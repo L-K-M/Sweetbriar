@@ -461,3 +461,36 @@ Running takeaways while reading raw reports. Input to the curated docs.
 - Study NetNewsWire (open source: NSTableView timeline, NSOutlineView
   sidebar, WKWebView detail), Things, Mimestream. NetNewsWire's author on
   Liquid Glass adoption cost (2026-09-22).
+
+## Claris Emailer, codex (raw/emailer/codex.md) — additions to the devin report
+
+- More careful chronology; the 2007 Entourage retrospective misdates 1.0
+  (says 1996): use only for personnel testimony. Source code apparently
+  lost (2005 Copyright Office submission by a user; not proof). AOL access
+  code and StuffIt engine licensing complicated any rescue.
+- 2.0: 19 user-defined named/colored priorities + reserved Alert; Easy
+  Setup; unlimited accounts; Actions gained multiple tests/effects incl.
+  run AppleScript, add sender to contacts, print, add/remove group
+  members; "Go to New Mail"; Do Not Schedule hold in Out Box; individual
+  recipients markable for resending; Save As Text + XTND translator;
+  Option-Stop cancels pending connections. Macworld 7/1997: "the best
+  e-mail client currently available for the Macintosh"; MacUser 8/1997
+  found 2.0 more complex.
+- Much of the celebrated power came from Fog City's script catalog: BBEdit
+  editing, quote reduction/unwrap, digest extraction, mail merge,
+  templates/glossaries, FileMaker archiving. -> a "text workbench" and
+  external-editor round trip are revivable.
+- Today: Outlook for Mac documents server rules only ("client rules are no
+  longer supported"); Apple Mail rules sync via iCloud but their scripts
+  and sounds do not; Spark can't assign Gmail labels itself; Mimestream
+  edits Gmail server filters.
+- Out Box should distinguish Draft / Held / Ready / Submitting / Accepted
+  / Needs attention; Graph sendMail 202 Accepted != delivered; JMAP
+  maxDelayedSend = 0 means no server delayed send.
+- Actions: preview on selected mail, "why this matched", per-message
+  execution records so resyncs don't repeat side effects, clear "runs on
+  this Mac" vs "runs on server".
+- Durability first; first slice = receive, search, read, reply, draft,
+  queue send, keyboard filing, restore from backup — all responsive
+  during sync/indexing. Test: triage 20 messages, file several, draft a
+  reply without losing place or waiting on network.
