@@ -131,7 +131,9 @@ The question is still open; recommendation for v1:
   state, menus.
 - On macOS, Swift `@Observable` projections over core query windows. Since
   macOS 26, AppKit tracks Observation reads in `draw`/`layout`, so AppKit
-  and SwiftUI views can share one model (devin, unverified).
+  and SwiftUI views can share one model. This is on by default in the
+  2026 releases and opt-in on macOS 15
+  ([Apple](https://developer.apple.com/documentation/appkit/updating-views-automatically-with-observation-tracking-in-appkit.md)).
 - Composer text state stays native and submits revisions to the core. No
   FFI round trip per keystroke.
 

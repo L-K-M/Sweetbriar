@@ -900,3 +900,19 @@ Running takeaways while reading raw reports. Input to the curated docs.
   unlimited folder depth; never shipped. ATPM review: tiny footprint
   ("runs on 2MB RAM"), stable, clean; dislikes: thin English manual,
   sequential polling, 68k attachment decode bugs.
+
+## More facts checked by Claude (2026-10-11)
+
+- Thunderbird shipped native Microsoft Graph support (email only, no
+  calendar yet) in release 154, 2026-08-18; announced on the Thunderbird
+  blog in September 2026
+  ([blog](https://blog.thunderbird.net/2026/09/thunderbird-desktop-new-protocol-support-microsoft-graph-api/)).
+- Gmail ends "Send mail as" for third-party addresses on web and mobile,
+  fully removed January 2027, and ends Gmailify too; Workspace send-as
+  and Gmail aliases unaffected
+  ([Android Authority](https://androidauthority.com/gmail-killing-third-party-send-as-feature-3694659)).
+  Relevant to identities: users who relied on Gmail to send as their
+  other address need a client that does it.
+- AppKit automatic Observation tracking: opt-in on macOS 15 via
+  `NSObservationTrackingEnabled`, on by default in the 2026 releases
+  ([Apple](https://developer.apple.com/documentation/appkit/updating-views-automatically-with-observation-tracking-in-appkit.md)).

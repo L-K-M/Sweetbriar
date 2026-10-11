@@ -44,7 +44,9 @@ previous release.
   - `TextEditor` not yet composer-grade (font panel, spellcheck quirks)
 - **Interop got cheaper.** Since macOS 26, AppKit tracks `@Observable`
   reads in `draw`/`layout`, so AppKit and SwiftUI views can share one view
-  model (devin; back-deploys to 15 behind an Info.plist key; unverified).
+  model. This is on by default in the 2026 releases, and back-deploys to
+  macOS 15 behind the `NSObservationTrackingEnabled` key
+  ([Apple](https://developer.apple.com/documentation/appkit/updating-views-automatically-with-observation-tracking-in-appkit.md)).
 - **Decision rule:** build one fair list prototype, AppKit outline vs
   SwiftUI `Table`/`List`, on the same Rust query API. Include variable
   heights, threading, 10k-id selections, drag promises, VoiceOver and live
