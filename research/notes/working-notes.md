@@ -370,3 +370,42 @@ Running takeaways while reading raw reports. Input to the curated docs.
   differentiator. MDN: parse, never auto-send.
 - macOS 27: no changes found that affect third-party mail clients.
 - Tiered checklist (launch / soon / later) in the report, section 4.1.
+
+## Search (raw/search/glm.md; codex report pending)
+
+- macOS 27 Mail advertises a new relevance ranking with highlighted terms:
+  relevance-first is now table stakes.
+- GLM recommends Tantivy (MIT; BM25, phrase/slop, FuzzyTermQuery, regex,
+  facets/aggregations, mmap, incremental segments; one writer process,
+  readers in other processes) for text + SQLite as system of record;
+  FTS5 viable for v1 if the query AST and extractor pipeline stay
+  engine-agnostic. Tantivy has no vector support through 0.27; format
+  churn across minors -> stamp index versions, auto-rebuild.
+- FTS5: unicode61 (diacritics options), trigram (substring, 3-char floor),
+  external-content/contentless-delete tables, bm25/snippet/highlight; no
+  fuzzy; weak CJK.
+- Xapian GPL (why notmuch/mu are GPL); Cyrus/Fastmail use a Xapian fork
+  with CJK word boundaries.
+- Tokenizer: charabia (MIT; jieba, lindera, Thai/Khmer, normalization);
+  Japanese/Korean ~2-3 MiB/s, budget indexing time.
+- Query language "SBQL": one AST, three front ends (token chips, Gmail-
+  superset text syntax with notmuch-style boolean core and regex escape
+  hatch, NL -> AST via rules then on-device LLM with guided generation,
+  always shown as editable chips). Saved searches compose (`query:`).
+- Ranking: BM25F field boosts (subject > participants > body) + recency
+  decay + thread collapse + small boosts (direct-to-me, starred);
+  relevance/date toggle; RRF fusion with optional vectors.
+- Semantic (opt-in): EmbeddingGemma-300M (768 MRL->128, 100+ languages,
+  Gemma license: check redistribution) or bge-small-en (MIT); ort or
+  candle; sqlite-vec (pre-v1, brute force fine at <=1M) or USearch (HNSW,
+  mmap views). 1M msgs: ~1-8 core-hours, 0.13-0.8 GB vectors (estimates).
+- Server search: Gmail X-GM-RAW / API q= (full web grammar); Graph $search
+  is date-sorted and capped at 1,000 results (client must rank, local
+  cache depth = search radius); JMAP Email/query + SearchSnippet/get;
+  IMAP ESEARCH + FUZZY (RFC 6203, RELEVANCY scores) where advertised.
+  Merge by Message-ID / X-GM-MSGID / internetMessageId with "on server"
+  badges; per-account fan-out with deadlines and cancellation.
+- Attachments: filenames always; PDF via PDFKit (mac) / pdfium; OOXML via
+  calamine + quick-xml; OCR opt-in (Vision / Tesseract). Pipeline stage
+  with caps and per-account policy.
+- Per-account indexes (reindex/delete atomically, fan-out maps 1:1).
