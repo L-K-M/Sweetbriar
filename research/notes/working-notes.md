@@ -752,3 +752,84 @@ Running takeaways while reading raw reports. Input to the curated docs.
   send outcome known.
 - Thunderbird is the strongest counter-proposal (saved searches, outgoing
   filters, redirect extension) if the architecture constraints changed.
+
+## Architecture, codex (raw/arch-core/codex.md) — agrees with devin on shape; additions
+
+- Element's 2025-11 retrospective: parity took longer than expected; SDK
+  work more complex than app work -> don't build several front ends while
+  inventing the engine. 1Password abandoned its SwiftUI Mac app: Rust
+  doesn't make a native front end cheap. Proton Mail facade: UniFFI,
+  app-lifetime MailSession, live queries returning initial results +
+  WatchHandle.disconnect(); reports shared regressions and platform silos.
+- Delta Chat incident: ambiguous `dc_is_configured()` after an error made
+  an encrypted account look unconfigured; UI cleanup could delete it ->
+  error taxonomy (NotFound, Locked, Unavailable, Corrupt, NeedsMigration);
+  a failed open never authorizes account creation or deletion.
+- UniFFI 0.32.1 (2026-09-08); Swift async template lacks automatic
+  Swift->Rust cancellation: add a withTaskCancellationHandler adapter +
+  explicit Rust request/token (Signal's race-aware pattern). Swift 6 async
+  foreign-trait fix merged 2026-07-15 (verify in the pinned version).
+  UniFFI is binary lifting/lowering, not JSON.
+- Cancellation is operation-specific: queries/previews disposable;
+  save_draft and enqueue_send take caller-generated idempotency keys; a
+  durable receipt means accepted; dropping the Swift waiter never cancels
+  an accepted operation; cancelling a queued send is its own command;
+  send states Queued / Submitting / Accepted / Failed / OutcomeUnknown.
+- Subscriptions: pull-based `next_batch(limit)` with one outstanding pull,
+  optional coalesced "data available" wake-up; bounded buffers ->
+  ResetRequired on overflow (never drop a positional edit); snapshot +
+  subscription established atomically; generation-tagged edits; a query
+  generation is not a long-lived SQLite read transaction. Start 200
+  rows/page, 600-row cache. BoltFFI streams drop events when full:
+  unsuitable for positional diffs without gap/reset handling.
+- Bodies via MessageHandle/BodyLease (chunks or permission-controlled
+  file/descriptor); chunk/file first.
+- One EngineHost owns the Tokio runtime per engine process; store worker
+  for blocking SQLite; never block_on on main thread; shutdown records
+  pending work.
+- Process: one process first; if sync-after-quit is a release requirement,
+  move the sole owner into an SMAppService per-user agent; exclusive
+  engine-ownership lease so agent and in-process fallback never both
+  write. IPC DTOs separately versioned (UniFFI handles can't cross IPC).
+  Share extension hands off via the agent or an atomic versioned file in
+  the App Group; never a second writer.
+- Intel: macOS 26 supports four 2019/2020 Intel models; macOS 27 doesn't.
+  Apple silicon first; universal only by explicit policy.
+- Strict layering (matches the user's rule): L0 shells; L1 SweetbriarBridge
+  + sb-ffi / sb-native-client; L2 sb-service (commands, receipts, query
+  windows, subscriptions, DTOs/errors); L3 sb-engine (EngineHost, sync,
+  drafts, send, rules, undo, reconciliation, index scheduling); L4
+  sb-resources (single facade over leaves; maps types/capabilities/
+  errors); L5 leaves sb-store (SQLite, FTS5, blobs, journal, backups),
+  sb-mime, sb-search (optional Tantivy), sb-platform (secrets/OS),
+  sb-backend-{imap,graph,gmail,jmap,proton}. No sb-common; leaves never
+  call each other; FTS5 lives inside sb-store.
+- Index watermark: record indexing work + revision in the store
+  transaction; advance searchable watermark only after index commit.
+- First milestone: one account path, real mailbox + composer + search
+  window, 100k and 1M fixtures; cached first page <100 ms p95; <4 ms
+  main-thread work per UI batch; cancellation/lag/restart/crash tests;
+  strict Swift 6 compile of the actual exports.
+
+## Performance, GLM (raw/performance/glm.md) — agreements and conflicts
+
+- Agrees: 100 ms ceiling / 50 ms design point; everything from local
+  store; SQLite WAL single writer + readers, covering indexes, summary
+  tables, zstd content-addressed blobs; JWZ incremental + provider IDs;
+  NSTableView for 500k rows (SwiftUI List ~2 s for 10k rows in community
+  reports; Table lazy but unbenchmarked at 500k); plain-text fast path;
+  signposts + XCTest perf gates on a 1M corpus; "% of interactions under
+  budget" metric (opt-in, content-free telemetry).
+- CONFLICT 1 (Gmail transport): GLM says Gmail IMAP and Exchange Online
+  lack QRESYNC/CONDSTORE, so use Gmail API (history.list) and Graph delta.
+  devin/sources prefers IMAP + X-GM-EXT for Gmail (quotas, billing);
+  codex/performance computes >=55.6 h to import 1M messages through
+  messages.get under new-project quotas and suggests bulk IMAP import with
+  API deltas as a possible hybrid. -> Debate item; verify Gmail's
+  post-auth CAPABILITY (CONDSTORE?).
+- CONFLICT 2: GLM recommends a "pooled, prewarmed WKWebView (shared
+  process pool)". WKProcessPool is deprecated and a no-op (codex, devin);
+  pooling advice is stale. Prewarm only if measured.
+- GLM's counter-argument worth keeping: headers-only cache with bodies on
+  demand is cheaper; rebuttal: search/power features/never-lose-mail need
+  the full local store; prefetch policy is a dial, the schema isn't.
