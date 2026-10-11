@@ -1014,3 +1014,17 @@ Client 11 Graph, Notion Mail shutdown (announced by June), Thunderbird
 on-device budget, Apple's undated Graph promise, consumer Gmail Send-as
 end, Gmail API quotas, Workspace IMAP 2,500/500 MB/day, Swift-callable
 Fluent (community runtime). Corrections applied to 01, 04, 06, 09.
+
+## D17 engine studies (raw/db-engines/{codex,devin}.md; GLM timed out)
+
+Both recommend bundled SQLite + FTS5 after benchmarking DuckDB, libSQL,
+LMDB and RocksDB (redb's Python wheel was an empty stub). DuckDB wins
+import, aggregates and file size; loses ordered pages (~300×), point
+lookups (~30–45×), cross-process readers (file lock, reproduced by both)
+and incremental FTS (rebuild required). All engines kept every
+acknowledged commit across kill -9 trials (codex 210, Devin 75); neither
+tested power loss. Conflicts: Turso 0.5 date (codex's 2026-03-04 from the
+announcement wins over Devin's "Aug 2026"); Devin's "Postgres reduces
+safety" and "immutable files never corrupt" are not carried forward
+(codex round 2). Codex's version trap: libsqlite3-sys 0.38.1 bundles
+SQLite 3.53.2, not the benchmarked 3.53.4. Curated in 13-database-engine.md.

@@ -8,11 +8,12 @@ checked.
 
 ## Start here
 
-- [00-summary.md](00-summary.md): the conclusions and recommendations in
-  one place, including what is settled and what is still open (written
-  after the debate below).
-- [debate/](debate/): Claude's position paper, GPT-6.1-Sol's adversarial
-  review, and the resolution.
+- [00-summary.md](00-summary.md): the answers to the owner's questions,
+  what is settled, the decisions only the owner can make, and what is
+  still open.
+- [debate/](debate/): Claude's position paper, two adversarial review
+  rounds by GPT-6.1-Sol and Devin, Claude's response, and the
+  [resolution](debate/04-resolution.md).
 
 ## Curated documents
 
@@ -30,6 +31,7 @@ checked.
 | [10](10-landscape.md) | Landscape | The 2026 competition, user complaints, gaps, AI, positioning |
 | [11](11-classic-clients.md) | Classic clients | What made Eudora, Mailsmith, Claris Emailer, Musashi and others beloved; ranked revival catalog |
 | [12](12-markdown-first.md) | Markdown-first mail | Should Sweetbriar normalize incoming mail into one rendering and compose in Markdown? (owner's proposal) |
+| [13](13-database-engine.md) | Database engine | SQLite, PostgreSQL, DuckDB or another engine for the local store? SQLite's quirks and how to neutralize them (owner's questions) |
 
 Per-client deep dives: [classics/eudora.md](classics/eudora.md),
 [classics/mailsmith.md](classics/mailsmith.md),
@@ -49,7 +51,10 @@ Per-client deep dives: [classics/eudora.md](classics/eudora.md),
                                                                     │
                        primary sources (manuals, source             ▼
                        code, original app archives) ──────► adversarial review
-                                                            (GPT-6.1-Sol vs Claude)
+                                                            (GPT-6.1-Sol, Devin)
+                                                                    │
+                                                                    ▼
+                                                            resolution + summary
 ```
 
 - **Independent researchers.** Most topics were researched by two or more
@@ -75,6 +80,10 @@ Per-client deep dives: [classics/eudora.md](classics/eudora.md),
   - Thunderbird's Graph support
   - App Intents' mail domain
   - AppKit Observation tracking
+  - Graph's 5,000-message filtered-delta cap and Microsoft's consent policy
+
+  A separate fact check verified 18 more recent claims against primary
+  sources ([raw/fact-check-1/codex.md](raw/fact-check-1/codex.md)).
 - **Running notes** with every conflict and verification are in
   [notes/working-notes.md](notes/working-notes.md). The foundational
   decisions are listed in [notes/decision-agenda.md](notes/decision-agenda.md).
