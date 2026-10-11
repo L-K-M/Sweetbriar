@@ -208,8 +208,12 @@ available.
   - bge-m3 (dense, sparse and multi-vector)
 
   Run through `ort` (CoreML execution provider) or candle.
-- **Storage:** 1M × 768-dimension float32 = 3.07 GB; int8 = 0.77 GB;
-  Matryoshka-128 = about 0.13 GB. Attachment chunking multiplies these.
+- **Storage per 1M vectors, before index overhead:**
+  - 768 dimensions: float32 3.07 GB, int8 0.77 GB
+  - Matryoshka 128 dimensions: float32 0.51 GB, int8 0.13 GB
+
+  Attachment chunking multiplies these. (An earlier version mixed
+  precisions; Devin's review caught it.)
   Use sqlite-vec (pre-v1, brute force is fine at ≤1M) or USearch (HNSW,
   mmap views). Tantivy has no vectors.
 - **Ranking:** hybrid BM25 plus vectors via reciprocal rank fusion (k≈60).
