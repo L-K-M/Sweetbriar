@@ -1,0 +1,21 @@
+[fts] wrote /home/paseo/sb-research/jobs/db-engines-devin/bench/../results/fts.json
+{
+ "sqlite_doc_load_s": 8.097513659042306,
+ "sqlite_fts_build_s": 6.240312972047832,
+ "sqlite_fts_queries": 200,
+ "sqlite_fts_total_s": 4.63957770896377,
+ "sqlite_fts_ms_per_q": 23.197888544818852,
+ "sqlite_fts_hits": 23511549,
+ "sqlite_fts_incremental_2k_s": 0.30207733798306435,
+ "sqlite_fts_file_bytes": 360539168,
+ "duck_doc_load_s": 1.8513074459624477,
+ "duck_doc_load_method": "df INSERT SELECT",
+ "duck_fts_build_s": 28.619134720007423,
+ "duck_fts_queries": 200,
+ "duck_fts_total_s": 30.220800005015917,
+ "duck_fts_ms_per_q": 151.10400002507959,
+ "duck_fts_hits": 35054557,
+ "duck_fts_incremental_2k_s": 1.3940321109839715,
+ "duck_probe_hits_after_incremental": 151170,
+ "duck_fts_file_bytes": 67254426
+}
