@@ -409,3 +409,55 @@ Running takeaways while reading raw reports. Input to the curated docs.
   calamine + quick-xml; OCR opt-in (Vision / Tesseract). Pipeline stage
   with caps and per-account policy.
 - Per-account indexes (reindex/delete atomically, fan-out maps 1:1).
+
+## macOS UI (raw/macos-ui/codex.md; targets macOS 26 baseline; devin report pending)
+
+- Recommend AppKit shell + interaction-heavy controls (windows, menus,
+  toolbars, mailbox outline, message list, composer, responder chain);
+  SwiftUI for settings, inspectors, bounded panels (NSHostingSceneRepresentation
+  on 26). Strongest counter: WWDC25 claims 6x faster loading and up to 16x
+  faster updates for Mac SwiftUI lists >100k items; so build a fair
+  AppKit-vs-SwiftUI list prototype on the same Rust query API and reverse
+  if SwiftUI matches interaction quality.
+- Message list: view-based NSOutlineView (flat and threaded share one
+  model), reused cells, heights cached by (revision, width, font, preview
+  mode), no reloadData for flag changes; ID-based selection survives
+  sorts; drag-out .eml via NSFilePromiseProvider. Targets: p95 keyboard
+  selection feedback <50 ms; no frame overruns warm (16.7/8.3 ms).
+- Reader: WKWebView only for HTML; allowsContentJavaScript=false for all
+  navigations; nonPersistent data store; WKContentRuleList deny-all
+  compiled before display, fail closed; sanitize in Rust (ammonia); cid:
+  via app-specific WKURLSchemeHandler scheme per message (never global
+  Content-ID lookup); explicit "load remote content" via app-controlled
+  fetch/rewrite, never enabling JS; reconstitute on content-process
+  termination. WKProcessPool is deprecated and no-op: drop pool tuning;
+  at most one spare viewer if measured. Dark mode: honor author
+  color-scheme, offer original/light toggle, no blanket inversion.
+  Plain text: noneditable NSTextView on TextKit 2. Reply-quoting-selection
+  with JS off is an open prototype question.
+- Composer: NSTextView/TextKit 2; modes plain (format=flowed in the shared
+  serializer), restricted rich text, Markdown (pulldown-cmark, sanitized).
+  Durable draft document model lives in Rust with revisions; attributed
+  strings are presentation only. Attachments copied into the core's
+  immutable store before "saved". States Editing / Saved locally /
+  Queued / Sending / Sent|failed|uncertain. Writing Tools: protect quotes
+  and signatures via ignored ranges; keep pre-operation revision.
+- One command layer for menus, shortcuts, AppleScript (.sdef; async via
+  suspendExecution), Services, App Intents, notification actions, Quick
+  Look, Share extension (import into durable draft first), Focus filters,
+  mailto (RFC 6068, header-injection safe), MenuBarExtra.
+- Foundation Models on-device model: 4,096-token context; locale and
+  hardware availability vary; model changed in 26.4 (retest prompts).
+  Optional, user-invoked, no mail-mutating tools.
+- Distribution: Developer ID + notarization + Sparkle (EdDSA) first,
+  mostly sandboxed design to keep MAS possible; MAS forbids own updater and
+  downloaded code, needs consent for post-quit helpers. Mimestream: direct,
+  sandboxed with small unsandboxed helper; MailMate left MAS (2012) over
+  sandbox; Airmail MAS-only; Spark both.
+- No second authoritative DB in SwiftData/Core Data.
+- Required prototypes before product work: list comparison; hostile-HTML
+  reader with network tracing; crash-tested drafts/attachments; signed
+  distribution build (default mail app, Share ext, scripting, helper).
+- Study NetNewsWire (open source: NSTableView timeline, NSOutlineView
+  sidebar, WKWebView detail), Things, Mimestream. NetNewsWire's author on
+  Liquid Glass adoption cost (2026-09-22).
