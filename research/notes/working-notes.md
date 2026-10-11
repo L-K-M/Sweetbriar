@@ -863,3 +863,40 @@ Running takeaways while reading raw reports. Input to the curated docs.
   external editor, rules on any mailbox): study it.
 - Remote inspection should start read-only (POP Monitor made permanent
   deletion too easy).
+
+## Musashi, primary artifacts (raw/musashi-artifacts/codex.md) and devin (raw/musashi/devin.md)
+
+- Codex wrote a verified pure-Python StuffIt extractor (classic + SIT5;
+  methods 13 and 15 "Arsenic", LGPL attribution to XADMaster) and
+  extracted all four archives: 128 files, 3,747 resources, all checksums
+  pass. Tool lives in /home/paseo/sb-research/jobs/musashi-artifacts-codex/
+  tools (not committed: LGPL-derived; extracted manuals are copyrighted).
+- Complete menu inventory recovered (30 MENU resources in 1.2.4, 43 in
+  3.4.1) plus context menus (AMIT): e.g. 3.4.1 Do menu has New Message
+  -> {accounts}, Check Mail -> {accounts}, Remote Mail -> {accounts};
+  message viewer Do: Move, Copy, Trash, Reply (Reply / Reply to All /
+  Reply to Sender), Forward (Forward / Direct Forward / Local Forward),
+  Edit, Send, Highlight (7 colors), Options (Get Info, Add to address
+  book, Apply filters, Remove attachments, Mark read/unread); Send Now /
+  Send Later; long-press (~0.5 s) on compose/check/send buttons shows
+  account or timing choices.
+- 1.2.4 had permission-controlled shared mailboxes between local users
+  (recipients may add into and/or move out of the owner's mailbox; cannot
+  rename/delete); 3.4.1 replaced it with Local Forward.
+- Editable message metadata: subject and status (opened/replied/
+  forwarded/sent) via Get Info.
+- Search: status shortcuts (Unread/Read/Unsent/Sent), two condition
+  regions, date comparisons, highlight filter, scope (all / current
+  viewer / folder); "Call filter" loads a rule's conditions into search;
+  searching while a results viewer is front refines the results.
+- Templates also accept Reply-To (3.2.1); reply intro uses %N %S %D.
+- Stale-doc lesson: manual says CRAM-MD5 only, binaries also have
+  LOGIN/PLAIN (release notes 2001-12-22).
+- Devin: from Osaka; 2.x stored mbox-like per-mailbox files; 3.x moved to
+  per-user single-file Incoming/Outgoing Archives + Message Index, which a
+  2002 migrant cited as a fragility/backup worry. "Musashi-V" rewrite
+  beta (2000-10 to 2001-01) promised labels, named saved searches
+  decoupled from filters, thread sorting, mail-merge "repeated send",
+  unlimited folder depth; never shipped. ATPM review: tiny footprint
+  ("runs on 2MB RAM"), stable, clean; dislikes: thin English manual,
+  sequential polling, 68k attachment decode bugs.
