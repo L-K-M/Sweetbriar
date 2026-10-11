@@ -670,3 +670,85 @@ Running takeaways while reading raw reports. Input to the curated docs.
   RTT 20/100/300 ms, throttling, disk-full, crash at each boundary.
 - Mimestream regressions worth testing: CPU during large-cache refresh and
   Select All; typing lag in attachment-heavy threads.
+
+## Musashi (raw/musashi/codex.md; codex extracted the original archives and read EN+JP manuals)
+
+- Author Mamoru Misono (弥園 護), SONO SOFTWARE / Sonosoft, sole
+  proprietorship from 1997-07-01 (incorporated 2008; company still exists,
+  no evidence of Musashi maintenance). Earliest versions Japanese-only;
+  2.0.5 circulating by 1997-10 (68K/PPC, EN/JP); 2.2.2 in EN/FR/IT/JP;
+  3.0 1998-12 (hierarchical folders, multilingual fonts, Remote Mail);
+  3.3 2001 SMTP AUTH; 3.4 Mac OS X + Classic 2002; 3.4.2 2006; 3.5 2008
+  freeware (not open source). Shareware ¥3,000 / US$25-33 via Kagi/Vector.
+- Design intent (Misono, Vector 1998, translated): "a responsive, compact
+  style" while other apps grew heavy; usable on older Macs.
+- Virtual Message Viewer: new arrivals appear together in one viewer with
+  a column showing the folder each was filed into (by filters); search
+  results use the same viewer; normal message operations work there.
+  A 2005 user (212 folders in Apple Mail) missed exactly this: unread
+  mail gathered in one place, filed after reading. -> Sweetbriar "reading
+  session": stable ordered list across folders/accounts; reading doesn't
+  steal position; explicit refresh; separate Read / Done / File actions.
+- Multi-user within the app: manager password, per-user config, switch
+  user without quitting, shared "common mail" folder, Local Forward
+  between users without a server. (Engst 2003: OS accounts make this less
+  needed.)
+- Remote Mail: fetch headers/size from POP, mark retrieve/delete, then
+  execute (like Mailsmith's POP Monitor / Eudora server status).
+- Japanese text correctness as a user decision: JIS output, inline input
+  conversion, per-language fonts (avoid half-width-kana mojibake),
+  Cyrillic/Turkish/Greek converters. -> decoding override with preview
+  that never rewrites originals; CJK test corpus; lindera-tantivy.
+- Attachments inline in prose: icons at the caret, movable, deletable
+  like a character; placement preserved for Musashi readers.
+- Templates as plain-text files with optional To/Cc/Bcc/Subject/Account/
+  Signature headers + body (documented format).
+- Filters: max 2 conditions (AND/OR), incoming/sending/manual triggers,
+  first match wins, highlight colors.
+- Spatial folder UI: large/small icons or list, free icon placement,
+  custom folder icons, empty/non-empty folder pictures; customization
+  "Modules" (published resource format) with third-party module ecosystem
+  on Vector.
+- Reading: Space pages and advances; Control-1..9 scroll speeds; three
+  quote-depth colors; configurable reply intro with date/time-zone format.
+- Warning: release notes document fixed mail-loss bugs (mail vanished
+  after forced quit; on cancelled user switch; deletes bypassing Trash;
+  multiline Bcc exposure). "Automatically answer Yes" dialog timer = a
+  data-safety anti-pattern.
+- Reviews: Macworld 2002 (Engst) "fast and easy to use" but weak search/
+  filtering, no inline HTML, no IMAP, two mice; reader letter defends it
+  as "the easiest multiple-user environment to set up". Brightblack
+  reviews 88% (2.2), 92% (3.x).
+- Codex: Thunderbird filters run after sending too, so outgoing filters
+  are not extinct; claims of "lost features" must be checked carefully.
+- Extracted manuals are copyrighted (freeware licence keeps ownership):
+  cite, don't commit.
+
+## Eudora, codex (raw/eudora/codex.md) — additions to manual/devin
+
+- Qualcomm said Eudora was profitable but didn't fit the wireless business
+  (2006). Penelope/OSE (Thunderbird-based) is unsupported; panned by the
+  faithful for different feel and mailbox format. HERMES revival: Windows
+  Eudoramail 8.0; Mac "Eos" 6.3 (2026-04-02) can't run on Arm/Catalina+.
+- Interaction gems: Option-click "select similar" (same correspondent,
+  subject...); search results behave like a mailbox and can be acted on;
+  Engst 2004: one-second search over 33 mailboxes for unread/labeled mail
+  as a personal "attention queue" spanning his filing system (same idea as
+  Musashi's viewer); file replies beside originals (Fcc preference);
+  editable received subject/body ("Pencil") -> local overlays with
+  provenance, never rewriting originals; glossary expansion in body;
+  x-eudora-setting: links for hidden prefs; BossWatch (Windows 7) warns on
+  configured recipients.
+- Windows 7: X1 indexed search (Paid), saved searches, S/MIME.
+- Engst 2011 migration of ~1M messages: tools disagreed (970,283 vs
+  849,206 converted) -> imports need reconciliation reports.
+- Filters as an inspectable program: phases after receipt / before
+  submission / after confirmed submission / manual; simulation view ("42
+  match, 11 would move, none would send"); rule trace per message; rule
+  revisions; nested conditions but simple default editor.
+- Redirect honesty: RFC 5322 Resent-*; DMARC is now RFC 9989 (May 2026,
+  obsoletes 7489/9091) [verify]; fall back to forward-as-attachment where
+  faithful redirect isn't possible; Turbo-style action keeps source until
+  send outcome known.
+- Thunderbird is the strongest counter-proposal (saved searches, outgoing
+  filters, redirect extension) if the architecture constraints changed.
