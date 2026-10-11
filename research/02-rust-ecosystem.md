@@ -26,7 +26,7 @@ Versions as of 2026-10-11.
 | IMAP types/codec | `imap-types` + `imap-codec` (2.x alpha, duesee, NLnet) | — | Fuzzed, zero-copy, misuse-resistant; `quirk_*` flags for broken servers; rev2 being assembled |
 | IMAP flow | `imap-next` (sans-I/O) | — | Runtime-agnostic, fits the engine/FFI split |
 | IMAP client | Own thin client on `imap-next`; track/vendor `io-imap` 0.7 (pimalaya) | `async-imap` 0.12 (Delta Chat) to bootstrap | io-imap: CONDSTORE+QRESYNC, IDLE, MOVE, UIDPLUS, SORT/THREAD, XOAUTH2/OAUTHBEARER, SCRAM. async-imap: no QRESYNC |
-| SMTP | `lettre` 0.11 or `mail-send` 0.6 (DKIM signing, XOAUTH2) | `io-smtp` | mail-send is Tokio-only and lacks OAUTHBEARER |
+| SMTP | `lettre` 0.11 or `mail-send` 0.6 (DKIM signing, XOAUTH2) | `io-smtp` | mail-send is Tokio-only; supports XOAUTH2 and OAUTHBEARER ([0.6.0 source](https://docs.rs/mail-send/0.6.0/src/mail_send/smtp/auth.rs.html), checked by codex 2026-10-11) |
 | MIME parse | `mail-parser` 0.11 (Stalwart) with `full_encoding` | `mailparse` 0.18 | SIMD, lazy, 41 charsets incl. CJK, RFC 8621 body model, fuzzed + Miri; aggressive MSRV; Stalwart CVE-2026-26312 (cyclic MIME traversal) was fixed in the server; the safe `mail-parser` version is not established, so bound consumers |
 | MIME build | `mail-builder` 1.0 | lettre `Message` | |
 | Auth results | `mail-auth` 0.13 | — | DKIM, DKIM2 draft, ARC, SPF, DMARCbis (RFC 9989–9991); no BIMI |
@@ -42,7 +42,7 @@ Versions as of 2026-10-11.
 | OpenPGP | `pgp` (rpgp) 0.21 | `sequoia-openpgp` (LGPL) | RFC 9580, v6 keys, PQC feature |
 | S/MIME | **gap**: RustCrypto `cms`/`x509-cert` | `openssl` crate | Or Security.framework on macOS |
 | Store | `rusqlite` 0.40, bundled SQLite ≥ 3.51.3 | `sqlx` | Optional `bundled-sqlcipher` |
-| Search | SQLite FTS5 → `tantivy` 0.26/0.27 | — | See [05-search](05-search.md) |
+| Search | SQLite FTS5 → `tantivy` 0.26.2 (if it clears the bars) | — | See [05-search](05-search.md) |
 | Local formats | `maildir` (0BSD), `maildirs`, `mbox` | own | Export and import |
 
 ## What Sweetbriar must build

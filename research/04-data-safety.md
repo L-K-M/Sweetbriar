@@ -74,8 +74,11 @@ sqlite.org. Checked 2026-10-11.
 
 - **Object publication:** write to a temp file in the same directory →
   flush (`F_FULLFSYNC` on macOS, `fdatasync` on Linux) → `rename` → fsync
-  the directory → *then* commit the DB reference. A crash before the commit
-  leaves an orphan for GC, never a dangling reference.
+  the directory → *then* commit the DB reference. Newly created
+  account/shard directories are themselves persisted, up to an existing
+  durable ancestor, before any reference is committed. Every flush error
+  is checked, and "Saved" is withheld on failure. A crash before the
+  commit leaves an orphan for GC, never a dangling reference.
 - **GC** respects live references, pending operations, recovery
   retention and backup pins. It commits the reference removal before
   unlinking, and never erases disputed data to clear an error.
@@ -150,9 +153,13 @@ signed app and handle denial.
   unrelated remote changes survive. Equal bytes (a matching hash) never
   authorize destroying an occurrence or undoing another client's later
   move. Never a blind re-issue (revised after debate round 1).
-- **IMAP deletes and moves.** UID MOVE where advertised; else COPY →
-  verify COPYUID → `UID STORE +FLAGS.SILENT (\Deleted)` → `UID EXPUNGE`
-  (UIDPLUS). Without safe MOVE or UIDPLUS, automatic expunge is
+- **IMAP deletes and moves.** Before any destructive step, the complete
+  source message is acquired and durably retained locally (header-only
+  coverage is not enough). Then UID MOVE where advertised; else COPY →
+  verify COPYUID and destination membership (and complete destination
+  bytes for cross-account or local-folder moves) → `UID STORE
+  +FLAGS.SILENT (\Deleted)` → `UID EXPUNGE` (UIDPLUS). Missing or
+  ambiguous evidence parks the intent. Without safe MOVE or UIDPLUS, automatic expunge is
   disabled: flag only, and never treat another client's `\Deleted` flags
   as purge targets. COPYUID is a mapping receipt, not proof of
   durability. The IMAP layer has **no bare
@@ -187,9 +194,13 @@ signed app and handle denial.
   period (configurable; an explicit permanent purge exists). This
   conflicts with erasure expectations; it's a product decision.
 - **Provider dialects:**
-  - **Gmail:** read `ImapSettings` (`autoExpunge`, `expungeBehavior`) or
-    assume archive semantics; use `X-GM-MSGID` as identity; model label
-    removal separately from destruction.
+  - **Gmail:** read `ImapSettings` (`autoExpunge`, `expungeBehavior`).
+    If the settings or an operation's semantics are unknown, disable the
+    affected `\Deleted`/expunge mutations and use only a qualified
+    provider operation whose effect matches the durable intent: Gmail can
+    be configured to delete the last visible copy permanently, and
+    `autoExpunge` acts as soon as `\Deleted` is set. Use `X-GM-MSGID` as
+    identity; model label removal separately from destruction.
   - **Graph:** immutable ids, per-folder delta; use the provider's move
     operation (documented as a destination copy plus source removal), never
     a generic client COPY then DELETE.
@@ -221,9 +232,13 @@ signed app and handle denial.
     Keep the frozen attempt (exact bytes, envelope, time) visible and let
     the user resolve it. A stable Message-ID doesn't make SMTP deduplicate,
     and absence from Sent is not evidence of non-submission.
-  - Track RCPT results per recipient. Recipient acceptance is not
-    delivery, and accepted recipients never become retry targets after a
-    partial failure.
+  - Track RCPT results per recipient, separately from final submission
+    acceptance (the reply to DATA or BDAT). Recipient acceptance is not
+    delivery. A recipient leaves the automatic-retry set only after final
+    submission succeeds or its outcome is unknown. Definitely unsent
+    recipients are retried after transient failures, including a 4xx
+    reply to DATA: with RCPT A=250, RCPT B=450 and DATA=451, A is still
+    unsent.
   - If SMTP succeeded but the Sent APPEND failed, repair the Sent copy
     without resubmitting.
   - **Graph:** create a draft, persist its immutable id, send that draft,
@@ -242,9 +257,11 @@ signed app and handle denial.
 
 ## Credentials and hostile content
 
-- **Credentials:** tokens in the Keychain with
-  `kSecAttrAccessibleWhenUnlockedThisDeviceOnly` and non-synchronizable;
-  libsecret on Linux.
+- **Credentials:** tokens in the data-protection Keychain
+  (`kSecUseDataProtectionKeychain=true` on every add, read, update and
+  delete query, which macOS requires for this accessibility class) with
+  `kSecAttrAccessibleWhenUnlockedThisDeviceOnly` and
+  `kSecAttrSynchronizable=false`; libsecret on Linux.
   - Never in files or logs; scan diagnostics and exports for token
     patterns in CI.
   - `invalid_grant` means sign in again, and it never touches mail.

@@ -133,8 +133,9 @@ Exchange SMTP AUTH timeline were verified by hand. Checked 2026-10-11.
 - **BIMI is still an Internet-Draft.** Treat logos as branding, not trust.
   Apple Mail shows only provider-asserted BIMI; client-side VMC/CMC
   validation would let Sweetbriar show logos Apple Mail can't (later).
-- **MTA-STS and DANE** protect server-to-server hops; they don't apply to
-  a client talking to a known server.
+- **MTA-STS** protects server-to-server delivery. **DANE/TLSA** can also
+  authenticate mail-access and submission endpoints; MUA support is
+  optional (RFC 8314). Not a launch requirement.
 - **End-to-end encryption:**
   - OpenPGP (RFC 9580) via `rpgp`
   - Autocrypt 1.1 headers

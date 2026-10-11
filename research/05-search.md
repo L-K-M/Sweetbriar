@@ -58,7 +58,7 @@ data-safety and classic-client reports. Checked 2026-10-11.
 | Engine | Fit for a macOS + Linux Rust core | Strength | Cost | Role |
 |---|---|---|---|---|
 | **SQLite FTS5** | In the bundled SQLite | Same transaction as metadata; SQL joins for filters and facets; `bm25` with column weights, custom tokenizers, auxiliary functions, `snippet`, `highlight` | No fuzzy matching; trigram has a 3-character floor; CJK needs custom tokenizers | **Starting choice** |
-| **Tantivy** 0.26/0.27 (MIT) | Native Rust | BM25, phrases with slop, `FuzzyTermQuery`, regex, facets, custom tokenizers, mmap segments, commit payloads | Separate store with its own commits (a second crash-consistency surface); immutable docs (delete + reinsert); format churn between minors; no vectors | Challenger behind registered bars |
+| **Tantivy** 0.26.2 (MIT; 0.27 unreleased) | Native Rust | BM25, phrases with slop, `FuzzyTermQuery`, regex, facets, custom tokenizers, mmap segments, commit payloads | Separate store with its own commits (a second crash-consistency surface); immutable docs (delete + reinsert); format churn between minors; no vectors | Challenger behind registered bars |
 | Xapian | C++ bridge | Mature mail search (notmuch, mu, Fastmail's Cyrus fork with CJK) | **GPLv2+**; MPL relicensing planned but not done | Only if Sweetbriar goes GPL |
 | Meilisearch (`milli`) | Unpublished internal crate | Typo tolerance, bucket ranking | API coupling | Use its tokenizer `charabia`, not the engine |
 | Lucene | JVM | Reference feature set | Runtime | Design reference |
