@@ -292,3 +292,39 @@ Running takeaways while reading raw reports. Input to the curated docs.
   can re-enable), unavailable for new tenants, final removal date to be
   announced 2H 2027 ([o365reports](https://o365reports.com/deprecation-of-smtp-authentication-client-submission-in-exchange-online/),
   checked by Claude). sources/devin is correct.
+
+## Rust ecosystem (raw/rust-ecosystem/devin.md)
+
+- Codecs and MIME are solved; sync engine, store, threading, search,
+  rules are not (and are where Sweetbriar's value lives).
+- IMAP: imap-types/imap-codec (2.x alpha since 2024; fuzzed, zero-copy,
+  quirk_* flags for broken servers) + imap-next (sans-I/O). Clients:
+  io-imap 0.7 (pimalaya; CONDSTORE+QRESYNC, IDLE, MOVE, UIDPLUS, SORT/
+  THREAD, OAUTHBEARER/XOAUTH2, SCRAM) or async-imap 0.12 (Delta Chat;
+  CONDSTORE, MOVE, UIDPLUS, IDLE, COMPRESS, METADATA, no QRESYNC). jonhoo
+  `imap` unmaintained. melib most complete but EUPL/GPL. No Rust NOTIFY,
+  OBJECTID; IMAP4rev2 being assembled in imap-codec 2.x.
+- SMTP: lettre 0.11 (MIT, most used), mail-send (DKIM sign, XOAUTH2, no
+  OAUTHBEARER), io-smtp new.
+- MIME: mail-parser 0.11.9 (SIMD, lazy, zero-copy, 41 charsets, fuzzed,
+  Miri; emits RFC 8621 text/html/attachment lists; limits; MSRV churn) +
+  mail-builder 1.0. mailparse as robust fallback. TNEF and S/MIME are gaps.
+- mail-auth (DKIM/DKIM2 draft/ARC/SPF/DMARC incl. DMARCbis RFC 9989-9991;
+  no BIMI). jmap-client 0.4 (core, mail, WebSocket, EventSource).
+- calcard (iCal/vCard/JSCalendar/JSContact), rpgp `pgp` 0.21 (RFC 9580,
+  PQC), oauth2 5.0, rustls + platform verifier vs native-tls (client certs),
+  hickory DNS, ammonia + lol_html, encoding_rs + chardetng.
+- License ledger: AVOID sieve-rs (AGPL, only Rust Sieve), melib (EUPL/GPL),
+  notmuch/Xapian/mu (GPL), Mailsync and Proton Bridge (GPL); sequoia is
+  LGPL (prefer rpgp). MPL-2.0 OK: Thunderbird `ews` crate, `ms_graph_tb`
+  (in-tree), Delta Chat core.
+- Engines to study: Delta Chat core (MPL; per-folder IMAP loops, sqlcipher),
+  meli (uid_store/watch/cache), pimalaya neverest (MIT sync engine in
+  progress: IMAP + Graph + DAV + local pimdir store; NLnet-funded to 2027;
+  collaboration candidate), Mailsync README (best written description of a
+  desktop sync engine: CONDSTORE/QRESYNC background worker + IDLE
+  foreground worker; bodies only last ~3 months; stable IDs by header hash;
+  everything in transactions; Gmail = All Mail + X-GM-LABELS), Geary
+  (versioned schema, replay ops), EDS Camel folder summary tables, Apple
+  Mail Envelope Index + .emlx, K-9/Thunderbird Android, mox imapclient.
+- Rules: Sieve-subset interpreter is "a few weeks"; decide before rules UX.
