@@ -511,7 +511,11 @@ Running takeaways while reading raw reports. Input to the curated docs.
   (create/update/save/open/delete/send draft incl. scheduling,
   openMessage, reply, forward, update, archive, delete) and 5 entities
   (account, draft, mailbox, message, thread) wired into Siri, Shortcuts,
-  Spotlight. [verify] High-value adoption target.
+  Spotlight. Confirmed by Claude: Apple documents an App Intents mail
+  schema domain (archiveMail, sendDraft, createDraft, replyMail, ...;
+  [Apple](https://developer.apple.com/documentation/appintents/app-schema-domain-mail.md)).
+  Apple Intelligence routes to the user's default app for the domain.
+  High-value adoption target.
 - SwiftUI Table pain points at scale: identity-diffing cost, sort hangs,
   context menu doesn't give "clicked but unselected" Mac semantics,
   NSHostingView-in-cell sizing bugs. NetNewsWire forbids Auto Layout and
@@ -532,3 +536,137 @@ Running takeaways while reading raw reports. Input to the curated docs.
   can target Sweetbriar; Mailsmith was scriptable *and recordable*.
 - Billing direct via Paddle/FastSpring; MailMate $10/quarter; Mimestream
   $49.99/yr; Nova $99 + $49/yr updates.
+
+## Mailsmith (raw/mailsmith/devin.md, manual-based)
+
+- Bare Bones, code name "Bluto", 1.0 1998-05-04 ($79), POP3/SMTP only;
+  BBEdit text engine; NeoAccess object DB; 1.5 (2002) Carbon + PCRE; 2.0
+  (2003) OS X only, SpamSieve/PGP/Address Book integration, Macworld
+  Eddy; 2009 moved to Stickshift Software (Rich Siegel), freeware, closed
+  source; 2.2 storage became "outboard data files, one per message" +
+  rebuildable DB (for Spotlight, performance, disaster recovery); 2.3
+  Rebuild/Reconstruct Mailboxes; last 2.4.3 2018; 32-bit, dead since
+  Catalina. Died of "competing with free" (Apple Mail) and never shipping
+  the promised IMAP (Gruber left in 2007 for IMAP/iPhone).
+- Neuburg's "Iron Triangle": BBEdit-class text handling, scriptable +
+  recordable + attachable AppleScript, distributed filtering.
+- Distributed filtering: filters are named objects attached to mailboxes;
+  arriving mail is offered to top-level mailboxes' filters (alphabetical);
+  a Deposit drops it in and offers it to that mailbox's children: the
+  mailbox tree is the flowchart. One filter reusable across mailboxes.
+  Outgoing mail runs through the same system. Make a Filter from a model
+  message; auto filters on mailbox creation; Re-Apply Filters for
+  "cradle to grave" flows; filter logging; XML import/export.
+- Criteria include Sender is Known, Sender's Group Membership, Server
+  Account, List-ID, Notes, Spam Score, Partial, On Server; match methods
+  incl. PCRE grep and Approximately Matches (fuzzy 20-100%); no nested
+  grouping. ~21 actions incl. Deposit/Transfer/Copy, labels, priority,
+  status, Set Subject, sound, Notify, Print, autoreply from file, Report
+  to SpamCop, Run Script (on FilterMessage), Extract Enclosures, Stop.
+- Search: Advanced Query uses the same criteria engine as filters;
+  "Find Messages About" relevance search (1.5.3); PCRE everywhere (manual
+  has a ~30-page regex tutorial); Spotlight importer `kind:mailsmith`.
+- Editor: 6-slot clipboard history, Paste Quoted, unlimited undo, split
+  panes, rectangular selection, Emacs bindings, Rewrap Quoted Text, quote
+  level +/-, Strip Quotes, Zap Gremlins, Change Case, Balance.
+- Composition: per-message private Notes (never sent, searchable);
+  configurable attribution (#date#, ICU formats); netiquette warnings
+  (excessive quoting, sigdash, "me too", unbracketed URLs); random
+  signatures; Send Now vs Queue; Redirect and Re-Send; Reply to List
+  (List-Post); format=flowed (2.2).
+- Clippings with placeholders: #CLIPBOARD#, #DATETIME fmt#, #INSERTION#
+  and jump markers, #SCRIPT name#, #SYSTEM shell# (insert command output),
+  #UUID#; sets auto-activate per account.
+- Scripting: Menu Scripts `Menu•Item` intercept menu commands (Gruber's
+  Send Now guard); Startup/Shutdown items; filter Run Script; BBEdit
+  plug-in API; "Run Unix command on each received message" (pipe filter).
+- Misc: POP Monitor (triage the server mailbox before download); 32
+  labels; per-mailbox notification mute; Quiet Time; Copy Item Link
+  (`mailsmith:` URL); digest bursting; any menu key reassignable and any
+  menu item hideable; synthesized plain-text view of HTML-only mail.
+- Reviews: Tsai (ATPM 1999) "distributed filtering is revolutionary";
+  Porter (TidBITS 2002) "no program gives you more or better ways to
+  create and use filters"; Neuburg 2003; Ihnatko (Macworld 2003) cons: no
+  IMAP, LDAP, non-Roman text, as-you-type spelling. Watts Martin (Tsai,
+  Aug 2026): "The last email program I truly loved was Bare Bones'
+  Mailsmith"; MailMate is its closest descendant.
+- Lessons: Reconstruct lost labels/notes/status because they lived only
+  in the DB -> journal metadata or mirror into keywords/headers.
+- Devin's picks: 2.2 storage model; one criteria engine shared by search,
+  filters and scripting; mailbox-attached filters as flagship (plus a
+  flat-rules view over the same engine and a separate server-rule editor);
+  editor commands; Notes; automation API + AppleScript façade + menu
+  intercept scripts; skip recording, POP Monitor, menu hiding.
+
+## Performance (raw/performance/codex.md; glm report pending)
+
+- Budgets (proposed, p95 on a reference Apple-silicon Mac): cold launch to
+  useful mailbox 1.0 s (p99 2.0), warm 400 ms; switch mailbox first rows
+  100 ms; open cached message readable 100 ms (selection feedback 50 ms);
+  cached 50-message thread 100 ms selected / 250 ms expanded;
+  archive/delete visible 50 ms, durable intent 100 ms; search top results
+  100 ms after last keystroke incl. 30-50 ms coalescing; compose editable
+  100 ms; scrolling <5 ms main-thread work per update (16.7/8.3 ms frames).
+- Day-one commitments ranked: (1) local snapshots + durable local
+  mutations; (2) bounded work, cancellation, reserved interactive
+  capacity; (3) stable identity + memberships + paged summaries;
+  (4) virtualized rows + progressive rendering; (5) maintained local search
+  with explicit coverage; (6) delta sync + connection reuse; (7) measured
+  prefetch; (8) deferred launch work + instrumentation. Bulk actions
+  operate on a query/selection representation, not serialized IDs.
+- Hosted IMAP CAPABILITY probes (pre-auth, 2026-10-11): Fastmail
+  advertises IMAP4rev2, CONDSTORE, QRESYNC; Yahoo advertises OBJECTID and
+  PARTIAL; M365 MOVE/UIDPLUS/IDLE; Gmail X-GM-EXT. Server docs: Dovecot
+  rev2 experimental (default off), Cyrus broadest, Stalwart rev2 yes but
+  COMPRESS/NOTIFY planned. Negotiate after auth; keep capability record.
+- Gmail API new-project quota: 6,000 units/user/min; messages.get = 20 ->
+  1M messages via messages.get >= 55.6 hours at one user's max. Prefer
+  bulk IMAP for Gmail import. history.list: expired ID -> 404 -> full
+  reconcile; watch needs renewal and drops notifications.
+- Graph: per-folder delta; use `Prefer: IdType="ImmutableId"` (ordinary
+  IDs change on move); notifications avg <1 min, max 3 min; delta token
+  validity not fixed; commit cursor atomically with applied changes.
+- Connections: start at 2 per account (reserve one interactive), max ~4;
+  batch UIDs; at 100 ms RTT five serial round trips = 500 ms.
+- Prefetch hypothesis: selected + next 5 + previous 2; visible thread
+  bodies first; adapt to direction, hit rate, battery, network cost.
+- Scheduler: priority draft/outbox writes > selected fetch + current search
+  > visible metadata > nearby prefetch > historical sync > indexing. Batches
+  ~250 metadata changes. Map to macOS QoS explicitly (Rust priorities
+  don't become thread QoS automatically). spawn_blocking can't be aborted:
+  cooperative cancellation + SQLite interrupt.
+- Schema sketch: message (local id), remote_locator (account, mailbox,
+  UIDVALIDITY, UID; many per message), membership (mailbox, message)
+  WITHOUT ROWID, thread_edge/thread_summary, mailbox_message_summary
+  (materialized rows), blob (hash, codec, length, location, integrity),
+  draft_revision, settings, mutation_outbox, sync_cursor, index_journal.
+  Covering index on (mailbox_id, received_at DESC, message_id DESC, ...).
+  Cursor pagination with row values; ordered-ID vector for scrollbar
+  jumps (500k IDs = 4 MB).
+- Codex's own benchmark (1M rows, Linux, SQLite 3.40): first page 0.07 ms;
+  OFFSET 900000 80 ms; cursor to same page 0.08 ms.
+- WAL: one writer worker, 2-4 readers, short snapshots, scheduled
+  checkpoints, never hold a transaction across network/UI. synchronous=
+  FULL; evaluate fullfsync latency. Page size 4K first (can't change in
+  WAL), mmap off first.
+- Raw bytes: immutable hash-addressed files first behind an abstraction
+  (SQLite's 2017 test: ~10 KB BLOBs 35% faster than files); commit order:
+  temp file -> flush -> rename + dir sync -> DB reference; orphans GC'd.
+  zstd 1-3 for cold content. Dedupe bytes separately from logical
+  identity; Message-ID not unique; Mailspring's header-hash IDs can
+  collide (documented in its README).
+- Threading: persist header graph; incremental component updates;
+  provider keys (X-GM-THRID, JMAP threadId, Graph conversationId) stored
+  as account-scoped hints; cross-account threading a separate view policy.
+- FTS5 prototype first, benchmark Tantivy on 1M/5M fixtures; engine-neutral
+  AST; index journal for replay/rebuild.
+- WebView: one active + maybe one spare after measurement; launch shows
+  stored snapshot before discovery/reconcile/index verify/prewarm. Memory
+  target ~250 MiB app/core + 250 MiB WebKit helpers.
+- Measurement: OSSignposter spans correlated with Rust tracing IDs
+  (input, queue wait, SQL, blob, decode, FFI, diff, readable); XCTest
+  metrics on physical Macs nightly; Enron (~0.5M msgs) + deterministic
+  1M/5M synthetic fixtures (rewrite Message-ID/References together);
+  RTT 20/100/300 ms, throttling, disk-full, crash at each boundary.
+- Mimestream regressions worth testing: CPU during large-cache refresh and
+  Select All; typing lag in attachment-heavy threads.
