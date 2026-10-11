@@ -66,13 +66,19 @@ Codex's crate graph follows it.
 Rules:
 
 - Leaves never call each other. Backends never write the store; the
-  engine applies their deltas. Search never opens the authoritative DB.
+  engine applies their deltas. Search is reached only through its index
+  API; whether FTS5 lives inside the authoritative database or in a
+  separate derived database is a measured placement decision (D7).
 - No `sb-common` imported everywhere. Types belong to the layer that
-  defines them and are re-exported upward. Enforce allowed edges with
-  `cargo metadata` checks in CI.
-- Start with modules inside fewer crates and split them when the boundary
-  is useful. The graph above is the target structure, not day-one
-  scaffolding.
+  defines them and are re-exported upward. `cargo metadata` checks only
+  enforce edges between crates, so the layering rule also needs a module
+  architecture check in CI covering imports, qualified paths and
+  re-exports, with a deliberately forbidden dependency proving the check
+  fails. It lands with the first commit (revised after the debate).
+- Start with modules inside fewer crates. Crates only at real ownership
+  or build boundaries: FFI, store, MIME, each backend. The graph above is
+  the target structure, not day-one scaffolding; `sb-resources` is a
+  narrow composition boundary with typed APIs, not a universal façade.
 
 ## The core/UI contract
 
@@ -96,9 +102,11 @@ Rules:
   at 200 rows per page and a 600-row cache.
 - Rows carry display fields only (ids, revision, sender, subject, date,
   flags, attachment marker, bounded snippet). Never MIME trees or bodies.
-- Updates arrive as generation-tagged edits (insert, remove, update, move,
-  reset), following matrix-rust-sdk's `VectorDiff`. Snapshot and
-  subscription are established atomically.
+- Updates start as a window snapshot plus versioned invalidation and
+  reset, with bounded updates; positional edits (insert, remove, update,
+  move, following matrix-rust-sdk's `VectorDiff`) are added only where a
+  measured interaction benefits. Snapshot and subscription are
+  established atomically; selection is by stable id.
 - **Pull, don't push.** `Subscription.next_batch(limit)` with one
   outstanding pull, plus an optional coalesced "data available" wake-up.
   A bounded buffer that overflows returns `ResetRequired`; the UI then
@@ -182,11 +190,11 @@ notification. One writer; everyone else goes through it.
 
 | Tool | Status 2026-10-11 | Use |
 |---|---|---|
-| UniFFI 0.32.1 | Mature; Element, Mozilla, Bitwarden, Wire, Proton use it | Default. Strict Swift 6 compile of the actual exports is an early proof obligation (async foreign-trait fix merged July 2026) |
-| BoltFFI | New (Dec 2025); Crux moved to it; author benchmarks 1.4× to 13.7× faster than UniFFI | Re-evaluate in 2027, or if a measured hot path fails |
+| UniFFI (0.32.2 current, 2026-09-23) | Mature; Element, Mozilla, Bitwarden, Wire, Proton use it | Default. The Swift 6 async foreign-trait fix (PR #2943, merged 2026-07-15) is **not in 0.32.2's templates** (fact check 2026-10-11). Compile Sweetbriar's actual exports under strict Swift 6 first, then pin a release, an audited commit or a local patch, or avoid the affected callback shape |
+| BoltFFI | New (Dec 2025); Crux moved to it; publishes its own UniFFI comparisons (publisher benchmarks, not reproduced) | Bounded comparison if UniFFI needs a substantial workaround or a measured hot path fails |
 | swift-bridge | Maintained, Swift-only | Alternative if UniFFI's Swift output disappoints |
 | cbindgen + hand glue | Full control | Escape hatch for a proven hot path |
-| Crux | Pre-1.0 whole-app framework | Not for the whole desktop UI |
+| Crux (`crux_core` 0.19.0, 2026-06-08: `EffectRouter`, shells moved from UniFFI to BoltFFI) | Pre-1.0 whole-app framework | Not for the whole desktop UI |
 
 ## Build and packaging
 

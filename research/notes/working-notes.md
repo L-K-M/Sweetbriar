@@ -769,6 +769,8 @@ Running takeaways while reading raw reports. Input to the curated docs.
   Swift->Rust cancellation: add a withTaskCancellationHandler adapter +
   explicit Rust request/token (Signal's race-aware pattern). Swift 6 async
   foreign-trait fix merged 2026-07-15 (verify in the pinned version).
+  **Resolved by fact check 2026-10-11:** 0.32.2 (2026-09-23) is current
+  and its templates lack the fix (raw/fact-check-1/codex.md).
   UniFFI is binary lifting/lowering, not JSON.
 - Cancellation is operation-specific: queries/previews disposable;
   save_draft and enqueue_send take caller-generated idempotency keys; a
@@ -956,8 +958,9 @@ Running takeaways while reading raw reports. Input to the curated docs.
   faster than tsvector+GIN, and its index builds 7x faster; single-row commits fsync-bound for
   both (~250 vs 193/s); readers never blocked in WAL. Postgres wins only
   with many concurrent writers, which the single-writer design doesn't have.
-- **Akonadi switched its default to SQLite** (upstream MR !311; KDE PIM
-  26.04.1 per Gentoo news 2026-05-23, checked by Claude:
+- **Akonadi switched its default to SQLite** (upstream MR !311 merged
+  2026-01-27, shipped in Akonadi 26.04.0 on 2026-04-16 for new
+  installations; Gentoo adopted it with 26.04.1 per its news 2026-05-23, checked by Claude:
   [Gentoo news](https://gentoo.nic.cz/rsync/metadata/news/2026-05-23-kdepim-sql-backend-change/2026-05-23-kdepim-sql-backend-change.en.txt))
   after ~17 years of per-user MySQL/MariaDB/Postgres daemons ("running a
   daemon brings its own set of problems"). The closest precedent ran the
@@ -994,3 +997,20 @@ Running takeaways while reading raw reports. Input to the curated docs.
   CASA wording, Gmail billing, CONDSTORE, Outlook for Mac, Proton desktop,
   RFC 9979 scope) were accepted on their cited primary sources and applied
   to 01–07 and 10.
+
+## Fact check 1 (raw/fact-check-1/codex.md, 2026-10-11)
+
+18 recent claims checked against primary sources. False: UniFFI 0.32.1 as
+current and the Swift 6 async fix as shipped (0.32.2 is current; the fix
+is merged but unreleased). Partly true: Proton's 2026-10-09 terms change
+(adds discontinuation language; the automation clause is older), the EWS
+allow-list (Worldwide cloud first), macOS 27 app-data access (tightens
+existing protection; `~/Library/Mail` is MAC-protected), Akonadi (SQLite
+default since 26.04.0, not 26.08). Confirmed: BoltFFI, Crux 0.19
+(`crux_core`, BoltFFI shells), Mailspring 1.26 multi-folder model, eM
+Client 11 Graph, Notion Mail shutdown (announced by June), Thunderbird
+154 Graph (Release channel, email only), DavMail 7.0.0 (Graph since
+6.8.0), Foundation Models `LanguageModel`/PCC and TN3193's 4,096-token
+on-device budget, Apple's undated Graph promise, consumer Gmail Send-as
+end, Gmail API quotas, Workspace IMAP 2,500/500 MB/day, Swift-callable
+Fluent (community runtime). Corrections applied to 01, 04, 06, 09.

@@ -101,7 +101,9 @@ out, a semantic AST in the middle, originals always one keystroke away**.
   pulldown-cmark source maps, in the iA Writer / Bear style), with source
   and preview always available. Plain text is a first-class mode:
   Markdown improves expression and is never a compulsory syntax lesson.
-- **Pasting** HTML converts to Markdown (`htmd`).
+- **Pasting** HTML converts to Markdown (`htmd`) with a preview, an
+  explicit warning when the conversion is lossy, and a plain-text
+  fallback.
 - **Inline images:** a drag creates `![]()` with a `cid:` reference.
   GFM tables; code blocks with syntax highlighting (`syntect`).
 - **Signatures** are written in Markdown too.
@@ -147,8 +149,11 @@ original MIME (immutable) ──► part selection ──► sanitize ──► 
   normalization → (optional) article extraction.
 - **Storage:** the normalized form is cached with a converter-version stamp
   and rebuilt on upgrade. For encrypted mail, derive on open and never
-  cache. Per-sender and per-message presentation choices are user data.
-  Search indexes the normalized text.
+  cache. Per-sender and per-message presentation choices are user data;
+  they never grant remote-content permission. Search extracts its text
+  independently from the reading view, so folded quotes, signatures and
+  text the clean view drops stay searchable, with source-part provenance
+  (revised after the debate).
 - **Native vs WebKit** is a separate choice from normalized vs sender
   layout.
 - **The same Rust pipeline serves macOS and Linux** (WebKitGTK for sender
@@ -168,9 +173,18 @@ original MIME (immutable) ──► part selection ──► sanitize ──► 
    multipart/alternative writer, a recipient-client compatibility matrix.
 2. **The Rust semantic and security pipeline,** with a **reader-mode
    toggle**: plain text and simple personal HTML only.
-3. **Evaluation corpus before any automatic default** (codex):
-   - About 1,000 consented messages, stratified by category, provider and
-     locale, plus adversarial and malformed fixtures and a frozen holdout.
+3. **Evaluation corpus before any automatic default** (codex; size
+   reconciled in the debate):
+   - About 2,000 consented messages, stratified by category, sender
+     template, provider and locale, plus adversarial and malformed
+     fixtures (contradictory alternatives, receipts inside notifications,
+     forwarded invoices, ASCII tables, patches, signed mail). Freeze the
+     holdout **before** tuning the converter.
+   - Reading-task tests with 20+ participants (amounts, dates,
+     identities, link destinations): task accuracy must at least match
+     sender layout, and preference must justify the change. This study
+     runs during the pilot, after the 10–20-user cohort exists, and may
+     recruit beyond it.
    - **Critical failures:** altered numbers, dates or currencies; wrong
      table associations; lost action links; changed quoted code; missing
      qualifications. Any one of them in the holdout blocks automatic
@@ -179,7 +193,13 @@ original MIME (immutable) ──► part selection ──► sanitize ──► 
    - Performance budget to investigate: **p95 conversion under 50 ms for a
      100 KB body**, falling back asynchronously if exceeded.
 4. **Adaptive defaults,** category by category, with per-sender memory
-   (resettable, and safe against spoofed senders).
+   (resettable, and safe against spoofed senders). Sender layout is the
+   default for every category until its corpus result exists. Even then,
+   Reading view is the default only for a qualified category **and** a
+   message whose structure the current converter positively supports;
+   unsupported or contradictory structures use sender layout. The
+   unknown-sender default is a product decision informed by the corpus
+   (revised after debate round 2).
 5. **No target percentage of "normalized" mail.** If users mostly choose
    sender layout, normalization stays an excellent optional reader plus a
    quoting and search layer. The composer stands on its own.

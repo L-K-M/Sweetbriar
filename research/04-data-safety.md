@@ -49,7 +49,7 @@ sqlite.org. Checked 2026-10-11.
 | K-9 / Thunderbird Android | 9.0 settings migration silently made deletes permanent (#9034); one failing APPEND blocked the whole queue (#1155) | Migrations never escalate destructiveness; poisoned ops park in isolation |
 | Outlook PST/OST | Single-file format with size ceilings; repair drops items | Many small files; preserve the original before any repair |
 | Eudora (source audit) | The TOC mixed index and irreplaceable metadata; rebuilds lost labels and edits and resurrected deleted mail; compaction could discard work in progress; autosave was off by default | Separate metadata from projections; no compaction of originals; autosave always on |
-| Mailsmith 2.3 | Reconstruct from message files lost notes, labels and status | Journal metadata separately; mirror to keywords where possible |
+| Mailsmith 2.3 | Reconstruct from message files lost notes, labels and status | Keep metadata authoritative in SQLite (a rebuild from objects regenerates only derived data); backup generations with a stated recovery point; mirror to keywords where possible |
 | Claris Emailer 2.0 | Monolithic database corruption, whole-file backups, painful export | No opaque monolith; incremental backup; export on day one |
 | Musashi | Mail lost on forced quit or a cancelled user switch; deletes bypassed Trash; an "auto-answer Yes" dialog timer | Never auto-confirm destructive actions |
 | Mailspring | Drops in-flight tasks on restart instead of replaying; header-hash ids can collide | Replay with convergence checks; local ids never derived from headers alone |
@@ -116,7 +116,8 @@ sqlite.org. Checked 2026-10-11.
 | Never the system SQLite on macOS | Apple's build substitutes `F_BARRIERFSYNC` for `fullfsync` (bonsaidb, Tsai 2025) |
 | WAL, `synchronous=FULL` for authoritative state | WAL + NORMAL can roll back acknowledged commits after power loss |
 | `PRAGMA fullfsync=ON`, `checkpoint_fullfsync=ON` on macOS | macOS `fsync` doesn't flush the drive cache |
-| One writer connection that also owns checkpoints; readers through it | Avoids the WAL-reset trigger only if no other connection checkpoints; the fixed version is still required. One owner for migrations |
+| One writer connection that also owns checkpoints; bounded reader connections set `wal_autocheckpoint=0` | Avoids the WAL-reset trigger only if no other connection checkpoints; the fixed version is still required. One owner for migrations |
+| `foreign_keys=ON` on every connection before any transaction; read back every pragma at open | Unknown or misspelled pragmas are silently ignored |
 | Exclusive process ownership lease on the live store | A second instance uses the existing core or stays read-only |
 | `user_version` migrations, each transactional; `VACUUM INTO` a snapshot before destructive ones; verify counts and checksums after | Catalina and K-9 lessons |
 | `integrity_check` scheduled and after migrations; SHA-256 per object, verified on read | Detects corruption; on detection, pause dangerous work and preserve evidence, never "repair" by deleting |
@@ -124,42 +125,64 @@ sqlite.org. Checked 2026-10-11.
 | Store kept out of iCloud Drive, Dropbox, OneDrive and network mounts; warn if moved there | Sync daemons and network filesystems break SQLite's locking and fsync assumptions |
 | Time Machine: back up `state.sqlite` (via snapshots) and objects; exclude caches (`isExcludedFromBackup`, reapplied after writes) | Backups contain what matters, not 10 GB of index |
 
-**Open item.** Codex reports that macOS 27 changed app-data access
-permissions. Import from other apps' containers must use user-selected
-files or exports (verify).
+**Import permissions (fact check 2026-10-11).** macOS 27 denies
+cross-developer app and app-group container access by default; access
+is granted in Privacy & Security settings, not by a prompt.
+`~/Library/Mail` is protected Mail data: selecting `~/Library` doesn't
+authorize it, and being unsandboxed doesn't either. Start with Apple
+Mail's documented `.mbox` export; prototype direct import under the
+signed app and handle denial.
 
 ## Sync engine correctness
 
 - **Intent journal.** Each intent row is written in the same transaction
   as its local effect:
-  `{id, account, op, args, state, attempts, idempotency_key, origin}`.
-  Workers drain the journal. Per-account ordering applies only where the
-  protocol demands it. A poisoned op parks after N attempts and surfaces
-  to the user without blocking the rest.
-- **Replay is convergence.** "Ensure UID X in epoch E has `\Deleted` and
-  is UID-expunged", "ensure the message with hash H is in B and not in A",
-  "ensure submission S reached state Accepted". Never a blind re-issue.
+  `{id, account, config_generation, op, scoped_target, args,
+  preconditions, depends_on, reconciliation_policy, state, attempts,
+  idempotency_key, origin}`. Workers drain the journal. Dependent moves
+  and deletes are serialized; other ops run independently. Auth and
+  throttling waits are distinct from poison: a poisoned op parks after N
+  attempts and appears on the account health surface without blocking
+  the rest.
+- **Replay is reconciliation, not "ensure X".** Each intent targets a
+  scoped occurrence (mailbox, UIDVALIDITY, UID, or a provider id) and
+  checks its preconditions before acting. Flag changes apply as deltas, so
+  unrelated remote changes survive. Equal bytes (a matching hash) never
+  authorize destroying an occurrence or undoing another client's later
+  move. Never a blind re-issue (revised after debate round 1).
 - **IMAP deletes and moves.** UID MOVE where advertised; else COPY →
   verify COPYUID → `UID STORE +FLAGS.SILENT (\Deleted)` → `UID EXPUNGE`
-  (UIDPLUS). Without UIDPLUS: flag only and don't expunge; let the
-  server's own policy or the user decide. The IMAP layer has **no bare
+  (UIDPLUS). Without safe MOVE or UIDPLUS, automatic expunge is
+  disabled: flag only, and never treat another client's `\Deleted` flags
+  as purge targets. COPYUID is a mapping receipt, not proof of
+  durability. The IMAP layer has **no bare
   EXPUNGE verb and no CLOSE after flagging**.
 - **Default delete = move to Trash.** "Delete permanently" is a separate,
   confirmed command.
 - **Epoch-bound identity.** Every remote locator carries
-  `(mailbox, UIDVALIDITY)`. On a UIDVALIDITY change, suspend intents for
-  that mailbox, resync, rematch by hash and Message-ID, then resume. Stale
-  UIDs can never reach STORE or EXPUNGE.
+  `(mailbox, UIDVALIDITY)`. On a UIDVALIDITY change, the old targeting
+  authority is invalid: suspend intents for that mailbox and resync. Hash
+  and Message-ID may suggest a correspondence, but **ambiguous rematches
+  never resume destructive intents automatically**; they are quarantined
+  for the user. The same applies when a server changes UIDs without
+  changing UIDVALIDITY. Stale UIDs can never reach STORE or EXPUNGE.
 - **Incomplete observations don't prove absence.** Page through a staged
   inventory and publish the cursor atomically. An expired cursor or a
   failed page never counts as deletion.
-- **Tombstones** for local deletes until the server confirms and one clean
-  sync passes. They also keep a crash from resurrecting a message as
-  "new".
-- **Circuit breaker:** pause and ask when, since the last sync, a delete
-  set exceeds a threshold (start at > 50 messages or > 20% of a folder),
-  or a UIDVALIDITY change or account reconfiguration would delete in
-  bulk. Log the trigger.
+- **Tombstones** for local deletes until the server confirms. They also
+  keep a crash from resurrecting a message as "new". One clean sync does
+  not prove a tombstone can go: expired cursors, restored backups and
+  offline devices need a retention window based on evidence.
+- **Circuit breaker:** classify every disappearance as an explained user
+  batch action, removal from one folder, actual object destruction, or
+  incomplete observation. Pause unexplained destructive reconciliation and
+  recovery GC, preserve the inventory and recheck independently, while
+  safe downloads, drafting and other accounts continue. Conservative
+  defaults until real traces exist: pause on any unexplained bulk
+  disappearance beyond a small absolute count, any folder emptying, or a
+  UIDVALIDITY change or account reconfiguration that would delete in bulk.
+  A false pause costs a dialog; a false reconciliation costs mail. Log the
+  trigger (revised after debate rounds 1–2).
 - **Retain local copies when remote mail disappears** for a recovery
   period (configurable; an explicit permanent purge exists). This
   conflicts with erasure expectations; it's a product decision.
@@ -167,8 +190,9 @@ files or exports (verify).
   - **Gmail:** read `ImapSettings` (`autoExpunge`, `expungeBehavior`) or
     assume archive semantics; use `X-GM-MSGID` as identity; model label
     removal separately from destruction.
-  - **Graph:** immutable ids, per-folder delta, a move is copy plus
-    delete.
+  - **Graph:** immutable ids, per-folder delta; use the provider's move
+    operation (documented as a destination copy plus source removal), never
+    a generic client COPY then DELETE.
   - **JMAP:** `mailboxIds` updates are atomic per record, but `Email/set`
     isn't batch-atomic; reconcile `notUpdated`.
   - **Proton Bridge:** treat its UIDs with suspicion; detect epoch changes
@@ -193,14 +217,26 @@ files or exports (verify).
        → OutcomeUnknown (drop after DATA, crash before receipt) → user resolves
   ```
 
-  - Every submission carries the same Message-ID on any retry.
-  - After an ambiguous drop, look up Sent by Message-ID before offering a
-    resend. Never resend automatically.
+  - **Never automatically repeat a submission whose outcome is unknown.**
+    Keep the frozen attempt (exact bytes, envelope, time) visible and let
+    the user resolve it. A stable Message-ID doesn't make SMTP deduplicate,
+    and absence from Sent is not evidence of non-submission.
+  - Track RCPT results per recipient. Recipient acceptance is not
+    delivery, and accepted recipients never become retry targets after a
+    partial failure.
+  - If SMTP succeeded but the Sent APPEND failed, repair the Sent copy
+    without resubmitting.
+  - **Graph:** create a draft, persist its immutable id, send that draft,
+    then find the Sent copy by the same id (revised after debate round 1).
   - 4xx: exponential backoff with jitter. 5xx: fail to the user.
   - SIZE is checked first. A link-upload path covers large attachments.
   - Graph's `202 Accepted` is accepted, not delivered.
   - **Filing the Sent copy can never trigger resubmission.**
-  - **Restoring a backup never auto-dispatches** old outbox items.
+  - **Restore creates a new recovery incarnation** with **all outbound
+    effects** (sends, deletes, moves, rule actions) suppressed; it
+    invalidates stale provider cursors and reconciles before enabling
+    mutations. An old pending delete is as dangerous as an old pending
+    send.
 - **Undo send** is a client hold queue ("sending in 7 s"); there's no wire
   recall. Outlook recall works only inside one Exchange organization.
 
@@ -266,9 +302,13 @@ files or exports (verify).
 
 ## Testing strategy
 
-- **Deterministic simulation from day one.** The sync engine is a state
-  machine. Clock, network and disk are injectable. Seeded fake IMAP, JMAP
-  and Graph servers inject faults: drops after COPY/APPEND/DATA, rogue
+- **Right-sized from day one, growing with the engine** (revised after
+  debate round 1). Day one: injectable clock, transport and persistence;
+  a scripted fake server for the chosen first provider (behavioral case
+  specs for both IMAP and Graph); proptest models; crash cuts around object
+  publication, intent commit, delta-page application and submission. A
+  full deterministic schedule simulator grows as real concurrency appears.
+  The fake server injects faults: drops after COPY/APPEND/DATA, rogue
   responses, UIDVALIDITY resets, throttling, partial pages. Failing seeds
   replay exactly. Precedents: FoundationDB, TigerBeetle VOPR, and Dropbox
   Nucleus (a Rust client sync engine: three trees, remote/local/synced,
@@ -278,9 +318,11 @@ files or exports (verify).
 - **Model-based tests:** proptest state machines against an independent
   in-memory IMAP model (RFC 9051 semantics plus UIDVALIDITY), audited
   against the RFCs so the model doesn't encode the same wrong assumptions.
-- **Real servers in CI:** Dovecot (with `imaptest`), Cyrus (Cassandane),
-  Stalwart, Greenmail, plus periodic runs against Gmail, Microsoft 365,
-  iCloud, Fastmail and Yahoo test accounts. Mailspring's 2026 rewrite added
+- **Real servers in CI:** start with Dovecot (with `imaptest`) and the
+  chosen provider; add Cyrus (Cassandane), Stalwart, Greenmail and hosted
+  Gmail, Microsoft 365, iCloud, Fastmail and Yahoo accounts as backends
+  ship. Hosted test accounts are an operations programme with an owner
+  (locked accounts, suspended OAuth apps, rotated credentials). Mailspring's 2026 rewrite added
   exactly this ("fake problematic IMAP servers" in Docker).
 - **Fault injection:** kill -9 at every journal state, ENOSPC, fsync
   errors, toxiproxy and `tc netem` latency, resets. Power-loss simulation
@@ -318,7 +360,8 @@ Each milestone adds its failure traces to the permanent regression corpus.
 - **Single writer under load:** large imports must not delay draft commits
   (scheduler priority, small batches).
 - **Encryption keys:** recovery story.
-- **macOS 27 app-data import restrictions** (verify).
+- **Direct Apple Mail import** under the signed app's actual permission
+  path (default-denied on macOS 27).
 
 ## Key sources
 

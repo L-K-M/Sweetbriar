@@ -22,8 +22,11 @@ previous release.
   restricted rich text next, WYSIWYG HTML only if demand proves it.
 - **One command layer** feeds menus, shortcuts, AppleScript, Services, App
   Intents (Apple ships a mail schema domain), notifications and Shortcuts.
-- **Distribution:** Developer ID, notarization and Sparkle first, with a
-  mostly sandboxed design so a Mac App Store build stays possible.
+- **Distribution:** Developer ID, notarization and signed Sparkle updates
+  first, with a real App Sandbox build if the chosen integrations work in
+  it. An early signed build qualifies storage, imports, Keychain, Bridge,
+  scripting, external editors and update relaunch (revised after the
+  debate; "mostly sandboxed" is not a boundary).
 - **Deployment floor:** macOS 26 (scene bridging, rich-text and WebKit
   APIs, AppKit Observation tracking), arm64 first; adopt macOS 27 APIs
   behind `@available`.

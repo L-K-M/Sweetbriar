@@ -16,8 +16,8 @@ Exchange SMTP AUTH timeline were verified by hand. Checked 2026-10-11.
   encoded words, three filename encodings, charset lies, TNEF and
   format=flowed all have to be handled.
 - **Threading:** JWZ locally, with provider thread ids as hints.
-- **Sending:** keep a per-provider "server saves Sent" table, or users get
-  duplicate copies in Sent.
+- **Sending:** keep a "server saves Sent" table keyed by transport and
+  identity, or users get duplicate copies in Sent.
 - **RFC 9979 (May 2026)** standardized Apple's flag colours and several
   keywords. Round-trip them at launch.
 - **Sieve plus ManageSieve** is how server-side rules work outside Gmail
@@ -57,7 +57,7 @@ Exchange SMTP AUTH timeline were verified by hand. Checked 2026-10-11.
 
 | Provider | Gate |
 |---|---|
-| Gmail | `https://mail.google.com/` is a restricted scope and needs app verification; the annual CASA assessment applies if restricted data can be accessed from or through our servers (diagnostics count) |
+| Gmail | `https://mail.google.com/` is a restricted scope and needs app verification; the annual CASA assessment applies if restricted data can be accessed from or through third-party servers; content-free aggregate diagnostics don't automatically count, but mail-bearing traces or cloud features could; get a written determination |
 | Microsoft 365 | Multi-tenant Entra app, publisher verification, possible admin consent |
 | Yahoo / AOL | Manual OAuth approval; app passwords until approved |
 | iCloud | App-specific passwords only (OAuth is for Apple-chosen partners) |
@@ -89,8 +89,10 @@ Exchange SMTP AUTH timeline were verified by hand. Checked 2026-10-11.
   space-stuffing. Sending it is a preference (see
   [08-macos-ui](08-macos-ui.md)).
 - **TNEF (`winmail.dat`):** write a decoder from [MS-OXTNEF].
-- **Multipart:** prefer the most faithful `alternative` part and keep
-  `text/plain` authoritative for quoting. Resolve `related` and `cid:`
+- **Multipart:** prefer the most faithful `alternative` part. Record the
+  part actually displayed and quote from that part, with provenance;
+  handle alternatives that materially disagree explicitly (RFC 2046
+  intends them to be equivalent, but they sometimes aren't). Resolve `related` and `cid:`
   per message. Show `message/rfc822` as an attached message. Detect
   `text/calendar` even when it's mislabeled.
 - **Crypto parts are structure, not attachments.** Don't offer a
@@ -112,7 +114,7 @@ Exchange SMTP AUTH timeline were verified by hand. Checked 2026-10-11.
 - **Gmail documents saving SMTP-submitted mail to Sent itself;** the same
   claim for Microsoft 365 SMTP is unverified (Graph `sendMail` has its own
   documented behaviour). Qualify each transport and identity, then keep a
-  per-provider "server saves Sent" flag; otherwise `APPEND` to the
+  "server saves Sent" flag per transport and identity; otherwise `APPEND` to the
   `\Sent` special-use folder. Thunderbird bug 1431562 shows the duplicates
   this prevents.
 - **DSN (RFC 3461/3464)** is nice to have. BURL and FUTURERELEASE are
@@ -166,9 +168,13 @@ Exchange SMTP AUTH timeline were verified by hand. Checked 2026-10-11.
 
 ## Launch checklist
 
+Revised after the debate: the pilot ships only what its first provider
+needs; the rows below are the target for a general release, not a
+day-one matrix.
+
 | Tier | Standards |
 |---|---|
-| **Launch** | RFC 5322/MIME parsing with repair; IMAP4rev1/rev2 with UIDPLUS, CONDSTORE/QRESYNC, IDLE, ENABLE, LIST-EXTENDED, SPECIAL-USE, MOVE, SASL-IR, NAMESPACE, ID, LITERAL±; SMTP on 465/587; the full autoconfig chain; XOAUTH2/OAUTHBEARER and app passwords; TLS 1.2+ with hard-fail; JWZ + X-GM-THRID + Thread-Index; per-provider Sent rules; format=flowed; TNEF; one-click unsubscribe; iMIP banner; `$Junk`/`$NotJunk`/`$Forwarded`/`$MDNSent`/`$Phishing` and Apple flag colours; Authentication-Results display; Keychain tokens |
+| **General release** | RFC 5322/MIME parsing with repair; IMAP4rev1/rev2 with UIDPLUS, CONDSTORE/QRESYNC, IDLE, ENABLE, LIST-EXTENDED, SPECIAL-USE, MOVE, SASL-IR, NAMESPACE, ID, LITERAL±; SMTP on 465/587; the full autoconfig chain; XOAUTH2/OAUTHBEARER and app passwords; TLS 1.2+ with hard-fail; JWZ + X-GM-THRID + Thread-Index; per-provider Sent rules; format=flowed; TNEF; one-click unsubscribe; iMIP banner; `$Junk`/`$NotJunk`/`$Forwarded`/`$MDNSent`/`$Phishing` and Apple flag colours; Authentication-Results display; Keychain tokens |
 | **Soon after** | SMTPUTF8/EAI; SCRAM-SHA-256; CardDAV/CalDAV; ManageSieve with a Sieve editor; S/MIME verify and decrypt; OpenPGP read with Autocrypt; provider-asserted BIMI; DSN; METADATA; the remaining RFC 9979 keywords |
 | **Later** | Full OpenPGP key management; client-verified BIMI; NOTIFY; BURL; FUTURERELEASE; server THREAD as an optimization |
 

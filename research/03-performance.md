@@ -81,8 +81,10 @@ an import workflow, not "launch".
   - New projects (since 2026-05-01) get 6,000 units/user/minute, and
     `messages.get` costs 20. Importing 1M messages that way takes at least
     55.6 hours.
-  - So bulk import goes over IMAP or thread-level calls, not per-message
-    gets. See the transport debate in [06-account-backends](06-account-backends.md).
+  - Per-message API gets are therefore slow for bulk import, but IMAP is
+    capped too (Workspace: 2,500 MB/day download), and `threads.get`
+    returns parsed payloads, not raw MIME. Compare bytes, time and
+    coverage before choosing a bulk path. See [06-account-backends](06-account-backends.md).
 - **Microsoft Graph:** per-folder delta with opaque cursors. Send
   `Prefer: IdType="ImmutableId"`, because ordinary ids change on move.
   Limits: 10,000 requests per 10 minutes and 4 concurrent per app per
@@ -155,10 +157,12 @@ Storage ownership and durability are settled in
   checkpoints. Never hold a transaction across network or UI waits.
   Bundle SQLite ≥ 3.51.3 (WAL-reset fix). Page size 4 KiB first (it can't
   change in WAL mode). mmap off until benchmarked.
-- **Raw messages:** immutable, hash-addressed blobs; zstd levels 1–3 for
-  cold content. SQLite's own experiment found ~10 KB BLOBs 35% faster in
-  the DB than as files, so keep a size cutoff open behind the blob
-  abstraction.
+- **Raw messages:** immutable, hash-addressed, uncompressed per-message
+  files to start (revised after the debate). Cold compression (zstd 1–3)
+  and a small-object cutoff wait for measured file counts, backup and
+  restore time and disk use. SQLite's ~10 KB BLOB result (35% faster than
+  files) is one benchmark, not a mail workload; BLOBs remain the switch
+  if the file protocol fails qualification.
 - **Deduplicate bytes separately from logical identity.** Message-ID isn't
   unique. Mailspring documents that its header-hash ids can collide.
 - **Memory target:** about 250 MiB for app plus core, and 250 MiB for
@@ -221,10 +225,11 @@ Detail in [08-macos-ui](08-macos-ui.md).
 
 ## Disagreements and open questions
 
-- **Gmail transport.** GLM wants the Gmail API (it says Gmail IMAP lacks
-  CONDSTORE, which looks wrong). Devin wants IMAP with X-GM-EXT, citing
-  quotas and billing. Codex's quota arithmetic argues for bulk IMAP import
-  at least. To be settled in the debate and the first prototype.
+- **Gmail transport.** GLM wanted the Gmail API (it says Gmail IMAP lacks
+  CONDSTORE; historical rollout evidence contradicts that, but current
+  per-account behaviour needs an authenticated probe). Devin wanted IMAP
+  with X-GM-EXT, citing quotas and billing. Resolved in the debate: design
+  around Gmail identity, ship one transport, measure before a hybrid.
 - **SwiftUI vs AppKit for the list.** Measure, don't assume.
 - **Raw-blob size cutoff (DB vs files):** needs the real size distribution.
 

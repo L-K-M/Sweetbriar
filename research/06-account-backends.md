@@ -14,7 +14,9 @@ third-party Send-as were verified by hand.
   capabilities; none writes the store directly (see
   [01-architecture](01-architecture.md)).
 - **Exchange Online means Microsoft Graph, now.** EWS blocking started
-  2026-10-01; allow-lists became mandatory 2026-10-10; permanent shutdown
+  2026-10-01; from the 2026-10-10 rollout, Worldwide tenants keeping or
+  re-enabling EWS must list allowed apps in `EWSAllowedAppIDs` (other
+  clouds have separate schedules); permanent shutdown
   is 2027-04-01 with no extensions. On-prem Exchange keeps EWS.
   - Apple Mail on Mac still uses EWS. Apple promises Graph in a *future*
     macOS 27 update, with no date.
@@ -23,16 +25,23 @@ third-party Send-as were verified by hand.
     moved.
 - **Release gates are approvals, not code.** Start them immediately:
   - Microsoft's managed consent policy (the default for new tenants)
-    blocks user consent to `Mail.*` and to `IMAP`/`POP`/`EWS`/`EAS`
-    `.AccessAsUser.All` for unlisted apps; a second policy lets named
+    excludes a listed set of Graph permissions from ordinary user consent
+    (`Mail.Read`, `Mail.ReadWrite`, `Mail.ReadBasic` and their shared
+    variants, `MailboxItem.Read`, `MailBoxFolder.*`, `MailBoxSettings.*`,
+    calendars, contacts and more; `Mail.Send` is not on the list) and
+    Exchange `IMAP`/`POP`/`EWS`/`EAS.AccessAsUser.All`. Other tenant
+    policies can still grant consent; a second policy lets named
     clients through (Apple Mail, Spark, eM Client, Thunderbird, two
     Android clients). **Sweetbriar won't be listed, and choosing IMAP
     does not escape this**, so enterprise onboarding needs admin consent,
     docs and publisher verification (verified 2026-10-11).
   - Google restricted-scope verification applies to IMAP's
     `https://mail.google.com/` and the Gmail API alike. CASA applies if
-    restricted data can be accessed "from or through" our servers, which
-    diagnostics or cloud features can trigger; get a written determination.
+    restricted data can be accessed "from or through" third-party servers,
+    including the ability to access it. Content-free aggregate diagnostics
+    don't automatically trigger it, but crash reports or protocol traces
+    carrying mail data, or cloud features, could. Get Google's written
+    determination for the actual data flows.
   - Yahoo and AOL OAuth needs manual approval.
 - **Proton:** Bridge (local IMAP/SMTP, paid plans) is the only sanctioned
   path. Proton's Rust Mail core is public, but its `mail-uniffi` binding is
@@ -40,10 +49,14 @@ third-party Send-as were verified by hand.
   integration needs Proton's written agreement.
 - **Tuta and HEY:** no third-party access by design. Import and export
   workflows only.
-- **The internal model is JMAP-shaped:** `mailboxIds` set membership covers
-  IMAP folders, Gmail labels, Graph folders plus categories, and Proton
-  labels. Provider identity is explicit; sync cursors are opaque per
-  backend; a `providerData` sidecar holds extras.
+- **The internal model uses JMAP vocabulary but is occurrence-based**
+  (revised after the debate): immutable acquisitions; remote occurrences
+  with occurrence-scoped flags (IMAP mailbox + UIDVALIDITY + UID);
+  provider objects keyed by provider ids (Gmail account + message id, JMAP
+  Email id, Graph mailbox + immutable id); typed folder/label membership;
+  and Graph categories and other tags as a **separate** collection, never
+  mailbox membership (a Graph message has one `parentFolderId` plus
+  `categories`). Sync cursors are opaque per backend.
 
 ## Microsoft
 
@@ -53,7 +66,7 @@ third-party Send-as were verified by hand.
 | EWS | Exchange Online: blocking from 2026-10-01, dead 2027-04-01. On-prem (Exchange SE): supported | On-prem only, via Thunderbird's MPL `ews` crate. No Exchange Online launch path on EWS |
 | IMAP/SMTP + OAuth | Works, but tenants can disable IMAP/POP per mailbox; Security Defaults disables SMTP AUTH; SMTP basic auth off by default from end of Dec 2026 | Fallback; don't ask enterprises to loosen policy |
 | EAS (ActiveSync) | Licensable (Microsoft licensing program), mobile-shaped | Skip unless a customer requires it |
-| DavMail | 7.0.0 adds Graph; Java, GPL | User-configured gateway, not embedded |
+| DavMail | 7.0.0 (2026-09-19) strengthens the Graph backend first shipped in 6.8.0 (2026-06-12); Java, GPL | User-configured gateway, not embedded |
 
 **Graph implementation notes** (codex, verified against Microsoft Learn):
 
@@ -68,9 +81,11 @@ third-party Send-as were verified by hand.
 - **MIME:** `GET /messages/{id}/$value` returns MIME. Keep it with the
   metadata, but don't assume it's byte-identical to the original SMTP
   transaction.
-- **Sending:** `sendMail` takes JSON or base64 MIME, and needs `Mail.Send`
-  (not included in `Mail.ReadWrite`). `202 Accepted` means accepted, not
-  delivered; reconcile against Sent Items.
+- **Sending:** create a draft (JSON or MIME), persist its immutable id,
+  send that draft, then find the Sent copy by the same id. This needs
+  `Mail.Send` (not included in `Mail.ReadWrite`). `202 Accepted` means
+  accepted, not delivered. A missing Sent copy never authorizes
+  resubmission. Direct `sendMail` gives weaker correlation evidence.
 - **Attachments:** under 3 MB, a plain POST; 3–150 MB, an upload session
   with ranges under 4 MB. There's a known large-attachment issue in
   shared mailboxes.
@@ -110,8 +125,8 @@ third-party Send-as were verified by hand.
 
 | Path | Auth | Push | Quotas | Fidelity |
 |---|---|---|---|---|
-| **IMAP + X-GM-EXT-1 + XOAUTH2** | Restricted scope `mail.google.com` → verification (no CASA if local-only) | IDLE | Provider-level only (IMAP bandwidth caps apply, unverified) | `X-GM-MSGID` (= API id), `X-GM-THRID`, `X-GM-LABELS`, `X-GM-RAW` search; CONDSTORE rolled out historically; current CONDSTORE and QRESYNC unverified until an authenticated probe |
-| **Gmail API** | Same restricted scopes; CASA only if our servers touch data | `watch` → Pub/Sub needs our infrastructure; Google recommends polling for installed apps | New projects: 6,000 units/user/min, 1.2M/project/min, billing above 80M units/project/day announced, but price and start date pending with 90 days' notice. `messages.get` = 20 units → 1M messages ≥ 55.6 h for one user | Native labels, `history.list` deltas (404 when expired → full resync), threads, settings and filters APIs |
+| **IMAP + X-GM-EXT-1 + XOAUTH2** | Restricted scope `mail.google.com` → verification (no CASA if local-only) | IDLE | Workspace: 2,500 MB/day IMAP download, 500 MB/day upload (Google, checked 2026-10-11; consumer limits not documented there) | `X-GM-MSGID` (the API id's value: IMAP returns unsigned 64-bit decimal, the API hexadecimal; normalize without float truncation), `X-GM-THRID`, `X-GM-LABELS`, `X-GM-RAW` search; CONDSTORE rolled out historically; current CONDSTORE and QRESYNC unverified until an authenticated probe |
+| **Gmail API** | Same restricted scopes; CASA if restricted data can be accessed from or through third-party servers | `watch` → Pub/Sub needs our infrastructure; Google recommends polling for installed apps | New projects: 6,000 units/user/min, 1.2M/project/min, billing above 80M units/project/day announced, but price and start date pending with 90 days' notice. `messages.get` = 20 units → 1M messages ≥ 55.6 h for one user | Native labels, `history.list` deltas (404 when expired → full resync), threads, settings and filters APIs |
 | IMAP + app password | None | IDLE | — | As IMAP; Workspace admins can block it |
 
 - **The disagreement:**
@@ -120,10 +135,12 @@ third-party Send-as were verified by hand.
   - Codex and GLM: a dedicated Gmail API driver. True label and history
     model; no IMAP quirks such as `expungeBehavior`.
   - Codex's own quota arithmetic argues against API-only bulk import.
-- **Leaning:** design for both; ship IMAP-based Gmail first. Add an API
-  driver (or a hybrid: API for deltas, labels and settings, IMAP for bulk
-  bodies, joined by `X-GM-MSGID`) once quotas and billing are known. This
-  is a debate item.
+- **Resolved in the debate:** the Gmail account type is designed around
+  Gmail identity (`X-GM-MSGID` = API id, normalized), so either transport
+  can serve it. Ship one transport first, then measure API-only against a
+  hybrid (API for deltas, labels and settings; IMAP for bulk bodies) on
+  bytes, the Workspace IMAP limits and quota time before building the
+  hybrid. A hybrid doubles the failure modes; admins can disable IMAP.
 - **Workspace admins** can disable IMAP or app passwords; the API path then
   becomes necessary for those tenants.
 - **Consumer Gmail removes third-party Send-as on web and mobile in
@@ -148,8 +165,10 @@ third-party Send-as were verified by hand.
   - `mail-uniffi` is unpublished and **AGPL-3.0-only**
   - `proton-crypto-rs` is MIT, but not vetted for outside use (its default
     backend needs Go)
-  - the service terms (modified 2026-10-09) restrict automation that
-    deviates from normal client behavior
+  - the service terms restrict automation that deviates from normal
+    client behavior (a clause that predates the 2026-10-09 revision,
+    which added general service-discontinuation language; no new
+    Bridge-specific restriction)
 
   Technically possible, source-licensed and service-authorized are three
   separate questions. **Ask Proton.**
@@ -205,20 +224,30 @@ third-party Send-as were verified by hand.
 
 ## Implementation order
 
-Both reports agree on the shape. Codex puts approvals first; devin puts
-Graph right after IMAP.
+Revised after the debate ([debate/04-resolution](debate/04-resolution.md)).
 
-1. **Now, in parallel with engineering:** Entra registration, publisher
-   verification and the admin-consent kit; Google verification and a
-   written CASA determination; Yahoo, AOL and Fastmail registration.
+1. **Now, in parallel with engineering:** start Entra registration,
+   publisher verification and the admin-consent kit; Google verification
+   and a written CASA determination; Yahoo, AOL and Fastmail
+   registration. Submit applications as their artifacts become
+   available. This workstream continues whichever backend ships first.
 2. **Durable local store, import and export** (see the data-safety build
-   order).
-3. **Generic IMAP4rev1/rev2 + SMTP** with the full extension set and
-   provider presets: Gmail (X-GM-EXT), iCloud, Yahoo, Fastmail, GMX,
-   Proton Bridge (port probe, certificate handling, labels-as-folders).
-4. **Microsoft Graph** (Exchange Online + Outlook.com): delta sync, MIME,
-   drafts, sending, upload sessions, search. **Debate: should Graph come
-   before generic IMAP, given the EWS window?**
+   order). Import is the first slice: EML plus one cohort format (Apple
+   Mail's mbox export first; direct `.emlx` when a cohort needs it).
+3. **First live backend, chosen at a dated gate** (end of month 1):
+   - Graph (one primary mailbox, unfiltered per-folder delta, acquired
+     MIME, drafts and draft-based submission, categories, basic filing)
+     if three independent tenants authorize Sweetbriar's own app and the
+     cohort uses Microsoft 365.
+   - If an M365 cohort cannot authorize Sweetbriar, the cohort decision
+     reopens; IMAP doesn't solve their problem.
+   - Otherwise one demanded IMAP provider plus Dovecot fixtures in CI.
+     With no cohort evidence by the gate, the owner's own primary
+     provider.
+4. **Second backend by demand,** not on a fixed schedule: Graph or
+   IMAP with provider presets (Gmail X-GM-EXT, iCloud, Yahoo, Fastmail,
+   GMX, Proton Bridge with port probe, certificate handling and
+   labels-as-folders).
 5. **JMAP** (Fastmail, Stalwart, Cyrus): a narrow mail reference driver;
    tests memberships, states and blobs.
 6. **Gmail API driver** (or hybrid), once quota and billing are clear.

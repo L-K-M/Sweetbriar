@@ -18,15 +18,22 @@ data-safety and classic-client reports. Checked 2026-10-11.
   field (chips and text syntax), saved searches (smart mailboxes), rules
   and scripting. Mailsmith's shared criteria engine and Musashi's "load
   rule into search" prove the value.
-- **Engine: a measured decision between Tantivy and SQLite FTS5**, through
-  a common pipeline. GLM and codex/search lean Tantivy (fuzzy matching,
-  tokenizers, field boosts, facets). Codex/performance and devin/data-safety
-  lean FTS5 (one transaction, one durability story). Both agree: an
-  engine-neutral AST, extraction and publication pipeline, and a
-  benchmark on 100k and 1M real-shaped messages before committing.
+- **Engine: SQLite FTS5 is the declared starting choice** (revised after
+  the debate). Tantivy must clear pre-registered bars in a bounded
+  (about two-week) spike over the same extraction pipeline: judged
+  relevance, identifier and CJK tasks, latency under sync, freshness,
+  recovery and resources (see [debate/04-resolution](debate/04-resolution.md)).
+  GLM and codex/search leaned Tantivy (fuzzy matching, tokenizers, field
+  boosts, facets); codex/performance and devin/data-safety leaned FTS5
+  (one transaction, one durability story). Index placement (inside the
+  authoritative database or a separate derived FTS5 database) is tested
+  separately from engine choice.
 - **Federated search** reaches mail that isn't downloaded, via Gmail
   `X-GM-RAW`, Graph `$search`, JMAP `Email/query` and IMAP
-  ESEARCH/FUZZY. Results merge by identity with "on server" labels.
+  ESEARCH/FUZZY. Remote search is capability-qualified: each clause is
+  exact, broader (verified locally) or unsupported, and a capped result
+  set never proves "no matches". Results merge by account- or
+  mailbox-scoped provider identity with "on server" labels.
 - **Semantic search is opt-in and comes after lexical quality is proven.**
   Query parsing, vector retrieval and answer generation are separate
   concerns.
@@ -50,8 +57,8 @@ data-safety and classic-client reports. Checked 2026-10-11.
 
 | Engine | Fit for a macOS + Linux Rust core | Strength | Cost | Role |
 |---|---|---|---|---|
-| **Tantivy** 0.26/0.27 (MIT) | Native Rust | BM25, phrases with slop, `FuzzyTermQuery`, regex, facets, custom tokenizers, mmap segments, commit payloads | Separate store with its own commits; immutable docs (delete + reinsert); format churn between minors; no vectors | Leading candidate |
-| **SQLite FTS5** | In the bundled SQLite | Same transaction as metadata; SQL joins for filters and facets; `bm25`, `snippet`, `highlight` | No fuzzy matching; trigram has a 3-character floor; CJK needs custom tokenizers; limited ranking control | Mandatory comparison |
+| **SQLite FTS5** | In the bundled SQLite | Same transaction as metadata; SQL joins for filters and facets; `bm25` with column weights, custom tokenizers, auxiliary functions, `snippet`, `highlight` | No fuzzy matching; trigram has a 3-character floor; CJK needs custom tokenizers | **Starting choice** |
+| **Tantivy** 0.26/0.27 (MIT) | Native Rust | BM25, phrases with slop, `FuzzyTermQuery`, regex, facets, custom tokenizers, mmap segments, commit payloads | Separate store with its own commits (a second crash-consistency surface); immutable docs (delete + reinsert); format churn between minors; no vectors | Challenger behind registered bars |
 | Xapian | C++ bridge | Mature mail search (notmuch, mu, Fastmail's Cyrus fork with CJK) | **GPLv2+**; MPL relicensing planned but not done | Only if Sweetbriar goes GPL |
 | Meilisearch (`milli`) | Unpublished internal crate | Typo tolerance, bucket ranking | API coupling | Use its tokenizer `charabia`, not the engine |
 | Lucene | JVM | Reference feature set | Runtime | Design reference |
@@ -73,7 +80,11 @@ throughput, p95 latency, RSS) exist for mail workloads. Measure them.
   - bytes per 100k messages, merge disk space and energy
   - crash recovery at every publication step
 
-**Choose Tantivy only if it is materially better; otherwise FTS5.**
+**FTS5 unless Tantivy clears the registered bars** (for example nDCG@10
++0.05 with a paired 95% interval above zero and no exact or filter
+regression, or FTS5 missing latency, freshness or identifier/CJK
+requirements after bounded tuning). The full registration is in
+[debate/04-resolution](debate/04-resolution.md).
 
 ## Index design
 
@@ -151,12 +162,30 @@ Mail searches cover:
 
 Bare terms search subject, people, authored body and attachment text.
 
-Three front ends over one AST:
+**One typed representation, different allowed subsets** (revised after
+the debate). Search, saved views, rules and remote queries share the
+AST, but each use has its own evaluator and allowed subset:
+
+- Ranked, fuzzy and semantic predicates are search-only, never rule
+  predicates.
+- Missing body or attachment data evaluates to **unknown**, including
+  under negation: `NOT body:invoice` must not file every uncached
+  message. Rule previews use the same completeness semantics as
+  execution.
+- Relative dates carry an explicit evaluation clock and timezone.
+- Canonical query and date semantics are stored separately from the
+  localized display.
+- Searchable content is extracted independently from the reading view:
+  folded quotes, signatures and text the clean view drops stay
+  searchable, with source-part provenance and explicit extraction
+  coverage.
+
+Front ends over the AST (launch with the first two):
 
 1. Token chips: novices never need syntax, and the text and chips stay in
    sync.
 2. The text syntax.
-3. Natural language → AST. Rules handle dates and entities first; the
+3. Later, with D15: natural language → AST. Rules handle dates and entities first; the
    on-device LLM (Foundation Models guided generation into the AST schema;
    a constrained local model on Linux) handles the rest. The result is
    always shown as editable chips, never executed blindly.
@@ -182,8 +211,10 @@ available.
 
 - If an account is fully cached: search locally, and refresh from the
   server asynchronously.
-- If it isn't: query the server first, merging by Message-ID,
-  `X-GM-MSGID` or Graph `internetMessageId`.
+- If it isn't: query the server first and merge by account- or
+  mailbox-scoped authoritative ids (Gmail `X-GM-MSGID`, Graph immutable
+  id, JMAP Email id) or established locators. Message-ID and Graph
+  `internetMessageId` are correspondence clues only.
 - Per-account deadlines and cancellation on every keystroke. Never
   download bodies just to show snippets.
 
@@ -227,10 +258,10 @@ available.
 
 ## Disagreements and open questions
 
-- **Tantivy vs FTS5:** settle with the gate above. My prior (Claude):
-  "best-in-class" plus CJK and typo tolerance favours Tantivy, and the
-  outbox protocol makes its separate store safe. FTS5's single
-  transaction is a real simplicity win if it's good enough.
+- **Tantivy vs FTS5:** settled as FTS5 first with a competitive gate
+  (debate rounds 1–2). Claude's earlier prior favoured Tantivy; both
+  reviewers argued that a second store is a second durability surface and
+  that the bars, not the prior, should decide.
 - **One index vs per-account indexes.**
 - **Privacy:** index files, snippets and vectors need the same protection
   as blobs. Database encryption alone doesn't cover separate index files.

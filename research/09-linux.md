@@ -22,9 +22,11 @@ same stack independently. Checked 2026-10-11.
   the `webkit6` crate. `enable-javascript` and `enable-javascript-markup`
   off (script stripped at parse time), `auto-load-images` off, plus the
   shared Rust sanitizer and resource policy.
-- **Distribution:** Flatpak on Flathub first, plus a supported Ubuntu
-  `.deb`. Snap after credential and background tests (snap user daemons
-  are still experimental). AppImage optional.
+- **Distribution:** Flatpak on Flathub only, at first. A `.deb` adds a
+  second WebKit security-update and integration obligation; add it when
+  users justify it (revised after the debate). Snap after credential and
+  background tests (snap user daemons are still experimental). AppImage
+  optional.
 
 ## Toolkit facts (2026-10-11)
 
@@ -97,9 +99,11 @@ patches.
 - **Shared (Rust):** MIME, sanitizing and resource policy, search and
   query grammar, rules, account backends, durable drafts and outbox,
   commands, paged observable queries, view-state semantics, typed errors,
-  localization strings. Fluent `.ftl` is a candidate; Swift Fluent support
-  is unverified, so the fallback is generating `.strings`/`.xcstrings` at
-  build time.
+  localization strings. Fluent `.ftl` is a candidate: wrap maintained
+  `fluent-rs` in the core, or a young community runtime with a Swift
+  wrapper (`zig-fluent`, 2026). No official Swift implementation exists,
+  and lossless `.ftl` → `.xcstrings` conversion is unverified; the
+  fallback is generating `.strings`/`.xcstrings` at build time.
 - **Per platform:** windows, menus, toolbars, list widgets, composer,
   settings, notifications, drag and drop, theme plumbing, web view
   embedding, `mailto:` handling.
