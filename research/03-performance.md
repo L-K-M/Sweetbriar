@@ -146,7 +146,7 @@ Storage ownership and durability are settled in
   received_at DESC, message_id DESC, sender, subject, flags)`. Maintain
   summaries in the same transaction as the metadata they summarize.
 - **Keyset pagination, never OFFSET.** Codex's benchmark (1M rows, SQLite
-  3.40 on Linux):
+  3.40.1 on Linux):
   - first page: 0.07 ms
   - `OFFSET 900000`: 80 ms
   - the same page by cursor: 0.08 ms
