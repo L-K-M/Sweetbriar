@@ -141,19 +141,21 @@ text syntax with a notmuch-style boolean core and regex as an expert mode,
 and natural language turned into the AST on device, always shown as
 editable chips.
 
-- **v1 engine:** SQLite FTS5 inside `sb-store`, transactional with the
-  metadata. Benchmark Tantivy on 1M/5M fixtures before committing; it's
-  the upgrade path for typo tolerance, CJK tokenizers (lindera/charabia)
-  and facets.
+- **Engine:** a measured decision. Prototype Tantivy (fuzzy matching,
+  CJK tokenizers via lindera/charabia, field boosts, facets) and SQLite
+  FTS5 on the same extraction pipeline and relevance set, at 100k and 1M
+  messages. Choose Tantivy only if it is materially better. Either way,
+  publish through a replayable `search_outbox` with a commit-payload
+  watermark, so the index stays derived and crash-safe.
 - **Server search** fans out per account (X-GM-RAW, Graph `$search`, JMAP
   `Email/query`, IMAP ESEARCH/FUZZY) and merges by message identity with
   "on server" badges and visible local coverage.
 - **Semantic search** is opt-in later: EmbeddingGemma or bge-small,
   sqlite-vec, fused by RRF.
 
-*Strongest counter:* FTS5 has no fuzzy matching, weak CJK support and
-limited ranking control. "Best-in-class search" may require Tantivy from
-day one, and switching engines later is a second migration.
+*Strongest counter:* deferring the choice risks building twice. And if
+FTS5 is "good enough" on the benchmark, a separate Tantivy store adds a
+recovery/overlay subsystem for marginal gains.
 
 ## D8. macOS UI
 
