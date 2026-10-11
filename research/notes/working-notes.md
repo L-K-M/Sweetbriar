@@ -494,3 +494,41 @@ Running takeaways while reading raw reports. Input to the curated docs.
   queue send, keyboard filing, restore from backup — all responsive
   during sync/indexing. Test: triage 20 messages, file several, draft a
   reply without losing place or waiting on network.
+
+## macOS UI, devin (raw/macos-ui/devin.md) — agrees with codex; additions
+
+- Same verdict: AppKit-owned structure, SwiftUI islands; NSOutlineView /
+  NSTableView list; NSTextView/TextKit 2 composer; WKWebView for HTML.
+  Target macOS 26.0 minimum, arm64-first.
+- macOS 26: AppKit automatically tracks @Observable reads in draw/layout/
+  updateConstraints (back-deploys to 15 with NSObservationTrackingEnabled):
+  AppKit and SwiftUI views can share the same @Observable view models.
+  [verify]
+- macOS 27: refined Liquid Glass (readability), concentric corners, menu
+  item symbols hidden by default again; SwiftUI Document API; NSRefresh
+  Controller; Icon Composer `.icon` icons. Sparkle 2.10 needs macOS 12+.
+- App Intents has a dedicated `.mail` schema domain: 12 intents
+  (create/update/save/open/delete/send draft incl. scheduling,
+  openMessage, reply, forward, update, archive, delete) and 5 entities
+  (account, draft, mailbox, message, thread) wired into Siri, Shortcuts,
+  Spotlight. [verify] High-value adoption target.
+- SwiftUI Table pain points at scale: identity-diffing cost, sort hangs,
+  context menu doesn't give "clicked but unselected" Mac semantics,
+  NSHostingView-in-cell sizing bugs. NetNewsWire forbids Auto Layout and
+  stack views inside table cells for performance.
+- WKWebView: devin favors prewarming one hidden view at launch and reusing
+  one per pane (first WebContent process costly); codex says only if
+  measured. Load message HTML itself from the custom scheme so cid:
+  resolution is uniform. MailMate (r6272 notes) documents the same
+  content-rule + scheme-handler recipe; Mimestream blocks ~78 tracker
+  patterns. Own evaluateJavaScript still works with page JS off.
+- format=flowed: always honor on display; MailMate disabled sending it by
+  default in 2021 (Outlook/Gmail ignore it). Emit for plain-only messages,
+  behind a preference.
+- Composer: Plain + Markdown (generate multipart/alternative) first, WYSIWYG
+  later; STTextView as fallback TK2 component; SwiftUI TextEditor not
+  composer-grade yet.
+- AppleScript: use scripting access groups (sdef) so sandboxed callers
+  can target Sweetbriar; Mailsmith was scriptable *and recordable*.
+- Billing direct via Paddle/FastSpring; MailMate $10/quarter; Mimestream
+  $49.99/yr; Nova $99 + $49/yr updates.
