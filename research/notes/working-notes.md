@@ -205,3 +205,90 @@ Running takeaways while reading raw reports. Input to the curated docs.
   graph,gmail,carddav,ews}, mime, crypto, proto.
 - Open: view models in Rust (Crux/1Password style) vs Swift @Observable
   over diff streams. Devin leans Swift view models for v1.
+
+## Claris Emailer (raw/emailer/devin.md, manual-based)
+
+- Fog City Software (Guy Kawasaki's company; lead dev Jud Spencer),
+  licensed to Claris Apr 1995, 1.0 Jul 1995, 2.0 Apr 1997, final 2.0v3
+  ~Jan 1998; killed in the Claris -> FileMaker restructuring. Core team
+  (Spencer, Crevier, Cortright, Marandino) went to Microsoft: Outlook
+  Express Mac -> Entourage -> Outlook for Mac (community recollection).
+- Soul: one In Box, Out Box, Address Book and rule engine across all
+  services (POP/SMTP, AOL, CompuServe, eWorld, RadioMail). Offline-first:
+  compose locally, connect in batches manually or on named Schedules;
+  Locations = per-network connection profiles.
+- Loved: Mail Actions (ordered, stop-able, criteria on address book /
+  group membership, actions set priority / file / auto-reply with edited
+  text / auto-forward; "don't auto-reply to mailing lists"); Cmd-Opt-F
+  type-the-folder-name filing; auto-file after read/send/reply;
+  auto-delete read/sent/deleted after N days; Auto File Log (durable
+  audit of what rules filed where); named colored priorities; address
+  book type-to-filter; per-recipient send status with resend to one
+  recipient; "Send Now" for one message vs flush queue; random
+  signatures; configurable attribution line; holding Cmd reveals button
+  shortcuts; status window shows the subject being downloaded; deep
+  AppleScript + Fog City community script library.
+- Disliked: 1.x file-per-message wasted HFS blocks; 2.0 monolithic DB
+  corrupted, needed rebuild rituals, all-or-nothing backup, hard to
+  leave; slow all-folder search; no HTML.
+- Lesson: never ship opaque storage without built-in export (mbox/EML)
+  and integrity tooling; avoid modal connection UI.
+- [verify] Thunderbird Graph near-parity mid-2026; Mimestream notes Gmail
+  API billing later in 2026 (consistent with sources report).
+
+## Data safety (raw/data-safety/devin.md)
+
+- Incidents and root causes: Apple Mail Catalina 2019 (migration reported
+  success unverified; moves persisted header-only copies to server, which
+  synced deletions back); Thunderbird mbox compaction corruption (fixed by
+  rewriting the compactor, 128 ESR; auto-repair of local folders limited
+  because repair itself loses data); PST size ceilings; Proton Bridge UIDs
+  changing without UIDVALIDITY change, "Recovered Messages" deleted on
+  reset, leaked gluon DBs; K-9 9.0 settings migration silently made deletes
+  permanent (#9034); one failing APPEND blocked K-9's whole op queue
+  (#1155); Eudora .toc corruption; Airmail 3 URL-scheme exfiltration CVEs;
+  Mailspring drops in-flight tasks on launch instead of replaying.
+- Design: raw messages as immutable files (Maildir-style tmp -> fsync ->
+  rename -> dir fsync), SHA-256 per message; SQLite as rebuildable index;
+  oplog/intent queue authoritative, written in the same transaction as
+  the local effect; replay = convergence check; poisoned op parks after N
+  attempts; per-account ordering only where needed.
+- Never bare EXPUNGE (make the IMAP layer lack the verb): UID MOVE, else
+  COPY -> verify COPYUID -> UID STORE \Deleted -> UID EXPUNGE. Default
+  delete = move to Trash. Tombstones until server confirms + one clean
+  sync. Circuit breaker (e.g. >50 msgs or >20% of folder, or UIDVALIDITY
+  change producing mass deletes): pause and ask.
+- UIDVALIDITY change: freeze queue, resync, rematch by Message-ID/hash.
+  Gmail: read ImapSettings autoExpunge/expungeBehavior; X-GM-MSGID as key.
+- SQLite: bundle >= 3.51.3 (WAL-reset bug 3.7.0-3.51.2 loses commits when
+  connections write+checkpoint concurrently; found by Tailscale, reproduced
+  by Antithesis in ~15 min; checked on [sqlite.org](https://sqlite.org/wal.html):
+  fixed 2026-03-13, backports 3.44.6 and 3.50.7, "tight timing" race); Apple's system SQLite maps fullfsync
+  to F_BARRIERFSYNC, not a drive flush [verify]. WAL + synchronous=FULL +
+  fullfsync + checkpoint_fullfsync; single writer; VACUUM INTO before
+  migrations; integrity_check; Time Machine: back up messages, exclude
+  index/caches; warn if store is in iCloud/Dropbox/network FS.
+- Sending: at-most-once *visible*. States held(undo) -> queued ->
+  smtp-in-flight -> sent-unconfirmed -> confirmed|failed. Same Message-ID on
+  retry; after a drop post-DATA, look up Sent by Message-ID before resend;
+  show "possibly sent". 4xx backoff with jitter, 5xx fail. SIZE first;
+  large files via link upload.
+- Drafts: local append-only snapshots (debounced, fsync before "saved"),
+  one Message-ID per draft, APPEND+UIDPLUS, REPLACE (RFC 8508) if offered.
+- Security: tokens in Keychain ThisDeviceOnly, non-synchronizable; JS off
+  via WKWebpagePreferences.allowsContentJavaScript; block remote incl. CSS
+  (EFAIL: decrypted content and remote loads never share a context);
+  quarantine xattr on saved attachments; fuzz MIME; panics -> "render
+  failed"; mail-parser had CVE-2026-26312 (OOM on cyclic MIME).
+- BIMI still an Internet-Draft: branding, not trust.
+- Testing: deterministic simulation (FoundationDB, TigerBeetle VOPR,
+  Dropbox Nucleus in Rust: 3 trees remote/local/synced must converge),
+  proptest state machine vs in-memory IMAP model, imaptest, Cassandane,
+  real-server CI matrix, toxiproxy faults. Invariant table I1-I10.
+- Open: FTS5 vs Tantivy (one vs two storage engines with crash semantics).
+- RESOLVED CONFLICT: this report says Exchange Online SMTP AUTH basic is
+  rejected Mar-Apr 2026; that plan was revised on 2026-01-27: unchanged
+  until end of Dec 2026, then off by default for existing tenants (admins
+  can re-enable), unavailable for new tenants, final removal date to be
+  announced 2H 2027 ([o365reports](https://o365reports.com/deprecation-of-smtp-authentication-client-submission-in-exchange-online/),
+  checked by Claude). sources/devin is correct.
