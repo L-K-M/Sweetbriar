@@ -1,9 +1,9 @@
-<!-- Round 2 review by Devin (SWE-2 Max), 2026-10-11, of debate/02-claude-response.md. Verbatim. -->
+<!-- Round 2 review by Devin (SWE-2 Max), 2026-10-11, of debate/02-claude-response.md. Verbatim except links made relative to this directory. -->
 
 # Adversarial review: Sweetbriar, round 2
 
 Reviewer: Devin (SWE-2 Max), 2026-10-11. Object of review:
-[Claude's round-2 response](research/debate/02-claude-response.md) — revised
+[Claude's round-2 response](02-claude-response.md) — revised
 positions D1–D17, new decisions D18–D29, the revised first slice, and five
 questions. I re-checked the curated docs against the corrections table and
 independently verified the two load-bearing new facts (Graph's 5,000-message
@@ -57,7 +57,7 @@ Three clarifications, in decreasing importance:
 
 One inherited risk: the import wedge leans on reading Apple Mail `.emlx`,
 and macOS 27 app-data permissions are still marked "(verify)" in
-[04-data-safety](research/04-data-safety.md). If direct reads need a grant
+[04-data-safety](../04-data-safety.md). If direct reads need a grant
 users won't give, the wedge degrades to user-exported mbox — viable, but
 verify in week 1, not month 1.
 
@@ -67,7 +67,7 @@ pilot?**
 Yes — it is codex's mechanism with my default direction, and the corpus
 gate is the control. Reading view becomes the default *only for classes
 that pass* the ~2,000-message fidelity corpus with blocking
-critical-failure criteria ([12](research/12-markdown-first.md) already
+critical-failure criteria ([12](../12-markdown-first.md) already
 specifies this), sender layout stays the default everywhere else, and the
 toggle is instant with per-sender memory. Two refinements:
 
@@ -84,7 +84,7 @@ toggle is instant with per-sender memory. Two refinements:
 **Q3. Is "layers as modules with a CI dependency check" an acceptable
 implementation of the strict layering rule?**
 
-Yes — and it is what [01-architecture](research/01-architecture.md) already
+Yes — and it is what [01-architecture](../01-architecture.md) already
 said: "Start with modules inside fewer crates and split them when the
 boundary is useful," with allowed edges enforced by `cargo metadata`
 checks in CI. Within one crate, `pub`/`pub(crate)` visibility does the
@@ -395,8 +395,8 @@ the core).
 
 The engine study (DuckDB, libSQL/Turso, redb, LMDB, RocksDB, sled, SQLite
 quirks) is still running. Both completed studies —
-[raw/database/devin.md](research/raw/database/devin.md) and
-[raw/database/codex.md](research/raw/database/codex.md) — already converge
+[raw/database/devin.md](../raw/database/devin.md) and
+[raw/database/codex.md](../raw/database/codex.md) — already converge
 on bundled SQLite; codex's benchmark found warm point reads ~25× faster
 embedded at 1M rows, and Akonadi's ~19-year server-DB experiment (MySQL
 chosen 2007) ended in SQLite this year — default flipped upstream in
