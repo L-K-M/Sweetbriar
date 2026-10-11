@@ -328,3 +328,45 @@ Running takeaways while reading raw reports. Input to the curated docs.
   (versioned schema, replay ops), EDS Camel folder summary tables, Apple
   Mail Envelope Index + .emlx, K-9/Thunderbird Android, mox imapclient.
 - Rules: Sieve-subset interpreter is "a few weeks"; decide before rules UX.
+
+## Standards (raw/standards/devin.md)
+
+- Setup chain: known providers by domain and MX -> Autodiscover V1 (POX;
+  V2 JSON works but undocumented) -> Thunderbird ISPDB (MPL-2.0 data, ~50%
+  of accounts) -> autoconfig.<domain> / .well-known -> RFC 6186 SRV ->
+  hostname probing -> manual. Autoconfig is becoming
+  draft-ietf-mailmaint-autoconfig (-06, post-WGLC).
+- MX -> provider mapping picks the *auth path* (OAuth endpoints, app
+  password guidance), not just hosts.
+- OAuth on macOS: ASWebAuthenticationSession + PKCE + reverse-domain custom
+  scheme, loopback fallback (Google still allows loopback for desktop
+  clients). Client IDs are public; refresh token is the secret.
+  invalid_grant = re-authenticate, never delete the account.
+- Yahoo OAuth needs manual approval; iCloud app-specific passwords only;
+  Fastmail OAuth for all protocols; Gmail app passwords only with 2SV.
+- MIME edge cases: broken RFC 2047, three filename encodings (2231, 2047,
+  raw 8-bit), iso-8859-1 -> windows-1252, chardetng, malformed QP, EAI
+  (parse UTF-8 headers; SMTPUTF8 only when advertised), format=flowed in
+  and out, TNEF from [MS-OXTNEF] (~2k lines to write), message/rfc822,
+  text/calendar, crypto parts are structure not attachments.
+- Threading: JWZ locally + X-GM-THRID + Exchange Thread-Index /
+  ConversationIndex; THREAD=REFS draft is dead; server THREAD optional.
+  Localized reply prefixes (Aw:, Sv:, VS:, WG:, Odp:...).
+- Sending: prefer 465 implicit TLS (RFC 8314), else 587; Gmail and M365
+  save SMTP-submitted mail to Sent themselves: keep a per-provider
+  "server saves sent" flag or you double-append (Thunderbird bug 1431562).
+  DSN nice-to-have; BURL/FUTURERELEASE rare; undo/send-later client-side.
+- Trust: show Authentication-Results only from the account's own authserv-id.
+  BIMI: Apple Mail shows logos only for provider-asserted BIMI; client-side
+  VMC/CMC validation would be a differentiator (later).
+- RFC 9979 (May 2026, Jenkins/Fastmail + Eggert/Apple, Informational)
+  registers $MailFlagBit0/1/2 (Apple's 7 flag colors over \Flagged; 111
+  unassigned), $hasattachment, $muted, $notify, $canunsubscribe,
+  $unsubscribed, $memo, $maskedemail, $followed, $new ... and mailbox
+  attributes \Snoozed, \Scheduled, \Memos. Checked by Claude on
+  rfc-editor.org. Round-trip Apple flag colors at launch.
+- Sieve + ManageSieve (port 4190: Dovecot Pigeonhole, Cyrus, mailbox.org)
+  = server-side rules for non-Gmail/Exchange accounts; Sieve editor is a
+  differentiator. MDN: parse, never auto-send.
+- macOS 27: no changes found that affect third-party mail clients.
+- Tiered checklist (launch / soon / later) in the report, section 4.1.
