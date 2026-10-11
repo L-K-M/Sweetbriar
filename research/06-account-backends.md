@@ -126,10 +126,12 @@ third-party Send-as were verified by hand.
   is a debate item.
 - **Workspace admins** can disable IMAP or app passwords; the API path then
   becomes necessary for those tenants.
-- **Gmail removes third-party Send-as in January 2027** (and Gmailify).
-  Users who sent as other addresses through Gmail need a client that
-  sends through those accounts directly: an argument for first-class
-  identities ([11-classic-clients](11-classic-clients.md)).
+- **Consumer Gmail removes third-party Send-as on web and mobile in
+  January 2027** (and Gmailify); Workspace Send-as and Gmail aliases are
+  unaffected. Users who sent as other addresses through consumer Gmail
+  need a client that sends through those accounts directly: an argument
+  for first-class identities with per-identity outgoing servers
+  ([11-classic-clients](11-classic-clients.md)).
 
 ## Proton, Tuta, HEY
 

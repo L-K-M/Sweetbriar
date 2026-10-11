@@ -79,10 +79,12 @@ sqlite.org. Checked 2026-10-11.
 - **GC** respects live references, pending operations, recovery
   retention and backup pins. It commits the reference removal before
   unlinking, and never erases disputed data to clear an error.
-- **Metadata is primary data.** A periodic online backup (SQLite backup
-  API) and an append-only metadata journal mean a rebuild from objects
-  keeps labels, notes, statuses and overlays. Mirror to IMAP and JMAP
-  keywords and RFC 9979 flags where the server allows.
+- **Metadata is primary data.** SQLite is its sole authority; a rebuild
+  from objects regenerates only derived data, so labels, notes, statuses
+  and overlays survive it. Corruption of the database itself is covered by
+  backup generations with a stated recovery point, not by a separate
+  journal (revised after debate round 1). Mirror to IMAP and JMAP keywords
+  and RFC 9979 flags where the server allows.
 - **Store user-owned formats.** Original bytes are kept even when parsing
   fails. A local UUID is independent of Message-ID. Export to EML,
   Maildir and mbox (with documented `From ` escaping) from day one, with a
@@ -98,9 +100,13 @@ sqlite.org. Checked 2026-10-11.
   costly, use BLOBs plus verified EML export; reliable export beats a
   nominally open store. Devin: files, because a single database file
   concentrates corruption risk and makes mail unreadable without the app.
-  **Recommendation:** files, behind a blob abstraction with the protocol
-  proven by fault injection before release, and a size cutoff open for
-  small objects.
+  **Recommendation:** files, behind an object-store contract (atomic
+  publish; enumerate and pin for GC; no path-shaped assumptions in the
+  API) with the publication fault harness parameterized over store
+  implementations, so a BLOB store could replace files if qualification
+  fails. Start with one store: uncompressed per-message files, no
+  small-object cutoff or compression until measured (revised after
+  debate rounds 1–2).
 
 ## SQLite durability
 
