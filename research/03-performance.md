@@ -69,7 +69,8 @@ an import workflow, not "launch".
   - Yahoo advertises OBJECTID and PARTIAL.
   - Microsoft 365 advertises MOVE, UIDPLUS, IDLE and LITERAL+.
   - Gmail adds its X-GM extensions. It rolled out CONDSTORE years ago
-    (Thunderbird bug 912216); QRESYNC is unconfirmed.
+    (Thunderbird bug 912216); current CONDSTORE and QRESYNC behaviour is
+    unverified until an authenticated probe.
   - Authenticated probes belong in the first prototype.
 - **JMAP:** batched method calls with result references, state-based
   `/changes`, push. Preferred where offered (Fastmail, Stalwart, Cyrus);

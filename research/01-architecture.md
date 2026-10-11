@@ -197,8 +197,10 @@ notification. One writer; everyone else goes through it.
 - `cargo-swift` lags UniFFI versions; a small `xtask` is the fallback.
 - macOS 27 is Apple-silicon only. macOS 26 still runs on four Intel models.
   Build arm64 first; ship universal only if the support policy says so.
-- Release builds: LTO, `panic = "abort"` in the FFI library (or
-  `catch_unwind` at every export), stripped binaries with archived dSYMs.
+- Release builds: LTO, `panic = "unwind"` with `catch_unwind` at every
+  export and at the parser boundary (`abort` would contradict 04's "a
+  parser panic shows an error"; isolate risky extractors instead), stripped
+  binaries with archived dSYMs.
   Expect a core of roughly 8–25 MB per architecture.
 - CI: Rust tests on macOS and Linux, binding drift check, strict Swift 6
   compile, cancellation and subscription tests, signed agent and extension

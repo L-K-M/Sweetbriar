@@ -974,3 +974,23 @@ Running takeaways while reading raw reports. Input to the curated docs.
   or Litestream-style WAL streaming for backups.
 - Postgres becomes right for a future server-side sync service or shared
   team mailboxes, as a service; the client store then becomes a replica.
+
+## Debate round 1 (debate/01-review-*.md) — facts checked by Claude
+
+- Graph message delta: `$filter=receivedDateTime ge|gt` is the only filter,
+  and filtered delta returns at most 5,000 messages (Microsoft Learn,
+  delta-query-messages, checked 2026-10-11). Complete coverage needs
+  unfiltered per-folder delta.
+- Microsoft-managed user consent policy (default for new tenants) excludes
+  Graph `Mail.Read`, `Mail.ReadWrite`, `Mail.ReadBasic`, shared variants,
+  `MailboxItem.Read`, `MailBoxFolder.*`, `MailBoxSettings.*` and Exchange
+  `EAS/EWS/IMAP/POP.AccessAsUser.All`. `Mail.Send` is not on the list.
+  The separate mail-client policy names Apple Mail, Spark, eM Client,
+  Thunderbird, Android-Samsung and Android-Mail (Microsoft Learn,
+  manage-app-consent-policies, updated 2026-08-28). IMAP does not escape
+  admin consent.
+- Codex's other corrections (MPL, panic=abort, CVE scope, ESEARCH vs
+  PARTIAL, BINARYMIME, M365 Sent copies, Authentication-Results, calamine,
+  CASA wording, Gmail billing, CONDSTORE, Outlook for Mac, Proton desktop,
+  RFC 9979 scope) were accepted on their cited primary sources and applied
+  to 01–07 and 10.

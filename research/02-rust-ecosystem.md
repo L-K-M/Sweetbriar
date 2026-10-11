@@ -10,8 +10,10 @@ Versions as of 2026-10-11.
 - **Codecs and MIME are solved.** The sync engine, local store,
   threading, unified search, rules and the Microsoft/Proton backends are
   not. That is where Sweetbriar's value lives.
-- Keep **every dependency permissive** (MIT/Apache/BSD/MPL-2.0) so a
-  commercial option stays open. The traps: `sieve-rs` (AGPL), `melib`
+- Keep dependencies **compatible with a commercial option**: MIT/Apache/BSD,
+  audited MPL-2.0 (file-level copyleft, not permissive) and dynamically
+  linked LGPL platform libraries, with a per-component licence inventory
+  (revised after round 1). The traps: `sieve-rs` (AGPL), `melib`
   (EUPL/GPL), notmuch/Xapian/mu (GPL), Mailsync and Proton Bridge (GPL),
   `sequoia-openpgp` (LGPL).
 - Wrap every wire stack behind Sweetbriar's own `AccountBackend` boundary,
@@ -25,7 +27,7 @@ Versions as of 2026-10-11.
 | IMAP flow | `imap-next` (sans-I/O) | — | Runtime-agnostic, fits the engine/FFI split |
 | IMAP client | Own thin client on `imap-next`; track/vendor `io-imap` 0.7 (pimalaya) | `async-imap` 0.12 (Delta Chat) to bootstrap | io-imap: CONDSTORE+QRESYNC, IDLE, MOVE, UIDPLUS, SORT/THREAD, XOAUTH2/OAUTHBEARER, SCRAM. async-imap: no QRESYNC |
 | SMTP | `lettre` 0.11 or `mail-send` 0.6 (DKIM signing, XOAUTH2) | `io-smtp` | mail-send is Tokio-only and lacks OAUTHBEARER |
-| MIME parse | `mail-parser` 0.11 (Stalwart) with `full_encoding` | `mailparse` 0.18 | SIMD, lazy, 41 charsets incl. CJK, RFC 8621 body model, fuzzed + Miri; aggressive MSRV; CVE-2026-26312 (OOM on cyclic MIME) fixed |
+| MIME parse | `mail-parser` 0.11 (Stalwart) with `full_encoding` | `mailparse` 0.18 | SIMD, lazy, 41 charsets incl. CJK, RFC 8621 body model, fuzzed + Miri; aggressive MSRV; Stalwart CVE-2026-26312 (cyclic MIME traversal) was fixed in the server; the safe `mail-parser` version is not established, so bound consumers |
 | MIME build | `mail-builder` 1.0 | lettre `Message` | |
 | Auth results | `mail-auth` 0.13 | — | DKIM, DKIM2 draft, ARC, SPF, DMARCbis (RFC 9989–9991); no BIMI |
 | JMAP | `jmap-client` 0.4 | — | Core, mail, WebSocket, EventSource; the only maintained Rust client |

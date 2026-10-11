@@ -178,7 +178,7 @@ available.
 | Gmail | IMAP `X-GM-RAW` / API `q=`: the full web grammar | Conversation-scoped negation |
 | Microsoft Graph | `$search` (KQL) | **Date-sorted, max 1,000 results**: the client ranks, and local cache depth is the real search radius |
 | JMAP | `Email/query` + `SearchSnippet/get` (server highlighting) | Capabilities vary |
-| IMAP | SEARCH, ESEARCH (counts and paging), FUZZY with RELEVANCY (RFC 6203) where advertised | Server-dependent; CHARSET handling |
+| IMAP | SEARCH, ESEARCH (counts), PARTIAL for paging (RFC 9394), FUZZY with RELEVANCY (RFC 6203) where advertised | Server-dependent; CHARSET handling |
 
 - If an account is fully cached: search locally, and refresh from the
   server asynchronously.
@@ -192,8 +192,9 @@ available.
 - An extraction pipeline stage, versioned, with caps (first N KB), per-account
   policy and status.
 - **macOS:** PDFKit; Vision OCR (opt-in).
-- **Cross-platform:** pdfium-render or pure-Rust PDF; OOXML via `calamine`
-  plus `quick-xml`; Tesseract on Linux.
+- **Cross-platform:** pdfium-render or pure-Rust PDF; spreadsheets via
+  `calamine`; DOCX and PPTX via their own bounded `zip` + `quick-xml`
+  extractors (`calamine` reads spreadsheets only); Tesseract on Linux.
 - Legacy `.doc`/`.xls`: filename-only, or an optional helper.
 - Encrypted mail: index decrypted text only under an explicit local
   retention policy.

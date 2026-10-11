@@ -23,3 +23,23 @@ Ordered by how hard they are to change later.
 | D15 | AI posture: opt-in, on-device first (Apple Foundation Models), none required | Privacy promise | landscape, search |
 | D16 | Rendering model: Markdown-first (normalize incoming mail into one rendered form, "show original" toggle; compose in Markdown) vs sanitized original HTML with a reader mode (owner's proposal, 2026-10-11) | Shapes the reader, composer, storage of derived forms, search, privacy story | markdown-mail (new jobs) |
 | D17 | Local database engine: bundled SQLite vs PostgreSQL vs DuckDB, libSQL/Turso, redb, LMDB, RocksDB and others for authoritative state; SQLite's default quirks and how far they can be neutralized (owner's questions, 2026-10-11) | The store is the hardest thing to migrate | database-choice, db-engines (benchmarks + crash tests) |
+
+## Added after debate round 1
+
+Both reviewers found these missing ([response](../debate/02-claude-response.md)).
+D18–D21 are the owner's decisions; D22–D29 carry starting recommendations.
+
+| # | Decision | Hard to change because | Owner |
+|---|---|---|---|
+| D18 | Product licence and contribution policy (MPL core + paid app, GPL, proprietary; CLA or none) | Contributor rights and published terms can't be unpublished; shapes D13 | Owner |
+| D19 | Business model and licence-expiry behaviour | Licence server, grace states; read/export/recovery must survive expiry | Owner |
+| D20 | First cohort, team size, runway | Every scope and schedule estimate assumes it | Owner |
+| D21 | Scope: email-only pilot; shared/delegated mailboxes, calendars, contacts; Windows posture | Cohort may not switch without them | Owner |
+| D22 | Contacts source (own store, macOS Contacts, CardDAV) | Schema for identities, nicknames, rule criteria | Engineering |
+| D23 | Sweetbriar metadata across devices | Stable IDs and revisions must exist before data does | Engineering |
+| D24 | Encryption at rest and key recovery | Designed into the store and blob layer, or migrated later | Engineering |
+| D25 | Archive vs cache, retention, storage pressure | Defines the public data-safety promise | Engineering |
+| D26 | Onboarding and authorization flow | First-run experience; credential safety | Engineering |
+| D27 | Update and downgrade policy | A reverted update after migration is a data-loss vector | Engineering |
+| D28 | Junk/spam strategy | Mac power users expect a SpamSieve-style hook | Engineering |
+| D29 | Accessibility, localization, telemetry, security boundaries | Shapes shared projections and what leaves the machine | Engineering |

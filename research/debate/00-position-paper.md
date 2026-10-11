@@ -1,5 +1,8 @@
 # Position paper: foundational recommendations (draft for adversarial review)
 
+> Round-1 draft, kept as reviewed. Revised positions are in
+> [02-claude-response.md](02-claude-response.md).
+
 Author: Claude (Opus 5.5), 2026-10-11. Basis: the curated documents
 `research/0*.md`, the working notes and the raw reports in `research/raw/`.
 This paper states one recommendation per decision on the

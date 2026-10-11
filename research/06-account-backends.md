@@ -22,13 +22,17 @@ third-party Send-as were verified by hand.
     (Graph since 154, August 2026) and eM Client (11, 2026-10-07) already
     moved.
 - **Release gates are approvals, not code.** Start them immediately:
-  - Microsoft's managed consent policies let named clients through
-    (Apple Mail, Spark, eM Client, Thunderbird). **Sweetbriar won't be
-    listed**, so enterprise onboarding needs admin-consent docs and
-    publisher verification.
+  - Microsoft's managed consent policy (the default for new tenants)
+    blocks user consent to `Mail.*` and to `IMAP`/`POP`/`EWS`/`EAS`
+    `.AccessAsUser.All` for unlisted apps; a second policy lets named
+    clients through (Apple Mail, Spark, eM Client, Thunderbird, two
+    Android clients). **Sweetbriar won't be listed, and choosing IMAP
+    does not escape this**, so enterprise onboarding needs admin consent,
+    docs and publisher verification (verified 2026-10-11).
   - Google restricted-scope verification applies to IMAP's
-    `https://mail.google.com/` and the Gmail API alike. CASA applies only
-    if mail passes through our servers; get a written determination.
+    `https://mail.google.com/` and the Gmail API alike. CASA applies if
+    restricted data can be accessed "from or through" our servers, which
+    diagnostics or cloud features can trigger; get a written determination.
   - Yahoo and AOL OAuth needs manual approval.
 - **Proton:** Bridge (local IMAP/SMTP, paid plans) is the only sanctioned
   path. Proton's Rust Mail core is public, but its `mail-uniffi` binding is
@@ -55,7 +59,9 @@ third-party Send-as were verified by hand.
 
 - **Folders and messages:** `mailFolders/delta` for the hierarchy;
   per-folder `messages/delta`. Follow `nextLink` until `deltaLink` and keep
-  the full URL. Delta doesn't support `$search`.
+  the full URL. Delta doesn't support `$search`. A `receivedDateTime`
+  `$filter` caps delta at 5,000 messages: use it only as a recent-mail
+  fast path, never as proof of complete coverage (verified 2026-10-11).
 - **Ids:** send `Prefer: IdType="ImmutableId"` everywhere. Ids survive
   moves within one mailbox, but not moves into archive mailboxes or
   export/reimport. Namespace them by mailbox.
@@ -104,8 +110,8 @@ third-party Send-as were verified by hand.
 
 | Path | Auth | Push | Quotas | Fidelity |
 |---|---|---|---|---|
-| **IMAP + X-GM-EXT-1 + XOAUTH2** | Restricted scope `mail.google.com` → verification (no CASA if local-only) | IDLE | Provider-level only (IMAP bandwidth caps apply, unverified) | `X-GM-MSGID` (= API id), `X-GM-THRID`, `X-GM-LABELS`, `X-GM-RAW` search; CONDSTORE rolled out (QRESYNC unconfirmed) |
-| **Gmail API** | Same restricted scopes; CASA only if our servers touch data | `watch` → Pub/Sub needs our infrastructure; Google recommends polling for installed apps | New projects: 6,000 units/user/min, 1.2M/project/min, billing above 80M units/project/day (price unpublished). `messages.get` = 20 units → 1M messages ≥ 55.6 h for one user | Native labels, `history.list` deltas (404 when expired → full resync), threads, settings and filters APIs |
+| **IMAP + X-GM-EXT-1 + XOAUTH2** | Restricted scope `mail.google.com` → verification (no CASA if local-only) | IDLE | Provider-level only (IMAP bandwidth caps apply, unverified) | `X-GM-MSGID` (= API id), `X-GM-THRID`, `X-GM-LABELS`, `X-GM-RAW` search; CONDSTORE rolled out historically; current CONDSTORE and QRESYNC unverified until an authenticated probe |
+| **Gmail API** | Same restricted scopes; CASA only if our servers touch data | `watch` → Pub/Sub needs our infrastructure; Google recommends polling for installed apps | New projects: 6,000 units/user/min, 1.2M/project/min, billing above 80M units/project/day announced, but price and start date pending with 90 days' notice. `messages.get` = 20 units → 1M messages ≥ 55.6 h for one user | Native labels, `history.list` deltas (404 when expired → full resync), threads, settings and filters APIs |
 | IMAP + app password | None | IDLE | — | As IMAP; Workspace admins can block it |
 
 - **The disagreement:**

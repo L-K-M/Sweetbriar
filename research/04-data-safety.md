@@ -110,7 +110,7 @@ sqlite.org. Checked 2026-10-11.
 | Never the system SQLite on macOS | Apple's build substitutes `F_BARRIERFSYNC` for `fullfsync` (bonsaidb, Tsai 2025) |
 | WAL, `synchronous=FULL` for authoritative state | WAL + NORMAL can roll back acknowledged commits after power loss |
 | `PRAGMA fullfsync=ON`, `checkpoint_fullfsync=ON` on macOS | macOS `fsync` doesn't flush the drive cache |
-| One writer connection; readers through it | Removes the WAL-reset trigger; one owner for migrations |
+| One writer connection that also owns checkpoints; readers through it | Avoids the WAL-reset trigger only if no other connection checkpoints; the fixed version is still required. One owner for migrations |
 | Exclusive process ownership lease on the live store | A second instance uses the existing core or stays read-only |
 | `user_version` migrations, each transactional; `VACUUM INTO` a snapshot before destructive ones; verify counts and checksums after | Catalina and K-9 lessons |
 | `integrity_check` scheduled and after migrations; SHA-256 per object, verified on read | Detects corruption; on detection, pause dangerous work and preserve evidence, never "repair" by deleting |
@@ -226,15 +226,18 @@ files or exports (verify).
   traversal checks.
 - **Links:** show the real destination; warn on IDN confusables, raw IPs,
   userinfo and display/target mismatch (Eudora's ScamWatch).
-  `Authentication-Results` only from our own provider's `authserv-id`.
+  `Authentication-Results` only behind a provider boundary that strips
+  injected copies; the `authserv-id` alone is forgeable text (RFC 8601).
   BIMI is branding, not trust.
 - **URL schemes and automation** can never send or exfiltrate without
   confirmation (Airmail lesson).
 - **Parsers:** fuzz MIME, charset, base64, QP, TNEF and PKCS#7 paths
   (cargo-fuzz, afl); cap depth and size. A panic renders "message could
-  not be displayed", never kills the process. mail-parser's
-  CVE-2026-26312 (OOM on cyclic MIME) shows that Rust prevents memory
-  bugs, not resource exhaustion.
+  not be displayed", never kills the process; this needs `panic =
+  "unwind"` and `catch_unwind` at the parser boundary, and OOM needs
+  limits, not panics. Stalwart's CVE-2026-26312 (unbounded traversal of
+  cyclic MIME, fixed in Stalwart 0.15.5) shows that Rust prevents memory
+  bugs, not resource exhaustion; bound every consumer of the parse tree.
 
 ## Invariants and how each is proven
 

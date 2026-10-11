@@ -52,9 +52,9 @@ backends and classic-client reports. Checked 2026-10-11.
 | eM Client 11 | Native Windows/Mac (.NET) | IMAP, EWS, Graph, AirSync | Paid | Broad PIM suite, redesigned rules, AI |
 | Spark | Electron-ish desktop | IMAP, Gmail, Graph | Freemium + AI tiers | Credentials and send-later on Readdle servers; upsells |
 | Superhuman | Web/Electron | Gmail, Outlook | ~$30/mo | Keyboard speed; bounded offline window; AI |
-| Outlook (new, Mac) | Web-based | Microsoft cloud; other accounts copied to Microsoft's cloud | Free / M365 | Reported 5–10 s actions; no local IMAP, so no Proton Bridge accounts |
+| Outlook (new, Mac) | Native (Apple silicon); cloud-routed accounts | Microsoft cloud; other accounts copied to Microsoft's cloud | Free / M365 | Reported 5–10 s actions; no local IMAP, so no Proton Bridge accounts |
 | HEY | Native wrappers | HEY only | $99/yr | Screener; closed silo; MBOX export |
-| Proton Mail desktop | Native | Proton only | Proton plans | E2EE; Scribe AI with local option |
+| Proton Mail desktop | Electron (Rust core on mobile) | Proton only | Proton plans | E2EE; Scribe AI with local option |
 | Fastmail apps | Native-ish | Fastmail (JMAP) | Paid | Offline; user-authorized MCP access, no background AI |
 | Shortwave, Missive, Front | Web/Electron | Gmail / multi | SaaS | Team and AI-first; out of scope |
 | Notion Mail | Web/Mac | Gmail | — | **Shut down 2026-09-22** |

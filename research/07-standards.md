@@ -57,7 +57,7 @@ Exchange SMTP AUTH timeline were verified by hand. Checked 2026-10-11.
 
 | Provider | Gate |
 |---|---|
-| Gmail | `https://mail.google.com/` is a restricted scope and needs app verification; the annual CASA assessment applies only if mail passes through our servers |
+| Gmail | `https://mail.google.com/` is a restricted scope and needs app verification; the annual CASA assessment applies if restricted data can be accessed from or through our servers (diagnostics count) |
 | Microsoft 365 | Multi-tenant Entra app, publisher verification, possible admin consent |
 | Yahoo / AOL | Manual OAuth approval; app passwords until approved |
 | iCloud | App-specific passwords only (OAuth is for Apple-chosen partners) |
@@ -79,8 +79,9 @@ Exchange SMTP AUTH timeline were verified by hand. Checked 2026-10-11.
 - **Charsets:** map `iso-8859-1` to `windows-1252`, as WHATWG does. Detect
   undeclared 8-bit text with `chardetng`, and remap GB2312→GBK,
   `unknown-8bit` and similar labels.
-- **Transfer encodings:** use 8BITMIME and BINARY on submission, and
-  tolerate broken quoted-printable.
+- **Transfer encodings:** use 8BITMIME on submission; binary parts only
+  with BINARYMIME plus CHUNKING/BDAT (RFC 3030; IMAP BINARY is unrelated);
+  otherwise base64/quoted-printable. Tolerate broken quoted-printable.
 - **EAI/SMTPUTF8 (RFC 6530–6533, UTF8=ACCEPT):** inbound support is broad.
   Parse UTF-8 headers, and send with `SMTPUTF8` only when the server
   advertises it.
@@ -108,20 +109,24 @@ Exchange SMTP AUTH timeline were verified by hand. Checked 2026-10-11.
 
 - Prefer implicit TLS on port 465 (RFC 8314), else 587 with STARTTLS.
   Never send credentials before TLS.
-- **Gmail and Microsoft 365 save SMTP-submitted mail to Sent themselves.**
-  Keep a per-provider "server saves Sent" flag; otherwise `APPEND` to the
+- **Gmail documents saving SMTP-submitted mail to Sent itself;** the same
+  claim for Microsoft 365 SMTP is unverified (Graph `sendMail` has its own
+  documented behaviour). Qualify each transport and identity, then keep a
+  per-provider "server saves Sent" flag; otherwise `APPEND` to the
   `\Sent` special-use folder. Thunderbird bug 1431562 shows the duplicates
   this prevents.
 - **DSN (RFC 3461/3464)** is nice to have. BURL and FUTURERELEASE are
   rarely deployed.
 - Undo send and send later run client-side. RFC 9979 registers a
-  `\Scheduled` mailbox attribute.
+  `\Scheduled` mailbox attribute to identify the folder; it is not a
+  scheduled-send or snooze control protocol.
 
 ## Trust display
 
-- **`Authentication-Results`:** show only headers whose `authserv-id`
-  matches the account's own provider; anything deeper in the message is
-  attacker decoration. Show SPF, DKIM, DMARC (now RFC 9989) and ARC
+- **`Authentication-Results` (RFC 8601):** trust only headers added
+  behind a provider boundary known to strip injected copies; a matching
+  `authserv-id` is forgeable text on its own, and anything deeper in the
+  message is attacker decoration. Show SPF, DKIM, DMARC (now RFC 9989) and ARC
   verdicts factually.
 - **BIMI is still an Internet-Draft.** Treat logos as branding, not trust.
   Apple Mail shows only provider-asserted BIMI; client-side VMC/CMC
