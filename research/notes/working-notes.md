@@ -90,3 +90,118 @@ Running takeaways while reading raw reports. Input to the curated docs.
   JMAP -> local mbox/Maildir/POP/NNTP (public-inbox).
 - Mailspring pattern: one sync process per account, UI read-only on DB,
   writes as tasks (local op + remote op), deltas streamed to observers.
+
+## Eudora 6.2 manual (raw/eudora-manual/devin.md)
+
+- Local truth: mbox mailboxes on disk; Out is a real, inspectable,
+  editable queue with send-pipeline statuses (Unsent, Sendable, Queued,
+  Timed Queue, Sent, Replied, Forwarded, Redirected).
+- Personalities: full identities (server, SMTP, address, signature,
+  stationery, check options); replies come from the receiving personality;
+  personality is a filter criterion and action.
+- Filters: Incoming / Outgoing / Manual triggers; 2 terms with
+  and/or/unless; arbitrary headers, body, Junk Score, Personality;
+  "intersects nickname/address book"; ~19 actions (Make Status/Priority/
+  Label/Personality/Subject, Play Sound, Speak, Open, Print, Notify,
+  Forward, Redirect, Reply With stationery, Server Options, Copy,
+  Transfer, Move Attachments, Skip Rest); first match wins; Make Filter;
+  "dinosaur" icon for filters unused 30 days; filter report.
+- List: toggleable columns incl. Junk Score, Mood, Server Status;
+  Shift-click multi-key sort, sticky per mailbox; 5 priorities; 15 colored
+  labels; Group Subjects.
+- Content Concentrator: read a whole thread/sender as one concatenated
+  document with quotes and redundant headers trimmed.
+- Composing: per-message icon bar overrides (signature, encoding, wrap,
+  keep copy, receipt); Stationery (captures icon-bar state; Reply With
+  stationery powers auto-replies); MoodWatch chili peppers.
+- Send Again; Redirect (Resent-*) and Turbo Redirect (redirect + queue +
+  delete in one gesture); refuses auto-reply/redirect on Precedence
+  bulk/list.
+- ScamWatch: hover shows true URL; deceptive links warn + confirm.
+- Addressing: nicknames (incl. "me"), Quick Recipients (MRU), contact-photo
+  toolbar buttons; drag message onto a photo = forward (Option = redirect).
+- Search: criteria-row Find with regex, results act like a mailbox and can
+  be saved; toolbar field searches mail or web; Web Words; Link History.
+- Contextual Filing: select a word, context menu offers mailboxes whose
+  name matches.
+- Usage Statistics window; Extra Warnings settings; Scripts menu folder;
+  EMSAPI plug-ins; tabbed tool windows; customizable toolbar.
+- POP "skip messages over N KB" + per-message Fetch/Delete server actions
+  (modern analog: envelope+PREVIEW-only sync with explicit fetch).
+- Devin's top revival picks: Identities, Redirect, Send Again + Stationery,
+  outgoing/manual filters, first-class statuses, colored labels, multi-key
+  sort, Concentrator digest view, link inspector, tone advisory, Timed
+  Queue, Quick Recipients, nicknames, statistics, Scripts menu, regex
+  search. Not ESP (file sync over mail).
+- Caveats: Redirect vs DMARC alignment; client-side scheduled send needs
+  the app (or a helper) running; labels/colors have no cross-backend
+  standard (local canonical, project to keywords/categories/labels).
+- [verify] Gmail ending Send-as for third-party addresses Jan 2027.
+
+## Landscape, partial (raw/modern-landscape/glm.md, run killed at 13 min)
+
+- Apple Mail: recurring search failures (macOS 26.2 tokenization bug on
+  short alphanumeric codes), rules silently stop after upgrades, sync
+  stalls. macOS 27 adds a new Mail search ranking and "Suggestions".
+- New Outlook for Mac: slow (5-10 s actions per users/HN), cloud-routed,
+  no full offline, can't add local IMAP, so no Proton Bridge accounts.
+- Spark 3: webby, routes credentials through Readdle servers, upsells.
+  Superhuman $30/mo. HEY: closed silo. Notion Mail: Gmail-only, cloud.
+- Mimestream: native, Gmail API only, $49.99/yr, direct sale, local only.
+- MailMate: loved search + Markdown, IMAP only, single developer,
+  subscription switch (2025-07) controversial; 2.0 still beta.
+- Postbox: dead (eM Client acquired it in 2024).
+- Thunderbird: Gloda search unreliable; Supernova UI slowness; announced
+  native Microsoft Graph support Sept 2026; Thundermail hosting on
+  Stalwart (JMAP); iOS app still in development (Oct 2026).
+- Unmet power-user demand: fast + native + server-agnostic (IMAP +
+  Exchange/Graph + Gmail + Proton); great search; server rules / Sieve
+  editor ("literally no apps to manage sieve scripts"); Markdown AND
+  WYSIWYG; scripting/keyboard; local-first privacy. New indie entrants
+  pitch exactly this (Penguin Mail, Talanoa, Marco) [verify].
+- AI: liked when opt-in for triage, summaries, NL search; rejected when
+  forced, undisableable or cloud-scanning. "No AI" is a selling point.
+  Apple Foundation Models: ~3B on-device model, free, offline, guided
+  generation and tool calling; macOS 27 adds Private Cloud Compute
+  routing, custom models ("Core AI"), an `fm` CLI [verify details].
+
+## Architecture (raw/arch-core/devin.md)
+
+- Precedents for "Rust core + native UI": Proton Mail mobile (Rust core,
+  ~80% shared, crash rate 0.12% -> 0.05% on iOS), Element X
+  (matrix-sdk-ffi over UniFFI), Firefox (application-services "megazord"
+  xcframework), Bitwarden, Wire core-crypto, 1Password (hand FFI, view
+  models in core, Typeshare), libsignal (own bridge macro), Delta Chat
+  (Rust email engine; JSON-RPC API over CFFI in-process or stdio
+  out-of-process), Mullvad (daemon + gRPC), Ghostty (Zig core, SwiftUI +
+  GTK4 shells), Mailspring (per-account C++ mailsync process, UI
+  read-only on DB, tasks in, JSON deltas out).
+- Counter-precedents: Thunderbird runs three separate native stacks (iOS
+  is pure Swift on SwiftNIO); Dropbox abandoned its shared C++ mobile core
+  in 2019 (tooling, debugging, hiring).
+- UniFFI 0.32.x is the default: async both ways, callback "sink" traits
+  for push (no first-class streams), partial Swift 6 strict concurrency
+  (async foreign traits fail in v6 mode, issue #2929). Per-call
+  serialization ~0.6-2 us; never ship lists or bodies through it.
+- BoltFFI (Dec 2025): zero-copy, async streams, claims far faster; Crux
+  moved to it (crux 0.19, June 2026). Too young to bet on; revisit 2027.
+- Pattern: coarse façade objects + windowed list handle + VectorDiff-style
+  diff stream (Reset/Insert/Set/Remove/...) + controller (set_filter,
+  add_one_page). Bodies/attachments by path or blob reference.
+- One tokio runtime in core; long ops return cancellable handles; data
+  safety must not depend on cancellation semantics.
+- macOS process model: phase 1 in-process; phase 2 `sweetbriard`
+  LaunchAgent via SMAppService owning sync and all writes (background
+  sync, notifications, crash isolation); UI and extensions over XPC or a
+  Unix socket. XPC services die with the app, so they can't do background
+  sync. SQLite multi-process works (WAL, persist-WAL) but has no cross-
+  process change notification: one writer, others go through it.
+- Build: per-arch cargo -> xcframework -> local SPM binary target in the
+  app repo (post-deprecation Mozilla pattern); arm64 only is fine.
+  Release: panic=abort, LTO, strip with dSYMs. Core size ~8-25 MB.
+- Linux consumes the façade crate directly (no FFI).
+- Proposed crates: ui-api (façade), ffi (UniFFI only), ipc, sweetbriard,
+  core, sync, store (SQLite + blobs + tantivy), backend-{imap,jmap,smtp,
+  graph,gmail,carddav,ews}, mime, crypto, proto.
+- Open: view models in Rust (Crux/1Password style) vs Swift @Observable
+  over diff streams. Devin leans Swift view models for v1.

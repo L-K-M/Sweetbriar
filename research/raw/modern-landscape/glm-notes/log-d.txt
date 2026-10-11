@@ -1,0 +1,48 @@
+[0m
+> build · nemotron-3-ultra-free
+[0m
+[0m# [0mTodos
+[•] Research MailMate (freron.com)
+[ ] Research Airmail (airmailapp.com)
+[ ] Research Canary Mail (canarymail.io)
+[ ] Research Spark by Readdle (sparkmailapp.com)
+[ ] Research eM Client (emclient.com)
+[ ] Research Mailspring (getmailspring.com)
+[ ] Research Postbox (postbox-inc.com)
+[ ] Research Geary (GNOME)
+[ ] Research Evolution (GNOME)
+[ ] Research KMail (KDE)
+[ ] Write structured notes to clients-mac-linux.md
+[0m
+[0m% [0mWebFetch https://freron.com
+[0m% [0mWebFetch https://airmailapp.com
+[0m% [0mWebFetch https://canarymail.io
+[0m% [0mWebFetch https://sparkmailapp.com
+[0m% [0mWebFetch https://emclient.com
+[0m% [0mWebFetch https://getmailspring.com
+[0m% [0mWebFetch https://postbox-inc.com
+[0m% [0mWebFetch https://wiki.gnome.org/Apps/Geary
+[0m% [0mWebFetch https://wiki.gnome.org/Apps/Evolution
+[0m% [0mWebFetch https://kontact.kde.org/components/kmail/
+[0m
+[0m# [0mTodos
+[✓] Research MailMate (freron.com)
+[✓] Research Airmail (airmailapp.com)
+[✓] Research Canary Mail (canarymail.io)
+[✓] Research Spark by Readdle (sparkmailapp.com)
+[✓] Research eM Client (emclient.com)
+[✓] Research Mailspring (getmailspring.com)
+[✓] Research Postbox (postbox-inc.com)
+[✓] Research Geary (GNOME)
+[✓] Research Evolution (GNOME)
+[✓] Research KMail (KDE)
+[•] Write structured notes to clients-mac-linux.md
+[0m
+[0m% [0mWebFetch https://freron.com/pricing/
+[0m% [0mWebFetch https://canarymail.io/pricing
+[0m% [0mWebFetch https://sparkmailapp.com/pricing
+[0m% [0mWebFetch https://getmailspring.com/pro
+[0m
+[0m$ [0mmkdir -p /home/paseo/sb-research/jobs/modern-landscape-glm/notes
+(no output)
+[0m
