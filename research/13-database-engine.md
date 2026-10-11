@@ -1,12 +1,12 @@
 # 13 — Which database engine for the local store (D17)
 
-Synthesis of five studies:
+Synthesis of four studies and both debate rounds:
 - PostgreSQL vs SQLite: [raw/database/codex.md](raw/database/codex.md),
   [raw/database/devin.md](raw/database/devin.md).
 - Embedded engines, with benchmarks and crash tests:
   [raw/db-engines/codex.md](raw/db-engines/codex.md),
   [raw/db-engines/devin.md](raw/db-engines/devin.md).
-- Both rounds of the [debate](debate/04-resolution.md).
+- The [debate](debate/04-resolution.md).
 
 A third engine study (GLM) timed out before reporting. Checked
 2026-10-11.

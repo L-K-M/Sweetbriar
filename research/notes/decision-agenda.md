@@ -1,8 +1,8 @@
 # Decision agenda
 
 Foundational choices the research must inform. Each gets a recommendation
-in the synthesis and is then challenged in the GPT-6.1-Sol debate.
-Ordered by how hard they are to change later.
+in the synthesis and is then challenged in the adversarial debate
+(GPT-6.1-Sol and Devin). Ordered by how hard they are to change later.
 
 | # | Decision | Hard to change because | Main inputs |
 |---|---|---|---|

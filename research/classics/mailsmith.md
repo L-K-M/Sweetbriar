@@ -137,8 +137,10 @@ a BBEdit-grade composer, or attachable menu hooks.
 ## What Sweetbriar should take
 
 1. **Storage:** Mailsmith 2.2's design (one file per message plus a
-   disposable index), with **metadata journaled separately** so a rebuild
-   keeps notes and labels. See [04-data-safety](../04-data-safety.md).
+   disposable index), with user metadata kept in the SQLite store that is
+   the sole authority for all mutable state, so an index rebuild can never
+   lose acknowledged notes or labels. See
+   [04-data-safety](../04-data-safety.md).
 2. **One criteria engine** shared by search, saved views, rules and
    scripting, with regex and fuzzy match modes over an index (not a scan),
    protected so a pathological regex can't freeze the UI.

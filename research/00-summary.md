@@ -5,7 +5,7 @@ questions. The reasoning, sources and disagreements are in the
 [curated documents](README.md) and the [debate](debate/04-resolution.md).
 
 **How it was produced:**
-- Each topic was researched by two or more independent helper agents
+- Most topics were researched by two or more independent helper agents
   (Codex GPT-6.1-Sol, Devin SWE-2 Max, GLM-5.3, MiMo), working from
   primary sources: manuals, the Eudora source code, the original Musashi
   archives, vendor documentation.
@@ -33,7 +33,8 @@ questions. The reasoning, sources and disagreements are in the
 - **Never block the UI on the network or the disk.** Lists are windowed
   queries over covering indexes with keyset paging: at 1M rows, a page
   costs microseconds, versus 80 ms with `OFFSET`.
-- **Measured budgets** on a declared 8 GB Apple-silicon Mac, all p95:
+- **Proposed budgets** (p95 on a declared Apple-silicon reference Mac;
+  not yet measured):
   - 100 ms to open a cached message, switch mailbox or show search
     results;
   - 50 ms visible for archive/delete;
@@ -123,8 +124,9 @@ questions. The reasoning, sources and disagreements are in the
 - Details: [12](12-markdown-first.md).
 
 **Postgres, DuckDB or another database?**
-- **Bundled SQLite.** Three studies (two Postgres comparisons, three
-  engine surveys with benchmarks and kill -9 crash tests) agree.
+- **Bundled SQLite.** Four studies agree: two Postgres comparisons and
+  two engine surveys with benchmarks and kill -9 crash tests. A third
+  engine survey timed out.
 - **Postgres** would add a server to run and upgrade on every Mac, with
   no new failure domain. Akonadi just moved from server databases to
   SQLite.
