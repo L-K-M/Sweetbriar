@@ -825,11 +825,41 @@ Running takeaways while reading raw reports. Input to the curated docs.
   devin/sources prefers IMAP + X-GM-EXT for Gmail (quotas, billing);
   codex/performance computes >=55.6 h to import 1M messages through
   messages.get under new-project quotas and suggests bulk IMAP import with
-  API deltas as a possible hybrid. -> Debate item; verify Gmail's
-  post-auth CAPABILITY (CONDSTORE?).
+  API deltas as a possible hybrid. -> Debate item. Claude checked: Gmail
+  did roll out IMAP CONDSTORE (Thunderbird
+  [bug 912216](https://bugzilla.mozilla.org/show_bug.cgi?id=912216)
+  discusses problems after the rollout), so GLM's "no CONDSTORE" is
+  doubtful; QRESYNC unconfirmed. Settle with an authenticated CAPABILITY
+  probe in the first prototype.
 - CONFLICT 2: GLM recommends a "pooled, prewarmed WKWebView (shared
   process pool)". WKProcessPool is deprecated and a no-op (codex, devin);
   pooling advice is stale. Prewarm only if measured.
 - GLM's counter-argument worth keeping: headers-only cache with bodies on
   demand is cheaper; rebuttal: search/power features/never-lose-mail need
   the full local store; prefetch policy is a dial, the schema isn't.
+
+## Mailsmith, codex (raw/mailsmith/codex.md) — additions
+
+- Corrects the brief: successor was "Stickshift Software" (not "Stick
+  Software"). 2.2 manual documents as-you-type spelling, so old reviews'
+  complaint is version-bound.
+- Ihnatko worried send failures could be missed in the (errors) mailbox;
+  queued messages were uneditable; regexes could be dangerous (freeze);
+  alphabetical mailbox order silently changed filter results -> explicit
+  order, stable IDs, preview, incremental results, protect responsiveness.
+- Porter (MacTech 2004): barely used the mouse thanks to keyboard
+  assignment. Gruber's Send Now guard (menu script vetoes Cmd-E when text
+  is selected) -> named pre-send checks + after-action hooks.
+- Revival bundles: six clipboards + append-copy + Paste Quoted;
+  quote-depth rewrap with hard/soft line control; split view +
+  rectangular edits + invisibles; editor regex replace + mailbox regex
+  query + shared rule criteria; script-aware clippings + menu pre/post
+  hooks; private notes + message links (sweetbriar: URLs).
+- Graph only allows subject changes on drafts -> "Set Subject" must be a
+  local display overlay for received mail.
+- SpamSieve lists Mailsmith as legacy; Spark lacks SpamSieve integration
+  (insufficient extensibility) -> extension points matter.
+- MailMate is the strongest living counterexample (plain text/Markdown,
+  external editor, rules on any mailbox): study it.
+- Remote inspection should start read-only (POP Monitor made permanent
+  deletion too easy).
