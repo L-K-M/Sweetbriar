@@ -88,7 +88,7 @@ same stack independently. Checked 2026-10-11.
 | **Flatpak / Flathub** (first) | One build for every distro; portals for secrets, notifications, background, email | Store under `~/.var/app/...` (document backup and migration); must commit to portals |
 | **.deb (Ubuntu 24.04 / 26.04 LTS)** | No sandbox; familiar to sysadmins | Old GTK/WebKit on LTS unless bundled |
 | Snap (later) | Ubuntu store presence | User daemons experimental; password-manager interface needs testing |
-| AppImage (optional) | Try without installing | No portals; manual updates |
+| AppImage (optional) | Try without installing | No inherent sandbox; portal integration depends on the host; an updater must be supplied (AppImageUpdate or in-app) |
 
 WebKitGTK security updates must flow promptly for years, whatever the
 package format. Disabling JavaScript doesn't remove the need for engine
@@ -122,8 +122,8 @@ patches.
 3. **HTML and privacy:** hostile corpus; no script, no unsolicited network
    or file access (including CSS and fonts); links, CID, printing, zoom,
    dark mode, accessibility.
-4. **Desktop and distribution:** GNOME/Yaru and KDE on Wayland; Flatpak and
-   .deb; locked or missing secrets; GOA vs standalone OAuth; denied
+4. **Desktop and distribution:** GNOME/Yaru and KDE on Wayland; Flatpak
+   (`.deb` qualification only when that channel is adopted); locked or missing secrets; GOA vs standalone OAuth; denied
    background permission; suspend; `mailto:` and notification activation.
 
 Failing a gate reopens that specific decision (most likely the composer)

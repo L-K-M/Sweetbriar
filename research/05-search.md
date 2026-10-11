@@ -204,7 +204,8 @@ available.
 
 | Backend | Mechanism | Caveats |
 |---|---|---|
-| Gmail | IMAP `X-GM-RAW` / API `q=`: the full web grammar | Conversation-scoped negation |
+| Gmail (IMAP) | `X-GM-RAW`: Gmail search syntax, within the selected IMAP mailbox | Results are scoped to that mailbox, so cross-label coverage needs `[Gmail]/All Mail` or several searches |
+| Gmail (API) | `q=`: most of the Gmail search syntax | No UI alias expansion and no thread-wide search; qualify each translated clause and its coverage |
 | Microsoft Graph | `$search` (KQL) | **Date-sorted, max 1,000 results**: the client ranks, and local cache depth is the real search radius |
 | JMAP | `Email/query` + `SearchSnippet/get` (server highlighting) | Capabilities vary |
 | IMAP | SEARCH, ESEARCH (counts), PARTIAL for paging (RFC 9394), FUZZY with RELEVANCY (RFC 6203) where advertised | Server-dependent; CHARSET handling |
