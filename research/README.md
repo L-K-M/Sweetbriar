@@ -6,6 +6,35 @@ shared Rust core, a Swift UI on macOS first, and a native Linux UI later.
 Research began 2026-10-11. Time-sensitive facts carry the date they were
 checked.
 
+## Start here
+
+- [00-summary.md](00-summary.md): the conclusions and recommendations in
+  one place, including what is settled and what is still open (written
+  after the debate below).
+- [debate/](debate/): Claude's position paper, GPT-6.1-Sol's adversarial
+  review, and the resolution.
+
+## Curated documents
+
+| # | Topic | Question it answers |
+|---|---|---|
+| [01](01-architecture.md) | Architecture | How to build a Rust core under native UIs: layers, boundary, async, process model, packaging |
+| [02](02-rust-ecosystem.md) | Rust ecosystem | Which crates to reuse, what to build, licence traps |
+| [03](03-performance.md) | Performance | Latency budgets, sync protocols, store design at 1M messages, measurement |
+| [04](04-data-safety.md) | Data safety | How to never lose mail, drafts, settings or sends; invariants and tests |
+| [05](05-search.md) | Search | Engines, query language, index consistency, federation, semantic search |
+| [06](06-account-backends.md) | Account backends | Exchange/M365 (Graph), Gmail, Proton, JMAP, iCloud and others; order and approvals |
+| [07](07-standards.md) | Standards | Autoconfig, OAuth, MIME edge cases, threading, sending, keywords; launch checklist |
+| [08](08-macos-ui.md) | macOS UI | AppKit vs SwiftUI, list, reader, composer, system integration, distribution |
+| [09](09-linux.md) | Linux UI | GTK4/libadwaita vs Qt, WebKitGTK, portals, packaging |
+| [10](10-landscape.md) | Landscape | The 2026 competition, user complaints, gaps, AI, positioning |
+| [11](11-classic-clients.md) | Classic clients | What made Eudora, Mailsmith, Claris Emailer, Musashi and others beloved; ranked revival catalog |
+
+Per-client deep dives: [classics/eudora.md](classics/eudora.md),
+[classics/mailsmith.md](classics/mailsmith.md),
+[classics/claris-emailer.md](classics/claris-emailer.md),
+[classics/musashi.md](classics/musashi.md).
+
 ## Method
 
 ```
@@ -22,18 +51,37 @@ checked.
                                                             (GPT-6.1-Sol vs Claude)
 ```
 
-- Each topic is researched independently by two or more helper agents on
-  different models (Codex GPT-6.1-Sol, Devin SWE-2 Max, GLM-5.3, MiMo).
-- Classic clients are studied from primary sources where possible: the
-  Eudora Mac source code, the Eudora 6.2, Mailsmith 2.x and Claris
-  Emailer manuals, and the original Musashi archives.
-- Curated documents merge the raw reports, resolve contradictions, and
-  flag what remains unverified.
-- Key recommendations are challenged by GPT-6.1-Sol, and the debate is kept.
+- **Independent researchers.** Most topics were researched by two or more
+  helper agents on different models: Codex GPT-6.1-Sol, Devin SWE-2 Max,
+  GLM-5.3, and MiMo until its free quota ran out. Their reports are kept
+  verbatim in [raw/](raw/), with a provenance header.
+- **Primary sources for the classic clients:**
+  - the Eudora Mac source code (CHM, BSD), audited by codex
+  - the Eudora 6.2, Mailsmith 2.x and Claris Emailer manuals
+  - the original Musashi distribution archives, extracted with a StuffIt 5
+    decoder codex wrote for the purpose, and their English and Japanese
+    manuals and resource forks
+
+  Copyrighted manuals and binaries are cited, not committed.
+- **Curated documents** merge the raw reports, resolve contradictions, and
+  say what is still unverified. Claude checked high-impact facts by hand:
+  - EWS retirement and Apple Mail's dependence on it
+  - macOS 27 being current and Apple-silicon-only
+  - the SQLite WAL-reset bug
+  - the SMTP AUTH timeline
+  - RFC 9979
+  - Gmail CONDSTORE and the end of third-party Send-as
+  - Thunderbird's Graph support
+  - App Intents' mail domain
+  - AppKit Observation tracking
+- **Running notes** with every conflict and verification are in
+  [notes/working-notes.md](notes/working-notes.md). The foundational
+  decisions are listed in [notes/decision-agenda.md](notes/decision-agenda.md).
 
 ## Layout
 
-- `raw/` — helper reports, verbatim, one directory per topic. Not edited
-  except for a provenance header.
-- `briefs/` — the exact questions each helper received.
-- Curated documents (numbered) — added as synthesis completes.
+- `raw/<topic>/<agent>.md`: helper reports, verbatim. `<agent>-notes/` and
+  `<agent>-artifacts/` hold their working notes, scripts and data.
+- `briefs/`: the exact questions each helper received.
+- `notes/`: working notes and the decision agenda.
+- `debate/`: the adversarial review rounds.

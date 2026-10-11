@@ -16,7 +16,8 @@ Sweetbriar is a new email client project (started 2026-10-11). Goals:
   Musashi, ...).
 - Long-term project. Depth and correctness matter more than speed.
 
-Today is 2026-10-11. Your training data may be stale. Verify anything
+Today is 2026-10-11. The current macOS is macOS 27 "Golden Gate" (released
+2026-09-14, Apple silicon only). Your training data may be stale. Verify anything
 time-sensitive (deprecations, API retirements, library status and versions,
 pricing, policies, OS versions) against current sources on the web, and give
 the date of each such fact.
