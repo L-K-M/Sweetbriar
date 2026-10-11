@@ -1,0 +1,980 @@
+[
+  {
+    "url": "https://www.sqlite.org/testing.html",
+    "fetched_url": "https://www.sqlite.org/testing.html",
+    "consulted": "2026-10-11",
+    "file": "5f1ebda6c6d719f3.txt",
+    "bytes": 59623
+  },
+  {
+    "url": "https://www.sqlite.org/cksumvfs.html",
+    "fetched_url": "https://www.sqlite.org/cksumvfs.html",
+    "consulted": "2026-10-11",
+    "file": "e2216b136875bc4e.txt",
+    "bytes": 11356
+  },
+  {
+    "url": "https://www.sqlite.org/pragma.html",
+    "fetched_url": "https://www.sqlite.org/pragma.html",
+    "consulted": "2026-10-11",
+    "file": "f8124ebf5d1023e1.txt",
+    "bytes": 139936
+  },
+  {
+    "url": "https://www.sqlite.org/wal.html",
+    "fetched_url": "https://www.sqlite.org/wal.html",
+    "consulted": "2026-10-11",
+    "file": "d6f43ae05df1743e.txt",
+    "bytes": 42143
+  },
+  {
+    "url": "https://www.sqlite.org/lang_vacuum.html",
+    "fetched_url": "https://www.sqlite.org/lang_vacuum.html",
+    "consulted": "2026-10-11",
+    "file": "d852da5927bd7ef2.txt",
+    "bytes": 15215
+  },
+  {
+    "url": "https://www.sqlite.org/backup.html",
+    "fetched_url": "https://www.sqlite.org/backup.html",
+    "consulted": "2026-10-11",
+    "file": "42754b59f3106abf.txt",
+    "bytes": 28195
+  },
+  {
+    "url": "https://www.sqlite.org/howtocorrupt.html",
+    "fetched_url": "https://www.sqlite.org/howtocorrupt.html",
+    "consulted": "2026-10-11",
+    "file": "045f8c3590c593e4.txt",
+    "bytes": 46737
+  },
+  {
+    "url": "https://www.sqlite.org/recovery.html",
+    "fetched_url": "https://www.sqlite.org/recovery.html",
+    "consulted": "2026-10-11",
+    "file": "311fff96698f0a4e.txt",
+    "bytes": 13302
+  },
+  {
+    "url": "https://www.postgresql.org/docs/current/checksums.html",
+    "fetched_url": "https://www.postgresql.org/docs/current/checksums.html",
+    "consulted": "2026-10-11",
+    "file": "bbccb1efd2af8703.txt",
+    "bytes": 12560
+  },
+  {
+    "url": "https://www.postgresql.org/docs/current/wal-reliability.html",
+    "fetched_url": "https://www.postgresql.org/docs/current/wal-reliability.html",
+    "consulted": "2026-10-11",
+    "file": "0a8ba7d47a609bb1.txt",
+    "bytes": 24108
+  },
+  {
+    "url": "https://www.postgresql.org/docs/current/runtime-config-wal.html",
+    "fetched_url": "https://www.postgresql.org/docs/current/runtime-config-wal.html",
+    "consulted": "2026-10-11",
+    "file": "7501f14b05377090.txt",
+    "bytes": 82865
+  },
+  {
+    "url": "https://www.postgresql.org/docs/current/pgupgrade.html",
+    "fetched_url": "https://www.postgresql.org/docs/current/pgupgrade.html",
+    "consulted": "2026-10-11",
+    "file": "e3adf0b29433bf00.txt",
+    "bytes": 59371
+  },
+  {
+    "url": "https://www.postgresql.org/docs/current/sql-altercollation.html",
+    "fetched_url": "https://www.postgresql.org/docs/current/sql-altercollation.html",
+    "consulted": "2026-10-11",
+    "file": "23cef0202d22699e.txt",
+    "bytes": 18960
+  },
+  {
+    "url": "https://www.postgresql.org/docs/11/release-11-2.html",
+    "fetched_url": "https://www.postgresql.org/docs/11/release-11-2.html",
+    "consulted": "2026-10-11",
+    "file": "949bad8e5d199245.txt",
+    "bytes": 32709
+  },
+  {
+    "url": "https://wiki.postgresql.org/wiki/Fsync_Errors",
+    "fetched_url": "https://wiki.postgresql.org/wiki/Fsync_Errors",
+    "consulted": "2026-10-11",
+    "file": "5f58d5c06693ddc5.txt",
+    "bytes": 26360
+  },
+  {
+    "url": "https://litestream.io/how-it-works/",
+    "fetched_url": "https://litestream.io/how-it-works/",
+    "consulted": "2026-10-11",
+    "file": "d8f9094f03e5cf1b.txt",
+    "bytes": 28718
+  },
+  {
+    "url": "https://www.sqlite.org/atomiccommit.html",
+    "fetched_url": "https://www.sqlite.org/atomiccommit.html",
+    "consulted": "2026-10-11",
+    "file": "fc8c14d053cda2fb.txt",
+    "bytes": 77968
+  },
+  {
+    "url": "https://www.postgresql.org/docs/current/continuous-archiving.html",
+    "fetched_url": "https://www.postgresql.org/docs/current/continuous-archiving.html",
+    "consulted": "2026-10-11",
+    "file": "76a6f21e77d60e46.txt",
+    "bytes": 75113
+  },
+  {
+    "url": "https://www.postgresql.org/docs/current/app-pgbasebackup.html",
+    "fetched_url": "https://www.postgresql.org/docs/current/app-pgbasebackup.html",
+    "consulted": "2026-10-11",
+    "file": "f629e2d03383b298.txt",
+    "bytes": 57371
+  },
+  {
+    "url": "https://www.postgresql.org/docs/current/amcheck.html",
+    "fetched_url": "https://www.postgresql.org/docs/current/amcheck.html",
+    "consulted": "2026-10-11",
+    "file": "f81600417c7eea19.txt",
+    "bytes": 38322
+  },
+  {
+    "url": "https://www.postgresql.org/docs/current/app-pgresetwal.html",
+    "fetched_url": "https://www.postgresql.org/docs/current/app-pgresetwal.html",
+    "consulted": "2026-10-11",
+    "file": "6d1eb3b3f3932eff.txt",
+    "bytes": 28703
+  },
+  {
+    "url": "https://wiki.postgresql.org/wiki/Collations",
+    "fetched_url": "https://wiki.postgresql.org/wiki/Collations",
+    "consulted": "2026-10-11",
+    "file": "3e331408c1e58a0a.txt",
+    "bytes": 18074
+  },
+  {
+    "url": "https://github.com/andrecasal/sqlite-vs-postgres-benchmark",
+    "fetched_url": "https://github.com/andrecasal/sqlite-vs-postgres-benchmark",
+    "consulted": "2026-10-11",
+    "file": "11fa0bf97b6de52e.txt",
+    "bytes": 288432
+  },
+  {
+    "url": "https://www.postgresql.org/docs/current/indexes-index-only-scans.html",
+    "fetched_url": "https://www.postgresql.org/docs/current/indexes-index-only-scans.html",
+    "consulted": "2026-10-11",
+    "file": "e5f4af2e8ec15a41.txt",
+    "bytes": 24592
+  },
+  {
+    "url": "https://www.postgresql.org/docs/current/populate.html",
+    "fetched_url": "https://www.postgresql.org/docs/current/populate.html",
+    "consulted": "2026-10-11",
+    "file": "5c0c4c90ad54224e.txt",
+    "bytes": 31689
+  },
+  {
+    "url": "https://www.postgresql.org/support/versioning/",
+    "fetched_url": "https://www.postgresql.org/support/versioning/",
+    "consulted": "2026-10-11",
+    "file": "544607d71e2f6ec1.txt",
+    "bytes": 12675
+  },
+  {
+    "url": "https://www.sqlite.org/changes.html",
+    "fetched_url": "https://www.sqlite.org/changes.html",
+    "consulted": "2026-10-11",
+    "file": "db53bc046e596220.txt",
+    "bytes": 479741
+  },
+  {
+    "url": "https://raw.githubusercontent.com/postgres/postgres/REL_18_STABLE/src/backend/storage/file/fd.c",
+    "fetched_url": "https://raw.githubusercontent.com/postgres/postgres/REL_18_STABLE/src/backend/storage/file/fd.c",
+    "consulted": "2026-10-11",
+    "file": "e9d7ce0006436057.txt",
+    "bytes": 109467
+  },
+  {
+    "url": "https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/fsync.2.html",
+    "fetched_url": "https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/fsync.2.html",
+    "consulted": "2026-10-11",
+    "file": "1d34a879959944bd.txt",
+    "bytes": 15388
+  },
+  {
+    "url": "https://source-docs.thunderbird.net/en/latest/backend/folder_storage.html",
+    "fetched_url": "https://source-docs.thunderbird.net/en/latest/backend/folder_storage.html",
+    "consulted": "2026-10-11",
+    "file": "adec6a93791cc044.txt",
+    "bytes": 27258
+  },
+  {
+    "url": "https://support.mozilla.org/en-US/kb/rebuilding-global-database",
+    "fetched_url": "https://support.mozilla.org/en-US/kb/rebuilding-global-database",
+    "consulted": "2026-10-11",
+    "file": "17430e35584b0c93.txt",
+    "bytes": 3038
+  },
+  {
+    "url": "https://github.com/Foundry376/Mailspring-Sync",
+    "fetched_url": "https://github.com/Foundry376/Mailspring-Sync",
+    "consulted": "2026-10-11",
+    "file": "36e6f414689f59c9.txt",
+    "bytes": 333110
+  },
+  {
+    "url": "https://rs.delta.chat/deltachat/sql/index.html",
+    "fetched_url": "https://rs.delta.chat/deltachat/sql/index.html",
+    "consulted": "2026-10-11",
+    "file": "e77c97645c5e575e.txt",
+    "bytes": 6861
+  },
+  {
+    "url": "https://github.com/signalapp/Signal-Desktop/blob/main/ts/sql/Server.ts",
+    "consulted": "2026-10-11",
+    "errors": [
+      "HTTP Error 404: Not Found",
+      "HTTP Error 404: Not Found"
+    ]
+  },
+  {
+    "url": "https://github.com/RhetTbull/osxphotos/wiki/Understanding-the-Photos-database",
+    "fetched_url": "https://github.com/RhetTbull/osxphotos/wiki/Understanding-the-Photos-database",
+    "consulted": "2026-10-11",
+    "file": "9e2bc0e36e991c15.txt",
+    "bytes": 326253
+  },
+  {
+    "url": "https://turso.tech/blog/turso-0.5.0",
+    "fetched_url": "https://turso.tech/blog/turso-0.5.0",
+    "consulted": "2026-10-11",
+    "file": "daa68e8ec7bc1d42.txt",
+    "bytes": 117025
+  },
+  {
+    "url": "https://turso.tech/blog/turso-0.6.0",
+    "fetched_url": "https://turso.tech/blog/turso-0.6.0",
+    "consulted": "2026-10-11",
+    "file": "29dbfe98093f41ea.txt",
+    "bytes": 180897
+  },
+  {
+    "url": "https://github.com/tursodatabase/turso",
+    "fetched_url": "https://github.com/tursodatabase/turso",
+    "consulted": "2026-10-11",
+    "file": "da414ddeaa6e6c3f.txt",
+    "bytes": 541054
+  },
+  {
+    "url": "https://github.com/tursodatabase/turso/releases",
+    "fetched_url": "https://github.com/tursodatabase/turso/releases",
+    "consulted": "2026-10-11",
+    "file": "25567271fb70d69b.txt",
+    "bytes": 504005
+  },
+  {
+    "url": "https://github.com/tursodatabase/libsql",
+    "fetched_url": "https://github.com/tursodatabase/libsql",
+    "consulted": "2026-10-11",
+    "file": "6a1982bdf380b167.txt",
+    "bytes": 407947
+  },
+  {
+    "url": "https://github.com/theseus-rs/postgresql-embedded",
+    "fetched_url": "https://github.com/theseus-rs/postgresql-embedded",
+    "consulted": "2026-10-11",
+    "file": "1b472b5997744745.txt",
+    "bytes": 331481
+  },
+  {
+    "url": "https://github.com/faokunega/pg-embed",
+    "fetched_url": "https://github.com/faokunega/pg-embed",
+    "consulted": "2026-10-11",
+    "file": "485b68c3415452a4.txt",
+    "bytes": 330783
+  },
+  {
+    "url": "https://github.com/electric-sql/pglite",
+    "fetched_url": "https://github.com/electric-sql/pglite",
+    "consulted": "2026-10-11",
+    "file": "88495512298136ae.txt",
+    "bytes": 343645
+  },
+  {
+    "url": "https://userbase.kde.org/Akonadi",
+    "fetched_url": "https://userbase.kde.org/Akonadi",
+    "consulted": "2026-10-11",
+    "file": "b83a6c664ecd8eb3.txt",
+    "bytes": 59046
+  },
+  {
+    "url": "https://techbase.kde.org/KDE_PIM/Akonadi",
+    "fetched_url": "https://techbase.kde.org/KDE_PIM/Akonadi",
+    "consulted": "2026-10-11",
+    "file": "2aa3103149cb8236.txt",
+    "bytes": 81825
+  },
+  {
+    "url": "https://dvratil.cz",
+    "fetched_url": "https://dvratil.cz",
+    "consulted": "2026-10-11",
+    "file": "5f10be5fec5095de.txt",
+    "bytes": 134494
+  },
+  {
+    "url": "https://invent.kde.org/pim/akonadi/-/raw/master/CMakeLists.txt",
+    "fetched_url": "https://invent.kde.org/pim/akonadi/-/raw/master/CMakeLists.txt",
+    "consulted": "2026-10-11",
+    "file": "a5a226df514ef38f.txt",
+    "bytes": 15609
+  },
+  {
+    "url": "https://invent.kde.org/pim/akonadi/-/raw/master/src/server/storage/dbconfigpostgresql.cpp",
+    "fetched_url": "https://invent.kde.org/pim/akonadi/-/raw/master/src/server/storage/dbconfigpostgresql.cpp",
+    "consulted": "2026-10-11",
+    "file": "bcb3c99db176456c.txt",
+    "bytes": 26174
+  },
+  {
+    "url": "https://invent.kde.org/pim/akonadi/-/raw/master/src/server/storage/dbconfigmysql.cpp",
+    "fetched_url": "https://invent.kde.org/pim/akonadi/-/raw/master/src/server/storage/dbconfigmysql.cpp",
+    "consulted": "2026-10-11",
+    "file": "21acd861196c99ee.txt",
+    "bytes": 29100
+  },
+  {
+    "url": "https://invent.kde.org/pim/akonadi/-/raw/master/src/server/storage/dbconfigsqlite.cpp",
+    "fetched_url": "https://invent.kde.org/pim/akonadi/-/raw/master/src/server/storage/dbconfigsqlite.cpp",
+    "consulted": "2026-10-11",
+    "file": "19db6cdfcba1c057.txt",
+    "bytes": 10460
+  },
+  {
+    "url": "https://invent.kde.org/pim/akonadi/-/raw/master/src/server/storage/mysql-global.conf",
+    "fetched_url": "https://invent.kde.org/pim/akonadi/-/raw/master/src/server/storage/mysql-global.conf",
+    "consulted": "2026-10-11",
+    "file": "0176a228d88b666e.txt",
+    "bytes": 3396
+  },
+  {
+    "url": "https://www.sqlite.org/about.html",
+    "fetched_url": "https://www.sqlite.org/about.html",
+    "consulted": "2026-10-11",
+    "file": "ef9ecac0178a2ff3.txt",
+    "bytes": 9204
+  },
+  {
+    "url": "https://www.postgresql.org/docs/release/18.6/",
+    "fetched_url": "https://www.postgresql.org/docs/release/18.6/",
+    "consulted": "2026-10-11",
+    "file": "97691f588a2c4375.txt",
+    "bytes": 86253
+  },
+  {
+    "url": "https://www.postgresql.org/docs/current/collation.html",
+    "fetched_url": "https://www.postgresql.org/docs/current/collation.html",
+    "consulted": "2026-10-11",
+    "file": "9ca83cd53a3c7c66.txt",
+    "bytes": 66209
+  },
+  {
+    "url": "https://www.sqlite.org/c3ref/create_collation.html",
+    "fetched_url": "https://www.sqlite.org/c3ref/create_collation.html",
+    "consulted": "2026-10-11",
+    "file": "efe8d8ae80f18056.txt",
+    "bytes": 8687
+  },
+  {
+    "url": "https://www.sqlite.org/np1queryprob.html",
+    "fetched_url": "https://www.sqlite.org/np1queryprob.html",
+    "consulted": "2026-10-11",
+    "file": "fb21fe4f31a8e06e.txt",
+    "bytes": 24238
+  },
+  {
+    "url": "https://www.sqlite.org/fts5.html",
+    "fetched_url": "https://www.sqlite.org/fts5.html",
+    "consulted": "2026-10-11",
+    "file": "90b57f7dd042b435.txt",
+    "bytes": 215354
+  },
+  {
+    "url": "https://www.postgresql.org/docs/current/textsearch-indexes.html",
+    "fetched_url": "https://www.postgresql.org/docs/current/textsearch-indexes.html",
+    "consulted": "2026-10-11",
+    "file": "524f4ebd0581208c.txt",
+    "bytes": 18696
+  },
+  {
+    "url": "https://invent.kde.org/api/v4/projects/pim%2Fakonadi/repository/tags?per_page=5",
+    "fetched_url": "https://invent.kde.org/api/v4/projects/pim%2Fakonadi/repository/tags?per_page=5",
+    "consulted": "2026-10-11",
+    "file": "0198241565682bfe.txt",
+    "bytes": 8700
+  },
+  {
+    "url": "https://turso.tech/blog/turso-0.7.0",
+    "fetched_url": "https://turso.tech/blog/turso-0.7.0",
+    "consulted": "2026-10-11",
+    "file": "08a24bf9bc099df7.txt",
+    "bytes": 145668
+  },
+  {
+    "url": "https://docs.turso.tech/tursodb/concurrent-writes",
+    "fetched_url": "https://docs.turso.tech/tursodb/concurrent-writes",
+    "consulted": "2026-10-11",
+    "file": "04caf9962bd9301a.txt",
+    "bytes": 429739
+  },
+  {
+    "url": "https://duckdb.org/docs/stable/connect/concurrency.html",
+    "fetched_url": "https://duckdb.org/docs/stable/connect/concurrency",
+    "consulted": "2026-10-11",
+    "file": "32e15bc1996a1ae4.txt",
+    "bytes": 930
+  },
+  {
+    "url": "https://duckdb.org/docs/stable/sql/statements/transactions.html",
+    "fetched_url": "https://duckdb.org/docs/stable/sql/statements/transactions",
+    "consulted": "2026-10-11",
+    "file": "f82bfa59c12deeb9.txt",
+    "bytes": 962
+  },
+  {
+    "url": "https://www.lmdb.tech/doc/",
+    "fetched_url": "http://www.lmdb.tech/doc/",
+    "consulted": "2026-10-11",
+    "file": "1817743dd305564f.txt",
+    "bytes": 14722
+  },
+  {
+    "url": "http://www.lmdb.tech/doc/",
+    "fetched_url": "http://www.lmdb.tech/doc/",
+    "consulted": "2026-10-11",
+    "file": "14350fbe4a40ef47.txt",
+    "bytes": 14722
+  },
+  {
+    "url": "https://docs.rs/redb/latest/redb/enum.Durability.html",
+    "fetched_url": "https://docs.rs/redb/latest/redb/enum.Durability.html",
+    "consulted": "2026-10-11",
+    "file": "5d72b376f9253da4.txt",
+    "bytes": 45829
+  },
+  {
+    "url": "https://postgresapp.com/downloads.html",
+    "fetched_url": "https://postgresapp.com/downloads.html",
+    "consulted": "2026-10-11",
+    "file": "b8b3516137408b3e.txt",
+    "bytes": 9386
+  },
+  {
+    "url": "https://postgresapp.com/documentation/",
+    "fetched_url": "https://postgresapp.com/documentation/",
+    "consulted": "2026-10-11",
+    "file": "1c4cdedfc0c46c59.txt",
+    "bytes": 3825
+  },
+  {
+    "url": "https://www.gentoo.org/support/news-items/2026-05-23-kdepim-sql-backend-change.html",
+    "fetched_url": "https://www.gentoo.org/support/news-items/2026-05-23-kdepim-sql-backend-change.html",
+    "consulted": "2026-10-11",
+    "file": "93c215a5da9065c9.txt",
+    "bytes": 17366
+  },
+  {
+    "url": "https://invent.kde.org/pim/akonadi/-/merge_requests/311",
+    "fetched_url": "https://invent.kde.org/pim/akonadi/-/merge_requests/311",
+    "consulted": "2026-10-11",
+    "file": "475caafa2bc53c2f.txt",
+    "bytes": 66948
+  },
+  {
+    "url": "https://invent.kde.org/api/v4/projects/pim%2Fakonadi/merge_requests/311",
+    "fetched_url": "https://invent.kde.org/api/v4/projects/pim%2Fakonadi/merge_requests/311",
+    "consulted": "2026-10-11",
+    "file": "6ef6f97cf89186fa.txt",
+    "bytes": 4171
+  },
+  {
+    "url": "https://userbase.kde.org/Akonadi/Postgres_update",
+    "fetched_url": "https://userbase.kde.org/Akonadi/Postgres_update",
+    "consulted": "2026-10-11",
+    "file": "7eae5fe73cb22b31.txt",
+    "bytes": 35937
+  },
+  {
+    "url": "https://invent.kde.org/pim/akonadi/-/raw/v26.08.2/CMakeLists.txt",
+    "fetched_url": "https://invent.kde.org/pim/akonadi/-/raw/v26.08.2/CMakeLists.txt",
+    "consulted": "2026-10-11",
+    "file": "017d87f42e3bf5c3.txt",
+    "bytes": 15460
+  },
+  {
+    "url": "https://invent.kde.org/pim/akonadi/-/raw/v26.08.2/src/server/storage/dbconfigpostgresql.cpp",
+    "fetched_url": "https://invent.kde.org/pim/akonadi/-/raw/v26.08.2/src/server/storage/dbconfigpostgresql.cpp",
+    "consulted": "2026-10-11",
+    "file": "278a521b43f82376.txt",
+    "bytes": 26174
+  },
+  {
+    "url": "https://invent.kde.org/pim/akonadi/-/raw/v26.08.2/src/server/storage/dbconfigsqlite.cpp",
+    "fetched_url": "https://invent.kde.org/pim/akonadi/-/raw/v26.08.2/src/server/storage/dbconfigsqlite.cpp",
+    "consulted": "2026-10-11",
+    "file": "40976bf3e690792a.txt",
+    "bytes": 9496
+  },
+  {
+    "url": "https://invent.kde.org/pim/akonadi/-/raw/v26.08.2/src/server/storage/mysql-global.conf",
+    "fetched_url": "https://invent.kde.org/pim/akonadi/-/raw/v26.08.2/src/server/storage/mysql-global.conf",
+    "consulted": "2026-10-11",
+    "file": "5f0bd7ceb541e0b0.txt",
+    "bytes": 3396
+  },
+  {
+    "url": "https://bugzilla.redhat.com/show_bug.cgi?id=1953675",
+    "fetched_url": "https://bugzilla.redhat.com/show_bug.cgi?id=1953675",
+    "consulted": "2026-10-11",
+    "file": "b025c3156a58634c.txt",
+    "bytes": 67483
+  },
+  {
+    "url": "https://bugs.kde.org/show_bug.cgi?id=512859",
+    "fetched_url": "https://bugs.kde.org/show_bug.cgi?id=512859",
+    "consulted": "2026-10-11",
+    "file": "624f06538a341725.txt",
+    "bytes": 38912
+  },
+  {
+    "url": "https://developer.apple.com/library/archive/documentation/Miscellaneous/Reference/EntitlementKeyReference/Chapters/EnablingAppSandbox.html",
+    "fetched_url": "https://developer.apple.com/library/archive/documentation/Miscellaneous/Reference/EntitlementKeyReference/Chapters/EnablingAppSandbox.html",
+    "consulted": "2026-10-11",
+    "file": "edc44a8798a29cb2.txt",
+    "bytes": 59623
+  },
+  {
+    "url": "https://developer.apple.com/documentation/BundleResources/Entitlements/com.apple.security.application-groups",
+    "fetched_url": "https://developer.apple.com/documentation/BundleResources/Entitlements/com.apple.security.application-groups",
+    "consulted": "2026-10-11",
+    "file": "0bc14d96ae9a9853.txt",
+    "bytes": 19041
+  },
+  {
+    "url": "https://docs.flatpak.org/en/latest/sandbox-permissions.html",
+    "fetched_url": "https://docs.flatpak.org/en/latest/sandbox-permissions.html",
+    "consulted": "2026-10-11",
+    "file": "d0791c59c584a78d.txt",
+    "bytes": 79454
+  },
+  {
+    "url": "https://docs.flatpak.org/en/latest/conventions.html",
+    "fetched_url": "https://docs.flatpak.org/en/latest/conventions.html",
+    "consulted": "2026-10-11",
+    "file": "8ef26372687983a2.txt",
+    "bytes": 58971
+  },
+  {
+    "url": "https://github.com/cberner/redb",
+    "fetched_url": "https://github.com/cberner/redb",
+    "consulted": "2026-10-11",
+    "file": "6a3e85906f824048.txt",
+    "bytes": 345890
+  },
+  {
+    "url": "https://github.com/fjall-rs/fjall",
+    "fetched_url": "https://github.com/fjall-rs/fjall",
+    "consulted": "2026-10-11",
+    "file": "ee27e7cc852cfd43.txt",
+    "bytes": 376840
+  },
+  {
+    "url": "https://docs.rs/fjall/latest/fjall/enum.PersistMode.html",
+    "fetched_url": "https://docs.rs/fjall/latest/fjall/enum.PersistMode.html",
+    "consulted": "2026-10-11",
+    "file": "66ff7ff95b9f64f8.txt",
+    "bytes": 62754
+  },
+  {
+    "url": "https://github.com/spacejam/sled",
+    "fetched_url": "https://github.com/spacejam/sled",
+    "consulted": "2026-10-11",
+    "file": "1557261d745c2bdc.txt",
+    "bytes": 366498
+  },
+  {
+    "url": "https://github.com/meilisearch/heed",
+    "fetched_url": "https://github.com/meilisearch/heed",
+    "consulted": "2026-10-11",
+    "file": "fa71167a48dc1cb2.txt",
+    "bytes": 312390
+  },
+  {
+    "url": "https://github.com/facebook/rocksdb",
+    "fetched_url": "https://github.com/facebook/rocksdb",
+    "consulted": "2026-10-11",
+    "file": "cb564a72439f47cb.txt",
+    "bytes": 425672
+  },
+  {
+    "url": "https://github.com/rust-rocksdb/rust-rocksdb",
+    "fetched_url": "https://github.com/rust-rocksdb/rust-rocksdb",
+    "consulted": "2026-10-11",
+    "file": "82799705e9df7cd4.txt",
+    "bytes": 320337
+  },
+  {
+    "url": "https://github.com/facebook/rocksdb/wiki/WAL-Performance",
+    "fetched_url": "https://github.com/facebook/rocksdb/wiki/WAL-Performance",
+    "consulted": "2026-10-11",
+    "file": "9cd6899fb7717590.txt",
+    "bytes": 666871
+  },
+  {
+    "url": "https://docs.rs/rocksdb/latest/rocksdb/struct.WriteOptions.html",
+    "fetched_url": "https://docs.rs/rocksdb/latest/rocksdb/struct.WriteOptions.html",
+    "consulted": "2026-10-11",
+    "file": "ea4b36f8679fa99b.txt",
+    "bytes": 47803
+  },
+  {
+    "url": "https://docs.rs/sled/latest/sled/struct.Config.html",
+    "fetched_url": "https://docs.rs/sled/latest/sled/struct.Config.html",
+    "consulted": "2026-10-11",
+    "file": "970f1b9cc0abcbb2.txt",
+    "bytes": 64764
+  },
+  {
+    "url": "https://duckdb.org/why_duckdb",
+    "fetched_url": "https://duckdb.org/why_duckdb",
+    "consulted": "2026-10-11",
+    "file": "23b0b910f8f018a3.txt",
+    "bytes": 284908
+  },
+  {
+    "url": "https://github.com/duckdb/duckdb",
+    "fetched_url": "https://github.com/duckdb/duckdb",
+    "consulted": "2026-10-11",
+    "file": "472fc879b99854be.txt",
+    "bytes": 360995
+  },
+  {
+    "url": "https://github.com/duckdb/duckdb-rs",
+    "fetched_url": "https://github.com/duckdb/duckdb-rs",
+    "consulted": "2026-10-11",
+    "file": "45f799f7ffb21381.txt",
+    "bytes": 435214
+  },
+  {
+    "url": "https://raw.githubusercontent.com/LMDB/lmdb/mdb.master/libraries/liblmdb/mdb.c",
+    "fetched_url": "https://raw.githubusercontent.com/LMDB/lmdb/mdb.master/libraries/liblmdb/mdb.c",
+    "consulted": "2026-10-11",
+    "file": "a0e43848c8d97da1.txt",
+    "bytes": 328688
+  },
+  {
+    "url": "https://raw.githubusercontent.com/LMDB/lmdb/mdb.master/libraries/liblmdb/lmdb.h",
+    "fetched_url": "https://raw.githubusercontent.com/LMDB/lmdb/mdb.master/libraries/liblmdb/lmdb.h",
+    "consulted": "2026-10-11",
+    "file": "136284fbf5dd3129.txt",
+    "bytes": 75906
+  },
+  {
+    "url": "https://raw.githubusercontent.com/LMDB/lmdb/mdb.master/libraries/liblmdb/LICENSE",
+    "fetched_url": "https://raw.githubusercontent.com/LMDB/lmdb/mdb.master/libraries/liblmdb/LICENSE",
+    "consulted": "2026-10-11",
+    "file": "1602aefc3bbaf5d3.txt",
+    "bytes": 2214
+  },
+  {
+    "url": "https://doc.rust-lang.org/src/std/sys/fs/unix.rs.html",
+    "fetched_url": "https://doc.rust-lang.org/src/std/sys/fs/unix.rs.html",
+    "consulted": "2026-10-11",
+    "file": "be83decf8d432b9b.txt",
+    "bytes": 273435
+  },
+  {
+    "url": "https://raw.githubusercontent.com/cberner/redb/master/src/tree_store/page_store/file_backend.rs",
+    "consulted": "2026-10-11",
+    "errors": [
+      "HTTP Error 404: Not Found",
+      "HTTP Error 404: Not Found"
+    ]
+  },
+  {
+    "url": "https://pglite.dev/docs/about",
+    "fetched_url": "https://pglite.dev/docs/about",
+    "consulted": "2026-10-11",
+    "file": "9551d5d07256aa84.txt",
+    "bytes": 28963
+  },
+  {
+    "url": "https://pglite.dev/docs/filesystems",
+    "fetched_url": "https://pglite.dev/docs/filesystems",
+    "consulted": "2026-10-11",
+    "file": "4271d341fd0a7d4e.txt",
+    "bytes": 42348
+  },
+  {
+    "url": "https://pglite.dev/docs/multi-tab-worker",
+    "fetched_url": "https://pglite.dev/docs/multi-tab-worker",
+    "consulted": "2026-10-11",
+    "file": "7566f7df85c9001e.txt",
+    "bytes": 49536
+  },
+  {
+    "url": "https://raw.githubusercontent.com/faokunega/pg-embed/master/Cargo.toml",
+    "fetched_url": "https://raw.githubusercontent.com/faokunega/pg-embed/master/Cargo.toml",
+    "consulted": "2026-10-11",
+    "file": "fdbc5b4cee9f5695.txt",
+    "bytes": 1871
+  },
+  {
+    "url": "https://raw.githubusercontent.com/meilisearch/heed/main/Cargo.toml",
+    "fetched_url": "https://raw.githubusercontent.com/meilisearch/heed/main/Cargo.toml",
+    "consulted": "2026-10-11",
+    "file": "b593979fc7ad37a7.txt",
+    "bytes": 114
+  },
+  {
+    "url": "https://raw.githubusercontent.com/facebook/rocksdb/main/env/fs_posix.cc",
+    "fetched_url": "https://raw.githubusercontent.com/facebook/rocksdb/main/env/fs_posix.cc",
+    "consulted": "2026-10-11",
+    "file": "c02f632a549d184d.txt",
+    "bytes": 50282
+  },
+  {
+    "url": "https://duckdb.org/docs/current/connect/concurrency",
+    "fetched_url": "https://duckdb.org/docs/current/connect/concurrency",
+    "consulted": "2026-10-11",
+    "file": "e9572ae691d83536.txt",
+    "bytes": 354710
+  },
+  {
+    "url": "https://duckdb.org/docs/current/sql/statements/transactions",
+    "fetched_url": "https://duckdb.org/docs/current/sql/statements/transactions",
+    "consulted": "2026-10-11",
+    "file": "03c24d687f732c1c.txt",
+    "bytes": 358961
+  },
+  {
+    "url": "https://duckdb.org/2026/05/12/quack-remote-protocol",
+    "fetched_url": "https://duckdb.org/2026/05/12/quack-remote-protocol",
+    "consulted": "2026-10-11",
+    "file": "27322facfa580d72.txt",
+    "bytes": 561027
+  },
+  {
+    "url": "https://raw.githubusercontent.com/signalapp/Signal-Desktop/main/package.json",
+    "fetched_url": "https://raw.githubusercontent.com/signalapp/Signal-Desktop/main/package.json",
+    "consulted": "2026-10-11",
+    "file": "0abf7f73b70cfaf3.txt",
+    "bytes": 24848
+  },
+  {
+    "url": "https://raw.githubusercontent.com/signalapp/Signal-Desktop/main/ts/sql/Server.ts",
+    "consulted": "2026-10-11",
+    "errors": [
+      "HTTP Error 404: Not Found",
+      "HTTP Error 404: Not Found"
+    ]
+  },
+  {
+    "url": "https://github.com/signalapp/better-sqlite3",
+    "fetched_url": "https://github.com/signalapp/better-sqlite3",
+    "consulted": "2026-10-11",
+    "file": "ee731115409f562c.txt",
+    "bytes": 317385
+  },
+  {
+    "url": "https://www.postgresql.org/docs/current/runtime-config-connection.html",
+    "fetched_url": "https://www.postgresql.org/docs/current/runtime-config-connection.html",
+    "consulted": "2026-10-11",
+    "file": "4feea14437258a6c.txt",
+    "bytes": 60336
+  },
+  {
+    "url": "https://www.postgresql.org/docs/current/mvcc.html",
+    "fetched_url": "https://www.postgresql.org/docs/current/mvcc.html",
+    "consulted": "2026-10-11",
+    "file": "789864f7401f3ae1.txt",
+    "bytes": 17066
+  },
+  {
+    "url": "https://www.postgresql.org/docs/current/routine-vacuuming.html",
+    "fetched_url": "https://www.postgresql.org/docs/current/routine-vacuuming.html",
+    "consulted": "2026-10-11",
+    "file": "0485c93252136104.txt",
+    "bytes": 67503
+  },
+  {
+    "url": "https://www.postgresql.org/docs/current/textsearch-controls.html",
+    "fetched_url": "https://www.postgresql.org/docs/current/textsearch-controls.html",
+    "consulted": "2026-10-11",
+    "file": "776b7fed02e57eb3.txt",
+    "bytes": 47092
+  },
+  {
+    "url": "https://www.postgresql.org/about/licence/",
+    "fetched_url": "https://www.postgresql.org/about/licence/",
+    "consulted": "2026-10-11",
+    "file": "18577677cd0b074a.txt",
+    "bytes": 8073
+  },
+  {
+    "url": "https://www.sqlite.org/copyright.html",
+    "fetched_url": "https://www.sqlite.org/copyright.html",
+    "consulted": "2026-10-11",
+    "file": "75d0574743b504ca.txt",
+    "bytes": 8351
+  },
+  {
+    "url": "https://github.com/rusqlite/rusqlite",
+    "fetched_url": "https://github.com/rusqlite/rusqlite",
+    "consulted": "2026-10-11",
+    "file": "70ca2c75569fee9d.txt",
+    "bytes": 383105
+  },
+  {
+    "url": "https://api.github.com/repos/tursodatabase/turso/releases/tags/v0.8.2",
+    "fetched_url": "https://api.github.com/repos/tursodatabase/turso/releases/tags/v0.8.2",
+    "consulted": "2026-10-11",
+    "file": "592f871d66e36488.txt",
+    "bytes": 35078
+  },
+  {
+    "url": "https://github.com/tursodatabase/turso/releases/tag/v0.8.2",
+    "fetched_url": "https://github.com/tursodatabase/turso/releases/tag/v0.8.2",
+    "consulted": "2026-10-11",
+    "file": "b547d5ce0863af79.txt",
+    "bytes": 202254
+  },
+  {
+    "url": "https://raw.githubusercontent.com/signalapp/Signal-Desktop/main/ts/sql/migrations/index.node.ts",
+    "fetched_url": "https://raw.githubusercontent.com/signalapp/Signal-Desktop/main/ts/sql/migrations/index.node.ts",
+    "consulted": "2026-10-11",
+    "file": "4bd87c7c4c3e8ebd.txt",
+    "bytes": 58731
+  },
+  {
+    "url": "https://mariadb.com/docs/server/server-usage/storage-engines/innodb/innodb-system-variables",
+    "fetched_url": "https://mariadb.com/docs/server/server-usage/storage-engines/innodb/innodb-system-variables",
+    "consulted": "2026-10-11",
+    "file": "f32b2d6e35c47bad.txt",
+    "bytes": 5977348
+  },
+  {
+    "url": "https://www.sqlite.org/isolation.html",
+    "fetched_url": "https://www.sqlite.org/isolation.html",
+    "consulted": "2026-10-11",
+    "file": "d5d17178f0ee782a.txt",
+    "bytes": 17364
+  },
+  {
+    "url": "https://www.sqlite.org/lang_transaction.html",
+    "fetched_url": "https://www.sqlite.org/lang_transaction.html",
+    "consulted": "2026-10-11",
+    "file": "0f32b54f0bccc384.txt",
+    "bytes": 27068
+  },
+  {
+    "url": "https://www.sqlite.org/strict.html",
+    "consulted": "2026-10-11",
+    "errors": [
+      "HTTP Error 404: Not Found",
+      "HTTP Error 404: Not Found"
+    ]
+  },
+  {
+    "url": "https://www.rfc-editor.org/rfc/rfc5321",
+    "fetched_url": "https://www.rfc-editor.org/info/rfc5321/",
+    "consulted": "2026-10-11",
+    "file": "5283fe413ce452dd.txt",
+    "bytes": 1029568
+  },
+  {
+    "url": "https://www.rfc-editor.org/rfc/rfc9051",
+    "fetched_url": "https://www.rfc-editor.org/info/rfc9051/",
+    "consulted": "2026-10-11",
+    "file": "de9102ec5b8e7acb.txt",
+    "bytes": 3590856
+  },
+  {
+    "url": "https://github.com/quickwit-oss/tantivy",
+    "fetched_url": "https://github.com/quickwit-oss/tantivy",
+    "consulted": "2026-10-11",
+    "file": "910a08b6af8e55cc.txt",
+    "bytes": 382080
+  },
+  {
+    "url": "https://developer.apple.com/app-store/review/guidelines/",
+    "fetched_url": "https://developer.apple.com/app-store/review/guidelines/",
+    "consulted": "2026-10-11",
+    "file": "ba5aaca1a2072938.txt",
+    "bytes": 238264
+  },
+  {
+    "url": "https://github.com/maxgribov/apple-mail-parser",
+    "fetched_url": "https://github.com/maxgribov/apple-mail-parser",
+    "consulted": "2026-10-11",
+    "file": "efafa9dceb3a521d.txt",
+    "bytes": 285922
+  },
+  {
+    "url": "https://foundry376.github.io/Mailspring/guides/Database.html",
+    "fetched_url": "https://foundry376.github.io/Mailspring/guides/Database.html",
+    "consulted": "2026-10-11",
+    "file": "b01fa0d5611ce939.txt",
+    "bytes": 47671
+  },
+  {
+    "url": "https://github.com/chatmail/core",
+    "fetched_url": "https://github.com/chatmail/core",
+    "consulted": "2026-10-11",
+    "file": "ef9cb5449bc6bbad.txt",
+    "bytes": 399487
+  },
+  {
+    "url": "https://man7.org/linux/man-pages/man2/fsync.2.html",
+    "consulted": "2026-10-11",
+    "errors": [
+      "<urlopen error timed out>",
+      "<urlopen error timed out>"
+    ]
+  },
+  {
+    "url": "https://www.sqlite.org/stricttables.html",
+    "fetched_url": "https://www.sqlite.org/stricttables.html",
+    "consulted": "2026-10-11",
+    "file": "1c8ae4af1bbd48e1.txt",
+    "bytes": 13363
+  },
+  {
+    "url": "https://www.sqlite.org/fileformat2.html",
+    "fetched_url": "https://www.sqlite.org/fileformat2.html",
+    "consulted": "2026-10-11",
+    "file": "7b2662a75e6b4fc3.txt",
+    "bytes": 110473
+  },
+  {
+    "url": "https://docs.rs/redb/latest/redb/struct.Database.html",
+    "fetched_url": "https://docs.rs/redb/latest/redb/struct.Database.html",
+    "consulted": "2026-10-11",
+    "file": "e53b377b9feede16.txt",
+    "bytes": 52581
+  },
+  {
+    "url": "https://raw.githubusercontent.com/russellromney/sqlite-tantivy/main/BENCHMARK_RESULTS.md",
+    "fetched_url": "https://raw.githubusercontent.com/russellromney/sqlite-tantivy/main/BENCHMARK_RESULTS.md",
+    "consulted": "2026-10-11",
+    "file": "93a738862f0923bf.txt",
+    "bytes": 6339
+  },
+  {
+    "url": "https://raw.githubusercontent.com/VADOSWARE/fts-benchmark/main/README.md",
+    "fetched_url": "https://raw.githubusercontent.com/VADOSWARE/fts-benchmark/main/README.md",
+    "consulted": "2026-10-11",
+    "file": "b8a1b0b94dce8ad8.txt",
+    "bytes": 8960
+  }
+]

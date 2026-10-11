@@ -1,0 +1,308 @@
+{
+  "engine": "lmdb",
+  "cycles": [
+    {
+      "cycle": 1,
+      "new_acknowledged_rows": 60,
+      "total_acknowledged_rows": 60,
+      "phase": 1,
+      "open_recovery_ms": 0.6190480198711157,
+      "integrity_check": "full application key/data traversal; no standalone native checker exposed by wheel",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 2,
+      "new_acknowledged_rows": 60,
+      "total_acknowledged_rows": 120,
+      "phase": 2,
+      "open_recovery_ms": 1.129898999352008,
+      "integrity_check": "full application key/data traversal; no standalone native checker exposed by wheel",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 3,
+      "new_acknowledged_rows": 60,
+      "total_acknowledged_rows": 180,
+      "phase": 0,
+      "open_recovery_ms": 0.3560759942047298,
+      "integrity_check": "full application key/data traversal; no standalone native checker exposed by wheel",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 4,
+      "new_acknowledged_rows": 60,
+      "total_acknowledged_rows": 240,
+      "phase": 1,
+      "open_recovery_ms": 0.4180690157227218,
+      "integrity_check": "full application key/data traversal; no standalone native checker exposed by wheel",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 5,
+      "new_acknowledged_rows": 60,
+      "total_acknowledged_rows": 300,
+      "phase": 2,
+      "open_recovery_ms": 0.3405800089240074,
+      "integrity_check": "full application key/data traversal; no standalone native checker exposed by wheel",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 6,
+      "new_acknowledged_rows": 60,
+      "total_acknowledged_rows": 360,
+      "phase": 0,
+      "open_recovery_ms": 0.5273689748719335,
+      "integrity_check": "full application key/data traversal; no standalone native checker exposed by wheel",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 7,
+      "new_acknowledged_rows": 60,
+      "total_acknowledged_rows": 420,
+      "phase": 1,
+      "open_recovery_ms": 0.5718289758078754,
+      "integrity_check": "full application key/data traversal; no standalone native checker exposed by wheel",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 8,
+      "new_acknowledged_rows": 60,
+      "total_acknowledged_rows": 480,
+      "phase": 2,
+      "open_recovery_ms": 0.5692699924111366,
+      "integrity_check": "full application key/data traversal; no standalone native checker exposed by wheel",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 9,
+      "new_acknowledged_rows": 60,
+      "total_acknowledged_rows": 540,
+      "phase": 0,
+      "open_recovery_ms": 0.2993050147779286,
+      "integrity_check": "full application key/data traversal; no standalone native checker exposed by wheel",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 10,
+      "new_acknowledged_rows": 60,
+      "total_acknowledged_rows": 600,
+      "phase": 1,
+      "open_recovery_ms": 0.2927409950643778,
+      "integrity_check": "full application key/data traversal; no standalone native checker exposed by wheel",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 11,
+      "new_acknowledged_rows": 60,
+      "total_acknowledged_rows": 660,
+      "phase": 2,
+      "open_recovery_ms": 0.5520840059034526,
+      "integrity_check": "full application key/data traversal; no standalone native checker exposed by wheel",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 12,
+      "new_acknowledged_rows": 60,
+      "total_acknowledged_rows": 720,
+      "phase": 0,
+      "open_recovery_ms": 0.25417597498744726,
+      "integrity_check": "full application key/data traversal; no standalone native checker exposed by wheel",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 13,
+      "new_acknowledged_rows": 60,
+      "total_acknowledged_rows": 780,
+      "phase": 1,
+      "open_recovery_ms": 0.5339840427041054,
+      "integrity_check": "full application key/data traversal; no standalone native checker exposed by wheel",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 14,
+      "new_acknowledged_rows": 60,
+      "total_acknowledged_rows": 840,
+      "phase": 2,
+      "open_recovery_ms": 0.36825297866016626,
+      "integrity_check": "full application key/data traversal; no standalone native checker exposed by wheel",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 15,
+      "new_acknowledged_rows": 60,
+      "total_acknowledged_rows": 900,
+      "phase": 0,
+      "open_recovery_ms": 0.35510899033397436,
+      "integrity_check": "full application key/data traversal; no standalone native checker exposed by wheel",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 16,
+      "new_acknowledged_rows": 60,
+      "total_acknowledged_rows": 960,
+      "phase": 1,
+      "open_recovery_ms": 0.6824730080552399,
+      "integrity_check": "full application key/data traversal; no standalone native checker exposed by wheel",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 17,
+      "new_acknowledged_rows": 60,
+      "total_acknowledged_rows": 1020,
+      "phase": 2,
+      "open_recovery_ms": 0.5846950225532055,
+      "integrity_check": "full application key/data traversal; no standalone native checker exposed by wheel",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 18,
+      "new_acknowledged_rows": 60,
+      "total_acknowledged_rows": 1080,
+      "phase": 0,
+      "open_recovery_ms": 0.5303730140440166,
+      "integrity_check": "full application key/data traversal; no standalone native checker exposed by wheel",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 19,
+      "new_acknowledged_rows": 60,
+      "total_acknowledged_rows": 1140,
+      "phase": 1,
+      "open_recovery_ms": 0.5598629941232502,
+      "integrity_check": "full application key/data traversal; no standalone native checker exposed by wheel",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 20,
+      "new_acknowledged_rows": 60,
+      "total_acknowledged_rows": 1200,
+      "phase": 2,
+      "open_recovery_ms": 0.5444719572551548,
+      "integrity_check": "full application key/data traversal; no standalone native checker exposed by wheel",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 21,
+      "new_acknowledged_rows": 60,
+      "total_acknowledged_rows": 1260,
+      "phase": 0,
+      "open_recovery_ms": 0.4765290068462491,
+      "integrity_check": "full application key/data traversal; no standalone native checker exposed by wheel",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 22,
+      "new_acknowledged_rows": 60,
+      "total_acknowledged_rows": 1320,
+      "phase": 1,
+      "open_recovery_ms": 1.2342409463599324,
+      "integrity_check": "full application key/data traversal; no standalone native checker exposed by wheel",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 23,
+      "new_acknowledged_rows": 60,
+      "total_acknowledged_rows": 1380,
+      "phase": 2,
+      "open_recovery_ms": 0.3178940387442708,
+      "integrity_check": "full application key/data traversal; no standalone native checker exposed by wheel",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 24,
+      "new_acknowledged_rows": 60,
+      "total_acknowledged_rows": 1440,
+      "phase": 0,
+      "open_recovery_ms": 0.5451810429804027,
+      "integrity_check": "full application key/data traversal; no standalone native checker exposed by wheel",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 25,
+      "new_acknowledged_rows": 60,
+      "total_acknowledged_rows": 1500,
+      "phase": 1,
+      "open_recovery_ms": 0.7122089737094939,
+      "integrity_check": "full application key/data traversal; no standalone native checker exposed by wheel",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 26,
+      "new_acknowledged_rows": 60,
+      "total_acknowledged_rows": 1560,
+      "phase": 2,
+      "open_recovery_ms": 0.5469220341183245,
+      "integrity_check": "full application key/data traversal; no standalone native checker exposed by wheel",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 27,
+      "new_acknowledged_rows": 60,
+      "total_acknowledged_rows": 1620,
+      "phase": 0,
+      "open_recovery_ms": 0.3356069792062044,
+      "integrity_check": "full application key/data traversal; no standalone native checker exposed by wheel",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 28,
+      "new_acknowledged_rows": 60,
+      "total_acknowledged_rows": 1680,
+      "phase": 1,
+      "open_recovery_ms": 0.5936800152994692,
+      "integrity_check": "full application key/data traversal; no standalone native checker exposed by wheel",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 29,
+      "new_acknowledged_rows": 60,
+      "total_acknowledged_rows": 1740,
+      "phase": 2,
+      "open_recovery_ms": 0.7049389532767236,
+      "integrity_check": "full application key/data traversal; no standalone native checker exposed by wheel",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 30,
+      "new_acknowledged_rows": 60,
+      "total_acknowledged_rows": 1800,
+      "phase": 0,
+      "open_recovery_ms": 0.3248159773647785,
+      "integrity_check": "full application key/data traversal; no standalone native checker exposed by wheel",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    }
+  ],
+  "scope": "SIGKILL with pre-commit transaction paused; parent fsynced acknowledged-commit witness",
+  "passed": true,
+  "acknowledged_rows": 1800
+}

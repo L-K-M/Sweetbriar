@@ -1,0 +1,3428 @@
+[
+  {
+    "type": "MENU",
+    "spec": "1509",
+    "line": 158,
+    "file": "src/Common.r",
+    "title": "Db",
+    "items": [
+      {
+        "text": "0 No offscreen bm's",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 161
+      },
+      {
+        "text": "1 PeteBusy",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 162
+      },
+      {
+        "text": "2 Serial #'s",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 163
+      },
+      {
+        "text": "3 Random Nicknames Events",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 164
+      },
+      {
+        "text": "4 Fast ad scheduling",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 165
+      },
+      {
+        "text": "5 No Double-buffs",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 166
+      },
+      {
+        "text": "6 Repeat Mailchecks",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 167
+      },
+      {
+        "text": "7 Show arrival times",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 168
+      },
+      {
+        "text": "8 UseResFile",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 169
+      },
+      {
+        "text": "9 No Temp Mem",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 170
+      },
+      {
+        "text": "10 Menu Profile",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 171
+      },
+      {
+        "text": "11 Facetime accelerator",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 172
+      },
+      {
+        "text": "12 ports +10000",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 173
+      },
+      {
+        "text": "13 4X TCP Buffer",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 174
+      },
+      {
+        "text": "14 Visible composition",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 175
+      },
+      {
+        "text": "15 Message fetch trace",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 176
+      },
+      {
+        "text": "-",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 177
+      },
+      {
+        "text": "Debugger!",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 178
+      },
+      {
+        "text": "Collect IMAP message flags",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 179
+      },
+      {
+        "text": "Reset Leaks",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 180
+      },
+      {
+        "text": "Ads",
+        "key": "hierarchicalMenu",
+        "mark": "noMark",
+        "line": 181
+      },
+      {
+        "text": "Assign a command key",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 182
+      },
+      {
+        "text": "Test spooler",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 183
+      },
+      {
+        "text": "Dump win->pte",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 184
+      },
+      {
+        "text": "Debug Nagging",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 185
+      },
+      {
+        "text": "Dump Control Hierarchy",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 186
+      },
+      {
+        "text": "Toggle ad window",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 187
+      },
+      {
+        "text": "Audit Now",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 188
+      },
+      {
+        "text": "Test Matching",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 189
+      },
+      {
+        "text": "Add email received stat",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 190
+      },
+      {
+        "text": "Add email sent stat",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 191
+      }
+    ]
+  },
+  {
+    "type": "MENU",
+    "spec": "1228",
+    "line": 195,
+    "file": "src/Common.r",
+    "title": "Ad Select",
+    "items": [
+      {
+        "text": "Request new playlist",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 198
+      },
+      {
+        "text": "Reload playlist",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 199
+      },
+      {
+        "text": "Dump playlists",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 200
+      },
+      {
+        "text": "-",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 201
+      }
+    ]
+  },
+  {
+    "type": "MENU",
+    "spec": "1503, \"Edit\"",
+    "line": 539,
+    "file": "src/Common.r",
+    "title": "Edit",
+    "items": [
+      {
+        "text": "Undo",
+        "key": "\"Z\"",
+        "mark": "noMark",
+        "line": 547
+      },
+      {
+        "text": "-",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 549
+      },
+      {
+        "text": "Cut",
+        "key": "\"X\"",
+        "mark": "noMark",
+        "line": 551
+      },
+      {
+        "text": "Copy",
+        "key": "\"C\"",
+        "mark": "noMark",
+        "line": 553
+      },
+      {
+        "text": "Paste",
+        "key": "\"V\"",
+        "mark": "noMark",
+        "line": 555
+      },
+      {
+        "text": "Paste As Quotation",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 557
+      },
+      {
+        "text": "Clear",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 559
+      },
+      {
+        "text": "-",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 561
+      },
+      {
+        "text": "Text",
+        "key": "hierarchicalMenu",
+        "mark": "\"€\"",
+        "line": 563
+      },
+      {
+        "text": "-",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 565
+      },
+      {
+        "text": "Select All",
+        "key": "\"A\"",
+        "mark": "noMark",
+        "line": 567
+      },
+      {
+        "text": "Wrap Selection",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 569
+      },
+      {
+        "text": "Finish Nickname",
+        "key": "\"",
+        "mark": "\"",
+        "line": 571
+      },
+      {
+        "text": "Insert Recipient",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 573
+      },
+      {
+        "text": "Insert Emoticon",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 575
+      },
+      {
+        "text": "-",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 577
+      },
+      {
+        "text": "Message Plug–ins",
+        "key": "hierarchicalMenu",
+        "mark": "\"‹\"",
+        "line": 579
+      },
+      {
+        "text": "Speak",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 581
+      },
+      {
+        "text": "Dial",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 584
+      },
+      {
+        "text": "Spelling",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 588
+      },
+      {
+        "text": "Add Word Service...",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 591
+      }
+    ]
+  },
+  {
+    "type": "MENU",
+    "spec": "1554, \"Scripts\"",
+    "line": 595,
+    "file": "src/Common.r",
+    "title": "Scripts",
+    "items": [
+      {
+        "text": "Open Scripts Folder",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 603
+      },
+      {
+        "text": "-",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 605
+      }
+    ]
+  },
+  {
+    "type": "MENU",
+    "spec": "1553, \"ImporterSelect\"",
+    "line": 1843,
+    "file": "src/Common.r",
+    "title": "ImporterSelect",
+    "items": [
+      {
+        "text": "Search disk for all ...",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 1851
+      }
+    ]
+  },
+  {
+    "type": "MENU",
+    "spec": "515",
+    "line": 2873,
+    "file": "src/Common.r",
+    "title": "Help",
+    "items": []
+  },
+  {
+    "type": "MENU",
+    "spec": "1535",
+    "line": 67,
+    "file": "src/FiltDefs.r",
+    "title": "FActions",
+    "items": [
+      {
+        "text": "None",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 68
+      },
+      {
+        "text": "-",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 69
+      },
+      {
+        "text": "Make Status",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 70
+      },
+      {
+        "text": "Make Priority",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 71
+      },
+      {
+        "text": "Make Label",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 72
+      },
+      {
+        "text": "Make Personality",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 73
+      },
+      {
+        "text": "Make Subject",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 74
+      },
+      {
+        "text": "-",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 75
+      },
+      {
+        "text": "Play Sound",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 76
+      },
+      {
+        "text": "Speak",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 77
+      },
+      {
+        "text": "Open",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 78
+      },
+      {
+        "text": "Print",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 79
+      },
+      {
+        "text": "Remember Sender",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 80
+      },
+      {
+        "text": "Notify User",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 81
+      },
+      {
+        "text": "-",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 82
+      },
+      {
+        "text": "Forward To",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 83
+      },
+      {
+        "text": "Redirect To",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 84
+      },
+      {
+        "text": "Reply With",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 85
+      },
+      {
+        "text": "-",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 86
+      },
+      {
+        "text": "Server Options",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 87
+      },
+      {
+        "text": "-",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 88
+      },
+      {
+        "text": "Copy To",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 89
+      },
+      {
+        "text": "Transfer To",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 90
+      },
+      {
+        "text": "Junk",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 91
+      },
+      {
+        "text": "Move Attachments",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 92
+      },
+      {
+        "text": "-",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 93
+      },
+      {
+        "text": "Skip Rest",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 94
+      }
+    ]
+  },
+  {
+    "type": "MENU",
+    "spec": "1510, \"1510\"",
+    "line": 3799,
+    "file": "src/SettingsTwo.rsrc.r",
+    "title": "\\0x00",
+    "items": []
+  },
+  {
+    "type": "MENU",
+    "spec": "1511, \"1511\"",
+    "line": 3809,
+    "file": "src/SettingsTwo.rsrc.r",
+    "title": "\\0x00",
+    "items": []
+  },
+  {
+    "type": "MENU",
+    "spec": "1530",
+    "line": 3819,
+    "file": "src/SettingsTwo.rsrc.r",
+    "title": "PersPopup",
+    "items": [
+      {
+        "text": "«Dominant»",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 3827
+      },
+      {
+        "text": "-",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 3829
+      }
+    ]
+  },
+  {
+    "type": "MENU",
+    "spec": "1531",
+    "line": 3833,
+    "file": "src/SettingsTwo.rsrc.r",
+    "title": "Stationery Popup",
+    "items": [
+      {
+        "text": "None",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 3841
+      },
+      {
+        "text": "-",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 3843
+      }
+    ]
+  },
+  {
+    "type": "MENU",
+    "spec": "1552",
+    "line": 3847,
+    "file": "src/SettingsTwo.rsrc.r",
+    "title": "Graph Type",
+    "items": [
+      {
+        "text": "Line",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 3855
+      },
+      {
+        "text": "Area",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 3857
+      },
+      {
+        "text": "Bar",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 3859
+      },
+      {
+        "text": "Circle",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 3861
+      },
+      {
+        "text": "Diamond",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 3863
+      },
+      {
+        "text": "Square",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 3865
+      }
+    ]
+  },
+  {
+    "type": "MENU",
+    "spec": "1555, \"SSL Menu\"",
+    "line": 3869,
+    "file": "src/SettingsTwo.rsrc.r",
+    "title": "SSL",
+    "items": [
+      {
+        "text": "None",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 3877
+      },
+      {
+        "text": "Required (TLS)",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 3879
+      },
+      {
+        "text": "Optional (TLS)",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 3881
+      },
+      {
+        "text": "Required (Alternate Port)",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 3883
+      }
+    ]
+  },
+  {
+    "type": "MENU",
+    "spec": "1558",
+    "line": 3887,
+    "file": "src/SettingsTwo.rsrc.r",
+    "title": "\\0x00",
+    "items": [
+      {
+        "text": "None",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 3895
+      },
+      {
+        "text": "-",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 3897
+      }
+    ]
+  },
+  {
+    "type": "MENU",
+    "spec": "1559",
+    "line": 3901,
+    "file": "src/SettingsTwo.rsrc.r",
+    "title": "PreviewProfile",
+    "items": [
+      {
+        "text": "None",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 3909
+      },
+      {
+        "text": "-",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 3911
+      }
+    ]
+  },
+  {
+    "type": "MENU",
+    "spec": "1560",
+    "line": 3915,
+    "file": "src/SettingsTwo.rsrc.r",
+    "title": "MessageProfile",
+    "items": [
+      {
+        "text": "None",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 3923
+      },
+      {
+        "text": "-",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 3925
+      }
+    ]
+  },
+  {
+    "type": "MENU",
+    "spec": "1561",
+    "line": 3929,
+    "file": "src/SettingsTwo.rsrc.r",
+    "title": "MultiPreviewProfile",
+    "items": [
+      {
+        "text": "None",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 3937
+      },
+      {
+        "text": "-",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 3939
+      }
+    ]
+  },
+  {
+    "type": "MENU",
+    "spec": "1562",
+    "line": 3943,
+    "file": "src/SettingsTwo.rsrc.r",
+    "title": "SMTPRelayPersonality",
+    "items": [
+      {
+        "text": "None",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 3951
+      },
+      {
+        "text": "-",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 3953
+      }
+    ]
+  },
+  {
+    "type": "MENU",
+    "spec": "1514, \"Window\"",
+    "line": 15,
+    "file": "src/carbon.r",
+    "title": "Window",
+    "items": [
+      {
+        "text": "Minimize Window",
+        "key": "\"M\"",
+        "mark": "noMark",
+        "line": 23
+      },
+      {
+        "text": "Bring All to Front",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 25
+      },
+      {
+        "text": "Send to Back",
+        "key": "\"\\\\\"",
+        "mark": "noMark",
+        "line": 27
+      },
+      {
+        "text": "Tabs",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 29
+      },
+      {
+        "text": "Drawer",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 31
+      },
+      {
+        "text": "-",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 33
+      },
+      {
+        "text": "Address Book",
+        "key": "\"L\"",
+        "mark": "noMark",
+        "line": 35
+      },
+      {
+        "text": "Directory Services",
+        "key": "\"Y\"",
+        "mark": "noMark",
+        "line": 37
+      },
+      {
+        "text": "Filters",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 39
+      },
+      {
+        "text": "Link History",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 41
+      },
+      {
+        "text": "Mailboxes",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 43
+      },
+      {
+        "text": "Personalities",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 45
+      },
+      {
+        "text": "Signatures",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 47
+      },
+      {
+        "text": "Stationery",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 49
+      },
+      {
+        "text": "Statistics",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 51
+      },
+      {
+        "text": "Task Progress",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 53
+      },
+      {
+        "text": "-",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 55
+      }
+    ]
+  },
+  {
+    "type": "MENU",
+    "spec": "1514, \"Window\"",
+    "line": 4,
+    "file": "src/classic.r",
+    "title": "Window",
+    "items": [
+      {
+        "text": "Send to Back",
+        "key": "\"\\\\\"",
+        "mark": "noMark",
+        "line": 12
+      },
+      {
+        "text": "Tabs",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 14
+      },
+      {
+        "text": "-",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 16
+      },
+      {
+        "text": "Address Book",
+        "key": "\"L\"",
+        "mark": "noMark",
+        "line": 18
+      },
+      {
+        "text": "Directory Services",
+        "key": "\"Y\"",
+        "mark": "noMark",
+        "line": 20
+      },
+      {
+        "text": "Filters",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 22
+      },
+      {
+        "text": "Link History",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 24
+      },
+      {
+        "text": "Mailboxes",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 26
+      },
+      {
+        "text": "Personalities",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 28
+      },
+      {
+        "text": "Signatures",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 30
+      },
+      {
+        "text": "Stationery",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 32
+      },
+      {
+        "text": "Statistics",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 34
+      },
+      {
+        "text": "Task Progress",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 36
+      },
+      {
+        "text": "-",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 38
+      }
+    ]
+  },
+  {
+    "type": "MENU",
+    "spec": "1504, \"Mailbox\"",
+    "line": 5703,
+    "file": "src/common.rsrc.r",
+    "title": "Mailbox",
+    "items": [
+      {
+        "text": "In",
+        "key": "\"1\"",
+        "mark": "noMark",
+        "line": 5711
+      },
+      {
+        "text": "Out",
+        "key": "\"0\"",
+        "mark": "noMark",
+        "line": 5713
+      },
+      {
+        "text": "Junk",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 5715
+      },
+      {
+        "text": "Trash",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 5717
+      },
+      {
+        "text": "-",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 5719
+      }
+    ]
+  },
+  {
+    "type": "MENU",
+    "spec": "1201, \"Find Submenu\"",
+    "line": 5723,
+    "file": "src/common.rsrc.r",
+    "title": "Find",
+    "items": [
+      {
+        "text": "Find...",
+        "key": "\"F\"",
+        "mark": "noMark",
+        "line": 5731
+      },
+      {
+        "text": "Find Again",
+        "key": "\"G\"",
+        "mark": "noMark",
+        "line": 5733
+      },
+      {
+        "text": "Enter Selection",
+        "key": "\"=\"",
+        "mark": "noMark",
+        "line": 5735
+      },
+      {
+        "text": "-",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 5737
+      },
+      {
+        "text": "Search",
+        "key": "\"F\"",
+        "mark": "noMark",
+        "line": 5739
+      },
+      {
+        "text": "Search All",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 5741
+      },
+      {
+        "text": "Search Mailbox",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 5743
+      },
+      {
+        "text": "Search Mailfolder",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 5745
+      },
+      {
+        "text": "-",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 5747
+      },
+      {
+        "text": "Search Web for Selection",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 5749
+      }
+    ]
+  },
+  {
+    "type": "MENU",
+    "spec": "1512, \"1512\"",
+    "line": 5753,
+    "file": "src/common.rsrc.r",
+    "title": "\\0x00",
+    "items": []
+  },
+  {
+    "type": "MENU",
+    "spec": "1513, \"1513\"",
+    "line": 5763,
+    "file": "src/common.rsrc.r",
+    "title": "\\0x00",
+    "items": []
+  },
+  {
+    "type": "MENU",
+    "spec": "1501, \"Apple\"",
+    "line": 5773,
+    "file": "src/common.rsrc.r",
+    "title": "(untitled)",
+    "items": [
+      {
+        "text": "About Eudora...",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 5781
+      },
+      {
+        "text": "-",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 5783
+      }
+    ]
+  },
+  {
+    "type": "MENU",
+    "spec": "1210, \"Priority\"",
+    "line": 5787,
+    "file": "src/common.rsrc.r",
+    "title": "Priority",
+    "items": [
+      {
+        "text": "(Highest)",
+        "key": "\"\\0x1D\"",
+        "mark": "noMark",
+        "line": 5795
+      },
+      {
+        "text": "(High)",
+        "key": "\"\\0x1D\"",
+        "mark": "noMark",
+        "line": 5797
+      },
+      {
+        "text": "(Normal)",
+        "key": "\"\\0x1E\"",
+        "mark": "noMark",
+        "line": 5799
+      },
+      {
+        "text": "(Low)",
+        "key": "\"\\0x1D\"",
+        "mark": "noMark",
+        "line": 5801
+      },
+      {
+        "text": "(Lowest)",
+        "key": "\"\\0x1D\"",
+        "mark": "noMark",
+        "line": 5803
+      },
+      {
+        "text": "-",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 5805
+      },
+      {
+        "text": "Raise",
+        "key": "\"]\"",
+        "mark": "noMark",
+        "line": 5807
+      },
+      {
+        "text": "Lower",
+        "key": "\"[\"",
+        "mark": "noMark",
+        "line": 5809
+      }
+    ]
+  },
+  {
+    "type": "MENU",
+    "spec": "1213, \"Transliteration\"",
+    "line": 5813,
+    "file": "src/common.rsrc.r",
+    "title": "Transliteration",
+    "items": []
+  },
+  {
+    "type": "MENU",
+    "spec": "1516, \"MT1\"",
+    "line": 5823,
+    "file": "src/common.rsrc.r",
+    "title": "MT1",
+    "items": [
+      {
+        "text": "contains",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 5831
+      },
+      {
+        "text": "does not contain",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 5833
+      },
+      {
+        "text": "is",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 5835
+      },
+      {
+        "text": "is not",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 5837
+      },
+      {
+        "text": "starts with",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 5839
+      },
+      {
+        "text": "ends with",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 5841
+      },
+      {
+        "text": "appears",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 5843
+      },
+      {
+        "text": "does not appear",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 5845
+      },
+      {
+        "text": "intersects nickname",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 5847
+      },
+      {
+        "text": "doesn’t intersect nickname",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 5849
+      },
+      {
+        "text": "intersects address book",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 5851
+      },
+      {
+        "text": "doesn’t intersect address book",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 5853
+      },
+      {
+        "text": "matches regular expression",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 5855
+      },
+      {
+        "text": "is less than",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 5857
+      },
+      {
+        "text": "is greater than",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 5859
+      }
+    ]
+  },
+  {
+    "type": "MENU",
+    "spec": "1517, \"MT2\"",
+    "line": 5863,
+    "file": "src/common.rsrc.r",
+    "title": "MT2",
+    "items": [
+      {
+        "text": "contains",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 5871
+      },
+      {
+        "text": "does not contain",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 5873
+      },
+      {
+        "text": "is",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 5875
+      },
+      {
+        "text": "is not",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 5877
+      },
+      {
+        "text": "starts with",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 5879
+      },
+      {
+        "text": "ends with",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 5881
+      },
+      {
+        "text": "appears",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 5883
+      },
+      {
+        "text": "does not appear",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 5885
+      },
+      {
+        "text": "intersects nickname",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 5887
+      },
+      {
+        "text": "doesn’t intersect nickname",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 5889
+      },
+      {
+        "text": "intersects address book",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 5891
+      },
+      {
+        "text": "doesn’t intersect address book",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 5893
+      },
+      {
+        "text": "matches regular expression",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 5895
+      },
+      {
+        "text": "is less than",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 5897
+      },
+      {
+        "text": "is greater than",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 5899
+      }
+    ]
+  },
+  {
+    "type": "MENU",
+    "spec": "1518, \"Cj\"",
+    "line": 5903,
+    "file": "src/common.rsrc.r",
+    "title": "Cj",
+    "items": [
+      {
+        "text": "ignore",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 5911
+      },
+      {
+        "text": "and",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 5913
+      },
+      {
+        "text": "or",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 5915
+      },
+      {
+        "text": "unless",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 5917
+      }
+    ]
+  },
+  {
+    "type": "MENU",
+    "spec": "1506, \"Transfer\"",
+    "line": 5921,
+    "file": "src/common.rsrc.r",
+    "title": "Transfer",
+    "items": [
+      {
+        "text": "–> In",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 5929
+      },
+      {
+        "text": "–> Out",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 5931
+      },
+      {
+        "text": "–> Junk",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 5933
+      },
+      {
+        "text": "–> Trash",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 5935
+      },
+      {
+        "text": "-",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 5937
+      }
+    ]
+  },
+  {
+    "type": "MENU",
+    "spec": "1209, \"Status\"",
+    "line": 5941,
+    "file": "src/common.rsrc.r",
+    "title": "State",
+    "items": [
+      {
+        "text": "Unread",
+        "key": "\"\\0x1D\"",
+        "mark": "noMark",
+        "line": 5949
+      },
+      {
+        "text": "Read",
+        "key": "\"\\0x1D\"",
+        "mark": "noMark",
+        "line": 5951
+      },
+      {
+        "text": "Replied",
+        "key": "\"\\0x1D\"",
+        "mark": "noMark",
+        "line": 5953
+      },
+      {
+        "text": "Forwarded",
+        "key": "\"\\0x1D\"",
+        "mark": "noMark",
+        "line": 5955
+      },
+      {
+        "text": "Redirected",
+        "key": "\"\\0x1D\"",
+        "mark": "noMark",
+        "line": 5957
+      },
+      {
+        "text": "Recovered",
+        "key": "\"\\0x1D\"",
+        "mark": "noMark",
+        "line": 5959
+      },
+      {
+        "text": "-",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 5961
+      },
+      {
+        "text": "Unsendable",
+        "key": "\"\\0x1D\"",
+        "mark": "noMark",
+        "line": 5963
+      },
+      {
+        "text": "Sendable",
+        "key": "\"\\0x1D\"",
+        "mark": "noMark",
+        "line": 5965
+      },
+      {
+        "text": "Queued",
+        "key": "\"\\0x1D\"",
+        "mark": "noMark",
+        "line": 5967
+      },
+      {
+        "text": "Timed Queue",
+        "key": "\"\\0x1D\"",
+        "mark": "noMark",
+        "line": 5969
+      },
+      {
+        "text": "Sent",
+        "key": "\"\\0x1D\"",
+        "mark": "noMark",
+        "line": 5971
+      },
+      {
+        "text": "Unsent",
+        "key": "\"\\0x1D\"",
+        "mark": "noMark",
+        "line": 5973
+      },
+      {
+        "text": "Transfer Error",
+        "key": "\"\\0x1D\"",
+        "mark": "noMark",
+        "line": 5975
+      },
+      {
+        "text": "Being Sent",
+        "key": "\"\\0x1D\"",
+        "mark": "noMark",
+        "line": 5977
+      }
+    ]
+  },
+  {
+    "type": "MENU",
+    "spec": "1214, \"Sig\"",
+    "line": 5981,
+    "file": "src/common.rsrc.r",
+    "title": "Signature Popup",
+    "items": [
+      {
+        "text": "None",
+        "key": "\"\\0x1D\"",
+        "mark": "noMark",
+        "line": 5989
+      },
+      {
+        "text": "Standard",
+        "key": "\"\\0x1D\"",
+        "mark": "noMark",
+        "line": 5991
+      },
+      {
+        "text": "Alternate",
+        "key": "\"\\0x1D\"",
+        "mark": "noMark",
+        "line": 5993
+      }
+    ]
+  },
+  {
+    "type": "MENU",
+    "spec": "1521, \"Nickfile\"",
+    "line": 5997,
+    "file": "src/common.rsrc.r",
+    "title": "NickFile",
+    "items": []
+  },
+  {
+    "type": "MENU",
+    "spec": "1523, \"PhXIn\"",
+    "line": 6007,
+    "file": "src/common.rsrc.r",
+    "title": "PhXlIn",
+    "items": [
+      {
+        "text": "None",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6015
+      }
+    ]
+  },
+  {
+    "type": "MENU",
+    "spec": "1524, \"PhXOut\"",
+    "line": 6019,
+    "file": "src/common.rsrc.r",
+    "title": "PhXlOut",
+    "items": [
+      {
+        "text": "None",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6027
+      }
+    ]
+  },
+  {
+    "type": "MENU",
+    "spec": "1526",
+    "line": 6031,
+    "file": "src/common.rsrc.r",
+    "title": "FiltSound",
+    "items": []
+  },
+  {
+    "type": "MENU",
+    "spec": "1216",
+    "line": 6041,
+    "file": "src/common.rsrc.r",
+    "title": "Color",
+    "items": [
+      {
+        "text": "No Color",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6049
+      },
+      {
+        "text": "-",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6051
+      },
+      {
+        "text": "Red",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6053
+      },
+      {
+        "text": "Green",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6055
+      },
+      {
+        "text": "Blue",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6057
+      },
+      {
+        "text": "Yellow",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6059
+      },
+      {
+        "text": "Brown",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6061
+      }
+    ]
+  },
+  {
+    "type": "MENU",
+    "spec": "1220",
+    "line": 6065,
+    "file": "src/common.rsrc.r",
+    "title": "Translation Services",
+    "items": []
+  },
+  {
+    "type": "MENU",
+    "spec": "220, \"Process\"",
+    "line": 6075,
+    "file": "src/common.rsrc.r",
+    "title": "Process",
+    "items": []
+  },
+  {
+    "type": "MENU",
+    "spec": "1222",
+    "line": 6085,
+    "file": "src/common.rsrc.r",
+    "title": "Attach Translators",
+    "items": []
+  },
+  {
+    "type": "MENU",
+    "spec": "1223",
+    "line": 6095,
+    "file": "src/common.rsrc.r",
+    "title": "Translator Settings",
+    "items": []
+  },
+  {
+    "type": "MENU",
+    "spec": "1224",
+    "line": 6105,
+    "file": "src/common.rsrc.r",
+    "title": "Window Properties",
+    "items": [
+      {
+        "text": "Tabs",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6113
+      },
+      {
+        "text": "Floating",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6115
+      },
+      {
+        "text": "Dockable",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6117
+      }
+    ]
+  },
+  {
+    "type": "MENU",
+    "spec": "1507, \"Special\"",
+    "line": 6121,
+    "file": "src/common.rsrc.r",
+    "title": "Special",
+    "items": [
+      {
+        "text": "Filter Messages",
+        "key": "\"J\"",
+        "mark": "noMark",
+        "line": 6129
+      },
+      {
+        "text": "Make Address Book Entry...",
+        "key": "\"K\"",
+        "mark": "noMark",
+        "line": 6131
+      },
+      {
+        "text": "Make Filter...",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6133
+      },
+      {
+        "text": "Find",
+        "key": "hierarchicalMenu",
+        "mark": "\"…\"",
+        "line": 6135
+      },
+      {
+        "text": "Sort",
+        "key": "hierarchicalMenu",
+        "mark": "\"–\"",
+        "line": 6137
+      },
+      {
+        "text": "-",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6139
+      },
+      {
+        "text": "Settings...",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6141
+      },
+      {
+        "text": "Plug–in Settings",
+        "key": "hierarchicalMenu",
+        "mark": "\"ﬂ\"",
+        "line": 6143
+      },
+      {
+        "text": "-",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6145
+      },
+      {
+        "text": "Change Password...",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6147
+      },
+      {
+        "text": "Forget Password",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6149
+      },
+      {
+        "text": "Empty Trash",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6151
+      }
+    ]
+  },
+  {
+    "type": "MENU",
+    "spec": "1519, \"Sig\"",
+    "line": 6155,
+    "file": "src/common.rsrc.r",
+    "title": "Signature Popup",
+    "items": [
+      {
+        "text": "None",
+        "key": "\"\\0x1D\"",
+        "mark": "noMark",
+        "line": 6163
+      },
+      {
+        "text": "Standard",
+        "key": "\"\\0x1D\"",
+        "mark": "noMark",
+        "line": 6165
+      },
+      {
+        "text": "Alternate",
+        "key": "\"\\0x1D\"",
+        "mark": "noMark",
+        "line": 6167
+      }
+    ]
+  },
+  {
+    "type": "MENU",
+    "spec": "1537, \"Filt Priority\"",
+    "line": 6171,
+    "file": "src/common.rsrc.r",
+    "title": "Priority",
+    "items": [
+      {
+        "text": "(Highest)",
+        "key": "\"\\0x1D\"",
+        "mark": "noMark",
+        "line": 6179
+      },
+      {
+        "text": "(High)",
+        "key": "\"\\0x1D\"",
+        "mark": "noMark",
+        "line": 6181
+      },
+      {
+        "text": "(Normal)",
+        "key": "\"\\0x1E\"",
+        "mark": "noMark",
+        "line": 6183
+      },
+      {
+        "text": "(Low)",
+        "key": "\"\\0x1D\"",
+        "mark": "noMark",
+        "line": 6185
+      },
+      {
+        "text": "(Lowest)",
+        "key": "\"\\0x1D\"",
+        "mark": "noMark",
+        "line": 6187
+      },
+      {
+        "text": "-",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6189
+      },
+      {
+        "text": "Raise",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6191
+      },
+      {
+        "text": "Lower",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6193
+      }
+    ]
+  },
+  {
+    "type": "MENU",
+    "spec": "1536, \"Filt Status\"",
+    "line": 6197,
+    "file": "src/common.rsrc.r",
+    "title": "Filt Status",
+    "items": [
+      {
+        "text": "Unread",
+        "key": "\"\\0x1D\"",
+        "mark": "noMark",
+        "line": 6205
+      },
+      {
+        "text": "Read",
+        "key": "\"\\0x1D\"",
+        "mark": "noMark",
+        "line": 6207
+      },
+      {
+        "text": "Replied",
+        "key": "\"\\0x1D\"",
+        "mark": "noMark",
+        "line": 6209
+      },
+      {
+        "text": "Forwarded",
+        "key": "\"\\0x1D\"",
+        "mark": "noMark",
+        "line": 6211
+      },
+      {
+        "text": "Redirected",
+        "key": "\"\\0x1D\"",
+        "mark": "noMark",
+        "line": 6213
+      },
+      {
+        "text": "Recovered",
+        "key": "\"\\0x1D\"",
+        "mark": "noMark",
+        "line": 6215
+      },
+      {
+        "text": "-",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6217
+      },
+      {
+        "text": "Unsendable",
+        "key": "\"\\0x1D\"",
+        "mark": "noMark",
+        "line": 6219
+      },
+      {
+        "text": "Sendable",
+        "key": "\"\\0x1D\"",
+        "mark": "noMark",
+        "line": 6221
+      },
+      {
+        "text": "Queued",
+        "key": "\"\\0x1D\"",
+        "mark": "noMark",
+        "line": 6223
+      },
+      {
+        "text": "Timed Queue",
+        "key": "\"\\0x1D\"",
+        "mark": "noMark",
+        "line": 6225
+      },
+      {
+        "text": "Sent",
+        "key": "\"\\0x1D\"",
+        "mark": "noMark",
+        "line": 6227
+      },
+      {
+        "text": "Unsent",
+        "key": "\"\\0x1D\"",
+        "mark": "noMark",
+        "line": 6229
+      },
+      {
+        "text": "Transfer Error",
+        "key": "\"\\0x1D\"",
+        "mark": "noMark",
+        "line": 6231
+      },
+      {
+        "text": "Being Sent",
+        "key": "\"\\0x1D\"",
+        "mark": "noMark",
+        "line": 6233
+      }
+    ]
+  },
+  {
+    "type": "MENU",
+    "spec": "1227",
+    "line": 6237,
+    "file": "src/common.rsrc.r",
+    "title": "InternalSpeller",
+    "items": [
+      {
+        "text": "Check Spelling",
+        "key": "\"6\"",
+        "mark": "noMark",
+        "line": 6245
+      },
+      {
+        "text": "Find Next Misspelling",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6247
+      },
+      {
+        "text": "-",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6249
+      },
+      {
+        "text": "Add to Dictionary",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6251
+      },
+      {
+        "text": "Remove from Dictionary",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6253
+      }
+    ]
+  },
+  {
+    "type": "MENU",
+    "spec": "1543, \"Search Category\"",
+    "line": 6257,
+    "file": "src/common.rsrc.r",
+    "title": "SrchCategory",
+    "items": [
+      {
+        "text": "Anywhere",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6265
+      },
+      {
+        "text": "Headers",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6267
+      },
+      {
+        "text": "Body",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6269
+      },
+      {
+        "text": "Attachment Name(s)",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6271
+      },
+      {
+        "text": "-",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6273
+      },
+      {
+        "text": "Summary",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6275
+      },
+      {
+        "text": "Status",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6277
+      },
+      {
+        "text": "Junk Score",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6279
+      },
+      {
+        "text": "Priority",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6281
+      },
+      {
+        "text": "Attachment Count",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6283
+      },
+      {
+        "text": "Label",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6285
+      },
+      {
+        "text": "Date",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6287
+      },
+      {
+        "text": "Size (K)",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6289
+      },
+      {
+        "text": "Age",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6291
+      },
+      {
+        "text": "Personality",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6293
+      },
+      {
+        "text": "-",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6295
+      },
+      {
+        "text": "To:",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6297
+      },
+      {
+        "text": "From:",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6299
+      },
+      {
+        "text": "Subject:",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6301
+      },
+      {
+        "text": "Cc:",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6303
+      },
+      {
+        "text": "Bcc:",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6305
+      },
+      {
+        "text": "Any Recipient",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6307
+      }
+    ]
+  },
+  {
+    "type": "MENU",
+    "spec": "1522, \"CommonH\"",
+    "line": 6311,
+    "file": "src/common.rsrc.r",
+    "title": "CommonH",
+    "items": [
+      {
+        "text": "To:",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6319
+      },
+      {
+        "text": "Cc:",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6321
+      },
+      {
+        "text": "From:",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6323
+      },
+      {
+        "text": "Subject:",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6325
+      },
+      {
+        "text": "Reply-To:",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6327
+      },
+      {
+        "text": "-",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6329
+      },
+      {
+        "text": "«Any Recipient»",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6331
+      },
+      {
+        "text": "«Any Header»",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6333
+      },
+      {
+        "text": "«Junk Score»",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6335
+      },
+      {
+        "text": "«Body»",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6337
+      }
+    ]
+  },
+  {
+    "type": "MENU",
+    "spec": "1544, \"Search Equal\"",
+    "line": 6341,
+    "file": "src/common.rsrc.r",
+    "title": "SrchEqual",
+    "items": [
+      {
+        "text": "is",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6349
+      },
+      {
+        "text": "is not",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6351
+      }
+    ]
+  },
+  {
+    "type": "MENU",
+    "spec": "1545, \"Search Compare\"",
+    "line": 6355,
+    "file": "src/common.rsrc.r",
+    "title": "SrchCompare",
+    "items": [
+      {
+        "text": "is",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6363
+      },
+      {
+        "text": "is not",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6365
+      },
+      {
+        "text": "is greater than",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6367
+      },
+      {
+        "text": "is less than",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6369
+      }
+    ]
+  },
+  {
+    "type": "MENU",
+    "spec": "1546, \"Search Text Compare\"",
+    "line": 6373,
+    "file": "src/common.rsrc.r",
+    "title": "SrchTextCompare",
+    "items": [
+      {
+        "text": "contains",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6381
+      },
+      {
+        "text": "contains word",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6383
+      },
+      {
+        "text": "does not contain",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6385
+      },
+      {
+        "text": "is",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6387
+      },
+      {
+        "text": "is not",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6389
+      },
+      {
+        "text": "starts with",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6391
+      },
+      {
+        "text": "ends with",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6393
+      },
+      {
+        "text": "matches regexp",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6395
+      }
+    ]
+  },
+  {
+    "type": "MENU",
+    "spec": "1547, \"Age units\"",
+    "line": 6399,
+    "file": "src/common.rsrc.r",
+    "title": "Age units",
+    "items": [
+      {
+        "text": "Minutes",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6407
+      },
+      {
+        "text": "Hours",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6409
+      },
+      {
+        "text": "Days",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6411
+      },
+      {
+        "text": "Weeks",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6413
+      },
+      {
+        "text": "Months",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6415
+      },
+      {
+        "text": "Years",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6417
+      }
+    ]
+  },
+  {
+    "type": "MENU",
+    "spec": "1548, \"And Or\"",
+    "line": 6421,
+    "file": "src/common.rsrc.r",
+    "title": "AndOr",
+    "items": [
+      {
+        "text": "Match all",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6429
+      },
+      {
+        "text": "Match any",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6431
+      }
+    ]
+  },
+  {
+    "type": "MENU",
+    "spec": "1549, \"Search Compare Date\"",
+    "line": 6435,
+    "file": "src/common.rsrc.r",
+    "title": "SrchCompDate",
+    "items": [
+      {
+        "text": "is",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6443
+      },
+      {
+        "text": "is not",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6445
+      },
+      {
+        "text": "is after",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6447
+      },
+      {
+        "text": "is before",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6449
+      }
+    ]
+  },
+  {
+    "type": "MENU",
+    "spec": "1550, \"Filt Voice\"",
+    "line": 6453,
+    "file": "src/common.rsrc.r",
+    "title": "Filt Voice",
+    "items": []
+  },
+  {
+    "type": "MENU",
+    "spec": "1225",
+    "line": 6463,
+    "file": "src/common.rsrc.r",
+    "title": "Server Opts",
+    "items": [
+      {
+        "text": "Do Nothing",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6471
+      },
+      {
+        "text": "Fetch from Server",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6473
+      },
+      {
+        "text": "Delete from Server",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6475
+      },
+      {
+        "text": "Fetch & Delete",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6477
+      }
+    ]
+  },
+  {
+    "type": "MENU",
+    "spec": "1551",
+    "line": 6481,
+    "file": "src/common.rsrc.r",
+    "title": "Time",
+    "items": [
+      {
+        "text": "Day",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6489
+      },
+      {
+        "text": "Week",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6491
+      },
+      {
+        "text": "Month",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6493
+      },
+      {
+        "text": "Year",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 6495
+      }
+    ]
+  },
+  {
+    "type": "MENU",
+    "spec": "1208, \"Sort Submenu\"",
+    "line": 327,
+    "file": "src/two.rsrc.r",
+    "title": "Sort",
+    "items": [
+      {
+        "text": "by Status",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 335
+      },
+      {
+        "text": "by Junk Score",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 337
+      },
+      {
+        "text": "by Priority",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 339
+      },
+      {
+        "text": "by Attachments",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 341
+      },
+      {
+        "text": "by Label",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 343
+      },
+      {
+        "text": "by Sender",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 345
+      },
+      {
+        "text": "by Date",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 347
+      },
+      {
+        "text": "by Size",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 349
+      },
+      {
+        "text": "by Mailbox",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 351
+      },
+      {
+        "text": "by Mood",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 353
+      },
+      {
+        "text": "by Subject",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 355
+      },
+      {
+        "text": "-",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 357
+      },
+      {
+        "text": "Group Subjects",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 359
+      }
+    ]
+  },
+  {
+    "type": "MENU",
+    "spec": "1211, \"Label\"",
+    "line": 363,
+    "file": "src/two.rsrc.r",
+    "title": "Label",
+    "items": [
+      {
+        "text": "None",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 371
+      },
+      {
+        "text": "-",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 373
+      }
+    ]
+  },
+  {
+    "type": "MENU",
+    "spec": "1212, \"Change\"",
+    "line": 377,
+    "file": "src/two.rsrc.r",
+    "title": "Change",
+    "items": [
+      {
+        "text": "Queueing...",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 385
+      },
+      {
+        "text": "Status",
+        "key": "hierarchicalMenu",
+        "mark": "\"—\"",
+        "line": 387
+      },
+      {
+        "text": "Priority",
+        "key": "hierarchicalMenu",
+        "mark": "\"“\"",
+        "line": 389
+      },
+      {
+        "text": "Label",
+        "key": "hierarchicalMenu",
+        "mark": "\"”\"",
+        "line": 391
+      },
+      {
+        "text": "Personality",
+        "key": "hierarchicalMenu",
+        "mark": "\"›\"",
+        "line": 393
+      },
+      {
+        "text": "Server Options",
+        "key": "hierarchicalMenu",
+        "mark": "\"·\"",
+        "line": 395
+      }
+    ]
+  },
+  {
+    "type": "MENU",
+    "spec": "1217",
+    "line": 399,
+    "file": "src/two.rsrc.r",
+    "title": "Font",
+    "items": []
+  },
+  {
+    "type": "MENU",
+    "spec": "1218",
+    "line": 409,
+    "file": "src/two.rsrc.r",
+    "title": "Margins",
+    "items": []
+  },
+  {
+    "type": "MENU",
+    "spec": "1219",
+    "line": 419,
+    "file": "src/two.rsrc.r",
+    "title": "Text",
+    "items": [
+      {
+        "text": "Plain",
+        "key": "\"T\"",
+        "mark": "noMark",
+        "line": 427
+      },
+      {
+        "text": "Bold",
+        "key": "\"B\"",
+        "mark": "noMark",
+        "line": 429
+      },
+      {
+        "text": "Italic",
+        "key": "\"I\"",
+        "mark": "noMark",
+        "line": 431
+      },
+      {
+        "text": "Underline",
+        "key": "\"U\"",
+        "mark": "noMark",
+        "line": 433
+      },
+      {
+        "text": "-",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 435
+      },
+      {
+        "text": "Quote",
+        "key": "\"'\"",
+        "mark": "noMark",
+        "line": 437
+      },
+      {
+        "text": "Unquote",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 439
+      },
+      {
+        "text": "-",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 441
+      },
+      {
+        "text": "Left",
+        "key": "\"\\0x1E\"",
+        "mark": "noMark",
+        "line": 443
+      },
+      {
+        "text": "Center",
+        "key": "\"\\0x1E\"",
+        "mark": "noMark",
+        "line": 445
+      },
+      {
+        "text": "Right",
+        "key": "\"\\0x1E\"",
+        "mark": "noMark",
+        "line": 447
+      },
+      {
+        "text": "-",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 449
+      },
+      {
+        "text": "Margins",
+        "key": "hierarchicalMenu",
+        "mark": "\"⁄\"",
+        "line": 451
+      },
+      {
+        "text": "Color",
+        "key": "hierarchicalMenu",
+        "mark": "\"Ÿ\"",
+        "line": 453
+      },
+      {
+        "text": "Font",
+        "key": "hierarchicalMenu",
+        "mark": "\"ÿ\"",
+        "line": 455
+      },
+      {
+        "text": "Size",
+        "key": "hierarchicalMenu",
+        "mark": "\"‚\"",
+        "line": 457
+      },
+      {
+        "text": "-",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 459
+      },
+      {
+        "text": "Insert Horizontal Rule",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 461
+      },
+      {
+        "text": "Insert Graphic...",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 463
+      },
+      {
+        "text": "Link to URL...",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 465
+      }
+    ]
+  },
+  {
+    "type": "MENU",
+    "spec": "1221",
+    "line": 469,
+    "file": "src/two.rsrc.r",
+    "title": "Personalities",
+    "items": [
+      {
+        "text": "«Dominant»",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 477
+      },
+      {
+        "text": "-",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 479
+      }
+    ]
+  },
+  {
+    "type": "MENU",
+    "spec": "1556",
+    "line": 483,
+    "file": "src/two.rsrc.r",
+    "title": "Address Books",
+    "items": []
+  },
+  {
+    "type": "MENU",
+    "spec": "1557",
+    "line": 493,
+    "file": "src/two.rsrc.r",
+    "title": "Address Books",
+    "items": []
+  },
+  {
+    "type": "MENU",
+    "spec": "1226, \"SizePopup\"",
+    "line": 503,
+    "file": "src/two.rsrc.r",
+    "title": "Size",
+    "items": [
+      {
+        "text": "Smallest",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 511
+      },
+      {
+        "text": "Smaller",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 513
+      },
+      {
+        "text": "Small",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 515
+      },
+      {
+        "text": "Normal",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 517
+      },
+      {
+        "text": "Big",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 519
+      },
+      {
+        "text": "Bigger",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 521
+      },
+      {
+        "text": "Biggest",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 523
+      }
+    ]
+  },
+  {
+    "type": "MENU",
+    "spec": "1502, \"File\"",
+    "line": 527,
+    "file": "src/two.rsrc.r",
+    "title": "File",
+    "items": [
+      {
+        "text": "New Text Document",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 535
+      },
+      {
+        "text": "Open...",
+        "key": "\"O\"",
+        "mark": "noMark",
+        "line": 537
+      },
+      {
+        "text": "Open Selection",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 539
+      },
+      {
+        "text": "Open in Browser",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 541
+      },
+      {
+        "text": "-",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 543
+      },
+      {
+        "text": "Close",
+        "key": "\"W\"",
+        "mark": "noMark",
+        "line": 545
+      },
+      {
+        "text": "Save",
+        "key": "\"S\"",
+        "mark": "noMark",
+        "line": 547
+      },
+      {
+        "text": "Save As...",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 549
+      },
+      {
+        "text": "-",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 551
+      },
+      {
+        "text": "Import Mail...",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 553
+      },
+      {
+        "text": "Export...",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 555
+      },
+      {
+        "text": "-",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 557
+      },
+      {
+        "text": "Send Queued Messages",
+        "key": "\"-\"",
+        "mark": "noMark",
+        "line": 559
+      },
+      {
+        "text": "Check Mail",
+        "key": "\"M\"",
+        "mark": "noMark",
+        "line": 561
+      },
+      {
+        "text": "-",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 563
+      },
+      {
+        "text": "Page Setup...",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 565
+      },
+      {
+        "text": "Print...",
+        "key": "\"P\"",
+        "mark": "noMark",
+        "line": 567
+      },
+      {
+        "text": "Print One Copy",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 569
+      },
+      {
+        "text": "-",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 571
+      },
+      {
+        "text": "Quit",
+        "key": "\"Q\"",
+        "mark": "noMark",
+        "line": 573
+      }
+    ]
+  },
+  {
+    "type": "MENU",
+    "spec": "1505, \"Message\"",
+    "line": 577,
+    "file": "src/two.rsrc.r",
+    "title": "Message",
+    "items": [
+      {
+        "text": "New Message",
+        "key": "\"N\"",
+        "mark": "noMark",
+        "line": 585
+      },
+      {
+        "text": "Reply",
+        "key": "\"R\"",
+        "mark": "noMark",
+        "line": 587
+      },
+      {
+        "text": "Forward",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 589
+      },
+      {
+        "text": "Redirect",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 591
+      },
+      {
+        "text": "Send Again",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 593
+      },
+      {
+        "text": "-",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 595
+      },
+      {
+        "text": "New Message To",
+        "key": "hierarchicalMenu",
+        "mark": "noMark",
+        "line": 597
+      },
+      {
+        "text": "Forward To",
+        "key": "hierarchicalMenu",
+        "mark": "\"g\"",
+        "line": 599
+      },
+      {
+        "text": "Redirect To",
+        "key": "hierarchicalMenu",
+        "mark": "\"h\"",
+        "line": 601
+      },
+      {
+        "text": "-",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 603
+      },
+      {
+        "text": "New Message With",
+        "key": "hierarchicalMenu",
+        "mark": "\"‹\"",
+        "line": 605
+      },
+      {
+        "text": "Reply With",
+        "key": "hierarchicalMenu",
+        "mark": "\"f\"",
+        "line": 607
+      },
+      {
+        "text": "-",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 609
+      },
+      {
+        "text": "Attach Document...",
+        "key": "\"H\"",
+        "mark": "noMark",
+        "line": 611
+      },
+      {
+        "text": "Attach",
+        "key": "hierarchicalMenu",
+        "mark": "\"ﬁ\"",
+        "line": 613
+      },
+      {
+        "text": "Queue For Delivery",
+        "key": "\"E\"",
+        "mark": "noMark",
+        "line": 615
+      },
+      {
+        "text": "Change",
+        "key": "hierarchicalMenu",
+        "mark": "\"‘\"",
+        "line": 617
+      },
+      {
+        "text": "-",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 619
+      },
+      {
+        "text": "Junk",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 621
+      },
+      {
+        "text": "Not Junk",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 623
+      },
+      {
+        "text": "-",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 625
+      },
+      {
+        "text": "Delete",
+        "key": "\"D\"",
+        "mark": "noMark",
+        "line": 627
+      }
+    ]
+  },
+  {
+    "type": "MENU",
+    "spec": "1520, \"Attach\"",
+    "line": 631,
+    "file": "src/two.rsrc.r",
+    "title": "Attach",
+    "items": [
+      {
+        "text": "AppleDouble (\"MIME\")",
+        "key": "\"\\0x1D\"",
+        "mark": "noMark",
+        "line": 639
+      },
+      {
+        "text": "AppleSingle",
+        "key": "\"\\0x1D\"",
+        "mark": "noMark",
+        "line": 641
+      },
+      {
+        "text": "BinHex",
+        "key": "\"\\0x1D\"",
+        "mark": "noMark",
+        "line": 643
+      },
+      {
+        "text": "Uuencode Data Fork",
+        "key": "\"\\0x1D\"",
+        "mark": "noMark",
+        "line": 645
+      }
+    ]
+  },
+  {
+    "type": "MENU",
+    "spec": "1525, \"Label\"",
+    "line": 649,
+    "file": "src/two.rsrc.r",
+    "title": "LabelPop",
+    "items": [
+      {
+        "text": "None",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 657
+      },
+      {
+        "text": "-",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 659
+      }
+    ]
+  },
+  {
+    "type": "MENU",
+    "spec": "1539, \"Filt Pers\"",
+    "line": 663,
+    "file": "src/two.rsrc.r",
+    "title": "Filt Personalities",
+    "items": [
+      {
+        "text": "«Dominant»",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 671
+      },
+      {
+        "text": "-",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 673
+      }
+    ]
+  },
+  {
+    "type": "MENU",
+    "spec": "1540, \"Filt Station\"",
+    "line": 677,
+    "file": "src/two.rsrc.r",
+    "title": "Filt Station",
+    "items": []
+  },
+  {
+    "type": "MENU",
+    "spec": "1541",
+    "line": 687,
+    "file": "src/two.rsrc.r",
+    "title": "Network",
+    "items": [
+      {
+        "text": "Don’t check when not connected",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 695
+      },
+      {
+        "text": "Don’t check when on batteries",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 697
+      },
+      {
+        "text": "Offline (never check)",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 699
+      }
+    ]
+  },
+  {
+    "type": "MENU",
+    "spec": "1563",
+    "line": 703,
+    "file": "src/two.rsrc.r",
+    "title": "Options",
+    "items": [
+      {
+        "text": "Resynchronize Mailbox",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 711
+      },
+      {
+        "text": "Resynchronize Mailfolder",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 713
+      },
+      {
+        "text": "Resynchronize on Mail Check",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 715
+      },
+      {
+        "text": "-",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 717
+      },
+      {
+        "text": "Refresh Mailbox List",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 719
+      },
+      {
+        "text": "-",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 721
+      },
+      {
+        "text": "Show Deleted Messages",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 723
+      },
+      {
+        "text": "Remove Deleted Messages",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 725
+      },
+      {
+        "text": "Compact Mailbox",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 727
+      }
+    ]
+  },
+  {
+    "type": "MENU",
+    "spec": "229, \"ConConProfPreview\"",
+    "line": 731,
+    "file": "src/two.rsrc.r",
+    "title": "ConConProfPreview",
+    "items": [
+      {
+        "text": "Single Message",
+        "key": "noKey",
+        "mark": "noMark",
+        "line": 739
+      }
+    ]
+  }
+]

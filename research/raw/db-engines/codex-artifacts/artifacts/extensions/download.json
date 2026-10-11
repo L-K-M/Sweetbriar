@@ -1,0 +1,9 @@
+{
+  "date": "2026-10-11T21:02:25.054165+00:00",
+  "url": "https://extensions.duckdb.org/v1.5.6/linux_amd64/fts.duckdb_extension.gz",
+  "compressed_bytes": 3595806,
+  "bytes": 11591270,
+  "sha256": "517ed76ea17b7270f212c63c3522fab66e90c5f1c675a49ddfb3dea145ab0892",
+  "errors": [],
+  "verification": "LOAD uses default signature checking; allow_unsigned_extensions is not enabled"
+}

@@ -1,0 +1,27 @@
+[lmdb] wrote /home/paseo/sb-research/jobs/db-engines-devin/bench/../results/lmdb.json
+{
+ "engine": "lmdb",
+ "lmdb_version": "0.9.36",
+ "bulk_load_s": 39.18121289496776,
+ "bulk_load_rows": 1000000,
+ "sync_batch_s": 17.105930480000097,
+ "sync_batches": 400,
+ "sync_batch_rows": 250,
+ "single_commit_s": 51.91101250803331,
+ "single_commits": 2000,
+ "single_commit_us": 25955.506254016655,
+ "point_lookup_s": 0.023920279985759407,
+ "point_lookups": 20000,
+ "point_lookup_us": 1.1960139992879704,
+ "keyset_pages": 40,
+ "keyset_total_s": 0.0006211419822648168,
+ "keyset_ms_per_page": 0.015528549556620419,
+ "mark_read_s": 1.1085445119533688,
+ "mark_read_rows": 10000,
+ "concurrent_writer_batches": 100,
+ "concurrent_writer_s": 7.575123257003725,
+ "concurrent_reader_total_lookups": 853059,
+ "db_file_bytes": 345690112,
+ "open_plus_count_s": 0.00032410502899438143,
+ "count": 1125000
+}

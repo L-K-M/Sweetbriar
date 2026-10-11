@@ -1,0 +1,5270 @@
+[
+  {
+    "type": "eTAB",
+    "spec": "129, \"Home Tab\", purgeable",
+    "line": 4,
+    "file": "src/AddressBookTabs/homeTab.r"
+  },
+  {
+    "type": "eTAB",
+    "spec": "132, \"Notes Tab\", purgeable",
+    "line": 4,
+    "file": "src/AddressBookTabs/notesTab.r"
+  },
+  {
+    "type": "eTAB",
+    "spec": "131, \"Other Tab\", purgeable",
+    "line": 4,
+    "file": "src/AddressBookTabs/otherTab.r"
+  },
+  {
+    "type": "eTAB",
+    "spec": "128, \"Personal Tab\", purgeable",
+    "line": 4,
+    "file": "src/AddressBookTabs/personalTab.r"
+  },
+  {
+    "type": "eTAB",
+    "spec": "133, purgeable",
+    "line": 6,
+    "file": "src/AddressBookTabs/photoTab.r"
+  },
+  {
+    "type": "eTAB",
+    "spec": "130, \"Work Tab\", purgeable",
+    "line": 4,
+    "file": "src/AddressBookTabs/workTab.r"
+  },
+  {
+    "type": "SIZE",
+    "spec": "1",
+    "line": 21,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "STR#",
+    "spec": "900,purgeable",
+    "line": 44,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "STR#",
+    "spec": "700,purgeable",
+    "line": 80,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "STR#",
+    "spec": "20100,purgeable",
+    "line": 108,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "STR#",
+    "spec": "3400, purgeable",
+    "line": 110,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "STR#",
+    "spec": "3800, purgeable",
+    "line": 114,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "STR#",
+    "spec": "4000, purgeable",
+    "line": 118,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "STR#",
+    "spec": "24400, purgeable",
+    "line": 122,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "STR#",
+    "spec": "2400, purgeable",
+    "line": 127,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "STR#",
+    "spec": "600, purgeable",
+    "line": 137,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "1509",
+    "line": 158,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "1228",
+    "line": 195,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "STR#",
+    "spec": "20800, purgeable",
+    "line": 205,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1087, purgeable",
+    "line": 221,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "1087",
+    "line": 232,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "1088, purgeable",
+    "line": 324,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1088, purgeable",
+    "line": 389,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1139, purgeable",
+    "line": 400,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1140, purgeable",
+    "line": 411,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "1088, purgeable",
+    "line": 422,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1088, purgeable",
+    "line": 487,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1139, purgeable",
+    "line": 498,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1140, purgeable",
+    "line": 509,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "dftb",
+    "spec": "1088, purgeable",
+    "line": 521,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "1503, \"Edit\"",
+    "line": 539,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "1554, \"Scripts\"",
+    "line": 595,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1105, purgeable",
+    "line": 609,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1106, purgeable",
+    "line": 619,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1107, purgeable",
+    "line": 629,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1084, purgeable",
+    "line": 640,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1088, purgeable",
+    "line": 651,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1109, purgeable",
+    "line": 662,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1110, purgeable",
+    "line": 673,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "dftb",
+    "spec": "1075, purgeable",
+    "line": 834,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "dftb",
+    "spec": "1005, purgeable",
+    "line": 875,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "dftb",
+    "spec": "1078, purgeable",
+    "line": 897,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1078, purgeable",
+    "line": 909,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "1078, purgeable",
+    "line": 920,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "dftb",
+    "spec": "1079, purgeable",
+    "line": 955,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "dftb",
+    "spec": "1081, purgeable",
+    "line": 967,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "dftb",
+    "spec": "1082, purgeable",
+    "line": 981,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "dftb",
+    "spec": "1083, purgeable",
+    "line": 995,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "dftb",
+    "spec": "1084, purgeable",
+    "line": 1008,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "dftb",
+    "spec": "1085, purgeable",
+    "line": 1020,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "dftb",
+    "spec": "1086, purgeable",
+    "line": 1032,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "dftb",
+    "spec": "1090, purgeable",
+    "line": 1044,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "dftb",
+    "spec": "1091, purgeable",
+    "line": 1061,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "dftb",
+    "spec": "1093, purgeable",
+    "line": 1076,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "dftb",
+    "spec": "1094, purgeable",
+    "line": 1088,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "dftb",
+    "spec": "1101, purgeable",
+    "line": 1102,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "ldes",
+    "spec": "1007, purgeable",
+    "line": 1114,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "FUtf",
+    "spec": "128,\"ldap.bigfoot.com\",purgeable",
+    "line": 1128,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "FUcf",
+    "spec": "128,\"ldap.bigfoot.com\",purgeable",
+    "line": 1129,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "FUtf",
+    "spec": "129,\"ldap.four11.com\",purgeable",
+    "line": 1130,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "FUcf",
+    "spec": "129,\"ldap.four11.com\",purgeable",
+    "line": 1131,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "HLIT",
+    "spec": "900,purgeable",
+    "line": 1133,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "1089, \"AdTheObscure\", purgeable",
+    "line": 1426,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1089, \"AdTheObscure\", purgeable",
+    "line": 1455,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "1089, \"AdTheObscure\", purgeable",
+    "line": 1466,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1089, \"AdTheObscure\", purgeable",
+    "line": 1495,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "dftb",
+    "spec": "1089, purgeable",
+    "line": 1507,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "FEAT",
+    "spec": "1035, purgeable",
+    "line": 1518,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "FEAT",
+    "spec": "1036, purgeable",
+    "line": 1526,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "FEAT",
+    "spec": "1037, purgeable",
+    "line": 1534,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "FEAT",
+    "spec": "1038, purgeable",
+    "line": 1542,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "FEAT",
+    "spec": "1041, purgeable",
+    "line": 1551,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "1090, \"Offline Link\", purgeable",
+    "line": 1560,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "1091, \"Remind Me\", purgeable",
+    "line": 1632,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1090, \"Offline Link\", purgeable",
+    "line": 1693,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1091, \"Remind Me\", purgeable",
+    "line": 1704,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "WIND",
+    "spec": "1024, \"Email Importer\", purgeable",
+    "line": 1715,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1166, \"Import Account\", purgeable",
+    "line": 1725,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1167, \"Select Account\", purgeable",
+    "line": 1736,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1168, purgeable",
+    "line": 1747,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1182, \"Import Other\", purgeable",
+    "line": 1758,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1169, \"New Nickname\", purgeable",
+    "line": 1769,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1170, \"New Address Book\", purgeable",
+    "line": 1780,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1171, \"Remove Nickname\", purgeable",
+    "line": 1791,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "tab#",
+    "spec": "1002",
+    "line": 1807,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "tab#",
+    "spec": "1003",
+    "line": 1829,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "1553, \"ImporterSelect\"",
+    "line": 1843,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "EuSc",
+    "spec": "128, purgeable",
+    "line": 1855,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "WIND",
+    "spec": "1023, \"Statistics\", purgeable",
+    "line": 1868,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "WIND",
+    "spec": "1025, \"Plank\", purgeable",
+    "line": 1878,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "dftb",
+    "spec": "1098, purgeable",
+    "line": 1888,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "1098, \"ProfileReq\", purgeable",
+    "line": 1901,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1098, \"ProfileReq\", purgeable",
+    "line": 1947,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1172, \"ProfileReq\", purgeable",
+    "line": 1958,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1099, purgeable",
+    "line": 1969,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "1099, purgeable",
+    "line": 1980,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1173, purgeable",
+    "line": 2036,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1174, purgeable",
+    "line": 2048,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "dftb",
+    "spec": "1099, purgeable",
+    "line": 2060,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "1100, \"Repay\", purgeable",
+    "line": 2076,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1100, \"Repay\", purgeable",
+    "line": 2121,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1177, \"Repay\", purgeable",
+    "line": 2132,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "dftb",
+    "spec": "1100, purgeable",
+    "line": 2144,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "1104, \"Junkdown\", purgeable",
+    "line": 2157,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1104, \"Junkdown\", purgeable",
+    "line": 2192,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1200, \"Junkdown\", purgeable",
+    "line": 2203,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "dftb",
+    "spec": "1104, purgeable",
+    "line": 2214,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1034, \"New Nickname\", purgeable",
+    "line": 2226,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "1034, \"New Nickname\", purgeable",
+    "line": 2237,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "1095, \"New Group\", purgeable",
+    "line": 2356,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1095, \"New Group\", purgeable",
+    "line": 2445,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1158, \"Nickname name\", purgeable",
+    "line": 2456,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1028, purgeable",
+    "line": 2467,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1157, \"Real Name\", purgeable",
+    "line": 2478,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1159, \"First name\", purgeable",
+    "line": 2489,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1160, \"Last name\", purgeable",
+    "line": 2500,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1161, \"Nick Addresses\", purgeable",
+    "line": 2511,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1162, \"Personal Information\", purgeable",
+    "line": 2522,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1163, \"Swap Names\", purgeable",
+    "line": 2533,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1164, \"Group Addresses\", purgeable",
+    "line": 2544,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1165, \"Group Information\", purgeable",
+    "line": 2555,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "dftb",
+    "spec": "1034, purgeable",
+    "line": 2566,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "dftb",
+    "spec": "1095, purgeable",
+    "line": 2592,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1175, \"Match\", purgeable",
+    "line": 2614,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1176, \"Action\", purgeable",
+    "line": 2625,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "TMPL",
+    "spec": "1147,\"QTys\"",
+    "line": 2646,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "TMPL",
+    "spec": "1148,\"QTno\"",
+    "line": 2657,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "QTno",
+    "spec": "1000,\"No QuickTime Import\"",
+    "line": 2672,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "QTys",
+    "spec": "1000,\"QuickTime Import\"",
+    "line": 2704,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "Nag#",
+    "spec": "1003, purgeable",
+    "line": 2722,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "Nag#",
+    "spec": "1004, purgeable",
+    "line": 2733,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "Nag#",
+    "spec": "1005, purgeable",
+    "line": 2742,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "Nag#",
+    "spec": "1006, purgeable",
+    "line": 2753,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "Nag#",
+    "spec": "1007, purgeable",
+    "line": 2766,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "Nag#",
+    "spec": "1008, purgeable",
+    "line": 2777,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "Nag#",
+    "spec": "1009, purgeable",
+    "line": 2788,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "Nag#",
+    "spec": "1011, purgeable",
+    "line": 2797,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "Nag#",
+    "spec": "1012, purgeable",
+    "line": 2808,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "Nag#",
+    "spec": "1013, purgeable",
+    "line": 2819,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "Nag#",
+    "spec": "1014, purgeable",
+    "line": 2830,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1183, \"Name\", purgeable",
+    "line": 2839,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1184, \"Date\", purgeable",
+    "line": 2850,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1185, \"Size\", purgeable",
+    "line": 2861,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "515",
+    "line": 2873,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1204, \"MatchGroup\", purgeable",
+    "line": 2879,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1205, \"ActionGroup\", purgeable",
+    "line": 2890,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1109, \"Server check\", purgeable",
+    "line": 2904,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "1109, purgeable",
+    "line": 2916,
+    "file": "src/Common.r"
+  },
+  {
+    "type": "PICT",
+    "spec": "1013, \"Credits 2\", purgeable",
+    "line": 1,
+    "file": "src/Credits.r"
+  },
+  {
+    "type": "PICT",
+    "spec": "1014, \"Credits 3\", purgeable",
+    "line": 88,
+    "file": "src/Credits.r"
+  },
+  {
+    "type": "PICT",
+    "spec": "1015, \"Credits 4\", purgeable",
+    "line": 174,
+    "file": "src/Credits.r"
+  },
+  {
+    "type": "PICT",
+    "spec": "1016, \"Credits 5\", purgeable",
+    "line": 261,
+    "file": "src/Credits.r"
+  },
+  {
+    "type": "thng",
+    "spec": "128, \"Eudora Text Editor Component\", purgeable",
+    "line": 8,
+    "file": "src/Editor/Source/Resources/pete.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1178, purgeable",
+    "line": 1,
+    "file": "src/EsotericSettings60.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1179, purgeable",
+    "line": 12,
+    "file": "src/EsotericSettings60.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1180, purgeable",
+    "line": 23,
+    "file": "src/EsotericSettings60.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1181, purgeable",
+    "line": 34,
+    "file": "src/EsotericSettings60.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "2100, \"Color Tuning\", purgeable",
+    "line": 45,
+    "file": "src/EsotericSettings60.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "2102, \"Logging\", purgeable",
+    "line": 158,
+    "file": "src/EsotericSettings60.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "2103, \"Timeouts\", purgeable",
+    "line": 277,
+    "file": "src/EsotericSettings60.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "2104, \"Ports & Protocols\", purgeable",
+    "line": 348,
+    "file": "src/EsotericSettings60.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "2105, \"Desktop Margins\", purgeable",
+    "line": 480,
+    "file": "src/EsotericSettings60.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "2108, \"Compaction\", purgeable",
+    "line": 545,
+    "file": "src/EsotericSettings60.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "2109, \"Toolbar on Steroids\", purgeable",
+    "line": 604,
+    "file": "src/EsotericSettings60.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "2110, \"Really Miscellaneous\", purgeable",
+    "line": 771,
+    "file": "src/EsotericSettings60.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "2111, \"Boring Headers\", purgeable",
+    "line": 833,
+    "file": "src/EsotericSettings60.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "2112, \"Nickname Expansion\", purgeable",
+    "line": 850,
+    "file": "src/EsotericSettings60.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "2113, \"Make Filter Defaults\", purgeable",
+    "line": 952,
+    "file": "src/EsotericSettings60.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "2114, \"Threading\", purgeable",
+    "line": 1002,
+    "file": "src/EsotericSettings60.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "2115, \"LDAP\", purgeable",
+    "line": 1068,
+    "file": "src/EsotericSettings60.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "2117, \"Settings Icons\", purgeable",
+    "line": 1133,
+    "file": "src/EsotericSettings60.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "2118, \"IMAP\", purgeable",
+    "line": 1168,
+    "file": "src/EsotericSettings60.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "2119, \"Speak\", purgeable",
+    "line": 1316,
+    "file": "src/EsotericSettings60.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "2120, \"HTTP Proxy\"",
+    "line": 1440,
+    "file": "src/EsotericSettings60.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "2107, \"Junk Extras°junk\", purgeable",
+    "line": 1469,
+    "file": "src/EsotericSettings60.r"
+  },
+  {
+    "type": "ICN#",
+    "spec": "2105, \"Desktop Margins\", purgeable",
+    "line": 1554,
+    "file": "src/EsotericSettings60.r"
+  },
+  {
+    "type": "icl4",
+    "spec": "2105",
+    "line": 1577,
+    "file": "src/EsotericSettings60.r"
+  },
+  {
+    "type": "icl8",
+    "spec": "2105",
+    "line": 1609,
+    "file": "src/EsotericSettings60.r"
+  },
+  {
+    "type": "ics#",
+    "spec": "2105",
+    "line": 1670,
+    "file": "src/EsotericSettings60.r"
+  },
+  {
+    "type": "ics4",
+    "spec": "2105",
+    "line": 1681,
+    "file": "src/EsotericSettings60.r"
+  },
+  {
+    "type": "ics8",
+    "spec": "2105",
+    "line": 1692,
+    "file": "src/EsotericSettings60.r"
+  },
+  {
+    "type": "STR#",
+    "spec": "25200,purgeable",
+    "line": 1,
+    "file": "src/FiltDefs.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "1535",
+    "line": 67,
+    "file": "src/FiltDefs.r"
+  },
+  {
+    "type": "STR#",
+    "spec": "535,purgeable",
+    "line": 97,
+    "file": "src/FiltDefs.r"
+  },
+  {
+    "type": "hmnu",
+    "spec": "535,purgeable",
+    "line": 163,
+    "file": "src/FiltDefs.r"
+  },
+  {
+    "type": "STR#",
+    "spec": "2800,\"SMTP Commands\",purgeable",
+    "line": 1,
+    "file": "src/SMTP.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1007, purgeable",
+    "line": 1,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1008, purgeable",
+    "line": 12,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1010, purgeable",
+    "line": 23,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1035, purgeable",
+    "line": 34,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1036, purgeable",
+    "line": 45,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1037, purgeable",
+    "line": 56,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1043, purgeable",
+    "line": 67,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1044, purgeable",
+    "line": 78,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1045, purgeable",
+    "line": 89,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1046, purgeable",
+    "line": 100,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1047, purgeable",
+    "line": 111,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1048, purgeable",
+    "line": 122,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1049, purgeable",
+    "line": 133,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1050, purgeable",
+    "line": 144,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1055, purgeable",
+    "line": 155,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1056, purgeable",
+    "line": 166,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1059, purgeable",
+    "line": 177,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1060, purgeable",
+    "line": 188,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1061, purgeable",
+    "line": 199,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1108, purgeable",
+    "line": 210,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1151",
+    "line": 221,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1152",
+    "line": 232,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1153",
+    "line": 243,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1154",
+    "line": 254,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1155",
+    "line": 265,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1156",
+    "line": 276,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1186, purgeable",
+    "line": 287,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1187, purgeable",
+    "line": 298,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1188, purgeable",
+    "line": 309,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1193, purgeable",
+    "line": 320,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1195, purgeable",
+    "line": 331,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1198, purgeable",
+    "line": 342,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1197, purgeable",
+    "line": 353,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1196, purgeable",
+    "line": 364,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1199, purgeable",
+    "line": 375,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "2000, purgeable",
+    "line": 386,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "2002, \"Checking Mail\", purgeable",
+    "line": 420,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "2003, \"Sending Mail\", purgeable",
+    "line": 588,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "2004, \"Composing Mail\", purgeable",
+    "line": 729,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "2009, \"Mailbox Display\", purgeable",
+    "line": 845,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "2011, \"Eudora Labels\", purgeable",
+    "line": 1026,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "2014, \"Toolbar\", purgeable",
+    "line": 1133,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "2015, \"Getting Attention\", purgeable",
+    "line": 1228,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "2016, \"Hosts\", purgeable",
+    "line": 1332,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "2017, \"Extra Warnings\", purgeable",
+    "line": 1447,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "2019, \"Internet Dialup\", purgeable",
+    "line": 1572,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "2020, \"Miscellaneous\", purgeable",
+    "line": 1605,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "2021, \"Personalities°mPrs\", purgeable",
+    "line": 1700,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "2022, \"Personality Extras°mPrs\", purgeable",
+    "line": 1867,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "2024, \"Statistics°stcs\", purgeable",
+    "line": 2022,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "2025, \"Address Book\", purgeable",
+    "line": 2118,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "2026, \"SSL\", purgeable",
+    "line": 2233,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "3003, \"Checking Mail•244\", purgeable",
+    "line": 2348,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "2008, \"Fonts & Display\", purgeable",
+    "line": 2486,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "2005, \"Junk Mail°junk\", purgeable",
+    "line": 2702,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "2028, \"Content Concentrator°conc\", purgeable",
+    "line": 2813,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "2001, \"Getting Started\", purgeable",
+    "line": 2891,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "2013, \"Moving Around\", purgeable",
+    "line": 2988,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "2006, \"Attachments\", purgeable",
+    "line": 3102,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "2007, \"Replying\", purgeable",
+    "line": 3191,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "2010, \"Date Display\", purgeable",
+    "line": 3277,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "2012, \"Styled Text\", purgeable",
+    "line": 3318,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "2027, \"Spell Checking°spel\", purgeable",
+    "line": 3432,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "3021, \"Personality Extras°mPrs•244\", purgeable",
+    "line": 3522,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "2013, purgeable",
+    "line": 3715,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "2006, purgeable",
+    "line": 3727,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "2010, purgeable",
+    "line": 3739,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "2012, purgeable",
+    "line": 3751,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "2027, purgeable",
+    "line": 3763,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "2007, purgeable",
+    "line": 3775,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "3021, purgeable",
+    "line": 3787,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "1510, \"1510\"",
+    "line": 3799,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "1511, \"1511\"",
+    "line": 3809,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "1530",
+    "line": 3819,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "1531",
+    "line": 3833,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "1552",
+    "line": 3847,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "1555, \"SSL Menu\"",
+    "line": 3869,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "1558",
+    "line": 3887,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "1559",
+    "line": 3901,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "1560",
+    "line": 3915,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "1561",
+    "line": 3929,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "1562",
+    "line": 3943,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "PICT",
+    "spec": "2072, purgeable",
+    "line": 3957,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "PICT",
+    "spec": "2073, purgeable",
+    "line": 4110,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "PICT",
+    "spec": "2074, purgeable",
+    "line": 4267,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "dftb",
+    "spec": "2001",
+    "line": 4427,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "dftb",
+    "spec": "2013",
+    "line": 4493,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "dftb",
+    "spec": "2006",
+    "line": 4567,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "dftb",
+    "spec": "2007",
+    "line": 4629,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "dftb",
+    "spec": "2010",
+    "line": 4687,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "dftb",
+    "spec": "2012",
+    "line": 4717,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "dftb",
+    "spec": "2027",
+    "line": 4795,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "dftb",
+    "spec": "3021",
+    "line": 4857,
+    "file": "src/SettingsTwo.rsrc.r"
+  },
+  {
+    "type": "EuAC",
+    "spec": "128,purgeable",
+    "line": 4,
+    "file": "src/acap.r"
+  },
+  {
+    "type": "EuAl",
+    "spec": "128,purgeable",
+    "line": 46,
+    "file": "src/acap.r"
+  },
+  {
+    "type": "aete",
+    "spec": "0, \"Eudora's Suites\"",
+    "line": 16,
+    "file": "src/aete.r"
+  },
+  {
+    "type": "STR#",
+    "spec": "19600,purgeable",
+    "line": 1,
+    "file": "src/audit.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "1514, \"Window\"",
+    "line": 15,
+    "file": "src/carbon.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1002, purgeable",
+    "line": 59,
+    "file": "src/carbon.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "1514, \"Window\"",
+    "line": 4,
+    "file": "src/classic.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1002, purgeable",
+    "line": 42,
+    "file": "src/classic.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "1003, \"Error\", purgeable",
+    "line": 1,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "1013, \"Password\", purgeable",
+    "line": 38,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "1021, \"New Mail\", purgeable",
+    "line": 135,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "1027, \"Standard File for a Folder\", purgeable",
+    "line": 166,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "1032, purgeable",
+    "line": 236,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "1033, purgeable",
+    "line": 321,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "1008, \"New Mailbox\", purgeable",
+    "line": 372,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "1037, \"No Mail\", purgeable",
+    "line": 428,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "1044, purgeable",
+    "line": 459,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "1046",
+    "line": 502,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "1038, purgeable",
+    "line": 513,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "1026, purgeable",
+    "line": 524,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "1039, purgeable",
+    "line": 637,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "1050, purgeable",
+    "line": 676,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "1054, purgeable",
+    "line": 708,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "1055, \"Mom\", purgeable",
+    "line": 719,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "1066, \"SFO\", purgeable",
+    "line": 768,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "1067, \"URL\", purgeable",
+    "line": 785,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "1070, \"ACAP\", purgeable",
+    "line": 796,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "1075, purgeable",
+    "line": 891,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "1005",
+    "line": 941,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "1076, \"Nav Insert Button\", purgeable",
+    "line": 1018,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "1077, \"Nav Save As\", purgeable",
+    "line": 1029,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "1064, \"Wife\", purgeable",
+    "line": 1058,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "1079, purgeable",
+    "line": 1101,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "1081, purgeable",
+    "line": 1130,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "1082, purgeable",
+    "line": 1171,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "20100, \"Code Entry\", purgeable",
+    "line": 1212,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "1083, purgeable",
+    "line": 1291,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "1084, purgeable",
+    "line": 1326,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "1092",
+    "line": 1355,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "1085, \"Pre Payment\", purgeable",
+    "line": 1386,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "1086, \"Pre Registration\", purgeable",
+    "line": 1423,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "1093, \"Pre Profiling\", purgeable",
+    "line": 1460,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "128, \"Profile Received\", purgeable",
+    "line": 1497,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "1094, \"Profile ID Confirm\", purgeable",
+    "line": 1536,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "1096, \"Import Mail\", purgeable",
+    "line": 1581,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "1097, \"Importer Selection\", purgeable",
+    "line": 1643,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "1068, \"Make Filter Dialog\", purgeable",
+    "line": 1687,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "1101, \"SSL Certificate\", purgeable",
+    "line": 1838,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "1102, purgeable",
+    "line": 1872,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "1103, \"Junk Intro\", purgeable",
+    "line": 1907,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "dftb",
+    "spec": "1103, purgeable",
+    "line": 1936,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "dftb",
+    "spec": "20100, \"Code Entry\"",
+    "line": 1971,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "ALRT",
+    "spec": "1003, \"Error\", purgeable",
+    "line": 2086,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "ALRT",
+    "spec": "1016, \"Not Found\", purgeable",
+    "line": 2102,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "ALRT",
+    "spec": "1020, \"ICMP\", purgeable",
+    "line": 2118,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "ALRT",
+    "spec": "1021, \"New Mail\", purgeable",
+    "line": 2134,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "ALRT",
+    "spec": "1033, purgeable",
+    "line": 2150,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "ALRT",
+    "spec": "1037, \"No Mail\", purgeable",
+    "line": 2166,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1008, \"New Mailbox\", purgeable",
+    "line": 2182,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1013, \"Password\", purgeable",
+    "line": 2193,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1027, \"Standard File for a Folder\", purgeable",
+    "line": 2204,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1032, purgeable",
+    "line": 2215,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1044, purgeable",
+    "line": 2226,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1038, purgeable",
+    "line": 2237,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1026, purgeable",
+    "line": 2248,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1050, purgeable",
+    "line": 2259,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1055, purgeable",
+    "line": 2270,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1070, \"ACAP\", purgeable",
+    "line": 2281,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1075, purgeable",
+    "line": 2292,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1064, purgeable",
+    "line": 2303,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1079, purgeable",
+    "line": 2314,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1081, purgeable",
+    "line": 2325,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1082, purgeable",
+    "line": 2336,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "20100, \"Code Entry\", purgeable",
+    "line": 2347,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1083, purgeable",
+    "line": 2358,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1084, purgeable",
+    "line": 2369,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1092, \"Refund Code\", purgeable",
+    "line": 2380,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1085, \"Pre Payment\", purgeable",
+    "line": 2391,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1086, \"Pre Registration\", purgeable",
+    "line": 2402,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1093, \"Pre Profiling\", purgeable",
+    "line": 2413,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1094, \"Profile ID Confirm\", purgeable",
+    "line": 2424,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1096, \"Import Mail\", purgeable",
+    "line": 2435,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1097, \"Importer Select\", purgeable",
+    "line": 2446,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1068, \"Make Filter Dialog\", purgeable",
+    "line": 2457,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1101, \"SSL Certificate\", purgeable",
+    "line": 2468,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1102, \"Show Certificate\", purgeable",
+    "line": 2484,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1103, \"Junk Intro\", purgeable",
+    "line": 2495,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "WIND",
+    "spec": "1015, \"Properties\", purgeable",
+    "line": 2579,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "WIND",
+    "spec": "1022, \"Pay\", purgeable",
+    "line": 2609,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "WIND",
+    "spec": "1021, \"Link\", purgeable",
+    "line": 2619,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1001, \"ScrollBar\", purgeable",
+    "line": 2629,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1002, \"New Alias\", purgeable",
+    "line": 2640,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1003, \"Remove Alias\", purgeable",
+    "line": 2651,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1004, \"Ph/LDAP Lookup button\", purgeable",
+    "line": 2662,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1005, \"Make To\", purgeable",
+    "line": 2673,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1006, \"Insert\", purgeable",
+    "line": 2684,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1009, purgeable",
+    "line": 2695,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1012, purgeable",
+    "line": 2706,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1034, purgeable",
+    "line": 2717,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1013, \"Notify\", purgeable",
+    "line": 2728,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1058, purgeable",
+    "line": 2739,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1014, purgeable",
+    "line": 2750,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1015, purgeable",
+    "line": 2761,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1016, purgeable",
+    "line": 2772,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1017, purgeable",
+    "line": 2783,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1018, purgeable",
+    "line": 2794,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1019, purgeable",
+    "line": 2805,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1021, purgeable",
+    "line": 2816,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1022, purgeable",
+    "line": 2827,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1023, purgeable",
+    "line": 2838,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1024, purgeable",
+    "line": 2849,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1025, purgeable",
+    "line": 2860,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1026, purgeable",
+    "line": 2871,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1029, purgeable",
+    "line": 2882,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1030, purgeable",
+    "line": 2893,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1032, purgeable",
+    "line": 2904,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1033, purgeable",
+    "line": 2915,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1038, purgeable",
+    "line": 2926,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1040, purgeable",
+    "line": 2937,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1039, purgeable",
+    "line": 2948,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1041, purgeable",
+    "line": 2959,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1042, purgeable",
+    "line": 2970,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1052, purgeable",
+    "line": 2981,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1051, purgeable",
+    "line": 2992,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1053, purgeable",
+    "line": 3003,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1020, purgeable",
+    "line": 3014,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1057, purgeable",
+    "line": 3025,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1501, \"Live ScrollBar\", purgeable",
+    "line": 3036,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1064, \"task progress stop\", purgeable",
+    "line": 3047,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1065, \"task progress filter\", purgeable",
+    "line": 3058,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1066, purgeable",
+    "line": 3069,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1068, \"New Mailbox\", purgeable",
+    "line": 3080,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1067, \"Remove Mailbox\", purgeable",
+    "line": 3091,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1069, \"New Mailbox Folder\", purgeable",
+    "line": 3102,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1075, \"Remove Personality\", purgeable",
+    "line": 3113,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1077, \"Remove Signature\", purgeable",
+    "line": 3124,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1076, \"New Signature\", purgeable",
+    "line": 3135,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1074, \"New Personality\", purgeable",
+    "line": 3146,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1073, \"Edit Personality\", purgeable",
+    "line": 3157,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1072, \"Remove Stationery\", purgeable",
+    "line": 3168,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1071, \"New Stationery\", purgeable",
+    "line": 3179,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1070, \"Edit Stationery\", purgeable",
+    "line": 3190,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1078, purgeable",
+    "line": 3201,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1079, purgeable",
+    "line": 3212,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1080, purgeable",
+    "line": 3223,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1081, purgeable",
+    "line": 3234,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1082",
+    "line": 3245,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1083, purgeable",
+    "line": 3256,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1090, \"Check Personality\", purgeable",
+    "line": 3267,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1091, \"Act popup 1\", purgeable",
+    "line": 3278,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1092, purgeable",
+    "line": 3289,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1093, purgeable",
+    "line": 3300,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1094, purgeable",
+    "line": 3311,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1095, \"Act popup 5\", purgeable",
+    "line": 3322,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1096, \"Filt Arrow 1\", purgeable",
+    "line": 3333,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1097, \"Filt Arrow 2\", purgeable",
+    "line": 3344,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1098, \"Filt Nick 1\", purgeable",
+    "line": 3355,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1099, \"Filt Nick 2\", purgeable",
+    "line": 3366,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1191, \"Filt Status\", purgeable",
+    "line": 3377,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1192, \"FiltPrior\", purgeable",
+    "line": 3388,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1102, \"FiltReply\", purgeable",
+    "line": 3399,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1101, \"FiltPers\", purgeable",
+    "line": 3410,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1100, \"FiltLabel\", purgeable",
+    "line": 3421,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1103, \"Edit Signature\", purgeable",
+    "line": 3432,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1104, \"Box Size Box\", purgeable",
+    "line": 3443,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1111, \"Nick Recipient Checkbox\", purgeable",
+    "line": 3454,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1112, \"Nick Info List Button\", purgeable",
+    "line": 3465,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1113, \"Nick Business Card Button\", purgeable",
+    "line": 3476,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1115, \"Who\", purgeable",
+    "line": 3487,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1116, \"Subject\", purgeable",
+    "line": 3498,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1117, \"Voice\", purgeable",
+    "line": 3509,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1118, purgeable",
+    "line": 3520,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1119, purgeable",
+    "line": 3531,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1120, purgeable",
+    "line": 3542,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1121, purgeable",
+    "line": 3553,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1122, purgeable",
+    "line": 3564,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1125, \"Which Eudora\", purgeable",
+    "line": 3575,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1126, \"Keeping Current\", purgeable",
+    "line": 3586,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1127, \"Registration Info\", purgeable",
+    "line": 3597,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1129, purgeable",
+    "line": 3608,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1130, \"Full Feature\", purgeable",
+    "line": 3619,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1131, \"No Ad\", purgeable",
+    "line": 3630,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1132, \"Deadbeat\", purgeable",
+    "line": 3641,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1134, \"View Link\", purgeable",
+    "line": 3653,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1135, \"Remove Link\", purgeable",
+    "line": 3664,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1128, \"Switch to Light\", purgeable",
+    "line": 3675,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1136, \"Type\", purgeable",
+    "line": 3687,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1137, \"Name\", purgeable",
+    "line": 3698,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1138, \"Date Visited\", purgeable",
+    "line": 3709,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "20100, \"Code Entry Title\", purgeable",
+    "line": 3720,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1142, \"You can’t get there from here\", purgeable",
+    "line": 3731,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1143, \"Offline Link Reminder\", purgeable",
+    "line": 3742,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1144, \"More Info\", purgeable",
+    "line": 3753,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1133, \"Resync\", purgeable",
+    "line": 3765,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1145, \"Pre Payment\", purgeable",
+    "line": 3776,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1146, \"Pre Registration\", purgeable",
+    "line": 3787,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1147, \"Pre Profiling\", purgeable",
+    "line": 3798,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1124, \"Register\", purgeable",
+    "line": 3809,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1148, \"Profile ID Confirm\", purgeable",
+    "line": 3821,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1149, \"Statistics time period\"",
+    "line": 3833,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1150, \"More statistics\"",
+    "line": 3844,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1168, purgeable",
+    "line": 3855,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1189, \"SSL Certificate Group\", purgeable",
+    "line": 3866,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1190, \"task progress help\", purgeable",
+    "line": 3877,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1194, \"JunkIntroGroup\", purgeable",
+    "line": 3888,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CURS",
+    "spec": "131, preload",
+    "line": 3900,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CURS",
+    "spec": "130, preload",
+    "line": 3908,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CURS",
+    "spec": "129, preload",
+    "line": 3916,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CURS",
+    "spec": "128, preload",
+    "line": 3924,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CURS",
+    "spec": "1004, preload",
+    "line": 3932,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CURS",
+    "spec": "1003, preload",
+    "line": 3940,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CURS",
+    "spec": "1001, preload",
+    "line": 3948,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CURS",
+    "spec": "1002, preload",
+    "line": 3956,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CURS",
+    "spec": "1005, purgeable",
+    "line": 3964,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CURS",
+    "spec": "1006, purgeable, preload",
+    "line": 3972,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CURS",
+    "spec": "1007, purgeable, preload",
+    "line": 3980,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CURS",
+    "spec": "1008, purgeable, preload",
+    "line": 3988,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CURS",
+    "spec": "1009, purgeable, preload",
+    "line": 3996,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "CURS",
+    "spec": "1010, \"Pointer finger\"",
+    "line": 4004,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "PICT",
+    "spec": "1005, \"Black box\", purgeable",
+    "line": 4012,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "PICT",
+    "spec": "1011, purgeable",
+    "line": 4022,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "PICT",
+    "spec": "1001, \"Rooster\", purgeable",
+    "line": 4043,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "PICT",
+    "spec": "1008, \"FatSnake\"",
+    "line": 4450,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "PICT",
+    "spec": "1020, purgeable",
+    "line": 4701,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "PICT",
+    "spec": "1023, \"Gray logo\"",
+    "line": 4720,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "SICN",
+    "spec": "1011",
+    "line": 5200,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "SICN",
+    "spec": "1012",
+    "line": 5208,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "SICN",
+    "spec": "290, purgeable",
+    "line": 5216,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "SICN",
+    "spec": "1013, \"Sig\", purgeable",
+    "line": 5224,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "SICN",
+    "spec": "1014, \"Wrap\", purgeable",
+    "line": 5232,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "SICN",
+    "spec": "1015, \"KeepCopy\", purgeable",
+    "line": 5240,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "SICN",
+    "spec": "1016, \"Tabs\", purgeable",
+    "line": 5248,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "SICN",
+    "spec": "1017, \"QP\", purgeable",
+    "line": 5256,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "SICN",
+    "spec": "1018, purgeable",
+    "line": 5264,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "SICN",
+    "spec": "1019, purgeable",
+    "line": 5272,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "SICN",
+    "spec": "1021, purgeable",
+    "line": 5280,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "SICN",
+    "spec": "1009, purgeable",
+    "line": 5288,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "SICN",
+    "spec": "265, purgeable",
+    "line": 5296,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "SICN",
+    "spec": "270, purgeable",
+    "line": 5304,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "SICN",
+    "spec": "271, purgeable",
+    "line": 5312,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "SICN",
+    "spec": "272, purgeable",
+    "line": 5320,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "SICN",
+    "spec": "273, purgeable",
+    "line": 5328,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "SICN",
+    "spec": "257, purgeable",
+    "line": 5336,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "SICN",
+    "spec": "258, purgeable",
+    "line": 5344,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "SICN",
+    "spec": "259, purgeable",
+    "line": 5352,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "SICN",
+    "spec": "260, purgeable",
+    "line": 5359,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "SICN",
+    "spec": "261, purgeable",
+    "line": 5367,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "SICN",
+    "spec": "262, purgeable",
+    "line": 5375,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "SICN",
+    "spec": "263, purgeable",
+    "line": 5383,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "SICN",
+    "spec": "264, purgeable",
+    "line": 5391,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "SICN",
+    "spec": "1022, purgeable",
+    "line": 5399,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "SICN",
+    "spec": "1023, purgeable",
+    "line": 5407,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "SICN",
+    "spec": "1024, purgeable",
+    "line": 5415,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "SICN",
+    "spec": "1025, purgeable",
+    "line": 5423,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "SICN",
+    "spec": "274, purgeable",
+    "line": 5431,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "SICN",
+    "spec": "275, purgeable",
+    "line": 5439,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "SICN",
+    "spec": "276, purgeable",
+    "line": 5447,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "SICN",
+    "spec": "277, purgeable",
+    "line": 5455,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "SICN",
+    "spec": "278, purgeable",
+    "line": 5463,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "SICN",
+    "spec": "1047, purgeable",
+    "line": 5471,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "1504, \"Mailbox\"",
+    "line": 5703,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "1201, \"Find Submenu\"",
+    "line": 5723,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "1512, \"1512\"",
+    "line": 5753,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "1513, \"1513\"",
+    "line": 5763,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "1501, \"Apple\"",
+    "line": 5773,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "1210, \"Priority\"",
+    "line": 5787,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "1213, \"Transliteration\"",
+    "line": 5813,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "1516, \"MT1\"",
+    "line": 5823,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "1517, \"MT2\"",
+    "line": 5863,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "1518, \"Cj\"",
+    "line": 5903,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "1506, \"Transfer\"",
+    "line": 5921,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "1209, \"Status\"",
+    "line": 5941,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "1214, \"Sig\"",
+    "line": 5981,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "1521, \"Nickfile\"",
+    "line": 5997,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "1523, \"PhXIn\"",
+    "line": 6007,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "1524, \"PhXOut\"",
+    "line": 6019,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "1526",
+    "line": 6031,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "1216",
+    "line": 6041,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "1220",
+    "line": 6065,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "220, \"Process\"",
+    "line": 6075,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "1222",
+    "line": 6085,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "1223",
+    "line": 6095,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "1224",
+    "line": 6105,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "1507, \"Special\"",
+    "line": 6121,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "1519, \"Sig\"",
+    "line": 6155,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "1537, \"Filt Priority\"",
+    "line": 6171,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "1536, \"Filt Status\"",
+    "line": 6197,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "1227",
+    "line": 6237,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "1543, \"Search Category\"",
+    "line": 6257,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "1522, \"CommonH\"",
+    "line": 6311,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "1544, \"Search Equal\"",
+    "line": 6341,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "1545, \"Search Compare\"",
+    "line": 6355,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "1546, \"Search Text Compare\"",
+    "line": 6373,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "1547, \"Age units\"",
+    "line": 6399,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "1548, \"And Or\"",
+    "line": 6421,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "1549, \"Search Compare Date\"",
+    "line": 6435,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "1550, \"Filt Voice\"",
+    "line": 6453,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "1225",
+    "line": 6463,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "1551",
+    "line": 6481,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "STR ",
+    "spec": "1001, purgeable",
+    "line": 6867,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "dctb",
+    "spec": "1002",
+    "line": 7112,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "dctb",
+    "spec": "1068",
+    "line": 7127,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "dctb",
+    "spec": "1097",
+    "line": 7142,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "FREF",
+    "spec": "1007, purgeable",
+    "line": 7164,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "FREF",
+    "spec": "1005, purgeable",
+    "line": 7170,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "FREF",
+    "spec": "1001, \"Application\", purgeable",
+    "line": 7176,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "FREF",
+    "spec": "1002, \"Settings\", purgeable",
+    "line": 7182,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "FREF",
+    "spec": "1003, \"Mailbox\", purgeable",
+    "line": 7188,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "FREF",
+    "spec": "1004, \"TableOfContents\", purgeable",
+    "line": 7194,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "FREF",
+    "spec": "1006, purgeable",
+    "line": 7200,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "FREF",
+    "spec": "1008",
+    "line": 7206,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "FREF",
+    "spec": "1010",
+    "line": 7212,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "FREF",
+    "spec": "128",
+    "line": 7218,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "FREF",
+    "spec": "129",
+    "line": 7224,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "FREF",
+    "spec": "130",
+    "line": 7230,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "FREF",
+    "spec": "131",
+    "line": 7236,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "FREF",
+    "spec": "132",
+    "line": 7242,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "FREF",
+    "spec": "133",
+    "line": 7248,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "FREF",
+    "spec": "134",
+    "line": 7254,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "FREF",
+    "spec": "135",
+    "line": 7260,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "FREF",
+    "spec": "136",
+    "line": 7266,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "FREF",
+    "spec": "137",
+    "line": 7272,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "FREF",
+    "spec": "138",
+    "line": 7278,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "FREF",
+    "spec": "139",
+    "line": 7284,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "FREF",
+    "spec": "140",
+    "line": 7290,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "FREF",
+    "spec": "141",
+    "line": 7296,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "FREF",
+    "spec": "142",
+    "line": 7302,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "FREF",
+    "spec": "143",
+    "line": 7308,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "FREF",
+    "spec": "144",
+    "line": 7314,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "FREF",
+    "spec": "145",
+    "line": 7320,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "FREF",
+    "spec": "146",
+    "line": 7326,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "FREF",
+    "spec": "147",
+    "line": 7332,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "FREF",
+    "spec": "1109",
+    "line": 7338,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "FREF",
+    "spec": "1114",
+    "line": 7344,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "FREF",
+    "spec": "2074",
+    "line": 7350,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "FREF",
+    "spec": "1135, \"vCard\", purgeable",
+    "line": 7356,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "mctb",
+    "spec": "1216, \"Color menu\"",
+    "line": 7362,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "mctb",
+    "spec": "1507, \"Special menu\"",
+    "line": 7427,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "mctb",
+    "spec": "1225, \"Server Opts menu\"",
+    "line": 7444,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "PAT ",
+    "spec": "1001, purgeable",
+    "line": 7461,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "itl2",
+    "spec": "1000, \"English\", protected",
+    "line": 7541,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "wctb",
+    "spec": "1015",
+    "line": 7717,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "wctb",
+    "spec": "1021",
+    "line": 7732,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "STR#",
+    "spec": "1000, \"Prefs\"",
+    "line": 7751,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "tab#",
+    "spec": "1001, \"Search window tabs\"",
+    "line": 7931,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "BNDL",
+    "spec": "128, purgeable",
+    "line": 7944,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "FEAT",
+    "spec": "1002, \"Multiple Personalities\", purgeable",
+    "line": 8324,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "FEAT",
+    "spec": "1003, \"Stationery\", purgeable",
+    "line": 8333,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "FEAT",
+    "spec": "1004, \"Multiple Signatures\", purgeable",
+    "line": 8342,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "FEAT",
+    "spec": "1005, \"Filters\", purgeable",
+    "line": 8351,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "FEAT",
+    "spec": "1006, \"Extended Styles\", purgeable",
+    "line": 8360,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "FEAT",
+    "spec": "1007, \"Custom Toolbar\", purgeable",
+    "line": 8369,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "FEAT",
+    "spec": "1008, \"Simultaneous Directory Services\", purgeable",
+    "line": 8378,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "FEAT",
+    "spec": "1009, \"Multiple Address Books\", purgeable",
+    "line": 8387,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "FEAT",
+    "spec": "1010, \"Nickname Watching\", purgeable",
+    "line": 8396,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "FEAT",
+    "spec": "1011, \"FCC\", purgeable",
+    "line": 8405,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "FEAT",
+    "spec": "1012, \"Filter Personality\", purgeable",
+    "line": 8413,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "FEAT",
+    "spec": "1013, \"Filter Sound\", purgeable",
+    "line": 8422,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "FEAT",
+    "spec": "1014, \"Filter Open\", purgeable",
+    "line": 8431,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "FEAT",
+    "spec": "1015, \"Filter Print\", purgeable",
+    "line": 8440,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "FEAT",
+    "spec": "1016, \"Filter Forward\", purgeable",
+    "line": 8449,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "FEAT",
+    "spec": "1017, \"Filter Reply\", purgeable",
+    "line": 8457,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "FEAT",
+    "spec": "1018, \"Filter Redirect\", purgeable",
+    "line": 8466,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "FEAT",
+    "spec": "1019, \"Filter Server Options\", purgeable",
+    "line": 8475,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "FEAT",
+    "spec": "1020, \"Filter Label\", purgeable",
+    "line": 8484,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "FEAT",
+    "spec": "1021, \"Filter Speak\", purgeable",
+    "line": 8493,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "FEAT",
+    "spec": "1022, \"Filter History\", purgeable",
+    "line": 8502,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "FEAT",
+    "spec": "1023, \"Style Color\", purgeable",
+    "line": 8512,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "FEAT",
+    "spec": "1024, \"Style Quote\", purgeable",
+    "line": 8521,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "FEAT",
+    "spec": "1025, \"Style Justification\", purgeable",
+    "line": 8530,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "FEAT",
+    "spec": "1026, \"Style Margin\", purgeable",
+    "line": 8539,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "FEAT",
+    "spec": "1027, \"Style Bullets\", purgeable",
+    "line": 8548,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "FEAT",
+    "spec": "1028, \"Style Horizontal Rule\", purgeable",
+    "line": 8557,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "FEAT",
+    "spec": "1029, \"Style Link\", purgeable",
+    "line": 8566,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "FEAT",
+    "spec": "1030, \"Style Graphics\", purgeable",
+    "line": 8575,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "FEAT",
+    "spec": "1031, \"Links Window\", purgeable",
+    "line": 8584,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "FEAT",
+    "spec": "1032, \"Speaking\", purgeable",
+    "line": 8592,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "FEAT",
+    "spec": "1033, \"Return Receipt To\", purgeable",
+    "line": 8601,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "FEAT",
+    "spec": "1034, \"Advanced Search\", purgeable",
+    "line": 8610,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "FEAT",
+    "spec": "1001, \"Spell Checking\", purgeable",
+    "line": 8619,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "FEAT",
+    "spec": "1000, \"Junk Mail\", purgeable",
+    "line": 8628,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "FEAT",
+    "spec": "1039, \"ConCon\", purgeable",
+    "line": 8637,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "FEAT",
+    "spec": "1040, \"Clip2Phone\", purgeable",
+    "line": 8646,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "FEAT",
+    "spec": "1042, \"ContextFiling\", purgeable",
+    "line": 8655,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "FEAT",
+    "spec": "1043, \"MBDrawer\", purgeable",
+    "line": 8664,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "FEAT",
+    "spec": "1044, \"Emoticons\", purgeable",
+    "line": 8673,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "dlgx",
+    "spec": "20100, \"Code Entry\", purgeable",
+    "line": 8705,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "cctb",
+    "spec": "1142",
+    "line": 8711,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "cctb",
+    "spec": "1143",
+    "line": 8724,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "icns",
+    "spec": "1001, \"Application icon\"",
+    "line": 8810,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "icns",
+    "spec": "1002, \"Settings\"",
+    "line": 13195,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "icns",
+    "spec": "1003, \"Mailbox/text\"",
+    "line": 15804,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "icns",
+    "spec": "1004, \"Mailbox TOC\"",
+    "line": 18413,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "icns",
+    "spec": "1005, \"Resource plug-ins\"",
+    "line": 21022,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "icns",
+    "spec": "1006, \"Stationery\"",
+    "line": 23631,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "icns",
+    "spec": "1008, \"Help\"",
+    "line": 26240,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "icns",
+    "spec": "1010, \"Application attachment\"",
+    "line": 28849,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "icns",
+    "spec": "1045, \"Filters\"",
+    "line": 31458,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "icns",
+    "spec": "1114, \"Saved search\"",
+    "line": 34067,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "icns",
+    "spec": "2074, \"MoodWatch\"",
+    "line": 36676,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "icns",
+    "spec": "1135, \"vCard\"",
+    "line": 36789,
+    "file": "src/common.rsrc.r"
+  },
+  {
+    "type": "STR#",
+    "spec": "2200, purgeable",
+    "line": 11,
+    "file": "src/help.r"
+  },
+  {
+    "type": "STR#",
+    "spec": "3600, purgeable",
+    "line": 36,
+    "file": "src/help.r"
+  },
+  {
+    "type": "STR#",
+    "spec": "1400, purgeable",
+    "line": 61,
+    "file": "src/help.r"
+  },
+  {
+    "type": "STR#",
+    "spec": "4600,\"Comp Help\",purgeable",
+    "line": 140,
+    "file": "src/help.r"
+  },
+  {
+    "type": "STR#",
+    "spec": "4800,\"Mailbox Help\",purgeable",
+    "line": 156,
+    "file": "src/help.r"
+  },
+  {
+    "type": "STR#",
+    "spec": "5000,\"Nickname Help\",purgeable",
+    "line": 165,
+    "file": "src/help.r"
+  },
+  {
+    "type": "STR#",
+    "spec": "5200,\"Mailbox Help\",purgeable",
+    "line": 208,
+    "file": "src/help.r"
+  },
+  {
+    "type": "STR#",
+    "spec": "15400,\"Text formatting toolbar Help\",purgeable",
+    "line": 260,
+    "file": "src/help.r"
+  },
+  {
+    "type": "STR#",
+    "spec": "17000,\"Personalities Help\",purgeable",
+    "line": 299,
+    "file": "src/help.r"
+  },
+  {
+    "type": "STR#",
+    "spec": "17100,\"Signatures Help\",purgeable",
+    "line": 307,
+    "file": "src/help.r"
+  },
+  {
+    "type": "STR#",
+    "spec": "18000,\"Stationery Help\",purgeable",
+    "line": 314,
+    "file": "src/help.r"
+  },
+  {
+    "type": "STR#",
+    "spec": "19700,\"Link Help\",purgeable",
+    "line": 321,
+    "file": "src/help.r"
+  },
+  {
+    "type": "STR#",
+    "spec": "24000,\"Ph Help\",purgeable",
+    "line": 330,
+    "file": "src/help.r"
+  },
+  {
+    "type": "STR#",
+    "spec": "25800,\"Filter Help\",purgeable",
+    "line": 375,
+    "file": "src/help.r"
+  },
+  {
+    "type": "STR#",
+    "spec": "25900,\"Att Pop Help\",purgeable",
+    "line": 409,
+    "file": "src/help.r"
+  },
+  {
+    "type": "STR#",
+    "spec": "31000,\"Find Help\",purgeable",
+    "line": 417,
+    "file": "src/help.r"
+  },
+  {
+    "type": "STR#",
+    "spec": "19300,\"Search Help\",purgeable",
+    "line": 425,
+    "file": "src/help.r"
+  },
+  {
+    "type": "STR#",
+    "spec": "22000,\"Import Help\",purgeable",
+    "line": 445,
+    "file": "src/help.r"
+  },
+  {
+    "type": "STR#",
+    "spec": "2000,\"MacTCP Errors\",purgeable",
+    "line": 1,
+    "file": "src/mactcperrors.r"
+  },
+  {
+    "type": "STR#",
+    "spec": "15500,\"PPP Error Messages\",purgeable",
+    "line": 60,
+    "file": "src/mactcperrors.r"
+  },
+  {
+    "type": "STR#",
+    "spec": "15600,\"OT Error Messages\",purgeable",
+    "line": 91,
+    "file": "src/mactcperrors.r"
+  },
+  {
+    "type": "STR#",
+    "spec": "17400,\"PPP Connection Messages\",purgeable",
+    "line": 125,
+    "file": "src/mactcperrors.r"
+  },
+  {
+    "type": "STR#",
+    "spec": "20000,\"HTTP Error Messages\",purgeable",
+    "line": 146,
+    "file": "src/mactcperrors.r"
+  },
+  {
+    "type": "EuIM",
+    "spec": "128, \"Images\", purgeable",
+    "line": 24,
+    "file": "src/mappings.r"
+  },
+  {
+    "type": "EuIM",
+    "spec": "129, \"Proprietary Stuff\", purgeable",
+    "line": 46,
+    "file": "src/mappings.r"
+  },
+  {
+    "type": "EuIM",
+    "spec": "130, \"Other\", purgeable",
+    "line": 87,
+    "file": "src/mappings.r"
+  },
+  {
+    "type": "EuIM",
+    "spec": "131, \"Sounds\", purgeable",
+    "line": 112,
+    "file": "src/mappings.r"
+  },
+  {
+    "type": "EuIM",
+    "spec": "133, \"Movies\", purgeable",
+    "line": 126,
+    "file": "src/mappings.r"
+  },
+  {
+    "type": "EuOM",
+    "spec": "128,purgeable",
+    "line": 138,
+    "file": "src/mappings.r"
+  },
+  {
+    "type": "STH#",
+    "spec": "30100,purgeable",
+    "line": 1,
+    "file": "src/nick.r"
+  },
+  {
+    "type": "STH#",
+    "spec": "30300,purgeable",
+    "line": 5,
+    "file": "src/nick.r"
+  },
+  {
+    "type": "STH#",
+    "spec": "30500,purgeable",
+    "line": 11,
+    "file": "src/nick.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1087, purgeable",
+    "line": 1,
+    "file": "src/temp.DLOG.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1088, purgeable",
+    "line": 12,
+    "file": "src/temp.DLOG.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1078, purgeable",
+    "line": 23,
+    "file": "src/temp.DLOG.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1089, \"AdTheObscure\", purgeable",
+    "line": 34,
+    "file": "src/temp.DLOG.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1090, \"Offline Link\", purgeable",
+    "line": 45,
+    "file": "src/temp.DLOG.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1091, \"Remind Me\", purgeable",
+    "line": 56,
+    "file": "src/temp.DLOG.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1098, \"ProfileReq\", purgeable",
+    "line": 67,
+    "file": "src/temp.DLOG.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1099, purgeable",
+    "line": 78,
+    "file": "src/temp.DLOG.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1100, \"Repay\", purgeable",
+    "line": 89,
+    "file": "src/temp.DLOG.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1104, \"Junkdown\", purgeable",
+    "line": 100,
+    "file": "src/temp.DLOG.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1034, \"New Nickname\", purgeable",
+    "line": 111,
+    "file": "src/temp.DLOG.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1095, \"New Group\", purgeable",
+    "line": 122,
+    "file": "src/temp.DLOG.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1109, \"Server check\", purgeable",
+    "line": 133,
+    "file": "src/temp.DLOG.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "20050, \"Registration\", purgeable",
+    "line": 144,
+    "file": "src/temp.DLOG.r"
+  },
+  {
+    "type": "ALRT",
+    "spec": "1002, \"About\", purgeable",
+    "line": 155,
+    "file": "src/temp.DLOG.r"
+  },
+  {
+    "type": "ALRT",
+    "spec": "1060, \"Invalid Registration Number\", purgeable",
+    "line": 171,
+    "file": "src/temp.DLOG.r"
+  },
+  {
+    "type": "ALRT",
+    "spec": "1060, \"Invalid Registration Number\", purgeable",
+    "line": 187,
+    "file": "src/temp.DLOG.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "20050, \"Registration\", purgeable",
+    "line": 203,
+    "file": "src/temp.DLOG.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1078, purgeable",
+    "line": 214,
+    "file": "src/temp.DLOG.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1079, purgeable",
+    "line": 225,
+    "file": "src/temp.DLOG.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1081, purgeable",
+    "line": 236,
+    "file": "src/temp.DLOG.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1082, purgeable",
+    "line": 247,
+    "file": "src/temp.DLOG.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "2013, purgeable",
+    "line": 263,
+    "file": "src/temp.DLOG.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "2006, purgeable",
+    "line": 275,
+    "file": "src/temp.DLOG.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "2010, purgeable",
+    "line": 287,
+    "file": "src/temp.DLOG.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "2012, purgeable",
+    "line": 299,
+    "file": "src/temp.DLOG.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "2027, purgeable",
+    "line": 311,
+    "file": "src/temp.DLOG.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "2007, purgeable",
+    "line": 323,
+    "file": "src/temp.DLOG.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "3021, purgeable",
+    "line": 335,
+    "file": "src/temp.DLOG.r"
+  },
+  {
+    "type": "ALRT",
+    "spec": "1003, \"Error\", purgeable",
+    "line": 347,
+    "file": "src/temp.DLOG.r"
+  },
+  {
+    "type": "ALRT",
+    "spec": "1016, \"Not Found\", purgeable",
+    "line": 363,
+    "file": "src/temp.DLOG.r"
+  },
+  {
+    "type": "ALRT",
+    "spec": "1020, \"ICMP\", purgeable",
+    "line": 379,
+    "file": "src/temp.DLOG.r"
+  },
+  {
+    "type": "ALRT",
+    "spec": "1021, \"New Mail\", purgeable",
+    "line": 395,
+    "file": "src/temp.DLOG.r"
+  },
+  {
+    "type": "ALRT",
+    "spec": "1033, purgeable",
+    "line": 411,
+    "file": "src/temp.DLOG.r"
+  },
+  {
+    "type": "ALRT",
+    "spec": "1037, \"No Mail\", purgeable",
+    "line": 427,
+    "file": "src/temp.DLOG.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1008, \"New Mailbox\", purgeable",
+    "line": 443,
+    "file": "src/temp.DLOG.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1013, \"Password\", purgeable",
+    "line": 454,
+    "file": "src/temp.DLOG.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1027, \"Standard File for a Folder\", purgeable",
+    "line": 465,
+    "file": "src/temp.DLOG.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1032, purgeable",
+    "line": 476,
+    "file": "src/temp.DLOG.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1044, purgeable",
+    "line": 487,
+    "file": "src/temp.DLOG.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1038, purgeable",
+    "line": 498,
+    "file": "src/temp.DLOG.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1026, purgeable",
+    "line": 509,
+    "file": "src/temp.DLOG.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1050, purgeable",
+    "line": 520,
+    "file": "src/temp.DLOG.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1055, purgeable",
+    "line": 531,
+    "file": "src/temp.DLOG.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1070, \"ACAP\", purgeable",
+    "line": 542,
+    "file": "src/temp.DLOG.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1075, purgeable",
+    "line": 553,
+    "file": "src/temp.DLOG.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1064, purgeable",
+    "line": 564,
+    "file": "src/temp.DLOG.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1079, purgeable",
+    "line": 575,
+    "file": "src/temp.DLOG.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1081, purgeable",
+    "line": 586,
+    "file": "src/temp.DLOG.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1082, purgeable",
+    "line": 597,
+    "file": "src/temp.DLOG.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "20100, \"Code Entry\", purgeable",
+    "line": 608,
+    "file": "src/temp.DLOG.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1083, purgeable",
+    "line": 619,
+    "file": "src/temp.DLOG.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1084, purgeable",
+    "line": 630,
+    "file": "src/temp.DLOG.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1092, \"Refund Code\", purgeable",
+    "line": 641,
+    "file": "src/temp.DLOG.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1085, \"Pre Payment\", purgeable",
+    "line": 652,
+    "file": "src/temp.DLOG.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1086, \"Pre Registration\", purgeable",
+    "line": 663,
+    "file": "src/temp.DLOG.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1093, \"Pre Profiling\", purgeable",
+    "line": 674,
+    "file": "src/temp.DLOG.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1094, \"Profile ID Confirm\", purgeable",
+    "line": 685,
+    "file": "src/temp.DLOG.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1096, \"Import Mail\", purgeable",
+    "line": 696,
+    "file": "src/temp.DLOG.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1097, \"Importer Select\", purgeable",
+    "line": 707,
+    "file": "src/temp.DLOG.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1068, \"Make Filter Dialog\", purgeable",
+    "line": 718,
+    "file": "src/temp.DLOG.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1101, \"SSL Certificate\", purgeable",
+    "line": 729,
+    "file": "src/temp.DLOG.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1102, \"Show Certificate\", purgeable",
+    "line": 745,
+    "file": "src/temp.DLOG.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1103, \"Junk Intro\", purgeable",
+    "line": 756,
+    "file": "src/temp.DLOG.r"
+  },
+  {
+    "type": "dlgx",
+    "spec": "1087",
+    "line": 1,
+    "file": "src/temp.dlgx.r"
+  },
+  {
+    "type": "dlgx",
+    "spec": "1088",
+    "line": 7,
+    "file": "src/temp.dlgx.r"
+  },
+  {
+    "type": "dlgx",
+    "spec": "1078",
+    "line": 13,
+    "file": "src/temp.dlgx.r"
+  },
+  {
+    "type": "dlgx",
+    "spec": "1089",
+    "line": 19,
+    "file": "src/temp.dlgx.r"
+  },
+  {
+    "type": "dlgx",
+    "spec": "1090",
+    "line": 25,
+    "file": "src/temp.dlgx.r"
+  },
+  {
+    "type": "dlgx",
+    "spec": "1091",
+    "line": 31,
+    "file": "src/temp.dlgx.r"
+  },
+  {
+    "type": "dlgx",
+    "spec": "1098",
+    "line": 37,
+    "file": "src/temp.dlgx.r"
+  },
+  {
+    "type": "dlgx",
+    "spec": "1099",
+    "line": 43,
+    "file": "src/temp.dlgx.r"
+  },
+  {
+    "type": "dlgx",
+    "spec": "1100",
+    "line": 49,
+    "file": "src/temp.dlgx.r"
+  },
+  {
+    "type": "dlgx",
+    "spec": "1104",
+    "line": 55,
+    "file": "src/temp.dlgx.r"
+  },
+  {
+    "type": "dlgx",
+    "spec": "1034",
+    "line": 61,
+    "file": "src/temp.dlgx.r"
+  },
+  {
+    "type": "dlgx",
+    "spec": "1095",
+    "line": 67,
+    "file": "src/temp.dlgx.r"
+  },
+  {
+    "type": "dlgx",
+    "spec": "1109",
+    "line": 73,
+    "file": "src/temp.dlgx.r"
+  },
+  {
+    "type": "dlgx",
+    "spec": "20050",
+    "line": 79,
+    "file": "src/temp.dlgx.r"
+  },
+  {
+    "type": "alrx",
+    "spec": "1060",
+    "line": 85,
+    "file": "src/temp.dlgx.r"
+  },
+  {
+    "type": "dlgx",
+    "spec": "1079",
+    "line": 91,
+    "file": "src/temp.dlgx.r"
+  },
+  {
+    "type": "dlgx",
+    "spec": "1081",
+    "line": 97,
+    "file": "src/temp.dlgx.r"
+  },
+  {
+    "type": "dlgx",
+    "spec": "1082",
+    "line": 103,
+    "file": "src/temp.dlgx.r"
+  },
+  {
+    "type": "dlgx",
+    "spec": "2000",
+    "line": 109,
+    "file": "src/temp.dlgx.r"
+  },
+  {
+    "type": "dlgx",
+    "spec": "2013",
+    "line": 115,
+    "file": "src/temp.dlgx.r"
+  },
+  {
+    "type": "dlgx",
+    "spec": "2006",
+    "line": 121,
+    "file": "src/temp.dlgx.r"
+  },
+  {
+    "type": "dlgx",
+    "spec": "2010",
+    "line": 127,
+    "file": "src/temp.dlgx.r"
+  },
+  {
+    "type": "dlgx",
+    "spec": "2012",
+    "line": 133,
+    "file": "src/temp.dlgx.r"
+  },
+  {
+    "type": "dlgx",
+    "spec": "2027",
+    "line": 139,
+    "file": "src/temp.dlgx.r"
+  },
+  {
+    "type": "dlgx",
+    "spec": "2007",
+    "line": 145,
+    "file": "src/temp.dlgx.r"
+  },
+  {
+    "type": "dlgx",
+    "spec": "3021",
+    "line": 151,
+    "file": "src/temp.dlgx.r"
+  },
+  {
+    "type": "alrx",
+    "spec": "1003",
+    "line": 157,
+    "file": "src/temp.dlgx.r"
+  },
+  {
+    "type": "alrx",
+    "spec": "1016",
+    "line": 163,
+    "file": "src/temp.dlgx.r"
+  },
+  {
+    "type": "alrx",
+    "spec": "1020",
+    "line": 169,
+    "file": "src/temp.dlgx.r"
+  },
+  {
+    "type": "alrx",
+    "spec": "1021",
+    "line": 175,
+    "file": "src/temp.dlgx.r"
+  },
+  {
+    "type": "alrx",
+    "spec": "1033",
+    "line": 181,
+    "file": "src/temp.dlgx.r"
+  },
+  {
+    "type": "alrx",
+    "spec": "1037",
+    "line": 187,
+    "file": "src/temp.dlgx.r"
+  },
+  {
+    "type": "dlgx",
+    "spec": "1008",
+    "line": 193,
+    "file": "src/temp.dlgx.r"
+  },
+  {
+    "type": "dlgx",
+    "spec": "1013",
+    "line": 199,
+    "file": "src/temp.dlgx.r"
+  },
+  {
+    "type": "dlgx",
+    "spec": "1027",
+    "line": 205,
+    "file": "src/temp.dlgx.r"
+  },
+  {
+    "type": "dlgx",
+    "spec": "1032",
+    "line": 211,
+    "file": "src/temp.dlgx.r"
+  },
+  {
+    "type": "dlgx",
+    "spec": "1044",
+    "line": 217,
+    "file": "src/temp.dlgx.r"
+  },
+  {
+    "type": "dlgx",
+    "spec": "1038",
+    "line": 223,
+    "file": "src/temp.dlgx.r"
+  },
+  {
+    "type": "dlgx",
+    "spec": "1026",
+    "line": 229,
+    "file": "src/temp.dlgx.r"
+  },
+  {
+    "type": "dlgx",
+    "spec": "1050",
+    "line": 235,
+    "file": "src/temp.dlgx.r"
+  },
+  {
+    "type": "dlgx",
+    "spec": "1055",
+    "line": 241,
+    "file": "src/temp.dlgx.r"
+  },
+  {
+    "type": "dlgx",
+    "spec": "1070",
+    "line": 247,
+    "file": "src/temp.dlgx.r"
+  },
+  {
+    "type": "dlgx",
+    "spec": "1075",
+    "line": 253,
+    "file": "src/temp.dlgx.r"
+  },
+  {
+    "type": "dlgx",
+    "spec": "1064",
+    "line": 259,
+    "file": "src/temp.dlgx.r"
+  },
+  {
+    "type": "dlgx",
+    "spec": "20100",
+    "line": 265,
+    "file": "src/temp.dlgx.r"
+  },
+  {
+    "type": "dlgx",
+    "spec": "1083",
+    "line": 271,
+    "file": "src/temp.dlgx.r"
+  },
+  {
+    "type": "dlgx",
+    "spec": "1084",
+    "line": 277,
+    "file": "src/temp.dlgx.r"
+  },
+  {
+    "type": "dlgx",
+    "spec": "1092",
+    "line": 283,
+    "file": "src/temp.dlgx.r"
+  },
+  {
+    "type": "dlgx",
+    "spec": "1085",
+    "line": 289,
+    "file": "src/temp.dlgx.r"
+  },
+  {
+    "type": "dlgx",
+    "spec": "1086",
+    "line": 295,
+    "file": "src/temp.dlgx.r"
+  },
+  {
+    "type": "dlgx",
+    "spec": "1093",
+    "line": 301,
+    "file": "src/temp.dlgx.r"
+  },
+  {
+    "type": "dlgx",
+    "spec": "1094",
+    "line": 307,
+    "file": "src/temp.dlgx.r"
+  },
+  {
+    "type": "dlgx",
+    "spec": "1096",
+    "line": 313,
+    "file": "src/temp.dlgx.r"
+  },
+  {
+    "type": "dlgx",
+    "spec": "1097",
+    "line": 319,
+    "file": "src/temp.dlgx.r"
+  },
+  {
+    "type": "dlgx",
+    "spec": "1068",
+    "line": 325,
+    "file": "src/temp.dlgx.r"
+  },
+  {
+    "type": "dlgx",
+    "spec": "1101",
+    "line": 331,
+    "file": "src/temp.dlgx.r"
+  },
+  {
+    "type": "dlgx",
+    "spec": "1005",
+    "line": 337,
+    "file": "src/temp.dlgx.r"
+  },
+  {
+    "type": "dlgx",
+    "spec": "1102",
+    "line": 343,
+    "file": "src/temp.dlgx.r"
+  },
+  {
+    "type": "dlgx",
+    "spec": "1103",
+    "line": 349,
+    "file": "src/temp.dlgx.r"
+  },
+  {
+    "type": "STR#",
+    "spec": "25400, purgeable",
+    "line": 2,
+    "file": "src/two.r"
+  },
+  {
+    "type": "STR#",
+    "spec": "18300, purgeable",
+    "line": 22,
+    "file": "src/two.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "1002, purgeable",
+    "line": 42,
+    "file": "src/two.r"
+  },
+  {
+    "type": "ALRT",
+    "spec": "1002, \"About\", purgeable",
+    "line": 68,
+    "file": "src/two.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1062, purgeable",
+    "line": 1,
+    "file": "src/two.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1063, purgeable",
+    "line": 12,
+    "file": "src/two.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1085, purgeable",
+    "line": 23,
+    "file": "src/two.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1086, purgeable",
+    "line": 34,
+    "file": "src/two.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1087, purgeable",
+    "line": 45,
+    "file": "src/two.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1201, purgeable",
+    "line": 56,
+    "file": "src/two.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1054, \"TB Search Userpane\", purgeable",
+    "line": 67,
+    "file": "src/two.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1202, \"TB Search Go\", purgeable",
+    "line": 78,
+    "file": "src/two.rsrc.r"
+  },
+  {
+    "type": "CNTL",
+    "spec": "1203, \"TB Search Pop\", purgeable",
+    "line": 89,
+    "file": "src/two.rsrc.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "1015",
+    "line": 100,
+    "file": "src/two.rsrc.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "1056, purgeable",
+    "line": 135,
+    "file": "src/two.rsrc.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "1063, purgeable",
+    "line": 227,
+    "file": "src/two.rsrc.r"
+  },
+  {
+    "type": "DITL",
+    "spec": "1073, \"Choose Personality\", purgeable",
+    "line": 257,
+    "file": "src/two.rsrc.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1056, purgeable",
+    "line": 305,
+    "file": "src/two.rsrc.r"
+  },
+  {
+    "type": "DLOG",
+    "spec": "1073, \"Choose Personality\", purgeable",
+    "line": 316,
+    "file": "src/two.rsrc.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "1208, \"Sort Submenu\"",
+    "line": 327,
+    "file": "src/two.rsrc.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "1211, \"Label\"",
+    "line": 363,
+    "file": "src/two.rsrc.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "1212, \"Change\"",
+    "line": 377,
+    "file": "src/two.rsrc.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "1217",
+    "line": 399,
+    "file": "src/two.rsrc.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "1218",
+    "line": 409,
+    "file": "src/two.rsrc.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "1219",
+    "line": 419,
+    "file": "src/two.rsrc.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "1221",
+    "line": 469,
+    "file": "src/two.rsrc.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "1556",
+    "line": 483,
+    "file": "src/two.rsrc.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "1557",
+    "line": 493,
+    "file": "src/two.rsrc.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "1226, \"SizePopup\"",
+    "line": 503,
+    "file": "src/two.rsrc.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "1502, \"File\"",
+    "line": 527,
+    "file": "src/two.rsrc.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "1505, \"Message\"",
+    "line": 577,
+    "file": "src/two.rsrc.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "1520, \"Attach\"",
+    "line": 631,
+    "file": "src/two.rsrc.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "1525, \"Label\"",
+    "line": 649,
+    "file": "src/two.rsrc.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "1539, \"Filt Pers\"",
+    "line": 663,
+    "file": "src/two.rsrc.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "1540, \"Filt Station\"",
+    "line": 677,
+    "file": "src/two.rsrc.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "1541",
+    "line": 687,
+    "file": "src/two.rsrc.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "1563",
+    "line": 703,
+    "file": "src/two.rsrc.r"
+  },
+  {
+    "type": "MENU",
+    "spec": "229, \"ConConProfPreview\"",
+    "line": 731,
+    "file": "src/two.rsrc.r"
+  },
+  {
+    "type": "PICT",
+    "spec": "1004, purgeable",
+    "line": 743,
+    "file": "src/two.rsrc.r"
+  },
+  {
+    "type": "mctb",
+    "spec": "1525, \"LabelPop menu\"",
+    "line": 7277,
+    "file": "src/two.rsrc.r"
+  },
+  {
+    "type": "CSOm",
+    "spec": "1, \"Preferences Version\"",
+    "line": 3,
+    "file": "src/version.r"
+  },
+  {
+    "type": "vers",
+    "spec": "1, purgeable",
+    "line": 55,
+    "file": "src/version.r"
+  },
+  {
+    "type": "CSOm",
+    "spec": "2, \"Version\"",
+    "line": 69,
+    "file": "src/version.r"
+  }
+]

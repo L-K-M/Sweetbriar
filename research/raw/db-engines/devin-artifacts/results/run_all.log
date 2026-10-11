@@ -1,0 +1,265 @@
++ .venv/bin/python bench/bench_sqlite.py
++ tee results/log_sqlite.txt
+[sqlite] wrote /home/paseo/sb-research/jobs/db-engines-devin/bench/../results/sqlite.json
+{
+ "engine": "sqlite-apsw",
+ "sqlite_version": "3.53.4",
+ "bulk_load_s": 11.096800221013837,
+ "bulk_load_rows": 1000000,
+ "sync_batch_s": 5.952571601024829,
+ "sync_batches": 400,
+ "sync_batch_rows": 250,
+ "single_commit_s": 24.489076330966782,
+ "single_commits": 2000,
+ "single_commit_us": 12244.538165483391,
+ "point_lookup_s": 0.2650233839522116,
+ "point_lookups": 20000,
+ "point_lookup_us": 13.25116919761058,
+ "keyset_pages": 40,
+ "keyset_total_s": 8.444098057225347e-05,
+ "keyset_ms_per_page": 0.0021110245143063366,
+ "mark_read_s": 1.547662783996202,
+ "mark_read_rows": 10000,
+ "concurrent_writer_batches": 100,
+ "concurrent_writer_s": 2.1475864889798686,
+ "concurrent_reader_total_lookups": 86887,
+ "db_file_bytes": 280053376,
+ "open_plus_count_s": 0.006427203014027327,
+ "integrity_check_s": 3.0825172319891863,
+ "integrity": "ok"
+}
++ .venv/bin/python bench/bench_libsql.py
++ tee results/log_libsql.txt
+[libsql] wrote /home/paseo/sb-research/jobs/db-engines-devin/bench/../results/libsql.json
+{
+ "engine": "libsql-experimental",
+ "sqlite_base_version": "3.45.1",
+ "bulk_load_s": 24.151898626005277,
+ "bulk_load_rows": 1000000,
+ "sync_batch_s": 10.673744514002465,
+ "sync_batches": 400,
+ "sync_batch_rows": 250,
+ "single_commit_s": 19.67532665003091,
+ "single_commits": 2000,
+ "single_commit_us": 9837.663325015455,
+ "point_lookup_s": 0.27833661501063034,
+ "point_lookups": 20000,
+ "point_lookup_us": 13.916830750531517,
+ "keyset_pages": 40,
+ "keyset_total_s": 8.049898315221071e-05,
+ "keyset_ms_per_page": 0.002012474578805268,
+ "mark_read_s": 0.1781820369651541,
+ "mark_read_rows": 10000,
+ "concurrent_writer_batches": 100,
+ "concurrent_writer_s": 19.383613386948127,
+ "concurrent_reader_total_lookups": 120504,
+ "db_file_bytes": 280073856,
+ "open_plus_count_s": 0.006903918052557856,
+ "integrity_check_s": 2.6580956670222804,
+ "integrity": "ok"
+}
++ tee results/log_duckdb.txt
++ .venv/bin/python bench/bench_duckdb.py
+[duckdb] wrote /home/paseo/sb-research/jobs/db-engines-devin/bench/../results/duckdb.json
+{
+ "engine": "duckdb",
+ "duckdb_version": "1.5.6",
+ "cold_open_s": 0.044045966991689056,
+ "memory_limit_default": "100.4 GiB",
+ "threads_default": "16",
+ "bulk_load_executemany_s_30k": 18.6860442259931,
+ "bulk_load_executemany_rows": 30000,
+ "bulk_load_s": 2.9314493099809624,
+ "bulk_load_rows": 970000,
+ "bulk_load_method": "pandas df INSERT SELECT (+30k executemany first)",
+ "sync_batch_executemany_s_8": 1.4179192159790546,
+ "sync_batch_s": 8.567340957990382,
+ "sync_batches": 392,
+ "sync_batch_rows": 250,
+ "sync_batch_method": "df INSERT SELECT per txn (8 via executemany)",
+ "single_commit_s": 24.544890649965964,
+ "single_commits": 2000,
+ "single_commit_us": 12272.445324982982,
+ "point_lookup_s": 12.02054814202711,
+ "point_lookups": 20000,
+ "point_lookup_us": 601.0274071013555,
+ "keyset_pages": 40,
+ "keyset_total_s": 0.02194464101921767,
+ "keyset_ms_per_page": 0.5486160254804417,
+ "mark_read_s": 2.0823377369670197,
+ "mark_read_rows": 10000,
+ "concurrent_writer_batches": 100,
+ "concurrent_writer_s": 3.108693390036933,
+ "concurrent_reader_total_lookups": 3404,
+ "db_file_bytes": 101114708,
+ "open_plus_count_s": 0.019369926012586802
+}
++ .venv/bin/python bench/bench_lmdb.py
++ tee results/log_lmdb.txt
+[lmdb] wrote /home/paseo/sb-research/jobs/db-engines-devin/bench/../results/lmdb.json
+{
+ "engine": "lmdb",
+ "lmdb_version": "0.9.36",
+ "bulk_load_s": 39.18121289496776,
+ "bulk_load_rows": 1000000,
+ "sync_batch_s": 17.105930480000097,
+ "sync_batches": 400,
+ "sync_batch_rows": 250,
+ "single_commit_s": 51.91101250803331,
+ "single_commits": 2000,
+ "single_commit_us": 25955.506254016655,
+ "point_lookup_s": 0.023920279985759407,
+ "point_lookups": 20000,
+ "point_lookup_us": 1.1960139992879704,
+ "keyset_pages": 40,
+ "keyset_total_s": 0.0006211419822648168,
+ "keyset_ms_per_page": 0.015528549556620419,
+ "mark_read_s": 1.1085445119533688,
+ "mark_read_rows": 10000,
+ "concurrent_writer_batches": 100,
+ "concurrent_writer_s": 7.575123257003725,
+ "concurrent_reader_total_lookups": 853059,
+ "db_file_bytes": 345690112,
+ "open_plus_count_s": 0.00032410502899438143,
+ "count": 1125000
+}
++ .venv/bin/python bench/bench_rocks.py
++ tee results/log_rocks.txt
+[rocksdict] wrote /home/paseo/sb-research/jobs/db-engines-devin/bench/../results/rocksdict.json
+{
+ "engine": "rocksdict",
+ "note": "use_fsync=1, sync=True on commit batches",
+ "bulk_load_s": 3.8783842949778773,
+ "bulk_load_rows": 1000000,
+ "bulk_load_method": "WriteBatch 10k rows, WAL nosync",
+ "sync_batch_s": 7.031119705992751,
+ "sync_batches": 400,
+ "sync_batch_rows": 250,
+ "single_commit_s": 20.940663792018313,
+ "single_commits": 2000,
+ "single_commit_us": 10470.331896009156,
+ "point_lookup_s": 0.18714590795570984,
+ "point_lookups": 20000,
+ "point_lookup_us": 9.357295397785492,
+ "keyset_pages": 40,
+ "keyset_total_s": 0.0012482770252972841,
+ "keyset_ms_per_page": 0.031206925632432103,
+ "mark_read_s": 0.15759474295191467,
+ "mark_read_rows": 10000,
+ "concurrent_writer_batches": 100,
+ "concurrent_writer_s": 3.6313627419876866,
+ "concurrent_reader_total_lookups": 80358,
+ "db_file_bytes": 99579657,
+ "open_plus_count_s": 0.9462819939944893,
+ "count_all_keys": 2250000
+}
++ .venv/bin/python bench/bench_fts.py
++ tee results/log_fts.txt
+[fts] wrote /home/paseo/sb-research/jobs/db-engines-devin/bench/../results/fts.json
+{
+ "sqlite_doc_load_s": 8.097513659042306,
+ "sqlite_fts_build_s": 6.240312972047832,
+ "sqlite_fts_queries": 200,
+ "sqlite_fts_total_s": 4.63957770896377,
+ "sqlite_fts_ms_per_q": 23.197888544818852,
+ "sqlite_fts_hits": 23511549,
+ "sqlite_fts_incremental_2k_s": 0.30207733798306435,
+ "sqlite_fts_file_bytes": 360539168,
+ "duck_doc_load_s": 1.8513074459624477,
+ "duck_doc_load_method": "df INSERT SELECT",
+ "duck_fts_build_s": 28.619134720007423,
+ "duck_fts_queries": 200,
+ "duck_fts_total_s": 30.220800005015917,
+ "duck_fts_ms_per_q": 151.10400002507959,
+ "duck_fts_hits": 35054557,
+ "duck_fts_incremental_2k_s": 1.3940321109839715,
+ "duck_probe_hits_after_incremental": 151170,
+ "duck_fts_file_bytes": 67254426
+}
++ .venv/bin/python bench/crash_test.py sqlite 15
++ tee results/log_crash_sqlite.txt
+[sqlite] cycle 0: committed=28 ok=True problems=[]
+[sqlite] cycle 1: committed=50 ok=True problems=[]
+[sqlite] cycle 2: committed=63 ok=True problems=[]
+[sqlite] cycle 3: committed=80 ok=True problems=[]
+[sqlite] cycle 4: committed=117 ok=True problems=[]
+[sqlite] cycle 5: committed=131 ok=True problems=[]
+[sqlite] cycle 6: committed=190 ok=True problems=[]
+[sqlite] cycle 7: committed=210 ok=True problems=[]
+[sqlite] cycle 8: committed=235 ok=True problems=[]
+[sqlite] cycle 9: committed=245 ok=True problems=[]
+[sqlite] cycle 10: committed=256 ok=True problems=[]
+[sqlite] cycle 11: committed=278 ok=True problems=[]
+[sqlite] cycle 12: committed=291 ok=True problems=[]
+[sqlite] cycle 13: committed=304 ok=True problems=[]
+[sqlite] cycle 14: committed=316 ok=True problems=[]
++ .venv/bin/python bench/crash_test.py libsql 15
++ tee results/log_crash_libsql.txt
+[libsql] cycle 0: committed=30 ok=True problems=[]
+[libsql] cycle 1: committed=42 ok=True problems=[]
+[libsql] cycle 2: committed=69 ok=True problems=[]
+[libsql] cycle 3: committed=74 ok=True problems=[]
+[libsql] cycle 4: committed=84 ok=True problems=[]
+[libsql] cycle 5: committed=89 ok=True problems=[]
+[libsql] cycle 6: committed=117 ok=True problems=[]
+[libsql] cycle 7: committed=132 ok=True problems=[]
+[libsql] cycle 8: committed=138 ok=True problems=[]
+[libsql] cycle 9: committed=160 ok=True problems=[]
+[libsql] cycle 10: committed=189 ok=True problems=[]
+[libsql] cycle 11: committed=205 ok=True problems=[]
+[libsql] cycle 12: committed=218 ok=True problems=[]
+[libsql] cycle 13: committed=233 ok=True problems=[]
+[libsql] cycle 14: committed=265 ok=True problems=[]
++ .venv/bin/python bench/crash_test.py duckdb 15
++ tee results/log_crash_duckdb.txt
+[duckdb] cycle 0: committed=4 ok=True problems=[]
+[duckdb] cycle 1: committed=8 ok=True problems=[]
+[duckdb] cycle 2: committed=12 ok=True problems=[]
+[duckdb] cycle 3: committed=16 ok=True problems=[]
+[duckdb] cycle 4: committed=21 ok=True problems=[]
+[duckdb] cycle 5: committed=26 ok=True problems=[]
+[duckdb] cycle 6: committed=29 ok=True problems=[]
+[duckdb] cycle 7: committed=32 ok=True problems=[]
+[duckdb] cycle 8: committed=36 ok=True problems=[]
+[duckdb] cycle 9: committed=41 ok=True problems=[]
+[duckdb] cycle 10: committed=45 ok=True problems=[]
+[duckdb] cycle 11: committed=49 ok=True problems=[]
+[duckdb] cycle 12: committed=52 ok=True problems=[]
+[duckdb] cycle 13: committed=56 ok=True problems=[]
+[duckdb] cycle 14: committed=59 ok=True problems=[]
++ tee results/log_crash_lmdb.txt
++ .venv/bin/python bench/crash_test.py lmdb 15
+[lmdb] cycle 0: committed=7 ok=True problems=[]
+[lmdb] cycle 1: committed=22 ok=True problems=[]
+[lmdb] cycle 2: committed=33 ok=True problems=[]
+[lmdb] cycle 3: committed=53 ok=True problems=[]
+[lmdb] cycle 4: committed=62 ok=True problems=[]
+[lmdb] cycle 5: committed=67 ok=True problems=[]
+[lmdb] cycle 6: committed=87 ok=True problems=[]
+[lmdb] cycle 7: committed=105 ok=True problems=[]
+[lmdb] cycle 8: committed=118 ok=True problems=[]
+[lmdb] cycle 9: committed=139 ok=True problems=[]
+[lmdb] cycle 10: committed=159 ok=True problems=[]
+[lmdb] cycle 11: committed=174 ok=True problems=[]
+[lmdb] cycle 12: committed=188 ok=True problems=[]
+[lmdb] cycle 13: committed=200 ok=True problems=[]
+[lmdb] cycle 14: committed=206 ok=True problems=[]
++ .venv/bin/python bench/crash_test.py rocks 15
++ tee results/log_crash_rocks.txt
+[rocks] cycle 0: committed=12 ok=True problems=[]
+[rocks] cycle 1: committed=52 ok=True problems=[]
+[rocks] cycle 2: committed=79 ok=True problems=[]
+[rocks] cycle 3: committed=110 ok=True problems=[]
+[rocks] cycle 4: committed=140 ok=True problems=[]
+[rocks] cycle 5: committed=164 ok=True problems=[]
+[rocks] cycle 6: committed=192 ok=True problems=[]
+[rocks] cycle 7: committed=207 ok=True problems=[]
+[rocks] cycle 8: committed=249 ok=True problems=[]
+[rocks] cycle 9: committed=258 ok=True problems=[]
+[rocks] cycle 10: committed=296 ok=True problems=[]
+[rocks] cycle 11: committed=302 ok=True problems=[]
+[rocks] cycle 12: committed=308 ok=True problems=[]
+[rocks] cycle 13: committed=334 ok=True problems=[]
+[rocks] cycle 14: committed=367 ok=True problems=[]
++ echo 'ALL DONE'
+ALL DONE

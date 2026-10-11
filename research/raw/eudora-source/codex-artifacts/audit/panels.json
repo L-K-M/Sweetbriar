@@ -1,0 +1,4878 @@
+[
+  {
+    "type": "DITL",
+    "spec": "2100, \"Color Tuning\", purgeable",
+    "line": 45,
+    "file": "src/EsotericSettings60.r",
+    "entries": [
+      {
+        "kind": "StaticText",
+        "text": "Color Tuning§§-9",
+        "raw": "enabled,\n\t\t\t\"Color Tuning§§-9\"",
+        "line": 49
+      },
+      {
+        "kind": "StaticText",
+        "text": "Area lightening percentage:",
+        "raw": "disabled,\n\t\t\t\"Area lightening percentage:\"",
+        "line": 55
+      },
+      {
+        "kind": "EditText",
+        "text": "§§6107",
+        "raw": "enabled,\n\t\t\t\"§§6107\"",
+        "line": 61
+      },
+      {
+        "kind": "StaticText",
+        "text": "Text darkening percentage:",
+        "raw": "disabled,\n\t\t\t\"Text darkening percentage:\"",
+        "line": 67
+      },
+      {
+        "kind": "EditText",
+        "text": "§§6106",
+        "raw": "enabled,\n\t\t\t\"§§6106\"",
+        "line": 73
+      },
+      {
+        "kind": "StaticText",
+        "text": "Max percent lightness:",
+        "raw": "disabled,\n\t\t\t\"Max percent lightness:\"",
+        "line": 79
+      },
+      {
+        "kind": "EditText",
+        "text": "§§10002",
+        "raw": "enabled,\n\t\t\t\"§§10002\"",
+        "line": 85
+      },
+      {
+        "kind": "StaticText",
+        "text": "Min percent lightness:",
+        "raw": "disabled,\n\t\t\t\"Min percent lightness:\"",
+        "line": 91
+      },
+      {
+        "kind": "EditText",
+        "text": "§§10001",
+        "raw": "enabled,\n\t\t\t\"§§10001\"",
+        "line": 97
+      },
+      {
+        "kind": "StaticText",
+        "text": "Special Text Coloring§§-18",
+        "raw": "enabled,\n\t\t\t\"Special Text Coloring§§-18\"",
+        "line": 103
+      },
+      {
+        "kind": "StaticText",
+        "text": "URL Color:",
+        "raw": "disabled,\n\t\t\t\"URL Color:\"",
+        "line": 109
+      },
+      {
+        "kind": "Control",
+        "text": "",
+        "raw": "enabled,\n\t\t\t1178",
+        "line": 115
+      },
+      {
+        "kind": "StaticText",
+        "text": "Misspelling Color:",
+        "raw": "disabled,\n\t\t\t\"Misspelling Color:\"",
+        "line": 121
+      },
+      {
+        "kind": "Control",
+        "text": "",
+        "raw": "enabled,\n\t\t\t1179",
+        "line": 127
+      },
+      {
+        "kind": "StaticText",
+        "text": "Potentially Inflammatory Color:",
+        "raw": "disabled,\n\t\t\t\"Potentially Inflammatory Color:\"",
+        "line": 133
+      },
+      {
+        "kind": "Control",
+        "text": "",
+        "raw": "enabled,\n\t\t\t1180",
+        "line": 139
+      },
+      {
+        "kind": "StaticText",
+        "text": "Inflammatory Color:",
+        "raw": "disabled,\n\t\t\t\"Inflammatory Color:\"",
+        "line": 145
+      },
+      {
+        "kind": "Control",
+        "text": "",
+        "raw": "enabled,\n\t\t\t1181",
+        "line": 151
+      }
+    ]
+  },
+  {
+    "type": "DITL",
+    "spec": "2102, \"Logging\", purgeable",
+    "line": 158,
+    "file": "src/EsotericSettings60.r",
+    "entries": [
+      {
+        "kind": "StaticText",
+        "text": "Logging Options§§-19",
+        "raw": "enabled,\n\t\t\t\"Logging Options§§-19\"",
+        "line": 162
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Messages sent§§71:0",
+        "raw": "enabled,\n\t\t\t\"Messages sent§§71:0\"",
+        "line": 168
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Messages received§§71:1",
+        "raw": "enabled,\n\t\t\t\"Messages received§§71:1\"",
+        "line": 174
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Serial navigation§§71:2",
+        "raw": "enabled,\n\t\t\t\"Serial navigation§§71:2\"",
+        "line": 180
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Alerts§§71:3",
+        "raw": "enabled,\n\t\t\t\"Alerts§§71:3\"",
+        "line": 186
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Progress messages§§71:4",
+        "raw": "enabled,\n\t\t\t\"Progress messages§§71:4\"",
+        "line": 192
+      },
+      {
+        "kind": "CheckBox",
+        "text": "All bytes transferred§§71:5",
+        "raw": "enabled,\n\t\t\t\"All bytes transferred§§71:5\"",
+        "line": 198
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Throughput statistics§§71:10",
+        "raw": "enabled,\n\t\t\t\"Throughput statistics§§71:10\"",
+        "line": 204
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Leave mail on server decisions§§71:11",
+        "raw": "enabled,\n\t\t\t\"Leave mail on server decisions§§71:11\"",
+        "line": 210
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Plug-in files (at startup)§§71:12",
+        "raw": "enabled,\n\t\t\t\"Plug-in files (at startup)§§71:12\"",
+        "line": 216
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Filter matches§§71:13",
+        "raw": "enabled,\n\t\t\t\"Filter matches§§71:13\"",
+        "line": 222
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Messages moved§§71:14",
+        "raw": "enabled,\n\t\t\t\"Messages moved§§71:14\"",
+        "line": 228
+      },
+      {
+        "kind": "StaticText",
+        "text": "Rollover log every",
+        "raw": "disabled,\n\t\t\t\"Rollover log every\"",
+        "line": 234
+      },
+      {
+        "kind": "StaticText",
+        "text": "Kbytes",
+        "raw": "disabled,\n\t\t\t\"Kbytes\"",
+        "line": 240
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Protocol details§§71:18",
+        "raw": "enabled,\n\t\t\t\"Protocol details§§71:18\"",
+        "line": 246
+      },
+      {
+        "kind": "CheckBox",
+        "text": "TOC Handling§§71:19",
+        "raw": "enabled,\n\t\t\t\"TOC Handling§§71:19\"",
+        "line": 252
+      },
+      {
+        "kind": "CheckBox",
+        "text": "SSL Data§§71:17",
+        "raw": "enabled,\n\t\t\t\"SSL Data§§71:17\"",
+        "line": 258
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Internals§§71:20",
+        "raw": "enabled,\n\t\t\t\"Internals§§71:20\"",
+        "line": 264
+      },
+      {
+        "kind": "EditText",
+        "text": "§§10004",
+        "raw": "enabled,\n\t\t\t\"§§10004\"",
+        "line": 270
+      }
+    ]
+  },
+  {
+    "type": "DITL",
+    "spec": "2103, \"Timeouts\", purgeable",
+    "line": 277,
+    "file": "src/EsotericSettings60.r",
+    "entries": [
+      {
+        "kind": "StaticText",
+        "text": "Timeout Values§§-11",
+        "raw": "enabled,\n\t\t\t\"Timeout Values§§-11\"",
+        "line": 281
+      },
+      {
+        "kind": "StaticText",
+        "text": "Connection open:",
+        "raw": "disabled,\n\t\t\t\"Connection open:\"",
+        "line": 287
+      },
+      {
+        "kind": "EditText",
+        "text": "§§6804",
+        "raw": "enabled,\n\t\t\t\"§§6804\"",
+        "line": 293
+      },
+      {
+        "kind": "StaticText",
+        "text": "Response from server:",
+        "raw": "disabled,\n\t\t\t\"Response from server:\"",
+        "line": 299
+      },
+      {
+        "kind": "EditText",
+        "text": "§§7017",
+        "raw": "enabled,\n\t\t\t\"§§7017\"",
+        "line": 305
+      },
+      {
+        "kind": "StaticText",
+        "text": "Alerts:",
+        "raw": "disabled,\n\t\t\t\"Alerts:\"",
+        "line": 311
+      },
+      {
+        "kind": "EditText",
+        "text": "§§5602",
+        "raw": "enabled,\n\t\t\t\"§§5602\"",
+        "line": 317
+      },
+      {
+        "kind": "StaticText",
+        "text": "Navigation without \\\\e:",
+        "raw": "disabled,\n\t\t\t\"Navigation without \\\\e:\"",
+        "line": 323
+      },
+      {
+        "kind": "EditText",
+        "text": "§§7209",
+        "raw": "enabled,\n\t\t\t\"§§7209\"",
+        "line": 329
+      },
+      {
+        "kind": "StaticText",
+        "text": "Apple Events:",
+        "raw": "disabled,\n\t\t\t\"Apple Events:\"",
+        "line": 335
+      },
+      {
+        "kind": "EditText",
+        "text": "§§9415",
+        "raw": "enabled,\n\t\t\t\"§§9415\"",
+        "line": 341
+      }
+    ]
+  },
+  {
+    "type": "DITL",
+    "spec": "2104, \"Ports & Protocols\", purgeable",
+    "line": 348,
+    "file": "src/EsotericSettings60.r",
+    "entries": [
+      {
+        "kind": "StaticText",
+        "text": "Ports and Protocols§§-21",
+        "raw": "enabled,\n\t\t\t\"Ports and Protocols§§-21\"",
+        "line": 352
+      },
+      {
+        "kind": "StaticText",
+        "text": "POP3 port:",
+        "raw": "disabled,\n\t\t\t\"POP3 port:\"",
+        "line": 358
+      },
+      {
+        "kind": "EditText",
+        "text": "§§6820",
+        "raw": "enabled,\n\t\t\t\"§§6820\"",
+        "line": 364
+      },
+      {
+        "kind": "StaticText",
+        "text": "SMTP port:",
+        "raw": "disabled,\n\t\t\t\"SMTP port:\"",
+        "line": 370
+      },
+      {
+        "kind": "EditText",
+        "text": "§§7211",
+        "raw": "enabled,\n\t\t\t\"§§7211\"",
+        "line": 376
+      },
+      {
+        "kind": "StaticText",
+        "text": "IMAP port:",
+        "raw": "disabled,\n\t\t\t\"IMAP port:\"",
+        "line": 382
+      },
+      {
+        "kind": "EditText",
+        "text": "§§11319",
+        "raw": "enabled,\n\t\t\t\"§§11319\"",
+        "line": 388
+      },
+      {
+        "kind": "StaticText",
+        "text": "Finger port:",
+        "raw": "disabled,\n\t\t\t\"Finger port:\"",
+        "line": 394
+      },
+      {
+        "kind": "EditText",
+        "text": "§§8403",
+        "raw": "enabled,\n\t\t\t\"§§8403\"",
+        "line": 400
+      },
+      {
+        "kind": "StaticText",
+        "text": "Ph port:",
+        "raw": "disabled,\n\t\t\t\"Ph port:\"",
+        "line": 406
+      },
+      {
+        "kind": "EditText",
+        "text": "§§6814",
+        "raw": "enabled,\n\t\t\t\"§§6814\"",
+        "line": 412
+      },
+      {
+        "kind": "StaticText",
+        "text": "LDAP port:",
+        "raw": "disabled,\n\t\t\t\"LDAP port:\"",
+        "line": 418
+      },
+      {
+        "kind": "EditText",
+        "text": "§§10108",
+        "raw": "enabled,\n\t\t\t\"§§10108\"",
+        "line": 424
+      },
+      {
+        "kind": "RadioButton",
+        "text": "POP3 LAST command§§69=3",
+        "raw": "enabled,\n\t\t\t\"POP3 LAST command§§69=3\"",
+        "line": 430
+      },
+      {
+        "kind": "RadioButton",
+        "text": "Normal method§§69=1",
+        "raw": "enabled,\n\t\t\t\"Normal method§§69=1\"",
+        "line": 436
+      },
+      {
+        "kind": "RadioButton",
+        "text": "Status: header§§69=2",
+        "raw": "enabled,\n\t\t\t\"Status: header§§69=2\"",
+        "line": 442
+      },
+      {
+        "kind": "StaticText",
+        "text": "Find unread mail using:",
+        "raw": "disabled,\n\t\t\t\"Find unread mail using:\"",
+        "line": 448
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Use XTND XMIT to send mail§§87",
+        "raw": "enabled,\n\t\t\t\"Use XTND XMIT to send mail§§87\"",
+        "line": 454
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Use % hack to avoid sendmail DNS delays§§196",
+        "raw": "enabled,\n\t\t\t\"Use % hack to avoid sendmail DNS delays§\"\n\t\t\t\"§196\"",
+        "line": 460
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Send hostname with POP USER command§§195",
+        "raw": "enabled,\n\t\t\t\"Send hostname with POP USER command§§195\"",
+        "line": 467
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Send 8bit if SMTP supports 8BITMIME§§242",
+        "raw": "enabled,\n\t\t\t\"Send 8bit if SMTP supports 8BITMIME§§242\"",
+        "line": 473
+      }
+    ]
+  },
+  {
+    "type": "DITL",
+    "spec": "2105, \"Desktop Margins\", purgeable",
+    "line": 480,
+    "file": "src/EsotericSettings60.r",
+    "entries": [
+      {
+        "kind": "StaticText",
+        "text": "Desktop Margins§§-10",
+        "raw": "enabled,\n\t\t\t\"Desktop Margins§§-10\"",
+        "line": 484
+      },
+      {
+        "kind": "StaticText",
+        "text": "Right",
+        "raw": "disabled,\n\t\t\t\"Right\"",
+        "line": 490
+      },
+      {
+        "kind": "EditText",
+        "text": "§§8009",
+        "raw": "enabled,\n\t\t\t\"§§8009\"",
+        "line": 496
+      },
+      {
+        "kind": "StaticText",
+        "text": "Bottom:",
+        "raw": "disabled,\n\t\t\t\"Bottom:\"",
+        "line": 502
+      },
+      {
+        "kind": "EditText",
+        "text": "§§8010",
+        "raw": "enabled,\n\t\t\t\"§§8010\"",
+        "line": 508
+      },
+      {
+        "kind": "StaticText",
+        "text": "Left:",
+        "raw": "disabled,\n\t\t\t\"Left:\"",
+        "line": 514
+      },
+      {
+        "kind": "EditText",
+        "text": "§§8008",
+        "raw": "enabled,\n\t\t\t\"§§8008\"",
+        "line": 520
+      },
+      {
+        "kind": "StaticText",
+        "text": "Top:",
+        "raw": "disabled,\n\t\t\t\"Top:\"",
+        "line": 526
+      },
+      {
+        "kind": "EditText",
+        "text": "§§8011",
+        "raw": "enabled,\n\t\t\t\"§§8011\"",
+        "line": 532
+      },
+      {
+        "kind": "StaticText",
+        "text": "All values are in pixels.",
+        "raw": "disabled,\n\t\t\t\"All values are in pixels.\"",
+        "line": 538
+      }
+    ]
+  },
+  {
+    "type": "DITL",
+    "spec": "2108, \"Compaction\", purgeable",
+    "line": 545,
+    "file": "src/EsotericSettings60.r",
+    "entries": [
+      {
+        "kind": "StaticText",
+        "text": "Automatically compact mailbox when§§-9",
+        "raw": "enabled,\n\t\t\t\"Automatically compact mailbox when§§-9\"",
+        "line": 549
+      },
+      {
+        "kind": "StaticText",
+        "text": "Waste space is more than",
+        "raw": "disabled,\n\t\t\t\"Waste space is more than\"",
+        "line": 555
+      },
+      {
+        "kind": "EditText",
+        "text": "§§8406",
+        "raw": "enabled,\n\t\t\t\"§§8406\"",
+        "line": 561
+      },
+      {
+        "kind": "StaticText",
+        "text": "% of the",
+        "raw": "disabled,\n\t\t\t\"% of the\"",
+        "line": 567
+      },
+      {
+        "kind": "StaticText",
+        "text": "total space the mailbox takes",
+        "raw": "disabled,\n\t\t\t\"total space the mailbox takes\"",
+        "line": 573
+      },
+      {
+        "kind": "StaticText",
+        "text": "Waste space is more than",
+        "raw": "disabled,\n\t\t\t\"Waste space is more than\"",
+        "line": 579
+      },
+      {
+        "kind": "EditText",
+        "text": "§§8407",
+        "raw": "enabled,\n\t\t\t\"§§8407\"",
+        "line": 585
+      },
+      {
+        "kind": "StaticText",
+        "text": "% of the",
+        "raw": "disabled,\n\t\t\t\"% of the\"",
+        "line": 591
+      },
+      {
+        "kind": "StaticText",
+        "text": "total free space on the volume",
+        "raw": "disabled,\n\t\t\t\"total free space on the volume\"",
+        "line": 597
+      }
+    ]
+  },
+  {
+    "type": "DITL",
+    "spec": "2109, \"Toolbar on Steroids\", purgeable",
+    "line": 604,
+    "file": "src/EsotericSettings60.r",
+    "entries": [
+      {
+        "kind": "StaticText",
+        "text": "Show Toolbar§§-2\\n",
+        "raw": "enabled,\n\t\t\t\"Show Toolbar§§-2\\n\"",
+        "line": 608
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Show toolbar§§129",
+        "raw": "enabled,\n\t\t\t\"Show toolbar§§129\"",
+        "line": 614
+      },
+      {
+        "kind": "StaticText",
+        "text": "Orientation§§5",
+        "raw": "enabled,\n\t\t\t\"Orientation§§5\"",
+        "line": 620
+      },
+      {
+        "kind": "RadioButton",
+        "text": "Horizontal toolbar§§-131",
+        "raw": "enabled,\n\t\t\t\"Horizontal toolbar§§-131\"",
+        "line": 626
+      },
+      {
+        "kind": "RadioButton",
+        "text": "Vertical toolbar§§131",
+        "raw": "enabled,\n\t\t\t\"Vertical toolbar§§131\"",
+        "line": 632
+      },
+      {
+        "kind": "StaticText",
+        "text": "Spacing§§12",
+        "raw": "enabled,\n\t\t\t\"Spacing§§12\"",
+        "line": 638
+      },
+      {
+        "kind": "StaticText",
+        "text": "Between Buttons:",
+        "raw": "enabled,\n\t\t\t\"Between Buttons:\"",
+        "line": 644
+      },
+      {
+        "kind": "EditText",
+        "text": "§§9310",
+        "raw": "enabled,\n\t\t\t\"§§9310\"",
+        "line": 650
+      },
+      {
+        "kind": "StaticText",
+        "text": "Extra Between Groups:",
+        "raw": "enabled,\n\t\t\t\"Extra Between Groups:\"",
+        "line": 656
+      },
+      {
+        "kind": "EditText",
+        "text": "§§9308",
+        "raw": "enabled,\n\t\t\t\"§§9308\"",
+        "line": 662
+      },
+      {
+        "kind": "StaticText",
+        "text": "Buttons Per Group:",
+        "raw": "enabled,\n\t\t\t\"Buttons Per Group:\"",
+        "line": 668
+      },
+      {
+        "kind": "EditText",
+        "text": "§§9309",
+        "raw": "enabled,\n\t\t\t\"§§9309\"",
+        "line": 674
+      },
+      {
+        "kind": "StaticText",
+        "text": "Button style§§-24",
+        "raw": "enabled,\n\t\t\t\"Button style§§-24\"",
+        "line": 680
+      },
+      {
+        "kind": "StaticText",
+        "text": "H,V",
+        "raw": "enabled,\n\t\t\t\"H,V\"",
+        "line": 686
+      },
+      {
+        "kind": "RadioButton",
+        "text": "Big icons with names§§130=0",
+        "raw": "enabled,\n\t\t\t\"Big icons with names§§130=0\"",
+        "line": 692
+      },
+      {
+        "kind": "RadioButton",
+        "text": "Big icons only§§130=1",
+        "raw": "enabled,\n\t\t\t\"Big icons only§§130=1\"",
+        "line": 698
+      },
+      {
+        "kind": "RadioButton",
+        "text": "Small icons & names§§130=2",
+        "raw": "enabled,\n\t\t\t\"Small icons & names§§130=2\"",
+        "line": 704
+      },
+      {
+        "kind": "RadioButton",
+        "text": "Small icons only§§130=3",
+        "raw": "enabled,\n\t\t\t\"Small icons only§§130=3\"",
+        "line": 710
+      },
+      {
+        "kind": "RadioButton",
+        "text": "Names only§§130=4",
+        "raw": "enabled,\n\t\t\t\"Names only§§130=4\"",
+        "line": 716
+      },
+      {
+        "kind": "EditText",
+        "text": "§§27101",
+        "raw": "enabled,\n\t\t\t\"§§27101\"",
+        "line": 722
+      },
+      {
+        "kind": "EditText",
+        "text": "§§27102",
+        "raw": "enabled,\n\t\t\t\"§§27102\"",
+        "line": 728
+      },
+      {
+        "kind": "EditText",
+        "text": "§§27103",
+        "raw": "enabled,\n\t\t\t\"§§27103\"",
+        "line": 734
+      },
+      {
+        "kind": "EditText",
+        "text": "§§27104",
+        "raw": "enabled,\n\t\t\t\"§§27104\"",
+        "line": 740
+      },
+      {
+        "kind": "EditText",
+        "text": "§§27105",
+        "raw": "enabled,\n\t\t\t\"§§27105\"",
+        "line": 746
+      },
+      {
+        "kind": "StaticText",
+        "text": "Function keys§§-27",
+        "raw": "enabled,\n\t\t\t\"Function keys§§-27\"",
+        "line": 752
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Map function keys to buttons§§168",
+        "raw": "enabled,\n\t\t\t\"Map function keys to buttons§§168\"",
+        "line": 758
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Show function key labels§§170",
+        "raw": "enabled,\n\t\t\t\"Show function key labels§§170\"",
+        "line": 764
+      }
+    ]
+  },
+  {
+    "type": "DITL",
+    "spec": "2110, \"Really Miscellaneous\", purgeable",
+    "line": 771,
+    "file": "src/EsotericSettings60.r",
+    "entries": [
+      {
+        "kind": "StaticText",
+        "text": "Really Miscellaneous§§-9",
+        "raw": "enabled,\n\t\t\t\"Really Miscellaneous§§-9\"",
+        "line": 775
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Backup nickname files§§193",
+        "raw": "enabled,\n\t\t\t\"Backup nickname files§§193\"",
+        "line": 781
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Faster typing§§197",
+        "raw": "enabled,\n\t\t\t\"Faster typing§§197\"",
+        "line": 787
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Delete duplicate messages (slow)§§177",
+        "raw": "enabled,\n\t\t\t\"Delete duplicate messages (slow)§§177\"",
+        "line": 793
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Backup resource fork toc's§§-60",
+        "raw": "enabled,\n\t\t\t\"Backup resource fork toc's§§-60\"",
+        "line": 799
+      },
+      {
+        "kind": "CheckBox",
+        "text": "So-called “smart” paste§§-199",
+        "raw": "enabled,\n\t\t\t\"So-called “smart” paste§§-199\"",
+        "line": 805
+      },
+      {
+        "kind": "StaticText",
+        "text": "When dropping messages onto toolbar nicknames:",
+        "raw": "disabled,\n\t\t\t\"When dropping messages onto toolbar nick\"\n\t\t\t\"names:\"",
+        "line": 811
+      },
+      {
+        "kind": "RadioButton",
+        "text": "Forward the message to that nickname§§-338",
+        "raw": "enabled,\n\t\t\t\"Forward the message to that nickname§§-3\"\n\t\t\t\"38\"",
+        "line": 818
+      },
+      {
+        "kind": "RadioButton",
+        "text": "Redirect the message to that nickname§§338",
+        "raw": "enabled,\n\t\t\t\"Redirect the message to that nickname§§3\"\n\t\t\t\"38\"",
+        "line": 825
+      }
+    ]
+  },
+  {
+    "type": "DITL",
+    "spec": "2111, \"Boring Headers\", purgeable",
+    "line": 833,
+    "file": "src/EsotericSettings60.r",
+    "entries": [
+      {
+        "kind": "StaticText",
+        "text": "Hide these headers on incoming mail:§§-2",
+        "raw": "enabled,\n\t\t\t\"Hide these headers on incoming mail:§§-2\"",
+        "line": 837
+      },
+      {
+        "kind": "EditText",
+        "text": "§§3200",
+        "raw": "enabled,\n\t\t\t\"§§3200\"",
+        "line": 843
+      }
+    ]
+  },
+  {
+    "type": "DITL",
+    "spec": "2112, \"Nickname Expansion\", purgeable",
+    "line": 850,
+    "file": "src/EsotericSettings60.r",
+    "entries": [
+      {
+        "kind": "StaticText",
+        "text": "Nickname Expansion§§-4",
+        "raw": "disabled,\n\t\t\t\"Nickname Expansion§§-4\"",
+        "line": 854
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Expand nicknames immediately§§48",
+        "raw": "enabled,\n\t\t\t\"Expand nicknames immediately§§48\"",
+        "line": 860
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Nickname auto-completion§§203",
+        "raw": "enabled,\n\t\t\t\"Nickname auto-completion§§203\"",
+        "line": 866
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Nickname highlighting§§214",
+        "raw": "enabled,\n\t\t\t\"Nickname highlighting§§214\"",
+        "line": 872
+      },
+      {
+        "kind": "StaticText",
+        "text": "Nickname auto-completion and highlighting§§-8",
+        "raw": "disabled,\n\t\t\t\"Nickname auto-completion and highlightin\"\n\t\t\t\"g§§-8\"",
+        "line": 878
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Do processing immediately§§204",
+        "raw": "enabled,\n\t\t\t\"Do processing immediately§§204\"",
+        "line": 885
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Time delay before processing§§205",
+        "raw": "enabled,\n\t\t\t\"Time delay before processing§§205\"",
+        "line": 891
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Key delay before processing§§206",
+        "raw": "enabled,\n\t\t\t\"Key delay before processing§§206\"",
+        "line": 897
+      },
+      {
+        "kind": "StaticText",
+        "text": "History List Options§§-16",
+        "raw": "disabled,\n\t\t\t\"History List Options§§-16\"",
+        "line": 903
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Maintain nickname History List§§-293",
+        "raw": "enabled,\n\t\t\t\"Maintain nickname History List§§-293\"",
+        "line": 909
+      },
+      {
+        "kind": "StaticText",
+        "text": "Cache size:",
+        "raw": "disabled,\n\t\t\t\"Cache size:\"",
+        "line": 915
+      },
+      {
+        "kind": "EditText",
+        "text": "§§13114",
+        "raw": "enabled,\n\t\t\t\"§§13114\"",
+        "line": 921
+      },
+      {
+        "kind": "StaticText",
+        "text": "addresses",
+        "raw": "disabled,\n\t\t\t\"addresses\"",
+        "line": 927
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Show History List in Address Book§§-294",
+        "raw": "enabled,\n\t\t\t\"Show History List in Address Book§§-294\"",
+        "line": 933
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Add reply addresses to history§§-295",
+        "raw": "enabled,\n\t\t\t\"Add reply addresses to history§§-295\"",
+        "line": 939
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Add typed addresses to history§§-315",
+        "raw": "enabled,\n\t\t\t\"Add typed addresses to history§§-315\"",
+        "line": 945
+      }
+    ]
+  },
+  {
+    "type": "DITL",
+    "spec": "2113, \"Make Filter Defaults\", purgeable",
+    "line": 952,
+    "file": "src/EsotericSettings60.r",
+    "entries": [
+      {
+        "kind": "StaticText",
+        "text": "Make Filter Defaults§§-7",
+        "raw": "enabled,\n\t\t\t\"Make Filter Defaults§§-7\"",
+        "line": 956
+      },
+      {
+        "kind": "StaticText",
+        "text": "Default location of new mailboxes for filters that match the Subject line:",
+        "raw": "disabled,\n\t\t\t\"Default location of new mailboxes for fi\"\n\t\t\t\"lters that match the Subject line:\"",
+        "line": 962
+      },
+      {
+        "kind": "Button",
+        "text": "§§210",
+        "raw": "enabled,\n\t\t\t\"§§210\"",
+        "line": 969
+      },
+      {
+        "kind": "StaticText",
+        "text": "Default location of new mailboxes for filters that match the From line:",
+        "raw": "disabled,\n\t\t\t\"Default location of new mailboxes for fi\"\n\t\t\t\"lters that match the From line:\"",
+        "line": 975
+      },
+      {
+        "kind": "Button",
+        "text": "§§211",
+        "raw": "enabled,\n\t\t\t\"§§211\"",
+        "line": 982
+      },
+      {
+        "kind": "StaticText",
+        "text": "Default location of new mailboxes for filters that match the Any Recipient:",
+        "raw": "disabled,\n\t\t\t\"Default location of new mailboxes for fi\"\n\t\t\t\"lters that match the Any Recipient:\"",
+        "line": 988
+      },
+      {
+        "kind": "Button",
+        "text": "§§212",
+        "raw": "enabled,\n\t\t\t\"§§212\"",
+        "line": 995
+      }
+    ]
+  },
+  {
+    "type": "DITL",
+    "spec": "2114, \"Threading\", purgeable",
+    "line": 1002,
+    "file": "src/EsotericSettings60.r",
+    "entries": [
+      {
+        "kind": "StaticText",
+        "text": "Threading Options§§-10",
+        "raw": "enabled,\n\t\t\t\"Threading Options§§-10\"",
+        "line": 1006
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Use background threading§§-201",
+        "raw": "enabled,\n\t\t\t\"Use background threading§§-201\"",
+        "line": 1012
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Use separate thread for sending§§-223",
+        "raw": "enabled,\n\t\t\t\"Use separate thread for sending§§-223\"",
+        "line": 1018
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Show Task Progress during background activity§§225",
+        "raw": "enabled,\n\t\t\t\"Show Task Progress during background act\"\n\t\t\t\"ivity§§225\"",
+        "line": 1024
+      },
+      {
+        "kind": "StaticText",
+        "text": "Wait time before delivering:",
+        "raw": "disabled,\n\t\t\t\"Wait time before delivering:\"",
+        "line": 1031
+      },
+      {
+        "kind": "EditText",
+        "text": "§§9714",
+        "raw": "enabled,\n\t\t\t\"§§9714\"",
+        "line": 1037
+      },
+      {
+        "kind": "StaticText",
+        "text": "Hog time in foreground:",
+        "raw": "disabled,\n\t\t\t\"Hog time in foreground:\"",
+        "line": 1043
+      },
+      {
+        "kind": "EditText",
+        "text": "§§9915",
+        "raw": "enabled,\n\t\t\t\"§§9915\"",
+        "line": 1049
+      },
+      {
+        "kind": "StaticText",
+        "text": "Hog time in background:",
+        "raw": "disabled,\n\t\t\t\"Hog time in background:\"",
+        "line": 1055
+      },
+      {
+        "kind": "EditText",
+        "text": "§§9914",
+        "raw": "enabled,\n\t\t\t\"§§9914\"",
+        "line": 1061
+      }
+    ]
+  },
+  {
+    "type": "DITL",
+    "spec": "2115, \"LDAP\", purgeable",
+    "line": 1068,
+    "file": "src/EsotericSettings60.r",
+    "entries": [
+      {
+        "kind": "StaticText",
+        "text": "LDAP Options§§-10",
+        "raw": "enabled,\n\t\t\t\"LDAP Options§§-10\"",
+        "line": 1072
+      },
+      {
+        "kind": "EditText",
+        "text": "§§23",
+        "raw": "enabled,\n\t\t\t\"§§23\"",
+        "line": 1078
+      },
+      {
+        "kind": "StaticText",
+        "text": "Directory Services Host:",
+        "raw": "disabled,\n\t\t\t\"Directory Services Host:\"",
+        "line": 1084
+      },
+      {
+        "kind": "EditText",
+        "text": "§§7611",
+        "raw": "enabled,\n\t\t\t\"§§7611\"",
+        "line": 1090
+      },
+      {
+        "kind": "StaticText",
+        "text": "Word-wise search filter template:",
+        "raw": "disabled,\n\t\t\t\"Word-wise search filter template:\"",
+        "line": 1096
+      },
+      {
+        "kind": "EditText",
+        "text": "§§9015",
+        "raw": "enabled,\n\t\t\t\"§§9015\"",
+        "line": 1102
+      },
+      {
+        "kind": "StaticText",
+        "text": "Full query search filter template:",
+        "raw": "disabled,\n\t\t\t\"Full query search filter template:\"",
+        "line": 1108
+      },
+      {
+        "kind": "CheckBox",
+        "text": "“Live” directory service queries§§181",
+        "raw": "enabled,\n\t\t\t\"“Live” directory service queries§§181\"",
+        "line": 1114
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Display raw LDAP attribute names§§229",
+        "raw": "enabled,\n\t\t\t\"Display raw LDAP attribute names§§229\"",
+        "line": 1120
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Require Base Object specification§§238",
+        "raw": "enabled,\n\t\t\t\"Require Base Object specification§§238\"",
+        "line": 1126
+      }
+    ]
+  },
+  {
+    "type": "DITL",
+    "spec": "2117, \"Settings Icons\", purgeable",
+    "line": 1133,
+    "file": "src/EsotericSettings60.r",
+    "entries": [
+      {
+        "kind": "StaticText",
+        "text": "Icon sizes:§§-5",
+        "raw": "enabled,\n\t\t\t\"Icon sizes:§§-5\"",
+        "line": 1137
+      },
+      {
+        "kind": "RadioButton",
+        "text": "Big icons with names§§9605=54",
+        "raw": "enabled,\n\t\t\t\"Big icons with names§§9605=54\"",
+        "line": 1143
+      },
+      {
+        "kind": "RadioButton",
+        "text": "Big icons only§§9605=40",
+        "raw": "enabled,\n\t\t\t\"Big icons only§§9605=40\"",
+        "line": 1149
+      },
+      {
+        "kind": "RadioButton",
+        "text": "Small icons with names§§9605=24",
+        "raw": "enabled,\n\t\t\t\"Small icons with names§§9605=24\"",
+        "line": 1155
+      },
+      {
+        "kind": "RadioButton",
+        "text": "Names only§§9605=16",
+        "raw": "enabled,\n\t\t\t\"Names only§§9605=16\"",
+        "line": 1161
+      }
+    ]
+  },
+  {
+    "type": "DITL",
+    "spec": "2118, \"IMAP\", purgeable",
+    "line": 1168,
+    "file": "src/EsotericSettings60.r",
+    "entries": [
+      {
+        "kind": "StaticText",
+        "text": "IMAP Options§§-22",
+        "raw": "enabled,\n\t\t\t\"IMAP Options§§-22\"",
+        "line": 1172
+      },
+      {
+        "kind": "Control",
+        "text": "",
+        "raw": "enabled,\n\t\t\t1059",
+        "line": 1178
+      },
+      {
+        "kind": "StaticText",
+        "text": "Personality:",
+        "raw": "disabled,\n\t\t\t\"Personality:\"",
+        "line": 1184
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Download message size with minimal header§§-254",
+        "raw": "enabled,\n\t\t\t\"Download message size with minimal heade\"\n\t\t\t\"r§§-254\"",
+        "line": 1190
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Download everything on message open§§255",
+        "raw": "enabled,\n\t\t\t\"Download everything on message open§§255\"",
+        "line": 1197
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Ignore IMAP ALERT Messages§§358",
+        "raw": "enabled,\n\t\t\t\"Ignore IMAP ALERT Messages§§358\"",
+        "line": 1203
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Run “Incoming” filters on IMAP Inbox§§-268",
+        "raw": "enabled,\n\t\t\t\"Run “Incoming” filters on IMAP Inbox§§-2\"\n\t\t\t\"68\"",
+        "line": 1209
+      },
+      {
+        "kind": "StaticText",
+        "text": "Max number of simultaneous connections",
+        "raw": "disabled,\n\t\t\t\"Max number of simultaneous connections\"",
+        "line": 1216
+      },
+      {
+        "kind": "EditText",
+        "text": "§§12710",
+        "raw": "enabled,\n\t\t\t\"§§12710\"",
+        "line": 1222
+      },
+      {
+        "kind": "StaticText",
+        "text": "Idle seconds before closing connections",
+        "raw": "disabled,\n\t\t\t\"Idle seconds before closing connections\"",
+        "line": 1228
+      },
+      {
+        "kind": "EditText",
+        "text": "§§12709",
+        "raw": "enabled,\n\t\t\t\"§§12709\"",
+        "line": 1234
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Open task progress window for all IMAP tasks§§274",
+        "raw": "enabled,\n\t\t\t\"Open task progress window for all IMAP t\"\n\t\t\t\"asks§§274\"",
+        "line": 1240
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Authenticate with cleartext passwords only§§237",
+        "raw": "enabled,\n\t\t\t\"Authenticate with cleartext passwords on\"\n\t\t\t\"ly§§237\"",
+        "line": 1247
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Grab top level Inbox with mailbox list§§-276",
+        "raw": "enabled,\n\t\t\t\"Grab top level Inbox with mailbox list§§\"\n\t\t\t\"-276\"",
+        "line": 1254
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Save IMAP attachments after a transfer§§280",
+        "raw": "enabled,\n\t\t\t\"Save IMAP attachments after a transfer§§\"\n\t\t\t\"280\"",
+        "line": 1261
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Resync open mailboxes when Checking Mail§§317",
+        "raw": "enabled,\n\t\t\t\"Resync open mailboxes when Checking Mail\"\n\t\t\t\"§§317\"",
+        "line": 1268
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Use smarter IMAP connection management§§-272",
+        "raw": "enabled,\n\t\t\t\"Use smarter IMAP connection management§§\"\n\t\t\t\"-272\"",
+        "line": 1275
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Run junk scoring plugins on this IMAP account§§-362:16",
+        "raw": "enabled,\n\t\t\t\"Run junk scoring plugins on this IMAP ac\"\n\t\t\t\"count§§-362:16\"",
+        "line": 1282
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Remove cache when trashing messages§§374",
+        "raw": "enabled,\n\t\t\t\"Remove cache when trashing messages§§374\"",
+        "line": 1289
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Use UIDPLUS if avalable§§-373",
+        "raw": "enabled,\n\t\t\t\"Use UIDPLUS if avalable§§-373\"",
+        "line": 1295
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Attempt to create Junk and Trash mailboxes§§-362:21",
+        "raw": "enabled,\n\t\t\t\"Attempt to create Junk and Trash mailbox\"\n\t\t\t\"es§§-362:21\"",
+        "line": 1301
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Execute queued commands before quitting§§389",
+        "raw": "enabled,\n\t\t\t\"Execute queued commands before quitting\"\n\t\t\t\"§§389\"",
+        "line": 1308
+      }
+    ]
+  },
+  {
+    "type": "DITL",
+    "spec": "2119, \"Speak\", purgeable",
+    "line": 1316,
+    "file": "src/EsotericSettings60.r",
+    "entries": [
+      {
+        "kind": "StaticText",
+        "text": "Speech Options§§-18",
+        "raw": "enabled,\n\t\t\t\"Speech Options§§-18\"",
+        "line": 1320
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Speak phrase between messages of a mailbox§§-286:5",
+        "raw": "enabled,\n\t\t\t\"Speak phrase between messages of a mailb\"\n\t\t\t\"ox§§-286:5\"",
+        "line": 1326
+      },
+      {
+        "kind": "EditText",
+        "text": "§§12912",
+        "raw": "enabled,\n\t\t\t\"§§12912\"",
+        "line": 1333
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Apply special rules when speaking mail messages§§-286:0",
+        "raw": "enabled,\n\t\t\t\"Apply special rules when speaking mail m\"\n\t\t\t\"essages§§-286:0\"",
+        "line": 1339
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Speak mixed case terms as distinct words§§-286:2",
+        "raw": "enabled,\n\t\t\t\"Speak mixed case terms as distinct words\"\n\t\t\t\"§§-286:2\"",
+        "line": 1346
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Speak periods as \"dot\" where appropriate§§-286:8",
+        "raw": "enabled,\n\t\t\t\"Speak periods as \\\"dot\\\" where appropriate\"\n\t\t\t\"§§-286:8\"",
+        "line": 1353
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Speak italicized words with greater emphasis§§-286:12",
+        "raw": "enabled,\n\t\t\t\"Speak italicized words with greater emph\"\n\t\t\t\"asis§§-286:12\"",
+        "line": 1360
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Translate common acronyms to real words§§-286:13",
+        "raw": "enabled,\n\t\t\t\"Translate common acronyms to real words§\"\n\t\t\t\"§-286:13\"",
+        "line": 1367
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Skip long runs of punctuation (i.e. ****,----)§§-286:1",
+        "raw": "enabled,\n\t\t\t\"Skip long runs of punctuation (i.e. ****\"\n\t\t\t\",----)§§-286:1\"",
+        "line": 1374
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Try a little harder when speaking URL's§§-286:7",
+        "raw": "enabled,\n\t\t\t\"Try a little harder when speaking URL's§\"\n\t\t\t\"§-286:7\"",
+        "line": 1381
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Truncate URL's to their minimal path§§-286:6",
+        "raw": "enabled,\n\t\t\t\"Truncate URL's to their minimal path§§-2\"\n\t\t\t\"86:6\"",
+        "line": 1388
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Speak quoted passages:§§-286:10",
+        "raw": "enabled,\n\t\t\t\"Speak quoted passages:§§-286:10\"",
+        "line": 1395
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Use a slightly different voice for quotes§§-286:11",
+        "raw": "enabled,\n\t\t\t\"Use a slightly different voice for quote\"\n\t\t\t\"s§§-286:11\"",
+        "line": 1401
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Speak a phrase before and after quoted text§§-286:4",
+        "raw": "enabled,\n\t\t\t\"Speak a phrase before and after quoted t\"\n\t\t\t\"ext§§-286:4\"",
+        "line": 1408
+      },
+      {
+        "kind": "StaticText",
+        "text": "Before:",
+        "raw": "disabled,\n\t\t\t\"Before:\"",
+        "line": 1415
+      },
+      {
+        "kind": "EditText",
+        "text": "§§12913",
+        "raw": "enabled,\n\t\t\t\"§§12913\"",
+        "line": 1421
+      },
+      {
+        "kind": "StaticText",
+        "text": "After:",
+        "raw": "disabled,\n\t\t\t\"After:\"",
+        "line": 1427
+      },
+      {
+        "kind": "EditText",
+        "text": "§§12914",
+        "raw": "enabled,\n\t\t\t\"§§12914\"",
+        "line": 1433
+      }
+    ]
+  },
+  {
+    "type": "DITL",
+    "spec": "2120, \"HTTP Proxy\"",
+    "line": 1440,
+    "file": "src/EsotericSettings60.r",
+    "entries": [
+      {
+        "kind": "StaticText",
+        "text": "HTTP Proxy§§-4",
+        "raw": "disabled,\n\t\t\t\"HTTP Proxy§§-4\"",
+        "line": 1444
+      },
+      {
+        "kind": "StaticText",
+        "text": "HTTP proxy server  (host:port)",
+        "raw": "disabled,\n\t\t\t\"HTTP proxy server  (host:port)\"",
+        "line": 1450
+      },
+      {
+        "kind": "EditText",
+        "text": "§§312",
+        "raw": "enabled,\n\t\t\t\"§§312\"",
+        "line": 1456
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Use this HTTP proxy§§313",
+        "raw": "enabled,\n\t\t\t\"Use this HTTP proxy§§313\"",
+        "line": 1462
+      }
+    ]
+  },
+  {
+    "type": "DITL",
+    "spec": "2107, \"Junk Extras°junk\", purgeable",
+    "line": 1469,
+    "file": "src/EsotericSettings60.r",
+    "entries": [
+      {
+        "kind": "StaticText",
+        "text": "Junk Trimming§§-5",
+        "raw": "disabled,\n\t\t\t\"Junk Trimming§§-5\"",
+        "line": 1473
+      },
+      {
+        "kind": "StaticText",
+        "text": "Only remove junk whose score is at least",
+        "raw": "disabled,\n\t\t\t\"Only remove junk whose score is at least\"",
+        "line": 1479
+      },
+      {
+        "kind": "EditText",
+        "text": "§§32473",
+        "raw": "enabled,\n\t\t\t\"§§32473\"",
+        "line": 1485
+      },
+      {
+        "kind": "StaticText",
+        "text": "Trim old junk to mailbox:",
+        "raw": "disabled,\n\t\t\t\"Trim old junk to mailbox:\"",
+        "line": 1491
+      },
+      {
+        "kind": "EditText",
+        "text": "§§32472",
+        "raw": "enabled,\n\t\t\t\"§§32472\"",
+        "line": 1497
+      },
+      {
+        "kind": "StaticText",
+        "text": "Miscellaneous§§-13",
+        "raw": "disabled,\n\t\t\t\"Miscellaneous§§-13\"",
+        "line": 1503
+      },
+      {
+        "kind": "StaticText",
+        "text": "Transferring to Junk assigns score of",
+        "raw": "disabled,\n\t\t\t\"Transferring to Junk assigns score of\"",
+        "line": 1509
+      },
+      {
+        "kind": "EditText",
+        "text": "§§32477",
+        "raw": "enabled,\n\t\t\t\"§§32477\"",
+        "line": 1515
+      },
+      {
+        "kind": "StaticText",
+        "text": "Add whitelisted senders to address book:",
+        "raw": "disabled,\n\t\t\t\"Add whitelisted senders to address book:\"",
+        "line": 1521
+      },
+      {
+        "kind": "EditText",
+        "text": "§§32491",
+        "raw": "enabled,\n\t\t\t\"§§32491\"",
+        "line": 1527
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Delete Junk from server§§-362:7",
+        "raw": "enabled,\n\t\t\t\"Delete Junk from server§§-362:7\"",
+        "line": 1533
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Do not believe date on junk mail§§-362:14",
+        "raw": "enabled,\n\t\t\t\"Do not believe date on junk mail§§-362:1\"\n\t\t\t\"4\"",
+        "line": 1539
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Always enable Junk/Not Junk menu items§§362:15",
+        "raw": "enabled,\n\t\t\t\"Always enable Junk/Not Junk menu items§§\"\n\t\t\t\"362:15\"",
+        "line": 1546
+      }
+    ]
+  },
+  {
+    "type": "DITL",
+    "spec": "2000, purgeable",
+    "line": 386,
+    "file": "src/SettingsTwo.rsrc.r",
+    "entries": [
+      {
+        "kind": "Button",
+        "text": "OK",
+        "raw": "enabled,\n\t\t\t\"OK\"",
+        "line": 390
+      },
+      {
+        "kind": "Button",
+        "text": "Cancel",
+        "raw": "enabled,\n\t\t\t\"Cancel\"",
+        "line": 396
+      },
+      {
+        "kind": "UserItem",
+        "text": "",
+        "raw": "disabled",
+        "line": 402
+      },
+      {
+        "kind": "EditText",
+        "text": "",
+        "raw": "disabled,\n\t\t\t\"\"",
+        "line": 407
+      },
+      {
+        "kind": "Button",
+        "text": "Help",
+        "raw": "enabled,\n\t\t\t\"Help\"",
+        "line": 413
+      }
+    ]
+  },
+  {
+    "type": "DITL",
+    "spec": "2002, \"Checking Mail\", purgeable",
+    "line": 420,
+    "file": "src/SettingsTwo.rsrc.r",
+    "entries": [
+      {
+        "kind": "StaticText",
+        "text": "Account/Server Information§§-13",
+        "raw": "disabled,\n\t\t\t\"Account/Server Information§§-13\"",
+        "line": 424
+      },
+      {
+        "kind": "StaticText",
+        "text": "User Name:",
+        "raw": "disabled,\n\t\t\t\"User Name:\"",
+        "line": 430
+      },
+      {
+        "kind": "EditText",
+        "text": "§§221",
+        "raw": "enabled,\n\t\t\t\"§§221\"",
+        "line": 436
+      },
+      {
+        "kind": "StaticText",
+        "text": "Mail Server:",
+        "raw": "disabled,\n\t\t\t\"Mail Server:\"",
+        "line": 442
+      },
+      {
+        "kind": "EditText",
+        "text": "§§222",
+        "raw": "enabled,\n\t\t\t\"§§222\"",
+        "line": 448
+      },
+      {
+        "kind": "StaticText",
+        "text": "Mail Protocol:",
+        "raw": "disabled,\n\t\t\t\"Mail Protocol:\"",
+        "line": 454
+      },
+      {
+        "kind": "RadioButton",
+        "text": "POP§§-244",
+        "raw": "enabled,\n\t\t\t\"POP§§-244\"",
+        "line": 460
+      },
+      {
+        "kind": "RadioButton",
+        "text": "IMAP§§244",
+        "raw": "enabled,\n\t\t\t\"IMAP§§244\"",
+        "line": 466
+      },
+      {
+        "kind": "StaticText",
+        "text": "Authentication:",
+        "raw": "disabled,\n\t\t\t\"Authentication:\"",
+        "line": 472
+      },
+      {
+        "kind": "RadioButton",
+        "text": "Passwords§§-119",
+        "raw": "enabled,\n\t\t\t\"Passwords§§-119\"",
+        "line": 478
+      },
+      {
+        "kind": "RadioButton",
+        "text": "Kerberos§§117",
+        "raw": "enabled,\n\t\t\t\"Kerberos§§117\"",
+        "line": 484
+      },
+      {
+        "kind": "RadioButton",
+        "text": "APOP§§57",
+        "raw": "enabled,\n\t\t\t\"APOP§§57\"",
+        "line": 490
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Overlap commands§§34",
+        "raw": "enabled,\n\t\t\t\"Overlap commands§§34\"",
+        "line": 496
+      },
+      {
+        "kind": "StaticText",
+        "text": "Connection§§-19",
+        "raw": "disabled,\n\t\t\t\"Connection§§-19\"",
+        "line": 502
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Check for mail every§§153",
+        "raw": "enabled,\n\t\t\t\"Check for mail every§§153\"",
+        "line": 508
+      },
+      {
+        "kind": "EditText",
+        "text": "§§6",
+        "raw": "enabled,\n\t\t\t\"§§6\"",
+        "line": 514
+      },
+      {
+        "kind": "StaticText",
+        "text": "minutes",
+        "raw": "disabled,\n\t\t\t\"minutes\"",
+        "line": 520
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Don’t auto-check when using battery§§120",
+        "raw": "enabled,\n\t\t\t\"Don’t auto-check when using battery§§120\"",
+        "line": 526
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Send on check§§13",
+        "raw": "enabled,\n\t\t\t\"Send on check§§13\"",
+        "line": 532
+      },
+      {
+        "kind": "StaticText",
+        "text": "Mail Management§§-27",
+        "raw": "disabled,\n\t\t\t\"Mail Management§§-27\"",
+        "line": 538
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Leave on server for§§18",
+        "raw": "enabled,\n\t\t\t\"Leave on server for§§18\"",
+        "line": 544
+      },
+      {
+        "kind": "EditText",
+        "text": "§§101",
+        "raw": "enabled,\n\t\t\t\"§§101\"",
+        "line": 550
+      },
+      {
+        "kind": "StaticText",
+        "text": "days",
+        "raw": "disabled,\n\t\t\t\"days\"",
+        "line": 556
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Delete from server when emptied from trash§§102",
+        "raw": "enabled,\n\t\t\t\"Delete from server when emptied from tra\"\n\t\t\t\"sh§§102\"",
+        "line": 562
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Skip messages over§§47",
+        "raw": "enabled,\n\t\t\t\"Skip messages over§§47\"",
+        "line": 569
+      },
+      {
+        "kind": "EditText",
+        "text": "§§7616",
+        "raw": "enabled,\n\t\t\t\"§§7616\"",
+        "line": 575
+      },
+      {
+        "kind": "StaticText",
+        "text": "K",
+        "raw": "disabled,\n\t\t\t\"K\"",
+        "line": 581
+      }
+    ]
+  },
+  {
+    "type": "DITL",
+    "spec": "2003, \"Sending Mail\", purgeable",
+    "line": 588,
+    "file": "src/SettingsTwo.rsrc.r",
+    "entries": [
+      {
+        "kind": "StaticText",
+        "text": "Server§§-14",
+        "raw": "disabled,\n\t\t\t\"Server§§-14\"",
+        "line": 592
+      },
+      {
+        "kind": "StaticText",
+        "text": "Email Address:",
+        "raw": "disabled,\n\t\t\t\"Email Address:\"",
+        "line": 598
+      },
+      {
+        "kind": "EditText",
+        "text": "§§5",
+        "raw": "enabled,\n\t\t\t\"§§5\"",
+        "line": 604
+      },
+      {
+        "kind": "StaticText",
+        "text": "(You only need to fill this in if it’s different from Username@MailServer.)",
+        "raw": "disabled,\n\t\t\t\"(You only need to fill this in if it’s d\"\n\t\t\t\"ifferent from Username@MailServer.)\"",
+        "line": 610
+      },
+      {
+        "kind": "StaticText",
+        "text": "Default Domain:",
+        "raw": "disabled,\n\t\t\t\"Default Domain:\"",
+        "line": 617
+      },
+      {
+        "kind": "EditText",
+        "text": "§§116",
+        "raw": "enabled,\n\t\t\t\"§§116\"",
+        "line": 623
+      },
+      {
+        "kind": "StaticText",
+        "text": "(This will be added to addresses you type that don’t have domains on them.)",
+        "raw": "disabled,\n\t\t\t\"(This will be added to addresses you typ\"\n\t\t\t\"e that don’t have domains on them.)\"",
+        "line": 629
+      },
+      {
+        "kind": "StaticText",
+        "text": "SMTP Server:",
+        "raw": "disabled,\n\t\t\t\"SMTP Server:\"",
+        "line": 636
+      },
+      {
+        "kind": "EditText",
+        "text": "§§4",
+        "raw": "enabled,\n\t\t\t\"§§4\"",
+        "line": 642
+      },
+      {
+        "kind": "StaticText",
+        "text": "(You only need to fill this in if it’s different from checking mail server.)",
+        "raw": "disabled,\n\t\t\t\"(You only need to fill this in if it’s d\"\n\t\t\t\"ifferent from checking mail server.)\"",
+        "line": 648
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Use submission port (587)§§398",
+        "raw": "enabled,\n\t\t\t\"Use submission port (587)§§398\"",
+        "line": 655
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Allow authorization§§-309",
+        "raw": "enabled,\n\t\t\t\"Allow authorization§§-309\"",
+        "line": 661
+      },
+      {
+        "kind": "StaticText",
+        "text": "SMTP Relay Personality:",
+        "raw": "disabled,\n\t\t\t\"SMTP Relay Personality:\"",
+        "line": 667
+      },
+      {
+        "kind": "Control",
+        "text": "",
+        "raw": "enabled,\n\t\t\t1199",
+        "line": 673
+      },
+      {
+        "kind": "StaticText",
+        "text": "Connection§§-18",
+        "raw": "disabled,\n\t\t\t\"Connection§§-18\"",
+        "line": 679
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Immediate send§§25",
+        "raw": "enabled,\n\t\t\t\"Immediate send§§25\"",
+        "line": 685
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Send on check§§13",
+        "raw": "enabled,\n\t\t\t\"Send on check§§13\"",
+        "line": 691
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Use separate thread for sending§§-223",
+        "raw": "enabled,\n\t\t\t\"Use separate thread for sending§§-223\"",
+        "line": 697
+      },
+      {
+        "kind": "StaticText",
+        "text": "Message§§-22",
+        "raw": "disabled,\n\t\t\t\"Message§§-22\"",
+        "line": 703
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Fix curly quotes§§-85",
+        "raw": "enabled,\n\t\t\t\"Fix curly quotes§§-85\"",
+        "line": 709
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Keep copies§§19",
+        "raw": "enabled,\n\t\t\t\"Keep copies§§19\"",
+        "line": 715
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Automatically Fcc to original mailbox§§139",
+        "raw": "enabled,\n\t\t\t\"Automatically Fcc to original mailbox§§1\"\n\t\t\t\"39\"",
+        "line": 721
+      }
+    ]
+  },
+  {
+    "type": "DITL",
+    "spec": "2004, \"Composing Mail\", purgeable",
+    "line": 729,
+    "file": "src/SettingsTwo.rsrc.r",
+    "entries": [
+      {
+        "kind": "StaticText",
+        "text": "Account Information§§-7",
+        "raw": "disabled,\n\t\t\t\"Account Information§§-7\"",
+        "line": 733
+      },
+      {
+        "kind": "StaticText",
+        "text": "Email Address:",
+        "raw": "disabled,\n\t\t\t\"Email Address:\"",
+        "line": 739
+      },
+      {
+        "kind": "EditText",
+        "text": "§§5",
+        "raw": "enabled,\n\t\t\t\"§§5\"",
+        "line": 745
+      },
+      {
+        "kind": "StaticText",
+        "text": "(You only need to fill this in if it’s different from Username@MailServer.)",
+        "raw": "disabled,\n\t\t\t\"(You only need to fill this in if it’s d\"\n\t\t\t\"ifferent from Username@MailServer.)\"",
+        "line": 751
+      },
+      {
+        "kind": "StaticText",
+        "text": "Default Domain:",
+        "raw": "disabled,\n\t\t\t\"Default Domain:\"",
+        "line": 758
+      },
+      {
+        "kind": "EditText",
+        "text": "§§116",
+        "raw": "enabled,\n\t\t\t\"§§116\"",
+        "line": 764
+      },
+      {
+        "kind": "StaticText",
+        "text": "(This will be added to addresses you type that don’t have domains on them.)",
+        "raw": "disabled,\n\t\t\t\"(This will be added to addresses you typ\"\n\t\t\t\"e that don’t have domains on them.)\"",
+        "line": 770
+      },
+      {
+        "kind": "StaticText",
+        "text": "Nickname Expansion§§-10",
+        "raw": "disabled,\n\t\t\t\"Nickname Expansion§§-10\"",
+        "line": 777
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Auto-complete nicknames§§203",
+        "raw": "enabled,\n\t\t\t\"Auto-complete nicknames§§203\"",
+        "line": 783
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Expand nicknames immediately§§48",
+        "raw": "enabled,\n\t\t\t\"Expand nicknames immediately§§48\"",
+        "line": 789
+      },
+      {
+        "kind": "StaticText",
+        "text": "Or, take settings & text from stationery§§-12",
+        "raw": "disabled,\n\t\t\t\"Or, take settings & text from stationery\"\n\t\t\t\"§§-12\"",
+        "line": 795
+      },
+      {
+        "kind": "Control",
+        "text": "",
+        "raw": "enabled,\n\t\t\t1060",
+        "line": 802
+      },
+      {
+        "kind": "StaticText",
+        "text": "Use these settings:§§-18",
+        "raw": "disabled,\n\t\t\t\"Use these settings:§§-18\"",
+        "line": 808
+      },
+      {
+        "kind": "StaticText",
+        "text": "Signature:",
+        "raw": "disabled,\n\t\t\t\"Signature:\"",
+        "line": 814
+      },
+      {
+        "kind": "Control",
+        "text": "",
+        "raw": "enabled,\n\t\t\t1061",
+        "line": 820
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Word wrap§§7",
+        "raw": "enabled,\n\t\t\t\"Word wrap§§7\"",
+        "line": 826
+      },
+      {
+        "kind": "CheckBox",
+        "text": "May use Quoted-Printable§§-91",
+        "raw": "enabled,\n\t\t\t\"May use Quoted-Printable§§-91\"",
+        "line": 832
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Keep copies of outgoing mail§§19",
+        "raw": "enabled,\n\t\t\t\"Keep copies of outgoing mail§§19\"",
+        "line": 838
+      }
+    ]
+  },
+  {
+    "type": "DITL",
+    "spec": "2009, \"Mailbox Display\", purgeable",
+    "line": 845,
+    "file": "src/SettingsTwo.rsrc.r",
+    "entries": [
+      {
+        "kind": "StaticText",
+        "text": "Columns§§-12",
+        "raw": "disabled,\n\t\t\t\"Columns§§-12\"",
+        "line": 849
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Status§§-64:0",
+        "raw": "enabled,\n\t\t\t\"Status§§-64:0\"",
+        "line": 855
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Priority§§-64:1",
+        "raw": "enabled,\n\t\t\t\"Priority§§-64:1\"",
+        "line": 861
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Attachments§§-64:2",
+        "raw": "enabled,\n\t\t\t\"Attachments§§-64:2\"",
+        "line": 867
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Label§§-64:3",
+        "raw": "enabled,\n\t\t\t\"Label§§-64:3\"",
+        "line": 873
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Who§§-64:4",
+        "raw": "enabled,\n\t\t\t\"Who§§-64:4\"",
+        "line": 879
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Date§§-64:5",
+        "raw": "enabled,\n\t\t\t\"Date§§-64:5\"",
+        "line": 885
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Size§§-64:6",
+        "raw": "enabled,\n\t\t\t\"Size§§-64:6\"",
+        "line": 891
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Server§§-64:7",
+        "raw": "enabled,\n\t\t\t\"Server§§-64:7\"",
+        "line": 897
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Mood§§-64:10",
+        "raw": "enabled,\n\t\t\t\"Mood§§-64:10\"",
+        "line": 903
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Junk§§64:11",
+        "raw": "enabled,\n\t\t\t\"Junk§§64:11\"",
+        "line": 909
+      },
+      {
+        "kind": "StaticText",
+        "text": "Subject is always shown.",
+        "raw": "disabled,\n\t\t\t\"Subject is always shown.\"",
+        "line": 915
+      },
+      {
+        "kind": "StaticText",
+        "text": "Drawing§§-16",
+        "raw": "disabled,\n\t\t\t\"Drawing§§-16\"",
+        "line": 921
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Draw horizontal separator lines§§-79:0",
+        "raw": "enabled,\n\t\t\t\"Draw horizontal separator lines§§-79:0\"",
+        "line": 927
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Draw vertical separator lines§§-79:1",
+        "raw": "enabled,\n\t\t\t\"Draw vertical separator lines§§-79:1\"",
+        "line": 933
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Show count of selected messages§§303",
+        "raw": "enabled,\n\t\t\t\"Show count of selected messages§§303\"",
+        "line": 939
+      },
+      {
+        "kind": "StaticText",
+        "text": "Message preview§§-29",
+        "raw": "disabled,\n\t\t\t\"Message preview§§-29\"",
+        "line": 945
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Show message previews by default§§-246",
+        "raw": "enabled,\n\t\t\t\"Show message previews by default§§-246\"",
+        "line": 951
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Mark read after§§-247:0",
+        "raw": "enabled,\n\t\t\t\"Mark read after§§-247:0\"",
+        "line": 957
+      },
+      {
+        "kind": "EditText",
+        "text": "§§11510",
+        "raw": "enabled,\n\t\t\t\"§§11510\"",
+        "line": 963
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Mark read if clicked in or tabbed to or scrolled§§-247:1",
+        "raw": "enabled,\n\t\t\t\"Mark read if clicked in or tabbed to or \"\n\t\t\t\"scrolled§§-247:1\"",
+        "line": 969
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Mark read if “next message” used to move away§§-247:2",
+        "raw": "enabled,\n\t\t\t\"Mark read if “next message” used to move\"\n\t\t\t\" away§§-247:2\"",
+        "line": 976
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Mark read if deleted§§-247:3",
+        "raw": "enabled,\n\t\t\t\"Mark read if deleted§§-247:3\"",
+        "line": 983
+      },
+      {
+        "kind": "StaticText",
+        "text": "seconds",
+        "raw": "disabled,\n\t\t\t\"seconds\"",
+        "line": 989
+      },
+      {
+        "kind": "StaticText",
+        "text": "Content Concentrator Profiles§§1030",
+        "raw": "disabled,\n\t\t\t\"Content Concentrator Profiles§§1030\"",
+        "line": 995
+      },
+      {
+        "kind": "StaticText",
+        "text": "Multiple Messages:",
+        "raw": "disabled,\n\t\t\t\"Multiple Messages:\"",
+        "line": 1001
+      },
+      {
+        "kind": "StaticText",
+        "text": "Single Message:",
+        "raw": "disabled,\n\t\t\t\"Single Message:\"",
+        "line": 1007
+      },
+      {
+        "kind": "Control",
+        "text": "",
+        "raw": "enabled,\n\t\t\t1196",
+        "line": 1013
+      },
+      {
+        "kind": "Control",
+        "text": "",
+        "raw": "enabled,\n\t\t\t1198",
+        "line": 1019
+      }
+    ]
+  },
+  {
+    "type": "DITL",
+    "spec": "2011, \"Eudora Labels\", purgeable",
+    "line": 1026,
+    "file": "src/SettingsTwo.rsrc.r",
+    "entries": [
+      {
+        "kind": "StaticText",
+        "text": "Eudora’s labels§§-17",
+        "raw": "disabled,\n\t\t\t\"Eudora’s labels§§-17\"",
+        "line": 1030
+      },
+      {
+        "kind": "Control",
+        "text": "",
+        "raw": "enabled,\n\t\t\t1043",
+        "line": 1036
+      },
+      {
+        "kind": "EditText",
+        "text": "§§27701",
+        "raw": "enabled,\n\t\t\t\"§§27701\"",
+        "line": 1042
+      },
+      {
+        "kind": "EditText",
+        "text": "§§27702",
+        "raw": "enabled,\n\t\t\t\"§§27702\"",
+        "line": 1048
+      },
+      {
+        "kind": "EditText",
+        "text": "§§27703",
+        "raw": "enabled,\n\t\t\t\"§§27703\"",
+        "line": 1054
+      },
+      {
+        "kind": "EditText",
+        "text": "§§27704",
+        "raw": "enabled,\n\t\t\t\"§§27704\"",
+        "line": 1060
+      },
+      {
+        "kind": "Control",
+        "text": "",
+        "raw": "enabled,\n\t\t\t1044",
+        "line": 1066
+      },
+      {
+        "kind": "Control",
+        "text": "",
+        "raw": "enabled,\n\t\t\t1045",
+        "line": 1072
+      },
+      {
+        "kind": "Control",
+        "text": "",
+        "raw": "enabled,\n\t\t\t1046",
+        "line": 1078
+      },
+      {
+        "kind": "Control",
+        "text": "",
+        "raw": "enabled,\n\t\t\t1047",
+        "line": 1084
+      },
+      {
+        "kind": "EditText",
+        "text": "§§27705",
+        "raw": "enabled,\n\t\t\t\"§§27705\"",
+        "line": 1090
+      },
+      {
+        "kind": "EditText",
+        "text": "§§27706",
+        "raw": "enabled,\n\t\t\t\"§§27706\"",
+        "line": 1096
+      },
+      {
+        "kind": "EditText",
+        "text": "§§27707",
+        "raw": "enabled,\n\t\t\t\"§§27707\"",
+        "line": 1102
+      },
+      {
+        "kind": "EditText",
+        "text": "§§27708",
+        "raw": "enabled,\n\t\t\t\"§§27708\"",
+        "line": 1108
+      },
+      {
+        "kind": "Control",
+        "text": "",
+        "raw": "enabled,\n\t\t\t1048",
+        "line": 1114
+      },
+      {
+        "kind": "Control",
+        "text": "",
+        "raw": "enabled,\n\t\t\t1049",
+        "line": 1120
+      },
+      {
+        "kind": "Control",
+        "text": "",
+        "raw": "enabled,\n\t\t\t1050",
+        "line": 1126
+      }
+    ]
+  },
+  {
+    "type": "DITL",
+    "spec": "2014, \"Toolbar\", purgeable",
+    "line": 1133,
+    "file": "src/SettingsTwo.rsrc.r",
+    "entries": [
+      {
+        "kind": "StaticText",
+        "text": "Show§§-3",
+        "raw": "disabled,\n\t\t\t\"Show§§-3\"",
+        "line": 1137
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Show toolbar§§129",
+        "raw": "enabled,\n\t\t\t\"Show toolbar§§129\"",
+        "line": 1143
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Show search field§§-383",
+        "raw": "enabled,\n\t\t\t\"Show search field§§-383\"",
+        "line": 1149
+      },
+      {
+        "kind": "StaticText",
+        "text": "Orientation§§-6",
+        "raw": "enabled,\n\t\t\t\"Orientation§§-6\"",
+        "line": 1155
+      },
+      {
+        "kind": "RadioButton",
+        "text": "Horizontal toolbar§§-131",
+        "raw": "enabled,\n\t\t\t\"Horizontal toolbar§§-131\"",
+        "line": 1161
+      },
+      {
+        "kind": "RadioButton",
+        "text": "Vertical toolbar§§131",
+        "raw": "enabled,\n\t\t\t\"Vertical toolbar§§131\"",
+        "line": 1167
+      },
+      {
+        "kind": "StaticText",
+        "text": "Button style§§-12",
+        "raw": "enabled,\n\t\t\t\"Button style§§-12\"",
+        "line": 1173
+      },
+      {
+        "kind": "RadioButton",
+        "text": "Big icons with names§§130=0",
+        "raw": "enabled,\n\t\t\t\"Big icons with names§§130=0\"",
+        "line": 1179
+      },
+      {
+        "kind": "RadioButton",
+        "text": "Big icons only§§130=1",
+        "raw": "enabled,\n\t\t\t\"Big icons only§§130=1\"",
+        "line": 1185
+      },
+      {
+        "kind": "RadioButton",
+        "text": "Small icons & names§§130=2",
+        "raw": "enabled,\n\t\t\t\"Small icons & names§§130=2\"",
+        "line": 1191
+      },
+      {
+        "kind": "RadioButton",
+        "text": "Small icons only§§130=3",
+        "raw": "enabled,\n\t\t\t\"Small icons only§§130=3\"",
+        "line": 1197
+      },
+      {
+        "kind": "RadioButton",
+        "text": "Names only§§130=4",
+        "raw": "enabled,\n\t\t\t\"Names only§§130=4\"",
+        "line": 1203
+      },
+      {
+        "kind": "StaticText",
+        "text": "Function keys§§-15",
+        "raw": "enabled,\n\t\t\t\"Function keys§§-15\"",
+        "line": 1209
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Map function keys to buttons§§168",
+        "raw": "enabled,\n\t\t\t\"Map function keys to buttons§§168\"",
+        "line": 1215
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Show function key labels§§170",
+        "raw": "enabled,\n\t\t\t\"Show function key labels§§170\"",
+        "line": 1221
+      }
+    ]
+  },
+  {
+    "type": "DITL",
+    "spec": "2015, \"Getting Attention\", purgeable",
+    "line": 1228,
+    "file": "src/SettingsTwo.rsrc.r",
+    "entries": [
+      {
+        "kind": "StaticText",
+        "text": "When something exciting happens§§-5",
+        "raw": "disabled,\n\t\t\t\"When something exciting happens§§-5\"",
+        "line": 1232
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Put up an alert§§20",
+        "raw": "enabled,\n\t\t\t\"Put up an alert§§20\"",
+        "line": 1238
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Bounce the icon in dock§§-33",
+        "raw": "enabled,\n\t\t\t\"Bounce the icon in dock§§-33\"",
+        "line": 1244
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Open mailbox (new mail only)§§-51",
+        "raw": "enabled,\n\t\t\t\"Open mailbox (new mail only)§§-51\"",
+        "line": 1250
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Play a sound§§21",
+        "raw": "enabled,\n\t\t\t\"Play a sound§§21\"",
+        "line": 1256
+      },
+      {
+        "kind": "StaticText",
+        "text": "Unread mail count in dock§§-8",
+        "raw": "disabled,\n\t\t\t\"Unread mail count in dock§§-8\"",
+        "line": 1262
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Consider only recent messages unread§§-396:1",
+        "raw": "enabled,\n\t\t\t\"Consider only recent messages unread§§-3\"\n\t\t\t\"96:1\"",
+        "line": 1268
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Include all open mailboxes (vs In only)§§-396:2",
+        "raw": "enabled,\n\t\t\t\"Include all open mailboxes (vs In only)§\"\n\t\t\t\"§-396:2\"",
+        "line": 1275
+      },
+      {
+        "kind": "StaticText",
+        "text": "More attention-getting behavior§§-11",
+        "raw": "disabled,\n\t\t\t\"More attention-getting behavior§§-11\"",
+        "line": 1282
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Show Task Progress during background activity§§225",
+        "raw": "enabled,\n\t\t\t\"Show Task Progress during background act\"\n\t\t\t\"ivity§§225\"",
+        "line": 1288
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Open incoming message with error§§213",
+        "raw": "enabled,\n\t\t\t\"Open incoming message with error§§213\"",
+        "line": 1295
+      },
+      {
+        "kind": "StaticText",
+        "text": "Sounds§§-16",
+        "raw": "disabled,\n\t\t\t\"Sounds§§-16\"",
+        "line": 1301
+      },
+      {
+        "kind": "StaticText",
+        "text": "New mail sound:",
+        "raw": "disabled,\n\t\t\t\"New mail sound:\"",
+        "line": 1307
+      },
+      {
+        "kind": "Control",
+        "text": "",
+        "raw": "enabled,\n\t\t\t1035",
+        "line": 1313
+      },
+      {
+        "kind": "StaticText",
+        "text": "Attention sound:",
+        "raw": "disabled,\n\t\t\t\"Attention sound:\"",
+        "line": 1319
+      },
+      {
+        "kind": "Control",
+        "text": "",
+        "raw": "enabled,\n\t\t\t1036",
+        "line": 1325
+      }
+    ]
+  },
+  {
+    "type": "DITL",
+    "spec": "2016, \"Hosts\", purgeable",
+    "line": 1332,
+    "file": "src/SettingsTwo.rsrc.r",
+    "entries": [
+      {
+        "kind": "StaticText",
+        "text": "Checking Mail§§-4",
+        "raw": "disabled,\n\t\t\t\"Checking Mail§§-4\"",
+        "line": 1336
+      },
+      {
+        "kind": "StaticText",
+        "text": "Mail Server:",
+        "raw": "disabled,\n\t\t\t\"Mail Server:\"",
+        "line": 1342
+      },
+      {
+        "kind": "EditText",
+        "text": "§§222",
+        "raw": "enabled,\n\t\t\t\"§§222\"",
+        "line": 1348
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Overlap POP3 commands for better performance§§34",
+        "raw": "enabled,\n\t\t\t\"Overlap POP3 commands for better perform\"\n\t\t\t\"ance§§34\"",
+        "line": 1354
+      },
+      {
+        "kind": "StaticText",
+        "text": "Sending Mail§§-9",
+        "raw": "disabled,\n\t\t\t\"Sending Mail§§-9\"",
+        "line": 1361
+      },
+      {
+        "kind": "StaticText",
+        "text": "SMTP Server:",
+        "raw": "disabled,\n\t\t\t\"SMTP Server:\"",
+        "line": 1367
+      },
+      {
+        "kind": "EditText",
+        "text": "§§4",
+        "raw": "enabled,\n\t\t\t\"§§4\"",
+        "line": 1373
+      },
+      {
+        "kind": "StaticText",
+        "text": "(You only need to fill this in if it’s different from your Mail Server above.)",
+        "raw": "disabled,\n\t\t\t\"(You only need to fill this in if it’s d\"\n\t\t\t\"ifferent from your Mail Server above.)\"",
+        "line": 1379
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Use mail-exchange records§§190",
+        "raw": "enabled,\n\t\t\t\"Use mail-exchange records§§190\"",
+        "line": 1386
+      },
+      {
+        "kind": "StaticText",
+        "text": "Directory Services§§-15",
+        "raw": "disabled,\n\t\t\t\"Directory Services§§-15\"",
+        "line": 1392
+      },
+      {
+        "kind": "StaticText",
+        "text": "Ph/LDAP Server:",
+        "raw": "disabled,\n\t\t\t\"Ph/LDAP Server:\"",
+        "line": 1398
+      },
+      {
+        "kind": "EditText",
+        "text": "§§23",
+        "raw": "enabled,\n\t\t\t\"§§23\"",
+        "line": 1404
+      },
+      {
+        "kind": "StaticText",
+        "text": "Finger Server:",
+        "raw": "disabled,\n\t\t\t\"Finger Server:\"",
+        "line": 1410
+      },
+      {
+        "kind": "EditText",
+        "text": "§§103",
+        "raw": "enabled,\n\t\t\t\"§§103\"",
+        "line": 1416
+      },
+      {
+        "kind": "CheckBox",
+        "text": "“Live” directory service queries§§181",
+        "raw": "enabled,\n\t\t\t\"“Live” directory service queries§§181\"",
+        "line": 1422
+      },
+      {
+        "kind": "StaticText",
+        "text": "All connections§§-18",
+        "raw": "disabled,\n\t\t\t\"All connections§§-18\"",
+        "line": 1428
+      },
+      {
+        "kind": "CheckBox",
+        "text": "DNS load balancing§§106",
+        "raw": "enabled,\n\t\t\t\"DNS load balancing§§106\"",
+        "line": 1434
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Offline (no connections)§§84",
+        "raw": "enabled,\n\t\t\t\"Offline (no connections)§§84\"",
+        "line": 1440
+      }
+    ]
+  },
+  {
+    "type": "DITL",
+    "spec": "2017, \"Extra Warnings\", purgeable",
+    "line": 1447,
+    "file": "src/SettingsTwo.rsrc.r",
+    "entries": [
+      {
+        "kind": "StaticText",
+        "text": "Deleting§§-5",
+        "raw": "enabled,\n\t\t\t\"Deleting§§-5\"",
+        "line": 1451
+      },
+      {
+        "kind": "StaticText",
+        "text": "Warn me when I:",
+        "raw": "enabled,\n\t\t\t\"Warn me when I:\"",
+        "line": 1457
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Try to delete unread mail§§-35",
+        "raw": "enabled,\n\t\t\t\"Try to delete unread mail§§-35\"",
+        "line": 1463
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Try to delete queued mail§§-135",
+        "raw": "enabled,\n\t\t\t\"Try to delete queued mail§§-135\"",
+        "line": 1469
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Try to delete any unsent messages§§-136",
+        "raw": "enabled,\n\t\t\t\"Try to delete any unsent messages§§-136\"",
+        "line": 1475
+      },
+      {
+        "kind": "StaticText",
+        "text": "Queueing & Sending§§-13",
+        "raw": "enabled,\n\t\t\t\"Queueing & Sending§§-13\"",
+        "line": 1481
+      },
+      {
+        "kind": "StaticText",
+        "text": "Warn me when I:",
+        "raw": "enabled,\n\t\t\t\"Warn me when I:\"",
+        "line": 1487
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Try to queue a message with no subject§§137",
+        "raw": "enabled,\n\t\t\t\"Try to queue a message with no subject§§\"\n\t\t\t\"137\"",
+        "line": 1493
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Try to queue a message with styled text§§46",
+        "raw": "enabled,\n\t\t\t\"Try to queue a message with styled text§\"\n\t\t\t\"§46\"",
+        "line": 1500
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Try to quit with messages queued to be sent§§-138",
+        "raw": "enabled,\n\t\t\t\"Try to quit with messages queued to be s\"\n\t\t\t\"ent§§-138\"",
+        "line": 1507
+      },
+      {
+        "kind": "StaticText",
+        "text": "Try to send a message whose size is >",
+        "raw": "disabled,\n\t\t\t\"Try to send a message whose size is >\"",
+        "line": 1514
+      },
+      {
+        "kind": "EditText",
+        "text": "§§10218",
+        "raw": "enabled,\n\t\t\t\"§§10218\"",
+        "line": 1520
+      },
+      {
+        "kind": "StaticText",
+        "text": "K",
+        "raw": "disabled,\n\t\t\t\"K\"",
+        "line": 1526
+      },
+      {
+        "kind": "StaticText",
+        "text": "Other§§-19",
+        "raw": "enabled,\n\t\t\t\"Other§§-19\"",
+        "line": 1532
+      },
+      {
+        "kind": "StaticText",
+        "text": "Warn me when I:",
+        "raw": "enabled,\n\t\t\t\"Warn me when I:\"",
+        "line": 1538
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Set a changed message back to read-only§§-150",
+        "raw": "enabled,\n\t\t\t\"Set a changed message back to read-only§\"\n\t\t\t\"§-150\"",
+        "line": 1544
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Empty the Trash mailbox§§-152",
+        "raw": "enabled,\n\t\t\t\"Empty the Trash mailbox§§-152\"",
+        "line": 1551
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Try something that requires too much memory§§-178",
+        "raw": "enabled,\n\t\t\t\"Try something that requires too much mem\"\n\t\t\t\"ory§§-178\"",
+        "line": 1557
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Try to follow an ad’s link while offline§§311",
+        "raw": "enabled,\n\t\t\t\"Try to follow an ad’s link while offline\"\n\t\t\t\"§§311\"",
+        "line": 1564
+      }
+    ]
+  },
+  {
+    "type": "DITL",
+    "spec": "2019, \"Internet Dialup\", purgeable",
+    "line": 1572,
+    "file": "src/SettingsTwo.rsrc.r",
+    "entries": [
+      {
+        "kind": "StaticText",
+        "text": "Internet Dialup§§-4",
+        "raw": "enabled,\n\t\t\t\"Internet Dialup§§-4\"",
+        "line": 1576
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Don't check mail automatically if my Internet dialup \\nsoftware isn't already connected§§141",
+        "raw": "enabled,\n\t\t\t\"Don't check mail automatically if my Int\"\n\t\t\t\"ernet dialup \\nsoftware isn't already con\"\n\t\t\t\"nected§§141\"",
+        "line": 1582
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Disconnect my Internet dialup software after checking \\nmail, if Eudora connected it§§8",
+        "raw": "enabled,\n\t\t\t\"Disconnect my Internet dialup software a\"\n\t\t\t\"fter checking \\nmail, if Eudora connected\"\n\t\t\t\" it§§8\"",
+        "line": 1590
+      },
+      {
+        "kind": "StaticText",
+        "text": "OS X does not support these settings.",
+        "raw": "enabled,\n\t\t\t\"OS X does not support these settings.\"",
+        "line": 1598
+      }
+    ]
+  },
+  {
+    "type": "DITL",
+    "spec": "2020, \"Miscellaneous\", purgeable",
+    "line": 1605,
+    "file": "src/SettingsTwo.rsrc.r",
+    "entries": [
+      {
+        "kind": "StaticText",
+        "text": "Miscellaneous Settings§§-16",
+        "raw": "enabled,\n\t\t\t\"Miscellaneous Settings§§-16\"",
+        "line": 1609
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Close messages with mailbox§§36",
+        "raw": "enabled,\n\t\t\t\"Close messages with mailbox§§36\"",
+        "line": 1615
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Empty Trash on Quit§§16",
+        "raw": "enabled,\n\t\t\t\"Empty Trash on Quit§§16\"",
+        "line": 1621
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Turbo redirect by default§§115",
+        "raw": "enabled,\n\t\t\t\"Turbo redirect by default§§115\"",
+        "line": 1627
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Re-sort mailboxes less often§§151",
+        "raw": "enabled,\n\t\t\t\"Re-sort mailboxes less often§§151\"",
+        "line": 1633
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Use old-style “.toc” files§§-126",
+        "raw": "enabled,\n\t\t\t\"Use old-style “.toc” files§§-126\"",
+        "line": 1639
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Include outdated Return-Receipt-To:§§67",
+        "raw": "enabled,\n\t\t\t\"Include outdated Return-Receipt-To:§§67\"",
+        "line": 1645
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Correct (but slow) international sorting§§169",
+        "raw": "enabled,\n\t\t\t\"Correct (but slow) international sorting\"\n\t\t\t\"§§169\"",
+        "line": 1651
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Generate filter reports§§128",
+        "raw": "enabled,\n\t\t\t\"Generate filter reports§§128\"",
+        "line": 1658
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Prompt for receipts requested by self§§-192",
+        "raw": "enabled,\n\t\t\t\"Prompt for receipts requested by self§§-\"\n\t\t\t\"192\"",
+        "line": 1664
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Exchange Find and Search menu command keys§§278",
+        "raw": "enabled,\n\t\t\t\"Exchange Find and Search menu command ke\"\n\t\t\t\"ys§§278\"",
+        "line": 1671
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Use system keychain to store passwords§§275",
+        "raw": "enabled,\n\t\t\t\"Use system keychain to store passwords§§\"\n\t\t\t\"275\"",
+        "line": 1678
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Check Mail with shift-cmd-N. Minimize with cmd-M.§§352",
+        "raw": "enabled,\n\t\t\t\"Check Mail with shift-cmd-N. Minimize wi\"\n\t\t\t\"th cmd-M.§§352\"",
+        "line": 1685
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Attach with shift-cmd-A. Hide Eudora with cmd-H.§§-354",
+        "raw": "enabled,\n\t\t\t\"Attach with shift-cmd-A. Hide Eudora wit\"\n\t\t\t\"h cmd-H.§§-354\"",
+        "line": 1692
+      }
+    ]
+  },
+  {
+    "type": "DITL",
+    "spec": "2021, \"Personalities°mPrs\", purgeable",
+    "line": 1700,
+    "file": "src/SettingsTwo.rsrc.r",
+    "entries": [
+      {
+        "kind": "StaticText",
+        "text": "Personality to Configure§§-7",
+        "raw": "disabled,\n\t\t\t\"Personality to Configure§§-7\"",
+        "line": 1704
+      },
+      {
+        "kind": "StaticText",
+        "text": "Personality:",
+        "raw": "disabled,\n\t\t\t\"Personality:\"",
+        "line": 1710
+      },
+      {
+        "kind": "Control",
+        "text": "",
+        "raw": "enabled,\n\t\t\t1059",
+        "line": 1716
+      },
+      {
+        "kind": "Button",
+        "text": "New§§100:2",
+        "raw": "enabled,\n\t\t\t\"New§§100:2\"",
+        "line": 1722
+      },
+      {
+        "kind": "Button",
+        "text": "Remove§§100:3",
+        "raw": "enabled,\n\t\t\t\"Remove§§100:3\"",
+        "line": 1728
+      },
+      {
+        "kind": "StaticText",
+        "text": "Personality Name:",
+        "raw": "disabled,\n\t\t\t\"Personality Name:\"",
+        "line": 1734
+      },
+      {
+        "kind": "EditText",
+        "text": "§§100:4",
+        "raw": "enabled,\n\t\t\t\"§§100:4\"",
+        "line": 1740
+      },
+      {
+        "kind": "StaticText",
+        "text": "Checking Mail§§-16",
+        "raw": "disabled,\n\t\t\t\"Checking Mail§§-16\"",
+        "line": 1746
+      },
+      {
+        "kind": "StaticText",
+        "text": "User Name:",
+        "raw": "disabled,\n\t\t\t\"User Name:\"",
+        "line": 1752
+      },
+      {
+        "kind": "EditText",
+        "text": "§§221",
+        "raw": "enabled,\n\t\t\t\"§§221\"",
+        "line": 1758
+      },
+      {
+        "kind": "StaticText",
+        "text": "Mail Server:",
+        "raw": "disabled,\n\t\t\t\"Mail Server:\"",
+        "line": 1764
+      },
+      {
+        "kind": "EditText",
+        "text": "§§222",
+        "raw": "enabled,\n\t\t\t\"§§222\"",
+        "line": 1770
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Check mail every§§153",
+        "raw": "enabled,\n\t\t\t\"Check mail every§§153\"",
+        "line": 1776
+      },
+      {
+        "kind": "EditText",
+        "text": "§§6",
+        "raw": "enabled,\n\t\t\t\"§§6\"",
+        "line": 1782
+      },
+      {
+        "kind": "StaticText",
+        "text": "minutes",
+        "raw": "disabled,\n\t\t\t\"minutes\"",
+        "line": 1788
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Check mail on manual checks§§-183",
+        "raw": "enabled,\n\t\t\t\"Check mail on manual checks§§-183\"",
+        "line": 1794
+      },
+      {
+        "kind": "StaticText",
+        "text": "Sending Mail§§-26",
+        "raw": "disabled,\n\t\t\t\"Sending Mail§§-26\"",
+        "line": 1800
+      },
+      {
+        "kind": "StaticText",
+        "text": "Real name:",
+        "raw": "disabled,\n\t\t\t\"Real name:\"",
+        "line": 1806
+      },
+      {
+        "kind": "EditText",
+        "text": "§§77",
+        "raw": "enabled,\n\t\t\t\"§§77\"",
+        "line": 1812
+      },
+      {
+        "kind": "StaticText",
+        "text": "SMTP Server:",
+        "raw": "disabled,\n\t\t\t\"SMTP Server:\"",
+        "line": 1818
+      },
+      {
+        "kind": "EditText",
+        "text": "§§4",
+        "raw": "enabled,\n\t\t\t\"§§4\"",
+        "line": 1824
+      },
+      {
+        "kind": "StaticText",
+        "text": "Email Address:",
+        "raw": "disabled,\n\t\t\t\"Email Address:\"",
+        "line": 1830
+      },
+      {
+        "kind": "EditText",
+        "text": "§§5",
+        "raw": "enabled,\n\t\t\t\"§§5\"",
+        "line": 1836
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Send mail whenever sends are done§§-83",
+        "raw": "enabled,\n\t\t\t\"Send mail whenever sends are done§§-83\"",
+        "line": 1842
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Use submission port (587)§§398",
+        "raw": "enabled,\n\t\t\t\"Use submission port (587)§§398\"",
+        "line": 1848
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Allow authorization§§-309",
+        "raw": "enabled,\n\t\t\t\"Allow authorization§§-309\"",
+        "line": 1854
+      },
+      {
+        "kind": "Button",
+        "text": "Test Settings§§100:5",
+        "raw": "enabled,\n\t\t\t\"Test Settings§§100:5\"",
+        "line": 1860
+      }
+    ]
+  },
+  {
+    "type": "DITL",
+    "spec": "2022, \"Personality Extras°mPrs\", purgeable",
+    "line": 1867,
+    "file": "src/SettingsTwo.rsrc.r",
+    "entries": [
+      {
+        "kind": "StaticText",
+        "text": "Personality to Configure§§-3",
+        "raw": "disabled,\n\t\t\t\"Personality to Configure§§-3\"",
+        "line": 1871
+      },
+      {
+        "kind": "StaticText",
+        "text": "Personality:",
+        "raw": "disabled,\n\t\t\t\"Personality:\"",
+        "line": 1877
+      },
+      {
+        "kind": "Control",
+        "text": "",
+        "raw": "enabled,\n\t\t\t1059",
+        "line": 1883
+      },
+      {
+        "kind": "StaticText",
+        "text": "More Checking Mail§§-17",
+        "raw": "disabled,\n\t\t\t\"More Checking Mail§§-17\"",
+        "line": 1889
+      },
+      {
+        "kind": "StaticText",
+        "text": "Mail Protocol:",
+        "raw": "disabled,\n\t\t\t\"Mail Protocol:\"",
+        "line": 1895
+      },
+      {
+        "kind": "RadioButton",
+        "text": "POP§§-244",
+        "raw": "enabled,\n\t\t\t\"POP§§-244\"",
+        "line": 1901
+      },
+      {
+        "kind": "RadioButton",
+        "text": "IMAP§§244",
+        "raw": "enabled,\n\t\t\t\"IMAP§§244\"",
+        "line": 1907
+      },
+      {
+        "kind": "StaticText",
+        "text": "Authentication:",
+        "raw": "disabled,\n\t\t\t\"Authentication:\"",
+        "line": 1913
+      },
+      {
+        "kind": "RadioButton",
+        "text": "Passwords§§-119",
+        "raw": "enabled,\n\t\t\t\"Passwords§§-119\"",
+        "line": 1919
+      },
+      {
+        "kind": "RadioButton",
+        "text": "Kerberos§§117",
+        "raw": "enabled,\n\t\t\t\"Kerberos§§117\"",
+        "line": 1925
+      },
+      {
+        "kind": "RadioButton",
+        "text": "APOP§§57",
+        "raw": "enabled,\n\t\t\t\"APOP§§57\"",
+        "line": 1931
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Skip messages over§§47",
+        "raw": "enabled,\n\t\t\t\"Skip messages over§§47\"",
+        "line": 1937
+      },
+      {
+        "kind": "EditText",
+        "text": "§§7616",
+        "raw": "enabled,\n\t\t\t\"§§7616\"",
+        "line": 1943
+      },
+      {
+        "kind": "StaticText",
+        "text": "K",
+        "raw": "disabled,\n\t\t\t\"K\"",
+        "line": 1949
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Leave on server for§§18",
+        "raw": "enabled,\n\t\t\t\"Leave on server for§§18\"",
+        "line": 1955
+      },
+      {
+        "kind": "EditText",
+        "text": "§§101",
+        "raw": "enabled,\n\t\t\t\"§§101\"",
+        "line": 1961
+      },
+      {
+        "kind": "StaticText",
+        "text": "days",
+        "raw": "disabled,\n\t\t\t\"days\"",
+        "line": 1967
+      },
+      {
+        "kind": "StaticText",
+        "text": "More Sending Mail§§-25",
+        "raw": "disabled,\n\t\t\t\"More Sending Mail§§-25\"",
+        "line": 1973
+      },
+      {
+        "kind": "StaticText",
+        "text": "Stationery:",
+        "raw": "disabled,\n\t\t\t\"Stationery:\"",
+        "line": 1979
+      },
+      {
+        "kind": "Control",
+        "text": "",
+        "raw": "enabled,\n\t\t\t1060",
+        "line": 1985
+      },
+      {
+        "kind": "StaticText",
+        "text": "or Signature:",
+        "raw": "disabled,\n\t\t\t\"or Signature:\"",
+        "line": 1991
+      },
+      {
+        "kind": "Control",
+        "text": "",
+        "raw": "enabled,\n\t\t\t1061",
+        "line": 1997
+      },
+      {
+        "kind": "StaticText",
+        "text": "Domain to Add:",
+        "raw": "disabled,\n\t\t\t\"Domain to Add:\"",
+        "line": 2003
+      },
+      {
+        "kind": "EditText",
+        "text": "§§116",
+        "raw": "enabled,\n\t\t\t\"§§116\"",
+        "line": 2009
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Use relay personality, if defined§§-376",
+        "raw": "enabled,\n\t\t\t\"Use relay personality, if defined§§-376\"",
+        "line": 2015
+      }
+    ]
+  },
+  {
+    "type": "DITL",
+    "spec": "2024, \"Statistics°stcs\", purgeable",
+    "line": 2022,
+    "file": "src/SettingsTwo.rsrc.r",
+    "entries": [
+      {
+        "kind": "StaticText",
+        "text": "Statistics§§-15",
+        "raw": "disabled,\n\t\t\t\"Statistics§§-15\"",
+        "line": 2026
+      },
+      {
+        "kind": "Control",
+        "text": "",
+        "raw": "enabled,\n\t\t\t1151",
+        "line": 2032
+      },
+      {
+        "kind": "StaticText",
+        "text": "Current",
+        "raw": "disabled,\n\t\t\t\"Current\"",
+        "line": 2038
+      },
+      {
+        "kind": "Control",
+        "text": "",
+        "raw": "enabled,\n\t\t\t1154",
+        "line": 2044
+      },
+      {
+        "kind": "StaticText",
+        "text": "Series:",
+        "raw": "disabled,\n\t\t\t\"Series:\"",
+        "line": 2050
+      },
+      {
+        "kind": "StaticText",
+        "text": "Color:",
+        "raw": "disabled,\n\t\t\t\"Color:\"",
+        "line": 2056
+      },
+      {
+        "kind": "StaticText",
+        "text": "Graph Type:",
+        "raw": "disabled,\n\t\t\t\"Graph Type:\"",
+        "line": 2062
+      },
+      {
+        "kind": "Control",
+        "text": "",
+        "raw": "enabled,\n\t\t\t1152",
+        "line": 2068
+      },
+      {
+        "kind": "StaticText",
+        "text": "Previous",
+        "raw": "disabled,\n\t\t\t\"Previous\"",
+        "line": 2074
+      },
+      {
+        "kind": "Control",
+        "text": "",
+        "raw": "enabled,\n\t\t\t1155",
+        "line": 2080
+      },
+      {
+        "kind": "Control",
+        "text": "",
+        "raw": "enabled,\n\t\t\t1153",
+        "line": 2086
+      },
+      {
+        "kind": "StaticText",
+        "text": "Average",
+        "raw": "disabled,\n\t\t\t\"Average\"",
+        "line": 2092
+      },
+      {
+        "kind": "Control",
+        "text": "",
+        "raw": "enabled,\n\t\t\t1156",
+        "line": 2098
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Count IMAP messages in all mailboxes, not just InBox§§322",
+        "raw": "enabled,\n\t\t\t\"Count IMAP messages in all mailboxes, no\"\n\t\t\t\"t just InBox§§322\"",
+        "line": 2104
+      },
+      {
+        "kind": "Button",
+        "text": "Reset Statistics§§14513",
+        "raw": "enabled,\n\t\t\t\"Reset Statistics§§14513\"",
+        "line": 2111
+      }
+    ]
+  },
+  {
+    "type": "DITL",
+    "spec": "2025, \"Address Book\", purgeable",
+    "line": 2118,
+    "file": "src/SettingsTwo.rsrc.r",
+    "entries": [
+      {
+        "kind": "StaticText",
+        "text": "Display§§-4",
+        "raw": "disabled,\n\t\t\t\"Display§§-4\"",
+        "line": 2122
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Show History List in Address Book§§-294",
+        "raw": "enabled,\n\t\t\t\"Show History List in Address Book§§-294\"",
+        "line": 2128
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Append nickname text when sorting by value fields§§-323",
+        "raw": "enabled,\n\t\t\t\"Append nickname text when sorting by val\"\n\t\t\t\"ue fields§§-323\"",
+        "line": 2134
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Allow nicknames to be renamed in the list§§324",
+        "raw": "enabled,\n\t\t\t\"Allow nicknames to be renamed in the lis\"\n\t\t\t\"t§§324\"",
+        "line": 2141
+      },
+      {
+        "kind": "StaticText",
+        "text": "General§§-9",
+        "raw": "disabled,\n\t\t\t\"General§§-9\"",
+        "line": 2148
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Backup address books (and use LOTS of disk space)§§193",
+        "raw": "enabled,\n\t\t\t\"Backup address books (and use LOTS of di\"\n\t\t\t\"sk space)§§193\"",
+        "line": 2154
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Save address books using “Fast Save”§§-240",
+        "raw": "enabled,\n\t\t\t\"Save address books using “Fast Save”§§-2\"\n\t\t\t\"40\"",
+        "line": 2161
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Auto-expand address books during nickname drags§§327",
+        "raw": "enabled,\n\t\t\t\"Auto-expand address books during nicknam\"\n\t\t\t\"e drags§§327\"",
+        "line": 2168
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Maintain PDA syncing information§§339",
+        "raw": "enabled,\n\t\t\t\"Maintain PDA syncing information§§339\"",
+        "line": 2175
+      },
+      {
+        "kind": "StaticText",
+        "text": "Business Cards§§-15",
+        "raw": "disabled,\n\t\t\t\"Business Cards§§-15\"",
+        "line": 2181
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Support vCard features in Eudora§§351",
+        "raw": "enabled,\n\t\t\t\"Support vCard features in Eudora§§351\"",
+        "line": 2187
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Hide personal vCards in Address Book§§346",
+        "raw": "enabled,\n\t\t\t\"Hide personal vCards in Address Book§§34\"\n\t\t\t\"6\"",
+        "line": 2193
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Hide vCard button in message windows§§348",
+        "raw": "enabled,\n\t\t\t\"Hide vCard button in message windows§§34\"\n\t\t\t\"8\"",
+        "line": 2200
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Don't allow suspiciously formatted vCards§§342",
+        "raw": "enabled,\n\t\t\t\"Don't allow suspiciously formatted vCard\"\n\t\t\t\"s§§342\"",
+        "line": 2207
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Use “Home” tab as default location§§343",
+        "raw": "enabled,\n\t\t\t\"Use “Home” tab as default location§§343\"",
+        "line": 2214
+      },
+      {
+        "kind": "StaticText",
+        "text": "OS X AddressBook§§-17",
+        "raw": "disabled,\n\t\t\t\"OS X AddressBook§§-17\"",
+        "line": 2220
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Show OS X AddressBook§§382",
+        "raw": "enabled,\n\t\t\t\"Show OS X AddressBook§§382\"",
+        "line": 2226
+      }
+    ]
+  },
+  {
+    "type": "DITL",
+    "spec": "2026, \"SSL\", purgeable",
+    "line": 2233,
+    "file": "src/SettingsTwo.rsrc.r",
+    "entries": [
+      {
+        "kind": "StaticText",
+        "text": "Secure Sockets Layer§§-10",
+        "raw": "enabled,\n\t\t\t\"Secure Sockets Layer§§-10\"",
+        "line": 2237
+      },
+      {
+        "kind": "Control",
+        "text": "",
+        "raw": "enabled,\n\t\t\t1059",
+        "line": 2243
+      },
+      {
+        "kind": "StaticText",
+        "text": "Personality:",
+        "raw": "disabled,\n\t\t\t\"Personality:\"",
+        "line": 2249
+      },
+      {
+        "kind": "StaticText",
+        "text": "SSL for POP:",
+        "raw": "enabled,\n\t\t\t\"SSL for POP:\"",
+        "line": 2255
+      },
+      {
+        "kind": "Control",
+        "text": "",
+        "raw": "enabled,\n\t\t\t1186",
+        "line": 2261
+      },
+      {
+        "kind": "StaticText",
+        "text": "SSL for SMTP:",
+        "raw": "enabled,\n\t\t\t\"SSL for SMTP:\"",
+        "line": 2267
+      },
+      {
+        "kind": "Control",
+        "text": "",
+        "raw": "enabled,\n\t\t\t1187",
+        "line": 2273
+      },
+      {
+        "kind": "StaticText",
+        "text": "SSL for IMAP:",
+        "raw": "enabled,\n\t\t\t\"SSL for IMAP:\"",
+        "line": 2279
+      },
+      {
+        "kind": "Control",
+        "text": "",
+        "raw": "enabled,\n\t\t\t1188",
+        "line": 2285
+      },
+      {
+        "kind": "StaticText",
+        "text": "SSL is supported for MacOS Classic and MacOS 10.2 and later, but not MacOS 10.0 or 10.1.",
+        "raw": "disabled,\n\t\t\t\"SSL is supported for MacOS Classic and M\"\n\t\t\t\"acOS 10.2 and later, but not MacOS 10.0 \"\n\t\t\t\"or 10.1.\"",
+        "line": 2291
+      },
+      {
+        "kind": "StaticText",
+        "text": "Standard Port SSL Negotiation§§-14",
+        "raw": "enabled,\n\t\t\t\"Standard Port SSL Negotiation§§-14\"",
+        "line": 2299
+      },
+      {
+        "kind": "RadioButton",
+        "text": "Maximum Compatibility§§32456=0",
+        "raw": "enabled,\n\t\t\t\"Maximum Compatibility§§32456=0\"",
+        "line": 2305
+      },
+      {
+        "kind": "RadioButton",
+        "text": "Older SSL Implementations§§32456=256",
+        "raw": "enabled,\n\t\t\t\"Older SSL Implementations§§32456=256\"",
+        "line": 2311
+      },
+      {
+        "kind": "RadioButton",
+        "text": "TLS 1.0 (Cyrus)§§32456=769",
+        "raw": "enabled,\n\t\t\t\"TLS 1.0 (Cyrus)§§32456=769\"",
+        "line": 2317
+      },
+      {
+        "kind": "StaticText",
+        "text": "Alternate Port SSL Negotiation§§-18",
+        "raw": "enabled,\n\t\t\t\"Alternate Port SSL Negotiation§§-18\"",
+        "line": 2323
+      },
+      {
+        "kind": "RadioButton",
+        "text": "Maximum Compatibility§§32457=0",
+        "raw": "enabled,\n\t\t\t\"Maximum Compatibility§§32457=0\"",
+        "line": 2329
+      },
+      {
+        "kind": "RadioButton",
+        "text": "Older SSL Implementations§§32457=256",
+        "raw": "enabled,\n\t\t\t\"Older SSL Implementations§§32457=256\"",
+        "line": 2335
+      },
+      {
+        "kind": "RadioButton",
+        "text": "TLS 1.0§§32457=769",
+        "raw": "enabled,\n\t\t\t\"TLS 1.0§§32457=769\"",
+        "line": 2341
+      }
+    ]
+  },
+  {
+    "type": "DITL",
+    "spec": "3003, \"Checking Mail•244\", purgeable",
+    "line": 2348,
+    "file": "src/SettingsTwo.rsrc.r",
+    "entries": [
+      {
+        "kind": "StaticText",
+        "text": "Account/Server Information§§-10",
+        "raw": "disabled,\n\t\t\t\"Account/Server Information§§-10\"",
+        "line": 2352
+      },
+      {
+        "kind": "StaticText",
+        "text": "User Name:",
+        "raw": "disabled,\n\t\t\t\"User Name:\"",
+        "line": 2358
+      },
+      {
+        "kind": "EditText",
+        "text": "§§221",
+        "raw": "enabled,\n\t\t\t\"§§221\"",
+        "line": 2364
+      },
+      {
+        "kind": "StaticText",
+        "text": "Mail Host:",
+        "raw": "disabled,\n\t\t\t\"Mail Host:\"",
+        "line": 2370
+      },
+      {
+        "kind": "EditText",
+        "text": "§§222",
+        "raw": "enabled,\n\t\t\t\"§§222\"",
+        "line": 2376
+      },
+      {
+        "kind": "StaticText",
+        "text": "Mail Protocol:",
+        "raw": "disabled,\n\t\t\t\"Mail Protocol:\"",
+        "line": 2382
+      },
+      {
+        "kind": "RadioButton",
+        "text": "POP§§-244",
+        "raw": "enabled,\n\t\t\t\"POP§§-244\"",
+        "line": 2388
+      },
+      {
+        "kind": "RadioButton",
+        "text": "IMAP§§244",
+        "raw": "enabled,\n\t\t\t\"IMAP§§244\"",
+        "line": 2394
+      },
+      {
+        "kind": "StaticText",
+        "text": "Location prefix:",
+        "raw": "disabled,\n\t\t\t\"Location prefix:\"",
+        "line": 2400
+      },
+      {
+        "kind": "EditText",
+        "text": "§§11503",
+        "raw": "enabled,\n\t\t\t\"§§11503\"",
+        "line": 2406
+      },
+      {
+        "kind": "StaticText",
+        "text": "Connection§§-16",
+        "raw": "disabled,\n\t\t\t\"Connection§§-16\"",
+        "line": 2412
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Check for mail every§§153",
+        "raw": "enabled,\n\t\t\t\"Check for mail every§§153\"",
+        "line": 2418
+      },
+      {
+        "kind": "EditText",
+        "text": "§§6",
+        "raw": "enabled,\n\t\t\t\"§§6\"",
+        "line": 2424
+      },
+      {
+        "kind": "StaticText",
+        "text": "minutes",
+        "raw": "disabled,\n\t\t\t\"minutes\"",
+        "line": 2430
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Don’t auto-check when using battery§§120",
+        "raw": "enabled,\n\t\t\t\"Don’t auto-check when using battery§§120\"",
+        "line": 2436
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Send on check§§13",
+        "raw": "enabled,\n\t\t\t\"Send on check§§13\"",
+        "line": 2442
+      },
+      {
+        "kind": "StaticText",
+        "text": "Download Options§§-22",
+        "raw": "disabled,\n\t\t\t\"Download Options§§-22\"",
+        "line": 2448
+      },
+      {
+        "kind": "EditText",
+        "text": "§§7616",
+        "raw": "enabled,\n\t\t\t\"§§7616\"",
+        "line": 2454
+      },
+      {
+        "kind": "StaticText",
+        "text": "K",
+        "raw": "disabled,\n\t\t\t\"K\"",
+        "line": 2460
+      },
+      {
+        "kind": "RadioButton",
+        "text": "Minimal headers only§§-269",
+        "raw": "enabled,\n\t\t\t\"Minimal headers only§§-269\"",
+        "line": 2466
+      },
+      {
+        "kind": "RadioButton",
+        "text": "Full message except attachments over§§245",
+        "raw": "enabled,\n\t\t\t\"Full message except attachments over§§24\"\n\t\t\t\"5\"",
+        "line": 2472
+      },
+      {
+        "kind": "RadioButton",
+        "text": "Full message with attachments§§270",
+        "raw": "enabled,\n\t\t\t\"Full message with attachments§§270\"",
+        "line": 2479
+      }
+    ]
+  },
+  {
+    "type": "DITL",
+    "spec": "2008, \"Fonts & Display\", purgeable",
+    "line": 2486,
+    "file": "src/SettingsTwo.rsrc.r",
+    "entries": [
+      {
+        "kind": "StaticText",
+        "text": "Fonts§§-14",
+        "raw": "disabled,\n\t\t\t\"Fonts§§-14\"",
+        "line": 2490
+      },
+      {
+        "kind": "StaticText",
+        "text": "Screen Font:",
+        "raw": "disabled,\n\t\t\t\"Screen Font:\"",
+        "line": 2496
+      },
+      {
+        "kind": "StaticText",
+        "text": "Fixed-Width Font:",
+        "raw": "disabled,\n\t\t\t\"Fixed-Width Font:\"",
+        "line": 2502
+      },
+      {
+        "kind": "StaticText",
+        "text": "Print Font:",
+        "raw": "disabled,\n\t\t\t\"Print Font:\"",
+        "line": 2508
+      },
+      {
+        "kind": "Control",
+        "text": "",
+        "raw": "enabled,\n\t\t\t1007",
+        "line": 2514
+      },
+      {
+        "kind": "Control",
+        "text": "",
+        "raw": "enabled,\n\t\t\t1010",
+        "line": 2520
+      },
+      {
+        "kind": "Control",
+        "text": "",
+        "raw": "enabled,\n\t\t\t1008",
+        "line": 2526
+      },
+      {
+        "kind": "StaticText",
+        "text": "Size:",
+        "raw": "disabled,\n\t\t\t\"Size:\"",
+        "line": 2532
+      },
+      {
+        "kind": "StaticText",
+        "text": "Size:",
+        "raw": "disabled,\n\t\t\t\"Size:\"",
+        "line": 2538
+      },
+      {
+        "kind": "StaticText",
+        "text": "Size:",
+        "raw": "disabled,\n\t\t\t\"Size:\"",
+        "line": 2544
+      },
+      {
+        "kind": "EditText",
+        "text": "§§2",
+        "raw": "enabled,\n\t\t\t\"§§2\"",
+        "line": 2550
+      },
+      {
+        "kind": "EditText",
+        "text": "§§10510",
+        "raw": "enabled,\n\t\t\t\"§§10510\"",
+        "line": 2556
+      },
+      {
+        "kind": "EditText",
+        "text": "§§30",
+        "raw": "enabled,\n\t\t\t\"§§30\"",
+        "line": 2562
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Use Quartz text rendering§§-394",
+        "raw": "enabled,\n\t\t\t\"Use Quartz text rendering§§-394\"",
+        "line": 2568
+      },
+      {
+        "kind": "StaticText",
+        "text": "Colors§§-21",
+        "raw": "disabled,\n\t\t\t\"Colors§§-21\"",
+        "line": 2574
+      },
+      {
+        "kind": "StaticText",
+        "text": "Text:",
+        "raw": "disabled,\n\t\t\t\"Text:\"",
+        "line": 2580
+      },
+      {
+        "kind": "StaticText",
+        "text": "Quotes:",
+        "raw": "disabled,\n\t\t\t\"Quotes:\"",
+        "line": 2586
+      },
+      {
+        "kind": "StaticText",
+        "text": "Background:",
+        "raw": "disabled,\n\t\t\t\"Background:\"",
+        "line": 2592
+      },
+      {
+        "kind": "Control",
+        "text": "",
+        "raw": "enabled,\n\t\t\t1055",
+        "line": 2598
+      },
+      {
+        "kind": "Control",
+        "text": "",
+        "raw": "enabled,\n\t\t\t1108",
+        "line": 2604
+      },
+      {
+        "kind": "Control",
+        "text": "",
+        "raw": "enabled,\n\t\t\t1056",
+        "line": 2610
+      },
+      {
+        "kind": "StaticText",
+        "text": "Dimensions of message windows§§-25",
+        "raw": "enabled,\n\t\t\t\"Dimensions of message windows§§-25\"",
+        "line": 2616
+      },
+      {
+        "kind": "StaticText",
+        "text": "Width:",
+        "raw": "enabled,\n\t\t\t\"Width:\"",
+        "line": 2622
+      },
+      {
+        "kind": "EditText",
+        "text": "§§39",
+        "raw": "enabled,\n\t\t\t\"§§39\"",
+        "line": 2628
+      },
+      {
+        "kind": "StaticText",
+        "text": "Height:",
+        "raw": "enabled,\n\t\t\t\"Height:\"",
+        "line": 2634
+      },
+      {
+        "kind": "EditText",
+        "text": "§§40",
+        "raw": "enabled,\n\t\t\t\"§§40\"",
+        "line": 2640
+      },
+      {
+        "kind": "StaticText",
+        "text": "Display Options§§-35",
+        "raw": "disabled,\n\t\t\t\"Display Options§§-35\"",
+        "line": 2646
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Zoom windows when opening§§14",
+        "raw": "enabled,\n\t\t\t\"Zoom windows when opening§§14\"",
+        "line": 2652
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Display graphics in messages§§-236",
+        "raw": "enabled,\n\t\t\t\"Display graphics in messages§§-236\"",
+        "line": 2658
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Display emoticons as pictures§§-391:0",
+        "raw": "enabled,\n\t\t\t\"Display emoticons as pictures§§-391:0\"",
+        "line": 2664
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Show formatting toolbar§§188",
+        "raw": "enabled,\n\t\t\t\"Show formatting toolbar§§188\"",
+        "line": 2670
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Use Live Scrollbars§§209",
+        "raw": "enabled,\n\t\t\t\"Use Live Scrollbars§§209\"",
+        "line": 2676
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Automatically download HTML graphics§§-252",
+        "raw": "enabled,\n\t\t\t\"Automatically download HTML graphics§§-2\"\n\t\t\t\"52\"",
+        "line": 2682
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Animate animated GIF images§§282",
+        "raw": "enabled,\n\t\t\t\"Animate animated GIF images§§282\"",
+        "line": 2689
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Use live window resizing§§-369",
+        "raw": "enabled,\n\t\t\t\"Use live window resizing§§-369\"",
+        "line": 2695
+      }
+    ]
+  },
+  {
+    "type": "DITL",
+    "spec": "2005, \"Junk Mail°junk\", purgeable",
+    "line": 2702,
+    "file": "src/SettingsTwo.rsrc.r",
+    "entries": [
+      {
+        "kind": "StaticText",
+        "text": "Junk Threshold§§-5",
+        "raw": "disabled,\n\t\t\t\"Junk Threshold§§-5\"",
+        "line": 2706
+      },
+      {
+        "kind": "StaticText",
+        "text": "Consider mail junk if score is at least§§1005",
+        "raw": "disabled,\n\t\t\t\"Consider mail junk if score is at least§\"\n\t\t\t\"§1005\"",
+        "line": 2712
+      },
+      {
+        "kind": "Control",
+        "text": "",
+        "raw": "enabled,\n\t\t\t1193",
+        "line": 2719
+      },
+      {
+        "kind": "StaticText",
+        "text": "0",
+        "raw": "disabled,\n\t\t\t\"0\"",
+        "line": 2725
+      },
+      {
+        "kind": "StaticText",
+        "text": "100",
+        "raw": "disabled,\n\t\t\t\"100\"",
+        "line": 2731
+      },
+      {
+        "kind": "StaticText",
+        "text": "Junk & Address Books§§-8",
+        "raw": "disabled,\n\t\t\t\"Junk & Address Books§§-8\"",
+        "line": 2737
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Mail isn't junk if the sender is in an address book§§362:8",
+        "raw": "enabled,\n\t\t\t\"Mail isn't junk if the sender is in an a\"\n\t\t\t\"ddress book§§362:8\"",
+        "line": 2743
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Put Not Junk-ed senders in address book§§-362:9",
+        "raw": "enabled,\n\t\t\t\"Put Not Junk-ed senders in address book§\"\n\t\t\t\"§-362:9\"",
+        "line": 2750
+      },
+      {
+        "kind": "StaticText",
+        "text": "Junk Mailbox§§-15",
+        "raw": "disabled,\n\t\t\t\"Junk Mailbox§§-15\"",
+        "line": 2757
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Hold junk in Junk mailbox§§-362:0",
+        "raw": "enabled,\n\t\t\t\"Hold junk in Junk mailbox§§-362:0\"",
+        "line": 2763
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Junk mailbox is never marked unread§§362:4",
+        "raw": "enabled,\n\t\t\t\"Junk mailbox is never marked unread§§362\"\n\t\t\t\":4\"",
+        "line": 2769
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Remove mail that is at least§§-362:1",
+        "raw": "enabled,\n\t\t\t\"Remove mail that is at least§§-362:1\"",
+        "line": 2776
+      },
+      {
+        "kind": "EditText",
+        "text": "§§32471",
+        "raw": "enabled,\n\t\t\t\"§§32471\"",
+        "line": 2782
+      },
+      {
+        "kind": "StaticText",
+        "text": "days old.",
+        "raw": "disabled,\n\t\t\t\"days old.\"",
+        "line": 2788
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Warn before removing§§-362:2",
+        "raw": "enabled,\n\t\t\t\"Warn before removing§§-362:2\"",
+        "line": 2794
+      },
+      {
+        "kind": "StaticText",
+        "text": "Command Key§§-17",
+        "raw": "disabled,\n\t\t\t\"Command Key§§-17\"",
+        "line": 2800
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Use cmd-J for “Junk”§§-362:12",
+        "raw": "enabled,\n\t\t\t\"Use cmd-J for “Junk”§§-362:12\"",
+        "line": 2806
+      }
+    ]
+  },
+  {
+    "type": "DITL",
+    "spec": "2028, \"Content Concentrator°conc\", purgeable",
+    "line": 2813,
+    "file": "src/SettingsTwo.rsrc.r",
+    "entries": [
+      {
+        "kind": "StaticText",
+        "text": "Single Message Profiles§§-5",
+        "raw": "disabled,\n\t\t\t\"Single Message Profiles§§-5\"",
+        "line": 2817
+      },
+      {
+        "kind": "StaticText",
+        "text": "Preview Pane:",
+        "raw": "disabled,\n\t\t\t\"Preview Pane:\"",
+        "line": 2823
+      },
+      {
+        "kind": "Control",
+        "text": "",
+        "raw": "enabled,\n\t\t\t1196",
+        "line": 2829
+      },
+      {
+        "kind": "StaticText",
+        "text": "Message Window:",
+        "raw": "disabled,\n\t\t\t\"Message Window:\"",
+        "line": 2835
+      },
+      {
+        "kind": "Control",
+        "text": "",
+        "raw": "enabled,\n\t\t\t1197",
+        "line": 2841
+      },
+      {
+        "kind": "StaticText",
+        "text": "Multiple Messages§§-12",
+        "raw": "disabled,\n\t\t\t\"Multiple Messages§§-12\"",
+        "line": 2847
+      },
+      {
+        "kind": "StaticText",
+        "text": "Profile:",
+        "raw": "disabled,\n\t\t\t\"Profile:\"",
+        "line": 2853
+      },
+      {
+        "kind": "Control",
+        "text": "",
+        "raw": "enabled,\n\t\t\t1198",
+        "line": 2859
+      },
+      {
+        "kind": "StaticText",
+        "text": "Maximum # to Concentrate:",
+        "raw": "disabled,\n\t\t\t\"Maximum # to Concentrate:\"",
+        "line": 2865
+      },
+      {
+        "kind": "EditText",
+        "text": "§§32602",
+        "raw": "enabled,\n\t\t\t\"§§32602\"",
+        "line": 2871
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Require matching subjects or senders§§-370:0",
+        "raw": "enabled,\n\t\t\t\"Require matching subjects or senders§§-3\"\n\t\t\t\"70:0\"",
+        "line": 2877
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Generate multiple messages on Reply§§371",
+        "raw": "enabled,\n\t\t\t\"Generate multiple messages on Reply§§371\"",
+        "line": 2884
+      }
+    ]
+  },
+  {
+    "type": "DITL",
+    "spec": "2001, \"Getting Started\", purgeable",
+    "line": 2891,
+    "file": "src/SettingsTwo.rsrc.r",
+    "entries": [
+      {
+        "kind": "StaticText",
+        "text": "Checking Mail§§-5",
+        "raw": "disabled,\n\t\t\t\"Checking Mail§§-5\"",
+        "line": 2895
+      },
+      {
+        "kind": "StaticText",
+        "text": "User Name:",
+        "raw": "disabled,\n\t\t\t\"User Name:\"",
+        "line": 2901
+      },
+      {
+        "kind": "EditText",
+        "text": "§§221",
+        "raw": "enabled,\n\t\t\t\"§§221\"",
+        "line": 2907
+      },
+      {
+        "kind": "StaticText",
+        "text": "Mail Server:",
+        "raw": "disabled,\n\t\t\t\"Mail Server:\"",
+        "line": 2913
+      },
+      {
+        "kind": "EditText",
+        "text": "§§222",
+        "raw": "enabled,\n\t\t\t\"§§222\"",
+        "line": 2919
+      },
+      {
+        "kind": "StaticText",
+        "text": "Sending Mail§§-14",
+        "raw": "disabled,\n\t\t\t\"Sending Mail§§-14\"",
+        "line": 2925
+      },
+      {
+        "kind": "StaticText",
+        "text": "Real Name:",
+        "raw": "disabled,\n\t\t\t\"Real Name:\"",
+        "line": 2931
+      },
+      {
+        "kind": "EditText",
+        "text": "§§77",
+        "raw": "enabled,\n\t\t\t\"§§77\"",
+        "line": 2937
+      },
+      {
+        "kind": "StaticText",
+        "text": "SMTP Server:",
+        "raw": "disabled,\n\t\t\t\"SMTP Server:\"",
+        "line": 2943
+      },
+      {
+        "kind": "EditText",
+        "text": "§§4",
+        "raw": "enabled,\n\t\t\t\"§§4\"",
+        "line": 2949
+      },
+      {
+        "kind": "StaticText",
+        "text": "(You only need to fill this in if it’s different from your Mail Server above.)",
+        "raw": "disabled,\n\t\t\t\"(You only need to fill this in if it’s d\"\n\t\t\t\"ifferent from your Mail Server above.)\"",
+        "line": 2955
+      },
+      {
+        "kind": "StaticText",
+        "text": "Email Address:",
+        "raw": "disabled,\n\t\t\t\"Email Address:\"",
+        "line": 2962
+      },
+      {
+        "kind": "EditText",
+        "text": "§§5",
+        "raw": "enabled,\n\t\t\t\"§§5\"",
+        "line": 2968
+      },
+      {
+        "kind": "StaticText",
+        "text": "(You only need to fill this in if it’s different from Username@MailServer.)",
+        "raw": "disabled,\n\t\t\t\"(You only need to fill this in if it’s d\"\n\t\t\t\"ifferent from Username@MailServer.)\"",
+        "line": 2974
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Make Eudora the default Mailer§§378",
+        "raw": "enabled,\n\t\t\t\"Make Eudora the default Mailer§§378\"",
+        "line": 2981
+      }
+    ]
+  },
+  {
+    "type": "DITL",
+    "spec": "2013, \"Moving Around\", purgeable",
+    "line": 2988,
+    "file": "src/SettingsTwo.rsrc.r",
+    "entries": [
+      {
+        "kind": "StaticText",
+        "text": "Arrow+these modifiers to switch messages§§-6",
+        "raw": "enabled,\n\t\t\t\"Arrow+these modifiers to switch messages\"\n\t\t\t\"§§-6\"",
+        "line": 2992
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Command§§42:8",
+        "raw": "enabled,\n\t\t\t\"Command§§42:8\"",
+        "line": 2999
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Shift§§42:9",
+        "raw": "enabled,\n\t\t\t\"Shift§§42:9\"",
+        "line": 3005
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Caps Lock§§42:10",
+        "raw": "enabled,\n\t\t\t\"Caps Lock§§42:10\"",
+        "line": 3011
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Option§§42:11",
+        "raw": "enabled,\n\t\t\t\"Option§§42:11\"",
+        "line": 3017
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Control§§42:12",
+        "raw": "enabled,\n\t\t\t\"Control§§42:12\"",
+        "line": 3023
+      },
+      {
+        "kind": "StaticText",
+        "text": "After finishing a message§§-13",
+        "raw": "enabled,\n\t\t\t\"After finishing a message§§-13\"",
+        "line": 3029
+      },
+      {
+        "kind": "RadioButton",
+        "text": "Don’t open anything automatically§§97=0",
+        "raw": "enabled,\n\t\t\t\"Don’t open anything automatically§§97=0\"",
+        "line": 3035
+      },
+      {
+        "kind": "RadioButton",
+        "text": "Open the next message§§97=1",
+        "raw": "enabled,\n\t\t\t\"Open the next message§§97=1\"",
+        "line": 3041
+      },
+      {
+        "kind": "RadioButton",
+        "text": "Open next unread message§§97=2",
+        "raw": "enabled,\n\t\t\t\"Open next unread message§§97=2\"",
+        "line": 3047
+      },
+      {
+        "kind": "RadioButton",
+        "text": "Open next message if unread§§97=3",
+        "raw": "enabled,\n\t\t\t\"Open next message if unread§§97=3\"",
+        "line": 3053
+      },
+      {
+        "kind": "RadioButton",
+        "text": "Open next message if unread & same subject§§97=4",
+        "raw": "enabled,\n\t\t\t\"Open next message if unread & same subje\"\n\t\t\t\"ct§§97=4\"",
+        "line": 3059
+      },
+      {
+        "kind": "StaticText",
+        "text": "(\"Finishing\" a message means deleting it, transferring it, or paging past the end of it with the space bar.)",
+        "raw": "enabled,\n\t\t\t\"(\\\"Finishing\\\" a message means deleting it\"\n\t\t\t\", transferring it, or paging past the en\"\n\t\t\t\"d of it with the space bar.)\"",
+        "line": 3066
+      },
+      {
+        "kind": "StaticText",
+        "text": "More keystroke options§§-17",
+        "raw": "enabled,\n\t\t\t\"More keystroke options§§-17\"",
+        "line": 3074
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Tab to switch fields, option-tab to insert tab§§-28",
+        "raw": "enabled,\n\t\t\t\"Tab to switch fields, option-tab to inse\"\n\t\t\t\"rt tab§§-28\"",
+        "line": 3080
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Return switches among header fields§§-149",
+        "raw": "enabled,\n\t\t\t\"Return switches among header fields§§-14\"\n\t\t\t\"9\"",
+        "line": 3087
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Exchange Find and Search menu command keys§§278",
+        "raw": "enabled,\n\t\t\t\"Exchange Find and Search menu command ke\"\n\t\t\t\"ys§§278\"",
+        "line": 3094
+      }
+    ]
+  },
+  {
+    "type": "DITL",
+    "spec": "2006, \"Attachments\", purgeable",
+    "line": 3102,
+    "file": "src/SettingsTwo.rsrc.r",
+    "entries": [
+      {
+        "kind": "StaticText",
+        "text": "Sending Attachments§§-7",
+        "raw": "disabled,\n\t\t\t\"Sending Attachments§§-7\"",
+        "line": 3106
+      },
+      {
+        "kind": "StaticText",
+        "text": "Encoding method:",
+        "raw": "disabled,\n\t\t\t\"Encoding method:\"",
+        "line": 3112
+      },
+      {
+        "kind": "RadioButton",
+        "text": "AppleDouble (\"MIME\")§§109",
+        "raw": "enabled,\n\t\t\t\"AppleDouble (\\\"MIME\\\")§§109\"",
+        "line": 3118
+      },
+      {
+        "kind": "RadioButton",
+        "text": "AppleSingle§§108",
+        "raw": "enabled,\n\t\t\t\"AppleSingle§§108\"",
+        "line": 3124
+      },
+      {
+        "kind": "RadioButton",
+        "text": "BinHex§§107",
+        "raw": "enabled,\n\t\t\t\"BinHex§§107\"",
+        "line": 3130
+      },
+      {
+        "kind": "RadioButton",
+        "text": "Uuencode data fork§§110",
+        "raw": "enabled,\n\t\t\t\"Uuencode data fork§§110\"",
+        "line": 3136
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Always include Macintosh information§§26",
+        "raw": "enabled,\n\t\t\t\"Always include Macintosh information§§26\"",
+        "line": 3142
+      },
+      {
+        "kind": "StaticText",
+        "text": "Receiving Attachments§§-14",
+        "raw": "disabled,\n\t\t\t\"Receiving Attachments§§-14\"",
+        "line": 3148
+      },
+      {
+        "kind": "StaticText",
+        "text": "Attachment Folder:",
+        "raw": "disabled,\n\t\t\t\"Attachment Folder:\"",
+        "line": 3154
+      },
+      {
+        "kind": "Button",
+        "text": "§§43",
+        "raw": "enabled,\n\t\t\t\"§§43\"",
+        "line": 3160
+      },
+      {
+        "kind": "StaticText",
+        "text": "TEXT files belong to:",
+        "raw": "disabled,\n\t\t\t\"TEXT files belong to:\"",
+        "line": 3166
+      },
+      {
+        "kind": "Control",
+        "text": "",
+        "raw": "enabled,\n\t\t\t1037",
+        "line": 3172
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Trash attachments with messages§§86",
+        "raw": "enabled,\n\t\t\t\"Trash attachments with messages§§86\"",
+        "line": 3178
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Receive MIME digests as attachments§§-70",
+        "raw": "enabled,\n\t\t\t\"Receive MIME digests as attachments§§-70\"",
+        "line": 3184
+      }
+    ]
+  },
+  {
+    "type": "DITL",
+    "spec": "2007, \"Replying\", purgeable",
+    "line": 3191,
+    "file": "src/SettingsTwo.rsrc.r",
+    "entries": [
+      {
+        "kind": "StaticText",
+        "text": "Reply to All§§-3",
+        "raw": "enabled,\n\t\t\t\"Reply to All§§-3\"",
+        "line": 3195
+      },
+      {
+        "kind": "RadioButton",
+        "text": "By default (use option key for sender only)§§55",
+        "raw": "enabled,\n\t\t\t\"By default (use option key for sender on\"\n\t\t\t\"ly)§§55\"",
+        "line": 3201
+      },
+      {
+        "kind": "RadioButton",
+        "text": "When option key is down§§-55",
+        "raw": "enabled,\n\t\t\t\"When option key is down§§-55\"",
+        "line": 3208
+      },
+      {
+        "kind": "StaticText",
+        "text": "Address Handling for Reply to All§§-9",
+        "raw": "enabled,\n\t\t\t\"Address Handling for Reply to All§§-9\"",
+        "line": 3214
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Include yourself§§-56",
+        "raw": "enabled,\n\t\t\t\"Include yourself§§-56\"",
+        "line": 3220
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Put original To: recipients in§§93",
+        "raw": "enabled,\n\t\t\t\"Put original To: recipients in§§93\"",
+        "line": 3226
+      },
+      {
+        "kind": "StaticText",
+        "text": "Cc: field, not To: field",
+        "raw": "enabled,\n\t\t\t\"Cc: field, not To: field\"",
+        "line": 3232
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Treat lists specially§§267",
+        "raw": "enabled,\n\t\t\t\"Treat lists specially§§267\"",
+        "line": 3238
+      },
+      {
+        "kind": "StaticText",
+        "text": "(Reply to All will go to the mailing list, Reply to the original sender.  Will not work with all mailing lists.)",
+        "raw": "enabled,\n\t\t\t\"(Reply to All will go to the mailing lis\"\n\t\t\t\"t, Reply to the original sender.  Will n\"\n\t\t\t\"ot work with all mailing lists.)\"",
+        "line": 3244
+      },
+      {
+        "kind": "StaticText",
+        "text": "Miscellaneous§§-13",
+        "raw": "enabled,\n\t\t\t\"Miscellaneous§§-13\"",
+        "line": 3252
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Copy original’s priority to reply§§-73",
+        "raw": "enabled,\n\t\t\t\"Copy original’s priority to reply§§-73\"",
+        "line": 3258
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Generate multiple messages on Reply§§371",
+        "raw": "enabled,\n\t\t\t\"Generate multiple messages on Reply§§371\"",
+        "line": 3264
+      },
+      {
+        "kind": "StaticText",
+        "text": "to multiple messages",
+        "raw": "enabled,\n\t\t\t\"to multiple messages\"",
+        "line": 3270
+      }
+    ]
+  },
+  {
+    "type": "DITL",
+    "spec": "2010, \"Date Display\", purgeable",
+    "line": 3277,
+    "file": "src/SettingsTwo.rsrc.r",
+    "entries": [
+      {
+        "kind": "StaticText",
+        "text": "Date format§§-3",
+        "raw": "enabled,\n\t\t\t\"Date format§§-3\"",
+        "line": 3281
+      },
+      {
+        "kind": "RadioButton",
+        "text": "Age-sensitive§§-121",
+        "raw": "enabled,\n\t\t\t\"Age-sensitive§§-121\"",
+        "line": 3287
+      },
+      {
+        "kind": "RadioButton",
+        "text": "Fixed§§121",
+        "raw": "enabled,\n\t\t\t\"Fixed§§121\"",
+        "line": 3293
+      },
+      {
+        "kind": "StaticText",
+        "text": "Display timezone§§-6",
+        "raw": "enabled,\n\t\t\t\"Display timezone§§-6\"",
+        "line": 3299
+      },
+      {
+        "kind": "RadioButton",
+        "text": "Local timezone§§95",
+        "raw": "enabled,\n\t\t\t\"Local timezone§§95\"",
+        "line": 3305
+      },
+      {
+        "kind": "RadioButton",
+        "text": "Sender's timezone§§-95",
+        "raw": "enabled,\n\t\t\t\"Sender's timezone§§-95\"",
+        "line": 3311
+      }
+    ]
+  },
+  {
+    "type": "DITL",
+    "spec": "2012, \"Styled Text\", purgeable",
+    "line": 3318,
+    "file": "src/SettingsTwo.rsrc.r",
+    "entries": [
+      {
+        "kind": "StaticText",
+        "text": "Sending mail with styles§§-5",
+        "raw": "disabled,\n\t\t\t\"Sending mail with styles§§-5\"",
+        "line": 3322
+      },
+      {
+        "kind": "RadioButton",
+        "text": "Send plain & styled both§§176=0",
+        "raw": "enabled,\n\t\t\t\"Send plain & styled both§§176=0\"",
+        "line": 3328
+      },
+      {
+        "kind": "RadioButton",
+        "text": "Send styled mail only§§176=2",
+        "raw": "enabled,\n\t\t\t\"Send styled mail only§§176=2\"",
+        "line": 3334
+      },
+      {
+        "kind": "RadioButton",
+        "text": "Send plain text mail only§§176=1",
+        "raw": "enabled,\n\t\t\t\"Send plain text mail only§§176=1\"",
+        "line": 3340
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Ask each time§§46",
+        "raw": "enabled,\n\t\t\t\"Ask each time§§46\"",
+        "line": 3346
+      },
+      {
+        "kind": "StaticText",
+        "text": "When receiving styled mail, pay attention to§§-16",
+        "raw": "disabled,\n\t\t\t\"When receiving styled mail, pay attentio\"\n\t\t\t\"n to§§-16\"",
+        "line": 3352
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Bold§§-161:0",
+        "raw": "enabled,\n\t\t\t\"Bold§§-161:0\"",
+        "line": 3359
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Italic§§-161:1",
+        "raw": "enabled,\n\t\t\t\"Italic§§-161:1\"",
+        "line": 3365
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Underline§§-161:2",
+        "raw": "enabled,\n\t\t\t\"Underline§§-161:2\"",
+        "line": 3371
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Color§§-161:10",
+        "raw": "enabled,\n\t\t\t\"Color§§-161:10\"",
+        "line": 3377
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Size§§-161:9",
+        "raw": "enabled,\n\t\t\t\"Size§§-161:9\"",
+        "line": 3383
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Small sizes§§-335",
+        "raw": "enabled,\n\t\t\t\"Small sizes§§-335\"",
+        "line": 3389
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Font§§-161:8",
+        "raw": "enabled,\n\t\t\t\"Font§§-161:8\"",
+        "line": 3395
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Margins§§-179:0",
+        "raw": "enabled,\n\t\t\t\"Margins§§-179:0\"",
+        "line": 3401
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Excerpts§§-179:7",
+        "raw": "enabled,\n\t\t\t\"Excerpts§§-179:7\"",
+        "line": 3407
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Left, right, center§§-179:4",
+        "raw": "enabled,\n\t\t\t\"Left, right, center§§-179:4\"",
+        "line": 3413
+      },
+      {
+        "kind": "StaticText",
+        "text": "Formatting Toolbar§§-18",
+        "raw": "disabled,\n\t\t\t\"Formatting Toolbar§§-18\"",
+        "line": 3419
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Show formatting toolbar§§188",
+        "raw": "enabled,\n\t\t\t\"Show formatting toolbar§§188\"",
+        "line": 3425
+      }
+    ]
+  },
+  {
+    "type": "DITL",
+    "spec": "2027, \"Spell Checking°spel\", purgeable",
+    "line": 3432,
+    "file": "src/SettingsTwo.rsrc.r",
+    "entries": [
+      {
+        "kind": "StaticText",
+        "text": "Check spelling§§-4",
+        "raw": "disabled,\n\t\t\t\"Check spelling§§-4\"",
+        "line": 3436
+      },
+      {
+        "kind": "RadioButton",
+        "text": "Automatically as you type§§-249",
+        "raw": "enabled,\n\t\t\t\"Automatically as you type§§-249\"",
+        "line": 3442
+      },
+      {
+        "kind": "RadioButton",
+        "text": "Only when requested§§249",
+        "raw": "enabled,\n\t\t\t\"Only when requested§§249\"",
+        "line": 3448
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Warn when sending/queueing message\\nwith misspellings§§250:22",
+        "raw": "enabled,\n\t\t\t\"Warn when sending/queueing message\\nwith \"\n\t\t\t\"misspellings§§250:22\"",
+        "line": 3454
+      },
+      {
+        "kind": "StaticText",
+        "text": "Ignore words with§§-9",
+        "raw": "disabled,\n\t\t\t\"Ignore words with§§-9\"",
+        "line": 3461
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Initial capitals (Nostromo)§§250:0",
+        "raw": "enabled,\n\t\t\t\"Initial capitals (Nostromo)§§250:0\"",
+        "line": 3467
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Mixed capitals (noSTRomo)§§250:1",
+        "raw": "enabled,\n\t\t\t\"Mixed capitals (noSTRomo)§§250:1\"",
+        "line": 3473
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Numbers (n8str9m0)§§250:2",
+        "raw": "enabled,\n\t\t\t\"Numbers (n8str9m0)§§250:2\"",
+        "line": 3479
+      },
+      {
+        "kind": "CheckBox",
+        "text": "All capitals (NOSTROMO)§§250:3",
+        "raw": "enabled,\n\t\t\t\"All capitals (NOSTROMO)§§250:3\"",
+        "line": 3485
+      },
+      {
+        "kind": "StaticText",
+        "text": "Suggest words that§§-14",
+        "raw": "disabled,\n\t\t\t\"Suggest words that§§-14\"",
+        "line": 3491
+      },
+      {
+        "kind": "RadioButton",
+        "text": "Look like the word you typed§§-250:15",
+        "raw": "enabled,\n\t\t\t\"Look like the word you typed§§-250:15\"",
+        "line": 3497
+      },
+      {
+        "kind": "RadioButton",
+        "text": "Sound like the word you typed§§250:14",
+        "raw": "enabled,\n\t\t\t\"Sound like the word you typed§§250:14\"",
+        "line": 3503
+      },
+      {
+        "kind": "RadioButton",
+        "text": "Look or sound like the word§§250:20",
+        "raw": "enabled,\n\t\t\t\"Look or sound like the word§§250:20\"",
+        "line": 3509
+      },
+      {
+        "kind": "RadioButton",
+        "text": "Never make suggestions§§250:21",
+        "raw": "enabled,\n\t\t\t\"Never make suggestions§§250:21\"",
+        "line": 3515
+      }
+    ]
+  },
+  {
+    "type": "DITL",
+    "spec": "3021, \"Personality Extras°mPrs•244\", purgeable",
+    "line": 3522,
+    "file": "src/SettingsTwo.rsrc.r",
+    "entries": [
+      {
+        "kind": "StaticText",
+        "text": "Personality to Configure§§-3",
+        "raw": "disabled,\n\t\t\t\"Personality to Configure§§-3\"",
+        "line": 3526
+      },
+      {
+        "kind": "StaticText",
+        "text": "Personality:",
+        "raw": "disabled,\n\t\t\t\"Personality:\"",
+        "line": 3532
+      },
+      {
+        "kind": "Control",
+        "text": "",
+        "raw": "enabled,\n\t\t\t1059",
+        "line": 3538
+      },
+      {
+        "kind": "StaticText",
+        "text": "More Checking Mail§§-9",
+        "raw": "disabled,\n\t\t\t\"More Checking Mail§§-9\"",
+        "line": 3544
+      },
+      {
+        "kind": "StaticText",
+        "text": "Mail Protocol:",
+        "raw": "disabled,\n\t\t\t\"Mail Protocol:\"",
+        "line": 3550
+      },
+      {
+        "kind": "RadioButton",
+        "text": "POP§§-244",
+        "raw": "enabled,\n\t\t\t\"POP§§-244\"",
+        "line": 3556
+      },
+      {
+        "kind": "RadioButton",
+        "text": "IMAP§§244",
+        "raw": "enabled,\n\t\t\t\"IMAP§§244\"",
+        "line": 3562
+      },
+      {
+        "kind": "StaticText",
+        "text": "Location prefix:",
+        "raw": "disabled,\n\t\t\t\"Location prefix:\"",
+        "line": 3568
+      },
+      {
+        "kind": "EditText",
+        "text": "§§11503",
+        "raw": "enabled,\n\t\t\t\"§§11503\"",
+        "line": 3574
+      },
+      {
+        "kind": "StaticText",
+        "text": "Download Options§§-15",
+        "raw": "disabled,\n\t\t\t\"Download Options§§-15\"",
+        "line": 3580
+      },
+      {
+        "kind": "EditText",
+        "text": "§§7616",
+        "raw": "enabled,\n\t\t\t\"§§7616\"",
+        "line": 3586
+      },
+      {
+        "kind": "StaticText",
+        "text": "K",
+        "raw": "disabled,\n\t\t\t\"K\"",
+        "line": 3592
+      },
+      {
+        "kind": "RadioButton",
+        "text": "Minimal headers only§§-269",
+        "raw": "enabled,\n\t\t\t\"Minimal headers only§§-269\"",
+        "line": 3598
+      },
+      {
+        "kind": "RadioButton",
+        "text": "Full message except attachments over§§245",
+        "raw": "enabled,\n\t\t\t\"Full message except attachments over§§24\"\n\t\t\t\"5\"",
+        "line": 3604
+      },
+      {
+        "kind": "RadioButton",
+        "text": "Full message with attachments§§270",
+        "raw": "enabled,\n\t\t\t\"Full message with attachments§§270\"",
+        "line": 3611
+      },
+      {
+        "kind": "StaticText",
+        "text": "Remove Deleted Messages§§-22",
+        "raw": "disabled,\n\t\t\t\"Remove Deleted Messages§§-22\"",
+        "line": 3617
+      },
+      {
+        "kind": "RadioButton",
+        "text": "Always§§392:1",
+        "raw": "enabled,\n\t\t\t\"Always§§392:1\"",
+        "line": 3623
+      },
+      {
+        "kind": "RadioButton",
+        "text": "Never§§392:0",
+        "raw": "enabled,\n\t\t\t\"Never§§392:0\"",
+        "line": 3629
+      },
+      {
+        "kind": "RadioButton",
+        "text": "When percentage of deleted exceeds§§-392:2",
+        "raw": "enabled,\n\t\t\t\"When percentage of deleted exceeds§§-392\"\n\t\t\t\":2\"",
+        "line": 3635
+      },
+      {
+        "kind": "EditText",
+        "text": "§§32682",
+        "raw": "enabled,\n\t\t\t\"§§32682\"",
+        "line": 3642
+      },
+      {
+        "kind": "StaticText",
+        "text": "%",
+        "raw": "disabled,\n\t\t\t\"%\"",
+        "line": 3648
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Use a trash mailbox on the IMAP server§§-256",
+        "raw": "enabled,\n\t\t\t\"Use a trash mailbox on the IMAP server§§\"\n\t\t\t\"-256\"",
+        "line": 3654
+      },
+      {
+        "kind": "StaticText",
+        "text": "More Sending Mail§§-30",
+        "raw": "disabled,\n\t\t\t\"More Sending Mail§§-30\"",
+        "line": 3661
+      },
+      {
+        "kind": "StaticText",
+        "text": "Stationery:",
+        "raw": "disabled,\n\t\t\t\"Stationery:\"",
+        "line": 3667
+      },
+      {
+        "kind": "Control",
+        "text": "",
+        "raw": "enabled,\n\t\t\t1060",
+        "line": 3673
+      },
+      {
+        "kind": "StaticText",
+        "text": "or Signature:",
+        "raw": "disabled,\n\t\t\t\"or Signature:\"",
+        "line": 3679
+      },
+      {
+        "kind": "Control",
+        "text": "",
+        "raw": "enabled,\n\t\t\t1061",
+        "line": 3685
+      },
+      {
+        "kind": "StaticText",
+        "text": "Domain to Add:",
+        "raw": "disabled,\n\t\t\t\"Domain to Add:\"",
+        "line": 3691
+      },
+      {
+        "kind": "EditText",
+        "text": "§§116",
+        "raw": "enabled,\n\t\t\t\"§§116\"",
+        "line": 3697
+      },
+      {
+        "kind": "CheckBox",
+        "text": "Use relay personality, if defined§§-376",
+        "raw": "enabled,\n\t\t\t\"Use relay personality, if defined§§-376\"",
+        "line": 3703
+      }
+    ]
+  }
+]

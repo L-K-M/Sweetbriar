@@ -1,0 +1,667 @@
+{
+  "environment": {
+    "date": "2026-10-11",
+    "python": "3.11.2 (main, May 12 2026, 05:17:27) [GCC 12.2.0]",
+    "platform": "Linux-7.0.0-38-generic-x86_64-with-glibc2.36",
+    "cpus": 16,
+    "memory_bytes": 134763610112,
+    "sqlite": "3.53.4",
+    "apsw": "3.53.4.0",
+    "psycopg": "3.3.6",
+    "postgres": "postgres (PostgreSQL) 16.2",
+    "batch": 1000,
+    "page": 100,
+    "points": 10000,
+    "pages": 500,
+    "repeats": 3,
+    "cpu_models": [
+      "Intel(R) Xeon(R) W-2145 CPU @ 3.70GHz"
+    ],
+    "filesystem": "Filesystem     Type 1K-blocks      Used Available Use% Mounted on\n/dev/md2       ext4 485842536 363264188  97825436  79% /home/paseo",
+    "initdb_seconds": 0.8229154750006273,
+    "bundled_pginstall_bytes": 29523426,
+    "startup_to_connection_seconds": 0.0731710740365088,
+    "idle_footprint_with_one_client": {
+      "process_count": 7,
+      "sum_rss_bytes": 58540032,
+      "sum_pss_bytes": 15507456
+    },
+    "loaded_footprint_with_one_client": {
+      "process_count": 7,
+      "sum_rss_bytes": 279457792,
+      "sum_pss_bytes": 89186304
+    }
+  },
+  "runs": [
+    {
+      "engine": "SQLite",
+      "rows": 100000,
+      "repeat": 0,
+      "method": "executemany",
+      "insert_seconds": 1.32418372790562,
+      "checkpoint_seconds": 0.011780075030401349,
+      "database_bytes": 27901952,
+      "settings": {
+        "journal_mode": "wal",
+        "synchronous": 2,
+        "cache_size": -65536,
+        "wal_autocheckpoint": 1000,
+        "fullfsync": 0
+      },
+      "plan": [
+        [
+          4,
+          0,
+          145,
+          "SEARCH messages USING COVERING INDEX message_list (mailbox_id=? AND received_at<?)"
+        ]
+      ],
+      "point": {
+        "median_us": 4.181,
+        "p95_us": 6.322
+      },
+      "page100": {
+        "median_us": 58.5465,
+        "p95_us": 154.347,
+        "returned_rows": 49600
+      }
+    },
+    {
+      "engine": "PostgreSQL",
+      "rows": 100000,
+      "repeat": 0,
+      "method": "executemany",
+      "insert_seconds": 2.706046470440924,
+      "checkpoint_seconds": 0.2833737339824438,
+      "database_bytes": 38027264,
+      "settings": {
+        "fsync": "on",
+        "synchronous_commit": "on",
+        "full_page_writes": "on",
+        "wal_sync_method": "fdatasync",
+        "shared_buffers": "64MB",
+        "data_checksums": "on"
+      },
+      "plan": [
+        "Limit  (cost=0.42..11.37 rows=100 width=71) (actual time=0.025..0.075 rows=100 loops=1)",
+        "  Buffers: shared hit=5",
+        "  ->  Index Only Scan using message_list on messages  (cost=0.42..1076.94 rows=9826 width=71) (actual time=0.024..0.057 rows=100 loops=1)",
+        "        Index Cond: ((mailbox_id = '0'::smallint) AND (ROW(received_at, id) < ROW(2000000000, 100001)))",
+        "        Heap Fetches: 0",
+        "        Buffers: shared hit=5",
+        "Planning Time: 0.180 ms",
+        "Execution Time: 0.107 ms"
+      ],
+      "point": {
+        "median_us": 126.4445,
+        "p95_us": 198.451
+      },
+      "page100": {
+        "median_us": 364.1565,
+        "p95_us": 669.765,
+        "returned_rows": 49600
+      }
+    },
+    {
+      "engine": "PostgreSQL",
+      "rows": 100000,
+      "repeat": 0,
+      "method": "copy",
+      "insert_seconds": 1.8757315325783566,
+      "checkpoint_seconds": 0.6315360589651391,
+      "database_bytes": 38027264,
+      "settings": {
+        "fsync": "on",
+        "synchronous_commit": "on",
+        "full_page_writes": "on",
+        "wal_sync_method": "fdatasync",
+        "shared_buffers": "64MB",
+        "data_checksums": "on"
+      },
+      "plan": [
+        "Limit  (cost=0.42..11.37 rows=100 width=71) (actual time=0.021..0.071 rows=100 loops=1)",
+        "  Buffers: shared hit=5",
+        "  ->  Index Only Scan using message_list on messages  (cost=0.42..1130.86 rows=10322 width=71) (actual time=0.020..0.054 rows=100 loops=1)",
+        "        Index Cond: ((mailbox_id = '0'::smallint) AND (ROW(received_at, id) < ROW(2000000000, 100001)))",
+        "        Heap Fetches: 0",
+        "        Buffers: shared hit=5",
+        "Planning Time: 0.152 ms",
+        "Execution Time: 0.099 ms"
+      ],
+      "point": {
+        "median_us": 110.2055,
+        "p95_us": 208.995
+      },
+      "page100": {
+        "median_us": 359.14,
+        "p95_us": 590.015,
+        "returned_rows": 49600
+      }
+    },
+    {
+      "engine": "SQLite",
+      "rows": 100000,
+      "repeat": 1,
+      "method": "executemany",
+      "insert_seconds": 1.1874979231506586,
+      "checkpoint_seconds": 0.014877750014420599,
+      "database_bytes": 27901952,
+      "settings": {
+        "journal_mode": "wal",
+        "synchronous": 2,
+        "cache_size": -65536,
+        "wal_autocheckpoint": 1000,
+        "fullfsync": 0
+      },
+      "plan": [
+        [
+          4,
+          0,
+          145,
+          "SEARCH messages USING COVERING INDEX message_list (mailbox_id=? AND received_at<?)"
+        ]
+      ],
+      "point": {
+        "median_us": 3.827,
+        "p95_us": 6.581
+      },
+      "page100": {
+        "median_us": 51.5945,
+        "p95_us": 139.003,
+        "returned_rows": 49600
+      }
+    },
+    {
+      "engine": "PostgreSQL",
+      "rows": 100000,
+      "repeat": 1,
+      "method": "executemany",
+      "insert_seconds": 2.501011955435388,
+      "checkpoint_seconds": 0.2812213209690526,
+      "database_bytes": 38027264,
+      "settings": {
+        "fsync": "on",
+        "synchronous_commit": "on",
+        "full_page_writes": "on",
+        "wal_sync_method": "fdatasync",
+        "shared_buffers": "64MB",
+        "data_checksums": "on"
+      },
+      "plan": [
+        "Limit  (cost=0.42..11.38 rows=100 width=71) (actual time=0.012..0.034 rows=100 loops=1)",
+        "  Buffers: shared hit=5",
+        "  ->  Index Only Scan using message_list on messages  (cost=0.42..1116.00 rows=10179 width=71) (actual time=0.012..0.027 rows=100 loops=1)",
+        "        Index Cond: ((mailbox_id = '0'::smallint) AND (ROW(received_at, id) < ROW(2000000000, 100001)))",
+        "        Heap Fetches: 0",
+        "        Buffers: shared hit=5",
+        "Planning Time: 0.101 ms",
+        "Execution Time: 0.049 ms"
+      ],
+      "point": {
+        "median_us": 96.46600000000001,
+        "p95_us": 209.131
+      },
+      "page100": {
+        "median_us": 221.7695,
+        "p95_us": 373.632,
+        "returned_rows": 49600
+      }
+    },
+    {
+      "engine": "PostgreSQL",
+      "rows": 100000,
+      "repeat": 1,
+      "method": "copy",
+      "insert_seconds": 1.6383104649139568,
+      "checkpoint_seconds": 0.3498269090196118,
+      "database_bytes": 38027264,
+      "settings": {
+        "fsync": "on",
+        "synchronous_commit": "on",
+        "full_page_writes": "on",
+        "wal_sync_method": "fdatasync",
+        "shared_buffers": "64MB",
+        "data_checksums": "on"
+      },
+      "plan": [
+        "Limit  (cost=0.42..11.37 rows=100 width=71) (actual time=0.014..0.051 rows=100 loops=1)",
+        "  Buffers: shared hit=5",
+        "  ->  Index Only Scan using message_list on messages  (cost=0.42..1081.94 rows=9876 width=71) (actual time=0.014..0.039 rows=100 loops=1)",
+        "        Index Cond: ((mailbox_id = '0'::smallint) AND (ROW(received_at, id) < ROW(2000000000, 100001)))",
+        "        Heap Fetches: 0",
+        "        Buffers: shared hit=5",
+        "Planning Time: 0.115 ms",
+        "Execution Time: 0.073 ms"
+      ],
+      "point": {
+        "median_us": 122.88749999999999,
+        "p95_us": 214.47
+      },
+      "page100": {
+        "median_us": 247.962,
+        "p95_us": 594.944,
+        "returned_rows": 49600
+      }
+    },
+    {
+      "engine": "SQLite",
+      "rows": 100000,
+      "repeat": 2,
+      "method": "executemany",
+      "insert_seconds": 1.3117539018276148,
+      "checkpoint_seconds": 0.018133237026631832,
+      "database_bytes": 27901952,
+      "settings": {
+        "journal_mode": "wal",
+        "synchronous": 2,
+        "cache_size": -65536,
+        "wal_autocheckpoint": 1000,
+        "fullfsync": 0
+      },
+      "plan": [
+        [
+          4,
+          0,
+          145,
+          "SEARCH messages USING COVERING INDEX message_list (mailbox_id=? AND received_at<?)"
+        ]
+      ],
+      "point": {
+        "median_us": 3.92,
+        "p95_us": 6.868
+      },
+      "page100": {
+        "median_us": 52.9585,
+        "p95_us": 144.307,
+        "returned_rows": 49600
+      }
+    },
+    {
+      "engine": "PostgreSQL",
+      "rows": 100000,
+      "repeat": 2,
+      "method": "executemany",
+      "insert_seconds": 2.262219728436321,
+      "checkpoint_seconds": 0.17526557302335277,
+      "database_bytes": 38027264,
+      "settings": {
+        "fsync": "on",
+        "synchronous_commit": "on",
+        "full_page_writes": "on",
+        "wal_sync_method": "fdatasync",
+        "shared_buffers": "64MB",
+        "data_checksums": "on"
+      },
+      "plan": [
+        "Limit  (cost=0.42..11.39 rows=100 width=71) (actual time=0.012..0.051 rows=100 loops=1)",
+        "  Buffers: shared hit=5",
+        "  ->  Index Only Scan using message_list on messages  (cost=0.42..1115.80 rows=10169 width=71) (actual time=0.012..0.039 rows=100 loops=1)",
+        "        Index Cond: ((mailbox_id = '0'::smallint) AND (ROW(received_at, id) < ROW(2000000000, 100001)))",
+        "        Heap Fetches: 0",
+        "        Buffers: shared hit=5",
+        "Planning Time: 0.121 ms",
+        "Execution Time: 0.070 ms"
+      ],
+      "point": {
+        "median_us": 124.172,
+        "p95_us": 222.67
+      },
+      "page100": {
+        "median_us": 345.818,
+        "p95_us": 641.747,
+        "returned_rows": 49600
+      }
+    },
+    {
+      "engine": "PostgreSQL",
+      "rows": 100000,
+      "repeat": 2,
+      "method": "copy",
+      "insert_seconds": 1.4574034991674125,
+      "checkpoint_seconds": 0.433569221990183,
+      "database_bytes": 38027264,
+      "settings": {
+        "fsync": "on",
+        "synchronous_commit": "on",
+        "full_page_writes": "on",
+        "wal_sync_method": "fdatasync",
+        "shared_buffers": "64MB",
+        "data_checksums": "on"
+      },
+      "plan": [
+        "Limit  (cost=0.42..11.35 rows=100 width=71) (actual time=0.018..0.086 rows=100 loops=1)",
+        "  Buffers: shared hit=5",
+        "  ->  Index Only Scan using message_list on messages  (cost=0.42..1082.34 rows=9896 width=71) (actual time=0.017..0.064 rows=100 loops=1)",
+        "        Index Cond: ((mailbox_id = '0'::smallint) AND (ROW(received_at, id) < ROW(2000000000, 100001)))",
+        "        Heap Fetches: 0",
+        "        Buffers: shared hit=5",
+        "Planning Time: 0.121 ms",
+        "Execution Time: 0.117 ms"
+      ],
+      "point": {
+        "median_us": 118.458,
+        "p95_us": 226.355
+      },
+      "page100": {
+        "median_us": 282.8935,
+        "p95_us": 604.448,
+        "returned_rows": 49600
+      }
+    },
+    {
+      "engine": "SQLite",
+      "rows": 1000000,
+      "repeat": 0,
+      "method": "executemany",
+      "insert_seconds": 12.099579715635628,
+      "checkpoint_seconds": 0.0008016909705474973,
+      "database_bytes": 282656768,
+      "settings": {
+        "journal_mode": "wal",
+        "synchronous": 2,
+        "cache_size": -65536,
+        "wal_autocheckpoint": 1000,
+        "fullfsync": 0
+      },
+      "plan": [
+        [
+          4,
+          0,
+          175,
+          "SEARCH messages USING COVERING INDEX message_list (mailbox_id=? AND received_at<?)"
+        ]
+      ],
+      "point": {
+        "median_us": 5.887,
+        "p95_us": 13.383
+      },
+      "page100": {
+        "median_us": 57.209,
+        "p95_us": 116.972,
+        "returned_rows": 50000
+      }
+    },
+    {
+      "engine": "PostgreSQL",
+      "rows": 1000000,
+      "repeat": 0,
+      "method": "executemany",
+      "insert_seconds": 34.58317317353794,
+      "checkpoint_seconds": 0.6622110040043481,
+      "database_bytes": 380149760,
+      "settings": {
+        "fsync": "on",
+        "synchronous_commit": "on",
+        "full_page_writes": "on",
+        "wal_sync_method": "fdatasync",
+        "shared_buffers": "64MB",
+        "data_checksums": "on"
+      },
+      "plan": [
+        "Limit  (cost=0.42..11.38 rows=100 width=71) (actual time=0.012..0.034 rows=100 loops=1)",
+        "  Buffers: shared hit=5",
+        "  ->  Index Only Scan using message_list on messages  (cost=0.42..10610.22 rows=96890 width=71) (actual time=0.011..0.026 rows=100 loops=1)",
+        "        Index Cond: ((mailbox_id = '0'::smallint) AND (ROW(received_at, id) < ROW(2000000000, 1000001)))",
+        "        Heap Fetches: 0",
+        "        Buffers: shared hit=5",
+        "Planning Time: 0.081 ms",
+        "Execution Time: 0.048 ms"
+      ],
+      "point": {
+        "median_us": 144.4005,
+        "p95_us": 231.789
+      },
+      "page100": {
+        "median_us": 366.3675,
+        "p95_us": 630.418,
+        "returned_rows": 50000
+      }
+    },
+    {
+      "engine": "PostgreSQL",
+      "rows": 1000000,
+      "repeat": 0,
+      "method": "copy",
+      "insert_seconds": 19.36490564205451,
+      "checkpoint_seconds": 2.1390828160219826,
+      "database_bytes": 380305408,
+      "settings": {
+        "fsync": "on",
+        "synchronous_commit": "on",
+        "full_page_writes": "on",
+        "wal_sync_method": "fdatasync",
+        "shared_buffers": "64MB",
+        "data_checksums": "on"
+      },
+      "plan": [
+        "Limit  (cost=0.42..11.45 rows=100 width=71) (actual time=0.023..0.073 rows=100 loops=1)",
+        "  Buffers: shared hit=5",
+        "  ->  Index Only Scan using message_list on messages  (cost=0.42..11042.47 rows=100123 width=71) (actual time=0.022..0.056 rows=100 loops=1)",
+        "        Index Cond: ((mailbox_id = '0'::smallint) AND (ROW(received_at, id) < ROW(2000000000, 1000001)))",
+        "        Heap Fetches: 0",
+        "        Buffers: shared hit=5",
+        "Planning Time: 0.167 ms",
+        "Execution Time: 0.103 ms"
+      ],
+      "point": {
+        "median_us": 162.2215,
+        "p95_us": 274.076
+      },
+      "page100": {
+        "median_us": 385.169,
+        "p95_us": 726.571,
+        "returned_rows": 50000
+      }
+    },
+    {
+      "engine": "SQLite",
+      "rows": 1000000,
+      "repeat": 1,
+      "method": "executemany",
+      "insert_seconds": 26.834133587544784,
+      "checkpoint_seconds": 0.0007015579612925649,
+      "database_bytes": 282656768,
+      "settings": {
+        "journal_mode": "wal",
+        "synchronous": 2,
+        "cache_size": -65536,
+        "wal_autocheckpoint": 1000,
+        "fullfsync": 0
+      },
+      "plan": [
+        [
+          4,
+          0,
+          175,
+          "SEARCH messages USING COVERING INDEX message_list (mailbox_id=? AND received_at<?)"
+        ]
+      ],
+      "point": {
+        "median_us": 5.8325,
+        "p95_us": 8.843
+      },
+      "page100": {
+        "median_us": 57.459,
+        "p95_us": 108.868,
+        "returned_rows": 50000
+      }
+    },
+    {
+      "engine": "PostgreSQL",
+      "rows": 1000000,
+      "repeat": 1,
+      "method": "executemany",
+      "insert_seconds": 33.972635484533384,
+      "checkpoint_seconds": 0.9959331199643202,
+      "database_bytes": 380149760,
+      "settings": {
+        "fsync": "on",
+        "synchronous_commit": "on",
+        "full_page_writes": "on",
+        "wal_sync_method": "fdatasync",
+        "shared_buffers": "64MB",
+        "data_checksums": "on"
+      },
+      "plan": [
+        "Limit  (cost=0.42..11.38 rows=100 width=71) (actual time=0.011..0.033 rows=100 loops=1)",
+        "  Buffers: shared hit=5",
+        "  ->  Index Only Scan using message_list on messages  (cost=0.42..11045.56 rows=100857 width=71) (actual time=0.010..0.026 rows=100 loops=1)",
+        "        Index Cond: ((mailbox_id = '0'::smallint) AND (ROW(received_at, id) < ROW(2000000000, 1000001)))",
+        "        Heap Fetches: 0",
+        "        Buffers: shared hit=5",
+        "Planning Time: 0.087 ms",
+        "Execution Time: 0.046 ms"
+      ],
+      "point": {
+        "median_us": 123.5535,
+        "p95_us": 241.889
+      },
+      "page100": {
+        "median_us": 397.2375,
+        "p95_us": 640.382,
+        "returned_rows": 50000
+      }
+    },
+    {
+      "engine": "PostgreSQL",
+      "rows": 1000000,
+      "repeat": 1,
+      "method": "copy",
+      "insert_seconds": 18.760774878493976,
+      "checkpoint_seconds": 8.148825211974327,
+      "database_bytes": 380305408,
+      "settings": {
+        "fsync": "on",
+        "synchronous_commit": "on",
+        "full_page_writes": "on",
+        "wal_sync_method": "fdatasync",
+        "shared_buffers": "64MB",
+        "data_checksums": "on"
+      },
+      "plan": [
+        "Limit  (cost=0.42..11.45 rows=100 width=71) (actual time=0.012..0.051 rows=100 loops=1)",
+        "  Buffers: shared hit=5",
+        "  ->  Index Only Scan using message_list on messages  (cost=0.42..11126.46 rows=100923 width=71) (actual time=0.011..0.039 rows=100 loops=1)",
+        "        Index Cond: ((mailbox_id = '0'::smallint) AND (ROW(received_at, id) < ROW(2000000000, 1000001)))",
+        "        Heap Fetches: 0",
+        "        Buffers: shared hit=5",
+        "Planning Time: 0.087 ms",
+        "Execution Time: 0.069 ms"
+      ],
+      "point": {
+        "median_us": 120.9145,
+        "p95_us": 240.915
+      },
+      "page100": {
+        "median_us": 324.22450000000003,
+        "p95_us": 709.328,
+        "returned_rows": 50000
+      }
+    },
+    {
+      "engine": "SQLite",
+      "rows": 1000000,
+      "repeat": 2,
+      "method": "executemany",
+      "insert_seconds": 25.577778154518455,
+      "checkpoint_seconds": 0.0006877409759908915,
+      "database_bytes": 282656768,
+      "settings": {
+        "journal_mode": "wal",
+        "synchronous": 2,
+        "cache_size": -65536,
+        "wal_autocheckpoint": 1000,
+        "fullfsync": 0
+      },
+      "plan": [
+        [
+          4,
+          0,
+          175,
+          "SEARCH messages USING COVERING INDEX message_list (mailbox_id=? AND received_at<?)"
+        ]
+      ],
+      "point": {
+        "median_us": 5.871,
+        "p95_us": 9.385
+      },
+      "page100": {
+        "median_us": 57.087500000000006,
+        "p95_us": 69.262,
+        "returned_rows": 50000
+      }
+    },
+    {
+      "engine": "PostgreSQL",
+      "rows": 1000000,
+      "repeat": 2,
+      "method": "executemany",
+      "insert_seconds": 56.39092083036667,
+      "checkpoint_seconds": 1.6779272069688886,
+      "database_bytes": 380149760,
+      "settings": {
+        "fsync": "on",
+        "synchronous_commit": "on",
+        "full_page_writes": "on",
+        "wal_sync_method": "fdatasync",
+        "shared_buffers": "64MB",
+        "data_checksums": "on"
+      },
+      "plan": [
+        "Limit  (cost=0.42..11.38 rows=100 width=71) (actual time=0.017..0.040 rows=100 loops=1)",
+        "  Buffers: shared hit=5",
+        "  ->  Index Only Scan using message_list on messages  (cost=0.42..10878.88 rows=99323 width=71) (actual time=0.017..0.033 rows=100 loops=1)",
+        "        Index Cond: ((mailbox_id = '0'::smallint) AND (ROW(received_at, id) < ROW(2000000000, 1000001)))",
+        "        Heap Fetches: 0",
+        "        Buffers: shared hit=5",
+        "Planning Time: 0.101 ms",
+        "Execution Time: 0.057 ms"
+      ],
+      "point": {
+        "median_us": 155.644,
+        "p95_us": 253.687
+      },
+      "page100": {
+        "median_us": 387.79200000000003,
+        "p95_us": 714.83,
+        "returned_rows": 50000
+      }
+    },
+    {
+      "engine": "PostgreSQL",
+      "rows": 1000000,
+      "repeat": 2,
+      "method": "copy",
+      "insert_seconds": 23.88316370587563,
+      "checkpoint_seconds": 6.255215621960815,
+      "database_bytes": 380305408,
+      "settings": {
+        "fsync": "on",
+        "synchronous_commit": "on",
+        "full_page_writes": "on",
+        "wal_sync_method": "fdatasync",
+        "shared_buffers": "64MB",
+        "data_checksums": "on"
+      },
+      "plan": [
+        "Limit  (cost=0.42..11.45 rows=100 width=71) (actual time=0.009..0.024 rows=100 loops=1)",
+        "  Buffers: shared hit=5",
+        "  ->  Index Only Scan using message_list on messages  (cost=0.42..11043.11 rows=100157 width=71) (actual time=0.009..0.019 rows=100 loops=1)",
+        "        Index Cond: ((mailbox_id = '0'::smallint) AND (ROW(received_at, id) < ROW(2000000000, 1000001)))",
+        "        Heap Fetches: 0",
+        "        Buffers: shared hit=5",
+        "Planning Time: 0.064 ms",
+        "Execution Time: 0.034 ms"
+      ],
+      "point": {
+        "median_us": 147.67,
+        "p95_us": 227.456
+      },
+      "page100": {
+        "median_us": 239.6275,
+        "p95_us": 450.2,
+        "returned_rows": 50000
+      }
+    }
+  ]
+}

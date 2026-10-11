@@ -1,0 +1,28 @@
+[rocksdict] wrote /home/paseo/sb-research/jobs/db-engines-devin/bench/../results/rocksdict.json
+{
+ "engine": "rocksdict",
+ "note": "use_fsync=1, sync=True on commit batches",
+ "bulk_load_s": 3.8783842949778773,
+ "bulk_load_rows": 1000000,
+ "bulk_load_method": "WriteBatch 10k rows, WAL nosync",
+ "sync_batch_s": 7.031119705992751,
+ "sync_batches": 400,
+ "sync_batch_rows": 250,
+ "single_commit_s": 20.940663792018313,
+ "single_commits": 2000,
+ "single_commit_us": 10470.331896009156,
+ "point_lookup_s": 0.18714590795570984,
+ "point_lookups": 20000,
+ "point_lookup_us": 9.357295397785492,
+ "keyset_pages": 40,
+ "keyset_total_s": 0.0012482770252972841,
+ "keyset_ms_per_page": 0.031206925632432103,
+ "mark_read_s": 0.15759474295191467,
+ "mark_read_rows": 10000,
+ "concurrent_writer_batches": 100,
+ "concurrent_writer_s": 3.6313627419876866,
+ "concurrent_reader_total_lookups": 80358,
+ "db_file_bytes": 99579657,
+ "open_plus_count_s": 0.9462819939944893,
+ "count_all_keys": 2250000
+}
