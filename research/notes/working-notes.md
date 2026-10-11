@@ -916,3 +916,61 @@ Running takeaways while reading raw reports. Input to the curated docs.
 - AppKit automatic Observation tracking: opt-in on macOS 15 via
   `NSObservationTrackingEnabled`, on by default in the 2026 releases
   ([Apple](https://developer.apple.com/documentation/appkit/updating-views-automatically-with-observation-tracking-in-appkit.md)).
+
+## D16 Markdown-first, GLM (raw/markdown/glm.md) + Devin's debate view
+
+- Both say: **split the proposal.** Writing in Markdown is low risk and
+  differentiating (MailMate precedent; Mimestream shortcuts; Markdown
+  Here). Reading: **adaptive normalization, not normalize-everything.**
+- Render model is a richer document AST (Pandoc-like), not Markdown:
+  CommonMark can't carry dir/lang, data-table semantics, cid image maps.
+  Markdown is an export of the AST (GLM: store CommonMark+GFM + sidecar
+  metadata as a versioned cache).
+- Classify per message: text-like mail (plain, quoted threads, patches,
+  notifications, simple HTML passing a fidelity gate) renders normalized
+  natively (TextKit 2, no WebContent process: privacy + dark mode + speed);
+  layout mail (newsletters, receipts, marketing, calendar, AMP) renders the
+  sanitized original by default. Instant "Show original", per-sender
+  memory. Normalized form is a derived, versioned, discardable cache.
+- Wire format: multipart/alternative = rendered text/plain (format=flowed)
+  + email-safe generated HTML with inlined CSS. `text/markdown` (RFC 7763)
+  is unused by mainstream clients; MailMate uses a private
+  `markup=markdown` parameter on text/plain; optional per identity.
+- Tooling: comrak 0.56 (652/652 CommonMark, 670/670 GFM), pulldown-cmark,
+  htmd 0.5.5 (~16 ms for a 1.37 MB page on M4), html2text, dom_smoothie
+  (readability), ammonia, syntect.
+- Replies: quote from AST as Markdown blockquote, "keep original
+  formatting" fallback; forward as untouched message/rfc822.
+- Effort: composer + wire format ~4-6 weeks; reading pipeline ~1
+  engineer-year for "good", then an ongoing fidelity treadmill. Fallback:
+  a reader-mode toggle with the same internals (80% of benefit).
+- Risks: fidelity and trust (receipts, legal notices, phishing cues);
+  needs a differential corpus harness (pandoc as oracle, golden
+  snapshots) before shipping; encrypted mail: derive on open, don't cache.
+
+## D17 database, Devin (raw/database/devin.md + devin-artifacts/bench.py)
+
+- Benchmark (shared Linux box; SQLite 3.40.1 WAL+FULL vs PostgreSQL 16.2
+  via pip `pgserver`, Unix socket; 500k mail-shaped rows): point lookup
+  7 us vs 116 us (16x); keyset page 197 us vs 508 us; FTS5 query ~4x
+  faster than tsvector+GIN, and its index builds 7x faster; single-row commits fsync-bound for
+  both (~250 vs 193/s); readers never blocked in WAL. Postgres wins only
+  with many concurrent writers, which the single-writer design doesn't have.
+- **Akonadi switched its default to SQLite** (upstream MR !311; KDE PIM
+  26.04.1 per Gentoo news 2026-05-23, checked by Claude:
+  [Gentoo news](https://gentoo.nic.cz/rsync/metadata/news/2026-05-23-kdepim-sql-backend-change/2026-05-23-kdepim-sql-backend-change.en.txt))
+  after ~17 years of per-user MySQL/MariaDB/Postgres daemons ("running a
+  daemon brings its own set of problems"). The closest precedent ran the
+  experiment and reversed it.
+- Postgres-specific hazards on desktops: yearly major-version datadir
+  upgrades (pg_upgrade/dump-restore), libc/ICU collation drift corrupting
+  indexes, a postmaster to babysit, sandbox/MAS friction (unix socket +
+  shared memory).
+- Every surveyed desktop mail client is SQLite (+ files): Apple Mail,
+  Outlook for Mac (Outlook.sqlite), Mailspring, Delta Chat, Evolution,
+  eM Client; Signal Desktop and Apple Photos too.
+- Tighten SQLite plan: latest SQLite is 3.54.0 (2026-10-09) [verify];
+  `reserve_bytes=8` + cksumvfs for page checksums; VACUUM INTO snapshots
+  or Litestream-style WAL streaming for backups.
+- Postgres becomes right for a future server-side sync service or shared
+  team mailboxes, as a service; the client store then becomes a replica.
