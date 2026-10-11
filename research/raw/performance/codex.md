@@ -103,7 +103,7 @@ IMAP allows pipelining, but dependencies and ambiguous untagged responses restri
 | PARTIAL | ? | D | ? |
 | LITERAL+ | D | D | D |
 
-**Hosted endpoint evidence:** on 2026-10-11 at 18:32 UTC, this research connected over certificate-verified TLS on port 993, issued CAPABILITY, and logged out, without authenticating. `A` below means explicitly advertised in that response; `D` means official documentation additionally confirms the feature; `?` means **(unverified)**, not unsupported. Pre-authentication lists may omit extensions available after login. Probe transcripts are saved in [protocol-probes.json](/home/paseo/sb-research/jobs/performance-codex/protocol-probes.json). Gmail’s documentation additionally confirms SPECIAL-USE and its X-GM extensions. [Gmail extension documentation](https://developers.google.com/workspace/gmail/imap/imap-extensions)
+**Hosted endpoint evidence:** on 2026-10-11 at 18:32 UTC, this research connected over certificate-verified TLS on port 993, issued CAPABILITY, and logged out, without authenticating. `A` below means explicitly advertised in that response; `D` means official documentation additionally confirms the feature; `?` means **(unverified)**, not unsupported. Pre-authentication lists may omit extensions available after login. Probe transcripts are saved in [protocol-probes.json](codex-artifacts/protocol-probes.json). Gmail’s documentation additionally confirms SPECIAL-USE and its X-GM extensions. [Gmail extension documentation](https://developers.google.com/workspace/gmail/imap/imap-extensions)
 
 | Feature | Gmail | iCloud | Fastmail | Microsoft 365 | Yahoo |
 |---|---|---|---|---|---|
@@ -197,7 +197,7 @@ SQLite’s documentation explains why OFFSET grows with skipped rows and shows r
 | Page after `OFFSET 900000` | 79.764 ms | 105.906 ms |
 | Same distant page using date/ID cursor | 0.080 ms | 0.312 ms |
 
-The database occupied 142,614,528 bytes, about 136 MiB. All three queries used the covering index. These are warm metadata-query results; OS caches were not flushed, helpers were running concurrently, and no macOS UI, full-text search, cold I/O, or write durability was measured. SQLite 3.40.1 was the available benchmark library, **not** the proposed shipping version. [Reproducible script](/home/paseo/sb-research/jobs/performance-codex/bench-sqlite.py), [Recorded results](/home/paseo/sb-research/jobs/performance-codex/bench-results.json)
+The database occupied 142,614,528 bytes, about 136 MiB. All three queries used the covering index. These are warm metadata-query results; OS caches were not flushed, helpers were running concurrently, and no macOS UI, full-text search, cold I/O, or write durability was measured. SQLite 3.40.1 was the available benchmark library, **not** the proposed shipping version. [Reproducible script](codex-artifacts/bench-sqlite.py), [Recorded results](codex-artifacts/bench-results.json)
 
 **Concurrency and durability:** WAL allows concurrent readers and a writer, but only one writer at a time. SQLite normally auto-checkpoints at 1,000 pages; long reader transactions can prevent progress and grow the WAL. Propose one owned writer worker, two to four reader connections, short read snapshots, bounded writes, and separately scheduled checkpoints. Never hold a transaction while awaiting network or UI work. [SQLite WAL](https://sqlite.org/wal.html)
 
@@ -364,4 +364,4 @@ All links below were consulted on **2026-10-11**; historical publication/update 
 
 - **Test data:** [CMU Enron dataset](https://www.cs.cmu.edu/~enron/).
 
-Original research artifacts: [IMAP probe script](/home/paseo/sb-research/jobs/performance-codex/probe-imap.py), [IMAP capability transcripts](/home/paseo/sb-research/jobs/performance-codex/protocol-probes.json), [SQLite experiment script](/home/paseo/sb-research/jobs/performance-codex/bench-sqlite.py), [SQLite results](/home/paseo/sb-research/jobs/performance-codex/bench-results.json).
+Original research artifacts: [IMAP probe script](codex-artifacts/probe-imap.py), [IMAP capability transcripts](codex-artifacts/protocol-probes.json), [SQLite experiment script](codex-artifacts/bench-sqlite.py), [SQLite results](codex-artifacts/bench-results.json).

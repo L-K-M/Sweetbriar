@@ -1,0 +1,66 @@
+{
+  "date": "2026-10-11",
+  "scope": "Synthetic metadata only, Linux shared host; warm repetitions, OS cache not flushed; helpers running concurrently; not a macOS, end-to-end UI, durability, or cold-cache benchmark",
+  "python": "3.11.2",
+  "sqlite": "3.40.1",
+  "platform": "Linux 7.0.0-38-generic",
+  "architecture": "x86_64",
+  "cpu": "Intel(R) Xeon(R) W-2145 CPU @ 3.70GHz",
+  "rows": 1000000,
+  "page_size": 4096,
+  "cache_size_kib": 32768,
+  "mmap_bytes": 0,
+  "journal_mode": "WAL",
+  "synchronous": "FULL",
+  "database_bytes": 142614528,
+  "queries": {
+    "first_100": {
+      "median_ms": 0.0732765,
+      "p95_ms": 0.270495,
+      "max_ms": 0.312731,
+      "n": 50,
+      "rows": 100,
+      "first_id": 1000000,
+      "query_plan": [
+        [
+          4,
+          0,
+          0,
+          "SEARCH summary USING COVERING INDEX by_date (mailbox_id=?)"
+        ]
+      ]
+    },
+    "offset_900000": {
+      "median_ms": 79.7643095,
+      "p95_ms": 105.905599,
+      "max_ms": 111.744543,
+      "n": 50,
+      "rows": 100,
+      "first_id": 100000,
+      "query_plan": [
+        [
+          7,
+          0,
+          0,
+          "SEARCH summary USING COVERING INDEX by_date (mailbox_id=?)"
+        ]
+      ]
+    },
+    "keyset_same_page": {
+      "median_ms": 0.0800905,
+      "p95_ms": 0.311517,
+      "max_ms": 0.321233,
+      "n": 50,
+      "rows": 100,
+      "first_id": 100000,
+      "query_plan": [
+        [
+          4,
+          0,
+          0,
+          "SEARCH summary USING COVERING INDEX by_date (mailbox_id=? AND (received_at,message_id)<(?,?))"
+        ]
+      ]
+    }
+  }
+}

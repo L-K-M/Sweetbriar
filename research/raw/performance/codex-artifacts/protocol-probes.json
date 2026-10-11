@@ -1,0 +1,57 @@
+[
+  {
+    "host": "imap.gmail.com",
+    "port": 993,
+    "time_utc": "2026-10-11T18:32:39.988734+00:00",
+    "scope": "Unauthenticated TLS CAPABILITY; no login or mailbox access",
+    "greeting": "* OK Gimap ready for requests from 116.202.149.227 cdcc0902adbc2-43a7738888emb264262512d76",
+    "response": [
+      "* CAPABILITY IMAP4rev1 UNSELECT IDLE NAMESPACE QUOTA ID XLIST CHILDREN X-GM-EXT-1 XYZZY SASL-IR AUTH=XOAUTH2 AUTH=PLAIN AUTH=PLAIN-CLIENTTOKEN AUTH=OAUTHBEARER",
+      "A001 OK Thats all she wrote! cdcc0902adbc2-43a7738888emb264262512d76"
+    ]
+  },
+  {
+    "host": "imap.mail.me.com",
+    "port": 993,
+    "time_utc": "2026-10-11T18:32:39.989276+00:00",
+    "scope": "Unauthenticated TLS CAPABILITY; no login or mailbox access",
+    "greeting": "* OK [CAPABILITY XAPPLEPUSHSERVICE IMAP4 IMAP4rev1 SASL-IR AUTH=ATOKEN AUTH=PLAIN AUTH=ATOKEN2 AUTH=XOAUTH2] (2640B16-eca2ee407610) p00-iscream-100-percent-5855dc6c7f-98h96",
+    "response": [
+      "* CAPABILITY XAPPLEPUSHSERVICE IMAP4 IMAP4rev1 SASL-IR AUTH=ATOKEN AUTH=PLAIN AUTH=ATOKEN2 AUTH=XOAUTH2",
+      "A001 OK Completed"
+    ]
+  },
+  {
+    "host": "imap.fastmail.com",
+    "port": 993,
+    "time_utc": "2026-10-11T18:32:39.989637+00:00",
+    "scope": "Unauthenticated TLS CAPABILITY; no login or mailbox access",
+    "greeting": "* OK IMAP4 ready",
+    "response": [
+      "* CAPABILITY IMAP4 IMAP4rev1 IMAP4rev2 LITERAL+ ENABLE UIDPLUS SASL-IR NAMESPACE CONDSTORE SORT LIST-EXTENDED QRESYNC MOVE SPECIAL-USE CREATE-SPECIAL-USE IDLE AUTH=PLAIN AUTH=LOGIN AUTH=XOAUTH2 AUTH=OAUTHBEARER",
+      "A001 OK completed"
+    ]
+  },
+  {
+    "host": "outlook.office365.com",
+    "port": 993,
+    "time_utc": "2026-10-11T18:32:39.990152+00:00",
+    "scope": "Unauthenticated TLS CAPABILITY; no login or mailbox access",
+    "greeting": "* OK Microsoft Exchange IMAP4 service ready. a98cb1b6-483b-4a17-ade1-719896200170 (tcpproxy/15.21.0522.001 BACKENDAUTHENTICATE) [RgBSADAAUAAyADgAMQBDAEEAMAAxADcANwAuAEQARQBVAFAAMgA4ADEALgBQAFIATwBEAC4ATwBVAFQATABPAE8ASwAuAEMATwBNAA==]",
+    "response": [
+      "* CAPABILITY IMAP4 IMAP4rev1 AUTH=XOAUTH2 LOGINDISABLED SASL-IR UIDPLUS MOVE ID UNSELECT CHILDREN IDLE NAMESPACE LITERAL+",
+      "A001 OK CAPABILITY completed."
+    ]
+  },
+  {
+    "host": "imap.mail.yahoo.com",
+    "port": 993,
+    "time_utc": "2026-10-11T18:32:39.990437+00:00",
+    "scope": "Unauthenticated TLS CAPABILITY; no login or mailbox access",
+    "greeting": "* OK Welcome! IMAP Server up and ready to accept your request",
+    "response": [
+      "* CAPABILITY IMAP4rev1 SASL-IR AUTH=PLAIN AUTH=XOAUTH2 AUTH=OAUTHBEARER ID MOVE NAMESPACE XYMHIGHESTMODSEQ UIDPLUS LITERAL+ CHILDREN UNSELECT X-MSG-EXT OBJECTID IDLE ENABLE UIDONLY X-UIDONLY LIST-EXTENDED LIST-STATUS SPECIAL-USE PARTIAL APPENDLIMIT=41697280",
+      "A001 OK CAPABILITY completed"
+    ]
+  }
+]
