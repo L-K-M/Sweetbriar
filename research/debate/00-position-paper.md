@@ -195,8 +195,13 @@ users live. Qt is native there and its web engine is Chromium.
 5. EWS for on-prem Exchange via Thunderbird's MPL crate.
 6. Local mbox/Maildir, POP3, read-only NNTP/public-inbox.
 
-Start Google restricted-scope verification, Entra publisher verification
-and Yahoo OAuth applications early. Tuta and HEY: import only.
+Start Google restricted-scope verification (with a written CASA
+determination), Entra publisher verification plus an admin-consent kit
+(Microsoft's managed consent policies let named clients such as Apple Mail,
+Spark, eM Client and Thunderbird through; Sweetbriar won't be on that
+list), and Yahoo OAuth applications early. Proton direct integration
+needs Proton's written agreement: its public Rust `mail-uniffi` binding is
+AGPL-3.0-only. Tuta and HEY: import only.
 
 *Strongest counter:* the EWS shutdown is a once-in-a-decade opening; Graph
 should be first, because generic IMAP is a crowded, commoditized market.
