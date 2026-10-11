@@ -29,6 +29,7 @@ checked.
 | [09](09-linux.md) | Linux UI | GTK4/libadwaita vs Qt, WebKitGTK, portals, packaging |
 | [10](10-landscape.md) | Landscape | The 2026 competition, user complaints, gaps, AI, positioning |
 | [11](11-classic-clients.md) | Classic clients | What made Eudora, Mailsmith, Claris Emailer, Musashi and others beloved; ranked revival catalog |
+| [12](12-markdown-first.md) | Markdown-first mail | Should Sweetbriar normalize incoming mail into one rendering and compose in Markdown? (owner's proposal) |
 
 Per-client deep dives: [classics/eudora.md](classics/eudora.md),
 [classics/mailsmith.md](classics/mailsmith.md),
