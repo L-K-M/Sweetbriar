@@ -1,0 +1,308 @@
+{
+  "engine": "duckdb",
+  "cycles": [
+    {
+      "cycle": 1,
+      "new_acknowledged_rows": 60,
+      "total_acknowledged_rows": 60,
+      "phase": 1,
+      "open_recovery_ms": 23.354289995040745,
+      "integrity_check": "no full native integrity-check command; full scans + exact data/hash/membership/intent checks",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 2,
+      "new_acknowledged_rows": 60,
+      "total_acknowledged_rows": 120,
+      "phase": 2,
+      "open_recovery_ms": 40.590793010778725,
+      "integrity_check": "no full native integrity-check command; full scans + exact data/hash/membership/intent checks",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 3,
+      "new_acknowledged_rows": 60,
+      "total_acknowledged_rows": 180,
+      "phase": 0,
+      "open_recovery_ms": 40.34453799249604,
+      "integrity_check": "no full native integrity-check command; full scans + exact data/hash/membership/intent checks",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 4,
+      "new_acknowledged_rows": 60,
+      "total_acknowledged_rows": 240,
+      "phase": 1,
+      "open_recovery_ms": 31.17992402985692,
+      "integrity_check": "no full native integrity-check command; full scans + exact data/hash/membership/intent checks",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 5,
+      "new_acknowledged_rows": 60,
+      "total_acknowledged_rows": 300,
+      "phase": 2,
+      "open_recovery_ms": 43.53021300630644,
+      "integrity_check": "no full native integrity-check command; full scans + exact data/hash/membership/intent checks",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 6,
+      "new_acknowledged_rows": 60,
+      "total_acknowledged_rows": 360,
+      "phase": 0,
+      "open_recovery_ms": 25.69502597907558,
+      "integrity_check": "no full native integrity-check command; full scans + exact data/hash/membership/intent checks",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 7,
+      "new_acknowledged_rows": 60,
+      "total_acknowledged_rows": 420,
+      "phase": 1,
+      "open_recovery_ms": 41.81380104273558,
+      "integrity_check": "no full native integrity-check command; full scans + exact data/hash/membership/intent checks",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 8,
+      "new_acknowledged_rows": 60,
+      "total_acknowledged_rows": 480,
+      "phase": 2,
+      "open_recovery_ms": 29.786514001898468,
+      "integrity_check": "no full native integrity-check command; full scans + exact data/hash/membership/intent checks",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 9,
+      "new_acknowledged_rows": 60,
+      "total_acknowledged_rows": 540,
+      "phase": 0,
+      "open_recovery_ms": 43.12167799798772,
+      "integrity_check": "no full native integrity-check command; full scans + exact data/hash/membership/intent checks",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 10,
+      "new_acknowledged_rows": 60,
+      "total_acknowledged_rows": 600,
+      "phase": 1,
+      "open_recovery_ms": 48.068139993119985,
+      "integrity_check": "no full native integrity-check command; full scans + exact data/hash/membership/intent checks",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 11,
+      "new_acknowledged_rows": 60,
+      "total_acknowledged_rows": 660,
+      "phase": 2,
+      "open_recovery_ms": 35.42768396437168,
+      "integrity_check": "no full native integrity-check command; full scans + exact data/hash/membership/intent checks",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 12,
+      "new_acknowledged_rows": 60,
+      "total_acknowledged_rows": 720,
+      "phase": 0,
+      "open_recovery_ms": 46.247716003563255,
+      "integrity_check": "no full native integrity-check command; full scans + exact data/hash/membership/intent checks",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 13,
+      "new_acknowledged_rows": 60,
+      "total_acknowledged_rows": 780,
+      "phase": 1,
+      "open_recovery_ms": 41.8230650248006,
+      "integrity_check": "no full native integrity-check command; full scans + exact data/hash/membership/intent checks",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 14,
+      "new_acknowledged_rows": 60,
+      "total_acknowledged_rows": 840,
+      "phase": 2,
+      "open_recovery_ms": 39.29480101214722,
+      "integrity_check": "no full native integrity-check command; full scans + exact data/hash/membership/intent checks",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 15,
+      "new_acknowledged_rows": 60,
+      "total_acknowledged_rows": 900,
+      "phase": 0,
+      "open_recovery_ms": 41.86563298571855,
+      "integrity_check": "no full native integrity-check command; full scans + exact data/hash/membership/intent checks",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 16,
+      "new_acknowledged_rows": 60,
+      "total_acknowledged_rows": 960,
+      "phase": 1,
+      "open_recovery_ms": 28.983680997043848,
+      "integrity_check": "no full native integrity-check command; full scans + exact data/hash/membership/intent checks",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 17,
+      "new_acknowledged_rows": 60,
+      "total_acknowledged_rows": 1020,
+      "phase": 2,
+      "open_recovery_ms": 40.6990050105378,
+      "integrity_check": "no full native integrity-check command; full scans + exact data/hash/membership/intent checks",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 18,
+      "new_acknowledged_rows": 60,
+      "total_acknowledged_rows": 1080,
+      "phase": 0,
+      "open_recovery_ms": 27.181193989235908,
+      "integrity_check": "no full native integrity-check command; full scans + exact data/hash/membership/intent checks",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 19,
+      "new_acknowledged_rows": 60,
+      "total_acknowledged_rows": 1140,
+      "phase": 1,
+      "open_recovery_ms": 43.21133397752419,
+      "integrity_check": "no full native integrity-check command; full scans + exact data/hash/membership/intent checks",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 20,
+      "new_acknowledged_rows": 60,
+      "total_acknowledged_rows": 1200,
+      "phase": 2,
+      "open_recovery_ms": 44.288987992331386,
+      "integrity_check": "no full native integrity-check command; full scans + exact data/hash/membership/intent checks",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 21,
+      "new_acknowledged_rows": 60,
+      "total_acknowledged_rows": 1260,
+      "phase": 0,
+      "open_recovery_ms": 33.742192026693374,
+      "integrity_check": "no full native integrity-check command; full scans + exact data/hash/membership/intent checks",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 22,
+      "new_acknowledged_rows": 60,
+      "total_acknowledged_rows": 1320,
+      "phase": 1,
+      "open_recovery_ms": 34.29403400514275,
+      "integrity_check": "no full native integrity-check command; full scans + exact data/hash/membership/intent checks",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 23,
+      "new_acknowledged_rows": 60,
+      "total_acknowledged_rows": 1380,
+      "phase": 2,
+      "open_recovery_ms": 32.63171896105632,
+      "integrity_check": "no full native integrity-check command; full scans + exact data/hash/membership/intent checks",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 24,
+      "new_acknowledged_rows": 60,
+      "total_acknowledged_rows": 1440,
+      "phase": 0,
+      "open_recovery_ms": 28.21271202992648,
+      "integrity_check": "no full native integrity-check command; full scans + exact data/hash/membership/intent checks",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 25,
+      "new_acknowledged_rows": 60,
+      "total_acknowledged_rows": 1500,
+      "phase": 1,
+      "open_recovery_ms": 31.301982002332807,
+      "integrity_check": "no full native integrity-check command; full scans + exact data/hash/membership/intent checks",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 26,
+      "new_acknowledged_rows": 60,
+      "total_acknowledged_rows": 1560,
+      "phase": 2,
+      "open_recovery_ms": 35.219777026213706,
+      "integrity_check": "no full native integrity-check command; full scans + exact data/hash/membership/intent checks",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 27,
+      "new_acknowledged_rows": 60,
+      "total_acknowledged_rows": 1620,
+      "phase": 0,
+      "open_recovery_ms": 31.63100400706753,
+      "integrity_check": "no full native integrity-check command; full scans + exact data/hash/membership/intent checks",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 28,
+      "new_acknowledged_rows": 60,
+      "total_acknowledged_rows": 1680,
+      "phase": 1,
+      "open_recovery_ms": 24.70099099446088,
+      "integrity_check": "no full native integrity-check command; full scans + exact data/hash/membership/intent checks",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 29,
+      "new_acknowledged_rows": 60,
+      "total_acknowledged_rows": 1740,
+      "phase": 2,
+      "open_recovery_ms": 40.263824979774654,
+      "integrity_check": "no full native integrity-check command; full scans + exact data/hash/membership/intent checks",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 30,
+      "new_acknowledged_rows": 60,
+      "total_acknowledged_rows": 1800,
+      "phase": 0,
+      "open_recovery_ms": 36.44929203437641,
+      "integrity_check": "no full native integrity-check command; full scans + exact data/hash/membership/intent checks",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    }
+  ],
+  "scope": "SIGKILL with pre-commit transaction paused; parent fsynced acknowledged-commit witness",
+  "passed": true,
+  "acknowledged_rows": 1800
+}

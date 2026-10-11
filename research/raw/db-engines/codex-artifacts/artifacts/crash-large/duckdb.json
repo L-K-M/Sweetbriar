@@ -1,0 +1,339 @@
+{
+  "engine": "duckdb",
+  "source": "artifacts/run1/duckdb.db",
+  "initial_messages": 550001,
+  "baseline_digests": {
+    "messages": {
+      "rows": 550001,
+      "sha256": "2d0b4ace0a362f5cf3efd77aa41220ffe7ad479f2cad8dfd70b7de37bab765b5"
+    },
+    "memberships": {
+      "rows": 550001,
+      "sha256": "bb966e439d824cb75b7e855a099177267a7f9ea020c5be9589dba9f0f759b70e"
+    },
+    "intents": {
+      "rows": 60601,
+      "sha256": "6eb886b09d6a46221f4037e8fccd455ae939a394afb63fde2f32f3c538149ab4"
+    }
+  },
+  "cycles": [
+    {
+      "cycle": 1,
+      "phase": 1,
+      "acknowledged_new_rows": 60,
+      "retained_messages": 550061,
+      "open_recovery_ms": 44.52432499965653,
+      "integrity": "full scans + exact application sets/content; no comprehensive native checker",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 2,
+      "phase": 2,
+      "acknowledged_new_rows": 120,
+      "retained_messages": 550121,
+      "open_recovery_ms": 41.70775902457535,
+      "integrity": "full scans + exact application sets/content; no comprehensive native checker",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 3,
+      "phase": 0,
+      "acknowledged_new_rows": 180,
+      "retained_messages": 550181,
+      "open_recovery_ms": 36.97130299406126,
+      "integrity": "full scans + exact application sets/content; no comprehensive native checker",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 4,
+      "phase": 1,
+      "acknowledged_new_rows": 240,
+      "retained_messages": 550241,
+      "open_recovery_ms": 32.99712197622284,
+      "integrity": "full scans + exact application sets/content; no comprehensive native checker",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 5,
+      "phase": 2,
+      "acknowledged_new_rows": 300,
+      "retained_messages": 550301,
+      "open_recovery_ms": 37.53106499789283,
+      "integrity": "full scans + exact application sets/content; no comprehensive native checker",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 6,
+      "phase": 0,
+      "acknowledged_new_rows": 360,
+      "retained_messages": 550361,
+      "open_recovery_ms": 36.247804993763566,
+      "integrity": "full scans + exact application sets/content; no comprehensive native checker",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 7,
+      "phase": 1,
+      "acknowledged_new_rows": 420,
+      "retained_messages": 550421,
+      "open_recovery_ms": 42.82643902115524,
+      "integrity": "full scans + exact application sets/content; no comprehensive native checker",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 8,
+      "phase": 2,
+      "acknowledged_new_rows": 480,
+      "retained_messages": 550481,
+      "open_recovery_ms": 53.442626958712935,
+      "integrity": "full scans + exact application sets/content; no comprehensive native checker",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 9,
+      "phase": 0,
+      "acknowledged_new_rows": 540,
+      "retained_messages": 550541,
+      "open_recovery_ms": 27.22444705432281,
+      "integrity": "full scans + exact application sets/content; no comprehensive native checker",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 10,
+      "phase": 1,
+      "acknowledged_new_rows": 600,
+      "retained_messages": 550601,
+      "open_recovery_ms": 36.43110999837518,
+      "integrity": "full scans + exact application sets/content; no comprehensive native checker",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 11,
+      "phase": 2,
+      "acknowledged_new_rows": 660,
+      "retained_messages": 550661,
+      "open_recovery_ms": 36.86739597469568,
+      "integrity": "full scans + exact application sets/content; no comprehensive native checker",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 12,
+      "phase": 0,
+      "acknowledged_new_rows": 720,
+      "retained_messages": 550721,
+      "open_recovery_ms": 48.11169300228357,
+      "integrity": "full scans + exact application sets/content; no comprehensive native checker",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 13,
+      "phase": 1,
+      "acknowledged_new_rows": 780,
+      "retained_messages": 550781,
+      "open_recovery_ms": 38.96957001416013,
+      "integrity": "full scans + exact application sets/content; no comprehensive native checker",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 14,
+      "phase": 2,
+      "acknowledged_new_rows": 840,
+      "retained_messages": 550841,
+      "open_recovery_ms": 41.12253204220906,
+      "integrity": "full scans + exact application sets/content; no comprehensive native checker",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 15,
+      "phase": 0,
+      "acknowledged_new_rows": 900,
+      "retained_messages": 550901,
+      "open_recovery_ms": 42.97809099080041,
+      "integrity": "full scans + exact application sets/content; no comprehensive native checker",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 16,
+      "phase": 1,
+      "acknowledged_new_rows": 960,
+      "retained_messages": 550961,
+      "open_recovery_ms": 23.42033904278651,
+      "integrity": "full scans + exact application sets/content; no comprehensive native checker",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 17,
+      "phase": 2,
+      "acknowledged_new_rows": 1020,
+      "retained_messages": 551021,
+      "open_recovery_ms": 40.578422020189464,
+      "integrity": "full scans + exact application sets/content; no comprehensive native checker",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 18,
+      "phase": 0,
+      "acknowledged_new_rows": 1080,
+      "retained_messages": 551081,
+      "open_recovery_ms": 27.690468006767333,
+      "integrity": "full scans + exact application sets/content; no comprehensive native checker",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 19,
+      "phase": 1,
+      "acknowledged_new_rows": 1140,
+      "retained_messages": 551141,
+      "open_recovery_ms": 40.456835995428264,
+      "integrity": "full scans + exact application sets/content; no comprehensive native checker",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 20,
+      "phase": 2,
+      "acknowledged_new_rows": 1200,
+      "retained_messages": 551201,
+      "open_recovery_ms": 42.405345011502504,
+      "integrity": "full scans + exact application sets/content; no comprehensive native checker",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 21,
+      "phase": 0,
+      "acknowledged_new_rows": 1260,
+      "retained_messages": 551261,
+      "open_recovery_ms": 30.14053002698347,
+      "integrity": "full scans + exact application sets/content; no comprehensive native checker",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 22,
+      "phase": 1,
+      "acknowledged_new_rows": 1320,
+      "retained_messages": 551321,
+      "open_recovery_ms": 39.007742947433144,
+      "integrity": "full scans + exact application sets/content; no comprehensive native checker",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 23,
+      "phase": 2,
+      "acknowledged_new_rows": 1380,
+      "retained_messages": 551381,
+      "open_recovery_ms": 39.784330991096795,
+      "integrity": "full scans + exact application sets/content; no comprehensive native checker",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 24,
+      "phase": 0,
+      "acknowledged_new_rows": 1440,
+      "retained_messages": 551441,
+      "open_recovery_ms": 42.64075099490583,
+      "integrity": "full scans + exact application sets/content; no comprehensive native checker",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 25,
+      "phase": 1,
+      "acknowledged_new_rows": 1500,
+      "retained_messages": 551501,
+      "open_recovery_ms": 42.8948700428009,
+      "integrity": "full scans + exact application sets/content; no comprehensive native checker",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 26,
+      "phase": 2,
+      "acknowledged_new_rows": 1560,
+      "retained_messages": 551561,
+      "open_recovery_ms": 44.65486097615212,
+      "integrity": "full scans + exact application sets/content; no comprehensive native checker",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 27,
+      "phase": 0,
+      "acknowledged_new_rows": 1620,
+      "retained_messages": 551621,
+      "open_recovery_ms": 38.39783096918836,
+      "integrity": "full scans + exact application sets/content; no comprehensive native checker",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 28,
+      "phase": 1,
+      "acknowledged_new_rows": 1680,
+      "retained_messages": 551681,
+      "open_recovery_ms": 38.026043970603496,
+      "integrity": "full scans + exact application sets/content; no comprehensive native checker",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 29,
+      "phase": 2,
+      "acknowledged_new_rows": 1740,
+      "retained_messages": 551741,
+      "open_recovery_ms": 40.91135400813073,
+      "integrity": "full scans + exact application sets/content; no comprehensive native checker",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 30,
+      "phase": 0,
+      "acknowledged_new_rows": 1800,
+      "retained_messages": 551801,
+      "open_recovery_ms": 41.570404020603746,
+      "integrity": "full scans + exact application sets/content; no comprehensive native checker",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    }
+  ],
+  "scope": "SIGKILL before commit on a copy of a completed 500k benchmark store",
+  "passed": true,
+  "acknowledged_rows": 1800,
+  "final_messages": 551801,
+  "final_baseline_digests": {
+    "messages": {
+      "rows": 550001,
+      "sha256": "2d0b4ace0a362f5cf3efd77aa41220ffe7ad479f2cad8dfd70b7de37bab765b5"
+    },
+    "memberships": {
+      "rows": 550001,
+      "sha256": "bb966e439d824cb75b7e855a099177267a7f9ea020c5be9589dba9f0f759b70e"
+    },
+    "intents": {
+      "rows": 60601,
+      "sha256": "6eb886b09d6a46221f4037e8fccd455ae939a394afb63fde2f32f3c538149ab4"
+    }
+  }
+}

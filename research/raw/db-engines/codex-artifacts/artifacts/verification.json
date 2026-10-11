@@ -1,0 +1,55 @@
+{
+  "verified_at": "2026-10-11T21:18:11.736803+00:00",
+  "report_words": 8553,
+  "report_sha256": "2f8e9c8aa14f7211d8d94349a130b24b80ee19328e81c9637051f1e7142955fb",
+  "cited_urls": 110,
+  "local_links": 71,
+  "syntax_checks": "passed",
+  "recovery_trials": [
+    {
+      "engine": "sqlite",
+      "series": "small",
+      "kills": 30,
+      "acknowledged_rows": 1800
+    },
+    {
+      "engine": "duckdb",
+      "series": "small",
+      "kills": 30,
+      "acknowledged_rows": 1800
+    },
+    {
+      "engine": "libsql",
+      "series": "small",
+      "kills": 30,
+      "acknowledged_rows": 1800
+    },
+    {
+      "engine": "lmdb",
+      "series": "small",
+      "kills": 30,
+      "acknowledged_rows": 1800
+    },
+    {
+      "engine": "rocksdb",
+      "series": "small",
+      "kills": 30,
+      "acknowledged_rows": 1800
+    },
+    {
+      "engine": "sqlite",
+      "series": "large",
+      "kills": 30,
+      "acknowledged_rows": 1800,
+      "initial_messages": 525001
+    },
+    {
+      "engine": "duckdb",
+      "series": "large",
+      "kills": 30,
+      "acknowledged_rows": 1800,
+      "initial_messages": 550001
+    }
+  ],
+  "sustained_readers": "passed"
+}

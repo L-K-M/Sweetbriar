@@ -1,0 +1,26 @@
+{
+  "sqlite": {
+    "writer_open": true,
+    "read_only_child_returncode": 0,
+    "stdout": "[(1,)]\n",
+    "stderr": ""
+  },
+  "duckdb": {
+    "writer_open": true,
+    "read_only_child_returncode": 1,
+    "stdout": "",
+    "stderr": "Traceback (most recent call last):\n  File \"<string>\", line 1, in <module>\n_duckdb.IOException: IO Error: Could not set lock on file \"/home/paseo/sb-research/jobs/db-engines-codex/artifacts/reproduction-check-process/duckdb.db\": Conflicting lock is held in /usr/bin/python3.11 (PID 2176241). See also https://duckdb.org/docs/stable/connect/concurrency\n"
+  },
+  "libsql": {
+    "writer_open": true,
+    "read_only_child_returncode": 0,
+    "stdout": "[(1,)]\n",
+    "stderr": ""
+  },
+  "lmdb": {
+    "writer_open": true,
+    "read_only_child_returncode": 0,
+    "stdout": "b'value'\n",
+    "stderr": ""
+  }
+}

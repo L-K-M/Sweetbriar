@@ -1,0 +1,7 @@
+duckdb==1.5.6
+apsw==3.53.4.0
+lmdb==3.0.0
+rocksdict==0.3.29
+libsql-experimental==0.0.55
+redb==0.5.0
+pyarrow==26.0.0

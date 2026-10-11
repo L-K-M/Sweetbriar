@@ -1,0 +1,30 @@
+[
+  {
+    "url": "https://crates.io/api/v1/crates/redb/4.3.0/download",
+    "final_url": "https://static.crates.io/crates/redb/redb-4.3.0.crate",
+    "date": "2026-10-11",
+    "sha256": "fb338a6c67830a61bed824b78c2bb034ab1ff401a20616bd7957524f4fdc2f22",
+    "path": "sources/crates/redb-4.3.0.crate"
+  },
+  {
+    "url": "https://crates.io/api/v1/crates/sanakirja/2.0.0-beta.3/download",
+    "final_url": "https://static.crates.io/crates/sanakirja/sanakirja-2.0.0-beta.3.crate",
+    "date": "2026-10-11",
+    "sha256": "a6a94836e96e8d5fe507372876db74c2654597d6934699c61b66aac7efb4d94a",
+    "path": "sources/crates/sanakirja-2.0.0-beta.3.crate"
+  },
+  {
+    "url": "https://crates.io/api/v1/crates/fjall/3.1.12/download",
+    "final_url": "https://static.crates.io/crates/fjall/fjall-3.1.12.crate",
+    "date": "2026-10-11",
+    "sha256": "8efbd0317c570d3bc4f498f44644d908e7dbac8138f4e083cc853baea25c8c65",
+    "path": "sources/crates/fjall-3.1.12.crate"
+  },
+  {
+    "url": "https://crates.io/api/v1/crates/libsqlite3-sys/0.38.1/download",
+    "final_url": "https://static.crates.io/crates/libsqlite3-sys/libsqlite3-sys-0.38.1.crate",
+    "date": "2026-10-11",
+    "sha256": "f6c19a05435c21ac299d71b6a9c13db3e3f47c520517d58990a462a1397a61db",
+    "path": "sources/crates/libsqlite3-sys-0.38.1.crate"
+  }
+]

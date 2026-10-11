@@ -1,0 +1,339 @@
+{
+  "engine": "sqlite",
+  "source": "artifacts/run1/sqlite.db",
+  "initial_messages": 525001,
+  "baseline_digests": {
+    "messages": {
+      "rows": 525001,
+      "sha256": "04f75f07a08f0b832c14d13434fa5daf14f87ed1f38a8118e62f12ed3dd4766e"
+    },
+    "memberships": {
+      "rows": 525001,
+      "sha256": "3024d070040eabf48451bd94193e3c84def567f292572ed07f95634c038b1c62"
+    },
+    "intents": {
+      "rows": 35601,
+      "sha256": "0dc438d1d6963ee16076beafb7a7aaed81bbe8b92fa7cc733dc28ff2913dc394"
+    }
+  },
+  "cycles": [
+    {
+      "cycle": 1,
+      "phase": 1,
+      "acknowledged_new_rows": 60,
+      "retained_messages": 525061,
+      "open_recovery_ms": 1.6407400253228843,
+      "integrity": "SQLite integrity_check + foreign_key_check + exact application sets/content",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 2,
+      "phase": 2,
+      "acknowledged_new_rows": 120,
+      "retained_messages": 525121,
+      "open_recovery_ms": 1.1799070052802563,
+      "integrity": "SQLite integrity_check + foreign_key_check + exact application sets/content",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 3,
+      "phase": 0,
+      "acknowledged_new_rows": 180,
+      "retained_messages": 525181,
+      "open_recovery_ms": 0.5989780183881521,
+      "integrity": "SQLite integrity_check + foreign_key_check + exact application sets/content",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 4,
+      "phase": 1,
+      "acknowledged_new_rows": 240,
+      "retained_messages": 525241,
+      "open_recovery_ms": 0.7855049916543067,
+      "integrity": "SQLite integrity_check + foreign_key_check + exact application sets/content",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 5,
+      "phase": 2,
+      "acknowledged_new_rows": 300,
+      "retained_messages": 525301,
+      "open_recovery_ms": 0.7379529997706413,
+      "integrity": "SQLite integrity_check + foreign_key_check + exact application sets/content",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 6,
+      "phase": 0,
+      "acknowledged_new_rows": 360,
+      "retained_messages": 525361,
+      "open_recovery_ms": 0.7610330358147621,
+      "integrity": "SQLite integrity_check + foreign_key_check + exact application sets/content",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 7,
+      "phase": 1,
+      "acknowledged_new_rows": 420,
+      "retained_messages": 525421,
+      "open_recovery_ms": 1.5863630105741322,
+      "integrity": "SQLite integrity_check + foreign_key_check + exact application sets/content",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 8,
+      "phase": 2,
+      "acknowledged_new_rows": 480,
+      "retained_messages": 525481,
+      "open_recovery_ms": 1.4484570128843188,
+      "integrity": "SQLite integrity_check + foreign_key_check + exact application sets/content",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 9,
+      "phase": 0,
+      "acknowledged_new_rows": 540,
+      "retained_messages": 525541,
+      "open_recovery_ms": 1.8542709876783192,
+      "integrity": "SQLite integrity_check + foreign_key_check + exact application sets/content",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 10,
+      "phase": 1,
+      "acknowledged_new_rows": 600,
+      "retained_messages": 525601,
+      "open_recovery_ms": 1.386223011650145,
+      "integrity": "SQLite integrity_check + foreign_key_check + exact application sets/content",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 11,
+      "phase": 2,
+      "acknowledged_new_rows": 660,
+      "retained_messages": 525661,
+      "open_recovery_ms": 1.921256014611572,
+      "integrity": "SQLite integrity_check + foreign_key_check + exact application sets/content",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 12,
+      "phase": 0,
+      "acknowledged_new_rows": 720,
+      "retained_messages": 525721,
+      "open_recovery_ms": 1.558136020321399,
+      "integrity": "SQLite integrity_check + foreign_key_check + exact application sets/content",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 13,
+      "phase": 1,
+      "acknowledged_new_rows": 780,
+      "retained_messages": 525781,
+      "open_recovery_ms": 0.7424509967677295,
+      "integrity": "SQLite integrity_check + foreign_key_check + exact application sets/content",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 14,
+      "phase": 2,
+      "acknowledged_new_rows": 840,
+      "retained_messages": 525841,
+      "open_recovery_ms": 1.4390270225703716,
+      "integrity": "SQLite integrity_check + foreign_key_check + exact application sets/content",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 15,
+      "phase": 0,
+      "acknowledged_new_rows": 900,
+      "retained_messages": 525901,
+      "open_recovery_ms": 1.4025609707459807,
+      "integrity": "SQLite integrity_check + foreign_key_check + exact application sets/content",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 16,
+      "phase": 1,
+      "acknowledged_new_rows": 960,
+      "retained_messages": 525961,
+      "open_recovery_ms": 1.4486289583146572,
+      "integrity": "SQLite integrity_check + foreign_key_check + exact application sets/content",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 17,
+      "phase": 2,
+      "acknowledged_new_rows": 1020,
+      "retained_messages": 526021,
+      "open_recovery_ms": 0.7099579670466483,
+      "integrity": "SQLite integrity_check + foreign_key_check + exact application sets/content",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 18,
+      "phase": 0,
+      "acknowledged_new_rows": 1080,
+      "retained_messages": 526081,
+      "open_recovery_ms": 0.7368479855358601,
+      "integrity": "SQLite integrity_check + foreign_key_check + exact application sets/content",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 19,
+      "phase": 1,
+      "acknowledged_new_rows": 1140,
+      "retained_messages": 526141,
+      "open_recovery_ms": 1.0524140088818967,
+      "integrity": "SQLite integrity_check + foreign_key_check + exact application sets/content",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 20,
+      "phase": 2,
+      "acknowledged_new_rows": 1200,
+      "retained_messages": 526201,
+      "open_recovery_ms": 1.5528490184806287,
+      "integrity": "SQLite integrity_check + foreign_key_check + exact application sets/content",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 21,
+      "phase": 0,
+      "acknowledged_new_rows": 1260,
+      "retained_messages": 526261,
+      "open_recovery_ms": 1.707811956293881,
+      "integrity": "SQLite integrity_check + foreign_key_check + exact application sets/content",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 22,
+      "phase": 1,
+      "acknowledged_new_rows": 1320,
+      "retained_messages": 526321,
+      "open_recovery_ms": 1.455117017030716,
+      "integrity": "SQLite integrity_check + foreign_key_check + exact application sets/content",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 23,
+      "phase": 2,
+      "acknowledged_new_rows": 1380,
+      "retained_messages": 526381,
+      "open_recovery_ms": 1.3065410312265158,
+      "integrity": "SQLite integrity_check + foreign_key_check + exact application sets/content",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 24,
+      "phase": 0,
+      "acknowledged_new_rows": 1440,
+      "retained_messages": 526441,
+      "open_recovery_ms": 1.7069730092771351,
+      "integrity": "SQLite integrity_check + foreign_key_check + exact application sets/content",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 25,
+      "phase": 1,
+      "acknowledged_new_rows": 1500,
+      "retained_messages": 526501,
+      "open_recovery_ms": 1.350690028630197,
+      "integrity": "SQLite integrity_check + foreign_key_check + exact application sets/content",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 26,
+      "phase": 2,
+      "acknowledged_new_rows": 1560,
+      "retained_messages": 526561,
+      "open_recovery_ms": 1.3549199793487787,
+      "integrity": "SQLite integrity_check + foreign_key_check + exact application sets/content",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 27,
+      "phase": 0,
+      "acknowledged_new_rows": 1620,
+      "retained_messages": 526621,
+      "open_recovery_ms": 0.7315659895539284,
+      "integrity": "SQLite integrity_check + foreign_key_check + exact application sets/content",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 28,
+      "phase": 1,
+      "acknowledged_new_rows": 1680,
+      "retained_messages": 526681,
+      "open_recovery_ms": 0.7363720214925706,
+      "integrity": "SQLite integrity_check + foreign_key_check + exact application sets/content",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 29,
+      "phase": 2,
+      "acknowledged_new_rows": 1740,
+      "retained_messages": 526741,
+      "open_recovery_ms": 1.4009530423209071,
+      "integrity": "SQLite integrity_check + foreign_key_check + exact application sets/content",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    },
+    {
+      "cycle": 30,
+      "phase": 0,
+      "acknowledged_new_rows": 1800,
+      "retained_messages": 526801,
+      "open_recovery_ms": 1.4499720418825746,
+      "integrity": "SQLite integrity_check + foreign_key_check + exact application sets/content",
+      "missing_rows": 0,
+      "partial_transactions": 0
+    }
+  ],
+  "scope": "SIGKILL before commit on a copy of a completed 500k benchmark store",
+  "passed": true,
+  "acknowledged_rows": 1800,
+  "final_messages": 526801,
+  "final_baseline_digests": {
+    "messages": {
+      "rows": 525001,
+      "sha256": "04f75f07a08f0b832c14d13434fa5daf14f87ed1f38a8118e62f12ed3dd4766e"
+    },
+    "memberships": {
+      "rows": 525001,
+      "sha256": "3024d070040eabf48451bd94193e3c84def567f292572ed07f95634c038b1c62"
+    },
+    "intents": {
+      "rows": 35601,
+      "sha256": "0dc438d1d6963ee16076beafb7a7aaed81bbe8b92fa7cc733dc28ff2913dc394"
+    }
+  }
+}
