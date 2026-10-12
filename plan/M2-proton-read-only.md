@@ -109,7 +109,9 @@ signed in, with its TLS certificate exported.
   - crash cuts during header batches resume without gaps or
     duplicates;
   - an epoch change quarantines targeting intents (inserted directly in
-    the test).
+    the test);
+  - schema-level cross-account rejection: inserting an occurrence whose
+    message belongs to another account fails.
 
 ### M2.5 Body acquisition, coverage and health — M, linux + macos-ci
 

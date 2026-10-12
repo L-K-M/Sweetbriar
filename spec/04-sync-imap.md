@@ -181,6 +181,13 @@ connection.
      `quarantined` with `quarantine_reason='config_change'`.
    - The target occurrence's epoch equals the mailbox's current
      UIDVALIDITY, and the occurrence is `present`.
+   - **Live identity check:** in the selected mailbox, `UID FETCH <uid>
+     (BODY.PEEK[HEADER.FIELDS (X-PM-INTERNAL-ID)])` returns the logical
+     message's `provider_key`. A UID can be reused within the same
+     epoch, as Bridge has done historically. A mismatch, or missing or
+     ambiguous evidence, quarantines the intent with
+     `quarantine_reason='ambiguous_match'`. This applies to every
+     mutation (`set_flags`, `move`, `copy`).
    - For `move`: the occurrence is still in the source mailbox, as of the
      last inventory.
    - For `set_flags`: none needed; flags are applied as deltas.

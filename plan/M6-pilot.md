@@ -78,8 +78,8 @@ is met.
   - the opt-in local latency log with a percentile report;
   - an accessibility audit script (Accessibility Inspector checklist);
   - the power-cut test procedure;
-  - the nightly power-loss simulation (`Fs` that drops unflushed
-    writes).
+  - the nightly power-loss simulation on both layers: the `Fs` seam for
+    objects, and the test SQLite VFS for the database and WAL (11).
 - **Acceptance:**
   - **owner:** budgets met at p95 with the real mailbox;
   - VoiceOver completes the gate tasks;

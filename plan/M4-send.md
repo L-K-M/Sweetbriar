@@ -66,6 +66,11 @@ inspectable Out Box. Unknown outcomes are never retried automatically.
   - crash cuts at every transition give **zero duplicate submissions**
     (fake counter) across 200 seeds;
   - a connection drop after `DATA` gives `outcome_unknown` and no retry;
+  - **a Bridge 554 final reply to `DATA` gives `outcome_unknown`**, not
+    `failed`, unless its class is on the qualified pre-submission list
+    (empty until M2.6 evidence adds entries);
+  - an account reconfiguration between queueing and submission keeps the
+    attempt `queued` until `confirm_send_route`;
   - partial RCPT rejection keeps accepted recipients `sent` and offers a
     new attempt only for rejected ones;
   - a definite pre-acceptance failure gives `failed`, with retry only on

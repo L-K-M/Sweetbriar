@@ -35,10 +35,17 @@ user-granted permission path.
    - Batches are at most 250 messages per transaction. The job records
      its progress (file and offset), so it can resume after a crash or
      quit without duplicating.
-3. **Duplicates.** If the same bytes were already imported, the
-   acquisition is reused and a second occurrence is created **only if**
-   it comes from a different source mailbox. Duplicates are counted, not
-   silently dropped.
+3. **Duplicates.**
+   - Bytes are deduplicated: identical bytes share one acquisition and
+     one object.
+   - **Messages are not.** Every source message gets its own occurrence,
+     even when two identical messages sit in the same mailbox, so
+     multiplicity survives export.
+   - **Re-import and resume** are idempotent by **source identity**: the
+     source file's SHA-256 plus the message's offset, or the EML file's
+     path and hash, recorded in `acquisition_sources.source_ref`. A
+     source message already imported isn't imported again.
+   - Byte duplicates are counted in the report.
 4. **Rejects.** Unparseable messages are still stored as acquisitions,
    since bytes are kept even when parsing fails, and flagged
    `parse_state='failed'`. Unreadable regions of a source file are

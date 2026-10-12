@@ -90,9 +90,17 @@ and [raw/plan-proton-bridge/codex.md](../research/raw/plan-proton-bridge/codex.m
 2. **`held`:** `cancel_send` moves it to `cancelled` and the draft back to
    `editing`. The claim to submit and a cancel are serialized by the
    writer; whichever commits first wins.
-3. **`queued` → `submitting`** commits before any network I/O. On startup,
-   any attempt found in `submitting` becomes `outcome_unknown`: never
-   retried automatically.
+3. **`queued` → `submitting`** commits before any network I/O.
+   - **Before claiming,** the engine checks that the attempt's
+     `config_generation` equals the account's current one. If the account
+     was reconfigured (endpoint, credentials, identity) since, the attempt
+     stays `queued`, marked "Account changed; confirm sending with the new
+     settings". It is submitted only after the user confirms
+     (`confirm_send_route`, 07) or cancels.
+   - The draft must have a valid sending identity. Drafts without one
+     can't be sent.
+   - On startup, any attempt found in `submitting` becomes
+     `outcome_unknown`: never retried automatically.
 4. **SMTP session** (through `lettre`, or the transport chosen in 01):
    - **Connect and authenticate.** Connect to Bridge's SMTP port, run
      STARTTLS (or implicit TLS) with the pinned certificate, then
@@ -104,10 +112,20 @@ and [raw/plan-proton-bridge/codex.md](../research/raw/plan-proton-bridge/codex.m
      - **250 final reply** → attempt `accepted`. Every `rcpt_accepted`
        recipient becomes `sent` (accepted by Bridge, not delivered), and
        the draft becomes `sent`.
-     - **Definite 5xx final reply** → `failed`; recipients are `unsent`.
-     - **4xx final reply** → `failed` with a retry offer; recipients are
-       `unsent`. Bridge often maps upstream failures to a generic 554, so
-       the text is shown verbatim.
+     - **Any other final reply to `DATA`, on a Bridge account** →
+       `outcome_unknown`. Bridge submits to Proton (creates a draft, then
+       calls `SendDraft`) before it answers. Its generic 554 can follow a
+       lost Proton reply after Proton already accepted the message, so a
+       negative DATA reply doesn't prove nothing was sent. The reply text
+       is shown verbatim.
+     - **Exception:** a reply whose text matches a **qualified
+       pre-submission class** becomes `failed` with recipients `unsent`.
+       The classes are invalid sender, invalid recipient, and message too
+       large, each confirmed in the real-Bridge test lane (M2.6) to occur
+       before any Proton submission. The list starts empty and grows only
+       with that evidence.
+     - **Generic IMAP accounts** (*later*): definite 5xx → `failed`; 4xx →
+       `failed` with a retry offer.
      - **Connection lost or timeout after `DATA` was sent** →
        `outcome_unknown`.
    - **Partial RCPT rejection** with DATA accepted: rejected recipients

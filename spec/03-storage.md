@@ -172,6 +172,9 @@ backups/<generation-id>/
    `object_pins(backup_in_progress)` for each, so nothing referenced can
    be collected mid-copy.
 4. Copy (or clone on APFS, `clonefile`) each object, verifying its hash.
+   Flush every copied object and the snapshot file (`F_FULLFSYNC` on
+   macOS, `fsync` on Linux), and flush every newly created directory up
+   to the generation root.
 5. Write `manifest.json`:
 
    ```json

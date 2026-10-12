@@ -98,7 +98,8 @@ CREATE TABLE identities (
   is_default         INTEGER NOT NULL CHECK (is_default IN (0,1)),
   sendable           TEXT NOT NULL CHECK (sendable IN ('validated','provisional','unavailable')),
   revision           INTEGER NOT NULL DEFAULT 1,
-  UNIQUE (account_id, email)
+  UNIQUE (account_id, email),
+  UNIQUE (identity_id, account_id)                   -- target of account-scoped foreign keys
 ) STRICT;
 
 CREATE TABLE account_appearance (
@@ -176,7 +177,8 @@ CREATE TABLE mailboxes (
   highest_modseq INTEGER,
   sync_state     TEXT NOT NULL CHECK (sync_state IN ('new','backfilling','synced','epoch_changed','gone')),
   revision       INTEGER NOT NULL DEFAULT 1,
-  UNIQUE (account_id, remote_name)
+  UNIQUE (account_id, remote_name),
+  UNIQUE (mailbox_id, account_id)
 ) STRICT;
 
 CREATE TABLE logical_messages (
@@ -185,15 +187,17 @@ CREATE TABLE logical_messages (
   provider_key     TEXT,                               -- provider object id when one exists; Proton: X-Pm-Internal-Id (04)
   acquisition_id   INTEGER REFERENCES acquisitions(acquisition_id), -- best complete body, NULL until fetched
   created_at       INTEGER NOT NULL,
-  UNIQUE (account_id, provider_key)
+  UNIQUE (account_id, provider_key),
+  UNIQUE (message_id, account_id)
 ) STRICT;
 
 CREATE TABLE occurrences (
   occurrence_id    INTEGER PRIMARY KEY AUTOINCREMENT,
-  mailbox_id       INTEGER NOT NULL REFERENCES mailboxes(mailbox_id),
+  account_id       TEXT NOT NULL,                      -- must match both the mailbox's and the message's account
+  mailbox_id       INTEGER NOT NULL,
   uidvalidity      INTEGER,                            -- epoch this UID belongs to; NULL for local archive
   uid              INTEGER,                            -- NULL for local archive
-  message_id       INTEGER NOT NULL REFERENCES logical_messages(message_id),
+  message_id       INTEGER NOT NULL,
   internal_date    INTEGER,
   rfc822_size      INTEGER,
   modseq           INTEGER,
@@ -206,11 +210,17 @@ CREATE TABLE occurrences (
   state            TEXT NOT NULL CHECK (state IN ('present','vanish_pending','vanished','epoch_stale')),
   first_seen_at    INTEGER NOT NULL,
   last_seen_at     INTEGER NOT NULL,
-  UNIQUE (mailbox_id, uidvalidity, uid)
+  UNIQUE (mailbox_id, uidvalidity, uid),
+  FOREIGN KEY (mailbox_id, account_id) REFERENCES mailboxes(mailbox_id, account_id),
+  FOREIGN KEY (message_id, account_id) REFERENCES logical_messages(message_id, account_id)
 ) STRICT;
 CREATE INDEX occ_by_message ON occurrences(message_id);
 ```
 
+- **Account scoping is enforced by the schema.** An occurrence's mailbox
+  and logical message must belong to its account (composite foreign
+  keys). A draft's identity, and a send attempt's identity and revision,
+  must match their account and draft.
 - **Flags live on occurrences** (D2). The same Proton message shown in
   `INBOX` and `Labels/Work` through Bridge has two occurrences with
   independent flags.
@@ -298,14 +308,16 @@ from discarded drafts. It is listed in the backup.
 ```sql
 CREATE TABLE drafts (
   draft_id          TEXT PRIMARY KEY,
-  account_id        TEXT NOT NULL REFERENCES accounts(account_id),
-  identity_id       TEXT NOT NULL REFERENCES identities(identity_id),
+  account_id        TEXT,                            -- NULL with identity_id NULL: a local draft with no sending identity yet
+  identity_id       TEXT,
   state             TEXT NOT NULL CHECK (state IN ('editing','queued','sent','discarded')),
   reply_to_occurrence_id INTEGER REFERENCES occurrences(occurrence_id),
   forward_of_message_id  INTEGER REFERENCES logical_messages(message_id),
   current_revision_id    TEXT,                     -- latest revision; set in the same transaction as the insert
   created_at        INTEGER NOT NULL,
-  updated_at        INTEGER NOT NULL
+  updated_at        INTEGER NOT NULL,
+  CHECK ((account_id IS NULL) = (identity_id IS NULL)),
+  FOREIGN KEY (identity_id, account_id) REFERENCES identities(identity_id, account_id)
 ) STRICT;
 
 CREATE TABLE draft_revisions (                    -- immutable once written
@@ -313,7 +325,7 @@ CREATE TABLE draft_revisions (                    -- immutable once written
   draft_id        TEXT NOT NULL REFERENCES drafts(draft_id),
   seq             INTEGER NOT NULL,
   base_revision_id TEXT REFERENCES draft_revisions(revision_id), -- for conflict branches
-  identity_id     TEXT NOT NULL REFERENCES identities(identity_id),
+  identity_id     TEXT REFERENCES identities(identity_id), -- NULL until a sending identity is chosen
   compose_format  TEXT NOT NULL CHECK (compose_format IN ('plain','markdown')),
   subject         TEXT NOT NULL,
   to_json         TEXT NOT NULL,
@@ -322,13 +334,17 @@ CREATE TABLE draft_revisions (                    -- immutable once written
   body_source     TEXT NOT NULL,
   attachments_json TEXT NOT NULL,                  -- list of {object_sha256, filename, media_type, size}
   created_at      INTEGER NOT NULL,
-  UNIQUE (draft_id, seq)
+  UNIQUE (draft_id, seq),
+  UNIQUE (revision_id, draft_id)
 ) STRICT;
 ```
 
 - **Saving** a draft inserts a revision and updates
   `drafts.current_revision_id` in one transaction. "Saved" is shown only
   after that commit.
+- **Drafts without an identity** (both `account_id` and `identity_id`
+  NULL) are allowed, so local drafts work before any sending account
+  exists. Sending requires a valid identity (05).
 - Attachments are published to the object store **before** the revision
   that references them.
 - Old revisions are kept until the draft is sent or discarded, and then
@@ -381,9 +397,10 @@ CREATE INDEX intents_runnable ON intents(account_id, state, next_attempt_at);
 CREATE TABLE send_attempts (
   attempt_id        TEXT PRIMARY KEY,
   draft_id          TEXT NOT NULL REFERENCES drafts(draft_id),
-  revision_id       TEXT NOT NULL REFERENCES draft_revisions(revision_id),
+  revision_id       TEXT NOT NULL,
   account_id        TEXT NOT NULL REFERENCES accounts(account_id),
-  identity_id       TEXT NOT NULL REFERENCES identities(identity_id),
+  config_generation INTEGER NOT NULL,              -- account configuration this attempt was frozen under
+  identity_id       TEXT NOT NULL,
   mime_sha256       TEXT NOT NULL,                 -- frozen outgoing bytes in the object store
   message_id_header TEXT NOT NULL,
   envelope_from     TEXT NOT NULL,
@@ -392,7 +409,9 @@ CREATE TABLE send_attempts (
   final_reply       TEXT,                          -- final SMTP reply (code + text)
   sent_copy         TEXT NOT NULL CHECK (sent_copy IN ('server_saves','pending','filed','failed')),
   created_at        INTEGER NOT NULL,
-  updated_at        INTEGER NOT NULL
+  updated_at        INTEGER NOT NULL,
+  FOREIGN KEY (revision_id, draft_id) REFERENCES draft_revisions(revision_id, draft_id),
+  FOREIGN KEY (identity_id, account_id) REFERENCES identities(identity_id, account_id)
 ) STRICT;
 
 CREATE TABLE send_recipients (
@@ -540,7 +559,8 @@ CREATE INDEX d_list_rows_unified ON d_list_rows(mailbox_role, sort_date DESC, oc
   `store_meta.last_migrated_by`.
 - **Each migration:**
   - is one Rust function in one transaction;
-  - is followed by `PRAGMA foreign_key_check` and `PRAGMA quick_check`;
+  - is followed by `PRAGMA foreign_key_check` and `PRAGMA quick_check`.
+    After the whole run, a full `PRAGMA integrity_check` (03);
   - is forward-only.
 - **Before any migration that rewrites or drops data,** the engine takes a
   `VACUUM INTO` snapshot, keeping the last two.

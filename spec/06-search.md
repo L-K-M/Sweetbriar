@@ -43,6 +43,7 @@ CREATE TABLE d_search_docs (             -- one row per acquisition with extract
   doc_id            INTEGER PRIMARY KEY, -- = acquisitions.acquisition_id
   extractor_version INTEGER NOT NULL,
   state             TEXT NOT NULL CHECK (state IN ('indexed','partial','failed')),
+  truncated_fields  TEXT NOT NULL DEFAULT '[]', -- JSON array of field names cut by a cap
   subject           TEXT,
   from_text         TEXT,
   to_text           TEXT,
@@ -120,8 +121,10 @@ shared by the search field, saved views and, later, rules.
 **Rules:**
 
 - **Unknown under negation.** A message whose body isn't downloaded or
-  indexed is `unknown` for body and text predicates. `not unknown` stays
-  `unknown`, so it never matches. Results show a count of messages
+  indexed is `unknown` for body and text predicates. So is a document
+  indexed as `partial` (an extraction cap was hit), for the fields that
+  were truncated: a term beyond the cap may still be in the message.
+  `not unknown` stays `unknown`, so it never matches. Results show a count of messages
   excluded as unknown ("312 messages not yet searchable").
 - **Per-use subsets:** search may use every node. Saved views may use
   every node. Rules (*later*) may not use ranked or fuzzy constructs.

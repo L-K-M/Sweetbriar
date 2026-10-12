@@ -44,7 +44,10 @@ local drafts. No network yet.
 - **Acceptance:**
   - importing `fixtures/import/*` reproduces the expected SHA-256 for
     every message;
-  - re-import creates no new acquisitions;
+  - re-import creates no new acquisitions and no new occurrences
+    (idempotent by source file hash plus offset);
+  - two identical messages in one mbox produce one acquisition and **two**
+    occurrences, and export writes both;
   - crash cuts at random points during import, then resume, give the
     same final counts and no duplicates (11 harness, 50 seeds in CI);
   - the report lists found, imported, duplicate and rejected counts and
@@ -187,6 +190,9 @@ local drafts. No network yet.
 - **Acceptance:**
   - a restored store has identical row counts and object hashes;
   - an interrupted backup is never `complete` (crash cuts);
+  - every copied object, the snapshot and new directories are flushed
+    before the manifest (`Fs` fault test: a dropped flush leaves the
+    generation incomplete);
   - GC never removes a referenced, pinned or in-backup object (proptest
     over random reference histories);
   - after restore: accounts `paused`, intents `quarantined`, attempts in
@@ -218,6 +224,8 @@ local drafts. No network yet.
   - concurrent saves from two windows with the same base: the second gets
     `Conflict`, and the UI offers to keep both;
   - an attachment is never referenced before it is published (test);
+  - a draft saves and reopens with **no sending account** configured
+    (`identity_id` NULL), and Send is unavailable for it;
   - **owner:** write, quit, relaunch, and the draft is intact.
 
 ### M1.10 Account appearance core — M, linux + macos-ci

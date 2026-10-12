@@ -70,8 +70,14 @@ test, except where the spec says "manual qualification".
      done intent lacks its effect.
   5. `PRAGMA integrity_check` and `foreign_key_check` pass.
 - **Power loss:** `kill -9` is not power-loss evidence. Power-loss
-  simulation (dropping unflushed writes, through an `Fs` implementation
-  that buffers until `sync`) runs nightly. Real power-cut tests on the
+  simulation runs nightly on two layers that each drop unflushed writes:
+  - an `Fs` implementation for object files that buffers until `sync`;
+  - a **test SQLite VFS** wrapping the default VFS (through
+    `libsqlite3-sys`, or a crate such as `sqlite-vfs`, pinned at use).
+    It tracks writes since the last `xSync` on the database, WAL and
+    journal files, and discards them on a simulated power cut. Bundled
+    SQLite does its own file I/O, so the `Fs` seam alone can't cover
+    it. Real power-cut tests on the
   owner's Mac are a manual qualification before the pilot is declared
   done.
 

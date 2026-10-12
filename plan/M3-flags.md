@@ -30,6 +30,12 @@ the intent framework every later mutation uses.
   - a drop after send, then reconnect, reconciles first and doesn't
     re-issue when the effect is present;
   - an epoch change moves pending intents to `quarantined`;
+  - **same-epoch UID reuse:** the fake server reassigns a UID to a
+    different message without changing UIDVALIDITY; the live
+    `X-Pm-Internal-Id` check quarantines the intent
+    (`ambiguous_match`), and no STORE is sent;
+  - an account reconfiguration (generation bump) quarantines pending
+    intents (`config_change`);
   - the proptest model includes intents and converges.
 
 ### M3.2 Read and star on Proton — M, linux + macos-ci
