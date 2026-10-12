@@ -58,7 +58,9 @@ and [raw/plan-proton-bridge/codex.md](../research/raw/plan-proton-bridge/codex.m
     address domain;
   - `Date`;
   - `In-Reply-To` and `References` from the original;
-  - `User-Agent: Sweetbriar/<version>`.
+  - `User-Agent: Sweetbriar/<version>`;
+  - **no `Bcc` header.** Bcc recipients exist only in the envelope
+    (`send_recipients`).
 - **Local limits (Proton):** 25 MB total attachments and at most 100
   files. Exceeding them blocks Send with an explanation. Bridge's SMTP
   `SIZE` advertises no number, so Sweetbriar checks itself.
@@ -76,6 +78,8 @@ and [raw/plan-proton-bridge/codex.md](../research/raw/plan-proton-bridge/codex.m
 ```
 
 1. **`send_draft(draft_id, revision_id)`:**
+   - `revision_id` must be the draft's `current_revision_id`, otherwise
+     `Conflict`: only what the user last saw is sent.
    - **First,** outside any transaction, build the MIME and publish it to
      the object store (03). If publishing fails, nothing else happens.
    - **Then,** in one transaction:
@@ -99,6 +103,10 @@ and [raw/plan-proton-bridge/codex.md](../research/raw/plan-proton-bridge/codex.m
      stays `queued`, marked "Account changed; confirm sending with the new
      settings". It is submitted only after the user confirms
      (`confirm_send_route`, 07) or cancels.
+   - **Confirming** checks that the attempt's identity is still
+     sendable, then sets the attempt's `config_generation` to the
+     account's current one in the same transaction. If the identity is
+     no longer sendable, confirming fails and only cancelling remains.
    - The draft must have a valid sending identity. Drafts without one
      can't be sent.
    - On startup, any attempt found in `submitting` becomes
@@ -139,9 +147,13 @@ and [raw/plan-proton-bridge/codex.md](../research/raw/plan-proton-bridge/codex.m
    `resolve_unknown_send`:
    - **Mark as sent** (e.g. after finding it in Sent): the draft becomes
      `sent`;
-   - **Send again**: creates a new attempt, with an explicit duplicate
-     warning; the draft is `queued` again;
+   - **Send again**: after an explicit duplicate warning, creates a new
+     attempt with the unknown attempt's frozen revision, bytes and
+     recipients (the same `Message-ID`, so recipients' clients can spot
+     the duplicate); the draft is `queued` again;
    - **Keep as draft**: the draft returns to `editing`.
+   - Each of these changes the draft's state only under the
+     current-revision rule (02): a newer revision stays `editing`.
    - **A `failed` attempt** also returns its draft to `editing`.
    - Sweetbriar may show evidence: a Sent occurrence whose headers carry
      the attempt's `Message-ID`. Evidence is shown, never acted on
@@ -151,6 +163,11 @@ and [raw/plan-proton-bridge/codex.md](../research/raw/plan-proton-bridge/codex.m
    - Automatic retry with backoff applies only to failures *before*
      `DATA`: connection refused, `AUTH` temporarily unavailable.
    - **Nothing after `DATA` is retried automatically.**
+
+7. **`discard_draft`** is refused with `Conflict` while the draft has an
+   attempt in `held`, `queued`, `submitting` or `outcome_unknown`. The
+   user cancels or resolves the attempt first, so discarded mail is
+   never sent.
 
 ## The Sent copy
 

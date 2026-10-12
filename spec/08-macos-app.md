@@ -36,8 +36,9 @@ restores its draft by `draft_id`.
 
 ## Sidebar
 
-- **Unified section:** Inbox, Flagged, Drafts (local), Out Box, then saved
-  views. Each account's own synced Drafts mailbox appears under the
+- **Unified section:** Inbox (`Unified(inbox)`), Flagged (`Flagged`),
+  Drafts (local) (`drafts()`), Out Box (`out_box()`), then saved views
+  (07). Each account's own synced Drafts mailbox appears under the
   account.
 - **One section per account,** with its colored monogram and name; its
   mailboxes are below, folders and labels grouped as Bridge exposes them

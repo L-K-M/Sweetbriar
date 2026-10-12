@@ -58,6 +58,8 @@ the intent framework every later mutation uses.
     intent is `done`;
   - a server that returns only a tagged `OK` to STORE still reaches
     `done`, via the confirming fetch;
+  - marking read in INBOX shows the message read at once in its label
+    and Starred views, with one STORE sent;
   - another client's later flag change (fake server) is preserved after
     our intent completes;
   - the UI updates instantly (local effect) and stays correct after the

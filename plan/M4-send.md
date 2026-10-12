@@ -46,7 +46,8 @@ inspectable Out Box. Unknown outcomes are never retried automatically.
     emphasis or headings (snapshot);
   - generated messages re-parse with `sb-mime::parse` to the same
     content;
-  - limits block with an explanation.
+  - limits block with an explanation;
+  - a draft with Bcc recipients produces MIME with no `Bcc` header.
 
 ### M4.3 Outbox and SMTP — L, linux
 
@@ -56,7 +57,10 @@ inspectable Out Box. Unknown outcomes are never retried automatically.
   02 (`send_attempts`, `send_recipients`).
 - **Depends on:** M4.2.
 - **Deliverables:**
-  - `send_draft`, `cancel_send` and `resolve_unknown_send`;
+  - `send_draft`, `cancel_send`, `resolve_unknown_send` and
+    `confirm_send_route`;
+  - identity promotion from `provisional` to `validated` on Bridge's
+    first acceptance (05);
   - `sb-smtp` on `lettre`, with the pinned-cert TLS from M2.2;
   - per-recipient RCPT tracking;
   - startup recovery: `submitting` becomes `outcome_unknown`;
@@ -81,6 +85,17 @@ inspectable Out Box. Unknown outcomes are never retried automatically.
     R2, which isn't marked sent. Cancelling R1 likewise leaves R2 intact;
   - an attempt whose account or identity doesn't match its revision's
     route snapshot is rejected by the schema (negative test);
+  - `send_draft` with a revision other than the current one gets
+    `Conflict`;
+  - `discard_draft` is refused while an attempt is `held`, `queued`,
+    `submitting` or `outcome_unknown`;
+  - "Send again" reuses the unknown attempt's frozen bytes (same
+    `Message-ID`);
+  - `confirm_send_route` adopts the new `config_generation`, and fails
+    if the identity is no longer sendable;
+  - `a@X.NET` in To and `a@x.net` in Cc produce one `RCPT TO`;
+  - a provisional identity becomes `validated` after its first accepted
+    send (fake server);
   - partial RCPT rejection keeps accepted recipients `sent` and offers a
     new attempt only for rejected ones;
   - a definite pre-acceptance failure gives `failed`, with retry only on

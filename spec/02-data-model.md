@@ -139,7 +139,7 @@ CREATE TABLE acquisitions (
   acquisition_id   INTEGER PRIMARY KEY AUTOINCREMENT,
   content_sha256   TEXT NOT NULL UNIQUE,              -- hex of the exact bytes
   byte_length      INTEGER NOT NULL,
-  object_state     TEXT NOT NULL CHECK (object_state IN ('published','missing','quarantined')),
+  object_state     TEXT NOT NULL CHECK (object_state IN ('published','missing','quarantined')), -- 03: absent, or damaged and moved to recovery/
   first_acquired_at INTEGER NOT NULL
 ) STRICT;
 
@@ -170,7 +170,7 @@ CREATE TABLE mailboxes (
   account_id     TEXT NOT NULL REFERENCES accounts(account_id),
   remote_name    TEXT NOT NULL,                        -- decoded (UTF-8) IMAP name; local archive uses import names
   delimiter      TEXT,
-  role           TEXT CHECK (role IN ('inbox','sent','drafts','trash','junk','archive','all','flagged','starred')),
+  role           TEXT CHECK (role IN ('inbox','sent','drafts','trash','junk','archive','all','flagged')), -- Bridge's Starred is 'flagged' (04)
   kind           TEXT NOT NULL CHECK (kind IN ('folder','label','virtual')),
   selectable     INTEGER NOT NULL CHECK (selectable IN (0,1)),
   uidvalidity    INTEGER,                              -- current epoch; NULL for local mailboxes
@@ -271,9 +271,11 @@ CREATE TABLE message_headers (                    -- headers fetched at sync, be
   different provider message (a different `X-Pm-Internal-Id`), the old
   row becomes `superseded` and a new row is inserted. History isn't
   rewritten.
-- **Unread state shown in a list is per occurrence:** the occurrence
-  shown in that mailbox. Mixed views ("All unread") count a logical
-  message as unread if any present occurrence is unread, and say so.
+- **Flags shown in a list** are the row's occurrence's: the occurrence
+  in that mailbox, or the representative in per-message windows (07).
+  For Proton, local flag changes apply to every occurrence of the
+  message (04), so occurrences disagree only briefly: after another
+  client's change, until the next sweep.
 - **Occurrence states:**
   - `vanish_pending`: absent from the server, not yet confirmed by a
     complete observation.
@@ -338,6 +340,11 @@ CREATE TABLE seen_addresses (                     -- derived from mail; feeds co
 ) STRICT;
 ```
 
+Two spellings that differ only in the domain's case share a row. Spellings
+that differ in the local part's case are separate rows, since local parts
+may be case-sensitive (RFC 5321 §2.4). `send_recipients` uses the same
+canonical form.
+
 A full `contacts` table (D22) is *later*. `seen_addresses` is
 technically derived but kept: rebuilding it would lose sent-to counts
 from discarded drafts. It is listed in the backup.
@@ -345,18 +352,14 @@ from discarded drafts. It is listed in the backup.
 ## Drafts
 
 ```sql
-CREATE TABLE drafts (
+CREATE TABLE drafts (                             -- the route (account, identity) lives only on revisions
   draft_id          TEXT PRIMARY KEY,
-  account_id        TEXT,                            -- NULL with identity_id NULL: a local draft with no sending identity yet
-  identity_id       TEXT,
   state             TEXT NOT NULL CHECK (state IN ('editing','queued','sent','discarded')),
   reply_to_occurrence_id INTEGER REFERENCES occurrences(occurrence_id),
   forward_of_message_id  INTEGER REFERENCES logical_messages(message_id),
   current_revision_id    TEXT,                     -- latest revision; set in the same transaction as the insert
   created_at        INTEGER NOT NULL,
   updated_at        INTEGER NOT NULL,
-  CHECK ((account_id IS NULL) = (identity_id IS NULL)),
-  FOREIGN KEY (identity_id, account_id) REFERENCES identities(identity_id, account_id),
   FOREIGN KEY (current_revision_id, draft_id) REFERENCES draft_revisions(revision_id, draft_id)
     DEFERRABLE INITIALLY DEFERRED
 ) STRICT;
@@ -396,8 +399,12 @@ CREATE TABLE draft_revisions (                    -- immutable once written
   `editing` with its newer revision, and nothing newer is lost or
   marked sent. "Saved" is shown only
   after that commit.
-- **Drafts without an identity** (both `account_id` and `identity_id`
-  NULL) are allowed, so local drafts work before any sending account
+- **Discarding** is refused (`Conflict`) while the draft has an attempt
+  in `held`, `queued`, `submitting` or `outcome_unknown` (05).
+- **A draft's route** is its current revision's `account_id` and
+  `identity_id`. `drafts` keeps no copy, so the two can't disagree.
+- **Drafts without an identity** (the current revision's route NULL)
+  are allowed, so local drafts work before any sending account
   exists. Sending requires a valid identity (05).
 - Attachments are published to the object store **before** the revision
   that references them.
@@ -470,17 +477,18 @@ CREATE TABLE send_attempts (
 
 CREATE TABLE send_recipients (
   attempt_id   TEXT NOT NULL REFERENCES send_attempts(attempt_id),
-  address      TEXT NOT NULL,
+  canonical    TEXT NOT NULL,                      -- seen_addresses form: local part as written, domain lowercased
+  address      TEXT NOT NULL,                      -- first spelling, as written
   kind         TEXT NOT NULL CHECK (kind IN ('to','cc','bcc')),
   rcpt_reply   TEXT,                               -- RCPT reply code + text
   state        TEXT NOT NULL CHECK (state IN ('pending','rcpt_accepted','rejected_permanent','rejected_transient','sent','unsent','unknown')),
-  PRIMARY KEY (attempt_id, address)
+  PRIMARY KEY (attempt_id, canonical)
 ) STRICT;
 ```
 
-- **One row per address.** An address appearing in To and Cc is one SMTP
-  recipient (one `RCPT TO`). Addresses are compared case-insensitively
-  in the domain part. `kind` records the most visible field it appeared
+- **One row per canonical address,** computed when the attempt is
+  built. An address appearing in To and Cc is one SMTP recipient (one
+  `RCPT TO`): `a@X.NET` in To and `a@x.net` in Cc are one row. `kind` records the most visible field it appeared
   in (`to` > `cc` > `bcc`); the frozen MIME keeps the headers as written.
 - The state machine and its rules are in [05-send](05-send.md).
 
@@ -513,7 +521,7 @@ CREATE TABLE breaker_events (
   mailbox_id  INTEGER,
   kind        TEXT NOT NULL CHECK (kind IN ('bulk_disappearance','folder_emptied','epoch_change','reconfiguration')),
   details_json TEXT NOT NULL,                      -- counts, inventory snapshot reference
-  state       TEXT NOT NULL CHECK (state IN ('open','user_confirmed','user_restored','dismissed')),
+  state       TEXT NOT NULL CHECK (state IN ('open','accepted','kept','cleared')), -- 04 (The breaker)
   created_at  INTEGER NOT NULL,
   resolved_at INTEGER,
   FOREIGN KEY (mailbox_id, account_id) REFERENCES mailboxes(mailbox_id, account_id)
@@ -588,12 +596,15 @@ CREATE TABLE d_list_rows (
   snippet       TEXT,
   unread        INTEGER NOT NULL,
   flagged       INTEGER NOT NULL,
-  has_attachments INTEGER NOT NULL
+  has_attachments INTEGER NOT NULL,
+  representative INTEGER NOT NULL CHECK (representative IN (0,1)) -- the message's row in per-message windows
 ) STRICT;
 CREATE INDEX d_list_rows_window ON d_list_rows(mailbox_id, sort_date DESC, occurrence_id DESC,
   sender, subject, snippet, unread, flagged, has_attachments);
 CREATE INDEX d_list_rows_unified ON d_list_rows(mailbox_role, sort_date DESC, occurrence_id DESC,
   account_id, sender, subject, snippet, unread, flagged, has_attachments);
+CREATE INDEX d_list_rows_flagged ON d_list_rows(sort_date DESC, occurrence_id DESC)
+  WHERE flagged = 1 AND representative = 1;
 ```
 
 - **`d_list_rows`** is the covering index for keyset-paginated mailbox
@@ -602,6 +613,13 @@ CREATE INDEX d_list_rows_unified ON d_list_rows(mailbox_role, sort_date DESC, oc
   `first_seen_at`. It is derived, but kept transactionally
   current, because the list must reflect a flag change instantly.
   Unified views ("all inboxes") page over `d_list_rows_unified` by role.
+- **The representative occurrence** stands for its logical message in
+  per-message windows (`Flagged`, `Search`, `View`, `Thread`; 07). It
+  is the message's present occurrence in a `folder` mailbox, else in a
+  `label` mailbox, else in a `virtual` one; ties go to the lowest
+  `occurrence_id`. Exactly one present occurrence per message has
+  `representative = 1`, maintained in the same transaction as occurrence
+  changes.
 - **Tags in list rows** are fetched per page in one batched query by
   `message_id`, after the window's rows are read. They aren't
   denormalized into `d_list_rows`.

@@ -33,7 +33,7 @@ docs (checked 2026-10-12). They must be requalified on the owner's Mac
 | Self-signed certificate, IP SAN `127.0.0.1` | Pin it (10). Always connect to the literal `127.0.0.1`, never `localhost` |
 | Credentials are a Bridge-generated password, not the Proton password | Never ask for the Proton password |
 | Capabilities: IMAP4rev1, IDLE (can be disabled remotely), UIDPLUS, MOVE, UNSELECT, ID. **No CONDSTORE/QRESYNC, NAMESPACE, LITERAL+ or SPECIAL-USE** (roles still appear as LIST attributes) | No modseq-based sync. Flags are swept. Use synchronizing literals. Read roles from LIST attributes |
-| Mailboxes: INBOX, Drafts, Sent, Starred, Archive, Spam, Trash, All Mail, Scheduled (hidden when empty); `Folders/<path>` and `Labels/<name>`; `Folders` and `Labels` are `\Noselect`; delimiter `/` | `kind='folder'` or `'label'` from the prefix. Starred and All Mail are `kind='virtual'` |
+| Mailboxes: INBOX, Drafts, Sent, Starred, Archive, Spam, Trash, All Mail, Scheduled (hidden when empty); `Folders/<path>` and `Labels/<name>`; `Folders` and `Labels` are `\Noselect`; delimiter `/` | `kind='folder'` or `'label'` from the prefix. Starred, All Mail and Scheduled are `kind='virtual'`. Roles: Starred `flagged`, All Mail `all`, Scheduled none (read-only in the pilot). Roles come from LIST attributes, else from these names |
 | One Proton message can appear in its folder, several `Labels/…`, All Mail and Starred | One occurrence per mailbox appearance, grouped by `X-Pm-Internal-Id` |
 | Bridge injects `X-Pm-Internal-Id` (the Proton message id) into fetched headers | `logical_messages.provider_key` for the Proton account. Its persistence is unverified, so it is evidence, not authority |
 | BODY[] is **reconstructed** from Proton's data. MIME boundaries are random since v3.25.0 | The same message fetched twice gives different bytes. Fetch a body once per logical message, and never compare bytes for identity |
@@ -98,10 +98,16 @@ There is no CONDSTORE, so sync per mailbox works like this:
    messages without an acquisition.
    - Order: messages the user opened first, then newest first.
    - **Before attaching a body,** the engine checks that the mailbox's
-     epoch is unchanged and that the fetched message's `X-Pm-Internal-Id`
-     equals the logical message's `provider_key`. On a mismatch the body
-     isn't attached: the mailbox gets a header resync and any intents on
-     that occurrence are quarantined (`ambiguous_match`).
+     epoch is unchanged, then applies the policy's identity check:
+     - **`proton_bridge`:** the fetched message's `X-Pm-Internal-Id`
+       equals the logical message's `provider_key`;
+     - **`generic_imap`:** `OBJECTID`/`EMAILID` match where advertised
+       and qualified. Otherwise the body's `Message-ID` and `Date` must
+       equal those in `message_headers`. This is weaker: it relies on
+       RFC 3501's rule that a UID isn't reused within an epoch.
+   - On a mismatch the body isn't attached: the mailbox gets a header
+     resync and any intents on that occurrence are quarantined
+     (`ambiguous_match`).
    - Each body is published (03), then the acquisition is inserted,
      linked to the logical message, and queued for search.
    - A body is never fetched again for another occurrence of the same
@@ -178,8 +184,10 @@ finish.
 
 **While paused:** downloads, reading, drafting and other accounts
 continue. The user sees counts and examples and chooses **Accept**
-(apply the disappearances) or **Keep** (leave occurrences marked
-`vanish_pending` and keep watching). Thresholds are settings, tuned from
+(apply the disappearances; the event becomes `accepted`) or **Keep**
+(leave occurrences marked `vanish_pending` and keep watching; `kept`).
+An open or kept event whose messages reappear on a later inventory
+becomes `cleared`. Thresholds are settings, tuned from
 traces later.
 
 ## Intents and the mutation matrix
@@ -193,6 +201,8 @@ connection.
      `quarantined` with `quarantine_reason='config_change'`.
    - The target occurrence's epoch equals the mailbox's current
      UIDVALIDITY, and the occurrence is `present`.
+   - `delete_to_trash` runs as a `move` to the account's Trash mailbox
+     and follows every `move` rule below.
    - **Live target check, defined by the provider policy,** before every
      mutation (`set_flags`, `move`, `copy`):
      - **`proton_bridge`:** in the selected mailbox, `UID FETCH <uid>
@@ -231,13 +241,14 @@ connection.
 
 | User action | Allowed when | Command | Notes |
 |---|---|---|---|
-| Mark read or unread | Any present occurrence in a selectable mailbox | `UID STORE <uid> +FLAGS.SILENT (\Seen)` or `-FLAGS.SILENT` | Proton syncs read state per message, so other occurrences converge on the next sweep. Each stays per-occurrence locally until then |
+| Mark read or unread | Any present occurrence in a selectable mailbox | `UID STORE <uid> +FLAGS.SILENT (\Seen)` or `-FLAGS.SILENT` | Proton keeps read state per message. The local effect applies to every present occurrence of the logical message; the intent targets the occurrence acted on. The sweep confirms the other occurrences |
 | Star or unstar | Same | `UID STORE` with `\Flagged` | Same convergence |
 | Archive, move to folder, move to Trash | Source is INBOX, Archive, Spam, Trash or `Folders/*`; destination is INBOX, Archive, Spam, Trash or `Folders/*`; source ≠ destination | `UID MOVE <uid> <dest>` | **Before the move,** the logical message's body must be acquired and published (keep a local copy of anything leaving view). Afterwards, verify the destination occurrence appears with the same `X-Pm-Internal-Id`, and only then mark `done` |
 | Add label | Source is any selectable non-virtual mailbox; destination is `Labels/*` | `UID COPY <uid> <label>` | Adds membership. The folder stays |
 | Remove label | — | Not in the pilot | Would need a qualified `UID EXPUNGE` on the label mailbox; deferred |
 | Delete permanently, empty Trash | — | Not in the pilot | No EXPUNGE in the Proton policy |
 | Move from Starred or All Mail | — | Resolved to the message's real folder occurrence first | If there's none, or it's ambiguous, the action is refused with an explanation |
+| Any action in Scheduled | — | Not in the pilot | Scheduled sends are read-only |
 | Archive, move or trash from a label view (`Labels/*`) | — | Resolved to the message's folder occurrence (same `X-Pm-Internal-Id`, in INBOX, Archive, Spam, Trash or `Folders/*`), then `UID MOVE` of that occurrence | Proton keeps labels on a folder-to-folder move, so the message stays in the label view. The UI says so. If no folder occurrence is known, the action is refused |
 
 **Generic IMAP policy** (Dovecot in CI; generic accounts later):
@@ -245,11 +256,17 @@ connection.
   COPY`, check `COPYUID`, then `UID STORE +FLAGS.SILENT (\Deleted)` and
   `UID EXPUNGE <uid>` (UIDPLUS required).
 - Without UIDPLUS, no automatic expunge.
+- **Completion:** a `move` or `copy` is `done` when `COPYUID` names the
+  destination UID and `UID FETCH <uid> (UID)` in the destination finds
+  it. Without `COPYUID` (MOVE without UIDPLUS), the move is `done` when
+  the source UID is gone; the destination occurrence arrives with the
+  next sync.
 - Never a bare `EXPUNGE`, and never `CLOSE` after flagging.
 
 **Flag conflicts:** with no CONDSTORE, a flag intent is a delta (add or
 remove one flag). While a local flag intent is pending or in flight, the
-sweep doesn't overwrite that flag on that occurrence. Once the intent is
+sweep doesn't overwrite that flag on the occurrences it covers (for
+Proton, every occurrence of the logical message). Once the intent is
 done, the next sweep wins: another client's later change is preserved.
 
 **Undo:** undo creates the inverse intent, for example move back to the
@@ -279,7 +296,10 @@ a dated diagnostics entry.
 If the capabilities or the mailbox roles change (the `ID` response's
 version, when present, is recorded as a best-effort hint only), mutations
 for the account are suspended until a check passes:
-- MOVE and UIDPLUS are still advertised;
+- the capabilities the account's policy uses are still advertised:
+  MOVE and UIDPLUS for `proton_bridge`; for `generic_imap`, MOVE or
+  UIDPLUS for the move path it chose (with neither, moves stay disabled
+  and flags continue);
 - the role mapping is unchanged.
 
 Read-only sync continues meanwhile.

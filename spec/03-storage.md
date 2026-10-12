@@ -143,9 +143,11 @@ orphan GC is about to remove. So:
 ### Reads and verification
 
 - `open` checks the length and computes the SHA-256 while streaming.
-  A mismatch raises `StoreError::Corrupt` and sets
-  `acquisitions.object_state='missing'`.
-- The damaged file is moved to `recovery/` and the UI is notified.
+  A mismatch raises `StoreError::Corrupt`, moves the damaged file to
+  `recovery/`, sets `acquisitions.object_state='quarantined'` and
+  notifies the UI. An absent file sets `'missing'`.
+- Publishing the same bytes again (a re-fetch, a re-import) restores
+  `'published'`.
 - A weekly verification job re-hashes a rotating sample of objects (1/52
   of them each week, so every object yearly), and all objects referenced
   by backups.
@@ -249,7 +251,8 @@ The process holds `<data root>.lock` throughout.
    - **On startup, a marker means a swap was interrupted.** If the data
      root is missing and staging exists, finish the swap. If both the
      data root and staging exist, the swap hadn't started: discard
-     staging and restart the restore on request.
+     staging and restart the restore on request. If the data root
+     exists and staging doesn't, the swap finished: remove the marker.
    - Nothing is deleted. The preserved root is listed in Settings →
      Backups until the user removes it.
 5. **Reconcile.** For each account the user resumes:

@@ -63,7 +63,7 @@ decided.
   - an unclassified file fails;
   - the real workspace passes.
 
-### M0.3 Store open path — M, linux
+### M0.3 Store open path — M, linux + macos-ci
 
 - **Goal:** `sb-store` opens or creates the database exactly as spec/03
   requires, and refuses anything else.
@@ -71,8 +71,12 @@ decided.
   mapping for `Locked`, `Corrupt`, `NewerStore`).
 - **Depends on:** M0.1.
 - **Deliverables:**
-  - `sb-store::open(paths, fs)`: the lease via the `Fs` seam's exclusive
-    lock (01 rule 5), the connection constructor with pragma set-and-read-back, version and source-id
+  - in `sb-types`: the `Fs` seam trait, complete (`create`, `write`,
+    `sync_all`, `sync_dir`, `rename`, `remove`, `lock_exclusive`);
+  - in `sb-platform`: its real implementation (`fcntl(F_FULLFSYNC)` on
+    macOS, `fsync` on Linux). M0.5 adds the fault-injecting one;
+  - `sb-store::open(paths, fs)`: the lease via `Fs::lock_exclusive`
+    (01 rule 5), the connection constructor with pragma set-and-read-back, version and source-id
     checks, refusal of synced and network locations (detected by path
     prefix and filesystem type);
   - `LIBSQLITE3_FLAGS` in `.cargo/config.toml`.
@@ -114,11 +118,9 @@ decided.
   verification), 11 (Fault injection).
 - **Depends on:** M0.3.
 - **Deliverables:**
-  - in `sb-types`: the `Fs` seam trait (`create`, `write`, `sync_all`,
-    `sync_dir`, `rename`, `remove`, `lock_exclusive`);
-  - in `sb-platform`: the real implementation (`fcntl(F_FULLFSYNC)` on
-    macOS, `fsync` on Linux) and a fault-injecting test implementation
-    (in `sb-test-support`). `resources` wires the real one in;
+  - the `Fs` seam and its real implementation from M0.3, plus a
+    fault-injecting implementation in `sb-test-support`. `resources`
+    wires the real one in;
   - in `sb-store`: `ObjectStore` and the file implementation;
   - in `sb-test-support`: the crash-cut harness (spawn a child, kill at
     numbered cut points, reopen, check invariants).

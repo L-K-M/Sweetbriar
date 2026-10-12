@@ -94,7 +94,8 @@ signed in, with its TLS certificate exported.
 - **Depends on:** M2.3.
 - **Deliverables:**
   - engine per-account tasks (IDLE watcher, worker);
-  - mailbox discovery and mapping (kinds and roles);
+  - mailbox discovery and mapping (kinds and roles: Starred `flagged`,
+    All Mail `all`, Scheduled `virtual` without a role);
   - header batches with `uidnext` checkpoints in one transaction;
   - logical message grouping with evidence;
   - the flag sweep; inventory with `vanish_pending` and `vanished`;
@@ -119,7 +120,10 @@ signed in, with its TLS certificate exported.
   - an epoch change quarantines targeting intents (inserted directly in
     the test);
   - schema-level cross-account rejection: inserting an occurrence whose
-    message belongs to another account fails.
+    message belongs to another account fails;
+  - the body-attach identity check per policy: on the Bridge profile a
+    different `X-Pm-Internal-Id` is refused; on Dovecot a body whose
+    `Message-ID` differs from `message_headers` is refused.
 
 ### M2.5 Body acquisition, coverage and health — M, linux + macos-ci
 
@@ -150,7 +154,9 @@ signed in, with its TLS certificate exported.
     server counts fetches);
   - reading never sends `\Seen` (command trace);
   - coverage numbers match fixture expectations;
-  - breaker Accept and Keep work end to end (UI test with the fake).
+  - breaker Accept and Keep work end to end (UI test with the fake),
+    leaving the event `accepted` or `kept`; an event whose messages
+    reappear becomes `cleared`.
 
 ### M2.6 Real-Bridge CI lane — L, linux (nightly)
 
@@ -167,8 +173,9 @@ signed in, with its TLS certificate exported.
     provisions mock users and messages, starts the Bridge core, and
     prints ports and the test certificate;
   - a nightly job runs the Rust read-only sync suite against it;
-  - the Go toolchain pinned by Bridge's `go.mod` (Go 1.26.x) installed in
-    that job;
+  - the Go toolchain pinned by Bridge's `go.mod` (Go 1.26.x) and Bridge's
+    native (CGO) build prerequisites from its `BUILDS.md`, without the
+    Qt GUI, installed in that job;
   - the lane is built to grow: M3.2, M4.3 and M5.1 each add their suites
     to it.
 - **Acceptance:**

@@ -129,7 +129,7 @@ shared by the search field, saved views and, later, rules.
 | Node | Meaning |
 |---|---|
 | `text` | Full-text query (FTS5) |
-| `field` | `from`, `to`, `cc`, `subject`, `body`, `attachment`, each with `contains`, `is` or `domain`. `contains` uses FTS5 on the field's column. `is` and `domain` match the parsed address lists and header values in `d_message_summary` exactly, never the tokenized text |
+| `field` | `from`, `to` and `cc` take `contains`, `is` or `domain`; `subject`, `body` and `attachment` take `contains` only. `contains` uses FTS5 on the field's columns (`body`: `body_authored`, `body_quoted` and `body_signature`). `is` and `domain` match the parsed address lists in `d_message_summary` exactly, never the tokenized text |
 | `flag` | `seen`, `flagged`, `answered`, `draft` |
 | `tag`, `has` | `has` takes `attachment` or `note` |
 | `date` | `before`, `after`, `on`, `within_days`; always with an explicit IANA timezone; relative dates also carry the evaluation clock |
@@ -164,6 +164,10 @@ shared by the search field, saved views and, later, rules.
 - Filters (account, mailbox, flags, dates) are applied **inside** the SQL
   query before ranking and limit, so a small account's hits can't vanish
   under a large one's.
+- **Grain:** one row per logical message, its representative occurrence
+  (02, `d_list_rows`). With a `mailbox` scope, rows are that mailbox's
+  occurrences instead. Counts are messages. A message with no present
+  occurrence isn't a hit; it appears in the Recovery list (04).
 - **Results stream:** the first 50 hits are ranked or date-sorted; more
   are fetched on scroll with keyset paging.
   - Date-sorted results page by `(sort_date, occurrence_id)`.

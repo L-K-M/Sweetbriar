@@ -47,7 +47,8 @@ local drafts. No network yet.
   - importing `fixtures/import/*` reproduces the expected SHA-256 for
     every message;
   - re-import creates no new acquisitions and no new occurrences
-    (idempotent by source file hash plus offset);
+    (idempotent by source identity: path, SHA-256, target mailbox and
+    offset; 09);
   - two identical messages in one mbox produce one acquisition and **two**
     occurrences, and export writes both;
   - two byte-identical mbox files with different names (`Inbox.mbox`,
@@ -66,18 +67,24 @@ local drafts. No network yet.
   read transactions).
 - **Depends on:** M1.2.
 - **Deliverables:**
-  - `d_list_rows` maintenance in the same transaction as occurrence
-    changes;
+  - `d_list_rows` maintenance, including the `representative` flag, in
+    the same transaction as occurrence changes;
   - `open_window` for `Mailbox`, `Unified` (paging over
-    `d_list_rows_unified` by role) and `Thread` specs (`Search` comes in
-    M1.6), with every anchor;
+    `d_list_rows_unified` by role), `Flagged` and `Thread` specs
+    (`Search` comes in M1.6), with every anchor;
   - batched per-page tag lookup;
   - `subscribe` / `next`, with coalescing and `ResetRequired`;
   - JWZ threading into `d_threads`.
 - **Acceptance:**
   - with 100k synthetic rows: first page < 5 ms and deep keyset page
     < 5 ms (Linux CI numbers recorded, no assertion);
-  - query plans use `d_list_rows_window` (`EXPLAIN QUERY PLAN` test);
+  - query plans use `d_list_rows_window`, and `Flagged` uses
+    `d_list_rows_flagged` (`EXPLAIN QUERY PLAN` tests);
+  - every logical message with a present occurrence has exactly one
+    representative, before and after moves and vanishes (property test
+    on a synthetic store);
+  - a flagged message with occurrences in a folder and two labels shows
+    once in `Flagged`, through its folder occurrence;
   - a flag change bumps the generation and wakes a pending `next`;
   - a slow consumer gets `ResetRequired`, never a silently dropped event;
   - selection by `occurrence_id` survives invalidation.
@@ -168,6 +175,11 @@ local drafts. No network yet.
   - relevance paging across three pages, whose dates are in a different
     order from their scores, never repeats or skips a hit;
   - completion keeps `User@example.net` and `user@example.net` distinct;
+  - a message with occurrences in a folder and two labels is one hit,
+    and a `mailbox` scope returns that mailbox's occurrence (synthetic
+    store);
+  - `is` or `domain` on `subject`, `body` or `attachment` is a parse
+    error;
   - 100k-message search latency is recorded.
 
 ### M1.7 Export — S, linux
@@ -225,7 +237,8 @@ local drafts. No network yet.
     points to a removed object (interleaving test);
   - restore: crash cuts at every step (staging, quarantine, marker, both
     renames) leave either the old store or the quarantined restored
-    store, never an unquarantined one;
+    store, never an unquarantined one; startup with the marker present
+    handles all three states (swap not started, half done, finished);
   - a second process can't open the store during the swap (the lock is
     outside the data root);
 
@@ -242,7 +255,7 @@ local drafts. No network yet.
   - attachments published before the revision;
   - the macOS compose window: token fields, subject, a plain or Markdown
     editor, autosave after 1.5 s, "Saved" only after the receipt;
-  - a drafts list in the sidebar.
+  - the `drafts()` query and the sidebar's Drafts (local) list.
 - **Acceptance:**
   - crash cuts during save: the last acknowledged revision always
     survives;

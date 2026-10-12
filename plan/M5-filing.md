@@ -22,7 +22,11 @@ verified before it completes.
   - add-label via `UID COPY` to `Labels/*`;
   - the generic policy: `UID MOVE`, or `COPY` + `STORE \Deleted` +
     `UID EXPUNGE` only with UIDPLUS; its live target check uses the
-    UIDVALIDITY/UID binding, since Dovecot has no Proton header (04);
+    UIDVALIDITY/UID binding, since Dovecot has no Proton header (04),
+    and its completion uses `COPYUID` plus a destination fetch;
+  - `delete_to_trash` as a `move` to Trash under every move rule;
+  - capability requalification scoped to the policy (04, Compatibility
+    ledger);
   - undo intents with the "moved elsewhere since" refusal;
   - the mutation-matrix suite added to the real-Bridge lane (M2.6), run
     with the folder-unlabel feature flag both ways.
@@ -31,7 +35,9 @@ verified before it completes.
     `UID EXPUNGE` or `CLOSE`** in any test (a global assertion in the
     fake server);
   - moving from a label mailbox resolves to the folder occurrence or is
-    refused;
+    refused, and any action in Scheduled is refused;
+  - a generic server without MOVE keeps moves working through UIDPLUS,
+    and one without either keeps flags working with moves disabled;
   - a move without an acquired body fetches it first;
   - a destination that doesn't verify leaves the intent pending for
     reconciliation rather than marking it done;
