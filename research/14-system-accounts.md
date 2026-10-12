@@ -1,7 +1,8 @@
 # 14 — System-level accounts (macOS, GNOME, KDE)
 
 Synthesis of [raw/system-accounts/codex.md](raw/system-accounts/codex.md)
-and [raw/system-accounts/devin.md](raw/system-accounts/devin.md), plus
+and [raw/system-accounts/devin.md](raw/system-accounts/devin.md) (Devin's
+run hit its 60-minute limit; its report is a near-complete draft), plus
 facts Claude checked by hand against Apple's documentation metadata, the
 GNOME Online Accounts and KDE source trees, and Mozilla's bug tracker.
 Checked 2026-10-12.
@@ -64,8 +65,10 @@ identity and history never depend on where its tokens come from.
      Sweetbriar implementing those logins.
    - `EKEventStore` does the same for calendars: full access on macOS 14+;
      write-only access can't read events.
-   - These expose data, never credentials or server settings. Native macOS
-     has no "limited contacts" mode (that's iOS).
+   - These expose data, never credentials or server settings. Native
+     macOS has no "limited contacts" mode: `CNAuthorizationStatus.limited`
+     exists on iOS, iPadOS, Mac Catalyst, visionOS and watchOS only (Apple
+     metadata, checked by Claude). Devin's draft assumed otherwise.
    - Container ids are external references, not Sweetbriar account ids.
 2. **Browser sign-in reuse.**
    - `ASWebAuthenticationSession` runs Sweetbriar's own OAuth in the
@@ -157,8 +160,10 @@ still list it.
   are issued to GNOME's Google client
   (`44438659992-….apps.googleusercontent.com`) and GNOME's Microsoft client
   (`b155a604-…`). Organisations can supply their own Microsoft client and
-  tenant id when adding an account. Google's client id is a build-time
-  option, not something an app can choose.
+  tenant id when adding an account. GNOME's default Microsoft 365 client
+  was itself unverified until a fix (GOA NEWS, issue #335), so users saw
+  an unverified-app warning. Google's client id is a build-time option,
+  not something an app can choose.
 - **GNOME's policy:**
   - Third-party apps "should contact the GNOME Online Accounts maintainers
     as well as the GNOME design and release team first".
