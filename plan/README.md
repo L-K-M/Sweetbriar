@@ -28,10 +28,10 @@ merges.** Every step is one pull request with acceptance checks.
 
 **Order:** each milestone depends on the previous one. Within a
 milestone, steps run in the listed order unless a step says it can run in
-parallel. **Read-only before mutations, and mutations before send**: the
-order follows the research's build order (local durability → read-only
-sync → reversible effects → submission), adapted to Bridge (flags before
-filing). Send comes before filing because daily use needs it more.
+parallel. **Read-only before mutations**: the order follows the research's build
+order (local durability → read-only sync → reversible effects →
+submission), adapted to Bridge. Flags, the first reversible effect,
+come first; send comes before filing because daily use needs it more.
 
 ## Step format
 

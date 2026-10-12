@@ -39,6 +39,8 @@ verified before it completes.
   - moving from a label mailbox resolves to the folder occurrence or is
     refused, and any action in Scheduled is refused;
   - `add_label` returns no undo token;
+  - in the local archive, `delete_to_trash` moves to a local Trash
+    mailbox, sends nothing and deletes nothing;
   - generic copy-and-delete moves: crash cuts after the COPY and after
     the STORE resume to completion, and `done` always means the source
     UID is gone (Dovecot);

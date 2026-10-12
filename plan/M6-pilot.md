@@ -46,7 +46,7 @@ is met.
   - **owner:** recognition check with all their accounts (the local
     archive plus Proton identities).
 
-### M6.3 Reading view experiment — M, linux + macos-ci
+### M6.3 Reading view experiment — M, linux + macos-ci + owner
 
 - **Goal:** an optional Reading view for supported structures, behind a
   toggle (off by default).

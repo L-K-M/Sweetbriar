@@ -102,6 +102,7 @@ CREATE TABLE identities (
   UNIQUE (account_id, email),
   UNIQUE (identity_id, account_id)                   -- target of account-scoped foreign keys
 ) STRICT;
+CREATE UNIQUE INDEX identities_one_default ON identities(account_id) WHERE is_default = 1;
 
 CREATE TABLE account_appearance (
   account_id   TEXT PRIMARY KEY REFERENCES accounts(account_id),
@@ -148,7 +149,7 @@ CREATE TABLE acquisition_sources (                    -- provenance, one row per
   acquisition_id   INTEGER NOT NULL REFERENCES acquisitions(acquisition_id),
   account_id       TEXT NOT NULL REFERENCES accounts(account_id),
   source_kind      TEXT NOT NULL CHECK (source_kind IN ('imap_fetch','import_mbox','import_eml','send_attempt')), -- 'send_attempt' reserved: in the pilot, sent mail arrives through Sent sync
-  source_ref       TEXT NOT NULL,                     -- e.g. occurrence id, import job id + offset, attempt id
+  source_ref       TEXT NOT NULL,                     -- e.g. occurrence id; import source path + sha256 + mailbox + offset (09); attempt id
   completeness     TEXT NOT NULL CHECK (completeness IN ('complete','truncated')),
   acquired_at      INTEGER NOT NULL
 ) STRICT;
@@ -476,7 +477,7 @@ CREATE TABLE send_attempts (
   state             TEXT NOT NULL CHECK (state IN ('held','queued','submitting','accepted','failed','outcome_unknown','cancelled')),
   hold_until        INTEGER,                       -- undo-send window
   final_reply       TEXT,                          -- final SMTP reply (code + text)
-  sent_copy         TEXT NOT NULL CHECK (sent_copy IN ('server_saves','pending','filed','failed')),
+  sent_copy         TEXT NOT NULL CHECK (sent_copy IN ('server_saves','pending','filed','failed')), -- at insert: server_saves if the provider saves Sent, else pending
   resolution        TEXT CHECK (resolution IN ('marked_sent','send_again','kept_as_draft')), -- the user's answer to outcome_unknown (05)
   resolved_at       INTEGER,
   created_at        INTEGER NOT NULL,

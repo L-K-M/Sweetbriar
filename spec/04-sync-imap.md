@@ -149,6 +149,10 @@ The UI says "Bridge-visible messages synced", never "all Proton mail".
 
 When a mailbox's UIDVALIDITY changes:
 
+A NULL stored `uidvalidity` (after a restore, 03) counts as a change:
+every present occurrence of the mailbox belongs to the old epoch, and a
+NULL `uidnext` means fetching starts at UID 1.
+
 1. **Before anything else,** mark every occurrence of the old epoch
    `epoch_stale`. Suspend every intent targeting those occurrences: they
    become `quarantined` with `quarantine_reason='epoch_change'`.

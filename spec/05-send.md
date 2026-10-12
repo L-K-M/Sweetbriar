@@ -18,7 +18,8 @@ and [raw/plan-proton-bridge/codex.md](../research/raw/plan-proton-bridge/codex.m
   - SimpleLogin and reverse aliases are qualified separately, later.
 - **Default identity for a new draft,** in order:
   1. **New message:** the identity of the selected account or mailbox's
-     account, otherwise the global default.
+     account, otherwise the global default (setting `identity.default`;
+     each account has at most one `is_default` identity, 02).
   2. **Reply or Reply All to a message the user sent:** the identity
      recorded on that message's send attempt, or the identity matching
      its From.

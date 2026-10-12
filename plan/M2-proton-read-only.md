@@ -97,6 +97,9 @@ signed in, with its TLS certificate exported.
   - mailbox discovery and mapping (kinds and roles: Starred `flagged`,
     All Mail `all`, Scheduled `virtual` without a role);
   - header batches with `uidnext` checkpoints in one transaction;
+  - the provider policy modules (`engine::policy::proton_bridge`,
+    `generic_imap`) with their mailbox mapping and grouping rules; later
+    steps add their mutation rules;
   - logical message grouping with evidence;
   - account state transitions.
 - **Acceptance:**

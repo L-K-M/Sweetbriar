@@ -120,14 +120,15 @@ decided.
 - **Depends on:** M0.3.
 - **Deliverables:**
   - the `Fs` seam and its real implementation from M0.3, plus a
-    fault-injecting implementation in `sb-test-support`. `resources`
-    wires the real one in;
+    fault-injecting implementation in `sb-test-support`. Callers inject
+    the real one: tests here, `resources` from M0.7;
   - in `sb-store`: `ObjectStore` and the file implementation. Reservation
     pins (03) arrive with GC in M1.8; until then nothing removes objects;
   - in `sb-test-support`: the crash-cut harness (spawn a child, kill at
     numbered cut points, reopen, check invariants).
 - **Acceptance:**
   - publish → open returns identical bytes;
+  - a new store's directories and data-root entry are flushed (03);
   - publishing the same bytes twice keeps one file;
   - every injected failure (short write, `ENOSPC`, `EIO` on sync, rename
     failure, directory-sync failure) returns an error and creates no

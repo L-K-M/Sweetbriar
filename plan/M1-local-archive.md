@@ -210,7 +210,7 @@ local drafts. No network yet.
     `>From `;
   - two identical messages imported from one mbox export as two.
 
-### M1.8 Backup, restore and GC — L, linux
+### M1.8 Backup, restore and GC — L, linux + macos-ci
 
 - **Goal:** backup generations, quarantined restore and safe GC.
 - **Spec:** 03 (Garbage collection, Backup generations, Restore).
@@ -231,6 +231,8 @@ local drafts. No network yet.
 - **Acceptance:**
   - a restored store has identical row counts and object hashes;
   - an interrupted backup is never `complete` (crash cuts);
+  - an interrupted generation is marked `failed` on the next run, and its
+    pins and directory are removed;
   - a power cut after the completion receipt that drops unflushed
     directory entries keeps the generation discoverable and verifiable;
   - a power cut right after the first restore rename that drops

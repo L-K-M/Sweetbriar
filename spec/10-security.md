@@ -68,7 +68,8 @@ and D24, D29.
     allow-list. Hyperlinks (`a href`) to `http`, `https` and `mailto` are
     kept as user-activated links;
   - no scripts, forms, iframes, objects, `<base>` or meta refresh;
-  - CSS is restricted, with no `url()` except `sweetbriar-cid:`.
+  - CSS is restricted, with no `url()` except `sweetbriar-cid:` and no
+    loading at-rules (`@import`, `@font-face`, `@namespace` with a URL).
   - The `WKWebView` setup in 08 adds a second, independent layer.
 - **Attachments:** the user opens them explicitly. Files are written to a
   per-lease cache directory with the quarantine attribute set, so

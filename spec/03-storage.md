@@ -21,6 +21,10 @@ Rests on research [04-data-safety](../research/04-data-safety.md),
   previews/, thumbnails/          disposable
 ```
 
+Creating a store makes `objects/`, `objects/tmp/`, `objects/sha256/`,
+`backups/` and `recovery/`, flushes each, then flushes the data root and
+its parent.
+
 - **The data root lives on a local filesystem.** At startup the engine
   refuses with an explanation if the data root is under iCloud Drive,
   Dropbox, OneDrive or a network mount, and offers to choose another
@@ -118,8 +122,9 @@ pub trait ObjectStore {
    Apple targets; verify this in a test.
 2. **Make the directory chain durable.** Create any missing
    `sha256/ab/cd/` directories. Unless `ab/cd` is in the process's set of
-   directories known durable, `fsync` `sha256/ab/` and `sha256/` (they
-   hold the entries for `cd/` and `ab/`), then add it to the set.
+   directories known durable, `fsync` `sha256/ab/`, `sha256/` and
+   `objects/` (they hold the entries for `cd/`, `ab/` and `sha256/`),
+   then add it to the set.
    - Existence doesn't prove durability: a failed or concurrent attempt
      may have created a directory without flushing it.
    - The set is in memory and starts empty at each launch. A directory
@@ -230,8 +235,9 @@ backups/<generation-id>/
   recovery point is ≤ 1 hour. The research's 5 minutes is the test
   setting.
 - **Retention:** the last 24 hourly, 7 daily and 4 weekly generations.
-- An interrupted generation is never treated as complete. Its row stays
-  `failed`, and the directory is removed on the next run.
+- An interrupted generation is never treated as complete. The next run
+  marks any `in_progress` generation `failed`, deletes its
+  `backup_in_progress` pins and removes its directory.
 
 ## Restore
 
