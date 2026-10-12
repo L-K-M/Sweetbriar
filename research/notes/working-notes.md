@@ -1062,8 +1062,8 @@ SQLite 3.53.2, not the benchmarked 3.53.4. Curated in 13-database-engine.md.
   automatically on managed Macs; non-MSAL apps need bundle-id allow-listing
   (`AppPrefixAllowList`) (Microsoft Learn).
 - **ASWebAuthenticationSession**: uses the default browser if it supports
-  the API (Safari, Chrome, Edge, Brave), otherwise Safari; Firefox doesn't
-  support it (developer forum and project reports; not Apple docs).
+  the API (Safari, Chrome, Edge, Brave), otherwise Safari. Firefox support
+  was missing in older reports; superseded by the bug 1921535 entry below.
 - **macOS tinting APIs** (Apple docs JSON): `NSGlassEffectView` and
   `.tintColor` macOS 26.0; `NSToolbarItem.backgroundTintColor` macOS 26.0;
   SwiftUI `toolbarBackground(_:for:)` macOS 13; `containerBackground(_:for:)`

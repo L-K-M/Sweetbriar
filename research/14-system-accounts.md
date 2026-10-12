@@ -15,15 +15,17 @@ on system level. Can we use these accounts?"
 | Platform | Can Sweetbriar use the system's mail accounts? | What it can use |
 |---|---|---|
 | **macOS** (Internet Accounts) | **No.** No public API exposes them | Contacts and calendars synced by those accounts (with permission); browser sign-in reuse; Microsoft's enterprise SSO broker on managed Macs; a settings importer via Apple Mail's scripting dictionary (to be tested) |
-| **GNOME** (Ubuntu, Fedora Workstation; Cinnamon too) | **Technically yes**, via a documented D-Bus API that hands out OAuth tokens, passwords and IMAP/SMTP settings | Server settings and identities; IMAP/SMTP password accounts. **OAuth tokens belong to GNOME's app registration,** and GNOME's policy asks third-party apps to contact its maintainers first and keep their own identity |
+| **GNOME** (Ubuntu, Fedora Workstation; Cinnamon too) | **Technically yes**, via a documented D-Bus API that hands out OAuth tokens, passwords and IMAP/SMTP settings | Server settings and identities; IMAP/SMTP password accounts; OAuth tokens. GNOME's policy asks third-party apps to contact its maintainers before integrating at all and to keep their own identity, and **OAuth tokens belong to GNOME's app registration** |
 | **KDE Plasma** (KAccounts) | **No** | Nothing for mail: no mail provider, and its Google provider lacks the Gmail scope. Its prototype successor, KOnlineAccounts, has no mail support yet |
 
 **Recommendation:** Sweetbriar keeps its own sign-in everywhere (D26
 stands). System accounts are optional *sources*, never the authority for
 Sweetbriar's accounts:
 - on macOS: contacts and enterprise SSO;
-- on GNOME: settings import and password accounts, with OAuth token reuse
-  only after agreement with GNOME.
+- on GNOME: settings import and password accounts after contacting the
+  GOA maintainers (GNOME's published request for any integration); OAuth
+  token reuse only with a documented agreement (Sweetbriar's own, stricter
+  release gate).
 
 The Rust core gets a `CredentialSource` abstraction, so an account's
 identity and history never depend on where its tokens come from.
@@ -184,15 +186,26 @@ still list it.
   it.
 
 **So, on GNOME:**
-- **Without agreement:**
+- **GNOME's request covers any integration.** Contact the GOA maintainers
+  and the GNOME design and release teams before shipping one. The policy
+  makes no exception for settings import or password accounts.
+- **After that contact:**
   - read GOA's account list, identities and server settings as an import
     and autofill source;
   - consume GOA **IMAP/SMTP password** accounts;
-  - then authorize Google and Microsoft accounts through Sweetbriar's own
+  - authorize Google and Microsoft accounts through Sweetbriar's own
     registrations.
-- **With GNOME's agreement** (and accurate disclosure to providers): use
-  `GetAccessToken` as a Linux convenience path. Our own sign-in stays the
-  fallback.
+- **OAuth token reuse needs a documented agreement.** This is
+  Sweetbriar's own, stricter release gate, not a technical restriction of
+  the API (Geary already calls `GetAccessToken`).
+  - The agreement should cover consent-screen attribution, permitted
+    consumers, scopes and policy responsibility.
+  - GNOME's agreement doesn't transfer Google's verification or override
+    tenant consent.
+  - Then `GetAccessToken` becomes a Linux convenience path, with our own
+    sign-in as the fallback.
+  - Sweetbriar never copies GNOME's client id into its own authorization
+    flow.
 - An organisation can also register its own client, or Sweetbriar's, in
   GOA's Microsoft 365 setup. That keeps the grant with the right app, but
   it creates a new GOA account rather than reusing an existing one.
@@ -214,6 +227,19 @@ still list it.
     only. Offline reading, search and compose keep working, and a reconnect
     action appears.
   - Sends with unknown outcome stay unknown.
+- **Mail must be enabled, and stay enabled.**
+  - The user can switch Mail off for an account in Online Accounts. GOA
+    then removes the `Mail` interface asynchronously, while the account
+    and its `OAuth2Based` interface can remain.
+  - Sweetbriar checks that Mail is enabled before binding and before any
+    network effect. It watches `MailDisabled` and interface changes.
+  - On disablement it invalidates outstanding credential leases and
+    pauses GOA-backed mail operations. Local data stays, and the user can
+    sign in independently instead.
+- **Token expiry may be unknown.** `GetAccessToken` returns 0 seconds
+  when the expiry is unknown. That means neither "expired now" nor "valid
+  forever". Sweetbriar reacquires through GOA when needed, with bounded
+  retries after authorization failures.
 - **Refresh belongs to GOA.** Sweetbriar asks for a new token, calls
   `EnsureCredentials` on authorization failure, watches `AttentionNeeded`,
   and keeps no copied refresh token.
@@ -264,8 +290,8 @@ Three records stay separate:
 
 - **Request:** account, resource or audience, scopes or protocol, a
   claims challenge, and whether interaction is allowed.
-- **Result:** a short-lived credential lease, its expiry and the source
-  generation, or a typed failure:
+- **Result:** a short-lived credential lease, its expiry (known or
+  unknown) and the source generation, or a typed failure:
   - `SourceUnavailable`, `SourceRemoved`;
   - `NeedsUserInteraction`, `ConsentRequired`;
   - `CredentialsLocked`, `CapabilityMissing`;
@@ -330,7 +356,7 @@ consumers would.
 
 | Topic | Claim | Resolution |
 |---|---|---|
-| GOA as a Linux shortcut | Claude's interim answer to the owner: GOA could let Sweetbriar skip Google's sign-in setup on Linux; Devin: GOA as a "first-class convenience path" | **Corrected.** GNOME's policy asks third-party apps to contact its maintainers and keep their own identity, and Google's verification doesn't transfer. Token reuse needs agreement; settings import and password accounts don't |
+| GOA as a Linux shortcut | Claude's interim answer to the owner: GOA could let Sweetbriar skip Google's sign-in setup on Linux; Devin: GOA as a "first-class convenience path" | **Corrected.** GNOME's policy asks third-party apps to contact its maintainers before any integration and to keep their own identity, and Google's verification doesn't transfer. Contact first for everything; token reuse also needs a documented agreement |
 | Firefox and `ASWebAuthenticationSession` | Earlier forum reports: unsupported; Devin: supported from Firefox 158 (2026-10-13) | Bug 1921535 fixed 2026-09-02 (157 branch); shipping release unverified |
 | KDE | Devin: "weakly maintained"; Codex: in transition to KOnlineAccounts | KAccounts still ships releases; the successor is a prototype. For mail, neither helps |
 
@@ -347,3 +373,27 @@ consumers would.
   wanted.
 - **A source-switch and removal test** proving drafts and history stay
   intact.
+
+## Sources
+
+All checked 2026-10-12. The raw reports carry many more.
+
+- **Apple:**
+  - [ACAccountStore availability metadata](https://developer.apple.com/tutorials/data/documentation/accounts/acaccountstore.json) and the [Twitter account-type identifier](https://developer.apple.com/tutorials/data/documentation/accounts/acaccounttypeidentifiertwitter.json) (the other social identifiers have sibling pages);
+  - [`CNAuthorizationStatus.limited` availability](https://developer.apple.com/tutorials/data/documentation/contacts/cnauthorizationstatus/limited.json), [TN3152 calendar access levels](https://developer.apple.com/documentation/technotes/tn3152-migrating-to-the-latest-calendar-access-levels);
+  - [`ASWebAuthenticationSession`](https://developer.apple.com/documentation/authenticationservices/aswebauthenticationsession), [Mozilla bug 1921535](https://bugzilla.mozilla.org/show_bug.cgi?id=1921535);
+  - [managed preferences payload](https://github.com/apple/device-management/blob/release/mdm/profiles/com.apple.ManagedClient.preferences.yaml), [`ManagedAppConfigurationProvider` availability](https://developer.apple.com/tutorials/data/documentation/managedapp/managedappconfigurationprovider.json), [WWDC26 session 206](https://developer.apple.com/videos/play/wwdc2026/206/);
+  - [App Review Guidelines](https://developer.apple.com/app-store/review/guidelines/), [TN3137 on Mac keychains](https://developer.apple.com/documentation/technotes/tn3137-on-mac-keychains).
+- **Microsoft:**
+  - [Enterprise SSO plug-in](https://learn.microsoft.com/en-us/entra/identity-platform/apple-sso-plugin), [Platform SSO](https://learn.microsoft.com/en-us/intune/device-configuration/settings-catalog/configure-platform-sso-macos);
+  - [MSAL web views](https://learn.microsoft.com/en-us/entra/msal/objc/customize-webviews), [app consent policies](https://learn.microsoft.com/en-us/entra/identity/enterprise-apps/manage-app-consent-policies).
+- **GNOME Online Accounts:**
+  - [D-Bus interfaces (3.58.1)](https://raw.githubusercontent.com/GNOME/gnome-online-accounts/3.58.1/data/dbus-interfaces.xml), [build options (3.58.1)](https://raw.githubusercontent.com/GNOME/gnome-online-accounts/3.58.1/meson_options.txt);
+  - [Google provider](https://raw.githubusercontent.com/GNOME/gnome-online-accounts/3.58.1/src/goabackend/goagoogleprovider.c), [Microsoft 365 provider](https://raw.githubusercontent.com/GNOME/gnome-online-accounts/3.58.1/src/goabackend/goamsgraphprovider.c), [NEWS](https://raw.githubusercontent.com/GNOME/gnome-online-accounts/master/NEWS);
+  - [goals and third-party policy](https://gnome.pages.gitlab.gnome.org/gnome-online-accounts/goals.html), [consumer overview and lifecycle](https://gnome.pages.gitlab.gnome.org/gnome-online-accounts/overview.html);
+  - [Geary's GOA mediator](https://raw.githubusercontent.com/GNOME/geary/main/src/client/application/goa-mediator.vala), [Geary Flatpak manifest](https://raw.githubusercontent.com/flathub/org.gnome.Geary/master/org.gnome.Geary.yaml);
+  - [Account portal](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.Account.html), [Snap `accounts-service`](https://snapcraft.io/docs/reference/interfaces/accounts-service-interface/).
+- **KDE:**
+  - [KAccounts Google provider](https://invent.kde.org/network/kaccounts-providers/-/blob/master/providers/google.provider.in), [kaccounts-integration](https://invent.kde.org/network/kaccounts-integration);
+  - [signond AuthService](https://accounts-sso.gitlab.io/libsignon-glib/gdbus-com.google.code.AccountsSSO.SingleSignOn.AuthService.html), [KOnlineAccounts README](https://github.com/KDE/konlineaccounts);
+  - [KDE bug 480779](https://bugs.kde.org/show_bug.cgi?id=480779), [discuss.kde.org thread](https://discuss.kde.org/t/google-blocks-access-from-dolphin-kio-gdrive/26007), [Nicolas Fella on a new online accounts system](https://nicolasfella.de/posts/a-new-online-accounts-system/).

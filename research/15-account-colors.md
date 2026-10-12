@@ -23,17 +23,21 @@ says how.
     inherits its account's color unless overridden.
   - A conversation spanning accounts shows one cue per message, never a
     single color for the whole thread.
-- **Color never works alone.** Every account cue carries the account name
-  or a monogram, so it survives color blindness, grayscale and
-  Differentiate Without Color. Color is recognition, not proof. The
+- **Color never works alone.** Every account cue carries a label or
+  symbol that distinguishes it from every other account's. Where two
+  accounts share a monogram, a short label or address is shown instead.
+  So the cue survives color blindness, grayscale and Differentiate
+  Without Color. Color is recognition, not proof. The
   safeguards are the full address, predictable reply identity, a
   cross-account check and a frozen send route.
 - **Precedent is strong.** eM Client 11 shows the account color "in the
   top bar of new message and reply windows" (announced 2026-08-06).
   Thunderbird 128 colors the compose From field (2024-07-11). Spark,
   Airmail, Canary, Mailspring and Mimestream mark unified-inbox rows.
-  Apple Mail and desktop Outlook have none. Users of both work around it
-  with rules and categories.
+  No equivalent account- or From-following compose cue was verified for
+  Apple Mail or desktop Outlook (unverified as an absence). Apple Mail users
+  color messages with rules; Outlook for Mac colors whole profiles
+  (groups of accounts), not the sending identity.
 - **One stored color per account, rendered many ways.** A single sRGB
   value lives in SQLite. The Rust core derives marker, strip, dark-mode,
   foreground and high-contrast tokens from it. Colors are per machine in
@@ -73,7 +77,7 @@ later.
 | Drafts, Out Box, scheduled and retrying sends | Identity chip and the actual address; the frozen route shown separately from queue state | P0 |
 | Cross-account warning and send confirmation | Names both the receiving account and the sending identity, with a warning symbol and text distinct from any account hue | P0 |
 | Sidebar account roots | Colored monogram next to the account name | P1 |
-| Unified inbox and other mixed-account lists, search results | A fixed account marker plus a short label or monogram, in the same column in flat and threaded layouts | P1 |
+| Unified inbox and other mixed-account lists, search results | A fixed account marker plus a short label or monogram, in the same column in flat and threaded layouts; a short label when monograms collide | P1 |
 | Mixed-account threads | A cue on each message; the collapsed summary lists account chips | P1 |
 | Reader header, standalone message window | "Received in Work" chip, separate from sender avatar, labels and flags | P1 |
 | Move/copy destination picker, account settings, account health surface | Account chip; cross-account operations explained in text | P1 |
@@ -93,10 +97,16 @@ color never replaces selection or focus colors.
    configured default. `mailto:`, Share, Services and automation use the
    same resolver. With no valid choice, show "Choose a sending identity"
    and disable Send.
-2. **Reply and Reply All:** resolve from the exact message being replied
-   to (Eudora's rule: reply from the personality that received it).
-   Prefer a configured identity matching the original recipient or
-   delivery headers, else that account's default. Explain any ambiguity.
+2. **Reply and Reply All:**
+   - **To a message you sent:** restore its recorded sending identity
+     first. With aliases A and B in one account, replying to mail sent
+     from A uses A, not the account default B. If that identity no longer
+     exists, require a visible choice.
+   - **To received mail:** resolve from the exact copy being replied to,
+     its occurrence (Eudora's rule: reply from the personality that
+     received it). Prefer a configured identity matching the original
+     recipient or delivery headers, else that account's default.
+   - Explain any ambiguity.
 3. **Forward:** start from the original message's account, and show any
    change clearly.
 4. **Resuming a draft:** restore its saved identity. What the user
@@ -149,8 +159,11 @@ unverified.
 
 - **Identity strip (default):**
   - Built from a custom-drawn `NSView` in an `NSTitlebarAccessoryViewController`
-    with `layoutAttribute = .bottom`. AppKit handles placement, tabs and
-    full screen.
+    with `layoutAttribute = .bottom`. AppKit handles placement and tabs.
+  - **Full screen:** a bottom titlebar accessory is hidden with the menu
+    bar in full screen by default. Set `fullScreenMinHeight` to the strip's
+    height, and update it when text or layout grows, so the strip stays
+    visible. Test with two compose windows in full screen.
   - At least 32 pt tall, growing with text size.
   - **Opaque, not glass:** the background is a restrained tint derived
     from the account color, with a saturated monogram. Opaque fills give
@@ -185,7 +198,7 @@ unverified.
   | Reduce Transparency | Strip stays opaque (it already is) |
   | Clear/tinted Liquid Glass | Strip unaffected |
   | Accent color | Untouched: controls keep the system accent |
-  | Differentiate Without Color (`NSWorkspace.accessibilityDisplayShouldDifferentiateWithoutColor`) | Stronger monograms, symbols and outlines; the name is always shown |
+  | Differentiate Without Color (`NSWorkspace.accessibilityDisplayShouldDifferentiateWithoutColor`) | Stronger monograms, symbols and outlines; a distinguishing label is always shown |
 
 - **Apple's guidance cuts both ways.** The Toolbar HIG discourages custom
   toolbar backgrounds; the Color HIG reserves tint for meaning. That is
@@ -314,8 +327,9 @@ IdentityAppearance  identity_id, color_override_srgb? (null = inherit), symbol_o
     notification on macOS, `gtk_accessible_announce` on GTK (4.14+).
   - Focus doesn't move.
 - **Differentiate Without Color, Increase Contrast, Reduce Transparency and
-  GNOME high contrast** are handled as above. The account name is always
-  visible, so color is never the only carrier.
+  GNOME high contrast** are handled as above. A distinguishing label or
+  symbol is always visible, so color is never the only carrier. The full
+  account identity is exposed to accessibility APIs.
 - **Release checks:**
   - keyboard-only and screen-reader runs of new, reply, forward, From
     switching, warning acknowledgement, the Out Box and color settings;
@@ -394,3 +408,23 @@ safety. The color helps the user notice.
   the strip shows the identity but can't settle authorization.
 - Warning fatigue on deliberate cross-account replies.
 - A hands-on look at eM Client 11's top bar, the closest shipping design.
+
+## Sources
+
+All checked 2026-10-12. The raw reports carry many more.
+
+- **Precedents:**
+  - [eM Client 11 account colors](https://www.emclient.com/blog/em-client-11-sneak-peek--account-colors-835), [Thunderbird 128 release notes](https://www.thunderbird.net/en-US/thunderbird/128.0esr/releasenotes/), [Thunderbird 153 release notes](https://www.thunderbird.net/en-US/thunderbird/153.0/releasenotes/);
+  - [Thunderbird bug 355520](https://bugzilla.mozilla.org/show_bug.cgi?id=355520), [Postbox Domain Fencing](https://support.postbox-inc.com/hc/en-us/articles/204344204-Domain-Fencing), [Outlook for Mac profiles](https://techcommunity.microsoft.com/discussions/microsoft365insider/profiles-in-outlook-for-mac/3795584).
+- **AppKit and SwiftUI** (availability via Apple's documentation metadata):
+  - [`NSGlassEffectView.tintColor`](https://developer.apple.com/documentation/appkit/nsglasseffectview/tintcolor), [`NSToolbarItem.backgroundTintColor`](https://developer.apple.com/documentation/appkit/nstoolbaritem/backgroundtintcolor);
+  - [`NSTitlebarAccessoryViewController`](https://developer.apple.com/documentation/appkit/nstitlebaraccessoryviewcontroller), [`fullScreenMinHeight`](https://developer.apple.com/documentation/appkit/nstitlebaraccessoryviewcontroller/fullscreenminheight), [`NSWindowTab.accessoryView`](https://developer.apple.com/documentation/appkit/nswindowtab/accessoryview);
+  - [`titlebarAppearsTransparent`](https://developer.apple.com/documentation/appkit/nswindow/titlebarappearstransparent), [`toolbarBackground(_:for:)`](https://developer.apple.com/documentation/swiftui/view/toolbarbackground(_:for:)), [`glassEffect(_:in:)`](https://developer.apple.com/documentation/swiftui/view/glasseffect(_:in:));
+  - [Differentiate Without Color](https://developer.apple.com/documentation/appkit/nsworkspace/accessibilitydisplayshoulddifferentiatewithoutcolor), [Reduce Transparency](https://developer.apple.com/documentation/appkit/nsworkspace/accessibilitydisplayshouldreducetransparency);
+  - HIG: [Toolbars](https://developer.apple.com/design/human-interface-guidelines/toolbars), [Color](https://developer.apple.com/design/human-interface-guidelines/color).
+- **GTK and libadwaita:**
+  - [`gtk_style_context_add_provider` (deprecated 4.10)](https://docs.gtk.org/gtk4/method.StyleContext.add_provider.html), [libadwaita CSS variables](https://gnome.pages.gitlab.gnome.org/libadwaita/doc/1.10/css-variables.html);
+  - [libadwaita styles and appearance](https://gnome.pages.gitlab.gnome.org/libadwaita/doc/1.10/styles-and-appearance.html), [`gtk_accessible_announce`](https://docs.gtk.org/gtk4/method.Accessible.announce.html).
+- **Color and contrast:**
+  - [Okabe–Ito palette](https://jfly.uni-koeln.de/color/), [WCAG 2.2](https://www.w3.org/TR/WCAG22/), [WCAG use of color](https://www.w3.org/WAI/WCAG22/Understanding/use-of-color.html);
+  - [RFC 9979](https://www.rfc-editor.org/rfc/rfc9979.html), [RFC 5464](https://www.rfc-editor.org/rfc/rfc5464.html). Claude recomputed the four contrast ratios from WCAG's relative-luminance formula.

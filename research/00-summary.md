@@ -150,10 +150,11 @@ questions. The reasoning, sources and disagreements are in the
     scripting dictionary.
 - **GNOME (and Ubuntu): technically yes.** GNOME Online Accounts hands
   out tokens, passwords and IMAP/SMTP settings over D-Bus.
-  - But its OAuth tokens belong to GNOME's app registrations, and GNOME
-    asks third-party apps to contact it first and keep their own identity.
-  - So: settings import and password accounts now; token reuse only with
-    GNOME's agreement.
+  - But GNOME asks third-party apps to contact its maintainers before any
+    integration and to keep their own identity, and its OAuth tokens
+    belong to GNOME's app registrations.
+  - So: settings import and password accounts after contacting GNOME;
+    token reuse only with a documented agreement.
 - **KDE: no.** No mail provider exists in KAccounts, and its successor is
   a prototype.
 - **Own sign-in stays the baseline everywhere**, behind a credential-source

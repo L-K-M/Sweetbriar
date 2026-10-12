@@ -53,5 +53,5 @@ D18–D21 are the owner's decisions; D22–D29 carry starting recommendations.
 
 | # | Decision | Recommendation |
 |---|---|---|
-| D30 | Use of system-level accounts | Own sign-in everywhere (D26). Optional sources: macOS contacts, MSAL enterprise SSO, managed presets; GOA settings import and password accounts; GOA OAuth only with GNOME's agreement; nothing from KDE yet. A `CredentialSource` abstraction keeps account identity independent of token source ([14](../14-system-accounts.md)) |
+| D30 | Use of system-level accounts | Own sign-in everywhere (D26). Optional sources: macOS contacts, MSAL enterprise SSO, managed presets; GOA settings import and password accounts after contacting GOA's maintainers; GOA OAuth only with a documented agreement; nothing from KDE yet. A `CredentialSource` abstraction keeps account identity independent of token source ([14](../14-system-accounts.md)) |
 | D31 | Account colors | One stored color per account (identity override); compose identity strip, Strong mode optional; incoming by occurrence, outgoing by identity; cross-account reply check; per-machine, exported ([15](../15-account-colors.md)) |
