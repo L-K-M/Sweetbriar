@@ -36,9 +36,9 @@ D18–D21 are the owner's decisions; D22–D29 carry starting recommendations.
 
 | # | Decision | Hard to change because | Owner |
 |---|---|---|---|
-| D18 | Product licence and contribution policy (MPL core + paid app, GPL, proprietary; CLA or none) | Contributor rights and published terms can't be unpublished; shapes D13 | Owner |
+| D18 | **Decided 2026-10-12: public-domain dedication of Sweetbriar's own code (as far as dependencies allow); no contributions; forks welcome.** Product licence and contribution policy | Contributor rights and published terms can't be unpublished; shapes D13 | Owner |
 | D19 | Business model and licence-expiry behaviour | Licence server, grace states; read/export/recovery must survive expiry | Owner |
-| D20 | First cohort, team size, runway | Every scope and schedule estimate assumes it | Owner |
+| D20 | **Decided 2026-10-12: AI agents build, the owner reviews; macOS CI on GitHub Actions; first live backend = the owner's Proton Mail via Proton Bridge.** First cohort, team size, runway | Every scope and schedule estimate assumes it | Owner |
 | D21 | Scope: email-only pilot; shared/delegated mailboxes, calendars, contacts; Windows posture | Cohort may not switch without them | Owner |
 | D22 | Contacts source (own store, macOS Contacts, CardDAV) | Schema for identities, nicknames, rule criteria | Engineering |
 | D23 | Sweetbriar metadata across devices | Stable IDs and revisions must exist before data does | Engineering |
