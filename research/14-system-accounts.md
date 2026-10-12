@@ -247,6 +247,11 @@ still list it.
 - **Refresh belongs to GOA.** Sweetbriar asks for a new token, calls
   `EnsureCredentials` on authorization failure, watches `AttentionNeeded`,
   and keeps no copied refresh token.
+- **Temporary and locked accounts are labelled.** GOA's `IsTemporary`
+  accounts are "silently disregarded after logout", so Sweetbriar skips
+  them for binding, or labels them visibly. `IsLocked` accounts were
+  added by an administrator and are treated as an enterprise-managed
+  source.
 - **Imported settings get Sweetbriar's TLS policy.** GOA's
   `*AcceptSslErrors` flags are never adopted silently.
 
@@ -285,7 +290,9 @@ Three records stay separate:
    and mailbox, history and settings (D1, D2).
 2. **Transport namespace:** remote ids and sync cursors per backend.
 3. **Credential binding:**
-   - source kind and external handle (GOA object path, MSAL account id …);
+   - source kind and external handle (GOA `Account:Id`, which never
+     changes; the D-Bus object path is only a per-session handle; MSAL
+     account id …);
    - authority or tenant, and the effective client id;
    - capabilities and a binding generation.
 

@@ -319,7 +319,7 @@ both round-2 reviews ([Codex §4](debate/03-review-codex-r2.md),
 - [README](README.md): document index and method.
 - [debate/](debate/): the position paper, the reviews, the response and
   the resolution.
-- [notes/decision-agenda.md](notes/decision-agenda.md): D1–D29.
+- [notes/decision-agenda.md](notes/decision-agenda.md): D1–D31.
 - [notes/working-notes.md](notes/working-notes.md): every conflict and
   hand-verified fact.
 - [raw/](raw/): helper reports verbatim, with benchmark scripts and
