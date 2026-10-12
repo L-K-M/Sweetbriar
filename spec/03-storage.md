@@ -24,7 +24,8 @@ Rests on research [04-data-safety](../research/04-data-safety.md),
   refuses with an explanation if the data root is under iCloud Drive,
   Dropbox, OneDrive or a network mount, and offers to choose another
   location.
-- **One process owns the store.** It holds `store.lock` for its lifetime.
+- **One process owns the store.** It holds `store.lock` for its lifetime,
+  through the `Fs` seam's exclusive lock (01).
   A second instance fails to get the lock, so it doesn't open the
   database for writing. It reports `Locked` and tells the UI to focus
   the running instance.
@@ -36,10 +37,12 @@ Rests on research [04-data-safety](../research/04-data-safety.md),
 - **Build:**
   - bundled SQLite through `rusqlite`'s `bundled` feature, pinned so the
     linked library is ≥ 3.51.3 and never the withdrawn 3.52.0;
-  - compile options `SQLITE_DQS=0`, `SQLITE_DEFAULT_FOREIGN_KEYS=1` and
-    `SQLITE_DEFAULT_WAL_SYNCHRONOUS=2`, with FTS5 enabled;
-  - **never the system SQLite.** On macOS it maps `fullfsync` to a weaker
-    barrier.
+  - compile options `SQLITE_DQS=0`, `SQLITE_DEFAULT_FOREIGN_KEYS=1`,
+    `SQLITE_DEFAULT_WAL_SYNCHRONOUS=2` and `SQLITE_STRICT_SUBTYPE=1`, with
+    FTS5 enabled;
+  - **never the system SQLite.** Its version and build options aren't
+    ours to pin, and Apple's build has been reported to map `fullfsync`
+    to a weaker barrier (historical reports; unverified for macOS 27).
 - **Every connection** is opened by one constructor, which sets and
   **reads back** each setting. Any mismatch is a startup error
   (`Corrupt`/`Unavailable` per 07):

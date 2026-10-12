@@ -68,9 +68,9 @@ and [raw/plan-proton-bridge/codex.md](../research/raw/plan-proton-bridge/codex.m
 ```
             send_draft
  editing ──────────────► held ──(undo window ends)──► queued ──► submitting
-                          │ cancel_send                             │
-                          ▼                                         ├─► accepted ──► (Sent reconciliation)
-                      cancelled                                     ├─► failed       (definite failure before acceptance)
+                          │ cancel_send                   │ cancel_send │
+                          ▼                               ▼             ├─► accepted ──► (Sent reconciliation)
+                      cancelled ◄─────────────────────────┘             ├─► failed       (qualified pre-submission failure)
                                                                     └─► outcome_unknown (connection lost after DATA,
                                                                                          crash before final reply recorded)
 ```
@@ -87,9 +87,11 @@ and [raw/plan-proton-bridge/codex.md](../research/raw/plan-proton-bridge/codex.m
    - The frozen bytes, identity, envelope and recipients never change
      afterwards. Editing the draft again creates a new revision and,
      if sent, a new attempt.
-2. **`held`:** `cancel_send` moves it to `cancelled` and the draft back to
-   `editing`. The claim to submit and a cancel are serialized by the
-   writer; whichever commits first wins.
+2. **`held` and `queued`:** `cancel_send` moves the attempt to `cancelled`
+   and the draft back to `editing`. That includes an attempt waiting for
+   `confirm_send_route`. The claim to submit and a cancel are serialized
+   by the writer; whichever commits first wins. Once `submitting`, an
+   attempt can't be cancelled.
 3. **`queued` → `submitting`** commits before any network I/O.
    - **Before claiming,** the engine checks that the attempt's
      `config_generation` equals the account's current one. If the account
@@ -134,10 +136,12 @@ and [raw/plan-proton-bridge/codex.md](../research/raw/plan-proton-bridge/codex.m
 5. **`outcome_unknown`** shows in the Out Box with the frozen message, the
    time and what is known. The user resolves it with
    `resolve_unknown_send`:
-   - **Mark as sent** (e.g. after finding it in Sent);
-   - **Send again** (creates a new attempt, with an explicit duplicate
-     warning);
-   - **Keep as draft**.
+   - **Mark as sent** (e.g. after finding it in Sent): the draft becomes
+     `sent`;
+   - **Send again**: creates a new attempt, with an explicit duplicate
+     warning; the draft is `queued` again;
+   - **Keep as draft**: the draft returns to `editing`.
+   - **A `failed` attempt** also returns its draft to `editing`.
    - Sweetbriar may show evidence: a Sent occurrence whose headers carry
      the attempt's `Message-ID`. Evidence is shown, never acted on
      automatically.

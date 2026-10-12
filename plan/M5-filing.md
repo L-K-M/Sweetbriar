@@ -22,7 +22,9 @@ verified before it completes.
   - add-label via `UID COPY` to `Labels/*`;
   - the generic policy: `UID MOVE`, or `COPY` + `STORE \Deleted` +
     `UID EXPUNGE` only with UIDPLUS;
-  - undo intents with the "moved elsewhere since" refusal.
+  - undo intents with the "moved elsewhere since" refusal;
+  - the mutation-matrix suite added to the real-Bridge lane (M2.6), run
+    with the folder-unlabel feature flag both ways.
 - **Acceptance:**
   - for the Proton policy, the command trace contains **no `EXPUNGE`,
     `UID EXPUNGE` or `CLOSE`** in any test (a global assertion in the
@@ -46,7 +48,7 @@ verified before it completes.
 - **Deliverables:**
   - toolbar and menu commands;
   - drag to sidebar mailboxes;
-  - the filing palette (`⌃⌘F`) ranked by recent use;
+  - the filing palette (`⇧⌘M`, Move to…) ranked by recent use;
   - the undo toast (10 s);
   - an explanation for actions the policy refuses.
 - **Acceptance:**

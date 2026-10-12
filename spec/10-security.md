@@ -11,6 +11,10 @@ and D24, D29.
     `kSecUseDataProtectionKeychain=true` on every query,
     `kSecAttrAccessibleWhenUnlockedThisDeviceOnly` and
     `kSecAttrSynchronizable=false`.
+  - **Pilot caveat:** the data-protection Keychain needs an
+    entitlement-signed app. Until the owner has a signing identity (plan
+    O8), ad-hoc builds may fall back to a file-based Keychain item. The
+    fallback is flagged in Settings and removed in plan M6.5.
   - On Linux: the Secret Service.
 - **The database stores only a `credential_ref`** (02). Secrets are never
   written to files, logs, crash reports or exports.

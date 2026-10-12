@@ -67,8 +67,8 @@ decided.
   mapping for `Locked`, `Corrupt`, `NewerStore`).
 - **Depends on:** M0.1.
 - **Deliverables:**
-  - `sb-store::open(paths)`: lease file (`flock`), the connection
-    constructor with pragma set-and-read-back, version and source-id
+  - `sb-store::open(paths, fs)`: the lease via the `Fs` seam's exclusive
+    lock (01 rule 5), the connection constructor with pragma set-and-read-back, version and source-id
     checks, refusal of synced and network locations (detected by path
     prefix and filesystem type);
   - `LIBSQLITE3_FLAGS` in `.cargo/config.toml`.
@@ -109,9 +109,11 @@ decided.
   verification), 11 (Fault injection).
 - **Depends on:** M0.3.
 - **Deliverables:**
-  - in `sb-platform`: the `Fs` seam trait (`create`, `write`,
-    `sync_all`, `sync_dir`, `rename`, `remove`) with a real
-    implementation and a fault-injecting test implementation;
+  - in `sb-types`: the `Fs` seam trait (`create`, `write`, `sync_all`,
+    `sync_dir`, `rename`, `remove`, `lock_exclusive`);
+  - in `sb-platform`: the real implementation (`fcntl(F_FULLFSYNC)` on
+    macOS, `fsync` on Linux) and a fault-injecting test implementation
+    (in `sb-test-support`). `resources` wires the real one in;
   - in `sb-store`: `ObjectStore` and the file implementation;
   - in `sb-test-support`: the crash-cut harness (spawn a child, kill at
     numbered cut points, reopen, check invariants).
@@ -123,9 +125,11 @@ decided.
     object;
   - crash cuts at every protocol step leave either no object or a
     complete verified one;
-  - on macOS, the file implementation calls `fcntl(F_FULLFSYNC)`
+  - on macOS, `sb-platform`'s `Fs::sync_all` calls `fcntl(F_FULLFSYNC)`
     explicitly rather than relying on `std`'s choice, and a macOS CI test
-    checks that the call succeeds on APFS.
+    checks that the call succeeds on APFS;
+  - `check-layers` passes: `sb-store` references only `sb-types` for the
+    seam.
 
 ### M0.6 Writer, readers and receipts — M, linux
 
@@ -202,7 +206,8 @@ decided.
   - `macos.yml` is green: Rust aarch64 tests, `xtask ffi`, `check-ffi`,
     `xcodegen`, then `xcodebuild build test` with strict concurrency and
     warnings as errors;
-  - an unsigned `.app` zip is uploaded as an artifact;
+  - an ad-hoc signed (`CODE_SIGN_IDENTITY=-`) `.app` zip is uploaded as an
+    artifact;
   - **owner (O3):** it launches on the owner's Mac.
 
 ### M0.10 Message list prototype — M, macos-ci + owner

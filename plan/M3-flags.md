@@ -50,7 +50,8 @@ the intent framework every later mutation uses.
   - the sweep doesn't overwrite flags with pending intents;
   - a setting for marking read after opening (immediately, after N
     seconds, or manually);
-  - macOS: mark read and unread (⇧⌘U), star (⇧⌘L), and toolbar items.
+  - macOS: mark read and unread (⇧⌘U), star (⇧⌘L), and toolbar items;
+  - the flag suite added to the real-Bridge nightly lane (M2.6).
 - **Acceptance:**
   - the command trace shows `+FLAGS.SILENT (\Seen)` exactly once per
     action;

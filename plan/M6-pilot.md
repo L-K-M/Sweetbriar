@@ -37,7 +37,8 @@ is met.
   - account cues in mixed-account threads, search results, the Out Box,
     the move destination picker and the health view;
   - account-prefixed window titles;
-  - the account name in notification text;
+  - the account name in notification text (notifications exist since
+    M2.5);
   - Appearance settings (Standard, Strong, Minimal) with previews.
 - **Acceptance:**
   - an audit test lists every P0 and P1 surface and checks it renders an

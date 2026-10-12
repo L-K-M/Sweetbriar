@@ -17,7 +17,10 @@ docs (checked 2026-10-12). They must be requalified on the owner's Mac
   identity headers.
   - The pilot has two policies, `proton_bridge` and `generic_imap`
     (Dovecot in CI).
-  - The engine consults the policy before planning any remote effect.
+  - **Policies live in the engine** (`sb-core::engine::policy`). The
+    engine consults them before planning any remote effect and tells the
+    transport exactly which commands to send. `sb-imap` stays
+    dialect-free.
 - **The engine** (01) owns planning, reconciliation, intents and the
   breaker. The transport never writes the store; it returns observations
   that the engine applies.

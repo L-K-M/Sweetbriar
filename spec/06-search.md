@@ -57,7 +57,7 @@ CREATE TABLE d_search_docs (             -- one row per acquisition with extract
 CREATE VIRTUAL TABLE d_search_fts USING fts5(
   subject, from_text, to_text, cc_text, body_authored, body_quoted, body_signature, attachment_names,
   content='d_search_docs', content_rowid='doc_id',
-  tokenize = "unicode61 remove_diacritics 2 tokenchars '@.-_+'",
+  tokenize = "unicode61 remove_diacritics 2",
   prefix = '2 3'
 );
 
@@ -75,8 +75,18 @@ CREATE TABLE d_index_queue (              -- work for the index job; durable wat
   that move mechanical.
 - **Enqueueing:** acquisitions are queued in the same transaction that
   inserts them, so the index can never silently miss one.
-- **Tokenizer:** `tokenchars '@.-_+'` keeps email addresses, order
-  numbers and identifiers searchable as whole tokens.
+- **Tokenizer:** plain `unicode61`, so `alice@example.com` indexes as
+  `alice`, `example`, `com` and `A-1234` as `a`, `1234`. Searching for
+  `example` or `1234` finds them.
+  - **Exact identifiers:** the query parser turns any term containing
+    punctuation (`alice@example.com`, `A-1234`, `2026-001`) into an FTS5
+    **phrase** of its tokens, so it matches them adjacent and in order.
+    (Tested: `"A-1234"` and `"alice@example.com"` match;
+    `"paid invoice"` matches "Paid invoice.".)
+  - An earlier draft used `tokenchars`; it was dropped because it glued
+    sentence punctuation into tokens and broke substring matches.
+  - **Exact address equality** (`from:… is`) uses `d_message_summary`,
+    not FTS.
   - A second, trigram-tokenized table for substring and CJK search is
     *later*, behind the Tantivy-or-trigram decision.
   - **Pilot limitation:** CJK text is indexed by `unicode61`, which

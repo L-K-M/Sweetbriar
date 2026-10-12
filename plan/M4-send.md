@@ -61,7 +61,12 @@ inspectable Out Box. Unknown outcomes are never retried automatically.
   - per-recipient RCPT tracking;
   - startup recovery: `submitting` becomes `outcome_unknown`;
   - Sent reconciliation by `Message-ID`, display only;
-  - the fake SMTP server in `sb-test-support`, counting submissions.
+  - the fake SMTP server in `sb-test-support`, counting submissions;
+  - `seen_addresses` sent-to counts updated on `accepted`;
+  - an SMTP suite in the real-Bridge lane (M2.6). It submits to the mock
+    Proton API and classifies which Bridge errors occur before any
+    Proton submission: the evidence for the qualified pre-submission
+    list (05).
 - **Acceptance:**
   - crash cuts at every transition give **zero duplicate submissions**
     (fake counter) across 200 seeds;
@@ -94,7 +99,12 @@ inspectable Out Box. Unknown outcomes are never retried automatically.
   - Undo Send with a 7 s hold;
   - the Out Box view (queued, held, unknown, failed) with the resolve
     actions;
-  - Reply, Reply All and Forward commands.
+  - Reply, Reply All and Forward commands;
+  - composer extras deferred from M0.11: paste as Markdown with a preview
+    and a lossy-conversion warning, inline images (`multipart/related`),
+    an external editor round trip;
+  - Settings → Sending safety: cross-account check, always choose
+    identity, undo-send delay.
 - **Acceptance:**
   - an XCUITest switches From: the strip label and color change, and the
     accessibility announcement is posted;

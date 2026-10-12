@@ -45,7 +45,9 @@ signed in, with its TLS certificate exported.
     sets, header literals, flags, body literals as streams);
   - an IDLE watcher;
   - timeouts and backoff;
-  - the provider policy type (`proton_bridge`, `generic_imap`).
+  - a dialect-free command interface. The provider policies
+    (`proton_bridge`, `generic_imap`) live in `sb-core::engine::policy`
+    (04) and arrive in M2.4.
 - **Acceptance**, against the fake server and Dovecot:
   - a wrong pin is rejected before LOGIN;
   - a missing STARTTLS is rejected;
@@ -124,6 +126,13 @@ signed in, with its TLS certificate exported.
   - the body queue (opened messages first, then newest) using
     `BODY.PEEK[]`, publish, link and index;
   - `coverage()` and `health()`;
+  - `pause_account`, `resume_account` and `disconnect_account`;
+  - the "Recovery: messages no longer on the server" list (`epoch_stale`
+    and `vanished` occurrences with no counterpart);
+  - the diagnostics package (redacted, previewed, saved by the user; 10),
+    used by M2.Q item 3;
+  - new-mail notifications through `UNUserNotificationCenter`, naming the
+    account in text, with previews only if enabled (10);
   - the macOS Activity window: per account state, coverage, breaker
     events with Accept and Keep, parked and quarantined intents with
     actions.
@@ -148,7 +157,11 @@ signed in, with its TLS certificate exported.
   - a small Go driver inside a pinned Bridge v3.27.1 checkout that
     provisions mock users and messages, starts the Bridge core, and
     prints ports and the test certificate;
-  - a nightly job runs the Rust read-only sync suite against it.
+  - a nightly job runs the Rust read-only sync suite against it;
+  - the Go toolchain pinned by Bridge's `go.mod` (Go 1.26.x) installed in
+    that job;
+  - the lane is built to grow: M3.2, M4.3 and M5.1 each add their suites
+    to it.
 - **Acceptance:**
   - the nightly lane runs green;
   - its results include the actual capability set, LIST output and

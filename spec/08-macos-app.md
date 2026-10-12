@@ -36,7 +36,9 @@ restores its draft by `draft_id`.
 
 ## Sidebar
 
-- **Unified section:** Inbox, Flagged, Drafts, Out Box, then saved views.
+- **Unified section:** Inbox, Flagged, Drafts (local), Out Box, then saved
+  views. Each account's own synced Drafts mailbox appears under the
+  account.
 - **One section per account,** with its colored monogram and name; its
   mailboxes are below, folders and labels grouped as Bridge exposes them
   (04).
@@ -164,7 +166,7 @@ Implements [15-account-colors](../research/15-account-colors.md):
 
 ## Keyboard filing ("type to file")
 
-`⌃⌘F` opens a filing palette: an `NSPanel` with a search field over
+`⇧⌘M` (Move to…) opens a filing palette: an `NSPanel` with a search field over
 mailboxes, ranked by recent use per account. Return moves the selection,
 and the undo toast offers **Undo** for 10 s.
 

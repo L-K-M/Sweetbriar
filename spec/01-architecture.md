@@ -19,10 +19,10 @@ crates/
   sb-core/                 L2–L4  modules: service (L2), engine (L3), resources (L4)
   sb-store/                L5  SQLite, migrations, object store, backups, FTS5, query AST + SQL
   sb-mime/                 L5  parsing, extraction, sanitizing, rendering, composing MIME, Markdown
-  sb-imap/                 L5  IMAP transport + provider policies (proton_bridge, generic_imap)
+  sb-imap/                 L5  generic IMAP transport; knows no provider dialects
   sb-smtp/                 L5  SMTP submission
   sb-platform/             L5  secret store, clock, filesystem seams, paths, platform facts
-  sb-types/                L6  shared vocabulary only: ids, timestamps, email addresses, byte ranges; no logic, no dependencies on other sb-* crates
+  sb-types/                L6  shared vocabulary only: ids, timestamps, email addresses, byte ranges, and seam traits (Fs, Clock); no implementations, no dependencies on other sb-* crates
   sb-test-support/         dev-only: fake IMAP/SMTP server, fixtures loader, crash-cut harness
   sb-bindgen/              tool: uniffi-bindgen-swift pinned to the workspace uniffi version
 xtask/                     cargo xtask: ci, check-layers, ffi, check-ffi, dist (later)
@@ -80,7 +80,8 @@ it.**
    - `sb-mime` doesn't touch the store.
    - `sb-store` doesn't know about IMAP.
    - Shared vocabulary types (ids, timestamps, email addresses, byte
-     ranges) live in `sb-types` (L6), directly below the leaves. Leaves
+     ranges) and **seam traits** (`Fs`, `Clock`) live in `sb-types` (L6),
+     directly below the leaves. Leaves
      may use it; everything above reaches those types only through
      re-exports in the layer directly below. `sb-types` holds data types
      and trivial constructors only, so it can't become a catch-all.
@@ -90,7 +91,14 @@ it.**
 4. **Backends never write the store.** `sb-imap` returns observations
    (mailbox lists, UID sets, fetched headers and bodies). The engine
    decides what to apply and applies it through `resources` → `sb-store`.
-5. **Platform services enter at L5** (`sb-platform`). The Swift app
+5. **Seams are traits in `sb-types`; implementations are in
+   `sb-platform`.** A leaf such as `sb-store` uses only the `Fs` trait
+   from `sb-types`. `resources` (L4) constructs the real implementation
+   from `sb-platform` and passes it in. Tests pass a fault-injecting one.
+   The real `Fs` implements durable flushes (`fcntl(F_FULLFSYNC)` on
+   macOS) and the exclusive store lock. So no leaf calls another leaf,
+   and no platform syscall sits in `sb-store`.
+6. **Platform services enter at L5** (`sb-platform`). The Swift app
    doesn't implement core logic. Where a native implementation is
    unavoidable (Keychain specifics), `sb-platform` defines a trait. The
    macOS implementation lives in Rust via the platform crates (below),

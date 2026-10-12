@@ -144,12 +144,14 @@ local drafts. No network yet.
     error positions) and the SQL compiler with unknown-under-negation;
   - `Search` window spec;
   - `coverage(scope)`;
+  - `seen_addresses` population from parsed summaries (received mail),
+    feeding composer completion;
   - macOS: the search field with chips round-tripping the text syntax,
     and a results list with the coverage note.
 - **Acceptance:**
   - parser tests for every syntax form, plus error positions;
-  - an exact address and an order number like `A-1234` are found as
-    whole tokens;
+  - an exact address and an order number like `A-1234` are found by
+    phrase matching, and `example` alone finds `alice@example.com`;
   - `NOT body:x` excludes unindexed messages and reports them as
     unknown;
   - filters apply before limit (a small account's hit survives next to
@@ -185,6 +187,10 @@ local drafts. No network yet.
   - the restore procedure (verify, preserve, install, quarantine, new
     incarnation);
   - the GC job with the grace period;
+  - the weekly object-verification job (a rotating 1/52 sample plus all
+    backup-referenced objects) and the weekly `integrity_check` (03);
+  - Settings → Backups: list generations, back up now, restore, and
+    preserved data roots;
   - commands `start_backup`, `list_backups` and `start_restore`;
   - `sb-cli backup|restore`.
 - **Acceptance:**

@@ -217,10 +217,17 @@ CREATE TABLE occurrences (
 CREATE INDEX occ_by_message ON occurrences(message_id);
 ```
 
-- **Account scoping is enforced by the schema.** An occurrence's mailbox
-  and logical message must belong to its account (composite foreign
-  keys). A draft's identity, and a send attempt's identity and revision,
-  must match their account and draft.
+- **Account scoping is enforced by the schema** where it is fixed:
+  - an occurrence's mailbox and logical message must belong to its
+    account;
+  - a breaker event's mailbox must belong to its account;
+  - a draft's identity, and a send attempt's identity, must match their
+    account;
+  - a send attempt's revision must belong to its draft.
+  - Not schema-enforced: a draft revision records the identity chosen at
+    that revision, which may differ from the draft's current account
+    after the user switches From. The engine validates the identity at
+    send time.
 - **Flags live on occurrences** (D2). The same Proton message shown in
   `INBOX` and `Labels/Work` through Bridge has two occurrences with
   independent flags.
@@ -252,7 +259,7 @@ CREATE INDEX occ_by_message ON occurrences(message_id);
 CREATE TABLE tags (
   tag_id     TEXT PRIMARY KEY,
   name       TEXT NOT NULL UNIQUE,
-  color_srgb TEXT,
+  color_srgb TEXT CHECK (color_srgb IS NULL OR color_srgb GLOB '#[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]'),
   revision   INTEGER NOT NULL DEFAULT 1
 ) STRICT;
 
@@ -357,7 +364,7 @@ CREATE TABLE intents (
   intent_id          TEXT PRIMARY KEY,
   account_id         TEXT NOT NULL REFERENCES accounts(account_id),
   config_generation  INTEGER NOT NULL,             -- account generation it was planned against
-  op                 TEXT NOT NULL CHECK (op IN ('set_flags','move','copy','delete_to_trash','expunge_scoped','append','submit')),
+  op                 TEXT NOT NULL CHECK (op IN ('set_flags','move','copy','delete_to_trash','expunge_scoped','append','submit')), -- 'expunge_scoped', 'append', 'submit': reserved, not produced in the pilot (sends use send_attempts, 05)
   target_json        TEXT NOT NULL,                -- scoped target: occurrence ids with (mailbox, uidvalidity, uid)
   args_json          TEXT NOT NULL,                -- e.g. {"add":["\\Seen"],"remove":[]} or destination mailbox id
   preconditions_json TEXT NOT NULL,                -- what must still be true to act (04)
@@ -456,12 +463,13 @@ Receipts are kept for 30 days.
 CREATE TABLE breaker_events (
   event_id    TEXT PRIMARY KEY,
   account_id  TEXT NOT NULL REFERENCES accounts(account_id),
-  mailbox_id  INTEGER REFERENCES mailboxes(mailbox_id),
+  mailbox_id  INTEGER,
   kind        TEXT NOT NULL CHECK (kind IN ('bulk_disappearance','folder_emptied','epoch_change','reconfiguration')),
   details_json TEXT NOT NULL,                      -- counts, inventory snapshot reference
   state       TEXT NOT NULL CHECK (state IN ('open','user_confirmed','user_restored','dismissed')),
   created_at  INTEGER NOT NULL,
-  resolved_at INTEGER
+  resolved_at INTEGER,
+  FOREIGN KEY (mailbox_id, account_id) REFERENCES mailboxes(mailbox_id, account_id)
 ) STRICT;
 
 CREATE TABLE backup_generations (
@@ -542,7 +550,8 @@ CREATE INDEX d_list_rows_unified ON d_list_rows(mailbox_role, sort_date DESC, oc
 ```
 
 - **`d_list_rows`** is the covering index for keyset-paginated mailbox
-  windows (research 03, 13). It is derived, but kept transactionally
+  windows (research 03, 13). `sort_date` is the occurrence's
+  `internal_date`, else the parsed `Date` header, else `first_seen_at`. It is derived, but kept transactionally
   current, because the list must reflect a flag change instantly.
   Unified views ("all inboxes") page over `d_list_rows_unified` by role.
 - **Tags in list rows** are fetched per page in one batched query by

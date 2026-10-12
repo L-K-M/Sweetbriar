@@ -18,7 +18,8 @@ mail client for Proton Mail.
 - **Reader:** sanitized sender layout for HTML and literal plain text.
   The Reading view arrives later, category by category, as a fidelity
   corpus proves it (research D16).
-- **Composer:** plain text or Markdown, sent as `multipart/alternative`.
+- **Composer:** plain text (sent as flowed text) or Markdown (sent as
+  `multipart/alternative`).
 - **Classic workflows:** recoverable drafts and an inspectable Out Box;
   saved views; keyboard filing with undo; private notes and tags (D14).
 - **Account colors:** the compose identity strip and account markers
@@ -74,7 +75,7 @@ These rule every decision the spec leaves open.
 | **Occurrence** | One remote copy of a message: (account, mailbox, UIDVALIDITY, UID) for IMAP. It carries its own flags. The same message in two Bridge label folders is two occurrences |
 | **Logical message** | Sweetbriar's grouping of occurrences known to be the same provider message. It never merges on Message-ID alone |
 | **Membership** | An occurrence's presence in a mailbox (folder or label) |
-| **Intent** | A durable record of a remote effect the user requested (flag, move, delete, send), written in the same transaction as the local effect |
+| **Intent** | A durable record of a remote effect the user requested (flag, move, trash, add label), written in the same transaction as the local effect. Sends are tracked as send attempts instead |
 | **Send attempt** | A frozen record of one submission: bytes, envelope, identity, per-recipient results |
 | **Generation** | A version counter used to invalidate stale query windows, credentials or backups |
 | **Coverage** | Which parts of an account are locally available (headers, bodies, attachments, index) |
