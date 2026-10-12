@@ -127,6 +127,13 @@ color never replaces selection or focus colors.
    identities the account backend has validated as sendable, including
    aliases and Send As or On Behalf Of grants. The strip displays that
    choice and never extends it.
+   - Graph can't list which mailboxes a user may send as, so delegated
+     identities come from explicit user or admin provisioning or another
+     supported source of permission evidence. Cached validation is
+     provisional.
+   - A refusal such as Graph's `ErrorSendAsDenied` becomes a visible
+     blocked send; no other identity is substituted.
+   - Sweetbriar never sends probe mail to discover permissions.
 7. **Send and queue:** freeze the account, identity, envelope sender and
    headers in the durable send attempt (D3). Changing the selection later
    can't reroute queued mail. A missing account or credential blocks the

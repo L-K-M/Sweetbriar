@@ -210,9 +210,21 @@ still list it.
     sign-in as the fallback.
   - Sweetbriar never copies GNOME's client id into its own authorization
     flow.
-- An organisation can also register its own client, or Sweetbriar's, in
-  GOA's Microsoft 365 setup. That keeps the grant with the right app, but
-  it creates a new GOA account rather than reusing an existing one.
+- **Not Sweetbriar's client id in GOA.** GOA's Microsoft 365 setup accepts
+  a custom client and tenant id, but the provider still requests its own
+  hardcoded, broad permissions (`files.readwrite.all`,
+  `sites.readwrite.all`, shared calendar, contact and task scopes and
+  more). Using Sweetbriar's registration there would ask users to consent
+  under Sweetbriar's name to far more than Sweetbriar needs. That
+  contradicts the narrow registration in
+  [06-account-backends](06-account-backends.md) and Microsoft's
+  minimum-permissions terms, so it's not a supported setup.
+  - It would only become one with a provider requesting just Sweetbriar's
+    justified permissions, a compatible registered redirect, and a policy
+    basis for other GOA consumers using that registration.
+  - An administrator deliberately provisioning an **organisation-owned**
+    registration for GOA's broader services is a different case: the
+    organisation owns and approves that grant.
 
 ### Packaging
 
