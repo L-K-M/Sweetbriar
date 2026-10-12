@@ -231,7 +231,9 @@ subject to implementation evidence, not to further argument.
 - **D18 Licence:** Sweetbriar's own code is dedicated to the public
   domain, as far as the licences of its dependencies allow. No outside
   contributions are accepted; anyone may fork. The repository's
-  `LICENSE` has been the Unlicense since the initial commit.
+  `LICENSE` has been the Unlicense since the initial commit. Since
+  2026-10-12 the code is offered as "Unlicense OR 0BSD" (`LICENSE-0BSD`),
+  so a plain licence covers places where the dedication may not hold.
 - **D20 Builders:** AI agents implement in small PR-sized steps; the
   owner reviews and merges. macOS builds and tests run on GitHub Actions
   macOS runners. No branch protection on `main`: agents check CI before
