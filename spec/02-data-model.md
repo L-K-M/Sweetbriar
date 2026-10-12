@@ -75,7 +75,8 @@ CREATE TABLE imap_endpoints (                         -- one per IMAP account
   credential_ref    TEXT NOT NULL,                    -- key into the platform secret store, never the secret
   trusted_cert_sha256 TEXT,                           -- pinned leaf certificate (Bridge), hex
   server_saves_sent INTEGER NOT NULL CHECK (server_saves_sent IN (0,1)),
-  capabilities_json TEXT,                             -- last CAPABILITY seen, for diagnostics
+  address_mode      TEXT CHECK (address_mode IN ('combined','split')), -- Proton Bridge only
+  capabilities_json TEXT,                             -- last CAPABILITY, ID and LIST roles seen (04 compatibility ledger)
   revision          INTEGER NOT NULL DEFAULT 1
 ) STRICT;
 
@@ -173,7 +174,7 @@ CREATE TABLE mailboxes (
 CREATE TABLE logical_messages (
   message_id       INTEGER PRIMARY KEY AUTOINCREMENT,
   account_id       TEXT NOT NULL REFERENCES accounts(account_id),
-  provider_key     TEXT,                               -- provider's stable object id when one exists (see 04)
+  provider_key     TEXT,                               -- provider object id when one exists; Proton: X-Pm-Internal-Id (04)
   acquisition_id   INTEGER REFERENCES acquisitions(acquisition_id), -- best complete body, NULL until fetched
   created_at       INTEGER NOT NULL,
   UNIQUE (account_id, provider_key)

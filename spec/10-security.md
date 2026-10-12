@@ -25,10 +25,16 @@ and D24, D29.
 - **Connections** to Bridge use STARTTLS or TLS as Bridge is configured,
   through `rustls`.
 - **Bridge's self-signed certificate is pinned at setup.**
-  - Sweetbriar connects and shows the certificate's SHA-256 fingerprint.
-  - The user confirms it, guided to compare with Bridge's own display or
-    exported certificate (04 has the details).
-  - The fingerprint is stored in `imap_endpoints.trusted_cert_sha256`.
+  - **Preferred:** the user exports it from Bridge (Settings → Advanced →
+    Export TLS certificates, which writes `cert.pem` and `key.pem`) and
+    picks `cert.pem`. Sweetbriar never reads `key.pem`.
+  - **Fallback:** Sweetbriar shows the presented certificate's SHA-256
+    fingerprint for the user to confirm.
+  - The DER SHA-256 is stored in `imap_endpoints.trusted_cert_sha256`.
+    Trust is scoped to that account's endpoints and never added to the
+    system trust store.
+  - Connections always use the literal `127.0.0.1`: the certificate's
+    IP SAN is `127.0.0.1`, with no `localhost` name.
 - **Later connections** require an exact match with that pin. On a
   mismatch the account pauses with a clear message, for example after a
   Bridge reinstall. Pins are never updated silently.

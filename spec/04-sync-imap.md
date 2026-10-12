@@ -1,0 +1,246 @@
+# 04 — IMAP sync (Proton Bridge first)
+
+Rests on research [04-data-safety](../research/04-data-safety.md), D2/D3
+in [debate/04-resolution](../research/debate/04-resolution.md), and
+[raw/plan-proton-bridge/codex.md](../research/raw/plan-proton-bridge/codex.md).
+The Bridge facts below come from Bridge **v3.27.1** source and Proton's
+docs (checked 2026-10-12). They must be requalified on the owner's Mac
+(the manual checklist in the plan) before mutations are enabled.
+
+## Structure
+
+- **The generic IMAP transport** (the `sb-backend-imap` crate):
+  connections, TLS, the IMAP codec, command and response handling, and
+  capability discovery. It knows nothing about Proton.
+- **A provider policy** declares the dialect: multi-membership,
+  COPY-may-move, server-saves-Sent, the allowed mutation matrix, and
+  identity headers.
+  - The pilot has two policies, `proton_bridge` and `generic_imap`
+    (Dovecot in CI).
+  - The engine consults the policy before planning any remote effect.
+- **The engine** (01) owns planning, reconciliation, intents and the
+  breaker. The transport never writes the store; it returns observations
+  that the engine applies.
+
+## Proton Bridge facts the engine relies on
+
+| Fact | Consequence |
+|---|---|
+| Listens on `127.0.0.1`. IMAP 1143 and SMTP 1025 by default (configurable). STARTTLS by default; "SSL" means implicit TLS on the displayed port | The account preset fills these in; the user copies the values from Bridge |
+| Self-signed certificate, IP SAN `127.0.0.1` | Pin it (10). Always connect to the literal `127.0.0.1`, never `localhost` |
+| Credentials are a Bridge-generated password, not the Proton password | Never ask for the Proton password |
+| Capabilities: IMAP4rev1, IDLE (can be disabled remotely), UIDPLUS, MOVE, UNSELECT, ID. **No CONDSTORE/QRESYNC, NAMESPACE, LITERAL+ or SPECIAL-USE** (roles still appear as LIST attributes) | No modseq-based sync. Flags are swept. Use synchronizing literals. Read roles from LIST attributes |
+| Mailboxes: INBOX, Drafts, Sent, Starred, Archive, Spam, Trash, All Mail, Scheduled (hidden when empty); `Folders/<path>` and `Labels/<name>`; `Folders` and `Labels` are `\Noselect`; delimiter `/` | `kind='folder'` or `'label'` from the prefix. Starred and All Mail are `kind='virtual'` |
+| One Proton message can appear in its folder, several `Labels/…`, All Mail and Starred | One occurrence per mailbox appearance, grouped by `X-Pm-Internal-Id` |
+| Bridge injects `X-Pm-Internal-Id` (the Proton message id) into fetched headers | `logical_messages.provider_key` for the Proton account. Its persistence is unverified, so it is evidence, not authority |
+| BODY[] is **reconstructed** from Proton's data. MIME boundaries are random since v3.25.0 | The same message fetched twice gives different bytes. Fetch a body once per logical message, and never compare bytes for identity |
+| Bridge can return a synthetic "Message failed to build" substitute | Don't classify by subject. Coverage reports Bridge-visible inventory, not all Proton mail |
+| All Mail can be hidden, and can exclude Spam and Trash per Proton settings | Never treat All Mail as complete inventory. Sync every selectable mailbox |
+| UIDVALIDITY is assigned at mailbox creation. Bridge repair, cache loss and address-mode changes rebuild mailboxes (new epochs) | An epoch change is normal after a repair; handle it as described below |
+| Permanent flags: `\Seen`, `\Flagged`, `\Deleted`, `$Forwarded`. `\Seen` maps to read/unread; `\Flagged` maps to Starred. Arbitrary keywords aren't synced to Proton | Only `\Seen` and `\Flagged` are written in the pilot. Tags stay local |
+| COPY to `Labels/L` adds a label. **COPY to `Folders/F` can move.** MOVE folder → label keeps the folder. MOVE label → folder files and removes the label. MOVE from or to All Mail, and APPEND to All Mail, are disallowed. MOVE between Inbox and Sent is disallowed | The mutation matrix below |
+| **EXPUNGE on a label mailbox unlabels. On Trash or Drafts it can delete permanently** | **No EXPUNGE of any kind in the Proton policy** (pilot) |
+| SMTP saves the Sent copy itself. Its duplicate suppression is in memory only | `server_saves_sent=1`. Never APPEND to Sent (05) |
+| Bridge is GPLv3 | Never bundle or embed Bridge. It is user-installed |
+
+## Connections
+
+- **Per account:** one IDLE connection (on INBOX), plus one worker
+  connection for sync and commands, then at most two body-fetch
+  connections, added only after measurements.
+- **Setup:**
+  - TLS is established before any credential; capabilities are
+    re-read after STARTTLS and after login.
+  - `ID` sends `("name" "Sweetbriar" "version" "<version>")`, honestly
+    identifying the client.
+- **Mailbox state:** `EXAMINE` (read-only) unless a write is planned.
+  Leave with `UNSELECT`, never `CLOSE`.
+- **Reads:** body fetches use `BODY.PEEK[]`, so reading never sets
+  `\Seen` remotely. Read state changes only through an explicit
+  `set_flags` intent.
+- **Timeouts:**
+  - 30 s per command, 120 s per body fetch, scaled for large literals;
+  - IDLE is renewed every 25 min;
+  - reconnects back off exponentially (1 s to 5 min).
+- **Fault handling:** a malformed response (e.g. raw UTF-8 in an ENVELOPE,
+  Gluon issue #498) closes the connection. Nothing parsed after the fault
+  is applied. Header fields are read from `BODY.PEEK[HEADER.FIELDS (…)]`
+  literals, not from ENVELOPE.
+
+## Sync loop
+
+There is no CONDSTORE, so sync per mailbox works like this:
+
+1. **Discover mailboxes.** `LIST "" "*"` maps names, roles and kinds, and
+   is reconciled with the `mailboxes` rows.
+   - New mailboxes are added.
+   - Missing ones are marked `gone`; their occurrences are kept.
+2. **Check the epoch.** `EXAMINE` returns `UIDVALIDITY` and `UIDNEXT`.
+   - If UIDVALIDITY differs from the stored value: see
+     [Epoch changes](#epoch-changes).
+3. **Fetch new messages.** UIDs from the stored `uidnext` upward, in
+   batches of 250, fetching `(UID FLAGS INTERNALDATE RFC822.SIZE
+   BODY.PEEK[HEADER.FIELDS (DATE FROM TO CC SUBJECT MESSAGE-ID IN-REPLY-TO
+   REFERENCES LIST-ID X-PM-INTERNAL-ID)])`.
+   - For each, the engine finds or creates the logical message by
+     `(account, X-Pm-Internal-Id)`, then inserts the occurrence and
+     updates `d_list_rows`.
+   - **Each batch commits with its `uidnext` checkpoint in one
+     transaction,** so a crash resumes without gaps or duplicates.
+4. **Acquire bodies.** A separate queue fetches `BODY.PEEK[]` for logical
+   messages without an acquisition.
+   - Order: messages the user opened first, then newest first.
+   - Each body is published (03), then the acquisition is inserted,
+     linked to the logical message, and queued for search.
+   - A body is never fetched again for another occurrence of the same
+     logical message.
+5. **Sweep flags.** A periodic `UID FETCH 1:* (UID FLAGS)` per mailbox:
+   INBOX every 60 s while active, others every 15 min, plus after IDLE
+   notifications. Changed flags update occurrences. Pending local flag
+   intents take precedence (below).
+6. **Check the inventory.** After the flag sweep's full UID list, UIDs
+   that are stored as `present` but absent from the server become
+   `vanish_pending`.
+   - Only after a **second complete inventory** (a later full sweep, or
+     `EXPUNGE` responses seen in the session) do they become `vanished`.
+   - Disappearances pass through the breaker first.
+7. **Use IDLE notifications** (`EXISTS`, `EXPUNGE`, `FETCH`) as triggers
+   to run steps 3–6 for that mailbox. They are not a journal.
+
+**Pace:** the inbox is polled every 60 s when IDLE is unavailable;
+everything else follows the intervals above. Interactive fetches (opening
+a message) always run before background work.
+
+**Coverage** per mailbox records:
+- `headers_complete`: every UID below `uidnext` has an occurrence;
+- the count of logical messages with and without bodies.
+
+The UI says "Bridge-visible messages synced", never "all Proton mail".
+
+## Epoch changes
+
+When a mailbox's UIDVALIDITY changes:
+
+1. **Before anything else,** mark every occurrence of the old epoch
+   `epoch_stale`. Suspend every intent targeting those occurrences: they
+   become `quarantined`, with the reason `epoch_change`.
+2. **Resync the mailbox** as new: new occurrences under the new epoch,
+   grouped to logical messages by `X-Pm-Internal-Id`.
+3. **Rematch.** Old and new occurrences with the same `X-Pm-Internal-Id`
+   are linked to the same logical message, so tags and notes carry over.
+   - An old occurrence with no new counterpart stays `epoch_stale` and
+     is shown in "Recovery: messages no longer on the server". It is not
+     deleted.
+4. **Quarantined intents are never resumed automatically.** The user
+   reviews them on the health surface: retarget to the new occurrence,
+   or cancel.
+5. **Breaker:** an epoch change on more than one mailbox at once (a
+   Bridge repair or mode change) records one `breaker_event` of kind
+   `epoch_change`, and the account shows "Bridge rebuilt its mailboxes;
+   reconciling".
+
+## The breaker
+
+Classify each disappearance seen in an inventory:
+
+| Class | Example | Action |
+|---|---|---|
+| **Explained** | A move or delete this client performed (matching `done` intent) | Apply |
+| **Single-folder move** | The `X-Pm-Internal-Id` reappears in another mailbox in the same sync pass | Apply as a move |
+| **Unexplained disappearance** | Gone, with no reappearance and no intent | Breaker rules below |
+| **Incomplete observation** | Connection dropped, partial FETCH, Bridge still syncing | Never counts. Keep `present` |
+
+**Pause, conservative defaults:** an open breaker event pauses all
+destructive reconciliation and recovery GC for the account when any of
+these holds:
+- more than 25 unexplained disappearances in one mailbox in one pass;
+- unexplained disappearances of more than 50% of a mailbox holding at
+  least 8 messages;
+- a mailbox going from at least 1 message to 0;
+- an epoch change.
+
+**While paused:** downloads, reading, drafting and other accounts
+continue. The user sees counts and examples and chooses **Accept**
+(apply the disappearances) or **Keep** (leave occurrences marked
+`vanish_pending` and keep watching). Thresholds are settings, tuned from
+traces later.
+
+## Intents and the mutation matrix
+
+**Execution:** each intent row (02) runs on the account's worker
+connection.
+
+1. **Check preconditions.**
+   - The target occurrence's epoch equals the mailbox's current
+     UIDVALIDITY, and the occurrence is `present`.
+   - For `move`: the occurrence is still in the source mailbox, as of the
+     last inventory.
+   - For `set_flags`: none needed; flags are applied as deltas.
+2. **Act** with the policy's command.
+3. **Interpret the response:**
+   - tagged `OK` plus evidence (`COPYUID` or `[UIDPLUS]` data, an untagged
+     `EXPUNGE` for MOVE) → `done`;
+   - a `NO` that will persist → `parked`;
+   - a connection drop → back to `pending`, with a reconcile-before-retry
+     flag.
+4. **Reconcile before retry.** After a drop, the engine first re-reads the
+   target (`UID FETCH <uid> (FLAGS)` in source, or a check in the
+   destination by `X-Pm-Internal-Id` header search). It re-issues only
+   if the effect is absent.
+5. **Order:** intents for the same occurrence run in order. Independent
+   intents may run in any order.
+
+**Proton policy (pilot)**:
+
+| User action | Allowed when | Command | Notes |
+|---|---|---|---|
+| Mark read or unread | Any present occurrence in a selectable mailbox | `UID STORE <uid> +FLAGS.SILENT (\Seen)` or `-FLAGS.SILENT` | Proton syncs read state per message, so other occurrences converge on the next sweep. Each stays per-occurrence locally until then |
+| Star or unstar | Same | `UID STORE` with `\Flagged` | Same convergence |
+| Archive, move to folder, move to Trash | Source is INBOX, Archive, Spam, Trash or `Folders/*`; destination is INBOX, Archive, Spam, Trash or `Folders/*`; source ≠ destination | `UID MOVE <uid> <dest>` | **Before the move,** the logical message's body must be acquired and published (keep a local copy of anything leaving view). Afterwards, verify the destination occurrence appears with the same `X-Pm-Internal-Id`, and only then mark `done` |
+| Add label | Source is any selectable non-virtual mailbox; destination is `Labels/*` | `UID COPY <uid> <label>` | Adds membership. The folder stays |
+| Remove label | — | Not in the pilot | Would need a qualified `UID EXPUNGE` on the label mailbox; deferred |
+| Delete permanently, empty Trash | — | Not in the pilot | No EXPUNGE in the Proton policy |
+| Move from Starred or All Mail | — | Resolved to the message's real folder occurrence first | If there's none, or it's ambiguous, the action is refused with an explanation |
+
+**Generic IMAP policy** (Dovecot in CI; generic accounts later):
+- `UID MOVE` when `MOVE` is advertised. Otherwise copy and delete: `UID
+  COPY`, check `COPYUID`, then `UID STORE +FLAGS.SILENT (\Deleted)` and
+  `UID EXPUNGE <uid>` (UIDPLUS required).
+- Without UIDPLUS, no automatic expunge.
+- Never a bare `EXPUNGE`, and never `CLOSE` after flagging.
+
+**Flag conflicts:** with no CONDSTORE, a flag intent is a delta (add or
+remove one flag). While a local flag intent is pending or in flight, the
+sweep doesn't overwrite that flag on that occurrence. Once the intent is
+done, the next sweep wins: another client's later change is preserved.
+
+**Undo:** undo creates the inverse intent, for example move back to the
+recorded source mailbox, with its own preconditions. If another client
+moved the message since, undo is refused with "Moved elsewhere since".
+
+## Account states and health
+
+| Condition | Account state | User sees |
+|---|---|---|
+| Connection refused | `needs_attention` | "Bridge isn't running" (retries continue) |
+| Login rejected | `needs_attention` | "Bridge password changed or account signed out in Bridge" |
+| Certificate pin mismatch | `needs_attention` | "Bridge's certificate changed", with the re-trust flow (10) |
+| Epoch change or breaker event | `active` with an open event | "Bridge rebuilt mailboxes; reconciling" or "Review N disappeared messages" |
+| Healthy | `active` | Last sync time and coverage |
+
+None of these deletes local data. The health surface lists parked and
+quarantined intents with **Retry**, **Retarget** (after an epoch change)
+and **Cancel**.
+
+## Compatibility ledger
+
+On every connect, the engine records the capabilities, the mailbox list
+with roles and the server `ID` in `imap_endpoints.capabilities_json`, plus
+a dated diagnostics entry.
+
+If the capabilities change, or a new Bridge version is detected (from
+`ID`), mutations for the account are suspended until a check passes:
+- MOVE and UIDPLUS are still advertised;
+- the role mapping is unchanged.
+
+Read-only sync continues meanwhile.
