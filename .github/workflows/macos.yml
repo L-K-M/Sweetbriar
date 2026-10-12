@@ -1,0 +1,87 @@
+name: macos
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  changes:
+    runs-on: macos-26
+    timeout-minutes: 5
+    # paths-filter lists a PR's changed files through the GitHub API.
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      rust: ${{ steps.filter.outputs.rust }}
+    steps:
+      - name: Log image
+        run: |
+          echo "Runner image: ${ImageOS:-unknown} ${ImageVersion:-unknown}"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history so the filter can diff on push events.
+          fetch-depth: 0
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        id: filter
+        with:
+          filters: |
+            rust:
+              - 'crates/**'
+              - 'xtask/**'
+              - 'apps/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - '.cargo/**'
+              - 'rust-toolchain.toml'
+              - '.github/workflows/macos.yml'
+
+  # Rust-only first shape (M0.1). M0.8 adds `xtask ffi` + `check-ffi`,
+  # M0.9 adds xcodegen/xcodebuild and the .app artifact (spec/11).
+  build:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: macos-26
+    timeout-minutes: 30
+    env:
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+
+      - name: Log toolchain and image
+        run: |
+          rustup show
+          rustc -Vv
+          xcodebuild -version
+          echo "Runner image: ${ImageOS:-unknown} ${ImageVersion:-unknown}"
+
+      - name: cargo test (aarch64-apple-darwin)
+        run: cargo test --workspace --target aarch64-apple-darwin
+
+  # Aggregate merge gate: always runs so the check exists on every PR;
+  # succeeds when the build job succeeded or was skipped by the filter.
+  macos:
+    if: always()
+    needs: [changes, build]
+    runs-on: macos-26
+    timeout-minutes: 5
+    steps:
+      - name: Log image
+        run: |
+          echo "Runner image: ${ImageOS:-unknown} ${ImageVersion:-unknown}"
+      - name: Aggregate results
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          echo "$NEEDS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          [ "$(echo "$NEEDS" | jq '[.[] | .result] | all(. == "success" or . == "skipped")')" = "true" ]

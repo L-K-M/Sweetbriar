@@ -1,0 +1,3 @@
+# LIBSQLITE3_FLAGS for the bundled SQLite build arrives in M0.3 (spec/03).
+[alias]
+xtask = "run --package xtask --"
