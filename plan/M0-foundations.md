@@ -28,7 +28,8 @@ decided.
   - `.gitignore`;
   - `.github/workflows/ci.yml`: `ubuntu-24.04`,
     `permissions: contents: read`, concurrency with cancel-in-progress
-    for PRs, timeouts, actions pinned to SHAs, sccache;
+    for PRs, timeouts, actions pinned to SHAs, sccache, and a final
+    aggregate `ci` job (the required check, 11);
   - `.github/workflows/macos.yml` in its **Rust-only** first shape (on
     `macos-26`: `cargo test --target aarch64-apple-darwin`, plus the
     always-reporting `macos` job). M0.8 adds the FFI checks and M0.9 the

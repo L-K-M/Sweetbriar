@@ -68,7 +68,7 @@ async fn Core::shutdown(self);   // flush writer, release the lease
 
 - **Selections:** large selections never serialize 100k ids. A selection
   is either a list of up to 1,000 occurrence ids or a `SelectionToken`
-  that names a query window and its generation (01-architecture).
+  that names a query window and its generation.
 - **Undo:** message commands return an `Option<UndoToken>`. Undoable in
   the pilot: flags, folder moves (including `delete_to_trash`), tags and
   notes. `add_label` returns none: removing a label needs EXPUNGE, which

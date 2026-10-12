@@ -30,7 +30,7 @@ verified before it completes.
   - capability requalification scoped to the policy (04, Compatibility
     ledger);
   - undo intents with the "moved elsewhere since" refusal;
-  - the mutation-matrix suite added to the real-Bridge lane (M2.6), run
+  - the mutation-matrix suite added to the real-Bridge lane (M2.7), run
     with the folder-unlabel feature flag both ways.
 - **Acceptance:**
   - for the Proton policy, the command trace contains **no `EXPUNGE`,

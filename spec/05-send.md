@@ -31,7 +31,8 @@ and [raw/plan-proton-bridge/codex.md](../research/raw/plan-proton-bridge/codex.m
 - **Cross-account check:** a reply whose identity's account differs from
   the receiving occurrence's account shows a banner (08). If it wasn't
   acknowledged for this draft revision's identity and recipients, Send
-  asks once more.
+  asks once more. The acknowledgement lives in the compose window and
+  isn't persisted: after a relaunch, Send asks again.
 
 ## Composing
 
@@ -136,7 +137,7 @@ Otherwise the draft keeps its state.
      - **Exception:** a reply whose text matches a **qualified
        pre-submission class** becomes `failed` with recipients `unsent`.
        The classes are invalid sender, invalid recipient, and message too
-       large, each confirmed in the real-Bridge test lane (M2.6) to occur
+       large, each confirmed in the real-Bridge test lane (M2.7) to occur
        before any Proton submission. The list starts empty and grows only
        with that evidence.
      - **Generic IMAP accounts** (*later*): definite 5xx → `failed`; 4xx →

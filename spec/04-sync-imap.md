@@ -218,6 +218,11 @@ connection.
    - For `move`: the occurrence is still in the source mailbox, as of the
      last inventory.
    - For `set_flags`: none needed; flags are applied as deltas.
+   - A target that isn't `present`, or a move source that no longer holds
+     it, quarantines the intent (`epoch_change` for `epoch_stale`,
+     otherwise `ambiguous_match`).
+   - **On startup,** `in_flight` intents return to `pending` with the
+     reconcile-before-retry flag (step 4).
 2. **Act** with the policy's command.
 3. **Interpret the response,** per operation:
    - **`set_flags`** (`UID STORE … FLAGS.SILENT`, which returns no flag
@@ -234,8 +239,10 @@ connection.
    first re-reads the target and re-issues only if the effect is
    provably absent:
    - flags: `UID FETCH <uid> (FLAGS)` in the source mailbox;
-   - **`proton_bridge`** move or copy: a destination search by
-     `X-Pm-Internal-Id` header;
+   - **`proton_bridge`** move or copy: in the destination, fetch
+     `BODY.PEEK[HEADER.FIELDS (X-PM-INTERNAL-ID)]` for UIDs at or above
+     the destination's `uidnext` recorded in `evidence_json` before the
+     action, and look for the `provider_key`;
    - **`generic_imap`** move or copy: the `COPYUID` mapping recorded in
      `intents.evidence_json` as it arrived, or a qualified `EMAILID`.
      Without either, a move whose source UID is gone is `done`;
@@ -255,7 +262,7 @@ connection.
 | Add label | Source is any selectable non-virtual mailbox; destination is `Labels/*` | `UID COPY <uid> <label>` | Adds membership. The folder stays |
 | Remove label | — | Not in the pilot | Would need a qualified `UID EXPUNGE` on the label mailbox; deferred |
 | Delete permanently, empty Trash | — | Not in the pilot | No EXPUNGE in the Proton policy |
-| Move from Starred or All Mail | — | Resolved to the message's real folder occurrence first | If there's none, or it's ambiguous, the action is refused with an explanation |
+| Move or add label from Starred or All Mail | — | Resolved to the message's real folder occurrence first, then `UID MOVE` or `UID COPY` of that occurrence | If there's none, or it's ambiguous, the action is refused with an explanation |
 | Any action in Scheduled | — | Not in the pilot | Scheduled sends are read-only |
 | Archive, move or trash from a label view (`Labels/*`) | — | Resolved to the message's folder occurrence (same `X-Pm-Internal-Id`, in INBOX, Archive, Spam, Trash or `Folders/*`), then `UID MOVE` of that occurrence | Proton keeps labels on a folder-to-folder move, so the message stays in the label view. The UI says so. If no folder occurrence is known, the action is refused |
 

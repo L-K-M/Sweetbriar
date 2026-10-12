@@ -51,7 +51,7 @@ the intent framework every later mutation uses.
   - a setting for marking read after opening (immediately, after N
     seconds, or manually);
   - macOS: mark read and unread (⇧⌘U), star (⇧⌘L), and toolbar items;
-  - the flag suite added to the real-Bridge nightly lane (M2.6).
+  - the flag suite added to the real-Bridge nightly lane (M2.7).
 - **Acceptance:**
   - the command trace shows `+FLAGS.SILENT (\Seen)` exactly once per
     action, followed by a confirming `UID FETCH … (FLAGS)` before the

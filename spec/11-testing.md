@@ -116,6 +116,8 @@ The repository is public, so GitHub-hosted runners are free.
   fallback) and SPM package caching keyed on `Package.resolved`. No
   DerivedData caching.
 - **Branch protection on `main`:** required checks are `ci` and `macos`.
+  Each is a final aggregate job that always runs and succeeds only when
+  its workflow's other jobs succeeded (or, for `macos`, were skipped).
   The nightly checks are advisory.
 - **What agents must run before opening a PR:** `cargo xtask ci`, which
   runs everything in `ci.yml` except the Dovecot suite, available as

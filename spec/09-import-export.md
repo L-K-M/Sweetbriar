@@ -48,11 +48,14 @@ user-granted permission path.
      isn't imported again. Two byte-identical mbox files under different
      names are two sources, and both are imported.
    - Byte duplicates are counted in the report.
-4. **Rejects.** Unparseable messages are still stored as acquisitions,
+4. **Flags.** Read state comes from `Status` and `X-Status` headers where
+   present. Otherwise imported messages are marked read: an archive isn't
+   new mail. The report counts each case.
+5. **Rejects.** Unparseable messages are still stored as acquisitions,
    since bytes are kept even when parsing fails, and flagged
    `parse_state='failed'`. Unreadable regions of a source file are
    logged with offsets.
-5. **Report.** At the end, `import_report.json` lists:
+6. **Report.** At the end, `import_report.json` lists:
    - files;
    - messages found, imported, duplicates, rejected;
    - bytes in and bytes stored;
@@ -61,7 +64,7 @@ user-granted permission path.
      mailbox structure beyond the file name).
 
    It is shown in the Import report window and saved in `recovery/`.
-6. **Sources are never modified or removed.**
+7. **Sources are never modified or removed.**
 
 **Acceptance:** importing a fixture set (09 fixtures in 11-testing)
 reproduces exact byte hashes for every message, survives `kill -9` at any

@@ -70,7 +70,7 @@ inspectable Out Box. Unknown outcomes are never retried automatically.
   - Sent reconciliation by `Message-ID`, display only;
   - the fake SMTP server in `sb-test-support`, counting submissions;
   - `seen_addresses` sent-to counts updated on `accepted`;
-  - an SMTP suite in the real-Bridge lane (M2.6). It submits to the mock
+  - an SMTP suite in the real-Bridge lane (M2.7). It submits to the mock
     Proton API and classifies which Bridge errors occur before any
     Proton submission: the evidence for the qualified pre-submission
     list (05).
@@ -80,7 +80,7 @@ inspectable Out Box. Unknown outcomes are never retried automatically.
   - a connection drop after `DATA` gives `outcome_unknown` and no retry;
   - **a Bridge 554 final reply to `DATA` gives `outcome_unknown`**, not
     `failed`, unless its class is on the qualified pre-submission list
-    (empty until M2.6 evidence adds entries);
+    (empty until M2.7 evidence adds entries);
   - an account reconfiguration between queueing and submission keeps the
     attempt `queued` until `confirm_send_route`, and `cancel_send` works
     while it waits;

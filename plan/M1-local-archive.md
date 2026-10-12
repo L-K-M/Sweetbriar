@@ -53,6 +53,8 @@ local drafts. No network yet.
     offset; 09);
   - two identical messages in one mbox produce one acquisition and **two**
     occurrences;
+  - read state follows `Status`/`X-Status` where present, and messages
+    without them import as read;
   - two byte-identical mbox files with different names (`Inbox.mbox`,
     `Archive.mbox`) both import, into their own mailboxes;
   - crash cuts at random points during import, then resume, give the
@@ -210,8 +212,8 @@ local drafts. No network yet.
   - the backup job (online backup API, pins, object copy or
     `clonefile`, manifest written last);
   - retention;
-  - the restore procedure (verify, preserve, install, quarantine, new
-    incarnation);
+  - the restore procedure in spec/03's order: verify, stage, quarantine
+    with a new incarnation in staging, quiesce, swap, reconcile;
   - the GC job with the grace period;
   - the weekly object-verification job (a rotating 1/52 sample plus all
     backup-referenced objects) and the weekly `integrity_check` (03);

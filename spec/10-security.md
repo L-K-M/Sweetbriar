@@ -20,7 +20,8 @@ and D24, D29.
   written to files, logs, crash reports or exports.
 - **The Bridge password** (Bridge generates it; it is not the Proton
   password) is entered once at account setup and stored as above.
-- **A Keychain error pauses the account.** It never deletes or recreates
+- **A Keychain error puts the account in `needs_attention`** (04). It
+  never deletes or recreates
   anything. Logs redact anything that looks like a token or password; a
   CI test scans for this.
 
@@ -40,8 +41,8 @@ and D24, D29.
   - Connections always use the literal `127.0.0.1`: the certificate's
     IP SAN is `127.0.0.1`, with no `localhost` name.
 - **Later connections** require an exact match with that pin. On a
-  mismatch the account pauses with a clear message, for example after a
-  Bridge reinstall. Pins are never updated silently.
+  mismatch the account goes to `needs_attention` with a clear message,
+  for example after a Bridge reinstall. Pins are never updated silently.
 - **Loopback only:** Bridge connections go to `127.0.0.1` only. `::1`
   isn't used: Bridge's certificate names only the IPv4 address.
 - **Generic IMAP** (*later*) uses the platform verifier. Certificate
@@ -96,6 +97,6 @@ and D24, D29.
 
 - **Dependency checks:** `cargo-deny` checks licences and advisories on
   every PR (11), using the licence policy from
-  [plan/README](../plan/README.md).
+  [spec/01](01-architecture.md#licence-policy-for-dependencies).
 - **Locking:** `Cargo.lock` and `Package.resolved` are committed.
   Dependency updates are their own PRs.

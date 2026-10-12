@@ -147,7 +147,7 @@ CREATE TABLE acquisition_sources (                    -- provenance, one row per
   source_id        INTEGER PRIMARY KEY AUTOINCREMENT,
   acquisition_id   INTEGER NOT NULL REFERENCES acquisitions(acquisition_id),
   account_id       TEXT NOT NULL REFERENCES accounts(account_id),
-  source_kind      TEXT NOT NULL CHECK (source_kind IN ('imap_fetch','import_mbox','import_eml','send_attempt')),
+  source_kind      TEXT NOT NULL CHECK (source_kind IN ('imap_fetch','import_mbox','import_eml','send_attempt')), -- 'send_attempt' reserved: in the pilot, sent mail arrives through Sent sync
   source_ref       TEXT NOT NULL,                     -- e.g. occurrence id, import job id + offset, attempt id
   completeness     TEXT NOT NULL CHECK (completeness IN ('complete','truncated')),
   acquired_at      INTEGER NOT NULL
@@ -300,6 +300,7 @@ CREATE TABLE message_tags (
   message_id INTEGER NOT NULL REFERENCES logical_messages(message_id),
   tag_id     TEXT NOT NULL REFERENCES tags(tag_id),
   added_at   INTEGER NOT NULL,
+  revision   INTEGER NOT NULL DEFAULT 1,           -- rule 9
   PRIMARY KEY (message_id, tag_id)
 ) STRICT;
 
@@ -389,9 +390,10 @@ CREATE TABLE draft_revisions (                    -- immutable once written
 ) STRICT;
 ```
 
-- **Saving** a draft inserts a revision and updates
-  `drafts.current_revision_id` in one transaction (the foreign key is
-  deferred to commit).
+- **Saving** a draft inserts a revision, updates
+  `drafts.current_revision_id` and sets the draft `editing`, in one
+  transaction (the foreign key is deferred to commit). `queued` thus
+  always means the current revision has a live attempt.
 - **Drafts with live attempts.** A draft may be saved again while an
   attempt is `held` or `queued`. An attempt changes its draft's state
   (`sent`, `editing`, `queued`) only if the draft's
@@ -410,7 +412,9 @@ CREATE TABLE draft_revisions (                    -- immutable once written
 - Attachments are published to the object store **before** the revision
   that references them.
 - Old revisions are kept until the draft is sent or discarded, and then
-  for a retention period (default 30 days).
+  for a retention period (default 30 days). Revisions referenced by a
+  send attempt are kept as long as the attempt; attempts and their
+  recipients are the send history and are kept.
 
 ## Intents (remote effects)
 
@@ -534,7 +538,7 @@ CREATE TABLE backup_generations (
   started_at     INTEGER NOT NULL,
   completed_at   INTEGER,
   state          TEXT NOT NULL CHECK (state IN ('in_progress','complete','failed')),
-  location       TEXT NOT NULL,                    -- path of the generation directory
+  location       TEXT NOT NULL,                    -- path of the generation directory; rewritten by restore (03)
   manifest_sha256 TEXT,
   object_count   INTEGER,
   total_bytes    INTEGER
@@ -596,9 +600,9 @@ CREATE TABLE d_list_rows (
   sender        TEXT,
   subject       TEXT,
   snippet       TEXT,
-  unread        INTEGER NOT NULL,
-  flagged       INTEGER NOT NULL,
-  has_attachments INTEGER NOT NULL,
+  unread        INTEGER NOT NULL CHECK (unread IN (0,1)),
+  flagged       INTEGER NOT NULL CHECK (flagged IN (0,1)),
+  has_attachments INTEGER NOT NULL CHECK (has_attachments IN (0,1)),
   representative INTEGER NOT NULL CHECK (representative IN (0,1)) -- the message's row in per-message windows
 ) STRICT;
 CREATE INDEX d_list_rows_window ON d_list_rows(mailbox_id, sort_date DESC, occurrence_id DESC,

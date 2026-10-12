@@ -164,6 +164,7 @@ is committed, and updates are their own PRs.
 | Migrations | `rusqlite_migration` | 2.6.0 | Or an owned runner if it doesn't fit 02's rules; decided in M0 |
 | MIME parsing | `mail-parser` (`full_encoding`) | 0.11.9 | Includes an mbox iterator (09), wrapped with Sweetbriar's accounting and offset tracking. Bounded per 10 |
 | MIME composing | `mail-builder` | 1.0.0 | |
+| Color math | `palette` | pin at first use (M1.10) | Contrast and derived tints for account colors |
 | Markdown | `pulldown-cmark` | pin at first use | Raw HTML disabled (05) |
 | HTML sanitizing | `ammonia`, `lol_html`, `html5ever` | pin at first use | Per 10 |
 | IMAP | `io-imap` | 0.7.1 | **Spike first** (plan M2.1): check it handles Bridge's quirks (synchronizing literals, LIST attributes, UIDPLUS receipts, raw UTF-8 resilience). Fallback: `async-imap` 0.12.0 (`runtime-tokio`, no default features) |

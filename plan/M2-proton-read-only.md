@@ -85,12 +85,12 @@ signed in, with its TLS certificate exported.
     item **for the pilot only**, flagged in Settings, until O8 provides
     a signing identity. Record which happened.
 
-### M2.4 Read-only sync engine — L, linux
+### M2.4 Discovery and header sync — L, linux
 
-- **Goal:** the sync loop with checkpoints, grouping by
-  `X-Pm-Internal-Id`, flag sweeps, inventory, the breaker and epoch
-  changes.
-- **Spec:** 04 (Sync loop, Epoch changes, The breaker, Account states).
+- **Goal:** mailboxes and headers sync with checkpoints, grouped into
+  logical messages by `X-Pm-Internal-Id`.
+- **Spec:** 04 (Sync loop steps 1–3 and 7, Account states), 02
+  (`message_headers`, occurrences).
 - **Depends on:** M2.3.
 - **Deliverables:**
   - engine per-account tasks (IDLE watcher, worker);
@@ -98,36 +98,45 @@ signed in, with its TLS certificate exported.
     All Mail `all`, Scheduled `virtual` without a role);
   - header batches with `uidnext` checkpoints in one transaction;
   - logical message grouping with evidence;
+  - account state transitions.
+- **Acceptance:**
+  - **UID reuse:** the old occurrence becomes `superseded` and the new
+    one is inserted;
+  - `message_headers` persists the header literal and parsed fields,
+    including `Delivered-To` and `X-Original-To`, in the batch's
+    transaction;
+  - crash cuts during header batches resume without gaps or
+    duplicates;
+  - schema-level cross-account rejection: inserting an occurrence whose
+    message belongs to another account fails.
+
+### M2.5 Flag sweep, inventory, breaker and epochs — L, linux
+
+- **Goal:** flags converge, disappearances are confirmed safely, and
+  epoch changes and mass disappearances stop for review.
+- **Spec:** 04 (Sync loop steps 5–6, Epoch changes, The breaker).
+- **Depends on:** M2.4.
+- **Deliverables:**
   - the flag sweep; inventory with `vanish_pending` and `vanished`;
   - the breaker with `breaker_events`;
-  - epoch-change handling with quarantine;
-  - account state transitions.
+  - epoch-change handling with quarantine.
 - **Acceptance:**
   - a proptest model against an in-memory IMAP model with random
     sequences of server changes (new, flag change, move between
     mailboxes, expunge, epoch change, disconnects) converges to the
     model's state;
   - an occurrence never vanishes on an incomplete observation;
-  - **UID reuse:** the old occurrence becomes `superseded` and the new
-    one is inserted;
-  - `message_headers` persists the header literal and parsed fields,
-    including `Delivered-To` and `X-Original-To`, in the batch's
-    transaction;
   - the breaker opens on the default thresholds;
-  - crash cuts during header batches resume without gaps or
-    duplicates;
   - an epoch change quarantines targeting intents (inserted directly in
-    the test);
-  - schema-level cross-account rejection: inserting an occurrence whose
-    message belongs to another account fails.
+    the test).
 
-### M2.5 Body acquisition, coverage and health — M, linux + macos-ci
+### M2.6 Body acquisition, coverage and health — M, linux + macos-ci
 
 - **Goal:** bodies download once per logical message, coverage is
   visible, and the account health surface exists.
 - **Spec:** 04 (Sync loop step 4, Account states and health), 06
   (Coverage), 08 (Activity / account health window).
-- **Depends on:** M2.4.
+- **Depends on:** M2.5.
 - **Deliverables:**
   - the body queue (opened messages first, then newest) using
     `BODY.PEEK[]`, publish, link and index;
@@ -159,14 +168,14 @@ signed in, with its TLS certificate exported.
     leaving the event `accepted` or `kept`; an event whose messages
     reappear becomes `cleared`.
 
-### M2.6 Real-Bridge CI lane — L, linux (nightly)
+### M2.7 Real-Bridge CI lane — L, linux (nightly)
 
 - **Goal:** run Sweetbriar's engine against **real Bridge code** with
   Proton's mock API, without credentials.
 - **Spec:** 11 (Test layers), research
   [raw/plan-proton-bridge](../research/raw/plan-proton-bridge/codex.md)
   §2.7.
-- **Depends on:** M2.4.
+- **Depends on:** M2.5.
 - **Deliverables:**
   - a separate CI-only component (its own directory, licensed per
     Bridge's GPLv3, never linked into Sweetbriar);

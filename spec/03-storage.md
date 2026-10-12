@@ -172,8 +172,8 @@ transaction plus a final re-check, and the unlink, in one writer task:
   grace period (default 7 days). Any other pin kind blocks removal;
 - no backup generation `in_progress` exists.
 
-GC never runs while **any** account has an open breaker event (04), or
-while integrity is in doubt.
+GC never runs while **any** account has a breaker event that is `open`
+or `kept` (04), or while integrity is in doubt.
 
 ## Backup generations
 
@@ -244,7 +244,9 @@ The process holds `<data root>.lock` throughout.
      with `quarantine_reason='restore'`;
    - mark every send attempt in `held`, `queued` or `submitting` as
      `outcome_unknown`. Their outcome after the backup is unknown, and
-     they are never resent automatically.
+     they are never resent automatically;
+   - rewrite `backup_generations.location` to point into the preserved
+     root, where those generations will be after the swap.
    - Then flush the staging root.
 4. **Swap, restart-safe.**
    - **First, quiesce the live store.** Refuse new commands
