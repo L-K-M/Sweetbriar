@@ -60,8 +60,8 @@ inspectable Out Box. Unknown outcomes are never retried automatically.
   02 (`send_attempts`, `send_recipients`).
 - **Depends on:** M4.2.
 - **Deliverables:**
-  - `send_draft`, `cancel_send`, `resolve_unknown_send` and
-    `confirm_send_route`;
+  - `send_draft`, `cancel_send`, `resolve_unknown_send`,
+    `retry_rejected_recipients` and `confirm_send_route`;
   - identity promotion from `provisional` to `validated` on Bridge's
     first acceptance (05);
   - `sb-smtp` on `lettre`, with the pinned-cert TLS from M2.2;
@@ -93,6 +93,13 @@ inspectable Out Box. Unknown outcomes are never retried automatically.
     route snapshot is rejected by the schema (negative test);
   - `send_draft` with a revision other than the current one gets
     `Conflict`;
+  - two `send_draft` calls with different keys, concurrent or in turn,
+    queue one attempt; the second gets `Conflict`. Sending a `sent` or
+    `discarded` draft gets `Conflict`;
+  - each `resolve_unknown_send` choice survives a restart, can't be
+    applied twice, and frees the draft for discarding; with a queued R2
+    it leaves R2 `queued`;
+  - `retry_rejected_recipients` sends only to rejected recipients;
   - `discard_draft` is refused while an attempt is `held`, `queued`,
     `submitting` or `outcome_unknown`;
   - "Send again" reuses the unknown attempt's frozen bytes (same

@@ -135,6 +135,10 @@ decided.
     hash-valid orphan may remain. Retrying the publication succeeds;
   - crash cuts at every protocol step leave either no object or a
     complete verified one;
+  - a failed directory flush, then a retry in the same process, then a
+    simulated power cut that drops unflushed directory entries, loses no
+    acknowledged object; so do two concurrent publications into a new
+    directory;
   - on macOS, `sb-platform`'s `Fs::sync_all` calls `fcntl(F_FULLFSYNC)`
     explicitly rather than relying on `std`'s choice, and a macOS CI test
     checks that the call succeeds on APFS;

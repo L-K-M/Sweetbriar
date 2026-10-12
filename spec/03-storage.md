@@ -116,9 +116,15 @@ pub trait ObjectStore {
    hashing, then flush and `fsync` the file. On macOS that is
    `fcntl(F_FULLFSYNC)`, which is what Rust's `File::sync_all` uses on
    Apple targets; verify this in a test.
-2. **Persist new directories.** If the final `sha256/ab/cd/` directories
-   don't exist, create them, then `fsync` each newly created directory and
-   its parent, up to an existing durable ancestor.
+2. **Make the directory chain durable.** Create any missing
+   `sha256/ab/cd/` directories. Unless `ab/cd` is in the process's set of
+   directories known durable, `fsync` `sha256/ab/` and `sha256/` (they
+   hold the entries for `cd/` and `ab/`), then add it to the set.
+   - Existence doesn't prove durability: a failed or concurrent attempt
+     may have created a directory without flushing it.
+   - The set is in memory and starts empty at each launch. A directory
+     joins it only after its whole chain flushed successfully, and
+     flushing one chain is serialized.
 3. **Rename.** `rename(tmp, final)`. If the final file already exists,
    delete the temp file instead: same hash, same bytes.
 4. **Persist the rename.** `fsync` the final file's directory.

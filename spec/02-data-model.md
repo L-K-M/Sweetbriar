@@ -402,8 +402,9 @@ CREATE TABLE draft_revisions (                    -- immutable once written
   `editing` or itself `queued`, and nothing newer is lost or marked
   sent. "Saved" is shown only
   after that commit.
-- **Discarding** is refused (`Conflict`) while the draft has an attempt
-  in `held`, `queued`, `submitting` or `outcome_unknown` (05).
+- **Discarding** is refused (`Conflict`) while the draft has a live
+  attempt: `held`, `queued`, `submitting`, or `outcome_unknown` not yet
+  resolved (05).
 - **A draft's route** is its current revision's `account_id` and
   `identity_id`. `drafts` keeps no copy, so the two can't disagree.
 - **Drafts without an identity** (the current revision's route NULL)
@@ -475,11 +476,18 @@ CREATE TABLE send_attempts (
   hold_until        INTEGER,                       -- undo-send window
   final_reply       TEXT,                          -- final SMTP reply (code + text)
   sent_copy         TEXT NOT NULL CHECK (sent_copy IN ('server_saves','pending','filed','failed')),
+  resolution        TEXT CHECK (resolution IN ('marked_sent','send_again','kept_as_draft')), -- the user's answer to outcome_unknown (05)
+  resolved_at       INTEGER,
   created_at        INTEGER NOT NULL,
   updated_at        INTEGER NOT NULL,
+  CHECK (resolution IS NULL OR state = 'outcome_unknown'),
+  CHECK ((resolution IS NULL) = (resolved_at IS NULL)),
   FOREIGN KEY (revision_id, draft_id, account_id, identity_id)
     REFERENCES draft_revisions(revision_id, draft_id, account_id, identity_id)
 ) STRICT;
+-- At most one live attempt per revision; resolved unknown attempts are history.
+CREATE UNIQUE INDEX send_attempts_live ON send_attempts(revision_id)
+  WHERE state IN ('held','queued','submitting') OR (state = 'outcome_unknown' AND resolution IS NULL);
 
 CREATE TABLE send_recipients (
   attempt_id   TEXT NOT NULL REFERENCES send_attempts(attempt_id),
@@ -616,7 +624,7 @@ CREATE INDEX d_list_rows_flagged ON d_list_rows(sort_date DESC, occurrence_id DE
 - **`d_list_rows`** is the covering index for keyset-paginated mailbox
   windows (research 03, 13). `sort_date` is the occurrence's
   `internal_date`, else `message_headers.date_header`, else
-  `first_seen_at`. It is derived, but kept transactionally
+  `d_message_summary.date_header` (imports), else `first_seen_at`. It is derived, but kept transactionally
   current, because the list must reflect a flag change instantly.
   Unified views ("all inboxes") page over `d_list_rows_unified` by role.
 - **The representative occurrence** stands for its logical message in

@@ -91,6 +91,7 @@ local drafts. No network yet.
     once in `Flagged`, through its folder occurrence;
   - a flag change bumps the generation and wakes a pending `next`;
   - a slow consumer gets `ResetRequired`, never a silently dropped event;
+  - an mbox imported in reverse chronological order lists by `Date`;
   - selection by `occurrence_id` survives invalidation.
 
 ### M1.4 Sidebar and message list in the app — M, macos-ci + owner

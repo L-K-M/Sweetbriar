@@ -85,6 +85,12 @@ Otherwise the draft keeps its state.
 1. **`send_draft(draft_id, revision_id)`:**
    - `revision_id` must be the draft's `current_revision_id`, otherwise
      `Conflict`: only what the user last saw is sent.
+   - The draft must be `editing`, and the revision must have no live
+     attempt and none `accepted` or resolved `marked_sent`. Otherwise
+     `Conflict`. A second call with the same idempotency key returns the
+     first result (07). These checks run again inside the transaction
+     below, so two calls with different keys can't queue one revision
+     twice; the `send_attempts_live` index (02) backs them up.
    - **First,** outside any transaction, build the MIME and publish it to
      the object store (03). If publishing fails, nothing else happens.
    - **Then,** in one transaction:
@@ -146,19 +152,28 @@ Otherwise the draft keeps its state.
        `outcome_unknown`.
    - **Partial RCPT rejection** with DATA accepted: rejected recipients
      stay `rejected_*` and are offered as a new attempt to those
-     recipients only. Accepted recipients are never re-sent.
+     recipients only (`retry_rejected_recipients`, 07): the same frozen
+     bytes, an envelope with just them. Accepted recipients are never
+     re-sent.
 5. **`outcome_unknown`** shows in the Out Box with the frozen message, the
    time and what is known. The user resolves it with
    `resolve_unknown_send`:
-   - **Mark as sent** (e.g. after finding it in Sent): the draft becomes
-     `sent`;
+   - **Mark as sent** (e.g. after finding it in Sent): its `unknown`
+     recipients become `sent`, and the draft becomes `sent`;
    - **Send again**: after an explicit duplicate warning, creates a new
      attempt with the unknown attempt's frozen revision, bytes and
      recipients (the same `Message-ID`, so recipients' clients can spot
-     the duplicate); the draft is `queued` again;
-   - **Keep as draft**: the draft returns to `editing`.
+     the duplicate), in the same transaction that records the
+     resolution; the draft is `queued` again;
+   - **Keep as draft**: the draft returns to `editing`. The warning says
+     that sending the same revision again may duplicate it.
+   - The resolution is stored on the attempt (`resolution`, 02) and can't
+     be changed. A resolved attempt is history: it no longer counts as
+     live for sending or discarding, and the Out Box lists it under
+     history.
    - Each of these changes the draft's state only under the
-     current-revision rule (02): a newer revision stays `editing`.
+     current-revision rule (02): a newer revision keeps its state,
+     including `queued`.
    - **A `failed` attempt** also returns its draft to `editing`.
    - Sweetbriar may show evidence: a Sent occurrence whose headers carry
      the attempt's `Message-ID`. Evidence is shown, never acted on
@@ -169,8 +184,9 @@ Otherwise the draft keeps its state.
      `DATA`: connection refused, `AUTH` temporarily unavailable.
    - **Nothing after `DATA` is retried automatically.**
 
-7. **`discard_draft`** is refused with `Conflict` while the draft has an
-   attempt in `held`, `queued`, `submitting` or `outcome_unknown`. The
+7. **`discard_draft`** is refused with `Conflict` while the draft has a
+   live attempt (`held`, `queued`, `submitting`, or unresolved
+   `outcome_unknown`). The
    user cancels or resolves the attempt first, so discarded mail is
    never sent.
 

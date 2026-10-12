@@ -122,7 +122,15 @@ There is no CONDSTORE, so sync per mailbox works like this:
    - Only after a **second complete inventory** (a later full sweep, or
      `EXPUNGE` responses seen in the session) do they become `vanished`.
    - Disappearances pass through the breaker first.
-7. **Use IDLE notifications** (`EXISTS`, `EXPUNGE`, `FETCH`) as triggers
+7. **Re-check identities (`proton_bridge`).** Steps 3 and 5 never read
+   an existing UID's provider id, so a UID reused below `uidnext` would
+   go unseen. Every 6 h per mailbox, and after each reconnect, `UID FETCH
+   1:* (UID BODY.PEEK[HEADER.FIELDS (X-PM-INTERNAL-ID)])` compares each
+   UID's id with its current occurrence. A mismatch takes step 3's
+   UID-reuse path (supersede, insert, header fetch) and quarantines
+   intents on the old occurrence (`ambiguous_match`). The live target
+   check still guards every mutation in between.
+8. **Use IDLE notifications** (`EXISTS`, `EXPUNGE`, `FETCH`) as triggers
    to run steps 3–6 for that mailbox. They are not a journal.
 
 **Pace:** the inbox is polled every 60 s when IDLE is unavailable;
@@ -271,11 +279,17 @@ connection.
   COPY`, check `COPYUID`, then `UID STORE +FLAGS.SILENT (\Deleted)` and
   `UID EXPUNGE <uid>` (UIDPLUS required).
 - Without UIDPLUS, no automatic expunge.
-- **Completion:** a `move` or `copy` is `done` when `COPYUID` names the
-  destination UID and `UID FETCH <uid> (UID)` in the destination finds
-  it. Without `COPYUID` (MOVE without UIDPLUS), the move is `done` when
-  the source UID is gone; the destination occurrence arrives with the
-  next sync.
+- **Completion:** a `copy` is `done` when `COPYUID`, with the
+  destination's current UIDVALIDITY, names the new UID and `UID FETCH
+  <uid> (UID)` in the destination finds it. A `move` also needs the
+  source UID gone:
+  - `UID MOVE` removes it. Without `COPYUID` (no UIDPLUS), the move is
+    `done` when the source UID is gone; the destination arrives with the
+    next sync.
+  - The copy-and-delete fallback records each phase (copied, flagged
+    `\Deleted`, expunged) in `intents.evidence_json`. After a crash or
+    drop it resumes from the last proven phase, under the live target
+    check, and is `done` only when the source UID is gone.
 - Never a bare `EXPUNGE`, and never `CLOSE` after flagging.
 
 **Flag conflicts:** with no CONDSTORE, a flag intent is a delta (add or

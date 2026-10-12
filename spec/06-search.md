@@ -129,7 +129,7 @@ shared by the search field, saved views and, later, rules.
 | Node | Meaning |
 |---|---|
 | `text` | Full-text query (FTS5) |
-| `field` | `from`, `to` and `cc` take `contains`, `is` or `domain`; `subject`, `body` and `attachment` take `contains` only. `contains` uses FTS5 on the field's columns (`body`: `body_authored`, `body_quoted` and `body_signature`). `is` and `domain` match the parsed address lists in `d_message_summary` exactly, never the tokenized text |
+| `field` | `from`, `to` and `cc` take `contains`, `is` or `domain`; `subject`, `body` and `attachment` take `contains` only. `contains` uses FTS5 on the field's columns (`body`: `body_authored`, `body_quoted` and `body_signature`). `is` and `domain` match parsed address lists exactly, never the tokenized text: from `message_headers` for synced mail, else `d_message_summary` |
 | `flag` | `seen`, `flagged`, `answered`, `draft` |
 | `tag`, `has` | `has` takes `attachment` or `note` |
 | `date` | `before`, `after`, `on`, `within_days`; always with an explicit IANA timezone; relative dates also carry the evaluation clock |
@@ -140,7 +140,9 @@ shared by the search field, saved views and, later, rules.
 **Rules:**
 
 - **Unknown under negation.** A message whose body isn't downloaded or
-  indexed is `unknown` for body and text predicates. So is a document
+  indexed is `unknown` for every FTS predicate (`text`, and `contains`
+  on any field), and for `is`/`domain` when neither `message_headers`
+  nor a summary exists. So is a document
   indexed as `partial` (an extraction cap was hit), for the fields that
   were truncated: a term beyond the cap may still be in the message.
   `not unknown` stays `unknown`, so it never matches. Results show a count of messages

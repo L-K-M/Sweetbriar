@@ -89,7 +89,7 @@ signed in, with its TLS certificate exported.
 
 - **Goal:** mailboxes and headers sync with checkpoints, grouped into
   logical messages by `X-Pm-Internal-Id`.
-- **Spec:** 04 (Sync loop steps 1–3 and 7, Account states), 02
+- **Spec:** 04 (Sync loop steps 1–3 and 8, Account states), 02
   (`message_headers`, occurrences).
 - **Depends on:** M2.3.
 - **Deliverables:**
@@ -114,10 +114,11 @@ signed in, with its TLS certificate exported.
 
 - **Goal:** flags converge, disappearances are confirmed safely, and
   epoch changes and mass disappearances stop for review.
-- **Spec:** 04 (Sync loop steps 5–6, Epoch changes, The breaker).
+- **Spec:** 04 (Sync loop steps 5–7, Epoch changes, The breaker).
 - **Depends on:** M2.4.
 - **Deliverables:**
   - the flag sweep; inventory with `vanish_pending` and `vanished`;
+  - the Proton identity re-check (step 7);
   - the breaker with `breaker_events`;
   - epoch-change handling with quarantine.
 - **Acceptance:**
@@ -127,6 +128,9 @@ signed in, with its TLS certificate exported.
     model's state;
   - an occurrence never vanishes on an incomplete observation;
   - the breaker opens on the default thresholds;
+  - **UID reused below `uidnext`:** with UIDNEXT and flags unchanged and
+    A's body already acquired, the identity re-check finds B at A's UID,
+    supersedes A and inserts B, with no mutation or body fetch;
   - an epoch change quarantines targeting intents (inserted directly in
     the test).
 
@@ -162,6 +166,9 @@ signed in, with its TLS certificate exported.
   - the body-attach identity check per policy: on the Bridge profile a
     different `X-Pm-Internal-Id` is refused; on Dovecot a body whose
     `Message-ID` differs from `message_headers` is refused;
+  - with headers but no body, `from:` `is`/`domain` predicates match
+    from `message_headers`, and `contains` and `text` count the message
+    as unknown, also under negation;
   - reading never sends `\Seen` (command trace);
   - coverage numbers match fixture expectations;
   - breaker Accept and Keep work end to end (UI test with the fake),
