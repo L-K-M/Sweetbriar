@@ -235,7 +235,7 @@ subject to implementation evidence, not to further argument.
   2026-10-12 the code is offered as "Unlicense OR 0BSD" (`LICENSE-0BSD`),
   so a plain licence covers places where the dedication may not hold.
 - **D20 Builders:** AI agents implement in small PR-sized steps; the
-  owner reviews and merges. macOS builds and tests run on GitHub Actions
+  owner reviews. macOS builds and tests run on GitHub Actions
   macOS runners. No branch protection on `main`: agents merge only with
   no blocking review findings and green `ci` and `macos` checks.
 - **D20 First live backend:** the owner's own provider is **Proton
@@ -250,28 +250,19 @@ These come before a credible schedule. The options and questions are in
 both round-2 reviews ([Codex §4](debate/03-review-codex-r2.md),
 [Devin §5](debate/03-review-devin-r2.md)).
 
-1. **D18 Licence and contributions** (decided 2026-10-12, above).
-   - Options: proprietary; source-available; MPL core + paid app;
-     permissive core + paid app; GPL.
-   - Will outside contributions be accepted, and under a CLA, a DCO or
-     neither?
-   - Decide before the first public code.
-2. **D19 Business model.**
+D18 and the builder and first-backend parts of D20 are decided (above).
+
+1. **D19 Business model.**
    - Options: annual, perpetual + upgrades, or support/sponsorship.
    - Reading, export and draft recovery survive expiry in every option.
-3. **D20 First users, team and runway** (partly decided 2026-10-12,
-   above). This decision sets the scope of everything else:
-   - Who is reachable, can authorize the app, and needs these workflows?
-     The candidates:
-     - small Microsoft 365 organizations with archives;
-     - Gmail or Workspace users;
-     - mixed-provider power users;
-     - classic-client refugees;
-     - an archive companion first.
-   - How many engineers? Plans assume 2–3; one engineer halves the scope.
-   - What is your own primary mail provider? It becomes the default first
-     backend if no cohort evidence exists by the gate.
-4. **D21 Scope.**
+2. **D20 Users after the owner's pilot.** Who is reachable, can
+   authorize the app, and needs these workflows? The candidates:
+   - small Microsoft 365 organizations with archives;
+   - Gmail or Workspace users;
+   - mixed-provider power users;
+   - classic-client refugees;
+   - an archive companion first.
+3. **D21 Scope.**
    - Primary-mailbox email only, or also shared/delegated mailboxes,
      calendars and contacts?
    - Windows: never, later, or planned? Saying "never" is fine.

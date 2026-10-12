@@ -1,8 +1,7 @@
 # Sweetbriar implementation plan
 
 How the pilot defined in [spec/00-overview](../spec/00-overview.md) gets
-built, step by step. **AI agents implement; the owner reviews and
-merges.** Every step is one pull request with acceptance checks.
+built, step by step. **AI agents implement; the owner reviews.** Every step is one pull request with acceptance checks.
 
 **Status:** v0.1, 2026-10-12.
 
