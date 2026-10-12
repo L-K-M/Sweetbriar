@@ -139,6 +139,42 @@ questions. The reasoning, sources and disagreements are in the
   benchmarks.
 - Details: [13](13-database-engine.md).
 
+**Can we use the accounts signed in at system level?**
+- **macOS: no** for mail.
+  - Internet Accounts has no public API; the Accounts framework only ever
+    covered social networks and was deprecated in macOS 12.
+  - What Sweetbriar can use: contacts and calendars synced by those
+    accounts (with permission), one-click browser sign-in when the user is
+    already logged in, Microsoft's enterprise SSO on managed Macs (MSAL),
+    MDM presets, and possibly a settings importer through Apple Mail's
+    scripting dictionary.
+- **GNOME (and Ubuntu): technically yes.** GNOME Online Accounts hands
+  out tokens, passwords and IMAP/SMTP settings over D-Bus.
+  - But its OAuth tokens belong to GNOME's app registrations, and GNOME
+    asks third-party apps to contact it first and keep their own identity.
+  - So: settings import and password accounts now; token reuse only with
+    GNOME's agreement.
+- **KDE: no.** No mail provider exists in KAccounts, and its successor is
+  a prototype.
+- **Own sign-in stays the baseline everywhere**, behind a credential-source
+  abstraction in the core.
+- Details: [14](14-system-accounts.md).
+
+**Account colors.**
+- **Compose window:** each account gets one color. The compose window
+  shows it in an identity strip below the native toolbar, with the
+  account name, a monogram and the full From address.
+  - It follows the selected From identity, changing the moment From
+    changes.
+  - An optional Strong mode tints the upper window.
+- **Mailbox views:** received mail is marked by the account that holds
+  it, in the sidebar, unified inbox, threads, search and reader.
+- **Safety:** a cross-account reply check and the frozen send route carry
+  the safety; color helps the user notice.
+- **Accessibility:** color is never the only cue.
+- **Storage:** colors are stored per machine and exported.
+- Details: [15](15-account-colors.md).
+
 ## Why a shared Rust core (the premise, argued)
 
 **For:**
@@ -186,6 +222,7 @@ subject to implementation evidence, not to further argument.
 | D14–D15 | Four pilot workflows; AI opt-in with explicit on-device/cloud modes, off the critical path. |
 | D16 | Markdown compose; adaptive Reading view gated by the corpus. |
 | D17 | Bundled SQLite (pinned ≥ 3.51.3, verified at runtime) for state; FTS5 for search. |
+| D30–D31 | Recommended 2026-10-12, after the debate: system accounts as optional credential sources; account colors with a compose identity strip ([14](14-system-accounts.md), [15](15-account-colors.md)). |
 | D22–D29 | Starting recommendations in [debate/04-resolution](debate/04-resolution.md) and the round-2 reviews: contacts, per-machine metadata, encryption from a threat model, archive-by-default, onboarding, forward-only migrations, junk, accessibility/telemetry. |
 
 ## Decisions only the owner can make
