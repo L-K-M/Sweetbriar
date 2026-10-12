@@ -8,6 +8,10 @@ checked.
 
 ## Start here
 
+- The implementation contract built from this research is in
+  [spec/](../spec/README.md), and the step-by-step build order in
+  [plan/](../plan/README.md).
+
 - [00-summary.md](00-summary.md): the answers to the owner's questions,
   what is settled, the decisions only the owner can make, and what is
   still open.

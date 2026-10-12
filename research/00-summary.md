@@ -226,6 +226,21 @@ subject to implementation evidence, not to further argument.
 | D30–D31 | Recommended 2026-10-12, after the debate: system accounts as optional credential sources; account colors with a compose identity strip ([14](14-system-accounts.md), [15](15-account-colors.md)). |
 | D22–D29 | Starting recommendations in [debate/04-resolution](debate/04-resolution.md) and the round-2 reviews: contacts, per-machine metadata, encryption from a threat model, archive-by-default, onboarding, forward-only migrations, junk, accessibility/telemetry. |
 
+## Owner decisions taken (2026-10-12)
+
+- **D18 Licence:** Sweetbriar's own code is dedicated to the public
+  domain, as far as the licences of its dependencies allow. No outside
+  contributions are accepted; anyone may fork. The repository's
+  `LICENSE` has been the Unlicense since the initial commit.
+- **D20 Builders:** AI agents implement in small PR-sized steps; the
+  owner reviews and merges. macOS builds and tests run on GitHub Actions
+  macOS runners.
+- **D20 First live backend:** the owner's own provider is **Proton
+  Mail**, so the first live backend is IMAP/SMTP through Proton Mail
+  Bridge. This needs no Google or Microsoft app approvals, which stay a
+  parallel workstream for later backends.
+- **Still open:** D19 (business model) and D21 (scope beyond email).
+
 ## Decisions only the owner can make
 
 These come before a credible schedule. The options and questions are in

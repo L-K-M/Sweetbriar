@@ -1,0 +1,204 @@
+# 06 — Search
+
+Rests on research [05-search](../research/05-search.md) and D7 in
+[debate/04-resolution](../research/debate/04-resolution.md). The engine
+is **SQLite FTS5**. Tantivy may replace it only by passing the bars
+registered in the resolution.
+
+## Extraction
+
+- **Inputs:** a background index job extracts searchable text from each
+  acquisition's parsed MIME tree, **independently of how the reader
+  renders it**.
+- **Fields extracted:**
+
+  | Field | Contents |
+  |---|---|
+  | `subject` | |
+  | `from` | address and display name |
+  | `to_text` | |
+  | `cc_text` | |
+  | `body_authored` | text before the detected quote or signature boundary |
+  | `body_quoted` | quoted text |
+  | `body_signature` | signature |
+  | `attachment_names` | |
+  | `attachment_text` | later; PDF via PDFKit on macOS |
+
+- **When quote detection is unsure,** the text goes into `body_authored`.
+  Nothing extractable is dropped.
+- **Sources:** the `text/plain` part when present, and text extracted
+  from HTML parts by stripping markup (`html5ever`). If both exist, both
+  are indexed, deduplicated by normalized paragraph.
+- **Limits:**
+  - at most 1 MB of text per message and 64 KB per attachment name list;
+  - parsing runs with depth and size caps (10-security).
+  - A message hitting a cap is marked `partial` in coverage.
+- **Versioning:** the `extractor_version` is stored. A version bump
+  re-queues every document.
+
+## Schema
+
+```sql
+CREATE TABLE d_search_docs (             -- one row per acquisition with extracted text
+  doc_id            INTEGER PRIMARY KEY, -- = acquisitions.acquisition_id
+  extractor_version INTEGER NOT NULL,
+  state             TEXT NOT NULL CHECK (state IN ('indexed','partial','failed')),
+  truncated_fields  TEXT NOT NULL DEFAULT '[]', -- JSON array of field names cut by a cap
+  subject           TEXT,
+  from_text         TEXT,
+  to_text           TEXT,
+  cc_text           TEXT,
+  body_authored     TEXT,
+  body_quoted       TEXT,
+  body_signature    TEXT,
+  attachment_names  TEXT
+) STRICT;
+
+CREATE VIRTUAL TABLE d_search_fts USING fts5(
+  subject, from_text, to_text, cc_text, body_authored, body_quoted, body_signature, attachment_names,
+  content='d_search_docs', content_rowid='doc_id',
+  tokenize = "unicode61 remove_diacritics 2",
+  prefix = '2 3'
+);
+
+CREATE TABLE d_index_queue (              -- work for the index job; durable watermark
+  doc_id      INTEGER PRIMARY KEY,
+  reason      TEXT NOT NULL CHECK (reason IN ('new','reextract','delete')),
+  enqueued_at INTEGER NOT NULL
+) STRICT;
+```
+
+- **Placement (pilot):** FTS5 lives in the same database file as derived
+  tables. Index writes go through the writer task at low priority, in
+  batches of at most 200 documents. Moving FTS5 to a separate derived
+  database is a measured option (research D7). The queue table makes
+  that move mechanical.
+- **Enqueueing:** acquisitions are queued in the same transaction that
+  inserts them, so the index can never silently miss one.
+- **Keeping FTS5 in step:** `d_search_fts` is an external-content table,
+  so SQLite doesn't index `d_search_docs` changes by itself. In one writer
+  transaction per batch, the index job:
+  1. for a re-extraction, issues FTS5's `'delete'` command with the old
+     values;
+  2. writes the `d_search_docs` row;
+  3. inserts the new values into `d_search_fts`;
+  4. deletes the `d_index_queue` entry.
+  - A crash leaves the queue entry, and the batch reruns.
+- **Tokenizer:** plain `unicode61`, so `alice@example.com` indexes as
+  `alice`, `example`, `com` and `A-1234` as `a`, `1234`. Searching for
+  `example` or `1234` finds them.
+  - **Exact identifiers:** the query parser turns any term containing
+    punctuation (`alice@example.com`, `A-1234`, `2026-001`) into an FTS5
+    **phrase** of its tokens, so it matches them adjacent and in order.
+    (Tested: `"A-1234"` and `"alice@example.com"` match;
+    `"paid invoice"` matches "Paid invoice.".)
+  - An earlier draft used `tokenchars`; it was dropped because it glued
+    sentence punctuation into tokens and broke substring matches.
+  - **Exact address equality** (`from:… is`) uses `d_message_summary`,
+    not FTS.
+  - A second, trigram-tokenized table for substring and CJK search is
+    *later*, behind the Tantivy-or-trigram decision.
+  - **Pilot limitation:** CJK text is indexed by `unicode61`, which
+    doesn't segment words, so CJK search is weak. This is stated in the
+    coverage UI.
+- **Ranking:** `bm25(d_search_fts, 4.0, 2.0, 1.0, 1.0, 1.0, 0.25, 0.1, 0.75)`
+  weights subject, from, to, cc, authored, quoted, signature and
+  attachment names. These are starting values, validated against the
+  judged task set.
+- **Rebuild:** dropping all `d_search_*` tables and re-queueing every
+  acquisition must reproduce the index. Rebuild is a visible, resumable
+  operation.
+
+## Query AST v1
+
+One typed representation, serialized as JSON with a version. It is
+shared by the search field, saved views and, later, rules.
+
+```json
+{"v": 1, "q": {"and": [
+  {"field": "from", "op": "contains", "value": "alice@example.com"},
+  {"text": "invoice"},
+  {"not": {"flag": "seen"}},
+  {"date": {"after": "2026-01-01", "tz": "Europe/Zurich"}},
+  {"account": "uuid"}, {"mailbox": 42}
+]}}
+```
+
+**Node types:**
+
+| Node | Meaning |
+|---|---|
+| `text` | Full-text query (FTS5) |
+| `field` | `from`, `to` and `cc` take `contains`, `is` or `domain`; `subject`, `body` and `attachment` take `contains` only. `contains` uses FTS5 on the field's columns (`body`: `body_authored`, `body_quoted` and `body_signature`). `is` and `domain` match parsed address lists exactly, never the tokenized text: from `message_headers` for synced mail, else `d_message_summary` |
+| `flag` | `seen`, `flagged`, `answered`, `draft` |
+| `tag`, `has` | `has` takes `attachment` or `note` |
+| `date` | `before`, `after`, `on`, `within_days`; always with an explicit IANA timezone; relative dates also carry the evaluation clock |
+| `size` | |
+| `account`, `mailbox` | Scope |
+| `and`, `or`, `not` | Combinators |
+
+**Rules:**
+
+- **Unknown under negation.** A message whose body isn't downloaded or
+  indexed is `unknown` for every FTS predicate (`text`, and `contains`
+  on any field), and for `is`/`domain` when neither `message_headers`
+  nor a summary exists. So is a document
+  indexed as `partial` (an extraction cap was hit), for the fields that
+  were truncated: a term beyond the cap may still be in the message.
+  `not unknown` stays `unknown`, so it never matches. Results show a count of messages
+  excluded as unknown ("312 messages not yet searchable").
+- **Per-use subsets:** search may use every node. Saved views may use
+  every node. Rules (*later*) may not use ranked or fuzzy constructs.
+- **Exactness:** `field … is` and quoted phrases are never stemmed or
+  rewritten.
+- **Front ends (pilot):**
+  - a text syntax: `from:`, `to:`, `subject:`, `body:`, `has:attachment`,
+    `is:unread`, `is:flagged`, `before:`, `after:`, `in:`, `tag:`,
+    quoted phrases, `-term`, `OR`, parentheses;
+  - chips that round-trip with that syntax.
+  - Natural-language queries are *later* (D15).
+- **Parser:** a hand-written parser in the core, used by both shells.
+  Invalid syntax returns an error with a position, never a silent
+  reinterpretation.
+
+## Execution
+
+- Filters (account, mailbox, flags, dates) are applied **inside** the SQL
+  query before ranking and limit, so a small account's hits can't vanish
+  under a large one's.
+- **Grain:** one row per logical message, its representative occurrence
+  (02, `d_list_rows`). With a `mailbox` scope, rows are that mailbox's
+  occurrences instead. Counts are messages. A message with no present
+  occurrence isn't a hit; it appears in the Recovery list (04).
+- **Results stream:** the first 50 hits are ranked or date-sorted; more
+  are fetched on scroll with keyset paging.
+  - Date-sorted results page by `(sort_date, occurrence_id)`.
+  - Relevance results page by `(bm25 score, occurrence_id)`, within the
+    same query generation. A new generation restarts paging.
+  - The cursor is opaque to the shell (07).
+- **Freshness:** a newly acquired message is searchable within 2 s at
+  p95 while the index job keeps up. Flag and mailbox predicates read live
+  authoritative tables, so they are always current.
+- **Server search** (IMAP `SEARCH` on Bridge) is *later*. Bridge
+  searches Proton's encrypted store with limitations (04).
+
+## Coverage
+
+The core exposes, per account and per mailbox:
+
+- headers synced;
+- bodies acquired;
+- documents indexed, partial or failed;
+- queue length.
+
+The search UI shows coverage whenever it is below 100% for the current
+scope.
+
+## Acceptance targets (pilot)
+
+On the owner's Mac with 100k messages:
+
+- cached exact search, p95 ≤ 100 ms and p99 ≤ 250 ms during background
+  sync;
+- new mail searchable within 2 s at p95;
+- index rebuild ≤ 15 min.
