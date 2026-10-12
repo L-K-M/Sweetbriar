@@ -32,6 +32,7 @@ pub enum CoreError {
     NewerStore { app_version: String }, // store migrated by a newer app; read-only
     InvalidInput { field: String, message: String },
     Conflict { detail: String },  // e.g. draft revision base mismatch
+    ResetRequired { generation: u64 }, // stale window cursor; reopen from Top or Around
     Cancelled,
     Internal { detail: String },
 }
@@ -68,8 +69,11 @@ async fn Core::shutdown(self);   // flush writer, release the lease
 - **Selections:** large selections never serialize 100k ids. A selection
   is either a list of up to 1,000 occurrence ids or a `SelectionToken`
   that names a query window and its generation (01-architecture).
-- **Undo:** each message command returns an `UndoToken`;
-  `undo(token)` creates compensating intents. Undo is the inverse
+- **Undo:** message commands return an `Option<UndoToken>`. Undoable in
+  the pilot: flags, folder moves (including `delete_to_trash`), tags and
+  notes. `add_label` returns none: removing a label needs EXPUNGE, which
+  the Proton policy forbids (04). `undo(token)` creates compensating
+  intents. Undo is the inverse
   command, never a rollback of history.
 
 ## Queries
@@ -104,7 +108,7 @@ struct ListRow {
 - **Paging** is by keyset cursor, never `OFFSET`. Cursors are opaque and
   sort-specific: `(sort_date, occurrence_id)` for date order, `(score,
   occurrence_id)` for relevance order. They are bound to the window's
-  generation, so a stale cursor gets `ResetRequired`.
+  generation, so a stale cursor gets `CoreError::ResetRequired`.
 - **Other queries:**
   - `get_message(message_id)` → headers, occurrences, tags, note and
     body availability;

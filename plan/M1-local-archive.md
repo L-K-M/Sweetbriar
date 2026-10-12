@@ -15,7 +15,8 @@ local drafts. No network yet.
   - `sb-mime::parse(bytes, limits) -> Parsed | Partial | Failed`, with
     `catch_unwind` around `mail-parser`;
   - summary extraction (headers, snippet, attachment presence);
-  - `cargo-fuzz` targets (MIME, mbox splitter) wired into `nightly.yml`,
+  - a `cargo-fuzz` MIME target wired into `nightly.yml` (M1.2 adds the
+    mbox splitter's),
     using a **pinned nightly toolchain** for fuzzing only (in
     `fuzz/rust-toolchain.toml`); everything else stays on stable;
   - the fixtures corpus (`fixtures/eml/`): multipart variants, charsets,
@@ -41,6 +42,7 @@ local drafts. No network yet.
   - the mbox splitter (mboxo and mboxrd detection, `>From ` unquoting,
     offset tracking over `mail-parser`'s iterator);
   - EML folder walk;
+  - an mbox-splitter fuzz target in the nightly fuzz job;
   - commands `start_import` and `cancel_job`;
   - `sb-cli import <paths>`.
 - **Acceptance:**
@@ -50,7 +52,7 @@ local drafts. No network yet.
     (idempotent by source identity: path, SHA-256, target mailbox and
     offset; 09);
   - two identical messages in one mbox produce one acquisition and **two**
-    occurrences, and export writes both;
+    occurrences;
   - two byte-identical mbox files with different names (`Inbox.mbox`,
     `Archive.mbox`) both import, into their own mailboxes;
   - crash cuts at random points during import, then resume, give the
@@ -196,7 +198,8 @@ local drafts. No network yet.
   - the manifest lists every message, with `not_acquired` entries where
     applicable;
   - mboxrd escaping round-trips lines starting with `From ` and
-    `>From `.
+    `>From `;
+  - two identical messages imported from one mbox export as two.
 
 ### M1.8 Backup, restore and GC — L, linux
 
@@ -232,9 +235,13 @@ local drafts. No network yet.
   - GC's grace clock: an orphan gets a `gc_grace` pin on first sight and
     is removed only after the grace period, and a re-referenced object
     loses its pin;
+  - reservation pins in `publish` (03);
   - **republish race:** publishing bytes equal to an expired orphan takes
     a reservation that GC honours, so the referencing commit never
-    points to a removed object (interleaving test);
+    points to a removed object (interleaving test, pausing publication
+    before the reservation and GC before its unlink);
+  - restore with a pending write and an active account worker: both stop
+    before the swap, and no connection stays open on the replaced root;
   - restore: crash cuts at every step (staging, quarantine, marker, both
     renames) leave either the old store or the quarantined restored
     store, never an unquarantined one; startup with the marker present

@@ -230,10 +230,18 @@ connection.
    - a `NO` that will persist → `parked`;
    - a connection drop → back to `pending`, with a reconcile-before-retry
      flag.
-4. **Reconcile before retry.** After a drop, the engine first re-reads the
-   target (`UID FETCH <uid> (FLAGS)` in source, or a check in the
-   destination by `X-Pm-Internal-Id` header search). It re-issues only
-   if the effect is absent.
+4. **Reconcile before retry,** per policy. After a drop, the engine
+   first re-reads the target and re-issues only if the effect is
+   provably absent:
+   - flags: `UID FETCH <uid> (FLAGS)` in the source mailbox;
+   - **`proton_bridge`** move or copy: a destination search by
+     `X-Pm-Internal-Id` header;
+   - **`generic_imap`** move or copy: the `COPYUID` mapping recorded in
+     `intents.evidence_json` as it arrived, or a qualified `EMAILID`.
+     Without either, a move whose source UID is gone is `done`;
+     anything else is quarantined (`ambiguous_match`). The engine never
+     re-issues `COPY`, or goes on to `STORE \Deleted`, without that
+     evidence.
 5. **Order:** intents for the same occurrence run in order. Independent
    intents may run in any order.
 

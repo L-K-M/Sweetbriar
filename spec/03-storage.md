@@ -132,8 +132,12 @@ handles. A crash after it leaves a valid reference.
 **Reservation against GC.** `publish` returns an existing object's id
 when the bytes are already stored. That object could be an expired
 orphan GC is about to remove. So:
-- before `publish` returns, it inserts `object_pins(reservation, <token>)`
-  through the writer, serialized with GC's final re-check;
+- `publish` inserts `object_pins(reservation, <token>)` through the
+  writer **before step 3**, where it tests whether the final file
+  exists;
+- GC's final re-check and its unlink run as one writer task. A
+  reservation therefore commits either before it (GC skips the object)
+  or after it (the file is gone, and step 3 installs the new copy);
 - the transaction that references the object deletes that reservation in
   the same commit;
 - if the caller aborts, the reservation is deleted, or expires after 24 h
@@ -160,7 +164,7 @@ orphan GC is about to remove. So:
 - If a reference reappears before removal, GC deletes that pin.
 
 GC removes an object only if **all** of these hold, checked in one read
-transaction plus a final re-check under the writer:
+transaction plus a final re-check, and the unlink, in one writer task:
 
 - no row references it: `acquisitions`, `draft_revisions` attachments,
   `send_attempts.mime_sha256`;
@@ -243,6 +247,13 @@ The process holds `<data root>.lock` throughout.
      they are never resent automatically.
    - Then flush the staging root.
 4. **Swap, restart-safe.**
+   - **First, quiesce the live store.** Refuse new commands
+     (`Unavailable`); let a submission in progress finish; stop account
+     workers, the outbox and maintenance jobs; drain the writer queue;
+     run `wal_checkpoint(TRUNCATE)` and close every connection to the
+     current and staging databases. The lock stays held. Open windows
+     and subscriptions get `ResetRequired`. SQLite must never see a
+     database file renamed while it's open.
    - Write a marker file `<data root>.restore-pending` naming the staging
      root and the preserved name, and flush it.
    - Rename the current data root to `<data root>.preserved-<old
@@ -253,6 +264,7 @@ The process holds `<data root>.lock` throughout.
      data root and staging exist, the swap hadn't started: discard
      staging and restart the restore on request. If the data root
      exists and staging doesn't, the swap finished: remove the marker.
+   - Then open the restored store, with every account paused.
    - Nothing is deleted. The preserved root is listed in Settings →
      Backups until the user removes it.
 5. **Reconcile.** For each account the user resumes:

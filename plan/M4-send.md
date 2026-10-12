@@ -21,6 +21,9 @@ inspectable Out Box. Unknown outcomes are never retried automatically.
   - replying to received mail picks the identity in To, Cc or
     `Delivered-To` of that exact occurrence;
   - no valid identity gives "Choose a sending identity";
+  - after a restart, offline, a reply to a message whose body wasn't
+    downloaded resolves its identity from `message_headers` (including
+    `Delivered-To`);
   - a cross-account reply raises the check, and acknowledgement is
     invalidated by identity or recipient edits.
 
@@ -83,6 +86,9 @@ inspectable Out Box. Unknown outcomes are never retried automatically.
     while it waits;
   - queue R1, save R2, then R1 is accepted: the draft stays `editing` with
     R2, which isn't marked sent. Cancelling R1 likewise leaves R2 intact;
+  - queue R1, save and queue R2: R1's acceptance, cancellation, or its
+    resolution as sent or kept as draft leaves the draft `queued` with
+    R2;
   - an attempt whose account or identity doesn't match its revision's
     route snapshot is rejected by the schema (negative test);
   - `send_draft` with a revision other than the current one gets

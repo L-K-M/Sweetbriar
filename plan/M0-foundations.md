@@ -121,7 +121,8 @@ decided.
   - the `Fs` seam and its real implementation from M0.3, plus a
     fault-injecting implementation in `sb-test-support`. `resources`
     wires the real one in;
-  - in `sb-store`: `ObjectStore` and the file implementation;
+  - in `sb-store`: `ObjectStore` and the file implementation. Reservation
+    pins (03) arrive with GC in M1.8; until then nothing removes objects;
   - in `sb-test-support`: the crash-cut harness (spawn a child, kill at
     numbered cut points, reopen, check invariants).
 - **Acceptance:**
@@ -219,6 +220,7 @@ decided.
     warnings as errors;
   - an ad-hoc signed (`CODE_SIGN_IDENTITY=-`) `.app` zip is uploaded as an
     artifact;
+  - a PR changing only `.cargo/config.toml` runs the macOS build jobs;
   - **owner (O3):** it launches on the owner's Mac.
 
 ### M0.10 Message list prototype — M, macos-ci + owner

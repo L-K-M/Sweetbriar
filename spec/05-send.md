@@ -77,6 +77,10 @@ and [raw/plan-proton-bridge/codex.md](../research/raw/plan-proton-bridge/codex.m
                                                                                          crash before final reply recorded)
 ```
 
+Every transition below that changes the draft's state does so only if
+the attempt's revision is still the draft's current revision (02).
+Otherwise the draft keeps its state.
+
 1. **`send_draft(draft_id, revision_id)`:**
    - `revision_id` must be the draft's `current_revision_id`, otherwise
      `Conflict`: only what the user last saw is sent.

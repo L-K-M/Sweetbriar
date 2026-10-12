@@ -1,7 +1,7 @@
 # M5 — Filing
 
 **Outcome:** archive, move to folder, move to Trash and add label, with
-undo. Every action is checked against the Proton mutation matrix and
+undo for moves (add label has none in the pilot; 07). Every action is checked against the Proton mutation matrix and
 verified before it completes.
 
 ### M5.1 Proton mutation matrix — L, linux
@@ -23,7 +23,9 @@ verified before it completes.
   - the generic policy: `UID MOVE`, or `COPY` + `STORE \Deleted` +
     `UID EXPUNGE` only with UIDPLUS; its live target check uses the
     UIDVALIDITY/UID binding, since Dovecot has no Proton header (04),
-    and its completion uses `COPYUID` plus a destination fetch;
+    and its completion uses `COPYUID` plus a destination fetch. After a
+    drop it reconciles from the recorded `COPYUID` or quarantines, never
+    re-issuing `COPY` blind (04);
   - `delete_to_trash` as a `move` to Trash under every move rule;
   - capability requalification scoped to the policy (04, Compatibility
     ledger);
@@ -36,6 +38,9 @@ verified before it completes.
     fake server);
   - moving from a label mailbox resolves to the folder occurrence or is
     refused, and any action in Scheduled is refused;
+  - `add_label` returns no undo token;
+  - a generic COPY dropped after the server applied it, with no Proton
+    header, is quarantined rather than copied again (Dovecot);
   - a generic server without MOVE keeps moves working through UIDPLUS,
     and one without either keeps flags working with moves disabled;
   - a move without an acquired body fetches it first;
@@ -57,7 +62,8 @@ verified before it completes.
   - drag to sidebar mailboxes;
   - the filing palette (`⇧⌘M`, Move to…) ranked by recent use;
   - the undo toast (10 s);
-  - an explanation for actions the policy refuses.
+  - an explanation for actions the policy refuses;
+  - no undo offered after add label.
 - **Acceptance:**
   - XCUITests: archive, then undo, restores the message; the palette
     moves the selection; a refused action shows its explanation;

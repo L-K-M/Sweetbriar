@@ -394,10 +394,11 @@ CREATE TABLE draft_revisions (                    -- immutable once written
   deferred to commit).
 - **Drafts with live attempts.** A draft may be saved again while an
   attempt is `held` or `queued`. An attempt changes its draft's state
-  (`sent`, `editing`) only if the draft's `current_revision_id` still
-  equals the attempt's `revision_id`. Otherwise the draft stays
-  `editing` with its newer revision, and nothing newer is lost or
-  marked sent. "Saved" is shown only
+  (`sent`, `editing`, `queued`) only if the draft's
+  `current_revision_id` still equals the attempt's `revision_id`.
+  Otherwise the draft keeps its state, whether its newer revision is
+  `editing` or itself `queued`, and nothing newer is lost or marked
+  sent. "Saved" is shown only
   after that commit.
 - **Discarding** is refused (`Conflict`) while the draft has an attempt
   in `held`, `queued`, `submitting` or `outcome_unknown` (05).
@@ -429,6 +430,7 @@ CREATE TABLE intents (
   wait_reason        TEXT CHECK (wait_reason IN ('auth','throttled','offline','dependency','breaker')),
   quarantine_reason  TEXT CHECK (quarantine_reason IN ('epoch_change','restore','ambiguous_match','config_change','breaker')),
   last_error         TEXT,
+  evidence_json      TEXT,                         -- server evidence recorded as it arrives, e.g. a COPYUID mapping (04)
   idempotency_key    TEXT NOT NULL UNIQUE,
   origin             TEXT NOT NULL CHECK (origin IN ('user','undo','import','system')),
   created_at         INTEGER NOT NULL,

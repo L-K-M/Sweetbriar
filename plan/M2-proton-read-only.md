@@ -108,22 +108,18 @@ signed in, with its TLS certificate exported.
     mailboxes, expunge, epoch change, disconnects) converges to the
     model's state;
   - an occurrence never vanishes on an incomplete observation;
-  - **UID reuse between header and body fetch:** the old occurrence
-    becomes `superseded`, the new one is inserted, and the old message's
-    body is never attached to the new one;
-  - after a restart, offline, a reply to a message whose body wasn't
-    downloaded still applies the reply-identity rules, from
-    `message_headers` (including `Delivered-To`) and `References`;
+  - **UID reuse:** the old occurrence becomes `superseded` and the new
+    one is inserted;
+  - `message_headers` persists the header literal and parsed fields,
+    including `Delivered-To` and `X-Original-To`, in the batch's
+    transaction;
   - the breaker opens on the default thresholds;
   - crash cuts during header batches resume without gaps or
     duplicates;
   - an epoch change quarantines targeting intents (inserted directly in
     the test);
   - schema-level cross-account rejection: inserting an occurrence whose
-    message belongs to another account fails;
-  - the body-attach identity check per policy: on the Bridge profile a
-    different `X-Pm-Internal-Id` is refused; on Dovecot a body whose
-    `Message-ID` differs from `message_headers` is refused.
+    message belongs to another account fails.
 
 ### M2.5 Body acquisition, coverage and health — M, linux + macos-ci
 
@@ -152,6 +148,11 @@ signed in, with its TLS certificate exported.
 - **Acceptance:**
   - a message in INBOX plus two labels is fetched exactly once (fake
     server counts fetches);
+  - **UID reuse between header and body fetch:** message B's body,
+    fetched at A's old UID, is never attached to A's logical message;
+  - the body-attach identity check per policy: on the Bridge profile a
+    different `X-Pm-Internal-Id` is refused; on Dovecot a body whose
+    `Message-ID` differs from `message_headers` is refused;
   - reading never sends `\Seen` (command trace);
   - coverage numbers match fixture expectations;
   - breaker Accept and Keep work end to end (UI test with the fake),
