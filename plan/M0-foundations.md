@@ -22,19 +22,21 @@ decided.
     `about.toml`/template, plus the drift check in `xtask ci` and
     `ci.yml`;
   - `CONTRIBUTING.md` ("This project doesn't accept contributions. You're
-    free to fork it under the Unlicense.");
+    free to fork it under the Unlicense or 0BSD.");
   - `AGENTS.md` (commands, the Linux vs macOS-CI split, the rules from
     plan/README);
   - `.gitignore`;
   - `.github/workflows/ci.yml`: `ubuntu-24.04`,
     `permissions: contents: read`, concurrency with cancel-in-progress
     for PRs, timeouts, actions pinned to SHAs, sccache, and a final
-    aggregate `ci` job (the required check, 11);
+    aggregate `ci` job (the merge gate, 11);
   - `.github/workflows/macos.yml` in its **Rust-only** first shape (on
     `macos-26`: `cargo test --target aarch64-apple-darwin`, plus the
     always-reporting `macos` job). M0.8 adds the FFI checks and M0.9 the
     app build.
-  - If owner task O2 says yes, `LICENSE-0BSD` plus a note in `README.md`.
+  - `license = "Unlicense OR 0BSD"` under `[workspace.package]`, with
+    `license.workspace = true` in every crate (the licence files already
+    exist).
 - **Acceptance:**
   - `cargo xtask ci` passes locally;
   - `ci.yml` and the Rust-only `macos.yml` pass on the PR;

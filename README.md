@@ -9,6 +9,8 @@ later.
   against.
 - [plan/](plan/README.md): the step-by-step implementation plan.
 
-Sweetbriar is released into the public domain under the
-[Unlicense](LICENSE). It doesn't accept contributions; you're free to
-fork it.
+Sweetbriar's own code is available under the [Unlicense](LICENSE)
+(public domain) or [0BSD](LICENSE-0BSD), your choice. 0BSD covers places
+where a public-domain dedication may not be recognised. Third-party
+components keep their own licences. The project doesn't accept contributions;
+you're free to fork it.

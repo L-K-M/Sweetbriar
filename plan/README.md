@@ -1,8 +1,7 @@
 # Sweetbriar implementation plan
 
 How the pilot defined in [spec/00-overview](../spec/00-overview.md) gets
-built, step by step. **AI agents implement; the owner reviews and
-merges.** Every step is one pull request with acceptance checks.
+built, step by step. **AI agents implement; the owner reviews.** Every step is one pull request with acceptance checks.
 
 **Status:** v0.1, 2026-10-12.
 
@@ -87,10 +86,11 @@ Each PR follows the owner's standing loop:
 2. Reviews run. The repository has no GitHub review bots, so helper
    reviews by Codex and Devin are posted as PR comments.
 3. Address the findings holistically.
-4. Repeat until there are no blocking findings, then merge.
+4. Repeat until there are no blocking findings and the `ci` and `macos`
+   checks are green, then merge.
 
-**Branch protection on `main`** requires the `ci` and `macos` checks
-(owner task O1).
+`main` has no branch protection (owner decision, 2026-10-12): agents
+check CI themselves before merging.
 
 ## Owner tasks
 
@@ -99,8 +99,8 @@ that needs it.
 
 | # | Task | Needed by |
 |---|---|---|
-| O1 | Enable branch protection on `main`, with required checks `ci` and `macos` once they exist | M0.1 / M0.9 |
-| O2 | Decide whether to offer the code as **"Unlicense OR 0BSD"** (research recommendation: 0BSD adds a conventional licence where a public-domain dedication may not be recognised, e.g. Switzerland) or keep the Unlicense alone | Any time; M0.1 adds the file if yes |
+| O1 | *Dropped (2026-10-12): no branch protection on `main`* | — |
+| O2 | *Decided (2026-10-12): "Unlicense OR 0BSD"; `LICENSE-0BSD` added* | — |
 | O3 | Run the CI-built app on your Mac (`xattr -dr com.apple.quarantine Sweetbriar.app`) and report problems | From M0.9 |
 | O4 | Judge the list prototype and composer probe on your Mac (checklists in M0) | M0.10, M0.11 |
 | O5 | Export a few Apple Mail mailboxes (Mailbox → Export Mailbox) for the import qualification | M1.Q |
