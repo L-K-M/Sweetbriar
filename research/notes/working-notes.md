@@ -1028,3 +1028,61 @@ announcement wins over Devin's "Aug 2026"); Devin's "Postgres reduces
 safety" and "immutable files never corrupt" are not carried forward
 (codex round 2). Codex's version trap: libsqlite3-sys 0.38.1 bundles
 SQLite 3.53.2, not the benchmarked 3.53.4. Curated in 13-database-engine.md.
+
+## System accounts and account colors: facts checked by Claude (2026-10-12)
+
+- **Accounts.framework** (Apple docs JSON): `ACAccountStore` deprecated
+  macOS 12 / iOS 15 ("Use appropriate non-Apple SDK"); the only account
+  types ever were Twitter, Facebook, Sina Weibo, Tencent Weibo, LinkedIn,
+  all deprecated macOS 10.13. No mail, Google, Exchange or iCloud access.
+- **GNOME Online Accounts** (gitlab master, latest release 3.58.1,
+  2026-04-12 per the release archive; the git tag is dated 2026-04-11): D-Bus `OAuth2Based.GetAccessToken` plus `ClientId` /
+  `ClientSecret` properties; `PasswordBased.GetPassword`; `Mail` exposes
+  `EmailAddress`, `ImapHost`, `ImapUserName`, `ImapUseSsl/Tls`,
+  `SmtpHost`, `SmtpAuthXoauth2` and more; `Account` has `AttentionNeeded`,
+  `EnsureCredentials`, `MailDisabled`. Providers: Google, Microsoft 365
+  (`ms_graph`), Exchange (EWS), IMAP/SMTP, Kerberos, ownCloud/Nextcloud,
+  WebDAV, Fedora (off by default); no Windows Live provider any more.
+  Google provider requests `https://mail.google.com/` with GNOME's client
+  id. Microsoft 365 provider requests Graph `mail.readwrite`, `mail.send`
+  and more with GNOME's client id `b155a604-…` or an org-supplied client
+  id and tenant id (University of Waterloo docs describe the latter).
+- **KDE KAccounts** (invent.kde.org, kaccounts-integration and
+  kaccounts-providers v26.08.2, Sept/Oct 2026): providers are Google,
+  ownCloud and Nextcloud only. The Google provider's scopes are userinfo,
+  calendar, tasks, contacts feed and YouTube upload; **no Gmail scope**, no
+  Microsoft provider, no IMAP/SMTP provider; Google calendar/contacts
+  service files sit in `services/disabled`. kdepim-runtime's build has no
+  KAccounts dependency (KMail's Akonadi resources do their own OAuth). In
+  June 2024 Google blocked KDE's client for Drive ("Google blocked us from
+  using this back in June because we weren't able justify our API usage",
+  KDE bug 480779, via discuss.kde.org thread 26007): a shared desktop OAuth
+  client can lose access, and GOA's Google client carries the same risk.
+- **MSAL + Microsoft Enterprise SSO plug-in**: MSAL apps use the plug-in
+  automatically on managed Macs; non-MSAL apps need bundle-id allow-listing
+  (`AppPrefixAllowList`) (Microsoft Learn).
+- **ASWebAuthenticationSession**: uses the default browser if it supports
+  the API (Safari, Chrome, Edge, Brave), otherwise Safari. Firefox support
+  was missing in older reports; superseded by the bug 1921535 entry below.
+- **macOS tinting APIs** (Apple docs JSON): `NSGlassEffectView` and
+  `.tintColor` macOS 26.0; `NSToolbarItem.backgroundTintColor` macOS 26.0;
+  SwiftUI `toolbarBackground(_:for:)` macOS 13; `containerBackground(_:for:)`
+  macOS 14; `glassEffect(_:in:)` macOS 26;
+  `NSWorkspace.accessibilityDisplayShouldDifferentiateWithoutColor` 10.10.
+- **Firefox and `ASWebAuthenticationSession`**: bug 1921535 RESOLVED FIXED
+  2026-09-02, target "157 Branch", `cf_status_firefox157=fixed`
+  (Bugzilla REST, checked by Claude); Firefox 157 released 2026-09-29
+  (whattrainisitnow.com calendar). eduVPN testers report it working only
+  in 158 betas, so end-to-end behaviour is unproven.
+- **GOA third-party policy** (goals page, checked by Claude): third-party
+  apps "should contact the GNOME Online Accounts maintainers as well as the
+  GNOME design and release team first"; branded apps should use their own
+  identities, not "GNOME". This corrects Claude's interim answer to the
+  owner that GOA could let Sweetbriar skip its own Google setup on Linux.
+- **KOnlineAccounts** (github.com/KDE/konlineaccounts): "prototype stage,
+  not ready for production"; Nextcloud, Mastodon, Google; consumers
+  include KDE PIM in master; no mail functionality documented.
+- **eM Client 11** account colors (blog, 2026-08-06): "your selected color
+  will be displayed in the top bar of new message and reply windows".
+  **Thunderbird 128** (2024-07-11): "Custom account colors are now shown in
+  the 'From' field when composing a message".

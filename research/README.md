@@ -32,6 +32,8 @@ checked.
 | [11](11-classic-clients.md) | Classic clients | What made Eudora, Mailsmith, Claris Emailer, Musashi and others beloved; ranked revival catalog |
 | [12](12-markdown-first.md) | Markdown-first mail | Should Sweetbriar normalize incoming mail into one rendering and compose in Markdown? (owner's proposal) |
 | [13](13-database-engine.md) | Database engine | SQLite, PostgreSQL, DuckDB or another engine for the local store? SQLite's quirks and how to neutralize them (owner's questions) |
+| [14](14-system-accounts.md) | System accounts | Can Sweetbriar use accounts signed in at system level: macOS Internet Accounts, GNOME Online Accounts, KDE? (owner's question) |
+| [15](15-account-colors.md) | Account colors | How to color-code accounts clearly, including the compose window (owner's requirement) |
 
 Per-client deep dives: [classics/eudora.md](classics/eudora.md),
 [classics/mailsmith.md](classics/mailsmith.md),

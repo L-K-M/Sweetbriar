@@ -48,3 +48,10 @@ D18–D21 are the owner's decisions; D22–D29 carry starting recommendations.
 | D27 | Update and downgrade policy | A reverted update after migration is a data-loss vector | Engineering |
 | D28 | Junk/spam strategy | Mac power users expect a SpamSieve-style hook | Engineering |
 | D29 | Accessibility, localization, telemetry, security boundaries | Shapes shared projections and what leaves the machine | Engineering |
+
+## Added 2026-10-12 (owner's follow-ups)
+
+| # | Decision | Recommendation |
+|---|---|---|
+| D30 | Use of system-level accounts | Own sign-in everywhere (D26). Optional sources: macOS contacts, MSAL enterprise SSO, managed presets; GOA settings import and password accounts after contacting GOA's maintainers; GOA OAuth only with a documented agreement; nothing from KDE yet. A `CredentialSource` abstraction keeps account identity independent of token source ([14](../14-system-accounts.md)) |
+| D31 | Account colors | One stored color per account (identity override); compose identity strip, Strong mode optional; incoming by occurrence, outgoing by identity; cross-account reply check; per-machine, exported ([15](../15-account-colors.md)) |

@@ -1,0 +1,127 @@
+[
+  {
+    "url": "https://developer.apple.com/documentation/appkit/nsglasseffectview/tintcolor",
+    "status": 200,
+    "bytes": 18614
+  },
+  {
+    "url": "https://developer.apple.com/documentation/appkit/nstoolbaritem/backgroundtintcolor",
+    "status": 200,
+    "bytes": 18668
+  },
+  {
+    "url": "https://developer.apple.com/documentation/accessibility/testing-system-accessibility-features-in-your-app",
+    "status": 200,
+    "bytes": 19278
+  },
+  {
+    "url": "https://developer.apple.com/documentation/usernotifications/unmutablenotificationcontent",
+    "status": 200,
+    "bytes": 18707
+  },
+  {
+    "url": "https://developer.apple.com/documentation/appkit/nsdocktile",
+    "status": 200,
+    "bytes": 18436
+  },
+  {
+    "url": "https://developer.apple.com/documentation/appkit/nsstatusitem",
+    "status": 200,
+    "bytes": 18326
+  },
+  {
+    "url": "https://developer.apple.com/documentation/appkit/nsimage/istemplate",
+    "status": 200,
+    "bytes": 18473
+  },
+  {
+    "url": "https://developer.apple.com/documentation/appkit/nswindow/backgroundcolor",
+    "status": 200,
+    "bytes": 18455
+  },
+  {
+    "url": "https://developer.apple.com/documentation/appkit/nswindow/titlebarappearstransparent",
+    "status": 200,
+    "bytes": 18747
+  },
+  {
+    "url": "https://developer.apple.com/documentation/appkit/nsglasseffectview",
+    "status": 200,
+    "bytes": 18432
+  },
+  {
+    "url": "https://developer.apple.com/documentation/swiftui/view/toolbarbackground(_:for:)-5ybst",
+    "status": 200,
+    "bytes": 18796
+  },
+  {
+    "url": "https://developer.apple.com/documentation/swiftui/view/toolbarbackgroundvisibility(_:for:)",
+    "status": 200,
+    "bytes": 18870
+  },
+  {
+    "url": "https://developer.apple.com/documentation/swiftui/view/containerbackground(_:for:)",
+    "status": 200,
+    "bytes": 18710
+  },
+  {
+    "url": "https://developer.apple.com/documentation/swiftui/containerbackgroundplacement/window",
+    "status": 200,
+    "bytes": 18590
+  },
+  {
+    "url": "https://developer.apple.com/documentation/swiftui/view/glasseffect(_:in:)",
+    "status": 200,
+    "bytes": 18473
+  },
+  {
+    "url": "https://developer.apple.com/documentation/swiftui/glass/tint(_:)",
+    "status": 200,
+    "bytes": 18374
+  },
+  {
+    "url": "https://developer.apple.com/documentation/appkit/nstitlebaraccessoryviewcontroller",
+    "status": 200,
+    "bytes": 18854
+  },
+  {
+    "url": "https://developer.apple.com/documentation/appkit/nswindowtab/accessoryview",
+    "status": 200,
+    "bytes": 18463
+  },
+  {
+    "url": "https://developer.apple.com/documentation/appkit/nsworkspace/accessibilitydisplayshoulddifferentiatewithoutcolor",
+    "status": 200,
+    "bytes": 19280
+  },
+  {
+    "url": "https://developer.apple.com/documentation/appkit/nspopupbutton",
+    "status": 200,
+    "bytes": 18310
+  },
+  {
+    "url": "https://developer.apple.com/documentation/appkit/nsmenuitem/image",
+    "status": 200,
+    "bytes": 18268
+  },
+  {
+    "url": "https://developer.apple.com/documentation/appkit/nsaccessibility-swift.struct/post(element:notification:userinfo:)",
+    "status": 200,
+    "bytes": 19245
+  },
+  {
+    "url": "https://developer.apple.com/documentation/accessibility/accessibility-inspector",
+    "status": 200,
+    "bytes": 18677
+  },
+  {
+    "url": "https://developer.apple.com/documentation/appkit/nscolorwell",
+    "status": 200,
+    "bytes": 18384
+  },
+  {
+    "url": "https://developer.apple.com/documentation/swiftui/colorpicker",
+    "status": 200,
+    "bytes": 18353
+  }
+]
