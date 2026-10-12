@@ -76,9 +76,11 @@ identity and history never depend on where its tokens come from.
    - `ASWebAuthenticationSession` runs Sweetbriar's own OAuth in the
      default browser if that browser supports the API, otherwise in Safari.
      Safari, Chrome, Edge and Brave support it.
-   - Firefox implemented it in bug 1921535 (fixed 2026-09-02, 157 branch).
-     Devin reports it shipping in Firefox 158 on 2026-10-13; the shipping
-     release is unverified.
+   - Firefox implemented it in bug 1921535 (fixed 2026-09-02), which
+     shipped in Firefox 157 on 2026-09-29 (Bugzilla status flags; Mozilla
+     release calendar). eduVPN testers report it working only in 158
+     betas (158 ships 2026-10-13), so treat Firefox support as available
+     but unproven until tested.
    - If the user is already signed in to Google or Microsoft there, adding
      an account can take one click. Consent, account choice and MFA can
      still appear.
@@ -119,7 +121,7 @@ migrates passwords between password managers), and App Intents.
 
 ### The API
 
-GOA 3.58.1 (2026-04-11; GNOME 50) is a per-user D-Bus service,
+GOA 3.58.1 (released 2026-04-12; GNOME 50) is a per-user D-Bus service,
 `org.gnome.OnlineAccounts`, with account objects under
 `/org/gnome/OnlineAccounts`. Claude checked the interface XML and provider
 sources:
@@ -198,8 +200,10 @@ still list it.
 - **OAuth token reuse needs a documented agreement.** This is
   Sweetbriar's own, stricter release gate, not a technical restriction of
   the API (Geary already calls `GetAccessToken`).
-  - The agreement should cover consent-screen attribution, permitted
-    consumers, scopes and policy responsibility.
+  - The agreement means written confirmation from the GOA maintainers,
+    covering consent-screen attribution, permitted consumers, scopes and
+    policy responsibility. Sweetbriar's identity is shown to the user at
+    first use.
   - GNOME's agreement doesn't transfer Google's verification or override
     tenant consent.
   - Then `GetAccessToken` becomes a Linux convenience path, with our own
@@ -357,7 +361,7 @@ consumers would.
 | Topic | Claim | Resolution |
 |---|---|---|
 | GOA as a Linux shortcut | Claude's interim answer to the owner: GOA could let Sweetbriar skip Google's sign-in setup on Linux; Devin: GOA as a "first-class convenience path" | **Corrected.** GNOME's policy asks third-party apps to contact its maintainers before any integration and to keep their own identity, and Google's verification doesn't transfer. Contact first for everything; token reuse also needs a documented agreement |
-| Firefox and `ASWebAuthenticationSession` | Earlier forum reports: unsupported; Devin: supported from Firefox 158 (2026-10-13) | Bug 1921535 fixed 2026-09-02 (157 branch); shipping release unverified |
+| Firefox and `ASWebAuthenticationSession` | Earlier forum reports: unsupported; Devin: supported from Firefox 158 (2026-10-13) | Bug 1921535 fixed 2026-09-02 and shipped in Firefox 157 (2026-09-29); working end to end only in 158 betas per eduVPN testers; untested here |
 | KDE | Devin: "weakly maintained"; Codex: in transition to KOnlineAccounts | KAccounts still ships releases; the successor is a prototype. For mail, neither helps |
 
 ## Open

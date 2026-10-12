@@ -32,8 +32,13 @@ says how.
   cross-account check and a frozen send route.
 - **Precedent is strong.** eM Client 11 shows the account color "in the
   top bar of new message and reply windows" (announced 2026-08-06).
-  Thunderbird 128 colors the compose From field (2024-07-11). Spark,
-  Airmail, Canary, Mailspring and Mimestream mark unified-inbox rows.
+  Thunderbird 128 colors the compose From field (2024-07-11).
+  [Spark](https://sparkmailapp.com/help/add-manage-accounts/choose-the-account-name-title-and-color),
+  [Airmail](https://help.airmailapp.com/en-us/article/preferences-appearance-airmail-for-macos-xob04q/),
+  [Canary](https://canarymail.io/help/unified-view-macos),
+  [Mailspring](https://github.com/Foundry376/Mailspring/pull/2240) and
+  [Mimestream](https://mimestream.com/help/user-guide/unified-inbox) mark
+  unified-inbox rows.
   No equivalent account- or From-following compose cue was verified for
   Apple Mail or desktop Outlook (unverified as an absence). Apple Mail users
   color messages with rules; Outlook for Mac colors whole profiles
@@ -118,7 +123,11 @@ color never replaces selection or focus colors.
      destination.
    The body is untouched and Undo still works. The color crossfades in
    about 150 ms, or instantly with Reduce Motion.
-6. **Send and queue:** freeze the account, identity, envelope sender and
+6. **Only sendable identities are offered.** The From list contains only
+   identities the account backend has validated as sendable, including
+   aliases and Send As or On Behalf Of grants. The strip displays that
+   choice and never extends it.
+7. **Send and queue:** freeze the account, identity, envelope sender and
    headers in the durable send attempt (D3). Changing the selection later
    can't reroute queued mail. A missing account or credential blocks the
    send visibly; nothing is silently substituted.
@@ -222,8 +231,10 @@ unverified.
   **and** `--headerbar-backdrop-color` for that window class. Without
   the backdrop variable, the cue disappears when the window loses focus.
 - **Accent:**
-  - libadwaita 1.6+ allows a per-widget accent override
-    (`--accent-bg-color`, `--accent-color`, `--accent-fg-color`). Sweetbriar
+  - libadwaita allows a per-widget accent override (`--accent-bg-color`,
+    `--accent-color`, `--accent-fg-color`), using the CSS variables
+    introduced in libadwaita 1.6 ([maintainer's 1.6 announcement](https://blogs.gnome.org/alicem/2024/09/13/libadwaita-1-6/),
+    2024-09-13). Sweetbriar
     doesn't use it: ordinary controls keep the system accent, and
     `AdwStyleManager` keeps reporting the system value anyway.
   - Variants come from `style-dark.css`, `style-hc.css` and

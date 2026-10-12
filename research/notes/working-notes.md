@@ -1035,8 +1035,8 @@ SQLite 3.53.2, not the benchmarked 3.53.4. Curated in 13-database-engine.md.
   macOS 12 / iOS 15 ("Use appropriate non-Apple SDK"); the only account
   types ever were Twitter, Facebook, Sina Weibo, Tencent Weibo, LinkedIn,
   all deprecated macOS 10.13. No mail, Google, Exchange or iCloud access.
-- **GNOME Online Accounts** (gitlab master, latest tag 3.58.1,
-  2026-04-11): D-Bus `OAuth2Based.GetAccessToken` plus `ClientId` /
+- **GNOME Online Accounts** (gitlab master, latest release 3.58.1,
+  2026-04-12 per the release archive; the git tag is dated 2026-04-11): D-Bus `OAuth2Based.GetAccessToken` plus `ClientId` /
   `ClientSecret` properties; `PasswordBased.GetPassword`; `Mail` exposes
   `EmailAddress`, `ImapHost`, `ImapUserName`, `ImapUseSsl/Tls`,
   `SmtpHost`, `SmtpAuthXoauth2` and more; `Account` has `AttentionNeeded`,
@@ -1070,8 +1070,10 @@ SQLite 3.53.2, not the benchmarked 3.53.4. Curated in 13-database-engine.md.
   macOS 14; `glassEffect(_:in:)` macOS 26;
   `NSWorkspace.accessibilityDisplayShouldDifferentiateWithoutColor` 10.10.
 - **Firefox and `ASWebAuthenticationSession`**: bug 1921535 RESOLVED FIXED
-  2026-09-02, target "157 Branch" (Bugzilla REST, checked by Claude);
-  shipping release unverified (Devin reports 158 on 2026-10-13).
+  2026-09-02, target "157 Branch", `cf_status_firefox157=fixed`
+  (Bugzilla REST, checked by Claude); Firefox 157 released 2026-09-29
+  (whattrainisitnow.com calendar). eduVPN testers report it working only
+  in 158 betas, so end-to-end behaviour is unproven.
 - **GOA third-party policy** (goals page, checked by Claude): third-party
   apps "should contact the GNOME Online Accounts maintainers as well as the
   GNOME design and release team first"; branded apps should use their own
