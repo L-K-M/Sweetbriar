@@ -236,8 +236,8 @@ subject to implementation evidence, not to further argument.
   so a plain licence covers places where the dedication may not hold.
 - **D20 Builders:** AI agents implement in small PR-sized steps; the
   owner reviews and merges. macOS builds and tests run on GitHub Actions
-  macOS runners. No branch protection on `main`: agents check CI before
-  merging.
+  macOS runners. No branch protection on `main`: agents merge only with
+  no blocking review findings and green `ci` and `macos` checks.
 - **D20 First live backend:** the owner's own provider is **Proton
   Mail**, so the first live backend is IMAP/SMTP through Proton Mail
   Bridge. This needs no Google or Microsoft app approvals, which stay a
@@ -250,7 +250,7 @@ These come before a credible schedule. The options and questions are in
 both round-2 reviews ([Codex §4](debate/03-review-codex-r2.md),
 [Devin §5](debate/03-review-devin-r2.md)).
 
-1. **D18 Licence and contributions.**
+1. **D18 Licence and contributions** (decided 2026-10-12, above).
    - Options: proprietary; source-available; MPL core + paid app;
      permissive core + paid app; GPL.
    - Will outside contributions be accepted, and under a CLA, a DCO or
@@ -259,8 +259,8 @@ both round-2 reviews ([Codex §4](debate/03-review-codex-r2.md),
 2. **D19 Business model.**
    - Options: annual, perpetual + upgrades, or support/sponsorship.
    - Reading, export and draft recovery survive expiry in every option.
-3. **D20 First users, team and runway.** This decision sets the scope of
-   everything else:
+3. **D20 First users, team and runway** (partly decided 2026-10-12,
+   above). This decision sets the scope of everything else:
    - Who is reachable, can authorize the app, and needs these workflows?
      The candidates:
      - small Microsoft 365 organizations with archives;

@@ -34,8 +34,9 @@ decided.
     `macos-26`: `cargo test --target aarch64-apple-darwin`, plus the
     always-reporting `macos` job). M0.8 adds the FFI checks and M0.9 the
     app build.
-  - `license = "Unlicense OR 0BSD"` in the workspace `Cargo.toml`,
-    inherited by every crate (the licence files already exist; O2).
+  - `license = "Unlicense OR 0BSD"` under `[workspace.package]`, with
+    `license.workspace = true` in every crate (the licence files already
+    exist; O2).
 - **Acceptance:**
   - `cargo xtask ci` passes locally;
   - `ci.yml` and the Rust-only `macos.yml` pass on the PR;

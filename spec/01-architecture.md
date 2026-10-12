@@ -183,8 +183,9 @@ is committed, and updates are their own PRs.
 
 - **Sweetbriar's own code** is offered as `Unlicense OR 0BSD`, at the
   recipient's option (`LICENSE`, `LICENSE-0BSD`; owner's decision, D18).
-  Every workspace crate declares `license = "Unlicense OR 0BSD"`. No outside contributions are
-  accepted; `CONTRIBUTING.md` says so.
+  The workspace `Cargo.toml` sets it under `[workspace.package]`, and
+  every crate opts in with `license.workspace = true`. No outside
+  contributions are accepted; `CONTRIBUTING.md` says so.
 - **Allowed in the linked runtime:** MIT, MIT-0, Apache-2.0,
   BSD-2-Clause, BSD-3-Clause, ISC, 0BSD, Unlicense, CC0-1.0, Zlib,
   Unicode-3.0.
