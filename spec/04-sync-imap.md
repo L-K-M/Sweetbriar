@@ -9,7 +9,7 @@ docs (checked 2026-10-12). They must be requalified on the owner's Mac
 
 ## Structure
 
-- **The generic IMAP transport** (the `sb-backend-imap` crate):
+- **The generic IMAP transport** (the `sb-imap` crate):
   connections, TLS, the IMAP codec, command and response handling, and
   capability discovery. It knows nothing about Proton.
 - **A provider policy** declares the dialect: multi-membership,
@@ -37,7 +37,7 @@ docs (checked 2026-10-12). They must be requalified on the owner's Mac
 | Bridge can return a synthetic "Message failed to build" substitute | Don't classify by subject. Coverage reports Bridge-visible inventory, not all Proton mail |
 | All Mail can be hidden, and can exclude Spam and Trash per Proton settings | Never treat All Mail as complete inventory. Sync every selectable mailbox |
 | UIDVALIDITY is assigned at mailbox creation. Bridge repair, cache loss and address-mode changes rebuild mailboxes (new epochs) | An epoch change is normal after a repair; handle it as described below |
-| Permanent flags: `\Seen`, `\Flagged`, `\Deleted`, `$Forwarded`. `\Seen` maps to read/unread; `\Flagged` maps to Starred. Arbitrary keywords aren't synced to Proton | Only `\Seen` and `\Flagged` are written in the pilot. Tags stay local |
+| Permanent flags: `\Seen`, `\Flagged`, `\Deleted`, `$Forwarded`, `Forwarded`; Proton metadata also yields `\Answered` and `\Draft`. `\Seen` maps to read/unread; `\Flagged` maps to Starred. Arbitrary keywords aren't synced to Proton | Only `\Seen` and `\Flagged` are written in the pilot; the others are read-only. Tags stay local |
 | COPY to `Labels/L` adds a label. **COPY to `Folders/F` can move.** MOVE folder → label keeps the folder. MOVE label → folder files and removes the label. MOVE from or to All Mail, and APPEND to All Mail, are disallowed. MOVE between Inbox and Sent is disallowed | The mutation matrix below |
 | **EXPUNGE on a label mailbox unlabels. On Trash or Drafts it can delete permanently** | **No EXPUNGE of any kind in the Proton policy** (pilot) |
 | SMTP saves the Sent copy itself. Its duplicate suppression is in memory only | `server_saves_sent=1`. Never APPEND to Sent (05) |
@@ -112,7 +112,8 @@ everything else follows the intervals above. Interactive fetches (opening
 a message) always run before background work.
 
 **Coverage** per mailbox records:
-- `headers_complete`: every UID below `uidnext` has an occurrence;
+- `headers_complete`: every UID the server reported below `uidnext` (in
+  the last full UID list) has an occurrence;
 - the count of logical messages with and without bodies.
 
 The UI says "Bridge-visible messages synced", never "all Proton mail".
@@ -123,7 +124,7 @@ When a mailbox's UIDVALIDITY changes:
 
 1. **Before anything else,** mark every occurrence of the old epoch
    `epoch_stale`. Suspend every intent targeting those occurrences: they
-   become `quarantined`, with the reason `epoch_change`.
+   become `quarantined` with `quarantine_reason='epoch_change'`.
 2. **Resync the mailbox** as new: new occurrences under the new epoch,
    grouped to logical messages by `X-Pm-Internal-Id`.
 3. **Rematch.** Old and new occurrences with the same `X-Pm-Internal-Id`
@@ -150,14 +151,18 @@ Classify each disappearance seen in an inventory:
 | **Unexplained disappearance** | Gone, with no reappearance and no intent | Breaker rules below |
 | **Incomplete observation** | Connection dropped, partial FETCH, Bridge still syncing | Never counts. Keep `present` |
 
-**Pause, conservative defaults:** an open breaker event pauses all
-destructive reconciliation and recovery GC for the account when any of
-these holds:
+**Pause, conservative defaults:** a breaker event is opened when any of
+these holds. It pauses destructive reconciliation for the account, and
+GC globally (03):
 - more than 25 unexplained disappearances in one mailbox in one pass;
 - unexplained disappearances of more than 50% of a mailbox holding at
   least 8 messages;
 - a mailbox going from at least 1 message to 0;
-- an epoch change.
+- an epoch change on more than one mailbox at once.
+
+An epoch change on a single mailbox opens no event. It still pauses
+destructive reconciliation for that mailbox until its resync and rematch
+finish.
 
 **While paused:** downloads, reading, drafting and other accounts
 continue. The user sees counts and examples and chooses **Accept**
@@ -171,6 +176,9 @@ traces later.
 connection.
 
 1. **Check preconditions.**
+   - The intent's `config_generation` equals the account's current one.
+     If the account was reconfigured since, the intent becomes
+     `quarantined` with `quarantine_reason='config_change'`.
    - The target occurrence's epoch equals the mailbox's current
      UIDVALIDITY, and the occurrence is `present`.
    - For `move`: the occurrence is still in the source mailbox, as of the
@@ -201,6 +209,7 @@ connection.
 | Remove label | — | Not in the pilot | Would need a qualified `UID EXPUNGE` on the label mailbox; deferred |
 | Delete permanently, empty Trash | — | Not in the pilot | No EXPUNGE in the Proton policy |
 | Move from Starred or All Mail | — | Resolved to the message's real folder occurrence first | If there's none, or it's ambiguous, the action is refused with an explanation |
+| Archive, move or trash from a label view (`Labels/*`) | — | Resolved to the message's folder occurrence (same `X-Pm-Internal-Id`, in INBOX, Archive, Spam, Trash or `Folders/*`), then `UID MOVE` of that occurrence | Proton keeps labels on a folder-to-folder move, so the message stays in the label view. The UI says so. If no folder occurrence is known, the action is refused |
 
 **Generic IMAP policy** (Dovecot in CI; generic accounts later):
 - `UID MOVE` when `MOVE` is advertised. Otherwise copy and delete: `UID
@@ -238,8 +247,9 @@ On every connect, the engine records the capabilities, the mailbox list
 with roles and the server `ID` in `imap_endpoints.capabilities_json`, plus
 a dated diagnostics entry.
 
-If the capabilities change, or a new Bridge version is detected (from
-`ID`), mutations for the account are suspended until a check passes:
+If the capabilities or the mailbox roles change (the `ID` response's
+version, when present, is recorded as a best-effort hint only), mutations
+for the account are suspended until a check passes:
 - MOVE and UIDPLUS are still advertised;
 - the role mapping is unchanged.
 

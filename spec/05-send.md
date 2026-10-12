@@ -40,11 +40,16 @@ and [raw/plan-proton-bridge/codex.md](../research/raw/plan-proton-bridge/codex.m
   autolinks, rendered with `pulldown-cmark`. **Raw HTML is disabled**:
   HTML in the source renders as literal text.
 - **Outgoing MIME,** built with `mail-builder`:
-  - **plain:** `text/plain; charset=utf-8; format=flowed`;
-  - **markdown:** `multipart/alternative` with `text/plain` (the Markdown
-    source, wrapped as flowed text) and `text/html` (rendered, sanitized
-    by the same allow-list as the reader, with inline CSS from a
-    built-in stylesheet);
+  - **plain:** `text/plain; charset=utf-8; format=flowed` by default.
+    A per-draft "literal" option sends without flowed wrapping, for
+    patches and code.
+  - **markdown:** `multipart/alternative` with:
+    - `text/plain`: **text rendered from the Markdown** (emphasis markers
+      removed, lists and quotes kept as plain-text conventions, links as
+      `text <url>`), not the raw source. The source stays local in the
+      draft revision (research 12);
+    - `text/html`: rendered, sanitized by the same allow-list as the
+      reader, with inline CSS from a built-in stylesheet;
   - **attachments:** `multipart/mixed`; inline images go in
     `multipart/related` with `cid:`;
   - no `text/markdown` part (research D16).
@@ -70,11 +75,15 @@ and [raw/plan-proton-bridge/codex.md](../research/raw/plan-proton-bridge/codex.m
                                                                                          crash before final reply recorded)
 ```
 
-1. **`send_draft(draft_id, revision_id)`** in one transaction:
-   - builds the MIME and publishes it to the object store;
-   - inserts `send_attempts` (`held`, `hold_until = now + undo window`)
-     and `send_recipients` (`pending`);
-   - sets the draft to `queued`.
+1. **`send_draft(draft_id, revision_id)`:**
+   - **First,** outside any transaction, build the MIME and publish it to
+     the object store (03). If publishing fails, nothing else happens.
+   - **Then,** in one transaction:
+     - insert `send_attempts` (`held`, `hold_until = now + undo window`)
+       and `send_recipients` (`pending`, one row per address, 02);
+     - set the draft to `queued`.
+     - If this transaction fails, the published object is an orphan, and
+       GC handles it.
    - The frozen bytes, identity, envelope and recipients never change
      afterwards. Editing the draft again creates a new revision and,
      if sent, a new attempt.

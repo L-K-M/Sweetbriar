@@ -69,9 +69,13 @@ restores its draft by `draft_id`.
 
 ## Reader
 
-- **HTML:** sanitized sender layout, shown in **one reused `WKWebView`**:
+- **HTML:** sanitized sender layout, shown in **one reused `WKWebView`
+  per reading pane** (each main window and message window has its own):
+  - a non-persistent data store (`WKWebsiteDataStore.nonPersistent()`);
   - JavaScript off;
-  - `WKContentRuleList` blocks every network load;
+  - `WKContentRuleList` blocks every network load. If rule-list
+    compilation fails, the reader **fails closed**: it shows plain text
+    only;
   - a custom `WKURLSchemeHandler` for `sweetbriar-cid:` serves only
     resources from the current message's lease;
   - a navigation generation counter drops responses for a previously
@@ -90,8 +94,12 @@ restores its draft by `draft_id`.
   - the "Received in <account>" chip in the account color with its
     label;
   - tags and the note.
-- **Links** show their real destination on hover. A mismatch between the
-  link text's domain and its target domain shows a warning.
+- **Links** show their real destination on hover. A warning appears
+  when:
+  - the link text's domain differs from the target's;
+  - the target is a raw IP address;
+  - the target URL contains user info (`user@host`).
+  - IDN confusable checks come later.
 
 ## Composer
 
@@ -114,7 +122,7 @@ restores its draft by `draft_id`.
   7 s, set in settings) **Undo Send** cancels it.
 - **Composer probes (M0):** CJK marked text, right-to-left text, and undo
   across formatting. Pasted HTML, inline images and the external editor
-  come in M3.
+  come in M4.
 
 ### Identity strip and account colors
 

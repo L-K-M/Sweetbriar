@@ -61,8 +61,10 @@ local drafts. No network yet.
 - **Deliverables:**
   - `d_list_rows` maintenance in the same transaction as occurrence
     changes;
-  - `open_window` for `Mailbox`, `Unified` and `Thread` specs (`Search`
-    comes in M1.6), with every anchor;
+  - `open_window` for `Mailbox`, `Unified` (paging over
+    `d_list_rows_unified` by role) and `Thread` specs (`Search` comes in
+    M1.6), with every anchor;
+  - batched per-page tag lookup;
   - `subscribe` / `next`, with coalescing and `ResetRequired`;
   - JWZ threading into `d_threads`.
 - **Acceptance:**
@@ -116,8 +118,11 @@ local drafts. No network yet.
   - Linux tests: every hostile fixture renders with no `<script>`,
     `on*` attributes, forms, iframes, remote URLs or CSS `url()` other
     than `sweetbriar-cid:`;
-  - macOS UI test: a canary fixture with a remote image makes no
-    network request (`URLProtocol` canary counter is 0);
+  - macOS UI test: a canary fixture whose images, CSS and links point at a
+    local HTTP server started by the test (`http://127.0.0.1:<port>/…`)
+    produces **zero connections** to that server while the message is
+    displayed. `URLProtocol` can't observe WebKit's out-of-process
+    loads, so it isn't used;
   - switching messages quickly never shows the previous message's
     resources (generation test);
   - **owner:** reading real imported mail looks right.
@@ -187,8 +192,11 @@ local drafts. No network yet.
   - after restore: accounts `paused`, intents `quarantined`, attempts in
     `held`, `queued` or `submitting` become `outcome_unknown`, and a new
     incarnation UUID;
-  - restore never deletes the previous data root (it's moved to
-    `recovery/`).
+  - restore never deletes the previous data root: it's renamed to
+    `<data root>.preserved-<old incarnation>`;
+  - GC's grace clock: an orphan gets a `gc_grace` pin on first sight and
+    is removed only after the grace period, and a re-referenced object
+    loses its pin.
 
 ### M1.9 Local drafts and the composer — L, linux + macos-ci
 

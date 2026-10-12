@@ -16,7 +16,8 @@ registered in the resolution.
   |---|---|
   | `subject` | |
   | `from` | address and display name |
-  | `to_cc` | |
+  | `to_text` | |
+  | `cc_text` | |
   | `body_authored` | text before the detected quote or signature boundary |
   | `body_quoted` | quoted text |
   | `body_signature` | signature |
@@ -44,7 +45,8 @@ CREATE TABLE d_search_docs (             -- one row per acquisition with extract
   state             TEXT NOT NULL CHECK (state IN ('indexed','partial','failed')),
   subject           TEXT,
   from_text         TEXT,
-  to_cc_text        TEXT,
+  to_text           TEXT,
+  cc_text           TEXT,
   body_authored     TEXT,
   body_quoted       TEXT,
   body_signature    TEXT,
@@ -52,7 +54,7 @@ CREATE TABLE d_search_docs (             -- one row per acquisition with extract
 ) STRICT;
 
 CREATE VIRTUAL TABLE d_search_fts USING fts5(
-  subject, from_text, to_cc_text, body_authored, body_quoted, body_signature, attachment_names,
+  subject, from_text, to_text, cc_text, body_authored, body_quoted, body_signature, attachment_names,
   content='d_search_docs', content_rowid='doc_id',
   tokenize = "unicode61 remove_diacritics 2 tokenchars '@.-_+'",
   prefix = '2 3'
@@ -79,8 +81,8 @@ CREATE TABLE d_index_queue (              -- work for the index job; durable wat
   - **Pilot limitation:** CJK text is indexed by `unicode61`, which
     doesn't segment words, so CJK search is weak. This is stated in the
     coverage UI.
-- **Ranking:** `bm25(d_search_fts, 4.0, 2.0, 1.0, 1.0, 0.25, 0.1, 0.75)`
-  weights subject, from, to_cc, authored, quoted, signature and
+- **Ranking:** `bm25(d_search_fts, 4.0, 2.0, 1.0, 1.0, 1.0, 0.25, 0.1, 0.75)`
+  weights subject, from, to, cc, authored, quoted, signature and
   attachment names. These are starting values, validated against the
   judged task set.
 - **Rebuild:** dropping all `d_search_*` tables and re-queueing every
@@ -107,7 +109,7 @@ shared by the search field, saved views and, later, rules.
 | Node | Meaning |
 |---|---|
 | `text` | Full-text query (FTS5) |
-| `field` | `from`, `to`, `cc`, `subject`, `body`, `attachment`, each with `contains`, `is` or `domain` |
+| `field` | `from`, `to`, `cc`, `subject`, `body`, `attachment`, each with `contains`, `is` or `domain`. `contains` uses FTS5 on the field's column. `is` and `domain` match the parsed address lists and header values in `d_message_summary` exactly, never the tokenized text |
 | `flag` | `seen`, `flagged`, `answered`, `draft` |
 | `tag`, `has` | `has` takes `attachment` or `note` |
 | `date` | `before`, `after`, `on`, `within_days`; always with an explicit IANA timezone; relative dates also carry the evaluation clock |

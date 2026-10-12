@@ -22,6 +22,7 @@ crates/
   sb-imap/                 L5  IMAP transport + provider policies (proton_bridge, generic_imap)
   sb-smtp/                 L5  SMTP submission
   sb-platform/             L5  secret store, clock, filesystem seams, paths, platform facts
+  sb-types/                L6  shared vocabulary only: ids, timestamps, email addresses, byte ranges; no logic, no dependencies on other sb-* crates
   sb-test-support/         dev-only: fake IMAP/SMTP server, fixtures loader, crash-cut harness
   sb-bindgen/              tool: uniffi-bindgen-swift pinned to the workspace uniffi version
 xtask/                     cargo xtask: ci, check-layers, ffi, check-ffi, dist (later)
@@ -62,6 +63,9 @@ it.**
             one narrow, typed façade over the leaves; maps leaf types and errors
                                  │
  L5   sb-store     sb-mime     sb-imap     sb-smtp     sb-platform
+                                 │
+ L6                          sb-types
+            plain shared data types used by more than one leaf
 ```
 
 **Rules:**
@@ -75,9 +79,11 @@ it.**
    - `sb-imap` doesn't parse MIME: it returns bytes.
    - `sb-mime` doesn't touch the store.
    - `sb-store` doesn't know about IMAP.
-   - Shared vocabulary types (ids, timestamps) live in the lowest crate
-     that needs them and are re-exported upward through `resources`.
-     There is no `sb-common` crate.
+   - Shared vocabulary types (ids, timestamps, email addresses, byte
+     ranges) live in `sb-types` (L6), directly below the leaves. Leaves
+     may use it; everything above reaches those types only through
+     re-exports in the layer directly below. `sb-types` holds data types
+     and trivial constructors only, so it can't become a catch-all.
 3. **Types climb through re-exports.** A DTO defined in L5 reaches L3
    only through a `pub use` in `resources`. L2 defines its own DTOs for
    the API surface. No engine or store type crosses into L1.

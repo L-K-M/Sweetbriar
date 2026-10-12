@@ -38,9 +38,8 @@ and D24, D29.
 - **Later connections** require an exact match with that pin. On a
   mismatch the account pauses with a clear message, for example after a
   Bridge reinstall. Pins are never updated silently.
-- **Loopback only:** Bridge connections are allowed only to loopback
-  addresses (127.0.0.1, ::1) unless the user explicitly configures
-  otherwise.
+- **Loopback only:** Bridge connections go to `127.0.0.1` only. `::1`
+  isn't used: Bridge's certificate names only the IPv4 address.
 - **Generic IMAP** (*later*) uses the platform verifier. Certificate
   errors are never accepted silently.
 
@@ -57,8 +56,10 @@ and D24, D29.
 - **Fuzzing:** `cargo-fuzz` targets cover the MIME parser entry points,
   the mbox splitter and the query parser. They run nightly in CI.
 - **Rendering:**
-  - sanitized HTML: `ammonia` with an allow-list, then `lol_html` to
-    rewrite `cid:` URLs and strip remote URLs;
+  - sanitized HTML: `lol_html` first rewrites `cid:` URLs to
+    `sweetbriar-cid:` and records and removes remote URLs (this count
+    feeds `remote_content_blocked`), then `ammonia` sanitizes with an
+    allow-list;
   - no scripts, forms, iframes, objects, `<base>` or meta refresh;
   - CSS is restricted, with no `url()` except `sweetbriar-cid:`.
   - The `WKWebView` setup in 08 adds a second, independent layer.

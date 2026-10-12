@@ -6,14 +6,16 @@ verified before it completes.
 
 ### M5.1 Proton mutation matrix — L, linux
 
-- **Goal:** `move_messages`, `delete_to_trash` and `add_tag`-to-label
-  (via `COPY`) under the Proton policy; the generic policy for Dovecot.
+- **Goal:** `move_messages`, `delete_to_trash` and `add_label` (via
+  `COPY` to `Labels/*`) under the Proton policy; the generic policy for
+  Dovecot. Local tags (`add_tag`) never touch the server.
 - **Spec:** 04 (Proton policy table, generic IMAP policy, Undo), 07
   (Messages commands).
 - **Depends on:** M4 complete.
 - **Deliverables:**
-  - policy checks: allowed source and destination classes; Starred and
-    All Mail resolved to the real folder occurrence or refused;
+  - policy checks: allowed source and destination classes; Starred, All
+    Mail and label views resolved to the real folder occurrence or
+    refused (04 matrix);
   - pre-acquisition: the body is published before any move;
   - `UID MOVE` execution with destination verification by
     `X-Pm-Internal-Id`;

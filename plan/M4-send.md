@@ -32,14 +32,18 @@ inspectable Out Box. Unknown outcomes are never retried automatically.
 - **Deliverables:**
   - `sb-mime::compose`:
     - plain: flowed;
-    - Markdown: `pulldown-cmark` with raw HTML disabled, sanitized HTML
-      with inline CSS, `multipart/alternative`;
+    - Markdown: `pulldown-cmark` with raw HTML disabled; a
+      `multipart/alternative` with a plain-text rendering of the Markdown
+      (not the raw source) and sanitized HTML with inline CSS;
+    - the per-draft literal plain-text option, without flowed wrapping;
     - attachments: `multipart/mixed` and `related`;
     - headers per 05;
   - the local Proton limit checks (25 MB, 100 files).
 - **Acceptance:**
   - `insta` snapshots for representative drafts;
   - HTML in Markdown source appears as literal text in the HTML part;
+  - the `text/plain` alternative contains no Markdown syntax markers for
+    emphasis or headings (snapshot);
   - generated messages re-parse with `sb-mime::parse` to the same
     content;
   - limits block with an explanation.

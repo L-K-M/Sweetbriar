@@ -136,19 +136,22 @@ handles. A crash after it leaves a valid reference.
 
 ### Garbage collection
 
-GC removes an object only if **all** of these hold, checked in one
-read transaction plus a final re-check under the writer:
+**The grace clock** is a `gc_grace` pin:
+- When GC first finds an object with no referencing row, it inserts
+  `object_pins(gc_grace)` with `created_at = now`.
+- If a reference reappears before removal, GC deletes that pin.
+
+GC removes an object only if **all** of these hold, checked in one read
+transaction plus a final re-check under the writer:
 
 - no row references it: `acquisitions`, `draft_revisions` attachments,
   `send_attempts.mime_sha256`;
-- no `object_pins` row exists for it;
-- no backup generation `in_progress` exists;
-- it is older than the grace period (default 7 days) since its last
-  reference was removed, or since publication if it was never
-  referenced.
+- its only pins are `gc_grace` pins, the oldest of which is older than the
+  grace period (default 7 days). Any other pin kind blocks removal;
+- no backup generation `in_progress` exists.
 
-GC never runs while the breaker has an open event (04) or while
-integrity is in doubt.
+GC never runs while **any** account has an open breaker event (04), or
+while integrity is in doubt.
 
 ## Backup generations
 
@@ -203,8 +206,10 @@ Restoring creates a **new incarnation** and runs quarantined. The steps:
 
 1. **Verify.** Check the chosen generation against its manifest: database
    hash, every object hash.
-2. **Preserve.** Move the current data root aside into `recovery/`.
-   Nothing is deleted.
+2. **Preserve.** Rename the current data root to a sibling directory,
+   `<data root>.preserved-<old incarnation>`. Nothing is deleted. The
+   preserved root is listed in Settings → Backups until the user removes
+   it.
 3. **Install.** Copy the generation in and set `store_meta.incarnation`
    to a new UUID.
 4. **Quarantine.**

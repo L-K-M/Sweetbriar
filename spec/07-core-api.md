@@ -56,10 +56,10 @@ async fn Core::shutdown(self);   // flush writer, release the lease
 | Accounts | `add_bridge_account(params)`, `update_account(id, params)`, `pause_account(id)`, `resume_account(id)`, `disconnect_account(id)`, `set_account_appearance(id, appearance)` |
 | Identities | `upsert_identity(params)`, `set_default_identity(id)` |
 | Import/export | `start_import(paths, target)` → job id, `cancel_job(id)`, `start_export(scope, format, destination)` |
-| Messages | `set_flags(selection, add, remove)`, `move_messages(selection, to_mailbox)`, `delete_to_trash(selection)`, `add_tag(selection, tag)`, `remove_tag(selection, tag)`, `set_note(message_id, text)` |
+| Messages | `set_flags(selection, add, remove)`, `move_messages(selection, to_mailbox)`, `delete_to_trash(selection)`, `add_label(selection, label_mailbox)` (server label, 04), `add_tag(selection, tag)` and `remove_tag(selection, tag)` (local only), `set_note(message_id, text)` (one note per message; empty text removes it) |
 | Drafts | `create_draft(context)` → draft id (`context` is new, reply, reply-all or forward, with source occurrence), `save_draft(draft_id, base_revision_id, content)` → revision id, `discard_draft(id)` |
 | Sending | `send_draft(draft_id, revision_id)` → attempt id, `cancel_send(attempt_id)` (only in `held`), `resolve_unknown_send(attempt_id, resolution)` |
-| Intents | `release_intents(ids)`, `cancel_intents(ids)` |
+| Intents | `release_intents(ids)`, `retarget_intent(id, occurrence_id)` (after an epoch change; the new target must be the same logical message), `cancel_intents(ids)` |
 | Safety | `resolve_breaker_event(id, resolution)` |
 | Views | `upsert_saved_view(params)`, `delete_saved_view(id)` |
 | Backup | `start_backup()`, `list_backups()`, `start_restore(generation_id)` |
@@ -76,7 +76,8 @@ async fn Core::shutdown(self);   // flush writer, release the lease
 
 ```rust
 async fn open_window(spec: WindowSpec, anchor: Anchor, limit: u32) -> Result<Window, CoreError>;
-// WindowSpec: Mailbox(id) | Account(id, role) | Unified(role) | Search(query_json) | View(id) | Thread(thread_id)
+// WindowSpec: Mailbox(id) | Unified(role) | Search(query_json) | View(id) | Thread(thread_id)
+// (Account(id, role) is later; the sidebar uses Mailbox and Unified.)
 // Anchor: Top | After(cursor) | Before(cursor) | Around(occurrence_id)
 struct Window {
     window_id: WindowId,

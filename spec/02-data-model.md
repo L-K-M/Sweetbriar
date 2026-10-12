@@ -32,9 +32,15 @@ Rests on research D1, D2, D3, D14, D22, D23 and D31
 8. **Never delete authoritative rows to "clean up".** Rows carry a state;
    only an explicit user action or a retention policy removes them, and
    always through an intent or a recorded operation.
-9. **Revisions:** every user-editable row has `revision INTEGER` that
-   increments on change. This reserves the field for later cross-device
-   sync (D23).
+9. **Revisions:** every row holding user-authored settings or metadata
+   (accounts, identities, appearance, tags, notes, views, settings) has
+   `revision INTEGER` that increments on change. This reserves the field
+   for later cross-device sync (D23). Drafts are versioned by immutable
+   revisions instead; intents and send attempts are device-local records
+   and never sync.
+10. **Colors** are stored as canonical lowercase `#rrggbb`. Inputs,
+    including the palette's published uppercase values, are lowercased
+    before validation.
 
 ## Store metadata
 
@@ -43,8 +49,10 @@ CREATE TABLE store_meta (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL
 ) STRICT;
--- keys: 'schema_version', 'store_uuid', 'incarnation' (new UUID after every
--- restore), 'created_at', 'app_version_last_opened'
+-- keys: 'store_uuid', 'incarnation' (new UUID after every restore),
+-- 'created_at', 'app_version_last_opened', 'last_migrated_by' (app version).
+-- The schema version is PRAGMA user_version, owned by the migration runner;
+-- it is not duplicated here.
 ```
 
 ## Accounts and identities
@@ -113,7 +121,7 @@ CREATE TABLE identity_appearance (
   messages live there, so every message belongs to exactly one account.
 - An account's **state** changes only through the engine.
   `disconnected` keeps all data; it only stops network activity
-  (research D30).
+  (research D3 and D25: removal never deletes).
 - **`sendable`:**
   - `validated`: the backend confirmed the address can send.
   - `provisional`: user-provisioned, unconfirmed, as with delegated
@@ -245,9 +253,9 @@ CREATE TABLE message_tags (
   PRIMARY KEY (message_id, tag_id)
 ) STRICT;
 
-CREATE TABLE notes (
+CREATE TABLE notes (                              -- one note per message in the pilot
   note_id     TEXT PRIMARY KEY,
-  message_id  INTEGER NOT NULL REFERENCES logical_messages(message_id),
+  message_id  INTEGER NOT NULL UNIQUE REFERENCES logical_messages(message_id),
   body_source TEXT NOT NULL,                       -- Markdown
   created_at  INTEGER NOT NULL,
   updated_at  INTEGER NOT NULL,
@@ -342,6 +350,7 @@ CREATE TABLE intents (
   attempts           INTEGER NOT NULL DEFAULT 0,
   next_attempt_at    INTEGER,
   wait_reason        TEXT CHECK (wait_reason IN ('auth','throttled','offline','dependency','breaker')),
+  quarantine_reason  TEXT CHECK (quarantine_reason IN ('epoch_change','restore','ambiguous_match','config_change','breaker')),
   last_error         TEXT,
   idempotency_key    TEXT NOT NULL UNIQUE,
   origin             TEXT NOT NULL CHECK (origin IN ('user','undo','import','system')),
@@ -357,8 +366,11 @@ CREATE INDEX intents_runnable ON intents(account_id, state, next_attempt_at);
 - **States:**
   - `parked`: the intent failed N times or hit a terminal error; it shows
     on the health surface.
-  - `quarantined`: the user must decide, after an ambiguous rematch or a
-    breaker event.
+  - `quarantined`: the user must decide. `quarantine_reason` records why:
+    an epoch change, a restore, an ambiguous match, a configuration change
+    (the account's `config_generation` moved past the intent's), or a
+    breaker event. It is set exactly when `state='quarantined'`, which the
+    engine enforces.
   - `wait_reason` separates waiting from failing.
 - The execution and reconciliation rules are in
   [04-sync-imap](04-sync-imap.md).
@@ -393,7 +405,11 @@ CREATE TABLE send_recipients (
 ) STRICT;
 ```
 
-The state machine and its rules are in [05-send](05-send.md).
+- **One row per address.** An address appearing in To and Cc is one SMTP
+  recipient (one `RCPT TO`). Addresses are compared case-insensitively
+  in the domain part. `kind` records the most visible field it appeared
+  in (`to` > `cc` > `bcc`); the frozen MIME keeps the headers as written.
+- The state machine and its rules are in [05-send](05-send.md).
 
 ## Commands, receipts and settings
 
@@ -466,6 +482,7 @@ CREATE TABLE d_message_summary (                  -- parsed once per acquisition
   in_reply_to     TEXT,
   references_json TEXT,
   list_id         TEXT,
+  delivered_to_json TEXT,                         -- Delivered-To and X-Original-To values, for reply identity (05)
   has_attachments INTEGER NOT NULL CHECK (has_attachments IN (0,1)),
   snippet         TEXT                            -- bounded, plain text
 ) STRICT;
@@ -488,6 +505,7 @@ CREATE TABLE d_thread_members (
 CREATE TABLE d_list_rows (
   occurrence_id INTEGER PRIMARY KEY REFERENCES occurrences(occurrence_id),
   mailbox_id    INTEGER NOT NULL,
+  mailbox_role  TEXT,                              -- copied from mailboxes.role, for unified views
   account_id    TEXT NOT NULL,
   sort_date     INTEGER NOT NULL,
   message_id    INTEGER NOT NULL,
@@ -500,22 +518,29 @@ CREATE TABLE d_list_rows (
 ) STRICT;
 CREATE INDEX d_list_rows_window ON d_list_rows(mailbox_id, sort_date DESC, occurrence_id DESC,
   sender, subject, snippet, unread, flagged, has_attachments);
+CREATE INDEX d_list_rows_unified ON d_list_rows(mailbox_role, sort_date DESC, occurrence_id DESC,
+  account_id, sender, subject, snippet, unread, flagged, has_attachments);
 ```
 
 - **`d_list_rows`** is the covering index for keyset-paginated mailbox
   windows (research 03, 13). It is derived, but kept transactionally
   current, because the list must reflect a flag change instantly.
+  Unified views ("all inboxes") page over `d_list_rows_unified` by role.
+- **Tags in list rows** are fetched per page in one batched query by
+  `message_id`, after the window's rows are read. They aren't
+  denormalized into `d_list_rows`.
 - **Threads** are computed locally (JWZ plus provider hints when present).
   Manual thread merge and split, and their merge log, are *later*.
 - **Search tables** are in [06-search](06-search.md).
 
 ## Migrations
 
-- `store_meta.schema_version` starts at 1.
+- **The schema version** is `PRAGMA user_version`, starting at 1, owned by
+  the migration runner. After each migration the engine writes
+  `store_meta.last_migrated_by`.
 - **Each migration:**
   - is one Rust function in one transaction;
-  - is followed by `PRAGMA foreign_key_check` and
-    `PRAGMA integrity_check (quick)`;
+  - is followed by `PRAGMA foreign_key_check` and `PRAGMA quick_check`;
   - is forward-only.
 - **Before any migration that rewrites or drops data,** the engine takes a
   `VACUUM INTO` snapshot, keeping the last two.
