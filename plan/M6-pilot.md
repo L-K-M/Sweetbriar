@@ -82,7 +82,10 @@ is met.
   - the nightly power-loss simulation on both layers: the `Fs` seam for
     objects, and the test SQLite VFS for the database and WAL (11).
 - **Acceptance:**
-  - **owner:** budgets met at p95 with the real mailbox;
+  - **owner:** the spec/08 budgets met at p95 with the real mailbox, and
+    the spec/06 search targets (cached exact search p95 ≤ 100 ms and
+    p99 ≤ 250 ms during sync, new mail searchable within 2 s at p95,
+    index rebuild ≤ 15 min), with mailbox size and sync load recorded;
   - VoiceOver completes the gate tasks;
   - pulling power during sync and during a draft save preserves every
     acknowledged save;

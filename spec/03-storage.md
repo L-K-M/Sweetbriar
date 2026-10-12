@@ -7,9 +7,10 @@ Rests on research [04-data-safety](../research/04-data-safety.md),
 ## On-disk layout
 
 ```
+<data root>.lock                  exclusive ownership lease, a sibling of the data root, so it survives
+                                  the root being renamed during restore
 <data root>/                      macOS: ~/Library/Application Support/Sweetbriar/
                                   Linux: $XDG_DATA_HOME/sweetbriar/
-  store.lock                      exclusive ownership lease (flock / F_SETLK)
   state.sqlite (+ -wal, -shm)     the database (02)
   objects/
     tmp/                          in-progress writes, same volume
@@ -24,8 +25,9 @@ Rests on research [04-data-safety](../research/04-data-safety.md),
   refuses with an explanation if the data root is under iCloud Drive,
   Dropbox, OneDrive or a network mount, and offers to choose another
   location.
-- **One process owns the store.** It holds `store.lock` for its lifetime,
-  through the `Fs` seam's exclusive lock (01).
+- **One process owns the store.** It holds `<data root>.lock` for its
+  lifetime, through the `Fs` seam's exclusive lock (01). The lock file is
+  outside the data root, so it stays valid while restore swaps roots.
   A second instance fails to get the lock, so it doesn't open the
   database for writing. It reports `Locked` and tells the UI to focus
   the running instance.
@@ -127,6 +129,17 @@ Only after `publish` returns may a database transaction reference the
 object. A crash before that transaction leaves an orphan, which GC
 handles. A crash after it leaves a valid reference.
 
+**Reservation against GC.** `publish` returns an existing object's id
+when the bytes are already stored. That object could be an expired
+orphan GC is about to remove. So:
+- before `publish` returns, it inserts `object_pins(reservation, <token>)`
+  through the writer, serialized with GC's final re-check;
+- the transaction that references the object deletes that reservation in
+  the same commit;
+- if the caller aborts, the reservation is deleted, or expires after 24 h
+  (startup cleanup).
+- GC honours reservations like any non-grace pin.
+
 ### Reads and verification
 
 - `open` checks the length and computes the SHA-256 while streaming.
@@ -210,20 +223,35 @@ backups/<generation-id>/
 
 Restoring creates a **new incarnation** and runs quarantined. The steps:
 
+The process holds `<data root>.lock` throughout.
+
 1. **Verify.** Check the chosen generation against its manifest: database
    hash, every object hash.
-2. **Preserve.** Rename the current data root to a sibling directory,
-   `<data root>.preserved-<old incarnation>`. Nothing is deleted. The
-   preserved root is listed in Settings → Backups until the user removes
-   it.
-3. **Install.** Copy the generation in and set `store_meta.incarnation`
-   to a new UUID.
-4. **Quarantine.**
-   - Mark every account `paused`.
-   - Mark every `pending`, `in_flight` or `parked` intent `quarantined`.
-   - Mark every send attempt in `held`, `queued` or `submitting` as
+2. **Stage.** Copy the generation into a sibling staging root,
+   `<data root>.restoring-<new incarnation>`, with the publication
+   protocol's flushes.
+3. **Quarantine in staging,** before the restored store can ever open as
+   the live one. In one transaction on the staging database:
+   - set `store_meta.incarnation` to the new UUID;
+   - mark every account `paused`;
+   - mark every `pending`, `in_flight` or `parked` intent `quarantined`
+     with `quarantine_reason='restore'`;
+   - mark every send attempt in `held`, `queued` or `submitting` as
      `outcome_unknown`. Their outcome after the backup is unknown, and
      they are never resent automatically.
+   - Then flush the staging root.
+4. **Swap, restart-safe.**
+   - Write a marker file `<data root>.restore-pending` naming the staging
+     root and the preserved name, and flush it.
+   - Rename the current data root to `<data root>.preserved-<old
+     incarnation>`, then the staging root to `<data root>`. Flush the
+     parent directory, then remove the marker.
+   - **On startup, a marker means a swap was interrupted.** If the data
+     root is missing and staging exists, finish the swap. If both the
+     data root and staging exist, the swap hadn't started: discard
+     staging and restart the restore on request.
+   - Nothing is deleted. The preserved root is listed in Settings →
+     Backups until the user removes it.
 5. **Reconcile.** For each account the user resumes:
    - discard IMAP cursors for that account (`uidvalidity`, `highest_modseq`
      and `uidnext` set to NULL), forcing a full resync;

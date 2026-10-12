@@ -75,7 +75,12 @@ inspectable Out Box. Unknown outcomes are never retried automatically.
     `failed`, unless its class is on the qualified pre-submission list
     (empty until M2.6 evidence adds entries);
   - an account reconfiguration between queueing and submission keeps the
-    attempt `queued` until `confirm_send_route`;
+    attempt `queued` until `confirm_send_route`, and `cancel_send` works
+    while it waits;
+  - queue R1, save R2, then R1 is accepted: the draft stays `editing` with
+    R2, which isn't marked sent. Cancelling R1 likewise leaves R2 intact;
+  - an attempt whose account or identity doesn't match its revision's
+    route snapshot is rejected by the schema (negative test);
   - partial RCPT rejection keeps accepted recipients `sent` and offers a
     new attempt only for rejected ones;
   - a definite pre-acceptance failure gives `failed`, with retry only on

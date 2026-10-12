@@ -15,8 +15,9 @@ Rests on research D1, D2, D3, D14, D22, D23 and D31
      acquisitions and authoritative tables: parsed summaries, threads,
      search.
    - A rebuild never touches authoritative tables.
-2. **All tables are `STRICT`.** Every connection runs with
-   `foreign_keys=ON` (03-storage).
+2. **Every application-owned ordinary table is `STRICT`.** SQLite's
+   internal tables (`sqlite_*`) and FTS5 virtual and shadow tables can't
+   be. Every connection runs with `foreign_keys=ON` (03-storage).
 3. **Ids:**
    - Entities the user or other machines may refer to (accounts,
      identities, drafts, intents, tags, notes, views) use a `TEXT` UUID
@@ -207,14 +208,33 @@ CREATE TABLE occurrences (
   f_draft          INTEGER NOT NULL DEFAULT 0 CHECK (f_draft IN (0,1)),
   f_deleted        INTEGER NOT NULL DEFAULT 0 CHECK (f_deleted IN (0,1)),
   keywords         TEXT NOT NULL DEFAULT '[]',         -- canonical JSON array, sorted ($Forwarded, $MailFlagBit0 …)
-  state            TEXT NOT NULL CHECK (state IN ('present','vanish_pending','vanished','epoch_stale')),
+  state            TEXT NOT NULL CHECK (state IN ('present','vanish_pending','vanished','epoch_stale','superseded')),
   first_seen_at    INTEGER NOT NULL,
   last_seen_at     INTEGER NOT NULL,
-  UNIQUE (mailbox_id, uidvalidity, uid),
   FOREIGN KEY (mailbox_id, account_id) REFERENCES mailboxes(mailbox_id, account_id),
   FOREIGN KEY (message_id, account_id) REFERENCES logical_messages(message_id, account_id)
 ) STRICT;
 CREATE INDEX occ_by_message ON occurrences(message_id);
+-- A locator is unique only among current bindings: a UID reused within the same
+-- epoch gets a new row, and the old row becomes 'superseded' (04).
+CREATE UNIQUE INDEX occ_current_locator ON occurrences(mailbox_id, uidvalidity, uid)
+  WHERE state IN ('present','vanish_pending');
+
+CREATE TABLE message_headers (                    -- headers fetched at sync, before any body; keyed by logical message
+  message_id        INTEGER PRIMARY KEY REFERENCES logical_messages(message_id),
+  raw_fields        BLOB NOT NULL,                -- the exact header-fields literal fetched (04 step 3)
+  header_message_id TEXT,
+  subject           TEXT,
+  from_json         TEXT,
+  to_json           TEXT,
+  cc_json           TEXT,
+  delivered_to_json TEXT,                         -- Delivered-To and X-Original-To
+  date_header       INTEGER,
+  in_reply_to       TEXT,
+  references_json   TEXT,
+  list_id           TEXT,
+  fetched_at        INTEGER NOT NULL
+) STRICT;
 ```
 
 - **Account scoping is enforced by the schema** where it is fixed:
@@ -224,10 +244,12 @@ CREATE INDEX occ_by_message ON occurrences(message_id);
   - a draft's identity, and a send attempt's identity, must match their
     account;
   - a send attempt's revision must belong to its draft.
-  - Not schema-enforced: a draft revision records the identity chosen at
-    that revision, which may differ from the draft's current account
-    after the user switches From. The engine validates the identity at
-    send time.
+  - a draft's current revision belongs to that draft, and a revision's
+    base is in the same draft;
+  - each revision snapshots its route (account and identity); a send
+    attempt's draft, revision, account and identity must equal that
+    revision's snapshot. Historical revisions keep their original route
+    when the user later switches From.
 - **Flags live on occurrences** (D2). The same Proton message shown in
   `INBOX` and `Labels/Work` through Bridge has two occurrences with
   independent flags.
@@ -240,6 +262,15 @@ CREATE INDEX occ_by_message ON occurrences(message_id);
   - Equal bytes or an equal Message-ID **never** group occurrences. They
     may only be recorded as a correspondence hint (`d_correspondence`,
     later).
+- **Headers before bodies.** `message_headers` keeps the header fields
+  fetched during sync, so list rows, threading, offline replies and
+  reply-identity rules work before a body is acquired. It is refreshed
+  when the body arrives. It isn't derived from acquisitions, so it is
+  kept and backed up.
+- **UID reuse.** If the same `(mailbox, uidvalidity, uid)` later names a
+  different provider message (a different `X-Pm-Internal-Id`), the old
+  row becomes `superseded` and a new row is inserted. History isn't
+  rewritten.
 - **Unread state shown in a list is per occurrence:** the occurrence
   shown in that mailbox. Mixed views ("All unread") count a logical
   message as unread if any present occurrence is unread, and say so.
@@ -297,7 +328,8 @@ they are never written to the server in the pilot.
 
 ```sql
 CREATE TABLE seen_addresses (                     -- derived from mail; feeds completion
-  email          TEXT PRIMARY KEY,                -- lowercased address
+  canonical      TEXT PRIMARY KEY,                -- local part as written + '@' + lowercased domain
+  email          TEXT NOT NULL,                   -- the address exactly as last seen (local-part case kept, RFC 5321 §2.4)
   display_name   TEXT,
   last_seen_at   INTEGER NOT NULL,
   times_sent_to  INTEGER NOT NULL DEFAULT 0,
@@ -324,16 +356,20 @@ CREATE TABLE drafts (
   created_at        INTEGER NOT NULL,
   updated_at        INTEGER NOT NULL,
   CHECK ((account_id IS NULL) = (identity_id IS NULL)),
-  FOREIGN KEY (identity_id, account_id) REFERENCES identities(identity_id, account_id)
+  FOREIGN KEY (identity_id, account_id) REFERENCES identities(identity_id, account_id),
+  FOREIGN KEY (current_revision_id, draft_id) REFERENCES draft_revisions(revision_id, draft_id)
+    DEFERRABLE INITIALLY DEFERRED
 ) STRICT;
 
 CREATE TABLE draft_revisions (                    -- immutable once written
   revision_id     TEXT PRIMARY KEY,
   draft_id        TEXT NOT NULL REFERENCES drafts(draft_id),
   seq             INTEGER NOT NULL,
-  base_revision_id TEXT REFERENCES draft_revisions(revision_id), -- for conflict branches
-  identity_id     TEXT REFERENCES identities(identity_id), -- NULL until a sending identity is chosen
+  base_revision_id TEXT,                           -- for conflict branches; must be in the same draft
+  account_id      TEXT,                           -- route snapshot: the identity's account at this revision
+  identity_id     TEXT,                           -- NULL until a sending identity is chosen
   compose_format  TEXT NOT NULL CHECK (compose_format IN ('plain','markdown')),
+  plain_flowed    INTEGER NOT NULL DEFAULT 1 CHECK (plain_flowed IN (0,1)), -- 0 = literal plain text (05)
   subject         TEXT NOT NULL,
   to_json         TEXT NOT NULL,
   cc_json         TEXT NOT NULL,
@@ -342,12 +378,23 @@ CREATE TABLE draft_revisions (                    -- immutable once written
   attachments_json TEXT NOT NULL,                  -- list of {object_sha256, filename, media_type, size}
   created_at      INTEGER NOT NULL,
   UNIQUE (draft_id, seq),
-  UNIQUE (revision_id, draft_id)
+  UNIQUE (revision_id, draft_id),
+  UNIQUE (revision_id, draft_id, account_id, identity_id),
+  CHECK ((account_id IS NULL) = (identity_id IS NULL)),
+  FOREIGN KEY (base_revision_id, draft_id) REFERENCES draft_revisions(revision_id, draft_id),
+  FOREIGN KEY (identity_id, account_id) REFERENCES identities(identity_id, account_id)
 ) STRICT;
 ```
 
 - **Saving** a draft inserts a revision and updates
-  `drafts.current_revision_id` in one transaction. "Saved" is shown only
+  `drafts.current_revision_id` in one transaction (the foreign key is
+  deferred to commit).
+- **Drafts with live attempts.** A draft may be saved again while an
+  attempt is `held` or `queued`. An attempt changes its draft's state
+  (`sent`, `editing`) only if the draft's `current_revision_id` still
+  equals the attempt's `revision_id`. Otherwise the draft stays
+  `editing` with its newer revision, and nothing newer is lost or
+  marked sent. "Saved" is shown only
   after that commit.
 - **Drafts without an identity** (both `account_id` and `identity_id`
   NULL) are allowed, so local drafts work before any sending account
@@ -417,8 +464,8 @@ CREATE TABLE send_attempts (
   sent_copy         TEXT NOT NULL CHECK (sent_copy IN ('server_saves','pending','filed','failed')),
   created_at        INTEGER NOT NULL,
   updated_at        INTEGER NOT NULL,
-  FOREIGN KEY (revision_id, draft_id) REFERENCES draft_revisions(revision_id, draft_id),
-  FOREIGN KEY (identity_id, account_id) REFERENCES identities(identity_id, account_id)
+  FOREIGN KEY (revision_id, draft_id, account_id, identity_id)
+    REFERENCES draft_revisions(revision_id, draft_id, account_id, identity_id)
 ) STRICT;
 
 CREATE TABLE send_recipients (
@@ -485,7 +532,7 @@ CREATE TABLE backup_generations (
 
 CREATE TABLE object_pins (                        -- objects GC must keep regardless of references
   object_sha256 TEXT NOT NULL,
-  pin_kind      TEXT NOT NULL CHECK (pin_kind IN ('backup_in_progress','gc_grace','send_attempt','quarantine')),
+  pin_kind      TEXT NOT NULL CHECK (pin_kind IN ('backup_in_progress','gc_grace','reservation','send_attempt','quarantine')),
   pin_ref       TEXT NOT NULL,
   created_at    INTEGER NOT NULL,
   PRIMARY KEY (object_sha256, pin_kind, pin_ref)
@@ -551,7 +598,8 @@ CREATE INDEX d_list_rows_unified ON d_list_rows(mailbox_role, sort_date DESC, oc
 
 - **`d_list_rows`** is the covering index for keyset-paginated mailbox
   windows (research 03, 13). `sort_date` is the occurrence's
-  `internal_date`, else the parsed `Date` header, else `first_seen_at`. It is derived, but kept transactionally
+  `internal_date`, else `message_headers.date_header`, else
+  `first_seen_at`. It is derived, but kept transactionally
   current, because the list must reflect a flag change instantly.
   Unified views ("all inboxes") page over `d_list_rows_unified` by role.
 - **Tags in list rows** are fetched per page in one batched query by

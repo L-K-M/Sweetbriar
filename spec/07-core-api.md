@@ -97,8 +97,10 @@ struct ListRow {
 - Rows carry **display fields only**: no MIME trees and no bodies. The
   account color is resolved by the shell from `account_id` through
   `appearance()`.
-- **Paging** is by keyset cursor `(sort_date, occurrence_id)`, never
-  `OFFSET`.
+- **Paging** is by keyset cursor, never `OFFSET`. Cursors are opaque and
+  sort-specific: `(sort_date, occurrence_id)` for date order, `(score,
+  occurrence_id)` for relevance order. They are bound to the window's
+  generation, so a stale cursor gets `ResetRequired`.
 - **Other queries:**
   - `get_message(message_id)` → headers, occurrences, tags, note and
     body availability;

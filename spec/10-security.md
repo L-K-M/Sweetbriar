@@ -61,9 +61,11 @@ and D24, D29.
   the mbox splitter and the query parser. They run nightly in CI.
 - **Rendering:**
   - sanitized HTML: `lol_html` first rewrites `cid:` URLs to
-    `sweetbriar-cid:` and records and removes remote URLs (this count
-    feeds `remote_content_blocked`), then `ammonia` sanitizes with an
-    allow-list;
+    `sweetbriar-cid:` and records and removes remote **resource** URLs
+    (`img`, `srcset`, CSS, fonts, media; this count feeds
+    `remote_content_blocked`), then `ammonia` sanitizes with an
+    allow-list. Hyperlinks (`a href`) to `http`, `https` and `mailto` are
+    kept as user-activated links;
   - no scripts, forms, iframes, objects, `<base>` or meta refresh;
   - CSS is restricted, with no `url()` except `sweetbriar-cid:`.
   - The `WKWebView` setup in 08 adds a second, independent layer.

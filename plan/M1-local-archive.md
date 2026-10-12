@@ -15,7 +15,9 @@ local drafts. No network yet.
   - `sb-mime::parse(bytes, limits) -> Parsed | Partial | Failed`, with
     `catch_unwind` around `mail-parser`;
   - summary extraction (headers, snippet, attachment presence);
-  - `cargo-fuzz` targets (MIME, mbox splitter) wired into `nightly.yml`;
+  - `cargo-fuzz` targets (MIME, mbox splitter) wired into `nightly.yml`,
+    using a **pinned nightly toolchain** for fuzzing only (in
+    `fuzz/rust-toolchain.toml`); everything else stays on stable;
   - the fixtures corpus (`fixtures/eml/`): multipart variants, charsets,
     format=flowed, TNEF, malformed, deep nesting, huge headers.
 - **Acceptance:**
@@ -48,6 +50,8 @@ local drafts. No network yet.
     (idempotent by source file hash plus offset);
   - two identical messages in one mbox produce one acquisition and **two**
     occurrences, and export writes both;
+  - two byte-identical mbox files with different names (`Inbox.mbox`,
+    `Archive.mbox`) both import, into their own mailboxes;
   - crash cuts at random points during import, then resume, give the
     same final counts and no duplicates (11 harness, 50 seeds in CI);
   - the report lists found, imported, duplicate and rejected counts and
@@ -145,7 +149,9 @@ local drafts. No network yet.
   - `Search` window spec;
   - `coverage(scope)`;
   - `seen_addresses` population from parsed summaries (received mail),
-    feeding composer completion;
+    feeding composer completion; local-part case preserved;
+  - a query-parser fuzz target added to the nightly fuzz job;
+  - opaque, sort-specific cursors (date order, relevance order);
   - macOS: the search field with chips round-tripping the text syntax,
     and a results list with the coverage note.
 - **Acceptance:**
@@ -157,6 +163,11 @@ local drafts. No network yet.
   - filters apply before limit (a small account's hit survives next to
     a large one);
   - rebuilding the index reproduces identical results;
+  - re-extraction updates FTS5 through the delete-then-insert sequence,
+    and a crash mid-batch reruns it (06);
+  - relevance paging across three pages, whose dates are in a different
+    order from their scores, never repeats or skips a hit;
+  - completion keeps `User@example.net` and `user@example.net` distinct;
   - 100k-message search latency is recorded.
 
 ### M1.7 Export — S, linux
@@ -208,7 +219,15 @@ local drafts. No network yet.
     `<data root>.preserved-<old incarnation>`;
   - GC's grace clock: an orphan gets a `gc_grace` pin on first sight and
     is removed only after the grace period, and a re-referenced object
-    loses its pin.
+    loses its pin;
+  - **republish race:** publishing bytes equal to an expired orphan takes
+    a reservation that GC honours, so the referencing commit never
+    points to a removed object (interleaving test);
+  - restore: crash cuts at every step (staging, quarantine, marker, both
+    renames) leave either the old store or the quarantined restored
+    store, never an unquarantined one;
+  - a second process can't open the store during the swap (the lock is
+    outside the data root);
 
 ### M1.9 Local drafts and the composer — L, linux + macos-ci
 

@@ -21,7 +21,8 @@ verified before it completes.
     `X-Pm-Internal-Id`;
   - add-label via `UID COPY` to `Labels/*`;
   - the generic policy: `UID MOVE`, or `COPY` + `STORE \Deleted` +
-    `UID EXPUNGE` only with UIDPLUS;
+    `UID EXPUNGE` only with UIDPLUS; its live target check uses the
+    UIDVALIDITY/UID binding, since Dovecot has no Proton header (04);
   - undo intents with the "moved elsewhere since" refusal;
   - the mutation-matrix suite added to the real-Bridge lane (M2.6), run
     with the folder-unlabel feature flag both ways.

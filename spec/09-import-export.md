@@ -41,10 +41,12 @@ user-granted permission path.
    - **Messages are not.** Every source message gets its own occurrence,
      even when two identical messages sit in the same mailbox, so
      multiplicity survives export.
-   - **Re-import and resume** are idempotent by **source identity**: the
-     source file's SHA-256 plus the message's offset, or the EML file's
-     path and hash, recorded in `acquisition_sources.source_ref`. A
-     source message already imported isn't imported again.
+   - **Re-import and resume** are idempotent by **source identity**:
+     the source file's path and SHA-256, the target mailbox and the
+     message's offset (for EML, the file's path and hash), recorded in
+     `acquisition_sources.source_ref`. A source message already imported
+     isn't imported again. Two byte-identical mbox files under different
+     names are two sources, and both are imported.
    - Byte duplicates are counted in the report.
 4. **Rejects.** Unparseable messages are still stored as acquisitions,
    since bytes are kept even when parsing fails, and flagged

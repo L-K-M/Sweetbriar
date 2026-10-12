@@ -107,6 +107,12 @@ signed in, with its TLS certificate exported.
     mailboxes, expunge, epoch change, disconnects) converges to the
     model's state;
   - an occurrence never vanishes on an incomplete observation;
+  - **UID reuse between header and body fetch:** the old occurrence
+    becomes `superseded`, the new one is inserted, and the old message's
+    body is never attached to the new one;
+  - after a restart, offline, a reply to a message whose body wasn't
+    downloaded still applies the reply-identity rules, from
+    `message_headers` (including `Delivered-To`) and `References`;
   - the breaker opens on the default thresholds;
   - crash cuts during header batches resume without gaps or
     duplicates;
@@ -126,7 +132,10 @@ signed in, with its TLS certificate exported.
   - the body queue (opened messages first, then newest) using
     `BODY.PEEK[]`, publish, link and index;
   - `coverage()` and `health()`;
-  - `pause_account`, `resume_account` and `disconnect_account`;
+  - `update_account` (endpoint, credentials, certificate re-trust; keeps
+    the account UUID and bumps `config_generation`), `pause_account`,
+    `resume_account` and `disconnect_account`, tested through the public
+    API, including resuming after a restore;
   - the "Recovery: messages no longer on the server" list (`epoch_stale`
     and `vanished` occurrences with no counterpart);
   - the diagnostics package (redacted, previewed, saved by the user; 10),

@@ -112,8 +112,9 @@ and [raw/plan-proton-bridge/codex.md](../research/raw/plan-proton-bridge/codex.m
      `rejected_permanent`/`rejected_transient`.
    - **`DATA`:**
      - **250 final reply** → attempt `accepted`. Every `rcpt_accepted`
-       recipient becomes `sent` (accepted by Bridge, not delivered), and
-       the draft becomes `sent`.
+       recipient becomes `sent` (accepted by Bridge, not delivered). The
+       draft becomes `sent` only if its `current_revision_id` still
+       equals the attempt's revision (02, drafts with live attempts).
      - **Any other final reply to `DATA`, on a Bridge account** →
        `outcome_unknown`. Bridge submits to Proton (creates a draft, then
        calls `SendDraft`) before it answers. Its generic 554 can follow a

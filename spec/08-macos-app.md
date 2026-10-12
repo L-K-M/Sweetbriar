@@ -82,9 +82,12 @@ restores its draft by `draft_id`.
     resources from the current message's lease;
   - a navigation generation counter drops responses for a previously
     shown message.
-- **Remote content** stays blocked by default. "Load remote content"
-  applies per message or per sender; the choice is stored in settings,
-  never inferred.
+- **Remote content** (images, CSS, fonts that would load automatically)
+  is always blocked in the pilot. A "Load remote content" option, per
+  message or per sender, is *later*: it needs a separate rendition and
+  rule-list policy.
+- **Hyperlinks** stay clickable. A click opens the link in the default
+  browser after the warnings below; the reader itself never navigates.
 - **Plain text** renders natively in an `NSTextView` (TextKit 2):
   literal, no Markdown interpretation, with quotes styled by depth.
 - **Reading view:** a toggle, off by default. It renders the semantic

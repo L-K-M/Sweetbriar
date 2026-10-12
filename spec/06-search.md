@@ -75,6 +75,15 @@ CREATE TABLE d_index_queue (              -- work for the index job; durable wat
   that move mechanical.
 - **Enqueueing:** acquisitions are queued in the same transaction that
   inserts them, so the index can never silently miss one.
+- **Keeping FTS5 in step:** `d_search_fts` is an external-content table,
+  so SQLite doesn't index `d_search_docs` changes by itself. In one writer
+  transaction per batch, the index job:
+  1. for a re-extraction, issues FTS5's `'delete'` command with the old
+     values;
+  2. writes the `d_search_docs` row;
+  3. inserts the new values into `d_search_fts`;
+  4. deletes the `d_index_queue` entry.
+  - A crash leaves the queue entry, and the batch reruns.
 - **Tokenizer:** plain `unicode61`, so `alice@example.com` indexes as
   `alice`, `example`, `com` and `A-1234` as `a`, `1234`. Searching for
   `example` or `1234` finds them.
@@ -156,7 +165,11 @@ shared by the search field, saved views and, later, rules.
   query before ranking and limit, so a small account's hits can't vanish
   under a large one's.
 - **Results stream:** the first 50 hits are ranked or date-sorted; more
-  are fetched on scroll with keyset paging over `(rank or date, id)`.
+  are fetched on scroll with keyset paging.
+  - Date-sorted results page by `(sort_date, occurrence_id)`.
+  - Relevance results page by `(bm25 score, occurrence_id)`, within the
+    same query generation. A new generation restarts paging.
+  - The cursor is opaque to the shell (07).
 - **Freshness:** a newly acquired message is searchable within 2 s at
   p95 while the index job keeps up. Flag and mailbox predicates read live
   authoritative tables, so they are always current.

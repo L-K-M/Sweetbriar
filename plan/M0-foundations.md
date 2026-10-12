@@ -5,11 +5,11 @@ skeleton with the publication protocol under fault injection; the core
 API reachable from a minimal macOS app; the list and composer prototypes
 decided.
 
-### M0.1 Repository bootstrap — S, linux
+### M0.1 Repository bootstrap — S, linux + macos-ci
 
 - **Goal:** the Cargo workspace and agent tooling exist, and Linux CI is
   green on an empty core.
-- **Spec:** 01 (layout, licence policy), 11 (CI `ci.yml`).
+- **Spec:** 01 (layout, licence policy), 11 (CI `ci.yml`, `macos.yml`).
 - **Deliverables:**
   - `Cargo.toml` (workspace, resolver 3, edition 2024);
     `rust-toolchain.toml` (1.99.0); `.cargo/config.toml`;
@@ -28,11 +28,15 @@ decided.
   - `.gitignore`;
   - `.github/workflows/ci.yml`: `ubuntu-24.04`,
     `permissions: contents: read`, concurrency with cancel-in-progress
-    for PRs, timeouts, actions pinned to SHAs, sccache.
+    for PRs, timeouts, actions pinned to SHAs, sccache;
+  - `.github/workflows/macos.yml` in its **Rust-only** first shape (on
+    `macos-26`: `cargo test --target aarch64-apple-darwin`, plus the
+    always-reporting `macos` job). M0.8 adds the FFI checks and M0.9 the
+    app build.
   - If owner task O2 says yes, `LICENSE-0BSD` plus a note in `README.md`.
 - **Acceptance:**
   - `cargo xtask ci` passes locally;
-  - `ci.yml` passes on the PR;
+  - `ci.yml` and the Rust-only `macos.yml` pass on the PR;
   - `cargo deny check` passes with the allow-list;
   - the notices drift check passes, and fails when a dependency is added
     without regenerating.
@@ -94,14 +98,15 @@ decided.
 - **Acceptance:**
   - a fresh store reaches version 1;
   - `foreign_key_check` and `integrity_check` are empty or `ok`;
-  - a test asserts every ordinary table is `STRICT` (via
-    `pragma_table_list`, excluding virtual tables and FTS5 shadow
-    tables);
+  - a test asserts every application-owned ordinary table is `STRICT`
+    (via `pragma_table_list` with `type='table'` and
+    `name NOT GLOB 'sqlite_*'`, which excludes virtual, shadow and
+    internal tables);
   - the schema version is read from `PRAGMA user_version`, and a store
     with a higher version yields `NewerStore` naming
     `store_meta.last_migrated_by`.
 
-### M0.5 Object store and publication protocol — L, linux
+### M0.5 Object store and publication protocol — L, linux + macos-ci
 
 - **Goal:** the `ObjectStore` trait and its file implementation follow the
   publication protocol, with fault tests.
@@ -120,9 +125,10 @@ decided.
 - **Acceptance:**
   - publish → open returns identical bytes;
   - publishing the same bytes twice keeps one file;
-  - injected short write, `ENOSPC`, `EIO` on sync, rename failure and
-    directory-sync failure each return an error and leave no published
-    object;
+  - every injected failure (short write, `ENOSPC`, `EIO` on sync, rename
+    failure, directory-sync failure) returns an error and creates no
+    reference. Before the rename, no object exists. After it, a complete,
+    hash-valid orphan may remain. Retrying the publication succeeds;
   - crash cuts at every protocol step leave either no object or a
     complete verified one;
   - on macOS, `sb-platform`'s `Fs::sync_all` calls `fcntl(F_FULLFSYNC)`
@@ -170,7 +176,8 @@ decided.
 ### M0.8 FFI exports and bindings — M, linux (+ macos-ci for the XCFramework)
 
 - **Goal:** `sb-ffi` exports the M0.7 API through UniFFI. Swift bindings
-  are generated and committed; macOS CI builds the XCFramework.
+  are generated and committed; macOS CI builds the XCFramework. This step
+  extends `macos.yml` with `xtask ffi` and `check-ffi`.
 - **Spec:** 07 (Threading, cancellation and FFI rules), 01 (sb-ffi,
   sb-bindgen).
 - **Depends on:** M0.7.
@@ -201,7 +208,9 @@ decided.
     `withTaskCancellationHandler` and `@MainActor` batching;
   - a main window showing a setting read from the core;
   - a Swift Testing unit test for the adapter;
-  - `.github/workflows/macos.yml` per 11, with path filters.
+  - `macos.yml` extended to the full shape in 11: XcodeGen, `xcodebuild`
+    build and test, and the path-filtered build jobs behind the
+    always-reporting `macos` job.
 - **Acceptance:**
   - `macos.yml` is green: Rust aarch64 tests, `xtask ffi`, `check-ffi`,
     `xcodegen`, then `xcodebuild build test` with strict concurrency and

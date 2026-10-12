@@ -84,15 +84,24 @@ There is no CONDSTORE, so sync per mailbox works like this:
 3. **Fetch new messages.** UIDs from the stored `uidnext` upward, in
    batches of 250, fetching `(UID FLAGS INTERNALDATE RFC822.SIZE
    BODY.PEEK[HEADER.FIELDS (DATE FROM TO CC SUBJECT MESSAGE-ID IN-REPLY-TO
-   REFERENCES LIST-ID X-PM-INTERNAL-ID)])`.
+   REFERENCES LIST-ID DELIVERED-TO X-ORIGINAL-TO X-PM-INTERNAL-ID)])`.
    - For each, the engine finds or creates the logical message by
-     `(account, X-Pm-Internal-Id)`, then inserts the occurrence and
-     updates `d_list_rows`.
+     `(account, X-Pm-Internal-Id)`, stores the header literal and parsed
+     fields in `message_headers` (02), inserts the occurrence and updates
+     `d_list_rows`.
+   - If the locator `(mailbox, uidvalidity, uid)` already has a current
+     occurrence for a **different** `X-Pm-Internal-Id`, that occurrence
+     becomes `superseded` (UID reuse, 02) and the new one is inserted.
    - **Each batch commits with its `uidnext` checkpoint in one
      transaction,** so a crash resumes without gaps or duplicates.
 4. **Acquire bodies.** A separate queue fetches `BODY.PEEK[]` for logical
    messages without an acquisition.
    - Order: messages the user opened first, then newest first.
+   - **Before attaching a body,** the engine checks that the mailbox's
+     epoch is unchanged and that the fetched message's `X-Pm-Internal-Id`
+     equals the logical message's `provider_key`. On a mismatch the body
+     isn't attached: the mailbox gets a header resync and any intents on
+     that occurrence are quarantined (`ambiguous_match`).
    - Each body is published (03), then the acquisition is inserted,
      linked to the logical message, and queued for search.
    - A body is never fetched again for another occurrence of the same
@@ -184,20 +193,30 @@ connection.
      `quarantined` with `quarantine_reason='config_change'`.
    - The target occurrence's epoch equals the mailbox's current
      UIDVALIDITY, and the occurrence is `present`.
-   - **Live identity check:** in the selected mailbox, `UID FETCH <uid>
-     (BODY.PEEK[HEADER.FIELDS (X-PM-INTERNAL-ID)])` returns the logical
-     message's `provider_key`. A UID can be reused within the same
-     epoch, as Bridge has done historically. A mismatch, or missing or
-     ambiguous evidence, quarantines the intent with
-     `quarantine_reason='ambiguous_match'`. This applies to every
-     mutation (`set_flags`, `move`, `copy`).
+   - **Live target check, defined by the provider policy,** before every
+     mutation (`set_flags`, `move`, `copy`):
+     - **`proton_bridge`:** in the selected mailbox, `UID FETCH <uid>
+       (BODY.PEEK[HEADER.FIELDS (X-PM-INTERNAL-ID)])` must return the
+       logical message's `provider_key`. A UID can be reused within the
+       same epoch, as Bridge has done historically.
+     - **`generic_imap`:** the live `UIDVALIDITY` must equal the
+       occurrence's epoch, and the UID must still exist (`UID FETCH <uid>
+       (UID)`). `OBJECTID`/`EMAILID` (RFC 8474) are compared only where
+       advertised and qualified.
+     - A mismatch, or missing or ambiguous evidence, quarantines the
+       intent with `quarantine_reason='ambiguous_match'`.
    - For `move`: the occurrence is still in the source mailbox, as of the
      last inventory.
    - For `set_flags`: none needed; flags are applied as deltas.
 2. **Act** with the policy's command.
-3. **Interpret the response:**
-   - tagged `OK` plus evidence (`COPYUID` or `[UIDPLUS]` data, an untagged
-     `EXPUNGE` for MOVE) → `done`;
+3. **Interpret the response,** per operation:
+   - **`set_flags`** (`UID STORE … FLAGS.SILENT`, which returns no flag
+     data): after the tagged `OK`, confirm with `UID FETCH <uid> (FLAGS)`,
+     plus the live target check, that the requested delta holds → `done`;
+   - **`move`:** tagged `OK` with `COPYUID` data or an untagged `EXPUNGE`,
+     then destination verification (the matrix) → `done`;
+   - **`copy`** (add label): tagged `OK` with `COPYUID`, then the
+     destination occurrence verified → `done`;
    - a `NO` that will persist → `parked`;
    - a connection drop → back to `pending`, with a reconcile-before-retry
      flag.

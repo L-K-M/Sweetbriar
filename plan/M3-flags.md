@@ -54,7 +54,10 @@ the intent framework every later mutation uses.
   - the flag suite added to the real-Bridge nightly lane (M2.6).
 - **Acceptance:**
   - the command trace shows `+FLAGS.SILENT (\Seen)` exactly once per
-    action;
+    action, followed by a confirming `UID FETCH … (FLAGS)` before the
+    intent is `done`;
+  - a server that returns only a tagged `OK` to STORE still reaches
+    `done`, via the confirming fetch;
   - another client's later flag change (fake server) is preserved after
     our intent completes;
   - the UI updates instantly (local effect) and stays correct after the
