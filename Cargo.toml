@@ -1,0 +1,23 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/sb-ffi",
+    "crates/sb-cli",
+    "crates/sb-core",
+    "crates/sb-store",
+    "crates/sb-mime",
+    "crates/sb-imap",
+    "crates/sb-smtp",
+    "crates/sb-platform",
+    "crates/sb-types",
+    "crates/sb-test-support",
+    "crates/sb-bindgen",
+    "xtask",
+]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+license = "Unlicense OR 0BSD"
+publish = false
+rust-version = "1.99"

@@ -106,7 +106,8 @@ The repository is public, so GitHub-hosted runners are free.
 
 **Rules:**
 - **Pinning:** runners are pinned (`macos-26`, not `macos-latest`). Every
-  job logs `rustc -Vv`, `xcodebuild -version` and the image version.
+  job logs the runner image version; jobs that run Rust also log
+  `rustc -Vv`, and macOS jobs that run Xcode log `xcodebuild -version`.
   Linux uses `ubuntu-24.04`, the LTS behind `ubuntu-latest`; the research
   also allows `ubuntu-26.04`, which the pinned Rust toolchain doesn't
   need.

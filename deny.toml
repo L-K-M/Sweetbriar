@@ -1,0 +1,51 @@
+# cargo-deny policy implementing the licence rules in spec/01
+# ("Licence policy for dependencies"), cargo-deny 0.20.2 syntax.
+# Starting template: research/raw/plan-crates-licence/codex.md §A10.
+
+[advisories]
+yanked = "deny"
+unmaintained = "all"
+unsound = "all"
+ignore = []
+maximum-db-staleness = "P1D"
+unused-ignored-advisory = "warn"
+
+[licenses]
+confidence-threshold = 0.95
+allow = [
+    "MIT",
+    "MIT-0",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "0BSD",
+    "Unlicense",
+    "CC0-1.0",
+    "Zlib",
+    "Unicode-3.0",
+]
+# MPL-2.0 is file-level copyleft, allowed by named exception per package
+# and version (spec/01): UniFFI's crates only. These match nothing until
+# uniffi enters the graph in M0.8 and only warn until then.
+exceptions = [
+    { crate = "uniffi@0.32.2", allow = ["MPL-2.0"] },
+    { crate = "uniffi_core@0.32.2", allow = ["MPL-2.0"] },
+    { crate = "uniffi_macros@0.32.2", allow = ["MPL-2.0"] },
+    { crate = "uniffi_meta@0.32.2", allow = ["MPL-2.0"] },
+    { crate = "uniffi_pipeline@0.32.2", allow = ["MPL-2.0"] },
+    { crate = "uniffi_bindgen@0.32.2", allow = ["MPL-2.0"] },
+]
+
+# Sweetbriar's own crates are publish = false; their Unlicense OR 0BSD
+# offering is already on the allow list above.
+[licenses.private]
+ignore = false
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
