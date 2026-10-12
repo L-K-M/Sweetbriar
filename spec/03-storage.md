@@ -218,7 +218,9 @@ backups/<generation-id>/
    }
    ```
 
-   `fsync` it and the directory.
+   `fsync` it and the generation directory, then the backup destination
+   directory (which holds the generation's entry) and any newly created
+   ancestor, up to one known durable.
 6. Mark the generation `complete`, remove the pins and resume GC.
 
 **Policy:**
@@ -263,7 +265,8 @@ The process holds `<data root>.lock` throughout.
      and subscriptions get `ResetRequired`. SQLite must never see a
      database file renamed while it's open.
    - Write a marker file `<data root>.restore-pending` naming the staging
-     root and the preserved name, and flush it.
+     root and the preserved name. Flush it **and its parent directory**
+     before either rename.
    - Rename the current data root to `<data root>.preserved-<old
      incarnation>`, then the staging root to `<data root>`. Flush the
      parent directory, then remove the marker.

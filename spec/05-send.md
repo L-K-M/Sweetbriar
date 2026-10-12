@@ -28,11 +28,17 @@ and [raw/plan-proton-bridge/codex.md](../research/raw/plan-proton-bridge/codex.m
   4. **Forward:** as for reply.
   5. If no valid identity results, the draft opens with "Choose a sending
      identity" and Send disabled.
+- **Reply recipients** are resolved separately from the identity: Reply
+  goes to the original's `Reply-To` if present, else its From; Reply All
+  adds its To and Cc, minus the chosen identity's address. Offline, these
+  come from `message_headers` (02).
 - **Cross-account check:** a reply whose identity's account differs from
   the receiving occurrence's account shows a banner (08). If it wasn't
   acknowledged for this draft revision's identity and recipients, Send
   asks once more. The acknowledgement lives in the compose window and
-  isn't persisted: after a relaunch, Send asks again.
+  isn't persisted: after a relaunch, Send asks again. The window passes
+  it with the send request (`send_draft`'s `acks`, 07); the core checks
+  it against the revision and never stores it.
 
 ## Composing
 
@@ -150,6 +156,9 @@ Otherwise the draft keeps its state.
        `failed` with a retry offer.
      - **Connection lost or timeout after `DATA` was sent** →
        `outcome_unknown`.
+     - **On `outcome_unknown`,** `rcpt_accepted` recipients become
+       `unknown`; definite RCPT rejections keep their state. A recipient
+       whose RCPT reply wasn't recorded before a crash becomes `unknown`.
    - **Partial RCPT rejection** with DATA accepted: rejected recipients
      stay `rejected_*` and are offered as a new attempt to those
      recipients only (`retry_rejected_recipients`, 07): the same frozen

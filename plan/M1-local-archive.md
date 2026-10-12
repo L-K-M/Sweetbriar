@@ -39,8 +39,9 @@ local drafts. No network yet.
   - the local archive account, created on first run;
   - engine import job: inventory, ingest with batches of 250,
     checkpoints, duplicate handling, report JSON;
-  - the mbox splitter (mboxo and mboxrd detection, `>From ` unquoting,
-    offset tracking over `mail-parser`'s iterator);
+  - the mbox splitter (mboxo and mboxrd detection, each variant's
+    unquoting, offset tracking). `mail-parser`'s iterator unquotes as
+    mboxrd, so it isn't used for mboxo;
   - EML folder walk;
   - an mbox-splitter fuzz target in the nightly fuzz job;
   - commands `start_import` and `cancel_job`;
@@ -55,6 +56,9 @@ local drafts. No network yet.
     occurrences;
   - read state follows `Status`/`X-Status` where present, and messages
     without them import as read;
+  - the same file with a `>>From ` line imports differently, and
+    correctly, as mboxo and as mboxrd; with the variant unknown, the job
+    asks;
   - two byte-identical mbox files with different names (`Inbox.mbox`,
     `Archive.mbox`) both import, into their own mailboxes;
   - crash cuts at random points during import, then resume, give the
@@ -135,8 +139,10 @@ local drafts. No network yet.
   - the hostile-HTML fixture set (`fixtures/hostile/`).
 - **Acceptance:**
   - Linux tests: every hostile fixture renders with no `<script>`,
-    `on*` attributes, forms, iframes, remote URLs or CSS `url()` other
-    than `sweetbriar-cid:`;
+    `on*` attributes, forms, iframes, remote resource URLs (images,
+    media, stylesheets) or CSS `url()` other than `sweetbriar-cid:`;
+  - safe HTTP/HTTPS hyperlinks survive sanitizing (10), and following
+    one is intercepted by the reader;
   - macOS UI test: a canary fixture whose images, CSS and links point at a
     local HTTP server started by the test (`http://127.0.0.1:<port>/…`)
     produces **zero connections** to that server while the message is
@@ -225,6 +231,11 @@ local drafts. No network yet.
 - **Acceptance:**
   - a restored store has identical row counts and object hashes;
   - an interrupted backup is never `complete` (crash cuts);
+  - a power cut after the completion receipt that drops unflushed
+    directory entries keeps the generation discoverable and verifiable;
+  - a power cut right after the first restore rename that drops
+    unflushed directory entries still finds the marker on startup, and
+    never creates an empty store;
   - every copied object, the snapshot and new directories are flushed
     before the manifest (`Fs` fault test: a dropped flush leaves the
     generation incomplete);

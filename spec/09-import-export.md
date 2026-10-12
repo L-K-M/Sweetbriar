@@ -23,9 +23,12 @@ user-granted permission path.
    (mbox `From ` separators, `.eml` files) and bytes. The UI shows the
    inventory before anything is imported.
 2. **Ingest.** For each message, in source order:
-   - extract the exact bytes, undoing mboxrd `>From ` quoting
-     (a `>From ` line becomes `From `) according to the detected
-     variant;
+   - extract the exact bytes, undoing the variant's `From ` quoting:
+     mboxrd removes one `>` from every `>+From ` line; mboxo only turns
+     `>From ` into `From `. A `>>From ` line decodes differently in each,
+     so when the variant is unknown and such lines exist, the job asks
+     the user, records the choice with its checkpoint, and the report
+     names it;
    - publish the bytes (03);
    - insert or reuse the acquisition, add an `acquisition_sources` row
      (`import_mbox` or `import_eml`, with source path and offset), create

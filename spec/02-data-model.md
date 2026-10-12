@@ -226,6 +226,7 @@ CREATE TABLE message_headers (                    -- headers fetched at sync, be
   header_message_id TEXT,
   subject           TEXT,
   from_json         TEXT,
+  reply_to_json     TEXT,
   to_json           TEXT,
   cc_json           TEXT,
   delivered_to_json TEXT,                         -- Delivered-To and X-Original-To
@@ -572,6 +573,7 @@ CREATE TABLE d_message_summary (                  -- parsed once per acquisition
   subject         TEXT,
   from_addr       TEXT,
   from_name       TEXT,
+  reply_to_json   TEXT,
   to_json         TEXT,
   cc_json         TEXT,
   date_header     INTEGER,

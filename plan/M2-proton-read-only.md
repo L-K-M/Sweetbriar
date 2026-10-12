@@ -149,8 +149,10 @@ signed in, with its TLS certificate exported.
     the account UUID and bumps `config_generation`), `pause_account`,
     `resume_account` and `disconnect_account`, tested through the public
     API, including resuming after a restore;
-  - the "Recovery: messages no longer on the server" list (`epoch_stale`
-    and `vanished` occurrences with no counterpart);
+  - the "Recovery: messages no longer on the server" list (`epoch_stale`,
+    `vanished` and `superseded` occurrences with no present
+    counterpart, each with its reason); a message all of whose
+    occurrences were superseded keeps its body, tags and notes there;
   - the diagnostics package (redacted, previewed, saved by the user; 10),
     used by M2.Q item 3;
   - new-mail notifications through `UNUserNotificationCenter`, naming the

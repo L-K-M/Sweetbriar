@@ -20,6 +20,8 @@ inspectable Out Box. Unknown outcomes are never retried automatically.
     default B;
   - replying to received mail picks the identity in To, Cc or
     `Delivered-To` of that exact occurrence;
+  - offline and header-only, Reply goes to `Reply-To` when it differs
+    from From;
   - no valid identity gives "Choose a sending identity";
   - after a restart, offline, a reply to a message whose body wasn't
     downloaded resolves its identity from `message_headers` (including
@@ -96,9 +98,17 @@ inspectable Out Box. Unknown outcomes are never retried automatically.
   - two `send_draft` calls with different keys, concurrent or in turn,
     queue one attempt; the second gets `Conflict`. Sending a `sent` or
     `discarded` draft gets `Conflict`;
-  - each `resolve_unknown_send` choice survives a restart, can't be
-    applied twice, and frees the draft for discarding; with a queued R2
-    it leaves R2 `queued`;
+  - each `resolve_unknown_send` choice resolves the attempt exactly once
+    and survives a restart. After "Mark as sent" or "Keep as draft",
+    discarding succeeds when no other attempt is live; after "Send
+    again", it gets `Conflict` until the new attempt ends. With a queued
+    R2, any choice leaves R2 `queued`;
+  - recipients: `rcpt_accepted` become `unknown` on `outcome_unknown`;
+    rejections keep their state; "Mark as sent" makes the unknown ones
+    `sent`;
+  - a cross-account reply without the `cross_account` ack gets
+    `Conflict`; with it, it sends; an identity or recipient edit (a new
+    revision) needs a new ack;
   - `retry_rejected_recipients` sends only to rejected recipients;
   - `discard_draft` is refused while an attempt is `held`, `queued`,
     `submitting` or `outcome_unknown`;

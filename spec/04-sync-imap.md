@@ -83,8 +83,9 @@ There is no CONDSTORE, so sync per mailbox works like this:
      [Epoch changes](#epoch-changes).
 3. **Fetch new messages.** UIDs from the stored `uidnext` upward, in
    batches of 250, fetching `(UID FLAGS INTERNALDATE RFC822.SIZE
-   BODY.PEEK[HEADER.FIELDS (DATE FROM TO CC SUBJECT MESSAGE-ID IN-REPLY-TO
-   REFERENCES LIST-ID DELIVERED-TO X-ORIGINAL-TO X-PM-INTERNAL-ID)])`.
+   BODY.PEEK[HEADER.FIELDS (DATE FROM REPLY-TO TO CC SUBJECT MESSAGE-ID
+   IN-REPLY-TO REFERENCES LIST-ID DELIVERED-TO X-ORIGINAL-TO
+   X-PM-INTERNAL-ID)])`.
    - For each, the engine finds or creates the logical message by
      `(account, X-Pm-Internal-Id)`, stores the header literal and parsed
      fields in `message_headers` (02), inserts the occurrence and updates
@@ -157,7 +158,8 @@ When a mailbox's UIDVALIDITY changes:
    are linked to the same logical message, so tags and notes carry over.
    - An old occurrence with no new counterpart stays `epoch_stale` and
      is shown in "Recovery: messages no longer on the server". It is not
-     deleted.
+     deleted. That list also holds messages whose last occurrence is
+     `vanished` or `superseded` (UID reuse), each with its reason.
 4. **Quarantined intents are never resumed automatically.** The user
    reviews them on the health surface: retarget to the new occurrence,
    or cancel.
