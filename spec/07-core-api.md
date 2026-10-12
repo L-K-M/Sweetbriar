@@ -76,7 +76,7 @@ async fn Core::shutdown(self);   // flush writer, release the lease
   the pilot: flags, folder moves (including `delete_to_trash`), tags and
   notes. `add_label` returns none: removing a label needs EXPUNGE, which
   the Proton policy forbids (04). `undo(token)` creates compensating
-  intents. Undo is the inverse
+  intents, or inverse local commands for local effects. Undo is the inverse
   command, never a rollback of history.
 
 ## Queries
@@ -84,7 +84,8 @@ async fn Core::shutdown(self);   // flush writer, release the lease
 ```rust
 async fn open_window(spec: WindowSpec, anchor: Anchor, limit: u32) -> Result<Window, CoreError>;
 // WindowSpec: Mailbox(id) | Unified(role) | Flagged | Search(query_json) | View(id) | Thread(thread_id)
-// (Account(id, role) is later; the sidebar uses Mailbox, Unified and Flagged.)
+// (Account(id, role) is later. The sidebar uses Mailbox, Unified, Flagged and View,
+// plus drafts() and out_box(); Thread backs the reader's conversation context.)
 // Anchor: Top | After(cursor) | Before(cursor) | Around(occurrence_id)
 struct Window {
     window_id: WindowId,
@@ -113,7 +114,7 @@ struct ListRow {
   occurrence_id)` for relevance order. They are bound to the window's
   generation, so a stale cursor gets `CoreError::ResetRequired`.
 - **Other queries:**
-  - `get_message(message_id)` → headers, occurrences, tags, note and
+  - `get_message(message_id)` → headers, occurrences, `thread_id`, tags, note and
     body availability;
   - `accounts()`, `identities(account_id)`, `mailboxes(account_id)`;
   - `appearance()` → resolved colors and monograms;

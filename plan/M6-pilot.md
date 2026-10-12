@@ -34,11 +34,11 @@ is met.
 - **Spec:** research 15 (Where the color appears); 08.
 - **Depends on:** M4.4, M6.1.
 - **Deliverables:**
-  - account cues in mixed-account threads, search results, the Out Box,
+  - account cues in search results, the Out Box,
     the move destination picker and the health view;
   - account-prefixed window titles;
   - the account name in notification text (notifications exist since
-    M2.6);
+    M2.7);
   - Appearance settings (Standard, Strong, Minimal) with previews.
 - **Acceptance:**
   - an audit test lists every P0 and P1 surface and checks it renders an

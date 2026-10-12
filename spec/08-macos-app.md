@@ -180,7 +180,7 @@ and the undo toast offers **Undo** for 10 s.
   `com.sweetbriar.cmd.*` namespace, wired to the menus and the responder
   chain.
 - **Versioning:** the persisted intent and query formats are versioned
-  now (D14). The scripting surfaces (AppleScript, App Intents, a CLI) are
+  now (research debate/04, resolution change 15). The scripting surfaces (AppleScript, App Intents, a CLI) are
   *later* and will attach to these commands.
 
 ## Accessibility (pilot gates)

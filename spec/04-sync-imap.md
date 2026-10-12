@@ -337,4 +337,7 @@ for the account are suspended until a check passes:
   and flags continue);
 - the role mapping is unchanged.
 
-Read-only sync continues meanwhile.
+Read-only sync continues meanwhile. A failed check shows on the health
+surface with the old and new values. A new role mapping takes effect
+only when the user confirms it, which records it as the new baseline
+and resumes mutations.

@@ -34,7 +34,8 @@ and [raw/plan-proton-bridge/codex.md](../research/raw/plan-proton-bridge/codex.m
   adds its To and Cc, minus the chosen identity's address. Offline, these
   come from `message_headers` (02).
 - **Cross-account check:** a reply whose identity's account differs from
-  the receiving occurrence's account shows a banner (08). If it wasn't
+  the receiving occurrence's account shows a banner (08). Replies to
+  local-archive messages are exempt: that account can't send. If it wasn't
   acknowledged for this draft revision's identity and recipients, Send
   asks once more. The acknowledgement lives in the compose window and
   isn't persisted: after a relaunch, Send asks again. The window passes
@@ -89,7 +90,7 @@ Every transition below that changes the draft's state does so only if
 the attempt's revision is still the draft's current revision (02).
 Otherwise the draft keeps its state.
 
-1. **`send_draft(draft_id, revision_id)`:**
+1. **`send_draft(draft_id, revision_id, acks)`:**
    - `revision_id` must be the draft's `current_revision_id`, otherwise
      `Conflict`: only what the user last saw is sent.
    - The draft must be `editing`, and the revision must have no live
@@ -150,7 +151,7 @@ Otherwise the draft keeps its state.
      - **Exception:** a reply whose text matches a **qualified
        pre-submission class** becomes `failed` with recipients `unsent`.
        The classes are invalid sender, invalid recipient, and message too
-       large, each confirmed in the real-Bridge test lane (M2.7) to occur
+       large, each confirmed in the real-Bridge test lane (M2.8) to occur
        before any Proton submission. The list starts empty and grows only
        with that evidence.
      - **Generic IMAP accounts** (*later*): definite 5xx → `failed`; 4xx →

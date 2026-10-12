@@ -259,8 +259,9 @@ The process holds `<data root>.lock` throughout.
    - mark every send attempt in `held`, `queued` or `submitting` as
      `outcome_unknown`. Their outcome after the backup is unknown, and
      they are never resent automatically;
-   - rewrite `backup_generations.location` to point into the preserved
-     root, where those generations will be after the swap.
+   - rewrite each `backup_generations.location` inside the data root to
+     point into the preserved root, where it will be after the swap.
+     Locations outside the data root stay as they are.
    - Then flush the staging root.
 4. **Swap, restart-safe.**
    - **First, quiesce the live store.** Refuse new commands

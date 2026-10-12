@@ -137,32 +137,21 @@ signed in, with its TLS certificate exported.
   - an epoch change quarantines targeting intents (inserted directly in
     the test).
 
-### M2.6 Body acquisition, coverage and health — M, linux + macos-ci
+### M2.6 Body acquisition and coverage — M, linux
 
-- **Goal:** bodies download once per logical message, coverage is
-  visible, and the account health surface exists.
-- **Spec:** 04 (Sync loop step 4, Account states and health), 06
-  (Coverage), 08 (Activity / account health window).
+- **Goal:** bodies download once per logical message, and coverage and
+  recovery are queryable.
+- **Spec:** 04 (Sync loop step 4, Epoch changes: Recovery), 06
+  (Coverage).
 - **Depends on:** M2.5.
 - **Deliverables:**
   - the body queue (opened messages first, then newest) using
     `BODY.PEEK[]`, publish, link and index;
-  - `coverage()` and `health()`;
-  - `update_account` (endpoint, credentials, certificate re-trust; keeps
-    the account UUID and bumps `config_generation`), `pause_account`,
-    `resume_account` and `disconnect_account`, tested through the public
-    API, including resuming after a restore;
+  - `coverage()`;
   - the "Recovery: messages no longer on the server" list (`epoch_stale`,
     `vanished` and `superseded` occurrences with no present
     counterpart, each with its reason); a message all of whose
-    occurrences were superseded keeps its body, tags and notes there;
-  - the diagnostics package (redacted, previewed, saved by the user; 10),
-    used by M2.Q item 3;
-  - new-mail notifications through `UNUserNotificationCenter`, naming the
-    account in text, with previews only if enabled (10);
-  - the macOS Activity window: per account state, coverage, breaker
-    events with Accept and Keep, parked and quarantined intents with
-    actions.
+    occurrences were superseded keeps its body, tags and notes there.
 - **Acceptance:**
   - a message in INBOX plus two labels is fetched exactly once (fake
     server counts fetches);
@@ -175,12 +164,37 @@ signed in, with its TLS certificate exported.
     from `message_headers`, and `contains` and `text` count the message
     as unknown, also under negation;
   - reading never sends `\Seen` (command trace);
-  - coverage numbers match fixture expectations;
+  - coverage numbers match fixture expectations.
+
+### M2.7 Account health and the Activity window — M, linux + macos-ci
+
+- **Goal:** accounts can be managed and repaired, and their health is
+  visible in the app.
+- **Spec:** 04 (Account states and health), 07 (Accounts commands), 08
+  (Activity / account health window), 10 (diagnostics, notifications).
+- **Depends on:** M2.6.
+- **Deliverables:**
+  - `health()`;
+  - `update_account` (endpoint, credentials, certificate re-trust; keeps
+    the account UUID and bumps `config_generation`), `pause_account`,
+    `resume_account` and `disconnect_account`, tested through the public
+    API, including resuming after a restore;
+  - the diagnostics package (redacted, previewed, saved by the user; 10),
+    used by M2.Q item 3;
+  - new-mail notifications through `UNUserNotificationCenter`, naming the
+    account in text, with previews only if enabled (10);
+  - the macOS Activity window: per account state, coverage, breaker
+    events with Accept and Keep, parked and quarantined intents with
+    actions, and the Recovery list.
+- **Acceptance:**
   - breaker Accept and Keep work end to end (UI test with the fake),
     leaving the event `accepted` or `kept`; an event whose messages
-    reappear becomes `cleared`.
+    reappear becomes `cleared`;
+  - a re-trusted certificate and repaired credentials keep the account's
+    UUID and data;
+  - the diagnostics package contains no secret (log-scan test).
 
-### M2.7 Real-Bridge CI lane — L, linux (nightly)
+### M2.8 Real-Bridge CI lane — L, linux (nightly)
 
 - **Goal:** run Sweetbriar's engine against **real Bridge code** with
   Proton's mock API, without credentials.

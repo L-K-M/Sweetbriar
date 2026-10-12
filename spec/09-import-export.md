@@ -88,4 +88,4 @@ point and resumes with identical final counts.
 - **Offboarding:** the export manifest format is versioned and documented
   in the repository. Together with the store layout (03) and schema (02),
   it lets an independent tool read a Sweetbriar store without the app
-  (D27). The tool itself is *later*.
+  (research debate/04, resolution change 18). The tool itself is *later*.

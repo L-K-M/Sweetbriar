@@ -427,7 +427,7 @@ CREATE TABLE intents (
   account_id         TEXT NOT NULL REFERENCES accounts(account_id),
   config_generation  INTEGER NOT NULL,             -- account generation it was planned against
   op                 TEXT NOT NULL CHECK (op IN ('set_flags','move','copy','delete_to_trash','expunge_scoped','append','submit')), -- 'expunge_scoped', 'append', 'submit': reserved, not produced in the pilot (sends use send_attempts, 05)
-  target_json        TEXT NOT NULL,                -- scoped target: occurrence ids with (mailbox, uidvalidity, uid)
+  target_json        TEXT NOT NULL,                -- scoped target: occurrence ids with (mailbox, uidvalidity, uid); every *_json payload here carries "v": 1
   args_json          TEXT NOT NULL,                -- e.g. {"add":["\\Seen"],"remove":[]} or destination mailbox id
   preconditions_json TEXT NOT NULL,                -- what must still be true to act (04)
   depends_on         TEXT REFERENCES intents(intent_id),
@@ -617,9 +617,9 @@ CREATE TABLE d_list_rows (
   representative INTEGER NOT NULL CHECK (representative IN (0,1)) -- the message's row in per-message windows
 ) STRICT;
 CREATE INDEX d_list_rows_window ON d_list_rows(mailbox_id, sort_date DESC, occurrence_id DESC,
-  sender, subject, snippet, unread, flagged, has_attachments);
+  message_id, account_id, sender, subject, snippet, unread, flagged, has_attachments);
 CREATE INDEX d_list_rows_unified ON d_list_rows(mailbox_role, sort_date DESC, occurrence_id DESC,
-  account_id, sender, subject, snippet, unread, flagged, has_attachments);
+  mailbox_id, message_id, account_id, sender, subject, snippet, unread, flagged, has_attachments);
 CREATE INDEX d_list_rows_flagged ON d_list_rows(sort_date DESC, occurrence_id DESC)
   WHERE flagged = 1 AND representative = 1;
 ```
