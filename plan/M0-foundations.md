@@ -36,7 +36,7 @@ decided.
     app build.
   - `license = "Unlicense OR 0BSD"` under `[workspace.package]`, with
     `license.workspace = true` in every crate (the licence files already
-    exist; O2).
+    exist).
 - **Acceptance:**
   - `cargo xtask ci` passes locally;
   - `ci.yml` and the Rust-only `macos.yml` pass on the PR;

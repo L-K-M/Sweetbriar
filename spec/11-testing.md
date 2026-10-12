@@ -118,8 +118,9 @@ The repository is public, so GitHub-hosted runners are free.
 - **Caching:** `sccache` for Rust (with `Swatinem/rust-cache` as the
   fallback) and SPM package caching keyed on `Package.resolved`. No
   DerivedData caching.
-- **Merge gate:** `ci` and `macos` must be green before a merge. `main`
-  has no branch protection; agents check this themselves (plan/README).
+- **Merge gate:** `ci` and `macos` must be green, and no blocking review
+  findings may remain, before a merge. `main` has no branch protection;
+  agents check this themselves (plan/README).
   Each is a final aggregate job that always runs and succeeds only when
   its workflow's other jobs succeeded (or, for `macos`, were skipped).
   The nightly checks are advisory.
