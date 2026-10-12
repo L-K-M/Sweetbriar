@@ -183,8 +183,9 @@ transaction plus a final re-check, and the unlink, in one writer task:
   grace period (default 7 days). Any other pin kind blocks removal;
 - no backup generation `in_progress` exists.
 
-GC never runs while **any** account has a breaker event that is `open`
-or `kept` (04), or while integrity is in doubt.
+GC never runs while **any** account has an `open` breaker event (04),
+or while integrity is in doubt. A `kept` event doesn't stop GC: its
+occurrences stay `vanish_pending`, so their objects stay referenced.
 
 ## Backup generations
 

@@ -434,7 +434,7 @@ CREATE TABLE intents (
   state              TEXT NOT NULL CHECK (state IN ('pending','in_flight','done','parked','quarantined','cancelled')),
   attempts           INTEGER NOT NULL DEFAULT 0,
   next_attempt_at    INTEGER,
-  wait_reason        TEXT CHECK (wait_reason IN ('auth','throttled','offline','dependency','breaker')),
+  wait_reason        TEXT CHECK (wait_reason IN ('auth','throttled','offline','dependency','breaker','requalify')),
   quarantine_reason  TEXT CHECK (quarantine_reason IN ('epoch_change','restore','ambiguous_match','config_change','breaker')),
   last_error         TEXT,
   evidence_json      TEXT,                         -- server evidence recorded as it arrives, e.g. a COPYUID mapping (04)
@@ -535,7 +535,7 @@ CREATE TABLE breaker_events (
   event_id    TEXT PRIMARY KEY,
   account_id  TEXT NOT NULL REFERENCES accounts(account_id),
   mailbox_id  INTEGER,
-  kind        TEXT NOT NULL CHECK (kind IN ('bulk_disappearance','folder_emptied','epoch_change','reconfiguration')),
+  kind        TEXT NOT NULL CHECK (kind IN ('bulk_disappearance','folder_emptied','epoch_change','reconfiguration')), -- 'reconfiguration': reserved, not produced in the pilot
   details_json TEXT NOT NULL,                      -- counts, inventory snapshot reference
   state       TEXT NOT NULL CHECK (state IN ('open','accepted','kept','cleared')), -- 04 (The breaker)
   created_at  INTEGER NOT NULL,

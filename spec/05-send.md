@@ -192,7 +192,9 @@ Otherwise the draft keeps its state.
 6. **Retries:** only `failed` attempts with a definite pre-acceptance
    failure, and only on user request.
    - Automatic retry with backoff applies only to failures *before*
-     `DATA`: connection refused, `AUTH` temporarily unavailable.
+     `DATA`: connection refused, `AUTH` temporarily unavailable. These
+     keep the attempt `queued`; the outbox retries it with an in-memory
+     backoff, so there's nothing to persist.
    - **Nothing after `DATA` is retried automatically.**
 
 7. **`discard_draft`** is refused with `Conflict` while the draft has a

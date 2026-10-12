@@ -86,6 +86,9 @@ There is no CONDSTORE, so sync per mailbox works like this:
    BODY.PEEK[HEADER.FIELDS (DATE FROM REPLY-TO TO CC SUBJECT MESSAGE-ID
    IN-REPLY-TO REFERENCES LIST-ID DELIVERED-TO X-ORIGINAL-TO
    X-PM-INTERNAL-ID)])`.
+   - The fetch also backfills UIDs below `uidnext` that the last full
+     UID list reported but that have no occurrence (Bridge can
+     materialize messages late).
    - For each, the engine finds or creates the logical message by
      `(account, X-Pm-Internal-Id)`, stores the header literal and parsed
      fields in `message_headers` (02), inserts the occurrence and updates
@@ -201,7 +204,8 @@ continue. The user sees counts and examples and chooses **Accept**
 (apply the disappearances; the event becomes `accepted`) or **Keep**
 (leave occurrences marked `vanish_pending` and keep watching; `kept`).
 An open or kept event whose messages reappear on a later inventory
-becomes `cleared`. Thresholds are settings, tuned from
+becomes `cleared`. A kept event can still be accepted later, from the
+health surface. Thresholds are settings, tuned from
 traces later.
 
 ## Intents and the mutation matrix
@@ -330,7 +334,8 @@ a dated diagnostics entry.
 
 If the capabilities or the mailbox roles change (the `ID` response's
 version, when present, is recorded as a best-effort hint only), mutations
-for the account are suspended until a check passes:
+for the account are suspended until a check passes (pending intents
+wait with `wait_reason='requalify'`):
 - the capabilities the account's policy uses are still advertised:
   MOVE and UIDPLUS for `proton_bridge`; for `generic_imap`, MOVE or
   UIDPLUS for the move path it chose (with neither, moves stay disabled

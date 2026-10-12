@@ -260,7 +260,8 @@ local drafts. No network yet.
     a reservation that GC honours, so the referencing commit never
     points to a removed object (interleaving test, pausing publication
     before the reservation and GC before its unlink);
-  - restore with a pending write and an active account worker: both stop
+  - restore with a pending write and a running engine job (account
+    workers arrive in M2.4 and join this test then): both stop
     before the swap, and no connection stays open on the replaced root;
   - restore: crash cuts at every step (staging, quarantine, marker, both
     renames) leave either the old store or the quarantined restored

@@ -64,6 +64,7 @@ restores its draft by `draft_id`.
 - **Keyboard:**
   - arrows, Return to open, Space to page the reader;
   - `⌘⌫` delete to trash, `⌃⌘A` archive;
+  - `⇧⌘U` mark read or unread, `⇧⌘L` star or unstar;
   - type-to-file (below);
   - every command is also in a menu.
 - **Performance budget:** switching mailbox shows the first rows within

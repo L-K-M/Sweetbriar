@@ -110,6 +110,8 @@ signed in, with its TLS certificate exported.
     transaction;
   - crash cuts during header batches resume without gaps or
     duplicates;
+  - M1.8's restore test now also stops an active account worker before
+    the swap;
   - schema-level cross-account rejection: inserting an occurrence whose
     message belongs to another account fails.
 
