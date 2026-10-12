@@ -234,7 +234,8 @@ subject to implementation evidence, not to further argument.
   `LICENSE` has been the Unlicense since the initial commit.
 - **D20 Builders:** AI agents implement in small PR-sized steps; the
   owner reviews and merges. macOS builds and tests run on GitHub Actions
-  macOS runners.
+  macOS runners. No branch protection on `main`: agents check CI before
+  merging.
 - **D20 First live backend:** the owner's own provider is **Proton
   Mail**, so the first live backend is IMAP/SMTP through Proton Mail
   Bridge. This needs no Google or Microsoft app approvals, which stay a

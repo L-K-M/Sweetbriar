@@ -100,7 +100,7 @@ The repository is public, so GitHub-hosted runners are free.
 | Workflow | Trigger | Runner | Jobs |
 |---|---|---|---|
 | `ci.yml` | every PR and push to `main` | `ubuntu-24.04` | `cargo fmt --check`; `cargo clippy --workspace --all-targets -- -D warnings`; `cargo test --workspace`; `cargo doc` (deny broken links); `cargo xtask check-layers`; `cargo deny check`; `cargo about generate` to a temp file and diff against `THIRD_PARTY_NOTICES.md`; Dovecot protocol suite |
-| `macos.yml` | **every** PR and push to `main` | `macos-26` | A `changes` job (path filter on `crates/`, `xtask/`, `apps/`, `Cargo.toml`, `Cargo.lock`, `.cargo/`, `rust-toolchain.toml` and `.github/workflows/macos.yml`); the build jobs run only if it matched (job-level `if:`): `cargo test` (aarch64); `cargo xtask ffi`; `cargo xtask check-ffi` (drift); `xcodegen generate`; `xcodebuild build` + `test` with Swift 6 strict concurrency; upload `.xcresult` on failure. A final `macos` job always runs and succeeds when the build jobs succeeded or were skipped, so the required check never hangs |
+| `macos.yml` | **every** PR and push to `main` | `macos-26` | A `changes` job (path filter on `crates/`, `xtask/`, `apps/`, `Cargo.toml`, `Cargo.lock`, `.cargo/`, `rust-toolchain.toml` and `.github/workflows/macos.yml`); the build jobs run only if it matched (job-level `if:`): `cargo test` (aarch64); `cargo xtask ffi`; `cargo xtask check-ffi` (drift); `xcodegen generate`; `xcodebuild build` + `test` with Swift 6 strict concurrency; upload `.xcresult` on failure. A final `macos` job always runs and succeeds when the build jobs succeeded or were skipped, so the merge gate always has a result |
 | `nightly.yml` | schedule (daily) + manual | `ubuntu-24.04`, `macos-26`, `xcode-27` (advisory) | full fault-injection and proptest runs, fuzzing (time-boxed), XCUITest smoke, unsigned `.dmg` artifact |
 | `release.yml` | tag `v*` | `macos-26` | unsigned (ad-hoc) `.dmg` attached to the GitHub Release; Developer ID signing, notarization and Sparkle come later (plan) |
 
@@ -118,7 +118,8 @@ The repository is public, so GitHub-hosted runners are free.
 - **Caching:** `sccache` for Rust (with `Swatinem/rust-cache` as the
   fallback) and SPM package caching keyed on `Package.resolved`. No
   DerivedData caching.
-- **Branch protection on `main`:** required checks are `ci` and `macos`.
+- **Merge gate:** `ci` and `macos` must be green before a merge. `main`
+  has no branch protection; agents check this themselves (plan/README).
   Each is a final aggregate job that always runs and succeeds only when
   its workflow's other jobs succeeded (or, for `macos`, were skipped).
   The nightly checks are advisory.
