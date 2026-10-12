@@ -73,7 +73,9 @@ decided.
 - **Depends on:** M0.1.
 - **Deliverables:**
   - in `sb-types`: the `Fs` seam trait, complete (`create`, `write`,
-    `sync_all`, `sync_dir`, `rename`, `remove`, `lock_exclusive`);
+    `open`/`read`, `metadata` (existence, length), `read_dir`,
+    `create_dir`, `sync_all`, `sync_dir`, `rename`, `remove`,
+    `lock_exclusive`);
   - in `sb-platform`: its real implementation (`fcntl(F_FULLFSYNC)` on
     macOS, `fsync` on Linux). M0.5 adds the fault-injecting one;
   - `sb-store::open(paths, fs)`: the lease via `Fs::lock_exclusive`

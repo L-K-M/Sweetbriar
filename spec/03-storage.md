@@ -261,7 +261,14 @@ The process holds `<data root>.lock` throughout.
      they are never resent automatically;
    - rewrite each `backup_generations.location` inside the data root to
      point into the preserved root, where it will be after the swap.
-     Locations outside the data root stay as they are.
+     Locations outside the data root stay as they are;
+   - fix the inherited backup rows. The snapshot holds its own
+     generation's row as `in_progress`, since `complete` was written
+     afterwards: mark the restored-from generation `complete`, with its
+     verified manifest data. Mark any other inherited `in_progress` row
+     `failed` and delete its `backup_in_progress` pins, without touching
+     its directory, so interrupted-job cleanup only ever acts on jobs
+     started after the restore.
    - Then flush the staging root.
 4. **Swap, restart-safe.**
    - **First, quiesce the live store.** Refuse new commands

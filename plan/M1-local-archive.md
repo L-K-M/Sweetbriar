@@ -233,6 +233,10 @@ local drafts. No network yet.
   - an interrupted backup is never `complete` (crash cuts);
   - an interrupted generation is marked `failed` on the next run, and its
     pins and directory are removed;
+  - back up G, restore G, restart and back up again: G stays `complete`,
+    intact and restorable, and no inherited unfinished job blocks GC;
+  - restore with one generation inside the data root and one at an
+    external destination: both locations resolve afterwards;
   - a power cut after the completion receipt that drops unflushed
     directory entries keeps the generation discoverable and verifiable;
   - a power cut right after the first restore rename that drops
