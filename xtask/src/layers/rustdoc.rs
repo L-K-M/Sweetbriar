@@ -86,8 +86,8 @@ struct External {
     name: String,
 }
 
-/// `inner.use`: `id` is the target's item id — null when rustdoc
-/// couldn't resolve it.
+/// `inner.use`: `id` is the target's item id — null for primitive
+/// re-exports.
 #[derive(Deserialize)]
 struct UseItem {
     source: String,

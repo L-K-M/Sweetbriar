@@ -258,6 +258,13 @@ fn negative_fixtures_fail() {
             1,
             "sb_store: source `crates/outside.rs` lies outside the crate's directory",
         ),
+        // Same, for a build script at a custom path (`build = "codegen.rs"`).
+        (
+            "custom-build-escape",
+            "crates/sb-store/Cargo.toml",
+            1,
+            "sb_store: source `crates/outside.rs` lies outside the crate's directory",
+        ),
         // rustdoc runs with all features, so a feature-gated re-export
         // is seen.
         (
@@ -377,6 +384,8 @@ fn positive_fixtures_pass() {
         "primitive-export",
         // `pub extern crate self as api` aliases the crate itself.
         "extern-self",
+        // A build script at a custom path has its own dep-info name.
+        "custom-build-script",
     ] {
         let report = check(case);
         assert!(

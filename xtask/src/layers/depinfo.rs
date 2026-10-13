@@ -158,8 +158,8 @@ pub(crate) fn check(
 /// The dep-info candidates an artifact's filename implies. `check`
 /// reports only `deps/lib<krate>-<hash>.rmeta` (bins, tests and
 /// benches included); rustc writes `<krate>-<hash>.d` beside it. A
-/// custom-build artifact reports `build/<pkg>-<fp>/build-script-build`
-/// whose dep-info is `build_script_build-<fp>.d` — the fingerprint
+/// custom-build artifact reports `build/<pkg>-<fp>/build-script-<name>`
+/// whose dep-info is `build_script_<name>-<fp>.d` — the fingerprint
 /// lives in the parent directory's name.
 fn dep_info(artifact: &Path, kind: ArtifactKind) -> Vec<PathBuf> {
     let mut out = Vec::new();
@@ -178,8 +178,9 @@ fn dep_info(artifact: &Path, kind: ArtifactKind) -> Vec<PathBuf> {
             .and_then(Path::file_name)
             .and_then(|n| n.to_str())
             .and_then(|n| n.rsplit('-').next().map(str::to_owned))
+        && let Some(stem) = artifact.file_stem().and_then(|n| n.to_str())
     {
-        out.push(artifact.with_file_name(format!("build_script_build-{fp}.d")));
+        out.push(artifact.with_file_name(format!("{}-{fp}.d", stem.replace('-', "_"))));
     }
     out
 }
