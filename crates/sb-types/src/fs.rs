@@ -51,9 +51,11 @@ pub trait ReadFile: io::Read + io::Seek + Send {}
 impl<T: io::Read + io::Seek + Send> ReadFile for T {}
 
 /// A held exclusive lock (spec/03 "One process owns the store").
-/// Dropping it releases the lock; anything `Send` can stand in for one.
-pub trait Lease: Send {}
-impl<T: Send> Lease for T {}
+/// Dropping it releases the lock; anything `Send + Sync` can stand in
+/// for one. `Sync` because the store that holds it is shared as
+/// `Arc<Store>` across tasks (spec/01).
+pub trait Lease: Send + Sync {}
+impl<T: Send + Sync> Lease for T {}
 
 /// Why `Fs::lock_exclusive` did not hand out a lease.
 #[derive(Debug)]

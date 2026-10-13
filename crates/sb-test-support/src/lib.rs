@@ -8,11 +8,13 @@ mod cut;
 mod fault;
 mod sim;
 
+use std::future::Future;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::thread;
 
 use sb_platform::{OsRandom, RealFs, SystemClock};
 use sb_types::fs::Fs;
@@ -22,6 +24,37 @@ use sb_types::time::{Clock, Timestamp};
 pub use cut::{CutFs, run_crash_cuts};
 pub use fault::{FaultFs, FaultKind, FsOp};
 pub use sim::SimFs;
+
+/// Drive `future` to completion on the calling thread: a minimal
+/// executor for tests, with no runtime dependency (spec/01 keeps the
+/// store's future runtime-free; tests await it with this). The waker
+/// unparks the thread, so a wake from the writer thread resumes the
+/// wait; spurious parks are harmless because the future is re-polled.
+pub fn block_on<F: Future>(future: F) -> F::Output {
+    use std::pin::pin;
+    use std::task::{Context, Poll, Wake, Waker};
+
+    /// Wakes by unparking the blocked test thread. `Thread::unpark`
+    /// leaves a permit, so an unpark that lands before the `park`
+    /// below cannot be lost.
+    struct ThreadParker(thread::Thread);
+
+    impl Wake for ThreadParker {
+        fn wake(self: Arc<Self>) {
+            self.0.unpark();
+        }
+    }
+
+    let waker = Waker::from(Arc::new(ThreadParker(thread::current())));
+    let mut cx = Context::from_waker(&waker);
+    let mut future = pin!(future);
+    loop {
+        match future.as_mut().poll(&mut cx) {
+            Poll::Ready(output) => return output,
+            Poll::Pending => thread::park(),
+        }
+    }
+}
 
 /// The real `Fs` implementation, for tests that exercise actual
 /// filesystem behaviour (spec/01 rule 5).
@@ -138,6 +171,8 @@ impl Drop for ScratchDir {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
 
     #[test]
@@ -145,6 +180,41 @@ mod tests {
         let clock = FixedClock::new(Timestamp::from_millis(42));
         assert_eq!(clock.now().as_millis(), 42);
         assert_eq!(clock.now().as_millis(), 42);
+    }
+
+    /// `block_on` returns an already-ready future's output without
+    /// parking, and one that pends first: the waker registered by the
+    /// executor is called from another thread, as the store's writer
+    /// thread resolves a submitted write.
+    #[test]
+    fn block_on_returns_ready_and_pending_futures() {
+        assert_eq!(block_on(async { 7 + 35 }), 42);
+
+        /// Pends once, wakes from another thread, then completes.
+        struct PendOnce {
+            polled: bool,
+        }
+        impl Future for PendOnce {
+            type Output = u32;
+            fn poll(
+                mut self: std::pin::Pin<&mut Self>,
+                cx: &mut std::task::Context<'_>,
+            ) -> std::task::Poll<u32> {
+                if self.polled {
+                    std::task::Poll::Ready(42)
+                } else {
+                    self.polled = true;
+                    let waker = cx.waker().clone();
+                    thread::spawn(move || {
+                        thread::sleep(Duration::from_millis(20));
+                        waker.wake();
+                    });
+                    std::task::Poll::Pending
+                }
+            }
+        }
+
+        assert_eq!(block_on(PendOnce { polled: false }), 42);
     }
 
     /// Two draws in a row differ, so two UUIDs made back to back

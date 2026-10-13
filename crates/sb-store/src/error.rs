@@ -5,7 +5,9 @@ use std::error::Error;
 use std::fmt;
 
 /// A store failure, mapped one-to-one onto `CoreError` variants.
-#[derive(Debug)]
+/// `Clone` because a stopped writer resolves every queued future with
+/// the same refusal.
+#[derive(Debug, Clone)]
 pub enum StoreError {
     /// What was asked for isn't there: an absent object
     /// (`CoreError::NotFound`).
@@ -26,6 +28,10 @@ pub enum StoreError {
     NewerStore { app_version: String },
     /// A caller argument was rejected (`CoreError::InvalidInput`).
     InvalidInput { message: String },
+    /// The caller's request collides with stored state, e.g. an
+    /// idempotency key reused for another command, or a draft revision
+    /// base mismatch (`CoreError::Conflict`).
+    Conflict { detail: String },
     /// An internal invariant broke, e.g. the linked SQLite isn't the
     /// pinned build (`CoreError::Internal`).
     Internal { detail: String },
@@ -53,6 +59,12 @@ impl StoreError {
             detail: detail.into(),
         }
     }
+
+    pub(crate) fn conflict(detail: impl Into<String>) -> Self {
+        Self::Conflict {
+            detail: detail.into(),
+        }
+    }
 }
 
 impl fmt::Display for StoreError {
@@ -67,6 +79,7 @@ impl fmt::Display for StoreError {
                 "the store was migrated by a newer app ({app_version}); open it with that version"
             ),
             Self::InvalidInput { message } => write!(f, "invalid input: {message}"),
+            Self::Conflict { detail } => write!(f, "conflict: {detail}"),
             Self::Internal { detail } => write!(f, "internal error: {detail}"),
         }
     }

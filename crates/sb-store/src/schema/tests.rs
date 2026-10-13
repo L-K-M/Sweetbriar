@@ -16,7 +16,7 @@ use sb_types::time::Timestamp;
 use super::*;
 use crate::StorePaths;
 use crate::store::{PINNED_SQLITE, WRITER_PRAGMAS};
-use crate::testing::{FIXED_NOW_MS, scratch_paths, test_seams};
+use crate::testing::{FIXED_NOW_MS, reading, scratch_paths, test_seams};
 
 /// Seams with a different clock and seed, to prove a reopen rewrote
 /// nothing it shouldn't have.
@@ -76,9 +76,12 @@ fn assert_v4_uuid(uuid: &str) {
 fn a_fresh_store_reaches_version_1_with_its_meta() {
     let (_scratch, paths) = scratch_paths("schema-fresh");
     let store = crate::open(&paths, &test_seams(real_fs())).unwrap();
-    assert_eq!(one_int(store.conn(), "PRAGMA user_version"), 1);
+    assert_eq!(
+        reading(&store, |tx| Ok(one_int(tx, "PRAGMA user_version"))),
+        1
+    );
 
-    let meta = store_meta(store.conn());
+    let meta = reading(&store, |tx| Ok(store_meta(tx)));
     assert_eq!(
         meta.get("last_migrated_by").unwrap(),
         env!("CARGO_PKG_VERSION")
@@ -103,7 +106,7 @@ fn reopening_runs_no_migration() {
     let (_scratch, paths) = scratch_paths("schema-reopen");
     let first = crate::open(&paths, &test_seams(real_fs())).unwrap();
     let (created_at, store_uuid, incarnation) = {
-        let meta = store_meta(first.conn());
+        let meta = reading(&first, |tx| Ok(store_meta(tx)));
         (
             meta["created_at"].clone(),
             meta["store_uuid"].clone(),
@@ -113,8 +116,11 @@ fn reopening_runs_no_migration() {
     first.close().unwrap();
 
     let second = crate::open(&paths, &other_seams()).unwrap();
-    assert_eq!(one_int(second.conn(), "PRAGMA user_version"), 1);
-    let meta = store_meta(second.conn());
+    assert_eq!(
+        reading(&second, |tx| Ok(one_int(tx, "PRAGMA user_version"))),
+        1
+    );
+    let meta = reading(&second, |tx| Ok(store_meta(tx)));
     assert_eq!(meta.get("created_at").unwrap(), &created_at);
     assert_eq!(meta.get("store_uuid").unwrap(), &store_uuid);
     assert_eq!(meta.get("incarnation").unwrap(), &incarnation);
@@ -127,19 +133,22 @@ fn reopening_runs_no_migration() {
 fn checks_after_open_are_clean() {
     let (_scratch, paths) = scratch_paths("schema-clean");
     let store = crate::open(&paths, &test_seams(real_fs())).unwrap();
-    let mut foreign_keys = store.conn().prepare("PRAGMA foreign_key_check").unwrap();
-    let mut rows = foreign_keys.query([]).unwrap();
-    assert!(
-        rows.next().unwrap().is_none(),
-        "foreign_key_check returned rows"
-    );
-    drop(rows);
-    drop(foreign_keys);
-    assert_eq!(
-        pragma_strings(store.conn(), "PRAGMA integrity_check").unwrap(),
-        vec!["ok".to_owned()],
-        "integrity_check did not answer ok"
-    );
+    reading(&store, |tx| {
+        let mut foreign_keys = tx.prepare("PRAGMA foreign_key_check").unwrap();
+        let mut rows = foreign_keys.query([]).unwrap();
+        assert!(
+            rows.next().unwrap().is_none(),
+            "foreign_key_check returned rows"
+        );
+        drop(rows);
+        drop(foreign_keys);
+        assert_eq!(
+            pragma_strings(tx, "PRAGMA integrity_check").unwrap(),
+            vec!["ok".to_owned()],
+            "integrity_check did not answer ok"
+        );
+        Ok(())
+    });
 }
 
 /// 4. Every application-owned ordinary table is `STRICT` (spec/02
@@ -149,34 +158,33 @@ fn checks_after_open_are_clean() {
 fn every_owned_ordinary_table_is_strict() {
     let (_scratch, paths) = scratch_paths("schema-strict");
     let store = crate::open(&paths, &test_seams(real_fs())).unwrap();
-    let mut stmt = store
-        .conn()
-        .prepare(
-            "SELECT name FROM pragma_table_list
-             WHERE schema = 'main' AND type = 'table'
-               AND name NOT GLOB 'sqlite_*' AND strict = 0",
-        )
-        .unwrap();
-    let loose: Vec<String> = stmt
-        .query_map([], |row| row.get(0))
-        .unwrap()
-        .collect::<Result<Vec<_>, _>>()
-        .unwrap();
+    let (loose, tables) = reading(&store, |tx| {
+        let loose: Vec<String> = tx
+            .prepare(
+                "SELECT name FROM pragma_table_list
+                 WHERE schema = 'main' AND type = 'table'
+                   AND name NOT GLOB 'sqlite_*' AND strict = 0",
+            )
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        // The filter does see the store's tables, so the query isn't
+        // answering over an empty set.
+        let tables: Vec<String> = tx
+            .prepare(
+                "SELECT name FROM pragma_table_list
+                 WHERE schema = 'main' AND type = 'table' AND name NOT GLOB 'sqlite_*'",
+            )
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        Ok((loose, tables))
+    });
     assert!(loose.is_empty(), "tables that are not STRICT: {loose:?}");
-
-    // The filter does see the store's tables, so the query isn't
-    // answering over an empty set.
-    let tables: Vec<String> = store
-        .conn()
-        .prepare(
-            "SELECT name FROM pragma_table_list
-             WHERE schema = 'main' AND type = 'table' AND name NOT GLOB 'sqlite_*'",
-        )
-        .unwrap()
-        .query_map([], |row| row.get(0))
-        .unwrap()
-        .collect::<Result<_, _>>()
-        .unwrap();
     assert!(!tables.is_empty());
     assert!(tables.contains(&"store_meta".to_owned()), "{tables:?}");
 }
@@ -273,9 +281,10 @@ fn migrated_schema_matches_the_spec_sql_blocks() {
 
     let (_scratch, paths) = scratch_paths("schema-drift");
     let store = crate::open(&paths, &test_seams(real_fs())).unwrap();
+    let migrated = reading(&store, |tx| Ok(schema_rows(tx)));
     assert_eq!(
         schema_rows(&spec_conn),
-        schema_rows(store.conn()),
+        migrated,
         "the migrated schema drifted from the spec's SQL blocks"
     );
 }
@@ -310,6 +319,7 @@ fn a_migration_leaving_a_foreign_key_violation_rolls_back() {
         &paths,
         &test_seams(real_fs()),
         WRITER_PRAGMAS,
+        crate::store::READER_PRAGMAS,
         &PINNED_SQLITE,
         failing,
     )
@@ -324,12 +334,17 @@ fn a_migration_leaving_a_foreign_key_violation_rolls_back() {
     }
 
     let store = crate::open(&paths, &test_seams(real_fs())).unwrap();
-    assert_eq!(one_int(store.conn(), "PRAGMA user_version"), 1);
     assert_eq!(
-        one_int(
-            store.conn(),
-            "SELECT count(*) FROM sqlite_schema WHERE name = 'm2_probe'"
-        ),
+        reading(&store, |tx| Ok(one_int(tx, "PRAGMA user_version"))),
+        1
+    );
+    assert_eq!(
+        reading(&store, |tx| {
+            Ok(one_int(
+                tx,
+                "SELECT count(*) FROM sqlite_schema WHERE name = 'm2_probe'",
+            ))
+        }),
         0,
         "the rolled-back migration's table is still there"
     );
@@ -535,6 +550,7 @@ fn open_err(paths: &StorePaths, migrations: &[Migration]) -> StoreError {
         paths,
         &test_seams(real_fs()),
         WRITER_PRAGMAS,
+        crate::store::READER_PRAGMAS,
         &PINNED_SQLITE,
         migrations,
     )
@@ -732,7 +748,10 @@ fn failing_randomness_is_unavailable_and_retryable() {
     assert!(matches!(err, StoreError::Unavailable { .. }), "{err:?}");
 
     let store = crate::open(&paths, &test_seams(real_fs())).unwrap();
-    assert_eq!(one_int(store.conn(), "PRAGMA user_version"), 1);
+    assert_eq!(
+        reading(&store, |tx| Ok(one_int(tx, "PRAGMA user_version"))),
+        1
+    );
 }
 
 /// `store_uuid` and `incarnation` must differ; a seam that repeats
@@ -789,41 +808,9 @@ fn a_store_missing_one_identity_key_is_corrupt_and_untouched() {
 }
 
 /// The env vars that turn this test binary into a crashing writer: the
-/// database to write and the SQL to commit.
-const CRASH_DB_ENV: &str = "SB_SCHEMA_TEST_CRASH_DB";
-const CRASH_SQL_ENV: &str = "SB_SCHEMA_TEST_CRASH_SQL";
-
-/// Not a test: [`crash_write`] re-executes the test binary to run it.
-/// It commits `CRASH_SQL_ENV` into the WAL and exits without closing
-/// the connection, leaving committed frames behind as a crash does.
-#[test]
-#[ignore = "spawned by crash_write"]
-fn crashed_writer_child() {
-    let db = std::env::var(CRASH_DB_ENV).expect("database env");
-    let sql = std::env::var(CRASH_SQL_ENV).expect("SQL env");
-    let raw = Connection::open(db).unwrap();
-    raw.execute_batch("PRAGMA wal_autocheckpoint = 0;").unwrap();
-    raw.execute_batch(&sql).unwrap();
-    std::process::exit(0);
-}
-
-/// Commit `sql` from a child process that then dies, so the WAL holds
-/// frames the main file doesn't.
-fn crash_write(paths: &StorePaths, sql: &str) {
-    let status = std::process::Command::new(std::env::current_exe().unwrap())
-        .args([
-            "--exact",
-            "schema::tests::crashed_writer_child",
-            "--ignored",
-        ])
-        .env(CRASH_DB_ENV, paths.state_db())
-        .env(CRASH_SQL_ENV, sql)
-        .status()
-        .unwrap();
-    assert!(status.success(), "the crashing writer failed: {status}");
-    let wal = fs::metadata(paths.data_root().join("state.sqlite-wal")).unwrap();
-    assert!(wal.len() > 0, "the crash left no WAL frames");
-}
+/// database to write and the SQL to commit. The harness itself moved
+/// to `testing.rs` when the read-only open tests needed it too.
+pub(crate) use crate::testing::crash_write;
 
 /// A refused database stays untouched even when a crash left WAL
 /// frames: open judges it read-only, and a read-only connection never

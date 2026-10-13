@@ -6,14 +6,19 @@
 mod error;
 mod objects;
 mod paths;
+mod readers;
+mod receipts;
 mod schema;
 mod store;
 #[cfg(test)]
 mod testing;
+mod writer;
 
 pub use error::StoreError;
 pub use objects::{
     FileObjectStore, ObjectId, ObjectIter, ObjectReader, ObjectStore, read_error_as_store_error,
 };
 pub use paths::StorePaths;
-pub use store::{Seams, Store, open};
+pub use receipts::{Receipt, run_once};
+pub use store::{ReadOnlyStore, Seams, Store, open, open_read_only};
+pub use writer::{WriteFuture, WritePriority, Writer};

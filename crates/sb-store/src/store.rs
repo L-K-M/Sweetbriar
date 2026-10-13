@@ -21,7 +21,11 @@ use sb_types::time::Clock;
 use crate::StoreError;
 use crate::StorePaths;
 use crate::objects::FileObjectStore;
-use crate::schema::{MIGRATIONS, Migration, check_existing, run_migrations};
+use crate::readers::Readers;
+use crate::schema::{
+    MIGRATIONS, Migration, check_existing, check_existing_read_only, run_migrations,
+};
+use crate::writer::{WriteFuture, WritePriority, Writer};
 
 /// The SQLite build spec/01's crate table pins (rusqlite 0.40.2 →
 /// libsqlite3-sys 0.38.2 → SQLite 3.53.2); `open` refuses any other.
@@ -50,47 +54,76 @@ pub(crate) struct PinnedSqlite {
     source_id: &'static str,
 }
 
-/// An open store: the writer connection and the object store held
-/// under the ownership lease.
+/// An open store: the reader pool, the writer, the object store and
+/// the ownership lease (spec/01 "Store threads", spec/03).
 ///
 /// Field order is load-bearing: fields drop in declaration order, so
-/// the connection closes before the lease releases the lock — SQLite
-/// is done with the files before another process may take them.
+/// the readers close first, the writer is the last connection to
+/// close — SQLite then checkpoints and removes the WAL (M0.4 lifted
+/// `NO_CKPT_ON_CLOSE` for the writer) — and the lease releases last,
+/// after SQLite is done with the files.
 pub struct Store {
-    conn: Connection,
+    readers: Readers,
+    writer: Writer,
     objects: FileObjectStore,
     lease: Box<dyn Lease>,
 }
 
 impl Store {
-    /// The writer connection, for the crate's own tests (and later
-    /// internals).
-    #[cfg(test)]
-    pub(crate) fn conn(&self) -> &Connection {
-        &self.conn
-    }
-
     /// The store's object store (spec/03): publishing objects through
     /// it lands them under this store's `objects/`.
     pub fn objects(&self) -> &FileObjectStore {
         &self.objects
     }
 
-    /// Close the connection explicitly, then release the lease. The
-    /// lock file itself is kept, never deleted (spec/03).
+    /// Submit one write to the writer (spec/03 "Write discipline"):
+    /// see [`Writer::submit`]. The returned future resolves when the
+    /// writer's transaction commits or rolls back.
+    pub fn write<T, F>(&self, priority: WritePriority, closure: F) -> WriteFuture<T>
+    where
+        T: Send + 'static,
+        F: FnOnce(&rusqlite::Transaction) -> Result<T, StoreError> + Send + 'static,
+    {
+        self.writer.submit(priority, closure)
+    }
+
+    /// Run one read through the reader pool (spec/03): a short
+    /// transaction on a free read-only connection, waiting for one
+    /// when all are busy.
+    pub fn read<T>(
+        &self,
+        f: impl FnOnce(&rusqlite::Transaction) -> Result<T, StoreError>,
+    ) -> Result<T, StoreError> {
+        self.readers.read(f)
+    }
+
+    /// Close the readers, then the writer (joining its thread and
+    /// closing the last connection, which checkpoints and removes the
+    /// WAL), then release the lease. The lock file itself is kept,
+    /// never deleted (spec/03).
     pub fn close(self) -> Result<(), StoreError> {
         let Self {
-            conn,
+            readers,
+            writer,
             objects,
             lease,
         } = self;
-        // On error the returned connection drops here, still before
-        // `lease` releases.
-        conn.close().map_err(|(_conn, e)| sqlite_err(e))?;
+        let readers_closed = readers.close();
+        let writer_closed = writer.close();
         drop(objects);
         drop(lease);
-        Ok(())
+        readers_closed.and(writer_closed)
     }
+}
+
+/// The store is shared as `Arc<Store>` by many tasks (spec/01); prove
+/// it carries across threads. Never called — the body only needs to
+/// typecheck.
+#[allow(dead_code)]
+fn assert_store_is_send_and_sync() {
+    fn check<T: Send + Sync>() {}
+    check::<Store>();
+    check::<ReadOnlyStore>();
 }
 
 /// The connection and lease aren't printable; the type name is all a
@@ -150,16 +183,25 @@ impl std::fmt::Debug for Seams {
 /// at an existing database, the one connection constructor, version
 /// check, migrations, `app_version_last_opened` — in this order.
 pub fn open(paths: &StorePaths, seams: &Seams) -> Result<Store, StoreError> {
-    open_with(paths, seams, WRITER_PRAGMAS, &PINNED_SQLITE, MIGRATIONS)
+    open_with(
+        paths,
+        seams,
+        WRITER_PRAGMAS,
+        READER_PRAGMAS,
+        &PINNED_SQLITE,
+        MIGRATIONS,
+    )
 }
 
-/// `open` with the settings table, pinned version and migration list
+/// `open` with the settings tables, pinned version and migration list
 /// as parameters, so tests can simulate a pragma or version mismatch,
 /// or add a failing migration.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn open_with(
     paths: &StorePaths,
     seams: &Seams,
-    pragmas: &[PragmaSpec],
+    writer_pragmas: &[PragmaSpec],
+    reader_pragmas: &[PragmaSpec],
     pinned: &PinnedSqlite,
     migrations: &[Migration],
 ) -> Result<Store, StoreError> {
@@ -178,17 +220,94 @@ pub(crate) fn open_with(
         paths.recovery().to_path_buf(),
     );
     examine_existing(fs, paths, pinned, migrations)?;
-    let mut conn = open_connection(paths.state_db(), pragmas)?;
+    let mut conn = open_connection(paths.state_db(), Access::ReadWrite, writer_pragmas)?;
     check_sqlite_version(&conn, pinned)?;
     run_migrations(&mut conn, seams, migrations)?;
-    // Open succeeded: from now on the writer owns checkpoints (spec/03).
-    conn.set_db_config(DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, false)
-        .map_err(sqlite_err)?;
+    // The readers first, from the same constructor (spec/03): if one
+    // fails, the writer connection still doesn't checkpoint on close.
+    let readers = Readers::open(paths.state_db(), reader_pragmas)?;
+    // The writer thread owns the connection from here (spec/01), and
+    // lets it checkpoint once it runs (spec/03).
+    let writer = Writer::new(conn)?;
     Ok(Store {
-        conn,
+        readers,
+        writer,
         objects,
         lease,
     })
+}
+
+/// A store opened for reading only (spec/02 "Migrations", plan M0.6):
+/// an existing store — newer or current — under the lease, served by
+/// the reader pool. No writer, no migrations: `state.sqlite` and its
+/// WAL keep their bytes. Like any WAL reader, SQLite may create its
+/// shared-memory index (`-shm`) and an empty WAL.
+pub struct ReadOnlyStore {
+    readers: Readers,
+    lease: Box<dyn Lease>,
+}
+
+impl ReadOnlyStore {
+    /// Run one read through the reader pool, as [`Store::read`].
+    pub fn read<T>(
+        &self,
+        f: impl FnOnce(&rusqlite::Transaction) -> Result<T, StoreError>,
+    ) -> Result<T, StoreError> {
+        self.readers.read(f)
+    }
+
+    /// Close the readers — none of them checkpoints, by construction —
+    /// then release the lease. Nothing reaches `state.sqlite` or the
+    /// WAL.
+    pub fn close(self) -> Result<(), StoreError> {
+        let Self { readers, lease } = self;
+        let closed = readers.close();
+        drop(lease);
+        closed
+    }
+}
+
+/// The connection and lease aren't printable; the type name is all a
+/// test needs.
+impl std::fmt::Debug for ReadOnlyStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ReadOnlyStore")
+    }
+}
+
+/// Open an existing store for reading only (spec/02 "Migrations"): a
+/// store newer than this app opens here — the writable open refuses
+/// it with `NewerStore` — and a current one passes the usual checks;
+/// version 0 or foreign is `Corrupt`. The layout must already exist
+/// (`NotFound` otherwise) and is never created; `state.sqlite` is
+/// examined read-only and left byte-for-byte unchanged, WAL frames a
+/// crash left included.
+pub fn open_read_only(paths: &StorePaths, seams: &Seams) -> Result<ReadOnlyStore, StoreError> {
+    open_read_only_with(paths, seams, READER_PRAGMAS, &PINNED_SQLITE, MIGRATIONS)
+}
+
+/// `open_read_only` with the settings table, pinned version and
+/// migration list as parameters, so tests can vary them as for
+/// [`open_with`].
+pub(crate) fn open_read_only_with(
+    paths: &StorePaths,
+    seams: &Seams,
+    reader_pragmas: &[PragmaSpec],
+    pinned: &PinnedSqlite,
+    migrations: &[Migration],
+) -> Result<ReadOnlyStore, StoreError> {
+    let fs = seams.fs();
+    // No creation, not even the lock file: an absent store (or an
+    // absent parent) is `NotFound` before anything is touched.
+    require_existing(fs, paths)?;
+    let paths = &resolve_root(fs, paths)?;
+    check_location(fs, paths.data_root())?;
+    let lease = take_lease(fs, paths.lock_file())?;
+    // Again under the lease: it may have changed meanwhile.
+    require_existing(fs, paths)?;
+    examine_read_only(fs, paths, pinned, migrations)?;
+    let readers = Readers::open(paths.state_db(), reader_pragmas)?;
+    Ok(ReadOnlyStore { readers, lease })
 }
 
 /// The store's identity (spec/03): the data root with symlinks
@@ -345,13 +464,38 @@ fn check_partial_layout(fs: &dyn Fs, paths: &StorePaths) -> Result<(), StoreErro
     Ok(())
 }
 
+/// How the one connection constructor opens `state.sqlite` (spec/03
+/// "Connections"): the writer read-write, every reader and the
+/// examination before it read-only, so nothing but the writer can
+/// write or checkpoint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Access {
+    /// The store's one writer connection.
+    ReadWrite,
+    /// A reader: opened with `SQLITE_OPEN_READ_ONLY`, so SQLite
+    /// itself refuses any write through it.
+    ReadOnly,
+}
+
 /// Step 4 (spec/03 "SQLite configuration"): the one connection
 /// constructor. Open `state.sqlite`, apply each setting and read it
 /// back; a `state.sqlite` SQLite can't read as a database is `Corrupt`
 /// and stays byte-for-byte untouched. An existing database reaches it
 /// only after [`examine_existing`] accepted it.
-fn open_connection(state_db: &Path, pragmas: &[PragmaSpec]) -> Result<Connection, StoreError> {
-    let conn = Connection::open(state_db).map_err(sqlite_err)?;
+pub(crate) fn open_connection(
+    state_db: &Path,
+    access: Access,
+    pragmas: &[PragmaSpec],
+) -> Result<Connection, StoreError> {
+    let flags = match access {
+        Access::ReadWrite => {
+            OpenFlags::SQLITE_OPEN_READ_WRITE
+                | OpenFlags::SQLITE_OPEN_CREATE
+                | OpenFlags::SQLITE_OPEN_NO_MUTEX
+        }
+        Access::ReadOnly => OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    };
+    let conn = Connection::open_with_flags(state_db, flags).map_err(sqlite_err)?;
     // Closing doesn't checkpoint until the caller lifts this (`open_with`
     // on success): a failed open leaves the file as its steps left it,
     // with WAL frames a crash left behind still in the WAL (spec/02).
@@ -388,6 +532,50 @@ fn open_connection(state_db: &Path, pragmas: &[PragmaSpec]) -> Result<Connection
     Ok(conn)
 }
 
+/// The read-only open's look at the layout (plan M0.6): create
+/// nothing. A missing data root or `state.sqlite` is `NotFound`; one
+/// that exists answers to the writable open's rules — short or
+/// non-file databases and missing layout directories are `Corrupt`.
+fn require_existing(fs: &dyn Fs, paths: &StorePaths) -> Result<(), StoreError> {
+    match fs
+        .metadata(paths.data_root())
+        .map_err(fs_err("stat", paths))?
+    {
+        Some(md) if md.kind() == FileKind::Directory => {}
+        _ => {
+            return Err(StoreError::not_found(format!(
+                "the data root {} does not exist",
+                paths.data_root().display()
+            )));
+        }
+    }
+    match fs
+        .metadata(paths.state_db())
+        .map_err(fs_err("stat", paths))?
+    {
+        None => Err(StoreError::not_found(format!(
+            "{} does not exist",
+            paths.state_db().display()
+        ))),
+        Some(md)
+            if md.kind() == FileKind::File && !md.is_empty() && md.len() < SQLITE_HEADER_LEN =>
+        {
+            Err(StoreError::corrupt(format!(
+                "{} is {} bytes, shorter than a SQLite header",
+                paths.state_db().display(),
+                md.len()
+            )))
+        }
+        // An empty file is left to the examination: SQLite reads it as
+        // an empty database, which no store lives in, and reports that.
+        Some(md) if md.kind() == FileKind::File => check_layout(fs, paths),
+        Some(_) => Err(StoreError::corrupt(format!(
+            "{} is not a file",
+            paths.state_db().display()
+        ))),
+    }
+}
+
 /// Before the writer touches an existing `state.sqlite`, judge it
 /// through a read-only connection (spec/02 "Migrations", spec/03): the
 /// SQLite build first, as spec/02 orders it, then not WAL, a newer
@@ -409,16 +597,46 @@ fn examine_existing(
         return Ok(());
     }
 
-    let conn = open_read_only(paths.state_db())?;
+    let conn = verdict_connection(paths.state_db())?;
     check_sqlite_version(&conn, pinned)?;
     refuse_other_journal_modes(&conn)?;
     check_existing(&conn, migrations)
 }
 
-/// The connection [`examine_existing`] judges through: read-only, so it
+/// The read-only open's examination of an existing `state.sqlite`
+/// (spec/02 "Migrations", plan M0.6): as [`examine_existing`], except
+/// a newer `user_version` is accepted (a newer app may have changed
+/// `store_meta`'s shape). Still read-only, still WAL-only, still
+/// version-checked against the pin — so nothing is written either way.
+fn examine_read_only(
+    fs: &dyn Fs,
+    paths: &StorePaths,
+    pinned: &PinnedSqlite,
+    migrations: &[Migration],
+) -> Result<(), StoreError> {
+    let existing = fs
+        .metadata(paths.state_db())
+        .map_err(fs_err("stat", paths))?
+        .is_some_and(|md| !md.is_empty());
+    if !existing {
+        // `require_existing` allowed an empty file through; SQLite
+        // reads it as an empty database, which no store lives in.
+        return Err(StoreError::corrupt(format!(
+            "{} is empty; not an existing store",
+            paths.state_db().display()
+        )));
+    }
+
+    let conn = verdict_connection(paths.state_db())?;
+    check_sqlite_version(&conn, pinned)?;
+    refuse_other_journal_modes(&conn)?;
+    check_existing_read_only(&conn, migrations)
+}
+
+/// The connection the examinations judge through: read-only, so it
 /// never writes or checkpoints, and not trusting the schema of a file
 /// that may not be ours, so no schema-defined function runs.
-fn open_read_only(state_db: &Path) -> Result<Connection, StoreError> {
+fn verdict_connection(state_db: &Path) -> Result<Connection, StoreError> {
     let conn = Connection::open_with_flags(
         state_db,
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
@@ -449,7 +667,10 @@ fn refuse_other_journal_modes(conn: &Connection) -> Result<(), StoreError> {
 /// the pinned constants, else `Internal`. The release bounds (floor,
 /// withdrawn) get their own message so a mis-linked build names the
 /// right reason.
-fn check_sqlite_version(conn: &Connection, pinned: &PinnedSqlite) -> Result<(), StoreError> {
+pub(crate) fn check_sqlite_version(
+    conn: &Connection,
+    pinned: &PinnedSqlite,
+) -> Result<(), StoreError> {
     let version: String = conn
         .query_row("SELECT sqlite_version()", [], |r| r.get(0))
         .map_err(sqlite_err)?;
@@ -581,6 +802,62 @@ pub(crate) const WRITER_PRAGMAS: &[PragmaSpec] = &[
         name: "wal_autocheckpoint",
         set: "1000",
         expect: Expect::Int(1000),
+    },
+    #[cfg(target_os = "macos")]
+    PragmaSpec {
+        name: "fullfsync",
+        set: "ON",
+        expect: Expect::Int(1),
+    },
+    #[cfg(target_os = "macos")]
+    PragmaSpec {
+        name: "checkpoint_fullfsync",
+        set: "ON",
+        expect: Expect::Int(1),
+    },
+];
+
+/// The reader connections' settings (spec/03 "Connections"): the
+/// writer's rows, except readers never checkpoint on their own
+/// (`wal_autocheckpoint = 0`; only the writer checkpoints), plus
+/// `query_only`, so a read can't write even by accident. The
+/// constructor sets and reads back each one; `NO_CKPT_ON_CLOSE`
+/// stays on for readers, so closing one never checkpoints either.
+pub(crate) const READER_PRAGMAS: &[PragmaSpec] = &[
+    PragmaSpec {
+        name: "journal_mode",
+        set: "WAL",
+        expect: Expect::Text("wal"),
+    },
+    PragmaSpec {
+        name: "synchronous",
+        set: "FULL",
+        expect: Expect::Int(2),
+    },
+    PragmaSpec {
+        name: "foreign_keys",
+        set: "ON",
+        expect: Expect::Int(1),
+    },
+    PragmaSpec {
+        name: "busy_timeout",
+        set: "5000",
+        expect: Expect::Int(5000),
+    },
+    PragmaSpec {
+        name: "trusted_schema",
+        set: "OFF",
+        expect: Expect::Int(0),
+    },
+    PragmaSpec {
+        name: "wal_autocheckpoint",
+        set: "0",
+        expect: Expect::Int(0),
+    },
+    PragmaSpec {
+        name: "query_only",
+        set: "ON",
+        expect: Expect::Int(1),
     },
     #[cfg(target_os = "macos")]
     PragmaSpec {

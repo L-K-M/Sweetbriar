@@ -197,10 +197,24 @@ decided.
 - **Spec:** 03 (Connections, Write discipline), 02 (`command_receipts`),
   07 (Commands: idempotency).
 - **Depends on:** M0.4.
-- **Deliverables:** `sb-store::Writer` (submit a closure with a priority,
-  returning a future) and the reader pool; receipt helpers; the
-  read-only open of a store refused with `NewerStore` (02 Migrations):
-  the lease and readers, no writer, nothing written.
+- **Spec also:** 01 (Process model: store threads).
+- **Deliverables:**
+  - `sb-store::Writer`: one OS thread owning the writer connection; a
+    closure is submitted with a priority (user, then sync, then index,
+    01) and runs in one `BEGIN IMMEDIATE` transaction; submitting
+    returns a future of its result. The future needs no runtime, so
+    `sb-store` takes no async dependency. When the queue drains, the
+    writer checkpoints (03);
+  - the reader pool (default 4): read-only connections from the one
+    constructor, each read one short transaction;
+  - receipt helpers: run a command under an idempotency key in one
+    write; a repeated key returns the stored receipt without running,
+    a key reused for another command is `Conflict` (07);
+  - the read-only open (02 Migrations): an existing store, newer or
+    current, under the lease, with readers only. It creates no store
+    and no lock for an absent one, and writes nothing to `state.sqlite`
+    or its WAL; like any WAL reader, SQLite may create its
+    shared-memory index (`-shm`) and an empty WAL.
 - **Acceptance:**
   - writes from many tasks are serialized;
   - a user-priority write overtakes queued sync writes (test with
@@ -208,7 +222,8 @@ decided.
   - repeating an idempotency key returns the stored receipt without
     re-running;
   - readers use `query_only` and `wal_autocheckpoint=0`
-    (pragma readback);
+    (pragma readback), and a write through one fails;
+  - a key reused for a different command is `Conflict`;
   - a store with a newer `user_version` opens read-only, and its
     `state.sqlite` is unchanged afterwards.
 

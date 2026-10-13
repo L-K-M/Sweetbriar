@@ -9,11 +9,11 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 
-use sb_test_support::{ScratchDir, real_fs};
+use sb_test_support::{ScratchDir, block_on, real_fs};
 use sb_types::fs::{Fs, Location};
 
 use super::*;
-use crate::testing::{scratch_paths, test_seams};
+use crate::testing::{crash_write, scratch_paths, test_seams};
 
 /// `open` on a fresh scratch store.
 fn open_scratch(label: &str) -> (ScratchDir, StorePaths, Store) {
@@ -90,14 +90,18 @@ fn compile_options_show_the_spec_03_flags() {
     }
 }
 
-/// After open, every setting reads back its spec/03 value.
+/// After open, every setting reads back its spec/03 value — on the
+/// writer's own connection, so through a write closure (spec/01: only
+/// the writer's thread touches that connection).
 #[test]
 fn settings_stick_after_open() {
     let (_scratch, _paths, store) = open_scratch("settings");
-    let conn = &store.conn;
-    let journal: String = conn
-        .query_row("PRAGMA journal_mode", [], |r| r.get(0))
-        .unwrap();
+    let read_pragma = |name: &str| pragma_on_writer(&store, name);
+    let journal: String = block_on(store.write(crate::WritePriority::User, |tx| {
+        tx.query_row("PRAGMA journal_mode", [], |r| r.get(0))
+            .map_err(crate::schema::bug)
+    }))
+    .unwrap();
     assert_eq!(journal, "wal");
     let mut expected_settings = vec![
         ("synchronous", 2),
@@ -110,11 +114,19 @@ fn settings_stick_after_open() {
         expected_settings.extend([("fullfsync", 1), ("checkpoint_fullfsync", 1)]);
     }
     for (pragma, expected) in expected_settings {
-        let got: i64 = conn
-            .query_row(&format!("PRAGMA {pragma}"), [], |r| r.get(0))
-            .unwrap();
-        assert_eq!(got, expected, "PRAGMA {pragma}");
+        assert_eq!(read_pragma(pragma), expected, "PRAGMA {pragma}");
     }
+}
+
+/// One pragma's value on the writer's own connection, through a write
+/// closure (spec/01: only the writer's thread touches that connection).
+fn pragma_on_writer(store: &Store, name: &str) -> i64 {
+    let sql = format!("PRAGMA {name}");
+    block_on(store.write(crate::WritePriority::User, move |tx| {
+        tx.query_row(&sql, [], |r| r.get(0))
+            .map_err(crate::schema::bug)
+    }))
+    .unwrap()
 }
 
 /// DQS is off: a double-quoted string that isn't a column errors, a
@@ -122,18 +134,24 @@ fn settings_stick_after_open() {
 #[test]
 fn dqs_rejects_bare_double_quoted_strings() {
     let (_scratch, _paths, store) = open_scratch("dqs");
-    let conn = &store.conn;
-    let err = conn
-        .query_row("SELECT \"x\"", [], |r| r.get::<_, String>(0))
-        .unwrap_err();
+    let err = block_on(store.write(crate::WritePriority::User, |tx| {
+        tx.query_row("SELECT \"x\"", [], |r| r.get::<_, String>(0))
+            .map_err(crate::schema::bug)?;
+        Ok(())
+    }))
+    .unwrap_err();
     assert!(err.to_string().contains("no such column"), "{err}");
 
-    conn.execute_batch("CREATE TABLE t(a); INSERT INTO t VALUES ('v')")
-        .unwrap();
-    let value: String = conn
-        .query_row("SELECT \"a\" FROM t", [], |r| r.get(0))
-        .unwrap();
-    assert_eq!(value, "v");
+    block_on(store.write(crate::WritePriority::User, |tx| {
+        tx.execute_batch("CREATE TABLE t(a); INSERT INTO t VALUES ('v')")
+            .map_err(crate::schema::bug)?;
+        let value: String = tx
+            .query_row("SELECT \"a\" FROM t", [], |r| r.get(0))
+            .map_err(crate::schema::bug)?;
+        Ok(value)
+    }))
+    .map(|value| assert_eq!(value, "v"))
+    .unwrap();
 }
 
 // ---------------------------------------------------------------------------
@@ -342,6 +360,36 @@ fn same_process_second_open_is_locked_until_close() {
 // Refused opens.
 //
 
+/// A reader that can't open fails the open before the writer starts,
+/// so the writer's connection closes without checkpointing: WAL frames
+/// a crash left stay in the WAL, `state.sqlite` keeps its bytes, and
+/// the lease is released.
+#[test]
+fn a_reader_failing_to_open_leaves_crashed_frames_in_the_wal() {
+    let (_scratch, paths, store) = open_scratch("reader-open-fails");
+    store.close().unwrap();
+    crash_write(&paths, "INSERT INTO store_meta VALUES ('crash', 'frame');");
+    let before = fs::read(paths.state_db()).unwrap();
+    let mut readers = READER_PRAGMAS.to_vec();
+    readers[0].expect = Expect::Text("delete");
+    let err = open_with(
+        &paths,
+        &test_seams(real_fs()),
+        WRITER_PRAGMAS,
+        &readers,
+        &PINNED_SQLITE,
+        MIGRATIONS,
+    )
+    .unwrap_err();
+    assert!(matches!(err, StoreError::Unavailable { .. }), "{err:?}");
+    assert_eq!(
+        fs::read(paths.state_db()).unwrap(),
+        before,
+        "the failed open checkpointed crashed frames"
+    );
+    open(&paths, &test_seams(real_fs())).unwrap();
+}
+
 /// A settings row that cannot read back refuses the open with
 /// `Unavailable` naming the pragma, and the lease is released.
 #[test]
@@ -355,6 +403,7 @@ fn pragma_mismatch_is_unavailable_and_releases_the_lease() {
         &paths,
         &test_seams(real_fs()),
         &pragmas,
+        READER_PRAGMAS,
         &PINNED_SQLITE,
         MIGRATIONS,
     )
@@ -374,7 +423,7 @@ fn pragma_mismatch_is_unavailable_and_releases_the_lease() {
 fn the_verdict_connection_is_read_only_and_distrusts_the_schema() {
     let (_scratch, paths, store) = open_scratch("read-only-verdict");
     store.close().unwrap();
-    let conn = open_read_only(paths.state_db()).unwrap();
+    let conn = verdict_connection(paths.state_db()).unwrap();
     let trusted: i64 = conn
         .pragma_query_value(None, "trusted_schema", |row| row.get(0))
         .unwrap();
@@ -401,6 +450,7 @@ fn version_mismatch_is_internal_before_the_schema_verdict() {
         &paths,
         &test_seams(real_fs()),
         WRITER_PRAGMAS,
+        crate::store::READER_PRAGMAS,
         &wrong,
         MIGRATIONS,
     )
@@ -422,6 +472,7 @@ fn version_mismatch_is_internal() {
         &paths,
         &test_seams(real_fs()),
         WRITER_PRAGMAS,
+        crate::store::READER_PRAGMAS,
         &wrong,
         MIGRATIONS,
     )
@@ -442,6 +493,7 @@ fn version_mismatch_is_internal() {
         &paths,
         &test_seams(real_fs()),
         WRITER_PRAGMAS,
+        READER_PRAGMAS,
         &other_source,
         MIGRATIONS,
     )
@@ -767,4 +819,244 @@ fn relative_data_root_is_invalid_input() {
             err => panic!("expected InvalidInput for {root}, got {err:?}"),
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// The read-only open (plan M0.6; spec/02 "Migrations").
+//
+
+/// `store_meta` through a read-only open, as a map.
+fn read_only_meta(store: &ReadOnlyStore) -> std::collections::BTreeMap<String, String> {
+    store
+        .read(|tx| {
+            let mut stmt = tx.prepare("SELECT key, value FROM store_meta").unwrap();
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })
+                .unwrap()
+                .collect::<Result<std::collections::BTreeMap<_, _>, _>>()
+                .unwrap();
+            Ok(rows)
+        })
+        .unwrap()
+}
+
+/// 8. A store with a `user_version` above the latest opens read-only:
+///    `read` sees `store_meta`, and after `close` `state.sqlite`'s
+///    bytes are unchanged — also when a crash left WAL frames (the
+///    crashed-writer pattern from `schema/tests.rs`).
+#[test]
+fn a_newer_store_opens_read_only_and_stays_unchanged() {
+    let (scratch, paths) = scratch_paths("read-only-newer");
+    open(&paths, &test_seams(real_fs()))
+        .unwrap()
+        .close()
+        .unwrap();
+    let raw = rusqlite::Connection::open(paths.state_db()).unwrap();
+    raw.execute_batch("PRAGMA user_version = 2;").unwrap();
+    raw.close().unwrap();
+
+    let before = fs::read(paths.state_db()).unwrap();
+    let read_only = open_read_only(&paths, &test_seams(real_fs())).unwrap();
+    let meta = read_only_meta(&read_only);
+    assert!(
+        meta.contains_key("store_uuid"),
+        "the read-only open did not see store_meta: {meta:?}"
+    );
+    read_only.close().unwrap();
+    assert_eq!(
+        fs::read(paths.state_db()).unwrap(),
+        before,
+        "the read-only open changed state.sqlite"
+    );
+    // SQLite may leave an empty WAL and its shared-memory index, as
+    // for any WAL reader; the WAL holds nothing written.
+    let wal = paths.data_root().join("state.sqlite-wal");
+    assert!(
+        fs::metadata(&wal).map_or(true, |md| md.len() == 0),
+        "the read-only open wrote to the WAL"
+    );
+    drop(scratch);
+}
+
+/// A newer app may change `store_meta`: a newer store whose
+/// `store_meta` isn't migration 1's still opens read-only.
+#[test]
+fn a_newer_store_with_a_changed_store_meta_opens_read_only() {
+    let (scratch, paths) = scratch_paths("read-only-newer-meta");
+    open(&paths, &test_seams(real_fs()))
+        .unwrap()
+        .close()
+        .unwrap();
+    let raw = rusqlite::Connection::open(paths.state_db()).unwrap();
+    raw.execute_batch("ALTER TABLE store_meta ADD COLUMN note TEXT; PRAGMA user_version = 2;")
+        .unwrap();
+    raw.close().unwrap();
+
+    let read_only = open_read_only(&paths, &test_seams(real_fs())).unwrap();
+    assert!(read_only_meta(&read_only).contains_key("store_uuid"));
+    read_only.close().unwrap();
+    drop(scratch);
+}
+
+/// A read-only store refuses writes: its readers are read-only.
+#[test]
+fn a_read_only_store_refuses_writes() {
+    let (scratch, paths) = scratch_paths("read-only-refuses");
+    open(&paths, &test_seams(real_fs()))
+        .unwrap()
+        .close()
+        .unwrap();
+    let read_only = open_read_only(&paths, &test_seams(real_fs())).unwrap();
+    let refused = read_only.read(|tx| {
+        tx.execute_batch("CREATE TABLE must_not_exist (x INTEGER) STRICT;")
+            .map_err(|e| StoreError::internal(e.to_string()))
+    });
+    assert!(refused.is_err(), "a read-only store accepted a write");
+    read_only.close().unwrap();
+    drop(scratch);
+}
+
+/// 8 with a crash: WAL frames a dead writer left behind survive the
+/// read-only open and close, and `state.sqlite` keeps its bytes —
+/// no reader checkpoints them into the file.
+#[test]
+fn a_newer_store_with_crashed_wal_frames_opens_read_only_untouched() {
+    let (scratch, paths) = scratch_paths("read-only-newer-crash");
+    open(&paths, &test_seams(real_fs()))
+        .unwrap()
+        .close()
+        .unwrap();
+    crash_write(
+        &paths,
+        "PRAGMA user_version = 2;
+         UPDATE store_meta SET value = '9.9.9' WHERE key = 'last_migrated_by';",
+    );
+
+    let before = fs::read(paths.state_db()).unwrap();
+    let wal_before = fs::read(paths.data_root().join("state.sqlite-wal")).unwrap();
+    let read_only = open_read_only(&paths, &test_seams(real_fs())).unwrap();
+    // The crashed frames are what made this store newer: `read` sees
+    // the version 2 they carry, through the read-only connections.
+    let version = read_only
+        .read(|tx| {
+            tx.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+                .map_err(|e| StoreError::internal(e.to_string()))
+        })
+        .unwrap();
+    assert_eq!(version, 2);
+    read_only.close().unwrap();
+    assert_eq!(
+        fs::read(paths.state_db()).unwrap(),
+        before,
+        "the read-only open changed state.sqlite"
+    );
+    assert_eq!(
+        fs::read(paths.data_root().join("state.sqlite-wal")).unwrap(),
+        wal_before,
+        "a reader checkpointed the crashed WAL frames"
+    );
+    drop(scratch);
+}
+
+/// 8. A current store opens read-only too, and closes unchanged.
+#[test]
+fn a_current_store_opens_read_only() {
+    let (scratch, paths) = scratch_paths("read-only-current");
+    open(&paths, &test_seams(real_fs()))
+        .unwrap()
+        .close()
+        .unwrap();
+
+    let before = fs::read(paths.state_db()).unwrap();
+    let read_only = open_read_only(&paths, &test_seams(real_fs())).unwrap();
+    assert!(read_only_meta(&read_only).contains_key("incarnation"));
+    read_only.close().unwrap();
+    assert_eq!(fs::read(paths.state_db()).unwrap(), before);
+    drop(scratch);
+}
+
+/// 8. An absent store is `NotFound` and nothing is created.
+#[test]
+fn an_absent_store_is_not_found_and_nothing_is_created() {
+    let (scratch, paths) = scratch_paths("read-only-absent");
+    match open_read_only(&paths, &test_seams(real_fs())).unwrap_err() {
+        StoreError::NotFound { what } => assert!(what.contains("data root"), "{what}"),
+        err => panic!("expected NotFound, got {err:?}"),
+    }
+    assert_eq!(
+        recursive_listing(scratch.path()),
+        Vec::new(),
+        "the read-only open created something (the lock file?)"
+    );
+    drop(scratch);
+
+    // An absent parent too: still `NotFound`, still nothing created.
+    let scratch = ScratchDir::new("read-only-absent-parent");
+    let paths = StorePaths::new(scratch.path().join("missing/parent/store")).unwrap();
+    assert!(matches!(
+        open_read_only(&paths, &test_seams(real_fs())),
+        Err(StoreError::NotFound { .. })
+    ));
+    assert_eq!(recursive_listing(scratch.path()), Vec::new());
+    drop(scratch);
+
+    // A data root without `state.sqlite` is `NotFound` too, and no
+    // lock appears beside it.
+    let (scratch, paths) = scratch_paths("read-only-no-db");
+    fs::create_dir_all(paths.objects_tmp()).unwrap();
+    let listing = recursive_listing(scratch.path());
+    match open_read_only(&paths, &test_seams(real_fs())).unwrap_err() {
+        StoreError::NotFound { what } => assert!(what.contains("state.sqlite"), "{what}"),
+        err => panic!("expected NotFound, got {err:?}"),
+    }
+    assert_eq!(recursive_listing(scratch.path()), listing);
+    drop(scratch);
+}
+
+/// 8. A foreign database is `Corrupt`: version 0 with a schema, in or
+///    out of WAL.
+#[test]
+fn a_foreign_database_is_corrupt_read_only() {
+    for mode in ["WAL", "DELETE"] {
+        let (scratch, paths) = scratch_paths("read-only-foreign");
+        open(&paths, &test_seams(real_fs()))
+            .unwrap()
+            .close()
+            .unwrap();
+        for name in ["state.sqlite", "state.sqlite-wal", "state.sqlite-shm"] {
+            let path = paths.data_root().join(name);
+            if path.exists() {
+                fs::remove_file(path).unwrap();
+            }
+        }
+        let raw = rusqlite::Connection::open(paths.state_db()).unwrap();
+        raw.execute_batch(&format!("PRAGMA journal_mode = {mode}; CREATE TABLE t(x);"))
+            .unwrap();
+        raw.close().unwrap();
+
+        let before = fs::read(paths.state_db()).unwrap();
+        match open_read_only(&paths, &test_seams(real_fs())).unwrap_err() {
+            StoreError::Corrupt { .. } => {}
+            err => panic!("expected Corrupt for journal mode {mode}, got {err:?}"),
+        }
+        assert_eq!(fs::read(paths.state_db()).unwrap(), before);
+        drop(scratch);
+    }
+}
+
+/// 8. A read-only open while the store is open is `Locked`: the
+///    lease is exclusive (spec/03), even for readers.
+#[test]
+fn a_read_only_open_while_the_store_is_open_is_locked() {
+    let (scratch, paths) = scratch_paths("read-only-locked");
+    let store = open(&paths, &test_seams(real_fs())).unwrap();
+    assert!(matches!(
+        open_read_only(&paths, &test_seams(real_fs())),
+        Err(StoreError::Locked)
+    ));
+    store.close().unwrap();
+    open_read_only(&paths, &test_seams(real_fs())).unwrap();
+    drop(scratch);
 }
