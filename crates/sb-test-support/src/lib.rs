@@ -7,6 +7,7 @@
 mod cut;
 mod fault;
 mod sim;
+mod sqlite;
 
 use std::future::Future;
 use std::io;
@@ -24,6 +25,7 @@ use sb_types::time::{Clock, Timestamp};
 pub use cut::{CutFs, run_crash_cuts};
 pub use fault::{FaultFs, FaultKind, FsOp};
 pub use sim::SimFs;
+pub use sqlite::{execute_sql, store_meta_value};
 
 /// Drive `future` to completion on the calling thread: a minimal
 /// executor for tests, with no runtime dependency (spec/01 keeps the

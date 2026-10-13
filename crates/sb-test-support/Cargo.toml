@@ -12,3 +12,6 @@ sb-types = { version = "0.0.0", path = "../sb-types" }
 # `SIGKILL` for the crash-cut harness and `ENOSPC`/`EIO` for fault
 # injection; the same pin `sb-platform` carries (spec/01).
 libc = "=0.2.190"
+# Reading and damaging a store's database from outside the store, for
+# tests above it (the marker, injected corruption).
+rusqlite = { version = "=0.40.2", features = ["bundled", "backup", "limits"] }

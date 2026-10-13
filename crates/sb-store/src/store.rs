@@ -23,7 +23,8 @@ use crate::StorePaths;
 use crate::objects::FileObjectStore;
 use crate::readers::Readers;
 use crate::schema::{
-    MIGRATIONS, Migration, check_existing, check_existing_read_only, run_migrations,
+    MIGRATIONS, Migration, check_existing, check_existing_read_only, read_user_version, require_ok,
+    run_migrations,
 };
 use crate::writer::{WriteFuture, WritePriority, Writer};
 
@@ -54,6 +55,11 @@ pub(crate) struct PinnedSqlite {
     source_id: &'static str,
 }
 
+/// The `store_meta` key of the clean-shutdown marker (spec/03
+/// "Integrity"): present only between a clean shutdown and the next
+/// open.
+pub(crate) const CLEAN_SHUTDOWN_KEY: &str = "clean_shutdown_at";
+
 /// An open store: the reader pool, the writer, the object store and
 /// the ownership lease (spec/01 "Store threads", spec/03).
 ///
@@ -67,6 +73,9 @@ pub struct Store {
     writer: Writer,
     objects: FileObjectStore,
     lease: Box<dyn Lease>,
+    /// The clock [`Store::close`] stamps the clean-shutdown marker
+    /// with, held from the seams the store opened with.
+    clock: Arc<dyn Clock>,
 }
 
 impl Store {
@@ -97,22 +106,31 @@ impl Store {
         self.readers.read(f)
     }
 
-    /// Close the readers, then the writer (joining its thread and
-    /// closing the last connection, which checkpoints and removes the
-    /// WAL), then release the lease. The lock file itself is kept,
-    /// never deleted (spec/03).
+    /// Close the store (spec/03 "Integrity"): record the
+    /// clean-shutdown marker as the writer's last write, then close
+    /// the readers, join the writer (closing the last connection,
+    /// which checkpoints and removes the WAL), then release the lease.
+    /// The lock file itself is kept, never deleted (spec/03).
+    ///
+    /// Dropping a `Store` without `close` records nothing — an unclean
+    /// end, which the next open answers with `PRAGMA quick_check`.
     pub fn close(self) -> Result<(), StoreError> {
         let Self {
             readers,
             writer,
             objects,
             lease,
+            clock,
         } = self;
+        // The marker goes in at the lowest priority, so anything
+        // already queued commits first and the marker truly is the
+        // last write; callers stop submitting before closing.
+        let marker = record_clean_shutdown(&writer, clock.as_ref());
         let readers_closed = readers.close();
         let writer_closed = writer.close();
         drop(objects);
         drop(lease);
-        readers_closed.and(writer_closed)
+        marker.and(readers_closed).and(writer_closed)
     }
 }
 
@@ -170,6 +188,12 @@ impl Seams {
     pub(crate) fn random_arc(&self) -> &Arc<dyn Random> {
         &self.random
     }
+
+    /// The clock seam by handle, as `fs_arc`: the store stamps the
+    /// clean-shutdown marker with the clock it opened with.
+    pub(crate) fn clock_arc(&self) -> &Arc<dyn Clock> {
+        &self.clock
+    }
 }
 
 impl std::fmt::Debug for Seams {
@@ -208,6 +232,7 @@ pub(crate) fn open_with(
     let fs = seams.fs();
     let paths = &resolve_root(fs, paths)?;
     check_location(fs, paths.data_root())?;
+    create_missing_ancestors(fs, paths)?;
     let lease = take_lease(fs, paths.lock_file())?;
     // From here on an early return drops `lease`, releasing the lock.
     ensure_layout(fs, paths)?;
@@ -222,6 +247,7 @@ pub(crate) fn open_with(
     examine_existing(fs, paths, pinned, migrations)?;
     let mut conn = open_connection(paths.state_db(), Access::ReadWrite, writer_pragmas)?;
     check_sqlite_version(&conn, pinned)?;
+    startup_quick_check(&conn)?;
     run_migrations(&mut conn, seams, migrations)?;
     // The readers first, from the same constructor (spec/03): if one
     // fails, the writer connection still doesn't checkpoint on close.
@@ -234,7 +260,80 @@ pub(crate) fn open_with(
         writer,
         objects,
         lease,
+        clock: Arc::clone(seams.clock_arc()),
     })
+}
+
+/// The startup `quick_check` (spec/03 "Integrity"): an existing store
+/// (`user_version` ≥ 1 before migrating) that lacks the clean-shutdown
+/// marker didn't end cleanly, so check it before the migrations touch
+/// anything; a finding is `Corrupt`. A new store has no previous
+/// session and skips the check. Runs on the writer connection, after
+/// the SQLite version check and before the migrations.
+fn startup_quick_check(conn: &Connection) -> Result<(), StoreError> {
+    if read_user_version(conn)? < 1 || has_clean_shutdown_marker(conn)? {
+        return Ok(());
+    }
+    require_ok(conn, "PRAGMA quick_check", "the startup quick_check")
+}
+
+/// Whether `store_meta` holds the clean-shutdown marker. Open reaches
+/// this only after [`examine_existing`] accepted the store, so
+/// `store_meta` exists with the identity keys.
+fn has_clean_shutdown_marker(conn: &Connection) -> Result<bool, StoreError> {
+    let present: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM store_meta WHERE key = ?1",
+            [CLEAN_SHUTDOWN_KEY],
+            |row| row.get(0),
+        )
+        .map_err(|e| crate::schema::classify(e, "read the clean-shutdown marker"))?;
+    Ok(present > 0)
+}
+
+/// Record the clean-shutdown marker (spec/03 "Integrity") as the
+/// writer's last write: the clock's milliseconds since the epoch in
+/// decimal. A failure is reported by the caller after the rest of the
+/// close ran — the next open's `quick_check` is the safety net.
+fn record_clean_shutdown(writer: &Writer, clock: &dyn Clock) -> Result<(), StoreError> {
+    let at = clock.now();
+    let future = writer.submit(WritePriority::Index, move |tx| {
+        tx.execute(
+            "INSERT INTO store_meta (key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            rusqlite::params![CLEAN_SHUTDOWN_KEY, at.as_millis().to_string()],
+        )
+        .map_err(|e| crate::schema::classify(e, "record the clean-shutdown marker"))?;
+        Ok(())
+    });
+    await_write(future)
+}
+
+/// Drive one [`WriteFuture`] to completion on the calling thread: a
+/// thread-park waker, as in tests, since `close` is synchronous and
+/// the future works under any executor (a wake from the writer thread
+/// unparks this one; a park before the wake keeps its permit).
+fn await_write<T>(future: WriteFuture<T>) -> Result<T, StoreError> {
+    use std::task::{Context, Poll, Wake, Waker};
+
+    /// Wakes by unparking the blocked closing thread.
+    struct ThreadParker(std::thread::Thread);
+
+    impl Wake for ThreadParker {
+        fn wake(self: Arc<Self>) {
+            self.0.unpark();
+        }
+    }
+
+    let waker = Waker::from(Arc::new(ThreadParker(std::thread::current())));
+    let mut cx = Context::from_waker(&waker);
+    let mut future = std::pin::pin!(future);
+    loop {
+        match future.as_mut().poll(&mut cx) {
+            Poll::Ready(output) => return output,
+            Poll::Pending => std::thread::park(),
+        }
+    }
 }
 
 /// A store opened for reading only (spec/02 "Migrations", plan M0.6):
@@ -315,18 +414,60 @@ pub(crate) fn open_read_only_with(
 /// one lock (`alias -> store` locks `store.lock`). A root that doesn't
 /// exist yet resolves through its parent, which must exist.
 fn resolve_root(fs: &dyn Fs, paths: &StorePaths) -> Result<StorePaths, StoreError> {
-    let root = paths.data_root();
-    let resolved = match fs.metadata(root).map_err(fs_err("stat", paths))? {
-        Some(_) => fs.canonicalize(root),
-        None => {
-            let parent = root.parent().expect("StorePaths guarantees a final name");
-            let name = root
-                .file_name()
-                .expect("StorePaths guarantees a final name");
-            fs.canonicalize(parent).map(|parent| parent.join(name))
+    // Walk up to the nearest level that exists; the levels above it
+    // that don't are appended as spelled.
+    let mut existing = paths.data_root();
+    let mut missing = Vec::new();
+    while fs
+        .metadata(existing)
+        .map_err(fs_err("stat", paths))?
+        .is_none()
+    {
+        let (Some(name), Some(parent)) = (existing.file_name(), existing.parent()) else {
+            return Err(StoreError::unavailable(format!(
+                "no level of {} exists",
+                paths.data_root().display()
+            )));
+        };
+        missing.push(name);
+        existing = parent;
+    }
+    let mut resolved = fs
+        .canonicalize(existing)
+        .map_err(fs_err("resolve", paths))?;
+    for name in missing.iter().rev() {
+        resolved.push(name);
+    }
+    StorePaths::new(resolved)
+}
+
+/// A writable open's data root may sit under directories that don't
+/// exist yet, such as a fresh system's `~/.local/share` (spec/03):
+/// create each missing ancestor, flushing it into its parent, so the
+/// lock file and the root have somewhere to live. Run after the
+/// location check and before the lease; an absent ancestor means no
+/// other process can hold the lock beside the root.
+fn create_missing_ancestors(fs: &dyn Fs, paths: &StorePaths) -> Result<(), StoreError> {
+    let mut missing = Vec::new();
+    let mut dir = paths
+        .data_root()
+        .parent()
+        .expect("StorePaths guarantees a final name");
+    while fs.metadata(dir).map_err(fs_err("stat", paths))?.is_none() {
+        missing.push(dir);
+        dir = dir.parent().expect("the filesystem root exists");
+    }
+    for dir in missing.into_iter().rev() {
+        match fs.create_dir(dir) {
+            Ok(()) => {}
+            // Another process got there first: fine, it's a directory.
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(fs_err("create", paths)(e)),
         }
-    };
-    StorePaths::new(resolved.map_err(fs_err("resolve", paths))?)
+        let parent = dir.parent().expect("a created level has a parent");
+        fs.sync_dir(parent).map_err(fs_err("flush", paths))?;
+    }
+    Ok(())
 }
 
 /// Step 1 (spec/03): the data root lives on a local filesystem. Not

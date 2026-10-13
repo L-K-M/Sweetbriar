@@ -54,7 +54,9 @@ impl StoreError {
         }
     }
 
-    pub(crate) fn internal(detail: impl Into<String>) -> Self {
+    /// `Internal` is public because the layers above speak their own
+    /// error types over this one and construct the mapping's target.
+    pub fn internal(detail: impl Into<String>) -> Self {
         Self::Internal {
             detail: detail.into(),
         }

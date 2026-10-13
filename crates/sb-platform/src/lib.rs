@@ -11,7 +11,9 @@ mod clock;
 mod fs;
 mod location;
 mod random;
+mod roots;
 
 pub use clock::SystemClock;
 pub use fs::RealFs;
 pub use random::OsRandom;
+pub use roots::{default_cache_root, default_data_root};

@@ -63,7 +63,22 @@ pub(crate) fn run_migrations(
             "the post-migration integrity_check",
         )?;
     }
-    set_meta(conn, "app_version_last_opened", APP_VERSION)
+    record_open(conn)
+}
+
+/// Open's final write (spec/02, spec/03 "Integrity"): record
+/// `app_version_last_opened` and, in the same transaction, remove the
+/// clean-shutdown marker — the marker lives only between a clean
+/// shutdown and the next open, so a later crash (or power cut) during
+/// this session leaves it absent and the next open runs `quick_check`.
+fn record_open(conn: &mut Connection) -> Result<(), StoreError> {
+    let tx = conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(step_err)?;
+    set_meta(&tx, "app_version_last_opened", APP_VERSION)?;
+    tx.execute("DELETE FROM store_meta WHERE key = 'clean_shutdown_at'", [])
+        .map_err(step_err)?;
+    tx.commit().map_err(step_err)
 }
 
 /// Judge an existing database before anything writes to it: the
@@ -108,7 +123,7 @@ pub(crate) fn check_existing_read_only(
 }
 
 /// `PRAGMA user_version`, as the runner reads it.
-fn read_user_version(conn: &Connection) -> Result<i64, StoreError> {
+pub(crate) fn read_user_version(conn: &Connection) -> Result<i64, StoreError> {
     conn.query_row("PRAGMA user_version", [], |row| row.get(0))
         .map_err(step_err)
 }
@@ -276,7 +291,7 @@ fn last_migrated_by(conn: &Connection) -> Option<String> {
 
 /// Require a check pragma to answer exactly one `ok` row; anything
 /// else is `Corrupt` naming the first finding.
-fn require_ok(conn: &Connection, pragma: &str, what: &str) -> Result<(), StoreError> {
+pub(crate) fn require_ok(conn: &Connection, pragma: &str, what: &str) -> Result<(), StoreError> {
     let findings = pragma_strings(conn, pragma)?;
     if matches!(findings.as_slice(), [single] if single == "ok") {
         return Ok(());

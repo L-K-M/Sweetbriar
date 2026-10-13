@@ -9,10 +9,24 @@ mod paths;
 mod readers;
 mod receipts;
 mod schema;
+pub mod settings;
 mod store;
 #[cfg(test)]
 mod testing;
 mod writer;
+
+// The seam vocabulary sb-types owns (spec/01 rules 2 and 3), re-exported
+// by item so the layer above — which cannot name sb-types directly —
+// reaches it through this crate, one layer at a time.
+pub use sb_types::fs::Fs;
+pub use sb_types::id::Uuid;
+pub use sb_types::random::Random;
+pub use sb_types::time::{Clock, Timestamp};
+
+// The write API's closure parameter, re-exported for the same reason:
+// the layer above states the bound without taking a rusqlite
+// dependency of its own.
+pub use rusqlite::Transaction;
 
 pub use error::StoreError;
 pub use objects::{
@@ -20,5 +34,6 @@ pub use objects::{
 };
 pub use paths::StorePaths;
 pub use receipts::{Receipt, run_once};
+pub use settings::{StoredSetting, read_all, upsert};
 pub use store::{ReadOnlyStore, Seams, Store, open, open_read_only};
 pub use writer::{WriteFuture, WritePriority, Writer};
