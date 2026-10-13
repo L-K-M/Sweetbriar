@@ -1,0 +1,11 @@
+[package]
+name = "sb-resources"
+version = "0.0.0"
+edition = "2021"
+build = "build.rs"
+
+[dependencies]
+sb-store = { path = "../sb-store", features = ["extra"] }
+
+[build-dependencies]
+sb-store = { path = "../sb-store" }

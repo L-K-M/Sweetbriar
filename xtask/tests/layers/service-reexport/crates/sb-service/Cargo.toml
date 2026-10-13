@@ -1,0 +1,7 @@
+[package]
+name = "sb-service"
+version = "0.0.0"
+edition = "2021"
+
+[dependencies]
+sb-engine = { path = "../sb-engine" }

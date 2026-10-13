@@ -39,12 +39,19 @@ jobs:
         run: cargo fmt --all --check
       - name: clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
+      # check-layers (and its integration tests under `cargo test`)
+      # reads rustdoc's unstable JSON output on a pinned nightly
+      # (spec/01); the pin moves only deliberately.
+      - name: Install nightly for check-layers
+        run: rustup toolchain install nightly-2026-10-10 --profile minimal
       - name: test
         run: cargo test --workspace
       - name: doc
         run: cargo doc --workspace --no-deps
         env:
           RUSTDOCFLAGS: "-D warnings"
+      - name: check-layers
+        run: cargo xtask check-layers
 
   deny:
     runs-on: ubuntu-24.04

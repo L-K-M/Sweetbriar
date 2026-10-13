@@ -44,26 +44,27 @@ decided.
   - the notices drift check passes, and fails when a dependency is added
     without regenerating.
 
-### M0.2 Layering check — M, linux
+### M0.2 Layering check — L, linux
 
-- **Goal:** `cargo xtask check-layers` enforces the owner's
-  adjacent-layer rule.
+- **Goal:** `cargo xtask check-layers` enforces what Cargo doesn't: the
+  crate graph, re-export rules and source boundaries (spec/01).
 - **Spec:** 01 (Layers, The layering check).
 - **Depends on:** M0.1.
 - **Deliverables:**
-  - `layers.toml` covering every module in the skeleton;
-  - the `syn`-based checker in `xtask`;
-  - fixtures in `xtask/tests/layers/`:
-    - negative: a direct skip-layer import, an alias, a re-export
-      shortcut, a glob, an `include!`, an exported macro with a `$crate`
-      path;
-    - positive: a legal adjacent re-export;
-  - wired into `xtask ci` and `ci.yml`.
+  - `sb-core` split into `sb-service`, `sb-engine` and `sb-resources`,
+    with the first-party dependencies of spec/01 rule 1;
+  - `layers.toml` classifying every workspace crate;
+  - the checker in `xtask`: `cargo metadata` for the crate graph,
+    rustdoc JSON (pinned nightly) for re-exports, Cargo dep-info for
+    source boundaries;
+  - the fixtures listed in spec/01, in `xtask/tests/layers/`;
+  - wired into `xtask ci`, `ci.yml` and `macos.yml` (pinned nightly
+    installed in both workflows).
 - **Acceptance:**
   - every negative fixture fails with a message naming the file, line
-    and forbidden edge;
+    and forbidden edge or rule;
   - the positive fixture passes;
-  - an unclassified file fails;
+  - an unclassified crate fails;
   - the real workspace passes.
 
 ### M0.3 Store open path — M, linux + macos-ci
@@ -125,7 +126,7 @@ decided.
 - **Deliverables:**
   - the `Fs` seam and its real implementation from M0.3, plus a
     fault-injecting implementation in `sb-test-support`. Callers inject
-    the real one: tests here, `resources` from M0.7;
+    the real one: tests here, `sb-resources` from M0.7;
   - in `sb-store`: `ObjectStore` and the file implementation. Reservation
     pins (03) arrive with GC in M1.8; until then nothing removes objects;
   - in `sb-test-support`: the crash-cut harness (spawn a child, kill at
@@ -170,13 +171,14 @@ decided.
 
 ### M0.7 Core skeleton and CLI — M, linux
 
-- **Goal:** `sb-core` has its three layers, with one command and one query
-  end to end; `sb-cli` uses them.
+- **Goal:** `sb-service`, `sb-engine` and `sb-resources` carry one command
+  and one query end to end; `sb-cli` uses them.
 - **Spec:** 01 (Layers, Process model), 07 (Lifecycle, Errors, one
   command: `set_setting`, one query: `settings()`).
 - **Depends on:** M0.2, M0.6.
 - **Deliverables:**
-  - `sb-core::{service, engine, resources}` modules;
+  - the command and query through `sb-service`, `sb-engine` and
+    `sb-resources`;
   - `open_core` and `shutdown`, with the runtime owned by the engine;
   - `sb-cli settings get|set`.
 - **Acceptance:**

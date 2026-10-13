@@ -8,3 +8,4 @@ rust-version.workspace = true
 
 # staticlib + cdylib crate types arrive with the UniFFI exports in M0.8.
 [dependencies]
+sb-service = { version = "0.0.0", path = "../sb-service" }

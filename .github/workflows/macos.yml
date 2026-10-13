@@ -42,6 +42,7 @@ jobs:
               - 'Cargo.lock'
               - '.cargo/**'
               - 'rust-toolchain.toml'
+              - 'layers.toml'
               - '.github/workflows/macos.yml'
 
   # Rust-only first shape (M0.1). M0.8 adds `xtask ffi` + `check-ffi`,
@@ -65,8 +66,15 @@ jobs:
           xcodebuild -version
           echo "Runner image: ${ImageOS:-unknown} ${ImageVersion:-unknown}"
 
+      # check-layers (and its integration tests under `cargo test`)
+      # sees the macOS-cfg surface here (spec/01); it needs rustdoc's
+      # unstable JSON on a pinned nightly.
+      - name: Install nightly for check-layers
+        run: rustup toolchain install nightly-2026-10-10 --profile minimal
       - name: cargo test (aarch64-apple-darwin)
         run: cargo test --workspace --target aarch64-apple-darwin
+      - name: check-layers
+        run: cargo xtask check-layers
 
   # Aggregate merge gate: always runs so the check exists on every PR;
   # succeeds when the build job succeeded or was skipped by the filter.

@@ -46,7 +46,7 @@ signed in, with its TLS certificate exported.
   - an IDLE watcher;
   - timeouts and backoff;
   - a dialect-free command interface. The provider policies
-    (`proton_bridge`, `generic_imap`) live in `sb-core::engine::policy`
+    (`proton_bridge`, `generic_imap`) live in `sb-engine` (module `policy`)
     (04) and arrive in M2.4.
 - **Acceptance**, against the fake server and Dovecot:
   - a wrong pin is rejected before LOGIN;
@@ -97,7 +97,7 @@ signed in, with its TLS certificate exported.
   - mailbox discovery and mapping (kinds and roles: Starred `flagged`,
     All Mail `all`, Scheduled `virtual` without a role);
   - header batches with `uidnext` checkpoints in one transaction;
-  - the provider policy modules (`engine::policy::proton_bridge`,
+  - the provider policy modules (`sb_engine::policy::proton_bridge`,
     `generic_imap`) with their mailbox mapping and grouping rules; later
     steps add their mutation rules;
   - logical message grouping with evidence;

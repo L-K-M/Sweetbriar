@@ -1,0 +1,10 @@
+[package]
+name = "sb-engine"
+version = "0.0.0"
+edition = "2021"
+
+[target.'cfg(unix)'.dependencies]
+sb-store = { path = "../sb-store" }
+
+[target.'cfg(unix)'.dependencies.sb-mime]
+path = "../sb-mime"

@@ -1,0 +1,2 @@
+//! Unclassified.
+pub struct Odd;

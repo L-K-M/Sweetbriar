@@ -1,0 +1,3 @@
+[crates]
+service_api = { layer = 2, deps = ["sb_engine"] }
+sb_engine   = { layer = 3 }

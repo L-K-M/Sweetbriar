@@ -3,7 +3,9 @@ resolver = "3"
 members = [
     "crates/sb-ffi",
     "crates/sb-cli",
-    "crates/sb-core",
+    "crates/sb-service",
+    "crates/sb-engine",
+    "crates/sb-resources",
     "crates/sb-store",
     "crates/sb-mime",
     "crates/sb-imap",

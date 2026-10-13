@@ -1,0 +1,3 @@
+[crates]
+sb_store = { layer = 5 }
+xtask    = { role = "tool" }
