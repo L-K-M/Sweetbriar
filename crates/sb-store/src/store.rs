@@ -239,8 +239,9 @@ pub(crate) fn open_with(
 
 /// A store opened for reading only (spec/02 "Migrations", plan M0.6):
 /// an existing store — newer or current — under the lease, served by
-/// the reader pool. No writer, no migrations, nothing written; the
-/// bytes on disk are unchanged by opening and closing it.
+/// the reader pool. No writer, no migrations: `state.sqlite` and its
+/// WAL keep their bytes. Like any WAL reader, SQLite may create its
+/// shared-memory index (`-shm`) and an empty WAL.
 pub struct ReadOnlyStore {
     readers: Readers,
     lease: Box<dyn Lease>,
@@ -256,7 +257,8 @@ impl ReadOnlyStore {
     }
 
     /// Close the readers — none of them checkpoints, by construction —
-    /// then release the lease. Nothing is written.
+    /// then release the lease. Nothing reaches `state.sqlite` or the
+    /// WAL.
     pub fn close(self) -> Result<(), StoreError> {
         let Self { readers, lease } = self;
         let closed = readers.close();
