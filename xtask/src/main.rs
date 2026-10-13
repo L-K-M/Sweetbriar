@@ -24,9 +24,7 @@ fn main() -> ExitCode {
     match task.as_str() {
         "ci" => ci(),
         "notices" => notices(),
-        // M0.2 implements the syn-based adjacent-layer checker here and
-        // adds it to `ci` in the same PR.
-        "check-layers" => pending("check-layers", "M0.2"),
+        "check-layers" => check_layers(),
         _ => {
             usage();
             ExitCode::FAILURE
@@ -38,11 +36,12 @@ fn main() -> ExitCode {
 /// stops the run.
 fn ci() -> ExitCode {
     let root = workspace_root();
-    let steps: [(&str, Step); 6] = [
+    let steps: [(&str, Step); 7] = [
         ("fmt", step_fmt),
         ("clippy", step_clippy),
         ("test", step_test),
         ("doc", step_doc),
+        ("check-layers", step_check_layers),
         ("deny", step_deny),
         ("notices-drift", step_notices_drift),
     ];
@@ -98,6 +97,48 @@ fn step_doc(root: &Path) -> bool {
     run(&mut cmd)
 }
 
+/// `cargo xtask check-layers [root]`: the layering gate, run on its
+/// own. An optional workspace root lets the fixtures under
+/// `xtask/tests/layers/` be checked by hand.
+fn check_layers() -> ExitCode {
+    let root = env::args()
+        .nth(2)
+        .map(PathBuf::from)
+        .unwrap_or_else(workspace_root);
+    if run_check_layers(&root) {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    }
+}
+
+/// The `ci` step: same checker, folded into the step loop.
+fn step_check_layers(root: &Path) -> bool {
+    run_check_layers(root)
+}
+
+/// Checks the workspace's sources against `layers.toml` and prints
+/// each violation (`file:line: <from> (Lx) -> <to> (Ly): <why>`).
+fn run_check_layers(root: &Path) -> bool {
+    match xtask::layers::check_workspace(root) {
+        Ok(report) if report.violations.is_empty() => {
+            eprintln!("check-layers: all layer boundaries hold");
+            true
+        }
+        Ok(report) => {
+            for violation in &report.violations {
+                eprintln!("{violation}");
+            }
+            eprintln!("check-layers: {} violation(s)", report.violations.len());
+            false
+        }
+        Err(error) => {
+            eprintln!("check-layers: {error}");
+            false
+        }
+    }
+}
+
 fn step_deny(root: &Path) -> bool {
     run(&mut cargo(root, &["deny", "check"]))
 }
@@ -127,12 +168,6 @@ fn step_notices_drift(root: &Path) -> bool {
 fn generate_notices(root: &Path, out: &Path) -> bool {
     let mut cmd = cargo(root, &["about", "generate", NOTICES_TEMPLATE]);
     run(cmd.arg("--output-file").arg(out))
-}
-
-/// Reports a task that exists in the plan but not yet in code.
-fn pending(name: &str, milestone: &str) -> ExitCode {
-    eprintln!("{name}: not implemented yet (lands in {milestone})");
-    ExitCode::FAILURE
 }
 
 /// A `cargo` invocation pinned to the workspace root so `xtask` works

@@ -1,0 +1,7 @@
+[package]
+name = "sb-resources"
+version = "0.0.0"
+edition = "2021"
+
+[dependencies]
+storage = { package = "sb-store", path = "../sb-store" }

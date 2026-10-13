@@ -6,5 +6,12 @@ license.workspace = true
 publish.workspace = true
 rust-version.workspace = true
 
-# Standard library only. `syn` arrives in M0.2 for check-layers.
+# `serde`, `serde_json` and `toml` are pinned for the check-layers
+# command (spec/01): serde+serde_json parse `cargo metadata`, cargo's
+# compiler messages and rustdoc's JSON output — the check reads
+# toolchain output, never Rust source — and serde+toml read
+# layers.toml.
 [dependencies]
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.151"
+toml = "=1.1.8"

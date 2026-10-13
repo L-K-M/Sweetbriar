@@ -1,0 +1,4 @@
+[crates]
+sb_engine = { layer = 3 }
+sb_store  = { layer = 5 }
+sb_mime   = { layer = 5 }

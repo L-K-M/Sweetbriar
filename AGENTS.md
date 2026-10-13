@@ -9,29 +9,43 @@ this file is the short operational summary.
 ```sh
 cargo xtask ci        # the full local gate; must be green before a PR
 cargo xtask notices   # regenerate THIRD_PARTY_NOTICES.md
-cargo xtask check-layers  # M0.2 — not implemented yet
+cargo xtask check-layers  # the spec/01 layer-boundary checker
 ```
+
+`check-layers` reads rustdoc's unstable JSON output, so it needs the
+pinned nightly toolchain:
+
+```sh
+rustup toolchain install nightly-2026-10-10 --profile minimal
+```
+
+Building stays on the stable pin in `rust-toolchain.toml`; moving the
+nightly pin is its own PR (spec/01 "Toolchain").
 
 `cargo xtask ci` runs, in order: `cargo fmt --all --check`,
 `cargo clippy --workspace --all-targets -- -D warnings`,
 `cargo test --workspace`, `cargo doc --workspace --no-deps` with
-`RUSTDOCFLAGS="-D warnings"`, `cargo deny check`, and the
-`THIRD_PARTY_NOTICES.md` drift check (regenerates to a temp file and
-diffs; regenerate with `cargo xtask notices` and commit the result).
+`RUSTDOCFLAGS="-D warnings"`, `cargo xtask check-layers`,
+`cargo deny check`, and the `THIRD_PARTY_NOTICES.md` drift check
+(regenerates to a temp file and diffs; regenerate with
+`cargo xtask notices` and commit the result).
 
 ## What runs where
 
 **Linux, every PR — agents verify locally:**
 
 - fmt, clippy, tests and docs (`cargo xtask ci`, all steps above);
+- `cargo xtask check-layers` (the spec/01 layer-boundary rules in
+  `layers.toml`);
 - `cargo deny check` (licences, advisories, bans, sources);
 - the notices drift check;
-- `check-layers` once M0.2 lands;
 - the Dovecot protocol suite once M2 lands (`cargo xtask ci --docker`).
 
 **Only in macOS CI (`.github/workflows/macos.yml`):**
 
 - `cargo test --workspace --target aarch64-apple-darwin` (M0.1 shape);
+- `cargo xtask check-layers` on the macOS toolchain — it sees the
+  macOS-cfg re-export surface (spec/01);
 - `xtask ffi` / `check-ffi`, the XCFramework, `xcodebuild` and Swift
   tests (M0.8/M0.9);
 - anything touching `apps/` or generated bindings.

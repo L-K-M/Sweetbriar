@@ -1,0 +1,45 @@
+# layers.toml — the layer graph `cargo xtask check-layers` enforces
+# (spec/01 "Layers", "The layering check").
+#
+# Every workspace crate is classified in [crates] by crate name (the
+# underscored name that shows up in check-layers diagnostics):
+#
+#   { layer = N }      — first-party code at layer N (1–6). `deps`
+#                        lists the first-party crates it may depend on
+#                        (normal, dev and build dependencies alike);
+#                        spec/01 rule 1 spelled out per crate.
+#   { role = "dev" }   — test support. Any crate may list it as a
+#                        dev-dependency only; its own dependencies are
+#                        unrestricted.
+#   { role = "tool" }  — outside the graph (xtask, sb-bindgen);
+#                        unrestricted.
+#
+# On top of the graph the checker enforces the re-export rules
+# (`pub use` of another first-party crate names items only; sb-service
+# re-exports nothing; exported macros aren't re-exported) and the
+# source boundaries (`#[path]`, `include!()`, `extern crate`).
+
+[crates]
+# L1 — app/CLI shells over the service API only.
+sb_ffi = { layer = 1, deps = ["sb_service"] }
+sb_cli = { layer = 1, deps = ["sb_service"] }
+
+# L2–L4 — the core, one crate per layer.
+sb_service   = { layer = 2, deps = ["sb_engine"] }
+sb_engine    = { layer = 3, deps = ["sb_resources"] }
+sb_resources = { layer = 4, deps = ["sb_store", "sb_mime", "sb_imap", "sb_smtp", "sb_platform"] }
+
+# L5 — leaf crates; they never call each other (spec/01 rule 2).
+sb_store    = { layer = 5, deps = ["sb_types"] }
+sb_mime     = { layer = 5, deps = ["sb_types"] }
+sb_imap     = { layer = 5, deps = ["sb_types"] }
+sb_smtp     = { layer = 5, deps = ["sb_types"] }
+sb_platform = { layer = 5, deps = ["sb_types"] }
+
+# L6 — shared vocabulary and seam traits only.
+sb_types = { layer = 6 }
+
+# Outside the graph.
+sb_test_support = { role = "dev" }
+xtask           = { role = "tool" }
+sb_bindgen      = { role = "tool" }

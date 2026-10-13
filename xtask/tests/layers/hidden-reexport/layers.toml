@@ -1,0 +1,3 @@
+[crates]
+sb_resources = { layer = 4, deps = ["sb_store"] }
+sb_store     = { layer = 5 }
