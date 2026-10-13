@@ -23,16 +23,25 @@ Rests on research [04-data-safety](../research/04-data-safety.md),
 
 Creating a store makes `objects/`, `objects/tmp/`, `objects/sha256/`,
 `backups/` and `recovery/`, flushes each, then flushes the data root and
-its parent.
+its parent, before `state.sqlite` exists. Open creates a store only in
+an absent or empty data root, or one holding only layout directories
+and no files (an interrupted creation); anything else without
+`state.sqlite` is refused (`Unavailable`). A store with `state.sqlite`
+but a missing layout directory is `Corrupt`; the directory isn't
+recreated.
 
 - **The data root lives on a local filesystem.** At startup the engine
   refuses with an explanation if the data root is under iCloud Drive,
   Dropbox, OneDrive or a network mount, and offers to choose another
-  location.
+  location. The `Fs` seam (01) classifies the location: synced folders
+  by path prefix, network mounts by filesystem type. The store refuses
+  any location that isn't local with `Unavailable`.
 - **One process owns the store.** It holds `<data root>.lock` for its
   lifetime, through the `Fs` seam's exclusive lock (01). The lock file is
   outside the data root, so it stays valid while restore swaps roots.
-  A second instance fails to get the lock, so it doesn't open the
+  The lock path comes from the resolved data root (symlinks and
+  trailing separators removed), so every spelling of one store shares
+  one lock. A second instance fails to get the lock, so it doesn't open the
   database for writing. It reports `Locked` and tells the UI to focus
   the running instance.
 - **Time Machine:** the cache root is excluded (`isExcludedFromBackup`,
@@ -50,8 +59,9 @@ its parent.
     ours to pin, and Apple's build has been reported to map `fullfsync`
     to a weaker barrier (historical reports; unverified for macOS 27).
 - **Every connection** is opened by one constructor, which sets and
-  **reads back** each setting. Any mismatch is a startup error
-  (`Corrupt`/`Unavailable` per 07):
+  **reads back** each setting. Any mismatch is a startup error,
+  `Unavailable` (07). A `state.sqlite` that SQLite can't read as a
+  database is `Corrupt` and stays untouched:
   - `journal_mode=WAL` (persistent; set at creation);
   - `synchronous=FULL`;
   - `foreign_keys=ON`, before any transaction;
@@ -60,8 +70,8 @@ its parent.
   - DQS off via `sqlite3_db_config`;
   - `trusted_schema=OFF`.
 - **Version check:** startup logs and verifies `sqlite_version()` and
-  `sqlite_source_id()` against the pinned values. CI fails if the linked
-  version is below the floor.
+  `sqlite_source_id()` against the pinned values; a mismatch is
+  `Internal`. CI fails if the linked version is below the floor.
 - **Connections:**
   - **One writer connection**, owned by the store's writer task. It also
     owns checkpoints: `wal_autocheckpoint=1000` on the writer, plus a

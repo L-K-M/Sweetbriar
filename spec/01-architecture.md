@@ -101,9 +101,11 @@ rule at compile time: a crate can name only the crates it depends on.
 5. **Seams are traits in `sb-types`; implementations are in
    `sb-platform`.** A leaf such as `sb-store` uses only the `Fs` trait
    from `sb-types`. `sb-resources` (L4) constructs the real implementation
-   from `sb-platform` and passes it in. Tests pass a fault-injecting one.
-   The real `Fs` implements durable flushes (`fcntl(F_FULLFSYNC)` on
-   macOS) and the exclusive store lock. So no leaf calls another leaf,
+   from `sb-platform` and passes it in. Tests pass the real one or a
+   fault-injecting one, both through `sb-test-support`, which may depend
+   on any crate. The real `Fs` implements durable flushes
+   (`fcntl(F_FULLFSYNC)` on macOS), the exclusive store lock and the
+   location check (03). So no leaf calls another leaf,
    and no platform syscall sits in `sb-store`.
 6. **Platform services enter at L5** (`sb-platform`). The Swift app
    doesn't implement core logic. Where a native implementation is
