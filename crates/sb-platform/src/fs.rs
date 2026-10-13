@@ -317,4 +317,28 @@ mod tests {
         let deep = scratch.0.join("a/b/c");
         assert_eq!(RealFs.location(&deep).unwrap(), Location::Local);
     }
+
+    /// The explicit `fcntl(F_FULLFSYNC)` path succeeds on a real file
+    /// (spec/03): `sync_all` on a seam handle and `sync_dir` both go
+    /// through `flush_durably`, which must call the fcntl itself
+    /// rather than lean on `std`'s choice. macOS CI runs this.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn full_fsync_succeeds_on_a_real_file() {
+        let scratch = Scratch::new("fullfsync");
+        let file = scratch.0.join("f");
+        std::fs::write(&file, b"durable bytes").unwrap();
+
+        let opened = std::fs::File::open(&file).unwrap();
+        flush_durably(&opened).unwrap();
+        drop(opened);
+
+        // The same path through the seam, where the write handle's
+        // `sync_all` and `sync_dir` land.
+        let mut written = RealFs.create(&scratch.0.join("g")).unwrap();
+        written.write_all(b"through the seam").unwrap();
+        written.sync_all().unwrap();
+        drop(written);
+        RealFs.sync_dir(&scratch.0).unwrap();
+    }
 }

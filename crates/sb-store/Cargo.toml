@@ -13,6 +13,9 @@ sb-types = { version = "0.0.0", path = "../sb-types" }
 # per spec/03 for later steps. Compile options come from
 # LIBSQLITE3_FLAGS in .cargo/config.toml.
 rusqlite = { version = "=0.40.2", features = ["bundled", "backup", "limits"] }
+# spec/01 crate table: SHA-256 object ids (spec/03), no default
+# features — the core hashing needs no `std` extras.
+sha2 = { version = "=0.11.1", default-features = false }
 
 [dev-dependencies]
 sb-test-support = { version = "0.0.0", path = "../sb-test-support" }

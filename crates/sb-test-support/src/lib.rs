@@ -1,8 +1,12 @@
 //! `sb-test-support` — dev-only. The real seams (`Fs`, `Clock`,
-//! `Random`) and scratch directories for tests, plus (in later steps)
-//! the fake IMAP/SMTP server, fixtures loader and crash-cut harness.
+//! `Random`) and scratch directories for tests, plus the fault and
+//! crash-injection filesystems (spec/11) and the crash-cut harness.
 //! Not part of the shipping core; other crates use it only from
 //! tests.
+
+mod cut;
+mod fault;
+mod sim;
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -14,6 +18,10 @@ use sb_platform::{OsRandom, RealFs, SystemClock};
 use sb_types::fs::Fs;
 use sb_types::random::Random;
 use sb_types::time::{Clock, Timestamp};
+
+pub use cut::{CutFs, run_crash_cuts};
+pub use fault::{FaultFs, FaultKind, FsOp};
+pub use sim::SimFs;
 
 /// The real `Fs` implementation, for tests that exercise actual
 /// filesystem behaviour (spec/01 rule 5).
