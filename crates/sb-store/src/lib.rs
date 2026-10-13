@@ -5,8 +5,11 @@
 
 mod error;
 mod paths;
+mod schema;
 mod store;
+#[cfg(test)]
+mod testing;
 
 pub use error::StoreError;
 pub use paths::StorePaths;
-pub use store::{Store, open};
+pub use store::{Seams, Store, open};
