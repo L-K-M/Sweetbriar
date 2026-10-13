@@ -45,7 +45,7 @@ test, except where the spec says "manual qualification".
 
 ## Fault injection
 
-- **Seams:** the store and engine take `Clock`, `Fs` and `Transport`
+- **Seams:** the store and engine take `Clock`, `Random`, `Fs` and `Transport`
   traits, so tests can inject failures. Production uses real
   implementations; these seams exist from the first commit.
 - **Crash cuts:**

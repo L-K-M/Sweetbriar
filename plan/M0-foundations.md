@@ -105,27 +105,47 @@ decided.
   - a `state.sqlite` that isn't a database yields `Corrupt` and is left
     untouched.
 
-### M0.4 Schema v1 and migrations — M, linux
+### M0.4 Schema v1 and migrations — L, linux
 
 - **Goal:** schema v1 from spec/02 is created through the migration
   runner.
-- **Spec:** 02 (all DDL, Migrations), 06 (search tables).
+- **Spec:** 02 (all DDL, Migrations), 06 (search tables), 01 (Layers
+  rule 5: the `Clock` and `Random` seams).
 - **Depends on:** M0.3.
 - **Deliverables:**
-  - the migration runner (`rusqlite_migration` 2.6.0, or an owned
-    runner; decide and record in the PR);
+  - the migration runner, owned, in `sb-store` (decided here; recorded
+    in 01's crate table);
   - migration 1 containing the 02 and 06 DDL;
-  - `store_meta` initialisation (store UUID, incarnation).
+  - `store_meta` initialisation (store UUID, incarnation, `created_at`,
+    both version keys);
+  - in `sb-types`: the `Clock` and `Random` seam traits, `Timestamp`
+    (02 rule 4) and `Uuid` (02 rule 3; version 4 from random bytes). In
+    `sb-platform`: the system clock and OS randomness (`getentropy`). In
+    `sb-test-support`: those, plus a fixed clock and deterministic
+    randomness;
+  - `sb-store::open` takes the clock and randomness alongside the `Fs`,
+    and runs the migrations after the version check (02 Migrations).
 - **Acceptance:**
-  - a fresh store reaches version 1;
+  - a fresh store reaches version 1; reopening runs no migration;
   - `foreign_key_check` and `integrity_check` are empty or `ok`;
+  - the migrated schema equals one built from spec/02's and spec/06's
+    SQL blocks;
+  - `store_meta` holds two distinct lowercase hyphenated v4 UUIDs, the
+    clock's `created_at`, and the workspace version in both version
+    keys;
+  - a migration whose checks find a problem rolls back and yields
+    `Corrupt`, leaving `user_version` unchanged (a test-only migration);
+  - a foreign database yields `Corrupt` with the file unchanged:
+    `user_version` 0 with a table, in WAL or another journal mode, and
+    a supported `user_version` without the identity keys, also when a
+    crash left WAL frames;
   - a test asserts every application-owned ordinary table is `STRICT`
     (via `pragma_table_list` with `type='table'` and
     `name NOT GLOB 'sqlite_*'`, which excludes virtual, shadow and
     internal tables);
   - the schema version is read from `PRAGMA user_version`, and a store
     with a higher version yields `NewerStore` naming
-    `store_meta.last_migrated_by`.
+    `store_meta.last_migrated_by`, with `state.sqlite` unchanged.
 
 ### M0.5 Object store and publication protocol — L, linux + macos-ci
 
@@ -170,7 +190,9 @@ decided.
   07 (Commands: idempotency).
 - **Depends on:** M0.4.
 - **Deliverables:** `sb-store::Writer` (submit a closure with a priority,
-  returning a future) and the reader pool; receipt helpers.
+  returning a future) and the reader pool; receipt helpers; the
+  read-only open of a store refused with `NewerStore` (02 Migrations):
+  the lease and readers, no writer, nothing written.
 - **Acceptance:**
   - writes from many tasks are serialized;
   - a user-priority write overtakes queued sync writes (test with
@@ -178,7 +200,9 @@ decided.
   - repeating an idempotency key returns the stored receipt without
     re-running;
   - readers use `query_only` and `wal_autocheckpoint=0`
-    (pragma readback).
+    (pragma readback);
+  - a store with a newer `user_version` opens read-only, and its
+    `state.sqlite` is unchanged afterwards.
 
 ### M0.7 Core skeleton and CLI — M, linux
 

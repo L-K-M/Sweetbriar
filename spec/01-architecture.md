@@ -24,7 +24,7 @@ crates/
   sb-imap/                 L5  generic IMAP transport; knows no provider dialects
   sb-smtp/                 L5  SMTP submission
   sb-platform/             L5  secret store, clock, filesystem seams, paths, platform facts
-  sb-types/                L6  shared vocabulary only: ids, timestamps, email addresses, byte ranges, and seam traits (Fs, Clock); no implementations, no dependencies on other sb-* crates
+  sb-types/                L6  shared vocabulary only: ids, timestamps, email addresses, byte ranges, and seam traits (Fs, Clock, Random); no implementations, no dependencies on other sb-* crates
   sb-test-support/         dev-only: fake IMAP/SMTP server, fixtures loader, crash-cut harness
   sb-bindgen/              tool: uniffi-bindgen-swift pinned to the workspace uniffi version
 xtask/                     cargo xtask: ci, check-layers, ffi, check-ffi, dist (later)
@@ -85,7 +85,7 @@ rule at compile time: a crate can name only the crates it depends on.
    - `sb-mime` doesn't touch the store.
    - `sb-store` doesn't know about IMAP.
    - Shared vocabulary types (ids, timestamps, email addresses, byte
-     ranges) and **seam traits** (`Fs`, `Clock`) live in `sb-types` (L6),
+     ranges) and **seam traits** (`Fs`, `Clock`, `Random`) live in `sb-types` (L6),
      directly below the leaves. Leaves
      may use it; everything above reaches those types only through
      re-exports in the layer directly below. `sb-types` holds data types
@@ -189,8 +189,8 @@ allowed first-party dependencies.
 - **Background jobs:** import, export, backup, index and GC are engine
   jobs with progress reporting and cancellation. Each holds its own
   resumable checkpoint in the store.
-- **Clock and randomness** come from `sb-platform` traits, so tests are
-  deterministic.
+- **Clock and randomness** come through the `Clock` and `Random` seams
+  (rule 5), so tests are deterministic.
 
 ## Crates and versions
 
@@ -200,7 +200,7 @@ is committed, and updates are their own PRs.
 | Purpose | Crate | Version | Notes |
 |---|---|---|---|
 | SQLite | `rusqlite` (`bundled`, `backup`, `limits`) | 0.40.2 | Bundles **SQLite 3.53.2** via `libsqlite3-sys` 0.38.2: ≥ 3.51.3 and not 3.52.0. FTS5 is compiled in. `LIBSQLITE3_FLAGS` per 03 |
-| Migrations | `rusqlite_migration` | 2.6.0 | Or an owned runner if it doesn't fit 02's rules; decided in M0 |
+| Migrations | owned runner in `sb-store` | — | Decided in M0.4: 02 runs each migration as a Rust function with its checks and `last_migrated_by` inside its transaction; `rusqlite_migration` 2.6.0 is built around SQL strings and down migrations |
 | MIME parsing | `mail-parser` (`full_encoding`) | 0.11.9 | Includes an mbox iterator (09), wrapped with Sweetbriar's accounting and offset tracking. Bounded per 10 |
 | MIME composing | `mail-builder` | 1.0.0 | |
 | Color math | `palette` | pin at first use (M1.10) | Contrast and derived tints for account colors |
