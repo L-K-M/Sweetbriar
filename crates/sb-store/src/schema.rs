@@ -77,6 +77,42 @@ pub(crate) fn check_existing(
     current_version(conn, latest).map(|_| ())
 }
 
+/// The read-only open's verdict (spec/02 "Migrations", plan M0.6):
+/// like the writable one, except a store newer than this app is
+/// accepted — its `store_meta` may have changed shape under a newer
+/// app, so that check is skipped — while version 0, a negative
+/// version and a supported version without the identity keys stay
+/// `Corrupt`. Reads only, so nothing is written either way.
+pub(crate) fn check_existing_read_only(
+    conn: &Connection,
+    migrations: &[Migration],
+) -> Result<(), StoreError> {
+    let latest = check_ordered(migrations)?;
+    let current = read_user_version(conn)?;
+    if current < 0 {
+        return Err(StoreError::corrupt(format!(
+            "PRAGMA user_version is {current}; a store version cannot be negative"
+        )));
+    }
+    if current == 0 {
+        return Err(StoreError::corrupt(
+            "user_version is 0; a store opened read-only must already have been migrated",
+        ));
+    }
+    if current > i64::from(latest) {
+        // A newer store: accepted read-only, without the `store_meta`
+        // shape check a newer app's schema may not satisfy.
+        return Ok(());
+    }
+    require_identity_keys(conn, current)
+}
+
+/// `PRAGMA user_version`, as the runner reads it.
+fn read_user_version(conn: &Connection) -> Result<i64, StoreError> {
+    conn.query_row("PRAGMA user_version", [], |row| row.get(0))
+        .map_err(step_err)
+}
+
 /// The store's schema version, after the checks spec/02 runs before
 /// writing anything: a negative `user_version` is `Corrupt`; one above
 /// `latest` is `NewerStore`, naming `last_migrated_by` (`unknown` if
@@ -84,9 +120,7 @@ pub(crate) fn check_existing(
 /// without the identity keys, isn't a Sweetbriar store (`Corrupt`).
 /// Reads only, so a refused database stays untouched.
 fn current_version(conn: &Connection, latest: u32) -> Result<i64, StoreError> {
-    let current: i64 = conn
-        .query_row("PRAGMA user_version", [], |row| row.get(0))
-        .map_err(step_err)?;
+    let current = read_user_version(conn)?;
     if current < 0 {
         return Err(StoreError::corrupt(format!(
             "PRAGMA user_version is {current}; a store version cannot be negative"
@@ -109,6 +143,13 @@ fn current_version(conn: &Connection, latest: u32) -> Result<i64, StoreError> {
         return Ok(current);
     }
 
+    require_identity_keys(conn, current)?;
+    Ok(current)
+}
+
+/// A supported `user_version` proves nothing without the identity
+/// keys in a `store_meta` shaped like migration 1's (spec/02).
+fn require_identity_keys(conn: &Connection, current: i64) -> Result<(), StoreError> {
     // `key` is the primary key (the shape check), so rows are distinct
     // keys.
     let present: i64 = if has_store_meta_table(conn)? {
@@ -127,7 +168,7 @@ fn current_version(conn: &Connection, latest: u32) -> Result<i64, StoreError> {
             IDENTITY_KEYS.join(", ")
         )));
     }
-    Ok(current)
+    Ok(())
 }
 
 /// Whether `store_meta` is exactly as migration 1 creates it, not
@@ -282,12 +323,12 @@ pub(crate) fn bug(e: rusqlite::Error) -> StoreError {
     classify(e, "a migration")
 }
 
-/// Map a SQLite failure during migration onto spec/07's errors: a
-/// broken database is `Corrupt`; the environment (a full disk, an I/O
-/// error, a read-only or locked file) is `Unavailable`, as at open;
-/// anything else, such as invalid SQL or a violated constraint, is a
-/// bug in `what`: `Internal`.
-fn classify(e: rusqlite::Error, what: &str) -> StoreError {
+/// Map a SQLite failure onto spec/07's errors: a broken database is
+/// `Corrupt`; the environment (a full disk, an I/O error, a read-only
+/// or locked file) is `Unavailable`, as at open; anything else, such
+/// as invalid SQL or a violated constraint, is a bug in `what`:
+/// `Internal`. Shared by the runner, the writer and the readers.
+pub(crate) fn classify(e: rusqlite::Error, what: &str) -> StoreError {
     let rusqlite::Error::SqliteFailure(ref err, _) = e else {
         return StoreError::internal(format!("{what} failed: {e}"));
     };
