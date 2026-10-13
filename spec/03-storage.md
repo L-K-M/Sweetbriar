@@ -103,11 +103,14 @@ The object store is a small module behind this interface. Callers never
 see paths:
 
 ```rust
+/// An object's identity: the SHA-256 and the length of its bytes.
+pub struct ObjectId { sha256: [u8; 32], byte_length: u64 }
+
 pub trait ObjectStore {
-    /// Write bytes durably; returns their SHA-256. Idempotent: the same bytes
+    /// Write bytes durably; returns their id. Idempotent: the same bytes
     /// produce the same id and no second copy.
     fn publish(&self, bytes: impl Read) -> Result<ObjectId, StoreError>;
-    /// Open for reading; verifies length and hash while streaming.
+    /// Open for reading; checks the length, then the hash while streaming.
     fn open(&self, id: &ObjectId) -> Result<ObjectReader, StoreError>;
     fn exists(&self, id: &ObjectId) -> Result<bool, StoreError>;
     /// Enumerate all published objects (for GC, backup, verification).
@@ -130,8 +133,8 @@ pub trait ObjectStore {
 
 1. **Write the temp file.** Stream into `objects/tmp/<random>` while
    hashing, then flush and `fsync` the file. On macOS that is
-   `fcntl(F_FULLFSYNC)`, which is what Rust's `File::sync_all` uses on
-   Apple targets; verify this in a test.
+   `fcntl(F_FULLFSYNC)`, which `sb-platform` calls explicitly rather
+   than relying on `std`'s choice; a macOS test checks it succeeds.
 2. **Make the directory chain durable.** Create any missing
    `sha256/ab/cd/` directories. Unless `ab/cd` is in the process's set of
    directories known durable, `fsync` `sha256/ab/`, `sha256/` and
@@ -145,8 +148,8 @@ pub trait ObjectStore {
 3. **Rename.** `rename(tmp, final)`. If the final file already exists,
    delete the temp file instead: same hash, same bytes.
 4. **Persist the rename.** `fsync` the final file's directory.
-5. **Return.** Every flush error is an error: return `StoreError::Io` and
-   never report success.
+5. **Return.** Every flush error is an error: return `Unavailable` (07)
+   and never report success.
 
 Only after `publish` returns may a database transaction reference the
 object. A crash before that transaction leaves an orphan, which GC
@@ -169,10 +172,11 @@ orphan GC is about to remove. So:
 
 ### Reads and verification
 
-- `open` checks the length and computes the SHA-256 while streaming.
-  A mismatch raises `StoreError::Corrupt`, moves the damaged file to
-  `recovery/`, sets `acquisitions.object_state='quarantined'` and
-  notifies the UI. An absent file sets `'missing'`.
+- `open` checks the length, then computes the SHA-256 while streaming.
+  A mismatch is `Corrupt`: the object store first moves the damaged file
+  to `recovery/` (durably, never over an earlier copy), and the engine
+  sets `acquisitions.object_state='quarantined'` and notifies the UI. An
+  absent file is `NotFound`, and the engine sets `'missing'`.
 - Publishing the same bytes again (a re-fetch, a re-import) restores
   `'published'`.
 - A weekly verification job re-hashes a rotating sample of objects (1/52
