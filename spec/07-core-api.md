@@ -9,7 +9,8 @@ macOS and directly in Rust for Linux and the CLI.
 
 - **Commands** change state. Each takes an `idempotency_key` (a UUID made
   by the shell) and returns a `Receipt`. Repeating a key returns the
-  stored receipt and does nothing else (02 `command_receipts`).
+  stored receipt and does nothing else (02 `command_receipts`); a key
+  reused for a different command is `Conflict`.
 - **Queries** read state as **windows**: a bounded page of rows plus a
   generation. A **subscription** tells the shell when its window is
   stale.

@@ -77,9 +77,11 @@ recreated.
 - **Connections:**
   - **One writer connection**, owned by the store's writer task. It also
     owns checkpoints: `wal_autocheckpoint=1000` on the writer, plus a
-    `wal_checkpoint(TRUNCATE)` when idle.
-  - **Reader connections** (a small pool) set `wal_autocheckpoint=0` and
-    `query_only=ON`. Read transactions are short: a query window is not a
+    `wal_checkpoint(TRUNCATE)` when its queue drains (a busy result,
+    readers still active, isn't an error).
+  - **Reader connections** (a small pool) open read-only, set
+    `wal_autocheckpoint=0` and `query_only=ON`, and never checkpoint on
+    close. Read transactions are short: a query window is not a
     long-lived read transaction (07).
 - **Write discipline:**
   - Writes are submitted to the writer task as closures; user-initiated
