@@ -21,7 +21,10 @@ Rests on research [04-data-safety](../research/04-data-safety.md),
   previews/, thumbnails/          disposable
 ```
 
-Creating a store makes `objects/`, `objects/tmp/`, `objects/sha256/`,
+A writable open first creates any missing ancestors of the data root,
+each flushed into its parent, so a default root works on a fresh
+system; the read-only open creates nothing. Creating a store makes
+`objects/`, `objects/tmp/`, `objects/sha256/`,
 `backups/` and `recovery/`, flushes each, then flushes the data root and
 its parent, before `state.sqlite` exists. Open creates a store only in
 an absent or empty data root, or one holding only layout directories
@@ -93,7 +96,12 @@ recreated.
 - **Integrity:**
   - `PRAGMA quick_check` runs at startup if the previous session didn't
     shut down cleanly; a full `integrity_check` runs weekly when idle and
-    after migrations.
+    after migrations. The marker is `store_meta.clean_shutdown_at`: the
+    shutdown's last write records it, and open removes it. When an
+    existing store lacks it, open runs `quick_check` on the writer
+    connection before the migrations; a finding is `Corrupt`. A new
+    store has no previous session, and the read-only open checks
+    nothing.
   - On failure: stop remote effects, keep the store read-only, copy the
     files to `recovery/`, and tell the user. Never repair by deleting.
 

@@ -10,7 +10,8 @@ macOS and directly in Rust for Linux and the CLI.
 - **Commands** change state. Each takes an `idempotency_key` (a UUID made
   by the shell) and returns a `Receipt`. Repeating a key returns the
   stored receipt and does nothing else (02 `command_receipts`); a key
-  reused for a different command is `Conflict`.
+  reused for a different command is `Conflict`. A shell without its own
+  UUID source (the CLI) asks the service for a new key.
 - **Queries** read state as **windows**: a bounded page of rows plus a
   generation. A **subscription** tells the shell when its window is
   stale.
@@ -47,7 +48,9 @@ This rule exists because of Delta Chat's account-loss incident.
 
 ```rust
 async fn open_core(config: CoreConfig) -> Result<Core, CoreError>;
-// CoreConfig: data_root, cache_root, platform services (secret store, clock, logger)
+// CoreConfig: data_root, cache_root, platform services (secret store, clock, logger).
+// The pilot's first cut (M0.7) takes the roots; sb-resources builds the
+// real Fs, Clock and Random from sb-platform.
 async fn Core::shutdown(self);   // flush writer, release the lease
 ```
 
