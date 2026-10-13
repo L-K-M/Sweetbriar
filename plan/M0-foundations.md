@@ -67,32 +67,43 @@ decided.
   - an unclassified crate fails;
   - the real workspace passes.
 
-### M0.3 Store open path — M, linux + macos-ci
+### M0.3 Store open path — L, linux + macos-ci
 
 - **Goal:** `sb-store` opens or creates the database exactly as spec/03
   requires, and refuses anything else.
 - **Spec:** 03 (On-disk layout, SQLite configuration), 07 (CoreError
-  mapping for `Locked`, `Corrupt`, `NewerStore`).
+  mapping for `Locked`, `Unavailable`, `Corrupt`, `Internal`).
 - **Depends on:** M0.1.
 - **Deliverables:**
   - in `sb-types`: the `Fs` seam trait, complete (`create`, `write`,
     `open`/`read`, `metadata` (existence, length), `read_dir`,
     `create_dir`, `sync_all`, `sync_dir`, `rename`, `remove`,
-    `lock_exclusive`);
+    `canonicalize`, `lock_exclusive`, `location` (local, synced or
+    network));
   - in `sb-platform`: its real implementation (`fcntl(F_FULLFSYNC)` on
-    macOS, `fsync` on Linux). M0.5 adds the fault-injecting one;
-  - `sb-store::open(paths, fs)`: the lease via `Fs::lock_exclusive`
-    (01 rule 5), the connection constructor with pragma set-and-read-back, version and source-id
-    checks, refusal of synced and network locations (detected by path
-    prefix and filesystem type);
+    macOS, `fsync` on Linux; synced folders by path prefix, network
+    mounts by filesystem type). M0.5 adds the fault-injecting one;
+  - in `sb-test-support`: the real `Fs` for `sb-store`'s tests (01
+    rule 5);
+  - `sb-store::open(paths, fs)`: the location check, then the lease via
+    `Fs::lock_exclusive` (01 rule 5), then the store directories (03
+    On-disk layout), the connection constructor with pragma
+    set-and-read-back, and the version and source-id checks;
   - `LIBSQLITE3_FLAGS` in `.cargo/config.toml`.
 - **Acceptance** (tests):
-  - linked SQLite version ≥ 3.51.3 and ≠ 3.52.0; FTS5 available
-    (create, insert, match);
+  - linked SQLite version ≥ 3.51.3 and ≠ 3.52.0, and equal to the
+    pinned version and source id; FTS5 available (create, insert,
+    match); `PRAGMA compile_options` shows the 03 flags;
   - after open: `journal_mode=wal`, `synchronous=2`, `foreign_keys=1`;
     DQS rejected (`SELECT "x"` errors);
-  - a second open in another process returns `Locked`;
-  - a pragma mismatch (simulated) refuses to open.
+  - a second open in another process returns `Locked` and creates
+    nothing;
+  - a pragma mismatch (simulated) refuses to open;
+  - a synced or network location is refused with `Unavailable`; the
+    path classification is tested for the macOS and Linux prefixes on
+    every host;
+  - a `state.sqlite` that isn't a database yields `Corrupt` and is left
+    untouched.
 
 ### M0.4 Schema v1 and migrations — M, linux
 
@@ -180,6 +191,8 @@ decided.
   - the command and query through `sb-service`, `sb-engine` and
     `sb-resources`;
   - `open_core` and `shutdown`, with the runtime owned by the engine;
+  - the clean-shutdown marker: `shutdown` records it, and the next
+    open runs `PRAGMA quick_check` when it's missing (03 Integrity);
   - `sb-cli settings get|set`.
 - **Acceptance:**
   - `sb-cli settings set appearance.compose_cue standard` then `get`

@@ -1,3 +1,7 @@
-# LIBSQLITE3_FLAGS for the bundled SQLite build arrives in M0.3 (spec/03).
 [alias]
 xtask = "run --package xtask --"
+
+# Compile options baked into the bundled SQLite build, per spec/03
+# "SQLite configuration"; the build script appends each -D flag.
+[env]
+LIBSQLITE3_FLAGS = { value = "-DSQLITE_DQS=0 -DSQLITE_DEFAULT_FOREIGN_KEYS=1 -DSQLITE_DEFAULT_WAL_SYNCHRONOUS=2 -DSQLITE_STRICT_SUBTYPE=1", force = true }
