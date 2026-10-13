@@ -350,6 +350,8 @@ fn a_dead_writer_resolves_queued_and_later_jobs_unavailable() {
     release.send(()).unwrap();
 
     wait_until_closed(&writer);
+    // Joining the dead thread waits until it has abandoned its queue.
+    assert!(writer.close().is_err(), "close hid the writer's death");
     assert!(
         matches!(
             poll_once(&mut queued),
@@ -365,13 +367,14 @@ fn a_dead_writer_resolves_queued_and_later_jobs_unavailable() {
         ),
         "a submit after the writer died didn't resolve Unavailable at once"
     );
-    assert!(writer.close().is_err(), "close hid the writer's death");
     drop(scratch);
 }
 
-/// Two concurrent `close` calls both wait for the writer thread: while
-/// a held write keeps it busy, neither returns, and afterwards both
-/// succeed and every queued write has run.
+/// Two concurrent `close` calls both wait for the writer thread: the
+/// first holds the handle lock while it joins (so a second blocks
+/// until the thread has ended), and both succeed with every queued
+/// write run. A held write keeps the thread busy; a notification
+/// from inside `close` replaces any timing.
 #[test]
 fn concurrent_closes_both_wait_for_the_writer_thread() {
     let (scratch, paths) = scratch_paths("writer-close-twice");
@@ -382,24 +385,22 @@ fn concurrent_closes_both_wait_for_the_writer_thread() {
         Ok(())
     });
     let queued = writer.submit(WritePriority::User, |_| Ok(()));
+    let (joining, joins) = mpsc::channel();
+    writer.on_joining(joining);
 
-    let (returned, returns) = mpsc::channel();
-    let returned_early = thread::scope(|scope| {
-        for _ in 0..2 {
-            let (writer, returned) = (&writer, returned.clone());
-            scope.spawn(move || returned.send(writer.close()).unwrap());
-        }
+    let (locked_while_joining, results) = thread::scope(|scope| {
+        let first = scope.spawn(|| writer.close());
+        let announced = joins.recv_timeout(Duration::from_secs(30)).is_ok();
+        let locked = announced && writer.handle_is_locked();
+        let second = scope.spawn(|| writer.close());
         // Released whatever happens, so a failure can't hang the scope.
-        let early = returns.recv_timeout(Duration::from_millis(300)).is_ok();
         release.send(()).unwrap();
-        early
+        (locked, [first.join().unwrap(), second.join().unwrap()])
     });
     assert!(
-        !returned_early,
-        "a close returned while the writer thread still ran"
+        locked_while_joining,
+        "close released the handle lock before joining the thread"
     );
-    let results: Vec<_> = returns.try_iter().collect();
-    assert_eq!(results.len(), 2);
     assert!(results.iter().all(Result::is_ok), "{results:?}");
     assert!(block_on(held).is_ok());
     assert!(block_on(queued).is_ok());

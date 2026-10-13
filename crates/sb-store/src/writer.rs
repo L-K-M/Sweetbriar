@@ -345,6 +345,9 @@ pub struct Writer {
     /// lock while joining, so a concurrent second `close` returns only
     /// once the thread has ended.
     handle: Mutex<Option<JoinHandle<Result<(), StoreError>>>>,
+    /// Told when a `close` is about to join, with the handle lock held.
+    #[cfg(test)]
+    joining: Mutex<Option<std::sync::mpsc::Sender<()>>>,
 }
 
 /// The writer thread's body, as handed to a [`Spawn`].
@@ -391,6 +394,8 @@ impl Writer {
         Ok(Self {
             shared,
             handle: Mutex::new(Some(handle)),
+            #[cfg(test)]
+            joining: Mutex::new(None),
         })
     }
 
@@ -432,14 +437,16 @@ impl Writer {
             .handle
             .lock()
             .expect("a panicking thread held the writer-thread lock");
-        match handle.take() {
-            Some(handle) => match handle.join() {
-                Ok(result) => result,
-                Err(_) => Err(StoreError::internal(
-                    "the writer thread panicked before closing",
-                )),
-            },
-            None => Ok(()),
+        let Some(thread) = handle.take() else {
+            return Ok(());
+        };
+        #[cfg(test)]
+        self.announce_joining();
+        match thread.join() {
+            Ok(result) => result,
+            Err(_) => Err(StoreError::internal(
+                "the writer thread panicked before closing",
+            )),
         }
     }
 }
@@ -450,6 +457,22 @@ impl Writer {
     /// ended.
     pub(crate) fn is_closed(&self) -> bool {
         lock(&self.shared.state).closed
+    }
+
+    /// Have `close` tell `to` when it is about to join the thread.
+    pub(crate) fn on_joining(&self, to: std::sync::mpsc::Sender<()>) {
+        *lock(&self.joining) = Some(to);
+    }
+
+    /// Whether some `close` holds the handle lock right now.
+    pub(crate) fn handle_is_locked(&self) -> bool {
+        self.handle.try_lock().is_err()
+    }
+
+    fn announce_joining(&self) {
+        if let Some(to) = lock(&self.joining).as_ref() {
+            let _ = to.send(());
+        }
     }
 }
 
