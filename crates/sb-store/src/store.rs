@@ -226,11 +226,9 @@ pub(crate) fn open_with(
     // The readers first, from the same constructor (spec/03): if one
     // fails, the writer connection still doesn't checkpoint on close.
     let readers = Readers::open(paths.state_db(), reader_pragmas)?;
-    // Open succeeded: from now on the writer owns checkpoints (spec/03),
-    // and its thread owns the connection (spec/01).
-    conn.set_db_config(DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, false)
-        .map_err(sqlite_err)?;
-    let writer = Writer::new(conn);
+    // The writer thread owns the connection from here (spec/01), and
+    // lets it checkpoint once it runs (spec/03).
+    let writer = Writer::new(conn)?;
     Ok(Store {
         readers,
         writer,

@@ -16,7 +16,7 @@ use crate::Store;
 use crate::StoreError;
 use crate::schema::{bug, run_migrations};
 use crate::store::{Access, WRITER_PRAGMAS, open_connection};
-use crate::testing::{reading, scratch_paths, test_seams, writing};
+use crate::testing::{crash_write, reading, scratch_paths, test_seams, writing};
 
 /// A store over a fresh scratch root, with a one-row probe table for
 /// the counter tests.
@@ -281,12 +281,7 @@ fn writer_over(paths: &crate::StorePaths) -> Writer {
     crate::store::create_layout(seams.fs(), paths).unwrap();
     let mut conn = open_connection(paths.state_db(), Access::ReadWrite, WRITER_PRAGMAS).unwrap();
     run_migrations(&mut conn, &seams, crate::schema::MIGRATIONS).unwrap();
-    conn.set_db_config(
-        rusqlite::config::DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE,
-        false,
-    )
-    .unwrap();
-    Writer::new(conn)
+    Writer::new(conn).unwrap()
 }
 
 /// A write closure runs inside `BEGIN IMMEDIATE`: before it executes
@@ -318,15 +313,14 @@ impl Drop for PanicOnDrop {
     }
 }
 
-/// Once the writer thread has died, a submit resolves `Unavailable` at
-/// once instead of waiting forever on a queue nobody serves, and
-/// `close` reports the death.
-#[test]
-fn submits_after_the_writer_died_resolve_unavailable() {
-    let (scratch, paths) = scratch_paths("writer-death");
-    let writer = writer_over(&paths);
-    drop(writer.submit(WritePriority::User, |_| Ok(PanicOnDrop)));
+/// Poll a future once, with a waker that does nothing.
+fn poll_once<T>(future: &mut WriteFuture<T>) -> Poll<Result<T, StoreError>> {
+    let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+    std::pin::Pin::new(future).poll(&mut cx)
+}
 
+/// Wait (bounded) until the writer refuses new jobs.
+fn wait_until_closed(writer: &Writer) {
     let deadline = std::time::Instant::now() + Duration::from_secs(30);
     while !writer.is_closed() {
         assert!(
@@ -335,15 +329,110 @@ fn submits_after_the_writer_died_resolve_unavailable() {
         );
         thread::sleep(Duration::from_millis(5));
     }
-    let mut late = writer.submit(WritePriority::User, |_| Ok(()));
-    let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+}
+
+/// When the writer thread dies, the job queued behind the fatal one
+/// resolves `Unavailable` instead of hanging, so does a later submit,
+/// and `close` reports the death. The fatal job is gated, so its
+/// future is gone before it returns and the writer thread drops the
+/// result itself, deterministically.
+#[test]
+fn a_dead_writer_resolves_queued_and_later_jobs_unavailable() {
+    let (scratch, paths) = scratch_paths("writer-death");
+    let writer = writer_over(&paths);
+    let (release, gate) = mpsc::channel::<()>();
+    let doomed = writer.submit(WritePriority::User, move |_| {
+        let _ = gate.recv();
+        Ok(PanicOnDrop)
+    });
+    let mut queued = writer.submit(WritePriority::User, |_| Ok(()));
+    drop(doomed);
+    release.send(()).unwrap();
+
+    wait_until_closed(&writer);
     assert!(
         matches!(
-            std::pin::Pin::new(&mut late).poll(&mut cx),
+            poll_once(&mut queued),
+            Poll::Ready(Err(StoreError::Unavailable { .. }))
+        ),
+        "the job queued behind the fatal one was never resolved"
+    );
+    let mut late = writer.submit(WritePriority::User, |_| Ok(()));
+    assert!(
+        matches!(
+            poll_once(&mut late),
             Poll::Ready(Err(StoreError::Unavailable { .. }))
         ),
         "a submit after the writer died didn't resolve Unavailable at once"
     );
     assert!(writer.close().is_err(), "close hid the writer's death");
+    drop(scratch);
+}
+
+/// Two concurrent `close` calls both wait for the writer thread: while
+/// a held write keeps it busy, neither returns, and afterwards both
+/// succeed and every queued write has run.
+#[test]
+fn concurrent_closes_both_wait_for_the_writer_thread() {
+    let (scratch, paths) = scratch_paths("writer-close-twice");
+    let writer = writer_over(&paths);
+    let (release, gate) = mpsc::channel::<()>();
+    let held = writer.submit(WritePriority::User, move |_| {
+        let _ = gate.recv();
+        Ok(())
+    });
+    let queued = writer.submit(WritePriority::User, |_| Ok(()));
+
+    let (returned, returns) = mpsc::channel();
+    let returned_early = thread::scope(|scope| {
+        for _ in 0..2 {
+            let (writer, returned) = (&writer, returned.clone());
+            scope.spawn(move || returned.send(writer.close()).unwrap());
+        }
+        // Released whatever happens, so a failure can't hang the scope.
+        let early = returns.recv_timeout(Duration::from_millis(300)).is_ok();
+        release.send(()).unwrap();
+        early
+    });
+    assert!(
+        !returned_early,
+        "a close returned while the writer thread still ran"
+    );
+    let results: Vec<_> = returns.try_iter().collect();
+    assert_eq!(results.len(), 2);
+    assert!(results.iter().all(Result::is_ok), "{results:?}");
+    assert!(block_on(held).is_ok());
+    assert!(block_on(queued).is_ok());
+    drop(scratch);
+}
+
+/// A spawner that refuses, as an OS out of threads would.
+fn refuse(_body: WriterBody) -> std::io::Result<JoinHandle<Result<(), StoreError>>> {
+    Err(std::io::Error::other("no threads left"))
+}
+
+/// An OS that refuses the writer thread makes it `Unavailable`, and
+/// the connection, dropped unstarted, doesn't checkpoint: WAL frames a
+/// crash left stay in the WAL.
+#[test]
+fn a_refused_writer_thread_is_unavailable_and_checkpoints_nothing() {
+    let (scratch, paths) = scratch_paths("writer-spawn-refused");
+    crate::open(&paths, &test_seams(real_fs()))
+        .unwrap()
+        .close()
+        .unwrap();
+    crash_write(&paths, "INSERT INTO store_meta VALUES ('crash', 'frame');");
+    let before = std::fs::read(paths.state_db()).unwrap();
+
+    let conn = open_connection(paths.state_db(), Access::ReadWrite, WRITER_PRAGMAS).unwrap();
+    assert!(matches!(
+        Writer::new_with(conn, refuse),
+        Err(StoreError::Unavailable { .. })
+    ));
+    assert_eq!(
+        std::fs::read(paths.state_db()).unwrap(),
+        before,
+        "the unstarted writer's connection checkpointed"
+    );
     drop(scratch);
 }

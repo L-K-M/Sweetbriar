@@ -360,6 +360,36 @@ fn same_process_second_open_is_locked_until_close() {
 // Refused opens.
 //
 
+/// A reader that can't open fails the open before the writer starts,
+/// so the writer's connection closes without checkpointing: WAL frames
+/// a crash left stay in the WAL, `state.sqlite` keeps its bytes, and
+/// the lease is released.
+#[test]
+fn a_reader_failing_to_open_leaves_crashed_frames_in_the_wal() {
+    let (_scratch, paths, store) = open_scratch("reader-open-fails");
+    store.close().unwrap();
+    crash_write(&paths, "INSERT INTO store_meta VALUES ('crash', 'frame');");
+    let before = fs::read(paths.state_db()).unwrap();
+    let mut readers = READER_PRAGMAS.to_vec();
+    readers[0].expect = Expect::Text("delete");
+    let err = open_with(
+        &paths,
+        &test_seams(real_fs()),
+        WRITER_PRAGMAS,
+        &readers,
+        &PINNED_SQLITE,
+        MIGRATIONS,
+    )
+    .unwrap_err();
+    assert!(matches!(err, StoreError::Unavailable { .. }), "{err:?}");
+    assert_eq!(
+        fs::read(paths.state_db()).unwrap(),
+        before,
+        "the failed open checkpointed crashed frames"
+    );
+    open(&paths, &test_seams(real_fs())).unwrap();
+}
+
 /// A settings row that cannot read back refuses the open with
 /// `Unavailable` naming the pragma, and the lease is released.
 #[test]
@@ -972,13 +1002,16 @@ fn an_absent_store_is_not_found_and_nothing_is_created() {
     assert_eq!(recursive_listing(scratch.path()), Vec::new());
     drop(scratch);
 
-    // A data root without `state.sqlite` is `NotFound` too.
+    // A data root without `state.sqlite` is `NotFound` too, and no
+    // lock appears beside it.
     let (scratch, paths) = scratch_paths("read-only-no-db");
     fs::create_dir_all(paths.objects_tmp()).unwrap();
+    let listing = recursive_listing(scratch.path());
     match open_read_only(&paths, &test_seams(real_fs())).unwrap_err() {
         StoreError::NotFound { what } => assert!(what.contains("state.sqlite"), "{what}"),
         err => panic!("expected NotFound, got {err:?}"),
     }
+    assert_eq!(recursive_listing(scratch.path()), listing);
     drop(scratch);
 }
 

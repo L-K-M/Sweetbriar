@@ -10,6 +10,7 @@ use std::any::Any;
 use std::collections::VecDeque;
 use std::fmt;
 use std::future::Future;
+use std::io;
 use std::sync::Arc;
 use std::sync::Condvar;
 use std::sync::Mutex;
@@ -19,6 +20,7 @@ use std::thread::JoinHandle;
 use rusqlite::Connection;
 use rusqlite::Transaction;
 use rusqlite::TransactionBehavior;
+use rusqlite::config::DbConfig;
 
 use crate::StoreError;
 use crate::schema::classify;
@@ -345,10 +347,36 @@ pub struct Writer {
     handle: Mutex<Option<JoinHandle<Result<(), StoreError>>>>,
 }
 
+/// The writer thread's body, as handed to a [`Spawn`].
+pub(crate) type WriterBody = Box<dyn FnOnce() -> Result<(), StoreError> + Send>;
+
+/// Starts the writer thread. Production spawns an OS thread; a test
+/// can refuse, as an exhausted OS would.
+pub(crate) type Spawn = fn(WriterBody) -> io::Result<JoinHandle<Result<(), StoreError>>>;
+
+/// The writer thread's name, for debuggers and panic messages.
+const WRITER_THREAD_NAME: &str = "sb-store-writer";
+
+/// The production [`Spawn`]: a named OS thread.
+fn spawn_os_thread(body: WriterBody) -> io::Result<JoinHandle<Result<(), StoreError>>> {
+    std::thread::Builder::new()
+        .name(WRITER_THREAD_NAME.to_owned())
+        .spawn(body)
+}
+
 impl Writer {
     /// Start the writer thread over `conn`, which the caller hands
-    /// over for good: from here only the thread touches it.
-    pub(crate) fn new(conn: Connection) -> Self {
+    /// over for good: from here only the thread touches it. An OS that
+    /// refuses the thread is `Unavailable`.
+    pub(crate) fn new(conn: Connection) -> Result<Self, StoreError> {
+        Self::new_with(conn, spawn_os_thread)
+    }
+
+    /// [`Writer::new`] with the thread spawner as a parameter. If it
+    /// refuses, `conn` is dropped here, still not checkpointing on
+    /// close: only the running thread lifts that (spec/02: no
+    /// checkpoint until open succeeds).
+    pub(crate) fn new_with(conn: Connection, spawn: Spawn) -> Result<Self, StoreError> {
         let shared = Arc::new(WriterShared {
             state: Mutex::new(WriterState {
                 queues: [VecDeque::new(), VecDeque::new(), VecDeque::new()],
@@ -358,14 +386,12 @@ impl Writer {
             ready: Condvar::new(),
         });
         let thread_shared = Arc::clone(&shared);
-        let handle = std::thread::Builder::new()
-            .name("sb-store-writer".to_owned())
-            .spawn(move || serve(conn, thread_shared))
-            .expect("cannot spawn the writer thread");
-        Self {
+        let handle = spawn(Box::new(move || serve(conn, thread_shared)))
+            .map_err(|e| StoreError::unavailable(format!("cannot start the writer thread: {e}")))?;
+        Ok(Self {
             shared,
             handle: Mutex::new(Some(handle)),
-        }
+        })
     }
 
     /// Queue one write at `priority`; the returned future resolves
@@ -446,6 +472,13 @@ impl fmt::Debug for Writer {
 /// closure panic reaches it) still closes the connection, stops
 /// accepting jobs and abandons the queue, so no future hangs.
 fn serve(mut conn: Connection, shared: Arc<WriterShared>) -> Result<(), StoreError> {
+    // The thread runs, so open succeeded: from now on the writer owns
+    // checkpoints (spec/03), on close too.
+    if let Err(e) = conn.set_db_config(DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, false) {
+        shared.shut_down();
+        let _ = conn.close();
+        return Err(classify(e, "let the writer checkpoint on close"));
+    }
     let served = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         writer_loop(&mut conn, &shared)
     }));
