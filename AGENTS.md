@@ -30,6 +30,10 @@ nightly pin is its own PR (spec/01 "Toolchain").
 (regenerates to a temp file and diffs; regenerate with
 `cargo xtask notices` and commit the result).
 
+Building `sb-store` compiles the bundled SQLite (spec/03), so a C
+compiler must be on `PATH`. Its compile options come from
+`LIBSQLITE3_FLAGS` in `.cargo/config.toml`.
+
 ## What runs where
 
 **Linux, every PR — agents verify locally:**
