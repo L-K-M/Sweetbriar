@@ -67,7 +67,7 @@ decided.
   - an unclassified crate fails;
   - the real workspace passes.
 
-### M0.3 Store open path — M, linux + macos-ci
+### M0.3 Store open path — L, linux + macos-ci
 
 - **Goal:** `sb-store` opens or creates the database exactly as spec/03
   requires, and refuses anything else.

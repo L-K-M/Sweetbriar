@@ -277,6 +277,6 @@ mod tests {
     fn network_mounts_by_macos_flags() {
         assert!(!macos_mount_is_network(MACOS_MNT_LOCAL));
         assert!(macos_mount_is_network(0));
-        assert!(macos_mount_is_network(0x0000_4000)); // MNT_DONTBROWSE alone
+        assert!(macos_mount_is_network(0x0010_0000)); // MNT_DONTBROWSE alone
     }
 }
