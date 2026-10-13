@@ -62,7 +62,9 @@ recreated.
   **reads back** each setting. Any mismatch is a startup error,
   `Unavailable` (07). A `state.sqlite` that SQLite can't read as a
   database is `Corrupt` and stays untouched:
-  - `journal_mode=WAL` (persistent; set at creation);
+  - `journal_mode=WAL` (persistent; set only on a new, empty database.
+    An existing database in another mode isn't a Sweetbriar store:
+    `Corrupt`, untouched);
   - `synchronous=FULL`;
   - `foreign_keys=ON`, before any transaction;
   - `fullfsync=ON` and `checkpoint_fullfsync=ON` (macOS);

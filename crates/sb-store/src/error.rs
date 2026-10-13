@@ -15,6 +15,10 @@ pub enum StoreError {
     /// The store is damaged: a missing layout directory, an unreadable
     /// `state.sqlite` (`CoreError::Corrupt`).
     Corrupt { detail: String },
+    /// The store was migrated by a newer app: `app_version` names the
+    /// version that last migrated it (`CoreError::NewerStore`); the
+    /// writable open refuses and writes nothing.
+    NewerStore { app_version: String },
     /// A caller argument was rejected (`CoreError::InvalidInput`).
     InvalidInput { message: String },
     /// An internal invariant broke, e.g. the linked SQLite isn't the
@@ -48,6 +52,10 @@ impl fmt::Display for StoreError {
             Self::Locked => f.write_str("the store is owned by another process"),
             Self::Unavailable { reason } => write!(f, "the store is unavailable: {reason}"),
             Self::Corrupt { detail } => write!(f, "the store is corrupt: {detail}"),
+            Self::NewerStore { app_version } => write!(
+                f,
+                "the store was migrated by a newer app ({app_version}); open it with that version"
+            ),
             Self::InvalidInput { message } => write!(f, "invalid input: {message}"),
             Self::Internal { detail } => write!(f, "internal error: {detail}"),
         }

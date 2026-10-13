@@ -1,23 +1,30 @@
 //! `open`: opens or creates a store exactly as spec/03 requires — the
-//! location check, the ownership lease, the on-disk layout, the one
-//! connection constructor with set-and-read-back settings, and the
-//! pinned-version check — and refuses anything else.
+//! location check, the ownership lease, the on-disk layout, a
+//! read-only look at an existing database, the one connection
+//! constructor with set-and-read-back settings, the pinned-version
+//! check, then the migrations and the
+//! `app_version_last_opened` record (spec/02) — and refuses anything
+//! else.
 
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use rusqlite::Connection;
 use rusqlite::config::DbConfig;
 use rusqlite::ffi::ErrorCode;
 use rusqlite::types::Value;
+use rusqlite::{Connection, OpenFlags};
 use sb_types::fs::{FileKind, Fs, Lease, Location, LockError};
+use sb_types::random::Random;
+use sb_types::time::Clock;
 
-use crate::{StoreError, StorePaths};
+use crate::StoreError;
+use crate::StorePaths;
+use crate::schema::{MIGRATIONS, Migration, check_existing, run_migrations};
 
 /// The SQLite build spec/01's crate table pins (rusqlite 0.40.2 →
 /// libsqlite3-sys 0.38.2 → SQLite 3.53.2); `open` refuses any other.
-const PINNED_SQLITE: PinnedSqlite = PinnedSqlite {
+pub(crate) const PINNED_SQLITE: PinnedSqlite = PinnedSqlite {
     version: "3.53.2",
     version_number: 3_053_002,
     source_id: "2026-06-03 19:12:13 d6e03d8c777cfa2d35e3b60d8ec3e0187f3e9f99d8e2ee9cac695fd6fcdf1a24",
@@ -36,7 +43,7 @@ const SQLITE_HEADER_LEN: u64 = 100;
 /// The SQLite build this release pins; `open` verifies the linked
 /// library against it (`version_number()`, `sqlite_version()` and
 /// `sqlite_source_id()`).
-struct PinnedSqlite {
+pub(crate) struct PinnedSqlite {
     version: &'static str,
     version_number: i32,
     source_id: &'static str,
@@ -54,6 +61,13 @@ pub struct Store {
 }
 
 impl Store {
+    /// The writer connection, for the crate's own tests (and later
+    /// internals).
+    #[cfg(test)]
+    pub(crate) fn conn(&self) -> &Connection {
+        &self.conn
+    }
+
     /// Close the connection explicitly, then release the lease. The
     /// lock file itself is kept, never deleted (spec/03).
     pub fn close(self) -> Result<(), StoreError> {
@@ -74,28 +88,70 @@ impl std::fmt::Debug for Store {
     }
 }
 
-/// Open or create the store at `paths` (spec/03): location check,
-/// lease, layout, the one connection constructor, version check — in
-/// this order.
-pub fn open(paths: &StorePaths, fs: Arc<dyn Fs>) -> Result<Store, StoreError> {
-    open_with(paths, fs.as_ref(), WRITER_PRAGMAS, &PINNED_SQLITE)
+/// The seams `open` runs against (spec/01 rule 5): the filesystem,
+/// the clock and the randomness, injected by the caller (`sb-resources`
+/// builds the real ones from `sb-platform`; tests inject fixed ones).
+pub struct Seams {
+    fs: Arc<dyn Fs>,
+    clock: Arc<dyn Clock>,
+    random: Arc<dyn Random>,
 }
 
-/// `open` with the settings table and pinned version as parameters, so
-/// tests can simulate a pragma or version mismatch.
-fn open_with(
+impl Seams {
+    pub fn new(fs: Arc<dyn Fs>, clock: Arc<dyn Clock>, random: Arc<dyn Random>) -> Self {
+        Self { fs, clock, random }
+    }
+
+    pub(crate) fn fs(&self) -> &dyn Fs {
+        self.fs.as_ref()
+    }
+
+    pub(crate) fn clock(&self) -> &dyn Clock {
+        self.clock.as_ref()
+    }
+
+    pub(crate) fn random(&self) -> &dyn Random {
+        self.random.as_ref()
+    }
+}
+
+impl std::fmt::Debug for Seams {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Seams")
+    }
+}
+
+/// Open or create the store at `paths` (spec/03, then spec/02
+/// "Migrations"): location check, lease, layout, the read-only look
+/// at an existing database, the one connection constructor, version
+/// check, migrations, `app_version_last_opened` — in this order.
+pub fn open(paths: &StorePaths, seams: &Seams) -> Result<Store, StoreError> {
+    open_with(paths, seams, WRITER_PRAGMAS, &PINNED_SQLITE, MIGRATIONS)
+}
+
+/// `open` with the settings table, pinned version and migration list
+/// as parameters, so tests can simulate a pragma or version mismatch,
+/// or add a failing migration.
+pub(crate) fn open_with(
     paths: &StorePaths,
-    fs: &dyn Fs,
+    seams: &Seams,
     pragmas: &[PragmaSpec],
     pinned: &PinnedSqlite,
+    migrations: &[Migration],
 ) -> Result<Store, StoreError> {
+    let fs = seams.fs();
     let paths = &resolve_root(fs, paths)?;
     check_location(fs, paths.data_root())?;
     let lease = take_lease(fs, paths.lock_file())?;
     // From here on an early return drops `lease`, releasing the lock.
     ensure_layout(fs, paths)?;
-    let conn = open_connection(paths.state_db(), pragmas)?;
+    examine_existing(fs, paths, pinned, migrations)?;
+    let mut conn = open_connection(paths.state_db(), pragmas)?;
     check_sqlite_version(&conn, pinned)?;
+    run_migrations(&mut conn, seams, migrations)?;
+    // Open succeeded: from now on the writer owns checkpoints (spec/03).
+    conn.set_db_config(DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, false)
+        .map_err(sqlite_err)?;
     Ok(Store { conn, lease })
 }
 
@@ -256,9 +312,15 @@ fn check_partial_layout(fs: &dyn Fs, paths: &StorePaths) -> Result<(), StoreErro
 /// Step 4 (spec/03 "SQLite configuration"): the one connection
 /// constructor. Open `state.sqlite`, apply each setting and read it
 /// back; a `state.sqlite` SQLite can't read as a database is `Corrupt`
-/// and stays byte-for-byte untouched.
+/// and stays byte-for-byte untouched. An existing database reaches it
+/// only after [`examine_existing`] accepted it.
 fn open_connection(state_db: &Path, pragmas: &[PragmaSpec]) -> Result<Connection, StoreError> {
     let conn = Connection::open(state_db).map_err(sqlite_err)?;
+    // Closing doesn't checkpoint until the caller lifts this (`open_with`
+    // on success): a failed open leaves the file as its steps left it,
+    // with WAL frames a crash left behind still in the WAL (spec/02).
+    conn.set_db_config(DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, true)
+        .map_err(sqlite_err)?;
     for spec in pragmas {
         // The table's `set` values are constants, so interpolating the
         // pragma line is safe.
@@ -288,6 +350,63 @@ fn open_connection(state_db: &Path, pragmas: &[PragmaSpec]) -> Result<Connection
         }
     }
     Ok(conn)
+}
+
+/// Before the writer touches an existing `state.sqlite`, judge it
+/// through a read-only connection (spec/02 "Migrations", spec/03): the
+/// SQLite build first, as spec/02 orders it, then not WAL, a newer
+/// store, or not a Sweetbriar store is refused untouched. A read-write
+/// connection would write even if it only read: closing it checkpoints
+/// WAL frames a crash left behind into the file. A read-only one never
+/// does.
+fn examine_existing(
+    fs: &dyn Fs,
+    paths: &StorePaths,
+    pinned: &PinnedSqlite,
+    migrations: &[Migration],
+) -> Result<(), StoreError> {
+    let existing = fs
+        .metadata(paths.state_db())
+        .map_err(fs_err("stat", paths))?
+        .is_some_and(|md| !md.is_empty());
+    if !existing {
+        return Ok(());
+    }
+
+    let conn = open_read_only(paths.state_db())?;
+    check_sqlite_version(&conn, pinned)?;
+    refuse_other_journal_modes(&conn)?;
+    check_existing(&conn, migrations)
+}
+
+/// The connection [`examine_existing`] judges through: read-only, so it
+/// never writes or checkpoints, and not trusting the schema of a file
+/// that may not be ours, so no schema-defined function runs.
+fn open_read_only(state_db: &Path) -> Result<Connection, StoreError> {
+    let conn = Connection::open_with_flags(
+        state_db,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(sqlite_err)?;
+    conn.execute_batch("PRAGMA trusted_schema = OFF")
+        .map_err(sqlite_err)?;
+    Ok(conn)
+}
+
+/// `journal_mode=WAL` persists in the file, so the constructor sets it
+/// only on a new, empty database (spec/03). An existing database in
+/// another mode isn't a Sweetbriar store, and switching it would
+/// rewrite it: refuse it, as `Corrupt`.
+fn refuse_other_journal_modes(conn: &Connection) -> Result<(), StoreError> {
+    let mode: String = conn
+        .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+        .map_err(sqlite_err)?;
+    if mode.eq_ignore_ascii_case("wal") {
+        return Ok(());
+    }
+    Err(StoreError::corrupt(format!(
+        "state.sqlite uses journal mode {mode}; a Sweetbriar store is always WAL, so this isn't one"
+    )))
 }
 
 /// Step 5 (spec/03): `sqlite_version()` and `sqlite_source_id()` equal
@@ -369,7 +488,7 @@ fn fs_err<'a>(
 /// One row of the connection-settings table (spec/03): `PRAGMA <name>
 /// = <set>`, and the value it must read back as.
 #[derive(Debug, Clone)]
-struct PragmaSpec {
+pub(crate) struct PragmaSpec {
     name: &'static str,
     set: &'static str,
     expect: Expect,
@@ -378,7 +497,7 @@ struct PragmaSpec {
 /// A pragma's expected read-back value; read-back types differ
 /// (`wal` is text, `synchronous` an integer).
 #[derive(Debug, Clone)]
-enum Expect {
+pub(crate) enum Expect {
     Int(i64),
     Text(&'static str),
 }
@@ -396,7 +515,7 @@ impl Expect {
 /// The writer connection's settings in spec order (spec/03). macOS
 /// adds its two fullfsync rows — the only `cfg(target_os)` in this
 /// crate.
-const WRITER_PRAGMAS: &[PragmaSpec] = &[
+pub(crate) const WRITER_PRAGMAS: &[PragmaSpec] = &[
     PragmaSpec {
         name: "journal_mode",
         set: "WAL",

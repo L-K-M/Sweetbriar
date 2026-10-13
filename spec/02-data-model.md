@@ -647,14 +647,44 @@ CREATE INDEX d_list_rows_flagged ON d_list_rows(sort_date DESC, occurrence_id DE
 ## Migrations
 
 - **The schema version** is `PRAGMA user_version`, starting at 1, owned by
-  the migration runner. After each migration the engine writes
-  `store_meta.last_migrated_by`.
+  the migration runner in `sb-store`. After each migration the engine
+  writes `store_meta.last_migrated_by`: the app version, which is the
+  workspace `version` in `Cargo.toml`.
+- **At open,** after the SQLite version check (03), the runner reads
+  `user_version`:
+  - 0 in an empty database: a new store; every migration runs;
+  - 0 in a database holding any schema object: not a Sweetbriar store.
+    `Corrupt`, and the file is left untouched;
+  - 1 up to the latest without `store_uuid`, `incarnation` and
+    `last_migrated_by` in a `store_meta` table exactly as above: not a
+    Sweetbriar store. `Corrupt`, untouched;
+  - below the app's latest version: the pending migrations run, in
+    order;
+  - above it: `NewerStore`, naming `last_migrated_by` (`unknown` if it
+    can't be read). Open writes nothing.
+
+  Nothing is written before these checks pass. They run on a
+  read-only connection, since closing a read-write one checkpoints
+  WAL frames a crash left behind into the file; for the same reason
+  the writer doesn't checkpoint on close until open succeeds. Then
+  open records `app_version_last_opened`.
 - **Each migration:**
-  - is one Rust function in one transaction;
-  - is followed by `PRAGMA foreign_key_check` and `PRAGMA quick_check`.
-    After the whole run, a full `PRAGMA integrity_check` (03);
+  - is one Rust function in one transaction, which also sets
+    `user_version` and `last_migrated_by`;
+  - is followed, inside that transaction, by `PRAGMA foreign_key_check`
+    and `PRAGMA quick_check`. A finding rolls the migration back and
+    yields `Corrupt`. After the whole run, a full
+    `PRAGMA integrity_check` (03); a finding is `Corrupt`;
   - is forward-only.
+- **Migration 1** creates the tables of this document and of 06, and
+  fills `store_meta`: `store_uuid` and `incarnation` (two new UUIDs),
+  `created_at`, and both version keys. A test builds a database from
+  these two documents' SQL blocks and requires the migrated schema to
+  match it, so the spec and the migrations can't drift.
 - **Before any migration that rewrites or drops data,** the engine takes a
-  `VACUUM INTO` snapshot, keeping the last two.
+  `VACUUM INTO` snapshot, keeping the last two. This arrives with the
+  first such migration; migration 1 has none.
 - **A store newer than the app** opens read-only, with an explanation
-  naming the app version that last migrated it (research D27).
+  naming the app version that last migrated it (research D27). The
+  writable open refuses it with `NewerStore`; the read-only open uses
+  readers only (plan M0.6).

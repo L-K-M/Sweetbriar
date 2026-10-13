@@ -7,7 +7,11 @@
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 compile_error!("sb-platform supports Linux and macOS only");
 
+mod clock;
 mod fs;
 mod location;
+mod random;
 
+pub use clock::SystemClock;
 pub use fs::RealFs;
+pub use random::OsRandom;

@@ -13,18 +13,12 @@ use sb_test_support::{ScratchDir, real_fs};
 use sb_types::fs::{Fs, Location};
 
 use super::*;
-
-/// A fresh data root under a unique scratch dir, as `StorePaths`.
-fn scratch_paths(label: &str) -> (ScratchDir, StorePaths) {
-    let scratch = ScratchDir::new(label);
-    let paths = StorePaths::new(scratch.path().join("store")).unwrap();
-    (scratch, paths)
-}
+use crate::testing::{scratch_paths, test_seams};
 
 /// `open` on a fresh scratch store.
 fn open_scratch(label: &str) -> (ScratchDir, StorePaths, Store) {
     let (scratch, paths) = scratch_paths(label);
-    let store = open(&paths, real_fs()).unwrap();
+    let store = open(&paths, &test_seams(real_fs())).unwrap();
     (scratch, paths, store)
 }
 
@@ -161,7 +155,7 @@ fn child_process() {
     // Held for the whole function, so the lock outlives the ready line.
     let held = match env::var(CHILD_ROLE_ENV).expect("role env").as_str() {
         // Open the store and hold it.
-        "open-store" => ChildHold::Store(open(&paths, real_fs()).expect("child open")),
+        "open-store" => ChildHold::Store(open(&paths, &test_seams(real_fs())).expect("child open")),
         // Hold only the lock, before any store exists.
         "hold-lock" => ChildHold::Lease(
             real_fs()
@@ -270,7 +264,10 @@ fn other_spellings_of_a_held_store_are_locked() {
     ] {
         let spelled = StorePaths::new(&spelling).unwrap();
         assert!(
-            matches!(open(&spelled, real_fs()), Err(StoreError::Locked)),
+            matches!(
+                open(&spelled, &test_seams(real_fs())),
+                Err(StoreError::Locked)
+            ),
             "{} was not Locked",
             spelling.display()
         );
@@ -293,7 +290,10 @@ fn other_process_holding_the_store_yields_locked() {
             .any(|(path, _)| path.ends_with("state.sqlite")),
         "child should have created the store"
     );
-    assert!(matches!(open(&paths, real_fs()), Err(StoreError::Locked)));
+    assert!(matches!(
+        open(&paths, &test_seams(real_fs())),
+        Err(StoreError::Locked)
+    ));
     assert_eq!(
         recursive_listing(&root),
         before,
@@ -301,7 +301,7 @@ fn other_process_holding_the_store_yields_locked() {
     );
 
     drop(_child);
-    open(&paths, real_fs()).unwrap();
+    open(&paths, &test_seams(real_fs())).unwrap();
 }
 
 /// A second process holding only the lock, before any store exists:
@@ -313,20 +313,26 @@ fn other_process_holding_only_the_lock_yields_locked() {
     let _child = spawn_child("hold-lock", &root);
 
     assert!(!root.exists());
-    assert!(matches!(open(&paths, real_fs()), Err(StoreError::Locked)));
+    assert!(matches!(
+        open(&paths, &test_seams(real_fs())),
+        Err(StoreError::Locked)
+    ));
     assert!(!root.exists(), "failed open created the data root");
 
     drop(_child);
-    open(&paths, real_fs()).unwrap();
+    open(&paths, &test_seams(real_fs())).unwrap();
 }
 
 /// Same process, second open: `Locked` until `close`.
 #[test]
 fn same_process_second_open_is_locked_until_close() {
     let (_scratch, paths, store) = open_scratch("same-proc");
-    assert!(matches!(open(&paths, real_fs()), Err(StoreError::Locked)));
+    assert!(matches!(
+        open(&paths, &test_seams(real_fs())),
+        Err(StoreError::Locked)
+    ));
     store.close().unwrap();
-    assert!(open(&paths, real_fs()).is_ok());
+    assert!(open(&paths, &test_seams(real_fs())).is_ok());
 }
 
 // ---------------------------------------------------------------------------
@@ -342,13 +348,61 @@ fn pragma_mismatch_is_unavailable_and_releases_the_lease() {
     // can never match.
     let mut pragmas = WRITER_PRAGMAS.to_vec();
     pragmas[0].expect = Expect::Text("delete");
-    match open_with(&paths, real_fs().as_ref(), &pragmas, &PINNED_SQLITE).unwrap_err() {
+    match open_with(
+        &paths,
+        &test_seams(real_fs()),
+        &pragmas,
+        &PINNED_SQLITE,
+        MIGRATIONS,
+    )
+    .unwrap_err()
+    {
         StoreError::Unavailable { reason } => {
             assert!(reason.contains("journal_mode"), "{reason}");
         }
         err => panic!("expected Unavailable, got {err:?}"),
     }
-    open(&paths, real_fs()).unwrap();
+    open(&paths, &test_seams(real_fs())).unwrap();
+}
+
+/// The verdict's connection can't write and doesn't trust the schema
+/// of the file it judges.
+#[test]
+fn the_verdict_connection_is_read_only_and_distrusts_the_schema() {
+    let (_scratch, paths, store) = open_scratch("read-only-verdict");
+    store.close().unwrap();
+    let conn = open_read_only(paths.state_db()).unwrap();
+    let trusted: i64 = conn
+        .pragma_query_value(None, "trusted_schema", |row| row.get(0))
+        .unwrap();
+    assert_eq!(trusted, 0);
+    assert!(conn.execute_batch("PRAGMA user_version = 9").is_err());
+}
+
+/// The build is checked before the schema verdict (spec/02): a wrong
+/// build is `Internal` even for an existing store the verdict would
+/// refuse as newer.
+#[test]
+fn version_mismatch_is_internal_before_the_schema_verdict() {
+    let (_scratch, paths, store) = open_scratch("version-before-verdict");
+    store.close().unwrap();
+    let raw = rusqlite::Connection::open(paths.state_db()).unwrap();
+    raw.execute_batch("PRAGMA user_version = 2;").unwrap();
+    raw.close().unwrap();
+
+    let wrong = PinnedSqlite {
+        source_id: "another build of the same version",
+        ..PINNED_SQLITE
+    };
+    let err = open_with(
+        &paths,
+        &test_seams(real_fs()),
+        WRITER_PRAGMAS,
+        &wrong,
+        MIGRATIONS,
+    )
+    .unwrap_err();
+    assert!(matches!(err, StoreError::Internal { .. }), "{err:?}");
 }
 
 /// A linked SQLite other than the pin refuses the open with
@@ -361,7 +415,15 @@ fn version_mismatch_is_internal() {
         version_number: 9_009_009,
         source_id: "not the pinned source id",
     };
-    match open_with(&paths, real_fs().as_ref(), WRITER_PRAGMAS, &wrong).unwrap_err() {
+    match open_with(
+        &paths,
+        &test_seams(real_fs()),
+        WRITER_PRAGMAS,
+        &wrong,
+        MIGRATIONS,
+    )
+    .unwrap_err()
+    {
         StoreError::Internal { detail } => {
             assert!(detail.contains("9.9.9"), "{detail}");
         }
@@ -373,13 +435,21 @@ fn version_mismatch_is_internal() {
         source_id: "another build of the same version",
         ..PINNED_SQLITE
     };
-    match open_with(&paths, real_fs().as_ref(), WRITER_PRAGMAS, &other_source).unwrap_err() {
+    match open_with(
+        &paths,
+        &test_seams(real_fs()),
+        WRITER_PRAGMAS,
+        &other_source,
+        MIGRATIONS,
+    )
+    .unwrap_err()
+    {
         StoreError::Internal { detail } => {
             assert!(detail.contains("another build"), "{detail}");
         }
         err => panic!("expected Internal, got {err:?}"),
     }
-    open(&paths, real_fs()).unwrap();
+    open(&paths, &test_seams(real_fs())).unwrap();
 }
 
 /// The real `Fs` with test hooks: a fixed `location`, a `sync_dir`
@@ -480,7 +550,7 @@ fn non_local_locations_are_unavailable_and_create_nothing() {
             location: Some(location),
             ..HookedFs::new(&paths)
         };
-        match open(&paths, Arc::new(fs)).unwrap_err() {
+        match open(&paths, &test_seams(Arc::new(fs))).unwrap_err() {
             StoreError::Unavailable { reason } => {
                 assert!(reason.contains(&named), "{reason}");
             }
@@ -499,7 +569,7 @@ fn non_database_state_sqlite_is_corrupt_and_untouched() {
 
     let bytes = b"this is not a SQLite database, not even a little bit".repeat(4);
     fs::write(paths.state_db(), &bytes).unwrap();
-    match open(&paths, real_fs()).unwrap_err() {
+    match open(&paths, &test_seams(real_fs())).unwrap_err() {
         StoreError::Corrupt { detail } => {
             assert!(detail.contains("state.sqlite"), "{detail}");
         }
@@ -523,7 +593,7 @@ fn short_state_sqlite_is_corrupt_and_untouched() {
     for len in [1, 99] {
         let bytes = vec![b'!'; len];
         fs::write(paths.state_db(), &bytes).unwrap();
-        match open(&paths, real_fs()).unwrap_err() {
+        match open(&paths, &test_seams(real_fs())).unwrap_err() {
             StoreError::Corrupt { .. } => {}
             err => panic!("expected Corrupt for {len} bytes, got {err:?}"),
         }
@@ -556,7 +626,7 @@ fn existing_store_missing_a_layout_directory_is_corrupt() {
     store.close().unwrap();
     fs::remove_dir(paths.objects_tmp()).unwrap();
 
-    match open(&paths, real_fs()).unwrap_err() {
+    match open(&paths, &test_seams(real_fs())).unwrap_err() {
         StoreError::Corrupt { detail } => {
             assert!(detail.contains("tmp"), "{detail}");
         }
@@ -576,7 +646,7 @@ fn unrelated_data_root_is_unavailable_and_untouched() {
     let root = paths.data_root();
     fs::create_dir(root).unwrap();
     fs::write(root.join("stray.txt"), b"mine").unwrap();
-    match open(&paths, real_fs()).unwrap_err() {
+    match open(&paths, &test_seams(real_fs())).unwrap_err() {
         StoreError::Unavailable { reason } => {
             assert!(reason.contains("stray.txt"), "{reason}");
         }
@@ -586,7 +656,7 @@ fn unrelated_data_root_is_unavailable_and_untouched() {
 
     let (_scratch, paths) = scratch_paths("layout-file-root");
     fs::write(paths.data_root(), b"a file").unwrap();
-    match open(&paths, real_fs()).unwrap_err() {
+    match open(&paths, &test_seams(real_fs())).unwrap_err() {
         StoreError::Unavailable { .. } => {}
         err => panic!("expected Unavailable, got {err:?}"),
     }
@@ -600,7 +670,7 @@ fn interrupted_creation_is_completed() {
     let (_scratch, paths) = scratch_paths("layout-interrupted");
     fs::create_dir(paths.data_root()).unwrap();
     fs::create_dir(paths.objects()).unwrap();
-    open(&paths, real_fs()).unwrap();
+    open(&paths, &test_seams(real_fs())).unwrap();
     for dir in paths.layout_dirs() {
         assert!(fs::metadata(dir).unwrap().is_dir(), "{}", dir.display());
     }
@@ -611,7 +681,7 @@ fn interrupted_creation_is_completed() {
 fn missing_parent_is_unavailable() {
     let scratch = ScratchDir::new("no-parent");
     let orphan = StorePaths::new(scratch.path().join("no/such/parent/store")).unwrap();
-    match open(&orphan, real_fs()).unwrap_err() {
+    match open(&orphan, &test_seams(real_fs())).unwrap_err() {
         StoreError::Unavailable { .. } => {}
         err => panic!("expected Unavailable, got {err:?}"),
     }
@@ -624,7 +694,7 @@ fn creation_flushes_in_spec_order_before_state_sqlite() {
     let (scratch, paths) = scratch_paths("layout-order");
     let fs = Arc::new(HookedFs::new(&paths));
 
-    open(&paths, fs.clone()).unwrap();
+    open(&paths, &test_seams(fs.clone())).unwrap();
 
     let mut expected: Vec<PathBuf> = paths
         .layout_dirs()
@@ -658,7 +728,7 @@ fn failed_creation_flush_is_unavailable_and_retryable() {
             failing_sync: Some(failing.to_path_buf()),
             ..HookedFs::new(&paths)
         };
-        match open(&paths, Arc::new(fs)).unwrap_err() {
+        match open(&paths, &test_seams(Arc::new(fs))).unwrap_err() {
             StoreError::Unavailable { reason } => {
                 assert!(reason.contains("injected flush failure"), "{reason}");
             }
@@ -666,7 +736,7 @@ fn failed_creation_flush_is_unavailable_and_retryable() {
         }
         assert!(!paths.state_db().exists(), "state.sqlite created");
     }
-    open(&paths, real_fs()).unwrap();
+    open(&paths, &test_seams(real_fs())).unwrap();
 }
 
 // ---------------------------------------------------------------------------
