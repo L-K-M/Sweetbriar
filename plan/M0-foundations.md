@@ -152,18 +152,26 @@ decided.
 - **Goal:** the `ObjectStore` trait and its file implementation follow the
   publication protocol, with fault tests.
 - **Spec:** 03 (Object store, Publication protocol, Reads and
-  verification), 11 (Fault injection).
+  verification), 11 (Fault injection), 07 (`NotFound`, `Corrupt`,
+  `Unavailable`).
 - **Depends on:** M0.3.
 - **Deliverables:**
-  - the `Fs` seam and its real implementation from M0.3, plus a
-    fault-injecting implementation in `sb-test-support`. Callers inject
-    the real one: tests here, `sb-resources` from M0.7;
+  - the `Fs` seam and its real implementation from M0.3, plus, in
+    `sb-test-support`, a fault-injecting wrapper (short write, `ENOSPC`,
+    `EIO` on sync, rename and directory-sync failures, chosen by
+    operation) and an in-memory `Fs` that keeps flushed and unflushed
+    file data and directory entries apart and drops the unflushed ones
+    on a simulated power cut. Callers inject the real one: tests here,
+    `sb-resources` from M0.7;
   - in `sb-store`: `ObjectStore` and the file implementation. Reservation
     pins (03) arrive with GC in M1.8; until then nothing removes objects;
   - in `sb-test-support`: the crash-cut harness (spawn a child, kill at
-    numbered cut points, reopen, check invariants).
+    numbered cut points, reopen, check invariants). A cut point is an
+    `Fs` operation: the child kills itself before the Nth one.
 - **Acceptance:**
-  - publish → open returns identical bytes;
+  - publish → open returns identical bytes; a wrong length or hash is
+    `Corrupt` with the file moved to `recovery/`; an absent object is
+    `NotFound`;
   - a new store's directories and data-root entry are flushed (03);
   - publishing the same bytes twice keeps one file;
   - every injected failure (short write, `ENOSPC`, `EIO` on sync, rename

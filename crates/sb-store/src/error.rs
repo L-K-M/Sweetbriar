@@ -7,13 +7,18 @@ use std::fmt;
 /// A store failure, mapped one-to-one onto `CoreError` variants.
 #[derive(Debug)]
 pub enum StoreError {
+    /// What was asked for isn't there: an absent object
+    /// (`CoreError::NotFound`).
+    NotFound { what: String },
     /// `<data root>.lock` is held by another process (`CoreError::Locked`).
     Locked,
     /// The store can't be used: a synced or network location, a root it
-    /// didn't create, a setting that won't stick (`CoreError::Unavailable`).
+    /// didn't create, a setting that won't stick, a failed flush
+    /// (`CoreError::Unavailable`).
     Unavailable { reason: String },
     /// The store is damaged: a missing layout directory, an unreadable
-    /// `state.sqlite` (`CoreError::Corrupt`).
+    /// `state.sqlite`, an object that failed verification
+    /// (`CoreError::Corrupt`).
     Corrupt { detail: String },
     /// The store was migrated by a newer app: `app_version` names the
     /// version that last migrated it (`CoreError::NewerStore`); the
@@ -27,6 +32,10 @@ pub enum StoreError {
 }
 
 impl StoreError {
+    pub(crate) fn not_found(what: impl Into<String>) -> Self {
+        Self::NotFound { what: what.into() }
+    }
+
     pub(crate) fn unavailable(reason: impl Into<String>) -> Self {
         Self::Unavailable {
             reason: reason.into(),
@@ -49,6 +58,7 @@ impl StoreError {
 impl fmt::Display for StoreError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::NotFound { what } => write!(f, "not found: {what}"),
             Self::Locked => f.write_str("the store is owned by another process"),
             Self::Unavailable { reason } => write!(f, "the store is unavailable: {reason}"),
             Self::Corrupt { detail } => write!(f, "the store is corrupt: {detail}"),

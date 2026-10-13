@@ -20,6 +20,7 @@ use sb_types::time::Clock;
 
 use crate::StoreError;
 use crate::StorePaths;
+use crate::objects::FileObjectStore;
 use crate::schema::{MIGRATIONS, Migration, check_existing, run_migrations};
 
 /// The SQLite build spec/01's crate table pins (rusqlite 0.40.2 →
@@ -49,14 +50,15 @@ pub(crate) struct PinnedSqlite {
     source_id: &'static str,
 }
 
-/// An open store: the writer connection held under the ownership
-/// lease.
+/// An open store: the writer connection and the object store held
+/// under the ownership lease.
 ///
 /// Field order is load-bearing: fields drop in declaration order, so
 /// the connection closes before the lease releases the lock — SQLite
 /// is done with the files before another process may take them.
 pub struct Store {
     conn: Connection,
+    objects: FileObjectStore,
     lease: Box<dyn Lease>,
 }
 
@@ -68,13 +70,24 @@ impl Store {
         &self.conn
     }
 
+    /// The store's object store (spec/03): publishing objects through
+    /// it lands them under this store's `objects/`.
+    pub fn objects(&self) -> &FileObjectStore {
+        &self.objects
+    }
+
     /// Close the connection explicitly, then release the lease. The
     /// lock file itself is kept, never deleted (spec/03).
     pub fn close(self) -> Result<(), StoreError> {
-        let Self { conn, lease } = self;
+        let Self {
+            conn,
+            objects,
+            lease,
+        } = self;
         // On error the returned connection drops here, still before
         // `lease` releases.
         conn.close().map_err(|(_conn, e)| sqlite_err(e))?;
+        drop(objects);
         drop(lease);
         Ok(())
     }
@@ -106,12 +119,23 @@ impl Seams {
         self.fs.as_ref()
     }
 
+    /// The filesystem seam by handle, for owners that outlive this
+    /// borrow (the object store holds one).
+    pub(crate) fn fs_arc(&self) -> &Arc<dyn Fs> {
+        &self.fs
+    }
+
     pub(crate) fn clock(&self) -> &dyn Clock {
         self.clock.as_ref()
     }
 
     pub(crate) fn random(&self) -> &dyn Random {
         self.random.as_ref()
+    }
+
+    /// The randomness seam by handle, as `fs_arc`.
+    pub(crate) fn random_arc(&self) -> &Arc<dyn Random> {
+        &self.random
     }
 }
 
@@ -145,6 +169,14 @@ pub(crate) fn open_with(
     let lease = take_lease(fs, paths.lock_file())?;
     // From here on an early return drops `lease`, releasing the lock.
     ensure_layout(fs, paths)?;
+    // The layout exists: the object store can publish into it. Built
+    // from the seams, so tests and the engine share one construction.
+    let objects = FileObjectStore::new(
+        Arc::clone(seams.fs_arc()),
+        Arc::clone(seams.random_arc()),
+        paths.objects().to_path_buf(),
+        paths.recovery().to_path_buf(),
+    );
     examine_existing(fs, paths, pinned, migrations)?;
     let mut conn = open_connection(paths.state_db(), pragmas)?;
     check_sqlite_version(&conn, pinned)?;
@@ -152,7 +184,11 @@ pub(crate) fn open_with(
     // Open succeeded: from now on the writer owns checkpoints (spec/03).
     conn.set_db_config(DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, false)
         .map_err(sqlite_err)?;
-    Ok(Store { conn, lease })
+    Ok(Store {
+        conn,
+        objects,
+        lease,
+    })
 }
 
 /// The store's identity (spec/03): the data root with symlinks
@@ -252,7 +288,7 @@ fn check_layout(fs: &dyn Fs, paths: &StorePaths) -> Result<(), StoreError> {
 /// creation); anything else is `Unavailable`. Then the missing
 /// directories are made in spec order, each is flushed, then the data
 /// root and its parent — all before `state.sqlite` exists.
-fn create_layout(fs: &dyn Fs, paths: &StorePaths) -> Result<(), StoreError> {
+pub(crate) fn create_layout(fs: &dyn Fs, paths: &StorePaths) -> Result<(), StoreError> {
     let root = paths.data_root();
     match fs.metadata(root).map_err(fs_err("stat", paths))? {
         None => fs.create_dir(root).map_err(fs_err("create", paths))?,

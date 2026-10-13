@@ -155,7 +155,9 @@ fn child_process() {
     // Held for the whole function, so the lock outlives the ready line.
     let held = match env::var(CHILD_ROLE_ENV).expect("role env").as_str() {
         // Open the store and hold it.
-        "open-store" => ChildHold::Store(open(&paths, &test_seams(real_fs())).expect("child open")),
+        "open-store" => ChildHold::Store(Box::new(
+            open(&paths, &test_seams(real_fs())).expect("child open"),
+        )),
         // Hold only the lock, before any store exists.
         "hold-lock" => ChildHold::Lease(
             real_fs()
@@ -172,10 +174,11 @@ fn child_process() {
 }
 
 /// What the child process holds while blocking on stdin. The fields
-/// exist to be dropped (releasing the lease), never to be read.
+/// exist to be dropped (releasing the lease), never to be read. The
+/// store rides in a box: it is far larger than a lease.
 #[allow(dead_code)]
 enum ChildHold {
-    Store(Store),
+    Store(Box<Store>),
     Lease(Box<dyn sb_types::fs::Lease>),
 }
 

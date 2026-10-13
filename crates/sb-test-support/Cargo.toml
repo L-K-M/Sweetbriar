@@ -9,3 +9,6 @@ rust-version.workspace = true
 [dependencies]
 sb-platform = { version = "0.0.0", path = "../sb-platform" }
 sb-types = { version = "0.0.0", path = "../sb-types" }
+# `SIGKILL` for the crash-cut harness and `ENOSPC`/`EIO` for fault
+# injection; the same pin `sb-platform` carries (spec/01).
+libc = "=0.2.190"
