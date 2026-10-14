@@ -90,10 +90,10 @@ impl fmt::Display for CoreError {
 mod tests {
     use super::*;
 
-    /// The mapping keeps every variant the service names (spec/07):
-    /// one assertion per variant, as `sb-service` does for the
-    /// engine — a service failure without its FFI mirror fails to
-    /// compile instead of silently becoming `Internal`.
+    /// The mapping keeps every variant the service names (spec/07),
+    /// with its fields: one assertion per variant, as `sb-service`
+    /// does for the engine — a service failure without its FFI mirror
+    /// fails to compile instead of silently becoming `Internal`.
     #[test]
     fn service_errors_map_variant_for_variant() {
         /// One service failure and the check that its mapped value is
@@ -104,7 +104,7 @@ mod tests {
                 sb_service::CoreError::NotFound {
                     what: "w".to_owned(),
                 },
-                |e| assert!(matches!(e, CoreError::NotFound { .. })),
+                |e| assert!(matches!(e, CoreError::NotFound { what } if what == "w")),
             ),
             (sb_service::CoreError::Locked, |e| {
                 assert!(matches!(e, CoreError::Locked))
@@ -113,40 +113,48 @@ mod tests {
                 sb_service::CoreError::Unavailable {
                     reason: "r".to_owned(),
                 },
-                |e| assert!(matches!(e, CoreError::Unavailable { .. })),
+                |e| assert!(matches!(e, CoreError::Unavailable { reason } if reason == "r")),
             ),
             (
                 sb_service::CoreError::Corrupt {
                     detail: "d".to_owned(),
                 },
-                |e| assert!(matches!(e, CoreError::Corrupt { .. })),
+                |e| assert!(matches!(e, CoreError::Corrupt { detail } if detail == "d")),
             ),
             (
                 sb_service::CoreError::NeedsMigration { from: 1, to: 2 },
-                |e| assert!(matches!(e, CoreError::NeedsMigration { .. })),
+                |e| assert!(matches!(e, CoreError::NeedsMigration { from: 1, to: 2 })),
             ),
             (
                 sb_service::CoreError::NewerStore {
                     app_version: "9".to_owned(),
                 },
-                |e| assert!(matches!(e, CoreError::NewerStore { .. })),
+                |e| {
+                    assert!(
+                        matches!(e, CoreError::NewerStore { app_version } if app_version == "9")
+                    )
+                },
             ),
             (
                 sb_service::CoreError::InvalidInput {
                     field: "key".to_owned(),
                     message: "m".to_owned(),
                 },
-                |e| assert!(matches!(e, CoreError::InvalidInput { .. })),
+                |e| {
+                    assert!(
+                        matches!(e, CoreError::InvalidInput { field, message } if field == "key" && message == "m")
+                    )
+                },
             ),
             (
                 sb_service::CoreError::Conflict {
                     detail: "c".to_owned(),
                 },
-                |e| assert!(matches!(e, CoreError::Conflict { .. })),
+                |e| assert!(matches!(e, CoreError::Conflict { detail } if detail == "c")),
             ),
             (
                 sb_service::CoreError::ResetRequired { generation: 7 },
-                |e| assert!(matches!(e, CoreError::ResetRequired { .. })),
+                |e| assert!(matches!(e, CoreError::ResetRequired { generation: 7 })),
             ),
             (sb_service::CoreError::Cancelled, |e| {
                 assert!(matches!(e, CoreError::Cancelled))
@@ -155,7 +163,7 @@ mod tests {
                 sb_service::CoreError::Internal {
                     detail: "i".to_owned(),
                 },
-                |e| assert!(matches!(e, CoreError::Internal { .. })),
+                |e| assert!(matches!(e, CoreError::Internal { detail } if detail == "i")),
             ),
         ];
         for (service_error, assert_maps) in cases {
