@@ -143,10 +143,8 @@ impl Setting {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::thread;
-    use std::time::Duration;
+    use std::pin::pin;
+    use std::task::{Context, Waker};
 
     use super::*;
     use sb_test_support::ScratchDir;
@@ -215,51 +213,30 @@ mod tests {
         sb_test_support::block_on(core.shutdown());
     }
 
-    /// `shutdown` waits for a call in flight: while another thread
-    /// holds the read side — as any call does for its duration —
-    /// `shutdown` cannot return. `completed` is set while the guard
-    /// is still held, so a `shutdown` that returned before it is set
-    /// provably didn't wait.
+    /// `shutdown` waits for a call in flight: while the read side is
+    /// held — as every call holds it for its duration — `shutdown`
+    /// stays pending; once it's released, `shutdown` completes and
+    /// later calls are `Unavailable`. Polled by hand, so nothing
+    /// depends on scheduling.
     #[test]
     fn shutdown_waits_for_a_call_in_flight() {
         let scratch = ScratchDir::new("ffi-wait-for-inflight");
         let core = sb_test_support::block_on(open_core(scratch_config(&scratch))).expect("opens");
 
-        let (acquired_tx, acquired_rx) = std::sync::mpsc::channel::<()>();
-        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
-        let completed = Arc::new(AtomicBool::new(false));
-        let holder = {
-            let core = Arc::clone(&core);
-            let completed = Arc::clone(&completed);
-            thread::spawn(move || {
-                // A stand-in for a slow call: take and hold the read
-                // side every call holds.
-                sb_test_support::block_on(async move {
-                    let _guard = core.service.read().await;
-                    let _ = acquired_tx.send(());
-                    let _ = release_rx.recv();
-                    completed.store(true, Ordering::SeqCst);
-                });
-            })
-        };
-        // A call is now in flight.
-        acquired_rx.recv().expect("the holder signals acquisition");
+        // A stand-in for a call in flight: the read side every call holds.
+        let in_flight = sb_test_support::block_on(core.service.read());
 
-        let shutting_down = {
-            let core = Arc::clone(&core);
-            thread::spawn(move || sb_test_support::block_on(core.shutdown()))
-        };
-        // Give `shutdown` time to queue on the write side; it cannot
-        // take it while the read is held.
-        thread::sleep(Duration::from_millis(100));
-        release_tx.send(()).expect("the holder is waiting");
-        shutting_down.join().expect("shutdown completes");
-
+        let mut shutdown = pin!(core.shutdown());
+        let mut cx = Context::from_waker(Waker::noop());
         assert!(
-            completed.load(Ordering::SeqCst),
-            "shutdown returned before the in-flight call completed"
+            shutdown.as_mut().poll(&mut cx).is_pending(),
+            "shutdown returned while a call was in flight"
         );
-        holder.join().expect("the holder thread ends");
+
+        drop(in_flight);
+        sb_test_support::block_on(shutdown);
+        let err = sb_test_support::block_on(core.settings()).expect_err("the core is shut down");
+        assert!(matches!(err, CoreError::Unavailable { .. }));
     }
 
     /// An unknown setting key maps to `InvalidInput` through the FFI
