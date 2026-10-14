@@ -4,6 +4,9 @@
 //! engine's window futures do no I/O; they are driven with the
 //! test-support executor like every engine test.
 
+use std::pin::pin;
+use std::task::{Context, Waker};
+
 use sb_test_support::ScratchDir;
 
 use super::{LONG_SUBJECT, SENDERS, SNIPPETS, SUBJECT_STEMS};
@@ -634,4 +637,37 @@ fn an_empty_source_pages_empty_at_generation_zero() {
         sb_test_support::block_on(engine.read_window(window_id, 1, Anchor::Top, 10)).unwrap();
     assert!(page.rows().is_empty());
     assert_eq!(page.total(), Count::Exact(0));
+}
+
+/// Window calls run on the engine's runtime, never on the caller's
+/// thread (spec/07 "One runtime": nothing blocks the caller's
+/// thread): the first poll hands the work over and answers `Pending`
+/// — the 500,000-id index and a 1,000-row page included — and the
+/// caller then awaits the result.
+#[test]
+fn window_calls_run_on_the_engine_runtime() {
+    const N: u32 = 500_000;
+    let (_scratch, engine) = scratch_engine("windows-dispatch");
+    let generation = fill(&engine, N);
+    let window =
+        sb_test_support::block_on(engine.open_window(WindowSpec::DebugSynthetic, Anchor::Top, 200))
+            .expect("the window opens");
+    let mut cx = Context::from_waker(Waker::noop());
+
+    let mut index = pin!(engine.window_ids(window.window_id()));
+    assert!(
+        index.as_mut().poll(&mut cx).is_pending(),
+        "the id index was built on the caller's thread"
+    );
+    let index = sb_test_support::block_on(index).expect("the index arrives");
+    assert_eq!(index.ids().len(), N as usize);
+
+    let mut page =
+        pin!(engine.read_window(window.window_id(), generation, Anchor::Around(1), 1_000));
+    assert!(
+        page.as_mut().poll(&mut cx).is_pending(),
+        "the page was built on the caller's thread"
+    );
+    let page = sb_test_support::block_on(page).expect("the page arrives");
+    assert_eq!(page.rows().len(), 1_000);
 }

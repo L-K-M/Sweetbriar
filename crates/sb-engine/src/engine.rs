@@ -53,8 +53,9 @@ pub struct Engine {
     blocking: Arc<BlockingWork>,
     runtime: OwnedRuntime,
     /// The open windows and the debug source behind them (spec/07
-    /// "Queries"): in memory only — no store reads, no blocking pool.
-    windows: Windows,
+    /// "Queries"): in memory only — no store reads. Shared with the
+    /// runtime tasks the window calls run on.
+    windows: Arc<Windows>,
     /// The worker reserved at open that closes the store if the engine
     /// is dropped without `shutdown`; it ends when this sender drops.
     cleanup: std::sync::mpsc::Sender<Cleanup>,
@@ -194,7 +195,7 @@ impl Engine {
                         resources: Some(Arc::new(resources)),
                         blocking: Arc::default(),
                         runtime,
-                        windows: Windows::new(),
+                        windows: Arc::new(Windows::new()),
                         cleanup: start_cleanup_worker()?,
                     })
                 });
@@ -216,7 +217,7 @@ impl Engine {
 
     /// The window table; crate-visible so the `windows` module can
     /// implement its share of `Engine`.
-    pub(crate) fn windows(&self) -> &Windows {
+    pub(crate) fn windows(&self) -> &Arc<Windows> {
         &self.windows
     }
 
@@ -269,6 +270,25 @@ impl Engine {
             result
         });
         self.join(task).await
+    }
+
+    /// Run in-memory work on the runtime's blocking pool, so a caller's
+    /// thread never does it (spec/07 "One runtime": nothing blocks the
+    /// caller's thread) — the window table's lock and a 500,000-id
+    /// index included. Counted like reads, so shutdown waits for it.
+    pub(crate) async fn compute<T, F>(&self, f: F) -> Result<T, EngineError>
+    where
+        T: Send + 'static,
+        F: FnOnce() -> Result<T, EngineError> + Send + 'static,
+    {
+        let running = self.blocking.start()?;
+        let task = self.runtime.handle().spawn_blocking(move || {
+            let result = f();
+            drop(running);
+            result
+        });
+        task.await
+            .map_err(|join| join_failed("run on the runtime", join))?
     }
 
     /// Await one blocking task, mapping a failed join to `Internal` and

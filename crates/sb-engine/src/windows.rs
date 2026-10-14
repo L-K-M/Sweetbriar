@@ -7,11 +7,12 @@
 //! `close_window` releases the handle. The pilot's only spec is
 //! `DebugSynthetic`: one in-memory source per core, replaced atomically
 //! by `debug_fill_synthetic`. Everything here is in memory — the window
-//! code touches neither the store nor the blocking pool, so the mutex
-//! below is taken for microseconds and never across an await.
+//! code never touches the store — but each call still runs on the
+//! runtime's blocking pool (spec/07 "One runtime"), so the mutex below
+//! is never taken on a caller's thread, nor held across an await.
 
 use std::collections::HashMap;
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use crate::{Engine, EngineError};
 
@@ -735,12 +736,12 @@ impl Engine {
     /// `debug_fill_synthetic` (spec/07 "Debug source"): replace the
     /// synthetic source with `count` rows and bump its generation, so
     /// open synthetic windows answer `ResetRequired`. The replacement
-    /// is one lock hold — atomic, and cheap enough to finish in a
-    /// single poll once the caller holds the core (07: a cancelled
-    /// fill either left the source untouched or returns the new
-    /// generation).
+    /// is one lock hold, so it is atomic: once begun it completes and
+    /// returns the new generation (07: a cancelled fill either left
+    /// the source untouched or returns the new generation).
     pub async fn debug_fill_synthetic(&self, count: u32) -> Result<u64, EngineError> {
-        self.windows().fill(count)
+        let windows = Arc::clone(self.windows());
+        self.compute(move || windows.fill(count)).await
     }
 
     /// `open_window` (spec/07 "Queries"): register a window over `spec`
@@ -753,7 +754,9 @@ impl Engine {
         anchor: Anchor,
         limit: u32,
     ) -> Result<Window, EngineError> {
-        self.windows().open(spec, &anchor, limit)
+        let windows = Arc::clone(self.windows());
+        self.compute(move || windows.open(spec, &anchor, limit))
+            .await
     }
 
     /// `read_window` (spec/07): the page `anchor` picks, at the
@@ -765,20 +768,30 @@ impl Engine {
         anchor: Anchor,
         limit: u32,
     ) -> Result<Window, EngineError> {
-        self.windows().read(window_id, generation, &anchor, limit)
+        let windows = Arc::clone(self.windows());
+        self.compute(move || windows.read(window_id, generation, &anchor, limit))
+            .await
     }
 
     /// `window_ids` (spec/07 "The id index"): the window's rows'
     /// occurrence ids in window order, with the source's current
     /// generation.
     pub async fn window_ids(&self, window_id: WindowId) -> Result<WindowIds, EngineError> {
-        self.windows().ids(window_id)
+        let windows = Arc::clone(self.windows());
+        self.compute(move || windows.ids(window_id)).await
     }
 
     /// `close_window` (spec/07): release the handle. Closing twice is
-    /// harmless.
+    /// harmless; so is closing while the engine shuts down, which
+    /// drops every window anyway.
     pub async fn close_window(&self, window_id: WindowId) {
-        self.windows().close(window_id);
+        let windows = Arc::clone(self.windows());
+        let _ = self
+            .compute(move || {
+                windows.close(window_id);
+                Ok(())
+            })
+            .await;
     }
 }
 
