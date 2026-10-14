@@ -68,7 +68,7 @@ final class AppKitPrototypeList: NSView {
         let column = NSTableColumn(
             identifier: NSUserInterfaceItemIdentifier("messages")
         )
-        column.resizingMask = .autoresizing
+        column.resizingMask = .autoresizingMask
         tableView.addTableColumn(column)
         tableView.headerView = nil
         tableView.style = .plain
@@ -76,7 +76,7 @@ final class AppKitPrototypeList: NSView {
         tableView.rowHeight =
             MessageRowMetrics.pitch - tableView.intercellSpacing.height
         tableView.allowsMultipleSelection = true
-        tableView.columnAutoresizingStyle = .lastColumnOnly
+        tableView.columnAutoresizingStyle = .lastColumnOnlyAutoresizingStyle
         tableView.dataSource = self
         tableView.delegate = self
         tableView.menu = contextMenu()

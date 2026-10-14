@@ -10,6 +10,10 @@ import AppKit
 /// menu"), persisted in user defaults under one key; AppKit is the
 /// default.
 enum PrototypeImplementation: String, CaseIterable {
+    /// The user-defaults key "List Implementation" persists under
+    /// (spec/08 "Debug menu").
+    private static let defaultsKey = "debug.listPrototype.implementation"
+
     case appkit
     case swiftui
 
@@ -27,7 +31,7 @@ enum PrototypeImplementation: String, CaseIterable {
     static var stored: PrototypeImplementation {
         get {
             guard let raw = UserDefaults.standard.string(
-                forKey: MainMenuBuilder.implementationDefaultsKey
+                forKey: Self.defaultsKey
             ) else {
                 return .appkit
             }
@@ -36,7 +40,7 @@ enum PrototypeImplementation: String, CaseIterable {
         set {
             UserDefaults.standard.set(
                 newValue.rawValue,
-                forKey: MainMenuBuilder.implementationDefaultsKey
+                forKey: Self.defaultsKey
             )
         }
     }
@@ -49,9 +53,6 @@ enum PrototypeImplementation: String, CaseIterable {
 /// a live builder goes dead.
 @MainActor
 final class MainMenuBuilder: NSObject {
-    /// The user-defaults key "List Implementation" persists under
-    /// (spec/08 "Debug menu").
-    static let implementationDefaultsKey = "debug.listPrototype.implementation"
 
     /// The fill count "Fill 500,000 Synthetic Rows" requests (plan
     /// M0.10, spec/07 "Debug source").

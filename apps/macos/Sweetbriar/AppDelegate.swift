@@ -154,7 +154,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         alert.informativeText = error.localizedDescription
         alert.alertStyle = .warning
         if let keyWindow = NSApplication.shared.keyWindow {
-            alert.beginSheetModal(for: keyWindow)
+            alert.beginSheetModal(for: keyWindow, completionHandler: nil)
         } else {
             _ = alert.runModal()
         }
