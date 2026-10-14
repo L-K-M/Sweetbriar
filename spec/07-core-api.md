@@ -188,6 +188,10 @@ fn release_lease(lease_id: LeaseId);
   observers in batches, at most one per frame.
 - **No synchronous FFI call** does I/O. Synchronous getters are allowed
   only for in-memory values (the appearance cache, for example).
+- **The core is a shared object across FFI.** Its `shutdown` waits for
+  calls in flight and closes the core; any call after it is
+  `Unavailable`. Swift makes its own idempotency keys (`UUID()`), so the
+  service's key helper isn't exported.
 - **UniFFI version:** pinned. The Swift 6 async callback fix is
   unreleased in 0.32.2 (research 01), so the pilot exposes **no async
   callback traits from Swift to Rust**. Platform services needed by the
