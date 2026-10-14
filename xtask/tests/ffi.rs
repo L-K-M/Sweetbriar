@@ -7,11 +7,10 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use xtask::ffi::{
-    binding_drift, headers_dir, lint_async_foreign_callbacks, swift_sources_dir,
-    unresolved_ffi_imports,
+    LibraryKind, binding_drift, build_library, headers_dir, lint_async_foreign_callbacks,
+    swift_sources_dir, unresolved_ffi_imports,
 };
 
 /// A fresh scratch dir under the system temp dir, unique per test.
@@ -168,8 +167,11 @@ fn the_committed_swift_imports_the_committed_module() {
 
 /// The fixture, a surface with a foreign-implemented trait whose method
 /// is async (spec/07 forbids it), is flagged naming the method. Built
-/// in a scratch copy with its own target dir, so it never shares build
-/// output with this workspace.
+/// in a scratch copy into a custom target dir, so it never shares build
+/// output with this workspace — and `build_library` must find the
+/// cdylib where Cargo put it, not the stale one left at
+/// `<dir>/target/debug`, the path an overridden `CARGO_TARGET_DIR`
+/// makes stale (M0.8 review).
 #[test]
 fn the_lint_flags_an_async_foreign_callback() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/ffi/async-callback");
@@ -180,20 +182,36 @@ fn the_lint_flags_an_async_foreign_callback() {
     fs::create_dir_all(copy.join("src")).unwrap();
     fs::copy(fixture.join("src/lib.rs"), copy.join("src/lib.rs")).unwrap();
 
-    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned());
-    let built = Command::new(cargo)
-        .args(["build", "--locked", "--manifest-path"])
-        .arg(copy.join("Cargo.toml"))
-        .env("CARGO_TARGET_DIR", copy.join("target"))
-        .status()
-        .expect("cargo runs");
-    assert!(built.success(), "the fixture didn't build");
+    // A stale library where the default target dir would hold it.
+    let default_debug = copy.join("target/debug");
+    fs::create_dir_all(&default_debug).unwrap();
+    fs::write(
+        default_debug.join(format!(
+            "{}async_callback_fixture{}",
+            std::env::consts::DLL_PREFIX,
+            std::env::consts::DLL_SUFFIX
+        )),
+        b"stale",
+    )
+    .unwrap();
 
-    let library = copy.join("target/debug").join(format!(
-        "{}async_callback_fixture{}",
-        std::env::consts::DLL_PREFIX,
-        std::env::consts::DLL_SUFFIX
-    ));
+    let custom_target = copy.join("custom-target");
+    let library = build_library(
+        &copy,
+        &["build", "--locked"],
+        Some(&custom_target),
+        "async_callback_fixture",
+        LibraryKind::Cdylib,
+    )
+    .expect("the fixture builds");
+    assert!(
+        fs::canonicalize(&library)
+            .unwrap()
+            .starts_with(fs::canonicalize(&custom_target).unwrap()),
+        "{} isn't under the target dir the build used",
+        library.display()
+    );
+
     let violations = lint_async_foreign_callbacks(&library).expect("the lint reads the fixture");
     assert_eq!(violations.len(), 1, "{violations:?}");
     assert!(violations[0].contains("SlowGetter.get"), "{violations:?}");

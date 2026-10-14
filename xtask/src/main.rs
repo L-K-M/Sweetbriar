@@ -57,6 +57,10 @@ fn ffi() -> ExitCode {
 
 /// `cargo xtask check-ffi`: bindings drift + async-callback lint.
 fn check_ffi() -> ExitCode {
+    if env::args().nth(2).is_some() {
+        usage();
+        return ExitCode::FAILURE;
+    }
     if xtask::ffi::check_ffi() {
         ExitCode::SUCCESS
     } else {

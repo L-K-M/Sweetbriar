@@ -21,14 +21,18 @@
 //! bindgen reads — so it can't drift from what the bindings contain.
 
 use std::collections::HashSet;
-use std::env::consts::{DLL_PREFIX, DLL_SUFFIX};
+use std::env::consts::DLL_SUFFIX;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use serde::Deserialize;
 use uniffi_bindgen::macro_metadata;
 use uniffi_meta::{Metadata, ObjectImpl, TraitKind};
 
 use crate::{ToolError, cargo, run};
+
+/// The crate the bindings export (Cargo's target name for `sb-ffi`).
+const FFI_CRATE: &str = "sb_ffi";
 
 /// The module name the generated modulemap declares (`--module-name`).
 const BINDINGS_MODULE_NAME: &str = "SweetbriarCoreFFI";
@@ -210,8 +214,13 @@ fn typecheck_swift(root: &Path) -> Vec<String> {
 /// `out`, returning the cdylib the metadata was read from (the lint
 /// re-reads it).
 pub fn generate_bindings(root: &Path, out: &Path) -> Result<PathBuf, ToolError> {
-    run(&cargo(), &["build", "-p", "sb-ffi"], root, None)?;
-    let library = host_cdylib(root)?;
+    let library = build_library(
+        root,
+        &["build", "-p", "sb-ffi"],
+        None,
+        FFI_CRATE,
+        LibraryKind::Cdylib,
+    )?;
     let out_dir = path_string(out)?;
     let lib = path_string(&library)?;
     let config = path_string(&root.join(BINDINGS_CONFIG))?;
@@ -243,19 +252,92 @@ pub fn generate_bindings(root: &Path, out: &Path) -> Result<PathBuf, ToolError> 
     Ok(library)
 }
 
-/// The host cdylib `cargo build -p sb-ffi` leaves in `target/debug`.
-fn host_cdylib(root: &Path) -> Result<PathBuf, ToolError> {
-    let library = root
-        .join("target/debug")
-        .join(format!("{DLL_PREFIX}sb_ffi{DLL_SUFFIX}"));
-    if library.is_file() {
-        Ok(library)
-    } else {
-        Err(ToolError(format!(
-            "the sb-ffi cdylib is missing at {}; build sb-ffi first",
-            library.display()
-        )))
+/// Which of a crate's library files to take from its build.
+#[derive(Clone, Copy)]
+pub enum LibraryKind {
+    /// The host `cdylib`, which carries UniFFI's metadata for the
+    /// bindgen and the lint.
+    Cdylib,
+    /// The `staticlib` the XCFramework wraps (Apple targets: `.a`).
+    Staticlib,
+}
+
+impl LibraryKind {
+    /// The crate type Cargo lists in the artifact's `target.kind`.
+    fn crate_type(self) -> &'static str {
+        match self {
+            Self::Cdylib => "cdylib",
+            Self::Staticlib => "staticlib",
+        }
     }
+
+    /// The file suffix that tells this library from the target's
+    /// other outputs (the `.rlib`, the other library).
+    fn suffix(self) -> &'static str {
+        match self {
+            Self::Cdylib => DLL_SUFFIX,
+            Self::Staticlib => ".a",
+        }
+    }
+}
+
+/// A `compiler-artifact` line of Cargo's `--message-format=json`
+/// output: the files one target produced.
+#[derive(Deserialize)]
+struct Artifact {
+    reason: String,
+    #[serde(default)]
+    target: ArtifactTarget,
+    #[serde(default)]
+    filenames: Vec<PathBuf>,
+}
+
+/// The artifact's target: its crate name and crate types.
+#[derive(Default, Deserialize)]
+struct ArtifactTarget {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    kind: Vec<String>,
+}
+
+/// Run `cargo <args> --message-format=json` in `dir` and return the
+/// `kind` library Cargo reports for `crate_name`. Cargo's own record
+/// of where it wrote the file, so `CARGO_TARGET_DIR`, `--target` and
+/// the profile all count: a guessed path could name a stale library
+/// from another build and check the wrong exports. `target`
+/// overrides the target dir.
+pub fn build_library(
+    dir: &Path,
+    args: &[&str],
+    target: Option<&Path>,
+    crate_name: &str,
+    kind: LibraryKind,
+) -> Result<PathBuf, ToolError> {
+    let mut args = args.to_vec();
+    args.push("--message-format=json");
+    let stdout = run(&cargo(), &args, dir, target)?;
+    stdout
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Artifact>(line).ok())
+        .filter(|artifact| {
+            artifact.reason == "compiler-artifact"
+                && artifact.target.name == crate_name
+                && artifact.target.kind.iter().any(|k| k == kind.crate_type())
+        })
+        .flat_map(|artifact| artifact.filenames)
+        .find(|file| {
+            file.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.ends_with(kind.suffix()))
+        })
+        .ok_or_else(|| {
+            ToolError(format!(
+                "cargo {} reported no {} for {crate_name}",
+                args.join(" "),
+                kind.crate_type()
+            ))
+        })
 }
 
 /// Copy the generated files into their committed homes — `.swift`
@@ -292,6 +374,7 @@ fn install_bindings(
                 continue;
             }
             fs::remove_file(&path).map_err(io("remove", &path))?;
+            eprintln!("ffi: removed {}, no longer generated", path.display());
         }
     }
     Ok(())
@@ -316,8 +399,8 @@ fn finish(root: &Path, output: FfiOutput) -> Result<(), ToolError> {
 /// it, with the committed headers, in the XCFramework (plan M0.8;
 /// macOS only — `xcodebuild` exists nowhere else).
 fn build_xcframework(root: &Path) -> Result<(), ToolError> {
-    run(
-        &cargo(),
+    let library = build_library(
+        root,
         &[
             "build",
             "-p",
@@ -326,10 +409,10 @@ fn build_xcframework(root: &Path) -> Result<(), ToolError> {
             "--target",
             "aarch64-apple-darwin",
         ],
-        root,
         None,
+        FFI_CRATE,
+        LibraryKind::Staticlib,
     )?;
-    let library = root.join("target/aarch64-apple-darwin/release/libsb_ffi.a");
     let output = xcframework_path(root);
     if output.exists() {
         fs::remove_dir_all(&output).map_err(io("remove", &output))?;
@@ -596,10 +679,14 @@ pub fn lint_async_foreign_callbacks(library: &Path) -> Result<Vec<String>, ToolE
     Ok(violations)
 }
 
-/// A fresh scratch directory under the system temp dir, named for
-/// the run so parallel invocations can't collide. Callers remove it.
+/// A fresh, empty scratch directory path under the system temp dir,
+/// named for the run so parallel invocations can't collide. Callers
+/// remove it.
 fn temp_dir(label: &str) -> PathBuf {
-    std::env::temp_dir().join(format!("{label}-{}", std::process::id()))
+    let dir = std::env::temp_dir().join(format!("{label}-{}", std::process::id()));
+    // A killed earlier run with a reused pid may have left files.
+    let _ = fs::remove_dir_all(&dir);
+    dir
 }
 
 /// The workspace root: this crate lives at `<workspace>/xtask`.
@@ -632,7 +719,6 @@ mod tests {
     #[test]
     fn install_replaces_outdated_and_removes_stale_bindings() {
         let root = temp_dir("xtask-ffi-install");
-        let _ = fs::remove_dir_all(&root);
         let generated = root.join("generated");
         let swift = root.join("Sources");
         let headers = root.join("Headers");
