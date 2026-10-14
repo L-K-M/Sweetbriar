@@ -39,6 +39,9 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.sweetbriar.SweetbriarBridge
+        # Signing needs an Info.plist; the framework's carries nothing
+        # of its own, so Xcode generates it.
+        GENERATE_INFOPLIST_FILE: YES
 
   Sweetbriar:
     type: application
@@ -72,6 +75,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.sweetbriar.SweetbriarBridgeTests
+        GENERATE_INFOPLIST_FILE: YES
 
 schemes:
   Sweetbriar:
