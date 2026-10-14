@@ -355,29 +355,48 @@ fn install_bindings(
     fs::create_dir_all(headers_dir).map_err(io("create", headers_dir))?;
     let files = generated_files(generated)?;
     for file in &files {
-        let to = if file.ends_with(".swift") {
-            swift_dir.join(file)
-        } else {
-            headers_dir.join(file)
-        };
+        let to = home(file, swift_dir, headers_dir).join(file);
         fs::copy(generated.join(file), &to).map_err(io("copy", &to))?;
     }
 
     for dir in [swift_dir, headers_dir] {
         for entry in fs::read_dir(dir).map_err(io("read", dir))? {
             let path = entry.map_err(io("read", dir))?.path();
-            let generated_now = path
+            let generated_here = path
                 .file_name()
                 .and_then(|name| name.to_str())
-                .is_some_and(|name| files.iter().any(|file| file == name));
-            if generated_now {
+                .is_some_and(|name| belongs_here(name, dir, &files, swift_dir, headers_dir));
+            if generated_here {
                 continue;
             }
             fs::remove_file(&path).map_err(io("remove", &path))?;
-            eprintln!("ffi: removed {}, no longer generated", path.display());
+            eprintln!("ffi: removed {}, not generated there", path.display());
         }
     }
     Ok(())
+}
+
+/// The directory a generated file is committed in: the Swift sources
+/// apart from the C header and modulemap.
+fn home<'a>(name: &str, swift_dir: &'a Path, headers_dir: &'a Path) -> &'a Path {
+    if name.ends_with(".swift") {
+        swift_dir
+    } else {
+        headers_dir
+    }
+}
+
+/// Whether `name`, found in `dir`, is a generated file in its home.
+/// A generated name in the other directory is as stale as one no
+/// longer generated: a `.swift` copy under the headers, say.
+fn belongs_here(
+    name: &str,
+    dir: &Path,
+    files: &[String],
+    swift_dir: &Path,
+    headers_dir: &Path,
+) -> bool {
+    files.iter().any(|file| file == name) && home(name, swift_dir, headers_dir) == dir
 }
 
 /// After the bindings: the XCFramework on macOS, a note elsewhere.
@@ -463,7 +482,8 @@ fn generated_files(generated: &Path) -> Result<Vec<String>, ToolError> {
 /// Drift between a fresh generation and the committed bindings:
 /// every generated file must be committed byte for byte in the
 /// directory its kind belongs to, and every committed file must
-/// still be generated. Each entry names the committed path.
+/// still be generated for the directory it sits in. Each entry names
+/// the committed path.
 pub fn binding_drift(
     generated: &Path,
     committed_swift: &Path,
@@ -477,10 +497,11 @@ pub fn binding_drift(
         )];
     };
     for name in &files {
-        let (dir, label) = if name.ends_with(".swift") {
-            (committed_swift, "Swift sources")
+        let dir = home(name, committed_swift, committed_headers);
+        let label = if dir == committed_swift {
+            "Swift sources"
         } else {
-            (committed_headers, "headers")
+            "headers"
         };
         let committed = dir.join(name);
         let Ok(generated_bytes) = fs::read(generated.join(name)) else {
@@ -512,12 +533,21 @@ pub fn binding_drift(
             let Some(name) = entry.file_name().into_string().ok() else {
                 continue;
             };
-            if !files.contains(&name) {
+            if belongs_here(&name, dir, &files, committed_swift, committed_headers) {
+                continue;
+            }
+            if files.contains(&name) {
                 drift.push(format!(
-                    "{name} is committed but no longer generated: {}",
+                    "{name} is generated for {}, not here: {}",
+                    home(&name, committed_swift, committed_headers).display(),
                     dir.join(&name).display()
                 ));
+                continue;
             }
+            drift.push(format!(
+                "{name} is committed but no longer generated: {}",
+                dir.join(&name).display()
+            ));
         }
     }
     drift
@@ -715,7 +745,7 @@ mod tests {
 
     /// Installing over outdated bindings leaves exactly the fresh
     /// generation behind: changed files replaced, files no longer
-    /// generated (a renamed output) removed.
+    /// generated (a renamed output) or in the wrong directory removed.
     #[test]
     fn install_replaces_outdated_and_removes_stale_bindings() {
         let root = temp_dir("xtask-ffi-install");
@@ -731,8 +761,15 @@ mod tests {
         fs::write(swift.join("Core.swift"), "let a = 1\n").unwrap();
         fs::write(swift.join("old.swift"), "let old = 0\n").unwrap();
         fs::write(headers.join("oldFFI.h"), "// old\n").unwrap();
+        // Generated names in the other kind's directory are stale too.
+        fs::write(headers.join("Core.swift"), "let a = 1\n").unwrap();
+        fs::write(swift.join("CoreFFI.h"), "// old\n").unwrap();
 
         install_bindings(&generated, &swift, &headers).expect("installs");
+
+        for misplaced in [headers.join("Core.swift"), swift.join("CoreFFI.h")] {
+            assert!(!misplaced.exists(), "{} survived", misplaced.display());
+        }
 
         assert_eq!(
             binding_drift(&generated, &swift, &headers),

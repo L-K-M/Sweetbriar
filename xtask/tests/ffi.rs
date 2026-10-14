@@ -82,6 +82,38 @@ fn drift_names_each_changed_missing_or_stale_file() {
     let _ = fs::remove_dir_all(&root);
 }
 
+/// A generated file committed in the other kind's directory is
+/// stale there, though its name is generated: a Swift file belongs
+/// under the Swift sources only, the rest under the headers only.
+#[test]
+fn drift_names_a_generated_file_in_the_wrong_directory() {
+    let root = scratch("wrong-dir");
+    let generated = root.join("generated");
+    let swift = root.join("Sources");
+    let headers = root.join("Headers");
+    let files = [
+        ("sb_ffi.swift", "let a = 1\n"),
+        ("sb_ffiFFI.h", "// h\n"),
+        ("module.modulemap", "m\n"),
+    ];
+    write_all(&generated, &files);
+    write_all(&swift, &[files[0], files[1]]);
+    write_all(&headers, &[files[0], files[1], files[2]]);
+
+    let drift = binding_drift(&generated, &swift, &headers);
+    assert_eq!(drift.len(), 2, "{drift:?}");
+    let misplaced = [swift.join("sb_ffiFFI.h"), headers.join("sb_ffi.swift")];
+    for path in misplaced {
+        assert!(
+            drift
+                .iter()
+                .any(|d| d.contains(&path.display().to_string()) && d.contains("not here")),
+            "{drift:?}"
+        );
+    }
+    let _ = fs::remove_dir_all(&root);
+}
+
 /// Swift that imports the module its modulemap declares, whose
 /// header sits beside it, resolves; an import no modulemap declares
 /// and a header nobody committed are each reported, naming the file.
