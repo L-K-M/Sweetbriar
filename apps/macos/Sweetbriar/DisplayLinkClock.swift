@@ -41,7 +41,11 @@ final class DisplayLinkClock: NSObject, FrameClock, @unchecked Sendable {
 
     func nextFrame() async {
         await withCheckedContinuation { waiter in
-            waiters.append(waiter)
+            // An invalidated clock never ticks again: don't park.
+            guard waiters.append(waiter) else {
+                waiter.resume()
+                return
+            }
             DispatchQueue.main.async {
                 self.link?.isPaused = false
             }
@@ -51,10 +55,16 @@ final class DisplayLinkClock: NSObject, FrameClock, @unchecked Sendable {
     /// Stop the link and drop it, breaking its target cycle — a
     /// `CADisplayLink` retains its target, so without this a clock
     /// owned by a closing window would leak the pair. Idempotent.
+    /// The waiters parked then resume at once, and later waits don't
+    /// park: a stranded wait would keep its frame batcher — and the
+    /// pages queued in it — alive forever.
     @MainActor
     func invalidate() {
         link?.invalidate()
         link = nil
+        for waiter in waiters.invalidate() {
+            waiter.resume()
+        }
     }
 
     deinit {
@@ -67,10 +77,25 @@ final class DisplayLinkClock: NSObject, FrameClock, @unchecked Sendable {
 private final class WaiterList: @unchecked Sendable {
     private let lock = NSLock()
     private var continuations: [CheckedContinuation<Void, Never>] = []
+    private var invalidated = false
 
-    func append(_ continuation: CheckedContinuation<Void, Never>) {
+    /// Park `continuation` for the next tick — false, parking nothing,
+    /// once the clock is invalidated.
+    func append(_ continuation: CheckedContinuation<Void, Never>) -> Bool {
         lock.withLock {
+            guard !invalidated else { return false }
             continuations.append(continuation)
+            return true
+        }
+    }
+
+    /// Refuse further waits and hand back the parked ones.
+    func invalidate() -> [CheckedContinuation<Void, Never>] {
+        lock.withLock {
+            invalidated = true
+            let all = continuations
+            continuations.removeAll()
+            return all
         }
     }
 

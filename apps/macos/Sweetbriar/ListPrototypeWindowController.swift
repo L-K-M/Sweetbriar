@@ -36,11 +36,9 @@ final class ListPrototypeWindowController: NSWindowController {
     /// status line reads "Opening" instead of the fill hint.
     private var opening = false
 
-    /// Bumped per `install`: two installs can interleave at their
-    /// suspension points (the Debug menu can race a manual swap), and
-    /// a superseded one must not commit its list. The final stretch —
-    /// building and embedding the list — runs without suspending.
-    private var installSerial = 0
+    /// Which install owns the window: a later install or the window's
+    /// close turns earlier tickets stale (see `InstallTickets`).
+    private var tickets = InstallTickets()
 
     /// The status overlay: the empty-source hint, or why nothing
     /// showed. Centered over the empty list.
@@ -168,15 +166,15 @@ final class ListPrototypeWindowController: NSWindowController {
     private func install(
         implementation: PrototypeImplementation
     ) async throws {
-        installSerial += 1
-        let serial = installSerial
+        let ticket = tickets.next()
         opening = true
         updateStatus()
         await teardown()
         let bridge = try await resolveBridge()
         guard let content = window?.contentView, let clock else { return }
-        // A later install claimed the window while this one suspended.
-        guard serial == installSerial else { return }
+        // A later install, or the window's close, claimed the window
+        // while this one suspended: build nothing.
+        guard tickets.isCurrent(ticket) else { return }
 
         let model = ListWindowModel(
             source: bridge, spec: .debugSynthetic, clock: clock
@@ -203,16 +201,19 @@ final class ListPrototypeWindowController: NSWindowController {
         updateStatus()
 
         Task { @MainActor [weak self] in
-            guard let self, self.model === model else { return }
-            defer {
-                self.opening = false
-                self.updateStatus()
-            }
+            guard let self, self.tickets.isCurrent(ticket) else { return }
+            var failure: (any Error)?
             do {
                 try await model.open()
             } catch {
-                self.openError = error
+                failure = error
             }
+            // A superseded model's outcome — often the failure its own
+            // close caused — is no longer the window's to show.
+            guard self.tickets.isCurrent(ticket) else { return }
+            self.openError = failure
+            self.opening = false
+            self.updateStatus()
         }
     }
 
@@ -276,11 +277,38 @@ extension ListPrototypeWindowController: NSWindowDelegate {
     /// handle included. `close()` is uncancellable; run it past the
     /// window's death, and drop the clock's display link.
     func windowWillClose(_ notification: Notification) {
+        tickets.close()
         let model = self.model
         Task { @MainActor in
             await model?.close()
         }
         clock?.invalidate()
         onWindowClosed?()
+    }
+}
+
+/// Install tickets for one window: each install takes the next
+/// ticket, and only the newest is current — until the window closes,
+/// which makes every ticket stale. A suspended install, or a replaced
+/// model's open, checks its ticket on resuming and leaves a window it
+/// no longer owns alone.
+struct InstallTickets {
+    private var newest = 0
+    private var closed = false
+
+    /// A fresh ticket, making every earlier one stale.
+    mutating func next() -> Int {
+        newest += 1
+        return newest
+    }
+
+    /// The window closed: no ticket is current any more.
+    mutating func close() {
+        closed = true
+    }
+
+    /// Whether `ticket` still owns the window.
+    func isCurrent(_ ticket: Int) -> Bool {
+        !closed && ticket == newest
     }
 }

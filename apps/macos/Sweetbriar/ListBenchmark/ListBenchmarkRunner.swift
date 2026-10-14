@@ -624,9 +624,10 @@ final class ListBenchmarkRunner {
         at screenPoint: NSPoint,
         windowNumber: Int
     ) -> NSEvent? {
-        guard let source = CGEventSource(stateID: .hidSystemState),
-              let cgEvent = CGEvent(
-                  scrollWheelEvent2Source: source,
+        // No event source: the event is never posted to the HID
+        // system, only handed to this app's queue.
+        guard let cgEvent = CGEvent(
+                  scrollWheelEvent2Source: nil,
                   units: .line,
                   wheelCount: 1,
                   wheel1: 1,
