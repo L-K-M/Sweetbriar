@@ -358,3 +358,55 @@ fn dropping_an_engine_inside_async_code_never_blocks_on_its_store() {
     let engine = reopen_eventually(&root);
     sb_test_support::block_on(engine.shutdown()).unwrap();
 }
+
+/// A waker that reports, once, that it was woken.
+struct Signal(std::sync::Mutex<Option<std::sync::mpsc::Sender<()>>>);
+
+impl std::task::Wake for Signal {
+    fn wake(self: std::sync::Arc<Self>) {
+        if let Some(woken) = self.0.lock().unwrap().take() {
+            let _ = woken.send(());
+        }
+    }
+}
+
+/// An `open` that finished on the blocking pool but whose result is
+/// never polled, dropped inside async code, still closes its store
+/// cleanly off the caller's thread: the clean-shutdown marker appears
+/// (a bare store dropped inline would record none).
+#[test]
+fn a_finished_open_dropped_unpolled_closes_its_store() {
+    let scratch = ScratchDir::new("engine-open-finished-dropped");
+    let root = scratch.path().join("store");
+    let (woken, wakes) = std::sync::mpsc::channel();
+    let waker = std::task::Waker::from(std::sync::Arc::new(Signal(std::sync::Mutex::new(Some(
+        woken,
+    )))));
+
+    outer_runtime().block_on(async {
+        let mut opening = std::pin::pin!(Engine::open(&root));
+        let first = opening
+            .as_mut()
+            .poll(&mut std::task::Context::from_waker(&waker));
+        assert!(
+            first.is_pending(),
+            "the open finished before its first poll"
+        );
+        wakes
+            .recv_timeout(std::time::Duration::from_secs(30))
+            .expect("the open never finished");
+        // Finished, not polled again: dropped here.
+    });
+
+    let state_db = root.join("state.sqlite");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while sb_test_support::store_meta_value(&state_db, "clean_shutdown_at").is_none() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the dropped open's store was never closed"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let engine = reopen_eventually(&root);
+    sb_test_support::block_on(engine.shutdown()).unwrap();
+}

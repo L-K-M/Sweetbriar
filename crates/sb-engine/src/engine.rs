@@ -127,19 +127,24 @@ impl Engine {
     pub async fn open(data_root: impl AsRef<Path>) -> Result<Self, EngineError> {
         let data_root = data_root.as_ref().to_path_buf();
         let runtime = OwnedRuntime::start()?;
-        let opened = runtime
-            .handle()
-            .spawn_blocking(move || Resources::open(&data_root))
+        // The whole engine is built on the blocking pool, so a finished
+        // open whose result is never polled drops an `Engine`, whose own
+        // `Drop` closes the store off the caller's thread, never a bare
+        // store that would close inline.
+        let handle = runtime.handle().clone();
+        let opened = handle
+            .spawn_blocking(move || {
+                Resources::open(&data_root).map(|resources| Self {
+                    resources: Some(Arc::new(resources)),
+                    blocking: Arc::default(),
+                    runtime,
+                })
+            })
             .await;
-        let resources = match opened {
-            Ok(resources) => resources.map_err(EngineError::from)?,
-            Err(join) => return Err(join_failed("open the store", join)),
-        };
-        Ok(Self {
-            resources: Some(Arc::new(resources)),
-            blocking: Arc::default(),
-            runtime,
-        })
+        match opened {
+            Ok(engine) => engine.map_err(EngineError::from),
+            Err(join) => Err(join_failed("open the store", join)),
+        }
     }
 
     /// The store handle; present until `shutdown` or drop takes it.

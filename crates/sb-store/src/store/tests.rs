@@ -1289,8 +1289,8 @@ fn unclean_store_with_null_damage(label: &str) -> (ScratchDir, StorePaths) {
 
 /// The read-only open checks nothing (spec/03): an unclean store with
 /// damage a read-only `quick_check` would find still opens read-only,
-/// its marker stays absent, and `state.sqlite` and the WAL keep their
-/// bytes.
+/// its marker stays absent, and `state.sqlite` keeps its bytes (the
+/// WAL side is covered by the crashed-frames read-only tests).
 #[test]
 fn the_read_only_open_neither_checks_nor_touches_the_marker() {
     let (_scratch, paths) = unclean_store_with_null_damage("check-read-only");
@@ -1302,22 +1302,18 @@ fn the_read_only_open_neither_checks_nor_touches_the_marker() {
     ));
     drop(checked);
 
-    let wal = paths.data_root().join("state.sqlite-wal");
     let before = fs::read(paths.state_db()).unwrap();
-    let wal_before = fs::read(&wal).ok();
     let read_only = open_read_only(&paths, &test_seams(real_fs())).unwrap();
     read_only.close().unwrap();
 
     assert_eq!(fs::read(paths.state_db()).unwrap(), before);
-    if let Some(wal_before) = wal_before {
-        assert_eq!(fs::read(&wal).unwrap(), wal_before);
-    }
     assert_eq!(raw_meta_value(&paths, "clean_shutdown_at"), None);
 }
 
 /// A failed ancestor flush, then a successful retry: the retry flushes
 /// that ancestor's parent again, since an ancestor that exists isn't
-/// proven durable (spec/03).
+/// proven durable (spec/03) — not even once something else (a cache
+/// directory, another store) has appeared beside the store's way down.
 #[test]
 fn a_retry_reflushes_an_ancestor_whose_flush_failed() {
     let scratch = ScratchDir::new("ancestor-retry");
@@ -1331,6 +1327,7 @@ fn a_retry_reflushes_an_ancestor_whose_flush_failed() {
         Err(StoreError::Unavailable { .. })
     ));
     assert!(scratch.path().join("a").exists());
+    fs::create_dir(scratch.path().join("a/cache")).unwrap();
 
     let retry = Arc::new(HookedFs::new(&paths));
     open(&paths, &test_seams(retry.clone()))
@@ -1344,8 +1341,9 @@ fn a_retry_reflushes_an_ancestor_whose_flush_failed() {
     );
 }
 
-/// The same through a simulated power cut: after the failed flush and
-/// a successful retry, a durably written file in the store survives.
+/// The same through a simulated power cut: after the failed flush, a
+/// sibling appearing and a successful retry, a durably written file in
+/// the store survives.
 #[test]
 fn a_retried_store_survives_a_power_cut() {
     use sb_test_support::{FaultFs, FaultKind, FsOp, SimFs};
@@ -1356,6 +1354,7 @@ fn a_retried_store_survives_a_power_cut() {
     let paths = StorePaths::new("/existing/a/b/store").unwrap();
     let fs = FaultFs::new(sim.clone(), FsOp::SyncDir, 1, FaultKind::Eio);
     assert!(create_missing_ancestors(&fs, &paths).is_err());
+    fs.create_dir(Path::new("/existing/a/cache")).unwrap();
     create_missing_ancestors(&fs, &paths).unwrap();
     create_layout(&fs, &paths).unwrap();
 

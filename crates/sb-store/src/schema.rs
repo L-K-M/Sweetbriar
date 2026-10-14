@@ -76,8 +76,11 @@ fn record_open(conn: &mut Connection) -> Result<(), StoreError> {
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(step_err)?;
     set_meta(&tx, "app_version_last_opened", APP_VERSION)?;
-    tx.execute("DELETE FROM store_meta WHERE key = 'clean_shutdown_at'", [])
-        .map_err(step_err)?;
+    tx.execute(
+        "DELETE FROM store_meta WHERE key = ?1",
+        [crate::store::CLEAN_SHUTDOWN_KEY],
+    )
+    .map_err(step_err)?;
     tx.commit().map_err(step_err)
 }
 
