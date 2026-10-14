@@ -92,6 +92,10 @@ final class ListPrototypeWindowController: NSWindowController {
         updateTitle()
     }
 
+    required init?(coder: NSCoder) {
+        fatalError("ListPrototypeWindowController is built in code")
+    }
+
     /// The window's frame-bearing name — "List Prototype — AppKit" or
     /// "— SwiftUI".
     private func updateTitle() {
