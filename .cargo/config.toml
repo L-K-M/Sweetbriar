@@ -5,3 +5,5 @@ xtask = "run --package xtask --"
 # "SQLite configuration"; the build script appends each -D flag.
 [env]
 LIBSQLITE3_FLAGS = { value = "-DSQLITE_DQS=0 -DSQLITE_DEFAULT_FOREIGN_KEYS=1 -DSQLITE_DEFAULT_WAL_SYNCHRONOUS=2 -DSQLITE_STRICT_SUBTYPE=1", force = true }
+
+# Path-filter probe for M0.9's acceptance; this PR is closed unmerged.
