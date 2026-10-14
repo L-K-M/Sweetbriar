@@ -18,6 +18,24 @@ use sb_resources::Resources;
 /// The name of the worker a dropped engine closes its store on.
 const CLOSE_THREAD_NAME: &str = "sb-engine-close";
 
+/// The name of the thread an engine is opened on.
+const OPEN_THREAD_NAME: &str = "sb-engine-open";
+
+/// The open thread's body, as handed to a [`SpawnOpen`].
+pub(crate) type OpenBody = Box<dyn FnOnce() + Send>;
+
+/// Starts the thread an engine is opened on. Production spawns an OS
+/// thread; a test can refuse, as an exhausted OS would.
+pub(crate) type SpawnOpen = fn(OpenBody) -> std::io::Result<()>;
+
+/// The production [`SpawnOpen`]: a named, detached OS thread.
+fn spawn_open_thread(body: OpenBody) -> std::io::Result<()> {
+    std::thread::Builder::new()
+        .name(OPEN_THREAD_NAME.to_owned())
+        .spawn(body)
+        .map(drop)
+}
+
 /// What a dropped engine hands its cleanup worker: the store's last
 /// handle and the count of blocking tasks still using it.
 type Cleanup = (Arc<Resources>, Arc<BlockingWork>);
@@ -144,29 +162,44 @@ impl Engine {
     /// blocks the caller's thread; dropping the future midway shuts the
     /// fresh runtime down in the background.
     pub async fn open(data_root: impl AsRef<Path>) -> Result<Self, EngineError> {
+        Self::open_with(data_root, spawn_open_thread).await
+    }
+
+    /// [`Engine::open`] with the open thread's spawner as a parameter,
+    /// so a test can refuse it as an exhausted OS would.
+    ///
+    /// The whole engine is built on a thread of its own, not the
+    /// runtime's blocking pool: tokio queues a blocking task when it
+    /// can't start a thread, so an open there could wait forever, while
+    /// spawning a thread fails at once, as `Unavailable` (spec/01:
+    /// threads are a startup resource). Building the engine there also
+    /// means a finished open whose result is never polled drops an
+    /// `Engine`, whose `Drop` closes the store off the caller's thread.
+    pub(crate) async fn open_with(
+        data_root: impl AsRef<Path>,
+        spawn: SpawnOpen,
+    ) -> Result<Self, EngineError> {
         let data_root = data_root.as_ref().to_path_buf();
         let runtime = OwnedRuntime::start()?;
-        // The whole engine is built on the blocking pool, so a finished
-        // open whose result is never polled drops an `Engine`, whose own
-        // `Drop` closes the store off the caller's thread, never a bare
-        // store that would close inline.
-        let handle = runtime.handle().clone();
-        let opened = handle
-            .spawn_blocking(move || {
-                let resources = Resources::open(&data_root).map_err(EngineError::from)?;
-                let cleanup = start_cleanup_worker()?;
-                Ok(Self {
-                    resources: Some(Arc::new(resources)),
-                    blocking: Arc::default(),
-                    runtime,
-                    cleanup,
-                })
-            })
-            .await;
-        match opened {
-            Ok(engine) => engine,
-            Err(join) => Err(join_failed("open the store", join)),
-        }
+        let (opened, received) = tokio::sync::oneshot::channel();
+        spawn(Box::new(move || {
+            let engine = Resources::open(&data_root)
+                .map_err(EngineError::from)
+                .and_then(|resources| {
+                    Ok(Self {
+                        resources: Some(Arc::new(resources)),
+                        blocking: Arc::default(),
+                        runtime,
+                        cleanup: start_cleanup_worker()?,
+                    })
+                });
+            // A caller that stopped waiting drops the engine here.
+            let _ = opened.send(engine);
+        }))
+        .map_err(|e| EngineError::unavailable(format!("cannot start the open thread: {e}")))?;
+        received
+            .await
+            .map_err(|_| EngineError::internal("the thread opening the store panicked"))?
     }
 
     /// The store handle; present until `shutdown` or drop takes it.

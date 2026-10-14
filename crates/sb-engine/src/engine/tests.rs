@@ -536,3 +536,26 @@ fn an_os_refusing_threads_fails_the_open_as_unavailable() {
         "the startup-refusal child failed: {status}"
     );
 }
+
+/// A spawner that refuses, as an OS out of threads would.
+fn refuse_open(_body: super::OpenBody) -> std::io::Result<()> {
+    Err(std::io::Error::other("no threads left"))
+}
+
+/// An OS that refuses the open thread fails the open as `Unavailable`
+/// at once (spec/01: threads are a startup resource), rather than
+/// leaving the open queued forever, and the runtime it started steps
+/// aside.
+#[test]
+fn a_refused_open_thread_is_unavailable() {
+    let scratch = ScratchDir::new("engine-open-refused");
+    let root = scratch.path().join("store");
+    match sb_test_support::block_on(Engine::open_with(&root, refuse_open)) {
+        Err(EngineError::Unavailable { reason }) => {
+            assert!(reason.contains("open thread"), "{reason}")
+        }
+        other => panic!("expected Unavailable, got {other:?}"),
+    }
+    let engine = sb_test_support::block_on(Engine::open(&root)).unwrap();
+    sb_test_support::block_on(engine.shutdown()).unwrap();
+}
