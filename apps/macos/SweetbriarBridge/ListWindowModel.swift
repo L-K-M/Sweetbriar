@@ -85,6 +85,13 @@ public final class ListWindowModel {
     @ObservationIgnored
     public var onPagesDelivered: @MainActor ([Int]) -> Void = { _ in }
 
+    /// Part B2b's benchmark hook: it observes the same deliveries as
+    /// `onPagesDelivered` — which stays the list's own — so the harness
+    /// can stamp each page delivery with the display interval it fell
+    /// in without taking over the list's reload.
+    @ObservationIgnored
+    public var onPagesDeliveredForBenchmark: @MainActor ([Int]) -> Void = { _ in }
+
     /// Called on the main actor when the id index is replaced —
     /// `open`, `rebuild` and a `resetRequired` rebuild each swap every
     /// row at once, so a list reloads fully rather than patching
@@ -462,8 +469,14 @@ public final class ListWindowModel {
         nextSerial &+= 1
         serials[k] = nextSerial
         let serial = nextSerial
+        // Signpost "queue" (plan M0.10): the read's request →
+        // completion span.
+        let span = ListPrototypeSignposts.begin("queue")
         let task = Task { [weak self] in
-            guard let self else { return }
+            guard let self else {
+                ListPrototypeSignposts.end("queue", span)
+                return
+            }
             let result: Result<ListWindow, any Error>
             do {
                 result = .success(
@@ -477,6 +490,7 @@ public final class ListWindowModel {
             } catch {
                 result = .failure(error)
             }
+            ListPrototypeSignposts.end("queue", span)
             self.readFinished(
                 page: k,
                 serial: serial,
@@ -525,6 +539,10 @@ public final class ListWindowModel {
     /// is dropped. A landed page whose ids aren't exactly
     /// `ids[s..<s+L]`, and any `resetRequired`, rebuilds the model.
     private func deliver(_ batch: [PageCompletion]) {
+        // Signpost "apply" (plan M0.10): the frame's delivery handling —
+        // landing rows plus the lists' reload work below.
+        let span = ListPrototypeSignposts.begin("apply")
+        defer { ListPrototypeSignposts.end("apply", span) }
         var landed: [Int] = []
         var reset = false
         for completion in batch {
@@ -567,6 +585,7 @@ public final class ListWindowModel {
         }
         if !landed.isEmpty {
             onPagesDelivered(landed)
+            onPagesDeliveredForBenchmark(landed)
         }
         if reset {
             scheduleRebuild()

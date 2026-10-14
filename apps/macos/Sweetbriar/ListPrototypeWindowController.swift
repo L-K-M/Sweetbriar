@@ -128,6 +128,26 @@ final class ListPrototypeWindowController: NSWindowController {
         list
     }
 
+    /// The current model under test, for part B2b's harness — its
+    /// generation check and page-delivery hook.
+    var listModel: ListWindowModel? {
+        model
+    }
+
+    /// The last open or install failure, for the harness's checks.
+    var openFailure: (any Error)? {
+        openError
+    }
+
+    /// The benchmark's end of run: close the window, then await the
+    /// model's `close()` so the run's reads are done before the next
+    /// window opens. `windowWillClose` also closes the model — a
+    /// second call is a no-op.
+    func closeAndAwaitModel() async {
+        window?.close()
+        await model?.close()
+    }
+
     /// Swap implementations: close the old model, install a fresh
     /// model and list — each starts clean (spec/08).
     func setImplementation(_ newValue: PrototypeImplementation) async {

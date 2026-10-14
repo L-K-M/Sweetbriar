@@ -25,6 +25,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// the same one forward.
     private var prototypeController: ListPrototypeWindowController?
 
+    /// The running benchmark, or nil — the menu item greys out while
+    /// one is in flight.
+    private var benchmarkRunner: ListBenchmarkRunner?
+
+    /// The report window the menu run shows, kept so it survives its
+    /// own close.
+    private var benchmarkReportController: BenchmarkReportWindowController?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 440, height: 140),
@@ -75,6 +83,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     "Couldn't load the setting: \(error.localizedDescription)"
             }
         }
+
+        // `-runListBenchmark <report.json>` (spec/08 "Debug menu"):
+        // the same benchmark the menu runs, then the report written
+        // to the path and the app quits — macOS CI drives it.
+        if let reportPath = UserDefaults.standard.string(
+            forKey: "runListBenchmark"
+        ) {
+            startBenchmark(reportPath: reportPath)
+        }
     }
 
     /// Build and install the main menu — its own type owns the items
@@ -89,6 +106,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             },
             onImplementationChanged: { [weak self] implementation in
                 self?.prototypeImplementationChanged(implementation)
+            },
+            onRunBenchmark: { [weak self] in
+                self?.startBenchmark()
+            },
+            isBenchmarkEnabled: { [weak self] in
+                self?.benchmarkRunner == nil
             }
         )
         NSApplication.shared.mainMenu = builder.makeMainMenu()
@@ -143,6 +166,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let controller = prototypeController else { return }
         Task { @MainActor in
             await controller.setImplementation(implementation)
+        }
+    }
+
+    /// Debug → Run List Benchmark (spec/08): the four ABBA runs in
+    /// fresh prototype windows, then the report in a window. With a
+    /// `reportPath` — the launch-argument run — the report is written
+    /// there, a short summary prints to stdout, and the app quits.
+    private func startBenchmark(reportPath: String? = nil) {
+        guard let session, benchmarkRunner == nil else { return }
+        let runner = ListBenchmarkRunner(session: session)
+        benchmarkRunner = runner
+        Task { @MainActor [weak self] in
+            let report = await runner.run()
+            guard let self else { return }
+            benchmarkRunner = nil
+            guard let reportPath else {
+                let controller = BenchmarkReportWindowController(
+                    report: report
+                )
+                benchmarkReportController = controller
+                controller.showWindow(nil)
+                return
+            }
+            // "a run that can't start still writes ok: false" — the
+            // runner's report already carries every failure; only the
+            // write can still fail.
+            let data = (try? report.encoded())
+                ?? Data(#"{ "ok": false, "failures": ["the report failed to encode"] }"#
+                    .utf8)
+            do {
+                try data.write(
+                    to: URL(fileURLWithPath: reportPath),
+                    options: .atomic
+                )
+            } catch {
+                print(
+                    "list-benchmark: couldn't write \(reportPath): "
+                        + error.localizedDescription
+                )
+            }
+            print(report.stdoutSummary)
+            NSApp.terminate(nil)
         }
     }
 

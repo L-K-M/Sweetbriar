@@ -61,6 +61,8 @@ final class MainMenuBuilder: NSObject {
     private let onFillSynthetic: @MainActor () -> Void
     private let onShowPrototype: @MainActor () -> Void
     private let onImplementationChanged: @MainActor (PrototypeImplementation) -> Void
+    private let onRunBenchmark: @MainActor () -> Void
+    private let isBenchmarkEnabled: @MainActor () -> Bool
 
     /// `NSMenuItem.identifier`s that `validateMenuItem` treats
     /// specially.
@@ -69,7 +71,7 @@ final class MainMenuBuilder: NSObject {
         static let implementation = NSUserInterfaceItemIdentifier(
             "debug.listImplementation"
         )
-        /// "Run List Benchmark" — disabled until part B2b wires it.
+        /// "Run List Benchmark" — disabled while a run is in flight.
         static let benchmark = NSUserInterfaceItemIdentifier(
             "debug.runListBenchmark"
         )
@@ -83,14 +85,21 @@ final class MainMenuBuilder: NSObject {
     ///   - onImplementationChanged: persist-and-swap the list
     ///     implementation — the builder stores the choice, the app
     ///     swaps any open window's list.
+    ///   - onRunBenchmark: run part B2b's list benchmark.
+    ///   - isBenchmarkEnabled: whether Run List Benchmark is live —
+    ///     false while a run is in flight.
     init(
         onFillSynthetic: @escaping @MainActor () -> Void,
         onShowPrototype: @escaping @MainActor () -> Void,
-        onImplementationChanged: @escaping @MainActor (PrototypeImplementation) -> Void
+        onImplementationChanged: @escaping @MainActor (PrototypeImplementation) -> Void,
+        onRunBenchmark: @escaping @MainActor () -> Void,
+        isBenchmarkEnabled: @escaping @MainActor () -> Bool
     ) {
         self.onFillSynthetic = onFillSynthetic
         self.onShowPrototype = onShowPrototype
         self.onImplementationChanged = onImplementationChanged
+        self.onRunBenchmark = onRunBenchmark
+        self.isBenchmarkEnabled = isBenchmarkEnabled
         super.init()
     }
 
@@ -197,7 +206,8 @@ final class MainMenuBuilder: NSObject {
             target: self
         )
         benchmark.identifier = ItemID.benchmark
-        benchmark.toolTip = "Added in part B2b"
+        benchmark.toolTip =
+            "Run the four list benchmark runs and show the report"
         menu.addItem(benchmark)
         item.submenu = menu
         return item
@@ -263,18 +273,20 @@ final class MainMenuBuilder: NSObject {
         onImplementationChanged(implementation)
     }
 
-    /// The benchmark stub — disabled; part B2b puts the run behind it.
+    /// Debug → Run List Benchmark (spec/08, plan M0.10).
     @objc
-    private func runListBenchmark(_ sender: NSMenuItem) {}
+    private func runListBenchmark(_ sender: NSMenuItem) {
+        onRunBenchmark()
+    }
 }
 
 extension MainMenuBuilder: NSMenuItemValidation {
-    /// Every Debug item is enabled except the benchmark stub; the
-    /// implementation pair re-checks itself against the stored choice
-    /// each time the menu opens.
+    /// Every Debug item is enabled except the benchmark while a run
+    /// is in flight; the implementation pair re-checks itself against
+    /// the stored choice each time the menu opens.
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         if menuItem.identifier == ItemID.benchmark {
-            return false
+            return isBenchmarkEnabled()
         }
         if menuItem.identifier == ItemID.implementation {
             let raw = menuItem.representedObject as? String

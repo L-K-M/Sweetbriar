@@ -66,9 +66,23 @@ compiler must be on `PATH`. Its compile options come from
   gitignored), `xcodebuild build test` on the `Sweetbriar` scheme —
   the Swift-Testing `SweetbriarBridgeTests` included — and the zipped
   `.app` artifact `Sweetbriar-app` (M0.9);
+- the app-hosted `SweetbriarTests` bundle (M0.10, a `bundle.unit-test`
+  target on the `Sweetbriar` scheme): the benchmark's Foundation-only
+  statistics, report and comparison bars plus the shared row
+  presentation and the context-click rule;
+- the M0.10 list benchmark: the Release app launches with
+  `-runListBenchmark <report.json>` after the Release zip step,
+  `jq -e '.ok == true'` gates on its verdict, and the report uploads
+  as the `list-benchmark` artifact — its numbers are diagnostic (the
+  owner's Mac decides between the two lists);
 - anything touching `apps/` or generated bindings.
 
 Agents can't run these locally — make the YAML correct by inspection.
+
+The owner runs the same benchmark from the app's Debug → Run List
+Benchmark menu item; it finishes in a report window with a Copy
+button. `-runListBenchmark` writes the file, prints a short summary
+and quits — even a run that can't start writes `ok: false`.
 
 ## Rules for agents (summary of plan/README.md)
 

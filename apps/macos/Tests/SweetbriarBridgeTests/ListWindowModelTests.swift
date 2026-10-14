@@ -597,6 +597,36 @@ func theIndexHookFiresOnOpenAndEveryRebuild() async throws {
     await model.close()
 }
 
+/// Part B2b's `onPagesDeliveredForBenchmark` sees the same deliveries
+/// as the list's own `onPagesDelivered` — the harness stamps each one
+/// without taking over the list's reload hook.
+@MainActor
+@Test(.timeLimit(.minutes(1)))
+func theBenchmarkHookSeesTheSameDeliveriesAsTheLists() async throws {
+    let n = 500_000
+    let fake = FakeListWindowSource()
+    _ = await fake.fill(n)
+    let clock = ManualFrameClock()
+    let listRecorder = BatchRecorder()
+    let benchmarkRecorder = BatchRecorder()
+    let model = try await openModel(over: fake, clock: clock)
+    model.onPagesDelivered = { batch in
+        Task { await listRecorder.record(batch) }
+    }
+    model.onPagesDeliveredForBenchmark = { batch in
+        Task { await benchmarkRecorder.record(batch) }
+    }
+
+    model.setVisible(150_000 ..< 150_080)
+    try #require(await settle(clock) { model.row(at: 150_050) != nil })
+    let batches = await benchmarkRecorder.batches
+    let listBatches = await listRecorder.batches
+    #expect(batches == [[750, 751]])
+    #expect(batches == listBatches)
+
+    await model.close()
+}
+
 // MARK: - The real core
 
 /// End to end through `CoreBridge` (spec/07 "Debug source"): fill the

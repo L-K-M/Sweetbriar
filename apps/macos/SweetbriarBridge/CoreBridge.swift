@@ -130,6 +130,10 @@ public final class CoreBridge: Sendable {
         limit: UInt32
     ) async throws -> ListWindow {
         let token = SweetbriarCore.CancelToken()
+        // Signpost "ffi" (plan M0.10): the model's read crossing the
+        // bridge into the core.
+        let span = ListPrototypeSignposts.begin("ffi")
+        defer { ListPrototypeSignposts.end("ffi", span) }
         let window = try await Self.withCancellation(token: token) {
             try await self.core.readWindow(
                 token: token,
