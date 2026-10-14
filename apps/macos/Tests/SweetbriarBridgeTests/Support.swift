@@ -57,6 +57,64 @@ actor Gate {
     }
 }
 
+/// A one-way throwing gate: `wait()` returns once `open()` runs, or
+/// throws `CancellationError` if its own task is cancelled first —
+/// how a fake read observes that the model dropped it.
+actor ThrowingGate {
+    private var opened = false
+    private var waiters: [UUID: CheckedContinuation<Void, any Error>] = [:]
+    private var cancelled: Set<UUID> = []
+
+    func wait() async throws {
+        if opened {
+            return
+        }
+        let id = UUID()
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                Task { self.park(id, continuation) }
+            }
+        } onCancel: {
+            Task { await self.resumeCancelled(id) }
+        }
+    }
+
+    /// Park a waiter — or resume it at once when the gate is already
+    /// open, or the wait was cancelled before the park landed.
+    private func park(
+        _ id: UUID,
+        _ continuation: CheckedContinuation<Void, any Error>
+    ) {
+        if opened {
+            continuation.resume()
+            return
+        }
+        if cancelled.contains(id) {
+            cancelled.remove(id)
+            continuation.resume(throwing: CancellationError())
+            return
+        }
+        waiters[id] = continuation
+    }
+
+    private func resumeCancelled(_ id: UUID) {
+        if let waiter = waiters.removeValue(forKey: id) {
+            waiter.resume(throwing: CancellationError())
+        } else {
+            cancelled.insert(id)
+        }
+    }
+
+    func open() {
+        opened = true
+        let all = waiters
+        waiters.removeAll()
+        for waiter in all.values {
+            waiter.resume()
+        }
+    }
+}
+
 /// A fresh temp dir and a config rooted in it; caller removes the dir.
 func tempConfig() -> (URL, CoreConfig) {
     let dir = FileManager.default.temporaryDirectory
@@ -81,7 +139,9 @@ func sinkBatcher(clock: ManualFrameClock) -> FrameBatcher<[Setting]> {
 let eventTimeout: Duration = .seconds(10)
 
 /// Poll `probe` until it holds; `false` once `eventTimeout` passes.
-func eventually(_ probe: () async -> Bool) async -> Bool {
+/// `@Sendable` keeps a probe written inside a `@MainActor` test
+/// nonisolated, so handing it to this nonisolated function is safe.
+func eventually(_ probe: @Sendable () async -> Bool) async -> Bool {
     let deadline = ContinuousClock.now + eventTimeout
     while await !probe() {
         if ContinuousClock.now >= deadline {

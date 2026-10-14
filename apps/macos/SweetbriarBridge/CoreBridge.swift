@@ -100,6 +100,75 @@ public final class CoreBridge: Sendable {
         )
     }
 
+    /// `open_window` (spec/07): register a window over `spec` and
+    /// return its first page at the source's current generation.
+    public func openWindow(
+        spec: WindowSpec,
+        anchor: Anchor,
+        limit: UInt32
+    ) async throws -> ListWindow {
+        let token = SweetbriarCore.CancelToken()
+        let window = try await Self.withCancellation(token: token) {
+            try await self.core.openWindow(
+                token: token,
+                spec: spec.generated,
+                anchor: anchor.generated,
+                limit: limit
+            )
+        }
+        return ListWindow(window)
+    }
+
+    /// `read_window` (spec/07): the page `anchor` picks out of the
+    /// window at the generation the caller holds. A stale generation
+    /// or cursor is `resetRequired`; an unknown or closed window is
+    /// `notFound`.
+    public func readWindow(
+        id: UInt64,
+        generation: UInt64,
+        anchor: Anchor,
+        limit: UInt32
+    ) async throws -> ListWindow {
+        let token = SweetbriarCore.CancelToken()
+        let window = try await Self.withCancellation(token: token) {
+            try await self.core.readWindow(
+                token: token,
+                windowId: id,
+                generation: generation,
+                anchor: anchor.generated,
+                limit: limit
+            )
+        }
+        return ListWindow(window)
+    }
+
+    /// `window_ids` (spec/07 "The id index"): every row's occurrence
+    /// id in window order, with the source's current generation.
+    public func windowIDs(id: UInt64) async throws -> WindowIDs {
+        let token = SweetbriarCore.CancelToken()
+        let index = try await Self.withCancellation(token: token) {
+            try await self.core.windowIds(token: token, windowId: id)
+        }
+        return WindowIDs(generation: index.generation, ids: index.ids)
+    }
+
+    /// `close_window` (spec/07): release the handle. No token — like
+    /// `shutdown`, the call can't be cancelled; closing twice is
+    /// harmless.
+    public func closeWindow(id: UInt64) async {
+        await core.closeWindow(windowId: id)
+    }
+
+    /// `debug_fill_synthetic` (spec/07 "Debug source"): replace the
+    /// synthetic source with `count` rows and return the new
+    /// generation. The token counts only until the replacement.
+    public func debugFillSynthetic(count: UInt32) async throws -> UInt64 {
+        let token = SweetbriarCore.CancelToken()
+        return try await Self.withCancellation(token: token) {
+            try await self.core.debugFillSynthetic(token: token, count: count)
+        }
+    }
+
     /// Close the core. Uncancellable by spec/07: it waits for calls in
     /// flight, so the caller just awaits it.
     public func shutdown() async {
@@ -138,6 +207,8 @@ protocol CallToken: Sendable {
 
 extension SweetbriarCore.CancelToken: CallToken {}
 
+extension CoreBridge: ListWindowSource {}
+
 extension Setting {
     /// Map the generated record field by field.
     fileprivate init(_ generated: SweetbriarCore.Setting) {
@@ -145,6 +216,82 @@ extension Setting {
             key: generated.key,
             value: generated.value,
             isDefault: generated.isDefault
+        )
+    }
+}
+
+extension WindowSpec {
+    /// Map the bridge enum onto the generated one.
+    fileprivate var generated: SweetbriarCore.WindowSpec {
+        switch self {
+        case .debugSynthetic:
+            return .debugSynthetic
+        }
+    }
+}
+
+extension Anchor {
+    /// Map the bridge enum onto the generated one.
+    fileprivate var generated: SweetbriarCore.Anchor {
+        switch self {
+        case .top:
+            return .top
+        case .after(let cursor):
+            return .after(cursor: cursor)
+        case .before(let cursor):
+            return .before(cursor: cursor)
+        case .around(let occurrenceId):
+            return .around(occurrenceId: occurrenceId)
+        }
+    }
+}
+
+extension ListCount {
+    /// Map the generated enum case by case.
+    fileprivate init(_ generated: SweetbriarCore.Count) {
+        switch generated {
+        case .exact(let n):
+            self = .exact(n: n)
+        case .atLeast(let n):
+            self = .atLeast(n: n)
+        case .unknown:
+            self = .unknown
+        }
+    }
+}
+
+extension ListRow {
+    /// Map the generated record field by field.
+    fileprivate init(_ generated: SweetbriarCore.ListRow) {
+        self.init(
+            occurrenceId: generated.occurrenceId,
+            messageId: generated.messageId,
+            accountId: generated.accountId,
+            mailboxId: generated.mailboxId,
+            sortDate: generated.sortDate,
+            sender: generated.sender,
+            subject: generated.subject,
+            snippet: generated.snippet,
+            unread: generated.unread,
+            flagged: generated.flagged,
+            hasAttachments: generated.hasAttachments,
+            tags: generated.tags
+        )
+    }
+}
+
+extension ListWindow {
+    /// Map the generated record field by field.
+    fileprivate init(_ generated: SweetbriarCore.Window) {
+        self.init(
+            windowId: generated.windowId,
+            generation: generated.generation,
+            rows: generated.rows.map { ListRow($0) },
+            before: generated.before,
+            after: generated.after,
+            hasMoreAfter: generated.hasMoreAfter,
+            hasMoreBefore: generated.hasMoreBefore,
+            total: ListCount(generated.total)
         )
     }
 }

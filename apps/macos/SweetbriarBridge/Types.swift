@@ -43,6 +43,128 @@ public struct Receipt: Sendable, Equatable {
     }
 }
 
+/// Which window the shell is listing (spec/07 "Queries"). For the
+/// pilot only `debugSynthetic` — the in-memory debug source — exists.
+public enum WindowSpec: Sendable, Equatable {
+    /// The synthetic source filled by `debugFillSynthetic`.
+    case debugSynthetic
+}
+
+/// Where a window page read starts (spec/07 "Queries"). Cursors are
+/// opaque strings minted by the core; the shell carries them
+/// unchanged.
+public enum Anchor: Sendable, Equatable {
+    /// The newest rows: the first page.
+    case top
+    /// At most `limit` rows strictly after the cursor's row.
+    case after(String)
+    /// At most `limit` rows strictly before the cursor's row.
+    case before(String)
+    /// The page centred on this occurrence id.
+    case around(Int64)
+}
+
+/// A window's row count as the shell should treat it (spec/07).
+public enum ListCount: Sendable, Equatable {
+    /// The exact number of rows.
+    case exact(n: UInt64)
+    /// A lower bound on the number of rows.
+    case atLeast(n: UInt64)
+    /// Not known.
+    case unknown
+}
+
+/// One list row (spec/07): display fields only — no MIME tree, no
+/// body. The shell resolves the account color from `accountId`.
+public struct ListRow: Sendable, Equatable {
+    public var occurrenceId: Int64
+    public var messageId: Int64
+    public var accountId: String
+    public var mailboxId: Int64
+    public var sortDate: Int64
+    public var sender: String
+    public var subject: String
+    public var snippet: String
+    public var unread: Bool
+    public var flagged: Bool
+    public var hasAttachments: Bool
+    public var tags: [String]
+
+    public init(
+        occurrenceId: Int64,
+        messageId: Int64,
+        accountId: String,
+        mailboxId: Int64,
+        sortDate: Int64,
+        sender: String,
+        subject: String,
+        snippet: String,
+        unread: Bool,
+        flagged: Bool,
+        hasAttachments: Bool,
+        tags: [String]
+    ) {
+        self.occurrenceId = occurrenceId
+        self.messageId = messageId
+        self.accountId = accountId
+        self.mailboxId = mailboxId
+        self.sortDate = sortDate
+        self.sender = sender
+        self.subject = subject
+        self.snippet = snippet
+        self.unread = unread
+        self.flagged = flagged
+        self.hasAttachments = hasAttachments
+        self.tags = tags
+    }
+}
+
+/// One page of a window (spec/07 "Queries"): the rows in window order,
+/// the cursors continuing the page — `nil` when it is empty — and
+/// whether rows lie past each end.
+public struct ListWindow: Sendable, Equatable {
+    public var windowId: UInt64
+    public var generation: UInt64
+    public var rows: [ListRow]
+    public var before: String?
+    public var after: String?
+    public var hasMoreAfter: Bool
+    public var hasMoreBefore: Bool
+    public var total: ListCount
+
+    public init(
+        windowId: UInt64,
+        generation: UInt64,
+        rows: [ListRow],
+        before: String?,
+        after: String?,
+        hasMoreAfter: Bool,
+        hasMoreBefore: Bool,
+        total: ListCount
+    ) {
+        self.windowId = windowId
+        self.generation = generation
+        self.rows = rows
+        self.before = before
+        self.after = after
+        self.hasMoreAfter = hasMoreAfter
+        self.hasMoreBefore = hasMoreBefore
+        self.total = total
+    }
+}
+
+/// A window's id index (spec/07 "The id index"): every row's
+/// `occurrenceId` in window order at the reported generation.
+public struct WindowIDs: Sendable, Equatable {
+    public var generation: UInt64
+    public var ids: [Int64]
+
+    public init(generation: UInt64, ids: [Int64]) {
+        self.generation = generation
+        self.ids = ids
+    }
+}
+
 /// Every core failure the shell can see, mirroring `CoreError` over
 /// FFI — except `Cancelled`, which callers instead receive as Swift's
 /// `CancellationError` (spec/07 "Errors").
