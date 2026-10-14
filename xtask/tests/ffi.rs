@@ -392,6 +392,40 @@ fn the_import_boundary_sees_access_levels_shared_lines_and_nested_names() {
     let _ = fs::remove_dir_all(&root);
 }
 
+/// Comments don't hide an import or fake one: an import after a
+/// block comment on its line is caught; an import inside a block
+/// comment (nested ones included) or a line comment isn't one; a
+/// string holding `/*` doesn't swallow the imports after it.
+#[test]
+fn the_import_boundary_reads_past_comments_and_strings() {
+    let root = scratch("boundary-comments");
+    write_all(
+        &root.join("Sweetbriar"),
+        &[(
+            "Comments.swift",
+            "/* helper */ import SweetbriarCore\n\
+             /* outer /* inner */ still a comment\nimport SweetbriarCore\n*/\n\
+             // import SweetbriarCore\n\
+             let marker = \"/* not a comment\"\n\
+             import SweetbriarCoreFFI\n",
+        )],
+    );
+
+    let violations = forbidden_swift_imports(&root);
+    assert_eq!(violations.len(), 2, "{violations:?}");
+    assert!(
+        violations.iter().any(|v| v.contains("Comments.swift:1")),
+        "{violations:?}"
+    );
+    assert!(
+        violations
+            .iter()
+            .any(|v| v.contains("Comments.swift:7") && v.contains("SweetbriarCoreFFI")),
+        "{violations:?}"
+    );
+    let _ = fs::remove_dir_all(&root);
+}
+
 /// The real `apps/macos` tree respects the boundary.
 #[test]
 fn the_real_tree_respects_the_import_boundary() {

@@ -629,7 +629,9 @@ pub fn unresolved_ffi_imports(swift: &Path, headers: &Path) -> Vec<String> {
 /// `apps_macos/SweetbriarCore/` — the app, its tests, anything else —
 /// must not import `SweetbriarCore` or `SweetbriarCoreFFI` in any
 /// spelling (`import X`, `@testable import X`, `public import X`,
-/// `import struct X.Y`, `import X.Y`, after a `;`). Only those two
+/// `import struct X.Y`, `import X.Y`, after a `;` or a comment).
+/// Comments and string literals are blanked first, so neither hides
+/// an import nor fakes one. Only those two
 /// top-level folders are exempt, not folders that share their names
 /// deeper down. Build output (`*.xcodeproj`, `.build`, `DerivedData`)
 /// is skipped. One finding per violating import, naming file and
@@ -653,7 +655,7 @@ pub fn forbidden_swift_imports(apps_macos: &Path) -> Vec<String> {
             problems.push(format!("cannot read {}", path.display()));
             continue;
         };
-        for (index, line) in text.lines().enumerate() {
+        for (index, line) in code_only(&text).lines().enumerate() {
             for module in line.split(';').filter_map(imported_module) {
                 if !FORBIDDEN.contains(&module) {
                     continue;
@@ -667,6 +669,96 @@ pub fn forbidden_swift_imports(apps_macos: &Path) -> Vec<String> {
         }
     }
     problems
+}
+
+/// Swift source with comments and string literals blanked to spaces,
+/// newlines kept so line numbers still match: `//` comments, nested
+/// `/* */` comments, `"…"` strings with escapes and `"""…"""`
+/// multi-line strings. Precise enough to find import statements,
+/// which never sit inside either.
+fn code_only(source: &str) -> String {
+    /// Where the scanner is.
+    enum State {
+        Code,
+        LineComment,
+        BlockComment { depth: usize },
+        Text,
+        MultiLineText,
+    }
+
+    let chars: Vec<char> = source.chars().collect();
+    let mut out = String::with_capacity(source.len());
+    let mut state = State::Code;
+    let mut i = 0;
+    // Blank a run of source characters, keeping newlines.
+    let blank = |out: &mut String, run: &[char]| {
+        for &c in run {
+            out.push(if c == '\n' { '\n' } else { ' ' });
+        }
+    };
+    while i < chars.len() {
+        let rest = &chars[i..];
+        let starts = |pattern: &str| rest.iter().copied().take(pattern.len()).eq(pattern.chars());
+        match state {
+            State::Code if starts("//") => state = State::LineComment,
+            State::Code if starts("/*") => {
+                state = State::BlockComment { depth: 1 };
+                blank(&mut out, &rest[..2]);
+                i += 2;
+                continue;
+            }
+            State::Code if starts("\"\"\"") => {
+                state = State::MultiLineText;
+                blank(&mut out, &rest[..3]);
+                i += 3;
+                continue;
+            }
+            State::Code if starts("\"") => state = State::Text,
+            State::Code => {
+                out.push(rest[0]);
+                i += 1;
+                continue;
+            }
+            State::LineComment if rest[0] == '\n' => state = State::Code,
+            State::BlockComment { depth } if starts("/*") => {
+                state = State::BlockComment { depth: depth + 1 };
+                blank(&mut out, &rest[..2]);
+                i += 2;
+                continue;
+            }
+            State::BlockComment { depth } if starts("*/") => {
+                state = if depth == 1 {
+                    State::Code
+                } else {
+                    State::BlockComment { depth: depth - 1 }
+                };
+                blank(&mut out, &rest[..2]);
+                i += 2;
+                continue;
+            }
+            State::Text if starts("\\") && rest.len() > 1 => {
+                blank(&mut out, &rest[..2]);
+                i += 2;
+                continue;
+            }
+            State::Text if rest[0] == '"' || rest[0] == '\n' => {
+                state = State::Code;
+                blank(&mut out, &rest[..1]);
+                i += 1;
+                continue;
+            }
+            State::MultiLineText if starts("\"\"\"") => {
+                state = State::Code;
+                blank(&mut out, &rest[..3]);
+                i += 3;
+                continue;
+            }
+            _ => {}
+        }
+        blank(&mut out, &rest[..1]);
+        i += 1;
+    }
+    out
 }
 
 /// Every `.swift` file under `dir` into `sources`, sorted per
