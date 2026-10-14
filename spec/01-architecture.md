@@ -186,6 +186,12 @@ allowed first-party dependencies.
   - a worker that does sync passes and executes intents;
   - a body-acquisition queue.
   - They hold no SQLite transactions across awaits.
+- **Threads are a startup resource.** Open starts the runtime, the
+  store's writer and the engine's cleanup worker; an OS that refuses any
+  of them fails the open as `Unavailable`. After open the core assumes
+  threads can still be started (the runtime's blocking pool grows on
+  demand): under OS thread exhaustion, blocking work waits rather than
+  fails. The pilot accepts that.
 - **Background jobs:** import, export, backup, index and GC are engine
   jobs with progress reporting and cancellation. Each holds its own
   resumable checkpoint in the store.

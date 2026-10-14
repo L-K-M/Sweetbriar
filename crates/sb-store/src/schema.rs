@@ -49,6 +49,12 @@ pub(crate) fn run_migrations(
 ) -> Result<(), StoreError> {
     let latest = check_ordered(migrations)?;
     let current = current_version(conn, latest)?;
+    // An upgrade cut short must not leave the last session's marker
+    // claiming a clean store (spec/03): it goes before the first
+    // migration writes anything.
+    if current >= 1 && current < i64::from(latest) {
+        clear_clean_shutdown_marker(conn)?;
+    }
 
     let mut ran = false;
     for migration in migrations.iter().filter(|m| m.version as i64 > current) {
@@ -76,12 +82,27 @@ fn record_open(conn: &mut Connection) -> Result<(), StoreError> {
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(step_err)?;
     set_meta(&tx, "app_version_last_opened", APP_VERSION)?;
+    delete_clean_shutdown_marker(&tx)?;
+    tx.commit().map_err(step_err)
+}
+
+/// Remove the clean-shutdown marker in a transaction of its own.
+fn clear_clean_shutdown_marker(conn: &mut Connection) -> Result<(), StoreError> {
+    let tx = conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(step_err)?;
+    delete_clean_shutdown_marker(&tx)?;
+    tx.commit().map_err(step_err)
+}
+
+/// Delete the clean-shutdown marker row, if any (spec/03 Integrity).
+fn delete_clean_shutdown_marker(tx: &Transaction) -> Result<(), StoreError> {
     tx.execute(
         "DELETE FROM store_meta WHERE key = ?1",
         [crate::store::CLEAN_SHUTDOWN_KEY],
     )
     .map_err(step_err)?;
-    tx.commit().map_err(step_err)
+    Ok(())
 }
 
 /// Judge an existing database before anything writes to it: the

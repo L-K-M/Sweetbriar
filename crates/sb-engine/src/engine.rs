@@ -45,10 +45,20 @@ pub struct Engine {
 struct OwnedRuntime(Option<Runtime>);
 
 impl OwnedRuntime {
+    /// Start the runtime; an OS that refuses its threads is
+    /// `Unavailable` (spec/01: threads are a startup resource). Tokio
+    /// panics rather than erring when a worker thread can't be spawned,
+    /// so the panic is caught and reported like the error.
     fn start() -> Result<Self, EngineError> {
-        Runtime::new()
-            .map(|runtime| Self(Some(runtime)))
-            .map_err(|e| EngineError::internal(format!("cannot start the engine's runtime: {e}")))
+        match std::panic::catch_unwind(Runtime::new) {
+            Ok(Ok(runtime)) => Ok(Self(Some(runtime))),
+            Ok(Err(e)) => Err(EngineError::unavailable(format!(
+                "cannot start the engine's runtime: {e}"
+            ))),
+            Err(_) => Err(EngineError::unavailable(
+                "cannot start the engine's runtime: the OS refused its threads",
+            )),
+        }
     }
 
     fn handle(&self) -> &Handle {

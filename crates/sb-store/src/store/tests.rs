@@ -1371,3 +1371,56 @@ fn a_retried_store_survives_a_power_cut() {
         "the store vanished with an unflushed ancestor"
     );
 }
+
+/// A test-only migration that commits.
+fn migration_succeeds(tx: &rusqlite::Transaction, _seams: &Seams) -> Result<(), StoreError> {
+    tx.execute_batch("CREATE TABLE upgraded (x INTEGER) STRICT;")
+        .map_err(crate::schema::bug)
+}
+
+/// A test-only migration that fails.
+fn migration_fails(tx: &rusqlite::Transaction, _seams: &Seams) -> Result<(), StoreError> {
+    tx.execute_batch("not_sql;").map_err(crate::schema::bug)
+}
+
+/// An upgrade cut short leaves no clean-shutdown marker: the last
+/// session's marker goes before the first migration commits, so after
+/// migration 2 commits and 3 fails, the store isn't claimed clean.
+#[test]
+fn an_interrupted_upgrade_leaves_no_marker() {
+    let (_scratch, paths, store) = open_scratch("upgrade-marker");
+    store.close().unwrap();
+    assert!(raw_meta_value(&paths, "clean_shutdown_at").is_some());
+
+    let migrations = [
+        MIGRATIONS[0],
+        Migration {
+            version: 2,
+            run: migration_succeeds,
+        },
+        Migration {
+            version: 3,
+            run: migration_fails,
+        },
+    ];
+    assert!(
+        open_with(
+            &paths,
+            &test_seams(real_fs()),
+            WRITER_PRAGMAS,
+            READER_PRAGMAS,
+            &PINNED_SQLITE,
+            &migrations,
+        )
+        .is_err()
+    );
+    let raw =
+        Connection::open_with_flags(paths.state_db(), rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .unwrap();
+    let version: i64 = raw
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap();
+    drop(raw);
+    assert_eq!(version, 2, "migration 2 should have committed");
+    assert_eq!(raw_meta_value(&paths, "clean_shutdown_at"), None);
+}

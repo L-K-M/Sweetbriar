@@ -491,3 +491,48 @@ fn a_drop_needs_no_new_thread() {
     let engine = reopen_eventually(&root);
     sb_test_support::block_on(engine.shutdown()).unwrap();
 }
+
+/// The env var that makes this test binary the startup-refusal child.
+#[cfg(target_os = "linux")]
+const STARTUP_REFUSAL_ROOT_ENV: &str = "SB_ENGINE_TEST_STARTUP_REFUSAL_ROOT";
+
+/// Not a test: `an_os_refusing_threads_fails_the_open_as_unavailable`
+/// runs it as a child. With new threads refused, opening an engine
+/// reports `Unavailable` instead of panicking.
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "spawned by an_os_refusing_threads_fails_the_open_as_unavailable"]
+fn startup_refusal_child() {
+    let root = std::env::var(STARTUP_REFUSAL_ROOT_ENV).expect("root env");
+    sb_test_support::with_new_threads_refused(|| {
+        assert!(
+            std::thread::Builder::new().spawn(|| ()).is_err(),
+            "the OS didn't refuse a new thread"
+        );
+        match sb_test_support::block_on(Engine::open(&root)) {
+            Err(EngineError::Unavailable { .. }) => {}
+            other => panic!("expected Unavailable, got {other:?}"),
+        }
+    });
+}
+
+/// Threads are a startup resource (spec/01): an OS that refuses them
+/// fails the open as `Unavailable` (Linux, in a child process).
+#[cfg(target_os = "linux")]
+#[test]
+fn an_os_refusing_threads_fails_the_open_as_unavailable() {
+    let scratch = ScratchDir::new("engine-startup-refusal");
+    let status = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "engine::tests::startup_refusal_child",
+            "--ignored",
+        ])
+        .env(STARTUP_REFUSAL_ROOT_ENV, scratch.path().join("store"))
+        .status()
+        .unwrap();
+    assert!(
+        status.success(),
+        "the startup-refusal child failed: {status}"
+    );
+}
