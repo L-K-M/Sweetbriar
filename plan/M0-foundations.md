@@ -297,19 +297,33 @@ decided.
   main-actor delivery), 11 (`macos.yml`).
 - **Depends on:** M0.8.
 - **Deliverables:**
+  - `sb-ffi`: a `CancelToken` argument on every async call, and a
+    synchronous `platform_default_config()` (07); bindings regenerated;
+  - `apps/macos/SweetbriarCore/Package.swift`: the local package, a
+    `binaryTarget` over the XCFramework plus the generated Swift;
   - `apps/macos/project.yml` (XcodeGen): AppKit app target, Swift 6,
-    strict concurrency, macOS 26 deployment, arm64;
+    strict concurrency, warnings as errors, macOS 26 deployment, arm64;
   - `SweetbriarBridge`: an async wrapper with
-    `withTaskCancellationHandler` and `@MainActor` batching;
+    `withTaskCancellationHandler` and `@MainActor` batching (at most one
+    delivery per frame);
   - a main window showing a setting read from the core;
   - a Swift Testing unit test for the adapter;
-  - `macos.yml` extended to the full shape in 11: XcodeGen, `xcodebuild`
-    build and test, and the path-filtered build jobs behind the
-    always-reporting `macos` job.
+  - a `check-ffi` lint: only `SweetbriarBridge` imports `SweetbriarCore`
+    or `SweetbriarCoreFFI` (08);
+  - `macos.yml` extended to the full shape in 11: XcodeGen (pinned, 11),
+    `xcodebuild` build and test, and the path-filtered build jobs behind
+    the always-reporting `macos` job.
 - **Acceptance:**
+  - from Rust: a token cancelled before a command leaves no effect and
+    answers `Cancelled`; a query waiting in the core answers
+    `Cancelled` when its token is cancelled; a command the core has
+    begun returns its receipt despite a cancel;
+  - the import lint fails on a fixture where the app imports
+    `SweetbriarCore`;
   - `macos.yml` is green: Rust aarch64 tests, `xtask ffi`, `check-ffi`,
     `xcodegen`, then `xcodebuild build test` with strict concurrency and
-    warnings as errors;
+    warnings as errors; the adapter tests cover a round trip, a
+    cancelled call and per-frame batching;
   - an ad-hoc signed (`CODE_SIGN_IDENTITY=-`) `.app` zip is uploaded as an
     artifact;
   - a PR changing only `.cargo/config.toml` runs the macOS build jobs;
