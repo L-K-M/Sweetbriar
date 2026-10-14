@@ -84,10 +84,13 @@ impl Core {
         value: &str,
     ) -> Result<Receipt, CoreError> {
         let receipt = self.engine.set_setting(idempotency_key, key, value).await?;
+        // Named, so the engine's item re-export is what this compiles
+        // against (spec/01 rule 3), not an inferred leaf type.
+        let created_at: sb_engine::Timestamp = receipt.created_at();
         Ok(Receipt {
             command: receipt.command().to_owned(),
             result_json: receipt.result_json().to_owned(),
-            created_at_ms: receipt.created_at().as_millis(),
+            created_at_ms: created_at.as_millis(),
         })
     }
 
@@ -133,6 +136,35 @@ impl std::fmt::Debug for Core {
 mod tests {
     use super::*;
     use sb_engine::EngineError;
+
+    /// `Core::shutdown` returns only once the store is closed: the
+    /// clean-shutdown marker is recorded and the lease released, so a
+    /// new core opens at once.
+    #[test]
+    fn shutdown_closes_the_store_before_returning() {
+        let scratch = sb_test_support::ScratchDir::new("service-shutdown");
+        let config = CoreConfig {
+            data_root: scratch.path().join("store"),
+            cache_root: scratch.path().join("cache"),
+        };
+        let core = sb_test_support::block_on(open_core(config.clone())).unwrap();
+        sb_test_support::block_on(core.set_setting(
+            &core.new_idempotency_key(),
+            "appearance.compose_cue",
+            "strong",
+        ))
+        .unwrap();
+        sb_test_support::block_on(core.shutdown());
+
+        let state_db = scratch.path().join("store/state.sqlite");
+        assert!(
+            sb_test_support::store_meta_value(&state_db, "clean_shutdown_at").is_some(),
+            "shutdown returned before recording the marker"
+        );
+        let core = sb_test_support::block_on(open_core(config))
+            .expect("shutdown returned before releasing the lease");
+        sb_test_support::block_on(core.shutdown());
+    }
 
     /// The platform defaults are absolute paths — the store's open
     /// path requires that (spec/03) — and computing them creates

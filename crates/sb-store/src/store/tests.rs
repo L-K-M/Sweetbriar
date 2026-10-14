@@ -781,14 +781,17 @@ fn creation_flushes_in_spec_order_before_state_sqlite() {
     expected.push(paths.data_root().to_path_buf());
     expected.push(scratch.path().to_path_buf());
     let recorded = fs.syncs.lock().unwrap().clone();
+    let synced: Vec<PathBuf> = recorded.iter().map(|(path, _)| path.clone()).collect();
     assert_eq!(
-        recorded
-            .iter()
-            .map(|(path, _)| path.clone())
-            .collect::<Vec<_>>(),
+        synced[..expected.len()],
         expected,
         "unexpected sync_dir order"
     );
+    // The scratch dir holds only the store and its lock, so the chain
+    // goes on up: each further flush is the parent of the one before.
+    for pair in synced[expected.len() - 1..].windows(2) {
+        assert_eq!(Some(pair[1].as_path()), pair[0].parent(), "{synced:?}");
+    }
     assert!(
         recorded.iter().all(|(_, state_db)| !state_db),
         "a sync_dir ran after state.sqlite existed: {recorded:?}"
@@ -1265,16 +1268,43 @@ fn the_startup_check_runs_before_the_migrations() {
     );
 }
 
-/// The read-only open checks nothing (spec/03): the same unclean,
-/// damaged store opens read-only, its marker stays absent, and
-/// `state.sqlite` and the WAL keep their bytes.
+/// An unclean store whose damage even a read-only connection's
+/// `quick_check` finds: a NULL in a column the schema (rewritten behind
+/// SQLite's back) declares NOT NULL.
+fn unclean_store_with_null_damage(label: &str) -> (ScratchDir, StorePaths) {
+    let (scratch, paths) = unclean_store_with_a_check_violation(label);
+    let raw = Connection::open(paths.state_db()).unwrap();
+    raw.execute_batch(
+        "CREATE TABLE null_damage (value TEXT);
+         INSERT INTO null_damage VALUES (NULL);
+         PRAGMA writable_schema = ON;
+         UPDATE sqlite_schema SET sql = 'CREATE TABLE null_damage (value TEXT NOT NULL) STRICT'
+           WHERE name = 'null_damage';
+         PRAGMA writable_schema = OFF;",
+    )
+    .unwrap();
+    raw.close().unwrap();
+    (scratch, paths)
+}
+
+/// The read-only open checks nothing (spec/03): an unclean store with
+/// damage a read-only `quick_check` would find still opens read-only,
+/// its marker stays absent, and `state.sqlite` and the WAL keep their
+/// bytes.
 #[test]
 fn the_read_only_open_neither_checks_nor_touches_the_marker() {
-    let (_scratch, paths) = unclean_store_with_a_check_violation("check-read-only");
+    let (_scratch, paths) = unclean_store_with_null_damage("check-read-only");
+    // The damage is visible to a read-only check, so a check would fail.
+    let checked = open_connection(paths.state_db(), Access::ReadOnly, READER_PRAGMAS).unwrap();
+    assert!(matches!(
+        startup_quick_check(&checked),
+        Err(StoreError::Corrupt { .. })
+    ));
+    drop(checked);
+
     let wal = paths.data_root().join("state.sqlite-wal");
     let before = fs::read(paths.state_db()).unwrap();
     let wal_before = fs::read(&wal).ok();
-
     let read_only = open_read_only(&paths, &test_seams(real_fs())).unwrap();
     read_only.close().unwrap();
 
@@ -1283,4 +1313,62 @@ fn the_read_only_open_neither_checks_nor_touches_the_marker() {
         assert_eq!(fs::read(&wal).unwrap(), wal_before);
     }
     assert_eq!(raw_meta_value(&paths, "clean_shutdown_at"), None);
+}
+
+/// A failed ancestor flush, then a successful retry: the retry flushes
+/// that ancestor's parent again, since an ancestor that exists isn't
+/// proven durable (spec/03).
+#[test]
+fn a_retry_reflushes_an_ancestor_whose_flush_failed() {
+    let scratch = ScratchDir::new("ancestor-retry");
+    let paths = StorePaths::new(scratch.path().join("a/b/store")).unwrap();
+    let failing = Arc::new(HookedFs {
+        failing_sync: Some(scratch.path().to_path_buf()),
+        ..HookedFs::new(&paths)
+    });
+    assert!(matches!(
+        open(&paths, &test_seams(failing)),
+        Err(StoreError::Unavailable { .. })
+    ));
+    assert!(scratch.path().join("a").exists());
+
+    let retry = Arc::new(HookedFs::new(&paths));
+    open(&paths, &test_seams(retry.clone()))
+        .unwrap()
+        .close()
+        .unwrap();
+    let synced = retry.syncs.lock().unwrap();
+    assert!(
+        synced.iter().any(|(path, _)| path == scratch.path()),
+        "the retry never flushed the level whose flush had failed: {synced:?}"
+    );
+}
+
+/// The same through a simulated power cut: after the failed flush and
+/// a successful retry, a durably written file in the store survives.
+#[test]
+fn a_retried_store_survives_a_power_cut() {
+    use sb_test_support::{FaultFs, FaultKind, FsOp, SimFs};
+    use std::io::Write as _;
+
+    let sim = Arc::new(SimFs::new());
+    sim.create_dir_all(Path::new("/existing")).unwrap();
+    let paths = StorePaths::new("/existing/a/b/store").unwrap();
+    let fs = FaultFs::new(sim.clone(), FsOp::SyncDir, 1, FaultKind::Eio);
+    assert!(create_missing_ancestors(&fs, &paths).is_err());
+    create_missing_ancestors(&fs, &paths).unwrap();
+    create_layout(&fs, &paths).unwrap();
+
+    // SQLite bypasses the seam; a synced file in the root stands in for
+    // the database.
+    let mut file = fs.create(paths.state_db()).unwrap();
+    file.write_all(b"acknowledged store").unwrap();
+    file.sync_all().unwrap();
+    drop(file);
+    fs.sync_dir(paths.data_root()).unwrap();
+    sim.power_cut();
+    assert!(
+        sim.metadata(paths.state_db()).unwrap().is_some(),
+        "the store vanished with an unflushed ancestor"
+    );
 }

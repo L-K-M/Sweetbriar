@@ -314,3 +314,47 @@ fn a_killed_core_leaves_no_marker_and_is_checked() {
         other => panic!("expected Corrupt from the startup check, got {other:?}"),
     }
 }
+
+/// Dropping an engine inside async code doesn't wait for its store to
+/// close: a read whose caller stopped waiting still runs, yet the drop
+/// returns at once, and the lease is released after the read ends.
+#[test]
+fn dropping_an_engine_inside_async_code_never_blocks_on_its_store() {
+    let scratch = ScratchDir::new("engine-drop-nonblocking");
+    let root = scratch.path().join("store");
+    let engine = sb_test_support::block_on(Engine::open(&root)).unwrap();
+    let (release, gate) = std::sync::mpsc::channel::<()>();
+    let (started, running) = std::sync::mpsc::channel::<()>();
+    {
+        let mut read = std::pin::pin!(engine.read_through(move |_| {
+            started.send(()).unwrap();
+            let _ = gate.recv();
+            Ok(())
+        }));
+        let _ = poll_once(read.as_mut());
+        running
+            .recv_timeout(std::time::Duration::from_secs(30))
+            .expect("the read never started");
+    }
+
+    let (dropped, drops) = std::sync::mpsc::channel::<()>();
+    let dropper = std::thread::spawn(move || {
+        outer_runtime().block_on(async move {
+            drop(engine);
+            dropped.send(()).unwrap();
+        });
+    });
+    // The read is still gated: a drop that waited for it would hang here.
+    let returned = drops
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .is_ok();
+    release.send(()).unwrap();
+    dropper.join().unwrap();
+    assert!(
+        returned,
+        "dropping the engine waited for its store to close"
+    );
+
+    let engine = reopen_eventually(&root);
+    sb_test_support::block_on(engine.shutdown()).unwrap();
+}

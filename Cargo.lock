@@ -315,6 +315,7 @@ name = "sb-service"
 version = "0.0.0"
 dependencies = [
  "sb-engine",
+ "sb-test-support",
 ]
 
 [[package]]

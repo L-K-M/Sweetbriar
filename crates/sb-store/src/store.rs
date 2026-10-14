@@ -6,6 +6,7 @@
 //! `app_version_last_opened` record (spec/02) — and refuses anything
 //! else.
 
+use std::ffi::OsStr;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -572,8 +573,38 @@ pub(crate) fn create_layout(fs: &dyn Fs, paths: &StorePaths) -> Result<(), Store
         fs.sync_dir(dir).map_err(fs_err("flush", paths))?;
     }
     fs.sync_dir(root).map_err(fs_err("flush", paths))?;
-    let parent = root.parent().expect("StorePaths guarantees a final name");
-    fs.sync_dir(parent).map_err(fs_err("flush", paths))
+    flush_root_chain(fs, paths)
+}
+
+/// Flush the data root's entry into its parent, then keep going up
+/// while a level holds nothing but the way down to this store (at the
+/// first level, the root and its lock file; above, the one directory
+/// below). Such a level was likely created for this store, by this open
+/// or an earlier one whose flush failed (spec/03: each created
+/// ancestor flushed into its parent), so its own entry needs flushing
+/// too; existing alone doesn't prove it durable. A level holding
+/// anything else predates the store, and so does its entry.
+fn flush_root_chain(fs: &dyn Fs, paths: &StorePaths) -> Result<(), StoreError> {
+    let root = paths.data_root();
+    let mut ours: Vec<&OsStr> = [root.file_name(), paths.lock_file().file_name()]
+        .into_iter()
+        .flatten()
+        .collect();
+    let mut level = root.parent().expect("StorePaths guarantees a final name");
+    loop {
+        fs.sync_dir(level).map_err(fs_err("flush", paths))?;
+        let holds_only_ours = fs
+            .read_dir(level)
+            .map_err(fs_err("list", paths))?
+            .iter()
+            .all(|entry| entry.file_name().is_some_and(|name| ours.contains(&name)));
+        let (true, Some(name), Some(parent)) = (holds_only_ours, level.file_name(), level.parent())
+        else {
+            return Ok(());
+        };
+        ours = vec![name];
+        level = parent;
+    }
 }
 
 /// The data root may hold only the layout directories themselves —
