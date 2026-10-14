@@ -19,9 +19,11 @@
 //! contains no hand-written `unsafe`.
 
 mod api;
+mod cancel;
 mod error;
 
-pub use api::{Core, CoreConfig, Receipt, Setting, open_core};
+pub use api::{Core, CoreConfig, Receipt, Setting, open_core, platform_default_config};
+pub use cancel::CancelToken;
 pub use error::CoreError;
 
 uniffi::setup_scaffolding!();

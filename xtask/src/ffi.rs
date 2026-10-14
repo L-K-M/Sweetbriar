@@ -19,6 +19,9 @@
 //! (spec/07 "Threading, cancellation and FFI rules"). The lint reads
 //! UniFFI's own metadata from the cdylib — the same bytes the
 //! bindgen reads — so it can't drift from what the bindings contain.
+//! `check-ffi` also walks `apps/macos` for the spec/08 import
+//! boundary: outside `SweetbriarBridge` and `SweetbriarCore` no Swift
+//! file may import `SweetbriarCore`/`SweetbriarCoreFFI` (M0.9).
 
 use std::collections::HashSet;
 use std::env::consts::DLL_SUFFIX;
@@ -29,7 +32,7 @@ use serde::Deserialize;
 use uniffi_bindgen::macro_metadata;
 use uniffi_meta::{Metadata, ObjectImpl, TraitKind};
 
-use crate::{ToolError, cargo, run};
+use crate::{ToolError, cargo, run, run_env};
 
 /// The crate the bindings export (Cargo's target name for `sb-ffi`).
 const FFI_CRATE: &str = "sb_ffi";
@@ -41,9 +44,11 @@ const BINDINGS_MODULE_NAME: &str = "SweetbriarCoreFFI";
 /// the Swift module and the FFI module the Swift imports.
 const BINDINGS_CONFIG: &str = "crates/sb-bindgen/swift-bindings.toml";
 
-/// The target the app builds for (spec/08: arm64, macOS 26), which
-/// the Swift type-check matches.
-const SWIFT_TARGET: &str = "arm64-apple-macos26.0";
+/// The app's minimum macOS (spec/08). The Swift type-check targets
+/// it, and the staticlib is built for it: cc-rs otherwise compiles
+/// the bundled SQLite for the SDK's newest macOS, newer than the app
+/// it's linked into.
+const MACOS_DEPLOYMENT_TARGET: &str = "26.0";
 
 /// The modulemap's filename (`--modulemap-filename`).
 const MODULEMAP_FILENAME: &str = "module.modulemap";
@@ -69,6 +74,11 @@ pub fn headers_dir(root: &Path) -> PathBuf {
 /// Where `xtask ffi` builds the XCFramework on macOS (gitignored).
 fn xcframework_path(root: &Path) -> PathBuf {
     core_package(root).join("SweetbriarCoreFFI.xcframework")
+}
+
+/// The macOS app tree the import boundary covers (spec/01).
+fn apps_macos_dir(root: &Path) -> PathBuf {
+    root.join("apps/macos")
 }
 
 /// What `cargo xtask ffi` produces.
@@ -111,7 +121,10 @@ pub fn check_ffi() -> bool {
     let _ = fs::remove_dir_all(&out);
     match checked {
         Ok(true) => {
-            eprintln!("check-ffi: bindings match and resolve; no async foreign callbacks");
+            eprintln!(
+                "check-ffi: bindings match and resolve; no async foreign callbacks; \
+                 the spec/08 import boundary holds"
+            );
             true
         }
         Ok(false) => false,
@@ -149,6 +162,10 @@ fn run_checks(root: &Path, out: &Path, library: &Path) -> bool {
         (
             lint_failure,
             "lint failure(s): the metadata couldn't be read",
+        ),
+        (
+            forbidden_swift_imports(&apps_macos_dir(root)),
+            "forbidden import(s): only SweetbriarBridge may see SweetbriarCore (spec/08)",
         ),
     ];
 
@@ -192,6 +209,7 @@ fn typecheck_swift(root: &Path) -> Vec<String> {
         Err(err) => return vec![err.to_string()],
     };
 
+    let swift_target = format!("arm64-apple-macos{MACOS_DEPLOYMENT_TARGET}");
     let mut args = vec![
         "-typecheck",
         "-swift-version",
@@ -199,7 +217,7 @@ fn typecheck_swift(root: &Path) -> Vec<String> {
         "-strict-concurrency=complete",
         "-warnings-as-errors",
         "-target",
-        SWIFT_TARGET,
+        &swift_target,
         "-I",
         &headers,
     ];
@@ -314,9 +332,21 @@ pub fn build_library(
     crate_name: &str,
     kind: LibraryKind,
 ) -> Result<PathBuf, ToolError> {
+    build_library_with_env(dir, args, target, &[], crate_name, kind)
+}
+
+/// `build_library` with environment overrides for the build (`run_env`).
+fn build_library_with_env(
+    dir: &Path,
+    args: &[&str],
+    target: Option<&Path>,
+    env: &[(&str, Option<&str>)],
+    crate_name: &str,
+    kind: LibraryKind,
+) -> Result<PathBuf, ToolError> {
     let mut args = args.to_vec();
     args.push("--message-format=json");
-    let stdout = run(&cargo(), &args, dir, target)?;
+    let stdout = run_env(&cargo(), &args, dir, target, env)?;
     stdout
         .lines()
         .filter_map(|line| serde_json::from_str::<Artifact>(line).ok())
@@ -418,7 +448,7 @@ fn finish(root: &Path, output: FfiOutput) -> Result<(), ToolError> {
 /// it, with the committed headers, in the XCFramework (plan M0.8;
 /// macOS only — `xcodebuild` exists nowhere else).
 fn build_xcframework(root: &Path) -> Result<(), ToolError> {
-    let library = build_library(
+    let library = build_library_with_env(
         root,
         &[
             "build",
@@ -429,6 +459,7 @@ fn build_xcframework(root: &Path) -> Result<(), ToolError> {
             "aarch64-apple-darwin",
         ],
         None,
+        &[("MACOSX_DEPLOYMENT_TARGET", Some(MACOS_DEPLOYMENT_TARGET))],
         FFI_CRATE,
         LibraryKind::Staticlib,
     )?;
@@ -606,6 +637,230 @@ pub fn unresolved_ffi_imports(swift: &Path, headers: &Path) -> Vec<String> {
         ));
     }
     problems
+}
+
+/// The spec/08 import boundary: `SweetbriarBridge` is the only Swift
+/// code that may see the generated core. Every `.swift` file under
+/// `apps_macos` outside `apps_macos/SweetbriarBridge/` and
+/// `apps_macos/SweetbriarCore/` — the app, its tests, anything else —
+/// must not import `SweetbriarCore` or `SweetbriarCoreFFI` in any
+/// spelling (`import X`, `@testable import X`, `public import X`,
+/// `import struct X.Y`, `import X.Y`, after a `;` or a comment).
+/// Comments and string literals are blanked first, so neither hides
+/// an import nor fakes one. Only those two
+/// top-level folders are exempt, not folders that share their names
+/// deeper down. Build output (`*.xcodeproj`, `.build`, `DerivedData`)
+/// is skipped. One finding per violating import, naming file and
+/// line; an unreadable directory or file is a finding too.
+pub fn forbidden_swift_imports(apps_macos: &Path) -> Vec<String> {
+    /// The folders that may import the core: the bridge and the
+    /// generated package itself.
+    const EXEMPT_TOP_LEVEL: &[&str] = &["SweetbriarBridge", "SweetbriarCore"];
+    /// The modules only the bridge may import.
+    const FORBIDDEN: &[&str] = &["SweetbriarCore", "SweetbriarCoreFFI"];
+
+    let exempt: Vec<PathBuf> = EXEMPT_TOP_LEVEL
+        .iter()
+        .map(|name| apps_macos.join(name))
+        .collect();
+    let mut problems = Vec::new();
+    let mut sources = Vec::new();
+    collect_swift_sources(apps_macos, &exempt, &mut sources, &mut problems);
+    for path in sources {
+        let Ok(text) = fs::read_to_string(&path) else {
+            problems.push(format!("cannot read {}", path.display()));
+            continue;
+        };
+        for (index, line) in code_only(&text).lines().enumerate() {
+            for module in line.split(';').filter_map(imported_module) {
+                if !FORBIDDEN.contains(&module) {
+                    continue;
+                }
+                problems.push(format!(
+                    "{}:{}: imports {module}, which only SweetbriarBridge may import (spec/08)",
+                    path.display(),
+                    index + 1
+                ));
+            }
+        }
+    }
+    problems
+}
+
+/// Swift source with comments and string literals blanked to spaces,
+/// newlines kept so line numbers still match: `//` comments, nested
+/// `/* */` comments, `"…"` strings with escapes and `"""…"""`
+/// multi-line strings. Precise enough to find import statements,
+/// which never sit inside either.
+fn code_only(source: &str) -> String {
+    /// Where the scanner is.
+    enum State {
+        Code,
+        LineComment,
+        BlockComment { depth: usize },
+        Text,
+        MultiLineText,
+    }
+
+    let chars: Vec<char> = source.chars().collect();
+    let mut out = String::with_capacity(source.len());
+    let mut state = State::Code;
+    let mut i = 0;
+    // Blank a run of source characters, keeping newlines.
+    let blank = |out: &mut String, run: &[char]| {
+        for &c in run {
+            out.push(if c == '\n' { '\n' } else { ' ' });
+        }
+    };
+    while i < chars.len() {
+        let rest = &chars[i..];
+        let starts = |pattern: &str| rest.iter().copied().take(pattern.len()).eq(pattern.chars());
+        match state {
+            State::Code if starts("//") => state = State::LineComment,
+            State::Code if starts("/*") => {
+                state = State::BlockComment { depth: 1 };
+                blank(&mut out, &rest[..2]);
+                i += 2;
+                continue;
+            }
+            State::Code if starts("\"\"\"") => {
+                state = State::MultiLineText;
+                blank(&mut out, &rest[..3]);
+                i += 3;
+                continue;
+            }
+            State::Code if starts("\"") => state = State::Text,
+            State::Code => {
+                out.push(rest[0]);
+                i += 1;
+                continue;
+            }
+            State::LineComment if rest[0] == '\n' => state = State::Code,
+            State::BlockComment { depth } if starts("/*") => {
+                state = State::BlockComment { depth: depth + 1 };
+                blank(&mut out, &rest[..2]);
+                i += 2;
+                continue;
+            }
+            State::BlockComment { depth } if starts("*/") => {
+                state = if depth == 1 {
+                    State::Code
+                } else {
+                    State::BlockComment { depth: depth - 1 }
+                };
+                blank(&mut out, &rest[..2]);
+                i += 2;
+                continue;
+            }
+            State::Text if starts("\\") && rest.len() > 1 => {
+                blank(&mut out, &rest[..2]);
+                i += 2;
+                continue;
+            }
+            State::Text if rest[0] == '"' || rest[0] == '\n' => {
+                state = State::Code;
+                blank(&mut out, &rest[..1]);
+                i += 1;
+                continue;
+            }
+            State::MultiLineText if starts("\"\"\"") => {
+                state = State::Code;
+                blank(&mut out, &rest[..3]);
+                i += 3;
+                continue;
+            }
+            _ => {}
+        }
+        blank(&mut out, &rest[..1]);
+        i += 1;
+    }
+    out
+}
+
+/// Every `.swift` file under `dir` into `sources`, sorted per
+/// directory, skipping the `exempt` paths and build output; an
+/// unreadable directory goes into `problems`.
+fn collect_swift_sources(
+    dir: &Path,
+    exempt: &[PathBuf],
+    sources: &mut Vec<PathBuf>,
+    problems: &mut Vec<String>,
+) {
+    /// Build output names, skipped wherever they appear.
+    const BUILD_OUTPUT: &[&str] = &[".build", "DerivedData"];
+
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(err) => {
+            problems.push(format!("cannot read {}: {err}", dir.display()));
+            return;
+        }
+    };
+    let mut paths: Vec<PathBuf> = entries
+        .filter_map(|entry| Some(entry.ok()?.path()))
+        .collect();
+    paths.sort();
+    for path in paths {
+        let name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        if path.is_dir() {
+            let skipped = exempt.contains(&path)
+                || BUILD_OUTPUT.contains(&name.as_str())
+                || name.ends_with(".xcodeproj");
+            if !skipped {
+                collect_swift_sources(&path, exempt, sources, problems);
+            }
+            continue;
+        }
+        if name.ends_with(".swift") {
+            sources.push(path);
+        }
+    }
+}
+
+/// The module one Swift statement imports, or `None` for any other
+/// statement. Leading attributes (`@testable`, `@_exported`,
+/// `@preconcurrency`, …), an access level (`public import X`, Swift
+/// 6) and a declaration kind between `import` and the path (`import
+/// struct X.Y`) all parse; the module is the path's first component.
+/// Commented lines never parse: their first token isn't `import`.
+fn imported_module(statement: &str) -> Option<&str> {
+    /// Access levels Swift 6 allows before `import`.
+    const ACCESS_LEVELS: &[&str] = &["public", "package", "internal", "fileprivate", "private"];
+    /// Swift's declaration kinds allowed between `import` and the
+    /// module path.
+    const KINDS: &[&str] = &[
+        "typealias",
+        "struct",
+        "class",
+        "enum",
+        "protocol",
+        "let",
+        "var",
+        "func",
+    ];
+    let mut tokens = statement.split_whitespace();
+    for token in tokens.by_ref() {
+        if token.starts_with('@') || ACCESS_LEVELS.contains(&token) {
+            continue;
+        }
+        if token != "import" {
+            return None;
+        }
+        break;
+    }
+    let mut path = tokens.next()?;
+    if KINDS.contains(&path) {
+        path = tokens.next()?;
+    }
+    path.split('.')
+        .next()
+        // A backticked name (``import `X` ``) is the same module.
+        .map(|name| name.trim_start_matches('`'))
+        .map(|name| name.trim_end_matches(|c: char| !(c.is_alphanumeric() || c == '_')))
+        .filter(|name| !name.is_empty())
 }
 
 /// The modules named by `canImport(Name)` in Swift source: UniFFI's

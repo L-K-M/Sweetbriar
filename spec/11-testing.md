@@ -115,7 +115,9 @@ The repository is public, so GitHub-hosted runners are free.
   - `permissions: contents: read` by default;
   - `concurrency` with cancel-in-progress for PRs only;
   - `timeout-minutes` on every job;
-  - third-party actions pinned to commit SHAs.
+  - third-party actions pinned to commit SHAs;
+  - tools a job downloads pinned by version and SHA-256 (XcodeGen
+    2.46.0, from its GitHub release).
 - **Caching:** `sccache` for Rust (with `Swatinem/rust-cache` as the
   fallback) and SPM package caching keyed on `Package.resolved`. No
   DerivedData caching.

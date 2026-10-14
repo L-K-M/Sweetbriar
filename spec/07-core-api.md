@@ -179,15 +179,24 @@ fn release_lease(lease_id: LeaseId);
 - **One runtime:** the core runs a single Tokio runtime, owned by the
   engine. FFI calls are dispatched onto it; nothing blocks the caller's
   thread.
-- **Cancellation:** the Swift adapter wraps each call in
-  `withTaskCancellationHandler`. Cancelling sends a cancel signal for
-  that call's token, and the core stops at the next await point.
-  - Commands that already committed still return their receipt.
+- **Cancellation:** every async FFI call takes a `CancelToken`, an FFI
+  object the adapter makes per call; its `cancel()` is synchronous and
+  in memory. The Swift adapter wraps each call in
+  `withTaskCancellationHandler` and cancels the token when the task is
+  cancelled; the core then stops at the next await point with
+  `Cancelled`. UniFFI 0.32.2's generated Swift never cancels the Rust
+  future, so the token is the only cancel path.
+  - A query stops wherever it waits.
+  - A command honours the token only until the core begins it. Once
+    begun it runs to completion, so commands that already committed
+    still return their receipt.
   - Their idempotency key makes a retry safe.
 - **Main-actor delivery:** the adapter delivers results to `@MainActor`
   observers in batches, at most one per frame.
 - **No synchronous FFI call** does I/O. Synchronous getters are allowed
-  only for in-memory values (the appearance cache, for example).
+  only for in-memory values (the appearance cache, for example), and
+  for `platform_default_config()`: the default roots (03) from the
+  environment, which the shell passes to `open_core`.
 - **The core is a shared object across FFI.** Its `shutdown` waits for
   calls in flight and closes the core; any call after it is
   `Unavailable`. Swift makes its own idempotency keys (`UUID()`), so the

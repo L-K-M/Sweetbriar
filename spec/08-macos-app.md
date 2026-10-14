@@ -18,7 +18,8 @@ Rests on research [08-macos-ui](../research/08-macos-ui.md),
   - a hand-written adapter adds `async`/cancellation and main-actor
     delivery (07);
   - **app code never calls generated bindings directly**: layering, L1
-    in 01.
+    in 01. Only `SweetbriarBridge` imports `SweetbriarCore` or
+    `SweetbriarCoreFFI`; an `xtask check-ffi` lint enforces it.
 
 ## Windows
 

@@ -255,12 +255,12 @@ void uniffi_sb_ffi_fn_free_core(uint64_t handle, RustCallStatus *_Nonnull out_st
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_SET_SETTING
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_SET_SETTING
-uint64_t uniffi_sb_ffi_fn_method_core_set_setting(uint64_t ptr, RustBuffer idempotency_key, RustBuffer key, RustBuffer value
+uint64_t uniffi_sb_ffi_fn_method_core_set_setting(uint64_t ptr, uint64_t token, RustBuffer idempotency_key, RustBuffer key, RustBuffer value
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_SETTINGS
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_SETTINGS
-uint64_t uniffi_sb_ffi_fn_method_core_settings(uint64_t ptr
+uint64_t uniffi_sb_ffi_fn_method_core_settings(uint64_t ptr, uint64_t token
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_SHUTDOWN
@@ -268,9 +268,41 @@ uint64_t uniffi_sb_ffi_fn_method_core_settings(uint64_t ptr
 uint64_t uniffi_sb_ffi_fn_method_core_shutdown(uint64_t ptr
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_CLONE_CANCELTOKEN
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_CLONE_CANCELTOKEN
+uint64_t uniffi_sb_ffi_fn_clone_canceltoken(uint64_t handle, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_FREE_CANCELTOKEN
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_FREE_CANCELTOKEN
+void uniffi_sb_ffi_fn_free_canceltoken(uint64_t handle, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_CONSTRUCTOR_CANCELTOKEN_NEW
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_CONSTRUCTOR_CANCELTOKEN_NEW
+uint64_t uniffi_sb_ffi_fn_constructor_canceltoken_new(RustCallStatus *_Nonnull out_status
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CANCELTOKEN_CANCEL
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CANCELTOKEN_CANCEL
+void uniffi_sb_ffi_fn_method_canceltoken_cancel(uint64_t ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CANCELTOKEN_IS_CANCELLED
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CANCELTOKEN_IS_CANCELLED
+int8_t uniffi_sb_ffi_fn_method_canceltoken_is_cancelled(uint64_t ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_FUNC_OPEN_CORE
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_FUNC_OPEN_CORE
-uint64_t uniffi_sb_ffi_fn_func_open_core(RustBuffer config
+uint64_t uniffi_sb_ffi_fn_func_open_core(uint64_t token, RustBuffer config
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_FUNC_PLATFORM_DEFAULT_CONFIG
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_FUNC_PLATFORM_DEFAULT_CONFIG
+RustBuffer uniffi_sb_ffi_fn_func_platform_default_config(RustCallStatus *_Nonnull out_status
+    
 );
 #endif
 #ifndef UNIFFI_FFIDEF_FFI_SB_FFI_RUSTBUFFER_ALLOC
@@ -539,6 +571,12 @@ uint16_t uniffi_sb_ffi_checksum_func_open_core(void
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_FUNC_PLATFORM_DEFAULT_CONFIG
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_FUNC_PLATFORM_DEFAULT_CONFIG
+uint16_t uniffi_sb_ffi_checksum_func_platform_default_config(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_SET_SETTING
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_SET_SETTING
 uint16_t uniffi_sb_ffi_checksum_method_core_set_setting(void
@@ -554,6 +592,24 @@ uint16_t uniffi_sb_ffi_checksum_method_core_settings(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_SHUTDOWN
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_SHUTDOWN
 uint16_t uniffi_sb_ffi_checksum_method_core_shutdown(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CANCELTOKEN_CANCEL
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CANCELTOKEN_CANCEL
+uint16_t uniffi_sb_ffi_checksum_method_canceltoken_cancel(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CANCELTOKEN_IS_CANCELLED
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CANCELTOKEN_IS_CANCELLED
+uint16_t uniffi_sb_ffi_checksum_method_canceltoken_is_cancelled(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_CONSTRUCTOR_CANCELTOKEN_NEW
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_CONSTRUCTOR_CANCELTOKEN_NEW
+uint16_t uniffi_sb_ffi_checksum_constructor_canceltoken_new(void
     
 );
 #endif

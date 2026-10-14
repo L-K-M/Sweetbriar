@@ -1,0 +1,96 @@
+# The macOS app (spec/08 "Platform"): `xcodegen generate --spec
+# apps/macos/project.yml` produces `Sweetbriar.xcodeproj` (ignored).
+# Layout: the generated `SweetbriarCore` Swift package (xtask ffi),
+# the `SweetbriarBridge` L1 framework, the `Sweetbriar` AppKit app,
+# and its Swift-Testing bundle.
+
+name: Sweetbriar
+
+options:
+  bundleIdPrefix: com.sweetbriar
+  deploymentTarget:
+    macOS: "26.0"
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    SWIFT_TREAT_WARNINGS_AS_ERRORS: YES
+    GCC_TREAT_WARNINGS_AS_ERRORS: YES
+    ARCHS: arm64
+    ONLY_ACTIVE_ARCH: YES
+    CODE_SIGN_IDENTITY: "-"
+    CODE_SIGN_STYLE: Manual
+    DEVELOPMENT_TEAM: ""
+    # Linker warnings fail the build too, like the compilers' (spec/08
+    # strictness): an object built for a newer macOS than the app's
+    # minimum, say.
+    OTHER_LDFLAGS: -Wl,-fatal_warnings
+
+packages:
+  SweetbriarCore:
+    path: SweetbriarCore
+
+targets:
+  SweetbriarBridge:
+    type: framework
+    platform: macOS
+    sources:
+      - SweetbriarBridge
+    dependencies:
+      - package: SweetbriarCore
+        product: SweetbriarCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.sweetbriar.SweetbriarBridge
+        # Signing needs an Info.plist; the framework's carries nothing
+        # of its own, so Xcode generates it.
+        GENERATE_INFOPLIST_FILE: YES
+
+  Sweetbriar:
+    type: application
+    platform: macOS
+    sources:
+      - Sweetbriar
+    dependencies:
+      - target: SweetbriarBridge
+        embed: true
+    info:
+      path: Sweetbriar/Info.plist
+      properties:
+        CFBundleDevelopmentRegion: en
+        CFBundleExecutable: $(EXECUTABLE_NAME)
+        CFBundleIdentifier: $(PRODUCT_BUNDLE_IDENTIFIER)
+        CFBundleInfoDictionaryVersion: "6.0"
+        CFBundleName: $(PRODUCT_NAME)
+        CFBundlePackageType: APPL
+        CFBundleShortVersionString: "1.0"
+        CFBundleVersion: "1"
+        LSMinimumSystemVersion: $(MACOSX_DEPLOYMENT_TARGET)
+        NSPrincipalClass: NSApplication
+
+  SweetbriarBridgeTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - Tests/SweetbriarBridgeTests
+    dependencies:
+      - target: SweetbriarBridge
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.sweetbriar.SweetbriarBridgeTests
+        GENERATE_INFOPLIST_FILE: YES
+
+schemes:
+  Sweetbriar:
+    build:
+      targets:
+        Sweetbriar: all
+        SweetbriarBridgeTests:
+          - test
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - SweetbriarBridgeTests

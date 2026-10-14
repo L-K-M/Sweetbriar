@@ -46,13 +46,14 @@ jobs:
               - '.github/workflows/macos.yml'
 
   # Rust tests and check-layers (M0.1), the UniFFI bindings and the
-  # XCFramework (M0.8); M0.9 adds xcodegen/xcodebuild and the .app
+  # XCFramework (M0.8); M0.9 adds the XcodeGen-generated project, an
+  # `xcodebuild build test` of the app scheme, and the zipped .app
   # artifact (spec/11).
   build:
     needs: changes
     if: needs.changes.outputs.rust == 'true'
     runs-on: macos-26
-    timeout-minutes: 30
+    timeout-minutes: 60
     env:
       RUSTC_WRAPPER: sccache
       SCCACHE_GHA_ENABLED: "true"
@@ -82,9 +83,62 @@ jobs:
       # committed bindings and would hide their drift.
       - name: check-ffi
         run: cargo xtask check-ffi
-      # Builds the XCFramework for aarch64-apple-darwin (plan M0.8).
+      # Builds the XCFramework for aarch64-apple-darwin (plan M0.8);
+      # the Swift package and the app link it below.
       - name: xtask ffi
         run: cargo xtask ffi
+
+      # XcodeGen writes the .xcodeproj (gitignored) the build and the
+      # tests run from. Pinned and SHA-256-verified before unzipping.
+      - name: Install XcodeGen
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/xcodegen.zip" \
+            https://github.com/yonaskolb/XcodeGen/releases/download/2.46.0/xcodegen.zip
+          echo "4d9e34b62172d645eed6457cac13fc222569974098ef4ee9c3368bedf0196806  $RUNNER_TEMP/xcodegen.zip" \
+            | shasum -a 256 -c -
+          unzip -q "$RUNNER_TEMP/xcodegen.zip" -d "$RUNNER_TEMP"
+          "$RUNNER_TEMP/xcodegen/bin/xcodegen" --version
+
+      - name: Generate the Xcode project
+        run: "$RUNNER_TEMP/xcodegen/bin/xcodegen generate --spec apps/macos/project.yml"
+
+      - name: xcodebuild build test
+        run: |
+          xcodebuild -project apps/macos/Sweetbriar.xcodeproj \
+            -scheme Sweetbriar \
+            -destination 'platform=macOS,arch=arm64' \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            -resultBundlePath "$RUNNER_TEMP/Sweetbriar.xcresult" \
+            CODE_SIGN_IDENTITY=- \
+            build test
+
+      - name: Upload the test result bundle on failure
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: Sweetbriar-xcresult
+          path: ${{ runner.temp }}/Sweetbriar.xcresult
+
+      # A Release app for whoever pulls the artifact: same signing,
+      # zipped the way Finder would make it.
+      - name: Release build and zip the app
+        run: |
+          xcodebuild -project apps/macos/Sweetbriar.xcodeproj \
+            -scheme Sweetbriar \
+            -destination 'platform=macOS,arch=arm64' \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            -configuration Release \
+            CODE_SIGN_IDENTITY=- \
+            build
+          ditto -c -k --sequesterRsrc --keepParent \
+            "$RUNNER_TEMP/DerivedData/Build/Products/Release/Sweetbriar.app" \
+            "$RUNNER_TEMP/Sweetbriar.zip"
+
+      - name: Upload the app
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: Sweetbriar-app
+          path: ${{ runner.temp }}/Sweetbriar.zip
 
   # Aggregate merge gate: always runs so the check exists on every PR;
   # succeeds when the build job succeeded or was skipped by the filter.
