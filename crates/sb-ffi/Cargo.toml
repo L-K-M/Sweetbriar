@@ -6,6 +6,21 @@ license.workspace = true
 publish.workspace = true
 rust-version.workspace = true
 
-# staticlib + cdylib crate types arrive with the UniFFI exports in M0.8.
+# staticlib + cdylib: the staticlib goes into the XCFramework the
+# Swift package links; bindgen reads the cdylib's metadata (plan M0.8).
+[lib]
+crate-type = ["lib", "staticlib", "cdylib"]
+
 [dependencies]
 sb-service = { version = "0.0.0", path = "../sb-service" }
+# The FFI object's shared-state lock only (spec/07 "the core is a
+# shared object"): `sync` alone, no runtime — the engine below owns
+# the one runtime, and the futures this crate exports are driven by
+# the foreign caller's polling (spec/07).
+tokio = { version = "=1.53.2", default-features = false, features = ["sync"] }
+# Proc-macro exports, no UDL (spec/01); no CLI features here — those
+# live in `sb-bindgen`.
+uniffi = { version = "=0.32.2", default-features = false }
+
+[dev-dependencies]
+sb-test-support = { version = "0.0.0", path = "../sb-test-support" }

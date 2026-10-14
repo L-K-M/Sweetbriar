@@ -1,3 +1,27 @@
-//! `sb-ffi` — L1. UniFFI exports for the macOS app (staticlib + cdylib
-//! for bindgen). Exports land in M0.8; the surface covers only
-//! `sb-service`'s API.
+//! `sb-ffi` — L1. UniFFI exports for the macOS app (staticlib +
+//! cdylib for bindgen, spec/01): the Swift-facing surface of the
+//! M0.7 core API. This crate defines its own DTO and error records —
+//! `sb-service` stays UniFFI-free — and converts field by field, so
+//! no engine or service type crosses the boundary (spec/07 "DTOs").
+//!
+//! The core is a **shared object** across FFI (spec/07 "Threading,
+//! cancellation and FFI rules"): calls hold the read side of a
+//! runtime-agnostic lock for their duration and `shutdown` takes the
+//! write side, so it waits for calls in flight; a call after
+//! `shutdown` answers `Unavailable`; a second `shutdown` does
+//! nothing. Exported functions are async — the foreign caller polls
+//! them, and nothing blocks the caller's thread. The service's
+//! idempotency-key helper is deliberately not exported: Swift makes
+//! its own UUIDs.
+//!
+//! Unlike the core crates this crate cannot `#![forbid(unsafe_code)]`:
+//! UniFFI's scaffolding expands to `unsafe extern "C"` shims. It
+//! contains no hand-written `unsafe`.
+
+mod api;
+mod error;
+
+pub use api::{Core, CoreConfig, Receipt, Setting, open_core};
+pub use error::CoreError;
+
+uniffi::setup_scaffolding!();

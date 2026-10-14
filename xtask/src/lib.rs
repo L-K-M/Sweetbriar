@@ -2,6 +2,7 @@
 //! the binary so integration tests can drive the layering checker
 //! directly (`xtask/tests/check_layers.rs`).
 
+pub mod ffi;
 pub mod layers;
 
 use std::fmt;

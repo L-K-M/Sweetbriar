@@ -8,6 +8,8 @@ use std::env;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
+use xtask::ffi::FfiOutput;
+
 /// The generated notices file the drift check diffs against.
 const NOTICES_FILE: &str = "THIRD_PARTY_NOTICES.md";
 /// cargo-about's Handlebars template, at the repo root.
@@ -25,10 +27,44 @@ fn main() -> ExitCode {
         "ci" => ci(),
         "notices" => notices(),
         "check-layers" => check_layers(),
+        "ffi" => ffi(),
+        "check-ffi" => check_ffi(),
         _ => {
             usage();
             ExitCode::FAILURE
         }
+    }
+}
+
+/// `cargo xtask ffi [--bindings-only]`: generate the Swift bindings
+/// (and, on macOS, build the XCFramework).
+fn ffi() -> ExitCode {
+    let flags: Vec<String> = env::args().skip(2).collect();
+    let output = match flags.as_slice() {
+        [] => FfiOutput::BindingsAndXcframework,
+        [flag] if flag == "--bindings-only" => FfiOutput::Bindings,
+        _ => {
+            usage();
+            return ExitCode::FAILURE;
+        }
+    };
+    if xtask::ffi::ffi(output) {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    }
+}
+
+/// `cargo xtask check-ffi`: bindings drift + async-callback lint.
+fn check_ffi() -> ExitCode {
+    if env::args().nth(2).is_some() {
+        usage();
+        return ExitCode::FAILURE;
+    }
+    if xtask::ffi::check_ffi() {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
     }
 }
 
@@ -208,5 +244,5 @@ fn workspace_root() -> PathBuf {
 }
 
 fn usage() {
-    eprintln!("usage: cargo xtask <ci|notices|check-layers>");
+    eprintln!("usage: cargo xtask <ci|notices|check-layers|ffi [--bindings-only]|check-ffi>");
 }

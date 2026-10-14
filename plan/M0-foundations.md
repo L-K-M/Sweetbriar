@@ -267,17 +267,27 @@ decided.
   sb-bindgen).
 - **Depends on:** M0.7.
 - **Deliverables:**
-  - `sb-ffi` (proc-macro exports; `staticlib` + `cdylib`);
+  - `sb-ffi` (proc-macro exports; `lib` + `staticlib` + `cdylib`): its own
+    UniFFI records, error and object mirroring the service's (`sb-service`
+    stays UniFFI-free): `open_core`, `Core.set_setting`,
+    `Core.settings`, `Core.shutdown` (07: a shared object), all async;
   - `sb-bindgen` pinned to `uniffi` 0.32.2;
   - `cargo xtask ffi [--bindings-only]` (bindings on Linux from the host
     `cdylib`; XCFramework on macOS);
   - `cargo xtask check-ffi` (regenerate and diff);
-  - generated Swift in `apps/macos/SweetbriarCore/`.
+  - generated Swift in `apps/macos/SweetbriarCore/Sources/SweetbriarCore/`,
+    the generated C header and modulemap in
+    `apps/macos/SweetbriarCore/Headers/` (both committed); the
+    XCFramework at `apps/macos/SweetbriarCore/SweetbriarCoreFFI.xcframework`
+    (built, ignored by git).
 - **Acceptance:**
   - `check-ffi` reports no drift;
   - on macOS CI, the XCFramework builds for `aarch64-apple-darwin`;
   - no async foreign callback traits in the exported surface (a
-    `check-ffi` lint).
+    `check-ffi` lint, shown to fail on one in a test);
+  - the exported calls work from Rust: open, set, read back, shut down;
+    a call after `shutdown` is `Unavailable`, and `shutdown` waits for a
+    call in flight.
 
 ### M0.9 macOS app shell — M, macos-ci + owner
 

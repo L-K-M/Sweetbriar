@@ -10,7 +10,14 @@ this file is the short operational summary.
 cargo xtask ci        # the full local gate; must be green before a PR
 cargo xtask notices   # regenerate THIRD_PARTY_NOTICES.md
 cargo xtask check-layers  # the spec/01 layer-boundary checker
+cargo xtask ffi --bindings-only  # regenerate the committed Swift bindings
+cargo xtask check-ffi     # bindings drift and import check + the async-callback lint
 ```
+
+After changing `sb-ffi`'s exports, run `cargo xtask ffi --bindings-only`
+and commit the regenerated files under `apps/macos/SweetbriarCore/`.
+`cargo xtask ffi` without the flag also builds the XCFramework, which
+needs macOS.
 
 `check-layers` reads rustdoc's unstable JSON output, so it needs the
 pinned nightly toolchain:
@@ -50,8 +57,9 @@ compiler must be on `PATH`. Its compile options come from
 - `cargo test --workspace --target aarch64-apple-darwin` (M0.1 shape);
 - `cargo xtask check-layers` on the macOS toolchain — it sees the
   macOS-cfg re-export surface (spec/01);
-- `xtask ffi` / `check-ffi`, the XCFramework, `xcodebuild` and Swift
-  tests (M0.8/M0.9);
+- `check-ffi` and `xtask ffi` — both also run on Linux, except
+  `check-ffi`'s Swift type-check and the XCFramework; `xcodebuild`
+  and Swift tests (M0.9);
 - anything touching `apps/` or generated bindings.
 
 Agents can't run these locally — make the YAML correct by inspection.

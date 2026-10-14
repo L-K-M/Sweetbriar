@@ -1,10 +1,8 @@
-//! `sb-bindgen` — tool. `uniffi-bindgen-swift` pinned to the workspace's
-//! `uniffi` version so bindings and runtime can't drift. The UniFFI
-//! dependency lands in M0.8 with `sb-ffi`'s exports.
+//! `sb-bindgen` — tool. The Swift bindings generator pinned to the
+//! workspace's `uniffi` version (spec/01), so bindings and runtime
+//! can't drift. Delegates to UniFFI's own Swift CLI entry point;
+//! `cargo xtask ffi` and `check-ffi` drive it.
 
-use std::process::ExitCode;
-
-fn main() -> ExitCode {
-    eprintln!("sb-bindgen: UniFFI is not wired in yet (lands in M0.8)");
-    ExitCode::from(2)
+fn main() {
+    uniffi::uniffi_bindgen_swift()
 }

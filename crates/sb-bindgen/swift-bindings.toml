@@ -1,0 +1,9 @@
+# UniFFI's config for the Swift bindings, passed by `cargo xtask ffi`
+# and `check-ffi` as `--config`. The generated Swift is the
+# `SweetbriarCore` package's code and imports its C declarations
+# from `SweetbriarCoreFFI`: the module the modulemap declares and the
+# XCFramework carries (plan M0.8). UniFFI's defaults (`sb_ffi`,
+# `sb_ffiFFI`) would import a module nothing declares.
+[crates.sb_ffi.bindings.swift]
+module_name = "SweetbriarCore"
+ffi_module_name = "SweetbriarCoreFFI"
