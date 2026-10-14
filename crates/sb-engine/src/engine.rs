@@ -156,11 +156,11 @@ impl Drop for Running {
 }
 
 impl Engine {
-    /// Open the store at `data_root` and start the runtime that owns
-    /// the work around it (spec/07 "Lifecycle"). The open itself runs
-    /// on the runtime's blocking pool, so awaiting this future never
-    /// blocks the caller's thread; dropping the future midway shuts the
-    /// fresh runtime down in the background.
+    /// Start the runtime, then open the store at `data_root` on a
+    /// thread of its own whose result comes back over a oneshot
+    /// (spec/07 "Lifecycle"), so awaiting this future never blocks the
+    /// caller's thread; dropping it midway shuts the fresh runtime down
+    /// in the background.
     pub async fn open(data_root: impl AsRef<Path>) -> Result<Self, EngineError> {
         Self::open_with(data_root, spawn_open_thread).await
     }

@@ -370,7 +370,7 @@ impl std::task::Wake for Signal {
     }
 }
 
-/// An `open` that finished on the blocking pool but whose result is
+/// An `open` that finished on its open thread but whose result is
 /// never polled, dropped inside async code, still closes its store
 /// cleanly off the caller's thread: the clean-shutdown marker appears
 /// (a bare store dropped inline would record none).
