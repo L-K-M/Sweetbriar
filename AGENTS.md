@@ -58,8 +58,14 @@ compiler must be on `PATH`. Its compile options come from
 - `cargo xtask check-layers` on the macOS toolchain — it sees the
   macOS-cfg re-export surface (spec/01);
 - `check-ffi` and `xtask ffi` — both also run on Linux, except
-  `check-ffi`'s Swift type-check and the XCFramework; `xcodebuild`
-  and Swift tests (M0.9);
+  `check-ffi`'s Swift type-check and the XCFramework. `check-ffi`
+  everywhere also lints the spec/08 import boundary: no `.swift` file
+  under `apps/macos` outside `SweetbriarBridge`/`SweetbriarCore` may
+  import `SweetbriarCore`/`SweetbriarCoreFFI`;
+- XcodeGen (`apps/macos/project.yml` → `Sweetbriar.xcodeproj`,
+  gitignored), `xcodebuild build test` on the `Sweetbriar` scheme —
+  the Swift-Testing `SweetbriarBridgeTests` included — and the zipped
+  `.app` artifact `Sweetbriar-app` (M0.9);
 - anything touching `apps/` or generated bindings.
 
 Agents can't run these locally — make the YAML correct by inspection.

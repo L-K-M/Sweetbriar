@@ -584,6 +584,170 @@ fileprivate struct FfiConverterString: FfiConverter {
 
 
 /**
+ * A `CancelToken` (spec/07): the FFI object the adapter makes per
+ * call and cancels when the surrounding Swift task is cancelled.
+ * The flag is the truth; the `Notify` wakes whoever is already
+ * waiting. `cancel` is synchronous and in memory — it does no I/O.
+ */
+public protocol CancelTokenProtocol: AnyObject, Sendable {
+    
+    /**
+     * Cancel the call this token gates (spec/07): synchronous and in
+     * memory. Idempotent — a second `cancel` changes nothing.
+     */
+    func cancel() 
+    
+    /**
+     * Whether `cancel` ran.
+     */
+    func isCancelled()  -> Bool
+    
+}
+/**
+ * A `CancelToken` (spec/07): the FFI object the adapter makes per
+ * call and cancels when the surrounding Swift task is cancelled.
+ * The flag is the truth; the `Notify` wakes whoever is already
+ * waiting. `cancel` is synchronous and in memory — it does no I/O.
+ */
+open class CancelToken: CancelTokenProtocol, @unchecked Sendable {
+    fileprivate let handle: UInt64
+
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoHandle {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noHandle: NoHandle) {
+        self.handle = 0
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_sb_ffi_fn_clone_canceltoken(self.handle, $0) }
+    }
+    /**
+     * A fresh token; the adapter makes one per call.
+     */
+public convenience init() {
+    let handle =
+        try! rustCall() {
+        uniffiCallStatus in
+    uniffi_sb_ffi_fn_constructor_canceltoken_new(uniffiCallStatus
+    )
+}
+    self.init(unsafeFromHandle: handle)
+}
+
+    deinit {
+        if handle == 0 {
+            // Mock objects have handle=0 don't try to free them
+            return
+        }
+
+        try! rustCall { uniffi_sb_ffi_fn_free_canceltoken(handle, $0) }
+    }
+
+    
+
+    
+    /**
+     * Cancel the call this token gates (spec/07): synchronous and in
+     * memory. Idempotent — a second `cancel` changes nothing.
+     */
+open func cancel()  {try! rustCall() {
+        uniffiCallStatus in
+    uniffi_sb_ffi_fn_method_canceltoken_cancel(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+}
+}
+    
+    /**
+     * Whether `cancel` ran.
+     */
+open func isCancelled() -> Bool  {
+    return try!  FfiConverterBool.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_sb_ffi_fn_method_canceltoken_is_cancelled(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+    
+
+    
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeCancelToken: FfiConverter {
+    typealias FfiType = UInt64
+    typealias SwiftType = CancelToken
+
+    public static func lift(_ handle: UInt64) throws -> CancelToken {
+        return CancelToken(unsafeFromHandle: handle)
+    }
+
+    public static func lower(_ value: CancelToken) -> UInt64 {
+        return value.uniffiCloneHandle()
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> CancelToken {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+    public static func write(_ value: CancelToken, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeCancelToken_lift(_ handle: UInt64) throws -> CancelToken {
+    return try FfiConverterTypeCancelToken.lift(handle)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeCancelToken_lower(_ value: CancelToken) -> UInt64 {
+    return FfiConverterTypeCancelToken.lower(value)
+}
+
+
+
+
+
+
+/**
  * The core as Swift holds it: one shared object (spec/07). The
  * service core sits behind a runtime-agnostic RwLock — the engine
  * below owns the one runtime, and the futures this object returns
@@ -596,15 +760,19 @@ public protocol CoreProtocol: AnyObject, Sendable {
      * `set_setting` (spec/07 "Commands"): one command under an
      * idempotency key the shell made (`UUID()` in Swift). The read
      * side of the shared lock is held for the call's duration, so a
-     * concurrent `shutdown` waits for it.
+     * concurrent `shutdown` waits for it. A command honours the
+     * token only until it holds the core: once begun it runs to
+     * completion and returns its receipt (spec/07).
      */
-    func setSetting(idempotencyKey: String, key: String, value: String) async throws  -> Receipt
+    func setSetting(token: CancelToken, idempotencyKey: String, key: String, value: String) async throws  -> Receipt
     
     /**
      * `settings()` (spec/07 "Queries"): every registered key with its
-     * effective value, the default for one never set.
+     * effective value, the default for one never set. A query stops
+     * wherever it waits — the core's read lock and the read itself
+     * both race the token (spec/07).
      */
-    func settings() async throws  -> [Setting]
+    func settings(token: CancelToken) async throws  -> [Setting]
     
     /**
      * Shut the core down (spec/07 "Lifecycle"): the write side of the
@@ -681,14 +849,16 @@ open class Core: CoreProtocol, @unchecked Sendable {
      * `set_setting` (spec/07 "Commands"): one command under an
      * idempotency key the shell made (`UUID()` in Swift). The read
      * side of the shared lock is held for the call's duration, so a
-     * concurrent `shutdown` waits for it.
+     * concurrent `shutdown` waits for it. A command honours the
+     * token only until it holds the core: once begun it runs to
+     * completion and returns its receipt (spec/07).
      */
-open func setSetting(idempotencyKey: String, key: String, value: String)async throws  -> Receipt  {
+open func setSetting(token: CancelToken, idempotencyKey: String, key: String, value: String)async throws  -> Receipt  {
     return
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_sb_ffi_fn_method_core_set_setting(
-                        self.uniffiCloneHandle(),FfiConverterString.lower(idempotencyKey),FfiConverterString.lower(key),FfiConverterString.lower(value)
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterString.lower(idempotencyKey),FfiConverterString.lower(key),FfiConverterString.lower(value)
                 )
             },
             pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
@@ -701,14 +871,16 @@ open func setSetting(idempotencyKey: String, key: String, value: String)async th
     
     /**
      * `settings()` (spec/07 "Queries"): every registered key with its
-     * effective value, the default for one never set.
+     * effective value, the default for one never set. A query stops
+     * wherever it waits — the core's read lock and the read itself
+     * both race the token (spec/07).
      */
-open func settings()async throws  -> [Setting]  {
+open func settings(token: CancelToken)async throws  -> [Setting]  {
     return
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_sb_ffi_fn_method_core_settings(
-                        self.uniffiCloneHandle()
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token)
                 )
             },
             pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
@@ -1242,13 +1414,15 @@ fileprivate func uniffiFutureContinuationCallback(handle: UInt64, pollResult: In
 }
 /**
  * Open the core (spec/07 "Lifecycle"): the shells' one entry point.
- * A failed open authorizes nothing; the caller shows the error.
+ * A failed open authorizes nothing; the caller shows the error. The
+ * token is honoured only until the open starts: the engine's open
+ * thread runs to the end and can't be interrupted midway (spec/07).
  */
-public func openCore(config: CoreConfig)async throws  -> Core  {
+public func openCore(token: CancelToken, config: CoreConfig)async throws  -> Core  {
     return
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
-                uniffi_sb_ffi_fn_func_open_core(FfiConverterTypeCoreConfig_lower(config)
+                uniffi_sb_ffi_fn_func_open_core(FfiConverterTypeCancelToken_lower(token),FfiConverterTypeCoreConfig_lower(config)
                 )
             },
             pollFunc: ffi_sb_ffi_rust_future_poll_u64,
@@ -1257,6 +1431,20 @@ public func openCore(config: CoreConfig)async throws  -> Core  {
             liftFunc: FfiConverterTypeCore_lift,
             errorHandler: FfiConverterTypeCoreError_lift
         )
+}
+/**
+ * The platform's default roots as the shell spells them (spec/07
+ * "Threading, cancellation and FFI rules": the one synchronous call
+ * allowed to reach the environment). A root that isn't UTF-8 is
+ * `Unavailable` naming it — paths don't cross FFI, so the shell
+ * can't spell it otherwise.
+ */
+public func platformDefaultConfig()throws  -> CoreConfig  {
+    return try  FfiConverterTypeCoreConfig_lift(try rustCallWithError(FfiConverterTypeCoreError_lift) {
+        uniffiCallStatus in
+    uniffi_sb_ffi_fn_func_platform_default_config(uniffiCallStatus
+    )
+})
 }
 
 private enum InitializationResult {
@@ -1274,16 +1462,28 @@ private let initializationResult: InitializationResult = {
     if bindings_contract_version != scaffolding_contract_version {
         return InitializationResult.contractVersionMismatch
     }
-    if (uniffi_sb_ffi_checksum_func_open_core() != 11706) {
+    if (uniffi_sb_ffi_checksum_func_open_core() != 57881) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_sb_ffi_checksum_method_core_set_setting() != 50550) {
+    if (uniffi_sb_ffi_checksum_func_platform_default_config() != 9969) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_sb_ffi_checksum_method_core_settings() != 48135) {
+    if (uniffi_sb_ffi_checksum_method_core_set_setting() != 25429) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_settings() != 17377) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_core_shutdown() != 9052) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_canceltoken_cancel() != 7688) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_canceltoken_is_cancelled() != 65292) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_constructor_canceltoken_new() != 31645) {
         return InitializationResult.apiChecksumMismatch
     }
 

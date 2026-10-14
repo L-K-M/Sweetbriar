@@ -9,8 +9,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use xtask::ffi::{
-    LibraryKind, binding_drift, build_library, headers_dir, lint_async_foreign_callbacks,
-    swift_sources_dir, unresolved_ffi_imports,
+    LibraryKind, binding_drift, build_library, forbidden_swift_imports, headers_dir,
+    lint_async_foreign_callbacks, swift_sources_dir, unresolved_ffi_imports,
 };
 
 /// A fresh scratch dir under the system temp dir, unique per test.
@@ -248,4 +248,156 @@ fn the_lint_flags_an_async_foreign_callback() {
     assert_eq!(violations.len(), 1, "{violations:?}");
     assert!(violations[0].contains("SlowGetter.get"), "{violations:?}");
     let _ = fs::remove_dir_all(&copy);
+}
+
+/// An app file importing `SweetbriarCore` is flagged, naming file and
+/// line; the forbidden spellings — `@testable`, `@_exported`,
+/// `import struct X.Y`, `import X.Y` — are each caught too.
+#[test]
+fn the_import_boundary_flags_core_imports_in_the_app() {
+    let root = scratch("boundary-app");
+    let app = root.join("Sweetbriar");
+    write_all(
+        &app,
+        &[(
+            "MainView.swift",
+            "import AppKit\nimport SweetbriarCore\n\nlet a = 1\n",
+        )],
+    );
+    write_all(
+        &app,
+        &[("More.swift", "@testable import SweetbriarCoreFFI\n")],
+    );
+    let tests = root.join("Tests/SweetbriarTests");
+    write_all(
+        &tests,
+        &[(
+            "Suite.swift",
+            "@_exported import SweetbriarCore\nimport struct SweetbriarCore.Setting\nimport SweetbriarCore.Thing\n",
+        )],
+    );
+
+    let violations = forbidden_swift_imports(&root);
+    assert_eq!(violations.len(), 5, "{violations:?}");
+    assert!(
+        violations
+            .iter()
+            .any(|v| v.contains("MainView.swift:2") && v.contains("SweetbriarCore")),
+        "{violations:?}"
+    );
+    assert!(
+        violations
+            .iter()
+            .any(|v| v.contains("More.swift:1") && v.contains("SweetbriarCoreFFI")),
+        "{violations:?}"
+    );
+    for line in [1, 2, 3] {
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.contains(&format!("Suite.swift:{line}"))),
+            "{violations:?}"
+        );
+    }
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// The same imports under `SweetbriarBridge/` — and under the
+/// generated `SweetbriarCore/` package — pass; so does a file buried
+/// in build output the walk must skip.
+#[test]
+fn the_import_boundary_lets_the_bridge_and_build_output_through() {
+    let root = scratch("boundary-ok");
+    write_all(
+        &root.join("SweetbriarBridge"),
+        &[("CoreBridge.swift", "import SweetbriarCore\n")],
+    );
+    write_all(
+        &root.join("SweetbriarCore/Sources/SweetbriarCore"),
+        &[("Generated.swift", "import SweetbriarCoreFFI\n")],
+    );
+    write_all(
+        &root.join("Sweetbriar.xcodeproj/gen"),
+        &[("Inside.swift", "import SweetbriarCore\n")],
+    );
+    write_all(
+        &root.join(".build"),
+        &[("Dep.swift", "import SweetbriarCore\n")],
+    );
+    write_all(
+        &root.join("DerivedData/out"),
+        &[("AlsoInside.swift", "@testable import SweetbriarCoreFFI\n")],
+    );
+    write_all(
+        &root.join("Sweetbriar"),
+        &[("App.swift", "import AppKit\nimport SweetbriarBridge\n")],
+    );
+
+    assert_eq!(
+        forbidden_swift_imports(&root),
+        Vec::<String>::new(),
+        "the bridge, the generated package and build output are exempt"
+    );
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// Swift 6 access-level imports (`public import X`, `package import
+/// X`, …) and an import after another statement on the same line are
+/// forbidden imports too, and a folder that merely shares an exempt
+/// name below the app is no exemption: only `apps/macos/SweetbriarBridge`
+/// and `apps/macos/SweetbriarCore` are.
+#[test]
+fn the_import_boundary_sees_access_levels_shared_lines_and_nested_names() {
+    let root = scratch("boundary-gaps");
+    let app = root.join("Sweetbriar");
+    write_all(
+        &app,
+        &[(
+            "Access.swift",
+            "public import SweetbriarCore\npackage import SweetbriarCoreFFI\n\
+             internal import SweetbriarCore\n@preconcurrency private import SweetbriarCore\n",
+        )],
+    );
+    write_all(
+        &app,
+        &[("Shared.swift", "import Foundation; import SweetbriarCore\n")],
+    );
+    write_all(
+        &app.join("SweetbriarBridge"),
+        &[("Hidden.swift", "import SweetbriarCore\n")],
+    );
+    write_all(
+        &app.join("SweetbriarCore"),
+        &[("AlsoHidden.swift", "import SweetbriarCoreFFI\n")],
+    );
+
+    let violations = forbidden_swift_imports(&root);
+    assert_eq!(violations.len(), 7, "{violations:?}");
+    for (file, line) in [
+        ("Access.swift", 1),
+        ("Access.swift", 2),
+        ("Access.swift", 3),
+        ("Access.swift", 4),
+        ("Shared.swift", 1),
+        ("Hidden.swift", 1),
+        ("AlsoHidden.swift", 1),
+    ] {
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.contains(&format!("{file}:{line}"))),
+            "{file}:{line} missing from {violations:?}"
+        );
+    }
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// The real `apps/macos` tree respects the boundary.
+#[test]
+fn the_real_tree_respects_the_import_boundary() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("xtask lives at <workspace>/xtask")
+        .join("apps/macos");
+    assert_eq!(forbidden_swift_imports(&root), Vec::<String>::new());
 }
