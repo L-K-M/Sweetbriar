@@ -15,6 +15,9 @@ use tokio::task::{JoinError, JoinHandle};
 use crate::EngineError;
 use sb_resources::Resources;
 
+/// The name of the thread a dropped engine closes its store on.
+const CLOSE_THREAD_NAME: &str = "sb-engine-close";
+
 /// The engine: one multi-threaded runtime and the store's one handle
 /// (spec/01). Every operation goes through here; nothing else in the
 /// core owns a thread.
@@ -231,21 +234,23 @@ fn close_resources(resources: Arc<Resources>) -> Result<(), sb_resources::StoreE
 
 impl Drop for Engine {
     /// An engine dropped without `shutdown` (a cancelled future, a
-    /// panic) still tries to close its store once its reads end, on
-    /// the blocking pool: closing joins the writer thread, which mustn't
-    /// block an async caller. Best effort: a runtime shutting down may
-    /// never start that task, an unclean end the next open's
-    /// `quick_check` covers (spec/03).
+    /// panic) still closes its store once its reads end, on a detached
+    /// thread of its own: closing joins the writer thread, which mustn't
+    /// block an async caller, and the runtime is shutting down, so its
+    /// blocking pool might never start the task. If no thread can be
+    /// started, or the process exits first, the end is unclean and the
+    /// next open's `quick_check` covers it (spec/03).
     fn drop(&mut self) {
         let Some(resources) = self.resources.take() else {
             return;
         };
         let blocking = Arc::clone(&self.blocking);
-        // Detached: nobody can await it from a destructor.
-        drop(self.runtime.handle().spawn_blocking(move || {
-            blocking.close_and_wait();
-            let _ = close_resources(resources);
-        }));
+        let _ = std::thread::Builder::new()
+            .name(CLOSE_THREAD_NAME.to_owned())
+            .spawn(move || {
+                blocking.close_and_wait();
+                let _ = close_resources(resources);
+            });
     }
 }
 
