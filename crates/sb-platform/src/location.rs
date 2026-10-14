@@ -15,12 +15,12 @@ use sb_types::fs::Location;
 /// The host OS whose rules classify a path; `synced_service` takes it
 /// as a parameter so the other OS's table still compiles and is tested.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum HostOs {
+pub(crate) enum HostOs {
     Linux,
     MacOs,
 }
 
-const HOST_OS: HostOs = if cfg!(target_os = "macos") {
+pub(crate) const HOST_OS: HostOs = if cfg!(target_os = "macos") {
     HostOs::MacOs
 } else {
     HostOs::Linux

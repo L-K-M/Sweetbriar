@@ -8,3 +8,6 @@ rust-version.workspace = true
 
 [dependencies]
 sb-engine = { version = "0.0.0", path = "../sb-engine" }
+
+[dev-dependencies]
+sb-test-support = { version = "0.0.0", path = "../sb-test-support" }

@@ -925,10 +925,13 @@ fn objects_added_to_store_meta_in_crashed_wal_are_refused() {
          END;",
     ] {
         let (_scratch, paths) = closed_store("schema-crashed-meta-object");
-        // Distinct values, so the unique index can be built.
+        // Distinct values, so the unique index can be built. The
+        // clean-shutdown marker shares the fixed clock's `created_at`
+        // value, so it moves too.
         tamper(
             &paths,
-            "UPDATE store_meta SET value = 'prior-opener' WHERE key = 'app_version_last_opened';",
+            "UPDATE store_meta SET value = 'prior-opener' WHERE key = 'app_version_last_opened';
+             UPDATE store_meta SET value = 'prior-shutdown' WHERE key = 'clean_shutdown_at';",
         );
         crash_write(&paths, sql);
         assert_corrupt_untouched(&paths, NO_IDENTITY);

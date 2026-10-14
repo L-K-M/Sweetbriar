@@ -13,7 +13,7 @@ use sb_test_support::{ScratchDir, block_on, real_fs};
 use sb_types::fs::{Fs, Location};
 
 use super::*;
-use crate::testing::{crash_write, scratch_paths, test_seams};
+use crate::testing::{FIXED_NOW_MS, crash_write, scratch_paths, test_seams};
 
 /// `open` on a fresh scratch store.
 fn open_scratch(label: &str) -> (ScratchDir, StorePaths, Store) {
@@ -731,15 +731,37 @@ fn interrupted_creation_is_completed() {
     }
 }
 
-/// The data root's parent must exist.
+/// A writable open creates the data root's missing ancestors, each
+/// flushed into its parent before the store is built (spec/03), so a
+/// default root works on a fresh system.
 #[test]
-fn missing_parent_is_unavailable() {
+fn missing_ancestors_are_created_and_flushed() {
     let scratch = ScratchDir::new("no-parent");
-    let orphan = StorePaths::new(scratch.path().join("no/such/parent/store")).unwrap();
-    match open(&orphan, &test_seams(real_fs())).unwrap_err() {
-        StoreError::Unavailable { .. } => {}
-        err => panic!("expected Unavailable, got {err:?}"),
-    }
+    let paths = StorePaths::new(scratch.path().join("no/such/parent/store")).unwrap();
+    let fs = Arc::new(HookedFs::new(&paths));
+    open(&paths, &test_seams(fs.clone()))
+        .unwrap()
+        .close()
+        .unwrap();
+
+    let syncs: Vec<PathBuf> = fs
+        .syncs
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(p, _)| p.clone())
+        .collect();
+    let expected_first = [
+        scratch.path().to_path_buf(),
+        scratch.path().join("no"),
+        scratch.path().join("no/such"),
+    ];
+    assert_eq!(
+        syncs[..3],
+        expected_first,
+        "ancestors not flushed in order: {syncs:?}"
+    );
+    assert!(paths.state_db().exists());
 }
 
 /// Creation flushes each layout directory, then the data root, then
@@ -759,14 +781,17 @@ fn creation_flushes_in_spec_order_before_state_sqlite() {
     expected.push(paths.data_root().to_path_buf());
     expected.push(scratch.path().to_path_buf());
     let recorded = fs.syncs.lock().unwrap().clone();
+    let synced: Vec<PathBuf> = recorded.iter().map(|(path, _)| path.clone()).collect();
     assert_eq!(
-        recorded
-            .iter()
-            .map(|(path, _)| path.clone())
-            .collect::<Vec<_>>(),
+        synced[..expected.len()],
         expected,
         "unexpected sync_dir order"
     );
+    // The scratch dir holds only the store and its lock, so the chain
+    // goes on up: each further flush is the parent of the one before.
+    for pair in synced[expected.len() - 1..].windows(2) {
+        assert_eq!(Some(pair[1].as_path()), pair[0].parent(), "{synced:?}");
+    }
     assert!(
         recorded.iter().all(|(_, state_db)| !state_db),
         "a sync_dir ran after state.sqlite existed: {recorded:?}"
@@ -1059,4 +1084,343 @@ fn a_read_only_open_while_the_store_is_open_is_locked() {
     store.close().unwrap();
     open_read_only(&paths, &test_seams(real_fs())).unwrap();
     drop(scratch);
+}
+
+// The clean-shutdown marker (spec/03 "Integrity", plan M0.7).
+//
+
+/// One `store_meta` value read through a raw read-only connection, so
+/// a closed store can be inspected without opening it (open would
+/// remove the marker).
+fn raw_meta_value(paths: &StorePaths, key: &str) -> Option<String> {
+    let raw = Connection::open_with_flags(
+        paths.state_db(),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .unwrap();
+    let mut stmt = raw
+        .prepare("SELECT value FROM store_meta WHERE key = ?1")
+        .unwrap();
+    stmt.query_map([key], |row| row.get::<_, String>(0))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap()
+        .into_iter()
+        .next()
+}
+
+/// `close` records `store_meta.clean_shutdown_at` with the clock's
+/// milliseconds; the next open removes it; a `Store` dropped without
+/// `close` records nothing (spec/03 "Integrity").
+#[test]
+fn close_records_the_marker_and_the_next_open_removes_it() {
+    let (scratch, paths) = scratch_paths("marker-close");
+    let store = open(&paths, &test_seams(real_fs())).unwrap();
+    store.close().unwrap();
+    // The fixed test clock's value, in decimal (spec/03).
+    assert_eq!(
+        raw_meta_value(&paths, "clean_shutdown_at"),
+        Some(FIXED_NOW_MS.to_string()),
+        "close must record the marker with the clock's milliseconds"
+    );
+
+    // The next open deletes it (in the same transaction as
+    // app_version_last_opened), and closing again re-records it.
+    let store = open(&paths, &test_seams(real_fs())).unwrap();
+    assert_eq!(
+        raw_meta_value(&paths, "clean_shutdown_at"),
+        None,
+        "open must remove the marker"
+    );
+    store.close().unwrap();
+    assert_eq!(
+        raw_meta_value(&paths, "clean_shutdown_at"),
+        Some(FIXED_NOW_MS.to_string())
+    );
+    drop(scratch);
+}
+
+/// Dropping a `Store` without `close` is an unclean end: no marker,
+/// exactly what a killed process leaves behind.
+#[test]
+fn a_dropped_store_records_no_marker() {
+    let (scratch, paths) = scratch_paths("marker-drop");
+    let store = open(&paths, &test_seams(real_fs())).unwrap();
+    drop(store);
+    assert_eq!(raw_meta_value(&paths, "clean_shutdown_at"), None);
+    drop(scratch);
+}
+
+/// The startup `quick_check` runs only when the marker is missing
+/// (spec/03 "Integrity"): a row violating a CHECK — inserted through a
+/// raw connection with `ignore_check_constraints`, a finding none of
+/// open's other steps sees — survives an open with the marker present,
+/// and fails one without it as `Corrupt`.
+#[test]
+fn quick_check_runs_only_without_the_marker() {
+    let (scratch, paths) = scratch_paths("marker-quick-check");
+    let store = open(&paths, &test_seams(real_fs())).unwrap();
+    store.close().unwrap();
+
+    // A row no open step otherwise notices: CHECK enforcement was off.
+    let raw = Connection::open(paths.state_db()).unwrap();
+    raw.execute_batch("PRAGMA ignore_check_constraints = ON")
+        .unwrap();
+    raw.execute(
+        "INSERT INTO accounts (account_id, kind, provider, display_name, state, sort_order, created_at)
+         VALUES ('bad', 'not-a-kind', 'local_archive', 'x', 'active', 0, 0)",
+        [],
+    )
+    .unwrap();
+    raw.close().unwrap();
+
+    // Marker present: no quick_check, the open succeeds (and deletes
+    // the marker); a clean close records it again.
+    let store = open(&paths, &test_seams(real_fs())).unwrap();
+    store.close().unwrap();
+
+    // Marker removed by hand, as a killed process would leave it: the
+    // next open runs quick_check and the CHECK violation is `Corrupt`.
+    let raw = Connection::open(paths.state_db()).unwrap();
+    raw.execute("DELETE FROM store_meta WHERE key = 'clean_shutdown_at'", [])
+        .unwrap();
+    raw.close().unwrap();
+    match open(&paths, &test_seams(real_fs())).unwrap_err() {
+        StoreError::Corrupt { detail } => {
+            assert!(detail.contains("quick_check"), "{detail}");
+        }
+        err => panic!("expected Corrupt, got {err:?}"),
+    }
+    drop(scratch);
+}
+
+/// An unclean store holding a CHECK violation: closed, then the bad row
+/// inserted and the marker removed through a raw connection, as a
+/// killed process with a damaged file would leave it.
+fn unclean_store_with_a_check_violation(label: &str) -> (ScratchDir, StorePaths) {
+    let (scratch, paths) = scratch_paths(label);
+    open(&paths, &test_seams(real_fs()))
+        .unwrap()
+        .close()
+        .unwrap();
+    let raw = Connection::open(paths.state_db()).unwrap();
+    raw.execute_batch(
+        "PRAGMA ignore_check_constraints = ON;
+         INSERT INTO accounts (account_id, kind, provider, display_name, state, sort_order, created_at)
+           VALUES ('bad', 'not-a-kind', 'local_archive', 'x', 'active', 0, 0);
+         DELETE FROM store_meta WHERE key = 'clean_shutdown_at';",
+    )
+    .unwrap();
+    raw.close().unwrap();
+    (scratch, paths)
+}
+
+/// A test-only migration 2 that would hide the damage by deleting the
+/// bad row.
+fn migration_2_repairs(tx: &rusqlite::Transaction, _seams: &Seams) -> Result<(), StoreError> {
+    tx.execute_batch("DELETE FROM accounts WHERE account_id = 'bad';")
+        .map_err(crate::schema::bug)
+}
+
+/// The startup check runs before the migrations (spec/03): a migration
+/// that would delete the damaged row never runs, and the store keeps
+/// its version and the row.
+#[test]
+fn the_startup_check_runs_before_the_migrations() {
+    let (_scratch, paths) = unclean_store_with_a_check_violation("check-before-migrate");
+    let migrations = [
+        MIGRATIONS[0],
+        Migration {
+            version: 2,
+            run: migration_2_repairs,
+        },
+    ];
+    match open_with(
+        &paths,
+        &test_seams(real_fs()),
+        WRITER_PRAGMAS,
+        READER_PRAGMAS,
+        &PINNED_SQLITE,
+        &migrations,
+    )
+    .unwrap_err()
+    {
+        StoreError::Corrupt { detail } => assert!(detail.contains("quick_check"), "{detail}"),
+        err => panic!("expected Corrupt, got {err:?}"),
+    }
+    let raw =
+        Connection::open_with_flags(paths.state_db(), rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .unwrap();
+    let version: i64 = raw
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap();
+    let bad_rows: i64 = raw
+        .query_row(
+            "SELECT count(*) FROM accounts WHERE account_id = 'bad'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        (version, bad_rows),
+        (1, 1),
+        "a migration ran before the check"
+    );
+}
+
+/// An unclean store whose damage even a read-only connection's
+/// `quick_check` finds: a NULL in a column the schema (rewritten behind
+/// SQLite's back) declares NOT NULL.
+fn unclean_store_with_null_damage(label: &str) -> (ScratchDir, StorePaths) {
+    let (scratch, paths) = unclean_store_with_a_check_violation(label);
+    let raw = Connection::open(paths.state_db()).unwrap();
+    raw.execute_batch(
+        "CREATE TABLE null_damage (value TEXT);
+         INSERT INTO null_damage VALUES (NULL);
+         PRAGMA writable_schema = ON;
+         UPDATE sqlite_schema SET sql = 'CREATE TABLE null_damage (value TEXT NOT NULL) STRICT'
+           WHERE name = 'null_damage';
+         PRAGMA writable_schema = OFF;",
+    )
+    .unwrap();
+    raw.close().unwrap();
+    (scratch, paths)
+}
+
+/// The read-only open checks nothing (spec/03): an unclean store with
+/// damage a read-only `quick_check` would find still opens read-only,
+/// its marker stays absent, and `state.sqlite` keeps its bytes (the
+/// WAL side is covered by the crashed-frames read-only tests).
+#[test]
+fn the_read_only_open_neither_checks_nor_touches_the_marker() {
+    let (_scratch, paths) = unclean_store_with_null_damage("check-read-only");
+    // The damage is visible to a read-only check, so a check would fail.
+    let checked = open_connection(paths.state_db(), Access::ReadOnly, READER_PRAGMAS).unwrap();
+    assert!(matches!(
+        startup_quick_check(&checked),
+        Err(StoreError::Corrupt { .. })
+    ));
+    drop(checked);
+
+    let before = fs::read(paths.state_db()).unwrap();
+    let read_only = open_read_only(&paths, &test_seams(real_fs())).unwrap();
+    read_only.close().unwrap();
+
+    assert_eq!(fs::read(paths.state_db()).unwrap(), before);
+    assert_eq!(raw_meta_value(&paths, "clean_shutdown_at"), None);
+}
+
+/// A failed ancestor flush, then a successful retry: the retry flushes
+/// that ancestor's parent again, since an ancestor that exists isn't
+/// proven durable (spec/03) — not even once something else (a cache
+/// directory, another store) has appeared beside the store's way down.
+#[test]
+fn a_retry_reflushes_an_ancestor_whose_flush_failed() {
+    let scratch = ScratchDir::new("ancestor-retry");
+    let paths = StorePaths::new(scratch.path().join("a/b/store")).unwrap();
+    let failing = Arc::new(HookedFs {
+        failing_sync: Some(scratch.path().to_path_buf()),
+        ..HookedFs::new(&paths)
+    });
+    assert!(matches!(
+        open(&paths, &test_seams(failing)),
+        Err(StoreError::Unavailable { .. })
+    ));
+    assert!(scratch.path().join("a").exists());
+    fs::create_dir(scratch.path().join("a/cache")).unwrap();
+
+    let retry = Arc::new(HookedFs::new(&paths));
+    open(&paths, &test_seams(retry.clone()))
+        .unwrap()
+        .close()
+        .unwrap();
+    let synced = retry.syncs.lock().unwrap();
+    assert!(
+        synced.iter().any(|(path, _)| path == scratch.path()),
+        "the retry never flushed the level whose flush had failed: {synced:?}"
+    );
+}
+
+/// The same through a simulated power cut: after the failed flush, a
+/// sibling appearing and a successful retry, a durably written file in
+/// the store survives.
+#[test]
+fn a_retried_store_survives_a_power_cut() {
+    use sb_test_support::{FaultFs, FaultKind, FsOp, SimFs};
+    use std::io::Write as _;
+
+    let sim = Arc::new(SimFs::new());
+    sim.create_dir_all(Path::new("/existing")).unwrap();
+    let paths = StorePaths::new("/existing/a/b/store").unwrap();
+    let fs = FaultFs::new(sim.clone(), FsOp::SyncDir, 1, FaultKind::Eio);
+    assert!(create_missing_ancestors(&fs, &paths).is_err());
+    fs.create_dir(Path::new("/existing/a/cache")).unwrap();
+    create_missing_ancestors(&fs, &paths).unwrap();
+    create_layout(&fs, &paths).unwrap();
+
+    // SQLite bypasses the seam; a synced file in the root stands in for
+    // the database.
+    let mut file = fs.create(paths.state_db()).unwrap();
+    file.write_all(b"acknowledged store").unwrap();
+    file.sync_all().unwrap();
+    drop(file);
+    fs.sync_dir(paths.data_root()).unwrap();
+    sim.power_cut();
+    assert!(
+        sim.metadata(paths.state_db()).unwrap().is_some(),
+        "the store vanished with an unflushed ancestor"
+    );
+}
+
+/// A test-only migration that commits.
+fn migration_succeeds(tx: &rusqlite::Transaction, _seams: &Seams) -> Result<(), StoreError> {
+    tx.execute_batch("CREATE TABLE upgraded (x INTEGER) STRICT;")
+        .map_err(crate::schema::bug)
+}
+
+/// A test-only migration that fails.
+fn migration_fails(tx: &rusqlite::Transaction, _seams: &Seams) -> Result<(), StoreError> {
+    tx.execute_batch("not_sql;").map_err(crate::schema::bug)
+}
+
+/// An upgrade cut short leaves no clean-shutdown marker: the last
+/// session's marker goes before the first migration commits, so after
+/// migration 2 commits and 3 fails, the store isn't claimed clean.
+#[test]
+fn an_interrupted_upgrade_leaves_no_marker() {
+    let (_scratch, paths, store) = open_scratch("upgrade-marker");
+    store.close().unwrap();
+    assert!(raw_meta_value(&paths, "clean_shutdown_at").is_some());
+
+    let migrations = [
+        MIGRATIONS[0],
+        Migration {
+            version: 2,
+            run: migration_succeeds,
+        },
+        Migration {
+            version: 3,
+            run: migration_fails,
+        },
+    ];
+    assert!(
+        open_with(
+            &paths,
+            &test_seams(real_fs()),
+            WRITER_PRAGMAS,
+            READER_PRAGMAS,
+            &PINNED_SQLITE,
+            &migrations,
+        )
+        .is_err()
+    );
+    let raw =
+        Connection::open_with_flags(paths.state_db(), rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .unwrap();
+    let version: i64 = raw
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap();
+    drop(raw);
+    assert_eq!(version, 2, "migration 2 should have committed");
+    assert_eq!(raw_meta_value(&paths, "clean_shutdown_at"), None);
 }

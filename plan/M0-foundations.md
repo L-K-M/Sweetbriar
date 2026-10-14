@@ -236,17 +236,27 @@ decided.
 - **Depends on:** M0.2, M0.6.
 - **Deliverables:**
   - the command and query through `sb-service`, `sb-engine` and
-    `sb-resources`;
-  - `open_core` and `shutdown`, with the runtime owned by the engine;
+    `sb-resources`: `set_setting` under an idempotency key (a receipt,
+    02 Settings registry) and `settings()`. Each layer maps the errors
+    of the one below; types climb by item re-exports only (01 rule 3);
+  - `open_core` and `shutdown`, with the runtime (`tokio` 1.53.2,
+    01) owned by the engine; `CoreConfig` carries the data and cache
+    roots;
   - the clean-shutdown marker: `shutdown` records it, and the next
     open runs `PRAGMA quick_check` when it's missing (03 Integrity);
-  - `sb-cli settings get|set`.
+  - `sb-cli settings get [key]` and `settings set <key> <value>`, with
+    `--data-root` (default: the platform's data root, 03);
 - **Acceptance:**
   - `sb-cli settings set appearance.compose_cue standard` then `get`
     round-trips across process restarts;
   - `check-layers` passes;
   - opening a store locked by another process yields `CoreError::Locked`
-    and creates nothing.
+    and creates nothing;
+  - an unknown key or value is `InvalidInput`; a repeated idempotency
+    key returns the first receipt;
+  - after a shutdown the marker is present; after a killed process it
+    isn't, and the next open runs `quick_check` (observable in a
+    test).
 
 ### M0.8 FFI exports and bindings — M, linux (+ macos-ci for the XCFramework)
 

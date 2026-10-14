@@ -51,7 +51,8 @@ CREATE TABLE store_meta (
   value TEXT NOT NULL
 ) STRICT;
 -- keys: 'store_uuid', 'incarnation' (new UUID after every restore),
--- 'created_at', 'app_version_last_opened', 'last_migrated_by' (app version).
+-- 'created_at', 'app_version_last_opened', 'last_migrated_by' (app version),
+-- 'clean_shutdown_at' (03 Integrity: present only between a clean shutdown and the next open).
 -- The schema version is PRAGMA user_version, owned by the migration runner;
 -- it is not duplicated here.
 ```
@@ -527,6 +528,17 @@ CREATE TABLE settings (
 ```
 
 Receipts are kept for 30 days.
+
+**Settings** are a registry: each key has its values and a default.
+`set_setting` refuses an unknown key or value with `InvalidInput`,
+stores the value's canonical JSON, and bumps `revision` and
+`updated_at` (rule 9). `settings()` returns every registered key, with
+the default for one never set. The pilot's registry, which later steps
+extend:
+
+| Key | Values | Default |
+|---|---|---|
+| `appearance.compose_cue` | `standard`, `strong` (08 Strong mode) | `standard` |
 
 ## Safety records
 

@@ -189,6 +189,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
+name = "pin-project-lite"
+version = "0.2.17"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
+
+[[package]]
 name = "pkg-config"
 version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -252,6 +258,7 @@ name = "sb-cli"
 version = "0.0.0"
 dependencies = [
  "sb-service",
+ "sb-test-support",
 ]
 
 [[package]]
@@ -259,6 +266,8 @@ name = "sb-engine"
 version = "0.0.0"
 dependencies = [
  "sb-resources",
+ "sb-test-support",
+ "tokio",
 ]
 
 [[package]]
@@ -306,6 +315,7 @@ name = "sb-service"
 version = "0.0.0"
 dependencies = [
  "sb-engine",
+ "sb-test-support",
 ]
 
 [[package]]
@@ -330,6 +340,7 @@ name = "sb-test-support"
 version = "0.0.0"
 dependencies = [
  "libc",
+ "rusqlite",
  "sb-platform",
  "sb-types",
 ]
@@ -454,6 +465,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "tokio"
+version = "1.53.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e95f91fcc7a621e8b030f6aa23c71fe9838ae2fb4d8118b75602a328f5144044"
+dependencies = [
+ "pin-project-lite",
 ]
 
 [[package]]
