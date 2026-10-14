@@ -8,6 +8,8 @@ mod cut;
 mod fault;
 mod sim;
 mod sqlite;
+#[cfg(target_os = "linux")]
+mod threads;
 
 use std::future::Future;
 use std::io;
@@ -26,6 +28,8 @@ pub use cut::{CutFs, run_crash_cuts};
 pub use fault::{FaultFs, FaultKind, FsOp};
 pub use sim::SimFs;
 pub use sqlite::{execute_sql, store_meta_value};
+#[cfg(target_os = "linux")]
+pub use threads::with_new_threads_refused;
 
 /// Drive `future` to completion on the calling thread: a minimal
 /// executor for tests, with no runtime dependency (spec/01 keeps the

@@ -15,21 +15,27 @@ use tokio::task::{JoinError, JoinHandle};
 use crate::EngineError;
 use sb_resources::Resources;
 
-/// The name of the thread a dropped engine closes its store on.
+/// The name of the worker a dropped engine closes its store on.
 const CLOSE_THREAD_NAME: &str = "sb-engine-close";
 
+/// What a dropped engine hands its cleanup worker: the store's last
+/// handle and the count of blocking tasks still using it.
+type Cleanup = (Arc<Resources>, Arc<BlockingWork>);
+
 /// The engine: one multi-threaded runtime and the store's one handle
-/// (spec/01). Every operation goes through here; nothing else in the
-/// core owns a thread.
+/// (spec/01), plus a cleanup worker reserved at open. Every operation
+/// goes through here.
 ///
-/// Field order matters on drop: the store handle goes to the runtime's
-/// blocking pool first (closing a store joins its writer thread, which
-/// must not block an async caller), then the runtime shuts down in the
-/// background.
+/// On drop the store handle goes to the cleanup worker (closing a store
+/// joins its writer thread, which must not block an async caller), then
+/// the runtime shuts down in the background.
 pub struct Engine {
     resources: Option<Arc<Resources>>,
     blocking: Arc<BlockingWork>,
     runtime: OwnedRuntime,
+    /// The worker reserved at open that closes the store if the engine
+    /// is dropped without `shutdown`; it ends when this sender drops.
+    cleanup: std::sync::mpsc::Sender<Cleanup>,
 }
 
 /// The runtime, shut down without blocking however it is dropped: an
@@ -137,15 +143,18 @@ impl Engine {
         let handle = runtime.handle().clone();
         let opened = handle
             .spawn_blocking(move || {
-                Resources::open(&data_root).map(|resources| Self {
+                let resources = Resources::open(&data_root).map_err(EngineError::from)?;
+                let cleanup = start_cleanup_worker()?;
+                Ok(Self {
                     resources: Some(Arc::new(resources)),
                     blocking: Arc::default(),
                     runtime,
+                    cleanup,
                 })
             })
             .await;
         match opened {
-            Ok(engine) => engine.map_err(EngineError::from),
+            Ok(engine) => engine,
             Err(join) => Err(join_failed("open the store", join)),
         }
     }
@@ -221,6 +230,25 @@ impl Engine {
     }
 }
 
+/// Start the worker that closes the store of an engine dropped without
+/// `shutdown`, waiting for its blocking tasks first. Reserved at open,
+/// so a drop never needs a new thread; an OS that refuses it fails the
+/// open as `Unavailable`.
+fn start_cleanup_worker() -> Result<std::sync::mpsc::Sender<Cleanup>, EngineError> {
+    let (cleanup, handed) = std::sync::mpsc::channel::<Cleanup>();
+    std::thread::Builder::new()
+        .name(CLOSE_THREAD_NAME.to_owned())
+        .spawn(move || {
+            // A closed channel means the engine shut down normally.
+            if let Ok((resources, blocking)) = handed.recv() {
+                blocking.close_and_wait();
+                let _ = close_resources(resources);
+            }
+        })
+        .map_err(|e| EngineError::unavailable(format!("cannot start the cleanup worker: {e}")))?;
+    Ok(cleanup)
+}
+
 /// Close the store through its last handle. Only the engine's
 /// shutdown, after every blocking task ended, calls this.
 fn close_resources(resources: Arc<Resources>) -> Result<(), sb_resources::StoreError> {
@@ -234,23 +262,16 @@ fn close_resources(resources: Arc<Resources>) -> Result<(), sb_resources::StoreE
 
 impl Drop for Engine {
     /// An engine dropped without `shutdown` (a cancelled future, a
-    /// panic) still closes its store once its reads end, on a detached
-    /// thread of its own: closing joins the writer thread, which mustn't
-    /// block an async caller, and the runtime is shutting down, so its
-    /// blocking pool might never start the task. If no thread can be
-    /// started, or the process exits first, the end is unclean and the
-    /// next open's `quick_check` covers it (spec/03).
+    /// panic) hands its store to the cleanup worker reserved at open,
+    /// which waits for the reads and closes it: closing joins the writer
+    /// thread, which mustn't block an async caller, and dropping needs
+    /// no new thread. A process exiting first is an unclean end, which
+    /// the next open's `quick_check` covers (spec/03).
     fn drop(&mut self) {
         let Some(resources) = self.resources.take() else {
             return;
         };
-        let blocking = Arc::clone(&self.blocking);
-        let _ = std::thread::Builder::new()
-            .name(CLOSE_THREAD_NAME.to_owned())
-            .spawn(move || {
-                blocking.close_and_wait();
-                let _ = close_resources(resources);
-            });
+        let _ = self.cleanup.send((resources, Arc::clone(&self.blocking)));
     }
 }
 

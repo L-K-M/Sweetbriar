@@ -410,3 +410,84 @@ fn a_finished_open_dropped_unpolled_closes_its_store() {
     let engine = reopen_eventually(&root);
     sb_test_support::block_on(engine.shutdown()).unwrap();
 }
+
+/// The env var that makes this test binary the thread-refusal child.
+#[cfg(target_os = "linux")]
+const REFUSAL_ROOT_ENV: &str = "SB_ENGINE_TEST_REFUSAL_ROOT";
+
+/// Not a test: `a_drop_needs_no_new_thread` runs it as a child, since
+/// refusing threads affects the whole process. With a write still
+/// running and the OS refusing new threads, dropping the engine inside
+/// async code returns at once: the cleanup worker reserved at open
+/// takes the store.
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "spawned by a_drop_needs_no_new_thread"]
+fn thread_refusal_child() {
+    let root = std::env::var(REFUSAL_ROOT_ENV).expect("root env");
+    let engine = sb_test_support::block_on(Engine::open(&root)).unwrap();
+    let outer = outer_runtime();
+    let (release, gate) = std::sync::mpsc::channel::<()>();
+    let (started, running) = std::sync::mpsc::channel::<()>();
+    // A write the caller stopped awaiting; the writer still runs it.
+    drop(
+        engine
+            .resources()
+            .write(sb_resources::WritePriority::User, move |_| {
+                started.send(()).unwrap();
+                let _ = gate.recv();
+                Ok(())
+            }),
+    );
+    running
+        .recv_timeout(std::time::Duration::from_secs(30))
+        .unwrap();
+
+    // Started before threads are refused: opens the gate after 500 ms.
+    let (dropped, drops) = std::sync::mpsc::channel::<()>();
+    let releaser = std::thread::spawn(move || {
+        let returned = drops
+            .recv_timeout(std::time::Duration::from_millis(500))
+            .is_ok();
+        release.send(()).unwrap();
+        returned
+    });
+    sb_test_support::with_new_threads_refused(|| {
+        assert!(
+            std::thread::Builder::new().spawn(|| ()).is_err(),
+            "the OS didn't refuse a new thread"
+        );
+        outer.block_on(async move {
+            drop(engine);
+            dropped.send(()).unwrap();
+        });
+    });
+    assert!(
+        releaser.join().unwrap(),
+        "with threads refused, dropping the engine waited for the writer"
+    );
+}
+
+/// Dropping an engine never needs a new thread, so it never blocks an
+/// async caller even when the OS refuses one (Linux, in a child process).
+#[cfg(target_os = "linux")]
+#[test]
+fn a_drop_needs_no_new_thread() {
+    let scratch = ScratchDir::new("engine-thread-refusal");
+    let root = scratch.path().join("store");
+    let status = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "engine::tests::thread_refusal_child",
+            "--ignored",
+        ])
+        .env(REFUSAL_ROOT_ENV, &root)
+        .status()
+        .unwrap();
+    assert!(
+        status.success(),
+        "the thread-refusal child failed: {status}"
+    );
+    let engine = reopen_eventually(&root);
+    sb_test_support::block_on(engine.shutdown()).unwrap();
+}
