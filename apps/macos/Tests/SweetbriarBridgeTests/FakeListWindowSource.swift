@@ -39,6 +39,10 @@ actor FakeListWindowSource: ListWindowSource {
     /// tests hold reads in flight, watch cancellation, then `open`.
     private var readGate: ThrowingGate?
 
+    /// When set, the next `windowIDs` takes its snapshot, then waits on
+    /// it before answering — a stale index arriving late.
+    private var indexGate: ThrowingGate?
+
     /// When set, the next `readWindow` answers rows whose occurrence
     /// ids don't match the index — the model's exact-page check
     /// should refuse them and rebuild.
@@ -57,6 +61,12 @@ actor FakeListWindowSource: ListWindowSource {
     /// Park every read on `gate` until it opens.
     func setGate(_ gate: ThrowingGate?) {
         readGate = gate
+    }
+
+    /// Hold the next `windowIDs` answer on `gate`; it answers the
+    /// snapshot it took on entry.
+    func gateNextIndexRead(_ gate: ThrowingGate) {
+        indexGate = gate
     }
 
     /// Make the next read answer rows whose ids don't match the
@@ -142,10 +152,16 @@ actor FakeListWindowSource: ListWindowSource {
         guard open.contains(id) else {
             throw CoreFailure.notFound(what: "window \(id)")
         }
-        return WindowIDs(
+        let count = rowCount
+        let snapshot = WindowIDs(
             generation: generation,
-            ids: (0 ..< rowCount).map { Int64(rowCount - $0) }
+            ids: (0 ..< count).map { Int64(count - $0) }
         )
+        if let gate = indexGate {
+            indexGate = nil
+            try await gate.wait()
+        }
+        return snapshot
     }
 
     /// `close_window` (spec/07): release the handle.

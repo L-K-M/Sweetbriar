@@ -627,6 +627,80 @@ func theBenchmarkHookSeesTheSameDeliveriesAsTheLists() async throws {
     await model.close()
 }
 
+/// An index older than the installed one is dropped (spec/08): a
+/// list opening on the empty source while the Debug menu fills and
+/// rebuilds keeps the refill's index when the opening's stale one
+/// lands last.
+@MainActor
+@Test(.timeLimit(.minutes(1)))
+func aStaleIndexLandingAfterARebuildIsDropped() async throws {
+    let fake = FakeListWindowSource()
+    let gate = ThrowingGate()
+    await fake.gateNextIndexRead(gate)
+    let clock = ManualFrameClock()
+    let model = ListWindowModel(source: fake, spec: .debugSynthetic, clock: clock)
+
+    // The opening's index snapshots the empty source, then parks.
+    let opening = Task { try await model.open() }
+    try #require(await eventually { await fake.indexReads.count == 1 })
+
+    // The fill and its rebuild land first.
+    let n = 1_000
+    let generation = await fake.fill(n)
+    try await model.rebuild()
+    #expect(model.generation == generation)
+    #expect(model.count == n)
+
+    // The stale generation-0 index lands last and is dropped.
+    await gate.open()
+    try await opening.value
+    #expect(model.generation == generation)
+    #expect(model.count == n)
+
+    await model.close()
+}
+
+/// A late completion never clears a newer request's pending mark, so
+/// a page is read once per request (spec/08). The old read's
+/// completion waits on a frame; a rebuild re-requests the page; the
+/// new read finishes, then the frame fires before its completion
+/// joins the batcher. The main actor is held meanwhile, so that order
+/// is fixed.
+@MainActor
+@Test(.timeLimit(.minutes(1)))
+func aLateCompletionLeavesANewerRequestPending() async throws {
+    let n = 5_000
+    let fake = FakeListWindowSource()
+    _ = await fake.fill(n)
+    let clock = ManualFrameClock()
+    let model = try await openModel(over: fake, clock: clock)
+
+    // The last page alone: no neighbour to prefetch.
+    model.setVisible(4_800 ..< 4_820)
+    try #require(await eventually { await clock.waiterCount == 1 })
+    #expect(await fake.reads.count == 1)
+
+    // The rebuild's read parks on the gate.
+    let gate = ThrowingGate()
+    await fake.setGate(gate)
+    try await model.rebuild()
+    try #require(await eventually { await fake.reads.count == 2 })
+
+    let ordered = DispatchSemaphore(value: 0)
+    Task.detached {
+        await gate.open()
+        try? await Task.sleep(for: .milliseconds(50))
+        await clock.tick()
+        ordered.signal()
+    }
+    ordered.wait()
+
+    try #require(await settle(clock) { model.row(at: 4_800) != nil })
+    #expect(await fake.reads.count == 2)
+
+    await model.close()
+}
+
 // MARK: - The real core
 
 /// End to end through `CoreBridge` (spec/07 "Debug source"): fill the

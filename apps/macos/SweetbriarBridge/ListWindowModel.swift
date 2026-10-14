@@ -142,9 +142,16 @@ public final class ListWindowModel {
     private var nextSerial: UInt64 = 0
 
     /// Pages whose read finished but whose completion still waits on
-    /// a frame — they count as requested until delivered or dropped.
+    /// a frame, with that read's serial — they count as requested
+    /// until that completion is delivered or dropped. Keyed by serial
+    /// so a late completion can't clear a newer request's mark.
     @ObservationIgnored
-    private var pendingDelivery: Set<Int> = []
+    private var pendingDelivery: [Int: UInt64] = [:]
+
+    /// Whether an id index is installed — a failed opening fetch then
+    /// leaves the window to the rebuild that installed it.
+    @ObservationIgnored
+    private var hasIndex = false
 
     /// Pages whose last read failed (other than `resetRequired`, which
     /// rebuilds). Retried on the next visibility change.
@@ -259,18 +266,32 @@ public final class ListWindowModel {
             throw CancellationError()
         }
         windowId = window.windowId
+        let index: WindowIDs
         do {
-            let index = try await source.windowIDs(id: window.windowId)
-            guard !closed else { return }
-            generation = index.generation
-            ids = index.ids
+            index = try await source.windowIDs(id: window.windowId)
         } catch {
+            guard !hasIndex else { return }
             await source.closeWindow(id: window.windowId)
             windowId = nil
             throw error
         }
+        guard !closed, install(index) else { return }
         onIndexChanged()
         applyVisibility()
+    }
+
+    /// Install a fetched id index, unless one from a later generation
+    /// is already in: a fetch that began before a fill can land after
+    /// the fill's rebuild, and must not roll the window back to an
+    /// older (perhaps empty) index that no read would ever correct.
+    /// Returns whether it was installed.
+    private func install(_ index: WindowIDs) -> Bool {
+        guard !hasIndex || index.generation >= generation else { return false }
+        generation = index.generation
+        ids = index.ids
+        reverseIndex = nil
+        hasIndex = true
+        return true
     }
 
     /// The rows the list is showing, as window ranks. Pins the pages
@@ -369,12 +390,9 @@ public final class ListWindowModel {
             throw error
         }
         rebuilding = false
-        guard !closed else { return }
-        generation = index.generation
-        ids = index.ids
-        reverseIndex = nil
+        guard !closed, install(index) else { return }
         serials = [:]
-        pendingDelivery = []
+        pendingDelivery = [:]
         failedPages = []
         for page in pages.values where page.rows != nil {
             page.rows = nil
@@ -448,7 +466,7 @@ public final class ListWindowModel {
         for k in requestOrder where inFlight.count < Self.inFlightLimit {
             guard wanted.contains(k),
                   inFlight[k] == nil,
-                  !pendingDelivery.contains(k),
+                  pendingDelivery[k] == nil,
                   !failedPages.contains(k),
                   pages[k]?.rows == nil
             else { continue }
@@ -515,7 +533,7 @@ public final class ListWindowModel {
             inFlight[k] = nil
         }
         if !closed {
-            pendingDelivery.insert(k)
+            pendingDelivery[k] = serial
             if batcher == nil {
                 batcher = FrameBatcher(clock: clock) { [weak self] batch in
                     self?.deliver(batch)
@@ -546,7 +564,9 @@ public final class ListWindowModel {
         var landed: [Int] = []
         var reset = false
         for completion in batch {
-            pendingDelivery.remove(completion.page)
+            if pendingDelivery[completion.page] == completion.serial {
+                pendingDelivery[completion.page] = nil
+            }
             if closed || reset { continue }
             guard completion.generation == generation,
                   serials[completion.page] == completion.serial,
