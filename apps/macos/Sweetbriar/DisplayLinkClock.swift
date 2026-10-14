@@ -3,6 +3,7 @@
 // target only — the bridge just knows the protocol.
 
 import AppKit
+import SweetbriarBridge
 
 /// A display link parked on the main run loop. `nextFrame()` waiters
 /// all resume on the same tick. The link runs only while someone
