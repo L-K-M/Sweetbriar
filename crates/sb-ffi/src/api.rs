@@ -100,7 +100,9 @@ pub async fn open_core(
 #[derive(uniffi::Object)]
 pub struct Core {
     /// The live service core; `None` once `shutdown` took it.
-    service: RwLock<Option<sb_service::Core>>,
+    /// Crate-visible so each domain module (`windows`) can implement
+    /// its share of the exported `Core` methods.
+    pub(crate) service: RwLock<Option<sb_service::Core>>,
 }
 
 /// What a call after `shutdown` always answers (spec/07: "any call
@@ -160,7 +162,7 @@ impl Core {
     /// read lock and the work itself — so a cancel stops it wherever
     /// it waits. The read side is held throughout, so `shutdown`
     /// waits for the query.
-    async fn query<T>(
+    pub(crate) async fn query<T>(
         &self,
         token: &CancelToken,
         work: impl AsyncFnOnce(&sb_service::Core) -> Result<T, sb_service::CoreError>,
@@ -178,7 +180,7 @@ impl Core {
     /// command holds the core's read side. From then on the command
     /// runs to completion, so one that committed always returns its
     /// receipt.
-    async fn command<T>(
+    pub(crate) async fn command<T>(
         &self,
         token: &CancelToken,
         work: impl AsyncFnOnce(&sb_service::Core) -> Result<T, sb_service::CoreError>,

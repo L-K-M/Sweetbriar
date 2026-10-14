@@ -784,6 +784,46 @@ public protocol CoreProtocol: AnyObject, Sendable {
      */
     func shutdown() async 
     
+    /**
+     * `close_window` (spec/07): release the handle. No token — like
+     * `shutdown`, the call can't be cancelled; closing twice, or
+     * after the core shut down, is harmless.
+     */
+    func closeWindow(windowId: UInt64) async 
+    
+    /**
+     * `debug_fill_synthetic` (spec/07 "Debug source"): replace the
+     * synthetic source with `count` rows and return the new
+     * generation. Exported in every build, reached only from the
+     * app's Debug menu (spec/08). It runs through `command`: the
+     * token counts only until the fill holds the core — the
+     * replacement is one lock hold, so a cancelled fill either
+     * leaves the source untouched or returns the new generation,
+     * never `Cancelled` after replacing (spec/07).
+     */
+    func debugFillSynthetic(token: CancelToken, count: UInt32) async throws  -> UInt64
+    
+    /**
+     * `open_window` (spec/07): register a window over `spec` and
+     * return its first page at the source's current generation. A
+     * query: the token races the core's lock and the work itself.
+     */
+    func openWindow(token: CancelToken, spec: WindowSpec, anchor: Anchor, limit: UInt32) async throws  -> Window
+    
+    /**
+     * `read_window` (spec/07): the page `anchor` picks out of the
+     * window at the generation the shell holds. A stale generation
+     * or cursor is `ResetRequired`; an unknown or closed window is
+     * `NotFound`.
+     */
+    func readWindow(token: CancelToken, windowId: UInt64, generation: UInt64, anchor: Anchor, limit: UInt32) async throws  -> Window
+    
+    /**
+     * `window_ids` (spec/07 "The id index"): every row's occurrence
+     * id in window order, with the source's current generation.
+     */
+    func windowIds(token: CancelToken, windowId: UInt64) async throws  -> WindowIds
+    
 }
 /**
  * The core as Swift holds it: one shared object (spec/07). The
@@ -916,6 +956,117 @@ open func shutdown()async   {
         )
 }
     
+    /**
+     * `close_window` (spec/07): release the handle. No token — like
+     * `shutdown`, the call can't be cancelled; closing twice, or
+     * after the core shut down, is harmless.
+     */
+open func closeWindow(windowId: UInt64)async   {
+    return
+        try!  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_close_window(
+                        self.uniffiCloneHandle(),FfiConverterUInt64.lower(windowId)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_void,
+            completeFunc: ffi_sb_ffi_rust_future_complete_void,
+            freeFunc: ffi_sb_ffi_rust_future_free_void,
+            liftFunc: { $0 },
+            errorHandler: nil
+            
+        )
+}
+    
+    /**
+     * `debug_fill_synthetic` (spec/07 "Debug source"): replace the
+     * synthetic source with `count` rows and return the new
+     * generation. Exported in every build, reached only from the
+     * app's Debug menu (spec/08). It runs through `command`: the
+     * token counts only until the fill holds the core — the
+     * replacement is one lock hold, so a cancelled fill either
+     * leaves the source untouched or returns the new generation,
+     * never `Cancelled` after replacing (spec/07).
+     */
+open func debugFillSynthetic(token: CancelToken, count: UInt32)async throws  -> UInt64  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_debug_fill_synthetic(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterUInt32.lower(count)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_u64,
+            completeFunc: ffi_sb_ffi_rust_future_complete_u64,
+            freeFunc: ffi_sb_ffi_rust_future_free_u64,
+            liftFunc: FfiConverterUInt64.lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * `open_window` (spec/07): register a window over `spec` and
+     * return its first page at the source's current generation. A
+     * query: the token races the core's lock and the work itself.
+     */
+open func openWindow(token: CancelToken, spec: WindowSpec, anchor: Anchor, limit: UInt32)async throws  -> Window  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_open_window(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterTypeWindowSpec_lower(spec),FfiConverterTypeAnchor_lower(anchor),FfiConverterUInt32.lower(limit)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeWindow_lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * `read_window` (spec/07): the page `anchor` picks out of the
+     * window at the generation the shell holds. A stale generation
+     * or cursor is `ResetRequired`; an unknown or closed window is
+     * `NotFound`.
+     */
+open func readWindow(token: CancelToken, windowId: UInt64, generation: UInt64, anchor: Anchor, limit: UInt32)async throws  -> Window  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_read_window(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterUInt64.lower(windowId),FfiConverterUInt64.lower(generation),FfiConverterTypeAnchor_lower(anchor),FfiConverterUInt32.lower(limit)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeWindow_lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * `window_ids` (spec/07 "The id index"): every row's occurrence
+     * id in window order, with the source's current generation.
+     */
+open func windowIds(token: CancelToken, windowId: UInt64)async throws  -> WindowIds  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_window_ids(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterUInt64.lower(windowId)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeWindowIds_lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
 
     
 }
@@ -1021,6 +1172,104 @@ public func FfiConverterTypeCoreConfig_lift(_ buf: RustBuffer) throws -> CoreCon
 #endif
 public func FfiConverterTypeCoreConfig_lower(_ value: CoreConfig) -> RustBuffer {
     return FfiConverterTypeCoreConfig.lower(value)
+}
+
+
+/**
+ * One list row (spec/07): display fields only — no MIME tree, no
+ * body.
+ */
+public struct ListRow: Equatable, Hashable {
+    public var occurrenceId: Int64
+    public var messageId: Int64
+    public var accountId: String
+    public var mailboxId: Int64
+    public var sortDate: Int64
+    public var sender: String
+    public var subject: String
+    public var snippet: String
+    public var unread: Bool
+    public var flagged: Bool
+    public var hasAttachments: Bool
+    public var tags: [String]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(occurrenceId: Int64, messageId: Int64, accountId: String, mailboxId: Int64, sortDate: Int64, sender: String, subject: String, snippet: String, unread: Bool, flagged: Bool, hasAttachments: Bool, tags: [String]) {
+        self.occurrenceId = occurrenceId
+        self.messageId = messageId
+        self.accountId = accountId
+        self.mailboxId = mailboxId
+        self.sortDate = sortDate
+        self.sender = sender
+        self.subject = subject
+        self.snippet = snippet
+        self.unread = unread
+        self.flagged = flagged
+        self.hasAttachments = hasAttachments
+        self.tags = tags
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension ListRow: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeListRow: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ListRow {
+        return
+            try ListRow(
+                occurrenceId: FfiConverterInt64.read(from: &buf), 
+                messageId: FfiConverterInt64.read(from: &buf), 
+                accountId: FfiConverterString.read(from: &buf), 
+                mailboxId: FfiConverterInt64.read(from: &buf), 
+                sortDate: FfiConverterInt64.read(from: &buf), 
+                sender: FfiConverterString.read(from: &buf), 
+                subject: FfiConverterString.read(from: &buf), 
+                snippet: FfiConverterString.read(from: &buf), 
+                unread: FfiConverterBool.read(from: &buf), 
+                flagged: FfiConverterBool.read(from: &buf), 
+                hasAttachments: FfiConverterBool.read(from: &buf), 
+                tags: FfiConverterSequenceString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ListRow, into buf: inout [UInt8]) {
+        FfiConverterInt64.write(value.occurrenceId, into: &buf)
+        FfiConverterInt64.write(value.messageId, into: &buf)
+        FfiConverterString.write(value.accountId, into: &buf)
+        FfiConverterInt64.write(value.mailboxId, into: &buf)
+        FfiConverterInt64.write(value.sortDate, into: &buf)
+        FfiConverterString.write(value.sender, into: &buf)
+        FfiConverterString.write(value.subject, into: &buf)
+        FfiConverterString.write(value.snippet, into: &buf)
+        FfiConverterBool.write(value.unread, into: &buf)
+        FfiConverterBool.write(value.flagged, into: &buf)
+        FfiConverterBool.write(value.hasAttachments, into: &buf)
+        FfiConverterSequenceString.write(value.tags, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeListRow_lift(_ buf: RustBuffer) throws -> ListRow {
+    return try FfiConverterTypeListRow.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeListRow_lower(_ value: ListRow) -> RustBuffer {
+    return FfiConverterTypeListRow.lower(value)
 }
 
 
@@ -1164,6 +1413,255 @@ public func FfiConverterTypeSetting_lift(_ buf: RustBuffer) throws -> Setting {
 public func FfiConverterTypeSetting_lower(_ value: Setting) -> RustBuffer {
     return FfiConverterTypeSetting.lower(value)
 }
+
+
+/**
+ * One page of a window (spec/07): the rows in window order, the
+ * cursors continuing the page — `None` when it is empty — and
+ * whether rows lie past each end.
+ */
+public struct Window: Equatable, Hashable {
+    public var windowId: UInt64
+    public var generation: UInt64
+    public var rows: [ListRow]
+    public var before: String?
+    public var after: String?
+    public var hasMoreAfter: Bool
+    public var hasMoreBefore: Bool
+    public var total: Count
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(windowId: UInt64, generation: UInt64, rows: [ListRow], before: String?, after: String?, hasMoreAfter: Bool, hasMoreBefore: Bool, total: Count) {
+        self.windowId = windowId
+        self.generation = generation
+        self.rows = rows
+        self.before = before
+        self.after = after
+        self.hasMoreAfter = hasMoreAfter
+        self.hasMoreBefore = hasMoreBefore
+        self.total = total
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension Window: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeWindow: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Window {
+        return
+            try Window(
+                windowId: FfiConverterUInt64.read(from: &buf), 
+                generation: FfiConverterUInt64.read(from: &buf), 
+                rows: FfiConverterSequenceTypeListRow.read(from: &buf), 
+                before: FfiConverterOptionString.read(from: &buf), 
+                after: FfiConverterOptionString.read(from: &buf), 
+                hasMoreAfter: FfiConverterBool.read(from: &buf), 
+                hasMoreBefore: FfiConverterBool.read(from: &buf), 
+                total: FfiConverterTypeCount.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: Window, into buf: inout [UInt8]) {
+        FfiConverterUInt64.write(value.windowId, into: &buf)
+        FfiConverterUInt64.write(value.generation, into: &buf)
+        FfiConverterSequenceTypeListRow.write(value.rows, into: &buf)
+        FfiConverterOptionString.write(value.before, into: &buf)
+        FfiConverterOptionString.write(value.after, into: &buf)
+        FfiConverterBool.write(value.hasMoreAfter, into: &buf)
+        FfiConverterBool.write(value.hasMoreBefore, into: &buf)
+        FfiConverterTypeCount.write(value.total, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeWindow_lift(_ buf: RustBuffer) throws -> Window {
+    return try FfiConverterTypeWindow.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeWindow_lower(_ value: Window) -> RustBuffer {
+    return FfiConverterTypeWindow.lower(value)
+}
+
+
+/**
+ * A window's id index (spec/07 "The id index"): every row's
+ * `occurrence_id` in window order at the reported generation. The
+ * list maps a position to an id and reads `Around(id)`, so a
+ * scrollbar jump never pages through the rows between.
+ */
+public struct WindowIds: Equatable, Hashable {
+    public var generation: UInt64
+    public var ids: [Int64]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(generation: UInt64, ids: [Int64]) {
+        self.generation = generation
+        self.ids = ids
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension WindowIds: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeWindowIds: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> WindowIds {
+        return
+            try WindowIds(
+                generation: FfiConverterUInt64.read(from: &buf), 
+                ids: FfiConverterSequenceInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: WindowIds, into buf: inout [UInt8]) {
+        FfiConverterUInt64.write(value.generation, into: &buf)
+        FfiConverterSequenceInt64.write(value.ids, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeWindowIds_lift(_ buf: RustBuffer) throws -> WindowIds {
+    return try FfiConverterTypeWindowIds.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeWindowIds_lower(_ value: WindowIds) -> RustBuffer {
+    return FfiConverterTypeWindowIds.lower(value)
+}
+
+
+/**
+ * Where a window page read starts (spec/07 "Queries"). Cursors are
+ * opaque strings minted by the core; the shell carries them
+ * unchanged.
+ */
+
+public enum Anchor: Equatable, Hashable {
+    
+    /**
+     * The newest rows: the first page.
+     */
+    case top
+    /**
+     * At most `limit` rows strictly after the cursor's row.
+     */
+    case after(cursor: String
+    )
+    /**
+     * At most `limit` rows strictly before the cursor's row.
+     */
+    case before(cursor: String
+    )
+    /**
+     * The page centred on this occurrence id.
+     */
+    case around(occurrenceId: Int64
+    )
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension Anchor: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeAnchor: FfiConverterRustBuffer {
+    typealias SwiftType = Anchor
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Anchor {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .top
+        
+        case 2: return .after(cursor: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 3: return .before(cursor: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 4: return .around(occurrenceId: try FfiConverterInt64.read(from: &buf)
+        )
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: Anchor, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .top:
+            writeInt(&buf, Int32(1))
+        
+        
+        case let .after(cursor):
+            writeInt(&buf, Int32(2))
+            FfiConverterString.write(cursor, into: &buf)
+            
+        
+        case let .before(cursor):
+            writeInt(&buf, Int32(3))
+            FfiConverterString.write(cursor, into: &buf)
+            
+        
+        case let .around(occurrenceId):
+            writeInt(&buf, Int32(4))
+            FfiConverterInt64.write(occurrenceId, into: &buf)
+            
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAnchor_lift(_ buf: RustBuffer) throws -> Anchor {
+    return try FfiConverterTypeAnchor.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAnchor_lower(_ value: Anchor) -> RustBuffer {
+    return FfiConverterTypeAnchor.lower(value)
+}
+
 
 
 /**
@@ -1340,6 +1838,262 @@ public func FfiConverterTypeCoreError_lower(_ value: CoreError) -> RustBuffer {
     return FfiConverterTypeCoreError.lower(value)
 }
 
+
+/**
+ * A window's row count as the shell should treat it (spec/07).
+ */
+
+public enum Count: Equatable, Hashable {
+    
+    /**
+     * The exact number of rows.
+     */
+    case exact(n: UInt64
+    )
+    /**
+     * A lower bound on the number of rows.
+     */
+    case atLeast(n: UInt64
+    )
+    /**
+     * Not known.
+     */
+    case unknown
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension Count: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeCount: FfiConverterRustBuffer {
+    typealias SwiftType = Count
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Count {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .exact(n: try FfiConverterUInt64.read(from: &buf)
+        )
+        
+        case 2: return .atLeast(n: try FfiConverterUInt64.read(from: &buf)
+        )
+        
+        case 3: return .unknown
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: Count, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case let .exact(n):
+            writeInt(&buf, Int32(1))
+            FfiConverterUInt64.write(n, into: &buf)
+            
+        
+        case let .atLeast(n):
+            writeInt(&buf, Int32(2))
+            FfiConverterUInt64.write(n, into: &buf)
+            
+        
+        case .unknown:
+            writeInt(&buf, Int32(3))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeCount_lift(_ buf: RustBuffer) throws -> Count {
+    return try FfiConverterTypeCount.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeCount_lower(_ value: Count) -> RustBuffer {
+    return FfiConverterTypeCount.lower(value)
+}
+
+
+
+/**
+ * Which window the shell is listing (spec/07). For the pilot only
+ * `DebugSynthetic` — the in-memory debug source — exists.
+ */
+
+public enum WindowSpec: Equatable, Hashable {
+    
+    /**
+     * The synthetic source filled by `debug_fill_synthetic`.
+     */
+    case debugSynthetic
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension WindowSpec: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeWindowSpec: FfiConverterRustBuffer {
+    typealias SwiftType = WindowSpec
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> WindowSpec {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .debugSynthetic
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: WindowSpec, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .debugSynthetic:
+            writeInt(&buf, Int32(1))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeWindowSpec_lift(_ buf: RustBuffer) throws -> WindowSpec {
+    return try FfiConverterTypeWindowSpec.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeWindowSpec_lower(_ value: WindowSpec) -> RustBuffer {
+    return FfiConverterTypeWindowSpec.lower(value)
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionString: FfiConverterRustBuffer {
+    typealias SwiftType = String?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterString.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterString.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceInt64: FfiConverterRustBuffer {
+    typealias SwiftType = [Int64]
+
+    public static func write(_ value: [Int64], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterInt64.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [Int64] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [Int64]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterInt64.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceString: FfiConverterRustBuffer {
+    typealias SwiftType = [String]
+
+    public static func write(_ value: [String], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterString.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [String] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [String]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterString.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeListRow: FfiConverterRustBuffer {
+    typealias SwiftType = [ListRow]
+
+    public static func write(_ value: [ListRow], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeListRow.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [ListRow] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [ListRow]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeListRow.read(from: &buf))
+        }
+        return seq
+    }
+}
+
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
@@ -1475,6 +2229,21 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_core_shutdown() != 9052) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_close_window() != 3551) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_debug_fill_synthetic() != 21599) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_open_window() != 29298) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_read_window() != 9726) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_window_ids() != 27649) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_canceltoken_cancel() != 7688) {

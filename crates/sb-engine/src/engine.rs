@@ -13,6 +13,7 @@ use tokio::runtime::{Handle, Runtime};
 use tokio::task::{JoinError, JoinHandle};
 
 use crate::EngineError;
+use crate::windows::Windows;
 use sb_resources::Resources;
 
 /// The name of the worker a dropped engine closes its store on.
@@ -51,6 +52,9 @@ pub struct Engine {
     resources: Option<Arc<Resources>>,
     blocking: Arc<BlockingWork>,
     runtime: OwnedRuntime,
+    /// The open windows and the debug source behind them (spec/07
+    /// "Queries"): in memory only — no store reads, no blocking pool.
+    windows: Windows,
     /// The worker reserved at open that closes the store if the engine
     /// is dropped without `shutdown`; it ends when this sender drops.
     cleanup: std::sync::mpsc::Sender<Cleanup>,
@@ -190,6 +194,7 @@ impl Engine {
                         resources: Some(Arc::new(resources)),
                         blocking: Arc::default(),
                         runtime,
+                        windows: Windows::new(),
                         cleanup: start_cleanup_worker()?,
                     })
                 });
@@ -207,6 +212,12 @@ impl Engine {
         self.resources
             .as_ref()
             .expect("the store handle lives until shutdown")
+    }
+
+    /// The window table; crate-visible so the `windows` module can
+    /// implement its share of `Engine`.
+    pub(crate) fn windows(&self) -> &Windows {
+        &self.windows
     }
 
     /// A fresh UUID string for a command's idempotency key (spec/07

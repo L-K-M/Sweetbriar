@@ -1,8 +1,9 @@
 //! `CoreError`: the core's whole error surface (spec/07 "Errors"),
 //! exactly as the spec lists it. The variants no engine failure
-//! reaches (`NeedsMigration`, `ResetRequired`, `Cancelled`) exist for
-//! the later steps that raise them; the mapping from the engine below
-//! keeps every variant the store already names.
+//! reaches (`NeedsMigration`, `Cancelled`) exist for the layers that
+//! raise them — `ResetRequired` is reached by the window queries; the
+//! mapping from the engine below keeps every variant the engine
+//! names.
 
 use std::fmt;
 
@@ -34,6 +35,7 @@ impl From<EngineError> for CoreError {
             EngineError::NewerStore { app_version } => Self::NewerStore { app_version },
             EngineError::InvalidInput { field, message } => Self::InvalidInput { field, message },
             EngineError::Conflict { detail } => Self::Conflict { detail },
+            EngineError::ResetRequired { generation } => Self::ResetRequired { generation },
             EngineError::Internal { detail } => Self::Internal { detail },
         }
     }

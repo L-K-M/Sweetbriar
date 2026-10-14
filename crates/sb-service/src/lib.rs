@@ -6,6 +6,8 @@
 
 mod api;
 mod error;
+mod windows;
 
 pub use api::{Core, CoreConfig, Receipt, Setting, open_core};
 pub use error::CoreError;
+pub use windows::{Anchor, Count, ListRow, Window, WindowIds, WindowSpec};

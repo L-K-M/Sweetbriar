@@ -74,6 +74,12 @@ pub struct Core {
 }
 
 impl Core {
+    /// The engine the calls run on; crate-visible so each domain
+    /// module (`windows`, …) can implement its share of `Core`.
+    pub(crate) fn engine(&self) -> &Engine {
+        &self.engine
+    }
+
     /// `set_setting` (spec/07 "Commands"): one command under an
     /// idempotency key, returning its receipt. A repeated key returns
     /// the stored receipt; an unknown key or value is `InvalidInput`.
@@ -185,7 +191,7 @@ mod tests {
         /// One engine failure and the check that its mapped value is
         /// the matching `CoreError` variant.
         type Case = (EngineError, fn(&CoreError));
-        let cases: [Case; 8] = [
+        let cases: [Case; 9] = [
             (
                 EngineError::NotFound {
                     what: "w".to_owned(),
@@ -226,6 +232,9 @@ mod tests {
                 },
                 |e| assert!(matches!(e, CoreError::Conflict { .. })),
             ),
+            (EngineError::ResetRequired { generation: 7 }, |e| {
+                assert!(matches!(e, CoreError::ResetRequired { generation: 7 }))
+            }),
             (
                 EngineError::Internal {
                     detail: "i".to_owned(),
