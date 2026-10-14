@@ -34,7 +34,7 @@ func settingRoundTripThenShutdownAnswersUnavailable() async throws {
     }
 }
 
-@Test
+@Test(.timeLimit(.minutes(1)))
 func aCallOnACancelledTaskThrowsAndWritesNothing() async throws {
     let (dir, config) = tempConfig()
     defer { try? FileManager.default.removeItem(at: dir) }
@@ -70,4 +70,64 @@ func aCallOnACancelledTaskThrowsAndWritesNothing() async throws {
     #expect(cue.isDefault)
 
     await bridge.shutdown()
+}
+
+/// Cancelling a task whose call is already in flight cancels the
+/// call's token (spec/07): the work waits for the token the way a
+/// query waits in the core, so only `onCancel` can release it.
+@Test(.timeLimit(.minutes(1)))
+func cancellingACallInFlightCancelsItsToken() async throws {
+    let token = RecordingToken()
+    let entered = Gate()
+    let task = Task {
+        try await CoreBridge.withCancellation(token: token) { () async throws -> Bool in
+            await entered.open()
+            guard await eventually({ token.isCancelled }) else {
+                return false
+            }
+            throw CancellationError()
+        }
+    }
+
+    await entered.wait()
+    #expect(!token.isCancelled, "the token was cancelled before the task was")
+    task.cancel()
+
+    let result = await task.result
+    #expect(token.isCancelled, "cancelling the task didn't cancel the call's token")
+    guard case .failure(let error) = result else {
+        Issue.record("the call ran on without its token being cancelled")
+        return
+    }
+    #expect(error is CancellationError, "expected CancellationError, got \(error)")
+}
+
+/// A shutdown that arrives while the open is still running waits for
+/// it and closes the core it produced (spec/07 "Lifecycle"): the
+/// session's core then answers `unavailable`, and its lease is gone —
+/// the store opens again.
+@Test(.timeLimit(.minutes(1)))
+func aShutdownDuringTheOpenClosesWhatTheOpenProduced() async throws {
+    let (dir, config) = tempConfig()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let sink = await sinkBatcher(clock: ManualFrameClock())
+
+    let session = CoreSession {
+        try await CoreBridge.open(config: config, snapshots: sink)
+    }
+    await session.shutdown()
+
+    let opened = try await session.bridge()
+    do {
+        _ = try await opened.settings()
+        Issue.record("the session's core still answered after shutdown")
+    } catch let failure as CoreFailure {
+        guard case .unavailable = failure else {
+            Issue.record("expected .unavailable, got \(failure)")
+            return
+        }
+    }
+
+    let reopened = try await CoreBridge.open(config: config, snapshots: sink)
+    await reopened.shutdown()
 }

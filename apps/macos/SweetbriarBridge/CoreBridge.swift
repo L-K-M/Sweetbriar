@@ -109,9 +109,10 @@ public final class CoreBridge: Sendable {
     /// Run `work` with `token` bound to the surrounding task's
     /// cancellation, and translate core errors into the bridge's
     /// public surface: `Cancelled` becomes `CancellationError`, the
-    /// rest `CoreFailure`.
-    private static func withCancellation<T>(
-        token: SweetbriarCore.CancelToken,
+    /// rest `CoreFailure`. Internal, not private: tests drive it with
+    /// their own `CallToken` to hold a call in flight.
+    static func withCancellation<T>(
+        token: some CallToken,
         _ work: () async throws -> T
     ) async throws -> T {
         try await withTaskCancellationHandler {
@@ -128,6 +129,14 @@ public final class CoreBridge: Sendable {
         }
     }
 }
+
+/// What `withCancellation` cancels when the calling task is
+/// cancelled: the core's `CancelToken`, or a test's stand-in.
+protocol CallToken: Sendable {
+    func cancel()
+}
+
+extension SweetbriarCore.CancelToken: CallToken {}
 
 extension Setting {
     /// Map the generated record field by field.

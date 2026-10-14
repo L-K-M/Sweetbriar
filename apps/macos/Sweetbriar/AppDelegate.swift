@@ -1,7 +1,7 @@
 // The M0.9 shell (spec/08 "Windows"): one main window showing the
 // core's `appearance.compose_cue` setting, refreshed at most once per
 // display frame through `FrameBatcher`. The core opens off the main
-// thread; an open failure lands in the label instead.
+// thread in a `CoreSession`; a failure lands in the label instead.
 
 import AppKit
 import SweetbriarBridge
@@ -11,7 +11,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private static let composeCueKey = "appearance.compose_cue"
 
     private var window: NSWindow?
-    private var bridge: CoreBridge?
+    private var session: CoreSession?
     private let cueLabel = NSTextField(labelWithString: "Opening the core…")
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -47,18 +47,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.cueLabel.stringValue = "Compose cue: \(cue.value)"
         }
 
-        Task.detached { [weak self] in
+        // The session opens off the main thread at once; quitting at
+        // any point later — mid-open included — shuts down what it
+        // opened.
+        let session = CoreSession {
+            try await CoreBridge.open(snapshots: batcher)
+        }
+        self.session = session
+        Task { [weak self] in
             do {
-                let bridge = try await CoreBridge.open(snapshots: batcher)
-                _ = try await bridge.settings()
-                await MainActor.run {
-                    self?.bridge = bridge
-                }
+                _ = try await session.bridge().settings()
             } catch {
-                await MainActor.run {
-                    self?.cueLabel.stringValue =
-                        "Open failed: \(error.localizedDescription)"
-                }
+                self?.cueLabel.stringValue =
+                    "Couldn't load the setting: \(error.localizedDescription)"
             }
         }
     }
@@ -69,11 +70,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminate(_ sender: NSApplication)
         -> NSApplication.TerminateReply
     {
-        guard let bridge else {
+        guard let session else {
             return .terminateNow
         }
         Task { @MainActor in
-            await bridge.shutdown()
+            await session.shutdown()
             NSApplication.shared.reply(toApplicationShouldTerminate: true)
         }
         return .terminateLater

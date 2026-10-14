@@ -74,3 +74,35 @@ func tempConfig() -> (URL, CoreConfig) {
 func sinkBatcher(clock: ManualFrameClock) -> FrameBatcher<[Setting]> {
     FrameBatcher(clock: clock) { _ in }
 }
+
+/// The longest a test waits for an asynchronous event: a regression
+/// fails within it instead of hanging the suite (a test's time limit
+/// cancels it, but cancellation can't end a wait that ignores it).
+let eventTimeout: Duration = .seconds(10)
+
+/// Poll `probe` until it holds; `false` once `eventTimeout` passes.
+func eventually(_ probe: () async -> Bool) async -> Bool {
+    let deadline = ContinuousClock.now + eventTimeout
+    while await !probe() {
+        if ContinuousClock.now >= deadline {
+            return false
+        }
+        try? await Task.sleep(for: .milliseconds(1))
+    }
+    return true
+}
+
+/// A stand-in for the core's token: records `cancel()`, so a test's
+/// work can wait for it the way a query waits in the core.
+final class RecordingToken: CallToken, @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancelled = false
+
+    var isCancelled: Bool {
+        lock.withLock { cancelled }
+    }
+
+    func cancel() {
+        lock.withLock { cancelled = true }
+    }
+}

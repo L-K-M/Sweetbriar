@@ -6,14 +6,7 @@ import Foundation
 import Testing
 @testable import SweetbriarBridge
 
-/// Yield until `probe` holds, so `post`'s main-actor hops have landed.
-private func until(_ probe: () async -> Bool) async {
-    while await !probe() {
-        await Task.yield()
-    }
-}
-
-@Test
+@Test(.timeLimit(.minutes(1)))
 func postsBetweenFramesArriveAsOneBatch() async throws {
     let clock = ManualFrameClock()
     let recorder = BatchRecorder()
@@ -29,11 +22,11 @@ func postsBetweenFramesArriveAsOneBatch() async throws {
 
     // Posts hop to the main actor; wait until the batcher is parked on
     // a frame before checking nothing arrived early.
-    await until { await clock.waiterCount == 1 }
+    try #require(await eventually { await clock.waiterCount == 1 })
     #expect(await recorder.batches.isEmpty)
 
     await clock.tick()
-    await until { await recorder.batches.count == 1 }
+    try #require(await eventually { await recorder.batches.count == 1 })
     let batch = try #require(await recorder.batches.first)
     #expect(batch.sorted() == [1, 2, 3])
 
@@ -44,4 +37,35 @@ func postsBetweenFramesArriveAsOneBatch() async throws {
         await Task.yield()
     }
     #expect(await recorder.batches.count == 1)
+}
+
+/// Each frame delivers exactly what was posted since the previous
+/// one: a second burst after a delivery waits for its own frame and
+/// arrives whole, and nothing is stranded after the first delivery.
+@Test(.timeLimit(.minutes(1)))
+func eachFrameDeliversWhatWasPostedSinceThePrevious() async throws {
+    let clock = ManualFrameClock()
+    let recorder = BatchRecorder()
+    let batcher = await FrameBatcher<Int>(clock: clock) { batch in
+        Task {
+            await recorder.record(batch)
+        }
+    }
+
+    batcher.post(1)
+    batcher.post(2)
+    try #require(await eventually { await clock.waiterCount == 1 })
+    await clock.tick()
+    try #require(await eventually { await recorder.batches.count == 1 })
+
+    batcher.post(3)
+    batcher.post(4)
+    try #require(await eventually { await clock.waiterCount == 1 })
+    #expect(await recorder.batches.count == 1, "the second burst arrived before its frame")
+
+    await clock.tick()
+    try #require(await eventually { await recorder.batches.count == 2 })
+    let batches = await recorder.batches
+    #expect(batches[0].sorted() == [1, 2])
+    #expect(batches[1].sorted() == [3, 4])
 }
