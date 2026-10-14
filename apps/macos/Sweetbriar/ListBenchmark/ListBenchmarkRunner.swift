@@ -748,7 +748,7 @@ final class ListBenchmarkRunner {
     /// rank 0's rect top in window coordinates moves point for point
     /// with the scroll offset — upward scrolls decrease it.
     static func scrollPosition(of list: any PrototypeList) -> Double? {
-        list.rowRect(forRank: 0)?.minY
+        list.rowRect(forRank: 0).map { Double($0.minY) }
     }
 
     /// The selection's expected ids straight from the id index — the

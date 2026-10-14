@@ -27,19 +27,17 @@ final class BenchmarkReportWindowController: NSWindowController {
         )
         window.contentView = content
 
-        let scrollView = NSScrollView()
-        scrollView.hasVerticalScroller = true
+        // AppKit's preconfigured pair: the text view tracks the
+        // scroll view's width and grows with its text.
+        let scrollView = NSTextView.scrollableTextView()
         scrollView.translatesAutoresizingMaskIntoConstraints = false
-        let textView = NSTextView()
-        textView.isEditable = false
-        textView.isSelectable = true
-        textView.isRichText = false
-        textView.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
-        textView.string = reportText
-        textView.isVerticallyResizable = true
-        textView.isHorizontallyResizable = false
-        textView.textContainer?.widthTracksTextView = true
-        scrollView.documentView = textView
+        if let textView = scrollView.documentView as? NSTextView {
+            textView.isEditable = false
+            textView.isSelectable = true
+            textView.isRichText = false
+            textView.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+            textView.string = reportText
+        }
         content.addSubview(scrollView)
 
         let copy = NSButton(
@@ -47,7 +45,6 @@ final class BenchmarkReportWindowController: NSWindowController {
             target: nil,
             action: #selector(copyReport(_:))
         )
-        copy.target = self
         copy.bezelStyle = .rounded
         copy.translatesAutoresizingMaskIntoConstraints = false
         copy.keyEquivalent = "\r"
@@ -72,6 +69,7 @@ final class BenchmarkReportWindowController: NSWindowController {
             ),
         ])
         super.init(window: window)
+        copy.target = self
         window.center()
     }
 

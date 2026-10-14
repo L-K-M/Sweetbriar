@@ -25,7 +25,7 @@ enum SystemProbes {
                 to: integer_t.self,
                 capacity: Int(count)
             ) { rebound in
-                task_info(mach_task_self_, TASK_VM_INFO, rebound, &count)
+                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), rebound, &count)
             }
         }
         return result == KERN_SUCCESS ? info.phys_footprint : 0
@@ -38,7 +38,8 @@ enum SystemProbes {
         guard size > 0 else { return "" }
         var buffer = [CChar](repeating: 0, count: size)
         sysctlbyname(name, &buffer, &size, nil, 0)
-        return String(cString: buffer)
+        let bytes = buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
+        return String(decoding: bytes, as: UTF8.self)
     }
 
     /// A sysctl `int` — `kern.hv_vmm_present` (nonzero: the runner is
