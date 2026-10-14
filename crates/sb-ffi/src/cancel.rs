@@ -69,9 +69,10 @@ impl CancelToken {
 /// `work` or `Cancelled`, whichever resolves first — a hand-written
 /// select over two pinned futures, on `std` alone: UniFFI drives these
 /// futures by polling them from Swift's tasks, so nothing
-/// runtime-bound may sit underneath. The token polls first each time,
-/// so a token cancelled before the call — or landing between the two
-/// halves of a poll — wins over work that completed at the same time.
+/// runtime-bound may sit underneath. Each poll checks the token
+/// first: a cancel that check sees wins, even over work that would
+/// finish in the same poll. A cancel arriving after the check, while
+/// the work finishes in that poll, loses — the work was done.
 pub(crate) async fn until_cancelled<F, T>(token: &CancelToken, work: F) -> Result<T, CoreError>
 where
     F: Future<Output = T>,

@@ -122,14 +122,11 @@ impl Core {
         key: String,
         value: String,
     ) -> Result<Receipt, CoreError> {
-        let guard = until_cancelled(&token, self.service.read()).await?;
-        let Some(core) = guard.as_ref() else {
-            return Err(CoreError::unavailable_shut_down());
-        };
-        let receipt = core
-            .set_setting(&idempotency_key, &key, &value)
-            .await
-            .map_err(CoreError::from)?;
+        let receipt = self
+            .command(&token, async |core| {
+                core.set_setting(&idempotency_key, &key, &value).await
+            })
+            .await?;
         Ok(Receipt::from_service(&receipt))
     }
 
@@ -138,13 +135,9 @@ impl Core {
     /// wherever it waits — the core's read lock and the read itself
     /// both race the token (spec/07).
     pub async fn settings(&self, token: Arc<CancelToken>) -> Result<Vec<Setting>, CoreError> {
-        let guard = until_cancelled(&token, self.service.read()).await?;
-        let Some(core) = guard.as_ref() else {
-            return Err(CoreError::unavailable_shut_down());
-        };
-        let settings = until_cancelled(&token, core.settings())
-            .await?
-            .map_err(CoreError::from)?;
+        let settings = self
+            .query(&token, async |core| core.settings().await)
+            .await?;
         Ok(settings.iter().map(Setting::from_service).collect())
     }
 
@@ -159,6 +152,42 @@ impl Core {
         if let Some(core) = guard.take() {
             core.shutdown().await;
         }
+    }
+}
+
+impl Core {
+    /// Run a query (spec/07): the token races every wait — the core's
+    /// read lock and the work itself — so a cancel stops it wherever
+    /// it waits. The read side is held throughout, so `shutdown`
+    /// waits for the query.
+    async fn query<T>(
+        &self,
+        token: &CancelToken,
+        work: impl AsyncFnOnce(&sb_service::Core) -> Result<T, sb_service::CoreError>,
+    ) -> Result<T, CoreError> {
+        let guard = until_cancelled(token, self.service.read()).await?;
+        let Some(core) = guard.as_ref() else {
+            return Err(CoreError::unavailable_shut_down());
+        };
+        until_cancelled(token, work(core))
+            .await?
+            .map_err(CoreError::from)
+    }
+
+    /// Run a command (spec/07): the token counts only until the
+    /// command holds the core's read side. From then on the command
+    /// runs to completion, so one that committed always returns its
+    /// receipt.
+    async fn command<T>(
+        &self,
+        token: &CancelToken,
+        work: impl AsyncFnOnce(&sb_service::Core) -> Result<T, sb_service::CoreError>,
+    ) -> Result<T, CoreError> {
+        let guard = until_cancelled(token, self.service.read()).await?;
+        let Some(core) = guard.as_ref() else {
+            return Err(CoreError::unavailable_shut_down());
+        };
+        work(core).await.map_err(CoreError::from)
     }
 }
 
@@ -446,5 +475,80 @@ mod tests {
         let config = platform_default_config().expect("a home directory exists in tests");
         assert!(PathBuf::from(&config.data_root).is_absolute());
         assert!(PathBuf::from(&config.cache_root).is_absolute());
+    }
+
+    /// A gate for the helper tests: work parked on it stays pending
+    /// until `open`, whatever polls it.
+    fn gate() -> Arc<tokio::sync::Notify> {
+        Arc::new(tokio::sync::Notify::new())
+    }
+
+    /// A query stops while its work waits, not only at the lock
+    /// (spec/07): with the work parked on a gate, cancelling the token
+    /// resolves the query `Cancelled` before the gate opens.
+    #[test]
+    fn a_query_whose_work_is_waiting_answers_cancelled() {
+        let scratch = ScratchDir::new("ffi-query-work-cancelled");
+        let core = sb_test_support::block_on(open_core(fresh_token(), scratch_config(&scratch)))
+            .expect("opens");
+
+        let token = fresh_token();
+        let parked = gate();
+        let mut query = pin!(core.query(&token, async |_core| {
+            parked.notified().await;
+            Ok(())
+        }));
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(
+            query.as_mut().poll(&mut cx).is_pending(),
+            "the query's work didn't wait on the gate"
+        );
+
+        token.cancel();
+        assert!(
+            matches!(
+                query.as_mut().poll(&mut cx),
+                Poll::Ready(Err(CoreError::Cancelled))
+            ),
+            "a query whose work was waiting ignored the cancel"
+        );
+
+        sb_test_support::block_on(core.shutdown());
+    }
+
+    /// A begun command ignores a cancel while its work waits (spec/07):
+    /// with the work parked on a gate, a cancel leaves it pending, and
+    /// opening the gate completes it with its result.
+    #[test]
+    fn a_command_whose_work_is_waiting_ignores_the_cancel() {
+        let scratch = ScratchDir::new("ffi-command-work-cancelled");
+        let core = sb_test_support::block_on(open_core(fresh_token(), scratch_config(&scratch)))
+            .expect("opens");
+
+        let token = fresh_token();
+        let parked = gate();
+        let mut command = pin!(core.command(&token, async |_core| {
+            parked.notified().await;
+            Ok(42)
+        }));
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(
+            command.as_mut().poll(&mut cx).is_pending(),
+            "the command's work didn't wait on the gate"
+        );
+
+        token.cancel();
+        assert!(
+            command.as_mut().poll(&mut cx).is_pending(),
+            "a begun command answered the cancel"
+        );
+
+        parked.notify_one();
+        assert!(
+            matches!(command.as_mut().poll(&mut cx), Poll::Ready(Ok(42))),
+            "the begun command didn't complete after its work did"
+        );
+
+        sb_test_support::block_on(core.shutdown());
     }
 }
