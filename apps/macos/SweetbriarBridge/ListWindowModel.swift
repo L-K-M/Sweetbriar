@@ -85,6 +85,13 @@ public final class ListWindowModel {
     @ObservationIgnored
     public var onPagesDelivered: @MainActor ([Int]) -> Void = { _ in }
 
+    /// Called on the main actor when the id index is replaced —
+    /// `open`, `rebuild` and a `resetRequired` rebuild each swap every
+    /// row at once, so a list reloads fully rather than patching
+    /// pages. Fires before the wanted pages re-request.
+    @ObservationIgnored
+    public var onIndexChanged: @MainActor () -> Void = {}
+
     private let source: any ListWindowSource
     private let spec: WindowSpec
     private let clock: any FrameClock
@@ -255,6 +262,7 @@ public final class ListWindowModel {
             windowId = nil
             throw error
         }
+        onIndexChanged()
         applyVisibility()
     }
 
@@ -364,6 +372,7 @@ public final class ListWindowModel {
         for page in pages.values where page.rows != nil {
             page.rows = nil
         }
+        onIndexChanged()
         applyVisibility()
     }
 

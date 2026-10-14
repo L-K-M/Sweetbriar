@@ -48,6 +48,15 @@ final class DisplayLinkClock: NSObject, FrameClock, @unchecked Sendable {
         }
     }
 
+    /// Stop the link and drop it, breaking its target cycle — a
+    /// `CADisplayLink` retains its target, so without this a clock
+    /// owned by a closing window would leak the pair. Idempotent.
+    @MainActor
+    func invalidate() {
+        link?.invalidate()
+        link = nil
+    }
+
     deinit {
         link?.invalidate()
     }

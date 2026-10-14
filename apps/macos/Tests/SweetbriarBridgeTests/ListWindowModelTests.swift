@@ -574,6 +574,29 @@ func aRebuildAfterAFillReadsTheRangeTheListLastShowed() async throws {
     await model.close()
 }
 
+/// `onIndexChanged` fires each time the id index is replaced — on
+/// `open` and on every rebuild — after `ids` holds the new index, so
+/// a list reloads wholesale with the right row count.
+@MainActor
+@Test(.timeLimit(.minutes(1)))
+func theIndexHookFiresOnOpenAndEveryRebuild() async throws {
+    let fake = FakeListWindowSource()
+    _ = await fake.fill(300)
+    let clock = ManualFrameClock()
+    let model = ListWindowModel(source: fake, spec: .debugSynthetic, clock: clock)
+    var counts: [Int] = []
+    model.onIndexChanged = { counts.append(model.count) }
+
+    try await model.open()
+    #expect(counts == [300])
+
+    _ = await fake.fill(500)
+    try await model.rebuild()
+    #expect(counts == [300, 500])
+
+    await model.close()
+}
+
 // MARK: - The real core
 
 /// End to end through `CoreBridge` (spec/07 "Debug source"): fill the
