@@ -11,7 +11,7 @@ cargo xtask ci        # the full local gate; must be green before a PR
 cargo xtask notices   # regenerate THIRD_PARTY_NOTICES.md
 cargo xtask check-layers  # the spec/01 layer-boundary checker
 cargo xtask ffi --bindings-only  # regenerate the committed Swift bindings
-cargo xtask check-ffi     # bindings drift + the async-callback lint
+cargo xtask check-ffi     # bindings drift and import check + the async-callback lint
 ```
 
 After changing `sb-ffi`'s exports, run `cargo xtask ffi --bindings-only`
@@ -57,9 +57,9 @@ compiler must be on `PATH`. Its compile options come from
 - `cargo test --workspace --target aarch64-apple-darwin` (M0.1 shape);
 - `cargo xtask check-layers` on the macOS toolchain — it sees the
   macOS-cfg re-export surface (spec/01);
-- `xtask ffi` (the XCFramework) and `check-ffi` — both also run on
-  Linux, the XCFramework excepted; `xcodebuild` and Swift tests
-  (M0.9);
+- `check-ffi` and `xtask ffi` — both also run on Linux, except
+  `check-ffi`'s Swift type-check and the XCFramework; `xcodebuild`
+  and Swift tests (M0.9);
 - anything touching `apps/` or generated bindings.
 
 Agents can't run these locally — make the YAML correct by inspection.

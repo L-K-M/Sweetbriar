@@ -10,28 +10,42 @@
 //! command generates the bindings and stops, saying the XCFramework
 //! needs macOS.
 //!
-//! `check-ffi` regenerates into a temp dir, diffs the committed
-//! files byte for byte, and lints the exported surface: no callback
-//! interface or foreign trait may have an async method, because
-//! UniFFI 0.32.2's Swift 6 async-callback fix is unreleased
+//! `check-ffi` regenerates into a temp dir and diffs the committed
+//! files byte for byte; checks the Swift imports the FFI module the
+//! modulemap declares; on macOS type-checks the committed Swift
+//! against the committed headers; and lints the exported surface: no
+//! callback interface or foreign trait may have an async method,
+//! because UniFFI 0.32.2's Swift 6 async-callback fix is unreleased
 //! (spec/07 "Threading, cancellation and FFI rules"). The lint reads
 //! UniFFI's own metadata from the cdylib — the same bytes the
 //! bindgen reads — so it can't drift from what the bindings contain.
 
 use std::collections::HashSet;
+use std::env::consts::{DLL_PREFIX, DLL_SUFFIX};
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use uniffi_bindgen::macro_metadata;
 use uniffi_meta::{Metadata, ObjectImpl, TraitKind};
 
-use crate::{ToolError, run};
+use crate::{ToolError, cargo, run};
 
 /// The module name the generated modulemap declares (`--module-name`).
 const BINDINGS_MODULE_NAME: &str = "SweetbriarCoreFFI";
 
+/// UniFFI's config for the Swift bindings (`--config`): it names
+/// the Swift module and the FFI module the Swift imports.
+const BINDINGS_CONFIG: &str = "crates/sb-bindgen/swift-bindings.toml";
+
+/// The target the app builds for (spec/08: arm64, macOS 26), which
+/// the Swift type-check matches.
+const SWIFT_TARGET: &str = "arm64-apple-macos26.0";
+
 /// The modulemap's filename (`--modulemap-filename`).
 const MODULEMAP_FILENAME: &str = "module.modulemap";
+
+/// The condition UniFFI's Swift wraps its FFI module import in.
+const CAN_IMPORT: &str = "canImport(";
 
 /// The Swift package that carries the generated bindings (spec/01).
 fn core_package(root: &Path) -> PathBuf {
@@ -53,75 +67,142 @@ fn xcframework_path(root: &Path) -> PathBuf {
     core_package(root).join("SweetbriarCoreFFI.xcframework")
 }
 
+/// What `cargo xtask ffi` produces.
+pub enum FfiOutput {
+    /// The committed bindings only (`--bindings-only`).
+    Bindings,
+    /// The bindings, then the XCFramework (macOS only).
+    BindingsAndXcframework,
+}
+
 /// `cargo xtask ffi [--bindings-only]`.
-pub fn ffi(bindings_only: bool) -> bool {
+pub fn ffi(output: FfiOutput) -> bool {
     let root = workspace_root();
     let out = temp_dir("sb-ffi-generate");
     let outcome = generate_bindings(&root, &out)
-        .map(|_| ())
-        .and_then(|()| install_bindings(&root, &out))
-        .and_then(|()| finish(&root, bindings_only));
-    let _ = fs::remove_dir_all(&out);
-    match outcome {
-        Ok(()) => {
+        .and_then(|_| install_bindings(&out, &swift_sources_dir(&root), &headers_dir(&root)))
+        .and_then(|()| {
             eprintln!(
                 "ffi: bindings installed under {}",
                 core_package(&root).display()
             );
+            finish(&root, output)
+        });
+    let _ = fs::remove_dir_all(&out);
+    let Err(err) = outcome else {
+        return true;
+    };
+    eprintln!("ffi: {err}");
+    false
+}
+
+/// `cargo xtask check-ffi`: a fresh generation matches the committed
+/// bindings, its Swift resolves its FFI import, the committed Swift
+/// type-checks (macOS), and the exported surface has no async
+/// foreign callback.
+pub fn check_ffi() -> bool {
+    let root = workspace_root();
+    let out = temp_dir("sb-ffi-check");
+    let checked = generate_bindings(&root, &out).map(|library| run_checks(&root, &out, &library));
+    let _ = fs::remove_dir_all(&out);
+    match checked {
+        Ok(true) => {
+            eprintln!("check-ffi: bindings match and resolve; no async foreign callbacks");
             true
         }
+        Ok(false) => false,
         Err(err) => {
-            eprintln!("ffi: {err}");
+            eprintln!("check-ffi: {err}");
             false
         }
     }
 }
 
-/// `cargo xtask check-ffi`: no drift between the committed bindings
-/// and a fresh generation, and no async foreign callbacks in the
-/// exported surface.
-pub fn check_ffi() -> bool {
-    let root = workspace_root();
-    let out = temp_dir("sb-ffi-check");
-    let checked = generate_bindings(&root, &out).map(|library| {
-        let drift = binding_drift(&out, &swift_sources_dir(&root), &headers_dir(&root));
-        for line in &drift {
+/// Every check over a fresh generation in `out`; each failing check
+/// prints its findings and then its own summary. True when all pass.
+fn run_checks(root: &Path, out: &Path, library: &Path) -> bool {
+    let (violations, lint_failure) = match lint_async_foreign_callbacks(library) {
+        Ok(violations) => (violations, Vec::new()),
+        Err(err) => (Vec::new(), vec![err.to_string()]),
+    };
+    let checks = [
+        (
+            binding_drift(out, &swift_sources_dir(root), &headers_dir(root)),
+            "file(s) drifted; run `cargo xtask ffi --bindings-only` and commit",
+        ),
+        (
+            unresolved_ffi_imports(out, out),
+            "unresolved FFI import(s): the Swift can't see its C declarations",
+        ),
+        (
+            typecheck_swift(root),
+            "Swift type-check failure(s) in the committed bindings",
+        ),
+        (
+            violations,
+            "async foreign callback(s); spec/07 forbids them in the pilot",
+        ),
+        (
+            lint_failure,
+            "lint failure(s): the metadata couldn't be read",
+        ),
+    ];
+
+    let mut passed = true;
+    for (findings, summary) in checks {
+        if findings.is_empty() {
+            continue;
+        }
+        passed = false;
+        for line in &findings {
             eprintln!("check-ffi: {line}");
         }
-        match lint_async_foreign_callbacks(&library) {
-            Ok(violations) => {
-                for line in &violations {
-                    eprintln!("check-ffi: {line}");
-                }
-                (drift, violations)
-            }
-            Err(err) => (vec![err.to_string()], Vec::new()),
+        eprintln!("check-ffi: {} {summary}", findings.len());
+    }
+    passed
+}
+
+/// Type-check the committed Swift against the committed headers the
+/// way the app compiles it (spec/08): Swift 6, complete strict
+/// concurrency, warnings as errors, the app's target. macOS only:
+/// the Swift toolchain and SDK the app builds with exist nowhere
+/// else; elsewhere it says it skipped.
+fn typecheck_swift(root: &Path) -> Vec<String> {
+    if !cfg!(target_os = "macos") {
+        eprintln!("check-ffi: the Swift type-check needs macOS (macOS CI runs it)");
+        return Vec::new();
+    }
+    let sources = match read_by_extension(&swift_sources_dir(root), "swift") {
+        Ok(sources) => sources,
+        Err(err) => return vec![err.to_string()],
+    };
+    let mut paths = Vec::new();
+    for (path, _) in &sources {
+        match path_string(path) {
+            Ok(path) => paths.push(path),
+            Err(err) => return vec![err.to_string()],
         }
-    });
-    let _ = fs::remove_dir_all(&out);
-    match checked {
-        Ok((drift, violations)) if drift.is_empty() && violations.is_empty() => {
-            eprintln!("check-ffi: bindings match; no async foreign callbacks");
-            true
-        }
-        Ok((drift, violations)) => {
-            if drift.is_empty() {
-                eprintln!(
-                    "check-ffi: {} async foreign callback(s); spec/07 forbids them in the pilot",
-                    violations.len()
-                );
-            } else {
-                eprintln!(
-                    "check-ffi: {} file(s) drifted; run `cargo xtask ffi --bindings-only` and commit",
-                    drift.len()
-                );
-            }
-            false
-        }
-        Err(err) => {
-            eprintln!("check-ffi: {err}");
-            false
-        }
+    }
+    let headers = match path_string(&headers_dir(root)) {
+        Ok(headers) => headers,
+        Err(err) => return vec![err.to_string()],
+    };
+
+    let mut args = vec![
+        "-typecheck",
+        "-swift-version",
+        "6",
+        "-strict-concurrency=complete",
+        "-warnings-as-errors",
+        "-target",
+        SWIFT_TARGET,
+        "-I",
+        &headers,
+    ];
+    args.extend(paths.iter().map(String::as_str));
+    match run("swiftc", &args, root, None) {
+        Ok(_) => Vec::new(),
+        Err(err) => vec![err.to_string()],
     }
 }
 
@@ -133,6 +214,7 @@ pub fn generate_bindings(root: &Path, out: &Path) -> Result<PathBuf, ToolError> 
     let library = host_cdylib(root)?;
     let out_dir = path_string(out)?;
     let lib = path_string(&library)?;
+    let config = path_string(&root.join(BINDINGS_CONFIG))?;
     run(
         &cargo(),
         &[
@@ -150,6 +232,8 @@ pub fn generate_bindings(root: &Path, out: &Path) -> Result<PathBuf, ToolError> 
             BINDINGS_MODULE_NAME,
             "--modulemap-filename",
             MODULEMAP_FILENAME,
+            "--config",
+            &config,
             &lib,
             &out_dir,
         ],
@@ -161,12 +245,9 @@ pub fn generate_bindings(root: &Path, out: &Path) -> Result<PathBuf, ToolError> 
 
 /// The host cdylib `cargo build -p sb-ffi` leaves in `target/debug`.
 fn host_cdylib(root: &Path) -> Result<PathBuf, ToolError> {
-    let ext = match std::env::consts::OS {
-        "macos" => "dylib",
-        "windows" => "dll",
-        _ => "so",
-    };
-    let library = root.join("target/debug").join(format!("libsb_ffi.{ext}"));
+    let library = root
+        .join("target/debug")
+        .join(format!("{DLL_PREFIX}sb_ffi{DLL_SUFFIX}"));
     if library.is_file() {
         Ok(library)
     } else {
@@ -177,40 +258,58 @@ fn host_cdylib(root: &Path) -> Result<PathBuf, ToolError> {
     }
 }
 
-/// Copy the generated files into their committed homes: `.swift`
-/// under `Sources/SweetbriarCore`, the header and modulemap under
-/// `Headers`. Copy-and-remove rather than rename: the generation
-/// dir may be on another filesystem.
-fn install_bindings(root: &Path, generated: &Path) -> Result<(), ToolError> {
-    let swift_dir = swift_sources_dir(root);
-    let headers = headers_dir(root);
-    fs::create_dir_all(&swift_dir).map_err(io("create", &swift_dir))?;
-    fs::create_dir_all(&headers).map_err(io("create", &headers))?;
-    for file in generated_files(generated)? {
+/// Copy the generated files into their committed homes — `.swift`
+/// into `swift_dir`, the header and modulemap into `headers_dir` —
+/// and remove committed files no longer generated, so a renamed
+/// output leaves no stale copy behind (both dirs hold generated
+/// files only; `binding_drift` enforces it). Copy rather than
+/// rename: the generation dir may be on another filesystem.
+fn install_bindings(
+    generated: &Path,
+    swift_dir: &Path,
+    headers_dir: &Path,
+) -> Result<(), ToolError> {
+    fs::create_dir_all(swift_dir).map_err(io("create", swift_dir))?;
+    fs::create_dir_all(headers_dir).map_err(io("create", headers_dir))?;
+    let files = generated_files(generated)?;
+    for file in &files {
         let to = if file.ends_with(".swift") {
-            swift_dir.join(&file)
+            swift_dir.join(file)
         } else {
-            headers.join(&file)
+            headers_dir.join(file)
         };
-        fs::copy(generated.join(&file), &to).map_err(io("copy", &to))?;
+        fs::copy(generated.join(file), &to).map_err(io("copy", &to))?;
+    }
+
+    for dir in [swift_dir, headers_dir] {
+        for entry in fs::read_dir(dir).map_err(io("read", dir))? {
+            let path = entry.map_err(io("read", dir))?.path();
+            let generated_now = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| files.iter().any(|file| file == name));
+            if generated_now {
+                continue;
+            }
+            fs::remove_file(&path).map_err(io("remove", &path))?;
+        }
     }
     Ok(())
 }
 
 /// After the bindings: the XCFramework on macOS, a note elsewhere.
-fn finish(root: &Path, bindings_only: bool) -> Result<(), ToolError> {
-    if bindings_only {
+fn finish(root: &Path, output: FfiOutput) -> Result<(), ToolError> {
+    if let FfiOutput::Bindings = output {
         return Ok(());
     }
-    if cfg!(target_os = "macos") {
-        build_xcframework(root)
-    } else {
+    if !cfg!(target_os = "macos") {
         eprintln!(
-            "ffi: bindings generated; the XCFramework needs macOS \
+            "ffi: the XCFramework needs macOS \
              (run `cargo xtask ffi` there or in macOS CI)"
         );
-        Ok(())
+        return Ok(());
     }
+    build_xcframework(root)
 }
 
 /// Build the release staticlib for the app's architecture and wrap
@@ -252,6 +351,7 @@ fn build_xcframework(root: &Path) -> Result<(), ToolError> {
         root,
         None,
     )?;
+    eprintln!("ffi: XCFramework built at {output}");
     Ok(())
 }
 
@@ -340,6 +440,106 @@ pub fn binding_drift(
     drift
 }
 
+/// Whether the Swift can see its C declarations: every module the
+/// Swift sources import behind `canImport(…)` — how UniFFI's Swift
+/// imports its FFI module — must be declared by a modulemap in
+/// `headers`, and every header a modulemap names must sit beside it.
+/// Swift built against a mismatch finds no `RustBuffer` and no FFI
+/// symbol, yet the XCFramework still builds; this catches it on any
+/// host. Swift with no FFI import at all is reported too, so the
+/// check never passes for want of anything to check. Each entry
+/// names the file at fault.
+pub fn unresolved_ffi_imports(swift: &Path, headers: &Path) -> Vec<String> {
+    let (sources, modulemaps) = match (
+        read_by_extension(swift, "swift"),
+        read_by_extension(headers, "modulemap"),
+    ) {
+        (Ok(sources), Ok(modulemaps)) => (sources, modulemaps),
+        (Err(err), _) | (_, Err(err)) => return vec![err.to_string()],
+    };
+
+    let mut problems = Vec::new();
+    let mut declared = HashSet::new();
+    for (path, text) in &modulemaps {
+        let (modules, named_headers) = modulemap_entries(text);
+        declared.extend(modules);
+        for header in named_headers {
+            if !headers.join(header).is_file() {
+                problems.push(format!(
+                    "{} names the header {header}, which isn't beside it",
+                    path.display()
+                ));
+            }
+        }
+    }
+
+    let mut imports = 0;
+    for (path, text) in &sources {
+        for module in conditional_imports(text) {
+            imports += 1;
+            if !declared.contains(module) {
+                problems.push(format!(
+                    "{} imports {module}, which no modulemap in {} declares",
+                    path.display(),
+                    headers.display()
+                ));
+            }
+        }
+    }
+    if imports == 0 {
+        problems.push(format!(
+            "no Swift source in {} imports an FFI module",
+            swift.display()
+        ));
+    }
+    problems
+}
+
+/// The modules named by `canImport(Name)` in Swift source: UniFFI's
+/// generated Swift wraps its FFI import in it
+/// (`#if canImport(XFFI) import XFFI #endif`).
+fn conditional_imports(swift: &str) -> Vec<&str> {
+    swift
+        .split(CAN_IMPORT)
+        .skip(1)
+        .filter_map(|rest| rest.split_once(')').map(|(module, _)| module.trim()))
+        .collect()
+}
+
+/// A modulemap's declared modules (`module Name {`, also after
+/// `framework`) and the headers it names (`header "x.h"`).
+fn modulemap_entries(modulemap: &str) -> (Vec<&str>, Vec<&str>) {
+    let mut modules = Vec::new();
+    let mut headers = Vec::new();
+    let mut tokens = modulemap.split_whitespace();
+    while let Some(token) = tokens.next() {
+        match token {
+            "module" => modules.extend(tokens.next().map(|name| name.trim_end_matches('{'))),
+            "header" => headers.extend(tokens.next().map(|name| name.trim_matches('"'))),
+            _ => {}
+        }
+    }
+    (modules, headers)
+}
+
+/// Every file in `dir` with extension `ext`, with its contents,
+/// sorted by path.
+fn read_by_extension(dir: &Path, ext: &str) -> Result<Vec<(PathBuf, String)>, ToolError> {
+    let mut paths: Vec<PathBuf> = fs::read_dir(dir)
+        .map_err(io("read", dir))?
+        .filter_map(|entry| Some(entry.ok()?.path()))
+        .filter(|path| path.extension().is_some_and(|found| found == ext))
+        .collect();
+    paths.sort();
+    paths
+        .into_iter()
+        .map(|path| {
+            let text = fs::read_to_string(&path).map_err(io("read", &path))?;
+            Ok((path, text))
+        })
+        .collect()
+}
+
 /// The async-foreign-callback lint (spec/07): every callback
 /// interface, and every trait a foreign side may implement, must
 /// carry only synchronous methods. Returns one line per violating
@@ -410,11 +610,6 @@ fn workspace_root() -> PathBuf {
         .to_path_buf()
 }
 
-/// The cargo binary to run (`$CARGO` under other cargo tooling).
-fn cargo() -> String {
-    std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string())
-}
-
 /// A path as a String for `run`, which takes `&[&str]`.
 fn path_string(path: &Path) -> Result<String, ToolError> {
     path.to_str()
@@ -425,4 +620,38 @@ fn path_string(path: &Path) -> Result<String, ToolError> {
 /// An I/O failure message naming the operation and the path.
 fn io<'a, 'b>(what: &'a str, path: &'b Path) -> impl Fn(std::io::Error) -> ToolError + use<'a, 'b> {
     move |err| ToolError(format!("cannot {what} {}: {err}", path.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Installing over outdated bindings leaves exactly the fresh
+    /// generation behind: changed files replaced, files no longer
+    /// generated (a renamed output) removed.
+    #[test]
+    fn install_replaces_outdated_and_removes_stale_bindings() {
+        let root = temp_dir("xtask-ffi-install");
+        let _ = fs::remove_dir_all(&root);
+        let generated = root.join("generated");
+        let swift = root.join("Sources");
+        let headers = root.join("Headers");
+        for dir in [&generated, &swift, &headers] {
+            fs::create_dir_all(dir).unwrap();
+        }
+        fs::write(generated.join("Core.swift"), "let a = 2\n").unwrap();
+        fs::write(generated.join("CoreFFI.h"), "// new\n").unwrap();
+        fs::write(generated.join(MODULEMAP_FILENAME), "module CoreFFI {}\n").unwrap();
+        fs::write(swift.join("Core.swift"), "let a = 1\n").unwrap();
+        fs::write(swift.join("old.swift"), "let old = 0\n").unwrap();
+        fs::write(headers.join("oldFFI.h"), "// old\n").unwrap();
+
+        install_bindings(&generated, &swift, &headers).expect("installs");
+
+        assert_eq!(
+            binding_drift(&generated, &swift, &headers),
+            Vec::<String>::new()
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
 }

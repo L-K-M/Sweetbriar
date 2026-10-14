@@ -1,13 +1,18 @@
 //! Integration tests for `cargo xtask check-ffi` (plan M0.8): the
-//! bindings drift comparison, and the async-foreign-callback lint run
-//! on a fixture that breaks spec/07. The real bindings pass both in
-//! `cargo xtask check-ffi` itself (locally and in macOS CI).
+//! bindings drift comparison, the FFI import check (on fixtures and
+//! on the committed bindings), and the async-foreign-callback lint
+//! run on a fixture that breaks spec/07. The real bindings pass all
+//! of them in `cargo xtask check-ffi` itself (locally and in macOS
+//! CI).
 
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use xtask::ffi::{binding_drift, lint_async_foreign_callbacks};
+use xtask::ffi::{
+    binding_drift, headers_dir, lint_async_foreign_callbacks, swift_sources_dir,
+    unresolved_ffi_imports,
+};
 
 /// A fresh scratch dir under the system temp dir, unique per test.
 fn scratch(label: &str) -> PathBuf {
@@ -76,6 +81,89 @@ fn drift_names_each_changed_missing_or_stale_file() {
         "{drift:?}"
     );
     let _ = fs::remove_dir_all(&root);
+}
+
+/// Swift that imports the module its modulemap declares, whose
+/// header sits beside it, resolves; an import no modulemap declares
+/// and a header nobody committed are each reported, naming the file.
+#[test]
+fn an_undeclared_import_or_a_missing_header_is_reported() {
+    let root = scratch("imports");
+    let swift = root.join("Sources");
+    let headers = root.join("Headers");
+    write_all(
+        &swift,
+        &[(
+            "Core.swift",
+            "#if canImport(CoreFFI)\nimport CoreFFI\n#endif\n",
+        )],
+    );
+    write_all(
+        &headers,
+        &[
+            (
+                "module.modulemap",
+                "module CoreFFI {\n    header \"CoreFFI.h\"\n    export *\n}",
+            ),
+            ("CoreFFI.h", "// h\n"),
+        ],
+    );
+    assert_eq!(
+        unresolved_ffi_imports(&swift, &headers),
+        Vec::<String>::new()
+    );
+
+    write_all(
+        &headers,
+        &[(
+            "module.modulemap",
+            "module OtherFFI {\n    header \"Other.h\"\n}",
+        )],
+    );
+    let problems = unresolved_ffi_imports(&swift, &headers);
+    assert_eq!(problems.len(), 2, "{problems:?}");
+    assert!(
+        problems
+            .iter()
+            .any(|p| p.contains("Core.swift") && p.contains("CoreFFI")),
+        "{problems:?}"
+    );
+    assert!(
+        problems
+            .iter()
+            .any(|p| p.contains("module.modulemap") && p.contains("Other.h")),
+        "{problems:?}"
+    );
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// Swift with no FFI import at all is reported too: the check must
+/// never pass because it found nothing to check.
+#[test]
+fn swift_without_an_ffi_import_is_reported() {
+    let root = scratch("no-import");
+    let swift = root.join("Sources");
+    let headers = root.join("Headers");
+    write_all(&swift, &[("Core.swift", "import Foundation\n")]);
+    write_all(&headers, &[("module.modulemap", "module CoreFFI {\n}")]);
+    let problems = unresolved_ffi_imports(&swift, &headers);
+    assert_eq!(problems.len(), 1, "{problems:?}");
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// The committed bindings resolve: the Swift imports the module the
+/// committed modulemap declares. A mismatch still builds an
+/// XCFramework, but Swift then can't see `RustBuffer` or any FFI
+/// symbol (M0.8 review).
+#[test]
+fn the_committed_swift_imports_the_committed_module() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("xtask lives at <workspace>/xtask");
+    assert_eq!(
+        unresolved_ffi_imports(&swift_sources_dir(root), &headers_dir(root)),
+        Vec::<String>::new()
+    );
 }
 
 /// The fixture, a surface with a foreign-implemented trait whose method

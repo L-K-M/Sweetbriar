@@ -1,5 +1,5 @@
 module SweetbriarCoreFFI {
-    header "sb_ffiFFI.h"
+    header "SweetbriarCoreFFI.h"
     export *
     use "Darwin"
     use "_Builtin_stdbool"
