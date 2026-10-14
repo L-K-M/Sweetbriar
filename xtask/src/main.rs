@@ -25,10 +25,32 @@ fn main() -> ExitCode {
         "ci" => ci(),
         "notices" => notices(),
         "check-layers" => check_layers(),
+        "ffi" => ffi(),
+        "check-ffi" => check_ffi(),
         _ => {
             usage();
             ExitCode::FAILURE
         }
+    }
+}
+
+/// `cargo xtask ffi [--bindings-only]`: generate the Swift bindings
+/// (and, on macOS, build the XCFramework).
+fn ffi() -> ExitCode {
+    let bindings_only = std::env::args().nth(2).as_deref() == Some("--bindings-only");
+    if xtask::ffi::ffi(bindings_only) {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    }
+}
+
+/// `cargo xtask check-ffi`: bindings drift + async-callback lint.
+fn check_ffi() -> ExitCode {
+    if xtask::ffi::check_ffi() {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
     }
 }
 
@@ -208,5 +230,5 @@ fn workspace_root() -> PathBuf {
 }
 
 fn usage() {
-    eprintln!("usage: cargo xtask <ci|notices|check-layers>");
+    eprintln!("usage: cargo xtask <ci|notices|check-layers|ffi [--bindings-only]|check-ffi>");
 }

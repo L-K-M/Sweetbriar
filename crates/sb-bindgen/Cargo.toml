@@ -7,3 +7,7 @@ publish.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+# The `cli` feature is the whole point of this crate: it provides the
+# Swift bindings generator entry point, pinned to the workspace's
+# `uniffi` version (spec/01) so bindings and runtime can't drift.
+uniffi = { version = "=0.32.2", default-features = false, features = ["cli"] }

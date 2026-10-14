@@ -45,8 +45,9 @@ jobs:
               - 'layers.toml'
               - '.github/workflows/macos.yml'
 
-  # Rust-only first shape (M0.1). M0.8 adds `xtask ffi` + `check-ffi`,
-  # M0.9 adds xcodegen/xcodebuild and the .app artifact (spec/11).
+  # Rust tests and check-layers (M0.1), the UniFFI bindings and the
+  # XCFramework (M0.8); M0.9 adds xcodegen/xcodebuild and the .app
+  # artifact (spec/11).
   build:
     needs: changes
     if: needs.changes.outputs.rust == 'true'
@@ -75,6 +76,14 @@ jobs:
         run: cargo test --workspace --target aarch64-apple-darwin
       - name: check-layers
         run: cargo xtask check-layers
+      # Generates the Swift bindings and builds the XCFramework for
+      # aarch64-apple-darwin (plan M0.8).
+      - name: xtask ffi
+        run: cargo xtask ffi
+      # The committed bindings match the exports, and no async foreign
+      # callback is exported (spec/07).
+      - name: check-ffi
+        run: cargo xtask check-ffi
 
   # Aggregate merge gate: always runs so the check exists on every PR;
   # succeeds when the build job succeeded or was skipped by the filter.

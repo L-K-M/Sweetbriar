@@ -1,0 +1,22 @@
+# A fixture for `cargo xtask check-ffi`'s async-callback lint
+# (plan M0.8, spec/07): a deliberate violation — a foreign callback
+# trait with an async method, which the pilot's exported surface
+# must not contain. Its own workspace, outside the layer graph; only
+# `xtask`'s integration tests build it.
+[package]
+name = "async-callback-fixture"
+version = "0.0.0"
+edition = "2021"
+license = "Unlicense OR 0BSD"
+publish = false
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# `async_trait` desugars the trait's async method into the
+# dyn-compatible form UniFFI's generated callback handler implements.
+async-trait = "=0.1.92"
+uniffi = { version = "=0.32.2", default-features = false }
