@@ -32,7 +32,7 @@ use serde::Deserialize;
 use uniffi_bindgen::macro_metadata;
 use uniffi_meta::{Metadata, ObjectImpl, TraitKind};
 
-use crate::{ToolError, cargo, run};
+use crate::{ToolError, cargo, run, run_env};
 
 /// The crate the bindings export (Cargo's target name for `sb-ffi`).
 const FFI_CRATE: &str = "sb_ffi";
@@ -44,9 +44,11 @@ const BINDINGS_MODULE_NAME: &str = "SweetbriarCoreFFI";
 /// the Swift module and the FFI module the Swift imports.
 const BINDINGS_CONFIG: &str = "crates/sb-bindgen/swift-bindings.toml";
 
-/// The target the app builds for (spec/08: arm64, macOS 26), which
-/// the Swift type-check matches.
-const SWIFT_TARGET: &str = "arm64-apple-macos26.0";
+/// The app's minimum macOS (spec/08). The Swift type-check targets
+/// it, and the staticlib is built for it: cc-rs otherwise compiles
+/// the bundled SQLite for the SDK's newest macOS, newer than the app
+/// it's linked into.
+const MACOS_DEPLOYMENT_TARGET: &str = "26.0";
 
 /// The modulemap's filename (`--modulemap-filename`).
 const MODULEMAP_FILENAME: &str = "module.modulemap";
@@ -207,6 +209,7 @@ fn typecheck_swift(root: &Path) -> Vec<String> {
         Err(err) => return vec![err.to_string()],
     };
 
+    let swift_target = format!("arm64-apple-macos{MACOS_DEPLOYMENT_TARGET}");
     let mut args = vec![
         "-typecheck",
         "-swift-version",
@@ -214,7 +217,7 @@ fn typecheck_swift(root: &Path) -> Vec<String> {
         "-strict-concurrency=complete",
         "-warnings-as-errors",
         "-target",
-        SWIFT_TARGET,
+        &swift_target,
         "-I",
         &headers,
     ];
@@ -329,9 +332,21 @@ pub fn build_library(
     crate_name: &str,
     kind: LibraryKind,
 ) -> Result<PathBuf, ToolError> {
+    build_library_with_env(dir, args, target, &[], crate_name, kind)
+}
+
+/// `build_library` with environment overrides for the build (`run_env`).
+fn build_library_with_env(
+    dir: &Path,
+    args: &[&str],
+    target: Option<&Path>,
+    env: &[(&str, Option<&str>)],
+    crate_name: &str,
+    kind: LibraryKind,
+) -> Result<PathBuf, ToolError> {
     let mut args = args.to_vec();
     args.push("--message-format=json");
-    let stdout = run(&cargo(), &args, dir, target)?;
+    let stdout = run_env(&cargo(), &args, dir, target, env)?;
     stdout
         .lines()
         .filter_map(|line| serde_json::from_str::<Artifact>(line).ok())
@@ -433,7 +448,7 @@ fn finish(root: &Path, output: FfiOutput) -> Result<(), ToolError> {
 /// it, with the committed headers, in the XCFramework (plan M0.8;
 /// macOS only — `xcodebuild` exists nowhere else).
 fn build_xcframework(root: &Path) -> Result<(), ToolError> {
-    let library = build_library(
+    let library = build_library_with_env(
         root,
         &[
             "build",
@@ -444,6 +459,7 @@ fn build_xcframework(root: &Path) -> Result<(), ToolError> {
             "aarch64-apple-darwin",
         ],
         None,
+        &[("MACOSX_DEPLOYMENT_TARGET", Some(MACOS_DEPLOYMENT_TARGET))],
         FFI_CRATE,
         LibraryKind::Staticlib,
     )?;
