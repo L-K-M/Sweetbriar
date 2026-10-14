@@ -841,6 +841,8 @@ fn imported_module(statement: &str) -> Option<&str> {
     }
     path.split('.')
         .next()
+        // A backticked name (``import `X` ``) is the same module.
+        .map(|name| name.trim_start_matches('`'))
         .map(|name| name.trim_end_matches(|c: char| !(c.is_alphanumeric() || c == '_')))
         .filter(|name| !name.is_empty())
 }
