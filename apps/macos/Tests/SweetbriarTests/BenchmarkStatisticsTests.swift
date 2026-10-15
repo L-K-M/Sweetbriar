@@ -144,11 +144,13 @@ struct TimelineTests {
 struct ReducerTests {
     /// A sample `cpu` ms of main-thread time into the run; frame times
     /// equal sample times.
-    private func sample(_ at: Double, cpu: Double, frame: Bool = true) -> TimelineSample {
+    private func sample(
+        _ at: Double, cpu: Double, frame: Bool = true, otherGeneration: Bool = false
+    ) -> TimelineSample {
         TimelineSample(
             firedAt: at, frameTime: at,
             cpuNanoseconds: UInt64(cpu * 1e6), footprintBytes: UInt64(at * 10),
-            isFrame: frame
+            isFrame: frame, generationChanged: otherGeneration
         )
     }
 
@@ -164,7 +166,7 @@ struct ReducerTests {
             TimelineEvent(phase: "firstRows", detail: "opened", postedAt: 0.001, readySample: nil),
         ]
         let reduction = BenchmarkTimeline.reduce(
-            samples: samples, events: events, nominalMilliseconds: 16.7
+            samples: samples, events: events, sealedAt: .infinity, nominalMilliseconds: 16.7
         )
         #expect(reduction.firstRowsMilliseconds == nil)
         #expect(reduction.unresolved == ["firstRows": 1])
@@ -189,7 +191,7 @@ struct ReducerTests {
             TimelineEvent(phase: "jumps", detail: "jump", postedAt: 0.02, readySample: 3),
         ]
         let reduction = BenchmarkTimeline.reduce(
-            samples: samples, events: events, nominalMilliseconds: 16.7
+            samples: samples, events: events, sealedAt: .infinity, nominalMilliseconds: 16.7
         )
         #expect(abs((reduction.firstRowsMilliseconds ?? 0) - 16.6) < 1e-6)
         let jumps = reduction.phases.jumps
@@ -214,12 +216,65 @@ struct ReducerTests {
             TimelineEvent(phase: "selection", detail: "click", postedAt: 1, readySample: nil),
         ]
         let reduction = BenchmarkTimeline.reduce(
-            samples: samples, events: events, nominalMilliseconds: 16.7
+            samples: samples, events: events, sealedAt: .infinity, nominalMilliseconds: 16.7
         )
         #expect(reduction.events.first?.latencyMilliseconds == 4_000)
         #expect(reduction.unresolved == ["selection": 1])
         #expect(reduction.phases.selection.latencyMilliseconds.count == 0)
         #expect(reduction.phases.selection.cpuMilliseconds.samples == [3_999])
+    }
+
+    @Test("another generation seen only at the stop still counts")
+    func generationAtTheStop() {
+        let samples = [
+            sample(0, cpu: 0, frame: false),
+            sample(0.0167, cpu: 1),
+            sample(0.5, cpu: 2, frame: false, otherGeneration: true),
+        ]
+        let reduction = BenchmarkTimeline.reduce(
+            samples: samples, events: [], sealedAt: .infinity, nominalMilliseconds: 16.7
+        )
+        #expect(reduction.generationChanged)
+    }
+
+    @Test("events recorded after the seal aren't the run's")
+    func sealed() {
+        let samples = [
+            sample(0, cpu: 0, frame: false),
+            sample(0.0167, cpu: 1),
+            sample(0.5, cpu: 2, frame: false),
+        ]
+        let events = [
+            TimelineEvent(phase: "jumps", detail: "jump", postedAt: 0.01, readySample: 1),
+            TimelineEvent(phase: "pageDeliveries", detail: "late", postedAt: 0.45, readySample: nil),
+        ]
+        let reduction = BenchmarkTimeline.reduce(
+            samples: samples, events: events, sealedAt: 0.4, nominalMilliseconds: 16.7
+        )
+        #expect(reduction.events.map(\.detail) == ["jump"])
+        #expect(reduction.unresolved.isEmpty)
+    }
+
+    @Test("out-of-range inputs clamp instead of inventing numbers")
+    func clamps() {
+        let samples = [
+            sample(0, cpu: 0, frame: false),
+            sample(0.0167, cpu: 1, frame: false),
+        ]
+        let events = [
+            TimelineEvent(phase: "jumps", detail: "jump", postedAt: 0.01, readySample: 99),
+        ]
+        let reduction = BenchmarkTimeline.reduce(
+            samples: samples, events: events, sealedAt: .infinity, nominalMilliseconds: 16.7
+        )
+        #expect(reduction.events.first?.renderReadyIntervalIndex == nil)
+        #expect(reduction.unresolved == ["jumps": 1])
+        #expect(reduction.intervals.activeCount <= reduction.intervals.count)
+
+        let empty = BenchmarkTimeline.reduce(
+            samples: [], events: events, sealedAt: .infinity, nominalMilliseconds: 16.7
+        )
+        #expect((empty.events.first?.latencyMilliseconds ?? -1) >= 0)
     }
 }
 

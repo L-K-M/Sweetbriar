@@ -382,12 +382,6 @@ final class ListBenchmarkRunner {
                 "the run overran its \(Self.runBudget.components.seconds) s budget"
             )
         }
-        if context.generationChanged {
-            generationAbort =
-                "\(implementation.rawValue) \(pass.rawValue): a model "
-                + "saw another generation mid-run"
-        }
-
         context.phase = "draining"
         await drainRenderReady(context: context)
         context.sealedAt = CACurrentMediaTime()
@@ -402,7 +396,7 @@ final class ListBenchmarkRunner {
         }
         // "closes both after" — the window and its model.
         await controller.closeAndAwaitModel()
-        return assembleRun(
+        let run = assembleRun(
             context: context,
             implementation: implementation,
             pass: pass,
@@ -414,6 +408,14 @@ final class ListBenchmarkRunner {
             sampledPeak: peakFootprint,
             screen: screen
         )
+        // Only now is the generation settled: a rebuild can land during
+        // the drain, or be seen by the terminal sample alone.
+        if run.generationChanged {
+            generationAbort =
+                "\(implementation.rawValue) \(pass.rawValue): a model "
+                + "saw another generation mid-run"
+        }
+        return run
     }
 
     /// Wait for the model to open at the fill's generation; nil on
@@ -992,8 +994,7 @@ final class ListBenchmarkRunner {
 
         // An event posted after the drain — a straggling delivery —
         // came after measuring ended: on a stopped timeline it can't
-        // render, so it isn't the run's.
-        let sealedAt = context.sealedAt ?? .infinity
+        // render, so it isn't the run's (`sealedAt`).
         let reduction = BenchmarkTimeline.reduce(
             samples: context.sampler.ticks.map {
                 TimelineSample(
@@ -1001,10 +1002,11 @@ final class ListBenchmarkRunner {
                     frameTime: $0.timestamp,
                     cpuNanoseconds: $0.cpuNanoseconds,
                     footprintBytes: $0.footprintBytes,
-                    isFrame: $0.isFrame
+                    isFrame: $0.isFrame,
+                    generationChanged: $0.generationChanged
                 )
             },
-            events: context.events.filter { $0.postedAt <= sealedAt }.map {
+            events: context.events.map {
                 TimelineEvent(
                     phase: $0.phase,
                     detail: $0.detail,
@@ -1012,6 +1014,7 @@ final class ListBenchmarkRunner {
                     readySample: $0.renderReadyTick
                 )
             },
+            sealedAt: context.sealedAt ?? .infinity,
             nominalMilliseconds: nominalMs
         )
 
@@ -1027,16 +1030,22 @@ final class ListBenchmarkRunner {
             failures.append("\(unresolvedTotal) events never rendered (\(byPhase))")
         }
 
+        // A tick may have seen it, or only the terminal sample.
+        let generationChanged = context.generationChanged || reduction.generationChanged
+        if generationChanged {
+            failures.append("a model saw another generation mid-run")
+        }
+
         let peak = max(reduction.peakFootprintBytes, sampledPeak)
         return BenchmarkRun(
             implementation: implementation.rawValue,
             pass: pass,
-            ok: failures.isEmpty && !context.generationChanged,
+            ok: failures.isEmpty,
             failures: failures,
             windowWasKey: windowWasKey,
             appWasActive: appWasActive,
             generation: generation,
-            generationChanged: context.generationChanged,
+            generationChanged: generationChanged,
             firstRowsMilliseconds: reduction.firstRowsMilliseconds,
             baselineFootprintBytes: baseline,
             peakFootprintBytes: peak,

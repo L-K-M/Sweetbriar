@@ -115,6 +115,8 @@ struct TimelineSample: Equatable {
     var footprintBytes: UInt64
     /// A display tick — only tick-to-tick intervals are frames.
     var isFrame: Bool
+    /// The model showed another generation than the fill's.
+    var generationChanged: Bool
 }
 
 /// One recorded event as the reducer reads it.
@@ -135,6 +137,9 @@ struct TimelineReduction: Equatable {
     /// Never-rendered events by phase, the opening's included.
     var unresolved: [String: Int]
     var peakFootprintBytes: UInt64
+    /// Some sample — the terminal one included — saw another
+    /// generation: the run measured a changed source.
+    var generationChanged: Bool
 }
 
 extension BenchmarkTimeline {
@@ -151,12 +156,16 @@ extension BenchmarkTimeline {
     /// runs from its interval to its render-ready one — or, never
     /// rendered, to where the next event of its phase superseded it or
     /// the run stopped; the opening's always counts, so a stalled
-    /// opening's work stays in the numbers.
+    /// opening's work stays in the numbers. Events posted after
+    /// `sealedAt` — measuring ended — aren't the run's. Out-of-range
+    /// inputs clamp: a ready sample that doesn't exist is no render.
     static func reduce(
         samples: [TimelineSample],
-        events: [TimelineEvent],
+        events allEvents: [TimelineEvent],
+        sealedAt: Double,
         nominalMilliseconds nominalMs: Double
     ) -> TimelineReduction {
+        let events = allEvents.filter { $0.postedAt <= sealedAt }
         var cpuMs: [Double] = []
         if samples.count > 1 {
             for i in 1 ..< samples.count {
@@ -181,7 +190,9 @@ extension BenchmarkTimeline {
             }
             return BenchmarkStatistics.isHitch(duration: duration, nominalInterval: nominalMs)
         }
-        let stoppedAt = firedAt.last ?? 0
+        // The stop follows every post; with no samples at all, the
+        // last post stands in, so no bound goes negative.
+        let stoppedAt = firedAt.last ?? events.map(\.postedAt).max() ?? 0
 
         var reportEvents: [BenchmarkEvent] = []
         var spans: [String: [EventSpan]] = [:]
@@ -190,20 +201,21 @@ extension BenchmarkTimeline {
         var firstRows: Double?
         for (position, event) in events.enumerated() {
             let interval = intervalIndex(of: event.postedAt, in: firedAt)
-            let readyAt = event.readySample.flatMap { $0 < firedAt.count ? firedAt[$0] : nil }
+            let readySample = event.readySample.flatMap { $0 < firedAt.count ? $0 : nil }
+            let readyAt = readySample.map { firedAt[$0] }
             let latency = self.latency(
                 postedAt: event.postedAt, readyAt: readyAt, stoppedAt: stoppedAt
             )
             let supersededAt = events[(position + 1)...]
                 .first { $0.phase == event.phase }?.postedAt ?? stoppedAt
-            let readyInterval = event.readySample
+            let readyInterval = readySample
                 ?? intervalIndex(of: supersededAt, in: firedAt)
             reportEvents.append(BenchmarkEvent(
                 phase: event.phase,
                 detail: event.detail,
                 postedAtSeconds: event.postedAt,
                 intervalIndex: interval,
-                renderReadyIntervalIndex: event.readySample,
+                renderReadyIntervalIndex: readySample,
                 latencyMilliseconds: latency.milliseconds
             ))
             let bucket = event.phase == openingPhase ? "overall" : event.phase
@@ -265,7 +277,8 @@ extension BenchmarkTimeline {
             events: reportEvents,
             firstRowsMilliseconds: firstRows,
             unresolved: unresolved,
-            peakFootprintBytes: samples.map(\.footprintBytes).max() ?? 0
+            peakFootprintBytes: samples.map(\.footprintBytes).max() ?? 0,
+            generationChanged: samples.contains(where: \.generationChanged)
         )
     }
 }
