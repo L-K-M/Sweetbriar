@@ -49,17 +49,19 @@ restores its draft by `draft_id`.
 ## Message list
 
 - **Built with** `NSTableView` (view-based), backed by a `ListWindowModel`
-  over a core window (07). M0.10's prototype kept AppKit. On macOS
-  CI's diagnostic run (virtualized M1, 60 Hz, 500,000 rows), SwiftUI
-  `List` failed every decision bar:
-  - it blocked the main thread for tens of seconds on open, jumps and
-    selection, and grew past 4 GB;
-  - AppKit showed its first rows in about 0.4 s and stayed near
-    40 MB, with 34 ms latency at p95.
+  over a core window (07). M0.10's prototype keeps AppKit, pending
+  the owner's Mac (O4), which decides. macOS CI's diagnostic run
+  (virtualized M1, 60 Hz, 500,000 rows):
+  - cold, SwiftUI `List` failed all 26 decision bars. It blocked the
+    main thread for tens of seconds on open, jumps and selection, and
+    peaked at 3.97 GB. Its warm run overran the benchmark's budget
+    before rendering;
+  - cold, AppKit showed its first rows in about 0.4 s, peaked at
+    41 MB, and rendered every input within 34 ms at p95. Its warm run,
+    after SwiftUI's, passed its checks.
 
-  The owner's Mac (O4) has the final say: the choice reopens only if
-  SwiftUI matches AppKit there on every checklist item and benchmark
-  (plan M0.10).
+  The choice reopens only if SwiftUI matches AppKit on the owner's Mac
+  on every checklist item and benchmark (plan M0.10).
 - **`ListWindowModel`** lives in `SweetbriarBridge`, free of AppKit, so
   both prototype lists and their tests share its paging, data and
   delivery cadence; each list adapts it idiomatically and observes only
