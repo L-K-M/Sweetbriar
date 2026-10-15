@@ -17,8 +17,8 @@ private struct RecordedEvent {
     var detail: String
     /// `CACurrentMediaTime()` at post.
     var postedAt: Double
-    /// The expected-state predicate — nil for wheel events, whose
-    /// targets are only known once the phase's total scroll is.
+    /// The expected-state predicate — the event is render-ready at the
+    /// first tick it holds.
     var expected: (@MainActor () -> Bool)?
     /// The tick the expected state first held at.
     var renderReadyTick: Int?
@@ -75,12 +75,6 @@ private final class RunContext {
             renderReadyTick: nil
         ))
         return events.count - 1
-    }
-
-    /// The wheel phase's deferred resolution: mark the event's
-    /// render-ready tick.
-    func resolve(_ event: Int, tick: Int) {
-        events[event].renderReadyTick = tick
     }
 
     /// A tick landed: flag a generation change, then check every
@@ -153,6 +147,7 @@ final class ListBenchmarkRunner {
             log("filled generation \(generation)")
             for (implementation, pass) in Self.sequence
             where generationAbort == nil {
+                await settle()
                 runs.append(await runOnce(
                     implementation: implementation,
                     pass: pass,
@@ -282,7 +277,9 @@ final class ListBenchmarkRunner {
                 else {
                     return false
                 }
-                return Self.allVisibleRowsPopulated(list: list, model: model)
+                // Its rows: the delivered pages' visible ones, laid out —
+                // not every visible row, which may wait on other pages.
+                return Self.deliveredRowsShown(pages, list: list, model: model)
                     && !list.hasPendingLayout
             }
         }
@@ -369,10 +366,33 @@ final class ListBenchmarkRunner {
                 }
             }
             if clock.now >= deadline {
+                // A completion queued behind a long main-thread block
+                // runs once this task yields: look once more.
+                try? await Task.sleep(for: .milliseconds(500))
+                if controller.listModel?.generation == generation,
+                   controller.prototypeList != nil {
+                    return nil
+                }
                 return "the list never opened at generation \(generation)"
             }
             try? await Task.sleep(for: .milliseconds(10))
         }
+    }
+
+    /// Wait, bounded at three minutes, until the main thread has
+    /// answered promptly for a second: a run starts only once the last
+    /// one's teardown has finished (a SwiftUI list over 500k ids takes
+    /// minutes to let go), so it doesn't pay for it.
+    private func settle() async {
+        let started = clock.now
+        let deadline = started + .seconds(180)
+        var prompt = 0
+        while prompt < 10, clock.now < deadline {
+            let before = clock.now
+            try? await Task.sleep(for: .milliseconds(100))
+            prompt = clock.now - before < .milliseconds(150) ? prompt + 1 : 0
+        }
+        log("settled in \((clock.now - started).components.seconds) s")
     }
 
     /// One progress line on stderr — where a CI run spends its time,
@@ -482,27 +502,37 @@ final class ListBenchmarkRunner {
         // it as NSWindow routes scroll-wheel events: to the view under
         // the pointer, whose responder chain reaches the list's scroll
         // view — the same path for both lists.
-        guard let target = window.contentView?.superview?.hitTest(centreInWindow)
+        guard let wheelTarget = window.contentView?.superview?.hitTest(centreInWindow)
         else {
             return ["the wheel phase found no view under the list's centre"]
         }
-        var wheelEvents: [Int] = []
         let start = clock.now
         for i in 0 ..< 200 where !context.stopped {
             if let event = Self.wheelEvent(
                 at: centre, windowNumber: windowNumber
             ) {
+                // Render-ready: the first settled tick showing the list
+                // moved up from where it stood just before the event —
+                // its first visible response. Line scrolls may animate,
+                // so the event's full travel isn't a fixed target.
+                let before = Self.scrollPosition(of: list)
                 let postedAt = postInput {
-                    target.scrollWheel(with: event)
+                    wheelTarget.scrollWheel(with: event)
                 }
-                wheelEvents.append(context.record(
+                context.record(
                     phase: "wheel",
                     detail: "wheel \(i + 1)",
                     postedAt: postedAt
-                ))
+                ) {
+                    guard let before, let now = Self.scrollPosition(of: list)
+                    else {
+                        return false
+                    }
+                    return now < before && !list.hasPendingLayout
+                }
             }
-            let target = start + .microseconds(16_700 * (i + 1))
-            let gap = target - clock.now
+            let due = start + .microseconds(16_700 * (i + 1))
+            let gap = due - clock.now
             if gap > .zero {
                 try? await Task.sleep(for: gap)
             }
@@ -519,14 +549,7 @@ final class ListBenchmarkRunner {
                 "wheel phase: visible rows not populated within 2 s"
             )
         }
-        if let endPosition, endPosition < baseline {
-            resolveWheelEvents(
-                context: context,
-                events: wheelEvents,
-                baseline: baseline,
-                endPosition: endPosition
-            )
-        } else {
+        if endPosition.map({ $0 >= baseline }) ?? true {
             failures.append("the wheel phase did not move the list up")
         }
         return failures
@@ -667,37 +690,6 @@ final class ListBenchmarkRunner {
         return positioned
     }
 
-    /// Wheel events carry no live expectation — their target is the
-    /// phase's total scroll divided evenly, so render-ready is the
-    /// first tick the list had scrolled the event's share with the
-    /// screen settled (plan M0.10).
-    private func resolveWheelEvents(
-        context: RunContext,
-        events: [Int],
-        baseline: Double,
-        endPosition: Double
-    ) {
-        let ticks = context.sampler.ticks
-        let share = (baseline - endPosition) / Double(events.count)
-        guard share > 0 else { return }
-        for (i, event) in events.enumerated() {
-            let target = baseline - share * Double(i + 1)
-            let postedAt = context.events[event].postedAt
-            for index in ticks.indices
-            where ticks[index].timestamp >= postedAt {
-                guard let position = ticks[index].scrollPosition,
-                      position <= target,
-                      ticks[index].visibleRowsPopulated,
-                      !ticks[index].pendingLayout
-                else {
-                    continue
-                }
-                context.resolve(event, tick: index)
-                break
-            }
-        }
-    }
-
     // MARK: - Posting input
 
     /// Wrap `post` in the "input" signpost interval and return its
@@ -835,6 +827,22 @@ final class ListBenchmarkRunner {
         let ranks = list.visibleRanks
         return !ranks.isEmpty && ranks.allSatisfy {
             model.row(at: $0) != nil
+        }
+    }
+
+    /// Every visible row of `pages` populated (a page scrolled out of
+    /// view has none to show).
+    static func deliveredRowsShown(
+        _ pages: [Int],
+        list: any PrototypeList,
+        model: ListWindowModel
+    ) -> Bool {
+        let visible = list.visibleRanks
+        return pages.allSatisfy { page in
+            let start = page * ListWindowModel.pageSize
+            let lo = max(start, visible.lowerBound)
+            let hi = min(start + ListWindowModel.pageSize, visible.upperBound)
+            return lo >= hi || (lo ..< hi).allSatisfy { model.row(at: $0) != nil }
         }
     }
 

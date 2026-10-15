@@ -71,10 +71,11 @@ compiler must be on `PATH`. Its compile options come from
   statistics, report and comparison bars plus the shared row
   presentation and the context-click rule;
 - the M0.10 list benchmark: the Release app launches with
-  `-runListBenchmark <report.json>` after the Release zip step,
-  `jq -e '.ok == true'` gates on its verdict, and the report uploads
-  as the `list-benchmark` artifact — its numbers are diagnostic (the
-  owner's Mac decides between the two lists);
+  `-runListBenchmark <report.json>` after the Release zip step; the
+  step passes when both AppKit runs pass their checks (SwiftUI's
+  failures are findings, kept in the report's `ok` and failures), and
+  the report uploads as the `list-benchmark` artifact — its numbers
+  are diagnostic (the owner's Mac decides between the two lists);
 - anything touching `apps/` or generated bindings.
 
 Agents can't run these locally — make the YAML correct by inspection.
