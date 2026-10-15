@@ -711,3 +711,63 @@ fn an_open_dropped_after_dispatch_leaves_no_window() {
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
 }
+
+/// Cleaning up a dropped open never runs on the dropping thread —
+/// which may be the foreign caller's (spec/07 "One runtime"): an open
+/// that finished but was never claimed is dropped while the window
+/// table is locked, and the drop still returns at once; the window
+/// closes once the table is free.
+#[test]
+fn a_dropped_finished_open_cleans_up_off_the_dropping_thread() {
+    const PATIENCE: std::time::Duration = std::time::Duration::from_secs(5);
+    const PROMPT: std::time::Duration = std::time::Duration::from_secs(1);
+    let (_scratch, engine) = scratch_engine("windows-open-cleanup");
+    let generation = fill(&engine, 10);
+    let mut cx = Context::from_waker(Waker::noop());
+
+    let mut open = Box::pin(engine.open_window(WindowSpec::DebugSynthetic, Anchor::Top, 5));
+    assert!(open.as_mut().poll(&mut cx).is_pending());
+
+    // The work registers window 1 and finishes; nobody claims it.
+    let deadline = std::time::Instant::now() + PATIENCE;
+    while !engine
+        .windows()
+        .lock()
+        .open
+        .contains_key(&WindowId::from(1))
+    {
+        assert!(std::time::Instant::now() < deadline, "the open never ran");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    std::thread::sleep(std::time::Duration::from_millis(50));
+
+    // Drop it while the table is locked: the drop must not wait.
+    let table = engine.windows().lock();
+    let prompt = std::thread::scope(|scope| {
+        let dropper = scope.spawn(move || drop(open));
+        let deadline = std::time::Instant::now() + PROMPT;
+        while !dropper.is_finished() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let prompt = dropper.is_finished();
+        drop(table);
+        prompt
+    });
+    assert!(prompt, "dropping the open waited on the window table");
+
+    let deadline = std::time::Instant::now() + PATIENCE;
+    while sb_test_support::block_on(engine.read_window(
+        WindowId::from(1),
+        generation,
+        Anchor::Top,
+        5,
+    ))
+    .is_ok()
+    {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the dropped open's window 1 is still registered"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}

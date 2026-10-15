@@ -14,6 +14,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
 
+use crate::engine::Detached;
 use crate::{Engine, EngineError};
 
 /// The largest synthetic fill (spec/07: `count` is 0–1,000,000).
@@ -755,12 +756,14 @@ impl Engine {
         limit: u32,
     ) -> Result<Window, EngineError> {
         let windows = Arc::clone(self.windows());
+        let cleanup = self.detached();
         let opened = self
             .compute(move || {
                 let window = windows.open(spec, &anchor, limit)?;
                 Ok(Opened {
                     window: Some(window),
                     windows,
+                    cleanup,
                 })
             })
             .await?;
@@ -805,11 +808,16 @@ impl Engine {
 
 /// A window `open_window` registered, on its way to the caller. If
 /// the caller stops waiting — its query cancelled after the work was
-/// dispatched — the runtime drops the task's output, and this closes
-/// the window: the shell can't close a handle it never received.
+/// dispatched — the task's output is dropped, and this closes the
+/// window: the shell can't close a handle it never received. The
+/// close runs on the blocking pool, never on the dropping thread: a
+/// finished task's output drops wherever its join handle does, which
+/// can be the foreign caller's thread, and the close takes the table's
+/// lock.
 struct Opened {
     window: Option<Window>,
     windows: Arc<Windows>,
+    cleanup: Detached,
 }
 
 impl Opened {
@@ -823,9 +831,11 @@ impl Opened {
 
 impl Drop for Opened {
     fn drop(&mut self) {
-        if let Some(window) = self.window.take() {
-            self.windows.close(window.window_id);
-        }
+        let Some(window) = self.window.take() else {
+            return;
+        };
+        let windows = Arc::clone(&self.windows);
+        self.cleanup.spawn(move || windows.close(window.window_id));
     }
 }
 

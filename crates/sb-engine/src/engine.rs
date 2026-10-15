@@ -146,6 +146,29 @@ impl BlockingWork {
     }
 }
 
+/// Runs cleanup on the engine's blocking pool without waiting for it:
+/// for work a dropped value owes — a `Drop` may run on any thread, the
+/// foreign caller's included, where nothing may block (spec/07 "One
+/// runtime"). Counted like other blocking work, so shutdown waits for
+/// it; skipped once shutdown has begun, which drops everything anyway.
+pub(crate) struct Detached {
+    handle: Handle,
+    blocking: Arc<BlockingWork>,
+}
+
+impl Detached {
+    /// Run `f` on the blocking pool, or not at all during shutdown.
+    pub(crate) fn spawn(&self, f: impl FnOnce() + Send + 'static) {
+        let Ok(running) = self.blocking.start() else {
+            return;
+        };
+        self.handle.spawn_blocking(move || {
+            f();
+            drop(running);
+        });
+    }
+}
+
 /// One counted blocking task; dropping it, at the task's end, counts it
 /// out.
 struct Running(Arc<BlockingWork>);
@@ -289,6 +312,15 @@ impl Engine {
         });
         task.await
             .map_err(|join| join_failed("run on the runtime", join))?
+    }
+
+    /// A handle for cleanup no caller waits for, run like `compute` on
+    /// the blocking pool — see `Detached`.
+    pub(crate) fn detached(&self) -> Detached {
+        Detached {
+            handle: self.runtime.handle().clone(),
+            blocking: Arc::clone(&self.blocking),
+        }
     }
 
     /// Await one blocking task, mapping a failed join to `Internal` and
