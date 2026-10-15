@@ -755,8 +755,16 @@ impl Engine {
         limit: u32,
     ) -> Result<Window, EngineError> {
         let windows = Arc::clone(self.windows());
-        self.compute(move || windows.open(spec, &anchor, limit))
-            .await
+        let opened = self
+            .compute(move || {
+                let window = windows.open(spec, &anchor, limit)?;
+                Ok(Opened {
+                    window: Some(window),
+                    windows,
+                })
+            })
+            .await?;
+        Ok(opened.into_window())
     }
 
     /// `read_window` (spec/07): the page `anchor` picks, at the
@@ -792,6 +800,32 @@ impl Engine {
                 Ok(())
             })
             .await;
+    }
+}
+
+/// A window `open_window` registered, on its way to the caller. If
+/// the caller stops waiting — its query cancelled after the work was
+/// dispatched — the runtime drops the task's output, and this closes
+/// the window: the shell can't close a handle it never received.
+struct Opened {
+    window: Option<Window>,
+    windows: Arc<Windows>,
+}
+
+impl Opened {
+    /// Hand the window to the caller, who now owns closing it.
+    fn into_window(mut self) -> Window {
+        self.window
+            .take()
+            .expect("an opened window is handed over once")
+    }
+}
+
+impl Drop for Opened {
+    fn drop(&mut self) {
+        if let Some(window) = self.window.take() {
+            self.windows.close(window.window_id);
+        }
     }
 }
 

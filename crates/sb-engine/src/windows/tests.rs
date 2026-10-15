@@ -671,3 +671,43 @@ fn window_calls_run_on_the_engine_runtime() {
     let page = sb_test_support::block_on(page).expect("the page arrives");
     assert_eq!(page.rows().len(), 1_000);
 }
+
+/// An open dropped after its work was dispatched — its caller
+/// cancelled — leaves no window behind (spec/07: the shell closes
+/// every window it holds, and can't close one it never received).
+/// The next open taking id 2 shows the dropped one ran and took id 1;
+/// that id must then answer `NotFound`.
+#[test]
+fn an_open_dropped_after_dispatch_leaves_no_window() {
+    const SETTLE: std::time::Duration = std::time::Duration::from_secs(5);
+    let (_scratch, engine) = scratch_engine("windows-open-dropped");
+    let generation = fill(&engine, 10);
+    let mut cx = Context::from_waker(Waker::noop());
+
+    let mut dropped = Box::pin(engine.open_window(WindowSpec::DebugSynthetic, Anchor::Top, 5));
+    assert!(dropped.as_mut().poll(&mut cx).is_pending());
+    drop(dropped);
+
+    let next =
+        sb_test_support::block_on(engine.open_window(WindowSpec::DebugSynthetic, Anchor::Top, 5))
+            .expect("the next window opens");
+    assert_eq!(next.window_id().get(), 2);
+
+    let deadline = std::time::Instant::now() + SETTLE;
+    loop {
+        let read = sb_test_support::block_on(engine.read_window(
+            WindowId::from(1),
+            generation,
+            Anchor::Top,
+            5,
+        ));
+        if matches!(read, Err(EngineError::NotFound { .. })) {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the dropped open's window 1 is still registered"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
