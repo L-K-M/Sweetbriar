@@ -290,6 +290,7 @@ final class ListBenchmarkRunner {
                 + "saw another generation mid-run"
         }
 
+        await drainRenderReady(context: context)
         context.sampler.stop()
         // "closes both after" — the window and its model.
         await controller.closeAndAwaitModel()
@@ -312,8 +313,11 @@ final class ListBenchmarkRunner {
         _ controller: ListPrototypeWindowController,
         generation: UInt64
     ) async -> String? {
+        // The state is read before the deadline: a list that blocks
+        // the main thread past it (SwiftUI over 500k ids can) has
+        // opened by the time this loop runs again, and is measured.
         let deadline = clock.now + .seconds(30)
-        while clock.now < deadline {
+        while true {
             if let error = controller.openFailure {
                 return "the list failed to open: \(error.localizedDescription)"
             }
@@ -327,9 +331,35 @@ final class ListBenchmarkRunner {
                         + "\(model.generation), not \(generation)"
                 }
             }
+            if clock.now >= deadline {
+                return "the list never opened at generation \(generation)"
+            }
             try? await Task.sleep(for: .milliseconds(10))
         }
-        return "the list never opened at generation \(generation)"
+    }
+
+    /// Wait, bounded, until event `index` is render-ready — before
+    /// the next input changes the state it expects (a click's
+    /// selection, a position's rows).
+    private func awaitRenderReady(
+        _ index: Int,
+        context: RunContext,
+        within limit: Duration = .seconds(2)
+    ) async {
+        _ = await checkWithin(limit, context: context) {
+            context.events[index].renderReadyTick != nil
+        }
+    }
+
+    /// Wait, bounded, until every event with an expectation is
+    /// render-ready, so the run's last inputs are measured before its
+    /// display link stops.
+    private func drainRenderReady(context: RunContext) async {
+        _ = await checkWithin(.seconds(2), context: context) {
+            context.events.allSatisfy {
+                $0.expected == nil || $0.renderReadyTick != nil
+            }
+        }
     }
 
     // MARK: - The phases
@@ -394,11 +424,21 @@ final class ListBenchmarkRunner {
         var failures: [String] = []
         let windowNumber = window.windowNumber
         let bounds = list.listView.convert(list.listView.bounds, to: nil)
+        let centreInWindow = NSPoint(x: bounds.midX, y: bounds.midY)
         let centre = window.convertToScreen(NSRect(
-            x: bounds.midX, y: bounds.midY, width: 0, height: 0
+            origin: centreInWindow, size: .zero
         )).origin
         guard let baseline = Self.scrollPosition(of: list) else {
             return ["the wheel phase found no scroll position"]
+        }
+        // An NSEvent made from a CGEvent carries no window, so AppKit
+        // can't route a posted one to this window. The harness routes
+        // it as NSWindow routes scroll-wheel events: to the view under
+        // the pointer, whose responder chain reaches the list's scroll
+        // view — the same path for both lists.
+        guard let target = window.contentView?.superview?.hitTest(centreInWindow)
+        else {
+            return ["the wheel phase found no view under the list's centre"]
         }
         var wheelEvents: [Int] = []
         let start = clock.now
@@ -407,7 +447,7 @@ final class ListBenchmarkRunner {
                 at: centre, windowNumber: windowNumber
             ) {
                 let postedAt = postInput {
-                    NSApp.postEvent(event, atStart: false)
+                    target.scrollWheel(with: event)
                 }
                 wheelEvents.append(context.record(
                     phase: "wheel",
@@ -482,7 +522,7 @@ final class ListBenchmarkRunner {
                     windowNumber: window.windowNumber
                 )
             }
-            context.record(
+            let event = context.record(
                 phase: "selection",
                 detail: detail,
                 postedAt: postedAt
@@ -492,9 +532,11 @@ final class ListBenchmarkRunner {
                     && list.selectedIDs == expectedSelection
                     && !list.hasPendingLayout
             }
-            return await checkWithin(.seconds(2), context: context) {
+            let took = await checkWithin(.seconds(2), context: context) {
                 list.selectedIDs == expectedSelection
             }
+            await awaitRenderReady(event, context: context)
+            return took
         }
 
         let anchor = 100_000
@@ -562,7 +604,7 @@ final class ListBenchmarkRunner {
             return true
         }
         let postedAt = postInput { list.scrollToRank(rank) }
-        context.record(
+        let event = context.record(
             phase: "selection",
             detail: "position jump to rank \(rank)",
             postedAt: postedAt
@@ -571,10 +613,12 @@ final class ListBenchmarkRunner {
                 && Self.allVisibleRowsPopulated(list: list, model: model)
                 && !list.hasPendingLayout
         }
-        return await checkWithin(.seconds(2), context: context) {
+        let positioned = await checkWithin(.seconds(2), context: context) {
             list.visibleRanks.contains(rank)
                 && Self.allVisibleRowsPopulated(list: list, model: model)
         }
+        await awaitRenderReady(event, context: context)
+        return positioned
     }
 
     /// Wheel events carry no live expectation — their target is the
@@ -640,7 +684,8 @@ final class ListBenchmarkRunner {
         else {
             return nil
         }
-        cgEvent.location = screenPoint
+        let screenTop = NSScreen.screens.first?.frame.maxY ?? 0
+        cgEvent.location = CGPoint(x: screenPoint.x, y: screenTop - screenPoint.y)
         cgEvent.setIntegerValueField(
             .mouseEventWindowUnderMousePointer,
             value: Int64(windowNumber)
@@ -808,11 +853,16 @@ final class ListBenchmarkRunner {
         var latencies: [String: [Double]] = [:]
         var unresolved: [String: Int] = [:]
         var firstRowsMs: Double?
-        for event in context.events {
+        for (position, event) in context.events.enumerated() {
             let interval = intervalIndex(of: event.postedAt, in: ticks)
             let ready = event.renderReadyTick
-            let readyInterval = ready ?? max(ticks.count - 1, interval)
-            let latency = (ticks[safe: readyInterval]?.timestamp ?? runEnd)
+            // An event never render-ready is censored where the next
+            // event of its phase superseded it (or the run ended): its
+            // latency is a lower bound, and it counts as unresolved.
+            let censoredAt = context.events[(position + 1)...]
+                .first { $0.phase == event.phase }?.postedAt ?? runEnd
+            let readyInterval = ready ?? intervalIndex(of: censoredAt, in: ticks)
+            let latency = (ready.flatMap { ticks[safe: $0]?.timestamp } ?? censoredAt)
                 - event.postedAt
             reportEvents.append(BenchmarkEvent(
                 phase: event.phase,
