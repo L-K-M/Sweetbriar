@@ -675,8 +675,10 @@ fn window_calls_run_on_the_engine_runtime() {
 /// An open dropped after its work was dispatched — its caller
 /// cancelled — leaves no window behind (spec/07: the shell closes
 /// every window it holds, and can't close one it never received).
-/// The next open taking id 2 shows the dropped one ran and took id 1;
-/// that id must then answer `NotFound`.
+/// The blocking pool runs the dropped open and the next one in either
+/// order, so the dropped one owns whichever of ids 1 and 2 the next
+/// didn't get; once both have registered, that id must answer
+/// `NotFound`.
 #[test]
 fn an_open_dropped_after_dispatch_leaves_no_window() {
     const SETTLE: std::time::Duration = std::time::Duration::from_secs(5);
@@ -691,22 +693,26 @@ fn an_open_dropped_after_dispatch_leaves_no_window() {
     let next =
         sb_test_support::block_on(engine.open_window(WindowSpec::DebugSynthetic, Anchor::Top, 5))
             .expect("the next window opens");
-    assert_eq!(next.window_id().get(), 2);
+    let dropped_id = WindowId::from(3 - next.window_id().get());
 
     let deadline = std::time::Instant::now() + SETTLE;
+    while engine.windows().lock().next_id < 2 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the dropped open never ran"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
     loop {
-        let read = sb_test_support::block_on(engine.read_window(
-            WindowId::from(1),
-            generation,
-            Anchor::Top,
-            5,
-        ));
+        let read =
+            sb_test_support::block_on(engine.read_window(dropped_id, generation, Anchor::Top, 5));
         if matches!(read, Err(EngineError::NotFound { .. })) {
             break;
         }
         assert!(
             std::time::Instant::now() < deadline,
-            "the dropped open's window 1 is still registered"
+            "the dropped open's window {} is still registered",
+            dropped_id.get()
         );
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
