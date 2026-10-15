@@ -251,9 +251,7 @@ final class ListBenchmarkRunner {
         NSApp.activate()
         controller.showWindow(nil)
         window.makeKeyAndOrderFront(nil)
-        let foreground = await checkWithin(.seconds(2)) {
-            window.isKeyWindow && NSApp.isActive
-        }
+        let foreground = await awaitSteadyForeground(window)
         if !foreground {
             failures.append("the window wasn't key and the app active")
         }
@@ -482,6 +480,30 @@ final class ListBenchmarkRunner {
         FileHandle.standardError.write(
             Data("list-benchmark: \(elapsed) s: \(message)\n".utf8)
         )
+    }
+
+    /// Wait, bounded, until the window has been key and the app active
+    /// for a quarter second without a break. Activation can flicker
+    /// just after launch (CI saw one frame of the first run lose both),
+    /// and a run measures only a steady foreground.
+    private func awaitSteadyForeground(_ window: NSWindow) async -> Bool {
+        let steady: Duration = .milliseconds(250)
+        let deadline = clock.now + .seconds(5)
+        var since: ContinuousClock.Instant?
+        while clock.now < deadline {
+            guard window.isKeyWindow, NSApp.isActive else {
+                since = nil
+                try? await Task.sleep(for: .milliseconds(10))
+                continue
+            }
+            let start = since ?? clock.now
+            since = start
+            if clock.now - start >= steady {
+                return true
+            }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return false
     }
 
     /// Wait, bounded, until event `index` is render-ready — before
