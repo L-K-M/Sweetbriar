@@ -232,6 +232,12 @@ final class ListBenchmarkRunner {
         NSApp.activate()
         controller.showWindow(nil)
         window.makeKeyAndOrderFront(nil)
+        let foreground = await checkWithin(.seconds(2)) {
+            window.isKeyWindow && NSApp.isActive
+        }
+        if !foreground {
+            failures.append("the window wasn't key and the app active")
+        }
         let windowWasKey = window.isKeyWindow
         let appWasActive = NSApp.isActive
         let openedAt = CACurrentMediaTime()
@@ -259,7 +265,8 @@ final class ListBenchmarkRunner {
                 // Generation 0 is a model still opening: the fill
                 // made the source's generation at least 1.
                 generationChanged: model.generation != 0
-                    && model.generation != generation
+                    && model.generation != generation,
+                foreground: controller?.window?.isKeyWindow == true && NSApp.isActive
             )
         }
         context.sampler.onTick = { [weak context] index in
@@ -357,6 +364,9 @@ final class ListBenchmarkRunner {
         await drainRenderReady(context: context)
         context.sampler.stop()
         let peakFootprint = footprint.stop()
+        if context.sampler.ticks.contains(where: { $0.isFrame && !$0.foreground }) {
+            failures.append("the window lost key or the app focus during the run")
+        }
         if context.events.first(where: { $0.phase == "firstRows" })?.renderReadyTick == nil {
             failures.append("the first rows never rendered")
         }
@@ -744,9 +754,10 @@ final class ListBenchmarkRunner {
         return postedAt
     }
 
-    /// One one-line wheel event: `CGEvent` over the list's centre in
+    /// One one-line wheel event: a `CGEvent` over the list's centre in
     /// global coordinates with the window-number fields set, turned
-    /// into an `NSEvent` for `NSApp.postEvent` (plan M0.10).
+    /// into an `NSEvent` the wheel phase hands to the view under that
+    /// point (plan M0.10).
     private static func wheelEvent(
         at screenPoint: NSPoint,
         windowNumber: Int
@@ -915,7 +926,7 @@ final class ListBenchmarkRunner {
         implementation: PrototypeImplementation,
         pass: BenchmarkRun.Pass,
         generation: UInt64,
-        failures: [String],
+        failures checkFailures: [String],
         windowWasKey: Bool,
         appWasActive: Bool,
         baseline: UInt64,
@@ -926,15 +937,15 @@ final class ListBenchmarkRunner {
         let fps = Double(screen?.maximumFramesPerSecond ?? 0)
         let nominalMs = fps > 0 ? 1_000 / fps : 0
 
-        // Interval i runs (tick i−1, tick i]: its CPU is the sample
-        // delta.
+        // The samples (BenchmarkTimeline): the start, each display
+        // tick, the terminal sample at the stop. Interval i's CPU is
+        // sample i's minus sample i−1's; only tick-to-tick intervals
+        // have a frame duration for hitches. Events are placed and
+        // timed by when samples ran — when CPU was read — not by the
+        // frame times the link reports, which trail them.
         var cpuMs: [Double] = []
-        var durations: [Double] = []
         if ticks.count > 1 {
             for i in 1 ..< ticks.count {
-                durations.append(
-                    (ticks[i].timestamp - ticks[i - 1].timestamp) * 1_000
-                )
                 cpuMs.append(
                     Double(
                         ticks[i].cpuNanoseconds
@@ -943,10 +954,20 @@ final class ListBenchmarkRunner {
                 )
             }
         }
-        // Events are placed and timed by when ticks ran — when CPU was
-        // sampled — not by the frame times the link reports, which
-        // trail them; frame times give the interval lengths.
-        let runEnd = ticks.last?.firedAt ?? CACurrentMediaTime()
+        let firedAt = ticks.map(\.firedAt)
+        let frameDurations = BenchmarkTimeline.frameDurations(
+            frameTimes: ticks.map(\.timestamp),
+            isFrame: ticks.map(\.isFrame)
+        )
+        func isHitch(_ interval: Int) -> Bool {
+            guard let duration = frameDurations[safe: interval - 1] ?? nil else {
+                return false
+            }
+            return BenchmarkStatistics.isHitch(
+                duration: duration, nominalInterval: nominalMs
+            )
+        }
+        let stoppedAt = ticks.last?.firedAt ?? CACurrentMediaTime()
 
         var reportEvents: [BenchmarkEvent] = []
         var spans: [String: [EventSpan]] = [:]
@@ -954,36 +975,40 @@ final class ListBenchmarkRunner {
         var unresolved: [String: Int] = [:]
         var firstRowsMs: Double?
         for (position, event) in context.events.enumerated() {
-            let interval = intervalIndex(of: event.postedAt, in: ticks)
+            let interval = BenchmarkTimeline.intervalIndex(of: event.postedAt, in: firedAt)
             let ready = event.renderReadyTick
             // An event never render-ready counts as unresolved: its
-            // latency, to the run's end, is only a lower bound, kept out
-            // of the percentiles. Its active span ends where the next
-            // event of its phase superseded it, or at the run's end.
+            // latency, to the stop, is only a lower bound, kept out of
+            // the percentiles. Its active span ends where the next event
+            // of its phase superseded it, or at the stop.
+            let latency = BenchmarkTimeline.latency(
+                postedAt: event.postedAt,
+                readyAt: ready.flatMap { ticks[safe: $0]?.firedAt },
+                stoppedAt: stoppedAt
+            )
             let supersededAt = context.events[(position + 1)...]
-                .first { $0.phase == event.phase }?.postedAt ?? runEnd
-            let readyInterval = ready ?? intervalIndex(of: supersededAt, in: ticks)
-            let latency = (ready.flatMap { ticks[safe: $0]?.firedAt } ?? runEnd)
-                - event.postedAt
+                .first { $0.phase == event.phase }?.postedAt ?? stoppedAt
+            let readyInterval = ready
+                ?? BenchmarkTimeline.intervalIndex(of: supersededAt, in: firedAt)
             reportEvents.append(BenchmarkEvent(
                 phase: event.phase,
                 detail: event.detail,
                 postedAtSeconds: event.postedAt,
                 intervalIndex: interval,
                 renderReadyIntervalIndex: ready,
-                latencyMilliseconds: latency * 1_000
+                latencyMilliseconds: latency.milliseconds
             ))
             if event.phase == "firstRows" {
-                firstRowsMs = ready.map { (ticks[$0].firedAt - event.postedAt) * 1_000 }
+                firstRowsMs = latency.resolved ? latency.milliseconds : nil
             } else {
                 spans[event.phase, default: []].append(EventSpan(
                     eventInterval: interval,
                     renderReadyInterval: readyInterval
                 ))
-                if ready == nil {
-                    unresolved[event.phase, default: 0] += 1
+                if latency.resolved {
+                    latencies[event.phase, default: []].append(latency.milliseconds)
                 } else {
-                    latencies[event.phase, default: []].append(latency * 1_000)
+                    unresolved[event.phase, default: 0] += 1
                 }
             }
         }
@@ -991,21 +1016,25 @@ final class ListBenchmarkRunner {
         if let first = context.events.first, first.phase == "firstRows",
            let ready = first.renderReadyTick {
             spans["overall", default: []].append(EventSpan(
-                eventInterval: intervalIndex(of: first.postedAt, in: ticks),
+                eventInterval: BenchmarkTimeline.intervalIndex(of: first.postedAt, in: firedAt),
                 renderReadyInterval: ready
             ))
+        }
+        // Every event must render: one that never did leaves part of
+        // its phase unmeasured, so the run fails (its numbers stay).
+        var failures = checkFailures
+        let unresolvedTotal = unresolved.values.reduce(0, +)
+        if unresolvedTotal > 0 {
+            let byPhase = unresolved.sorted { $0.key < $1.key }
+                .map { "\($0.key) \($0.value)" }
+                .joined(separator: ", ")
+            failures.append("\(unresolvedTotal) events never rendered (\(byPhase))")
         }
 
         func phase(_ name: String) -> PhaseStatistics {
             let active = BenchmarkStatistics.activeIntervals(spans[name] ?? [])
             let cpu = active.sorted().compactMap { cpuMs[safe: $0 - 1] }
-            let hitches = active.reduce(0) {
-                $0 + (durations[safe: $1 - 1].map {
-                    BenchmarkStatistics.isHitch(
-                        duration: $0, nominalInterval: nominalMs
-                    )
-                } == true ? 1 : 0)
-            }
+            let hitches = active.filter(isHitch).count
             return PhaseStatistics(
                 cpuMilliseconds: BenchmarkStatistics.summarize(cpu),
                 latencyMilliseconds: BenchmarkStatistics.summarize(
@@ -1028,20 +1057,10 @@ final class ListBenchmarkRunner {
             + (latencies["wheel"] ?? [])
             + (latencies["selection"] ?? [])
             + (latencies["pageDeliveries"] ?? [])
-        let overallHitches = overallActive.reduce(0) {
-            $0 + (durations[safe: $1 - 1].map {
-                BenchmarkStatistics.isHitch(
-                    duration: $0, nominalInterval: nominalMs
-                )
-            } == true ? 1 : 0)
-        }
-        // A run-wide hitch count over every interval — stalls outside
+        let overallHitches = overallActive.filter(isHitch).count
+        // A run-wide hitch count over every frame — stalls outside
         // event spans count too.
-        let runHitches = durations.reduce(0) {
-            $0 + (BenchmarkStatistics.isHitch(
-                duration: $1, nominalInterval: nominalMs
-            ) ? 1 : 0)
-        }
+        let runHitches = (1 ... max(1, cpuMs.count)).filter(isHitch).count
 
         let peak = max(ticks.map(\.footprintBytes).max() ?? baseline, sampledPeak)
         return BenchmarkRun(
@@ -1067,40 +1086,17 @@ final class ListBenchmarkRunner {
                     latencyMilliseconds: BenchmarkStatistics.summarize(overallLatencies),
                     hitchCount: overallHitches,
                     eventCount: reportEvents.count,
-                    unresolvedEvents: unresolved.values.reduce(0, +)
+                    unresolvedEvents: unresolvedTotal
                 )
             ),
             intervals: IntervalSummary(
-                count: durations.count,
+                count: cpuMs.count,
                 activeCount: overallActive.count,
                 hitchCount: runHitches,
                 nominalMilliseconds: nominalMs
             ),
             events: reportEvents
         )
-    }
-
-    /// The tick index ending the interval `time` fell in: the first
-    /// tick at or after it. Events posted after the last tick clamp
-    /// to it.
-    private func intervalIndex(
-        of time: Double, in ticks: [BenchmarkTick]
-    ) -> Int {
-        guard ticks.count > 1 else { return 0 }
-        if time <= ticks[1].firedAt { return 1 }
-        if time > ticks[ticks.count - 1].firedAt {
-            return ticks.count - 1
-        }
-        var lo = 1, hi = ticks.count - 1
-        while lo < hi {
-            let mid = (lo + hi) / 2
-            if ticks[mid].firedAt >= time {
-                hi = mid
-            } else {
-                lo = mid + 1
-            }
-        }
-        return lo
     }
 
     /// A run that can't start still produces a report — `ok: false`.

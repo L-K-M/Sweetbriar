@@ -79,19 +79,63 @@ struct ActiveIntervalTests {
 
 @Suite("hitch boundary")
 struct HitchTests {
-    @Test("an interval longer than nominal, past jitter, is a hitch")
+    @Test("any interval longer than nominal is a hitch")
     func longer() {
         // 60 Hz: one missed frame doubles the interval.
         #expect(BenchmarkStatistics.isHitch(duration: 33.3, nominalInterval: 16.7))
-        // 120 Hz: a 12 ms interval is longer than 8.33 ms.
-        #expect(BenchmarkStatistics.isHitch(duration: 12, nominalInterval: 8.33))
+        // 120 Hz: an 8.5 ms interval is longer than 8.33 ms.
+        #expect(BenchmarkStatistics.isHitch(duration: 8.5, nominalInterval: 8.333))
     }
 
-    @Test("timestamp jitter within 5% of nominal is not a hitch")
-    func jitter() {
+    @Test("timestamp rounding noise is no hitch")
+    func noise() {
         #expect(!BenchmarkStatistics.isHitch(duration: 10, nominalInterval: 10))
-        #expect(!BenchmarkStatistics.isHitch(duration: 10.5, nominalInterval: 10))
-        #expect(BenchmarkStatistics.isHitch(duration: 10.501, nominalInterval: 10))
+        #expect(!BenchmarkStatistics.isHitch(duration: 10.1, nominalInterval: 10))
+        #expect(BenchmarkStatistics.isHitch(duration: 10.11, nominalInterval: 10))
         #expect(!BenchmarkStatistics.isHitch(duration: 100, nominalInterval: 0))
+    }
+}
+
+@Suite("the run's timeline")
+struct TimelineTests {
+    /// Samples ran at 0 (the start), 10, 20 and 30 (frames), then the
+    /// terminal sample at the stop, 100.
+    private let firedAt: [Double] = [0, 10, 20, 30, 100]
+
+    @Test("a moment falls in the interval its next sample ends")
+    func intervals() {
+        #expect(BenchmarkTimeline.intervalIndex(of: 5, in: firedAt) == 1)
+        #expect(BenchmarkTimeline.intervalIndex(of: 10, in: firedAt) == 1)
+        #expect(BenchmarkTimeline.intervalIndex(of: 10.5, in: firedAt) == 2)
+        // Past the last frame, the terminal interval.
+        #expect(BenchmarkTimeline.intervalIndex(of: 60, in: firedAt) == 4)
+    }
+
+    @Test("a post after the last frame, then a stall: a positive bound to the stop")
+    func postAfterLastFrame() {
+        let latency = BenchmarkTimeline.latency(
+            postedAt: 40, readyAt: nil, stoppedAt: firedAt.last!
+        )
+        #expect(latency.milliseconds == 60_000)
+        #expect(!latency.resolved)
+    }
+
+    @Test("a resolved event's latency runs to its render-ready sample")
+    func resolved() {
+        let latency = BenchmarkTimeline.latency(
+            postedAt: 12, readyAt: 20, stoppedAt: firedAt.last!
+        )
+        #expect(latency.milliseconds == 8_000)
+        #expect(latency.resolved)
+    }
+
+    @Test("only frame-to-frame intervals have a frame duration")
+    func frameDurations() {
+        // The start and the terminal sample are no frames.
+        let durations = BenchmarkTimeline.frameDurations(
+            frameTimes: [0, 10, 20, 30, 100],
+            isFrame: [false, true, true, true, false]
+        )
+        #expect(durations == [nil, 10_000, 10_000, nil])
     }
 }

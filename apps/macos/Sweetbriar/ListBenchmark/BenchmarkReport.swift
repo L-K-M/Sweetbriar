@@ -137,7 +137,7 @@ struct BenchmarkPhases: Codable, Equatable {
 struct PhaseStatistics: Codable, Equatable {
     var cpuMilliseconds: SampleStatistics
     var latencyMilliseconds: SampleStatistics
-    /// Display intervals over 1.5 × the nominal interval, among this
+    /// Display intervals longer than the nominal interval, among this
     /// phase's active intervals.
     var hitchCount: Int
     var eventCount: Int
@@ -163,7 +163,7 @@ struct IntervalSummary: Codable, Equatable {
     /// Intervals an event's span covered — input or delivery to its
     /// render-ready.
     var activeCount: Int
-    /// Intervals longer than 1.5 × the nominal one, run-wide.
+    /// Display intervals longer than the nominal one, run-wide.
     var hitchCount: Int
     var nominalMilliseconds: Double
 }

@@ -31,6 +31,11 @@ struct BenchmarkTick {
     var visibleRowsPopulated: Bool
     /// The model's generation left the fill's — the abort condition.
     var generationChanged: Bool
+    /// The run's window was key and the app active.
+    var foreground: Bool
+    /// A display tick — not the run's start or terminal sample, whose
+    /// intervals have CPU but no frame duration.
+    var isFrame: Bool
 }
 
 /// Ticks once per display frame for the run's life. `extras` reads
@@ -44,6 +49,7 @@ final class BenchmarkTickSampler: NSObject {
         var scrollPosition: Double?
         var visibleRowsPopulated: Bool = false
         var generationChanged: Bool = false
+        var foreground: Bool = false
     }
 
     /// After every other before-waiting observer — AppKit's display
@@ -63,7 +69,7 @@ final class BenchmarkTickSampler: NSObject {
     /// Start ticking on `view`'s display, and watching the main run
     /// loop's commit points.
     func start(on view: NSView) {
-        ticks = [sample(timestamp: CACurrentMediaTime())]
+        ticks = [sample(timestamp: CACurrentMediaTime(), isFrame: false)]
         let link = view.displayLink(target: self, selector: #selector(tickFired(_:)))
         // The display's full rate, so an interval past nominal is a
         // missed frame, not a lowered rate.
@@ -93,10 +99,14 @@ final class BenchmarkTickSampler: NSObject {
         commitObserver = observer
     }
 
-    /// Stop the link and the observer.
+    /// Stop the link and the observer, and take the terminal sample:
+    /// the run's work after its last tick counts too, and the stop is
+    /// what never-rendered events are bounded by.
     func stop() {
-        link?.invalidate()
-        link = nil
+        guard let link else { return }
+        link.invalidate()
+        self.link = nil
+        ticks.append(sample(timestamp: CACurrentMediaTime(), isFrame: false))
         if let commitObserver {
             CFRunLoopObserverInvalidate(commitObserver)
         }
@@ -105,11 +115,11 @@ final class BenchmarkTickSampler: NSObject {
 
     @objc
     private func tickFired(_ link: CADisplayLink) {
-        ticks.append(sample(timestamp: link.timestamp))
+        ticks.append(sample(timestamp: link.timestamp, isFrame: true))
         onTick?(ticks.count - 1)
     }
 
-    private func sample(timestamp: Double) -> BenchmarkTick {
+    private func sample(timestamp: Double, isFrame: Bool) -> BenchmarkTick {
         let extras = extras?() ?? Extras()
         return BenchmarkTick(
             timestamp: timestamp,
@@ -118,7 +128,9 @@ final class BenchmarkTickSampler: NSObject {
             footprintBytes: SystemProbes.physicalFootprint(),
             scrollPosition: extras.scrollPosition,
             visibleRowsPopulated: extras.visibleRowsPopulated,
-            generationChanged: extras.generationChanged
+            generationChanged: extras.generationChanged,
+            foreground: extras.foreground,
+            isFrame: isFrame
         )
     }
 }

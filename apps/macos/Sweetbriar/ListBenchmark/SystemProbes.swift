@@ -56,12 +56,21 @@ enum SystemProbes {
 /// The process's peak footprint over a run, sampled every few
 /// milliseconds off the main thread: a peak inside a main-thread
 /// stall, which no display tick sees, still counts (plan M0.10: peak
-/// memory). `@unchecked Sendable`: the peak is behind its mutex, and
-/// the timer is only started and stopped, from the main actor.
+/// memory). `@unchecked Sendable`: the peak and the timer's state are
+/// behind their mutexes.
 final class FootprintSampler: @unchecked Sendable {
     private static let interval = DispatchTimeInterval.milliseconds(5)
 
+    /// Where the timer is in its life: a dispatch source must be
+    /// resumed before it is cancelled and released.
+    private enum State {
+        case idle
+        case running
+        case stopped
+    }
+
     private let peak = Mutex<UInt64>(0)
+    private let state = Mutex(State.idle)
     private let timer = DispatchSource.makeTimerSource(
         queue: .global(qos: .userInitiated)
     )
@@ -73,15 +82,37 @@ final class FootprintSampler: @unchecked Sendable {
         }
     }
 
-    /// Begin sampling; pair with one `stop()`.
+    /// Begin sampling.
     func start() {
-        timer.resume()
+        state.withLock { state in
+            guard state == .idle else { return }
+            state = .running
+            timer.resume()
+        }
     }
 
     /// Stop sampling and answer the peak seen.
     func stop() -> UInt64 {
-        timer.cancel()
+        finish()
         return peak.withLock { $0 }
+    }
+
+    /// A sampler dropped mid-run — its run abandoned — stops too.
+    deinit {
+        finish()
+    }
+
+    /// Cancel the timer once, resuming it first if it never ran.
+    private func finish() {
+        state.withLock { state in
+            if state == .idle {
+                timer.resume()
+            }
+            if state != .stopped {
+                timer.cancel()
+            }
+            state = .stopped
+        }
     }
 
     private func sample() {

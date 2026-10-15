@@ -42,19 +42,67 @@ enum BenchmarkStatistics {
         return active
     }
 
-    /// How far past nominal an interval may run before it counts:
-    /// display-link timestamps jitter slightly around the frame time.
-    static let hitchJitterAllowance = 1.05
+    /// Frame times are vsync times, so an on-time interval equals the
+    /// nominal one up to rounding; this much more (in ms) is no hitch.
+    static let hitchTimestampNoise = 0.1
 
     /// A hitch: an interval longer than the display's nominal interval
-    /// (plan M0.10), beyond 5% jitter — so a 120 Hz frame that took
-    /// 12 ms counts. Without a nominal interval nothing can be.
+    /// (plan M0.10), past timestamp rounding — so a 120 Hz frame that
+    /// took 8.5 ms counts. Without a nominal interval nothing can be.
     static func isHitch(duration: Double, nominalInterval: Double) -> Bool {
-        nominalInterval > 0 && duration > nominalInterval * hitchJitterAllowance
+        nominalInterval > 0 && duration > nominalInterval + hitchTimestampNoise
     }
 }
 
 /// The span one event keeps its intervals active for (plan M0.10).
+/// The run's timeline (plan M0.10): samples are the run's start, one
+/// per display tick, and a terminal one at the stop. Interval `i` runs
+/// from sample `i − 1` to sample `i`: its CPU is their difference, and
+/// a moment belongs to the interval its next sample ends. Only an
+/// interval between two display ticks is a frame, with a duration.
+enum BenchmarkTimeline {
+    /// The interval `time` falls in, given when the samples ran.
+    /// Moments past the last sample clamp to the last interval.
+    static func intervalIndex(of time: Double, in firedAt: [Double]) -> Int {
+        guard firedAt.count > 1 else { return 0 }
+        if time <= firedAt[1] { return 1 }
+        if time > firedAt[firedAt.count - 1] { return firedAt.count - 1 }
+        var lo = 1, hi = firedAt.count - 1
+        while lo < hi {
+            let mid = (lo + hi) / 2
+            if firedAt[mid] >= time {
+                hi = mid
+            } else {
+                lo = mid + 1
+            }
+        }
+        return lo
+    }
+
+    /// An event's latency in ms: to the sample it became render-ready
+    /// at, or — never ready — a lower bound to the measurement's stop,
+    /// which follows every post.
+    static func latency(
+        postedAt: Double,
+        readyAt: Double?,
+        stoppedAt: Double
+    ) -> (milliseconds: Double, resolved: Bool) {
+        (((readyAt ?? stoppedAt) - postedAt) * 1_000, readyAt != nil)
+    }
+
+    /// Each interval's frame duration in ms, or nil when it doesn't run
+    /// between two display ticks: the first (from the start) and the
+    /// terminal one (to the stop) are no frames.
+    static func frameDurations(frameTimes: [Double], isFrame: [Bool]) -> [Double?] {
+        guard frameTimes.count > 1 else { return [] }
+        return (1 ..< frameTimes.count).map { i in
+            isFrame[i] && isFrame[i - 1]
+                ? (frameTimes[i] - frameTimes[i - 1]) * 1_000
+                : nil
+        }
+    }
+}
+
 struct EventSpan: Equatable {
     /// The tick index ending the interval the event's post fell in.
     var eventInterval: Int
@@ -166,7 +214,8 @@ extension RunComparison {
         // an unresolved event's latency is only a lower bound, and a
         // failed run measured something other than the plan's scenario.
         let complete = [appkit, swiftui].allSatisfy { run in
-            run.ok && run.firstRowsMilliseconds != nil
+            run.ok && run.windowWasKey && run.appWasActive
+                && run.firstRowsMilliseconds != nil
                 && run.phases.overall.unresolvedEvents == 0
                 && [run.phases.jumps, run.phases.wheel, run.phases.selection,
                     run.phases.pageDeliveries].allSatisfy { $0.unresolvedEvents == 0 }
@@ -174,7 +223,7 @@ extension RunComparison {
         bars.append(BenchmarkBarResult(
             name: "runs.complete",
             pass: complete,
-            detail: "both runs passed their checks and every event rendered"
+            detail: "both runs passed their checks, key and front, and every event rendered"
         ))
         // "CPU and latency p95 and max within 1.2× AppKit's" — every
         // phase, overall included.

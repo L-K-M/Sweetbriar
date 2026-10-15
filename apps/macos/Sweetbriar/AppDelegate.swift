@@ -178,6 +178,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let runner = ListBenchmarkRunner(session: session)
         benchmarkRunner = runner
         Task { @MainActor [weak self] in
+            // An open List Prototype — a SwiftUI one can hold gigabytes
+            // — would sit in every run's footprint: close it first.
+            if let prototype = self?.prototypeController {
+                await prototype.closeAndAwaitModel()
+                self?.prototypeController = nil
+            }
             let report = await runner.run()
             guard let self else { return }
             benchmarkRunner = nil

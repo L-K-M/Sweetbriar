@@ -18,7 +18,8 @@ private func makeRun(
     firstRows: Double? = 50,
     wheelHitches: Int = 0,
     ok: Bool = true,
-    unresolvedWheelEvents: Int = 0
+    unresolvedWheelEvents: Int = 0,
+    foreground: Bool = true
 ) -> BenchmarkRun {
     func samples(_ value: Double) -> SampleStatistics {
         SampleStatistics(
@@ -40,8 +41,8 @@ private func makeRun(
         pass: pass,
         ok: ok,
         failures: ok ? [] : ["a check failed"],
-        windowWasKey: true,
-        appWasActive: true,
+        windowWasKey: foreground,
+        appWasActive: foreground,
         generation: 7,
         generationChanged: false,
         firstRowsMilliseconds: firstRows,
@@ -234,5 +235,14 @@ struct CompleteRunsTests {
             swiftui: makeRun(implementation: "swiftui", pass: .cold)
         )
         #expect(comparison.bars.first { $0.name == "runs.complete" }?.pass == true)
+    }
+
+    @Test("a run whose window wasn't key and front leaves it incomplete")
+    func background() {
+        let comparison = RunComparison.evaluate(
+            appkit: makeRun(implementation: "appkit", pass: .cold),
+            swiftui: makeRun(implementation: "swiftui", pass: .cold, foreground: false)
+        )
+        #expect(comparison.bars.first { $0.name == "runs.complete" }?.pass == false)
     }
 }
