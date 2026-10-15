@@ -45,10 +45,22 @@ private func syntheticId(_ rank: Int, _ n: Int) -> Int64 {
     Int64(n - rank)
 }
 
-/// A jump's pages have landed: every recorded batch the hook got, in
-/// order.
-private func deliveredBatches(_ recorder: BatchRecorder) async -> Set<Int> {
-    Set(await recorder.batches.flatMap { $0 })
+/// The page numbers every recorded batch carried.
+@MainActor
+private func deliveredBatches(_ recorder: PageBatchRecorder) -> Set<Int> {
+    Set(recorder.batches.flatMap { $0 })
+}
+
+/// The model's delivery hooks run on the main actor, so they record
+/// here synchronously — by the time a row has landed, its batch is
+/// recorded, with no hop for a test to race.
+@MainActor
+private final class PageBatchRecorder {
+    private(set) var batches: [[Int]] = []
+
+    func record(_ batch: [Int]) {
+        batches.append(batch)
+    }
 }
 
 // MARK: - Page reads
@@ -63,10 +75,10 @@ func aPageAroundAPositionThenItsNeighbourInTheScrollDirection() async throws {
     let fake = FakeListWindowSource()
     let generation = await fake.fill(n)
     let clock = ManualFrameClock()
-    let recorder = BatchRecorder()
+    let recorder = PageBatchRecorder()
     let model = try await openModel(over: fake, clock: clock)
     model.onPagesDelivered = { batch in
-        Task { await recorder.record(batch) }
+        recorder.record(batch)
     }
 
     // First sighting: page 750 pinned, and with no direction seen yet
@@ -92,8 +104,8 @@ func aPageAroundAPositionThenItsNeighbourInTheScrollDirection() async throws {
     #expect(model.row(at: 150_199)?.occurrenceId == syntheticId(150_199, n))
     // The prefetched page landed in the same frame batch.
     #expect(model.row(at: 150_200)?.occurrenceId == syntheticId(150_200, n))
-    #expect(await deliveredBatches(recorder) == [750, 751])
-    #expect(await recorder.batches.count == 1)
+    #expect(deliveredBatches(recorder) == [750, 751])
+    #expect(recorder.batches.count == 1)
 
     // Scrolling the other way flips the prefetch: page 745 pinned,
     // 744 prefetched.
@@ -287,10 +299,10 @@ func aCompletionForAPageNoLongerWantedIsDropped() async throws {
     let gate = ThrowingGate()
     await fake.setGate(gate)
     let clock = ManualFrameClock()
-    let recorder = BatchRecorder()
+    let recorder = PageBatchRecorder()
     let model = try await openModel(over: fake, clock: clock)
     model.onPagesDelivered = { batch in
-        Task { await recorder.record(batch) }
+        recorder.record(batch)
     }
 
     model.setVisible(600 ..< 650) // pages 3, 4 park on the gate
@@ -309,7 +321,7 @@ func aCompletionForAPageNoLongerWantedIsDropped() async throws {
     // The late completions for 3 and 4 landed nowhere.
     #expect(model.row(at: 600) == nil)
     #expect(model.row(at: 800) == nil)
-    #expect(await deliveredBatches(recorder) == [10, 11])
+    #expect(deliveredBatches(recorder) == [10, 11])
 
     await model.close()
 }
@@ -607,20 +619,20 @@ func theBenchmarkHookSeesTheSameDeliveriesAsTheLists() async throws {
     let fake = FakeListWindowSource()
     _ = await fake.fill(n)
     let clock = ManualFrameClock()
-    let listRecorder = BatchRecorder()
-    let benchmarkRecorder = BatchRecorder()
+    let listRecorder = PageBatchRecorder()
+    let benchmarkRecorder = PageBatchRecorder()
     let model = try await openModel(over: fake, clock: clock)
     model.onPagesDelivered = { batch in
-        Task { await listRecorder.record(batch) }
+        listRecorder.record(batch)
     }
     model.onPagesDeliveredForBenchmark = { batch in
-        Task { await benchmarkRecorder.record(batch) }
+        benchmarkRecorder.record(batch)
     }
 
     model.setVisible(150_000 ..< 150_080)
     try #require(await settle(clock) { model.row(at: 150_050) != nil })
-    let batches = await benchmarkRecorder.batches
-    let listBatches = await listRecorder.batches
+    let batches = benchmarkRecorder.batches
+    let listBatches = listRecorder.batches
     #expect(batches == [[750, 751]])
     #expect(batches == listBatches)
 
