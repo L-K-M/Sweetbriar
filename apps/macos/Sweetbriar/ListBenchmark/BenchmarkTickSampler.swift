@@ -31,8 +31,10 @@ struct BenchmarkTick {
     var visibleRowsPopulated: Bool
     /// The model's generation left the fill's — the abort condition.
     var generationChanged: Bool
-    /// The run's window was key and the app active.
-    var foreground: Bool
+    /// The run's window was key.
+    var windowKey: Bool
+    /// The app was active.
+    var appActive: Bool
     /// A display tick — not the run's start or terminal sample, whose
     /// intervals have CPU but no frame duration.
     var isFrame: Bool
@@ -49,7 +51,8 @@ final class BenchmarkTickSampler: NSObject {
         var scrollPosition: Double?
         var visibleRowsPopulated: Bool = false
         var generationChanged: Bool = false
-        var foreground: Bool = false
+        var windowKey: Bool = false
+        var appActive: Bool = false
     }
 
     /// After every other before-waiting observer — AppKit's display
@@ -129,7 +132,8 @@ final class BenchmarkTickSampler: NSObject {
             scrollPosition: extras.scrollPosition,
             visibleRowsPopulated: extras.visibleRowsPopulated,
             generationChanged: extras.generationChanged,
-            foreground: extras.foreground,
+            windowKey: extras.windowKey,
+            appActive: extras.appActive,
             isFrame: isFrame
         )
     }

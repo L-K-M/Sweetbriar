@@ -37,6 +37,16 @@ private final class RunContext {
     /// must stop (plan M0.10: abort the whole run).
     private(set) var generationChanged = false
 
+    /// The phase the run is in, for attributing what ticks observe.
+    var phase = "opening"
+
+    /// Frames at which the window wasn't key, or the app not active,
+    /// by phase and by which: the run must stay key and front.
+    private(set) var foregroundLosses: [String: Int] = [:]
+
+    /// When and in which phase the first such frame came.
+    private(set) var firstForegroundLoss: (what: String, phase: String, at: Double)?
+
     /// When the run must stop, whatever it is doing: its time budget.
     let deadline: ContinuousClock.Instant
 
@@ -109,6 +119,15 @@ private final class RunContext {
         guard index < ticks.count else { return }
         if ticks[index].generationChanged {
             generationChanged = true
+        }
+        for (lost, what) in [
+            (!ticks[index].windowKey, "window key"),
+            (!ticks[index].appActive, "app focus"),
+        ] where lost && ticks[index].isFrame {
+            foregroundLosses["\(what) in \(phase)", default: 0] += 1
+            if firstForegroundLoss == nil {
+                firstForegroundLoss = (what, phase, ticks[index].firedAt)
+            }
         }
         let firedAt = ticks[index].firedAt
         for i in events.indices where events[i].renderReadyTick == nil {
@@ -266,7 +285,8 @@ final class ListBenchmarkRunner {
                 // made the source's generation at least 1.
                 generationChanged: model.generation != 0
                     && model.generation != generation,
-                foreground: controller?.window?.isKeyWindow == true && NSApp.isActive
+                windowKey: controller?.window?.isKeyWindow == true,
+                appActive: NSApp.isActive
             )
         }
         context.sampler.onTick = { [weak context] index in
@@ -327,11 +347,13 @@ final class ListBenchmarkRunner {
             context.markGenerationChanged()
         }
         if failures.isEmpty, let list, let model {
+            context.phase = "jumps"
             failures.append(contentsOf: await runJumpPhase(
                 context: context, list: list, model: model
             ))
             log("\(implementation.rawValue) \(pass.rawValue): jumps done")
             if !context.stopped {
+                context.phase = "wheel"
                 failures.append(contentsOf: await runWheelPhase(
                     context: context,
                     window: window,
@@ -341,6 +363,7 @@ final class ListBenchmarkRunner {
             }
             log("\(implementation.rawValue) \(pass.rawValue): wheel done")
             if !context.stopped {
+                context.phase = "selection"
                 failures.append(contentsOf: await runSelectionPhase(
                     context: context,
                     window: window,
@@ -361,11 +384,16 @@ final class ListBenchmarkRunner {
                 + "saw another generation mid-run"
         }
 
+        context.phase = "draining"
         await drainRenderReady(context: context)
         context.sampler.stop()
         let peakFootprint = footprint.stop()
-        if context.sampler.ticks.contains(where: { $0.isFrame && !$0.foreground }) {
-            failures.append("the window lost key or the app focus during the run")
+        if let first = context.firstForegroundLoss {
+            let lost = context.foregroundLosses.sorted { $0.key < $1.key }
+                .map { "\($0.key): \($0.value) frames" }
+                .joined(separator: ", ")
+            log("\(implementation.rawValue) \(pass.rawValue): first lost \(first.what) in \(first.phase)")
+            failures.append("the run lost the foreground (\(lost))")
         }
         if context.events.first(where: { $0.phase == "firstRows" })?.renderReadyTick == nil {
             failures.append("the first rows never rendered")
