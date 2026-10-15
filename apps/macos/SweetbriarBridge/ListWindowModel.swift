@@ -148,6 +148,11 @@ public final class ListWindowModel {
     @ObservationIgnored
     private var pendingDelivery: [Int: UInt64] = [:]
 
+    /// The handle's release, once `close` started it: a later `close`
+    /// awaits it, so "closed" means released whoever asked.
+    @ObservationIgnored
+    private var closing: Task<Void, Never>?
+
     /// Whether an id index is installed — a failed opening fetch then
     /// leaves the window to the rebuild that installed it.
     @ObservationIgnored
@@ -276,6 +281,7 @@ public final class ListWindowModel {
             throw error
         }
         guard !closed, install(index) else { return }
+        seedFirstPage(from: window)
         onIndexChanged()
         applyVisibility()
     }
@@ -405,13 +411,20 @@ public final class ListWindowModel {
     /// closes every window it opens). Uncancellable; a second call is
     /// a no-op.
     public func close() async {
+        if let closing {
+            await closing.value
+            return
+        }
         if closed { return }
         closed = true
         for (_, entry) in inFlight {
             entry.task.cancel()
         }
         guard let wid = windowId else { return }
-        await source.closeWindow(id: wid)
+        let source = self.source
+        let release = Task { await source.closeWindow(id: wid) }
+        closing = release
+        await release.value
     }
 
     /// Recompute the wanted set from `visible` and `direction`,
@@ -533,22 +546,45 @@ public final class ListWindowModel {
             inFlight[k] = nil
         }
         if !closed {
-            pendingDelivery[k] = serial
-            if batcher == nil {
-                batcher = FrameBatcher(clock: clock) { [weak self] batch in
-                    self?.deliver(batch)
-                }
-            }
-            batcher?.post(
-                PageCompletion(
-                    page: k,
-                    serial: serial,
-                    generation: gen,
-                    result: result
-                )
-            )
+            queue(PageCompletion(
+                page: k,
+                serial: serial,
+                generation: gen,
+                result: result
+            ))
         }
         pump()
+    }
+
+    /// Mark a completion's page pending under its serial and hand it
+    /// to the frame batcher, which lands it on the next frame.
+    private func queue(_ completion: PageCompletion) {
+        pendingDelivery[completion.page] = completion.serial
+        if batcher == nil {
+            batcher = FrameBatcher(clock: clock) { [weak self] batch in
+                self?.deliver(batch)
+            }
+        }
+        batcher?.post(completion)
+    }
+
+    /// `open_window`'s own page — `Top` with the page limit — is page
+    /// 0 exactly (ranks 0..<min(200, N)), so it lands like a read of
+    /// page 0 would, when taken at the installed generation: the first
+    /// rows cost no second round trip. Not wanted by then, it's
+    /// dropped like any late read.
+    private func seedFirstPage(from window: ListWindow) {
+        guard window.generation == generation, !window.rows.isEmpty else {
+            return
+        }
+        nextSerial &+= 1
+        serials[0] = nextSerial
+        queue(PageCompletion(
+            page: 0,
+            serial: nextSerial,
+            generation: generation,
+            result: .success(window)
+        ))
     }
 
     /// Apply one frame's worth of read completions (spec/08: pages
@@ -604,8 +640,12 @@ public final class ListWindowModel {
             }
         }
         if !landed.isEmpty {
-            onPagesDelivered(landed)
+            // The benchmark stamps the delivery first, so a list's own
+            // synchronous work in its hook (AppKit's reload) counts
+            // inside the delivery's latency, as SwiftUI's deferred
+            // update does.
             onPagesDeliveredForBenchmark(landed)
+            onPagesDelivered(landed)
         }
         if reset {
             scheduleRebuild()

@@ -135,6 +135,10 @@ func exactPagesForBoundaryCounts(_ n: Int) async throws {
     #expect(model.count == n)
     #expect(model.generation == generation)
 
+    // Page 0 came with the open; a rebuild drops it, so every page —
+    // page 0 too — is read below (the seeding has its own test).
+    try await model.rebuild()
+
     let pageSize = ListWindowModel.pageSize
     let pageCount = (n + pageSize - 1) / pageSize
     for k in 0 ..< pageCount {
@@ -447,12 +451,13 @@ func closeCancelsReadsAndClosesTheWindow() async throws {
     let model = try await openModel(over: fake, clock: clock)
     let windowId = try #require(await fake.indexReads.first)
 
-    model.setVisible(0 ..< 50) // pages 0, 1 park on the gate
-    try #require(await eventually { await fake.reads.count == 2 })
+    // Page 0 came with the open; page 1's prefetch parks on the gate.
+    model.setVisible(0 ..< 50)
+    try #require(await eventually { await fake.reads.count == 1 })
 
     await model.close()
     #expect(await fake.closedWindows == [windowId])
-    try #require(await eventually { await fake.cancelledReads == 2 })
+    try #require(await eventually { await fake.cancelledReads == 1 })
 
     // After close the model is inert: no reads, no deliveries.
     model.setVisible(400 ..< 450)
@@ -460,7 +465,7 @@ func closeCancelsReadsAndClosesTheWindow() async throws {
         await clock.tick()
         await Task.yield()
     }
-    #expect(await fake.reads.count == 2)
+    #expect(await fake.reads.count == 1)
     #expect(model.row(at: 0) == nil)
 
     await model.close() // a second close is harmless
@@ -629,12 +634,15 @@ func theBenchmarkHookSeesTheSameDeliveriesAsTheLists() async throws {
         benchmarkRecorder.record(batch)
     }
 
+    // Pages 750 and 751 may land in one frame or two; either way both
+    // hooks see the same batches.
     model.setVisible(150_000 ..< 150_080)
-    try #require(await settle(clock) { model.row(at: 150_050) != nil })
+    try #require(await settle(clock) {
+        model.row(at: 150_050) != nil && model.row(at: 150_250) != nil
+    })
     let batches = benchmarkRecorder.batches
-    let listBatches = listRecorder.batches
-    #expect(batches == [[750, 751]])
-    #expect(batches == listBatches)
+    #expect(Set(batches.flatMap { $0 }) == [750, 751])
+    #expect(batches == listRecorder.batches)
 
     await model.close()
 }
@@ -719,6 +727,80 @@ func aLateCompletionLeavesANewerRequestPending() async throws {
 /// contexts, and blocking is the point.
 private func hold(until semaphore: DispatchSemaphore) {
     semaphore.wait()
+}
+
+/// The opening's own page is page 0 (spec/07: `Top` with the page
+/// limit reads ranks 0..<200, exactly page 0's rows), so the model
+/// lands it instead of reading it again — the first rows cost no
+/// second round trip.
+@MainActor
+@Test(.timeLimit(.minutes(1)))
+func theOpeningPageLandsAsPageZero() async throws {
+    let n = 1_000
+    let fake = FakeListWindowSource()
+    _ = await fake.fill(n)
+    let clock = ManualFrameClock()
+    let model = try await openModel(over: fake, clock: clock)
+
+    model.setVisible(0 ..< 50) // page 0, page 1 prefetched
+    try #require(await settle(clock) { model.row(at: 199) != nil && model.row(at: 200) != nil })
+    #expect(model.row(at: 0)?.occurrenceId == syntheticId(0, n))
+    #expect(await fake.readCount(anchor: .around(syntheticId(100, n))) == 0)
+    #expect(await fake.readCount(anchor: .around(syntheticId(300, n))) == 1)
+
+    await model.close()
+}
+
+/// A second `close()` waits for the first to release the handle, so
+/// "closed" means closed whoever asked (the benchmark awaits it
+/// between runs while the window's own close is under way).
+@MainActor
+@Test(.timeLimit(.minutes(1)))
+func aSecondCloseWaitsForTheFirst() async throws {
+    let fake = FakeListWindowSource()
+    _ = await fake.fill(10)
+    let gate = Gate()
+    await fake.gateNextClose(gate)
+    let clock = ManualFrameClock()
+    let model = try await openModel(over: fake, clock: clock)
+
+    let first = Task { await model.close() }
+    try #require(await eventually { await fake.closeCalls == 1 })
+    let secondDone = ObservationFlag()
+    let second = Task {
+        await model.close()
+        secondDone.set()
+    }
+    try? await Task.sleep(for: .milliseconds(100))
+    #expect(!secondDone.isSet, "the second close returned before the handle was released")
+
+    await gate.open()
+    await first.value
+    await second.value
+    #expect(secondDone.isSet)
+    #expect(await fake.closeCalls == 1)
+    #expect(await fake.closedWindows == [1])
+}
+
+/// The benchmark's hook hears of a delivery before the list's own
+/// hook runs, so a list's synchronous reload counts inside the
+/// delivery's measured latency.
+@MainActor
+@Test(.timeLimit(.minutes(1)))
+func theBenchmarkHookRunsBeforeTheListsHook() async throws {
+    let fake = FakeListWindowSource()
+    _ = await fake.fill(1_000)
+    let clock = ManualFrameClock()
+    let model = try await openModel(over: fake, clock: clock)
+    var calls: [String] = []
+    model.onPagesDelivered = { _ in calls.append("list") }
+    model.onPagesDeliveredForBenchmark = { _ in calls.append("benchmark") }
+
+    model.setVisible(0 ..< 50)
+    try #require(await settle(clock) { model.row(at: 0) != nil })
+    #expect(calls.prefix(2) == ["benchmark", "list"])
+
+    await model.close()
 }
 
 // MARK: - The real core

@@ -39,6 +39,12 @@ actor FakeListWindowSource: ListWindowSource {
     /// tests hold reads in flight, watch cancellation, then `open`.
     private var readGate: ThrowingGate?
 
+    /// When set, the next `closeWindow` waits on it first.
+    private var closeGate: Gate?
+
+    /// Every `closeWindow` call, counted on entry.
+    private(set) var closeCalls = 0
+
     /// When set, the next `windowIDs` takes its snapshot, then waits on
     /// it before answering — a stale index arriving late.
     private var indexGate: ThrowingGate?
@@ -166,8 +172,19 @@ actor FakeListWindowSource: ListWindowSource {
 
     /// `close_window` (spec/07): release the handle.
     func closeWindow(id: UInt64) async {
+        closeCalls += 1
+        if let gate = closeGate {
+            closeGate = nil
+            await gate.wait()
+        }
         open.remove(id)
         closedWindows.append(id)
+    }
+
+    /// Hold the next `closeWindow` on `gate` before it releases the
+    /// handle.
+    func gateNextClose(_ gate: Gate) {
+        closeGate = gate
     }
 
     /// Reject a `limit` outside 1–1,000 (spec/07), first thing.
