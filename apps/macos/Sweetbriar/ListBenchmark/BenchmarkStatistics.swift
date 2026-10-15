@@ -201,7 +201,7 @@ extension BenchmarkTimeline {
         var firstRows: Double?
         for (position, event) in events.enumerated() {
             let interval = intervalIndex(of: event.postedAt, in: firedAt)
-            let readySample = event.readySample.flatMap { $0 < firedAt.count ? $0 : nil }
+            let readySample = event.readySample.flatMap { firedAt.indices.contains($0) ? $0 : nil }
             let readyAt = readySample.map { firedAt[$0] }
             let latency = self.latency(
                 postedAt: event.postedAt, readyAt: readyAt, stoppedAt: stoppedAt
@@ -231,8 +231,12 @@ extension BenchmarkTimeline {
             }
         }
 
+        // Only intervals that exist count as active: a span over a run
+        // with no intervals covers none.
+        let intervals = cpuMs.isEmpty ? Set<Int>() : Set(1 ... cpuMs.count)
         func phase(_ name: String) -> PhaseStatistics {
             let active = BenchmarkStatistics.activeIntervals(spans[name] ?? [])
+                .intersection(intervals)
             return PhaseStatistics(
                 cpuMilliseconds: BenchmarkStatistics.summarize(
                     active.sorted().compactMap(cpu)
@@ -245,7 +249,7 @@ extension BenchmarkTimeline {
         }
         let overallActive = BenchmarkStatistics.activeIntervals(
             measuredPhases.flatMap { spans[$0] ?? [] } + (spans["overall"] ?? [])
-        )
+        ).intersection(intervals)
         let overall = PhaseStatistics(
             cpuMilliseconds: BenchmarkStatistics.summarize(
                 overallActive.sorted().compactMap(cpu)

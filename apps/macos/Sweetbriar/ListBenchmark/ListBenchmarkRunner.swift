@@ -412,8 +412,8 @@ final class ListBenchmarkRunner {
         // the drain, or be seen by the terminal sample alone.
         if run.generationChanged {
             generationAbort =
-                "\(implementation.rawValue) \(pass.rawValue): a model "
-                + "saw another generation mid-run"
+                "after \(implementation.rawValue) \(pass.rawValue) saw another "
+                + "generation, the remaining runs were skipped"
         }
         return run
     }

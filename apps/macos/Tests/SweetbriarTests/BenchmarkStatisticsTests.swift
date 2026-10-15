@@ -263,18 +263,20 @@ struct ReducerTests {
         ]
         let events = [
             TimelineEvent(phase: "jumps", detail: "jump", postedAt: 0.01, readySample: 99),
+            TimelineEvent(phase: "jumps", detail: "jump", postedAt: 0.012, readySample: -1),
         ]
         let reduction = BenchmarkTimeline.reduce(
             samples: samples, events: events, sealedAt: .infinity, nominalMilliseconds: 16.7
         )
-        #expect(reduction.events.first?.renderReadyIntervalIndex == nil)
-        #expect(reduction.unresolved == ["jumps": 1])
+        #expect(reduction.events.allSatisfy { $0.renderReadyIntervalIndex == nil })
+        #expect(reduction.unresolved == ["jumps": 2])
         #expect(reduction.intervals.activeCount <= reduction.intervals.count)
 
         let empty = BenchmarkTimeline.reduce(
             samples: [], events: events, sealedAt: .infinity, nominalMilliseconds: 16.7
         )
         #expect((empty.events.first?.latencyMilliseconds ?? -1) >= 0)
+        #expect(empty.intervals.activeCount <= empty.intervals.count)
     }
 }
 
