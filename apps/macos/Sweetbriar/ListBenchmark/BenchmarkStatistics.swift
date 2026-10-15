@@ -103,6 +103,173 @@ enum BenchmarkTimeline {
     }
 }
 
+/// One sample of a run's timeline as the reducer reads it: the
+/// sampler's tick without the live list state.
+struct TimelineSample: Equatable {
+    /// When the sample was taken.
+    var firedAt: Double
+    /// The frame time a display tick reports; the sample time for the
+    /// start and terminal samples.
+    var frameTime: Double
+    var cpuNanoseconds: UInt64
+    var footprintBytes: UInt64
+    /// A display tick — only tick-to-tick intervals are frames.
+    var isFrame: Bool
+}
+
+/// One recorded event as the reducer reads it.
+struct TimelineEvent: Equatable {
+    var phase: String
+    var detail: String
+    var postedAt: Double
+    /// The sample it was render-ready at; nil if it never was.
+    var readySample: Int?
+}
+
+/// A run's timeline reduced to plan M0.10's numbers.
+struct TimelineReduction: Equatable {
+    var phases: BenchmarkPhases
+    var intervals: IntervalSummary
+    var events: [BenchmarkEvent]
+    var firstRowsMilliseconds: Double?
+    /// Never-rendered events by phase, the opening's included.
+    var unresolved: [String: Int]
+    var peakFootprintBytes: UInt64
+}
+
+extension BenchmarkTimeline {
+    /// The opening's phase: from the window opening to its first rows.
+    static let openingPhase = "firstRows"
+
+    /// The phases with statistics of their own; the opening counts
+    /// toward the overall ones.
+    static let measuredPhases = ["jumps", "wheel", "selection", "pageDeliveries"]
+
+    /// Reduce a run (plan M0.10): per phase and overall, main-thread
+    /// CPU over active intervals, latency over rendered events, and
+    /// hitches; first rows; peak footprint. An event's active span
+    /// runs from its interval to its render-ready one — or, never
+    /// rendered, to where the next event of its phase superseded it or
+    /// the run stopped; the opening's always counts, so a stalled
+    /// opening's work stays in the numbers.
+    static func reduce(
+        samples: [TimelineSample],
+        events: [TimelineEvent],
+        nominalMilliseconds nominalMs: Double
+    ) -> TimelineReduction {
+        var cpuMs: [Double] = []
+        if samples.count > 1 {
+            for i in 1 ..< samples.count {
+                cpuMs.append(
+                    Double(samples[i].cpuNanoseconds - samples[i - 1].cpuNanoseconds) / 1e6
+                )
+            }
+        }
+        let firedAt = samples.map(\.firedAt)
+        let durations = frameDurations(
+            frameTimes: samples.map(\.frameTime),
+            isFrame: samples.map(\.isFrame)
+        )
+        func cpu(_ interval: Int) -> Double? {
+            interval >= 1 && interval <= cpuMs.count ? cpuMs[interval - 1] : nil
+        }
+        func isHitch(_ interval: Int) -> Bool {
+            guard interval >= 1, interval <= durations.count,
+                  let duration = durations[interval - 1]
+            else {
+                return false
+            }
+            return BenchmarkStatistics.isHitch(duration: duration, nominalInterval: nominalMs)
+        }
+        let stoppedAt = firedAt.last ?? 0
+
+        var reportEvents: [BenchmarkEvent] = []
+        var spans: [String: [EventSpan]] = [:]
+        var latencies: [String: [Double]] = [:]
+        var unresolved: [String: Int] = [:]
+        var firstRows: Double?
+        for (position, event) in events.enumerated() {
+            let interval = intervalIndex(of: event.postedAt, in: firedAt)
+            let readyAt = event.readySample.flatMap { $0 < firedAt.count ? firedAt[$0] : nil }
+            let latency = self.latency(
+                postedAt: event.postedAt, readyAt: readyAt, stoppedAt: stoppedAt
+            )
+            let supersededAt = events[(position + 1)...]
+                .first { $0.phase == event.phase }?.postedAt ?? stoppedAt
+            let readyInterval = event.readySample
+                ?? intervalIndex(of: supersededAt, in: firedAt)
+            reportEvents.append(BenchmarkEvent(
+                phase: event.phase,
+                detail: event.detail,
+                postedAtSeconds: event.postedAt,
+                intervalIndex: interval,
+                renderReadyIntervalIndex: event.readySample,
+                latencyMilliseconds: latency.milliseconds
+            ))
+            let bucket = event.phase == openingPhase ? "overall" : event.phase
+            spans[bucket, default: []].append(EventSpan(
+                eventInterval: interval, renderReadyInterval: readyInterval
+            ))
+            if !latency.resolved {
+                unresolved[event.phase, default: 0] += 1
+            } else if event.phase == openingPhase {
+                firstRows = latency.milliseconds
+            } else {
+                latencies[event.phase, default: []].append(latency.milliseconds)
+            }
+        }
+
+        func phase(_ name: String) -> PhaseStatistics {
+            let active = BenchmarkStatistics.activeIntervals(spans[name] ?? [])
+            return PhaseStatistics(
+                cpuMilliseconds: BenchmarkStatistics.summarize(
+                    active.sorted().compactMap(cpu)
+                ),
+                latencyMilliseconds: BenchmarkStatistics.summarize(latencies[name] ?? []),
+                hitchCount: active.filter(isHitch).count,
+                eventCount: spans[name]?.count ?? 0,
+                unresolvedEvents: unresolved[name] ?? 0
+            )
+        }
+        let overallActive = BenchmarkStatistics.activeIntervals(
+            measuredPhases.flatMap { spans[$0] ?? [] } + (spans["overall"] ?? [])
+        )
+        let overall = PhaseStatistics(
+            cpuMilliseconds: BenchmarkStatistics.summarize(
+                overallActive.sorted().compactMap(cpu)
+            ),
+            latencyMilliseconds: BenchmarkStatistics.summarize(
+                measuredPhases.flatMap { latencies[$0] ?? [] }
+            ),
+            hitchCount: overallActive.filter(isHitch).count,
+            eventCount: reportEvents.count,
+            unresolvedEvents: unresolved.values.reduce(0, +)
+        )
+
+        return TimelineReduction(
+            phases: BenchmarkPhases(
+                jumps: phase("jumps"),
+                wheel: phase("wheel"),
+                selection: phase("selection"),
+                pageDeliveries: phase("pageDeliveries"),
+                overall: overall
+            ),
+            intervals: IntervalSummary(
+                count: cpuMs.count,
+                activeCount: overallActive.count,
+                // Run-wide, over every frame: stalls outside event spans
+                // count too.
+                hitchCount: (1 ... max(1, cpuMs.count)).filter(isHitch).count,
+                nominalMilliseconds: nominalMs
+            ),
+            events: reportEvents,
+            firstRowsMilliseconds: firstRows,
+            unresolved: unresolved,
+            peakFootprintBytes: samples.map(\.footprintBytes).max() ?? 0
+        )
+    }
+}
+
 struct EventSpan: Equatable {
     /// The tick index ending the interval the event's post fell in.
     var eventInterval: Int

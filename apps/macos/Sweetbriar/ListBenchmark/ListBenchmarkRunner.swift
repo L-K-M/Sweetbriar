@@ -40,12 +40,16 @@ private final class RunContext {
     /// The phase the run is in, for attributing what ticks observe.
     var phase = "opening"
 
+    /// When measuring ended, after the drain: events recorded later
+    /// aren't the run's.
+    var sealedAt: Double?
+
     /// Frames at which the window wasn't key, or the app not active,
     /// by phase and by which: the run must stay key and front.
     private(set) var foregroundLosses: [String: Int] = [:]
 
-    /// When and in which phase the first such frame came.
-    private(set) var firstForegroundLoss: (what: String, phase: String, at: Double)?
+    /// Which was lost first, and in which phase.
+    private(set) var firstForegroundLoss: (what: String, phase: String)?
 
     /// When the run must stop, whatever it is doing: its time budget.
     let deadline: ContinuousClock.Instant
@@ -126,7 +130,7 @@ private final class RunContext {
         ] where lost && ticks[index].isFrame {
             foregroundLosses["\(what) in \(phase)", default: 0] += 1
             if firstForegroundLoss == nil {
-                firstForegroundLoss = (what, phase, ticks[index].firedAt)
+                firstForegroundLoss = (what, phase)
             }
         }
         let firedAt = ticks[index].firedAt
@@ -241,7 +245,7 @@ final class ListBenchmarkRunner {
         else {
             return failedRun(
                 implementation, pass, generation,
-                failures: ["the prototype window couldn't be created"],
+                failures: inheritedFailures + ["the prototype window couldn't be created"],
                 baseline: baseline
             )
         }
@@ -269,23 +273,25 @@ final class ListBenchmarkRunner {
         footprint.start()
         log("\(implementation.rawValue) \(pass.rawValue): opening")
         context.sampler.extras = { [weak controller] in
+            // The foreground belongs to the window and the app, read on
+            // every tick — also before the list is installed.
+            var extras = BenchmarkTickSampler.Extras()
+            extras.windowKey = controller?.window?.isKeyWindow == true
+            extras.appActive = NSApp.isActive
             guard let list = controller?.prototypeList,
                   let model = controller?.listModel
             else {
-                return .init()
+                return extras
             }
-            return .init(
-                scrollPosition: Self.scrollPosition(of: list),
-                visibleRowsPopulated: Self.allVisibleRowsPopulated(
-                    list: list, model: model
-                ),
-                // Generation 0 is a model still opening: the fill
-                // made the source's generation at least 1.
-                generationChanged: model.generation != 0
-                    && model.generation != generation,
-                windowKey: controller?.window?.isKeyWindow == true,
-                appActive: NSApp.isActive
+            extras.scrollPosition = Self.scrollPosition(of: list)
+            extras.visibleRowsPopulated = Self.allVisibleRowsPopulated(
+                list: list, model: model
             )
+            // Generation 0 is a model still opening: the fill made the
+            // source's generation at least 1.
+            extras.generationChanged = model.generation != 0
+                && model.generation != generation
+            return extras
         }
         context.sampler.onTick = { [weak context] index in
             context?.tickDidFire(index)
@@ -384,6 +390,7 @@ final class ListBenchmarkRunner {
 
         context.phase = "draining"
         await drainRenderReady(context: context)
+        context.sealedAt = CACurrentMediaTime()
         context.sampler.stop()
         let peakFootprint = footprint.stop()
         if let first = context.firstForegroundLoss {
@@ -392,9 +399,6 @@ final class ListBenchmarkRunner {
                 .joined(separator: ", ")
             log("\(implementation.rawValue) \(pass.rawValue): first lost \(first.what) in \(first.phase)")
             failures.append("the run lost the foreground (\(lost))")
-        }
-        if context.events.first(where: { $0.phase == "firstRows" })?.renderReadyTick == nil {
-            failures.append("the first rows never rendered")
         }
         // "closes both after" — the window and its model.
         await controller.closeAndAwaitModel()
@@ -483,9 +487,9 @@ final class ListBenchmarkRunner {
     }
 
     /// Wait, bounded, until the window has been key and the app active
-    /// for a quarter second without a break. Activation can flicker
-    /// just after launch (CI saw one frame of the first run lose both),
-    /// and a run measures only a steady foreground.
+    /// for a quarter second without a break: activation can still be
+    /// settling just after launch, and a run measures only a steady
+    /// foreground.
     private func awaitSteadyForeground(_ window: NSWindow) async -> Bool {
         let steady: Duration = .milliseconds(250)
         let deadline = clock.now + .seconds(5)
@@ -812,8 +816,8 @@ final class ListBenchmarkRunner {
         at screenPoint: NSPoint,
         windowNumber: Int
     ) -> NSEvent? {
-        // No event source: the event is never posted to the HID
-        // system, only handed to this app's queue.
+        // No event source: the event is never posted to the HID system
+        // — the wheel phase hands it straight to a view.
         guard let cgEvent = CGEvent(
                   scrollWheelEvent2Source: nil,
                   units: .line,
@@ -967,10 +971,10 @@ final class ListBenchmarkRunner {
 
     // MARK: - The run's numbers
 
-    /// Reduce the tick log and the events to the report's per-run
-    /// numbers (plan M0.10): per phase and overall — CPU p50/p95/max
-    /// over active intervals, latency p50/p95/max over events, hitch
-    /// counts — plus first-rows time, peak footprint and its rise.
+    /// The run's report: its timeline reduced (`BenchmarkTimeline`) to
+    /// plan M0.10's numbers, its checks' failures — plus never-rendered
+    /// events — and its peak footprint, from ticks and the independent
+    /// sampler.
     private func assembleRun(
         context: RunContext,
         implementation: PrototypeImplementation,
@@ -983,136 +987,47 @@ final class ListBenchmarkRunner {
         sampledPeak: UInt64,
         screen: NSScreen?
     ) -> BenchmarkRun {
-        let ticks = context.sampler.ticks
         let fps = Double(screen?.maximumFramesPerSecond ?? 0)
         let nominalMs = fps > 0 ? 1_000 / fps : 0
 
-        // The samples (BenchmarkTimeline): the start, each display
-        // tick, the terminal sample at the stop. Interval i's CPU is
-        // sample i's minus sample i−1's; only tick-to-tick intervals
-        // have a frame duration for hitches. Events are placed and
-        // timed by when samples ran — when CPU was read — not by the
-        // frame times the link reports, which trail them.
-        var cpuMs: [Double] = []
-        if ticks.count > 1 {
-            for i in 1 ..< ticks.count {
-                cpuMs.append(
-                    Double(
-                        ticks[i].cpuNanoseconds
-                            - ticks[i - 1].cpuNanoseconds
-                    ) / 1e6
+        // An event posted after the drain — a straggling delivery —
+        // came after measuring ended: on a stopped timeline it can't
+        // render, so it isn't the run's.
+        let sealedAt = context.sealedAt ?? .infinity
+        let reduction = BenchmarkTimeline.reduce(
+            samples: context.sampler.ticks.map {
+                TimelineSample(
+                    firedAt: $0.firedAt,
+                    frameTime: $0.timestamp,
+                    cpuNanoseconds: $0.cpuNanoseconds,
+                    footprintBytes: $0.footprintBytes,
+                    isFrame: $0.isFrame
                 )
-            }
-        }
-        let firedAt = ticks.map(\.firedAt)
-        let frameDurations = BenchmarkTimeline.frameDurations(
-            frameTimes: ticks.map(\.timestamp),
-            isFrame: ticks.map(\.isFrame)
+            },
+            events: context.events.filter { $0.postedAt <= sealedAt }.map {
+                TimelineEvent(
+                    phase: $0.phase,
+                    detail: $0.detail,
+                    postedAt: $0.postedAt,
+                    readySample: $0.renderReadyTick
+                )
+            },
+            nominalMilliseconds: nominalMs
         )
-        func isHitch(_ interval: Int) -> Bool {
-            guard let duration = frameDurations[safe: interval - 1] ?? nil else {
-                return false
-            }
-            return BenchmarkStatistics.isHitch(
-                duration: duration, nominalInterval: nominalMs
-            )
-        }
-        let stoppedAt = ticks.last?.firedAt ?? CACurrentMediaTime()
 
-        var reportEvents: [BenchmarkEvent] = []
-        var spans: [String: [EventSpan]] = [:]
-        var latencies: [String: [Double]] = [:]
-        var unresolved: [String: Int] = [:]
-        var firstRowsMs: Double?
-        for (position, event) in context.events.enumerated() {
-            let interval = BenchmarkTimeline.intervalIndex(of: event.postedAt, in: firedAt)
-            let ready = event.renderReadyTick
-            // An event never render-ready counts as unresolved: its
-            // latency, to the stop, is only a lower bound, kept out of
-            // the percentiles. Its active span ends where the next event
-            // of its phase superseded it, or at the stop.
-            let latency = BenchmarkTimeline.latency(
-                postedAt: event.postedAt,
-                readyAt: ready.flatMap { ticks[safe: $0]?.firedAt },
-                stoppedAt: stoppedAt
-            )
-            let supersededAt = context.events[(position + 1)...]
-                .first { $0.phase == event.phase }?.postedAt ?? stoppedAt
-            let readyInterval = ready
-                ?? BenchmarkTimeline.intervalIndex(of: supersededAt, in: firedAt)
-            reportEvents.append(BenchmarkEvent(
-                phase: event.phase,
-                detail: event.detail,
-                postedAtSeconds: event.postedAt,
-                intervalIndex: interval,
-                renderReadyIntervalIndex: ready,
-                latencyMilliseconds: latency.milliseconds
-            ))
-            if event.phase == "firstRows" {
-                firstRowsMs = latency.resolved ? latency.milliseconds : nil
-            } else {
-                spans[event.phase, default: []].append(EventSpan(
-                    eventInterval: interval,
-                    renderReadyInterval: readyInterval
-                ))
-                if latency.resolved {
-                    latencies[event.phase, default: []].append(latency.milliseconds)
-                } else {
-                    unresolved[event.phase, default: 0] += 1
-                }
-            }
-        }
-        // The opening counts toward the run's overall work.
-        if let first = context.events.first, first.phase == "firstRows",
-           let ready = first.renderReadyTick {
-            spans["overall", default: []].append(EventSpan(
-                eventInterval: BenchmarkTimeline.intervalIndex(of: first.postedAt, in: firedAt),
-                renderReadyInterval: ready
-            ))
-        }
-        // Every event must render: one that never did leaves part of
-        // its phase unmeasured, so the run fails (its numbers stay).
+        // Every event must render, the opening's included: one that
+        // never did leaves part of the run unmeasured, so the run fails
+        // (its numbers stay).
         var failures = checkFailures
-        let unresolvedTotal = unresolved.values.reduce(0, +)
+        let unresolvedTotal = reduction.unresolved.values.reduce(0, +)
         if unresolvedTotal > 0 {
-            let byPhase = unresolved.sorted { $0.key < $1.key }
+            let byPhase = reduction.unresolved.sorted { $0.key < $1.key }
                 .map { "\($0.key) \($0.value)" }
                 .joined(separator: ", ")
             failures.append("\(unresolvedTotal) events never rendered (\(byPhase))")
         }
 
-        func phase(_ name: String) -> PhaseStatistics {
-            let active = BenchmarkStatistics.activeIntervals(spans[name] ?? [])
-            let cpu = active.sorted().compactMap { cpuMs[safe: $0 - 1] }
-            let hitches = active.filter(isHitch).count
-            return PhaseStatistics(
-                cpuMilliseconds: BenchmarkStatistics.summarize(cpu),
-                latencyMilliseconds: BenchmarkStatistics.summarize(
-                    latencies[name] ?? []
-                ),
-                hitchCount: hitches,
-                eventCount: spans[name]?.count ?? 0,
-                unresolvedEvents: unresolved[name] ?? 0
-            )
-        }
-
-        let allSpans = (spans["jumps"] ?? [])
-            + (spans["wheel"] ?? [])
-            + (spans["selection"] ?? [])
-            + (spans["pageDeliveries"] ?? [])
-            + (spans["overall"] ?? [])
-        let overallActive = BenchmarkStatistics.activeIntervals(allSpans)
-        let overallCpu = overallActive.sorted().compactMap { cpuMs[safe: $0 - 1] }
-        let overallLatencies = (latencies["jumps"] ?? [])
-            + (latencies["wheel"] ?? [])
-            + (latencies["selection"] ?? [])
-            + (latencies["pageDeliveries"] ?? [])
-        let overallHitches = overallActive.filter(isHitch).count
-        // A run-wide hitch count over every frame — stalls outside
-        // event spans count too.
-        let runHitches = (1 ... max(1, cpuMs.count)).filter(isHitch).count
-
-        let peak = max(ticks.map(\.footprintBytes).max() ?? baseline, sampledPeak)
+        let peak = max(reduction.peakFootprintBytes, sampledPeak)
         return BenchmarkRun(
             implementation: implementation.rawValue,
             pass: pass,
@@ -1122,30 +1037,13 @@ final class ListBenchmarkRunner {
             appWasActive: appWasActive,
             generation: generation,
             generationChanged: context.generationChanged,
-            firstRowsMilliseconds: firstRowsMs,
+            firstRowsMilliseconds: reduction.firstRowsMilliseconds,
             baselineFootprintBytes: baseline,
             peakFootprintBytes: peak,
             footprintRiseBytes: Int64(peak) - Int64(baseline),
-            phases: BenchmarkPhases(
-                jumps: phase("jumps"),
-                wheel: phase("wheel"),
-                selection: phase("selection"),
-                pageDeliveries: phase("pageDeliveries"),
-                overall: PhaseStatistics(
-                    cpuMilliseconds: BenchmarkStatistics.summarize(overallCpu),
-                    latencyMilliseconds: BenchmarkStatistics.summarize(overallLatencies),
-                    hitchCount: overallHitches,
-                    eventCount: reportEvents.count,
-                    unresolvedEvents: unresolvedTotal
-                )
-            ),
-            intervals: IntervalSummary(
-                count: cpuMs.count,
-                activeCount: overallActive.count,
-                hitchCount: runHitches,
-                nominalMilliseconds: nominalMs
-            ),
-            events: reportEvents
+            phases: reduction.phases,
+            intervals: reduction.intervals,
+            events: reduction.events
         )
     }
 
@@ -1187,14 +1085,6 @@ final class ListBenchmarkRunner {
             ),
             events: []
         )
-    }
-}
-
-private extension Array {
-    /// `self[index]`, or nil out of range — the tick arrays are
-    /// indexed by interval numbers that start at 1.
-    subscript(safe index: Int) -> Element? {
-        indices.contains(index) ? self[index] : nil
     }
 }
 

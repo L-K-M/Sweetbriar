@@ -168,16 +168,21 @@ jobs:
           echo "--- benchmark report ---"
           cat "$RUNNER_TEMP/list-benchmark.json" || true
 
-      # The gate: the report exists and AppKit's cold run (the
-      # shipping list, in a clean process) passed every check. SwiftUI
-      # failing its checks is the comparison's finding, not a
-      # regression; AppKit's warm run follows SwiftUI's multi-gigabyte
-      # runs in this 7 GB VM, so it is recorded, not gated.
+      # The gate: all four runs happened, none saw another generation,
+      # and AppKit's cold run (the shipping list, in a clean process)
+      # passed every check. SwiftUI failing its checks is the
+      # comparison's finding, not a regression; AppKit's warm run
+      # follows SwiftUI's multi-gigabyte runs in this 7 GB VM, so it is
+      # recorded, not gated.
       - name: Check the benchmark's verdict
         if: always()
         run: |
-          jq -e '[.runs[] | select(.implementation == "appkit" and .pass == "cold") | .ok]
-            | length == 1 and all' "$RUNNER_TEMP/list-benchmark.json"
+          jq -e '
+            ([.runs[] | "\(.implementation)-\(.pass)"] | unique | length == 4)
+            and ([.runs[] | select(.generationChanged)] | length == 0)
+            and ([.runs[] | select(.implementation == "appkit" and .pass == "cold") | .ok]
+              | length == 1 and all)
+          ' "$RUNNER_TEMP/list-benchmark.json"
 
       - name: Upload the benchmark report
         if: always()

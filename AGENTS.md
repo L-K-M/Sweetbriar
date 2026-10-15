@@ -72,9 +72,10 @@ compiler must be on `PATH`. Its compile options come from
   presentation and the context-click rule;
 - the M0.10 list benchmark: the Release app launches with
   `-runListBenchmark <report.json>` after the Release zip step; the
-  step passes when AppKit's cold run passes its checks (SwiftUI's
-  failures are findings, kept in the report's `ok` and failures;
-  AppKit's warm run inherits SwiftUI's footprint on CI), and
+  step passes when all four runs happened without a generation abort
+  and AppKit's cold run passed its checks (SwiftUI's failures are
+  findings, kept in the report's `ok` and failures; AppKit's warm run
+  inherits SwiftUI's footprint on CI), and
   the report uploads as the `list-benchmark` artifact — its numbers
   are diagnostic (the owner's Mac decides between the two lists);
 - anything touching `apps/` or generated bindings.

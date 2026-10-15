@@ -158,7 +158,8 @@ struct SampleStatistics: Codable, Equatable {
 
 /// The run's display-interval ledger.
 struct IntervalSummary: Codable, Equatable {
-    /// Intervals between consecutive ticks, first to last.
+    /// Intervals between consecutive samples: the start, each display
+    /// tick, the terminal sample.
     var count: Int
     /// Intervals an event's span covered — input or delivery to its
     /// render-ready.

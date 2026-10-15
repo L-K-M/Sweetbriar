@@ -139,3 +139,87 @@ struct TimelineTests {
         #expect(durations == [nil, 10_000, 10_000, nil])
     }
 }
+
+@Suite("reducing a run")
+struct ReducerTests {
+    /// A sample `cpu` ms of main-thread time into the run; frame times
+    /// equal sample times.
+    private func sample(_ at: Double, cpu: Double, frame: Bool = true) -> TimelineSample {
+        TimelineSample(
+            firedAt: at, frameTime: at,
+            cpuNanoseconds: UInt64(cpu * 1e6), footprintBytes: UInt64(at * 10),
+            isFrame: frame
+        )
+    }
+
+    @Test("an opening that never renders keeps its work in the numbers")
+    func stalledOpening() {
+        // The start, one tick, then a 100 s stall to the stop.
+        let samples = [
+            sample(0, cpu: 0, frame: false),
+            sample(0.016, cpu: 1),
+            sample(100, cpu: 100_001, frame: false),
+        ]
+        let events = [
+            TimelineEvent(phase: "firstRows", detail: "opened", postedAt: 0.001, readySample: nil),
+        ]
+        let reduction = BenchmarkTimeline.reduce(
+            samples: samples, events: events, nominalMilliseconds: 16.7
+        )
+        #expect(reduction.firstRowsMilliseconds == nil)
+        #expect(reduction.unresolved == ["firstRows": 1])
+        #expect(reduction.phases.overall.unresolvedEvents == 1)
+        #expect(reduction.phases.overall.cpuMilliseconds.max == 100_000)
+        #expect(reduction.events.first?.latencyMilliseconds == 99_999)
+    }
+
+    @Test("a rendered run: latency, active CPU and a missed frame")
+    func rendered() {
+        // Ticks at 16.7 ms; the frame ending sample 3 is late (33.4 ms).
+        let samples = [
+            sample(0, cpu: 0, frame: false),
+            sample(0.0167, cpu: 2),
+            sample(0.0334, cpu: 4),
+            sample(0.0668, cpu: 30),
+            sample(0.0835, cpu: 31),
+            sample(0.09, cpu: 31, frame: false),
+        ]
+        let events = [
+            TimelineEvent(phase: "firstRows", detail: "opened", postedAt: 0.0001, readySample: 1),
+            TimelineEvent(phase: "jumps", detail: "jump", postedAt: 0.02, readySample: 3),
+        ]
+        let reduction = BenchmarkTimeline.reduce(
+            samples: samples, events: events, nominalMilliseconds: 16.7
+        )
+        #expect(abs((reduction.firstRowsMilliseconds ?? 0) - 16.6) < 1e-6)
+        let jumps = reduction.phases.jumps
+        #expect(abs(jumps.latencyMilliseconds.max - 46.8) < 1e-6)
+        // The jump's span: intervals 2 and 3, CPU 2 and 26 ms.
+        #expect(jumps.cpuMilliseconds.samples == [2, 26])
+        #expect(jumps.hitchCount == 1)
+        #expect(reduction.unresolved.isEmpty)
+        // Run-wide: the late frame only; the terminal interval is none.
+        #expect(reduction.intervals.hitchCount == 1)
+        #expect(reduction.intervals.count == 5)
+    }
+
+    @Test("a post after the last frame resolves to a positive bound")
+    func postAfterLastFrame() {
+        let samples = [
+            sample(0, cpu: 0, frame: false),
+            sample(0.0167, cpu: 1),
+            sample(5, cpu: 4_000, frame: false),
+        ]
+        let events = [
+            TimelineEvent(phase: "selection", detail: "click", postedAt: 1, readySample: nil),
+        ]
+        let reduction = BenchmarkTimeline.reduce(
+            samples: samples, events: events, nominalMilliseconds: 16.7
+        )
+        #expect(reduction.events.first?.latencyMilliseconds == 4_000)
+        #expect(reduction.unresolved == ["selection": 1])
+        #expect(reduction.phases.selection.latencyMilliseconds.count == 0)
+        #expect(reduction.phases.selection.cpuMilliseconds.samples == [3_999])
+    }
+}
+
