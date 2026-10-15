@@ -693,12 +693,20 @@ func aLateCompletionLeavesANewerRequestPending() async throws {
         await clock.tick()
         ordered.signal()
     }
-    ordered.wait()
+    hold(until: ordered)
 
     try #require(await settle(clock) { model.row(at: 4_800) != nil })
     #expect(await fake.reads.count == 2)
 
     await model.close()
+}
+
+/// Keep the calling thread — here the main actor — busy until
+/// `semaphore` signals, so jobs queued meanwhile run in a fixed
+/// order. Synchronous on purpose: `wait()` is barred from async
+/// contexts, and blocking is the point.
+private func hold(until semaphore: DispatchSemaphore) {
+    semaphore.wait()
 }
 
 // MARK: - The real core
