@@ -329,19 +329,102 @@ decided.
   - a PR changing only `.cargo/config.toml` runs the macOS build jobs;
   - **owner (O3):** it launches on the owner's Mac.
 
-### M0.10 Message list prototype — M, macos-ci + owner
+### M0.10 Message list prototype — L, macos-ci + owner
 
 - **Goal:** decide between AppKit `NSTableView` and SwiftUI `List` for the
   message list, on evidence.
-- **Spec:** 08 (Message list), research D8 (fair prototype).
+- **Spec:** 08 (Message list, Debug menu), 07 (Queries: window handles,
+  the id index, the debug source), research D8 (fair prototype).
 - **Depends on:** M0.9.
+- **Scope:** a flat list of fixed-height rows. The research's harder
+  cases are deferred: variable heights, threading, drag promises and
+  live updates. M0.10 can therefore keep AppKit, but a switch to
+  SwiftUI also needs those cases to pass on it, in a follow-up step
+  before M1.4. The synthetic source qualifies the UI stack only;
+  store-backed paging latency is qualified in M1.3, the same for
+  whichever framework wins.
 - **Deliverables:**
-  - a debug-only core command that fills a synthetic in-memory window
-    source with 500,000 rows (same `ListRow` shape as spec/07);
-  - two list implementations behind a debug toggle;
-  - a scroll and selection benchmark (XCTest `measure` plus signposts).
+  - a pilot diagnostic (07, exported in every build so the owner's
+    Release artifact has it) that fills a synthetic in-memory window
+    source with 500,000 rows (same `ListRow` shape as spec/07):
+    - `debug_fill_synthetic`, with `open_window`, `read_window`,
+      `window_ids`, `close_window` and their types
+      (`WindowSpec::DebugSynthetic` only, so far);
+    - through the engine, the service and the FFI; bindings
+      regenerated;
+  - `ListWindowModel` in `SweetbriarBridge` (08);
+  - two list implementations behind a debug toggle (08 Debug menu),
+    each the best idiomatic shape for its framework over the same model:
+    - AppKit: a view-based `NSTableView`, with no Auto Layout in cells
+      and a cached constant row height;
+    - SwiftUI: `List`, since mail rows are single-column (research 08);
+      `Table` isn't built, so the result speaks for `List`. Guardrails:
+      `ForEach` over all ids with stable ids, one constant row view
+      type, rows observed one by one, no `AnyView`;
+    - both: the same row fields, height and colors (system colors, so
+      Dark Mode); multi-select; a context menu with 08's targets;
+      VoiceOver labels in the order sender, subject, date, then unread
+      and flagged state;
+  - a benchmark harness in the app, run two ways, both on the Release
+    build: by Debug → Run List Benchmark on the owner's Mac, and in
+    macOS CI by launching the built app with `-runListBenchmark
+    <report.json>` (08), which prints and uploads the report.
+    `OSSignposter` spans mark input, queue, FFI and apply for
+    Instruments. (XCTest `measure` isn't used: its metrics cover a
+    whole process, not one update's main-thread work, and an app-hosted
+    test couldn't run the owner's Release build.)
+  - the harness's runs:
+    - each implementation in a fresh window and model of fixed size,
+      font and row height, frontmost and key; a cold run (from opening,
+      so the id index transfer and identity building count) and a warm
+      run; the order alternates between runs;
+    - it awaits a 500,000-row fill before opening anything, and aborts
+      if the generation changes mid-run;
+    - scrolling: jumps to rank `⌊f × (N − 1)⌋` for `f` = 0, 0.1 … 1.0,
+      250 ms apart, through each list's own scroll-position API; then
+      200 one-line scroll-wheel events upward, 16.7 ms apart, the same
+      events for both;
+    - selection, through mouse events with modifier flags, the same for
+      both: click rank 100,000; jump to rank 109,999 and shift-click it;
+      then ⌘-click ranks 100,000…100,009;
+    - outside the timed spans it checks that the visible rows are
+      populated and the selection is exactly the expected ids; a check
+      that fails or times out fails the run;
+  - the harness's numbers:
+    - main-thread CPU per display interval, from thread CPU counters
+      sampled at each tick of a continuously running display link; an
+      interval is active when an input or a page delivery fell in it or
+      its work was still running;
+    - latency from an input or page delivery to the first tick after
+      which its rows are laid out and visible (render-ready, a proxy
+      for presentation);
+    - hitches: display intervals longer than the display's own nominal
+      interval, so 120 Hz misses count;
+    - p50, p95 and max of CPU and latency, hitch counts, time to first
+      populated rows, peak memory, and the hardware, OS, Xcode and
+      refresh rate.
 - **Acceptance:**
-  - benchmark numbers for both are recorded in the PR;
+  - from Rust:
+    - a fill cancelled before its replacement leaves the source as it
+      was; one cancelled after returns the new generation;
+    - pages from `Top`, `After`, `Before` and `Around(id)` are contiguous
+      keyset pages that agree with the id index, across tied dates, both
+      ends, odd and even limits, and empty and tiny windows;
+    - a read at an older generation is `ResetRequired`;
+    - a closed or unknown window, and an `Around` id not in the window,
+      are `NotFound`;
+    - a `limit` outside 1–1,000 and a fill `count` over 1,000,000 are
+      `InvalidInput`;
+  - the model (Swift Testing):
+    - a page fetched around a position, and the exact pages for
+      N = 0, 1, 199, 200, 201, 250 and 401;
+    - at most 600 rows, with the visible pages kept;
+    - one read for concurrent misses on a page;
+    - at most two reads in flight, with obsolete ones cancelled;
+    - a late completion dropped;
+    - a rebuild after `ResetRequired`;
+  - benchmark numbers for both are recorded in the PR: macOS CI's
+    (diagnostic: virtualized runners) and the owner's Mac's (deciding);
   - **owner checklist (O4)**, completed for both:
     - smooth scrolling;
     - keyboard selection;
@@ -349,8 +432,15 @@ decided.
     - a context menu;
     - VoiceOver row reading;
     - Dark Mode;
-  - the decision is written into spec/08 (AppKit stays unless SwiftUI
-    matches it on every checklist item and benchmark).
+  - the decision is written into spec/08, from the owner's Mac's
+    numbers. AppKit stays unless SwiftUI matches it on every checklist
+    item and every benchmark. Matching means:
+    - CPU and latency p95 and max within 1.2× AppKit's;
+    - inside 08's budgets at p95: main-thread CPU per scroll update
+      under 5 ms, selection feedback under 50 ms, first populated rows
+      within 100 ms;
+    - peak memory within 1.2× AppKit's, and no more warm-scroll hitches
+      than AppKit.
 
 ### M0.11 Composer probe — S, macos-ci + owner
 

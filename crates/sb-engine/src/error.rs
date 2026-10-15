@@ -28,6 +28,10 @@ pub enum EngineError {
     /// idempotency key reused for another command
     /// (`CoreError::Conflict`).
     Conflict { detail: String },
+    /// A window read or cursor is stale: the window's state moved on
+    /// to `generation` (`CoreError::ResetRequired`). The caller
+    /// rebuilds on the same handle: its id index, then its pages.
+    ResetRequired { generation: u64 },
     /// An internal invariant broke (`CoreError::Internal`).
     Internal { detail: String },
 }
@@ -89,6 +93,12 @@ impl fmt::Display for EngineError {
             ),
             Self::InvalidInput { field, message } => write!(f, "invalid input: {field}: {message}"),
             Self::Conflict { detail } => write!(f, "conflict: {detail}"),
+            Self::ResetRequired { generation } => {
+                write!(
+                    f,
+                    "the window moved on to generation {generation}; rebuild it"
+                )
+            }
             Self::Internal { detail } => write!(f, "internal error: {detail}"),
         }
     }

@@ -12,6 +12,7 @@
 mod engine;
 mod error;
 mod settings;
+mod windows;
 
 // The engine's API types and the platform defaults the layer above
 // needs, re-exported by item through this layer (spec/01 rule 3;
@@ -21,3 +22,4 @@ pub use sb_resources::{Receipt, Timestamp, default_cache_root, default_data_root
 pub use engine::Engine;
 pub use error::EngineError;
 pub use settings::Setting;
+pub use windows::{Anchor, Count, Cursor, ListRow, Window, WindowId, WindowIds, WindowSpec};

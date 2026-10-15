@@ -102,7 +102,7 @@ that needs it.
 | O1 | *Dropped (2026-10-12): no branch protection on `main`* | — |
 | O2 | *Decided (2026-10-12): "Unlicense OR 0BSD"; `LICENSE-0BSD` added* | — |
 | O3 | Run the CI-built app on your Mac (`xattr -dr com.apple.quarantine Sweetbriar.app`) and report problems | From M0.9 |
-| O4 | Judge the list prototype and composer probe on your Mac (checklists in M0) | M0.10, M0.11 |
+| O4 | Judge the list prototype (and run its benchmark: Debug → Run List Benchmark) and the composer probe on your Mac (checklists in M0) | M0.10, M0.11 |
 | O5 | Export a few Apple Mail mailboxes (Mailbox → Export Mailbox) for the import qualification | M1.Q |
 | O6 | Install Proton Mail Bridge 3.27.1+ (paid Proton plan with Mail), sign in, export its TLS certificate | M2 |
 | O7 | Run the per-milestone qualification checklists against your real Proton account | M2.Q onward |

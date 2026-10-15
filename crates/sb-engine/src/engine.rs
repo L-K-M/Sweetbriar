@@ -13,6 +13,7 @@ use tokio::runtime::{Handle, Runtime};
 use tokio::task::{JoinError, JoinHandle};
 
 use crate::EngineError;
+use crate::windows::Windows;
 use sb_resources::Resources;
 
 /// The name of the worker a dropped engine closes its store on.
@@ -51,6 +52,10 @@ pub struct Engine {
     resources: Option<Arc<Resources>>,
     blocking: Arc<BlockingWork>,
     runtime: OwnedRuntime,
+    /// The open windows and the debug source behind them (spec/07
+    /// "Queries"): in memory only — no store reads. Shared with the
+    /// runtime tasks the window calls run on.
+    windows: Arc<Windows>,
     /// The worker reserved at open that closes the store if the engine
     /// is dropped without `shutdown`; it ends when this sender drops.
     cleanup: std::sync::mpsc::Sender<Cleanup>,
@@ -141,6 +146,29 @@ impl BlockingWork {
     }
 }
 
+/// Runs cleanup on the engine's blocking pool without waiting for it:
+/// for work a dropped value owes — a `Drop` may run on any thread, the
+/// foreign caller's included, where nothing may block (spec/07 "One
+/// runtime"). Counted like other blocking work, so shutdown waits for
+/// it; skipped once shutdown has begun, which drops everything anyway.
+pub(crate) struct Detached {
+    handle: Handle,
+    blocking: Arc<BlockingWork>,
+}
+
+impl Detached {
+    /// Run `f` on the blocking pool, or not at all during shutdown.
+    pub(crate) fn spawn(&self, f: impl FnOnce() + Send + 'static) {
+        let Ok(running) = self.blocking.start() else {
+            return;
+        };
+        self.handle.spawn_blocking(move || {
+            f();
+            drop(running);
+        });
+    }
+}
+
 /// One counted blocking task; dropping it, at the task's end, counts it
 /// out.
 struct Running(Arc<BlockingWork>);
@@ -190,6 +218,7 @@ impl Engine {
                         resources: Some(Arc::new(resources)),
                         blocking: Arc::default(),
                         runtime,
+                        windows: Arc::new(Windows::new()),
                         cleanup: start_cleanup_worker()?,
                     })
                 });
@@ -207,6 +236,12 @@ impl Engine {
         self.resources
             .as_ref()
             .expect("the store handle lives until shutdown")
+    }
+
+    /// The window table; crate-visible so the `windows` module can
+    /// implement its share of `Engine`.
+    pub(crate) fn windows(&self) -> &Arc<Windows> {
+        &self.windows
     }
 
     /// A fresh UUID string for a command's idempotency key (spec/07
@@ -258,6 +293,34 @@ impl Engine {
             result
         });
         self.join(task).await
+    }
+
+    /// Run in-memory work on the runtime's blocking pool, so a caller's
+    /// thread never does it (spec/07 "One runtime": nothing blocks the
+    /// caller's thread) — the window table's lock and a 500,000-id
+    /// index included. Counted like reads, so shutdown waits for it.
+    pub(crate) async fn compute<T, F>(&self, f: F) -> Result<T, EngineError>
+    where
+        T: Send + 'static,
+        F: FnOnce() -> Result<T, EngineError> + Send + 'static,
+    {
+        let running = self.blocking.start()?;
+        let task = self.runtime.handle().spawn_blocking(move || {
+            let result = f();
+            drop(running);
+            result
+        });
+        task.await
+            .map_err(|join| join_failed("run on the runtime", join))?
+    }
+
+    /// A handle for cleanup no caller waits for, run like `compute` on
+    /// the blocking pool — see `Detached`.
+    pub(crate) fn detached(&self) -> Detached {
+        Detached {
+            handle: self.runtime.handle().clone(),
+            blocking: Arc::clone(&self.blocking),
+        }
     }
 
     /// Await one blocking task, mapping a failed join to `Internal` and

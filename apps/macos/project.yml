@@ -2,7 +2,9 @@
 # apps/macos/project.yml` produces `Sweetbriar.xcodeproj` (ignored).
 # Layout: the generated `SweetbriarCore` Swift package (xtask ffi),
 # the `SweetbriarBridge` L1 framework, the `Sweetbriar` AppKit app,
-# and its Swift-Testing bundle.
+# and the two Swift-Testing bundles — the bridge's, and the
+# app-hosted `SweetbriarTests` for the benchmark's Foundation-only
+# logic (M0.10).
 
 name: Sweetbriar
 
@@ -81,6 +83,23 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.sweetbriar.SweetbriarBridgeTests
         GENERATE_INFOPLIST_FILE: YES
 
+  # The app-hosted bundle (plan M0.10): `@testable import Sweetbriar`
+  # drives the benchmark's Foundation-only statistics, report and row
+  # presentation inside the running app.
+  SweetbriarTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - Tests/SweetbriarTests
+    dependencies:
+      - target: Sweetbriar
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.sweetbriar.SweetbriarTests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/Sweetbriar.app/Contents/MacOS/Sweetbriar
+        BUNDLE_LOADER: $(TEST_HOST)
+
 schemes:
   Sweetbriar:
     build:
@@ -88,9 +107,12 @@ schemes:
         Sweetbriar: all
         SweetbriarBridgeTests:
           - test
+        SweetbriarTests:
+          - test
     run:
       config: Debug
     test:
       config: Debug
       targets:
         - SweetbriarBridgeTests
+        - SweetbriarTests

@@ -87,18 +87,25 @@ async fn Core::shutdown(self);   // flush writer, release the lease
 
 ```rust
 async fn open_window(spec: WindowSpec, anchor: Anchor, limit: u32) -> Result<Window, CoreError>;
+async fn read_window(window_id: WindowId, generation: u64, anchor: Anchor, limit: u32) -> Result<Window, CoreError>;
+async fn window_ids(window_id: WindowId) -> Result<WindowIds, CoreError>;
+async fn close_window(window_id: WindowId);
 // WindowSpec: Mailbox(id) | Unified(role) | Flagged | Search(query_json) | View(id) | Thread(thread_id)
 // (Account(id, role) is later. The sidebar uses Mailbox, Unified, Flagged and View,
 // plus drafts() and out_box(); Thread backs the reader's conversation context.)
+// (DebugSynthetic: the pilot's in-memory source for the list prototype, below.)
 // Anchor: Top | After(cursor) | Before(cursor) | Around(occurrence_id)
 struct Window {
     window_id: WindowId,
     generation: u64,
-    rows: Vec<ListRow>,       // ≤ limit, default 200
+    rows: Vec<ListRow>,       // ≤ limit
+    before: Option<Cursor>,   // the first row's cursor; None when rows is empty
+    after: Option<Cursor>,    // the last row's cursor
     has_more_after: bool,
     has_more_before: bool,
     total: Count,             // Exact(n) | AtLeast(n) | Unknown
 }
+struct WindowIds { generation: u64, ids: Vec<i64> } // the rows' occurrence ids, in window order
 struct ListRow {
     occurrence_id: i64, message_id: i64, account_id: String, mailbox_id: i64,
     sort_date: i64, sender: String, subject: String, snippet: String,
@@ -113,10 +120,55 @@ struct ListRow {
 - Rows carry **display fields only**: no MIME trees and no bodies. The
   account color is resolved by the shell from `account_id` through
   `appearance()`.
+- **Windows are handles.**
+  - `open_window` registers a window over `spec` and returns its first
+    page.
+  - `read_window` pages it at the generation the caller holds. Once
+    the window's state has moved on, any read answers
+    `ResetRequired { generation }` and the caller rebuilds: its id
+    index, then its pages.
+  - `close_window` releases it; the shell closes every window it
+    opens. A read of a closed or unknown window is `NotFound`.
 - **Paging** is by keyset cursor, never `OFFSET`. Cursors are opaque and
   sort-specific: `(sort_date, occurrence_id)` for date order, `(score,
   occurrence_id)` for relevance order. They are bound to the window's
   generation, so a stale cursor gets `CoreError::ResetRequired`.
+  - A cursor names its row, its spec and its generation. `open_window`
+    honours one minted on the same spec at its opening generation; one
+    from another generation is `ResetRequired`, and one from another
+    spec, or malformed, is `InvalidInput`.
+  - `After(c)` returns the rows strictly after `c`'s row, `Before(c)`
+    those strictly before it; every page is in window order.
+  - `limit` is 1–1,000; anything else is `InvalidInput`. Shells read
+    200 rows at a time.
+  - `Around(id)`: with `id` at rank `r` of `N` rows and `L = min(limit,
+    N)`, the page starts at rank `clamp(r − ⌊L/2⌋, 0, N − L)`. An id not
+    in the window at the caller's generation is `NotFound`.
+- **The id index:** `window_ids` returns the window's rows' occurrence
+  ids in window order, with their generation (research 01/03: 500k ids
+  are 4 MB). A list maps a row position to an id and reads `Around(id)`,
+  so a scrollbar jump never pages through the rows between. Should the
+  index grow too costly for huge windows, sparse anchors are the
+  fallback.
+- **Debug source (pilot):** `WindowSpec::DebugSynthetic` names one
+  in-memory source per core, filled by `async fn
+  debug_fill_synthetic(count: u32) -> Result<u64, CoreError>`, which
+  returns the new generation.
+  - `count` is 0–1,000,000; anything else is `InvalidInput`.
+  - The fill replaces the source atomically and bumps its generation,
+    so open synthetic windows answer `ResetRequired`. Before the first
+    fill the source is empty.
+  - Cancellation counts only until the replacement: a cancelled fill
+    either leaves the source untouched or returns its new generation.
+  - Rows are derived from their position `p` (0 is the newest), so the
+    source holds no per-row memory. `occurrence_id = count − p`, and
+    `sort_date` steps back one minute every two rows, so ties are broken
+    by `occurrence_id`. Strings and markers vary deterministically and
+    are synthetic.
+  - The fill is a pilot diagnostic, not a command: it writes nothing to
+    the store, takes no idempotency key and returns no receipt. It is
+    exported in every build, so the bindings match one library, and is
+    reached only from the app's Debug menu (08).
 - **Other queries:**
   - `get_message(message_id)` → headers, occurrences, `thread_id`, tags, note and
     body availability;
@@ -142,7 +194,9 @@ enum WindowEvent { Invalidated { generation: u64 }, ResetRequired }
 ```
 
 - **Pull, not push.** The shell asks for the next event, then re-reads
-  the affected range with `open_window(…, Around(selected))`.
+  the affected range with `read_window(window_id, generation,
+  Around(selected), …)`; `ResetRequired` makes it rebuild the id index,
+  then its pages.
 - **Pilot granularity:** whole-window invalidation. Positional diffs are
   added only where a measured interaction needs them (research D4).
 - **Coalescing:** events are coalesced. If a slow consumer falls behind,
@@ -151,7 +205,9 @@ enum WindowEvent { Invalidated { generation: u64 }, ResetRequired }
   read is a short transaction, and `generation` ties the rows to one
   committed state.
 - **Selection** is by stable `occurrence_id`, so it survives
-  invalidation.
+  invalidation while its occurrence stays in the window; a departed id
+  leaves the selection. In logical-message windows the representative
+  occurrence can change (02); M1.3 settles how selection follows it.
 
 ## Body and attachment leases
 

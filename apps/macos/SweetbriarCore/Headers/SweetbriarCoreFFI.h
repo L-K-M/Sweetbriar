@@ -268,6 +268,31 @@ uint64_t uniffi_sb_ffi_fn_method_core_settings(uint64_t ptr, uint64_t token
 uint64_t uniffi_sb_ffi_fn_method_core_shutdown(uint64_t ptr
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_CLOSE_WINDOW
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_CLOSE_WINDOW
+uint64_t uniffi_sb_ffi_fn_method_core_close_window(uint64_t ptr, uint64_t window_id
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_DEBUG_FILL_SYNTHETIC
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_DEBUG_FILL_SYNTHETIC
+uint64_t uniffi_sb_ffi_fn_method_core_debug_fill_synthetic(uint64_t ptr, uint64_t token, uint32_t count
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_OPEN_WINDOW
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_OPEN_WINDOW
+uint64_t uniffi_sb_ffi_fn_method_core_open_window(uint64_t ptr, uint64_t token, RustBuffer spec, RustBuffer anchor, uint32_t limit
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_READ_WINDOW
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_READ_WINDOW
+uint64_t uniffi_sb_ffi_fn_method_core_read_window(uint64_t ptr, uint64_t token, uint64_t window_id, uint64_t generation, RustBuffer anchor, uint32_t limit
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_WINDOW_IDS
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_WINDOW_IDS
+uint64_t uniffi_sb_ffi_fn_method_core_window_ids(uint64_t ptr, uint64_t token, uint64_t window_id
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_CLONE_CANCELTOKEN
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_CLONE_CANCELTOKEN
 uint64_t uniffi_sb_ffi_fn_clone_canceltoken(uint64_t handle, RustCallStatus *_Nonnull out_status
@@ -592,6 +617,36 @@ uint16_t uniffi_sb_ffi_checksum_method_core_settings(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_SHUTDOWN
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_SHUTDOWN
 uint16_t uniffi_sb_ffi_checksum_method_core_shutdown(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_CLOSE_WINDOW
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_CLOSE_WINDOW
+uint16_t uniffi_sb_ffi_checksum_method_core_close_window(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_DEBUG_FILL_SYNTHETIC
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_DEBUG_FILL_SYNTHETIC
+uint16_t uniffi_sb_ffi_checksum_method_core_debug_fill_synthetic(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_OPEN_WINDOW
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_OPEN_WINDOW
+uint16_t uniffi_sb_ffi_checksum_method_core_open_window(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_READ_WINDOW
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_READ_WINDOW
+uint16_t uniffi_sb_ffi_checksum_method_core_read_window(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_WINDOW_IDS
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_WINDOW_IDS
+uint16_t uniffi_sb_ffi_checksum_method_core_window_ids(void
     
 );
 #endif

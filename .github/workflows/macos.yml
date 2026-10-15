@@ -140,6 +140,58 @@ jobs:
           name: Sweetbriar-app
           path: ${{ runner.temp }}/Sweetbriar.zip
 
+      # M0.10's decision run: the benchmark exercises the Release app
+      # end to end — the 500k fill, all four ABBA runs and their
+      # checks — which no earlier step does, and it is how the
+      # AppKit-vs-SwiftUI evidence reaches the owner. Its numbers are
+      # diagnostic (the owner's Mac decides) but a run whose checks
+      # fail is a regression the gate must stop.
+      # `-LogForEachSlowPath` (SwiftUI's documented diagnostic) logs a
+      # `ForEach` that falls off its fast identity path.
+      # Four runs of at most five minutes each (the harness's budget),
+      # plus the fill and a blocked main thread's overrun.
+      - name: Run the list benchmark
+        timeout-minutes: 30
+        run: |
+          LOG="$RUNNER_TEMP/list-benchmark.log"
+          open -W -n -a \
+            "$RUNNER_TEMP/DerivedData/Build/Products/Release/Sweetbriar.app" \
+            --stdout "$LOG" --stderr "$LOG" \
+            --args -runListBenchmark "$RUNNER_TEMP/list-benchmark.json" \
+            -LogForEachSlowPath YES
+
+      - name: Print the benchmark log and report
+        if: always()
+        run: |
+          echo "--- benchmark log ---"
+          cat "$RUNNER_TEMP/list-benchmark.log" || true
+          echo "--- benchmark report ---"
+          cat "$RUNNER_TEMP/list-benchmark.json" || true
+
+      # The gate: all four runs happened, none saw another generation,
+      # and AppKit's cold run (the shipping list, in a clean process)
+      # passed every check. SwiftUI failing its checks is the
+      # comparison's finding, not a regression; AppKit's warm run
+      # follows SwiftUI's multi-gigabyte runs in this 7 GB VM, so it is
+      # recorded, not gated.
+      - name: Check the benchmark's verdict
+        if: always()
+        run: |
+          jq -e '
+            ([.runs[] | "\(.implementation)-\(.pass)"] | unique | length == 4)
+            and ([.runs[] | select(.generationChanged)] | length == 0)
+            and ([.runs[] | select(.implementation == "appkit" and .pass == "cold") | .ok]
+              | length == 1 and all)
+          ' "$RUNNER_TEMP/list-benchmark.json"
+
+      - name: Upload the benchmark report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: list-benchmark
+          path: ${{ runner.temp }}/list-benchmark.json
+          if-no-files-found: warn
+
   # Aggregate merge gate: always runs so the check exists on every PR;
   # succeeds when the build job succeeded or was skipped by the filter.
   macos:

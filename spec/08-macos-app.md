@@ -49,9 +49,43 @@ restores its draft by `draft_id`.
 ## Message list
 
 - **Built with** `NSTableView` (view-based), backed by a `ListWindowModel`
-  over a core window (07). The choice between AppKit and SwiftUI was
-  settled by a prototype in M0; this spec assumes AppKit unless the
-  prototype says otherwise.
+  over a core window (07). M0.10's prototype keeps AppKit, pending
+  the owner's Mac (O4), which decides. macOS CI's diagnostic run
+  (virtualized M1, 60 Hz, 500,000 rows):
+  - cold, SwiftUI `List` failed all 26 decision bars. It blocked the
+    main thread for tens of seconds on open, jumps and selection, and
+    peaked at 3.97 GB. Its warm run overran the benchmark's budget
+    before rendering;
+  - cold, AppKit showed its first rows in about 0.4 s, peaked at
+    41 MB, and rendered every input within 34 ms at p95. Its warm run,
+    after SwiftUI's, passed its checks.
+
+  The choice reopens only if SwiftUI matches AppKit on the owner's Mac
+  on every checklist item and benchmark (plan M0.10).
+- **`ListWindowModel`** lives in `SweetbriarBridge`, free of AppKit, so
+  both prototype lists and their tests share its paging, data and
+  delivery cadence; each list adapts it idiomatically and observes only
+  the rows it shows.
+  - It holds the window's id index (07) and pages in fixed 200-row
+    pages. Page `k` starts at rank `s = 200k` and holds `L = min(200, N
+    − s)` rows; it is read `Around(ids[s + ⌊L/2⌋])` with limit `L`,
+    which returns exactly those rows, the last partial page included.
+  - The cache holds at most three pages: the visible ones are pinned,
+    the next page in the scroll direction is prefetched, and the rest
+    go least recently used first.
+  - At most two reads are in flight; a read for a page no longer
+    wanted is cancelled through its token, and a completion from an
+    older generation or request is dropped.
+  - Pages reach the list through the frame batcher (07: at most once
+    per frame). A row not yet cached shows as a placeholder of the same
+    height. `ResetRequired` rebuilds the model on its existing handle:
+    the id index, then the pages. The prototype has no subscriptions
+    (M1.3 adds them), so after a fill the Debug menu hands the new
+    generation to every open prototype model, which rebuilds.
+  - Selection is held by `occurrence_id`, so a 10k-row selection
+    fetches no rows.
+  - Rows have one height per list: production heights vary with the
+    preview mode and font, not per row (research 08).
 - **Rows:**
   - sender, subject, snippet, date;
   - unread, flagged, attachment and tag markers;
@@ -61,7 +95,9 @@ restores its draft by `draft_id`.
   - native selection colors; the account color never replaces them;
   - selection is held by `occurrence_id`;
   - for bulk actions on more than 1,000 rows, the list passes a
-    `SelectionToken`.
+    `SelectionToken`;
+  - a context click on a selected row acts on the selection; on an
+    unselected row it acts on that row alone and leaves the selection.
 - **Keyboard:**
   - arrows, Return to open, Space to page the reader;
   - `⌘⌫` delete to trash, `⌃⌘A` archive;
@@ -70,7 +106,7 @@ restores its draft by `draft_id`.
   - every command is also in a menu.
 - **Performance budget:** switching mailbox shows the first rows within
   100 ms at p95. Scrolling a 500k-row mailbox spends < 5 ms of main-thread
-  work per update.
+  work per update. Selection feedback takes under 50 ms at p95.
 
 ## Reader
 
@@ -184,6 +220,20 @@ and the undo toast offers **Undo** for 10 s.
 - **Versioning:** the persisted intent and query formats are versioned
   now (research debate/04, resolution change 15). The scripting surfaces (AppleScript, App Intents, a CLI) are
   *later* and will attach to these commands.
+
+## Debug menu (pilot)
+
+The pilot carries a **Debug** menu in every build, so owner checklists
+run on the CI artifact.
+- **Fill 500,000 Synthetic Rows** calls `debug_fill_synthetic` (07).
+- **List Prototype** (plan M0.10) opens a window listing
+  `DebugSynthetic` through a `ListWindowModel`.
+- **List Implementation** toggles that window between AppKit
+  `NSTableView` and SwiftUI `List`, and is stored in user defaults.
+- **Run List Benchmark** runs the prototype's benchmark (plan M0.10) on
+  this Mac, for both implementations, and shows the numbers to copy.
+  Launching the app with `-runListBenchmark <report.json>` runs the
+  same benchmark, writes the report there and quits (macOS CI uses it).
 
 ## Accessibility (pilot gates)
 
