@@ -296,12 +296,6 @@ extension AppKitPrototypeList: PrototypeList {
     var listView: NSView {
         scrollView
     }
-
-    var hasPendingLayout: Bool {
-        needsLayout || needsDisplay || scrollView.needsDisplay
-            || tableView.needsLayout || tableView.needsDisplay
-            || window?.viewsNeedDisplay == true
-    }
 }
 
 // MARK: - The row cell

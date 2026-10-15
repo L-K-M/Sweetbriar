@@ -31,8 +31,4 @@ protocol PrototypeList: NSView {
     /// The view scroll-wheel events are posted to — the scroll view
     /// for AppKit, the hosting view for SwiftUI.
     var listView: NSView { get }
-
-    /// The list or its window still needs layout or display — the
-    /// harness waits this out before trusting `visibleRanks`.
-    var hasPendingLayout: Bool { get }
 }

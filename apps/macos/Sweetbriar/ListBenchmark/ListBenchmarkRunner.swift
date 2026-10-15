@@ -20,7 +20,10 @@ private struct RecordedEvent {
     /// The expected-state predicate — the event is render-ready at the
     /// first tick it holds.
     var expected: (@MainActor () -> Bool)?
-    /// The tick the expected state first held at.
+    /// When a run-loop commit point first passed with the expected
+    /// state holding: the state was laid out and committed then.
+    var committedAt: Double?
+    /// The first tick after `committedAt` — the frame presenting it.
     var renderReadyTick: Int?
 }
 
@@ -72,26 +75,45 @@ private final class RunContext {
             detail: detail,
             postedAt: postedAt,
             expected: expected,
+            committedAt: nil,
             renderReadyTick: nil
         ))
         return events.count - 1
     }
 
-    /// A tick landed: flag a generation change, then check every
-    /// unresolved expectation whose post precedes the tick — the
-    /// first tick at which the expected state holds is the event's
-    /// render-ready (plan M0.10).
+    /// The main run loop passed its commit point — after AppKit's
+    /// display cycle and Core Animation's commit, where both lists'
+    /// updates go out. An unresolved event whose expected state holds
+    /// here has been laid out and committed. (Testing for pending
+    /// layout at a tick instead fails under 60 Hz input: every tick
+    /// sees the views the newest event just dirtied.)
+    func commitPointPassed() {
+        let now = CACurrentMediaTime()
+        for i in events.indices where events[i].committedAt == nil {
+            guard let expected = events[i].expected,
+                  now >= events[i].postedAt,
+                  expected()
+            else {
+                continue
+            }
+            events[i].committedAt = now
+        }
+    }
+
+    /// A tick landed: flag a generation change, then resolve every
+    /// event committed before it — the first tick after its commit is
+    /// its render-ready (plan M0.10: "the first tick after which its
+    /// rows are laid out and visible").
     func tickDidFire(_ index: Int) {
         let ticks = sampler.ticks
         guard index < ticks.count else { return }
         if ticks[index].generationChanged {
             generationChanged = true
         }
-        let time = ticks[index].timestamp
+        let firedAt = ticks[index].firedAt
         for i in events.indices where events[i].renderReadyTick == nil {
-            guard let expected = events[i].expected,
-                  time >= events[i].postedAt,
-                  expected()
+            guard let committedAt = events[i].committedAt,
+                  firedAt > committedAt
             else {
                 continue
             }
@@ -228,7 +250,6 @@ final class ListBenchmarkRunner {
                 visibleRowsPopulated: Self.allVisibleRowsPopulated(
                     list: list, model: model
                 ),
-                pendingLayout: list.hasPendingLayout,
                 // Generation 0 is a model still opening: the fill
                 // made the source's generation at least 1.
                 generationChanged: model.generation != 0
@@ -237,6 +258,9 @@ final class ListBenchmarkRunner {
         }
         context.sampler.onTick = { [weak context] index in
             context?.tickDidFire(index)
+        }
+        context.sampler.onCommitPoint = { [weak context] in
+            context?.commitPointPassed()
         }
         context.sampler.start(on: content)
 
@@ -253,7 +277,6 @@ final class ListBenchmarkRunner {
                 return false
             }
             return Self.allVisibleRowsPopulated(list: list, model: model)
-                && !list.hasPendingLayout
         }
 
         controller.openList()
@@ -280,8 +303,7 @@ final class ListBenchmarkRunner {
                 // Its rows: the delivered pages' visible ones, laid out —
                 // not every visible row, which may wait on other pages.
                 return Self.deliveredRowsShown(pages, list: list, model: model)
-                    && !list.hasPendingLayout
-            }
+                }
         }
 
         let list = controller.prototypeList
@@ -459,7 +481,6 @@ final class ListBenchmarkRunner {
             ) {
                 list.visibleRanks.contains(rank)
                     && Self.allVisibleRowsPopulated(list: list, model: model)
-                    && !list.hasPendingLayout
             }
             let populated = await checkWithin(
                 .seconds(2), of: previousPost, context: context
@@ -528,7 +549,7 @@ final class ListBenchmarkRunner {
                     else {
                         return false
                     }
-                    return now < before && !list.hasPendingLayout
+                    return now < before
                 }
             }
             let due = start + .microseconds(16_700 * (i + 1))
@@ -599,7 +620,6 @@ final class ListBenchmarkRunner {
                 list.visibleRanks.contains(rank)
                     && Self.allVisibleRowsPopulated(list: list, model: model)
                     && list.selectedIDs == expectedSelection
-                    && !list.hasPendingLayout
             }
             let took = await checkWithin(.seconds(2), context: context) {
                 list.selectedIDs == expectedSelection
@@ -680,7 +700,6 @@ final class ListBenchmarkRunner {
         ) {
             list.visibleRanks.contains(rank)
                 && Self.allVisibleRowsPopulated(list: list, model: model)
-                && !list.hasPendingLayout
         }
         let positioned = await checkWithin(.seconds(2), context: context) {
             list.visibleRanks.contains(rank)

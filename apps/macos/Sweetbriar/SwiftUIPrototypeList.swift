@@ -148,11 +148,6 @@ extension SwiftUIPrototypeList: PrototypeList {
     var listView: NSView {
         hosting
     }
-
-    var hasPendingLayout: Bool {
-        needsLayout || needsDisplay || hosting.needsLayout
-            || hosting.needsDisplay || window?.viewsNeedDisplay == true
-    }
 }
 
 /// The list itself. `ForEach` reads `model.ids` through `RankedIDs`,
