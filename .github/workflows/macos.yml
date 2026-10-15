@@ -148,8 +148,10 @@ jobs:
       # fail is a regression the gate must stop.
       # `-LogForEachSlowPath` (SwiftUI's documented diagnostic) logs a
       # `ForEach` that falls off its fast identity path.
+      # Four runs of at most five minutes each (the harness's budget),
+      # plus the fill and a blocked main thread's overrun.
       - name: Run the list benchmark
-        timeout-minutes: 10
+        timeout-minutes: 30
         run: |
           LOG="$RUNNER_TEMP/list-benchmark.log"
           open -W -n -a \

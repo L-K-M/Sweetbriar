@@ -34,6 +34,24 @@ private final class RunContext {
     /// must stop (plan M0.10: abort the whole run).
     private(set) var generationChanged = false
 
+    /// When the run must stop, whatever it is doing: its time budget.
+    let deadline: ContinuousClock.Instant
+
+    init(deadline: ContinuousClock.Instant) {
+        self.deadline = deadline
+    }
+
+    /// The run overran its budget.
+    var overBudget: Bool {
+        ContinuousClock.now >= deadline
+    }
+
+    /// The run must post no further input: another generation, or no
+    /// time left.
+    var stopped: Bool {
+        generationChanged || overBudget
+    }
+
     /// Flag the abort from outside a tick — an open that landed on
     /// another generation counts too.
     func markGenerationChanged() {
@@ -100,8 +118,16 @@ final class ListBenchmarkRunner {
             (.appkit, .warm),
         ]
 
+    /// Each run's time budget: past it, the run posts no more input
+    /// and fails, so a list that stalls for minutes (SwiftUI over
+    /// 500k ids can) still leaves a report. Checked between inputs —
+    /// a blocked main thread overruns it by the length of the block.
+    private static let runBudget: Duration = .seconds(300)
+
     private let session: CoreSession
     private let clock = ContinuousClock()
+    /// When the benchmark started, for the progress lines.
+    private let startedAt = ContinuousClock.now
     /// Non-nil once a model has seen another generation — every
     /// remaining run is skipped.
     private var generationAbort: String?
@@ -124,6 +150,7 @@ final class ListBenchmarkRunner {
                 count: MainMenuBuilder.syntheticFillCount
             )
             environment.rowCount = Int(MainMenuBuilder.syntheticFillCount)
+            log("filled generation \(generation)")
             for (implementation, pass) in Self.sequence
             where generationAbort == nil {
                 runs.append(await runOnce(
@@ -193,7 +220,8 @@ final class ListBenchmarkRunner {
 
         // The run's display link runs continuously — separate from
         // the model's pausing clock.
-        let context = RunContext()
+        let context = RunContext(deadline: clock.now + Self.runBudget)
+        log("\(implementation.rawValue) \(pass.rawValue): opening")
         context.sampler.extras = { [weak controller] in
             guard let list = controller?.prototypeList,
                   let model = controller?.listModel
@@ -239,6 +267,7 @@ final class ListBenchmarkRunner {
         ) {
             failures.append(openFailure)
         }
+        log("\(implementation.rawValue) \(pass.rawValue): opened")
         // Page deliveries are events too — the model's separate hook,
         // so the list's own `onPagesDelivered` stays its own.
         controller.listModel?.onPagesDeliveredForBenchmark = {
@@ -267,7 +296,8 @@ final class ListBenchmarkRunner {
             failures.append(contentsOf: await runJumpPhase(
                 context: context, list: list, model: model
             ))
-            if !context.generationChanged {
+            log("\(implementation.rawValue) \(pass.rawValue): jumps done")
+            if !context.stopped {
                 failures.append(contentsOf: await runWheelPhase(
                     context: context,
                     window: window,
@@ -275,7 +305,8 @@ final class ListBenchmarkRunner {
                     model: model
                 ))
             }
-            if !context.generationChanged {
+            log("\(implementation.rawValue) \(pass.rawValue): wheel done")
+            if !context.stopped {
                 failures.append(contentsOf: await runSelectionPhase(
                     context: context,
                     window: window,
@@ -283,6 +314,12 @@ final class ListBenchmarkRunner {
                     model: model
                 ))
             }
+        }
+        log("\(implementation.rawValue) \(pass.rawValue): phases done")
+        if context.overBudget {
+            failures.append(
+                "the run overran its \(Self.runBudget.components.seconds) s budget"
+            )
         }
         if context.generationChanged {
             generationAbort =
@@ -338,6 +375,15 @@ final class ListBenchmarkRunner {
         }
     }
 
+    /// One progress line on stderr — where a CI run spends its time,
+    /// readable even if the run never finishes.
+    private func log(_ message: String) {
+        let elapsed = (ContinuousClock.now - startedAt).components.seconds
+        FileHandle.standardError.write(
+            Data("list-benchmark: \(elapsed) s: \(message)\n".utf8)
+        )
+    }
+
     /// Wait, bounded, until event `index` is render-ready — before
     /// the next input changes the state it expects (a click's
     /// selection, a position's rows).
@@ -374,7 +420,7 @@ final class ListBenchmarkRunner {
     ) async -> [String] {
         var failures: [String] = []
         var previousPost = clock.now
-        for i in 0 ... 10 where !context.generationChanged {
+        for i in 0 ... 10 where !context.stopped {
             let rank = Int(
                 (Double(i) / 10 * Double(model.count - 1)).rounded(.down)
             )
@@ -442,7 +488,7 @@ final class ListBenchmarkRunner {
         }
         var wheelEvents: [Int] = []
         let start = clock.now
-        for i in 0 ..< 200 where !context.generationChanged {
+        for i in 0 ..< 200 where !context.stopped {
             if let event = Self.wheelEvent(
                 at: centre, windowNumber: windowNumber
             ) {
@@ -569,7 +615,7 @@ final class ListBenchmarkRunner {
             // 3. Back at 100,000, ⌘-click 100,000…100,009 — each
             // toggles its row out of the selection; after the last,
             // exactly 100,010…109,999 remain.
-            for rank in 100_000 ... 100_009 where !context.generationChanged {
+            for rank in 100_000 ... 100_009 where !context.stopped {
                 let expected = Self.ids(
                     model: model, ranks: (rank + 1) ... 109_999
                 )
@@ -737,7 +783,7 @@ final class ListBenchmarkRunner {
         deadline: ContinuousClock.Instant
     ) async -> Bool {
         while !condition() {
-            if context?.generationChanged == true {
+            if context?.stopped == true {
                 return false
             }
             if clock.now >= deadline {
