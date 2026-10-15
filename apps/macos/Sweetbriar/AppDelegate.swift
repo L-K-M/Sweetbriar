@@ -206,8 +206,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         + error.localizedDescription
                 )
             }
-            print(report.stdoutSummary)
-            NSApp.terminate(nil)
+            // Unbuffered: stdout is a file under `open --stdout`.
+            FileHandle.standardOutput.write(
+                Data((report.stdoutSummary + "\n").utf8)
+            )
+            // Not from this task: it runs as a main-queue job, and the
+            // run loop `.terminateLater` spins doesn't drain the main
+            // queue inside one — the shutdown task would never run.
+            // A run-loop block runs outside the queue, on the main
+            // thread.
+            RunLoop.main.perform {
+                MainActor.assumeIsolated {
+                    NSApp.terminate(nil)
+                }
+            }
         }
     }
 

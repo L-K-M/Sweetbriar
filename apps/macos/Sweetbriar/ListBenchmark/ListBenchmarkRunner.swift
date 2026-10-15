@@ -206,7 +206,10 @@ final class ListBenchmarkRunner {
                     list: list, model: model
                 ),
                 pendingLayout: list.hasPendingLayout,
-                generationChanged: model.generation != generation
+                // Generation 0 is a model still opening: the fill
+                // made the source's generation at least 1.
+                generationChanged: model.generation != 0
+                    && model.generation != generation
             )
         }
         context.sampler.onTick = { [weak context] index in

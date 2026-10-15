@@ -147,7 +147,7 @@ jobs:
       # diagnostic (the owner's Mac decides) but a run whose checks
       # fail is a regression the gate must stop.
       - name: Run the list benchmark
-        timeout-minutes: 20
+        timeout-minutes: 10
         run: |
           LOG="$RUNNER_TEMP/list-benchmark.log"
           open -W -n -a \
