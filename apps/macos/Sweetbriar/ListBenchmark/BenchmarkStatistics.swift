@@ -1,6 +1,6 @@
 // The benchmark's math (plan M0.10): nearest-rank percentiles over
-// raw samples, which intervals count as active, the 1.5× hitch
-// boundary, and the informational comparison — SwiftUI ÷ AppKit per
+// raw samples, which intervals count as active, the hitch boundary,
+// and the informational comparison — SwiftUI ÷ AppKit per
 // number plus the decision bars. Foundation only, so it type-checks
 // on Linux and `SweetbriarTests` drives it.
 
@@ -42,11 +42,15 @@ enum BenchmarkStatistics {
         return active
     }
 
-    /// A hitch: an interval longer than 1.5 × the display's nominal
-    /// interval (plan M0.10) — exactly 1.5× is not a hitch, and
-    /// without a nominal interval nothing can be.
+    /// How far past nominal an interval may run before it counts:
+    /// display-link timestamps jitter slightly around the frame time.
+    static let hitchJitterAllowance = 1.05
+
+    /// A hitch: an interval longer than the display's nominal interval
+    /// (plan M0.10), beyond 5% jitter — so a 120 Hz frame that took
+    /// 12 ms counts. Without a nominal interval nothing can be.
     static func isHitch(duration: Double, nominalInterval: Double) -> Bool {
-        nominalInterval > 0 && duration > nominalInterval * 1.5
+        nominalInterval > 0 && duration > nominalInterval * hitchJitterAllowance
     }
 }
 
@@ -157,6 +161,21 @@ extension RunComparison {
         )
 
         var bars: [BenchmarkBarResult] = []
+        // Numbers count only from complete runs: both passed their
+        // checks, rendered their first rows, and every event rendered —
+        // an unresolved event's latency is only a lower bound, and a
+        // failed run measured something other than the plan's scenario.
+        let complete = [appkit, swiftui].allSatisfy { run in
+            run.ok && run.firstRowsMilliseconds != nil
+                && run.phases.overall.unresolvedEvents == 0
+                && [run.phases.jumps, run.phases.wheel, run.phases.selection,
+                    run.phases.pageDeliveries].allSatisfy { $0.unresolvedEvents == 0 }
+        }
+        bars.append(BenchmarkBarResult(
+            name: "runs.complete",
+            pass: complete,
+            detail: "both runs passed their checks and every event rendered"
+        ))
         // "CPU and latency p95 and max within 1.2× AppKit's" — every
         // phase, overall included.
         for (name, phase) in [

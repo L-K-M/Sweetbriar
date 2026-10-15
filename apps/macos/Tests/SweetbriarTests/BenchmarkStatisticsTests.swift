@@ -1,6 +1,7 @@
 // The benchmark's math (plan M0.10): nearest-rank percentiles, the
-// active-interval rule and the exact 1.5x hitch boundary. Foundation
-// only — `swift test` runs these in the Linux scratch harness too.
+// active-interval rule and the hitch boundary. Foundation only, so
+// the sources and these tests also build in a scratch SwiftPM package
+// on Linux; macOS CI runs them in the app-hosted bundle.
 
 #if canImport(Sweetbriar)
 @testable import Sweetbriar
@@ -78,15 +79,19 @@ struct ActiveIntervalTests {
 
 @Suite("hitch boundary")
 struct HitchTests {
-    @Test("exactly 1.5x the nominal interval is not a hitch")
-    func exactBoundary() {
-        #expect(!BenchmarkStatistics.isHitch(duration: 15, nominalInterval: 10))
+    @Test("an interval longer than nominal, past jitter, is a hitch")
+    func longer() {
+        // 60 Hz: one missed frame doubles the interval.
+        #expect(BenchmarkStatistics.isHitch(duration: 33.3, nominalInterval: 16.7))
+        // 120 Hz: a 12 ms interval is longer than 8.33 ms.
+        #expect(BenchmarkStatistics.isHitch(duration: 12, nominalInterval: 8.33))
     }
 
-    @Test("over 1.5x is a hitch; under is not; no nominal, no hitch")
-    func aroundBoundary() {
-        #expect(BenchmarkStatistics.isHitch(duration: 15.001, nominalInterval: 10))
-        #expect(!BenchmarkStatistics.isHitch(duration: 14.999, nominalInterval: 10))
+    @Test("timestamp jitter within 5% of nominal is not a hitch")
+    func jitter() {
+        #expect(!BenchmarkStatistics.isHitch(duration: 10, nominalInterval: 10))
+        #expect(!BenchmarkStatistics.isHitch(duration: 10.5, nominalInterval: 10))
+        #expect(BenchmarkStatistics.isHitch(duration: 10.501, nominalInterval: 10))
         #expect(!BenchmarkStatistics.isHitch(duration: 100, nominalInterval: 0))
     }
 }

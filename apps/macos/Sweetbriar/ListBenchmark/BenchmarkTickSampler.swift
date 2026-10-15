@@ -65,6 +65,14 @@ final class BenchmarkTickSampler: NSObject {
     func start(on view: NSView) {
         ticks = [sample(timestamp: CACurrentMediaTime())]
         let link = view.displayLink(target: self, selector: #selector(tickFired(_:)))
+        // The display's full rate, so an interval past nominal is a
+        // missed frame, not a lowered rate.
+        let fullRate = Float(view.window?.screen?.maximumFramesPerSecond ?? 0)
+        if fullRate > 0 {
+            link.preferredFrameRateRange = CAFrameRateRange(
+                minimum: fullRate, maximum: fullRate, preferred: fullRate
+            )
+        }
         link.add(to: .main, forMode: .common)
         self.link = link
 

@@ -169,11 +169,12 @@ final class ListBenchmarkRunner {
             log("filled generation \(generation)")
             for (implementation, pass) in Self.sequence
             where generationAbort == nil {
-                await settle()
+                let unsettled = await settle()
                 runs.append(await runOnce(
                     implementation: implementation,
                     pass: pass,
-                    generation: generation
+                    generation: generation,
+                    inheritedFailures: unsettled.map { [$0] } ?? []
                 ))
             }
             if let generationAbort {
@@ -206,9 +207,12 @@ final class ListBenchmarkRunner {
     private func runOnce(
         implementation: PrototypeImplementation,
         pass: BenchmarkRun.Pass,
-        generation: UInt64
+        generation: UInt64,
+        inheritedFailures: [String]
     ) async -> BenchmarkRun {
-        var failures: [String] = []
+        // A run that starts on an unsettled process measures the last
+        // run's teardown too: it fails, its numbers kept as evidence.
+        var failures = inheritedFailures
         let baseline = SystemProbes.physicalFootprint()
         let controller = ListPrototypeWindowController(
             session: session,
@@ -238,6 +242,8 @@ final class ListBenchmarkRunner {
         // The run's display link runs continuously — separate from
         // the model's pausing clock.
         let context = RunContext(deadline: clock.now + Self.runBudget)
+        let footprint = FootprintSampler()
+        footprint.start()
         log("\(implementation.rawValue) \(pass.rawValue): opening")
         context.sampler.extras = { [weak controller] in
             guard let list = controller?.prototypeList,
@@ -279,16 +285,11 @@ final class ListBenchmarkRunner {
             return Self.allVisibleRowsPopulated(list: list, model: model)
         }
 
-        controller.openList()
-        if let openFailure = await waitForOpen(
-            controller, generation: generation
-        ) {
-            failures.append(openFailure)
-        }
-        log("\(implementation.rawValue) \(pass.rawValue): opened")
-        // Page deliveries are events too — the model's separate hook,
-        // so the list's own `onPagesDelivered` stays its own.
-        controller.listModel?.onPagesDeliveredForBenchmark = {
+        // Page deliveries are events too — through the model's
+        // separate hook, so the list's own `onPagesDelivered` stays its
+        // own. Set on the controller before the open, so the opening's
+        // deliveries count.
+        controller.onPagesDeliveredForBenchmark = {
             [weak context, weak controller] pages in
             context?.record(
                 phase: "pageDeliveries",
@@ -303,9 +304,16 @@ final class ListBenchmarkRunner {
                 // Its rows: the delivered pages' visible ones, laid out —
                 // not every visible row, which may wait on other pages.
                 return Self.deliveredRowsShown(pages, list: list, model: model)
-                }
+            }
         }
 
+        controller.openList()
+        if let openFailure = await waitForOpen(
+            controller, generation: generation
+        ) {
+            failures.append(openFailure)
+        }
+        log("\(implementation.rawValue) \(pass.rawValue): opened")
         let list = controller.prototypeList
         let model = controller.listModel
         if let model, model.generation != 0, model.generation != generation {
@@ -348,6 +356,10 @@ final class ListBenchmarkRunner {
 
         await drainRenderReady(context: context)
         context.sampler.stop()
+        let peakFootprint = footprint.stop()
+        if context.events.first(where: { $0.phase == "firstRows" })?.renderReadyTick == nil {
+            failures.append("the first rows never rendered")
+        }
         // "closes both after" — the window and its model.
         await controller.closeAndAwaitModel()
         return assembleRun(
@@ -359,6 +371,7 @@ final class ListBenchmarkRunner {
             windowWasKey: windowWasKey,
             appWasActive: appWasActive,
             baseline: baseline,
+            sampledPeak: peakFootprint,
             screen: screen
         )
     }
@@ -404,8 +417,9 @@ final class ListBenchmarkRunner {
     /// Wait, bounded at three minutes, until the main thread has
     /// answered promptly for a second: a run starts only once the last
     /// one's teardown has finished (a SwiftUI list over 500k ids takes
-    /// minutes to let go), so it doesn't pay for it.
-    private func settle() async {
+    /// minutes to let go), so it doesn't pay for it. Answers why not,
+    /// when the bound passed first.
+    private func settle() async -> String? {
         let started = clock.now
         let deadline = started + .seconds(180)
         var prompt = 0
@@ -414,7 +428,13 @@ final class ListBenchmarkRunner {
             try? await Task.sleep(for: .milliseconds(100))
             prompt = clock.now - before < .milliseconds(150) ? prompt + 1 : 0
         }
-        log("settled in \((clock.now - started).components.seconds) s")
+        let waited = (clock.now - started).components.seconds
+        guard prompt >= 10 else {
+            log("not settled after \(waited) s")
+            return "the previous run's teardown hadn't settled after \(waited) s"
+        }
+        log("settled in \(waited) s")
+        return nil
     }
 
     /// One progress line on stderr — where a CI run spends its time,
@@ -482,26 +502,28 @@ final class ListBenchmarkRunner {
                 list.visibleRanks.contains(rank)
                     && Self.allVisibleRowsPopulated(list: list, model: model)
             }
-            let populated = await checkWithin(
+            let shown = await checkWithin(
                 .seconds(2), of: previousPost, context: context
             ) {
-                Self.allVisibleRowsPopulated(list: list, model: model)
+                list.visibleRanks.contains(rank)
+                    && Self.allVisibleRowsPopulated(list: list, model: model)
             }
-            if !populated {
+            if !shown {
                 failures.append(
-                    "jump to rank \(rank): visible rows not populated"
-                        + " within 2 s"
+                    "jump to rank \(rank): the target not shown with"
+                        + " populated rows within 2 s"
                 )
             }
         }
         return failures
     }
 
-    /// 200 one-line scroll-wheel events upward, 16.7 ms apart,
-    /// `CGEvent` → `NSEvent` → `NSApp.postEvent` — identical for both
-    /// lists. Their render-ready resolves after the phase, when the
-    /// per-event scroll share is known. Ends with the moved-up and
-    /// populated checks.
+    /// 200 one-line scroll-wheel events upward, 16.7 ms apart: each a
+    /// `CGEvent` made into an `NSEvent` and handed to the view under
+    /// the list's centre, as NSWindow routes scroll-wheel events —
+    /// identical for both lists. Each resolves at the first commit
+    /// showing the list moved up with its visible rows populated. Ends
+    /// with the moved-up and populated checks.
     private func runWheelPhase(
         context: RunContext,
         window: NSWindow,
@@ -550,6 +572,7 @@ final class ListBenchmarkRunner {
                         return false
                     }
                     return now < before
+                        && Self.allVisibleRowsPopulated(list: list, model: model)
                 }
             }
             let due = start + .microseconds(16_700 * (i + 1))
@@ -896,6 +919,7 @@ final class ListBenchmarkRunner {
         windowWasKey: Bool,
         appWasActive: Bool,
         baseline: UInt64,
+        sampledPeak: UInt64,
         screen: NSScreen?
     ) -> BenchmarkRun {
         let ticks = context.sampler.ticks
@@ -919,7 +943,10 @@ final class ListBenchmarkRunner {
                 )
             }
         }
-        let runEnd = ticks.last?.timestamp ?? CACurrentMediaTime()
+        // Events are placed and timed by when ticks ran — when CPU was
+        // sampled — not by the frame times the link reports, which
+        // trail them; frame times give the interval lengths.
+        let runEnd = ticks.last?.firedAt ?? CACurrentMediaTime()
 
         var reportEvents: [BenchmarkEvent] = []
         var spans: [String: [EventSpan]] = [:]
@@ -929,13 +956,14 @@ final class ListBenchmarkRunner {
         for (position, event) in context.events.enumerated() {
             let interval = intervalIndex(of: event.postedAt, in: ticks)
             let ready = event.renderReadyTick
-            // An event never render-ready is censored where the next
-            // event of its phase superseded it (or the run ended): its
-            // latency is a lower bound, and it counts as unresolved.
-            let censoredAt = context.events[(position + 1)...]
+            // An event never render-ready counts as unresolved: its
+            // latency, to the run's end, is only a lower bound, kept out
+            // of the percentiles. Its active span ends where the next
+            // event of its phase superseded it, or at the run's end.
+            let supersededAt = context.events[(position + 1)...]
                 .first { $0.phase == event.phase }?.postedAt ?? runEnd
-            let readyInterval = ready ?? intervalIndex(of: censoredAt, in: ticks)
-            let latency = (ready.flatMap { ticks[safe: $0]?.timestamp } ?? censoredAt)
+            let readyInterval = ready ?? intervalIndex(of: supersededAt, in: ticks)
+            let latency = (ready.flatMap { ticks[safe: $0]?.firedAt } ?? runEnd)
                 - event.postedAt
             reportEvents.append(BenchmarkEvent(
                 phase: event.phase,
@@ -946,15 +974,16 @@ final class ListBenchmarkRunner {
                 latencyMilliseconds: latency * 1_000
             ))
             if event.phase == "firstRows" {
-                firstRowsMs = ready.map { (ticks[$0].timestamp - event.postedAt) * 1_000 }
+                firstRowsMs = ready.map { (ticks[$0].firedAt - event.postedAt) * 1_000 }
             } else {
                 spans[event.phase, default: []].append(EventSpan(
                     eventInterval: interval,
                     renderReadyInterval: readyInterval
                 ))
-                latencies[event.phase, default: []].append(latency * 1_000)
                 if ready == nil {
                     unresolved[event.phase, default: 0] += 1
+                } else {
+                    latencies[event.phase, default: []].append(latency * 1_000)
                 }
             }
         }
@@ -1014,7 +1043,7 @@ final class ListBenchmarkRunner {
             ) ? 1 : 0)
         }
 
-        let peak = ticks.map(\.footprintBytes).max() ?? baseline
+        let peak = max(ticks.map(\.footprintBytes).max() ?? baseline, sampledPeak)
         return BenchmarkRun(
             implementation: implementation.rawValue,
             pass: pass,
@@ -1058,14 +1087,14 @@ final class ListBenchmarkRunner {
         of time: Double, in ticks: [BenchmarkTick]
     ) -> Int {
         guard ticks.count > 1 else { return 0 }
-        if time <= ticks[1].timestamp { return 1 }
-        if time > ticks[ticks.count - 1].timestamp {
+        if time <= ticks[1].firedAt { return 1 }
+        if time > ticks[ticks.count - 1].firedAt {
             return ticks.count - 1
         }
         var lo = 1, hi = ticks.count - 1
         while lo < hi {
             let mid = (lo + hi) / 2
-            if ticks[mid].timestamp >= time {
+            if ticks[mid].firedAt >= time {
                 hi = mid
             } else {
                 lo = mid + 1

@@ -132,6 +132,10 @@ final class ListPrototypeWindowController: NSWindowController {
         model
     }
 
+    /// The benchmark's page-delivery hook, handed to each model as it
+    /// is made — before its open — so no delivery escapes it.
+    var onPagesDeliveredForBenchmark: (@MainActor ([Int]) -> Void)?
+
     /// The last open or install failure, for the harness's checks.
     var openFailure: (any Error)? {
         openError
@@ -179,6 +183,9 @@ final class ListPrototypeWindowController: NSWindowController {
         let model = ListWindowModel(
             source: bridge, spec: .debugSynthetic, clock: clock
         )
+        if let onPagesDeliveredForBenchmark {
+            model.onPagesDeliveredForBenchmark = onPagesDeliveredForBenchmark
+        }
         let list: any PrototypeList
         switch implementation {
         case .appkit:

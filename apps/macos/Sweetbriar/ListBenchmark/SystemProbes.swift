@@ -4,6 +4,7 @@
 // never builds them for Linux.
 
 import Foundation
+import Synchronization
 
 enum SystemProbes {
     /// Main-thread CPU time in nanoseconds
@@ -51,3 +52,41 @@ enum SystemProbes {
         return value
     }
 }
+
+/// The process's peak footprint over a run, sampled every few
+/// milliseconds off the main thread: a peak inside a main-thread
+/// stall, which no display tick sees, still counts (plan M0.10: peak
+/// memory). `@unchecked Sendable`: the peak is behind its mutex, and
+/// the timer is only started and stopped, from the main actor.
+final class FootprintSampler: @unchecked Sendable {
+    private static let interval = DispatchTimeInterval.milliseconds(5)
+
+    private let peak = Mutex<UInt64>(0)
+    private let timer = DispatchSource.makeTimerSource(
+        queue: .global(qos: .userInitiated)
+    )
+
+    init() {
+        timer.schedule(deadline: .now(), repeating: Self.interval)
+        timer.setEventHandler { [weak self] in
+            self?.sample()
+        }
+    }
+
+    /// Begin sampling; pair with one `stop()`.
+    func start() {
+        timer.resume()
+    }
+
+    /// Stop sampling and answer the peak seen.
+    func stop() -> UInt64 {
+        timer.cancel()
+        return peak.withLock { $0 }
+    }
+
+    private func sample() {
+        let now = SystemProbes.physicalFootprint()
+        peak.withLock { $0 = max($0, now) }
+    }
+}
+

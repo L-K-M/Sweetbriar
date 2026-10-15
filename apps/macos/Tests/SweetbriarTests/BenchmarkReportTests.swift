@@ -16,7 +16,9 @@ private func makeRun(
     pass: BenchmarkRun.Pass,
     milliseconds: Double = 1,
     firstRows: Double? = 50,
-    wheelHitches: Int = 0
+    wheelHitches: Int = 0,
+    ok: Bool = true,
+    unresolvedWheelEvents: Int = 0
 ) -> BenchmarkRun {
     func samples(_ value: Double) -> SampleStatistics {
         SampleStatistics(
@@ -24,20 +26,20 @@ private func makeRun(
             samples: [value]
         )
     }
-    func phase(hitches: Int = 0) -> PhaseStatistics {
+    func phase(hitches: Int = 0, unresolved: Int = 0) -> PhaseStatistics {
         PhaseStatistics(
             cpuMilliseconds: samples(milliseconds),
             latencyMilliseconds: samples(milliseconds),
             hitchCount: hitches,
-            eventCount: 1,
-            unresolvedEvents: 0
+            eventCount: 1 + unresolved,
+            unresolvedEvents: unresolved
         )
     }
     return BenchmarkRun(
         implementation: implementation,
         pass: pass,
-        ok: true,
-        failures: [],
+        ok: ok,
+        failures: ok ? [] : ["a check failed"],
         windowWasKey: true,
         appWasActive: true,
         generation: 7,
@@ -48,7 +50,7 @@ private func makeRun(
         footprintRiseBytes: 100,
         phases: BenchmarkPhases(
             jumps: phase(),
-            wheel: phase(hitches: wheelHitches),
+            wheel: phase(hitches: wheelHitches, unresolved: unresolvedWheelEvents),
             selection: phase(),
             pageDeliveries: phase(),
             overall: phase()
@@ -189,5 +191,48 @@ struct ComparisonBarTests {
         #expect(comparison.cold == nil)
         #expect(comparison.warm == nil)
         #expect(!comparison.meetsAllBars)
+    }
+}
+
+@Suite("a comparison counts only complete runs")
+struct CompleteRunsTests {
+    @Test("a SwiftUI run that failed a check meets no bars")
+    func failedRun() {
+        let comparison = RunComparison.evaluate(
+            appkit: makeRun(implementation: "appkit", pass: .cold),
+            swiftui: makeRun(implementation: "swiftui", pass: .cold, ok: false)
+        )
+        #expect(!comparison.allBarsMet)
+        #expect(comparison.bars.first { $0.name == "runs.complete" }?.pass == false)
+    }
+
+    @Test("unresolved events leave the comparison incomplete")
+    func unresolved() {
+        let comparison = RunComparison.evaluate(
+            appkit: makeRun(implementation: "appkit", pass: .cold),
+            swiftui: makeRun(
+                implementation: "swiftui", pass: .cold,
+                unresolvedWheelEvents: 200
+            )
+        )
+        #expect(!comparison.allBarsMet)
+    }
+
+    @Test("a run without first rows leaves it incomplete")
+    func noFirstRows() {
+        let comparison = RunComparison.evaluate(
+            appkit: makeRun(implementation: "appkit", pass: .cold, firstRows: nil),
+            swiftui: makeRun(implementation: "swiftui", pass: .cold)
+        )
+        #expect(comparison.bars.first { $0.name == "runs.complete" }?.pass == false)
+    }
+
+    @Test("two complete runs pass the completeness bar")
+    func complete() {
+        let comparison = RunComparison.evaluate(
+            appkit: makeRun(implementation: "appkit", pass: .cold),
+            swiftui: makeRun(implementation: "swiftui", pass: .cold)
+        )
+        #expect(comparison.bars.first { $0.name == "runs.complete" }?.pass == true)
     }
 }

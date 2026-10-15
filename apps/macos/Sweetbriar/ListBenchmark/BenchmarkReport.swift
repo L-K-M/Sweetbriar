@@ -142,7 +142,8 @@ struct PhaseStatistics: Codable, Equatable {
     var hitchCount: Int
     var eventCount: Int
     /// Events whose expected state was never observed on screen —
-    /// their latency is capped at the run's end.
+    /// left out of the latency percentiles (their latency is only a
+    /// lower bound), and they leave a comparison incomplete.
     var unresolvedEvents: Int
 }
 
@@ -178,8 +179,8 @@ struct BenchmarkEvent: Codable, Equatable {
     /// The tick index ending the interval the post fell in.
     var intervalIndex: Int
     /// The first tick the expected state held on screen; nil when it
-    /// never did — `latencyMilliseconds` is then capped at the run's
-    /// end.
+    /// never did — `latencyMilliseconds` is then a lower bound, to the
+    /// run's end.
     var renderReadyIntervalIndex: Int?
     var latencyMilliseconds: Double
 }
