@@ -169,6 +169,10 @@ private struct PrototypeListRoot: View {
     var body: some View {
         ScrollViewReader { proxy in
             List(selection: $state.selectedIDs) {
+                // Selection tags come from `ForEach`'s own ids (Int64,
+                // like the selection set): no per-row `.tag`. The row
+                // traits are uniform, so they sit on the `ForEach`,
+                // outside the element builder.
                 ForEach(RankedIDs(model.ids)) { element in
                     MessageRowView(
                         page: model.page(containing: element.rank),
@@ -179,10 +183,9 @@ private struct PrototypeListRoot: View {
                     // insets, no separators, and the list's minimum
                     // row height capped at the pitch.
                     .frame(height: MessageRowMetrics.pitch)
-                    .tag(element.id)
-                    .listRowInsets(EdgeInsets())
-                    .listRowSeparator(.hidden)
                 }
+                .listRowInsets(EdgeInsets())
+                .listRowSeparator(.hidden)
             }
             .listStyle(.plain)
             .environment(

@@ -146,6 +146,8 @@ jobs:
       # AppKit-vs-SwiftUI evidence reaches the owner. Its numbers are
       # diagnostic (the owner's Mac decides) but a run whose checks
       # fail is a regression the gate must stop.
+      # `-LogForEachSlowPath` (SwiftUI's documented diagnostic) logs a
+      # `ForEach` that falls off its fast identity path.
       - name: Run the list benchmark
         timeout-minutes: 10
         run: |
@@ -153,7 +155,8 @@ jobs:
           open -W -n -a \
             "$RUNNER_TEMP/DerivedData/Build/Products/Release/Sweetbriar.app" \
             --stdout "$LOG" --stderr "$LOG" \
-            --args -runListBenchmark "$RUNNER_TEMP/list-benchmark.json"
+            --args -runListBenchmark "$RUNNER_TEMP/list-benchmark.json" \
+            -LogForEachSlowPath YES
 
       - name: Print the benchmark log and report
         if: always()
