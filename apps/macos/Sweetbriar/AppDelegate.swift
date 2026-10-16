@@ -25,6 +25,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// the same one forward.
     private var prototypeController: ListPrototypeWindowController?
 
+    /// The Composer Probe is a singleton the same way — Debug →
+    /// Composer Probe brings the same one forward.
+    private var composerProbeController: ComposerProbeWindowController?
+
     /// The running benchmark, or nil — the menu item greys out while
     /// one is in flight.
     private var benchmarkRunner: ListBenchmarkRunner?
@@ -112,6 +116,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             },
             isBenchmarkEnabled: { [weak self] in
                 self?.benchmarkRunner == nil
+            },
+            onShowComposerProbe: { [weak self] in
+                self?.showComposerProbe()
             }
         )
         NSApplication.shared.mainMenu = builder.makeMainMenu()
@@ -156,6 +163,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         prototypeController = controller
         controller.showWindow(nil)
         controller.openList()
+    }
+
+    /// Debug → Composer Probe (spec/08, plan M0.11): the composer's
+    /// editor without the core. Bring the open one forward, else make
+    /// one.
+    private func showComposerProbe() {
+        if let controller = composerProbeController {
+            controller.window?.makeKeyAndOrderFront(nil)
+            return
+        }
+        let controller = ComposerProbeWindowController()
+        controller.onWindowClosed = { [weak self] in
+            self?.composerProbeController = nil
+        }
+        composerProbeController = controller
+        controller.showWindow(nil)
     }
 
     /// List Implementation ▸: the builder already persisted the pick;

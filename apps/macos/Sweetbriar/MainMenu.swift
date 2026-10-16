@@ -63,6 +63,7 @@ final class MainMenuBuilder: NSObject {
     private let onImplementationChanged: @MainActor (PrototypeImplementation) -> Void
     private let onRunBenchmark: @MainActor () -> Void
     private let isBenchmarkEnabled: @MainActor () -> Bool
+    private let onShowComposerProbe: @MainActor () -> Void
 
     /// `NSMenuItem.identifier`s that `validateMenuItem` treats
     /// specially.
@@ -88,18 +89,22 @@ final class MainMenuBuilder: NSObject {
     ///   - onRunBenchmark: run part B2b's list benchmark.
     ///   - isBenchmarkEnabled: whether Run List Benchmark is live —
     ///     false while a run is in flight.
+    ///   - onShowComposerProbe: open the Composer Probe window or
+    ///     bring it forward (plan M0.11).
     init(
         onFillSynthetic: @escaping @MainActor () -> Void,
         onShowPrototype: @escaping @MainActor () -> Void,
         onImplementationChanged: @escaping @MainActor (PrototypeImplementation) -> Void,
         onRunBenchmark: @escaping @MainActor () -> Void,
-        isBenchmarkEnabled: @escaping @MainActor () -> Bool
+        isBenchmarkEnabled: @escaping @MainActor () -> Bool,
+        onShowComposerProbe: @escaping @MainActor () -> Void
     ) {
         self.onFillSynthetic = onFillSynthetic
         self.onShowPrototype = onShowPrototype
         self.onImplementationChanged = onImplementationChanged
         self.onRunBenchmark = onRunBenchmark
         self.isBenchmarkEnabled = isBenchmarkEnabled
+        self.onShowComposerProbe = onShowComposerProbe
         super.init()
     }
 
@@ -109,6 +114,7 @@ final class MainMenuBuilder: NSObject {
         let menu = NSMenu()
         menu.addItem(makeAppMenu())
         menu.addItem(makeEditMenu())
+        menu.addItem(makeFormatMenu())
         menu.addItem(makeWindowMenu())
         menu.addItem(makeDebugMenu())
         return menu
@@ -163,6 +169,26 @@ final class MainMenuBuilder: NSObject {
         return item
     }
 
+    /// Format: Bold and Italic — nil-target items that walk the
+    /// responder chain, so the composer editor's Markdown commands
+    /// get them (spec/08 "Composer").
+    private func makeFormatMenu() -> NSMenuItem {
+        let item = NSMenuItem()
+        let menu = NSMenu(title: "Format")
+        menu.addItem(Self.item(
+            "Bold",
+            action: #selector(ComposerTextView.toggleBoldMarkdown(_:)),
+            key: "b"
+        ))
+        menu.addItem(Self.item(
+            "Italic",
+            action: #selector(ComposerTextView.toggleItalicMarkdown(_:)),
+            key: "i"
+        ))
+        item.submenu = menu
+        return item
+    }
+
     /// Window: Minimize and Close; registered as the app's
     /// `windowsMenu` so window-management items join it.
     private func makeWindowMenu() -> NSMenuItem {
@@ -209,6 +235,12 @@ final class MainMenuBuilder: NSObject {
         benchmark.toolTip =
             "Run the four list benchmark runs and show the report"
         menu.addItem(benchmark)
+        menu.addItem(.separator())
+        menu.addItem(Self.item(
+            "Composer Probe",
+            action: #selector(showComposerProbe(_:)),
+            target: self
+        ))
         item.submenu = menu
         return item
     }
@@ -277,6 +309,12 @@ final class MainMenuBuilder: NSObject {
     @objc
     private func runListBenchmark(_ sender: NSMenuItem) {
         onRunBenchmark()
+    }
+
+    /// Debug → Composer Probe (spec/08, plan M0.11).
+    @objc
+    private func showComposerProbe(_ sender: NSMenuItem) {
+        onShowComposerProbe()
     }
 }
 

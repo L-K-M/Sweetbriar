@@ -448,13 +448,25 @@ decided.
   requirements before building on it.
 - **Spec:** 08 (Composer probes).
 - **Depends on:** M0.9.
-- **Deliverables:** a debug compose window, plain text plus Markdown live
-  styling (headings, emphasis, lists), with no core integration yet.
-- **Acceptance** (**owner checklist**, O4):
-  - Japanese input (marked text) commits correctly;
-  - Arabic and Hebrew right-to-left lines lay out and edit correctly;
-  - undo across a styling change restores both text and styling;
-  - VoiceOver reads the text.
+- **Deliverables:** a debug compose window (08 Debug menu: Composer
+  Probe), plain text plus Markdown live styling (headings, emphasis,
+  lists) and ⌘B/⌘I, with no core integration yet.
+- **Acceptance:**
+  - macOS CI (app-hosted tests on the real `NSTextView`):
+    - the Markdown styler marks headings, emphasis, strong and list
+      items, and leaves plain mode unstyled;
+    - ⌘B on a selection inserts the markers as one edit, and undo
+      restores the text and its styling;
+    - marked text set and committed through `NSTextInputClient` ends as
+      the committed string, and no styling runs while it is marked;
+    - the view stays on TextKit 2 (`textLayoutManager` non-nil) after
+      every operation;
+    - the editor's accessibility value is its text;
+  - **owner checklist** (O4):
+    - Japanese input (marked text) commits correctly;
+    - Arabic and Hebrew right-to-left lines lay out and edit correctly;
+    - undo across a styling change restores both text and styling;
+    - VoiceOver reads the text.
   - Results are recorded in the PR.
 
 ### M0.12 Nightly and release workflows — S, macos-ci
