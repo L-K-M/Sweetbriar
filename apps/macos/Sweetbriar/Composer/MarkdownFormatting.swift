@@ -137,25 +137,44 @@ enum MarkdownFormatting {
         }
     }
 
-    /// What an edit does to the style.
-    private enum Change {
-        case wrap
-        case unwrap
-        /// Inserts an empty pair at a caret: checked with a letter
-        /// typed between its markers, which must take the style.
-        case pair
-        /// Removes an empty, literal pair: nothing else may change.
-        case literal
-    }
-
     /// What one paragraph's part of the command does, in document
-    /// coordinates.
+    /// coordinates — enough to check the result against its intent.
     private struct ParagraphEdit {
         /// Marker stretches to delete, possibly overlapping.
         var deletions: [NSRange] = []
+        /// Markers added around text: they must parse as syntax.
         var insertions: [(position: Int, text: String)] = []
-        /// The stretches rewritten: wrapped windows, unwrapped spans.
-        var regions: [NSRange] = []
+        /// Empty pairs added at carets: literal as they stand, and
+        /// syntax around a styled letter once one is typed between.
+        var pairs: [(position: Int, text: String)] = []
+        /// Windows the style is added over.
+        var wrapped: [NSRange] = []
+        /// Spans of the style whose markers go.
+        var unwrapped: [NSRange] = []
+
+        /// The stretches rewritten — a selection touching one grows
+        /// over it.
+        var regions: [NSRange] {
+            wrapped + unwrapped
+        }
+
+        /// `self` and `other` together.
+        func adding(_ other: ParagraphEdit) -> ParagraphEdit {
+            var both = self
+            both.deletions += other.deletions
+            both.insertions += other.insertions
+            both.pairs += other.pairs
+            both.wrapped += other.wrapped
+            both.unwrapped += other.unwrapped
+            return both
+        }
+    }
+
+    /// Whether a check reads an edit's pairs as they stand or with a
+    /// letter typed between their markers.
+    private enum Typing {
+        case none
+        case letter
     }
 
     /// One paragraph as the styler reads it.
@@ -258,7 +277,7 @@ enum MarkdownFormatting {
                 }
                 edit.insertions.append((window.location, marker.text))
                 edit.insertions.append((NSMaxRange(window), marker.text))
-                edit.regions.append(window)
+                edit.wrapped.append(window)
             }
             return edit
         }
@@ -368,7 +387,7 @@ enum MarkdownFormatting {
             var edit = ParagraphEdit()
             for span in spans {
                 edit.deletions += span.markers
-                edit.regions.append(span.range)
+                edit.unwrapped.append(span.range)
             }
             return edit
         }
@@ -399,15 +418,23 @@ enum MarkdownFormatting {
 
         // MARK: checking
 
-        /// Whether `edit` changes only what it means to: parsed again,
+        /// Whether `edit` changes only what it means to. Parsed again,
         /// every syntax character it keeps is still syntax, every
-        /// marker it adds is syntax, and every text character keeps
-        /// its other style and has `style` exactly where the change
-        /// puts it.
-        func accepts(
+        /// marker it adds is syntax, every empty pair stays literal,
+        /// and every text character keeps its other style and has
+        /// `style` exactly where the edit puts it. An edit with pairs
+        /// is checked again with a letter typed between each pair's
+        /// markers: the letter must take the style, nothing else
+        /// change.
+        func accepts(_ edit: ParagraphEdit, style: MarkdownStyler.Style) -> Bool {
+            guard check(edit, style: style, typing: .none) else { return false }
+            return edit.pairs.isEmpty || check(edit, style: style, typing: .letter)
+        }
+
+        private func check(
             _ edit: ParagraphEdit,
             style: MarkdownStyler.Style,
-            change: Change
+            typing: Typing
         ) -> Bool {
             let base = range.location
             let count = units.count
@@ -417,30 +444,41 @@ enum MarkdownFormatting {
                     deleted[position - base] = true
                 }
             }
-            var inserted: [Int: [UInt16]] = [:]
+
+            /// What goes in before a position, and whether it's an
+            /// empty pair.
+            var inserted: [Int: (units: [UInt16], isPair: Bool)] = [:]
             for insertion in edit.insertions {
-                inserted[insertion.position - base, default: []] += Array(insertion.text.utf16)
+                inserted[insertion.position - base] = (Array(insertion.text.utf16), false)
+            }
+            for pair in edit.pairs {
+                inserted[pair.position - base] = (Array(pair.text.utf16), true)
             }
 
-            // The new text, where each kept character went, where the
-            // added markers sit, and — for a pair — the letter typed
-            // between them.
+            // The new text, where each kept character went, the added
+            // markers that must be syntax, those that must stay
+            // literal, and the letters typed into pairs.
             var result: [UInt16] = []
             var moved = [Int](repeating: 0, count: count)
-            var added: [Int] = []
+            var syntax: [Int] = []
+            var literal: [Int] = []
             var typed: [Int] = []
             for index in 0 ... count {
-                if var markers = inserted[index] {
+                if let insertion = inserted[index] {
+                    var markers = insertion.units
+                    let isPair = insertion.isPair
                     var letter: Int?
-                    if change == .pair {
+                    if isPair, typing == .letter {
                         letter = result.count + markers.count / 2
                         markers.insert(Self.typedLetter, at: markers.count / 2)
                     }
                     for position in result.count ..< result.count + markers.count {
                         if position == letter {
                             typed.append(position)
+                        } else if isPair, typing == .none {
+                            literal.append(position)
                         } else {
-                            added.append(position)
+                            syntax.append(position)
                         }
                     }
                     result += markers
@@ -454,27 +492,18 @@ enum MarkdownFormatting {
             let after = Paragraph(text: String(decoding: result, as: UTF16.self), location: 0)
             guard after.units.count == result.count else { return false }
 
-            let expected: [Bool]
-            switch change {
-            case .pair, .literal:
-                expected = covered(by: style)
-            case .wrap:
-                let windows = Self.mask(
-                    edit.regions.map { $0.location - base ..< NSMaxRange($0) - base },
-                    count: count
-                )
-                let before = covered(by: style)
-                expected = (0 ..< count).map { windows[$0] || before[$0] }
-            case .unwrap:
-                let unwrapped = Set(edit.regions.map(\.location))
-                let survivors = spans.filter {
-                    $0.style == style && !unwrapped.contains($0.range.location)
-                }
-                expected = Self.mask(
-                    survivors.map { $0.range.location - base ..< NSMaxRange($0.range) - base },
-                    count: count
-                )
+            // The style afterwards: the spans that survive, plus the
+            // windows wrapped.
+            let unwrapped = Set(edit.unwrapped.map(\.location))
+            let survivors = spans.filter {
+                $0.style == style && !unwrapped.contains($0.range.location)
             }
+            let expected = Self.mask(
+                (survivors.map(\.range) + edit.wrapped).map {
+                    $0.location - base ..< NSMaxRange($0) - base
+                },
+                count: count
+            )
 
             let other: MarkdownStyler.Style = style == .strong ? .emphasis : .strong
             let otherBefore = covered(by: other)
@@ -495,10 +524,9 @@ enum MarkdownFormatting {
                     return false
                 }
             }
-            let typedTakesStyle = typed.allSatisfy {
-                !after.marker[$0] && styleAfter[$0]
-            }
-            return typedTakesStyle && added.allSatisfy { after.marker[$0] }
+            return syntax.allSatisfy { after.marker[$0] }
+                && literal.allSatisfy { !after.marker[$0] }
+                && typed.allSatisfy { !after.marker[$0] && styleAfter[$0] }
         }
 
         /// What a pair check types between the markers.
@@ -637,11 +665,17 @@ enum MarkdownFormatting {
         /// The stretches rewritten — a selection touching one grows
         /// over it.
         private var regions: [NSRange] = []
+        /// Each paragraph's accepted edit so far, by its start: a
+        /// later edit there is checked together with it.
+        private var accepted: [Int: ParagraphEdit] = [:]
         /// Each adopted edit's extent: a later edit meeting one is
         /// refused, so replacements never overlap.
         private var claimed: [NSRange] = []
         /// Carets given a marker pair: they land between the markers.
         private var pairedCarets = Set<Int>()
+        /// Carets whose word gained an opening marker right at them:
+        /// they move past it, into the word's new span.
+        private var openingCarets = Set<Int>()
 
         init(marker: Marker) {
             self.marker = marker
@@ -679,12 +713,12 @@ enum MarkdownFormatting {
                     spans.append(span)
                 }
             }
-            if adopt(paragraph.unwrapping(spans), in: paragraph, change: .unwrap) {
+            if adopt(paragraph.unwrapping(spans), in: paragraph) {
                 return true
             }
             let outer = paragraph.outermost(spans)
             guard outer.count < spans.count else { return false }
-            return adopt(paragraph.unwrapping(outer), in: paragraph, change: .unwrap)
+            return adopt(paragraph.unwrapping(outer), in: paragraph)
         }
 
         /// One paragraph's wrap, in the first form whose result parses
@@ -701,7 +735,7 @@ enum MarkdownFormatting {
                 let edit = paragraph.wrapping(
                     windows, marker: marker, reach: reach, inner: inner
                 )
-                if adopt(edit, in: paragraph, change: .wrap) {
+                if adopt(edit, in: paragraph) {
                     return true
                 }
             }
@@ -716,57 +750,63 @@ enum MarkdownFormatting {
             if let pair = paragraph.emptyPair(around: caret, marker: marker) {
                 var removal = ParagraphEdit()
                 removal.deletions = pair
-                if adopt(removal, in: paragraph, change: .literal) {
+                if adopt(removal, in: paragraph) {
                     return
                 }
             }
-            if paragraph.isInsideWord(caret),
-               toggle(word: paragraph.widenedToWords(NSRange(location: caret, length: 0)), reader: reader) {
-                return
+            if paragraph.isInsideWord(caret) {
+                let word = paragraph.widenedToWords(NSRange(location: caret, length: 0))
+                if toggle(word: word, caret: caret, reader: reader) {
+                    return
+                }
             }
 
             var pair = ParagraphEdit()
-            pair.insertions = [(caret, marker.text + marker.text)]
-            if adopt(pair, in: paragraph, change: .pair) {
+            pair.pairs = [(caret, marker.text + marker.text)]
+            if adopt(pair, in: paragraph) {
                 pairedCarets.insert(caret)
                 return
             }
             if let word = paragraph.word(beside: caret) {
-                toggle(word: word, reader: reader)
+                toggle(word: word, caret: caret, reader: reader)
             }
         }
 
-        /// `word` toggled as if selected.
+        /// `word` toggled as if selected; `caret` moves into the word's
+        /// new span if its opening marker lands right at it.
         @discardableResult
-        private mutating func toggle(word: NSRange, reader: Reader) -> Bool {
+        private mutating func toggle(word: NSRange, caret: Int, reader: Reader) -> Bool {
             let pieces = reader.pieces(of: word).filter { !$0.content.isEmpty }
             guard !pieces.isEmpty else { return false }
             // A word lies in one paragraph: one piece.
-            return pieces[0].isStyled(marker.style)
+            let toggled = pieces[0].isStyled(marker.style)
                 ? unwrapParagraph(pieces)
                 : wrapParagraph(pieces)
+            let key = pieces[0].paragraph.range.location
+            if toggled, accepted[key]?.wrapped.contains(where: { $0.location == caret }) == true {
+                openingCarets.insert(caret)
+            }
+            return toggled
         }
 
-        /// Takes `edit` if its result parses as intended and it meets
-        /// no edit taken before.
-        private mutating func adopt(
-            _ edit: ParagraphEdit,
-            in paragraph: Paragraph,
-            change: Change
-        ) -> Bool {
+        /// Takes `edit` if it meets no edit taken before and, together
+        /// with the paragraph's edits taken so far, parses as intended.
+        private mutating func adopt(_ edit: ParagraphEdit, in paragraph: Paragraph) -> Bool {
             let points = edit.regions + edit.deletions
-                + edit.insertions.map { NSRange(location: $0.position, length: 0) }
+                + (edit.insertions + edit.pairs).map { NSRange(location: $0.position, length: 0) }
             guard let first = points.first else { return false }
             let extent = points.dropFirst().reduce(first) { NSUnionRange($0, $1) }
             let meets = claimed.contains {
                 $0.location <= NSMaxRange(extent) && extent.location <= NSMaxRange($0)
             }
-            guard !meets,
-                  paragraph.accepts(edit, style: marker.style, change: change) else {
+            let key = paragraph.range.location
+            let combined = (accepted[key] ?? ParagraphEdit()).adding(edit)
+            guard !meets, paragraph.accepts(combined, style: marker.style) else {
                 return false
             }
+            accepted[key] = combined
             deletions += edit.deletions
-            insertions += edit.insertions
+            insertions += edit.insertions + edit.pairs
             regions += edit.regions
             claimed.append(extent)
             return true
@@ -826,7 +866,8 @@ enum MarkdownFormatting {
             let rewritten = merged(regions)
             let after = selections.map { selection -> NSRange in
                 guard selection.length > 0 else {
-                    let caret = translation.position(of: selection.location, edge: .start)
+                    let edge: Edge = openingCarets.contains(selection.location) ? .end : .start
+                    let caret = translation.position(of: selection.location, edge: edge)
                     let offset = pairedCarets.contains(selection.location)
                         ? marker.text.utf16.count
                         : 0

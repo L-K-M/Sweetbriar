@@ -137,15 +137,60 @@ struct MarkdownFormattingTests {
 
     @Test("a caret edit never breaks the syntax around it")
     func caretKeepsSyntax() {
-        // Taking out the literal `**` would glue `__` to `a`.
+        // Taking out the literal `**` would glue `__` to `a`, and no
+        // other edit here keeps `x` bold: nothing changes.
         let text = "__x__**a"
-        let result = applying(
-            edit(.emphasis, in: text, selection: NSRange(location: 6, length: 0)), to: text
+        let e = edit(.emphasis, in: text, selection: NSRange(location: 6, length: 0))
+        #expect(applying(e, to: text) == text)
+    }
+
+    @Test("a pair that would re-pair now gives way to the word beside it")
+    func pairChecksTheRealText() {
+        // `**hello** world**` would take `world`'s bold.
+        let bold = "**hello world**"
+        let italic = edit(.emphasis, in: bold, selection: NSRange(location: 7, length: 0))
+        let both = applying(italic, to: bold)
+        #expect(both == "***hello* world**")
+        #expect(italic.selections == [NSRange(location: 8, length: 0)])
+        let back = edit(.emphasis, in: both, selections: italic.selections)
+        #expect(applying(back, to: both) == bold)
+        #expect(back.selections == [NSRange(location: 7, length: 0)])
+
+        let emphasized = "*hello world*"
+        let bolded = applying(
+            edit(in: emphasized, selection: NSRange(location: 6, length: 0)), to: emphasized
         )
-        #expect(
-            MarkdownStyler.styles(forParagraph: result)
-                .contains { $0.style == .strong && NSLocationInRange(3, $0.range) }
+        #expect(bolded == "***hello** world*")
+
+        let mixed = "**a** b**c**"
+        let mixedItalic = applying(
+            edit(.emphasis, in: mixed, selection: NSRange(location: 6, length: 0)), to: mixed
         )
+        #expect(mixedItalic == "**a** *b**c***")
+    }
+
+    @Test("a caret where a word's markers go lands inside them")
+    func caretAtWordStart() {
+        let strong = "__word__"
+        let italic = edit(.emphasis, in: strong, selection: NSRange(location: 2, length: 0))
+        #expect(applying(italic, to: strong) == "__*word*__")
+        #expect(italic.selections == [NSRange(location: 3, length: 0)])
+
+        let emphasized = "_word_"
+        let bold = edit(in: emphasized, selection: NSRange(location: 1, length: 0))
+        #expect(applying(bold, to: emphasized) == "_**word**_")
+        #expect(bold.selections == [NSRange(location: 3, length: 0)])
+    }
+
+    @Test("carets are checked together, not one by one")
+    func caretsTogether() {
+        // Two pairs bracketing `word` would make it bold.
+        let text = "word"
+        let e = edit(.emphasis, in: text, selections: [
+            NSRange(location: 0, length: 0), NSRange(location: 4, length: 0),
+        ])
+        let result = applying(e, to: text)
+        #expect(!MarkdownStyler.styles(forParagraph: result).contains { $0.style == .strong })
     }
 
     @Test("carets that meet never overlap their edits or overrun the text")
@@ -153,8 +198,11 @@ struct MarkdownFormattingTests {
         // The first caret's edit wins; a later one meeting it does
         // nothing, and carets landing together become one.
         let cases: [(String, [Int], String, [NSRange])] = [
-            ("xa****b", [0, 4, 6], "****xab", [
+            // A pair at 0 would turn `xa` bold with the literal `****`:
+            // the word bolds instead, and the later carets meet it.
+            ("xa****b", [0, 4, 6], "**xa****b**", [
                 NSRange(location: 2, length: 0), NSRange(location: 6, length: 0),
+                NSRange(location: 8, length: 0),
             ]),
             ("a****b", [3, 4], "ab", [NSRange(location: 1, length: 0)]),
         ]
