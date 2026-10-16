@@ -59,6 +59,17 @@ struct ComposerProbeTests {
         )
     }
 
+    /// Close the undo group the current event opened. In the app each
+    /// key event ends its own; a test's actions share one, so a
+    /// single undo would take back every edit before it.
+    private func endEvent() {
+        guard let undoManager = textView.undoManager,
+              undoManager.groupingLevel > 0 else {
+            return
+        }
+        undoManager.endUndoGrouping()
+    }
+
     /// Whether the display font at `location` carries `trait`.
     private func displayFont(
         at location: Int,
@@ -220,6 +231,7 @@ struct ComposerProbeTests {
         textView.insertText(
             "word", replacementRange: NSRange(location: 0, length: 0)
         )
+        endEvent()
         #expect(textView.isOnTextKit2)
 
         textView.setSelectedRange(NSRange(location: 0, length: 4))
