@@ -282,7 +282,10 @@ final class ComposerTextView: NSTextView {
     }
 }
 
-extension ComposerTextView: NSTextContentStorageDelegate {
+// The protocol is nonisolated in the SDK; TextKit asks for paragraphs
+// on the main thread, where the view lays out, so the conformance is
+// main-actor isolated and `@preconcurrency` asserts that at run time.
+extension ComposerTextView: @preconcurrency NSTextContentStorageDelegate {
     /// TextKit 2 asks for each paragraph's presentation: in Markdown
     /// mode, an `NSTextParagraph` carrying the styler's display
     /// attributes; in plain mode — and for any paragraph an input
