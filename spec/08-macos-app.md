@@ -58,7 +58,7 @@ restores its draft by `draft_id`.
     and the warm comparison is empty: its warm run stopped after first
     rows, its window no longer key;
   - AppKit passed the benchmark's checks. It showed its first rows in
-    170–207 ms, answered input within 32–41 ms at p95, and gave click
+    170–207 ms, answered input within 32–42 ms at p95, and gave click
     feedback in under 50 ms.
 
   With SwiftUI failing the benchmark, the owner's checklist couldn't

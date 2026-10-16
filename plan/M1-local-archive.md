@@ -109,7 +109,8 @@ local drafts. No network yet.
   - the sidebar outline;
   - the list from the M0.10 decision;
   - Run List Benchmark's store-backed mode: repeated mailbox switches
-    and the M0.10 scroll sequence over an imported mailbox, through the
+    and M0.10's scroll and selection sequences over an imported
+    mailbox, through the
     production list. Its report reads the refresh rate from the run's
     window (M0.10's reported the main screen's);
   - File → Import… with a progress sheet and the Import report window.
