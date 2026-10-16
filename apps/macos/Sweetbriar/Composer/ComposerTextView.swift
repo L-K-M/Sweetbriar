@@ -136,14 +136,17 @@ final class ComposerTextView: NSTextView {
         }
 
         // Last to first, so each replacement leaves the earlier ranges
-        // intact; one transaction, so TextKit 2 regenerates the
-        // paragraphs once.
+        // intact; one transaction and one storage edit batch, so
+        // TextKit 2 regenerates the paragraphs once however many
+        // markers the command touched.
         contentStorage.performEditingTransaction {
+            textStorage.beginEditing()
             for replacement in edit.replacements.reversed() {
                 textStorage.replaceCharacters(
                     in: replacement.range, with: replacement.string
                 )
             }
+            textStorage.endEditing()
         }
         didChangeText()
         breakUndoCoalescing()
@@ -184,19 +187,24 @@ final class ComposerTextView: NSTextView {
 
     // MARK: marked text
 
-    /// Marking text restyles its paragraph, so the delegate — which
-    /// leaves a paragraph holding marked text unstyled — answers again
-    /// even if TextKit regenerated the paragraph before the marked
-    /// range was set.
+    /// Marking text restyles the paragraphs it left and the ones it
+    /// holds now, so the delegate — which leaves a paragraph holding
+    /// marked text unstyled — answers again even if TextKit
+    /// regenerated them while the marked range was out of date.
     override func setMarkedText(
         _ string: Any,
         selectedRange: NSRange,
         replacementRange: NSRange
     ) {
+        let old = hasMarkedText() ? markedRange() : nil
         super.setMarkedText(
             string, selectedRange: selectedRange, replacementRange: replacementRange
         )
-        restyle(markedRange())
+
+        let new = hasMarkedText() ? markedRange() : nil
+        let touched = [old, new].compactMap { $0 }
+        guard let first = touched.first else { return }
+        restyle(touched.dropFirst().reduce(first) { union($0, $1) })
     }
 
     /// Committing marked text restyles the paragraphs it landed in:
@@ -210,12 +218,14 @@ final class ComposerTextView: NSTextView {
         let marked = markedRange()
         super.insertText(string, replacementRange: replacementRange)
 
-        // The committed text ends at the caret.
-        let caret = selectedRange().location
-        restyle(NSRange(
-            location: min(marked.location, caret),
-            length: abs(caret - marked.location)
-        ))
+        // The committed text ends at the caret; it replaced the marked
+        // text, or the replacement range when the input method named
+        // one.
+        var touched = union(marked, NSRange(location: selectedRange().location, length: 0))
+        if replacementRange.location != NSNotFound {
+            touched = union(touched, NSRange(location: replacementRange.location, length: 0))
+        }
+        restyle(touched)
     }
 
     /// Accepting marked text as it stands changes no characters, so
@@ -224,6 +234,13 @@ final class ComposerTextView: NSTextView {
         let marked = markedRange()
         super.unmarkText()
         restyle(marked)
+    }
+
+    /// The smallest range covering `a` and `b`; nil stands for none.
+    private func union(_ a: NSRange?, _ b: NSRange) -> NSRange {
+        guard let a else { return b }
+        let start = min(a.location, b.location)
+        return NSRange(location: start, length: max(NSMaxRange(a), NSMaxRange(b)) - start)
     }
 
     /// Regenerate the paragraphs covering `range` so the delegate

@@ -184,6 +184,34 @@ struct ComposerProbeTests {
         #expect(textView.isOnTextKit2)
     }
 
+    @Test("cancelling a composition restyles its paragraph")
+    func cancelledComposition() throws {
+        textView.mode = .markdown
+        textView.string = "**x** "
+        textView.setMarkedText(
+            "に",
+            selectedRange: NSRange(location: 1, length: 0),
+            replacementRange: NSRange(location: 6, length: 0)
+        )
+        #expect(
+            try displayAttributes(at: 0)[.foregroundColor] as? NSColor
+                != .tertiaryLabelColor
+        )
+
+        // An input method cancels by marking nothing.
+        textView.setMarkedText(
+            "",
+            selectedRange: NSRange(location: 0, length: 0),
+            replacementRange: NSRange(location: NSNotFound, length: 0)
+        )
+        #expect(!textView.hasMarkedText())
+        #expect(textView.string == "**x** ")
+        #expect(
+            try displayAttributes(at: 0)[.foregroundColor] as? NSColor
+                == .tertiaryLabelColor
+        )
+    }
+
     @Test("the view stays on TextKit 2 through every operation")
     func staysOnTextKit2() {
         textView.mode = .markdown
@@ -248,7 +276,7 @@ struct ComposerProbeTests {
     func accessibilityValue() {
         textView.string = "hello **world**"
         #expect(textView.accessibilityLabel() == "Message body")
-        #expect(textView.accessibilityValue() as? String == "hello **world**")
+        #expect(textView.accessibilityValue() == "hello **world**")
     }
 }
 #endif

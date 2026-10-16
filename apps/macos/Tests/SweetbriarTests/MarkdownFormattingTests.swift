@@ -31,15 +31,20 @@ struct MarkdownFormattingTests {
     }
 
     /// The string after applying `edit` — what the text storage
-    /// would hold. Last to first, as the view applies them.
+    /// would hold. One pass over the ascending, disjoint replacements,
+    /// so applying thousands stays linear.
     private func applying(_ edit: MarkdownFormatting.Edit, to text: String) -> String {
-        var result = text as NSString
-        for replacement in edit.replacements.reversed() {
-            result = result.replacingCharacters(
-                in: replacement.range, with: replacement.string
-            ) as NSString
+        let source = text as NSString
+        var result = ""
+        var location = 0
+        for replacement in edit.replacements {
+            result += source.substring(with: NSRange(
+                location: location, length: replacement.range.location - location
+            ))
+            result += replacement.string
+            location = NSMaxRange(replacement.range)
         }
-        return result as String
+        return result + source.substring(from: location)
     }
 
     /// The text `edit` leaves selected.
@@ -51,9 +56,10 @@ struct MarkdownFormattingTests {
     @Test("wrapping a selection covers the wrapped span")
     func wrap() {
         let e = edit(in: "a word c", selection: NSRange(location: 2, length: 4))
-        #expect(e.replacements == [MarkdownFormatting.Replacement(
-            range: NSRange(location: 2, length: 4), string: "**word**"
-        )])
+        #expect(e.replacements == [
+            MarkdownFormatting.Replacement(range: NSRange(location: 2, length: 0), string: "**"),
+            MarkdownFormatting.Replacement(range: NSRange(location: 6, length: 0), string: "**"),
+        ])
         #expect(applying(e, to: "a word c") == "a **word** c")
         // The new selection covers `**word**`, so ⌘B again unwraps.
         #expect(selected(e, in: "a word c") == ["**word**"])
@@ -142,6 +148,84 @@ struct MarkdownFormattingTests {
             applying(edit(.emphasis, in: text, selection: selection), to: text)
                 == "**word**"
         )
+    }
+
+    @Test("styling the end of a span composes, and toggles back")
+    func suffixComposes() {
+        /// The styles covering `location` in `text`'s display.
+        func styles(at location: Int, in text: String) -> [MarkdownStyler.Style] {
+            MarkdownStyler.styles(forParagraph: text)
+                .filter { $0.style != .marker && NSLocationInRange(location, $0.range) }
+                .map(\.style)
+        }
+
+        let bold = "**ab**"
+        let italic = edit(.emphasis, in: bold, selection: NSRange(location: 3, length: 1))
+        let both = applying(italic, to: bold)
+        #expect(both == "**a*b***")
+        #expect(styles(at: 4, in: both).contains(.strong))
+        #expect(styles(at: 4, in: both).contains(.emphasis))
+        #expect(applying(edit(.emphasis, in: both, selections: italic.selections), to: both) == bold)
+
+        let emphasized = "*ab*"
+        let bolded = applying(
+            edit(in: emphasized, selection: NSRange(location: 2, length: 1)), to: emphasized
+        )
+        #expect(bolded == "*a**b***")
+        #expect(styles(at: 4, in: bolded).contains(.strong))
+        #expect(styles(at: 4, in: bolded).contains(.emphasis))
+    }
+
+    @Test("italicizing a selection with a bold end unwraps cleanly again")
+    func mixedSelectionRoundTrip() {
+        let text = "_a_ **b**"
+        let all = NSRange(location: 0, length: 9)
+        let italic = applying(edit(.emphasis, in: text, selection: all), to: text)
+        #expect(italic == "*a **b***")
+
+        let again = edit(.emphasis, in: italic, selection: NSRange(location: 0, length: 9))
+        #expect(applying(again, to: italic) == "a **b**")
+    }
+
+    @Test("a span touching the selection merges instead of colliding")
+    func adjacentSpan() {
+        // `*a**b*` would leave `**` literal.
+        let text = "*a*b"
+        let e = edit(.emphasis, in: text, selection: NSRange(location: 3, length: 1))
+        let merged = applying(e, to: text)
+        #expect(merged == "*ab*")
+        #expect(applying(edit(.emphasis, in: merged, selections: e.selections), to: merged) == "ab")
+    }
+
+    @Test("a caret in a span unwraps it; carets elsewhere each get a pair")
+    func carets() {
+        let span = "**word**"
+        let e = edit(in: span, selection: NSRange(location: 4, length: 0))
+        #expect(applying(e, to: span) == "word")
+        #expect(e.selections == [NSRange(location: 2, length: 0)])
+
+        let text = "ab cd"
+        let pairs = edit(in: text, selections: [
+            NSRange(location: 1, length: 0), NSRange(location: 4, length: 0),
+        ])
+        #expect(applying(pairs, to: text) == "a****b c****d")
+        #expect(pairs.selections == [
+            NSRange(location: 3, length: 0), NSRange(location: 10, length: 0),
+        ])
+    }
+
+    @Test("many spans cost linear time, not quadratic")
+    func manySpansStayFast() {
+        // Every character checked against every span took seconds.
+        let text = String(repeating: "*a* ", count: 16_000)
+        let all = NSRange(location: 0, length: (text as NSString).length)
+        let clock = ContinuousClock()
+        var unwrapped = ""
+        let elapsed = clock.measure {
+            unwrapped = applying(edit(.emphasis, in: text, selection: all), to: text)
+        }
+        #expect(unwrapped == String(repeating: "a ", count: 16_000))
+        #expect(elapsed < .seconds(2))
     }
 
     @Test("separate spans in one selection never cross-pair")
@@ -235,6 +319,14 @@ struct MarkdownFormattingTests {
         let text = "😀 x"
         let e = edit(in: text, selection: NSRange(location: 0, length: 1))
         #expect(applying(e, to: text) == "**😀** x")
+    }
+
+    @Test("markers never split a whitespace-led combining sequence")
+    func combiningAfterSpace() {
+        // The accent belongs to the space; the markers go around `x`.
+        let text = " \u{0301}x"
+        let e = edit(in: text, selection: NSRange(location: 0, length: 3))
+        #expect(applying(e, to: text) == " \u{0301}**x**")
     }
 
     @Test("markers around non-ASCII text unwrap too")
