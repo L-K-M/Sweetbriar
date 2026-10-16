@@ -168,6 +168,38 @@ struct MarkdownStylerTests {
         ])
     }
 
+    @Test("a closing run of three closes two spans")
+    func asymmetricClosers() {
+        /// The styled spans, markers left out.
+        func spans(_ text: String) -> [MarkdownStyler.Run] {
+            runs(text).filter { $0.style != .marker }
+        }
+
+        #expect(spans("*a **b***") == [
+            MarkdownStyler.Run(range: NSRange(location: 0, length: 9), style: .emphasis),
+            MarkdownStyler.Run(range: NSRange(location: 3, length: 5), style: .strong),
+        ])
+        #expect(spans("**a *b***") == [
+            MarkdownStyler.Run(range: NSRange(location: 0, length: 9), style: .strong),
+            MarkdownStyler.Run(range: NSRange(location: 4, length: 3), style: .emphasis),
+        ])
+        // What italicizing or bolding the end of a span produces.
+        #expect(spans("**a*b***") == [
+            MarkdownStyler.Run(range: NSRange(location: 0, length: 8), style: .strong),
+            MarkdownStyler.Run(range: NSRange(location: 3, length: 3), style: .emphasis),
+        ])
+        #expect(spans("*a**b***") == [
+            MarkdownStyler.Run(range: NSRange(location: 0, length: 8), style: .emphasis),
+            MarkdownStyler.Run(range: NSRange(location: 2, length: 5), style: .strong),
+        ])
+        // CommonMark's rule of three: `**` inside a word can't close a
+        // lone `*`.
+        #expect(spans("*foo**bar**baz*") == [
+            MarkdownStyler.Run(range: NSRange(location: 0, length: 15), style: .emphasis),
+            MarkdownStyler.Run(range: NSRange(location: 4, length: 7), style: .strong),
+        ])
+    }
+
     @Test("unmatched markers cost linear time, not quadratic")
     func unmatchedMarkersStayFast() {
         // Every `*` can open and none can close (each follows a
@@ -179,6 +211,16 @@ struct MarkdownStylerTests {
             #expect(MarkdownStyler.styles(forParagraph: paragraph).isEmpty)
         }
         #expect(elapsed < .seconds(2))
+
+        // Every `**` both opens and closes, so the rule of three bars
+        // it from the `*` openers below: without CommonMark's openers
+        // bottom, each one would rescan them all.
+        let barred = String(repeating: "*a ", count: 16_000)
+            + String(repeating: "b**c ", count: 16_000)
+        let barredElapsed = clock.measure {
+            #expect(MarkdownStyler.styles(forParagraph: barred).count == 8_000 * 3)
+        }
+        #expect(barredElapsed < .seconds(2))
     }
 
     @Test("unclosed markers style nothing")

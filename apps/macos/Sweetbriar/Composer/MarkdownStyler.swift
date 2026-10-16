@@ -9,9 +9,10 @@
 //
 // It reads a subset of CommonMark, enough for a composer: an ATX
 // heading needs a space after its `#`s, a list marker needs text
-// after it, and emphasis never crosses a paragraph. Delimiter runs
-// pair `*`/`**` and `***` (`***x***`, `***x** y*`, `***x* y**`), not
-// CommonMark's full delimiter algorithm.
+// after it, and emphasis never crosses a paragraph. Emphasis follows
+// CommonMark's delimiter-run algorithm — flanking, the `_` rules, the
+// rule of three — so `***x***`, `*a **b***` and `**a*b***` pair as
+// CommonMark pairs them.
 
 import Foundation
 
@@ -57,16 +58,11 @@ enum MarkdownStyler {
         /// inline pass must not read a `* ` bullet as emphasis.
         var protected = [Bool](repeating: false, count: u.count)
         blockRuns(u, runs: &runs, protected: &protected)
-        let closers = Closers(u, protected: protected)
-        inlineRuns(
-            u, in: 0 ..< u.count,
-            protected: protected, closers: closers, runs: &runs
-        )
+        for pair in emphasisPairs(u, protected: protected) {
+            appendPair(pair, runs: &runs)
+        }
         return runs
     }
-
-    /// The longest delimiter run the inline pass pairs: `***`.
-    private static let maxDelimiterRun = 3
 
     /// Marker and boundary characters as UTF-16 code units.
     private enum Char {
@@ -210,111 +206,6 @@ enum MarkdownStyler {
 
     // MARK: inline constructs
 
-    /// Every usable close token in the paragraph by marker character
-    /// and run length, ascending — found in one pass, so pairing an
-    /// opener is a binary search rather than a rescan of the rest of
-    /// the paragraph (`*a *a *a …`, every opener unmatched, was
-    /// quadratic).
-    private struct Closers {
-        private struct Key: Hashable {
-            let token: UInt16
-            let length: Int
-        }
-
-        private var positions: [Key: [Int]] = [:]
-
-        init(_ u: [UInt16], protected: [Bool]) {
-            for j in u.indices
-            where u[j] == Char.asterisk || u[j] == Char.underscore {
-                for length in 1 ... maxDelimiterRun
-                where canClose(u, at: j, length: length, protected: protected) {
-                    positions[Key(token: u[j], length: length), default: []]
-                        .append(j)
-                }
-            }
-        }
-
-        /// The first close of `length` × `token` at or after `start`
-        /// that ends inside `span`, or nil.
-        func first(
-            _ token: UInt16,
-            length: Int,
-            from start: Int,
-            in span: Range<Int>
-        ) -> Int? {
-            guard let list = positions[Key(token: token, length: length)] else {
-                return nil
-            }
-            var low = 0
-            var high = list.count
-            while low < high {
-                let mid = (low + high) / 2
-                if list[mid] < start {
-                    low = mid + 1
-                } else {
-                    high = mid
-                }
-            }
-            guard low < list.count, list[low] + length <= span.upperBound else {
-                return nil
-            }
-            return list[low]
-        }
-    }
-
-    /// Strong and emphasis inside `span`, skipping `protected`
-    /// positions and recursing into each matched pair so `**_x_**`
-    /// takes both styles. A marker with no later partner styles
-    /// nothing — unclosed syntax stays literal.
-    private static func inlineRuns(
-        _ u: [UInt16],
-        in span: Range<Int>,
-        protected: [Bool],
-        closers: Closers,
-        runs: inout [Run]
-    ) {
-        var i = span.lowerBound
-        while i < span.upperBound {
-            guard !protected[i],
-                  u[i] == Char.asterisk || u[i] == Char.underscore else {
-                i += 1
-                continue
-            }
-            // The delimiter run, up to `***`. A run that fails to
-            // pair is literal as a whole, never split into singletons.
-            let token = u[i]
-            var length = 1
-            while length < maxDelimiterRun,
-                  i + length < span.upperBound,
-                  u[i + length] == token {
-                length += 1
-            }
-            guard canOpen(u, at: i, length: length) else {
-                i += length
-                continue
-            }
-
-            let pairing = Pairing(
-                u, opener: i, length: length,
-                token: token, span: span, closers: closers
-            )
-            guard let pairing else {
-                i += length
-                continue
-            }
-            for pair in pairing.pairs {
-                appendPair(pair, runs: &runs)
-            }
-            for inner in pairing.interiors {
-                inlineRuns(
-                    u, in: inner,
-                    protected: protected, closers: closers, runs: &runs
-                )
-            }
-            i = pairing.end
-        }
-    }
-
     /// One matched span: its style and its extent, markers included.
     private struct Pair {
         let style: Style
@@ -327,85 +218,151 @@ enum MarkdownStyler {
         }
     }
 
-    /// How a delimiter run pairs with the closers after it — the
-    /// spans it opens, outermost first, the text between their
-    /// markers left to scan, and where scanning resumes.
-    private struct Pairing {
-        let pairs: [Pair]
-        let interiors: [Range<Int>]
-        let end: Int
+    /// A run of `*` or `_` that may open or close emphasis, consumed
+    /// as it pairs: openers from their inner (right) end, closers
+    /// from their inner (left) end.
+    private struct Delimiter {
+        let token: UInt16
+        /// The run's length before any pairing — the rule of three
+        /// reads it.
+        let originalCount: Int
+        let canOpen: Bool
+        let canClose: Bool
+        var start: Int
+        var count: Int
+    }
 
-        /// Nil when nothing closes the run.
-        /// - `*`/`**`: the next closer of the same length.
-        /// - `***`: whichever closes first. `***` makes emphasis
-        ///   around strong; `**` closes strong inside and leaves the
-        ///   outer `*` to the next `*`; `*` closes emphasis inside and
-        ///   leaves the outer `**` to the next `**`. An outer marker
-        ///   with no partner stays literal.
-        init?(
-            _ u: [UInt16],
-            opener i: Int,
-            length: Int,
-            token: UInt16,
-            span: Range<Int>,
-            closers: Closers
-        ) {
-            func close(_ length: Int, from start: Int) -> Int? {
-                closers.first(token, length: length, from: start, in: span)
+    /// The strong and emphasis spans, outermost first — CommonMark's
+    /// delimiter-run algorithm in one pass. Each closer pairs with the
+    /// nearest compatible opener of its character, two characters at
+    /// a time while both runs have two (strong), else one (emphasis);
+    /// openers between the two can never pair and drop out. One stack
+    /// of openers per character, with CommonMark's "openers bottom"
+    /// marks, keeps the work linear: unmatched markers never rescan
+    /// the paragraph.
+    private static func emphasisPairs(_ u: [UInt16], protected: [Bool]) -> [Pair] {
+        /// The stacks' slot for each character: `*` then `_`.
+        func slot(_ token: UInt16) -> Int {
+            token == Char.asterisk ? 0 : 1
+        }
+        /// Closer classes: original length mod 3, times can-open.
+        let classes = 6
+
+        var pairs: [Pair] = []
+        var stacks: [[Delimiter]] = [[], []]
+        /// Per character and closer class: the stack depth below
+        /// which no opener pairs with that class.
+        var bottoms = [[Int]](repeating: Array(repeating: 0, count: classes), count: 2)
+
+        /// Shrinks a stack to `depth`, lowering its bottoms.
+        func truncate(_ s: Int, to depth: Int) {
+            guard depth < stacks[s].count else { return }
+            stacks[s].removeLast(stacks[s].count - depth)
+            bottoms[s] = bottoms[s].map { min($0, depth) }
+        }
+
+        var i = 0
+        while i < u.count {
+            guard !protected[i],
+                  u[i] == Char.asterisk || u[i] == Char.underscore else {
+                i += 1
+                continue
             }
+            var end = i + 1
+            while end < u.count, u[end] == u[i], !protected[end] {
+                end += 1
+            }
+            var closer = delimiter(u, run: i ..< end)
+            i = end
 
-            switch length {
-            case 1, 2:
-                guard let c = close(length, from: i + length) else {
-                    return nil
+            let s = slot(closer.token)
+            let other = 1 - s
+            let closerClass = (closer.originalCount % 3) * 2 + (closer.canOpen ? 1 : 0)
+            while closer.canClose, closer.count > 0 {
+                let candidates = stride(
+                    from: stacks[s].count - 1, through: bottoms[s][closerClass], by: -1
+                )
+                guard let index = candidates.first(where: {
+                    canPair(stacks[s][$0], with: closer)
+                }) else {
+                    // Nothing below pairs with this class: later
+                    // closers like it start their search here.
+                    bottoms[s][closerClass] = stacks[s].count
+                    break
                 }
-                pairs = [Pair(
-                    style: length == 2 ? .strong : .emphasis,
-                    range: i ..< c + length
-                )]
-                interiors = [i + length ..< c]
-                end = c + length
-            default:
-                let c3 = close(3, from: i + 3)
-                let c2 = close(2, from: i + 3)
-                let c1 = close(1, from: i + 3)
-                // The earliest closer wins; a `***` closer beats the
-                // `**` starting at the same place.
-                let earliest = [c3, c2, c1].compactMap { $0 }.min()
-                guard let earliest else { return nil }
 
-                if earliest == c3 {
-                    pairs = [
-                        Pair(style: .emphasis, range: i ..< earliest + 3),
-                        Pair(style: .strong, range: i + 1 ..< earliest + 2),
-                    ]
-                    interiors = [i + 3 ..< earliest]
-                    end = earliest + 3
-                } else if earliest == c2 {
-                    let inner = Pair(style: .strong, range: i + 1 ..< earliest + 2)
-                    guard let outer = close(1, from: earliest + 2) else {
-                        pairs = [inner]
-                        interiors = [i + 3 ..< earliest]
-                        end = earliest + 2
-                        return
-                    }
-                    pairs = [Pair(style: .emphasis, range: i ..< outer + 1), inner]
-                    interiors = [i + 3 ..< earliest, earliest + 2 ..< outer]
-                    end = outer + 1
+                // Openers between the pair drop out — of this
+                // character above it, of the other after it.
+                truncate(s, to: index + 1)
+                var opener = stacks[s][index]
+                var otherDepth = stacks[other].count
+                while otherDepth > 0, stacks[other][otherDepth - 1].start > opener.start {
+                    otherDepth -= 1
+                }
+                truncate(other, to: otherDepth)
+
+                let used = min(opener.count, closer.count) >= 2 ? 2 : 1
+                opener.count -= used
+                pairs.append(Pair(
+                    style: used == 2 ? .strong : .emphasis,
+                    range: opener.start + opener.count ..< closer.start + used
+                ))
+                closer.start += used
+                closer.count -= used
+
+                if opener.count == 0 {
+                    truncate(s, to: index)
                 } else {
-                    let inner = Pair(style: .emphasis, range: i + 2 ..< earliest + 1)
-                    guard let outer = close(2, from: earliest + 1) else {
-                        pairs = [inner]
-                        interiors = [i + 3 ..< earliest]
-                        end = earliest + 1
-                        return
-                    }
-                    pairs = [Pair(style: .strong, range: i ..< outer + 2), inner]
-                    interiors = [i + 3 ..< earliest, earliest + 1 ..< outer]
-                    end = outer + 2
+                    stacks[s][index] = opener
                 }
+            }
+            if closer.canOpen, closer.count > 0 {
+                stacks[s].append(closer)
             }
         }
+
+        // Outermost first, so a nested span follows the one holding it.
+        return pairs.sorted {
+            ($0.range.lowerBound, -$0.range.count) < ($1.range.lowerBound, -$1.range.count)
+        }
+    }
+
+    /// Whether `opener` may pair with `closer` — CommonMark's rule of
+    /// three: when either run can both open and close, their original
+    /// lengths may not sum to a multiple of three unless both are
+    /// multiples of three (so `*foo**bar**baz*` nests).
+    private static func canPair(_ opener: Delimiter, with closer: Delimiter) -> Bool {
+        guard opener.canClose || closer.canOpen else { return true }
+        let sum = opener.originalCount + closer.originalCount
+        return sum % 3 != 0
+            || (opener.originalCount % 3 == 0 && closer.originalCount % 3 == 0)
+    }
+
+    /// The delimiter `run` makes — CommonMark's flanking rules. A run
+    /// is left-flanking (may open) when text, not space, follows it,
+    /// and right-flanking (may close) when text precedes it;
+    /// punctuation counts as text only beside space or punctuation.
+    /// `_` inside a word neither opens nor closes (snake_case).
+    private static func delimiter(_ u: [UInt16], run: Range<Int>) -> Delimiter {
+        let before = run.lowerBound > 0 ? u[run.lowerBound - 1] : Char.space
+        let after = run.upperBound < u.count ? u[run.upperBound] : Char.space
+        let leftFlanking = !isWhitespace(after)
+            && (!isPunctuation(after) || isWhitespace(before) || isPunctuation(before))
+        let rightFlanking = !isWhitespace(before)
+            && (!isPunctuation(before) || isWhitespace(after) || isPunctuation(after))
+
+        let token = u[run.lowerBound]
+        let underscore = token == Char.underscore
+        return Delimiter(
+            token: token,
+            originalCount: run.count,
+            canOpen: leftFlanking
+                && (!underscore || !rightFlanking || isPunctuation(before)),
+            canClose: rightFlanking
+                && (!underscore || !leftFlanking || isPunctuation(after)),
+            start: run.lowerBound,
+            count: run.count
+        )
     }
 
     /// A pair's style run followed by its two `.marker` runs.
@@ -425,47 +382,6 @@ enum MarkdownStyler {
         ))
     }
 
-    /// Whether the marker at `i` may open: a space right after it
-    /// can't open (CommonMark's flanking rule), and `_`/`__` between
-    /// two alphanumerics is a word character, never emphasis.
-    private static func canOpen(_ u: [UInt16], at i: Int, length: Int) -> Bool {
-        guard i + length < u.count, !isWhitespace(u[i + length]) else {
-            return false
-        }
-        return !isIntraword(u, at: i, length: length)
-    }
-
-    /// Whether `length` × the marker at `j` may close: unclaimed by a
-    /// line-level construct, not a lone marker inside a longer run
-    /// (so `*a **b** c*` keeps its outer emphasis), not after a space,
-    /// and not intraword.
-    private static func canClose(
-        _ u: [UInt16],
-        at j: Int,
-        length: Int,
-        protected: [Bool]
-    ) -> Bool {
-        let token = u[j]
-        guard j + length <= u.count,
-              (j ..< j + length).allSatisfy({ u[$0] == token && !protected[$0] }) else {
-            return false
-        }
-        let insideRun = length == 1 &&
-            ((j > 0 && u[j - 1] == token) || (j + 1 < u.count && u[j + 1] == token))
-        let afterSpace = j > 0 && isWhitespace(u[j - 1])
-        return !insideRun && !afterSpace && !isIntraword(u, at: j, length: length)
-    }
-
-    /// `_` or `__` at `i` with alphanumerics on both sides is a word
-    /// character (snake_case), never emphasis — CommonMark's
-    /// intraword rule; `*`/`**` may sit inside a word.
-    private static func isIntraword(_ u: [UInt16], at i: Int, length: Int) -> Bool {
-        guard u[i] == Char.underscore, i > 0, i + length < u.count else {
-            return false
-        }
-        return isAlphanumeric(u[i - 1]) && isAlphanumeric(u[i + length])
-    }
-
     private static func isDigit(_ u: UInt16) -> Bool {
         (0x30 ... 0x39).contains(u)
     }
@@ -474,8 +390,12 @@ enum MarkdownStyler {
         u == Char.space || u == 0x09 || u == Char.newline || u == 0x0D
     }
 
-    private static func isAlphanumeric(_ u: UInt16) -> Bool {
+    /// CommonMark's Unicode punctuation: general categories P and S.
+    private static let punctuation = CharacterSet.punctuationCharacters
+        .union(.symbols)
+
+    private static func isPunctuation(_ u: UInt16) -> Bool {
         guard let scalar = Unicode.Scalar(u) else { return false }
-        return CharacterSet.alphanumerics.contains(scalar)
+        return punctuation.contains(scalar)
     }
 }
