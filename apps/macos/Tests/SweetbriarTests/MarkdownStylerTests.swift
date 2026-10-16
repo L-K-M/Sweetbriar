@@ -116,6 +116,71 @@ struct MarkdownStylerTests {
         ])
     }
 
+    @Test("***x*** takes emphasis outside and strong inside")
+    func triple() {
+        #expect(runs("***word***") == [
+            MarkdownStyler.Run(
+                range: NSRange(location: 0, length: 10),
+                style: .emphasis
+            ),
+            MarkdownStyler.Run(
+                range: NSRange(location: 0, length: 1),
+                style: .marker
+            ),
+            MarkdownStyler.Run(
+                range: NSRange(location: 9, length: 1),
+                style: .marker
+            ),
+            MarkdownStyler.Run(
+                range: NSRange(location: 1, length: 8),
+                style: .strong
+            ),
+            MarkdownStyler.Run(
+                range: NSRange(location: 1, length: 2),
+                style: .marker
+            ),
+            MarkdownStyler.Run(
+                range: NSRange(location: 7, length: 2),
+                style: .marker
+            ),
+        ])
+        // Strong closing first leaves the outer star to emphasis…
+        #expect(runs("***a** b*").filter { $0.style != .marker } == [
+            MarkdownStyler.Run(
+                range: NSRange(location: 0, length: 9),
+                style: .emphasis
+            ),
+            MarkdownStyler.Run(
+                range: NSRange(location: 1, length: 5),
+                style: .strong
+            ),
+        ])
+        // …and emphasis closing first leaves the outer pair to strong.
+        #expect(runs("***a* b**").filter { $0.style != .marker } == [
+            MarkdownStyler.Run(
+                range: NSRange(location: 0, length: 9),
+                style: .strong
+            ),
+            MarkdownStyler.Run(
+                range: NSRange(location: 2, length: 3),
+                style: .emphasis
+            ),
+        ])
+    }
+
+    @Test("unmatched markers cost linear time, not quadratic")
+    func unmatchedMarkersStayFast() {
+        // Every `*` can open and none can close (each follows a
+        // space): a rescan per opener took seconds on this 96 KB
+        // paragraph; one pass takes milliseconds.
+        let paragraph = String(repeating: "*a ", count: 32_000)
+        let clock = ContinuousClock()
+        let elapsed = clock.measure {
+            #expect(MarkdownStyler.styles(forParagraph: paragraph).isEmpty)
+        }
+        #expect(elapsed < .seconds(2))
+    }
+
     @Test("unclosed markers style nothing")
     func unclosed() {
         #expect(runs("a *b c").isEmpty)
