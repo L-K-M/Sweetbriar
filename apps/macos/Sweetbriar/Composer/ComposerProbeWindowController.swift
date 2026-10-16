@@ -117,7 +117,7 @@ final class ComposerProbeWindowController: NSWindowController {
 
         updateStatus()
         textChangeObserver = NotificationCenter.default.addObserver(
-            forName: NSText.didChangeTextNotification,
+            forName: NSText.didChangeNotification,
             object: textView,
             queue: .main
         ) { [weak self] _ in

@@ -45,15 +45,15 @@ final class ComposerTextView: NSTextView {
 
     /// The TextKit 2 content storage backing the view — kept so the
     /// delegate can read the paragraph source and a mode switch can
-    /// invalidate the elements it already answered.
+    /// regenerate the elements it already answered.
     private let contentStorage = NSTextContentStorage()
 
-    /// Plain or Markdown. Switching re-lays-out the document so the
+    /// Plain or Markdown. Switching restyles the document so the
     /// delegate runs again for every paragraph.
     var mode: ComposerMode = .markdown {
         didSet {
             guard mode != oldValue else { return }
-            restyleDocument()
+            restyle(NSRange(location: 0, length: (string as NSString).length))
         }
     }
 
@@ -107,10 +107,10 @@ final class ComposerTextView: NSTextView {
         applyMarkdownFormatting(.emphasis)
     }
 
-    /// Compute the wrap-or-unwrap edit for each selected range and
-    /// apply them last-to-first — earlier edits keep their
-    /// coordinates — through `shouldChangeText`, the storage
-    /// replacement and `didChangeText`, so the undo manager records
+    /// Apply the command's `MarkdownFormatting` edit — every
+    /// selection's replacements at once — through
+    /// `shouldChangeText(inRanges:replacementStrings:)`, the storage
+    /// replacements and `didChangeText()`, so the undo manager records
     /// one undoable edit for the whole command (spec/08).
     private func applyMarkdownFormatting(_ marker: MarkdownFormatting.Marker) {
         // No edits mid-composition: a storage change under marked
@@ -119,41 +119,42 @@ final class ComposerTextView: NSTextView {
             return
         }
 
-        var edits: [MarkdownFormatting.Edit] = []
-        for value in selectedRanges {
-            edits.append(MarkdownFormatting.edit(
-                for: marker, in: string, selection: value.rangeValue
-            ))
-        }
-        edits.sort { $0.range.location > $1.range.location }
-        guard !edits.isEmpty else { return }
+        let edit = MarkdownFormatting.edit(
+            for: marker,
+            in: string,
+            selections: selectedRanges.map(\.rangeValue)
+        )
+        guard !edit.replacements.isEmpty else { return }
 
-        if edits.count > 1 {
-            undoManager?.beginUndoGrouping()
+        // Its own undo step, never coalesced with the typing around it.
+        breakUndoCoalescing()
+        guard shouldChangeText(
+            inRanges: edit.replacements.map { NSValue(range: $0.range) },
+            replacementStrings: edit.replacements.map(\.string)
+        ) else {
+            return
         }
-        var newSelections: [NSValue] = []
-        for edit in edits {
-            guard shouldChangeText(
-                in: edit.range, replacementString: edit.replacement
-            ) else {
-                continue
+
+        // Last to first, so each replacement leaves the earlier ranges
+        // intact; one transaction, so TextKit 2 regenerates the
+        // paragraphs once.
+        contentStorage.performEditingTransaction {
+            for replacement in edit.replacements.reversed() {
+                textStorage.replaceCharacters(
+                    in: replacement.range, with: replacement.string
+                )
             }
-            textStorage.replaceCharacters(in: edit.range, with: edit.replacement)
-            didChangeText()
-            newSelections.append(NSValue(range: edit.selection))
         }
-        if edits.count > 1 {
-            undoManager?.endUndoGrouping()
-        }
+        didChangeText()
+        breakUndoCoalescing()
 
-        newSelections.sort { $0.rangeValue.location < $1.rangeValue.location }
-        if !newSelections.isEmpty {
-            selectedRanges = newSelections
+        if !edit.selections.isEmpty {
+            selectedRanges = edit.selections.map { NSValue(range: $0) }
         }
     }
 
-    /// Bold and Italic are Markdown-only — off in plain mode.
-    /// Anything else NSTextView validates itself.
+    /// Bold and Italic are Markdown-only, and wait for a composition
+    /// to end. Anything else NSTextView validates itself.
     override func validateUserInterfaceItem(
         _ item: any NSValidatedUserInterfaceItem
     ) -> Bool {
@@ -162,7 +163,7 @@ final class ComposerTextView: NSTextView {
                   || action == #selector(toggleItalicMarkdown(_:)) else {
             return super.validateUserInterfaceItem(item)
         }
-        return mode == .markdown
+        return canFormat
     }
 
     /// Menu-item validation reaches the view through the same rule —
@@ -173,26 +174,80 @@ final class ComposerTextView: NSTextView {
                   || action == #selector(toggleItalicMarkdown(_:)) else {
             return super.validateMenuItem(menuItem)
         }
-        return mode == .markdown
+        return canFormat
+    }
+
+    /// Whether the formatting commands would act.
+    private var canFormat: Bool {
+        mode == .markdown && !hasMarkedText()
     }
 
     // MARK: marked text
 
-    /// Committing marked text re-lays-out the document: a commit that
-    /// changed no characters would otherwise leave the paragraph's
-    /// element cached at whatever the delegate answered while the
-    /// text was marked (spec/08).
-    override func unmarkText() {
-        super.unmarkText()
-        restyleDocument()
+    /// Marking text restyles its paragraph, so the delegate — which
+    /// leaves a paragraph holding marked text unstyled — answers again
+    /// even if TextKit regenerated the paragraph before the marked
+    /// range was set.
+    override func setMarkedText(
+        _ string: Any,
+        selectedRange: NSRange,
+        replacementRange: NSRange
+    ) {
+        super.setMarkedText(
+            string, selectedRange: selectedRange, replacementRange: replacementRange
+        )
+        restyle(markedRange())
     }
 
-    /// Invalidate every element and layout so the delegate answers
-    /// again for every paragraph — through TextKit 2's managers only.
-    private func restyleDocument() {
-        guard let layoutManager = textLayoutManager else { return }
-        contentStorage.invalidateTextElements(for: layoutManager.documentRange)
-        layoutManager.invalidateLayout(for: layoutManager.documentRange)
+    /// Committing marked text restyles the paragraphs it landed in:
+    /// TextKit may have regenerated them while the range still read as
+    /// marked, which would leave them unstyled (spec/08).
+    override func insertText(_ string: Any, replacementRange: NSRange) {
+        guard hasMarkedText() else {
+            super.insertText(string, replacementRange: replacementRange)
+            return
+        }
+        let marked = markedRange()
+        super.insertText(string, replacementRange: replacementRange)
+
+        // The committed text ends at the caret.
+        let caret = selectedRange().location
+        restyle(NSRange(
+            location: min(marked.location, caret),
+            length: abs(caret - marked.location)
+        ))
+    }
+
+    /// Accepting marked text as it stands changes no characters, so
+    /// nothing else would restyle its paragraph.
+    override func unmarkText() {
+        let marked = markedRange()
+        super.unmarkText()
+        restyle(marked)
+    }
+
+    /// Regenerate the paragraphs covering `range` so the delegate
+    /// answers again: an attributes-only edit notification inside an
+    /// editing transaction makes the content storage rebuild their
+    /// elements and lay them out anew. No character or stored
+    /// attribute changes, so undo sees nothing — and only TextKit 2's
+    /// managers are involved.
+    private func restyle(_ range: NSRange) {
+        guard let textStorage = contentStorage.textStorage,
+              range.location != NSNotFound else {
+            return
+        }
+        let source = textStorage.string as NSString
+        guard source.length > 0 else { return }
+
+        let location = min(range.location, source.length)
+        let length = min(range.length, source.length - location)
+        let paragraphs = source.paragraphRange(
+            for: NSRange(location: location, length: length)
+        )
+        contentStorage.performEditingTransaction {
+            textStorage.edited(.editedAttributes, range: paragraphs, changeInLength: 0)
+        }
     }
 
     // MARK: display attributes

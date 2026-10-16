@@ -1,8 +1,9 @@
 // The Composer Probe's editor under test (plan M0.11): ⌘B as one
-// undoable edit that restores text and styling together, marked text
-// left unstyled until it commits, TextKit 2 staying on through every
-// operation, and the accessibility value being the text. AppKit only —
-// macOS CI runs it inside the app bundle.
+// undoable edit that restores text and styling together — across
+// paragraphs and selections too — bold and italic composing, marked
+// text left unstyled until it commits, TextKit 2 staying on through
+// every operation, and the accessibility value being the text. AppKit
+// only — macOS CI runs it inside the app bundle.
 
 #if canImport(Sweetbriar)
 @testable import Sweetbriar
@@ -25,34 +26,52 @@ struct ComposerProbeTests {
 
     /// The paragraphs TextKit 2 generated for the document: asking
     /// for the elements runs the delegate, so each answer shows what
-    /// the display layer was told — styled or untouched.
+    /// the display layer was told — styled or untouched. Enumerated
+    /// rather than read through `textElements(for:)`, which can come
+    /// back empty.
     private func paragraphs() -> [NSTextParagraph] {
-        guard let layoutManager = textView.textLayoutManager,
-              let storage = layoutManager.textContentManager
-                  as? NSTextContentStorage else {
+        guard let storage = textView.textLayoutManager?.textContentManager
+            as? NSTextContentStorage else {
             return []
         }
-        layoutManager.ensureLayout(for: layoutManager.documentRange)
-        return storage.textElements(for: layoutManager.documentRange)
-            .compactMap { $0 as? NSTextParagraph }
+        var paragraphs: [NSTextParagraph] = []
+        _ = storage.enumerateTextElements(from: storage.documentRange.location) {
+            if let paragraph = $0 as? NSTextParagraph {
+                paragraphs.append(paragraph)
+            }
+            return true
+        }
+        return paragraphs
     }
 
-    /// The display attributes at `location` in the document's first
-    /// paragraph — empty when the element or the attribute is absent.
+    /// The display attributes at `location` in paragraph `index`.
+    /// Throws when the paragraph or the location is missing, so a
+    /// "not styled" check can't pass on nothing.
     private func displayAttributes(
-        at location: Int
-    ) -> [NSAttributedString.Key: Any] {
-        guard let paragraph = paragraphs().first,
-              location < paragraph.attributedString.length else {
-            return [:]
-        }
+        at location: Int,
+        inParagraph index: Int = 0
+    ) throws -> [NSAttributedString.Key: Any] {
+        let all = paragraphs()
+        let paragraph = try #require(index < all.count ? all[index] : nil)
+        try #require(location < paragraph.attributedString.length)
         return paragraph.attributedString.attributes(
             at: location, effectiveRange: nil
         )
     }
 
+    /// Whether the display font at `location` carries `trait`.
+    private func displayFont(
+        at location: Int,
+        inParagraph index: Int = 0,
+        has trait: NSFontDescriptor.SymbolicTraits
+    ) throws -> Bool {
+        let font = try displayAttributes(at: location, inParagraph: index)[.font]
+            as? NSFont
+        return font?.fontDescriptor.symbolicTraits.contains(trait) == true
+    }
+
     @Test("⌘B wraps the selection in one undoable edit")
-    func boldWrapUndo() {
+    func boldWrapUndo() throws {
         textView.mode = .markdown
         textView.string = "say word now"
         textView.setSelectedRange(NSRange(location: 4, length: 4))
@@ -63,11 +82,10 @@ struct ComposerProbeTests {
 
         // The markers dim, the word goes bold — presentation only,
         // never in the stored text.
-        let markerColor = displayAttributes(at: 4)[.foregroundColor]
+        let markerColor = try displayAttributes(at: 4)[.foregroundColor]
             as? NSColor
         #expect(markerColor == .tertiaryLabelColor)
-        let wordFont = displayAttributes(at: 6)[.font] as? NSFont
-        #expect(wordFont?.fontDescriptor.symbolicTraits.contains(.bold) == true)
+        #expect(try displayFont(at: 6, has: .bold))
 
         // One undo restores the text…
         #expect(textView.undoManager?.canUndo == true)
@@ -78,15 +96,64 @@ struct ComposerProbeTests {
         // …and the styling with it: the styler's runs match the
         // restored text, and the paragraph is unstyled again.
         #expect(MarkdownStyler.styles(forParagraph: textView.string).isEmpty)
-        let restored = displayAttributes(at: 4)
+        let restored = try displayAttributes(at: 4)
         #expect(restored[.foregroundColor] as? NSColor != .tertiaryLabelColor)
-        let restoredFont = restored[.font] as? NSFont
-        #expect(restoredFont?.fontDescriptor.symbolicTraits.contains(.bold) != true)
+        #expect(try !displayFont(at: 4, has: .bold))
         #expect(textView.isOnTextKit2)
     }
 
+    @Test("⌘B across paragraphs bolds each, and one undo restores both")
+    func boldAcrossParagraphs() throws {
+        textView.mode = .markdown
+        textView.string = "one\ntwo"
+        textView.setSelectedRange(NSRange(location: 0, length: 7))
+
+        textView.toggleBoldMarkdown(nil)
+        #expect(textView.string == "**one**\n**two**")
+        #expect(try displayFont(at: 3, inParagraph: 0, has: .bold))
+        #expect(try displayFont(at: 3, inParagraph: 1, has: .bold))
+
+        textView.undoManager?.undo()
+        #expect(textView.string == "one\ntwo")
+        #expect(try !displayFont(at: 1, inParagraph: 0, has: .bold))
+        #expect(try !displayFont(at: 1, inParagraph: 1, has: .bold))
+    }
+
+    @Test("⌘B over two selections keeps each on its word")
+    func boldTwoSelections() {
+        textView.mode = .markdown
+        textView.string = "one two"
+        textView.selectedRanges = [
+            NSValue(range: NSRange(location: 0, length: 3)),
+            NSValue(range: NSRange(location: 4, length: 3)),
+        ]
+
+        textView.toggleBoldMarkdown(nil)
+        #expect(textView.string == "**one** **two**")
+        #expect(textView.selectedRanges.map(\.rangeValue) == [
+            NSRange(location: 0, length: 7), NSRange(location: 8, length: 7),
+        ])
+
+        // The same command on the same selections toggles back.
+        textView.toggleBoldMarkdown(nil)
+        #expect(textView.string == "one two")
+    }
+
+    @Test("⌘B then ⌘I shows bold italic")
+    func boldThenItalic() throws {
+        textView.mode = .markdown
+        textView.string = "word"
+        textView.setSelectedRange(NSRange(location: 0, length: 4))
+
+        textView.toggleBoldMarkdown(nil)
+        textView.toggleItalicMarkdown(nil)
+        #expect(textView.string == "***word***")
+        #expect(try displayFont(at: 4, has: .bold))
+        #expect(try displayFont(at: 4, has: .italic))
+    }
+
     @Test("marked text stays unstyled until it commits")
-    func markedText() {
+    func markedText() throws {
         textView.mode = .markdown
         textView.string = "**x** "
         let markedLocation = "**x** ".utf16.count
@@ -100,7 +167,7 @@ struct ComposerProbeTests {
 
         // While marked, the paragraph's element is the unstyled
         // default — the delegate returned nil.
-        let during = displayAttributes(at: 0)
+        let during = try displayAttributes(at: 0)
         #expect(during[.foregroundColor] as? NSColor != .tertiaryLabelColor)
         #expect(textView.isOnTextKit2)
 
@@ -112,13 +179,14 @@ struct ComposerProbeTests {
         #expect(!textView.hasMarkedText())
 
         // Committed: the delegate styles the paragraph again.
-        let after = displayAttributes(at: 0)
+        let after = try displayAttributes(at: 0)
         #expect(after[.foregroundColor] as? NSColor == .tertiaryLabelColor)
         #expect(textView.isOnTextKit2)
     }
 
     @Test("the view stays on TextKit 2 through every operation")
     func staysOnTextKit2() {
+        textView.mode = .markdown
         #expect(textView.isOnTextKit2)
 
         textView.insertText(
@@ -152,7 +220,7 @@ struct ComposerProbeTests {
     }
 
     @Test("plain mode leaves text unstyled and turns the commands off")
-    func plainMode() {
+    func plainMode() throws {
         textView.string = "**word**"
         textView.mode = .plain
 
@@ -163,14 +231,14 @@ struct ComposerProbeTests {
         )
         #expect(!textView.validateUserInterfaceItem(item))
         #expect(
-            displayAttributes(at: 0)[.foregroundColor] as? NSColor
+            try displayAttributes(at: 0)[.foregroundColor] as? NSColor
                 != .tertiaryLabelColor
         )
 
         textView.mode = .markdown
         #expect(textView.validateUserInterfaceItem(item))
         #expect(
-            displayAttributes(at: 0)[.foregroundColor] as? NSColor
+            try displayAttributes(at: 0)[.foregroundColor] as? NSColor
                 == .tertiaryLabelColor
         )
         #expect(textView.isOnTextKit2)
