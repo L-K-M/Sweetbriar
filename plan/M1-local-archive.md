@@ -115,7 +115,13 @@ local drafts. No network yet.
     report;
   - **owner (O5):** imports their own Apple Mail exports; the report
     matches the Mailbox message counts shown in Apple Mail; scrolling
-    and keyboard navigation are fluid.
+    and keyboard navigation are fluid;
+  - **owner (O5):** Debug → Run List Benchmark's AppKit runs meet
+    spec/08's list budgets at p95 on the owner's Mac. M0.10's prototype
+    missed two of them, which this step closes:
+    - scroll-update main-thread CPU under 5 ms (M0.10: 6.1–7.3 ms);
+    - first rows within 100 ms (M0.10: 170–207 ms; the opening page
+      waits for the 500,000-id index).
 
 ### M1.5 Safe rendering and the reader — L, linux + macos-ci
 

@@ -49,19 +49,19 @@ restores its draft by `draft_id`.
 ## Message list
 
 - **Built with** `NSTableView` (view-based), backed by a `ListWindowModel`
-  over a core window (07). M0.10's prototype keeps AppKit, pending
-  the owner's Mac (O4), which decides. macOS CI's diagnostic run
-  (virtualized M1, 60 Hz, 500,000 rows):
-  - cold, SwiftUI `List` failed all 26 decision bars. It blocked the
-    main thread for tens of seconds on open, jumps and selection, and
-    peaked at 3.97 GB. Its warm run overran the benchmark's budget
-    before rendering;
-  - cold, AppKit showed its first rows in about 0.4 s, peaked at
-    41 MB, and rendered every input within 34 ms at p95. Its warm run,
-    after SwiftUI's, passed its checks.
+  over a core window (07). Decided by M0.10's prototype on the owner's
+  Mac (120 Hz, 500,000 synthetic rows), where SwiftUI `List` failed 25
+  of 26 decision bars:
+  - SwiftUI showed its first rows after 92 s (106 s warm), peaked at
+    3.9 GB, and answered wheel input in 938 ms and jumps in 5.8 s at
+    p95;
+  - AppKit passed every check. It showed its first rows in 170–207 ms,
+    answered input within 32–41 ms at p95, and gave selection feedback
+    in under 50 ms.
 
-  The choice reopens only if SwiftUI matches AppKit on the owner's Mac
-  on every checklist item and benchmark (plan M0.10).
+  macOS CI's diagnostic runs agreed. AppKit still misses two budgets
+  below: scroll updates took 6.1–7.3 ms of main-thread CPU at p95, and
+  first rows exceeded 100 ms. M1.4 closes both (plan).
 - **`ListWindowModel`** lives in `SweetbriarBridge`, free of AppKit, so
   both prototype lists and their tests share its paging, data and
   delivery cadence; each list adapts it idiomatically and observes only
