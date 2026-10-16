@@ -150,13 +150,21 @@ struct MarkdownFormattingTests {
 
     @Test("carets that meet never overlap their edits or overrun the text")
     func meetingCarets() {
-        for (text, carets) in [("xa****b", [0, 4, 6]), ("a****b", [3, 4])] {
+        // The first caret's edit wins; a later one meeting it does
+        // nothing, and carets landing together become one.
+        let cases: [(String, [Int], String, [NSRange])] = [
+            ("xa****b", [0, 4, 6], "****xab", [
+                NSRange(location: 2, length: 0), NSRange(location: 6, length: 0),
+            ]),
+            ("a****b", [3, 4], "ab", [NSRange(location: 1, length: 0)]),
+        ]
+        for (text, carets, expected, selections) in cases {
             let e = edit(in: text, selections: carets.map { NSRange(location: $0, length: 0) })
-            let result = applying(e, to: text) as NSString
             for (earlier, later) in zip(e.replacements, e.replacements.dropFirst()) {
                 #expect(NSMaxRange(earlier.range) <= later.range.location)
             }
-            #expect(e.selections.allSatisfy { NSMaxRange($0) <= result.length })
+            #expect(applying(e, to: text) == expected)
+            #expect(e.selections == selections)
         }
     }
 

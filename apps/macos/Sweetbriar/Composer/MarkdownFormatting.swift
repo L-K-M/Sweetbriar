@@ -915,13 +915,13 @@ enum MarkdownFormatting {
         outer.location <= inner.location && NSMaxRange(inner) <= NSMaxRange(outer)
     }
 
-    /// `ranges` sorted, overlapping ones joined; touching ones stay
-    /// apart.
+    /// `ranges` sorted, overlapping or equal ones joined — two carets
+    /// landing together become one; touching ones stay apart.
     private static func merged(_ ranges: [NSRange]) -> [NSRange] {
         var result: [NSRange] = []
         for range in ranges.sorted(by: { $0.location < $1.location }) {
             guard let last = result.last,
-                  NSIntersectionRange(last, range).length > 0 else {
+                  NSIntersectionRange(last, range).length > 0 || last == range else {
                 result.append(range)
                 continue
             }
