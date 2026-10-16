@@ -226,6 +226,7 @@ struct ComposerProbeTests {
         #expect(textView.isOnTextKit2)
 
         textView.undoManager?.undo()
+        #expect(textView.string == "word")
         #expect(textView.isOnTextKit2)
 
         textView.setMarkedText(

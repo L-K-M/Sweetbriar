@@ -189,7 +189,13 @@ struct MarkdownFormattingTests {
         let e = edit(.emphasis, in: text, selections: [
             NSRange(location: 0, length: 0), NSRange(location: 4, length: 0),
         ])
+        // The first caret gets its pair; the second, which would
+        // complete `**word**`, is refused.
         let result = applying(e, to: text)
+        #expect(result == "**word")
+        #expect(e.selections == [
+            NSRange(location: 1, length: 0), NSRange(location: 6, length: 0),
+        ])
         #expect(!MarkdownStyler.styles(forParagraph: result).contains { $0.style == .strong })
     }
 

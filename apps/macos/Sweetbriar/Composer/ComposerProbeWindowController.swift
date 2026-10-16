@@ -63,8 +63,10 @@ final class ComposerProbeWindowController: NSWindowController {
 
         // The editor fills the scroll view's width and grows down —
         // the standard scrollable-text configuration, TextKit 2
-        // included.
-        let scrollView = NSScrollView()
+        // included. The scroll view starts at the content size so the
+        // editor's minimum height is the viewport's, not zero: a click
+        // anywhere in the empty editor focuses it.
+        let scrollView = NSScrollView(frame: NSRect(origin: .zero, size: Self.contentSize))
         scrollView.hasVerticalScroller = true
         scrollView.autohidesScrollers = true
         scrollView.borderType = .noBorder
