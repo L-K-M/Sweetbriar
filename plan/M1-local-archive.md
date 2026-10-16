@@ -110,9 +110,9 @@ local drafts. No network yet.
   - the list from the M0.10 decision;
   - Run List Benchmark's store-backed mode: repeated mailbox switches
     and M0.10's scroll and selection sequences over an imported
-    mailbox, through the
-    production list. Its report reads the refresh rate from the run's
-    window (M0.10's reported the main screen's);
+    mailbox, through the production list. Its report reads the
+    refresh rate from the run's window (M0.10's reported the main
+    screen's);
   - File → Import… with a progress sheet and the Import report window.
 - **Acceptance:**
   - macOS CI is green;
