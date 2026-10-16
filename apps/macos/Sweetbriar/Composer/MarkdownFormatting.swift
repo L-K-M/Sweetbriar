@@ -28,11 +28,14 @@ import Foundation
 /// can't open; `**hello.**` can) — and a paragraph with no safe form
 /// is left alone.
 ///
-/// A caret inside or touching a span of the style unwraps it; a caret
-/// between an empty marker pair takes the pair out; any other caret
-/// gets a marker pair with the caret between. Markers never cross a
-/// paragraph — the styler reads one at a time — so a selection over
-/// several is formatted paragraph by paragraph.
+/// A caret works on words, as word processors do: between an empty
+/// marker pair it takes the pair out; inside a word it toggles the
+/// word; elsewhere it gets a marker pair to type into — unless the
+/// pair would pair up with markers around it, when the word beside
+/// it toggles instead. Carets whose edits would meet keep only the
+/// first. Markers never cross a paragraph — the styler reads one at
+/// a time — so a selection over several is formatted paragraph by
+/// paragraph.
 enum MarkdownFormatting {
     /// Which style the command toggles.
     enum Marker {
@@ -96,7 +99,7 @@ enum MarkdownFormatting {
         var plan = Plan(marker: marker)
         if ranges.isEmpty {
             for caret in snapped {
-                plan.toggle(caret: caret.location, in: reader.paragraph(at: caret.location))
+                plan.toggle(caret: caret.location, reader: reader)
             }
         } else {
             let pieces = ranges
@@ -134,10 +137,15 @@ enum MarkdownFormatting {
         }
     }
 
-    /// Whether `change` adds the style or takes it away.
+    /// What an edit does to the style.
     private enum Change {
         case wrap
         case unwrap
+        /// Inserts an empty pair at a caret: checked with a letter
+        /// typed between its markers, which must take the style.
+        case pair
+        /// Removes an empty, literal pair: nothing else may change.
+        case literal
     }
 
     /// What one paragraph's part of the command does, in document
@@ -153,6 +161,7 @@ enum MarkdownFormatting {
     /// One paragraph as the styler reads it.
     private struct Paragraph {
         let range: NSRange
+        let text: NSString
         let units: [UInt16]
         /// The strong and emphasis spans, outermost first.
         let spans: [Span]
@@ -190,6 +199,7 @@ enum MarkdownFormatting {
                 }
             }
             self.range = NSRange(location: location, length: units.count)
+            self.text = text as NSString
             self.units = units
             self.spans = spans
             self.marker = Self.mask(markers, count: units.count)
@@ -253,17 +263,43 @@ enum MarkdownFormatting {
             return edit
         }
 
-        /// `window` out to the whitespace around it.
-        private func widenedToWords(_ window: NSRange) -> NSRange {
-            var start = window.location
-            while start > range.location, !isWhitespace(units[start - 1 - range.location]) {
-                start -= 1
+        /// `window` out to the whitespace around it, a whole composed
+        /// character at a time — a combining mark on a space stays
+        /// with the space.
+        func widenedToWords(_ window: NSRange) -> NSRange {
+            var start = window.location - range.location
+            while start > 0 {
+                let character = text.rangeOfComposedCharacterSequence(at: start - 1)
+                guard !isWhitespace(units[character.location]) else { break }
+                start = character.location
             }
-            var end = NSMaxRange(window)
-            while end < NSMaxRange(range), !isWhitespace(units[end - range.location]) {
-                end += 1
+            var end = NSMaxRange(window) - range.location
+            while end < units.count {
+                let character = text.rangeOfComposedCharacterSequence(at: end)
+                guard !isWhitespace(units[character.location]) else { break }
+                end = NSMaxRange(character)
             }
-            return NSRange(location: start, length: end - start)
+            return NSRange(location: start + range.location, length: end - start)
+        }
+
+        /// Whether text, not whitespace or the paragraph's edge, sits
+        /// on both sides of `caret`.
+        func isInsideWord(_ caret: Int) -> Bool {
+            let at = caret - range.location
+            return at > 0 && at < units.count
+                && !isWhitespace(units[at - 1]) && !isWhitespace(units[at])
+        }
+
+        /// The word ending or starting at `caret`, left first.
+        func word(beside caret: Int) -> NSRange? {
+            let at = caret - range.location
+            if at > 0, !isWhitespace(units[at - 1]) {
+                return widenedToWords(NSRange(location: caret - 1, length: 1))
+            }
+            if at < units.count, !isWhitespace(units[at]) {
+                return widenedToWords(NSRange(location: caret, length: 1))
+            }
+            return nil
         }
 
         /// `windows` grown over every span crossing their edges and
@@ -312,6 +348,19 @@ enum MarkdownFormatting {
             let touches = NSMaxRange(span.range) == window.location
                 || NSMaxRange(window) == span.range.location
             return touches && span.style == style
+        }
+
+        /// The outermost of `spans`: those no other one holds.
+        func outermost(_ spans: [Span]) -> [Span] {
+            // Outermost first, so a span inside another comes after it.
+            var kept: [Span] = []
+            for span in spans {
+                if let last = kept.last, MarkdownFormatting.contains(last.range, span.range) {
+                    continue
+                }
+                kept.append(span)
+            }
+            return kept
         }
 
         /// The unwrap of `spans`: their markers deleted.
@@ -373,14 +422,27 @@ enum MarkdownFormatting {
                 inserted[insertion.position - base, default: []] += Array(insertion.text.utf16)
             }
 
-            // The new text, where each kept character went, and where
-            // the added markers sit.
+            // The new text, where each kept character went, where the
+            // added markers sit, and — for a pair — the letter typed
+            // between them.
             var result: [UInt16] = []
             var moved = [Int](repeating: 0, count: count)
             var added: [Int] = []
+            var typed: [Int] = []
             for index in 0 ... count {
-                if let markers = inserted[index] {
-                    added += result.count ..< result.count + markers.count
+                if var markers = inserted[index] {
+                    var letter: Int?
+                    if change == .pair {
+                        letter = result.count + markers.count / 2
+                        markers.insert(Self.typedLetter, at: markers.count / 2)
+                    }
+                    for position in result.count ..< result.count + markers.count {
+                        if position == letter {
+                            typed.append(position)
+                        } else {
+                            added.append(position)
+                        }
+                    }
                     result += markers
                 }
                 guard index < count else { break }
@@ -394,6 +456,8 @@ enum MarkdownFormatting {
 
             let expected: [Bool]
             switch change {
+            case .pair, .literal:
+                expected = covered(by: style)
             case .wrap:
                 let windows = Self.mask(
                     edit.regions.map { $0.location - base ..< NSMaxRange($0) - base },
@@ -431,8 +495,14 @@ enum MarkdownFormatting {
                     return false
                 }
             }
-            return added.allSatisfy { after.marker[$0] }
+            let typedTakesStyle = typed.allSatisfy {
+                !after.marker[$0] && styleAfter[$0]
+            }
+            return typedTakesStyle && added.allSatisfy { after.marker[$0] }
         }
+
+        /// What a pair check types between the markers.
+        private static let typedLetter = UInt16(UInt8(ascii: "x"))
     }
 
     /// How far a wrap reaches: the selected text, or the words around
@@ -567,6 +637,9 @@ enum MarkdownFormatting {
         /// The stretches rewritten — a selection touching one grows
         /// over it.
         private var regions: [NSRange] = []
+        /// Each adopted edit's extent: a later edit meeting one is
+        /// refused, so replacements never overlap.
+        private var claimed: [NSRange] = []
         /// Carets given a marker pair: they land between the markers.
         private var pairedCarets = Set<Int>()
 
@@ -578,75 +651,124 @@ enum MarkdownFormatting {
         /// character loses its markers.
         mutating func unwrap(_ pieces: [Piece]) {
             for group in byParagraph(pieces) {
-                let paragraph = group[0].paragraph
-                var seen = Set<Int>()
-                var spans: [Span] = []
-                for piece in group {
-                    for span in paragraph.spans where span.style == marker.style
-                        && piece.hasContent(in: span.range)
-                        && seen.insert(span.range.location).inserted {
-                        spans.append(span)
-                    }
-                }
-                adopt(paragraph.unwrapping(spans), in: paragraph, change: .unwrap)
+                unwrapParagraph(group)
             }
         }
 
         /// Wrapping: each piece without the style is wrapped from its
-        /// first to its last text character, in the first form whose
-        /// result parses as intended.
+        /// first to its last text character.
         mutating func wrap(_ pieces: [Piece]) {
+            let unstyled = pieces.filter { !$0.isStyled(marker.style) }
+            for group in byParagraph(unstyled) {
+                wrapParagraph(group)
+            }
+        }
+
+        /// One paragraph's unwrap — of every span holding the text, or
+        /// failing that of the outermost ones, the inverse of a wrap
+        /// that had to keep spans nested.
+        @discardableResult
+        private mutating func unwrapParagraph(_ group: [Piece]) -> Bool {
+            let paragraph = group[0].paragraph
+            var seen = Set<Int>()
+            var spans: [Span] = []
+            for piece in group {
+                for span in paragraph.spans where span.style == marker.style
+                    && piece.hasContent(in: span.range)
+                    && seen.insert(span.range.location).inserted {
+                    spans.append(span)
+                }
+            }
+            if adopt(paragraph.unwrapping(spans), in: paragraph, change: .unwrap) {
+                return true
+            }
+            let outer = paragraph.outermost(spans)
+            guard outer.count < spans.count else { return false }
+            return adopt(paragraph.unwrapping(outer), in: paragraph, change: .unwrap)
+        }
+
+        /// One paragraph's wrap, in the first form whose result parses
+        /// as intended.
+        @discardableResult
+        private mutating func wrapParagraph(_ group: [Piece]) -> Bool {
             let attempts: [(Reach, InnerSpans)] = [
                 (.selection, .dissolve), (.selection, .keep),
                 (.words, .dissolve), (.words, .keep),
             ]
-            let unstyled = pieces.filter { !$0.isStyled(marker.style) }
-            for group in byParagraph(unstyled) {
-                let paragraph = group[0].paragraph
-                let windows = group.map(\.window)
-                for (reach, inner) in attempts {
-                    let edit = paragraph.wrapping(
-                        windows, marker: marker, reach: reach, inner: inner
-                    )
-                    if adopt(edit, in: paragraph, change: .wrap) {
-                        break
-                    }
+            let paragraph = group[0].paragraph
+            let windows = group.map(\.window)
+            for (reach, inner) in attempts {
+                let edit = paragraph.wrapping(
+                    windows, marker: marker, reach: reach, inner: inner
+                )
+                if adopt(edit, in: paragraph, change: .wrap) {
+                    return true
                 }
             }
+            return false
         }
 
-        /// A caret toggle: an empty pair comes out, a span of the
-        /// style holding the caret unwraps, else a pair goes in.
-        mutating func toggle(caret: Int, in paragraph: Paragraph) {
+        /// A caret toggle — see the type's notes: an empty pair comes
+        /// out, a word holding the caret toggles, else a pair goes in,
+        /// else the word beside the caret toggles.
+        mutating func toggle(caret: Int, reader: Reader) {
+            let paragraph = reader.paragraph(at: caret)
             if let pair = paragraph.emptyPair(around: caret, marker: marker) {
-                deletions += pair
+                var removal = ParagraphEdit()
+                removal.deletions = pair
+                if adopt(removal, in: paragraph, change: .literal) {
+                    return
+                }
+            }
+            if paragraph.isInsideWord(caret),
+               toggle(word: paragraph.widenedToWords(NSRange(location: caret, length: 0)), reader: reader) {
                 return
             }
-            let holding = paragraph.spans.last {
-                $0.style == marker.style
-                    && $0.range.location <= caret && caret <= NSMaxRange($0.range)
-            }
-            if let holding {
-                adopt(paragraph.unwrapping([holding]), in: paragraph, change: .unwrap)
+
+            var pair = ParagraphEdit()
+            pair.insertions = [(caret, marker.text + marker.text)]
+            if adopt(pair, in: paragraph, change: .pair) {
+                pairedCarets.insert(caret)
                 return
             }
-            insertions.append((caret, marker.text + marker.text))
-            pairedCarets.insert(caret)
+            if let word = paragraph.word(beside: caret) {
+                toggle(word: word, reader: reader)
+            }
         }
 
-        /// Takes `edit` if its result parses as intended.
+        /// `word` toggled as if selected.
         @discardableResult
+        private mutating func toggle(word: NSRange, reader: Reader) -> Bool {
+            let pieces = reader.pieces(of: word).filter { !$0.content.isEmpty }
+            guard !pieces.isEmpty else { return false }
+            // A word lies in one paragraph: one piece.
+            return pieces[0].isStyled(marker.style)
+                ? unwrapParagraph(pieces)
+                : wrapParagraph(pieces)
+        }
+
+        /// Takes `edit` if its result parses as intended and it meets
+        /// no edit taken before.
         private mutating func adopt(
             _ edit: ParagraphEdit,
             in paragraph: Paragraph,
             change: Change
         ) -> Bool {
-            guard paragraph.accepts(edit, style: marker.style, change: change) else {
+            let points = edit.regions + edit.deletions
+                + edit.insertions.map { NSRange(location: $0.position, length: 0) }
+            guard let first = points.first else { return false }
+            let extent = points.dropFirst().reduce(first) { NSUnionRange($0, $1) }
+            let meets = claimed.contains {
+                $0.location <= NSMaxRange(extent) && extent.location <= NSMaxRange($0)
+            }
+            guard !meets,
+                  paragraph.accepts(edit, style: marker.style, change: change) else {
                 return false
             }
             deletions += edit.deletions
             insertions += edit.insertions
             regions += edit.regions
+            claimed.append(extent)
             return true
         }
 
@@ -821,8 +943,10 @@ enum MarkdownFormatting {
         return result
     }
 
+    /// CommonMark whitespace, as the styler reads it; a surrogate
+    /// half is part of a character that isn't.
     private static func isWhitespace(_ unit: unichar) -> Bool {
         guard let scalar = Unicode.Scalar(unit) else { return false }
-        return CharacterSet.whitespacesAndNewlines.contains(scalar)
+        return MarkdownStyler.isWhitespace(scalar)
     }
 }

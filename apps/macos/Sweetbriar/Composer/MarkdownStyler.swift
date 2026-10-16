@@ -432,9 +432,22 @@ enum MarkdownStyler {
     /// A lone surrogate counts as text.
     private static func kind(of scalar: Unicode.Scalar?) -> Kind {
         guard let scalar else { return .text }
-        if CharacterSet.whitespacesAndNewlines.contains(scalar) {
+        if isWhitespace(scalar) {
             return .whitespace
         }
         return punctuation.contains(scalar) ? .punctuation : .text
+    }
+
+    /// CommonMark's Unicode whitespace: category Zs, tab, line feed,
+    /// form feed, carriage return — narrower than Foundation's set,
+    /// which adds vertical tab and the line separators. The formatter
+    /// shares it, so both read text the same way.
+    static func isWhitespace(_ scalar: Unicode.Scalar) -> Bool {
+        switch scalar.value {
+        case 0x09, 0x0A, 0x0C, 0x0D:
+            return true
+        default:
+            return scalar.properties.generalCategory == .spaceSeparator
+        }
     }
 }

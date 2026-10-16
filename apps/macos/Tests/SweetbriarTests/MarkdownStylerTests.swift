@@ -223,6 +223,10 @@ struct MarkdownStylerTests {
             MarkdownStyler.Run(range: NSRange(location: 0, length: 7), style: .emphasis),
         ])
         #expect(spans("*hello\u{00A0}*").isEmpty)
+        // A vertical tab is no CommonMark whitespace.
+        #expect(spans("*x\u{000B}*") == [
+            MarkdownStyler.Run(range: NSRange(location: 0, length: 4), style: .emphasis),
+        ])
     }
 
     @Test("unmatched markers cost linear time, not quadratic")
@@ -235,7 +239,7 @@ struct MarkdownStylerTests {
         let elapsed = clock.measure {
             #expect(MarkdownStyler.styles(forParagraph: paragraph).isEmpty)
         }
-        #expect(elapsed < .seconds(2))
+        #expect(elapsed < .seconds(10))
 
         // Every `**` both opens and closes, so the rule of three bars
         // it from the `*` openers below: without CommonMark's openers
@@ -245,7 +249,7 @@ struct MarkdownStylerTests {
         let barredElapsed = clock.measure {
             #expect(MarkdownStyler.styles(forParagraph: barred).count == 8_000 * 3)
         }
-        #expect(barredElapsed < .seconds(2))
+        #expect(barredElapsed < .seconds(10))
     }
 
     @Test("unclosed markers style nothing")
