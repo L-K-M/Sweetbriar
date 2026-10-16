@@ -108,6 +108,11 @@ local drafts. No network yet.
   - `ListWindowModel` (Swift, `@Observable`) over a core window;
   - the sidebar outline;
   - the list from the M0.10 decision;
+  - Run List Benchmark's store-backed mode: repeated mailbox switches
+    and M0.10's scroll and selection sequences over an imported
+    mailbox, through the production list. Its report reads the
+    refresh rate from the run's window (M0.10's reported the main
+    screen's);
   - File → Import… with a progress sheet and the Import report window.
 - **Acceptance:**
   - macOS CI is green;
@@ -115,7 +120,14 @@ local drafts. No network yet.
     report;
   - **owner (O5):** imports their own Apple Mail exports; the report
     matches the Mailbox message counts shown in Apple Mail; scrolling
-    and keyboard navigation are fluid.
+    and keyboard navigation are fluid;
+  - **owner (O9):** on the owner's Mac, the store-backed benchmark
+    meets spec/08's list budgets at p95, and the synthetic one still
+    passes its checks. M0.10's prototype missed two budgets, which this
+    step closes, with core paging and id-index work in M1.3:
+    - first rows within 100 ms over repeated mailbox switches (M0.10:
+      170–207 ms; the opening page waits for the 500,000-id index);
+    - scroll-update main-thread CPU under 5 ms (M0.10: 6.1–7.3 ms).
 
 ### M1.5 Safe rendering and the reader — L, linux + macos-ci
 
