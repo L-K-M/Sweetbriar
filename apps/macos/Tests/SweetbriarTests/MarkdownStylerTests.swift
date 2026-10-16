@@ -200,6 +200,31 @@ struct MarkdownStylerTests {
         ])
     }
 
+    @Test("flanking reads whole Unicode characters beside a run")
+    func unicodeNeighbors() {
+        /// The styled spans, markers left out.
+        func spans(_ text: String) -> [MarkdownStyler.Run] {
+            runs(text).filter { $0.style != .marker }
+        }
+
+        // An emoji is a symbol — punctuation to CommonMark — not a
+        // letter, so `_` beside it still opens and closes.
+        #expect(spans("_hello_😀") == [
+            MarkdownStyler.Run(range: NSRange(location: 0, length: 7), style: .emphasis),
+        ])
+        #expect(spans("😀_hello_") == [
+            MarkdownStyler.Run(range: NSRange(location: 2, length: 7), style: .emphasis),
+        ])
+        #expect(spans("*😀*") == [
+            MarkdownStyler.Run(range: NSRange(location: 0, length: 4), style: .emphasis),
+        ])
+        // A no-break space is whitespace.
+        #expect(spans("_hello_\u{00A0}next") == [
+            MarkdownStyler.Run(range: NSRange(location: 0, length: 7), style: .emphasis),
+        ])
+        #expect(spans("*hello\u{00A0}*").isEmpty)
+    }
+
     @Test("unmatched markers cost linear time, not quadratic")
     func unmatchedMarkersStayFast() {
         // Every `*` can open and none can close (each follows a

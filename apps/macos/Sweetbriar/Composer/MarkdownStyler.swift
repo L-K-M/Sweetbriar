@@ -342,14 +342,16 @@ enum MarkdownStyler {
     /// is left-flanking (may open) when text, not space, follows it,
     /// and right-flanking (may close) when text precedes it;
     /// punctuation counts as text only beside space or punctuation.
-    /// `_` inside a word neither opens nor closes (snake_case).
+    /// `_` inside a word neither opens nor closes (snake_case). The
+    /// neighbours are whole characters: an emoji beside a run is a
+    /// symbol, not two unknown code units.
     private static func delimiter(_ u: [UInt16], run: Range<Int>) -> Delimiter {
-        let before = run.lowerBound > 0 ? u[run.lowerBound - 1] : Char.space
-        let after = run.upperBound < u.count ? u[run.upperBound] : Char.space
-        let leftFlanking = !isWhitespace(after)
-            && (!isPunctuation(after) || isWhitespace(before) || isPunctuation(before))
-        let rightFlanking = !isWhitespace(before)
-            && (!isPunctuation(before) || isWhitespace(after) || isPunctuation(after))
+        let before = kind(ofScalarEndingAt: run.lowerBound, in: u)
+        let after = kind(ofScalarStartingAt: run.upperBound, in: u)
+        let leftFlanking = after != .whitespace
+            && (after != .punctuation || before != .text)
+        let rightFlanking = before != .whitespace
+            && (before != .punctuation || after != .text)
 
         let token = u[run.lowerBound]
         let underscore = token == Char.underscore
@@ -357,9 +359,9 @@ enum MarkdownStyler {
             token: token,
             originalCount: run.count,
             canOpen: leftFlanking
-                && (!underscore || !rightFlanking || isPunctuation(before)),
+                && (!underscore || !rightFlanking || before == .punctuation),
             canClose: rightFlanking
-                && (!underscore || !leftFlanking || isPunctuation(after)),
+                && (!underscore || !leftFlanking || after == .punctuation),
             start: run.lowerBound,
             count: run.count
         )
@@ -386,16 +388,53 @@ enum MarkdownStyler {
         (0x30 ... 0x39).contains(u)
     }
 
-    private static func isWhitespace(_ u: UInt16) -> Bool {
-        u == Char.space || u == 0x09 || u == Char.newline || u == 0x0D
+    /// What flanking needs to know of a delimiter run's neighbour.
+    private enum Kind {
+        /// CommonMark's Unicode whitespace — or the paragraph's edge.
+        case whitespace
+        /// CommonMark's Unicode punctuation: categories P and S.
+        case punctuation
+        case text
     }
 
     /// CommonMark's Unicode punctuation: general categories P and S.
     private static let punctuation = CharacterSet.punctuationCharacters
         .union(.symbols)
 
-    private static func isPunctuation(_ u: UInt16) -> Bool {
-        guard let scalar = Unicode.Scalar(u) else { return false }
-        return punctuation.contains(scalar)
+    /// The kind of the character just before `end` — a surrogate pair
+    /// read as one scalar.
+    private static func kind(ofScalarEndingAt end: Int, in u: [UInt16]) -> Kind {
+        guard end > 0 else { return .whitespace }
+        let low = u[end - 1]
+        if UTF16.isTrailSurrogate(low), end > 1, UTF16.isLeadSurrogate(u[end - 2]) {
+            return kind(of: scalar(lead: u[end - 2], trail: low))
+        }
+        return kind(of: Unicode.Scalar(low))
+    }
+
+    /// The kind of the character starting at `start`.
+    private static func kind(ofScalarStartingAt start: Int, in u: [UInt16]) -> Kind {
+        guard start < u.count else { return .whitespace }
+        let high = u[start]
+        if UTF16.isLeadSurrogate(high), start + 1 < u.count, UTF16.isTrailSurrogate(u[start + 1]) {
+            return kind(of: scalar(lead: high, trail: u[start + 1]))
+        }
+        return kind(of: Unicode.Scalar(high))
+    }
+
+    /// The scalar a surrogate pair encodes.
+    private static func scalar(lead: UInt16, trail: UInt16) -> Unicode.Scalar? {
+        let high = UInt32(lead) - 0xD800
+        let low = UInt32(trail) - 0xDC00
+        return Unicode.Scalar(0x10000 + (high << 10) + low)
+    }
+
+    /// A lone surrogate counts as text.
+    private static func kind(of scalar: Unicode.Scalar?) -> Kind {
+        guard let scalar else { return .text }
+        if CharacterSet.whitespacesAndNewlines.contains(scalar) {
+            return .whitespace
+        }
+        return punctuation.contains(scalar) ? .punctuation : .text
     }
 }
