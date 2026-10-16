@@ -50,18 +50,22 @@ restores its draft by `draft_id`.
 
 - **Built with** `NSTableView` (view-based), backed by a `ListWindowModel`
   over a core window (07). Decided by M0.10's prototype on the owner's
-  Mac (120 Hz, 500,000 synthetic rows), where SwiftUI `List` failed 25
-  of 26 decision bars:
-  - SwiftUI showed its first rows after 92 s (106 s warm), peaked at
-    3.9 GB, and answered wheel input in 938 ms and jumps in 5.8 s at
-    p95;
-  - AppKit passed every check. It showed its first rows in 170–207 ms,
-    answered input within 32–41 ms at p95, and gave selection feedback
-    in under 50 ms.
+  Mac (500,000 synthetic rows, a 120 Hz window; PR #16):
+  - SwiftUI `List` failed 25 of the 26 cold decision bars. It showed
+    its first rows after 92 s, peaked at 3.9 GB, and took 938 ms at p95
+    to answer wheel input and 5.8 s for jumps (4 never rendered). It
+    lost focus during its stalls, so its failed clicks aren't counted,
+    and the warm comparison is empty: its warm run stopped after first
+    rows, its window no longer key;
+  - AppKit passed the benchmark's checks. It showed its first rows in
+    170–207 ms, answered input within 32–41 ms at p95, and gave click
+    feedback in under 50 ms.
 
-  macOS CI's diagnostic runs agreed. AppKit still misses two budgets
-  below: scroll updates took 6.1–7.3 ms of main-thread CPU at p95, and
-  first rows exceeded 100 ms. M1.4 closes both (plan).
+  With SwiftUI failing the benchmark, the owner's checklist couldn't
+  change the outcome; it raised no issue. macOS CI's diagnostic runs
+  agreed. AppKit still misses two budgets below: scroll updates took
+  6.1–7.3 ms of main-thread CPU at p95, and first rows exceeded 100 ms.
+  M1.3 and M1.4 close both (plan).
 - **`ListWindowModel`** lives in `SweetbriarBridge`, free of AppKit, so
   both prototype lists and their tests share its paging, data and
   delivery cadence; each list adapts it idiomatically and observes only
