@@ -2,8 +2,9 @@
 // "Composer"): formatting commands edit the Markdown source itself —
 // add `**`/`*` markers, or remove the ones already there — as one
 // undoable edit computed here. It reads the source through
-// `MarkdownStyler`, so "already bold" means what the display shows.
-// Pure and Foundation-only so it tests on Linux.
+// `MarkdownStyler`, so "already bold" means what the display shows,
+// and it re-reads each result the same way before using it. Pure and
+// Foundation-only so it tests on Linux.
 
 import Foundation
 
@@ -20,10 +21,18 @@ import Foundation
 ///   into each other; spans of the style inside dissolve into the new
 ///   one.
 ///
-/// A caret inside a span of the style, markers included, unwraps it;
-/// any other caret gets a marker pair with the caret between. Markers
-/// never cross a paragraph — the styler reads one at a time — so a
-/// selection over several is formatted paragraph by paragraph.
+/// Each paragraph's result is parsed again and must change only what
+/// the command meant: every other style and every piece of syntax
+/// stays as it was. When it doesn't, a safer form is tried — keeping
+/// the spans inside, then markers around whole words (`hello**.**`
+/// can't open; `**hello.**` can) — and a paragraph with no safe form
+/// is left alone.
+///
+/// A caret inside or touching a span of the style unwraps it; a caret
+/// between an empty marker pair takes the pair out; any other caret
+/// gets a marker pair with the caret between. Markers never cross a
+/// paragraph — the styler reads one at a time — so a selection over
+/// several is formatted paragraph by paragraph.
 enum MarkdownFormatting {
     /// Which style the command toggles.
     enum Marker {
@@ -101,8 +110,10 @@ enum MarkdownFormatting {
         }
 
         let replacements = plan.replacements(in: reader.source)
-        let after = snapped.map { plan.selection(after: $0, through: replacements) }
-        return Edit(replacements: replacements, selections: merged(after))
+        return Edit(
+            replacements: replacements,
+            selections: plan.selections(after: snapped, through: replacements)
+        )
     }
 
     // MARK: reading the source
@@ -123,49 +134,82 @@ enum MarkdownFormatting {
         }
     }
 
+    /// Whether `change` adds the style or takes it away.
+    private enum Change {
+        case wrap
+        case unwrap
+    }
+
+    /// What one paragraph's part of the command does, in document
+    /// coordinates.
+    private struct ParagraphEdit {
+        /// Marker stretches to delete, possibly overlapping.
+        var deletions: [NSRange] = []
+        var insertions: [(position: Int, text: String)] = []
+        /// The stretches rewritten: wrapped windows, unwrapped spans.
+        var regions: [NSRange] = []
+    }
+
     /// One paragraph as the styler reads it.
     private struct Paragraph {
         let range: NSRange
+        let units: [UInt16]
         /// The strong and emphasis spans, outermost first.
         let spans: [Span]
         /// Per position, paragraph-relative: syntax, inside a strong
         /// span, inside an emphasis span — lookups, not scans of the
-        /// spans per character. (Foundation's `IndexSet` unions are
-        /// quadratic on Linux.)
+        /// spans per character.
         private let marker: [Bool]
         private let strong: [Bool]
         private let emphasis: [Bool]
 
-        init(range: NSRange, source: NSString) {
+        init(text: String, location: Int) {
+            let units = Array(text.utf16)
             var spans: [Span] = []
-            var marker = [Bool](repeating: false, count: range.length)
-            var strong = marker
-            var emphasis = marker
-            for run in MarkdownStyler.styles(forParagraph: source.substring(with: range)) {
+            var markers: [Range<Int>] = []
+            var strong: [Range<Int>] = []
+            var emphasis: [Range<Int>] = []
+            for run in MarkdownStyler.styles(forParagraph: text) {
                 let positions = run.range.location ..< NSMaxRange(run.range)
                 switch run.style {
                 case .strong:
-                    positions.forEach { strong[$0] = true }
+                    strong.append(positions)
                 case .emphasis:
-                    positions.forEach { emphasis[$0] = true }
+                    emphasis.append(positions)
                 case .marker:
-                    positions.forEach { marker[$0] = true }
+                    markers.append(positions)
                 case .heading, .listItem:
                     continue
                 }
                 if run.style != .marker {
                     let shifted = NSRange(
-                        location: run.range.location + range.location,
+                        location: run.range.location + location,
                         length: run.range.length
                     )
                     spans.append(Span(range: shifted, style: run.style))
                 }
             }
-            self.range = range
+            self.range = NSRange(location: location, length: units.count)
+            self.units = units
             self.spans = spans
-            self.marker = marker
-            self.strong = strong
-            self.emphasis = emphasis
+            self.marker = Self.mask(markers, count: units.count)
+            self.strong = Self.mask(strong, count: units.count)
+            self.emphasis = Self.mask(emphasis, count: units.count)
+        }
+
+        /// Positions inside any of `ranges` — one sweep over boundary
+        /// counts, so nested spans cost no more than flat ones.
+        static func mask(_ ranges: [Range<Int>], count: Int) -> [Bool] {
+            var delta = [Int](repeating: 0, count: count + 1)
+            for range in ranges {
+                delta[range.lowerBound] += 1
+                delta[range.upperBound] -= 1
+            }
+            var depth = 0
+            return (0 ..< count).map {
+                depth += delta[$0]
+                return depth > 0
+            }
         }
 
         /// Whether the styler marks `position` as syntax.
@@ -175,9 +219,237 @@ enum MarkdownFormatting {
 
         /// Whether `position` sits in a span of `style`.
         func isCovered(_ position: Int, by style: MarkdownStyler.Style) -> Bool {
-            let covered = style == .strong ? strong : emphasis
-            return covered[position - range.location]
+            covered(by: style)[position - range.location]
         }
+
+        private func covered(by style: MarkdownStyler.Style) -> [Bool] {
+            style == .strong ? strong : emphasis
+        }
+
+        // MARK: planning
+
+        /// The wrap of `windows`: grown, then — for `.words` —
+        /// widened to whole words first; spans of the style inside
+        /// dissolve or stay.
+        func wrapping(
+            _ windows: [NSRange],
+            marker: Marker,
+            reach: Reach,
+            inner: InnerSpans
+        ) -> ParagraphEdit {
+            let start = reach == .words ? windows.map(widenedToWords) : windows
+            var edit = ParagraphEdit()
+            for window in settled(start, style: marker.style) {
+                if inner == .dissolve {
+                    for span in spans where span.style == marker.style
+                        && MarkdownFormatting.contains(window, span.range) {
+                        edit.deletions += span.markers
+                    }
+                }
+                edit.insertions.append((window.location, marker.text))
+                edit.insertions.append((NSMaxRange(window), marker.text))
+                edit.regions.append(window)
+            }
+            return edit
+        }
+
+        /// `window` out to the whitespace around it.
+        private func widenedToWords(_ window: NSRange) -> NSRange {
+            var start = window.location
+            while start > range.location, !isWhitespace(units[start - 1 - range.location]) {
+                start -= 1
+            }
+            var end = NSMaxRange(window)
+            while end < NSMaxRange(range), !isWhitespace(units[end - range.location]) {
+                end += 1
+            }
+            return NSRange(location: start, length: end - start)
+        }
+
+        /// `windows` grown over every span crossing their edges and
+        /// every span of `style` touching them, then joined where they
+        /// meet, until nothing changes. Each edge grows in one pass:
+        /// spans by descending start for the left edge, by ascending
+        /// end for the right, so a chain of touching spans is taken in
+        /// one sweep, not one span per scan.
+        private func settled(_ windows: [NSRange], style: MarkdownStyler.Style) -> [NSRange] {
+            let byStart = spans.sorted { $0.range.location > $1.range.location }
+            let byEnd = spans.sorted { NSMaxRange($0.range) < NSMaxRange($1.range) }
+            var windows = windows
+            while true {
+                let grown = windows.map { window in
+                    var window = window
+                    for span in byStart where span.range.location < window.location
+                        && grows(window, over: span, style: style) {
+                        window = NSUnionRange(window, span.range)
+                    }
+                    for span in byEnd where NSMaxRange(span.range) > NSMaxRange(window)
+                        && grows(window, over: span, style: style) {
+                        window = NSUnionRange(window, span.range)
+                    }
+                    return window
+                }
+                let next = joined(grown)
+                if next == windows {
+                    return next
+                }
+                windows = next
+            }
+        }
+
+        /// Whether `window` must take in `span`: markers at its edges
+        /// would cut the span, or run into the span's own markers.
+        private func grows(
+            _ window: NSRange,
+            over span: Span,
+            style: MarkdownStyler.Style
+        ) -> Bool {
+            let overlap = NSIntersectionRange(window, span.range).length > 0
+            if overlap {
+                return !MarkdownFormatting.contains(window, span.range)
+                    && !MarkdownFormatting.contains(span.range, window)
+            }
+            let touches = NSMaxRange(span.range) == window.location
+                || NSMaxRange(window) == span.range.location
+            return touches && span.style == style
+        }
+
+        /// The unwrap of `spans`: their markers deleted.
+        func unwrapping(_ spans: [Span]) -> ParagraphEdit {
+            var edit = ParagraphEdit()
+            for span in spans {
+                edit.deletions += span.markers
+                edit.regions.append(span.range)
+            }
+            return edit
+        }
+
+        /// An empty `marker` pair around `caret` — what a toggle at a
+        /// caret inserts — as literal text, not syntax.
+        func emptyPair(around caret: Int, marker: Marker) -> [NSRange]? {
+            let m = marker.text.utf16.count
+            let token = marker.text.utf16.first
+            let at = caret - range.location
+            var left = 0
+            while at - left > 0, units[at - left - 1] == token {
+                left += 1
+            }
+            var right = 0
+            while at + right < units.count, units[at + right] == token {
+                right += 1
+            }
+            guard left == m, right == m,
+                  (at - m ..< at + m).allSatisfy({ !self.marker[$0] }) else {
+                return nil
+            }
+            return [
+                NSRange(location: caret - m, length: m),
+                NSRange(location: caret, length: m),
+            ]
+        }
+
+        // MARK: checking
+
+        /// Whether `edit` changes only what it means to: parsed again,
+        /// every syntax character it keeps is still syntax, every
+        /// marker it adds is syntax, and every text character keeps
+        /// its other style and has `style` exactly where the change
+        /// puts it.
+        func accepts(
+            _ edit: ParagraphEdit,
+            style: MarkdownStyler.Style,
+            change: Change
+        ) -> Bool {
+            let base = range.location
+            let count = units.count
+            var deleted = [Bool](repeating: false, count: count)
+            for deletion in edit.deletions {
+                for position in deletion.location ..< NSMaxRange(deletion) {
+                    deleted[position - base] = true
+                }
+            }
+            var inserted: [Int: [UInt16]] = [:]
+            for insertion in edit.insertions {
+                inserted[insertion.position - base, default: []] += Array(insertion.text.utf16)
+            }
+
+            // The new text, where each kept character went, and where
+            // the added markers sit.
+            var result: [UInt16] = []
+            var moved = [Int](repeating: 0, count: count)
+            var added: [Int] = []
+            for index in 0 ... count {
+                if let markers = inserted[index] {
+                    added += result.count ..< result.count + markers.count
+                    result += markers
+                }
+                guard index < count else { break }
+                if !deleted[index] {
+                    moved[index] = result.count
+                    result.append(units[index])
+                }
+            }
+            let after = Paragraph(text: String(decoding: result, as: UTF16.self), location: 0)
+            guard after.units.count == result.count else { return false }
+
+            let expected: [Bool]
+            switch change {
+            case .wrap:
+                let windows = Self.mask(
+                    edit.regions.map { $0.location - base ..< NSMaxRange($0) - base },
+                    count: count
+                )
+                let before = covered(by: style)
+                expected = (0 ..< count).map { windows[$0] || before[$0] }
+            case .unwrap:
+                let unwrapped = Set(edit.regions.map(\.location))
+                let survivors = spans.filter {
+                    $0.style == style && !unwrapped.contains($0.range.location)
+                }
+                expected = Self.mask(
+                    survivors.map { $0.range.location - base ..< NSMaxRange($0.range) - base },
+                    count: count
+                )
+            }
+
+            let other: MarkdownStyler.Style = style == .strong ? .emphasis : .strong
+            let otherBefore = covered(by: other)
+            let otherAfter = after.covered(by: other)
+            let styleAfter = after.covered(by: style)
+            for index in 0 ..< count where !deleted[index] {
+                let target = moved[index]
+                if marker[index] {
+                    guard after.marker[target] else { return false }
+                    continue
+                }
+                if isWhitespace(units[index]) {
+                    continue
+                }
+                guard !after.marker[target],
+                      otherAfter[target] == otherBefore[index],
+                      styleAfter[target] == expected[index] else {
+                    return false
+                }
+            }
+            return added.allSatisfy { after.marker[$0] }
+        }
+    }
+
+    /// How far a wrap reaches: the selected text, or the words around
+    /// it — markers between a letter and punctuation can't open or
+    /// close.
+    private enum Reach {
+        case selection
+        case words
+    }
+
+    /// What a wrap does with spans of its style inside it.
+    private enum InnerSpans {
+        /// Their markers go — `**a** b` → `**a b**`.
+        case dissolve
+        /// They stay nested, when dissolving would break the syntax
+        /// beside them.
+        case keep
     }
 
     /// A selection's part inside one paragraph.
@@ -220,7 +492,10 @@ enum MarkdownFormatting {
     /// The source and its paragraphs, each read by the styler once.
     private final class Reader {
         let source: NSString
-        private var paragraphs: [Int: Paragraph] = [:]
+        /// The paragraph read last — selections arrive sorted, so the
+        /// next one usually falls in it, and finding a paragraph's
+        /// bounds scans it.
+        private var last: Paragraph?
 
         init(_ source: NSString) {
             self.source = source
@@ -246,12 +521,14 @@ enum MarkdownFormatting {
 
         /// The paragraph holding `location`.
         func paragraph(at location: Int) -> Paragraph {
-            let range = source.paragraphRange(for: NSRange(location: location, length: 0))
-            if let cached = paragraphs[range.location] {
-                return cached
+            if let last, NSLocationInRange(location, last.range) {
+                return last
             }
-            let paragraph = Paragraph(range: range, source: source)
-            paragraphs[range.location] = paragraph
+            let range = source.paragraphRange(for: NSRange(location: location, length: 0))
+            let paragraph = Paragraph(
+                text: source.substring(with: range), location: range.location
+            )
+            last = paragraph
             return paragraph
         }
 
@@ -276,28 +553,22 @@ enum MarkdownFormatting {
             }
             return pieces
         }
-
-        private func isWhitespace(_ unit: unichar) -> Bool {
-            guard let scalar = Unicode.Scalar(unit) else { return false }
-            return CharacterSet.whitespacesAndNewlines.contains(scalar)
-        }
     }
 
     // MARK: planning the edit
 
-    /// The command's changes before they become replacements: marker
-    /// characters to delete, markers to insert, and the stretches
-    /// rewritten — a selection touching one grows over it.
+    /// The command's accepted changes before they become
+    /// replacements.
     private struct Plan {
         let marker: Marker
         /// Marker stretches to delete, possibly overlapping.
         private var deletions: [NSRange] = []
         private var insertions: [(position: Int, text: String)] = []
+        /// The stretches rewritten — a selection touching one grows
+        /// over it.
         private var regions: [NSRange] = []
         /// Carets given a marker pair: they land between the markers.
         private var pairedCarets = Set<Int>()
-        /// Spans already unwrapped, by start — once is enough.
-        private var unwrapped = Set<Int>()
 
         init(marker: Marker) {
             self.marker = marker
@@ -306,116 +577,91 @@ enum MarkdownFormatting {
         /// Unwrapping: each span of the style holding a selected text
         /// character loses its markers.
         mutating func unwrap(_ pieces: [Piece]) {
-            for piece in pieces {
-                for span in piece.paragraph.spans where span.style == marker.style
-                    && piece.hasContent(in: span.range) {
-                    unwrap(span)
+            for group in byParagraph(pieces) {
+                let paragraph = group[0].paragraph
+                var seen = Set<Int>()
+                var spans: [Span] = []
+                for piece in group {
+                    for span in paragraph.spans where span.style == marker.style
+                        && piece.hasContent(in: span.range)
+                        && seen.insert(span.range.location).inserted {
+                        spans.append(span)
+                    }
                 }
+                adopt(paragraph.unwrapping(spans), in: paragraph, change: .unwrap)
             }
         }
 
         /// Wrapping: each piece without the style is wrapped from its
-        /// first to its last text character, grown over the spans the
-        /// markers would cut or touch; spans of the style inside
-        /// dissolve. Pieces of a paragraph that end up meeting wrap
-        /// together.
+        /// first to its last text character, in the first form whose
+        /// result parses as intended.
         mutating func wrap(_ pieces: [Piece]) {
-            // Selections arrive sorted, so a paragraph's pieces are
-            // adjacent.
-            var groups: [[Piece]] = []
-            for piece in pieces where !piece.isStyled(marker.style) {
-                if let last = groups.last?.last, last.paragraph.range == piece.paragraph.range {
-                    groups[groups.count - 1].append(piece)
-                } else {
-                    groups.append([piece])
-                }
-            }
-
-            for group in groups {
-                guard let spans = group.first?.paragraph.spans else { continue }
-                for window in settled(group.map(\.window), spans: spans) {
-                    for span in spans where span.style == marker.style
-                        && MarkdownFormatting.contains(window, span.range) {
-                        deletions += span.markers
+            let attempts: [(Reach, InnerSpans)] = [
+                (.selection, .dissolve), (.selection, .keep),
+                (.words, .dissolve), (.words, .keep),
+            ]
+            let unstyled = pieces.filter { !$0.isStyled(marker.style) }
+            for group in byParagraph(unstyled) {
+                let paragraph = group[0].paragraph
+                let windows = group.map(\.window)
+                for (reach, inner) in attempts {
+                    let edit = paragraph.wrapping(
+                        windows, marker: marker, reach: reach, inner: inner
+                    )
+                    if adopt(edit, in: paragraph, change: .wrap) {
+                        break
                     }
-                    insertions.append((window.location, marker.text))
-                    insertions.append((NSMaxRange(window), marker.text))
-                    regions.append(window)
                 }
             }
         }
 
-        /// A caret inside a span of the style unwraps the innermost
-        /// one; elsewhere it gets a marker pair.
+        /// A caret toggle: an empty pair comes out, a span of the
+        /// style holding the caret unwraps, else a pair goes in.
         mutating func toggle(caret: Int, in paragraph: Paragraph) {
+            if let pair = paragraph.emptyPair(around: caret, marker: marker) {
+                deletions += pair
+                return
+            }
             let holding = paragraph.spans.last {
                 $0.style == marker.style
                     && $0.range.location <= caret && caret <= NSMaxRange($0.range)
             }
             if let holding {
-                unwrap(holding)
+                adopt(paragraph.unwrapping([holding]), in: paragraph, change: .unwrap)
                 return
             }
             insertions.append((caret, marker.text + marker.text))
             pairedCarets.insert(caret)
         }
 
-        private mutating func unwrap(_ span: Span) {
-            guard unwrapped.insert(span.range.location).inserted else { return }
-            deletions += span.markers
-            regions.append(span.range)
+        /// Takes `edit` if its result parses as intended.
+        @discardableResult
+        private mutating func adopt(
+            _ edit: ParagraphEdit,
+            in paragraph: Paragraph,
+            change: Change
+        ) -> Bool {
+            guard paragraph.accepts(edit, style: marker.style, change: change) else {
+                return false
+            }
+            deletions += edit.deletions
+            insertions += edit.insertions
+            regions += edit.regions
+            return true
         }
 
-        /// `windows` grown over every span crossing their edges and
-        /// every span of the style touching them, then joined where
-        /// they meet, until neither changes anything.
-        private func settled(_ windows: [NSRange], spans: [Span]) -> [NSRange] {
-            var windows = windows
-            while true {
-                let grown = windows.map { window in
-                    var window = window
-                    var changed = true
-                    while changed {
-                        changed = false
-                        for span in spans where grows(window, over: span) {
-                            window = NSUnionRange(window, span.range)
-                            changed = true
-                        }
-                    }
-                    return window
+        /// `pieces` grouped by paragraph — selections arrive sorted,
+        /// so a paragraph's pieces are adjacent.
+        private func byParagraph(_ pieces: [Piece]) -> [[Piece]] {
+            var groups: [[Piece]] = []
+            for piece in pieces {
+                if let last = groups.last?.last, last.paragraph.range == piece.paragraph.range {
+                    groups[groups.count - 1].append(piece)
+                } else {
+                    groups.append([piece])
                 }
-                let next = joined(grown)
-                if next == windows {
-                    return next
-                }
-                windows = next
             }
-        }
-
-        /// Whether `window` must take in `span`: markers at its edges
-        /// would cut the span, or run into the span's own markers.
-        private func grows(_ window: NSRange, over span: Span) -> Bool {
-            let overlap = NSIntersectionRange(window, span.range).length > 0
-            if overlap {
-                return !MarkdownFormatting.contains(window, span.range)
-                    && !MarkdownFormatting.contains(span.range, window)
-            }
-            let touches = NSMaxRange(span.range) == window.location
-                || NSMaxRange(window) == span.range.location
-            return touches && span.style == marker.style
-        }
-
-        /// `ranges` sorted, overlapping or touching ones joined.
-        private func joined(_ ranges: [NSRange]) -> [NSRange] {
-            var result: [NSRange] = []
-            for range in ranges.sorted(by: { $0.location < $1.location }) {
-                guard let last = result.last, range.location <= NSMaxRange(last) else {
-                    result.append(range)
-                    continue
-                }
-                result[result.count - 1] = NSUnionRange(last, range)
-            }
-            return result
+            return groups
         }
 
         /// The plan as replacements: each deleted stretch and each
@@ -446,24 +692,101 @@ enum MarkdownFormatting {
             return result.filter { $0.string != source.substring(with: $0.range) }
         }
 
-        /// Where `selection` lands: a range grows over the stretches
-        /// rewritten around it; a caret given a pair sits between the
-        /// markers.
-        func selection(after selection: NSRange, through replacements: [Replacement]) -> NSRange {
-            guard selection.length > 0 else {
-                let caret = translate(selection.location, through: replacements, edge: .start)
-                let offset = pairedCarets.contains(selection.location)
-                    ? marker.text.utf16.count
-                    : 0
-                return NSRange(location: caret + offset, length: 0)
+        /// Where each of `selections` lands: a range grows over the
+        /// stretches rewritten around it; a caret given a pair sits
+        /// between the markers. Binary searches, so many selections
+        /// over many regions stay linear-logarithmic.
+        func selections(
+            after selections: [NSRange],
+            through replacements: [Replacement]
+        ) -> [NSRange] {
+            let translation = Translation(replacements)
+            let rewritten = merged(regions)
+            let after = selections.map { selection -> NSRange in
+                guard selection.length > 0 else {
+                    let caret = translation.position(of: selection.location, edge: .start)
+                    let offset = pairedCarets.contains(selection.location)
+                        ? marker.text.utf16.count
+                        : 0
+                    return NSRange(location: caret + offset, length: 0)
+                }
+
+                var affected = selection
+                var index = firstIndex(in: rewritten) { NSMaxRange($0) > selection.location }
+                while index < rewritten.count, rewritten[index].location < NSMaxRange(selection) {
+                    affected = NSUnionRange(affected, rewritten[index])
+                    index += 1
+                }
+                let start = translation.position(of: affected.location, edge: .start)
+                let end = translation.position(of: NSMaxRange(affected), edge: .end)
+                return NSRange(location: start, length: end - start)
             }
-            let affected = regions
-                .filter { NSIntersectionRange($0, selection).length > 0 }
-                .reduce(selection) { NSUnionRange($0, $1) }
-            let start = translate(affected.location, through: replacements, edge: .start)
-            let end = translate(NSMaxRange(affected), through: replacements, edge: .end)
-            return NSRange(location: start, length: end - start)
+            return merged(after)
         }
+    }
+
+    // MARK: selections after
+
+    /// Which end of a selection a position is: a start stays before
+    /// text inserted at it, an end moves past it.
+    private enum Edge {
+        case start
+        case end
+    }
+
+    /// Pre-edit positions to post-edit ones, by binary search over the
+    /// replacements' running length change.
+    private struct Translation {
+        private let replacements: [Replacement]
+        /// `shifts[k]`: the length change of replacements `0 ..< k`.
+        private let shifts: [Int]
+
+        init(_ replacements: [Replacement]) {
+            self.replacements = replacements
+            var shifts = [0]
+            for replacement in replacements {
+                shifts.append(
+                    shifts[shifts.count - 1] + replacement.string.utf16.count
+                        - replacement.range.length
+                )
+            }
+            self.shifts = shifts
+        }
+
+        /// Where `position` lands; inside a replacement it snaps to
+        /// the replacement's start or end.
+        func position(of position: Int, edge: Edge) -> Int {
+            let index = firstIndex(in: replacements) {
+                let end = NSMaxRange($0.range)
+                let before = end < position
+                    || (end == position && (edge == .end || $0.range.location < position))
+                return !before
+            }
+            let shift = shifts[index]
+            guard index < replacements.count,
+                  replacements[index].range.location < position else {
+                return position + shift
+            }
+            let replacement = replacements[index]
+            let length = edge == .end ? replacement.string.utf16.count : 0
+            return replacement.range.location + shift + length
+        }
+    }
+
+    /// The first index of sorted `items` where `isPast` holds — it
+    /// must be false then true along them.
+    private static func firstIndex<T>(in items: [T], where isPast: (T) -> Bool) -> Int {
+        var low = 0
+        var high = items.count
+        while low < high {
+            let mid = (low + high) / 2
+            if isPast(items[mid]) {
+                high = mid
+            } else {
+                low = mid + 1
+            }
+        }
+        return low
     }
 
     private static func contains(_ outer: NSRange, _ inner: NSRange) -> Bool {
@@ -485,38 +808,21 @@ enum MarkdownFormatting {
         return result
     }
 
-    // MARK: selections after
-
-    /// Which end of a selection a position is: a start stays before
-    /// text inserted at it, an end moves past it.
-    private enum Edge {
-        case start
-        case end
-    }
-
-    /// Where pre-edit `position` lands after `replacements`.
-    private static func translate(
-        _ position: Int,
-        through replacements: [Replacement],
-        edge: Edge
-    ) -> Int {
-        var shift = 0
-        for replacement in replacements {
-            let range = replacement.range
-            let newLength = replacement.string.utf16.count
-            let before = NSMaxRange(range) < position
-                || (NSMaxRange(range) == position
-                    && (edge == .end || range.location < position))
-            if before {
-                shift += newLength - range.length
+    /// `ranges` sorted, overlapping or touching ones joined.
+    private static func joined(_ ranges: [NSRange]) -> [NSRange] {
+        var result: [NSRange] = []
+        for range in ranges.sorted(by: { $0.location < $1.location }) {
+            guard let last = result.last, range.location <= NSMaxRange(last) else {
+                result.append(range)
                 continue
             }
-            // Inside a replacement: snap to its start or its end.
-            if range.location < position {
-                return range.location + shift + (edge == .end ? newLength : 0)
-            }
-            break
+            result[result.count - 1] = NSUnionRange(last, range)
         }
-        return position + shift
+        return result
+    }
+
+    private static func isWhitespace(_ unit: unichar) -> Bool {
+        guard let scalar = Unicode.Scalar(unit) else { return false }
+        return CharacterSet.whitespacesAndNewlines.contains(scalar)
     }
 }

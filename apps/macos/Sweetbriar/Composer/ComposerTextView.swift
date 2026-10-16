@@ -223,7 +223,7 @@ final class ComposerTextView: NSTextView {
         // one.
         var touched = union(marked, NSRange(location: selectedRange().location, length: 0))
         if replacementRange.location != NSNotFound {
-            touched = union(touched, NSRange(location: replacementRange.location, length: 0))
+            touched = union(touched, replacementRange)
         }
         restyle(touched)
     }

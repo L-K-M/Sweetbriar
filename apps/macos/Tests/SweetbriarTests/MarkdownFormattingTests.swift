@@ -228,6 +228,95 @@ struct MarkdownFormattingTests {
         #expect(elapsed < .seconds(2))
     }
 
+    @Test("dissolving a span never breaks the syntax beside it")
+    func neighbouringSyntax() {
+        /// The styles covering `location` in `text`'s display.
+        func styles(at location: Int, in text: String) -> [MarkdownStyler.Style] {
+            MarkdownStyler.styles(forParagraph: text)
+                .filter { $0.style != .marker && NSLocationInRange(location, $0.range) }
+                .map(\.style)
+        }
+
+        // Dropping `*a*`'s markers would glue `__` to `a`, so the
+        // emphasis stays nested instead.
+        let text = "__x__*a* b"
+        let italic = applying(
+            edit(.emphasis, in: text, selection: NSRange(location: 0, length: 10)), to: text
+        )
+        #expect(italic == "*__x__*a* b*")
+        #expect(styles(at: 3, in: italic).contains(.strong))
+        #expect(styles(at: 3, in: italic).contains(.emphasis))
+
+        // Unbolding `x` here could only leave `__x__`, still bold:
+        // nothing changes.
+        let tangled = "_**_x_**_"
+        #expect(edit(in: tangled, selection: NSRange(location: 4, length: 1)).replacements.isEmpty)
+    }
+
+    @Test("markers that couldn't open take in the word")
+    func flanking() {
+        // `hello**.**` wouldn't parse: `**` between a letter and a
+        // period can't open.
+        let text = "hello."
+        let e = edit(in: text, selection: NSRange(location: 5, length: 1))
+        let bolded = applying(e, to: text)
+        #expect(bolded == "**hello.**")
+        #expect(applying(edit(in: bolded, selections: e.selections), to: bolded) == text)
+    }
+
+    @Test("bold on an empty marker pair takes it out again")
+    func emptyPair() {
+        let text = "a****b"
+        let e = edit(in: text, selection: NSRange(location: 3, length: 0))
+        #expect(applying(e, to: text) == "ab")
+        #expect(e.selections == [NSRange(location: 1, length: 0)])
+    }
+
+    @Test("a chain of touching spans and deep nesting stay linear")
+    func chainsStayFast() {
+        let clock = ContinuousClock()
+
+        // Each `*a*` touches the next `_b_`: growing one span per scan
+        // was quadratic.
+        let chain = String(repeating: "_b_*a*", count: 8_000) + "x"
+        let x = NSRange(location: (chain as NSString).length - 1, length: 1)
+        var merged = ""
+        let chainElapsed = clock.measure {
+            merged = applying(edit(.emphasis, in: chain, selection: x), to: chain)
+        }
+        #expect(merged == "*" + String(repeating: "ba", count: 8_000) + "x*")
+        #expect(chainElapsed < .seconds(2))
+
+        // 50,000 strong spans nested around `x`: filling each one's
+        // whole range was quadratic.
+        let depth = 50_000
+        let nested = String(repeating: "**", count: depth) + "x"
+            + String(repeating: "**", count: depth)
+        let middle = NSRange(location: 2 * depth, length: 1)
+        var unwrapped = ""
+        let nestedElapsed = clock.measure {
+            unwrapped = applying(edit(in: nested, selection: middle), to: nested)
+        }
+        #expect(unwrapped == "x")
+        #expect(nestedElapsed < .seconds(3))
+    }
+
+    @Test("many selections map in linear time")
+    func manySelectionsStayFast() {
+        let count = 24_000
+        let text = String(repeating: "a ", count: count)
+        let selections = (0 ..< count).map { NSRange(location: 2 * $0, length: 1) }
+        let clock = ContinuousClock()
+        var e = MarkdownFormatting.Edit(replacements: [], selections: [])
+        let elapsed = clock.measure {
+            e = edit(in: text, selections: selections)
+        }
+        #expect(applying(e, to: text) == String(repeating: "**a** ", count: count))
+        #expect(e.selections.count == count)
+        #expect(e.selections.last == NSRange(location: 6 * (count - 1), length: 5))
+        #expect(elapsed < .seconds(3))
+    }
+
     @Test("separate spans in one selection never cross-pair")
     func separateSpans() {
         // Both words bold: ⌘B removes it from each.
