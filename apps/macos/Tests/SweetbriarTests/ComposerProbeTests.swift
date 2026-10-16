@@ -59,17 +59,6 @@ struct ComposerProbeTests {
         )
     }
 
-    /// Close the undo group the current event opened. In the app each
-    /// key event ends its own; a test's actions share one, so a
-    /// single undo would take back every edit before it.
-    private func endEvent() {
-        guard let undoManager = textView.undoManager,
-              undoManager.groupingLevel > 0 else {
-            return
-        }
-        undoManager.endUndoGrouping()
-    }
-
     /// Whether the display font at `location` carries `trait`.
     private func displayFont(
         at location: Int,
@@ -228,12 +217,9 @@ struct ComposerProbeTests {
         textView.mode = .markdown
         #expect(textView.isOnTextKit2)
 
-        textView.insertText(
-            "word", replacementRange: NSRange(location: 0, length: 0)
-        )
-        endEvent()
-        #expect(textView.isOnTextKit2)
-
+        // Set, not typed: a test's calls share one event, so typing
+        // would join ⌘B's undo step.
+        textView.string = "word"
         textView.setSelectedRange(NSRange(location: 0, length: 4))
         textView.toggleBoldMarkdown(nil)
         #expect(textView.string == "**word**")
@@ -251,6 +237,12 @@ struct ComposerProbeTests {
             "に", replacementRange: NSRange(location: 4, length: 1)
         )
         #expect(textView.string == "wordに")
+        #expect(textView.isOnTextKit2)
+
+        textView.insertText(
+            "!", replacementRange: NSRange(location: 5, length: 0)
+        )
+        #expect(textView.string == "wordに!")
         #expect(textView.isOnTextKit2)
 
         textView.mode = .plain
