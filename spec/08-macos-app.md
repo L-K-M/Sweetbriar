@@ -149,6 +149,14 @@ restores its draft by `draft_id`.
 
 - **Built with** an `NSTextView` (TextKit 2) in plain or Markdown mode.
   Markdown gets live styling, with source always visible.
+  - The styling is presentation: derived from the source on each edit
+    and never stored in the text. Undo restores text and styling
+    together, and text an input method is composing (marked text) is
+    never restyled mid-composition.
+  - Formatting commands (⌘B bold, ⌘I italic) insert or remove Markdown
+    markers as one undoable edit.
+  - Nothing touches TextKit 1 (`layoutManager`), which would drop the
+    view into compatibility mode.
 - **Above the editor:**
   - the **identity strip** (below);
   - To, Cc and Bcc token fields, with completion from `seen_addresses`
@@ -234,6 +242,8 @@ run on the CI artifact.
   this Mac, for both implementations, and shows the numbers to copy.
   Launching the app with `-runListBenchmark <report.json>` runs the
   same benchmark, writes the report there and quits (macOS CI uses it).
+- **Composer Probe** (plan M0.11) opens a compose window: the composer's
+  editor in plain or Markdown mode, without the core.
 
 ## Accessibility (pilot gates)
 
