@@ -70,6 +70,10 @@ compiler must be on `PATH`. Its compile options come from
   target on the `Sweetbriar` scheme): the benchmark's Foundation-only
   statistics, report and comparison bars plus the shared row
   presentation and the context-click rule;
+- the composer probe's app-hosted tests in the same bundle (M0.11):
+  ⌘B as one undoable edit, marked text left unstyled until commit,
+  `isOnTextKit2` staying true, the accessibility value, and the
+  Foundation-only `MarkdownStyler`/`MarkdownFormatting` suites;
 - the M0.10 list benchmark: the Release app launches with
   `-runListBenchmark <report.json>` after the Release zip step; the
   step passes when all four runs happened without a generation abort
