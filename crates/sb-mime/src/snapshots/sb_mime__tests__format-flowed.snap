@@ -1,0 +1,34 @@
+---
+source: crates/sb-mime/src/tests.rs
+expression: outcome
+---
+Parsed(
+    MessageSummary {
+        message_id: None,
+        subject: Some(
+            "flowed",
+        ),
+        from: Some(
+            MailboxAddress {
+                name: Some(
+                    "Frank",
+                ),
+                address: Some(
+                    "frank@example.com",
+                ),
+            },
+        ),
+        reply_to: [],
+        to: [],
+        cc: [],
+        date: None,
+        in_reply_to: None,
+        references: [],
+        list_id: None,
+        delivered_to: [],
+        has_attachments: false,
+        snippet: Some(
+            "This is a flowed paragraph where lines end with a space to \nindicate soft wrapping. The next token continues the same \nlogical paragraph.\n\nA new paragraph after a hard break.\n",
+        ),
+    },
+)

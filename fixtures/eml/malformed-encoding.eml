@@ -1,0 +1,6 @@
+From: Heidi <heidi@example.com>
+Subject: bad base64
+Content-Type: text/plain
+Content-Transfer-Encoding: base64
+
+!!!@@@%%%not-base64-at-all%%%

@@ -1,0 +1,9 @@
+From: Frank <frank@example.com>
+Subject: flowed
+Content-Type: text/plain; format=flowed; delsp=yes
+
+This is a flowed paragraph where lines end with a space to 
+indicate soft wrapping. The next token continues the same 
+logical paragraph.
+
+A new paragraph after a hard break.

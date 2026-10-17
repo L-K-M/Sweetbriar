@@ -1,0 +1,20 @@
+Subject: five deep
+Content-Type: multipart/mixed; boundary="n1"
+
+--n1
+Content-Type: multipart/alternative; boundary="n2"
+
+--n2
+Content-Type: multipart/related; boundary="n3"
+
+--n3
+Content-Type: multipart/mixed; boundary="n4"
+
+--n4
+Content-Type: text/plain
+
+deep leaf
+--n4--
+--n3--
+--n2--
+--n1--

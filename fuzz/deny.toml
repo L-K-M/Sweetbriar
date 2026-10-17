@@ -1,0 +1,23 @@
+# Fuzz-only graph. NCSA is confined to the pinned, undistributed fuzzer;
+# the application's runtime licence policy remains in ../deny.toml.
+[advisories]
+yanked = "deny"
+unmaintained = "all"
+unsound = "all"
+maximum-db-staleness = "P1D"
+
+[licenses]
+confidence-threshold = 0.95
+allow = ["MIT", "Apache-2.0", "BSD-3-Clause", "Unicode-3.0", "Unlicense", "0BSD"]
+exceptions = [{ crate = "libfuzzer-sys@0.4.13", allow = ["NCSA"] }]
+
+[licenses.private]
+ignore = false
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

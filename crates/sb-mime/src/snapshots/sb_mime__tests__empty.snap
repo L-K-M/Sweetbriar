@@ -1,0 +1,7 @@
+---
+source: crates/sb-mime/src/tests.rs
+expression: outcome
+---
+Failed(
+    Unparseable,
+)

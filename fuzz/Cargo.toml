@@ -1,0 +1,33 @@
+[package]
+name = "sb-mime-fuzz"
+version = "0.0.1"
+edition = "2024"
+license = "Unlicense OR 0BSD"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+# Keep sanitizer/nightly builds outside the stable application workspace.
+[workspace]
+members = ["."]
+resolver = "3"
+
+[dependencies]
+libfuzzer-sys = "=0.4.13"
+sb-mime = { version = "0.0.1", path = "../crates/sb-mime" }
+
+[[bin]]
+name = "mime"
+path = "fuzz_targets/mime.rs"
+test = false
+doc = false
+bench = false
+
+# Keep mail-parser on its shipped semantics (debug_assertions and
+# overflow checks off) so findings are real release-visible panics,
+# not upstream asserts on states its recovery path already handles.
+# See fixtures/eml/fuzz-rfc822-partid.eml and the workspace Cargo.toml.
+[profile.release.package.mail-parser]
+debug-assertions = false
+overflow-checks = false

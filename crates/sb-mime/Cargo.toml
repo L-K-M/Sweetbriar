@@ -8,3 +8,11 @@ rust-version.workspace = true
 
 [dependencies]
 sb-types = { version = "0.0.1", path = "../sb-types" }
+# spec/01 crate table: MIME parsing, bounded per spec/10. `full_encoding`
+# keeps single/multi-byte charset coverage; Sweetbriar enforces the
+# resource budgets before delegating (see src/walk.rs).
+mail-parser = { version = "=0.11.9", features = ["full_encoding"] }
+
+[dev-dependencies]
+# spec/01 crate table: snapshot testing of the fixtures/eml corpus.
+insta = "=1.49.0"

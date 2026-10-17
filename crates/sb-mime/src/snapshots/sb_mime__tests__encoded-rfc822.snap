@@ -1,0 +1,32 @@
+---
+source: crates/sb-mime/src/tests.rs
+expression: outcome
+---
+Parsed(
+    MessageSummary {
+        message_id: None,
+        subject: Some(
+            "encoded forward",
+        ),
+        from: Some(
+            MailboxAddress {
+                name: Some(
+                    "Frank",
+                ),
+                address: Some(
+                    "frank@example.com",
+                ),
+            },
+        ),
+        reply_to: [],
+        to: [],
+        cc: [],
+        date: None,
+        in_reply_to: None,
+        references: [],
+        list_id: None,
+        delivered_to: [],
+        has_attachments: true,
+        snippet: None,
+    },
+)

@@ -1,0 +1,18 @@
+From: Moderator <mod@example.com>
+Subject: list digest
+MIME-Version: 1.0
+Content-Type: multipart/digest; boundary="dg1"
+
+--dg1
+
+From: Poster <p1@example.com>
+Subject: first digest item
+
+First body.
+--dg1
+
+From: Poster2 <p2@example.com>
+Subject: second digest item
+
+Second body.
+--dg1--

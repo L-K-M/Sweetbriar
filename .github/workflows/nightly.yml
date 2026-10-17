@@ -44,14 +44,45 @@ jobs:
           exit 1
 
   fuzz:
-    if: false
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    env:
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: 'true'
     steps:
-      - run: |
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+      - name: Log the fuzz toolchain and image
+        working-directory: fuzz
+        run: |
+          rustup show
+          rustc -Vv
           echo "Runner image: ${ImageOS:-unknown} ${ImageVersion:-unknown}"
-          echo '::error::The MIME fuzz target arrives in M1.1'
-          exit 1
+      - uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
+        with:
+          tool: cargo-fuzz@0.13.2,cargo-deny@0.20.2
+      - name: Check the fuzz dependency graph
+        run: cargo deny --manifest-path fuzz/Cargo.toml --config fuzz/deny.toml --locked check
+      - name: Format the isolated fuzz target
+        working-directory: fuzz
+        run: cargo fmt --check
+      - name: Fuzz MIME for 60 seconds
+        working-directory: fuzz
+        run: |
+          mkdir -p corpus/mime
+          # -O: fuzz the shipped build — cargo-fuzz otherwise injects
+          # debug_assertions/overflow-checks into dependencies, where
+          # upstream asserts (mail-parser "Invalid part ID") fire on
+          # states the release parser recovers from.
+          cargo fuzz run -O --fuzz-dir . mime corpus/mime ../fixtures/eml -- \
+            -max_total_time=60 -max_len=1000000 -rss_limit_mb=2048 -timeout=10
+          git diff --exit-code -- Cargo.lock
+      - name: Upload findings on failure
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mime-fuzz-findings
+          path: fuzz/artifacts/mime
 
   macos:
     strategy:

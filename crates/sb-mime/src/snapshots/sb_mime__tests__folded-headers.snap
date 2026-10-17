@@ -1,0 +1,49 @@
+---
+source: crates/sb-mime/src/tests.rs
+expression: outcome
+---
+Parsed(
+    MessageSummary {
+        message_id: Some(
+            "fold@example.com",
+        ),
+        subject: Some(
+            "A subject that has been folded across many lines to exercise continuation handling in the parser",
+        ),
+        from: Some(
+            MailboxAddress {
+                name: Some(
+                    "Kate",
+                ),
+                address: Some(
+                    "kate@example.com",
+                ),
+            },
+        ),
+        reply_to: [],
+        to: [],
+        cc: [],
+        date: None,
+        in_reply_to: None,
+        references: [
+            "a@x",
+            "b@x",
+            "c@x",
+            "d@x",
+            "e@x",
+            "f@x",
+            "g@x",
+            "h@x",
+            "i@x",
+            "j@x",
+            "k@x",
+            "l@x",
+        ],
+        list_id: None,
+        delivered_to: [],
+        has_attachments: false,
+        snippet: Some(
+            "Body after long folded headers.\n",
+        ),
+    },
+)

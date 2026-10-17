@@ -1,0 +1,9 @@
+From: Frank <frank@example.com>
+Subject: encoded forward
+MIME-Version: 1.0
+Content-Type: message/rfc822
+Content-Transfer-Encoding: base64
+Content-Disposition: attachment
+
+RnJvbTogTmVzdGVkIDxuZXN0ZWRAZXhhbXBsZS5jb20+DQpTdWJqZWN0OiBlbmNvZGVkIGlubmVy
+DQpDb250ZW50LVR5cGU6IHRleHQvcGxhaW4NCg0KRGVjb2RlZCBpbm5lciBib2R5Lg0K
