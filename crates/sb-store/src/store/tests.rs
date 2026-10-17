@@ -439,7 +439,7 @@ fn version_mismatch_is_internal_before_the_schema_verdict() {
     let (_scratch, paths, store) = open_scratch("version-before-verdict");
     store.close().unwrap();
     let raw = rusqlite::Connection::open(paths.state_db()).unwrap();
-    raw.execute_batch("PRAGMA user_version = 2;").unwrap();
+    raw.execute_batch("PRAGMA user_version = 3;").unwrap();
     raw.close().unwrap();
 
     let wrong = PinnedSqlite {
@@ -879,7 +879,7 @@ fn a_newer_store_opens_read_only_and_stays_unchanged() {
         .close()
         .unwrap();
     let raw = rusqlite::Connection::open(paths.state_db()).unwrap();
-    raw.execute_batch("PRAGMA user_version = 2;").unwrap();
+    raw.execute_batch("PRAGMA user_version = 3;").unwrap();
     raw.close().unwrap();
 
     let before = fs::read(paths.state_db()).unwrap();
@@ -915,7 +915,7 @@ fn a_newer_store_with_a_changed_store_meta_opens_read_only() {
         .close()
         .unwrap();
     let raw = rusqlite::Connection::open(paths.state_db()).unwrap();
-    raw.execute_batch("ALTER TABLE store_meta ADD COLUMN note TEXT; PRAGMA user_version = 2;")
+    raw.execute_batch("ALTER TABLE store_meta ADD COLUMN note TEXT; PRAGMA user_version = 3;")
         .unwrap();
     raw.close().unwrap();
 
@@ -955,7 +955,7 @@ fn a_newer_store_with_crashed_wal_frames_opens_read_only_untouched() {
         .unwrap();
     crash_write(
         &paths,
-        "PRAGMA user_version = 2;
+        "PRAGMA user_version = 3;
          UPDATE store_meta SET value = '9.9.9' WHERE key = 'last_migrated_by';",
     );
 
@@ -963,14 +963,14 @@ fn a_newer_store_with_crashed_wal_frames_opens_read_only_untouched() {
     let wal_before = fs::read(paths.data_root().join("state.sqlite-wal")).unwrap();
     let read_only = open_read_only(&paths, &test_seams(real_fs())).unwrap();
     // The crashed frames are what made this store newer: `read` sees
-    // the version 2 they carry, through the read-only connections.
+    // the newer version they carry, through the read-only connections.
     let version = read_only
         .read(|tx| {
             tx.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
                 .map_err(|e| StoreError::internal(e.to_string()))
         })
         .unwrap();
-    assert_eq!(version, 2);
+    assert_eq!(version, 3);
     read_only.close().unwrap();
     assert_eq!(
         fs::read(paths.state_db()).unwrap(),
@@ -1168,7 +1168,7 @@ fn quick_check_runs_only_without_the_marker() {
         .unwrap();
     raw.execute(
         "INSERT INTO accounts (account_id, kind, provider, display_name, state, sort_order, created_at)
-         VALUES ('bad', 'not-a-kind', 'local_archive', 'x', 'active', 0, 0)",
+         VALUES ('bad', 'not-a-kind', 'generic_imap', 'x', 'active', 0, 0)",
         [],
     )
     .unwrap();
@@ -1207,7 +1207,7 @@ fn unclean_store_with_a_check_violation(label: &str) -> (ScratchDir, StorePaths)
     raw.execute_batch(
         "PRAGMA ignore_check_constraints = ON;
          INSERT INTO accounts (account_id, kind, provider, display_name, state, sort_order, created_at)
-           VALUES ('bad', 'not-a-kind', 'local_archive', 'x', 'active', 0, 0);
+           VALUES ('bad', 'not-a-kind', 'generic_imap', 'x', 'active', 0, 0);
          DELETE FROM store_meta WHERE key = 'clean_shutdown_at';",
     )
     .unwrap();
@@ -1228,13 +1228,7 @@ fn migration_2_repairs(tx: &rusqlite::Transaction, _seams: &Seams) -> Result<(),
 #[test]
 fn the_startup_check_runs_before_the_migrations() {
     let (_scratch, paths) = unclean_store_with_a_check_violation("check-before-migrate");
-    let migrations = [
-        MIGRATIONS[0],
-        Migration {
-            version: 2,
-            run: migration_2_repairs,
-        },
-    ];
+    let migrations = crate::testing::extra_migration(migration_2_repairs);
     match open_with(
         &paths,
         &test_seams(real_fs()),
@@ -1263,7 +1257,7 @@ fn the_startup_check_runs_before_the_migrations() {
         .unwrap();
     assert_eq!(
         (version, bad_rows),
-        (1, 1),
+        (i64::from(crate::schema::LATEST_SCHEMA_VERSION), 1),
         "a migration ran before the check"
     );
 }
@@ -1385,24 +1379,20 @@ fn migration_fails(tx: &rusqlite::Transaction, _seams: &Seams) -> Result<(), Sto
 
 /// An upgrade cut short leaves no clean-shutdown marker: the last
 /// session's marker goes before the first migration commits, so after
-/// migration 2 commits and 3 fails, the store isn't claimed clean.
+/// the first test migration commits and the second fails, the store
+/// isn't claimed clean.
 #[test]
 fn an_interrupted_upgrade_leaves_no_marker() {
     let (_scratch, paths, store) = open_scratch("upgrade-marker");
     store.close().unwrap();
     assert!(raw_meta_value(&paths, "clean_shutdown_at").is_some());
 
-    let migrations = [
-        MIGRATIONS[0],
-        Migration {
-            version: 2,
-            run: migration_succeeds,
-        },
-        Migration {
-            version: 3,
-            run: migration_fails,
-        },
-    ];
+    let mut migrations = crate::testing::extra_migration(migration_succeeds);
+    let committed_version = migrations.last().unwrap().version;
+    migrations.push(Migration {
+        version: committed_version + 1,
+        run: migration_fails,
+    });
     assert!(
         open_with(
             &paths,
@@ -1421,6 +1411,10 @@ fn an_interrupted_upgrade_leaves_no_marker() {
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
     drop(raw);
-    assert_eq!(version, 2, "migration 2 should have committed");
+    assert_eq!(
+        version,
+        i64::from(committed_version),
+        "the first test migration should have committed"
+    );
     assert_eq!(raw_meta_value(&paths, "clean_shutdown_at"), None);
 }

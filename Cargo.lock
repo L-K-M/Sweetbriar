@@ -675,6 +675,7 @@ dependencies = [
  "rusqlite",
  "sb-test-support",
  "sb-types",
+ "serde_json",
  "sha2",
 ]
 

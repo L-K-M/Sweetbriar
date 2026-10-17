@@ -16,6 +16,7 @@ use crate::StoreError;
 /// The app version the workspace `Cargo.toml` carries: what
 /// `last_migrated_by` and `app_version_last_opened` record (spec/02).
 pub(crate) const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
+pub(crate) const LATEST_SCHEMA_VERSION: u32 = 2;
 
 /// One migration: the schema version it moves the store to, and the
 /// function that does it, inside the runner's transaction. The
@@ -27,11 +28,17 @@ pub(crate) struct Migration {
 }
 
 /// The production migration list, in order. Version 1 creates schema
-/// v1 (spec/02, spec/06).
-pub(crate) const MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    run: migration_1,
-}];
+/// v1 (spec/02, spec/06); version 2 adds durable imports.
+pub(crate) const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        run: migration_1,
+    },
+    Migration {
+        version: LATEST_SCHEMA_VERSION,
+        run: migration_2,
+    },
+];
 
 /// The `store_meta` keys every migrated store holds (spec/02): a
 /// database with a supported `user_version` but without them isn't a
@@ -417,6 +424,32 @@ fn migration_1(tx: &Transaction, seams: &Seams) -> Result<(), StoreError> {
         tx.execute(
             "INSERT INTO store_meta (key, value) VALUES (?1, ?2)",
             params![key, value],
+        )
+        .map_err(bug)?;
+    }
+    Ok(())
+}
+
+/// Additive only: keep existing archives and every v1 authoritative row.
+fn migration_2(tx: &Transaction, seams: &Seams) -> Result<(), StoreError> {
+    tx.execute_batch(include_str!("schema/v2.sql"))
+        .map_err(bug)?;
+    let exists: bool = tx
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM accounts WHERE provider = 'local_archive')",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(bug)?;
+    if !exists {
+        tx.execute(
+            "INSERT INTO accounts
+             (account_id, kind, provider, display_name, state, sort_order, created_at)
+             VALUES (?1, 'local', 'local_archive', 'Local Archive', 'active', 0, ?2)",
+            params![
+                random_uuid(seams)?.to_string(),
+                seams.clock().now().as_millis()
+            ],
         )
         .map_err(bug)?;
     }

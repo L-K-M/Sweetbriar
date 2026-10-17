@@ -203,10 +203,9 @@ CREATE TABLE import_job_sources (
   the same checkpoint. A stale revision is `Conflict` and rolls back.
 - Each source has its own row so a batch rewrites only its progress,
   rather than an entire EML-folder inventory.
-- Migration 2 adds these tables and the import-identity and single-local-
-  archive indexes. It also
-  creates the local archive account if none exists, preserving an existing
-  archive and all v1 rows. It rewrites or drops no existing data.
+- Migration 2 adds these tables and both unique indexes. It creates the
+  local archive account if none exists, preserving an existing archive
+  and all v1 rows. It rewrites or drops no existing data.
 
 ## Mailboxes, occurrences and logical messages
 
