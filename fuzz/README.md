@@ -5,7 +5,8 @@ directory:
 
 ```sh
 mkdir -p corpus/mime
-cargo fuzz run -O --fuzz-dir . mime corpus/mime ../fixtures/eml -- \
+cargo fuzz run -O --target x86_64-unknown-linux-gnu --fuzz-dir . \
+  mime corpus/mime ../fixtures/eml -- \
   -max_total_time=60 -max_len=1000000 -rss_limit_mb=2048 -timeout=10
 ```
 
@@ -15,6 +16,10 @@ assert on states their release builds recover from (mail-parser's
 `debug_assert!("Invalid part ID")` is one — the minimised reproducer is
 committed as `fixtures/eml/fuzz-rfc822-partid.eml`). The gate verifies
 the shipped build; AddressSanitizer stays enabled either way.
+
+`--target` pins the host triple: cargo-fuzz defaults to the platform it
+was itself compiled for, and prebuilt musl binaries would otherwise try
+to build a musl fuzz target, which AddressSanitizer does not support.
 
 The pinned nightly applies only here. Cargo-fuzz's default AddressSanitizer
 stays enabled. The first corpus is writable; committed synthetic fixtures

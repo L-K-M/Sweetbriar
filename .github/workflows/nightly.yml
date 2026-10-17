@@ -74,7 +74,10 @@ jobs:
           # debug_assertions/overflow-checks into dependencies, where
           # upstream asserts (mail-parser "Invalid part ID") fire on
           # states the release parser recovers from.
-          cargo fuzz run -O --fuzz-dir . mime corpus/mime ../fixtures/eml -- \
+          # --target: cargo-fuzz defaults to its own build triple, and
+          # install-action ships a musl binary — ASAN needs gnu.
+          cargo fuzz run -O --target x86_64-unknown-linux-gnu --fuzz-dir . \
+            mime corpus/mime ../fixtures/eml -- \
             -max_total_time=60 -max_len=1000000 -rss_limit_mb=2048 -timeout=10
           git diff --exit-code -- Cargo.lock
       - name: Upload findings on failure
