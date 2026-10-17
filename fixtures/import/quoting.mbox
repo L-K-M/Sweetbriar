@@ -1,0 +1,12 @@
+From sender@example.test Sat Oct 17 12:00:00 2026
+From: Sender <sender@example.test>
+To: Reader <reader@example.test>
+Subject: Quoting variants
+Status: RO
+X-Status: FA
+
+>From escaped once
+>>From escaped twice
+>>>From escaped thrice
+>Fromage is not a separator
+ From indented stays literal
