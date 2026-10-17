@@ -17,6 +17,7 @@ Rests on research [04-data-safety](../research/04-data-safety.md),
     sha256/ab/cd/<64 hex>         published immutable objects
   backups/<generation-id>/        backup generations (below)
   recovery/                       preserved evidence: quarantined objects, pre-migration snapshots
+    import-source-<32 hex>         private import source snapshots (09)
 <cache root>/                     macOS: ~/Library/Caches/Sweetbriar/   Linux: $XDG_CACHE_HOME/sweetbriar/
   previews/, thumbnails/          disposable
 ```
@@ -49,6 +50,25 @@ recreated.
   the running instance.
 - **Time Machine:** the cache root is excluded (`isExcludedFromBackup`,
   re-applied after writes). The data root is included.
+
+### Import source snapshots
+
+- A capture uses the `Fs` seam to copy one regular file in bounded chunks
+  while hashing it. Its observed size must stay equal to the size at open;
+  a growing or truncated source fails with the consumed-byte offset.
+- The copy has a random, create-new name in `recovery/`. It is flushed,
+  then `recovery/` is flushed, before its token, SHA-256 and byte length
+  may be referenced by an inventory checkpoint. Sources are never written
+  or removed. Cancellation or I/O failure returns no completed snapshot
+  and attempts to remove only that capture's private file.
+- Reopening validates the token, length and full hash before returning a
+  seekable reader. Missing copies are `NotFound`; a wrong kind, length or
+  hash is `Corrupt`, with the evidence retained in `recovery/`.
+- The core treats a completed copy as immutable. This captures a byte
+  stream, not a filesystem-atomic view of another process's writes.
+- The engine owns snapshot references and terminal-job cleanup. Unreferenced
+  crash leftovers remain recovery evidence until that cleanup can identify
+  them. These auxiliary copies are outside the acquisition object store.
 
 ## SQLite configuration
 
@@ -281,6 +301,9 @@ The process holds `<data root>.lock` throughout.
    the live one. In one transaction on the staging database:
    - set `store_meta.incarnation` to the new UUID;
    - mark every account `paused`;
+   - mark unfinished import jobs `failed`, preserving requests and
+     checkpoints. Recovery source copies are outside backup generations;
+     the user starts a fresh inventory rather than resuming original paths;
    - mark every `pending`, `in_flight` or `parked` intent `quarantined`
      with `quarantine_reason='restore'`;
    - mark every send attempt in `held`, `queued` or `submitting` as

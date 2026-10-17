@@ -46,6 +46,21 @@ local drafts. No network yet.
     scheduling/recovery/cancellation, service commands, report JSON in
     `recovery/` and `sb-cli import`. Run all end-to-end acceptance checks
     below, including the 50-seed crash/resume suite.
+    Split before implementation into these PRs:
+    - **M1.2c1 Source snapshots and flags — M:** bounded, durable private
+      source copies in `recovery/`, verified seekable reopening and bounded
+      `Status`/`X-Status` extraction. May run alongside M1.2b: it depends
+      only on M0.5 and M1.1. Tests cover changed originals, snapshot
+      corruption, cancellation, I/O/flush failures and flag/header limits.
+    - **M1.2c2 Inventory and acquisition adapter — L:** Apple Mail package
+      and EML-folder discovery, source inventory and variant requirements,
+      exact publication and MIME-summary/flag mapping through `sb-resources`.
+      Depends on M1.2b and M1.2c1.
+    - **M1.2c3 Jobs, service and CLI — L:** confirmation, checkpointed
+      scheduling/recovery/cancellation, commands, reports and `sb-cli import`.
+    - **M1.2c4 Crash qualification — M:** the 50-seed crash/resume suite
+      and all original end-to-end M1.2 acceptance checks below. M1.3 waits
+      for this qualification.
 - **Goal:** import mbox and EML into the local archive account with exact
   bytes, resumable jobs and a reconciliation report.
 - **Spec:** 09 (Import), 03 (publication before reference), 02
