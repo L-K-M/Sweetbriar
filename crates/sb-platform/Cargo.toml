@@ -7,7 +7,7 @@ publish.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-sb-types = { version = "0.0.0", path = "../sb-types" }
+sb-types = { version = "0.0.1", path = "../sb-types" }
 # fcntl(F_FULLFSYNC), statfs and the network-filesystem magic numbers
 # behind `Fs::location`; pinned exactly per spec/01's version rule.
 libc = "=0.2.190"

@@ -1,0 +1,78 @@
+name: Package macOS
+description: Test the app and its launch, then package an ad-hoc signed DMG.
+
+runs:
+  using: composite
+  steps:
+    - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+    - name: Log toolchain and image
+      shell: bash
+      run: |
+        rustup show
+        rustc -Vv
+        xcodebuild -version
+        echo "Runner image: ${ImageOS:-unknown} ${ImageVersion:-unknown}"
+
+    - name: Read the release version
+      shell: bash
+      run: |
+        VERSION=$(cargo metadata --no-deps --format-version 1 \
+          | jq -r '.packages[] | select(.name == "sb-ffi") | .version')
+        if [[ "$GITHUB_REF_TYPE" == tag && "$GITHUB_REF_NAME" != "v$VERSION" ]]; then
+          echo "::error::Tag $GITHUB_REF_NAME does not match workspace version $VERSION"
+          exit 1
+        fi
+        echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+    # Check before ffi overwrites the committed bindings.
+    - name: Check bindings and build the XCFramework
+      shell: bash
+      run: |
+        cargo xtask check-ffi
+        cargo xtask ffi
+
+    - name: Install XcodeGen
+      shell: bash
+      run: |
+        curl -fsSL -o "$RUNNER_TEMP/xcodegen.zip" \
+          https://github.com/yonaskolb/XcodeGen/releases/download/2.46.0/xcodegen.zip
+        echo "4d9e34b62172d645eed6457cac13fc222569974098ef4ee9c3368bedf0196806  $RUNNER_TEMP/xcodegen.zip" \
+          | shasum -a 256 -c -
+        unzip -q "$RUNNER_TEMP/xcodegen.zip" -d "$RUNNER_TEMP"
+        "$RUNNER_TEMP/xcodegen/bin/xcodegen" --version
+        "$RUNNER_TEMP/xcodegen/bin/xcodegen" generate --spec apps/macos/project.yml
+
+    - name: Swift unit tests
+      shell: bash
+      run: |
+        xcodebuild -project apps/macos/Sweetbriar.xcodeproj \
+          -scheme Sweetbriar -destination 'platform=macOS,arch=arm64' \
+          -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+          -resultBundlePath "$RUNNER_TEMP/Sweetbriar-unit.xcresult" \
+          CODE_SIGN_IDENTITY=- build test
+
+    - name: XCUITest launch smoke
+      shell: bash
+      run: |
+        xcodebuild -project apps/macos/Sweetbriar.xcodeproj \
+          -scheme SweetbriarSmoke -destination 'platform=macOS,arch=arm64' \
+          -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+          -resultBundlePath "$RUNNER_TEMP/Sweetbriar-smoke.xcresult" \
+          CODE_SIGN_IDENTITY=- test
+
+    - name: Build and verify the release DMG
+      shell: bash
+      run: |
+        xcodebuild -project apps/macos/Sweetbriar.xcodeproj \
+          -scheme Sweetbriar -destination 'platform=macOS,arch=arm64' \
+          -derivedDataPath "$RUNNER_TEMP/DerivedData" -configuration Release \
+          MARKETING_VERSION="$VERSION" CODE_SIGN_IDENTITY=- build
+        APP="$RUNNER_TEMP/DerivedData/Build/Products/Release/Sweetbriar.app"
+        codesign --verify --deep --strict "$APP"
+        mkdir "$RUNNER_TEMP/dmg"
+        ditto "$APP" "$RUNNER_TEMP/dmg/Sweetbriar.app"
+        ln -s /Applications "$RUNNER_TEMP/dmg/Applications"
+        cp LICENSE LICENSE-0BSD THIRD_PARTY_NOTICES.md "$RUNNER_TEMP/dmg/"
+        DMG="$RUNNER_TEMP/Sweetbriar-$VERSION-arm64.dmg"
+        hdiutil create -volname Sweetbriar -srcfolder "$RUNNER_TEMP/dmg" -format UDZO "$DMG"
+        hdiutil verify "$DMG"

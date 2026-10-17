@@ -24,6 +24,7 @@ settings:
     CODE_SIGN_IDENTITY: "-"
     CODE_SIGN_STYLE: Manual
     DEVELOPMENT_TEAM: ""
+    MARKETING_VERSION: "0.0.1"
     # Linker warnings fail the build too, like the compilers' (spec/08
     # strictness): an object built for a newer macOS than the app's
     # minimum, say.
@@ -66,7 +67,7 @@ targets:
         CFBundleInfoDictionaryVersion: "6.0"
         CFBundleName: $(PRODUCT_NAME)
         CFBundlePackageType: APPL
-        CFBundleShortVersionString: "1.0"
+        CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: "1"
         LSMinimumSystemVersion: $(MACOSX_DEPLOYMENT_TARGET)
         NSPrincipalClass: NSApplication
@@ -100,6 +101,19 @@ targets:
         TEST_HOST: $(BUILT_PRODUCTS_DIR)/Sweetbriar.app/Contents/MacOS/Sweetbriar
         BUNDLE_LOADER: $(TEST_HOST)
 
+  SweetbriarUITests:
+    type: bundle.ui-testing
+    platform: macOS
+    sources:
+      - Tests/SweetbriarUITests
+    dependencies:
+      - target: Sweetbriar
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.sweetbriar.SweetbriarUITests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: Sweetbriar
+
 schemes:
   Sweetbriar:
     build:
@@ -116,3 +130,14 @@ schemes:
       targets:
         - SweetbriarBridgeTests
         - SweetbriarTests
+
+  # UI automation stays in the nightly/release lane (spec/11).
+  SweetbriarSmoke:
+    build:
+      targets:
+        Sweetbriar: all
+        SweetbriarUITests: [test]
+    test:
+      config: Debug
+      targets:
+        - SweetbriarUITests

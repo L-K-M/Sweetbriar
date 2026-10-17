@@ -7,7 +7,7 @@ publish.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-sb-engine = { version = "0.0.0", path = "../sb-engine" }
+sb-engine = { version = "0.0.1", path = "../sb-engine" }
 
 [dev-dependencies]
-sb-test-support = { version = "0.0.0", path = "../sb-test-support" }
+sb-test-support = { version = "0.0.1", path = "../sb-test-support" }

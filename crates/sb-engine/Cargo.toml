@@ -7,7 +7,7 @@ publish.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-sb-resources = { version = "0.0.0", path = "../sb-resources" }
+sb-resources = { version = "0.0.1", path = "../sb-resources" }
 # spec/01 crate table: the one async runtime, owned by the engine
 # (spec/01 "Process model"). Only the multi-thread scheduler: no I/O
 # driver, no timers, no macros — the core's futures are runtime-neutral
@@ -15,4 +15,4 @@ sb-resources = { version = "0.0.0", path = "../sb-resources" }
 tokio = { version = "=1.53.2", default-features = false, features = ["rt-multi-thread", "sync"] }
 
 [dev-dependencies]
-sb-test-support = { version = "0.0.0", path = "../sb-test-support" }
+sb-test-support = { version = "0.0.1", path = "../sb-test-support" }

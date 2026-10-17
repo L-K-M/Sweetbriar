@@ -7,4 +7,4 @@ publish.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-sb-types = { version = "0.0.0", path = "../sb-types" }
+sb-types = { version = "0.0.1", path = "../sb-types" }
