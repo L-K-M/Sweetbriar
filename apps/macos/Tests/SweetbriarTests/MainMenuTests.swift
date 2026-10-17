@@ -103,7 +103,7 @@ struct MainMenuTests {
             windowNumber: window.windowNumber,
             context: nil,
             characters: character,
-            charactersIgnoringModifiers: character.lowercased(),
+            charactersIgnoringModifiers: character,
             isARepeat: false,
             keyCode: UInt16(keyCode)
         ))
