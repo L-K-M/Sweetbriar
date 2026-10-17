@@ -21,3 +21,15 @@ accepted = [
 # they stay out of the notices file.
 [private]
 ignore = true
+
+# cargo-about otherwise also ingests src/gb18030_2022.rs — a source
+# file whose header comment happens to be the WHATWG license text —
+# emitting it as a second BSD-3-Clause block with the file's contents.
+# Pin the crate's real license files so only their text is extracted.
+[encoding_rs.clarify]
+license = "(Apache-2.0 OR MIT) AND BSD-3-Clause"
+files = [
+    { path = "LICENSE-APACHE", checksum = "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30", license = "Apache-2.0" },
+    { path = "LICENSE-MIT", checksum = "3fa4ca83dcc9237839b1bdeb2e6d16bdfb5ec0c5ce42b24694d8bbf0dcbef72c", license = "MIT" },
+    { path = "LICENSE-WHATWG", checksum = "838118388fe5c2e7f1dbbaeed13e1c7f3ebf88be91319c7c1d77c18e987d1a50", license = "BSD-3-Clause" },
+]

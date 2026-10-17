@@ -1,0 +1,16 @@
+From: Erin <erin@example.com>
+Subject: winmail
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="tnef1"
+
+--tnef1
+Content-Type: text/plain
+
+See attached winmail.dat.
+--tnef1
+Content-Type: application/ms-tnef; name="winmail.dat"
+Content-Disposition: attachment; filename="winmail.dat"
+Content-Transfer-Encoding: base64
+
+eI8+hR4BbgEBAC4AAAABAAEAAQ==
+--tnef1--

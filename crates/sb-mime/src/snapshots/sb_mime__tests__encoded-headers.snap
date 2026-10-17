@@ -1,0 +1,45 @@
+---
+source: crates/sb-mime/src/tests.rs
+expression: outcome
+---
+Parsed(
+    MessageSummary {
+        message_id: Some(
+            "eh-1@example.com",
+        ),
+        subject: Some(
+            "Sölded durch Übersetzung folded  more",
+        ),
+        from: Some(
+            MailboxAddress {
+                name: Some(
+                    "Jürgen Müller",
+                ),
+                address: Some(
+                    "jm@example.com",
+                ),
+            },
+        ),
+        reply_to: [],
+        to: [
+            MailboxAddress {
+                name: Some(
+                    "André",
+                ),
+                address: Some(
+                    "andre@example.com",
+                ),
+            },
+        ],
+        cc: [],
+        date: None,
+        in_reply_to: None,
+        references: [],
+        list_id: None,
+        delivered_to: [],
+        has_attachments: false,
+        snippet: Some(
+            "Body.\n",
+        ),
+    },
+)

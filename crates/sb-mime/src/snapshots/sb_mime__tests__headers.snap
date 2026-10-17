@@ -1,0 +1,79 @@
+---
+source: crates/sb-mime/src/tests.rs
+expression: outcome
+---
+Parsed(
+    MessageSummary {
+        message_id: Some(
+            "id-1@example.com",
+        ),
+        subject: Some(
+            "See attachment",
+        ),
+        from: Some(
+            MailboxAddress {
+                name: Some(
+                    "Alice Sender",
+                ),
+                address: Some(
+                    "alice@example.com",
+                ),
+            },
+        ),
+        reply_to: [
+            MailboxAddress {
+                name: None,
+                address: Some(
+                    "replies@example.com",
+                ),
+            },
+        ],
+        to: [
+            MailboxAddress {
+                name: Some(
+                    "Bob",
+                ),
+                address: Some(
+                    "bob@example.com",
+                ),
+            },
+            MailboxAddress {
+                name: None,
+                address: Some(
+                    "carol@example.com",
+                ),
+            },
+        ],
+        cc: [
+            MailboxAddress {
+                name: None,
+                address: Some(
+                    "dave@example.com",
+                ),
+            },
+        ],
+        date: Some(
+            Timestamp(
+                1710239400000,
+            ),
+        ),
+        in_reply_to: Some(
+            "id-0@example.com",
+        ),
+        references: [
+            "id-0@example.com",
+            "id-00@example.com",
+        ],
+        list_id: Some(
+            "sweetbriar.example.com",
+        ),
+        delivered_to: [
+            "owner@example.com",
+            "alias@example.com",
+        ],
+        has_attachments: false,
+        snippet: Some(
+            "Plain body text here.\n",
+        ),
+    },
+)

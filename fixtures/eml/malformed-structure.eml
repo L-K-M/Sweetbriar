@@ -1,0 +1,7 @@
+From: Grace <grace@example.com>
+Subject: broken boundary
+Content-Type: multipart/mixed; boundary="neverthere"
+
+This body never sees the declared boundary anywhere.
+--notthere
+More trailing text.

@@ -1,0 +1,43 @@
+---
+source: crates/sb-mime/src/tests.rs
+expression: outcome
+---
+Parsed(
+    MessageSummary {
+        message_id: Some(
+            "mm-1@example.com",
+        ),
+        subject: Some(
+            "report",
+        ),
+        from: Some(
+            MailboxAddress {
+                name: Some(
+                    "Carol",
+                ),
+                address: Some(
+                    "carol@example.com",
+                ),
+            },
+        ),
+        reply_to: [],
+        to: [
+            MailboxAddress {
+                name: None,
+                address: Some(
+                    "owner@example.com",
+                ),
+            },
+        ],
+        cc: [],
+        date: None,
+        in_reply_to: None,
+        references: [],
+        list_id: None,
+        delivered_to: [],
+        has_attachments: true,
+        snippet: Some(
+            "Attached is the file.",
+        ),
+    },
+)

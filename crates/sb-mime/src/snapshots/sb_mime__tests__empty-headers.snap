@@ -1,0 +1,29 @@
+---
+source: crates/sb-mime/src/tests.rs
+assertion_line: 133
+expression: outcome
+---
+Partial {
+    summary: MessageSummary {
+        message_id: None,
+        subject: Some(
+            "empty subject not",
+        ),
+        from: None,
+        reply_to: [],
+        to: [],
+        cc: [],
+        date: None,
+        in_reply_to: None,
+        references: [],
+        list_id: None,
+        delivered_to: [],
+        has_attachments: false,
+        snippet: None,
+    },
+    warnings: [
+        Malformed {
+            parts: 1,
+        },
+    ],
+}

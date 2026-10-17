@@ -1,0 +1,12 @@
+Message-ID: <fold@example.com>
+From: Kate <kate@example.com>
+Subject: A subject that has been folded across
+	many lines to exercise continuation handling in
+	the parser
+References: <a@x> <b@x> <c@x> <d@x> <e@x> <f@x> <g@x>
+	<h@x> <i@x> <j@x> <k@x> <l@x>
+X-Long-Extension: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+	bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+	cccccccccccccccccccccccccccccccccccccccccccccccccccc
+
+Body after long folded headers.

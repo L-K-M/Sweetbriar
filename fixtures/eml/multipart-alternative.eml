@@ -1,0 +1,14 @@
+From: Dave <dave@example.com>
+Subject: newsletter
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="alt9"
+
+--alt9
+Content-Type: text/plain; charset=utf-8
+
+Plain text version.
+--alt9
+Content-Type: text/html; charset=utf-8
+
+<html><body><p>HTML version.</p></body></html>
+--alt9--

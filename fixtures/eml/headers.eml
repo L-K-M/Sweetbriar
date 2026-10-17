@@ -1,0 +1,17 @@
+Return-Path: <bounce@example.com>
+Delivered-To: owner@example.com
+X-Original-To: alias@example.com
+Message-ID: <id-1@example.com>
+Date: Tue, 12 Mar 2024 10:30:00 +0000
+From: Alice Sender <alice@example.com>
+Reply-To: replies@example.com
+To: Bob <bob@example.com>, carol@example.com
+Cc: dave@example.com
+Subject: See attachment
+In-Reply-To: <id-0@example.com>
+References: <id-0@example.com> <id-00@example.com>
+List-Id: Sweetbriar <sweetbriar.example.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+
+Plain body text here.

@@ -88,8 +88,10 @@ Agents can't run these locally — make the YAML correct by inspection.
 
 M0.12 adds `nightly.yml` (daily/manual): Swift unit tests, the
 `SweetbriarSmoke` XCUITest launch and an ad-hoc signed DMG. `xcode-27`
-is advisory; fault/proptest/fuzz placeholders stay skipped until their
-suites exist. Tags `v*` run the Rust CI gate and the same macOS package
+is advisory; fault/proptest placeholders stay skipped until their
+suites exist. M1.1 enables the 60-second Linux MIME fuzz run; reproduction
+and its isolated nightly toolchain are documented in `fuzz/README.md`.
+Tags `v*` run the Rust CI gate and the same macOS package
 checks before publishing the DMG. The tag must match the workspace
 version; keep the README and XcodeGen marketing version in step.
 

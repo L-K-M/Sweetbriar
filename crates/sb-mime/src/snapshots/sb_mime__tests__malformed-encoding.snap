@@ -1,0 +1,39 @@
+---
+source: crates/sb-mime/src/tests.rs
+expression: outcome
+---
+Partial {
+    summary: MessageSummary {
+        message_id: None,
+        subject: Some(
+            "bad base64",
+        ),
+        from: Some(
+            MailboxAddress {
+                name: Some(
+                    "Heidi",
+                ),
+                address: Some(
+                    "heidi@example.com",
+                ),
+            },
+        ),
+        reply_to: [],
+        to: [],
+        cc: [],
+        date: None,
+        in_reply_to: None,
+        references: [],
+        list_id: None,
+        delivered_to: [],
+        has_attachments: false,
+        snippet: Some(
+            "!!!@@@%%%not-base64-at-all%%%\n",
+        ),
+    },
+    warnings: [
+        Malformed {
+            parts: 1,
+        },
+    ],
+}
