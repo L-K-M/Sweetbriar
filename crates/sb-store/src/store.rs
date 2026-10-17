@@ -26,6 +26,7 @@ use crate::schema::{
     MIGRATIONS, Migration, check_existing, check_existing_read_only, read_user_version, require_ok,
     run_migrations,
 };
+use crate::source_snapshots::ImportSourceSnapshots;
 use crate::writer::{WriteFuture, WritePriority, Writer};
 
 /// The SQLite build spec/01's crate table pins (rusqlite 0.40.2 →
@@ -72,6 +73,7 @@ pub struct Store {
     readers: Readers,
     writer: Writer,
     objects: FileObjectStore,
+    source_snapshots: ImportSourceSnapshots,
     lease: Box<dyn Lease>,
     /// The clock [`Store::close`] stamps the clean-shutdown marker
     /// with, held from the seams the store opened with.
@@ -83,6 +85,25 @@ impl Store {
     /// it lands them under this store's `objects/`.
     pub fn objects(&self) -> &FileObjectStore {
         &self.objects
+    }
+
+    /// Capture stable import input before inventory or a referencing
+    /// transaction. Blocking file I/O; progress may cancel the copy.
+    pub fn capture_import_source(
+        &self,
+        source: &Path,
+        progress: impl FnMut(u64) -> std::ops::ControlFlow<()>,
+    ) -> Result<crate::ImportSourceCapture, StoreError> {
+        self.source_snapshots.capture(source, progress)
+    }
+
+    /// Verify the whole private copy before allowing offset-based reads.
+    /// This never reopens the original source path.
+    pub fn open_import_source(
+        &self,
+        snapshot: &crate::ImportSourceSnapshot,
+    ) -> Result<Box<dyn sb_types::fs::ReadFile>, StoreError> {
+        self.source_snapshots.open(snapshot)
     }
 
     /// Submit one write to the writer (spec/03 "Write discipline"):
@@ -119,6 +140,7 @@ impl Store {
             readers,
             writer,
             objects,
+            source_snapshots,
             lease,
             clock,
         } = self;
@@ -129,6 +151,7 @@ impl Store {
         let readers_closed = readers.close();
         let writer_closed = writer.close();
         drop(objects);
+        drop(source_snapshots);
         drop(lease);
         marker.and(readers_closed).and(writer_closed)
     }
@@ -259,6 +282,11 @@ pub(crate) fn open_with(
         readers,
         writer,
         objects,
+        source_snapshots: ImportSourceSnapshots::new(
+            Arc::clone(seams.fs_arc()),
+            Arc::clone(seams.random_arc()),
+            paths.recovery().to_path_buf(),
+        ),
         lease,
         clock: Arc::clone(seams.clock_arc()),
     })

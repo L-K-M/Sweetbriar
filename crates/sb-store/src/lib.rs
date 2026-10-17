@@ -10,6 +10,7 @@ mod readers;
 mod receipts;
 mod schema;
 pub mod settings;
+mod source_snapshots;
 mod store;
 #[cfg(test)]
 mod testing;
@@ -35,5 +36,6 @@ pub use objects::{
 pub use paths::StorePaths;
 pub use receipts::{Receipt, run_once};
 pub use settings::{StoredSetting, read_all, upsert};
+pub use source_snapshots::{ImportSourceCapture, ImportSourceSnapshot};
 pub use store::{ReadOnlyStore, Seams, Store, open, open_read_only};
 pub use writer::{WriteFuture, WritePriority, Writer};

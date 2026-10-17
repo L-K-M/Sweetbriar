@@ -47,7 +47,7 @@ local drafts. No network yet.
     `recovery/` and `sb-cli import`. Run all end-to-end acceptance checks
     below, including the 50-seed crash/resume suite.
     Split before implementation into these PRs:
-    - **M1.2c1 Source snapshots and flags — M:** bounded, durable private
+    - **M1.2c1 Source snapshots and flags — L:** bounded, durable private
       source copies in `recovery/`, verified seekable reopening and bounded
       `Status`/`X-Status` extraction. May run alongside M1.2b: it depends
       only on M0.5 and M1.1. Tests cover changed originals, snapshot
@@ -294,6 +294,9 @@ local drafts. No network yet.
   - after restore: accounts `paused`, intents `quarantined`, attempts in
     `held`, `queued` or `submitting` become `outcome_unknown`, and a new
     incarnation UUID;
+  - unfinished import jobs become `failed` with requests/checkpoints
+    intact; restore never substitutes original paths for private source
+    copies absent from the backup;
   - restore never deletes the previous data root: it's renamed to
     `<data root>.preserved-<old incarnation>`;
   - GC's grace clock: an orphan gets a `gc_grace` pin on first sight and
