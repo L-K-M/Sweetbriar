@@ -58,7 +58,7 @@ struct MainMenuTests {
         pasteboard.clearContents()
         try #require(pasteboard.setString("👩🏽‍💻", forType: .string))
 
-        try withFocusedEditor { textView in
+        try withFocusedEditor { (textView: ComposerTextView) throws in
             textView.mode = mode
             textView.string = "hello :rocket: there"
             textView.setSelectedRange(NSRange(location: 6, length: 8))
@@ -79,7 +79,7 @@ struct MainMenuTests {
         let window = try #require(controller.window)
         defer {
             controller.close()
-            previousWindow?.makeKeyWindow()
+            previousWindow?.makeKey()
         }
         window.makeKeyAndOrderFront(nil)
         try #require(window.makeFirstResponder(controller.textView))
