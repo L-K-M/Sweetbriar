@@ -141,9 +141,15 @@ impl Head {
 /// entity inside `multipart/digest` is a nested message; CT-less
 /// elsewhere is `text/plain`.
 enum Entity {
-    Text { html: bool },
+    Text {
+        html: bool,
+    },
     Binary,
-    Multipart { boundary: Vec<u8>, digest: bool },
+    Multipart {
+        boundary: Vec<u8>,
+        digest: bool,
+        alternative: bool,
+    },
     NestedMessage,
 }
 
@@ -156,6 +162,10 @@ fn classify(head: &Head, parent_digest: bool) -> Entity {
                     .csubtype
                     .as_deref()
                     .is_some_and(|s| s.eq_ignore_ascii_case(b"digest")),
+                alternative: head
+                    .csubtype
+                    .as_deref()
+                    .is_some_and(|s| s.eq_ignore_ascii_case(b"alternative")),
             },
             None => Entity::Binary,
         },
@@ -211,6 +221,9 @@ struct Frame {
     step: Step,
     depth: u32,
     digest: bool,
+    /// The frame's container is `multipart/alternative`: its text
+    /// leaves are body variants, not attachments.
+    alternative: bool,
     enc_depth: u32,
     resume: Resume,
 }
@@ -229,7 +242,10 @@ fn walk_parser() -> MessageParser {
 /// `parse_headers` does: leading whitespace is skipped, a blank or
 /// whitespace-only line ends the block, every other line is a field and
 /// runs to its newline (folds included in the byte count). Returns
-/// `(block_len, fields, terminated)`.
+/// `(block_len, fields, terminated)`. Fields are counted as upstream
+/// counts them: a line that starts with space/tab and has
+/// non-whitespace content is a fold of the preceding field, not a new
+/// field.
 fn header_block(data: &[u8]) -> (usize, usize, bool) {
     let mut pos = 0;
     let mut fields = 0usize;
@@ -243,9 +259,28 @@ fn header_block(data: &[u8]) -> (usize, usize, bool) {
             }
         }
         fields += 1;
-        while let Some(&ch) = data.get(pos) {
-            pos += 1;
-            if ch == b'\n' {
+        loop {
+            while let Some(&ch) = data.get(pos) {
+                pos += 1;
+                if ch == b'\n' {
+                    break;
+                }
+            }
+            match data.get(pos) {
+                Some(b' ' | b'\t') => (),
+                _ => break,
+            }
+            // The line starts like a fold, but a whitespace-only line
+            // ends the block instead.
+            let mut probe = pos + 1;
+            let folded = loop {
+                match data.get(probe) {
+                    None | Some(b'\n') => break false,
+                    Some(ch) if ch.is_ascii_whitespace() => probe += 1,
+                    Some(_) => break true,
+                }
+            };
+            if !folded {
                 break;
             }
         }
@@ -322,6 +357,7 @@ pub(crate) fn walk<'x>(data: &'x [u8], limits: &Limits, warnings: Vec<ParseWarni
             step: Step::Headers,
             depth: 1,
             digest: false,
+            alternative: false,
             enc_depth: 0,
             resume: Resume::Scan,
         }],
@@ -427,6 +463,13 @@ impl Walker<'_, '_, '_> {
             self.violated = true;
             return;
         }
+        if !terminated {
+            // Upstream parses the partial headers but never creates
+            // the entity — and nothing follows the block in this
+            // region, so this frame is done too.
+            self.pop_frame();
+            return;
+        }
 
         let head = {
             let mut stream = MessageStream::new(&data[..block_len]);
@@ -451,7 +494,11 @@ impl Walker<'_, '_, '_> {
         self.saw_attachment |= head.attachment;
 
         match classify(&head, digest) {
-            Entity::Multipart { boundary, digest } => {
+            Entity::Multipart {
+                boundary,
+                digest,
+                alternative,
+            } => {
                 if !self.child_depth(depth) {
                     return;
                 }
@@ -471,6 +518,7 @@ impl Walker<'_, '_, '_> {
                         step: Step::Headers,
                         depth: depth + 1,
                         digest,
+                        alternative,
                         enc_depth,
                         resume: Resume::Scan,
                     }),
@@ -562,6 +610,7 @@ impl Walker<'_, '_, '_> {
                     step: Step::Headers,
                     depth: depth + 1,
                     digest: false,
+                    alternative: false,
                     enc_depth,
                     resume: Resume::AtMatch(resume_pos),
                 });
@@ -601,6 +650,7 @@ impl Walker<'_, '_, '_> {
                             boundary: None,
                             depth: depth + 1,
                             digest: false,
+                            alternative: false,
                             enc_depth: enc_depth + 1,
                             resume: Resume::AtMatch(resume_pos),
                         });
@@ -645,7 +695,10 @@ impl Walker<'_, '_, '_> {
                         charset,
                         html,
                     });
-                } else {
+                } else if !self.stack.last().expect("non-empty").alternative {
+                    // Inside multipart/alternative, sibling text leaves
+                    // are body variants — upstream routes them to
+                    // text_body/html_body rather than attachments.
                     self.saw_attachment = true;
                 }
             }

@@ -124,8 +124,12 @@ fn verify(message: &Message<'_>, limits: &Limits, warnings: &mut Vec<ParseWarnin
         if steps > 4 * limits.max_parts() + 64 {
             // Defensive: upstream builds child links forward-only, so
             // revisits can't occur; guard anyway against a structurally
-            // impossible cycle.
-            break;
+            // impossible cycle — and fail closed: an unverified tree
+            // must never be reported as fully parsed.
+            warnings.push(ParseWarning::TooManyParts {
+                limit: limits.max_parts(),
+            });
+            return false;
         }
         if idx == 0 {
             parts_seen += m.parts.len() as u64;
@@ -190,7 +194,7 @@ fn partial_summary(walked: walk::Walked<'_>, data: &[u8], limits: &Limits) -> Pa
             .end
             .min(range.start + limits.max_header_bytes())
             .min(data.len());
-        let mut stream = MessageStream::new(&data[..end]);
+        let mut stream = MessageStream::new(&data[range.start..end]);
         let mut headers = Vec::new();
         let parser = extract::summary_parser();
         stream.parse_headers(&parser, &mut headers);

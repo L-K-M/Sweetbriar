@@ -5,8 +5,8 @@
 use std::path::Path;
 
 use crate::{
-    Limits, MAX_DECODED_PART_BYTES, MAX_HEADER_BYTES, MAX_HEADER_FIELDS, MAX_MESSAGE_BYTES,
-    MAX_PARTS, ParseFailure, ParseOutcome, ParseWarning, SNIPPET_BYTES, parse,
+    Limits, MAX_DECODED_PART_BYTES, MAX_DEPTH, MAX_HEADER_BYTES, MAX_HEADER_FIELDS,
+    MAX_MESSAGE_BYTES, MAX_PARTS, ParseFailure, ParseOutcome, ParseWarning, SNIPPET_BYTES, parse,
 };
 
 /// Header-line marker that trips `crate::tripwire` in test builds.
@@ -27,7 +27,14 @@ fn assert_parsed(bytes: &[u8]) -> crate::MessageSummary {
 }
 
 fn assert_partial(bytes: &[u8]) -> (crate::MessageSummary, Vec<ParseWarning>) {
-    match parse(bytes, &Limits::default()) {
+    assert_partial_limits(bytes, &Limits::default())
+}
+
+fn assert_partial_limits(
+    bytes: &[u8],
+    limits: &Limits,
+) -> (crate::MessageSummary, Vec<ParseWarning>) {
+    match parse(bytes, limits) {
         ParseOutcome::Partial { summary, warnings } => (summary, warnings),
         other => panic!("expected Partial, got {other:?}"),
     }
@@ -135,6 +142,18 @@ fn fixture_corpus() {
     }
 }
 
+#[test]
+fn flowed_fixture_keeps_its_trailing_spaces() {
+    // format=flowed depends on literal trailing spaces (RFC 3676 soft
+    // breaks) — exactly what editors and whitespace-stripping tools
+    // silently remove. Guard the fixture against silent rot.
+    let bytes = fixture("format-flowed.eml");
+    assert!(
+        bytes.windows(2).any(|w| w == b" \n" || w == b" \r"),
+        "format-flowed.eml lost its load-bearing trailing spaces"
+    );
+}
+
 // ---- required summary fields ----
 
 #[test]
@@ -164,19 +183,19 @@ fn extracts_all_summary_fields() {
 
 #[test]
 fn depth_at_and_over_limit() {
-    // leaf at depth 50: 49 multipart wrappers — admitted.
-    let ok = nested_multipart(49);
+    // leaf at depth MAX_DEPTH: MAX_DEPTH-1 multipart wrappers — admitted.
+    let ok = nested_multipart(MAX_DEPTH as usize - 1);
     assert!(matches!(
         parse(&ok, &Limits::default()),
         ParseOutcome::Parsed(_)
     ));
-    // leaf at depth 51: Partial + TooDeep.
-    let over = nested_multipart(50);
+    // leaf at depth MAX_DEPTH+1: Partial + TooDeep.
+    let over = nested_multipart(MAX_DEPTH as usize);
     let (_, warnings) = assert_partial(&over);
     assert!(
         warnings
             .iter()
-            .any(|w| matches!(w, ParseWarning::TooDeep { limit: 50 })),
+            .any(|w| matches!(w, ParseWarning::TooDeep { limit } if *limit == MAX_DEPTH)),
         "{warnings:?}"
     );
 }
@@ -214,7 +233,7 @@ fn message_bytes_ceiling() {
         ),
         other => panic!("expected Partial, got {other:?}"),
     }
-    // Real ceiling: 100,000,001 raw bytes.
+    // Real ceiling: 17 header bytes + MAX_MESSAGE_BYTES of body.
     let mut big = b"Subject: big\r\n\r\n".to_vec();
     big.extend(std::iter::repeat_n(b'x', MAX_MESSAGE_BYTES));
     let (_, warnings) = assert_partial(&big);
@@ -228,8 +247,8 @@ fn message_bytes_ceiling() {
 
 #[test]
 fn decoded_part_ceiling() {
-    // 26 MB of text in one part: over the 25,000,000 decoded cap, under
-    // the 100 MB message cap. Bound check fires before materialization.
+    // MAX_DECODED_PART_BYTES+1 of text in one part: over the decoded
+    // cap, under the message cap. Bound check fires before decode.
     let mut big = b"Subject: big part\r\nContent-Type: text/plain\r\n\r\n".to_vec();
     big.extend(std::iter::repeat_n(
         b'x',
@@ -246,8 +265,9 @@ fn decoded_part_ceiling() {
 
 #[test]
 fn encoded_part_bound_before_decode() {
-    // Base64 of a 40 MB blob decodes to ~30 MB > cap: must trip the
-    // bound from the *encoded* extent, without materializing it.
+    // A 40 MB blob base64-encodes to ~53 MB and decodes back to 40 MB
+    // > cap: the bound must trip from the *encoded* extent, without
+    // materializing the decode.
     let raw = vec![b'x'; 40_000_000];
     let encoded = b64(&raw);
     let mut msg =
@@ -279,9 +299,10 @@ fn encoded_part_bound_before_decode() {
 
 #[test]
 fn header_byte_and_count_ceilings() {
-    // A single header field body over the byte budget.
+    // One header block over the byte budget: the field body alone
+    // exceeds it, so the block trips under any counting contract.
     let mut msg = b"Subject: ".to_vec();
-    msg.extend(std::iter::repeat_n(b'x', MAX_HEADER_BYTES));
+    msg.extend(std::iter::repeat_n(b'x', MAX_HEADER_BYTES + 1));
     msg.extend_from_slice(b"\r\n\r\nbody");
     let (_, warnings) = assert_partial(&msg);
     assert!(
@@ -304,6 +325,22 @@ fn header_byte_and_count_ceilings() {
         ),
         "{warnings:?}"
     );
+}
+
+#[test]
+fn folded_lines_count_as_one_field() {
+    // 3 RFC fields but 7 content lines: a line-based count would trip
+    // max_header_fields(3); the RFC-field count (upstream semantics)
+    // admits it.
+    let mut msg = Vec::new();
+    msg.extend_from_slice(b"Received: hop1\r\n\twith continuation\r\n\tand more\r\n");
+    msg.extend_from_slice(b"Received: hop2\r\n\tfolded too\r\n");
+    msg.extend_from_slice(b"Subject: folded\r\n\r\nbody");
+    let limits = Limits::default().with_max_header_fields(3);
+    match parse(&msg, &limits) {
+        ParseOutcome::Parsed(s) => assert_eq!(s.subject(), Some("folded")),
+        other => panic!("expected Parsed, got {other:?}"),
+    }
 }
 
 #[test]
@@ -373,11 +410,43 @@ fn malformed_is_partial() {
     );
 }
 
+#[test]
+fn unterminated_entity_is_dropped_like_upstream() {
+    // A part whose header block runs to EOF is truncated damage, not
+    // an entity: upstream drops it, so the walk counts one Malformed —
+    // not a second for the phantom entity's empty body.
+    let mut msg = b"Content-Type: multipart/mixed; boundary=b\r\n\r\n--b\r\nContent-Type: text/plain\r\n\r\nbody\r\n--b\r\n".to_vec();
+    msg.extend_from_slice(b"Content-Type: text/plain");
+    let (_, warnings) = assert_partial(&msg);
+    assert_eq!(
+        warnings
+            .iter()
+            .filter(|w| matches!(w, ParseWarning::Malformed { .. }))
+            .count(),
+        1,
+        "{warnings:?}"
+    );
+}
+
+#[test]
+fn alternative_siblings_are_not_attachments() {
+    // multipart/alternative's sibling text leaves are body variants
+    // (upstream routes them to text_body/html_body): a Partial from
+    // unrelated damage must not report attachments.
+    let msg = b"Content-Type: multipart/alternative; boundary=b\r\n\r\n--b\r\nContent-Type: text/plain\r\n\r\nplain body\r\n--b\r\nContent-Type: text/html\r\n\r\n<p>html</p>\r\n--b--\r\n".to_vec();
+    // Drop the last byte: truncation makes it Partial but both text
+    // leaves are still walked inside the alternative container.
+    let limits = Limits::default().with_max_message_bytes(msg.len() - 1);
+    let (s, _) = assert_partial_limits(&msg, &limits);
+    assert!(!s.has_attachments());
+}
+
 // ---- snippet ----
 
 #[test]
 fn snippet_is_bounded_and_unicode_safe() {
-    // 600 copies of a 4-byte emoji well past the 512-byte budget.
+    // 600 copies of a 6-byte pair ("é😀" = 2+4 UTF-8 bytes), ~3.6 KB —
+    // well past the 512-byte budget and across char boundaries.
     let mut msg = b"Content-Type: text/plain; charset=utf-8\r\n\r\n".to_vec();
     for _ in 0..600 {
         msg.extend_from_slice("é😀".as_bytes());
@@ -392,6 +461,9 @@ fn snippet_is_bounded_and_unicode_safe() {
 
 #[test]
 fn panic_inside_boundary_is_contained() {
+    // Requires panic = "unwind" (the default for test builds; the
+    // workspace doesn't override it): under panic = "abort" the
+    // tripwire aborts the harness rather than being contained.
     // The marker header trips `crate::tripwire` mid-walk, inside the
     // `catch_unwind` boundary — the actual containment path.
     let mut msg = TRIPWIRE_MARKER.to_vec();

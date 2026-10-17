@@ -34,6 +34,9 @@ panic = "unwind"
 # ID")`, then release falls through to its corrupted-MIME recovery path.
 # sb-mime's contract is the shipped behaviour, so compile this dep to
 # release semantics in every profile; sb-mime's own asserts stay enabled.
+# Reported upstream as stalwartlabs/mail-parser#164 — remove these
+# overrides once a fixed release lands so assert-enabled test builds
+# catch upstream invariant regressions again.
 [profile.dev.package.mail-parser]
 debug-assertions = false
 overflow-checks = false

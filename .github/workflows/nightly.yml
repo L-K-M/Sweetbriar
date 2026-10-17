@@ -66,6 +66,16 @@ jobs:
       - name: Format the isolated fuzz target
         working-directory: fuzz
         run: cargo fmt --check
+      # Persist the generated corpus between runs: without it every
+      # 60-second run starts from the static seeds only and re-covers
+      # the same shallow paths. Each run saves under its own key and
+      # restores the most recent corpus via the prefix.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: fuzz/corpus/mime
+          key: mime-fuzz-corpus-${{ github.run_id }}
+          restore-keys: |
+            mime-fuzz-corpus-
       - name: Fuzz MIME for 60 seconds
         working-directory: fuzz
         run: |
@@ -86,6 +96,8 @@ jobs:
         with:
           name: mime-fuzz-findings
           path: fuzz/artifacts/mime
+          # The failure can be deny/fmt too, where no artifacts exist.
+          if-no-files-found: ignore
 
   macos:
     strategy:
