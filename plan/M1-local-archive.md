@@ -29,6 +29,23 @@ local drafts. No network yet.
 
 ### M1.2 Import engine — L, linux
 
+- **PR split (2026-10-17):** implement in order below. Together these
+  retain every deliverable and acceptance check of M1.2; M1.3 waits for
+  all three. Each PR stays under the plan's 1,500-line limit.
+  - **M1.2a Mbox source decoding — M:** streaming inventory and message
+    ranges in `sb-mime`, variant ambiguity detection, exact mboxo/mboxrd
+    unquoting, synthetic import fixtures and the nightly splitter fuzz
+    target. Tests cover byte preservation, offsets, bounded buffering,
+    chunk boundaries and source errors; CI fuzzes for 60 seconds.
+  - **M1.2b Durable import storage — L:** local archive creation,
+    source-identity deduplication, occurrence multiplicity, summary and
+    index-queue writes, and persistent batch checkpoints. Store tests
+    cover exact object hashes, flags, failed parsing and replay.
+  - **M1.2c Import jobs and CLI — L:** source inventory (Apple Mail
+    packages and EML folders included), variant choice, engine job
+    scheduling/recovery/cancellation, service commands, report JSON in
+    `recovery/` and `sb-cli import`. Run all end-to-end acceptance checks
+    below, including the 50-seed crash/resume suite.
 - **Goal:** import mbox and EML into the local archive account with exact
   bytes, resumable jobs and a reconciliation report.
 - **Spec:** 09 (Import), 03 (publication before reference), 02
