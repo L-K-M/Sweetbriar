@@ -163,8 +163,7 @@ final class MainMenuBuilder: NSObject {
         menu.addItem(Self.item(
             "Redo",
             action: Selector(("redo:")),
-            key: "z",
-            modifiers: [.command, .shift]
+            key: "Z"
         ))
         menu.addItem(.separator())
         menu.addItem(Self.item("Cut", action: #selector(NSText.cut(_:)), key: "x"))
