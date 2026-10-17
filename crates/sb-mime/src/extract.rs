@@ -140,7 +140,10 @@ pub(crate) fn extract_headers(headers: &[Header<'_>], summary: &mut MessageSumma
 /// (its decoded size was budget-checked at admission), reduce HTML,
 /// truncate on a UTF-8 boundary via upstream `preview_text`.
 pub(crate) fn extent_snippet(regions: &[Region<'_>], extent: &TextExtent) -> Option<String> {
-    let bytes = regions[extent.region].bytes().get(extent.range.clone())?;
+    let bytes = regions
+        .get(extent.region)?
+        .bytes()
+        .get(extent.range.clone())?;
     let decoded = match extent.cte {
         Cte::Identity => std::borrow::Cow::Borrowed(bytes),
         Cte::Base64 => base64_decode(bytes)?.into(),

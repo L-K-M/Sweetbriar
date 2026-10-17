@@ -46,8 +46,9 @@ impl ParseOutcome {
 /// Why a parse yielded nothing usable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParseFailure {
-    /// No headers could be parsed at all — the input is not an
-    /// RFC 5322 message (empty, or not mail-shaped).
+    /// The input yielded no message structure at all (empty, or not
+    /// mail-shaped). A body-only message with no header block is still
+    /// `Parsed`, with empty header fields.
     Unparseable,
     /// The parser panicked mid-parse. The unwind was contained at the
     /// `parse` boundary; the panic payload is not retained.
