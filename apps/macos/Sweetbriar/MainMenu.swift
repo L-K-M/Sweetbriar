@@ -154,12 +154,23 @@ final class MainMenuBuilder: NSObject {
         return item
     }
 
-    /// Edit: Copy and Select All — first-responder actions the
-    /// benchmark window and the lists use.
+    /// Native editing actions follow focus, including text expanders'
+    /// Paste shortcut and the composer's undo manager.
     private func makeEditMenu() -> NSMenuItem {
         let item = NSMenuItem()
         let menu = NSMenu(title: "Edit")
+        menu.addItem(Self.item("Undo", action: Selector(("undo:")), key: "z"))
+        menu.addItem(Self.item(
+            "Redo",
+            action: Selector(("redo:")),
+            key: "z",
+            modifiers: [.command, .shift]
+        ))
+        menu.addItem(.separator())
+        menu.addItem(Self.item("Cut", action: #selector(NSText.cut(_:)), key: "x"))
         menu.addItem(Self.item("Copy", action: #selector(NSText.copy(_:)), key: "c"))
+        menu.addItem(Self.item("Paste", action: #selector(NSText.paste(_:)), key: "v"))
+        menu.addItem(.separator())
         menu.addItem(Self.item(
             "Select All",
             action: #selector(NSText.selectAll(_:)),
