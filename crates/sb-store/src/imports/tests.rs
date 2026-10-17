@@ -81,10 +81,12 @@ fn commit(
     }))
 }
 
-fn count(store: &Store, table: &str) -> i64 {
+fn count(store: &Store, from_clause: &str) -> i64 {
     reading(store, |tx| {
         Ok(tx
-            .query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))
+            .query_row(&format!("SELECT count(*) FROM {from_clause}"), [], |r| {
+                r.get(0)
+            })
             .unwrap())
     })
 }
@@ -137,6 +139,11 @@ fn identical_bytes_keep_distinct_occurrences_but_replay_keeps_counts() {
     assert_eq!(job.checkpoint_json(), "{\"processed\":2,\"v\":1}");
     let source = reading(&store, |tx| import_job_source(tx, JOB, 0));
     assert_eq!(source.checkpoint_json(), job.checkpoint_json());
+    writing(&store, |tx| {
+        tx.execute("UPDATE acquisitions SET object_state = 'missing'", [])
+            .map_err(sql_error)?;
+        Ok(())
+    });
     let stats = commit(
         &store,
         job.revision(),
@@ -152,6 +159,10 @@ fn identical_bytes_keep_distinct_occurrences_but_replay_keeps_counts() {
         (0, 2, 0)
     );
     assert_eq!(count(&store, "occurrences"), 2);
+    assert_eq!(
+        count(&store, "acquisitions WHERE object_state = 'published'"),
+        1
+    );
 }
 
 #[test]
@@ -385,7 +396,10 @@ fn source_identity_lookup_uses_its_partial_index() {
             .collect::<Result<Vec<_>, _>>()
             .unwrap()
             .join("\n");
-        assert!(plan.contains("acquisition_import_identity"), "{plan}");
+        assert!(
+            plan.contains("SEARCH s ") && plan.contains("INDEX acquisition_import_identity"),
+            "{plan}"
+        );
         Ok(())
     });
 }

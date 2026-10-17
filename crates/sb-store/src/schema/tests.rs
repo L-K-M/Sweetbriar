@@ -81,7 +81,13 @@ fn a_fresh_store_reaches_the_latest_version_with_its_meta() {
         i64::from(LATEST_SCHEMA_VERSION)
     );
 
-    let meta = reading(&store, |tx| Ok(store_meta(tx)));
+    let meta =
+        reading(&store, |tx| {
+            assert_eq!(one_int(tx,
+            "SELECT count(*) FROM accounts WHERE provider = 'local_archive' AND kind = 'local'
+             AND display_name = 'Local Archive' AND state = 'active' AND sort_order = 0"), 1);
+            Ok(store_meta(tx))
+        });
     assert_eq!(
         meta.get("last_migrated_by").unwrap(),
         env!("CARGO_PKG_VERSION")
@@ -872,6 +878,12 @@ fn a_store_the_runner_cannot_write_is_unavailable() {
             .unwrap();
     let err = run_migrations(&mut raw, &test_seams(real_fs()), MIGRATIONS).unwrap_err();
     assert!(matches!(err, StoreError::Unavailable { .. }), "{err:?}");
+}
+
+/// Appending a migration must not reinterpret an existing store version.
+#[test]
+fn historical_migration_ids_are_pinned() {
+    assert_eq!([MIGRATIONS[0].version, MIGRATIONS[1].version], [1, 2]);
 }
 
 /// The runner relies on its list being strictly increasing; an

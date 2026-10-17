@@ -16,7 +16,8 @@ use crate::StoreError;
 /// The app version the workspace `Cargo.toml` carries: what
 /// `last_migrated_by` and `app_version_last_opened` record (spec/02).
 pub(crate) const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
-pub(crate) const LATEST_SCHEMA_VERSION: u32 = 2;
+#[cfg(test)]
+pub(crate) const LATEST_SCHEMA_VERSION: u32 = MIGRATIONS[MIGRATIONS.len() - 1].version;
 
 /// One migration: the schema version it moves the store to, and the
 /// function that does it, inside the runner's transaction. The
@@ -35,7 +36,7 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         run: migration_1,
     },
     Migration {
-        version: LATEST_SCHEMA_VERSION,
+        version: 2,
         run: migration_2,
     },
 ];

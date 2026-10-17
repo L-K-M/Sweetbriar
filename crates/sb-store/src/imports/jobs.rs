@@ -139,7 +139,8 @@ pub fn import_job(tx: &Transaction, id: &str) -> Result<ImportJob, StoreError> {
     })
 }
 
-/// Recover only unfinished work. Awaiting-confirmation jobs remain idle.
+/// Unfinished work and confirmation prompts. Recovery must leave
+/// awaiting-confirmation jobs idle until the user confirms.
 pub fn recoverable_import_jobs(tx: &Transaction) -> Result<Vec<ImportJob>, StoreError> {
     let mut statement = tx.prepare(
         "SELECT job_id FROM import_jobs WHERE state IN ('inventory','awaiting_confirmation','running')
