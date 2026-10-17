@@ -1,0 +1,89 @@
+name: nightly
+
+on:
+  schedule:
+    - cron: '23 3 * * *'
+  workflow_dispatch:
+  # Exercise changes to this lane before they reach the daily run.
+  pull_request:
+    paths:
+      - '.github/actions/package-macos/**'
+      - '.github/workflows/nightly.yml'
+      - '.github/workflows/release.yml'
+      - 'apps/macos/project.yml'
+      - 'apps/macos/Tests/SweetbriarUITests/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # M0.12 reserves these suites; later steps must supply real tests
+  # before enabling them. Skipped suites are not passing evidence.
+  fault-injection:
+    if: false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - run: |
+          echo "Runner image: ${ImageOS:-unknown} ${ImageVersion:-unknown}"
+          echo '::error::Full nightly crash/power-loss suite is not implemented'
+          exit 1
+
+  proptest:
+    if: false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - run: |
+          echo "Runner image: ${ImageOS:-unknown} ${ImageVersion:-unknown}"
+          echo '::error::Nightly state-machine models arrive with M2/M3/M4'
+          exit 1
+
+  fuzz:
+    if: false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - run: |
+          echo "Runner image: ${ImageOS:-unknown} ${ImageVersion:-unknown}"
+          echo '::error::The MIME fuzz target arrives in M1.1'
+          exit 1
+
+  macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-26
+            xcode: '26.6'
+          - runner: xcode-27
+            xcode: '27.0'
+    runs-on: ${{ matrix.runner }}
+    # The preview image reports compatibility findings without gating
+    # the stable runner's nightly artifact (spec/11).
+    continue-on-error: ${{ matrix.runner == 'xcode-27' }}
+    timeout-minutes: 60
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_${{ matrix.xcode }}.app/Contents/Developer
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: 'true'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/package-macos
+      - name: Upload test results on failure
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: nightly-xcresult-${{ matrix.runner }}
+          path: ${{ runner.temp }}/Sweetbriar-*.xcresult
+      - name: Upload the nightly DMG
+        if: matrix.runner == 'macos-26'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: Sweetbriar-nightly-dmg
+          path: ${{ runner.temp }}/Sweetbriar-*.dmg
+          if-no-files-found: error

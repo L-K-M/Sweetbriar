@@ -508,14 +508,14 @@ checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 
 [[package]]
 name = "sb-bindgen"
-version = "0.0.0"
+version = "0.0.1"
 dependencies = [
  "uniffi",
 ]
 
 [[package]]
 name = "sb-cli"
-version = "0.0.0"
+version = "0.0.1"
 dependencies = [
  "sb-service",
  "sb-test-support",
@@ -523,7 +523,7 @@ dependencies = [
 
 [[package]]
 name = "sb-engine"
-version = "0.0.0"
+version = "0.0.1"
 dependencies = [
  "sb-resources",
  "sb-test-support",
@@ -532,7 +532,7 @@ dependencies = [
 
 [[package]]
 name = "sb-ffi"
-version = "0.0.0"
+version = "0.0.1"
 dependencies = [
  "sb-service",
  "sb-test-support",
@@ -542,21 +542,21 @@ dependencies = [
 
 [[package]]
 name = "sb-imap"
-version = "0.0.0"
+version = "0.0.1"
 dependencies = [
  "sb-types",
 ]
 
 [[package]]
 name = "sb-mime"
-version = "0.0.0"
+version = "0.0.1"
 dependencies = [
  "sb-types",
 ]
 
 [[package]]
 name = "sb-platform"
-version = "0.0.0"
+version = "0.0.1"
 dependencies = [
  "libc",
  "sb-types",
@@ -564,7 +564,7 @@ dependencies = [
 
 [[package]]
 name = "sb-resources"
-version = "0.0.0"
+version = "0.0.1"
 dependencies = [
  "sb-imap",
  "sb-mime",
@@ -575,7 +575,7 @@ dependencies = [
 
 [[package]]
 name = "sb-service"
-version = "0.0.0"
+version = "0.0.1"
 dependencies = [
  "sb-engine",
  "sb-test-support",
@@ -583,14 +583,14 @@ dependencies = [
 
 [[package]]
 name = "sb-smtp"
-version = "0.0.0"
+version = "0.0.1"
 dependencies = [
  "sb-types",
 ]
 
 [[package]]
 name = "sb-store"
-version = "0.0.0"
+version = "0.0.1"
 dependencies = [
  "rusqlite",
  "sb-test-support",
@@ -600,7 +600,7 @@ dependencies = [
 
 [[package]]
 name = "sb-test-support"
-version = "0.0.0"
+version = "0.0.1"
 dependencies = [
  "libc",
  "rusqlite",
@@ -610,7 +610,7 @@ dependencies = [
 
 [[package]]
 name = "sb-types"
-version = "0.0.0"
+version = "0.0.1"
 
 [[package]]
 name = "scroll"
@@ -1079,7 +1079,7 @@ dependencies = [
 
 [[package]]
 name = "xtask"
-version = "0.0.0"
+version = "0.0.1"
 dependencies = [
  "serde",
  "serde_json",

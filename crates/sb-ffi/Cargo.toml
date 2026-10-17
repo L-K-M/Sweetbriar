@@ -12,7 +12,7 @@ rust-version.workspace = true
 crate-type = ["lib", "staticlib", "cdylib"]
 
 [dependencies]
-sb-service = { version = "0.0.0", path = "../sb-service" }
+sb-service = { version = "0.0.1", path = "../sb-service" }
 # The FFI object's shared-state lock only (spec/07 "the core is a
 # shared object"): `sync` alone, no runtime — the engine below owns
 # the one runtime, and the futures this crate exports are driven by
@@ -23,4 +23,4 @@ tokio = { version = "=1.53.2", default-features = false, features = ["sync"] }
 uniffi = { version = "=0.32.2", default-features = false }
 
 [dev-dependencies]
-sb-test-support = { version = "0.0.0", path = "../sb-test-support" }
+sb-test-support = { version = "0.0.1", path = "../sb-test-support" }

@@ -7,8 +7,8 @@ publish.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-sb-store = { version = "0.0.0", path = "../sb-store" }
-sb-mime = { version = "0.0.0", path = "../sb-mime" }
-sb-imap = { version = "0.0.0", path = "../sb-imap" }
-sb-smtp = { version = "0.0.0", path = "../sb-smtp" }
-sb-platform = { version = "0.0.0", path = "../sb-platform" }
+sb-store = { version = "0.0.1", path = "../sb-store" }
+sb-mime = { version = "0.0.1", path = "../sb-mime" }
+sb-imap = { version = "0.0.1", path = "../sb-imap" }
+sb-smtp = { version = "0.0.1", path = "../sb-smtp" }
+sb-platform = { version = "0.0.1", path = "../sb-platform" }
