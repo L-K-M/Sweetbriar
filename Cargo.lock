@@ -631,6 +631,7 @@ dependencies = [
  "insta",
  "mail-parser",
  "sb-types",
+ "sha2",
 ]
 
 [[package]]
