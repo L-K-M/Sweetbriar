@@ -1,4 +1,4 @@
-# MIME fuzzing
+# MIME and mbox fuzzing
 
 Requires a C++ compiler. Install `cargo-fuzz` 0.13.2, then run from this
 directory:
@@ -9,6 +9,19 @@ cargo fuzz run -O --target x86_64-unknown-linux-gnu --fuzz-dir . \
   mime corpus/mime ../fixtures/eml -- \
   -max_total_time=60 -max_len=1000000 -rss_limit_mb=2048 -timeout=10
 ```
+
+For the mbox splitter, use its own writable corpus and import seeds:
+
+```sh
+mkdir -p corpus/mbox
+cargo fuzz run -O --target x86_64-unknown-linux-gnu --fuzz-dir . \
+  mbox corpus/mbox ../fixtures/import -- \
+  -max_total_time=60 -max_len=1000000 -rss_limit_mb=2048 -timeout=10
+```
+
+The splitter target checks inventory, offsets and both variants' bytes
+against a whole-line reference decoder. Each target runs for 60 seconds
+in CI, with separate corpus caches and finding artifacts.
 
 `-O` builds the real release profile: without it cargo-fuzz injects
 debug_assertions and overflow-checks into every crate, so dependencies

@@ -16,3 +16,5 @@ mail-parser = { version = "=0.11.9", features = ["full_encoding"] }
 [dev-dependencies]
 # spec/01 crate table: snapshot testing of the fixtures/eml corpus.
 insta = "=1.49.0"
+# Pin the exact decoded fixture bytes independently of MIME summaries.
+sha2 = { version = "=0.11.1", default-features = false }

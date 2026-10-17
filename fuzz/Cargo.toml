@@ -24,6 +24,13 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "mbox"
+path = "fuzz_targets/mbox.rs"
+test = false
+doc = false
+bench = false
+
 # Keep mail-parser on its shipped semantics (debug_assertions and
 # overflow checks off) so findings are real release-visible panics,
 # not upstream asserts on states its recovery path already handles.

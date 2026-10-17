@@ -1,0 +1,10 @@
+From sender@example.test Sat Oct 17 12:00:00 2026
+From: sender@example.test
+Subject: Duplicate source message
+
+Keep both occurrences.
+From sender@example.test Sat Oct 17 12:00:00 2026
+From: sender@example.test
+Subject: Duplicate source message
+
+Keep both occurrences.
