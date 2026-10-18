@@ -198,6 +198,7 @@ fn aliases_cycles_and_overlapping_roots_visit_once() {
     assert_eq!(found, [("real", SourceKind::Eml), ("m", SourceKind::Mbox)]);
 }
 
+#[cfg(unix)]
 #[test]
 fn a_package_alias_without_an_extension_still_finds_its_source() {
     let (scratch, res) = resources("package-alias");
@@ -222,6 +223,8 @@ fn missing_nonregular_and_non_utf8_paths_are_reported() {
     let dir = scratch.path().join("d");
     fs::create_dir(&dir).unwrap();
     fs::write(dir.join("ok.eml"), EML).unwrap();
+    // APFS rejects these names; Linux also covers an actual listed entry.
+    #[cfg(target_os = "linux")]
     fs::write(dir.join(OsStr::from_bytes(b"bad\xff.eml")), EML).unwrap();
     let fifo = scratch.path().join("pipe");
     assert!(
@@ -233,18 +236,17 @@ fn missing_nonregular_and_non_utf8_paths_are_reported() {
     );
     let missing = scratch.path().join("missing.mbox");
     let nasty = scratch.path().join(OsStr::from_bytes(b"nasty\xffdir"));
-    fs::create_dir(&nasty).unwrap();
 
     let inventory = run(&res, &[missing, fifo, nasty, dir]);
     let kinds: Vec<ImportProblemKind> = inventory.problems().iter().map(|p| p.kind()).collect();
-    // A vanished root, a fifo, a non-UTF-8 root and a non-UTF-8
-    // candidate; the good sibling still inventories.
+    // Invalid roots need no filesystem entry; good siblings still inventory.
     assert_eq!(
         kinds,
         [
             ImportProblemKind::Inaccessible,
             ImportProblemKind::Unsupported,
             ImportProblemKind::NonUtf8,
+            #[cfg(target_os = "linux")]
             ImportProblemKind::NonUtf8,
         ]
     );
@@ -252,6 +254,20 @@ fn missing_nonregular_and_non_utf8_paths_are_reported() {
         panic!("one source expected: {:?}", inventory.sources())
     };
     assert_eq!(source.mailbox(), "d");
+}
+
+#[cfg(unix)]
+#[test]
+fn non_utf8_roots_are_rejected_before_filesystem_lookup() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+
+    let (scratch, res) = resources("invalid-path-input");
+    let path = scratch.path().join(OsStr::from_bytes(b"absent\xff.eml"));
+    let inventory = run(&res, &[path]);
+    assert!(inventory.sources().is_empty());
+    assert_eq!(inventory.problems().len(), 1);
+    assert_eq!(inventory.problems()[0].kind(), ImportProblemKind::NonUtf8);
 }
 
 #[test]
@@ -269,6 +285,7 @@ fn a_package_without_an_mbox_child_reports_a_problem() {
     assert_eq!(problem.kind(), ImportProblemKind::Inaccessible);
 }
 
+#[cfg(unix)]
 #[test]
 fn a_socket_is_an_unsupported_source_not_a_failed_open() {
     let (scratch, res) = resources("socket");
@@ -306,6 +323,14 @@ fn empty_sources_are_valid() {
         (mbox.message_count(), mbox.quoting()),
         (0, MboxQuoting::Equivalent)
     );
+    for source in inventory.sources() {
+        assert_eq!(
+            SourceInventory::from_json(&source.to_json())
+                .unwrap()
+                .to_json(),
+            source.to_json()
+        );
+    }
 }
 
 #[test]
@@ -400,6 +425,12 @@ fn fixtures_count_bytes_and_report_ambiguity() {
     assert_eq!(
         quoting.snapshot().sha256_hex(),
         "724fe2fa49eac578cfb0eaba45497015979618d5c19d1ddf4f7e39d5aba0bacc"
+    );
+    assert_eq!(
+        SourceInventory::from_json(&quoting.to_json())
+            .unwrap()
+            .to_json(),
+        quoting.to_json()
     );
 }
 
@@ -604,6 +635,7 @@ fn scan_failure_preserves_the_source_offset() {
 }
 
 const DEEP_ROOT: &str = "SB_IMPORT_DEEP_ROOT";
+const CHILD_PROOF: &str = "child-ran";
 const WALK_STACK_BYTES: usize = 512 * 1024;
 // Keep the canonical path below each host's path-length limit.
 #[cfg(target_os = "linux")]
@@ -631,6 +663,7 @@ fn deep_inventory_child() {
             assert!(inventory.problems().is_empty());
             assert_eq!(inventory.sources().len(), 1);
             res.close().unwrap();
+            fs::write(root.join(CHILD_PROOF), b"ok").unwrap();
         })
         .unwrap()
         .join()
@@ -656,6 +689,11 @@ fn deeply_nested_sources_do_not_consume_the_thread_stack() {
     loop {
         if let Some(status) = child.try_wait().unwrap() {
             assert!(status.success(), "deep inventory failed: {status}");
+            assert_eq!(
+                fs::read(scratch.path().join(CHILD_PROOF))
+                    .expect("the child filter matched no test"),
+                b"ok"
+            );
             break;
         }
         if Instant::now() >= deadline {

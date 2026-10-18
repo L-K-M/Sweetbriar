@@ -343,10 +343,13 @@ impl Walker<'_> {
     /// Resolve identity separately from the name used for classification
     /// and mailbox naming. The pending stack preserves depth-first order.
     fn visit(&mut self, named: PathBuf, origin: Origin) {
+        if named.to_str().is_none() {
+            return self.problem(&named, ImportProblemKind::NonUtf8, "the path is not UTF-8");
+        }
         let Some(canonical) = self.canonicalized(&named) else {
             return;
         };
-        if canonical.to_str().is_none() || named.to_str().is_none() {
+        if canonical.to_str().is_none() {
             return self.problem(
                 &canonical,
                 ImportProblemKind::NonUtf8,
