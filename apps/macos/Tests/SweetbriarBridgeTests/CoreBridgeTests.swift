@@ -164,6 +164,64 @@ func importCommandsCrossTheBridge() async throws {
     await bridge.shutdown()
 }
 
+/// Poll `importJob` until `done` accepts its state, within a bound.
+private func waitForJob(
+    _ bridge: CoreBridge,
+    id: String,
+    until done: (ImportJobState) -> Bool
+) async throws -> ImportJob {
+    let deadline = ContinuousClock.now + .seconds(50)
+    while true {
+        let job = try await bridge.importJob(id: id)
+        if done(job.state) {
+            return job
+        }
+        guard ContinuousClock.now < deadline else {
+            throw CoreFailure.internalError(detail: "the job never settled: \(job.state)")
+        }
+        try await Task.sleep(for: .milliseconds(20))
+    }
+}
+
+/// An import over the bridge (spec/09): the inventory shows the
+/// ambiguous source before confirmation, and the job completes with
+/// its totals.
+@Test(.timeLimit(.minutes(1)))
+func anImportRunsOverTheBridge() async throws {
+    let (dir, config) = tempConfig()
+    defer { try? FileManager.default.removeItem(at: dir) }
+
+    let bridge = try await CoreBridge.open(
+        config: config,
+        snapshots: await sinkBatcher(clock: ManualFrameClock())
+    )
+    let source = dir.appendingPathComponent("Inbox.mbox")
+    let mbox = "From a@example.test Sat Oct 17 12:00:00 2026\nSubject: one\n\n>>From here\n"
+    try Data(mbox.utf8).write(to: source)
+
+    let started = try await bridge.startImport(paths: [source.path])
+    let waiting = try await waitForJob(bridge, id: started.jobId) { $0 != .inventory }
+    #expect(waiting.state == .awaitingConfirmation)
+    let inventoried = try #require(waiting.sources.first)
+    #expect(waiting.sources.count == 1)
+    #expect(inventoried.mailbox == "Inbox")
+    #expect(inventoried.kind == .mbox)
+    #expect(inventoried.messages == 1)
+    #expect(inventoried.needsVariant)
+
+    try await bridge.confirmImport(
+        jobId: started.jobId,
+        variants: [VariantChoice(ordinal: inventoried.ordinal, variant: .mboxrd)]
+    )
+    let done = try await waitForJob(bridge, id: started.jobId) { $0.isFinished }
+    #expect(done.state == .completed)
+    #expect(done.sources.first?.variant == .mboxrd)
+    #expect(done.totals.imported == 1)
+    #expect(done.problemCount == 0)
+
+    await bridge.shutdown()
+}
+
 @Test(.timeLimit(.minutes(1)))
 func aCallOnACancelledTaskThrowsAndWritesNothing() async throws {
     let (dir, config) = tempConfig()

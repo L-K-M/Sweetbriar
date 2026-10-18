@@ -191,10 +191,11 @@ local drafts. No network yet.
   - **M1.4e Import command FFI — L:** `start_import`, `confirm_import`
     with per-source variant choices, `cancel_job`.
   - **M1.4f Import vocabulary FFI — L:** job states, sources, problems
-    and totals. Depends on M1.4e.
-  - **M1.4g Job query and report — L:** `import_job` and
-    `import_report`, which returns a published report only. Depends on
-    M1.4f.
+    and totals, with the `import_job` query that carries them. Depends
+    on M1.4e.
+  - **M1.4g Job report — L:** `import_report`, which returns a
+    published report only, and `import_job`'s report path once the
+    report is written. Depends on M1.4f.
   - **M1.4h List model — L:** `ListWindowModel` over a store window:
     the first page shown before the id index arrives, subscriptions,
     rebuilds on the same handle and selection following its message.

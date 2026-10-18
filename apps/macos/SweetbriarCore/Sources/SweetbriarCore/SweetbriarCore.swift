@@ -799,6 +799,13 @@ public protocol CoreProtocol: AnyObject, Sendable {
     func confirmImport(token: CancelToken, idempotencyKey: String, jobId: String, variants: [VariantChoice]) async throws  -> Receipt
     
     /**
+     * `import_job(job_id)` (spec/07): state, inventory, problems and
+     * counts. A query: the token races every wait. An unknown job is
+     * `NotFound`.
+     */
+    func importJob(token: CancelToken, jobId: String) async throws  -> ImportJob
+    
+    /**
      * `start_import(paths, target)` (spec/07): record the job and
      * inventory it in the background. A repeated key names the first
      * job and starts nothing.
@@ -1034,6 +1041,27 @@ open func confirmImport(token: CancelToken, idempotencyKey: String, jobId: Strin
             completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
             freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
             liftFunc: FfiConverterTypeReceipt_lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * `import_job(job_id)` (spec/07): state, inventory, problems and
+     * counts. A query: the token races every wait. An unknown job is
+     * `NotFound`.
+     */
+open func importJob(token: CancelToken, jobId: String)async throws  -> ImportJob  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_import_job(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterString.lower(jobId)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeImportJob_lift,
             errorHandler: FfiConverterTypeCoreError_lift
         )
 }
@@ -1557,6 +1585,261 @@ public func FfiConverterTypeCoreConfig_lower(_ value: CoreConfig) -> RustBuffer 
 
 
 /**
+ * One import job as `import_job` reports it (spec/07).
+ */
+public struct ImportJob: Equatable, Hashable {
+    public var id: String
+    public var state: ImportJobState
+    /**
+     * The inventory in ordinal order; empty until it finishes.
+     */
+    public var sources: [ImportSource]
+    /**
+     * The first problems; `problem_count` counts them all.
+     */
+    public var problems: [ImportProblem]
+    public var problemCount: UInt64
+    public var totals: ImportTotals
+    public var failure: String?
+    /**
+     * The report's path, once the job has finished.
+     */
+    public var reportPath: String?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(id: String, state: ImportJobState, 
+        /**
+         * The inventory in ordinal order; empty until it finishes.
+         */sources: [ImportSource], 
+        /**
+         * The first problems; `problem_count` counts them all.
+         */problems: [ImportProblem], problemCount: UInt64, totals: ImportTotals, failure: String?, 
+        /**
+         * The report's path, once the job has finished.
+         */reportPath: String?) {
+        self.id = id
+        self.state = state
+        self.sources = sources
+        self.problems = problems
+        self.problemCount = problemCount
+        self.totals = totals
+        self.failure = failure
+        self.reportPath = reportPath
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension ImportJob: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeImportJob: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ImportJob {
+        return
+            try ImportJob(
+                id: FfiConverterString.read(from: &buf), 
+                state: FfiConverterTypeImportJobState.read(from: &buf), 
+                sources: FfiConverterSequenceTypeImportSource.read(from: &buf), 
+                problems: FfiConverterSequenceTypeImportProblem.read(from: &buf), 
+                problemCount: FfiConverterUInt64.read(from: &buf), 
+                totals: FfiConverterTypeImportTotals.read(from: &buf), 
+                failure: FfiConverterOptionString.read(from: &buf), 
+                reportPath: FfiConverterOptionString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ImportJob, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.id, into: &buf)
+        FfiConverterTypeImportJobState.write(value.state, into: &buf)
+        FfiConverterSequenceTypeImportSource.write(value.sources, into: &buf)
+        FfiConverterSequenceTypeImportProblem.write(value.problems, into: &buf)
+        FfiConverterUInt64.write(value.problemCount, into: &buf)
+        FfiConverterTypeImportTotals.write(value.totals, into: &buf)
+        FfiConverterOptionString.write(value.failure, into: &buf)
+        FfiConverterOptionString.write(value.reportPath, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeImportJob_lift(_ buf: RustBuffer) throws -> ImportJob {
+    return try FfiConverterTypeImportJob.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeImportJob_lower(_ value: ImportJob) -> RustBuffer {
+    return FfiConverterTypeImportJob.lower(value)
+}
+
+
+/**
+ * A path that did not become a source, and why.
+ */
+public struct ImportProblem: Equatable, Hashable {
+    public var path: String
+    public var kind: ImportProblemKind
+    public var detail: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(path: String, kind: ImportProblemKind, detail: String) {
+        self.path = path
+        self.kind = kind
+        self.detail = detail
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension ImportProblem: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeImportProblem: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ImportProblem {
+        return
+            try ImportProblem(
+                path: FfiConverterString.read(from: &buf), 
+                kind: FfiConverterTypeImportProblemKind.read(from: &buf), 
+                detail: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ImportProblem, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.path, into: &buf)
+        FfiConverterTypeImportProblemKind.write(value.kind, into: &buf)
+        FfiConverterString.write(value.detail, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeImportProblem_lift(_ buf: RustBuffer) throws -> ImportProblem {
+    return try FfiConverterTypeImportProblem.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeImportProblem_lower(_ value: ImportProblem) -> RustBuffer {
+    return FfiConverterTypeImportProblem.lower(value)
+}
+
+
+/**
+ * One inventoried source and how far its ingest has got.
+ */
+public struct ImportSource: Equatable, Hashable {
+    public var ordinal: UInt64
+    public var path: String
+    public var mailbox: String
+    public var kind: ImportSourceKind
+    public var messages: UInt64
+    public var bytes: UInt64
+    public var sha256: String
+    /**
+     * A `>>From ` line exists, so `confirm_import` must choose a variant.
+     */
+    public var needsVariant: Bool
+    public var variant: MboxVariant?
+    public var messagesDone: UInt64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(ordinal: UInt64, path: String, mailbox: String, kind: ImportSourceKind, messages: UInt64, bytes: UInt64, sha256: String, 
+        /**
+         * A `>>From ` line exists, so `confirm_import` must choose a variant.
+         */needsVariant: Bool, variant: MboxVariant?, messagesDone: UInt64) {
+        self.ordinal = ordinal
+        self.path = path
+        self.mailbox = mailbox
+        self.kind = kind
+        self.messages = messages
+        self.bytes = bytes
+        self.sha256 = sha256
+        self.needsVariant = needsVariant
+        self.variant = variant
+        self.messagesDone = messagesDone
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension ImportSource: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeImportSource: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ImportSource {
+        return
+            try ImportSource(
+                ordinal: FfiConverterUInt64.read(from: &buf), 
+                path: FfiConverterString.read(from: &buf), 
+                mailbox: FfiConverterString.read(from: &buf), 
+                kind: FfiConverterTypeImportSourceKind.read(from: &buf), 
+                messages: FfiConverterUInt64.read(from: &buf), 
+                bytes: FfiConverterUInt64.read(from: &buf), 
+                sha256: FfiConverterString.read(from: &buf), 
+                needsVariant: FfiConverterBool.read(from: &buf), 
+                variant: FfiConverterOptionTypeMboxVariant.read(from: &buf), 
+                messagesDone: FfiConverterUInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ImportSource, into buf: inout [UInt8]) {
+        FfiConverterUInt64.write(value.ordinal, into: &buf)
+        FfiConverterString.write(value.path, into: &buf)
+        FfiConverterString.write(value.mailbox, into: &buf)
+        FfiConverterTypeImportSourceKind.write(value.kind, into: &buf)
+        FfiConverterUInt64.write(value.messages, into: &buf)
+        FfiConverterUInt64.write(value.bytes, into: &buf)
+        FfiConverterString.write(value.sha256, into: &buf)
+        FfiConverterBool.write(value.needsVariant, into: &buf)
+        FfiConverterOptionTypeMboxVariant.write(value.variant, into: &buf)
+        FfiConverterUInt64.write(value.messagesDone, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeImportSource_lift(_ buf: RustBuffer) throws -> ImportSource {
+    return try FfiConverterTypeImportSource.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeImportSource_lower(_ value: ImportSource) -> RustBuffer {
+    return FfiConverterTypeImportSource.lower(value)
+}
+
+
+/**
  * What `start_import` answers: its receipt and the job it names.
  */
 public struct ImportStarted: Equatable, Hashable {
@@ -1610,6 +1893,87 @@ public func FfiConverterTypeImportStarted_lift(_ buf: RustBuffer) throws -> Impo
 #endif
 public func FfiConverterTypeImportStarted_lower(_ value: ImportStarted) -> RustBuffer {
     return FfiConverterTypeImportStarted.lower(value)
+}
+
+
+/**
+ * Running totals (spec/09 "Report").
+ */
+public struct ImportTotals: Equatable, Hashable {
+    public var processed: UInt64
+    public var imported: UInt64
+    public var duplicates: UInt64
+    public var rejected: UInt64
+    public var bytesStored: UInt64
+    public var readFromHeaders: UInt64
+    public var readDefault: UInt64
+    public var flagsIncomplete: UInt64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(processed: UInt64, imported: UInt64, duplicates: UInt64, rejected: UInt64, bytesStored: UInt64, readFromHeaders: UInt64, readDefault: UInt64, flagsIncomplete: UInt64) {
+        self.processed = processed
+        self.imported = imported
+        self.duplicates = duplicates
+        self.rejected = rejected
+        self.bytesStored = bytesStored
+        self.readFromHeaders = readFromHeaders
+        self.readDefault = readDefault
+        self.flagsIncomplete = flagsIncomplete
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension ImportTotals: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeImportTotals: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ImportTotals {
+        return
+            try ImportTotals(
+                processed: FfiConverterUInt64.read(from: &buf), 
+                imported: FfiConverterUInt64.read(from: &buf), 
+                duplicates: FfiConverterUInt64.read(from: &buf), 
+                rejected: FfiConverterUInt64.read(from: &buf), 
+                bytesStored: FfiConverterUInt64.read(from: &buf), 
+                readFromHeaders: FfiConverterUInt64.read(from: &buf), 
+                readDefault: FfiConverterUInt64.read(from: &buf), 
+                flagsIncomplete: FfiConverterUInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ImportTotals, into buf: inout [UInt8]) {
+        FfiConverterUInt64.write(value.processed, into: &buf)
+        FfiConverterUInt64.write(value.imported, into: &buf)
+        FfiConverterUInt64.write(value.duplicates, into: &buf)
+        FfiConverterUInt64.write(value.rejected, into: &buf)
+        FfiConverterUInt64.write(value.bytesStored, into: &buf)
+        FfiConverterUInt64.write(value.readFromHeaders, into: &buf)
+        FfiConverterUInt64.write(value.readDefault, into: &buf)
+        FfiConverterUInt64.write(value.flagsIncomplete, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeImportTotals_lift(_ buf: RustBuffer) throws -> ImportTotals {
+    return try FfiConverterTypeImportTotals.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeImportTotals_lower(_ value: ImportTotals) -> RustBuffer {
+    return FfiConverterTypeImportTotals.lower(value)
 }
 
 
@@ -2720,6 +3084,255 @@ public func FfiConverterTypeCount_lower(_ value: Count) -> RustBuffer {
 
 
 /**
+ * An import job's state (spec/02 `import_jobs`).
+ */
+
+public enum ImportJobState: Equatable, Hashable {
+    
+    case inventory
+    case awaitingConfirmation
+    case running
+    case completed
+    case cancelled
+    case failed
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension ImportJobState: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeImportJobState: FfiConverterRustBuffer {
+    typealias SwiftType = ImportJobState
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ImportJobState {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .inventory
+        
+        case 2: return .awaitingConfirmation
+        
+        case 3: return .running
+        
+        case 4: return .completed
+        
+        case 5: return .cancelled
+        
+        case 6: return .failed
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: ImportJobState, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .inventory:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .awaitingConfirmation:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .running:
+            writeInt(&buf, Int32(3))
+        
+        
+        case .completed:
+            writeInt(&buf, Int32(4))
+        
+        
+        case .cancelled:
+            writeInt(&buf, Int32(5))
+        
+        
+        case .failed:
+            writeInt(&buf, Int32(6))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeImportJobState_lift(_ buf: RustBuffer) throws -> ImportJobState {
+    return try FfiConverterTypeImportJobState.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeImportJobState_lower(_ value: ImportJobState) -> RustBuffer {
+    return FfiConverterTypeImportJobState.lower(value)
+}
+
+
+
+/**
+ * Why a chosen or discovered path did not become a source (spec/09).
+ */
+
+public enum ImportProblemKind: Equatable, Hashable {
+    
+    case inaccessible
+    case unsupported
+    case nonUtf8
+    case failed
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension ImportProblemKind: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeImportProblemKind: FfiConverterRustBuffer {
+    typealias SwiftType = ImportProblemKind
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ImportProblemKind {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .inaccessible
+        
+        case 2: return .unsupported
+        
+        case 3: return .nonUtf8
+        
+        case 4: return .failed
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: ImportProblemKind, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .inaccessible:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .unsupported:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .nonUtf8:
+            writeInt(&buf, Int32(3))
+        
+        
+        case .failed:
+            writeInt(&buf, Int32(4))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeImportProblemKind_lift(_ buf: RustBuffer) throws -> ImportProblemKind {
+    return try FfiConverterTypeImportProblemKind.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeImportProblemKind_lower(_ value: ImportProblemKind) -> RustBuffer {
+    return FfiConverterTypeImportProblemKind.lower(value)
+}
+
+
+
+/**
+ * What a source holds.
+ */
+
+public enum ImportSourceKind: Equatable, Hashable {
+    
+    case mbox
+    case eml
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension ImportSourceKind: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeImportSourceKind: FfiConverterRustBuffer {
+    typealias SwiftType = ImportSourceKind
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ImportSourceKind {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .mbox
+        
+        case 2: return .eml
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: ImportSourceKind, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .mbox:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .eml:
+            writeInt(&buf, Int32(2))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeImportSourceKind_lift(_ buf: RustBuffer) throws -> ImportSourceKind {
+    return try FfiConverterTypeImportSourceKind.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeImportSourceKind_lower(_ value: ImportSourceKind) -> RustBuffer {
+    return FfiConverterTypeImportSourceKind.lower(value)
+}
+
+
+
+/**
  * Where an import lands. The pilot has only the local archive (spec/09).
  */
 
@@ -3282,6 +3895,30 @@ fileprivate struct FfiConverterOptionTypeMailboxRole: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionTypeMboxVariant: FfiConverterRustBuffer {
+    typealias SwiftType = MboxVariant?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeMboxVariant.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeMboxVariant.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceInt64: FfiConverterRustBuffer {
     typealias SwiftType = [Int64]
 
@@ -3349,6 +3986,56 @@ fileprivate struct FfiConverterSequenceTypeAccount: FfiConverterRustBuffer {
         seq.reserveCapacity(Int(len))
         for _ in 0 ..< len {
             seq.append(try FfiConverterTypeAccount.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeImportProblem: FfiConverterRustBuffer {
+    typealias SwiftType = [ImportProblem]
+
+    public static func write(_ value: [ImportProblem], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeImportProblem.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [ImportProblem] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [ImportProblem]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeImportProblem.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeImportSource: FfiConverterRustBuffer {
+    typealias SwiftType = [ImportSource]
+
+    public static func write(_ value: [ImportSource], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeImportSource.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [ImportSource] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [ImportSource]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeImportSource.read(from: &buf))
         }
         return seq
     }
@@ -3570,6 +4257,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_core_confirm_import() != 51860) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_import_job() != 61512) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_core_start_import() != 35998) {

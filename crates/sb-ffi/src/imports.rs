@@ -1,9 +1,11 @@
-//! The import commands over FFI (spec/07 "Commands", spec/09 "Job
-//! lifecycle"): `start_import`, `confirm_import` with one variant
-//! choice per ambiguous source, and `cancel_job`. Each is a command
-//! under an idempotency key the shell made: the token counts only
-//! until the command holds the core (`Core::command`). Paths cross as
-//! UTF-8 strings (spec/07 "DTOs").
+//! Imports over FFI (spec/07 "Commands", spec/09 "Job lifecycle"):
+//! `start_import`, `confirm_import` with one variant choice per
+//! ambiguous source, and `cancel_job` — each a command under an
+//! idempotency key the shell made, so the token counts only until the
+//! command holds the core (`Core::command`) — and the `import_job`
+//! query with the job's vocabulary. Paths cross as UTF-8 strings
+//! (spec/07 "DTOs"); one that isn't UTF-8 is spelled lossily, since
+//! the shell only shows it.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -30,6 +32,181 @@ impl MboxVariant {
         match self {
             Self::Mboxo => sb_service::MboxVariant::Mboxo,
             Self::Mboxrd => sb_service::MboxVariant::Mboxrd,
+        }
+    }
+
+    fn from_service(variant: sb_service::MboxVariant) -> Self {
+        match variant {
+            sb_service::MboxVariant::Mboxo => Self::Mboxo,
+            sb_service::MboxVariant::Mboxrd => Self::Mboxrd,
+        }
+    }
+}
+
+/// An import job's state (spec/02 `import_jobs`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum ImportJobState {
+    Inventory,
+    AwaitingConfirmation,
+    Running,
+    Completed,
+    Cancelled,
+    Failed,
+}
+
+impl ImportJobState {
+    fn from_service(state: sb_service::ImportJobState) -> Self {
+        match state {
+            sb_service::ImportJobState::Inventory => Self::Inventory,
+            sb_service::ImportJobState::AwaitingConfirmation => Self::AwaitingConfirmation,
+            sb_service::ImportJobState::Running => Self::Running,
+            sb_service::ImportJobState::Completed => Self::Completed,
+            sb_service::ImportJobState::Cancelled => Self::Cancelled,
+            sb_service::ImportJobState::Failed => Self::Failed,
+        }
+    }
+}
+
+/// What a source holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum ImportSourceKind {
+    Mbox,
+    Eml,
+}
+
+/// Why a chosen or discovered path did not become a source (spec/09).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum ImportProblemKind {
+    Inaccessible,
+    Unsupported,
+    NonUtf8,
+    Failed,
+}
+
+/// One inventoried source and how far its ingest has got.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct ImportSource {
+    pub ordinal: u64,
+    pub path: String,
+    pub mailbox: String,
+    pub kind: ImportSourceKind,
+    pub messages: u64,
+    pub bytes: u64,
+    pub sha256: String,
+    /// A `>>From ` line exists, so `confirm_import` must choose a variant.
+    pub needs_variant: bool,
+    pub variant: Option<MboxVariant>,
+    pub messages_done: u64,
+}
+
+impl ImportSource {
+    fn from_service(source: sb_service::ImportSource) -> Self {
+        Self {
+            ordinal: source.ordinal,
+            path: source.path.to_string_lossy().into_owned(),
+            mailbox: source.mailbox,
+            kind: match source.kind {
+                sb_service::ImportSourceKind::Mbox => ImportSourceKind::Mbox,
+                sb_service::ImportSourceKind::Eml => ImportSourceKind::Eml,
+            },
+            messages: source.messages,
+            bytes: source.bytes,
+            sha256: source.sha256,
+            needs_variant: source.needs_variant,
+            variant: source.variant.map(MboxVariant::from_service),
+            messages_done: source.messages_done,
+        }
+    }
+}
+
+/// A path that did not become a source, and why.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct ImportProblem {
+    pub path: String,
+    pub kind: ImportProblemKind,
+    pub detail: String,
+}
+
+impl ImportProblem {
+    fn from_service(problem: sb_service::ImportProblem) -> Self {
+        Self {
+            path: problem.path.to_string_lossy().into_owned(),
+            kind: match problem.kind {
+                sb_service::ImportProblemKind::Inaccessible => ImportProblemKind::Inaccessible,
+                sb_service::ImportProblemKind::Unsupported => ImportProblemKind::Unsupported,
+                sb_service::ImportProblemKind::NonUtf8 => ImportProblemKind::NonUtf8,
+                sb_service::ImportProblemKind::Failed => ImportProblemKind::Failed,
+            },
+            detail: problem.detail,
+        }
+    }
+}
+
+/// Running totals (spec/09 "Report").
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
+pub struct ImportTotals {
+    pub processed: u64,
+    pub imported: u64,
+    pub duplicates: u64,
+    pub rejected: u64,
+    pub bytes_stored: u64,
+    pub read_from_headers: u64,
+    pub read_default: u64,
+    pub flags_incomplete: u64,
+}
+
+impl ImportTotals {
+    fn from_service(totals: sb_service::ImportTotals) -> Self {
+        Self {
+            processed: totals.processed,
+            imported: totals.imported,
+            duplicates: totals.duplicates,
+            rejected: totals.rejected,
+            bytes_stored: totals.bytes_stored,
+            read_from_headers: totals.read_from_headers,
+            read_default: totals.read_default,
+            flags_incomplete: totals.flags_incomplete,
+        }
+    }
+}
+
+/// One import job as `import_job` reports it (spec/07).
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct ImportJob {
+    pub id: String,
+    pub state: ImportJobState,
+    /// The inventory in ordinal order; empty until it finishes.
+    pub sources: Vec<ImportSource>,
+    /// The first problems; `problem_count` counts them all.
+    pub problems: Vec<ImportProblem>,
+    pub problem_count: u64,
+    pub totals: ImportTotals,
+    pub failure: Option<String>,
+    /// The report's path, once the job has finished.
+    pub report_path: Option<String>,
+}
+
+impl ImportJob {
+    fn from_service(job: sb_service::ImportJob) -> Self {
+        Self {
+            id: job.id,
+            state: ImportJobState::from_service(job.state),
+            sources: job
+                .sources
+                .into_iter()
+                .map(ImportSource::from_service)
+                .collect(),
+            problems: job
+                .problems
+                .into_iter()
+                .map(ImportProblem::from_service)
+                .collect(),
+            problem_count: job.problem_count,
+            totals: ImportTotals::from_service(job.totals),
+            failure: job.failure,
+            report_path: job
+                .report_path
+                .map(|path| path.to_string_lossy().into_owned()),
         }
     }
 }
@@ -117,6 +294,20 @@ impl Core {
             .await?;
         Ok(Receipt::from_service(&receipt))
     }
+
+    /// `import_job(job_id)` (spec/07): state, inventory, problems and
+    /// counts. A query: the token races every wait. An unknown job is
+    /// `NotFound`.
+    pub async fn import_job(
+        &self,
+        token: Arc<CancelToken>,
+        job_id: String,
+    ) -> Result<ImportJob, CoreError> {
+        let job = self
+            .query(&token, async |core| core.import_job(&job_id).await)
+            .await?;
+        Ok(ImportJob::from_service(job))
+    }
 }
 
 #[cfg(test)]
@@ -153,24 +344,24 @@ mod tests {
         path.to_string_lossy().into_owned()
     }
 
-    /// The job's state through the service: `import_job` crosses the
-    /// FFI only in M1.4g.
-    fn state(core: &Core, job_id: &str) -> sb_service::ImportJobState {
-        sb_test_support::block_on(async {
-            let guard = core.service.read().await;
-            guard
-                .as_ref()
-                .unwrap()
-                .import_job(job_id)
-                .await
-                .unwrap()
-                .state
-        })
+    fn job(core: &Core, job_id: &str) -> ImportJob {
+        sb_test_support::block_on(core.import_job(token(), job_id.to_owned())).unwrap()
     }
 
-    fn wait(core: &Core, job_id: &str, done: impl Fn(sb_service::ImportJobState) -> bool) {
+    fn finished(state: ImportJobState) -> bool {
+        matches!(
+            state,
+            ImportJobState::Completed | ImportJobState::Cancelled | ImportJobState::Failed
+        )
+    }
+
+    fn wait(core: &Core, job_id: &str, done: impl Fn(ImportJobState) -> bool) -> ImportJob {
         let deadline = Instant::now() + PATIENCE;
-        while !done(state(core, job_id)) {
+        loop {
+            let job = job(core, job_id);
+            if done(job.state) {
+                return job;
+            }
             assert!(Instant::now() < deadline, "the job never settled");
             std::thread::sleep(POLL);
         }
@@ -186,12 +377,12 @@ mod tests {
         .unwrap()
     }
 
-    /// An import over the exported commands: a repeated key names the
-    /// first job, a confirmation must choose the ambiguous source's
-    /// variant, the job completes, and a finished job can't be
-    /// cancelled.
+    /// An import over the exported surface: a repeated key names the
+    /// first job, the inventory crosses before confirmation, the
+    /// ambiguous source needs its variant, the job completes with its
+    /// totals, and a finished job can't be cancelled.
     #[test]
-    fn an_import_runs_through_the_exported_commands() {
+    fn an_import_runs_through_the_exported_surface() {
         let scratch = ScratchDir::new("ffi-import");
         let core = scratch_core(&scratch);
         let path = mbox(scratch.path());
@@ -199,19 +390,29 @@ mod tests {
         let started = start(&core, "import-1", &path);
         assert_eq!(started.receipt.command, "start_import");
         assert_eq!(start(&core, "import-1", &path).job_id, started.job_id);
-        let job = started.job_id;
-        wait(&core, &job, |state| {
-            state != sb_service::ImportJobState::Inventory
-        });
-        assert_eq!(
-            state(&core, &job),
-            sb_service::ImportJobState::AwaitingConfirmation
-        );
+        let id = started.job_id;
+
+        let waiting = wait(&core, &id, |state| state != ImportJobState::Inventory);
+        assert_eq!(waiting.id, id);
+        assert_eq!(waiting.state, ImportJobState::AwaitingConfirmation);
+        assert_eq!(waiting.report_path, None);
+        let [source] = waiting.sources.as_slice() else {
+            panic!("one source: {:?}", waiting.sources);
+        };
+        assert_eq!(source.ordinal, 0);
+        assert_eq!(source.path, path);
+        assert_eq!(source.mailbox, "Inbox");
+        assert_eq!(source.kind, ImportSourceKind::Mbox);
+        assert_eq!(source.messages, 1);
+        assert_eq!(source.bytes, AMBIGUOUS.len() as u64);
+        assert!(source.needs_variant);
+        assert_eq!(source.variant, None);
+        assert_eq!(source.messages_done, 0);
 
         let err = sb_test_support::block_on(core.confirm_import(
             token(),
             "confirm-0".to_owned(),
-            job.clone(),
+            id.clone(),
             Vec::new(),
         ))
         .unwrap_err();
@@ -224,14 +425,20 @@ mod tests {
         sb_test_support::block_on(core.confirm_import(
             token(),
             "confirm-1".to_owned(),
-            job.clone(),
+            id.clone(),
             vec![choice],
         ))
         .unwrap();
-        wait(&core, &job, sb_service::ImportJobState::is_finished);
-        assert_eq!(state(&core, &job), sb_service::ImportJobState::Completed);
+        let done = wait(&core, &id, finished);
+        assert_eq!(done.state, ImportJobState::Completed);
+        assert_eq!(done.sources[0].variant, Some(MboxVariant::Mboxrd));
+        assert_eq!(done.sources[0].messages_done, 1);
+        assert_eq!(done.totals.processed, 1);
+        assert_eq!(done.totals.imported, 1);
+        assert_eq!(done.problem_count, 0);
+        assert_eq!(done.failure, None);
 
-        let err = sb_test_support::block_on(core.cancel_job(token(), "cancel-1".to_owned(), job))
+        let err = sb_test_support::block_on(core.cancel_job(token(), "cancel-1".to_owned(), id))
             .unwrap_err();
         assert!(matches!(err, CoreError::Conflict { .. }), "{err}");
 
@@ -257,15 +464,38 @@ mod tests {
         .unwrap_err();
         assert!(matches!(err, CoreError::Cancelled));
 
-        let job = start(&core, "import-2", &path).job_id;
-        wait(&core, &job, |state| {
-            state != sb_service::ImportJobState::Inventory
-        });
+        let id = start(&core, "import-2", &path).job_id;
+        wait(&core, &id, |state| state != ImportJobState::Inventory);
         let receipt =
-            sb_test_support::block_on(core.cancel_job(token(), "cancel-1".to_owned(), job.clone()))
+            sb_test_support::block_on(core.cancel_job(token(), "cancel-1".to_owned(), id.clone()))
                 .unwrap();
         assert_eq!(receipt.command, "cancel_job");
-        assert_eq!(state(&core, &job), sb_service::ImportJobState::Cancelled);
+        assert_eq!(job(&core, &id).state, ImportJobState::Cancelled);
+
+        sb_test_support::block_on(core.shutdown());
+    }
+
+    /// A path that can't be read is a problem, listed and counted; an
+    /// unknown job is `NotFound`.
+    #[test]
+    fn problems_cross_with_the_job() {
+        let scratch = ScratchDir::new("ffi-import-problems");
+        let core = scratch_core(&scratch);
+        let missing = scratch.path().join("missing.mbox");
+        let missing = missing.to_string_lossy().into_owned();
+
+        let id = start(&core, "import-1", &missing).job_id;
+        let job = wait(&core, &id, |state| state != ImportJobState::Inventory);
+        assert_eq!(job.problem_count, 1);
+        let [problem] = job.problems.as_slice() else {
+            panic!("one problem: {:?}", job.problems);
+        };
+        assert_eq!(problem.path, missing);
+        assert_eq!(problem.kind, ImportProblemKind::Inaccessible);
+
+        let err = sb_test_support::block_on(core.import_job(token(), "no-such-job".to_owned()))
+            .unwrap_err();
+        assert!(matches!(err, CoreError::NotFound { .. }), "{err}");
 
         sb_test_support::block_on(core.shutdown());
     }

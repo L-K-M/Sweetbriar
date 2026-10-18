@@ -152,6 +152,16 @@ public final class CoreBridge: Sendable {
         return Receipt(receipt)
     }
 
+    /// `import_job(job_id)` (spec/07): state, inventory, problems and
+    /// counts. An unknown job is `notFound`.
+    public func importJob(id: String) async throws -> ImportJob {
+        let token = SweetbriarCore.CancelToken()
+        let job = try await Self.withCancellation(token: token) {
+            try await self.core.importJob(token: token, jobId: id)
+        }
+        return ImportJob(job)
+    }
+
     /// `accounts()` (spec/07): every account, by sort order then id.
     public func accounts() async throws -> [Account] {
         let token = SweetbriarCore.CancelToken()
@@ -369,6 +379,107 @@ extension VariantChoice {
             variant = .mboxrd
         }
         return SweetbriarCore.VariantChoice(ordinal: ordinal, variant: variant)
+    }
+}
+
+extension MboxVariant {
+    /// Map the generated enum case by case.
+    fileprivate init(_ generated: SweetbriarCore.MboxVariant) {
+        switch generated {
+        case .mboxo:
+            self = .mboxo
+        case .mboxrd:
+            self = .mboxrd
+        }
+    }
+}
+
+extension ImportJobState {
+    /// Map the generated enum case by case.
+    fileprivate init(_ generated: SweetbriarCore.ImportJobState) {
+        switch generated {
+        case .inventory:
+            self = .inventory
+        case .awaitingConfirmation:
+            self = .awaitingConfirmation
+        case .running:
+            self = .running
+        case .completed:
+            self = .completed
+        case .cancelled:
+            self = .cancelled
+        case .failed:
+            self = .failed
+        }
+    }
+}
+
+extension ImportSource {
+    /// Map the generated record field by field.
+    fileprivate init(_ generated: SweetbriarCore.ImportSource) {
+        let kind: ImportSourceKind
+        switch generated.kind {
+        case .mbox:
+            kind = .mbox
+        case .eml:
+            kind = .eml
+        }
+        self.init(
+            ordinal: generated.ordinal,
+            path: generated.path,
+            mailbox: generated.mailbox,
+            kind: kind,
+            messages: generated.messages,
+            bytes: generated.bytes,
+            sha256: generated.sha256,
+            needsVariant: generated.needsVariant,
+            variant: generated.variant.map(MboxVariant.init),
+            messagesDone: generated.messagesDone
+        )
+    }
+}
+
+extension ImportProblem {
+    /// Map the generated record field by field.
+    fileprivate init(_ generated: SweetbriarCore.ImportProblem) {
+        let kind: ImportProblemKind
+        switch generated.kind {
+        case .inaccessible:
+            kind = .inaccessible
+        case .unsupported:
+            kind = .unsupported
+        case .nonUtf8:
+            kind = .nonUtf8
+        case .failed:
+            kind = .failed
+        }
+        self.init(path: generated.path, kind: kind, detail: generated.detail)
+    }
+}
+
+extension ImportJob {
+    /// Map the generated record field by field.
+    fileprivate init(_ generated: SweetbriarCore.ImportJob) {
+        let totals = generated.totals
+        self.init(
+            id: generated.id,
+            state: ImportJobState(generated.state),
+            sources: generated.sources.map(ImportSource.init),
+            problems: generated.problems.map(ImportProblem.init),
+            problemCount: generated.problemCount,
+            totals: ImportTotals(
+                processed: totals.processed,
+                imported: totals.imported,
+                duplicates: totals.duplicates,
+                rejected: totals.rejected,
+                bytesStored: totals.bytesStored,
+                readFromHeaders: totals.readFromHeaders,
+                readDefault: totals.readDefault,
+                flagsIncomplete: totals.flagsIncomplete
+            ),
+            failure: generated.failure,
+            reportPath: generated.reportPath
+        )
     }
 }
 
