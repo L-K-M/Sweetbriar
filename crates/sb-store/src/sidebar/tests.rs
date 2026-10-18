@@ -72,7 +72,9 @@ fn accounts_list_in_sort_order() {
         "INSERT INTO accounts (account_id, kind, provider, display_name, state, state_reason,
          sort_order, created_at)
          VALUES ('00000000-0000-4000-8000-0000000000b0', 'imap', 'proton_bridge', 'Work',
-                 'needs_attention', 'Bridge is not running', -1, 0)",
+                 'needs_attention', 'Bridge is not running', -1, 0),
+                ('00000000-0000-4000-8000-0000000000a0', 'imap', 'proton_bridge', 'Home',
+                 'paused', NULL, -1, 0)",
         [],
     )
     .unwrap();
@@ -81,6 +83,15 @@ fn accounts_list_in_sort_order() {
     assert_eq!(
         listed,
         vec![
+            // Equal sort orders fall back to the id.
+            StoredAccount {
+                account_id: "00000000-0000-4000-8000-0000000000a0".to_owned(),
+                kind: AccountKind::Imap,
+                display_name: "Home".to_owned(),
+                state: AccountState::Paused,
+                state_reason: None,
+                sort_order: -1,
+            },
             StoredAccount {
                 account_id: "00000000-0000-4000-8000-0000000000b0".to_owned(),
                 kind: AccountKind::Imap,
@@ -165,10 +176,25 @@ fn mailboxes_carry_counts_and_their_generation() {
 }
 
 /// An unknown account has no mailbox list; a known one without
-/// mailboxes has an empty one.
+/// mailboxes has an empty one, even when another account has some.
 #[test]
 fn unknown_accounts_have_no_mailbox_list() {
     let (mut conn, archive) = store();
+    conn.execute(
+        "INSERT INTO accounts (account_id, kind, provider, display_name, state, sort_order,
+         created_at)
+         VALUES ('00000000-0000-4000-8000-0000000000b0', 'imap', 'proton_bridge', 'Work',
+                 'active', 1, 0)",
+        [],
+    )
+    .unwrap();
+    mailbox(
+        &conn,
+        "00000000-0000-4000-8000-0000000000b0",
+        "INBOX",
+        "folder",
+        Some("inbox"),
+    );
     let tx = conn.transaction().unwrap();
     assert_eq!(mailboxes(&tx, "no-such-account").unwrap(), None);
     assert!(
