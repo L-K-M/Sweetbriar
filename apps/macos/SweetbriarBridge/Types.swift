@@ -43,6 +43,39 @@ public struct Receipt: Sendable, Equatable {
     }
 }
 
+/// Where an import lands. The pilot has only the local archive (spec/09).
+public enum ImportTarget: Sendable, Equatable {
+    case localArchive
+}
+
+/// How an mbox escapes `From ` lines (spec/09).
+public enum MboxVariant: Sendable, Equatable {
+    case mboxo
+    case mboxrd
+}
+
+/// The variant chosen for one ambiguous source, by inventory ordinal.
+public struct VariantChoice: Sendable, Equatable {
+    public var ordinal: UInt64
+    public var variant: MboxVariant
+
+    public init(ordinal: UInt64, variant: MboxVariant) {
+        self.ordinal = ordinal
+        self.variant = variant
+    }
+}
+
+/// What `startImport` answers: its receipt and the job it names.
+public struct ImportStarted: Sendable, Equatable {
+    public var receipt: Receipt
+    public var jobId: String
+
+    public init(receipt: Receipt, jobId: String) {
+        self.receipt = receipt
+        self.jobId = jobId
+    }
+}
+
 /// How an account reaches its mail.
 public enum AccountKind: Sendable, Equatable {
     case local

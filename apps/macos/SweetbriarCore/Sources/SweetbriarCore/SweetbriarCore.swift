@@ -785,6 +785,27 @@ public protocol CoreProtocol: AnyObject, Sendable {
     func shutdown() async 
     
     /**
+     * `cancel_job(id)` (spec/07, 09): the job is cancelled once this
+     * returns; committed batches stay imported. A finished job is
+     * `Conflict`.
+     */
+    func cancelJob(token: CancelToken, idempotencyKey: String, jobId: String) async throws  -> Receipt
+    
+    /**
+     * `confirm_import(job_id, variants)` (spec/07, 09): a variant for
+     * exactly the sources that need one; then ingest. A missing,
+     * extra or repeated choice is `InvalidInput`.
+     */
+    func confirmImport(token: CancelToken, idempotencyKey: String, jobId: String, variants: [VariantChoice]) async throws  -> Receipt
+    
+    /**
+     * `start_import(paths, target)` (spec/07): record the job and
+     * inventory it in the background. A repeated key names the first
+     * job and starts nothing.
+     */
+    func startImport(token: CancelToken, idempotencyKey: String, paths: [String], target: ImportTarget) async throws  -> ImportStarted
+    
+    /**
      * `accounts()` (spec/07): every account, by sort order then id.
      */
     func accounts(token: CancelToken) async throws  -> [Account]
@@ -972,6 +993,69 @@ open func shutdown()async   {
             liftFunc: { $0 },
             errorHandler: nil
             
+        )
+}
+    
+    /**
+     * `cancel_job(id)` (spec/07, 09): the job is cancelled once this
+     * returns; committed batches stay imported. A finished job is
+     * `Conflict`.
+     */
+open func cancelJob(token: CancelToken, idempotencyKey: String, jobId: String)async throws  -> Receipt  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_cancel_job(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterString.lower(idempotencyKey),FfiConverterString.lower(jobId)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeReceipt_lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * `confirm_import(job_id, variants)` (spec/07, 09): a variant for
+     * exactly the sources that need one; then ingest. A missing,
+     * extra or repeated choice is `InvalidInput`.
+     */
+open func confirmImport(token: CancelToken, idempotencyKey: String, jobId: String, variants: [VariantChoice])async throws  -> Receipt  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_confirm_import(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterString.lower(idempotencyKey),FfiConverterString.lower(jobId),FfiConverterSequenceTypeVariantChoice.lower(variants)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeReceipt_lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * `start_import(paths, target)` (spec/07): record the job and
+     * inventory it in the background. A repeated key names the first
+     * job and starts nothing.
+     */
+open func startImport(token: CancelToken, idempotencyKey: String, paths: [String], target: ImportTarget)async throws  -> ImportStarted  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_start_import(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterString.lower(idempotencyKey),FfiConverterSequenceString.lower(paths),FfiConverterTypeImportTarget_lower(target)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeImportStarted_lift,
+            errorHandler: FfiConverterTypeCoreError_lift
         )
 }
     
@@ -1473,6 +1557,63 @@ public func FfiConverterTypeCoreConfig_lower(_ value: CoreConfig) -> RustBuffer 
 
 
 /**
+ * What `start_import` answers: its receipt and the job it names.
+ */
+public struct ImportStarted: Equatable, Hashable {
+    public var receipt: Receipt
+    public var jobId: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(receipt: Receipt, jobId: String) {
+        self.receipt = receipt
+        self.jobId = jobId
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension ImportStarted: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeImportStarted: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ImportStarted {
+        return
+            try ImportStarted(
+                receipt: FfiConverterTypeReceipt.read(from: &buf), 
+                jobId: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ImportStarted, into buf: inout [UInt8]) {
+        FfiConverterTypeReceipt.write(value.receipt, into: &buf)
+        FfiConverterString.write(value.jobId, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeImportStarted_lift(_ buf: RustBuffer) throws -> ImportStarted {
+    return try FfiConverterTypeImportStarted.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeImportStarted_lower(_ value: ImportStarted) -> RustBuffer {
+    return FfiConverterTypeImportStarted.lower(value)
+}
+
+
+/**
  * One list row (spec/07): display fields only — no MIME tree, no
  * body.
  */
@@ -1851,6 +1992,63 @@ public func FfiConverterTypeSetting_lift(_ buf: RustBuffer) throws -> Setting {
 #endif
 public func FfiConverterTypeSetting_lower(_ value: Setting) -> RustBuffer {
     return FfiConverterTypeSetting.lower(value)
+}
+
+
+/**
+ * The variant chosen for one ambiguous source, by inventory ordinal.
+ */
+public struct VariantChoice: Equatable, Hashable {
+    public var ordinal: UInt64
+    public var variant: MboxVariant
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(ordinal: UInt64, variant: MboxVariant) {
+        self.ordinal = ordinal
+        self.variant = variant
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension VariantChoice: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeVariantChoice: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> VariantChoice {
+        return
+            try VariantChoice(
+                ordinal: FfiConverterUInt64.read(from: &buf), 
+                variant: FfiConverterTypeMboxVariant.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: VariantChoice, into buf: inout [UInt8]) {
+        FfiConverterUInt64.write(value.ordinal, into: &buf)
+        FfiConverterTypeMboxVariant.write(value.variant, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeVariantChoice_lift(_ buf: RustBuffer) throws -> VariantChoice {
+    return try FfiConverterTypeVariantChoice.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeVariantChoice_lower(_ value: VariantChoice) -> RustBuffer {
+    return FfiConverterTypeVariantChoice.lower(value)
 }
 
 
@@ -2522,6 +2720,68 @@ public func FfiConverterTypeCount_lower(_ value: Count) -> RustBuffer {
 
 
 /**
+ * Where an import lands. The pilot has only the local archive (spec/09).
+ */
+
+public enum ImportTarget: Equatable, Hashable {
+    
+    case localArchive
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension ImportTarget: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeImportTarget: FfiConverterRustBuffer {
+    typealias SwiftType = ImportTarget
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ImportTarget {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .localArchive
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: ImportTarget, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .localArchive:
+            writeInt(&buf, Int32(1))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeImportTarget_lift(_ buf: RustBuffer) throws -> ImportTarget {
+    return try FfiConverterTypeImportTarget.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeImportTarget_lower(_ value: ImportTarget) -> RustBuffer {
+    return FfiConverterTypeImportTarget.lower(value)
+}
+
+
+
+/**
  * What a mailbox is.
  */
 
@@ -2707,6 +2967,75 @@ public func FfiConverterTypeMailboxRole_lift(_ buf: RustBuffer) throws -> Mailbo
 #endif
 public func FfiConverterTypeMailboxRole_lower(_ value: MailboxRole) -> RustBuffer {
     return FfiConverterTypeMailboxRole.lower(value)
+}
+
+
+
+/**
+ * How an mbox escapes `From ` lines (spec/09).
+ */
+
+public enum MboxVariant: Equatable, Hashable {
+    
+    case mboxo
+    case mboxrd
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension MboxVariant: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeMboxVariant: FfiConverterRustBuffer {
+    typealias SwiftType = MboxVariant
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> MboxVariant {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .mboxo
+        
+        case 2: return .mboxrd
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: MboxVariant, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .mboxo:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .mboxrd:
+            writeInt(&buf, Int32(2))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMboxVariant_lift(_ buf: RustBuffer) throws -> MboxVariant {
+    return try FfiConverterTypeMboxVariant.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMboxVariant_lower(_ value: MboxVariant) -> RustBuffer {
+    return FfiConverterTypeMboxVariant.lower(value)
 }
 
 
@@ -3099,6 +3428,31 @@ fileprivate struct FfiConverterSequenceTypeSetting: FfiConverterRustBuffer {
         return seq
     }
 }
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeVariantChoice: FfiConverterRustBuffer {
+    typealias SwiftType = [VariantChoice]
+
+    public static func write(_ value: [VariantChoice], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeVariantChoice.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [VariantChoice] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [VariantChoice]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeVariantChoice.read(from: &buf))
+        }
+        return seq
+    }
+}
 private let UNIFFI_RUST_FUTURE_POLL_READY: Int8 = 0
 private let UNIFFI_RUST_FUTURE_POLL_WAKE: Int8 = 1
 
@@ -3210,6 +3564,15 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_core_shutdown() != 9052) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_cancel_job() != 21808) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_confirm_import() != 51860) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_start_import() != 35998) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_core_accounts() != 35560) {
