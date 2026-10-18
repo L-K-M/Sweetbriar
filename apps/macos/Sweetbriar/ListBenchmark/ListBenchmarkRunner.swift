@@ -548,6 +548,7 @@ final class ListBenchmarkRunner {
     ) async -> [String] {
         var failures: [String] = []
         var previousPost = clock.now
+        var lastJump: Int?
         for i in 0 ... 10 where !context.stopped {
             let rank = Int(
                 (Double(i) / 10 * Double(model.count - 1)).rounded(.down)
@@ -560,7 +561,7 @@ final class ListBenchmarkRunner {
             }
             let postedAt = postInput { list.scrollToRank(rank) }
             previousPost = clock.now
-            context.record(
+            lastJump = context.record(
                 phase: "jumps",
                 detail: "jump to rank \(rank)",
                 postedAt: postedAt
@@ -580,6 +581,11 @@ final class ListBenchmarkRunner {
                         + " populated rows within 2 s"
                 )
             }
+        }
+        // Wheel input can hide the last target before its commit/frame.
+        // Finish measuring that jump before changing the viewport.
+        if let lastJump {
+            await awaitRenderReady(lastJump, context: context)
         }
         return failures
     }
