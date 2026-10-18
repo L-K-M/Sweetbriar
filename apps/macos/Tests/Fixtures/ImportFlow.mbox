@@ -1,0 +1,17 @@
+From sender@example.test Sat Oct 17 12:00:00 2026
+From: Sender <sender@example.test>
+Subject: First fixture message
+Date: Sat, 17 Oct 2026 12:00:00 +0000
+Message-ID: <import-flow-1@example.test>
+Status: RO
+
+The first synthetic message.
+
+From sender@example.test Sat Oct 17 13:00:00 2026
+From: Sender <sender@example.test>
+Subject: Second fixture message
+Date: Sat, 17 Oct 2026 13:00:00 +0000
+Message-ID: <import-flow-2@example.test>
+Status: O
+
+The second synthetic message.

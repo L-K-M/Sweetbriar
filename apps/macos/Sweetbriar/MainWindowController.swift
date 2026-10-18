@@ -127,7 +127,7 @@ final class MainWindowController: NSWindowController {
             await sidebarModel.reload()
             sidebar.reloadSections()
             sidebar.choose(entryID: Self.initialEntryID)
-            imports.reattach()
+            await imports.reattach()
         }
     }
 

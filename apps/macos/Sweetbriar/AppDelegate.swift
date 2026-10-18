@@ -43,9 +43,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // The session opens off the main thread at once; quitting at
         // any point later — mid-open included — shuts down what it
-        // opened.
+        // opened. `-dataRoot <path> -cacheRoot <path>` opens other
+        // roots: UI tests import into fresh ones (spec/11).
+        let roots = LaunchRoots.fromArguments()
         let session = CoreSession {
-            try await CoreBridge.open(snapshots: batcher)
+            if let roots {
+                return try await CoreBridge.open(config: roots, snapshots: batcher)
+            }
+            return try await CoreBridge.open(snapshots: batcher)
         }
         self.session = session
 
@@ -233,6 +238,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             alert.beginSheetModal(for: keyWindow, completionHandler: nil)
         } else {
             _ = alert.runModal()
+        }
+    }
+
+    /// Explicit roots from the launch arguments, both or neither.
+    private enum LaunchRoots {
+        static let dataRootKey = "dataRoot"
+        static let cacheRootKey = "cacheRoot"
+
+        static func fromArguments() -> CoreConfig? {
+            let defaults = UserDefaults.standard
+            guard let data = defaults.string(forKey: dataRootKey),
+                  let cache = defaults.string(forKey: cacheRootKey)
+            else {
+                return nil
+            }
+            return CoreConfig(dataRoot: data, cacheRoot: cache)
         }
     }
 
