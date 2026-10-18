@@ -1,21 +1,17 @@
-// The M0.9 shell (spec/08 "Windows") plus the pilot's Debug menu
-// (spec/08 "Debug menu"): one main window showing the core's
-// `appearance.compose_cue` setting, refreshed at most once per display
-// frame through `FrameBatcher`; a code-built main menu carrying the
-// synthetic fill, the list prototype and the implementation toggle.
-// The core opens off the main thread in a `CoreSession`; a failure
-// lands in the label.
+// The app shell (spec/08 "Windows") plus the pilot's Debug menu
+// (spec/08 "Debug menu"): the main window — sidebar, message list,
+// reader — over the local archive, and a code-built main menu carrying
+// the synthetic fill, the list prototype and the implementation
+// toggle. The core opens off the main thread in a `CoreSession`; a
+// failure shows in the main window.
 
 import AppKit
 import SweetbriarBridge
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    private static let composeCueKey = "appearance.compose_cue"
-
-    private var window: NSWindow?
+    private var mainWindow: MainWindowController?
     private var session: CoreSession?
-    private let cueLabel = NSTextField(labelWithString: "Opening the core…")
 
     /// The menu builder is retained: `NSMenuItem.target` is weak, so
     /// the Debug items die with their builder otherwise.
@@ -38,39 +34,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var benchmarkReportController: BenchmarkReportWindowController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 440, height: 140),
-            styleMask: [.titled, .closable, .miniaturizable],
-            backing: .buffered,
-            defer: false
-        )
-        window.title = "Sweetbriar"
-        cueLabel.alignment = .center
-        cueLabel.translatesAutoresizingMaskIntoConstraints = false
-        let content = NSView()
-        content.addSubview(cueLabel)
-        NSLayoutConstraint.activate([
-            cueLabel.centerXAnchor.constraint(equalTo: content.centerXAnchor),
-            cueLabel.centerYAnchor.constraint(equalTo: content.centerYAnchor),
-        ])
-        window.contentView = content
-        window.center()
-        window.makeKeyAndOrderFront(nil)
-        self.window = window
-
         installMainMenu()
 
-        let batcher = FrameBatcher<[Setting]>(clock: DisplayLinkClock(view: content)) {
-            [weak self] batch in
-            // A batch is several snapshots; only the last matters —
-            // it's the newest core state.
-            guard let snapshot = batch.last,
-                let cue = snapshot.first(where: { $0.key == Self.composeCueKey })
-            else {
-                return
-            }
-            self?.cueLabel.stringValue = "Compose cue: \(cue.value)"
-        }
+        // Settings snapshots have no window to show in until the
+        // Settings window lands; the bridge still needs their batcher.
+        let clockView = NSView()
+        let batcher = FrameBatcher<[Setting]>(clock: DisplayLinkClock(view: clockView)) { _ in }
 
         // The session opens off the main thread at once; quitting at
         // any point later — mid-open included — shuts down what it
@@ -79,14 +48,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             try await CoreBridge.open(snapshots: batcher)
         }
         self.session = session
-        Task { [weak self] in
-            do {
-                _ = try await session.bridge().settings()
-            } catch {
-                self?.cueLabel.stringValue =
-                    "Couldn't load the setting: \(error.localizedDescription)"
-            }
-        }
+
+        let mainWindow = MainWindowController(session: session)
+        self.mainWindow = mainWindow
+        mainWindow.showWindow(nil)
+        mainWindow.start()
 
         // `-runListBenchmark <report.json>` (spec/08 "Debug menu"):
         // the same benchmark the menu runs, then the report written
@@ -264,6 +230,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             _ = alert.runModal()
         }
+    }
+
+    /// The Dock icon brings the main window back after it was closed.
+    func applicationShouldHandleReopen(
+        _ sender: NSApplication,
+        hasVisibleWindows flag: Bool
+    ) -> Bool {
+        if !flag {
+            mainWindow?.showWindow(nil)
+        }
+        return true
     }
 
     /// spec/07 "Lifecycle": the app can't die while the core is

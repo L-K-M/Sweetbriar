@@ -1,9 +1,10 @@
-// The AppKit prototype list (plan M0.10): a view-based `NSTableView`
-// of fixed-height cells with no Auto Layout inside them, driven by the
-// bridge's `ListWindowModel`. Pages land through `onPagesDelivered`
-// and reload only the delivered pages' visible rows; the clip view's
-// bounds changes drive `setVisible`. Selection is held by occurrence
-// id so a 10k-row selection fetches nothing.
+// The AppKit list (plan M0.10, the production list since M1.4): a
+// view-based `NSTableView` of fixed-height cells with no Auto Layout
+// inside them, driven by the bridge's `ListWindowModel`. Pages land
+// through `onPagesDelivered` and reload only the delivered pages'
+// visible rows; the clip view's bounds changes drive `setVisible`.
+// Selection is held by occurrence id, in the model too, so a 10k-row
+// selection fetches nothing and follows its messages across indexes.
 
 import AppKit
 import SweetbriarBridge
@@ -26,10 +27,26 @@ final class AppKitPrototypeList: NSView {
         .systemPurple, .systemPink, .systemTeal,
     ]
 
+    /// Whether rows show the account marker — the rail and monogram.
+    enum AccountMarker {
+        case shown
+        /// Until M1.10's appearance service gives accounts colors:
+        /// none is derived from an id (spec/08 "Sidebar").
+        case hidden
+    }
+
+    /// The table's accessibility identifier, for UI tests.
+    static let accessibilityID = "messageList"
+
     private let model: ListWindowModel
     private let formatter: MessageRowFormatter
+    private let accountMarker: AccountMarker
     private let scrollView = NSScrollView()
     private let tableView = NSTableView()
+
+    /// The selection, by occurrence id, whenever it changes — the
+    /// list's own clicks and a new index's changes alike.
+    var onSelectionChange: (@MainActor (Set<Int64>) -> Void)?
 
     /// The selection as occurrence ids — the source of truth the
     /// table's `selectedRowIndexes` is mapped through.
@@ -38,10 +55,12 @@ final class AppKitPrototypeList: NSView {
     init(
         model: ListWindowModel,
         formatter: MessageRowFormatter,
+        accountMarker: AccountMarker = .shown,
         onIndexChange: (@MainActor () -> Void)? = nil
     ) {
         self.model = model
         self.formatter = formatter
+        self.accountMarker = accountMarker
         super.init(frame: .zero)
         buildTable()
         observeClipView()
@@ -54,6 +73,13 @@ final class AppKitPrototypeList: NSView {
         model.onIndexChanged = { [weak self] in
             self?.indexDidChange()
             onIndexChange?()
+        }
+        // A new index followed or dropped selected ids (spec/08).
+        model.onSelectionChanged = { [weak self] ids in
+            guard let self else { return }
+            selectedOccurrenceIDs = ids
+            restoreSelection()
+            onSelectionChange?(ids)
         }
     }
 
@@ -80,6 +106,7 @@ final class AppKitPrototypeList: NSView {
         tableView.dataSource = self
         tableView.delegate = self
         tableView.menu = contextMenu()
+        tableView.setAccessibilityIdentifier(Self.accessibilityID)
 
         scrollView.documentView = tableView
         scrollView.hasVerticalScroller = true
@@ -142,6 +169,9 @@ final class AppKitPrototypeList: NSView {
     /// `resetRequired` rebuild): every row changed, so reload fully
     /// and map the selection back onto the new ranks.
     private func indexDidChange() {
+        // Range selection waits for the exact index (spec/08): the
+        // provisional prefix isn't the whole window.
+        tableView.allowsMultipleSelection = model.hasExactIndex
         tableView.reloadData()
         restoreSelection()
         pushVisibleRange()
@@ -197,19 +227,24 @@ extension AppKitPrototypeList: NSTableViewDataSource, NSTableViewDelegate {
     }
 
     private func makeCell() -> MessageRowCellView {
-        let cell = MessageRowCellView()
+        let cell = MessageRowCellView(showsAccountMarker: accountMarker == .shown)
         cell.identifier = Self.cellIdentifier
         return cell
     }
 
     /// Keep the id-held selection in sync with the table's indexes —
-    /// through `occurrenceID`, so no row is ever fetched for it.
+    /// through `occurrenceID`, so no row is ever fetched for it — and
+    /// hand it to the model, which keeps it across new indexes.
     func tableViewSelectionDidChange(_ notification: Notification) {
-        selectedOccurrenceIDs = Set(
+        let ids = Set(
             tableView.selectedRowIndexes.compactMap {
                 model.occurrenceID(at: $0)
             }
         )
+        guard ids != selectedOccurrenceIDs else { return }
+        selectedOccurrenceIDs = ids
+        model.select(ids)
+        onSelectionChange?(ids)
     }
 }
 
@@ -330,6 +365,10 @@ private final class MessageRowCellView: NSTableCellView {
     /// resolved again when the appearance changes.
     private var accountColor: NSColor = .clear
 
+    /// Whether the rail and monogram show; without them the text
+    /// starts at the leading edge.
+    private let showsAccountMarker: Bool
+
     /// Everything but the placeholder — hidden together when the row
     /// is out.
     private var contentSubviews: [NSView] {
@@ -337,7 +376,8 @@ private final class MessageRowCellView: NSTableCellView {
          snippetField, flagMarker, attachmentMarker] + tagChips
     }
 
-    init() {
+    init(showsAccountMarker: Bool) {
+        self.showsAccountMarker = showsAccountMarker
         super.init(frame: .zero)
 
         rail.wantsLayer = true
@@ -414,6 +454,10 @@ private final class MessageRowCellView: NSTableCellView {
         placeholderFill.isHidden = content != nil
         for subview in contentSubviews {
             subview.isHidden = content == nil
+        }
+        if !showsAccountMarker {
+            rail.isHidden = true
+            monogram.isHidden = true
         }
         guard let content else {
             setAccessibilityElement(false)
@@ -502,8 +546,9 @@ private final class MessageRowCellView: NSTableCellView {
             y: (bounds.height - metrics.monogramSize) / 2,
             width: metrics.monogramSize, height: metrics.monogramSize
         )
-        let contentX = rail.frame.maxX + metrics.innerGap
-            + metrics.monogramSize + metrics.innerGap
+        let contentX = showsAccountMarker
+            ? rail.frame.maxX + metrics.innerGap + metrics.monogramSize + metrics.innerGap
+            : metrics.innerGap
 
         // Top line: [dot] sender … [flag] [paperclip] date.
         var trailing = width - metrics.trailingPadding
