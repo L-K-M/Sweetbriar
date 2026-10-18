@@ -144,7 +144,12 @@ user-granted permission path.
   starts a new one), a waiting job keeps waiting and a running job
   resumes from its checkpoints.
 - Shells poll `import_job(id)` (07) for the state, inventory, problems
-  and counts.
+  and counts, and, once the job finishes, the report's path.
+- `sb-cli import [--variant mboxo|mboxrd] <paths>…` prints the
+  inventory, then confirms with that variant for every ambiguous source.
+  When one needs a choice and none was given, it cancels the job and
+  says so. It waits, prints the totals and the report's path, and exits
+  0 only for a completed job.
 - A source checkpoint is `{"v":1,"offset":…,"messages":…}`. The job
   checkpoint holds the problems, the confirmed variant choices, the next
   unfinished source and the running totals.
