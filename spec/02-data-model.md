@@ -762,8 +762,9 @@ CREATE INDEX logical_messages_by_acquisition ON logical_messages(acquisition_id)
     group is given is removed.
   - `d_threads` holds the earliest member's base subject, the one
     account of all members (NULL when they mix accounts), and the
-    newest representative's `sort_date` when its membership last
-    changed.
+    newest representative's `sort_date`, as of the last rebuild. A
+    rebuild rewrites every thread whose stored values differ from
+    these, so one interrupted mid-publication heals at the next.
   - `Thread` windows (07) join a thread's members to their
     representatives' list rows: the one list read that joins, since a
     thread is a page or two of rows.
