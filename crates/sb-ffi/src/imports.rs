@@ -597,7 +597,7 @@ mod tests {
         ))
         .unwrap()
         .job_id;
-        wait(&core, &job, |state| state != ImportJobState::Inventory);
+        wait(&core, &job, inventoried);
 
         let choices = vec![
             VariantChoice {
@@ -616,7 +616,7 @@ mod tests {
             choices,
         ))
         .unwrap();
-        let done = wait(&core, &job, finished);
+        let done = wait(&core, &job, published);
         assert_eq!(done.state, ImportJobState::Completed);
         let variants: Vec<_> = done.sources.iter().map(|source| source.variant).collect();
         assert_eq!(
