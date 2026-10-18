@@ -108,10 +108,16 @@ pub(crate) fn schedule_threads(spawner: &impl Spawn, rebuilds: &Arc<ThreadRebuil
 }
 
 async fn run(worker: Worker, rebuilds: Arc<ThreadRebuilds>) {
+    let stop = worker.shutdown_check();
     loop {
         // A failed pass leaves the watermark behind; the next import's
         // turn or the next open retries it.
         let _ = rebuild(&worker).await;
+        // Once shutdown begins, the next open does any pass still owed.
+        if stop() {
+            rebuilds.release();
+            return;
+        }
         if !rebuilds.next() {
             return;
         }
@@ -127,29 +133,42 @@ async fn rebuild(worker: &Worker) -> Result<(), StoreError> {
     if !revisions.stale() {
         return Ok(());
     }
-    let sources = gather(
+    // Shutdown stops a pass at any page or chunk, before the watermark.
+    let Some(sources) = gather(
         worker,
+        &stop,
         |tx, after| thread_sources(tx, after, PAGE),
         |s| s.message_id,
     )
-    .await?;
-    let memberships: HashMap<i64, i64> = gather(
+    .await?
+    else {
+        return Ok(());
+    };
+    let Some(memberships) = gather(
         worker,
+        &stop,
         |tx, after| thread_memberships(tx, after, PAGE),
         |m| m.0,
     )
     .await?
-    .into_iter()
-    .collect();
-    let stored: HashMap<i64, StoredThread> = gather(
+    else {
+        return Ok(());
+    };
+    let memberships: HashMap<i64, i64> = memberships.into_iter().collect();
+    let Some(stored) = gather(
         worker,
+        &stop,
         |tx, after| stored_threads(tx, after, PAGE),
         |t| t.thread_id,
     )
     .await?
-    .into_iter()
-    .map(|thread| (thread.thread_id, thread))
-    .collect();
+    else {
+        return Ok(());
+    };
+    let stored: HashMap<i64, StoredThread> = stored
+        .into_iter()
+        .map(|thread| (thread.thread_id, thread))
+        .collect();
     let plan = read(worker, move |_| plan(&sources, &memberships, &stored)).await?;
 
     let mut created: HashMap<usize, i64> = HashMap::new();
@@ -189,8 +208,13 @@ where
 }
 
 /// Every row `page` yields, read `PAGE` at a time after the last row's
-/// message id, one short read each.
-async fn gather<T, P, K>(worker: &Worker, page: P, key: K) -> Result<Vec<T>, StoreError>
+/// key, one short read each; `None` once `stop` says shutdown began.
+async fn gather<T, P, K>(
+    worker: &Worker,
+    stop: &impl Fn() -> bool,
+    page: P,
+    key: K,
+) -> Result<Option<Vec<T>>, StoreError>
 where
     T: Send + 'static,
     P: Fn(&sb_resources::Transaction, i64) -> Result<Vec<T>, StoreError>
@@ -203,12 +227,15 @@ where
     let mut all = Vec::new();
     let mut after = 0;
     loop {
+        if stop() {
+            return Ok(None);
+        }
         let rows = read(worker, move |resources| {
             resources.read(|tx| page(tx, after))
         })
         .await?;
         let Some(last) = rows.last() else {
-            return Ok(all);
+            return Ok(Some(all));
         };
         after = key(last);
         all.extend(rows);
@@ -349,10 +376,12 @@ fn plan(
             1 => accounts.first().map(|account| (*account).to_owned()),
             _ => None,
         };
+        // An empty base subject, as of "Re:", is no subject (NULL).
         let subject_norm = by_id
             .get(&members[0])
             .and_then(|s| s.subject.as_deref())
-            .map(base_subject);
+            .map(base_subject)
+            .filter(|subject| !subject.is_empty());
         let last_date = members
             .iter()
             .filter_map(|m| by_id.get(m).and_then(|s| s.representative_date))

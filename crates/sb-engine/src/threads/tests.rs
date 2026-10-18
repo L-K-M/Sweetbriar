@@ -131,6 +131,33 @@ fn merges_and_splits_keep_ids_by_spec_rule() {
     );
 }
 
+/// One worker at a time: a second claim asks the running one to go
+/// again, once; a release after a refused spawn lets the next claim in.
+#[test]
+fn one_rebuild_runs_and_requests_coalesce() {
+    let rebuilds = ThreadRebuilds::default();
+    assert!(rebuilds.claim());
+    assert!(!rebuilds.claim());
+    assert!(!rebuilds.claim());
+    assert!(rebuilds.next(), "one request to go again");
+    assert!(!rebuilds.next(), "and only one");
+    assert!(rebuilds.claim(), "the slot was given back");
+    rebuilds.release();
+    assert!(rebuilds.claim());
+}
+
+/// A subject that reduces to nothing, like "Re:", is stored as none.
+#[test]
+fn an_empty_base_subject_is_no_subject() {
+    let plan = plan(
+        &[source(1, "a@x", &[], "Re:")],
+        &HashMap::new(),
+        &HashMap::new(),
+    )
+    .unwrap();
+    assert_eq!(plan.threads[0].subject_norm, None);
+}
+
 /// Mixed accounts leave a thread unscoped.
 #[test]
 fn mixed_accounts_leave_the_scope_empty() {
@@ -232,8 +259,7 @@ fn groups(engine: &Engine) -> Vec<Vec<i64>> {
     groups
 }
 
-/// After an import's turn the engine threads the new messages, and
-/// the membership change advances the list generation (spec/02).
+/// After an import's turn the engine threads the new messages.
 #[test]
 fn an_import_is_threaded_when_its_turn_ends() {
     let scratch = ScratchDir::new("threads-after-import");
