@@ -128,8 +128,16 @@ pub struct ImportJob {
     pub problem_count: u64,
     pub totals: ImportTotals,
     pub failure: Option<String>,
-    /// The report, once the job has finished.
+    /// The report's path, once it is written (spec/09).
     pub report_path: Option<PathBuf>,
+}
+
+/// A finished job's published report (spec/07 `import_report`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportReport {
+    pub path: PathBuf,
+    /// The version-1 JSON object (spec/09 "Report").
+    pub json: String,
 }
 
 /// What `start_import` answers: its receipt and the job it names.
@@ -187,8 +195,19 @@ impl Core {
         Ok(Receipt::from_engine(&receipt))
     }
 
+    /// `import_report(job_id)` (spec/07, 09): a finished job's report,
+    /// or `None` while it is still being written. An unfinished job is
+    /// `Conflict`.
+    pub async fn import_report(&self, job_id: &str) -> Result<Option<ImportReport>, CoreError> {
+        let report = self.engine().import_report(job_id).await?;
+        Ok(report.map(|report| ImportReport {
+            path: report.path().to_path_buf(),
+            json: report.json().to_owned(),
+        }))
+    }
+
     /// `import_job(job_id)` (spec/07): state, inventory, problems,
-    /// counts and, once finished, the report's path.
+    /// counts and, once written, the report's path.
     pub async fn import_job(&self, job_id: &str) -> Result<ImportJob, CoreError> {
         let status = self.engine().import_job(job_id).await?;
         let checkpoint = status.checkpoint();

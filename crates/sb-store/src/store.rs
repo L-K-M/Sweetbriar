@@ -130,6 +130,11 @@ impl Store {
         self.import_reports.exists(job)
     }
 
+    /// `job`'s report as last written, or `None` while there is none.
+    pub fn read_import_report(&self, job: &str) -> Result<Option<String>, StoreError> {
+        self.import_reports.read(job)
+    }
+
     /// Where `job`'s report lives, for the user to open.
     pub fn import_report_path(&self, job: &str) -> Result<PathBuf, StoreError> {
         self.import_reports.path(job)

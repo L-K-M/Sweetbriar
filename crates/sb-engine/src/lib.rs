@@ -30,7 +30,7 @@ pub use sb_resources::{
 
 pub use engine::Engine;
 pub use error::EngineError;
-pub use import::{ImportJobStatus, ImportSourceStatus, ImportStarted};
+pub use import::{ImportJobStatus, ImportReport, ImportSourceStatus, ImportStarted};
 pub use settings::Setting;
 pub use windows::{
     Anchor, Count, Cursor, ListRow, Subscription, Window, WindowEvent, WindowId, WindowIds,

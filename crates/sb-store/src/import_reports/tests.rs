@@ -42,6 +42,25 @@ fn a_report_is_replaced_whole_and_leaves_no_temporary_file() {
     assert_eq!(names(&scratch), [format!("import-report-{JOB}.json")]);
 }
 
+/// A report reads back as written; none yet is `None`, and one that
+/// isn't UTF-8 is `Corrupt`.
+#[test]
+fn a_report_reads_back_as_written() {
+    let scratch = ScratchDir::new("report-read");
+    let reports = reports(real_fs(), &scratch);
+    assert_eq!(reports.read(JOB).unwrap(), None);
+    reports.write(JOB, b"{\"v\":1}").unwrap();
+    assert_eq!(reports.read(JOB).unwrap().as_deref(), Some("{\"v\":1}"));
+
+    reports.write(JOB, &[0xff, 0xfe]).unwrap();
+    let error = reports.read(JOB).unwrap_err();
+    assert!(matches!(error, StoreError::Corrupt { .. }), "{error:?}");
+    assert!(matches!(
+        reports.read("../x"),
+        Err(StoreError::InvalidInput { .. })
+    ));
+}
+
 #[test]
 fn job_ids_cannot_name_other_paths() {
     let scratch = ScratchDir::new("report-names");

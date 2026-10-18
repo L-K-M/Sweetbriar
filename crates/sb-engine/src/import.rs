@@ -195,9 +195,28 @@ impl ImportJobStatus {
         &self.checkpoint
     }
 
-    /// Where the report lives once the job has finished (spec/09).
+    /// Where the report lives, once it is written (spec/09): a finished
+    /// job names none until then.
     pub fn report_path(&self) -> Option<&Path> {
         self.report_path.as_deref()
+    }
+}
+
+/// A finished job's published report (spec/07 `import_report`): where
+/// it lives and its version-1 JSON.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportReport {
+    path: PathBuf,
+    json: String,
+}
+
+impl ImportReport {
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn json(&self) -> &str {
+        &self.json
     }
 }
 
@@ -346,28 +365,53 @@ impl Engine {
     }
 
     /// `import_job(job_id)` (spec/07): state, inventory, problems and
-    /// counts, from one read.
+    /// counts, from one read, and the report's path once it is
+    /// written. A report that can't be looked at counts as unwritten
+    /// here; `import_report` reports why.
     pub async fn import_job(&self, job_id: &str) -> Result<ImportJobStatus, EngineError> {
         let id = job_id.to_owned();
         self.read_through(move |resources| {
-            resources.read(|tx| {
+            let (job, sources) = resources.read(|tx| {
                 let job = import_job(tx, &id)?;
                 let sources = import_job_sources(tx, &job)?
                     .into_iter()
                     .map(|(source, position)| ImportSourceStatus { source, position })
                     .collect();
-                let report_path = if job.is_finished() {
-                    Some(resources.import_report_path(&id)?)
-                } else {
-                    None
-                };
-                Ok(ImportJobStatus {
-                    state: job.state(),
-                    sources,
-                    checkpoint: job.checkpoint().clone(),
-                    report_path,
-                })
+                Ok((job, sources))
+            })?;
+            let written =
+                job.is_finished() && matches!(resources.import_report_exists(&id), Ok(true));
+            let report_path = if written {
+                Some(resources.import_report_path(&id)?)
+            } else {
+                None
+            };
+            Ok(ImportJobStatus {
+                state: job.state(),
+                sources,
+                checkpoint: job.checkpoint().clone(),
+                report_path,
             })
+        })
+        .await
+    }
+
+    /// `import_report(job_id)` (spec/07, 09): a finished job's report,
+    /// or `None` while it is still being written. An unfinished job is
+    /// `Conflict`; an unreadable report is an error.
+    pub async fn import_report(&self, job_id: &str) -> Result<Option<ImportReport>, EngineError> {
+        let id = job_id.to_owned();
+        self.read_through(move |resources| {
+            let job = resources.read(|tx| import_job(tx, &id))?;
+            if !job.is_finished() {
+                return Err(StoreError::Conflict {
+                    detail: format!("import job {id} has not finished"),
+                });
+            }
+            let path = resources.import_report_path(&id)?;
+            Ok(resources
+                .read_import_report(&id)?
+                .map(|json| ImportReport { path, json }))
         })
         .await
     }

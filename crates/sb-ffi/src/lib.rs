@@ -30,8 +30,8 @@ pub use api::{Core, CoreConfig, Receipt, Setting, open_core, platform_default_co
 pub use cancel::CancelToken;
 pub use error::CoreError;
 pub use imports::{
-    ImportJob, ImportJobState, ImportProblem, ImportProblemKind, ImportSource, ImportSourceKind,
-    ImportStarted, ImportTarget, ImportTotals, MboxVariant, VariantChoice,
+    ImportJob, ImportJobState, ImportProblem, ImportProblemKind, ImportReport, ImportSource,
+    ImportSourceKind, ImportStarted, ImportTarget, ImportTotals, MboxVariant, VariantChoice,
 };
 pub use sidebar::{Account, AccountKind, AccountState, Mailbox, MailboxKind, Mailboxes};
 pub use subscribe::{Subscription, WindowEvent};

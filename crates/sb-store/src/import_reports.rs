@@ -3,7 +3,7 @@
 //! flushed, renamed over the final name and the directory flushed:
 //! readers see the old report or the new one, never a torn file.
 
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -21,6 +21,9 @@ const NAME_ATTEMPTS: usize = 8;
 
 /// The longest job id a report is named after; ids are UUIDs.
 const MAX_JOB_ID: usize = 64;
+/// The largest file `read` takes for a report: far above any real one,
+/// whose problem list stops at 50 entries, so a bigger file is not one.
+const MAX_REPORT_BYTES: u64 = 64 * 1024 * 1024;
 
 pub(crate) struct ImportReports {
     fs: Arc<dyn Fs>,
@@ -59,6 +62,42 @@ impl ImportReports {
             StoreError::unavailable(format!("cannot check the import report {job}: {e}"))
         })?;
         Ok(md.is_some_and(|md| md.kind() == FileKind::File))
+    }
+
+    /// `job`'s report as last written, or `None` while there is none
+    /// (spec/07 `import_report`). Writes replace it whole, so this
+    /// never sees a torn one. A report that isn't UTF-8 text of a
+    /// plausible size is `Corrupt`; one that can't be read is
+    /// `Unavailable`.
+    pub(crate) fn read(&self, job: &str) -> Result<Option<String>, StoreError> {
+        let path = self.path(job)?;
+        let unreadable = |e: io::Error| {
+            StoreError::unavailable(format!("cannot read the import report {job}: {e}"))
+        };
+        let (file, md) = match self.fs.open_regular(&path) {
+            Ok(opened) => opened,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(unreadable(e)),
+        };
+        let oversized = || {
+            StoreError::corrupt(format!(
+                "the import report {job} is over {MAX_REPORT_BYTES} bytes"
+            ))
+        };
+        if md.len() > MAX_REPORT_BYTES {
+            return Err(oversized());
+        }
+        // Bounded again while reading: the file may grow after the look.
+        let mut bytes = Vec::new();
+        file.take(MAX_REPORT_BYTES + 1)
+            .read_to_end(&mut bytes)
+            .map_err(unreadable)?;
+        if bytes.len() as u64 > MAX_REPORT_BYTES {
+            return Err(oversized());
+        }
+        String::from_utf8(bytes)
+            .map(Some)
+            .map_err(|_| StoreError::corrupt(format!("the import report {job} is not UTF-8")))
     }
 
     /// Replace `job`'s report with `bytes` durably (spec/03). A failure

@@ -588,6 +588,46 @@ fn a_finished_job_leaves_a_report_and_only_failures_keep_snapshots() {
     block_on(engine.shutdown()).unwrap();
 }
 
+/// `import_report` (spec/07): an unfinished job is `Conflict`, a
+/// finished one returns its published report at the path `import_job`
+/// names, and a report not written yet is `None` there and no path in
+/// `import_job`. An unknown job is `NotFound`.
+#[test]
+fn import_report_returns_only_a_published_report() {
+    let scratch = ScratchDir::new("import-report-query");
+    let root = scratch.path().join("store");
+    let engine = open(&root);
+
+    let id = start(&engine, &[fixtures().join("Inbox.mbox")]);
+    settle(&engine, &id, ImportJobState::AwaitingConfirmation);
+    let unfinished = block_on(engine.import_report(&id)).unwrap_err();
+    assert!(
+        matches!(unfinished, EngineError::Conflict { .. }),
+        "{unfinished:?}"
+    );
+
+    confirm(&engine, &id, vec![]).unwrap();
+    let done = settle(&engine, &id, ImportJobState::Completed);
+    let report = block_on(engine.import_report(&id))
+        .unwrap()
+        .expect("a finished job's report is published");
+    assert_eq!(Some(report.path()), done.report_path());
+    assert_eq!(report.json(), fs::read_to_string(report.path()).unwrap());
+    assert!(report.json().contains("\"state\": \"completed\""));
+
+    // As if the report were still being written.
+    fs::remove_file(report.path()).unwrap();
+    assert_eq!(status(&engine, &id).report_path(), None);
+    assert_eq!(block_on(engine.import_report(&id)).unwrap(), None);
+
+    let unknown = block_on(engine.import_report("00000000-0000-4000-8000-00000000dead"));
+    assert!(
+        matches!(unknown, Err(EngineError::NotFound { .. })),
+        "{unknown:?}"
+    );
+    block_on(engine.shutdown()).unwrap();
+}
+
 #[test]
 fn open_redoes_cleanup_for_a_finished_job_without_a_report() {
     let scratch = ScratchDir::new("import-report-sweep");

@@ -205,7 +205,7 @@ public struct ImportJob: Sendable, Equatable {
     public var problemCount: UInt64
     public var totals: ImportTotals
     public var failure: String?
-    /// The report's path, once the job has finished.
+    /// The report's path, once it is written (spec/09).
     public var reportPath: String?
 
     public init(
@@ -226,6 +226,18 @@ public struct ImportJob: Sendable, Equatable {
         self.totals = totals
         self.failure = failure
         self.reportPath = reportPath
+    }
+}
+
+/// A finished job's published report (spec/07 `import_report`).
+public struct ImportReport: Sendable, Equatable {
+    public var path: String
+    /// The version-1 JSON object (spec/09 "Report").
+    public var json: String
+
+    public init(path: String, json: String) {
+        self.path = path
+        self.json = json
     }
 }
 
