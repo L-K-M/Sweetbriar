@@ -11,12 +11,14 @@
 #![forbid(unsafe_code)]
 
 mod extract;
+mod import_flags;
 mod limits;
 mod mbox;
 mod outcome;
 mod summary;
 mod walk;
 
+pub use import_flags::{ImportFlags, import_flags};
 pub use limits::{
     Limits, MAX_DECODED_PART_BYTES, MAX_DEPTH, MAX_HEADER_BYTES, MAX_HEADER_FIELDS,
     MAX_MESSAGE_BYTES, MAX_PARTS, SNIPPET_BYTES,

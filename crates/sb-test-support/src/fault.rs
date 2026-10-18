@@ -157,6 +157,10 @@ impl Fs for FaultFs {
         self.inner.open(path)
     }
 
+    fn open_regular(&self, path: &Path) -> io::Result<(Box<dyn sb_types::fs::ReadFile>, Metadata)> {
+        self.inner.open_regular(path)
+    }
+
     fn metadata(&self, path: &Path) -> io::Result<Option<Metadata>> {
         self.inner.metadata(path)
     }
