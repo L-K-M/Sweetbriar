@@ -235,10 +235,14 @@ fn the_same_file_decodes_by_its_chosen_variant_and_the_job_asks_first() {
 /// 50 distinct cut points in `first..=last`, drawn by splitmix64 from
 /// a fixed seed so a failure replays exactly.
 fn cut_points(first: u64, last: u64) -> Vec<u64> {
-    let span = last.saturating_sub(first) + 1;
     assert!(
-        first <= last && span >= CUT_POINTS as u64,
-        "only {span} import operations to cut: is the filesystem seam connected?"
+        first <= last,
+        "no import operations were measured after startup: is the filesystem seam connected?"
+    );
+    let span = last - first + 1;
+    assert!(
+        span >= CUT_POINTS as u64,
+        "only {span} import operations to cut"
     );
     let mut state = CUT_SEED;
     let mut points = std::collections::BTreeSet::new();
@@ -329,7 +333,7 @@ fn imports_reach_the_uncut_counts_after_crash_cuts_at_seeded_points() {
     block_on(engine.shutdown()).unwrap();
     let points = cut_points(first, uncut.operations());
 
-    let killed = run_crash_cut_points(
+    let cuts = run_crash_cut_points(
         CUT_N_ENV,
         CUT_ROOT_ENV,
         "import::tests::acceptance::import_crash_child",
@@ -347,7 +351,13 @@ fn imports_reach_the_uncut_counts_after_crash_cuts_at_seeded_points() {
             block_on(engine.shutdown()).unwrap();
         },
     );
-    assert_eq!(killed, points.len() as u64, "every sampled cut must land");
+    // Operation counts are deterministic, so every point must land.
+    assert!(
+        cuts.survived.is_empty(),
+        "children outlived cut points {:?}",
+        cuts.survived
+    );
+    assert_eq!(cuts.killed, points);
 }
 
 /// The crash-cut child: the fixture import on `CutFs`, killed at the

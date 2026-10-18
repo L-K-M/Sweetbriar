@@ -24,7 +24,7 @@ use sb_types::fs::Fs;
 use sb_types::random::Random;
 use sb_types::time::{Clock, Timestamp};
 
-pub use cut::{CutFs, run_crash_cut_points, run_crash_cuts};
+pub use cut::{CutFs, CutPoints, run_crash_cut_points, run_crash_cuts};
 pub use fault::{FaultFs, FaultKind, FsOp};
 pub use sim::SimFs;
 pub use sqlite::{execute_sql, store_meta_value};

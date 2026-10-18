@@ -61,8 +61,10 @@ impl ImportReports {
         Ok(md.is_some_and(|md| md.kind() == FileKind::File))
     }
 
-    /// Replace `job`'s report with `bytes` durably (spec/03). On failure
-    /// the temporary file is removed, best-effort; the old report stays.
+    /// Replace `job`'s report with `bytes` durably (spec/03). A failure
+    /// before the rename removes the temporary file, best-effort, and
+    /// keeps the old report; a failed final directory flush leaves the
+    /// new report in place but not proven durable.
     pub(crate) fn write(&self, job: &str, bytes: &[u8]) -> Result<(), StoreError> {
         let path = self.path(job)?;
         let failed = |e: io::Error| {

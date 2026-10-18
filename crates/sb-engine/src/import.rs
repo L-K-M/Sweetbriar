@@ -293,22 +293,7 @@ impl Engine {
             let receipt = worker
                 .resources()
                 .write(WritePriority::User, move |tx| {
-                    run_once(tx, &key, CONFIRM_IMPORT, now, |tx| {
-                        let current = import_job(tx, &job)?;
-                        let Some((revision, checkpoint)) = expected.filter(|(revision, _)| {
-                            current.state() == ImportJobState::AwaitingConfirmation
-                                && current.revision() == *revision
-                        }) else {
-                            return Err(StoreError::Conflict {
-                                detail: format!(
-                                    "import job {job} is not awaiting the confirmation given"
-                                ),
-                            });
-                        };
-                        let state = ImportJobState::Running;
-                        advance_import_job(tx, &job, revision, state, &checkpoint, now)?;
-                        Ok(format!("{{\"job_id\":\"{job}\",\"state\":\"running\"}}"))
-                    })
+                    confirm_in(tx, &key, &job, expected, now)
                 })
                 .await?;
             spawn_job(&worker, &jobs, id, Task::Ingest)?;
@@ -393,7 +378,9 @@ impl Engine {
             .into_iter()
             .flatten()
         {
-            if !self.resources().import_report_exists(job.id())? {
+            // Best-effort, like the cleanup it gates: an unreadable
+            // `recovery/` must not keep the store closed.
+            if !matches!(self.resources().import_report_exists(job.id()), Ok(true)) {
                 let _ = finish(self.resources(), job.id());
             }
         }
@@ -438,6 +425,32 @@ impl Engine {
             .await
             .map_err(|_| EngineError::internal("an import command ended without an answer"))?
     }
+}
+
+/// The confirmation's write: only the waiting revision the caller
+/// validated becomes `running`. A job that changed since that read,
+/// or was not waiting then (`None`), is `Conflict`; a repeated key still
+/// returns its receipt first.
+fn confirm_in(
+    tx: &sb_resources::Transaction,
+    key: &str,
+    job: &str,
+    expected: Option<(i64, ImportJobCheckpoint)>,
+    now: sb_resources::Timestamp,
+) -> Result<Receipt, StoreError> {
+    run_once(tx, key, CONFIRM_IMPORT, now, |tx| {
+        let current = import_job(tx, job)?;
+        let Some((revision, checkpoint)) = expected.filter(|(revision, _)| {
+            current.state() == ImportJobState::AwaitingConfirmation
+                && current.revision() == *revision
+        }) else {
+            return Err(StoreError::Conflict {
+                detail: format!("import job {job} is not awaiting the confirmation given"),
+            });
+        };
+        advance_import_job(tx, job, revision, ImportJobState::Running, &checkpoint, now)?;
+        Ok(format!("{{\"job_id\":\"{job}\",\"state\":\"running\"}}"))
+    })
 }
 
 /// Start a worker for `id`, or hand an ingest to the one that holds it.

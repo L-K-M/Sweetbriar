@@ -117,10 +117,19 @@ fn command_from(word: String, args: &mut impl Iterator<Item = String>) -> Result
 }
 
 /// `import`'s arguments: an optional `--variant`, then at least one path.
+/// An unknown `--` option is an error, not a path; after `--`, every
+/// argument is a path.
 fn import_from(args: &mut impl Iterator<Item = String>) -> Result<Command, String> {
     let mut variant = None;
     let mut paths = Vec::new();
     while let Some(arg) = args.next() {
+        if arg == "--" {
+            paths.extend(args.by_ref().map(PathBuf::from));
+            break;
+        }
+        if arg.starts_with("--") && arg != "--variant" {
+            return Err(format!("unknown import option '{arg}'"));
+        }
         if arg != "--variant" {
             paths.push(PathBuf::from(arg));
             continue;

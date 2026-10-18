@@ -225,11 +225,19 @@ pub fn run_crash_cuts(
     }
 }
 
+/// What a sampled crash-cut run produced: the points that killed their
+/// child, and those whose child finished first (it made fewer
+/// operations), so a caller can name them.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct CutPoints {
+    pub killed: Vec<u64>,
+    pub survived: Vec<u64>,
+}
+
 /// Run `child` once per cut point in `points`, as [`run_crash_cuts`]
 /// does, for suites that sample cut points (a seeded set) instead of
-/// sweeping them all. A run that survives its point (it made fewer
-/// operations this time) is skipped; `check` sees each killed run.
-/// Returns how many runs were killed.
+/// sweeping them all. `check` sees each killed run; a run that survives
+/// its point is recorded, not checked.
 pub fn run_crash_cut_points(
     cut_env: &str,
     root_env: &str,
@@ -237,9 +245,9 @@ pub fn run_crash_cut_points(
     points: &[u64],
     fresh_root: &mut dyn FnMut(u64) -> PathBuf,
     check: &mut dyn FnMut(&Path),
-) -> u64 {
+) -> CutPoints {
     let exe = env::current_exe().expect("the test binary path");
-    let mut killed = 0;
+    let mut report = CutPoints::default();
     for &n in points {
         let root = fresh_root(n);
         let spawned = Command::new(&exe)
@@ -250,6 +258,7 @@ pub fn run_crash_cut_points(
             .expect("spawn the crash-cut child");
         let status = wait_with_deadline(spawned, CHILD_DEADLINE);
         if status.success() {
+            report.survived.push(n);
             continue;
         }
         let signal = std::os::unix::process::ExitStatusExt::signal(&status);
@@ -259,9 +268,9 @@ pub fn run_crash_cut_points(
             "crash-cut child at N={n} exited abnormally: {status}"
         );
         check(&root);
-        killed += 1;
+        report.killed.push(n);
     }
-    killed
+    report
 }
 
 /// Wait for `child`, killing it and failing loudly once `deadline`
