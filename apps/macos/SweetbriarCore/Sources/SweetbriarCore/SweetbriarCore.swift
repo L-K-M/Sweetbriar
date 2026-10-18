@@ -797,6 +797,13 @@ public protocol CoreProtocol: AnyObject, Sendable {
     func mailboxes(token: CancelToken, accountId: String) async throws  -> Mailboxes
     
     /**
+     * `subscribe` (spec/07): the window's changes from what it last
+     * delivered. A query: the token races the core's lock. An unknown
+     * or closed window answers `NotFound` on the first `next`.
+     */
+    func subscribe(token: CancelToken, windowId: UInt64) async throws  -> Subscription
+    
+    /**
      * `close_window` (spec/07): release the handle. No token — like
      * `shutdown`, the call can't be cancelled; closing twice, or
      * after the core shut down, is harmless.
@@ -1009,6 +1016,27 @@ open func mailboxes(token: CancelToken, accountId: String)async throws  -> Mailb
 }
     
     /**
+     * `subscribe` (spec/07): the window's changes from what it last
+     * delivered. A query: the token races the core's lock. An unknown
+     * or closed window answers `NotFound` on the first `next`.
+     */
+open func subscribe(token: CancelToken, windowId: UInt64)async throws  -> Subscription  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_subscribe(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterUInt64.lower(windowId)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_u64,
+            completeFunc: ffi_sb_ffi_rust_future_complete_u64,
+            freeFunc: ffi_sb_ffi_rust_future_free_u64,
+            liftFunc: FfiConverterTypeSubscription_lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
      * `close_window` (spec/07): release the handle. No token — like
      * `shutdown`, the call can't be cancelled; closing twice, or
      * after the core shut down, is harmless.
@@ -1162,6 +1190,150 @@ public func FfiConverterTypeCore_lift(_ handle: UInt64) throws -> Core {
 #endif
 public func FfiConverterTypeCore_lower(_ value: Core) -> UInt64 {
     return FfiConverterTypeCore.lower(value)
+}
+
+
+
+
+
+
+/**
+ * One window's stream of events.
+ */
+public protocol SubscriptionProtocol: AnyObject, Sendable {
+    
+    /**
+     * The next event: at once when the window's source already moved
+     * past the last one, else when it does. One call at a time — a
+     * second concurrent call is `InvalidInput`. A cancelled call
+     * answers `Cancelled` and moves no mark, so the next call still
+     * sees what it missed.
+     */
+    func next(token: CancelToken) async throws  -> WindowEvent
+    
+}
+/**
+ * One window's stream of events.
+ */
+open class Subscription: SubscriptionProtocol, @unchecked Sendable {
+    fileprivate let handle: UInt64
+
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoHandle {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noHandle: NoHandle) {
+        self.handle = 0
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_sb_ffi_fn_clone_subscription(self.handle, $0) }
+    }
+    // No primary constructor declared for this class.
+
+    deinit {
+        if handle == 0 {
+            // Mock objects have handle=0 don't try to free them
+            return
+        }
+
+        try! rustCall { uniffi_sb_ffi_fn_free_subscription(handle, $0) }
+    }
+
+    
+
+    
+    /**
+     * The next event: at once when the window's source already moved
+     * past the last one, else when it does. One call at a time — a
+     * second concurrent call is `InvalidInput`. A cancelled call
+     * answers `Cancelled` and moves no mark, so the next call still
+     * sees what it missed.
+     */
+open func next(token: CancelToken)async throws  -> WindowEvent  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_subscription_next(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeWindowEvent_lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+
+    
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeSubscription: FfiConverter {
+    typealias FfiType = UInt64
+    typealias SwiftType = Subscription
+
+    public static func lift(_ handle: UInt64) throws -> Subscription {
+        return Subscription(unsafeFromHandle: handle)
+    }
+
+    public static func lower(_ value: Subscription) -> UInt64 {
+        return value.uniffiCloneHandle()
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Subscription {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+    public static func write(_ value: Subscription, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSubscription_lift(_ handle: UInt64) throws -> Subscription {
+    return try FfiConverterTypeSubscription.lift(handle)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSubscription_lower(_ value: Subscription) -> UInt64 {
+    return FfiConverterTypeSubscription.lower(value)
 }
 
 
@@ -2540,8 +2712,85 @@ public func FfiConverterTypeMailboxRole_lower(_ value: MailboxRole) -> RustBuffe
 
 
 /**
- * Which window the shell is listing (spec/07). For the pilot only
- * `DebugSynthetic` — the in-memory debug source — exists.
+ * What a window's subscription reports (spec/07).
+ */
+
+public enum WindowEvent: Equatable, Hashable {
+    
+    /**
+     * The window's rows changed; re-read at this generation.
+     */
+    case invalidated(generation: UInt64
+    )
+    /**
+     * Fallen too far behind: rebuild the id index, then the pages.
+     */
+    case resetRequired
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension WindowEvent: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeWindowEvent: FfiConverterRustBuffer {
+    typealias SwiftType = WindowEvent
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> WindowEvent {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .invalidated(generation: try FfiConverterUInt64.read(from: &buf)
+        )
+        
+        case 2: return .resetRequired
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: WindowEvent, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case let .invalidated(generation):
+            writeInt(&buf, Int32(1))
+            FfiConverterUInt64.write(generation, into: &buf)
+            
+        
+        case .resetRequired:
+            writeInt(&buf, Int32(2))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeWindowEvent_lift(_ buf: RustBuffer) throws -> WindowEvent {
+    return try FfiConverterTypeWindowEvent.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeWindowEvent_lower(_ value: WindowEvent) -> RustBuffer {
+    return FfiConverterTypeWindowEvent.lower(value)
+}
+
+
+
+/**
+ * Which window the shell is listing (spec/07 "Store windows").
  */
 
 public enum WindowSpec: Equatable, Hashable {
@@ -2550,6 +2799,25 @@ public enum WindowSpec: Equatable, Hashable {
      * The synthetic source filled by `debug_fill_synthetic`.
      */
     case debugSynthetic
+    /**
+     * One mailbox's occurrences.
+     */
+    case mailbox(mailboxId: Int64
+    )
+    /**
+     * Every occurrence in mailboxes of one role.
+     */
+    case unified(role: MailboxRole
+    )
+    /**
+     * Flagged logical messages, once each.
+     */
+    case flagged
+    /**
+     * One thread's logical messages, once each.
+     */
+    case thread(threadId: Int64
+    )
 
 
 
@@ -2573,6 +2841,17 @@ public struct FfiConverterTypeWindowSpec: FfiConverterRustBuffer {
         
         case 1: return .debugSynthetic
         
+        case 2: return .mailbox(mailboxId: try FfiConverterInt64.read(from: &buf)
+        )
+        
+        case 3: return .unified(role: try FfiConverterTypeMailboxRole.read(from: &buf)
+        )
+        
+        case 4: return .flagged
+        
+        case 5: return .thread(threadId: try FfiConverterInt64.read(from: &buf)
+        )
+        
         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
@@ -2584,6 +2863,25 @@ public struct FfiConverterTypeWindowSpec: FfiConverterRustBuffer {
         case .debugSynthetic:
             writeInt(&buf, Int32(1))
         
+        
+        case let .mailbox(mailboxId):
+            writeInt(&buf, Int32(2))
+            FfiConverterInt64.write(mailboxId, into: &buf)
+            
+        
+        case let .unified(role):
+            writeInt(&buf, Int32(3))
+            FfiConverterTypeMailboxRole.write(role, into: &buf)
+            
+        
+        case .flagged:
+            writeInt(&buf, Int32(4))
+        
+        
+        case let .thread(threadId):
+            writeInt(&buf, Int32(5))
+            FfiConverterInt64.write(threadId, into: &buf)
+            
         }
     }
 }
@@ -2920,6 +3218,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_sb_ffi_checksum_method_core_mailboxes() != 55563) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_sb_ffi_checksum_method_core_subscribe() != 24172) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_sb_ffi_checksum_method_core_close_window() != 3551) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -2939,6 +3240,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_canceltoken_is_cancelled() != 65292) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_subscription_next() != 14648) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_constructor_canceltoken_new() != 31645) {

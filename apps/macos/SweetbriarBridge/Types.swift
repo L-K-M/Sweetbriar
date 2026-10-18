@@ -150,11 +150,26 @@ public struct Mailboxes: Sendable, Equatable {
     }
 }
 
-/// Which window the shell is listing (spec/07 "Queries"). For the
-/// pilot only `debugSynthetic` — the in-memory debug source — exists.
-public enum WindowSpec: Sendable, Equatable {
+/// Which window the shell is listing (spec/07 "Store windows").
+public enum WindowSpec: Sendable, Equatable, Hashable {
     /// The synthetic source filled by `debugFillSynthetic`.
     case debugSynthetic
+    /// One mailbox's occurrences.
+    case mailbox(Int64)
+    /// Every occurrence in mailboxes of one role.
+    case unified(MailboxRole)
+    /// Flagged logical messages, once each.
+    case flagged
+    /// One thread's logical messages, once each.
+    case thread(Int64)
+}
+
+/// What a window's subscription reports (spec/07 "Subscriptions").
+public enum WindowEvent: Sendable, Equatable {
+    /// The window's rows changed; re-read at this generation.
+    case invalidated(generation: UInt64)
+    /// Fallen too far behind: rebuild the id index, then the pages.
+    case resetRequired
 }
 
 /// Where a window page read starts (spec/07 "Queries"). Cursors are

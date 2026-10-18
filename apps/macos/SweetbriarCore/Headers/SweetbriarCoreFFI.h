@@ -278,6 +278,11 @@ uint64_t uniffi_sb_ffi_fn_method_core_accounts(uint64_t ptr, uint64_t token
 uint64_t uniffi_sb_ffi_fn_method_core_mailboxes(uint64_t ptr, uint64_t token, RustBuffer account_id
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_SUBSCRIBE
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_SUBSCRIBE
+uint64_t uniffi_sb_ffi_fn_method_core_subscribe(uint64_t ptr, uint64_t token, uint64_t window_id
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_CLOSE_WINDOW
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_CLOSE_WINDOW
 uint64_t uniffi_sb_ffi_fn_method_core_close_window(uint64_t ptr, uint64_t window_id
@@ -327,6 +332,21 @@ void uniffi_sb_ffi_fn_method_canceltoken_cancel(uint64_t ptr, RustCallStatus *_N
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CANCELTOKEN_IS_CANCELLED
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CANCELTOKEN_IS_CANCELLED
 int8_t uniffi_sb_ffi_fn_method_canceltoken_is_cancelled(uint64_t ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_CLONE_SUBSCRIPTION
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_CLONE_SUBSCRIPTION
+uint64_t uniffi_sb_ffi_fn_clone_subscription(uint64_t handle, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_FREE_SUBSCRIPTION
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_FREE_SUBSCRIPTION
+void uniffi_sb_ffi_fn_free_subscription(uint64_t handle, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_SUBSCRIPTION_NEXT
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_SUBSCRIPTION_NEXT
+uint64_t uniffi_sb_ffi_fn_method_subscription_next(uint64_t ptr, uint64_t token
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_FUNC_OPEN_CORE
@@ -642,6 +662,12 @@ uint16_t uniffi_sb_ffi_checksum_method_core_mailboxes(void
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_SUBSCRIBE
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_SUBSCRIBE
+uint16_t uniffi_sb_ffi_checksum_method_core_subscribe(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_CLOSE_WINDOW
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_CLOSE_WINDOW
 uint16_t uniffi_sb_ffi_checksum_method_core_close_window(void
@@ -681,6 +707,12 @@ uint16_t uniffi_sb_ffi_checksum_method_canceltoken_cancel(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CANCELTOKEN_IS_CANCELLED
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CANCELTOKEN_IS_CANCELLED
 uint16_t uniffi_sb_ffi_checksum_method_canceltoken_is_cancelled(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_SUBSCRIPTION_NEXT
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_SUBSCRIPTION_NEXT
+uint16_t uniffi_sb_ffi_checksum_method_subscription_next(void
     
 );
 #endif

@@ -13,18 +13,29 @@ use crate::api::Core;
 use crate::cancel::CancelToken;
 use crate::error::CoreError;
 
-/// Which window the shell is listing (spec/07). For the pilot only
-/// `DebugSynthetic` — the in-memory debug source — exists.
+/// Which window the shell is listing (spec/07 "Store windows").
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 pub enum WindowSpec {
     /// The synthetic source filled by `debug_fill_synthetic`.
     DebugSynthetic,
+    /// One mailbox's occurrences.
+    Mailbox { mailbox_id: i64 },
+    /// Every occurrence in mailboxes of one role.
+    Unified { role: MailboxRole },
+    /// Flagged logical messages, once each.
+    Flagged,
+    /// One thread's logical messages, once each.
+    Thread { thread_id: i64 },
 }
 
 impl WindowSpec {
     fn to_service(self) -> sb_service::WindowSpec {
         match self {
             Self::DebugSynthetic => sb_service::WindowSpec::DebugSynthetic,
+            Self::Mailbox { mailbox_id } => sb_service::WindowSpec::Mailbox(mailbox_id),
+            Self::Unified { role } => sb_service::WindowSpec::Unified(role.to_service()),
+            Self::Flagged => sb_service::WindowSpec::Flagged,
+            Self::Thread { thread_id } => sb_service::WindowSpec::Thread(thread_id),
         }
     }
 }
@@ -54,6 +65,19 @@ impl MailboxRole {
             sb_service::MailboxRole::Archive => Self::Archive,
             sb_service::MailboxRole::All => Self::All,
             sb_service::MailboxRole::Flagged => Self::Flagged,
+        }
+    }
+
+    fn to_service(self) -> sb_service::MailboxRole {
+        match self {
+            Self::Inbox => sb_service::MailboxRole::Inbox,
+            Self::Sent => sb_service::MailboxRole::Sent,
+            Self::Drafts => sb_service::MailboxRole::Drafts,
+            Self::Trash => sb_service::MailboxRole::Trash,
+            Self::Junk => sb_service::MailboxRole::Junk,
+            Self::Archive => sb_service::MailboxRole::Archive,
+            Self::All => sb_service::MailboxRole::All,
+            Self::Flagged => sb_service::MailboxRole::Flagged,
         }
     }
 }
@@ -378,6 +402,29 @@ mod tests {
             "the cancelled fill replaced the source"
         );
 
+        sb_test_support::block_on(core.shutdown());
+    }
+
+    /// Every store spec opens over the exported path; over an empty
+    /// store each is empty and knows it (spec/07 "Store windows").
+    #[test]
+    fn store_windows_open_over_the_exported_path() {
+        let (_scratch, core) = scratch_core("ffi-store-windows");
+        for spec in [
+            WindowSpec::Mailbox { mailbox_id: 1 },
+            WindowSpec::Unified {
+                role: MailboxRole::Inbox,
+            },
+            WindowSpec::Flagged,
+            WindowSpec::Thread { thread_id: 1 },
+        ] {
+            let window =
+                sb_test_support::block_on(core.open_window(fresh_token(), spec, Anchor::Top, 10))
+                    .unwrap();
+            assert!(window.rows.is_empty(), "{spec:?}");
+            assert_eq!(window.total, Count::Exact { n: 0 }, "{spec:?}");
+            sb_test_support::block_on(core.close_window(window.window_id));
+        }
         sb_test_support::block_on(core.shutdown());
     }
 
