@@ -211,6 +211,16 @@ enum WindowEvent { Invalidated { generation: u64 }, ResetRequired }
   added only where a measured interaction needs them (research D4).
 - **Coalescing:** events are coalesced. If a slow consumer falls behind,
   it gets `ResetRequired` and rebuilds; nothing is dropped silently.
+  - A subscription starts from the generation of its window's last page
+    or id index, so `next` returns at once when the source has moved
+    past it. Each event moves that mark to the generation it names.
+  - `next` names the latest generation. When more than 32 generations
+    passed since the mark, it answers `ResetRequired` instead.
+  - A second `next` while one waits is `InvalidInput`; a cancelled
+    `next` moves nothing. A closed or unknown window's `next` is
+    `NotFound`, and shutdown ends a waiting one with `Unavailable`.
+  - The store announces a new `list_generation` only after the
+    transaction that made it commits (03).
 - **Snapshot isolation:** a window is not a held read transaction. Each
   read is a short transaction, and `generation` ties the rows to one
   committed state.
