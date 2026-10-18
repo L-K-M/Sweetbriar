@@ -58,7 +58,11 @@ test, except where the spec says "manual qualification".
     - after an IMAP command is sent but before its response;
     - after SMTP `DATA` but before the final reply;
     - during backup and restore;
-    - during migrations.
+    - during migrations;
+    - during an import job (09), at 50 seeded cut points over a fixture
+      import. After each cut, reopening and finishing the job gives the
+      uncut run's final counts, with no duplicate occurrence or
+      provenance and no row referencing a missing object.
 - **I/O faults:** short writes, `ENOSPC`, `EIO` on `fsync`, `rename`
   failure. Each must produce an error, never a reported success.
 - **Invariants** checked after every cut:
