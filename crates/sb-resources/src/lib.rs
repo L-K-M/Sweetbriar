@@ -32,8 +32,8 @@ pub use import::{
 };
 pub use import_jobs::{
     ImportJobBatch, ImportJobCheckpoint, ImportJobRecord, ImportTotals, LISTED_PROBLEMS,
-    SourceProgress, advance_import_job, commit_import_job_batch, create_import_job, import_job,
-    import_job_source, record_import_sources, recoverable_import_jobs,
+    advance_import_job, commit_import_job_batch, create_import_job, import_job, import_job_source,
+    record_import_sources, recoverable_import_jobs,
 };
 pub use sb_mime::{MboxQuoting, MboxVariant};
 pub use sb_platform::{default_cache_root, default_data_root};

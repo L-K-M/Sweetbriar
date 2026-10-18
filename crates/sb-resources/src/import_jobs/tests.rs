@@ -92,10 +92,17 @@ fn malformed_checkpoints_are_refused() {
         "{\"v\":1,\"problems\":[{\"path\":\"/x\",\"kind\":\"odd\",\"detail\":\"\"}]}",
         "{\"v\":1,\"totals\":{\"processed\":1}}",
         "{\"v\":1,\"failure\":3}",
+        "{\"v\":1,\"sources\":2,\"ambiguous\":[1],\"variants\":[[1,\"mboxo\"],[1,\"mboxrd\"]]}",
+        "{\"v\":1,\"problem_count\":0,\"problems\":[{\"path\":\"/x\",\"kind\":\"failed\",\"detail\":\"\"}]}",
     ] {
         assert!(ImportJobCheckpoint::parse(json).is_err(), "{json}");
     }
     assert!(position_from_json("{\"v\":1,\"offset\":3}").is_err());
+    assert!(position_from_json("{\"v\":1,\"messages\":3}").is_err());
+    assert_eq!(
+        position_from_json("{\"v\":1,\"offset\":0,\"messages\":0}").unwrap(),
+        SourcePosition::START
+    );
 }
 
 #[test]
@@ -175,14 +182,8 @@ fn a_job_records_sources_and_commits_batches_with_both_checkpoints() {
             .unwrap()
             .unwrap();
         let position = acquired.next_position();
-        let progress = if position.messages() == sources[0].message_count() {
-            SourceProgress::Finished
-        } else {
-            SourceProgress::Partial
-        };
         let mailbox = sources[0].mailbox().to_owned();
-        let before = checkpoint.clone();
-        checkpoint = write(&res, move |tx| {
+        let job = write(&res, move |tx| {
             let messages = [acquired.into_message()];
             let batch = ImportJobBatch {
                 job_id: JOB,
@@ -191,13 +192,14 @@ fn a_job_records_sources_and_commits_batches_with_both_checkpoints() {
                 mailbox: &mailbox,
                 messages: &messages,
                 position,
-                progress,
                 flags_incomplete: 0,
             };
-            commit_import_job_batch(tx, &batch, &before, now)
+            commit_import_job_batch(tx, &batch, now)
         })
         .unwrap();
         revision += 1;
+        assert_eq!(job.revision(), revision);
+        checkpoint = job.checkpoint().clone();
         assert_eq!(checkpoint.next(), expected_next);
         let (_, stored) = res.read(|tx| import_job_source(tx, JOB, 0)).unwrap();
         assert_eq!(stored, position);
@@ -223,4 +225,161 @@ fn a_job_records_sources_and_commits_batches_with_both_checkpoints() {
     let job = res.read(|tx| import_job(tx, JOB)).unwrap();
     assert_eq!(job.revision(), revision);
     assert_eq!(job.checkpoint().to_json(), checkpoint.to_json());
+}
+
+/// A running job over `files` (name, mbox bytes); its revision.
+fn running_job(
+    res: &Resources,
+    scratch: &ScratchDir,
+    files: &[(&str, &[u8])],
+) -> (Vec<SourceInventory>, i64) {
+    let paths: Vec<PathBuf> = files
+        .iter()
+        .map(|(name, bytes)| {
+            let path = scratch.path().join(name);
+            fs::write(&path, bytes).unwrap();
+            path
+        })
+        .collect();
+    let (sources, problems) = inventory(res, &paths);
+    let now = res.now();
+    let recorded = sources.clone();
+    let job = write(res, move |tx| {
+        create_import_job(tx, JOB, &paths, now)?;
+        record_import_sources(tx, JOB, 0, &recorded)?;
+        let checkpoint = ImportJobCheckpoint::inventoried(&recorded, &problems);
+        let waiting = ImportJobState::AwaitingConfirmation;
+        let job = advance_import_job(tx, JOB, 1, waiting, &checkpoint, now)?;
+        advance_import_job(tx, JOB, 2, ImportJobState::Running, job.checkpoint(), now)
+    })
+    .unwrap();
+    (sources, job.revision())
+}
+
+const TWO: &[u8] =
+    b"From a Sat Oct 17 12:00:00 2026\n\none\nFrom b Sat Oct 17 12:00:00 2026\n\ntwo\n";
+const ONE: &[u8] = b"From a Sat Oct 17 12:00:00 2026\n\nonly\n";
+
+#[test]
+fn a_batch_must_continue_the_next_source() {
+    let (scratch, res) = resources("batch-order");
+    let (sources, revision) = running_job(&res, &scratch, &[("Two.mbox", TWO), ("One.mbox", ONE)]);
+    let now = res.now();
+    let mailbox = sources[1].mailbox().to_owned();
+    let end = SourcePosition::new(sources[1].snapshot().byte_length(), 1);
+    // Source 1 claims to finish while source 0 has not started.
+    let error = write(&res, move |tx| {
+        let batch = ImportJobBatch {
+            job_id: JOB,
+            revision,
+            ordinal: 1,
+            mailbox: &mailbox,
+            messages: &[],
+            position: end,
+            flags_incomplete: 0,
+        };
+        commit_import_job_batch(tx, &batch, now)
+    })
+    .unwrap_err();
+    assert!(matches!(error, StoreError::Internal { .. }), "{error:?}");
+    let job = res.read(|tx| import_job(tx, JOB)).unwrap();
+    assert_eq!((job.checkpoint().next(), job.revision()), (0, revision));
+}
+
+#[test]
+fn batch_totals_build_on_the_stored_checkpoint() {
+    let (scratch, res) = resources("batch-totals");
+    let (sources, revision) = running_job(&res, &scratch, &[("Two.mbox", TWO)]);
+    let mut acquisition = res
+        .open_import_acquisition(&sources[0], None, SourcePosition::START)
+        .unwrap();
+    let now = res.now();
+    for step in 0..2 {
+        let acquired = res
+            .acquire_import_message(&mut acquisition)
+            .unwrap()
+            .unwrap();
+        let position = acquired.next_position();
+        let mailbox = sources[0].mailbox().to_owned();
+        write(&res, move |tx| {
+            let messages = [acquired.into_message()];
+            let batch = ImportJobBatch {
+                job_id: JOB,
+                revision: revision + step,
+                ordinal: 0,
+                mailbox: &mailbox,
+                messages: &messages,
+                position,
+                flags_incomplete: 0,
+            };
+            // The base is the stored checkpoint, never the caller's.
+            commit_import_job_batch(tx, &batch, now)
+        })
+        .unwrap();
+    }
+    let job = res.read(|tx| import_job(tx, JOB)).unwrap();
+    assert_eq!(job.checkpoint().totals().processed, 2);
+    assert_eq!(
+        (job.checkpoint().sources(), job.checkpoint().next()),
+        (1, 1)
+    );
+}
+
+#[test]
+fn one_undecodable_job_does_not_hide_the_others() {
+    let (scratch, res) = resources("recover-corrupt");
+    running_job(&res, &scratch, &[("One.mbox", ONE)]);
+    let now = res.now();
+    write(&res, move |tx| {
+        create_import_job(tx, "00000000-0000-4000-8000-0000000000c5", &[], now)?;
+        // Damage the first job's checkpoint behind the store's back.
+        tx.execute(
+            "UPDATE import_jobs SET checkpoint_json = '{\"v\":1,\"sources\":1,\"next\":5}' WHERE job_id = ?1",
+            [JOB],
+        )
+        .map(drop)
+        .map_err(|e| StoreError::internal(e.to_string()))
+    })
+    .unwrap();
+    let jobs = res.read(recoverable_import_jobs).unwrap();
+    assert_eq!(jobs.len(), 2);
+    assert!(jobs.iter().any(|job| job.is_ok()));
+    assert!(
+        jobs.iter()
+            .any(|job| matches!(job, Err(StoreError::Corrupt { .. })))
+    );
+    let error = res.read(|tx| import_job(tx, JOB)).unwrap_err();
+    assert!(matches!(error, StoreError::Corrupt { .. }), "{error:?}");
+}
+
+#[test]
+fn only_the_first_problems_are_listed_but_all_are_counted() {
+    let (scratch, res) = resources("problems");
+    let missing: Vec<PathBuf> = (0..LISTED_PROBLEMS + 5)
+        .map(|n| scratch.path().join(format!("missing-{n}.mbox")))
+        .collect();
+    let (sources, problems) = inventory(&res, &missing);
+    let checkpoint = ImportJobCheckpoint::inventoried(&sources, &problems);
+    assert_eq!(checkpoint.problem_count(), (LISTED_PROBLEMS + 5) as u64);
+    assert_eq!(checkpoint.problems().len(), LISTED_PROBLEMS);
+    let parsed = ImportJobCheckpoint::parse(&checkpoint.to_json()).unwrap();
+    assert_eq!(parsed.problems().len(), LISTED_PROBLEMS);
+}
+
+#[test]
+fn an_oversized_request_is_refused_before_writing() {
+    let (_scratch, res) = resources("request-budget");
+    let now = res.now();
+    let huge = vec![PathBuf::from(
+        "/".to_owned() + &"x".repeat(MAX_IMPORT_CHANGES_BYTES),
+    )];
+    let error = write(&res, move |tx| create_import_job(tx, JOB, &huge, now)).unwrap_err();
+    assert!(
+        matches!(error, StoreError::InvalidInput { .. }),
+        "{error:?}"
+    );
+    assert!(matches!(
+        res.read(|tx| import_job(tx, JOB)),
+        Err(StoreError::NotFound { .. })
+    ));
 }
