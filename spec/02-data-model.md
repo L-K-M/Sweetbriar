@@ -1,4 +1,4 @@
-# 02 — Data model (SQLite schema v1)
+# 02 — Data model (SQLite schema v2)
 
 Rests on research D1, D2, D3, D14, D22, D23 and D31
 ([00-summary](../research/00-summary.md),
@@ -72,6 +72,8 @@ CREATE TABLE accounts (
   created_at        INTEGER NOT NULL,
   revision          INTEGER NOT NULL DEFAULT 1
 ) STRICT;
+CREATE UNIQUE INDEX accounts_one_local_archive ON accounts(provider)
+  WHERE provider = 'local_archive';
 
 CREATE TABLE imap_endpoints (                         -- one per IMAP account
   account_id        TEXT PRIMARY KEY REFERENCES accounts(account_id),
@@ -154,6 +156,9 @@ CREATE TABLE acquisition_sources (                    -- provenance, one row per
   completeness     TEXT NOT NULL CHECK (completeness IN ('complete','truncated')),
   acquired_at      INTEGER NOT NULL
 ) STRICT;
+CREATE UNIQUE INDEX acquisition_import_identity
+  ON acquisition_sources(account_id, source_kind, source_ref)
+  WHERE source_kind IN ('import_mbox','import_eml');
 ```
 
 - An acquisition row is inserted **only after** its object is published
@@ -163,6 +168,44 @@ CREATE TABLE acquisition_sources (                    -- provenance, one row per
 - Bytes are stored exactly as received, even when parsing fails.
   "Original" means "as acquired from this source", not the SMTP byte
   stream.
+
+## Import jobs (schema v2, M1.2b)
+
+```sql
+CREATE TABLE import_jobs (
+  job_id          TEXT PRIMARY KEY,
+  state           TEXT NOT NULL CHECK (state IN ('inventory','awaiting_confirmation','running','completed','cancelled','failed')),
+  request_json    TEXT NOT NULL,
+  checkpoint_json TEXT NOT NULL,
+  revision        INTEGER NOT NULL DEFAULT 1 CHECK (revision >= 1),
+  created_at      INTEGER NOT NULL,
+  updated_at      INTEGER NOT NULL
+) STRICT;
+
+CREATE TABLE import_job_sources (
+  job_id          TEXT NOT NULL REFERENCES import_jobs(job_id),
+  ordinal         INTEGER NOT NULL CHECK (ordinal >= 0),
+  source_json     TEXT NOT NULL,
+  checkpoint_json TEXT NOT NULL,
+  PRIMARY KEY (job_id, ordinal)
+) STRICT;
+```
+
+- Job requests, source inventory and checkpoints are canonical JSON objects
+  with `"v": 1`. The engine owns their payload types (09); the store
+  validates JSON and version before writing. Source inventory is immutable;
+  variant choices and progress live in its checkpoint.
+- Inventory is shown before confirmation. Only a `running` job ingests.
+  Completed, cancelled and failed jobs are retained as history.
+- Every batch commits acquisitions, provenance, occurrences, summaries,
+  index-queue entries and both checkpoints in one transaction. Updating
+  the job requires its expected revision, so two workers cannot advance
+  the same checkpoint. A stale revision is `Conflict` and rolls back.
+- Each source has its own row so a batch rewrites only its progress,
+  rather than an entire EML-folder inventory.
+- Migration 2 adds these tables and both unique indexes. It creates the
+  local archive account if none exists, preserving an existing archive
+  and all v1 rows. It rewrites or drops no existing data.
 
 ## Mailboxes, occurrences and logical messages
 
@@ -688,11 +731,12 @@ CREATE INDEX d_list_rows_flagged ON d_list_rows(sort_date DESC, occurrence_id DE
     yields `Corrupt`. After the whole run, a full
     `PRAGMA integrity_check` (03); a finding is `Corrupt`;
   - is forward-only.
-- **Migration 1** creates the tables of this document and of 06, and
+- **Migration 1** creates the original v1 tables of this document and of 06, and
   fills `store_meta`: `store_uuid` and `incarnation` (two new UUIDs),
   `created_at`, and both version keys. A test builds a database from
   these two documents' SQL blocks and requires the migrated schema to
-  match it, so the spec and the migrations can't drift.
+  match the complete migration sequence, so the spec and the migrations
+  can't drift. Migration 2 adds the import schema described above.
 - **Before any migration that rewrites or drops data,** the engine takes a
   `VACUUM INTO` snapshot, keeping the last two. This arrives with the
   first such migration; migration 1 has none.

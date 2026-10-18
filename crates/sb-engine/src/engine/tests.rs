@@ -307,7 +307,7 @@ fn a_killed_core_leaves_no_marker_and_is_checked() {
         &state_db,
         "PRAGMA ignore_check_constraints = ON;
          INSERT INTO accounts (account_id, kind, provider, display_name, state, sort_order, created_at)
-           VALUES ('bad', 'not-a-kind', 'local_archive', 'x', 'active', 0, 0);",
+           VALUES ('bad', 'not-a-kind', 'generic_imap', 'x', 'active', 0, 0);",
     );
     match sb_test_support::block_on(Engine::open(&root)) {
         Err(EngineError::Corrupt { detail }) => assert!(detail.contains("quick_check"), "{detail}"),

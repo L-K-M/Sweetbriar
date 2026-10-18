@@ -12,6 +12,19 @@ use crate::{Seams, Store, StoreError, StorePaths};
 /// The moment tests open at (2025-01-01T00:00:00Z).
 pub(crate) const FIXED_NOW_MS: i64 = 1_735_689_600_000;
 
+/// Exercise failing upgrades after every production migration, so new
+/// versions cannot accidentally turn an upgrade test into a no-op.
+pub(crate) fn extra_migration(
+    run: fn(&rusqlite::Transaction, &Seams) -> Result<(), StoreError>,
+) -> Vec<crate::schema::Migration> {
+    let mut migrations = crate::schema::MIGRATIONS.to_vec();
+    migrations.push(crate::schema::Migration {
+        version: crate::schema::LATEST_SCHEMA_VERSION + 1,
+        run,
+    });
+    migrations
+}
+
 /// Deterministic seams over `fs`: one clock value and one seed, so
 /// `created_at` and the UUIDs are reproducible.
 pub(crate) fn test_seams(fs: Arc<dyn Fs>) -> Seams {
