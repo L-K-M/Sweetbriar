@@ -18,6 +18,7 @@ Rests on research [04-data-safety](../research/04-data-safety.md),
   backups/<generation-id>/        backup generations (below)
   recovery/                       preserved evidence: quarantined objects, pre-migration snapshots
     import-source-<32 hex>         private import source snapshots (09)
+    import-report-<job id>.json    import job reports (09)
 <cache root>/                     macOS: ~/Library/Caches/Sweetbriar/   Linux: $XDG_CACHE_HOME/sweetbriar/
   previews/, thumbnails/          disposable
 ```
@@ -71,6 +72,17 @@ recreated.
 - The engine owns snapshot references and terminal-job cleanup. Unreferenced
   crash leftovers remain recovery evidence until that cleanup can identify
   them. These auxiliary copies are outside the acquisition object store.
+- Terminal-job cleanup removes a completed or cancelled job's snapshots,
+  then flushes `recovery/`. It covers every recorded source row, including
+  rows an interrupted inventory recorded before its final checkpoint. A
+  failed job keeps them as evidence. Removing a missing copy succeeds.
+- A capture that never becomes a source (its scan failed or was
+  cancelled) is removed at once. A cancelled inventory's worker removes
+  the captures it has not recorded; if that removal fails, they remain
+  unreferenced leftovers.
+- An import report is written to a fresh temporary name, flushed, renamed
+  over `import-report-<job id>.json` and `recovery/` is flushed. Reports
+  are derived from the job's rows, so rewriting one is safe.
 
 ## SQLite configuration
 

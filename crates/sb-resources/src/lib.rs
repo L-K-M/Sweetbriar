@@ -32,8 +32,9 @@ pub use import::{
 };
 pub use import_jobs::{
     ImportJobBatch, ImportJobCheckpoint, ImportJobRecord, ImportTotals, LISTED_PROBLEMS,
-    advance_import_job, commit_import_job_batch, create_import_job, import_job, import_job_source,
-    record_import_sources, recoverable_import_jobs,
+    advance_import_job, commit_import_job_batch, create_import_job, finished_import_jobs,
+    import_job, import_job_source, import_job_sources, import_report, record_import_sources,
+    recorded_import_job_sources, recoverable_import_jobs,
 };
 pub use sb_mime::{MboxQuoting, MboxVariant};
 pub use sb_platform::{default_cache_root, default_data_root};
@@ -130,6 +131,31 @@ impl Resources {
         acquisition: &mut SourceAcquisition,
     ) -> Result<Option<AcquiredMessage>, StoreError> {
         acquire::next(&self.store, acquisition, &sb_mime::Limits::default())
+    }
+
+    /// Terminal-job cleanup (spec/03): remove these snapshots and flush
+    /// `recovery/`; missing ones count as removed. Blocking.
+    pub fn remove_import_sources(
+        &self,
+        snapshots: &[ImportSourceSnapshot],
+    ) -> Result<(), StoreError> {
+        self.store.remove_import_sources(snapshots)
+    }
+
+    /// Durably replace `job`'s report in `recovery/` (spec/03, 09).
+    /// Blocking.
+    pub fn write_import_report(&self, job: &str, report: &str) -> Result<(), StoreError> {
+        self.store.write_import_report(job, report.as_bytes())
+    }
+
+    /// Whether `job`'s report exists, marking its cleanup done. Blocking.
+    pub fn import_report_exists(&self, job: &str) -> Result<bool, StoreError> {
+        self.store.import_report_exists(job)
+    }
+
+    /// Where `job`'s report lives, for the user to open.
+    pub fn import_report_path(&self, job: &str) -> Result<PathBuf, StoreError> {
+        self.store.import_report_path(job)
     }
 
     /// Close the store: the clean-shutdown marker, the writer, the

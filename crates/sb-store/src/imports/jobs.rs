@@ -154,6 +154,23 @@ pub fn recoverable_import_jobs(tx: &Transaction) -> Result<Vec<ImportJob>, Store
     ids.iter().map(|id| import_job(tx, id)).collect()
 }
 
+/// Completed, cancelled and failed jobs, oldest first: terminal-job
+/// cleanup at open checks each for its report (spec/09).
+pub fn finished_import_jobs(tx: &Transaction) -> Result<Vec<ImportJob>, StoreError> {
+    let mut statement = tx
+        .prepare(
+            "SELECT job_id FROM import_jobs WHERE state IN ('completed','cancelled','failed')
+             ORDER BY created_at, job_id",
+        )
+        .map_err(sql_error)?;
+    let ids = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(sql_error)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(sql_error)?;
+    ids.iter().map(|id| import_job(tx, id)).collect()
+}
+
 pub fn advance_import_job(
     tx: &Transaction,
     id: &str,
@@ -221,6 +238,30 @@ pub fn import_job_source(
         params![job_id, source_ordinal(ordinal)?],
         |row| Ok(ImportJobSource { source_json: row.get(0)?, checkpoint_json: row.get(1)? }),
     ).optional().map_err(sql_error)?.ok_or_else(|| StoreError::not_found("import job source"))
+}
+
+/// Every recorded source row of a job, in ordinal order, including rows
+/// an interrupted inventory recorded before its final checkpoint.
+pub fn import_job_source_rows(
+    tx: &Transaction,
+    job_id: &str,
+) -> Result<Vec<ImportJobSource>, StoreError> {
+    let mut statement = tx
+        .prepare(
+            "SELECT source_json, checkpoint_json FROM import_job_sources WHERE job_id = ?1
+             ORDER BY ordinal",
+        )
+        .map_err(sql_error)?;
+    statement
+        .query_map([job_id], |row| {
+            Ok(ImportJobSource {
+                source_json: row.get(0)?,
+                checkpoint_json: row.get(1)?,
+            })
+        })
+        .map_err(sql_error)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(sql_error)
 }
 
 pub(super) fn source_progress(

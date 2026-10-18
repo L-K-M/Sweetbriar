@@ -262,6 +262,25 @@ impl ImportSourceSnapshots {
         Ok(file)
     }
 
+    /// Remove finished jobs' copies, then flush `recovery/` once
+    /// (spec/03 terminal-job cleanup). A missing copy is already gone.
+    pub(crate) fn remove(&self, snapshots: &[ImportSourceSnapshot]) -> Result<(), StoreError> {
+        for snapshot in snapshots {
+            match retry_interrupted(|| self.fs.remove(&self.private_path(&snapshot.token))) {
+                Err(e) if e.kind() != io::ErrorKind::NotFound => {
+                    return Err(StoreError::unavailable(format!(
+                        "cannot remove the import source snapshot {}: {e}",
+                        snapshot.token
+                    )));
+                }
+                _ => (),
+            }
+        }
+        self.fs.sync_dir(&self.recovery).map_err(|e| {
+            StoreError::unavailable(format!("cannot flush the import source removals: {e}"))
+        })
+    }
+
     /// The copy's private path. Valid tokens are hex-only, so this can
     /// never name anything outside `recovery/`.
     fn private_path(&self, token: &str) -> PathBuf {
