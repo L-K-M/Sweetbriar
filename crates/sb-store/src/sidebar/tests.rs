@@ -41,7 +41,8 @@ type Summary<'a> = (
     u64,
 );
 
-/// A listed occurrence in `mailbox`, read or not.
+/// A listed occurrence in `mailbox`, read or not, committed the way a
+/// writer commits one: rows refreshed, then the generation advanced.
 fn occurrence(conn: &mut Connection, account: &str, mailbox: i64, seen: bool) {
     let tx = conn.transaction().unwrap();
     tx.execute(
@@ -58,6 +59,7 @@ fn occurrence(conn: &mut Connection, account: &str, mailbox: i64, seen: bool) {
     .unwrap();
     let id = tx.last_insert_rowid();
     list_rows::refresh(&tx, &BTreeSet::from([id])).unwrap();
+    list_rows::advance_generation(&tx).unwrap();
     tx.commit().unwrap();
 }
 
@@ -109,12 +111,17 @@ fn mailboxes_carry_counts_and_their_generation() {
     let inbox = mailbox(&conn, &archive, "Inbox", "folder", Some("inbox"));
     let all = mailbox(&conn, &archive, "All Mail", "virtual", Some("all"));
     let archived = mailbox(&conn, &archive, "Archive", "folder", None);
+    let before = {
+        let tx = conn.transaction().unwrap();
+        mailboxes(&tx, &archive).unwrap().unwrap().generation
+    };
     occurrence(&mut conn, &archive, inbox, false);
     occurrence(&mut conn, &archive, inbox, true);
     occurrence(&mut conn, &archive, work, false);
     let tx = conn.transaction().unwrap();
     let list = mailboxes(&tx, &archive).unwrap().unwrap();
-    assert_eq!(list.generation, list_rows::generation(&tx).unwrap());
+    // Each occurrence's write advanced the generation the list shows.
+    assert_eq!(list.generation, before + 3);
     let summary: Vec<Summary> = list
         .mailboxes
         .iter()
