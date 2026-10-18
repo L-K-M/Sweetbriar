@@ -53,7 +53,7 @@ CREATE TABLE store_meta (
 -- keys: 'store_uuid', 'incarnation' (new UUID after every restore),
 -- 'created_at', 'app_version_last_opened', 'last_migrated_by' (app version),
 -- 'clean_shutdown_at' (03 Integrity: present only between a clean shutdown and the next open),
--- 'list_generation' (decimal; the d_list_rows generation, from migration 3).
+-- 'list_generation' (an integer in decimal digits; the d_list_rows generation, from migration 3).
 -- The schema version is PRAGMA user_version, owned by the migration runner;
 -- it is not duplicated here.
 ```
@@ -679,7 +679,7 @@ CREATE INDEX d_list_rows_unified ON d_list_rows(mailbox_role, sort_date DESC, oc
 CREATE INDEX d_list_rows_flagged ON d_list_rows(sort_date DESC, occurrence_id DESC)
   WHERE flagged = 1 AND representative = 1;
 -- Migration 3: at most one representative row per message, and the messages
--- sharing an acquisition, whose rows a replaced summary updates.
+-- sharing an acquisition, whose rows its first summary updates.
 CREATE UNIQUE INDEX d_list_rows_one_representative ON d_list_rows(message_id)
   WHERE representative = 1;
 CREATE INDEX logical_messages_by_acquisition ON logical_messages(acquisition_id);
