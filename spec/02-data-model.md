@@ -733,6 +733,9 @@ CREATE INDEX logical_messages_by_acquisition ON logical_messages(acquisition_id)
     container of its own.
   - A link that would close a cycle is dropped; a message's own
     references overrule earlier guesses about its parent.
+  - Hostile chains stay bounded: only a message's last 128 References
+    ids count, and a link whose parent is more than 1,024 levels deep
+    is dropped.
   - Roots whose base subjects are equal share a thread, as in JWZ. The
     base subject follows RFC 5256: whitespace collapsed, trailing
     `(fwd)`, leading `Re:`/`Fw:`/`Fwd:` and `[…]` blobs, and a
