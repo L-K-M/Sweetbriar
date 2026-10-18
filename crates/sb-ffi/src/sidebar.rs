@@ -183,4 +183,126 @@ mod tests {
 
         sb_test_support::block_on(core.shutdown());
     }
+
+    /// Populated rows cross field by field: an account in states a
+    /// fresh store lacks, and an imported mailbox with distinct total
+    /// and unread counts at the generation its window shows.
+    #[test]
+    fn populated_sidebar_rows_cross_field_by_field() {
+        use std::time::{Duration, Instant};
+
+        const WORK: &str = "00000000-0000-4000-8000-0000000000b0";
+
+        let scratch = ScratchDir::new("ffi-sidebar-populated");
+        let store = scratch.path().join("store");
+        let config = || CoreConfig {
+            data_root: store.to_string_lossy().into_owned(),
+            cache_root: scratch.path().join("cache").to_string_lossy().into_owned(),
+        };
+        // Create the store, then add an account no command makes yet.
+        let core = sb_test_support::block_on(open_core(token(), config())).unwrap();
+        sb_test_support::block_on(core.shutdown());
+        sb_test_support::execute_sql(
+            &store.join("state.sqlite"),
+            &format!(
+                "INSERT INTO accounts (account_id, kind, provider, display_name, state,
+                   state_reason, sort_order, created_at)
+                 VALUES ('{WORK}', 'imap', 'proton_bridge', 'Work', 'needs_attention',
+                   'Bridge is not running', 5, 0)"
+            ),
+        );
+        let core = sb_test_support::block_on(open_core(token(), config())).unwrap();
+
+        let accounts = sb_test_support::block_on(core.accounts(token())).unwrap();
+        let archive = accounts[0].account_id.clone();
+        assert_eq!(
+            accounts,
+            vec![
+                Account {
+                    account_id: archive.clone(),
+                    kind: AccountKind::Local,
+                    display_name: "Local Archive".to_owned(),
+                    state: AccountState::Active,
+                    state_reason: None,
+                    sort_order: 0,
+                },
+                Account {
+                    account_id: WORK.to_owned(),
+                    kind: AccountKind::Imap,
+                    display_name: "Work".to_owned(),
+                    state: AccountState::NeedsAttention,
+                    state_reason: Some("Bridge is not running".to_owned()),
+                    sort_order: 5,
+                },
+            ]
+        );
+
+        // Two messages, one unread, imported through the service: the
+        // import commands cross the FFI only in M1.4e.
+        let path = scratch.path().join("Inbox.mbox");
+        std::fs::write(
+            &path,
+            "From a@example.test Sat Oct 17 12:00:00 2026\nStatus: RO\nSubject: Read\n\nx\n\
+             From a@example.test Sat Oct 17 12:00:00 2026\nStatus: O\nSubject: Unread\n\ny\n",
+        )
+        .unwrap();
+        let generation = sb_test_support::block_on(async {
+            let guard = core.service.read().await;
+            let service = guard.as_ref().unwrap();
+            let key = service.new_idempotency_key();
+            let job = service
+                .start_import(&key, vec![path], sb_service::ImportTarget::LocalArchive)
+                .await
+                .unwrap()
+                .job_id;
+            let deadline = Instant::now() + Duration::from_secs(300);
+            loop {
+                let state = service.import_job(&job).await.unwrap().state;
+                if state == sb_service::ImportJobState::AwaitingConfirmation {
+                    let key = service.new_idempotency_key();
+                    service
+                        .confirm_import(&key, &job, Vec::new())
+                        .await
+                        .unwrap();
+                }
+                if state == sb_service::ImportJobState::Completed {
+                    break;
+                }
+                assert!(Instant::now() < deadline, "the import never finished");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            let list = service.mailboxes(&archive).await.unwrap();
+            let window = service
+                .open_window(
+                    sb_service::WindowSpec::Mailbox(list.mailboxes[0].mailbox_id),
+                    sb_service::Anchor::Top,
+                    1,
+                )
+                .await
+                .unwrap();
+            window.generation
+        });
+
+        let list = sb_test_support::block_on(core.mailboxes(token(), archive.clone())).unwrap();
+        assert_eq!(list.generation, generation);
+        let [inbox] = list.mailboxes.as_slice() else {
+            panic!("one mailbox: {:?}", list.mailboxes);
+        };
+        assert_eq!(
+            inbox,
+            &Mailbox {
+                mailbox_id: inbox.mailbox_id,
+                account_id: archive,
+                name: "Inbox".to_owned(),
+                delimiter: None,
+                role: None,
+                kind: MailboxKind::Folder,
+                selectable: true,
+                total: 2,
+                unread: 1,
+            }
+        );
+
+        sb_test_support::block_on(core.shutdown());
+    }
 }
