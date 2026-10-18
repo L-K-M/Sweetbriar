@@ -273,7 +273,10 @@ impl ImportJobCheckpoint {
                 _ => None,
             })
             .collect::<Option<Vec<_>>>()
-            .ok_or_else(|| invalid("import job variants must be [ordinal, variant] pairs"))?;
+            .filter(|variants| variants.is_sorted_by(|a, b| a.0 < b.0))
+            .ok_or_else(|| {
+                invalid("import job variants must be ascending [ordinal, variant] pairs")
+            })?;
         let problems = list("problems")?
             .iter()
             .map(|problem| {
@@ -294,13 +297,19 @@ impl ImportJobCheckpoint {
         if next > sources {
             return Err(invalid("import job next source exceeds its source count"));
         }
+        let problem_count = count("problem_count")?;
+        if problems.len() > LISTED_PROBLEMS || (problems.len() as u64) > problem_count {
+            return Err(invalid(
+                "import job problems exceed their count or listing limit",
+            ));
+        }
         Ok(Self {
             sources,
             next,
             ambiguous,
             variants,
             problems,
-            problem_count: count("problem_count")?,
+            problem_count,
             totals: ImportTotals::from_value(object.get("totals"))?,
             failure,
         })
@@ -354,13 +363,6 @@ impl ImportJobRecord {
     }
 }
 
-/// Whether a batch ends its source's ingest.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SourceProgress {
-    Partial,
-    Finished,
-}
-
 /// One source's batch and where it leaves that source.
 pub struct ImportJobBatch<'a> {
     pub job_id: &'a str,
@@ -368,9 +370,9 @@ pub struct ImportJobBatch<'a> {
     pub ordinal: u64,
     pub mailbox: &'a str,
     pub messages: &'a [ImportMessage],
-    /// The position after the batch's last message.
+    /// The position after the batch's last message; reaching the
+    /// inventory's count finishes the source.
     pub position: SourcePosition,
-    pub progress: SourceProgress,
     pub flags_incomplete: u64,
 }
 
@@ -399,11 +401,15 @@ pub fn import_job(tx: &Transaction, id: &str) -> Result<ImportJobRecord, StoreEr
 }
 
 /// Jobs recovery at open must look at: inventory, waiting and running.
-pub fn recoverable_import_jobs(tx: &Transaction) -> Result<Vec<ImportJobRecord>, StoreError> {
-    rows::recoverable_import_jobs(tx)?
+/// Each decodes on its own, so one damaged row is `Corrupt` alone and
+/// never hides the others.
+pub fn recoverable_import_jobs(
+    tx: &Transaction,
+) -> Result<Vec<Result<ImportJobRecord, StoreError>>, StoreError> {
+    Ok(rows::recoverable_import_jobs(tx)?
         .into_iter()
         .map(ImportJobRecord::decode)
-        .collect()
+        .collect())
 }
 
 /// Record `sources` as ordinals `first..` while the job is in inventory.
@@ -444,15 +450,30 @@ pub fn import_job_source(
 }
 
 /// Commit one batch with both checkpoints (spec/02): the source's new
-/// position and the job's totals, advanced past a finished source.
-/// Returns the job checkpoint as committed; its revision is one higher.
+/// position and the job's totals, advanced past a finished source. The
+/// base is the stored checkpoint, and the batch must continue the job's
+/// next source within its inventory, so no caller can regress totals or
+/// skip a source. Returns the advanced job.
 pub fn commit_import_job_batch(
     tx: &Transaction,
     batch: &ImportJobBatch<'_>,
-    checkpoint: &ImportJobCheckpoint,
     now: Timestamp,
-) -> Result<ImportJobCheckpoint, StoreError> {
-    let mut committed = checkpoint.clone();
+) -> Result<ImportJobRecord, StoreError> {
+    let mut committed = import_job(tx, batch.job_id)?.checkpoint().clone();
+    if batch.ordinal != committed.next {
+        return Err(StoreError::internal(format!(
+            "an import batch for source {} cannot precede or skip source {}",
+            batch.ordinal, committed.next
+        )));
+    }
+    let (source, _) = import_job_source(tx, batch.job_id, batch.ordinal)?;
+    if batch.position.messages() > source.message_count()
+        || batch.flags_incomplete > batch.messages.len() as u64
+    {
+        return Err(StoreError::internal(
+            "an import batch claims more than its source or messages hold",
+        ));
+    }
     let rows_batch = ImportBatch {
         job_id: batch.job_id,
         expected_revision: batch.revision,
@@ -462,12 +483,12 @@ pub fn commit_import_job_batch(
     };
     rows::commit_import_batch(tx, &rows_batch, now, |stats| {
         committed.totals.add(stats, batch.flags_incomplete)?;
-        if batch.progress == SourceProgress::Finished {
+        if batch.position.messages() == source.message_count() {
             committed.next = batch.ordinal + 1;
         }
         Ok((position_json(batch.position), committed.to_json()))
     })?;
-    Ok(committed)
+    import_job(tx, batch.job_id)
 }
 
 fn position_json(position: SourcePosition) -> String {
