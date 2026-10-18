@@ -53,16 +53,18 @@ recreated.
 
 ### Import source snapshots
 
-- A capture uses the `Fs` seam to copy one regular file in bounded chunks
-  while hashing it. Its observed size must stay equal to the size at open;
-  a growing or truncated source fails with the consumed-byte offset.
+- A capture uses the `Fs` seam to open a regular file without waiting for
+  a FIFO writer, checking the kind and size on that same opened handle
+  before reading. It copies in bounded chunks while hashing; a growing
+  or truncated source fails with the consumed-byte offset.
 - The copy has a random, create-new name in `recovery/`. It is flushed,
   then `recovery/` is flushed, before its token, SHA-256 and byte length
   may be referenced by an inventory checkpoint. Sources are never written
   or removed. Cancellation or I/O failure returns no completed snapshot
   and attempts to remove only that capture's private file.
-- Reopening validates the token, length and full hash before returning a
-  seekable reader. Missing copies are `NotFound`; a wrong kind, length or
+- Reopening checks the opened handle's kind and length, then the full hash,
+  before returning that same seekable reader. It also refuses special files
+  without blocking. Missing copies are `NotFound`; a wrong kind, length or
   hash is `Corrupt`, with the evidence retained in `recovery/`.
 - The core treats a completed copy as immutable. This captures a byte
   stream, not a filesystem-atomic view of another process's writes.

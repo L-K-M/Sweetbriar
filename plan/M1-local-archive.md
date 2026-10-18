@@ -58,9 +58,10 @@ local drafts. No network yet.
       Depends on M1.2b and M1.2c1.
     - **M1.2c3 Jobs, service and CLI — L:** confirmation, checkpointed
       scheduling/recovery/cancellation, commands, reports and `sb-cli import`.
+      Depends on M1.2c2.
     - **M1.2c4 Crash qualification — M:** the 50-seed crash/resume suite
       and all original end-to-end M1.2 acceptance checks below. M1.3 waits
-      for this qualification.
+      for this qualification. Depends on M1.2c3.
 - **Goal:** import mbox and EML into the local archive account with exact
   bytes, resumable jobs and a reconciliation report.
 - **Spec:** 09 (Import), 03 (publication before reference), 02
