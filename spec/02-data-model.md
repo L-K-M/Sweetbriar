@@ -698,9 +698,12 @@ CREATE INDEX logical_messages_by_acquisition ON logical_messages(acquisition_id)
     `has_attachments` come from the summary; without one they are NULL
     and 0.
   - The transaction that changes an occurrence, its mailbox or its
-    display sources updates the affected rows. A summary replaced by a
-    newer parser updates the rows of every message sharing its
-    acquisition.
+    display sources updates the affected rows. An import never replaces
+    a stored summary, even an older parser's; summaries for a newer
+    parser come from rebuilding the derived tables. An import that
+    stores the first summary of bytes already held updates the rows of
+    every message sharing them; when those rows exceed the batch's
+    write budget (03), the batch fails.
   - `store_meta.list_generation` gains one in each transaction that
     inserts, changes or removes list rows, and in no other. Windows
     bind to it (07).
