@@ -4,12 +4,13 @@
 //! A *window* is a handle over a spec: `open_window` registers it and
 //! answers the first page, `read_window` pages it at the generation the
 //! caller holds, `window_ids` hands the shell the whole id index, and
-//! `close_window` releases the handle. The pilot's only spec is
-//! `DebugSynthetic`: one in-memory source per core, replaced atomically
-//! by `debug_fill_synthetic`. Everything here is in memory — the window
-//! code never touches the store — but each call still runs on the
-//! runtime's blocking pool (spec/07 "One runtime"), so the mutex below
-//! is never taken on a caller's thread, nor held across an await.
+//! `close_window` releases the handle. Store windows (`Mailbox`,
+//! `Unified`, `Flagged`, `Thread`) read `d_list_rows` in short reads and
+//! share the store's list generation. `DebugSynthetic` is the pilot's
+//! in-memory source, replaced atomically by `debug_fill_synthetic`.
+//! Every call runs on the runtime's blocking pool (spec/07 "One
+//! runtime"), so the table's mutex is never taken on a caller's thread,
+//! nor held across an await.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -397,7 +398,9 @@ impl Window {
         self.has_more_before
     }
 
-    /// The window's row count; the synthetic source always knows it.
+    /// The window's row count: exact for the synthetic source; for a
+    /// store window exact only when the page holds the whole window,
+    /// else at least what the page shows plus one per side with more.
     pub fn total(&self) -> Count {
         self.total
     }
@@ -1014,12 +1017,16 @@ impl Engine {
         check_limit(limit)?;
         let windows = Arc::clone(self.windows());
         let lookup = Arc::clone(&windows);
+        // The lookup and a store read are separate tasks, so a close in
+        // between still gets this page: the read saw the window open.
         let spec = self.compute(move || lookup.spec_of(window_id)).await?;
         let Some(scope) = spec.scope() else {
             return self
                 .compute(move || windows.read(window_id, generation, &anchor, limit))
                 .await;
         };
+        // A malformed or foreign cursor is a caller bug, reported before
+        // any staleness (as `cursor_rank` does for the synthetic source).
         let (store, minted) = store_anchor(spec, &anchor)?;
         // A cursor from another generation than the caller's is stale
         // whatever the store's is now; the error names the current one.

@@ -33,6 +33,8 @@ pub(super) fn mbox(dir: &Path, name: &str, messages: &[(&str, Option<&str>)]) ->
     path
 }
 
+/// Import `path` and wait until its thread rebuild has published too:
+/// that moves the list generation, so windows open only after it.
 pub(super) fn import(engine: &Engine, path: PathBuf) {
     let id = block_on(engine.start_import(&engine.new_idempotency_key(), vec![path]))
         .unwrap()
@@ -41,11 +43,35 @@ pub(super) fn import(engine: &Engine, path: PathBuf) {
     settle(engine, &id, ImportJobState::AwaitingConfirmation);
     block_on(engine.confirm_import(&engine.new_idempotency_key(), &id, Vec::new())).unwrap();
     settle(engine, &id, ImportJobState::Completed);
+    let deadline = Instant::now() + PATIENCE;
+    while engine
+        .resources()
+        .read(sb_resources::thread_revisions)
+        .unwrap()
+        .stale()
+    {
+        assert!(Instant::now() < deadline, "threads were never built");
+        std::thread::sleep(Duration::from_millis(5));
+    }
 }
 
 fn settle(engine: &Engine, id: &str, state: ImportJobState) {
     let deadline = Instant::now() + PATIENCE;
-    while block_on(engine.import_job(id)).unwrap().state() != state {
+    loop {
+        let job = block_on(engine.import_job(id)).unwrap();
+        if job.state() == state {
+            break;
+        }
+        // A job that ended elsewhere will never get there.
+        assert!(
+            !matches!(
+                job.state(),
+                ImportJobState::Completed | ImportJobState::Cancelled | ImportJobState::Failed
+            ),
+            "job {id} ended {:?}, failure {:?}",
+            job.state(),
+            job.checkpoint().failure()
+        );
         assert!(
             Instant::now() < deadline,
             "job {id} never reached {state:?}"
@@ -103,9 +129,9 @@ fn an_mbox_in_reverse_chronological_order_lists_by_date() {
         scratch.path(),
         "Inbox.mbox",
         &[
-            ("Newest", Some("Thu, 15 Oct 2026 10:00:00 +0000")),
-            ("Middle", Some("Wed, 14 Oct 2026 10:00:00 +0000")),
-            ("Oldest", Some("Tue, 13 Oct 2026 10:00:00 +0000")),
+            ("Newest", Some("Mon, 15 Oct 2001 10:00:00 +0000")),
+            ("Middle", Some("Sun, 14 Oct 2001 10:00:00 +0000")),
+            ("Oldest", Some("Sat, 13 Oct 2001 10:00:00 +0000")),
             ("Undated", None),
         ],
     );
@@ -116,7 +142,7 @@ fn an_mbox_in_reverse_chronological_order_lists_by_date() {
     );
     let window =
         block_on(engine.open_window(WindowSpec::Mailbox(mailbox), Anchor::Top, 10)).unwrap();
-    // Undated messages sort by first-seen time: the import, after 2026-10-15.
+    // Undated messages sort by first-seen time: the import, long after 2001.
     assert_eq!(
         subjects(&window),
         vec!["Undated", "Newest", "Middle", "Oldest"]
@@ -192,7 +218,17 @@ fn store_windows_page_and_reset() {
         block_on(engine.read_window(id, generation, Anchor::Around(ids.ids()[4]), 10)).unwrap();
     assert_eq!(around.total(), Count::Exact(5));
 
-    // A cursor carried to another spec, or an id outside the window.
+    // A malformed cursor, one carried to another spec, or an id outside
+    // the window.
+    assert!(matches!(
+        block_on(engine.read_window(
+            id,
+            generation,
+            Anchor::After("sbw1|nope".to_owned().into()),
+            2
+        )),
+        Err(EngineError::InvalidInput { .. })
+    ));
     let flagged = block_on(engine.open_window(WindowSpec::Flagged, Anchor::Top, 2)).unwrap();
     assert!(matches!(
         block_on(engine.read_window(

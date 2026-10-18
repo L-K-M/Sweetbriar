@@ -14,9 +14,8 @@ use crate::{Anchor, Engine, EngineError, WindowEvent, WindowSpec};
 
 const PATIENCE: Duration = Duration::from_secs(60);
 
-/// An engine holding one imported message, and its mailbox's window,
-/// opened once the import's thread rebuild has published: that moves
-/// the generation too.
+/// An engine holding one imported message, and its mailbox's window;
+/// `import` waits for the thread rebuild that moves the generation too.
 fn listed(label: &str) -> (ScratchDir, Engine, crate::Window) {
     let scratch = ScratchDir::new(label);
     let engine = block_on(Engine::open(scratch.path().join("store"))).unwrap();
@@ -28,16 +27,6 @@ fn listed(label: &str) -> (ScratchDir, Engine, crate::Window) {
             &[("Hello", Some("Thu, 15 Oct 2026 10:00:00 +0000"))],
         ),
     );
-    let deadline = Instant::now() + PATIENCE;
-    while engine
-        .resources()
-        .read(sb_resources::thread_revisions)
-        .unwrap()
-        .stale()
-    {
-        assert!(Instant::now() < deadline, "threads were never built");
-        std::thread::sleep(Duration::from_millis(5));
-    }
     let mailbox = value(
         &engine,
         "SELECT mailbox_id FROM mailboxes WHERE remote_name = 'Inbox'",
