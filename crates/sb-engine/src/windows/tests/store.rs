@@ -57,7 +57,21 @@ fn import(engine: &Engine, path: PathBuf) {
 
 fn settle(engine: &Engine, id: &str, state: ImportJobState) {
     let deadline = Instant::now() + PATIENCE;
-    while block_on(engine.import_job(id)).unwrap().state() != state {
+    loop {
+        let job = block_on(engine.import_job(id)).unwrap();
+        if job.state() == state {
+            break;
+        }
+        // A job that ended elsewhere will never get there.
+        assert!(
+            !matches!(
+                job.state(),
+                ImportJobState::Completed | ImportJobState::Cancelled | ImportJobState::Failed
+            ),
+            "job {id} ended {:?}, failure {:?}",
+            job.state(),
+            job.checkpoint().failure()
+        );
         assert!(
             Instant::now() < deadline,
             "job {id} never reached {state:?}"
@@ -115,9 +129,9 @@ fn an_mbox_in_reverse_chronological_order_lists_by_date() {
         scratch.path(),
         "Inbox.mbox",
         &[
-            ("Newest", Some("Thu, 15 Oct 2026 10:00:00 +0000")),
-            ("Middle", Some("Wed, 14 Oct 2026 10:00:00 +0000")),
-            ("Oldest", Some("Tue, 13 Oct 2026 10:00:00 +0000")),
+            ("Newest", Some("Mon, 15 Oct 2001 10:00:00 +0000")),
+            ("Middle", Some("Sun, 14 Oct 2001 10:00:00 +0000")),
+            ("Oldest", Some("Sat, 13 Oct 2001 10:00:00 +0000")),
             ("Undated", None),
         ],
     );
@@ -128,7 +142,7 @@ fn an_mbox_in_reverse_chronological_order_lists_by_date() {
     );
     let window =
         block_on(engine.open_window(WindowSpec::Mailbox(mailbox), Anchor::Top, 10)).unwrap();
-    // Undated messages sort by first-seen time: the import, after 2026-10-15.
+    // Undated messages sort by first-seen time: the import, long after 2001.
     assert_eq!(
         subjects(&window),
         vec!["Undated", "Newest", "Middle", "Oldest"]
