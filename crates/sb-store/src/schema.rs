@@ -12,6 +12,7 @@ use sb_types::id::Uuid;
 
 use crate::Seams;
 use crate::StoreError;
+use crate::list_rows;
 
 /// The app version the workspace `Cargo.toml` carries: what
 /// `last_migrated_by` and `app_version_last_opened` record (spec/02).
@@ -29,7 +30,8 @@ pub(crate) struct Migration {
 }
 
 /// The production migration list, in order. Version 1 creates schema
-/// v1 (spec/02, spec/06); version 2 adds durable imports.
+/// v1 (spec/02, spec/06); version 2 adds durable imports; version 3
+/// starts the list projection.
 pub(crate) const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 1,
@@ -38,6 +40,10 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 2,
         run: migration_2,
+    },
+    Migration {
+        version: 3,
+        run: migration_3,
     },
 ];
 
@@ -455,6 +461,23 @@ fn migration_2(tx: &Transaction, seams: &Seams) -> Result<(), StoreError> {
         .map_err(bug)?;
     }
     Ok(())
+}
+
+/// Migration 3 (spec/02): the list rows' support indexes, the first
+/// list generation, and rows for the occurrences imported before it.
+/// Additive only: no list row existed to rewrite.
+fn migration_3(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
+    tx.execute_batch(include_str!("schema/v3.sql"))
+        .map_err(bug)?;
+    tx.execute(
+        "INSERT INTO store_meta (key, value) VALUES (?1, ?2)",
+        params![
+            list_rows::GENERATION_KEY,
+            list_rows::FIRST_GENERATION.to_string()
+        ],
+    )
+    .map_err(bug)?;
+    list_rows::fill(tx)
 }
 
 /// One version-4 UUID from the randomness seam. A seam that can't

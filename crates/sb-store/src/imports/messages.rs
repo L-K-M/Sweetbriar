@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use rusqlite::{OptionalExtension, Transaction, params};
 use serde_json::json;
 
@@ -6,7 +8,7 @@ use super::{
     FIND_IMPORT_SOURCE, ImportJobState, advance_import_job, canonical_array, canonical_object,
     import_job, import_job_source, invalid, sql_error,
 };
-use crate::{ObjectId, StoreError, Timestamp};
+use crate::{ObjectId, StoreError, Timestamp, list_rows};
 
 /// Spec/09's maximum transaction batch, independent of body size.
 pub const MAX_IMPORT_BATCH: usize = 250;
@@ -16,6 +18,11 @@ pub const MAX_IMPORT_CHANGES_BYTES: usize = 2 * 1024 * 1024;
 const PER_MESSAGE_ROW_BUDGET: usize = 1024;
 // JSON can turn one control byte into six bytes, stored in row and index.
 const SOURCE_PATH_BUDGET_MULTIPLIER: usize = 6 * 2;
+// The list row's integers and framing in its row and two covering indexes.
+const LIST_ROW_BUDGET: usize = 512;
+// Sender, subject and snippet repeat in the list row and both its covering
+// indexes (spec/02 `d_list_rows`).
+const LIST_ROW_TEXT_COPIES: usize = 3;
 
 #[derive(Debug, Clone, Copy)]
 pub enum ImportSourceKind {
@@ -104,9 +111,21 @@ pub struct ImportMessage {
 
 impl ImportMessage {
     /// Conservative metadata budget for a batch builder. Count escaped
-    /// provenance twice (row and unique index); bodies never enter it.
+    /// provenance twice (row and unique index) and the list row's text
+    /// three times; bodies never enter it.
     pub fn change_budget_bytes(&self) -> usize {
         let summary = &self.summary;
+        let list_text = [
+            &summary.subject,
+            &summary.from_addr,
+            &summary.from_name,
+            &summary.snippet,
+        ]
+        .into_iter()
+        .flatten()
+        .fold(LIST_ROW_BUDGET, |size, text| {
+            size.saturating_add(text.len().saturating_mul(LIST_ROW_TEXT_COPIES))
+        });
         [
             &summary.header_message_id,
             &summary.subject,
@@ -124,11 +143,13 @@ impl ImportMessage {
         .into_iter()
         .flatten()
         .fold(
-            PER_MESSAGE_ROW_BUDGET.saturating_add(
-                self.source_path
-                    .len()
-                    .saturating_mul(SOURCE_PATH_BUDGET_MULTIPLIER),
-            ),
+            PER_MESSAGE_ROW_BUDGET
+                .saturating_add(list_text)
+                .saturating_add(
+                    self.source_path
+                        .len()
+                        .saturating_mul(SOURCE_PATH_BUDGET_MULTIPLIER),
+                ),
             |size, text| size.saturating_add(text.len()),
         )
     }
@@ -189,8 +210,21 @@ pub fn commit_import_batch(
     import_job_source(tx, batch.job_id, batch.source_ordinal)?;
     let (account, mailbox) = local_mailbox(tx, batch.mailbox_name)?;
     let mut stats = ImportBatchStats::default();
+    let mut touched = BTreeSet::new();
     for message in batch.messages {
-        store_message(tx, &account, mailbox, message, now, &mut stats)?;
+        store_message(
+            tx,
+            &account,
+            mailbox,
+            message,
+            now,
+            &mut stats,
+            &mut touched,
+        )?;
+    }
+    // One generation per batch that changed what lists show (spec/02).
+    if list_rows::refresh(tx, &touched)? {
+        list_rows::advance_generation(tx)?;
     }
     let (source_checkpoint, job_checkpoint) = progress(&stats)?;
     let source_checkpoint = canonical_object(&source_checkpoint)?;
@@ -256,6 +290,7 @@ fn store_message(
     message: &ImportMessage,
     now: Timestamp,
     stats: &mut ImportBatchStats,
+    touched: &mut BTreeSet<i64>,
 ) -> Result<(), StoreError> {
     let hash = message.object.sha256_hex();
     let length = i64::try_from(message.object.byte_length())
@@ -371,8 +406,13 @@ fn store_message(
         ],
     )
     .map_err(sql_error)?;
+    touched.insert(tx.last_insert_rowid());
     stats.imported += 1;
     if save_summary(tx, acquisition, &message.summary)? {
+        // A newer parser's summary changes every row showing these bytes.
+        if !inserted {
+            touched.extend(list_rows::sharing_acquisition(tx, acquisition)?);
+        }
         tx.execute(
             "INSERT INTO d_index_queue (doc_id, reason, enqueued_at) VALUES (?1, ?2, ?3)
              ON CONFLICT(doc_id) DO UPDATE SET reason = excluded.reason, enqueued_at = excluded.enqueued_at",

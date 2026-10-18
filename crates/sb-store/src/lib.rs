@@ -6,6 +6,7 @@
 mod error;
 mod import_reports;
 pub mod imports;
+mod list_rows;
 mod objects;
 mod paths;
 mod readers;

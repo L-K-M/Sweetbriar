@@ -515,3 +515,149 @@ fn migration_preserves_a_v1_archive_and_its_originals() {
     let store = crate::open(&paths, &test_seams(real_fs())).unwrap();
     assert_eq!(count(&store, "accounts"), 1);
 }
+
+/// (occurrence, sort_date, sender, subject, snippet, unread, flagged,
+/// has_attachments, representative) for every list row.
+type ListRow = (
+    i64,
+    i64,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    bool,
+    bool,
+    bool,
+    bool,
+);
+
+fn list_rows(store: &Store) -> Vec<ListRow> {
+    reading(store, |tx| {
+        let mut statement = tx
+            .prepare(
+                "SELECT occurrence_id, sort_date, sender, subject, snippet, unread, flagged,
+                 has_attachments, representative FROM d_list_rows ORDER BY occurrence_id",
+            )
+            .map_err(sql_error)?;
+        statement
+            .query_map([], |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                    row.get(7)?,
+                    row.get(8)?,
+                ))
+            })
+            .map_err(sql_error)?
+            .collect::<Result<_, _>>()
+            .map_err(sql_error)
+    })
+}
+
+fn list_generation(store: &Store) -> u64 {
+    reading(store, |tx| crate::list_rows::generation(tx))
+}
+
+/// An imported batch lists every new occurrence with its summary's
+/// display fields — `Date` as the sort date, else the first-seen time —
+/// in the same transaction, and advances the list generation once; a
+/// replay of the same sources changes neither (spec/02 `d_list_rows`).
+#[test]
+fn imported_occurrences_are_listed_in_their_batch() {
+    let (_scratch, _paths, store, revision) = setup();
+    let mut dated = message(&store, "/synthetic/Inbox.mbox", 0, ORIGINAL);
+    dated.summary.from_name = Some("Ada Sender".to_owned());
+    dated.summary.from_addr = Some("ada@example.test".to_owned());
+    dated.summary.date_header = Some(5_000);
+    dated.summary.snippet = Some("Keep both occurrences.".to_owned());
+    dated.summary.has_attachments = true;
+    dated.flags.flagged = true;
+    dated.flags.read = ImportReadState::FromHeaders { seen: false };
+    let copy = message(&store, "/synthetic/Inbox.mbox", 128, ORIGINAL);
+    let mut undated = message(
+        &store,
+        "/synthetic/Inbox.mbox",
+        256,
+        b"Subject: none\n\nx\n",
+    );
+    undated.summary.subject = None;
+    let before = list_generation(&store);
+
+    commit(&store, revision, "Inbox", vec![dated, copy, undated]).unwrap();
+
+    let text = |value: &str| Some(value.to_owned());
+    let subject = text("Duplicate source message");
+    let shared = (
+        5_000,
+        text("Ada Sender"),
+        subject.clone(),
+        text("Keep both occurrences."),
+    );
+    let rows = list_rows(&store);
+    let ids: Vec<i64> = rows.iter().map(|row| row.0).collect();
+    assert_eq!(
+        rows,
+        vec![
+            (
+                ids[0],
+                shared.0,
+                shared.1.clone(),
+                shared.2.clone(),
+                shared.3.clone(),
+                true,
+                true,
+                true,
+                true
+            ),
+            // Identical bytes share the summary, but not the flags.
+            (
+                ids[1], shared.0, shared.1, shared.2, shared.3, false, false, true, true
+            ),
+            (
+                ids[2],
+                FIXED_NOW_MS,
+                None,
+                None,
+                None,
+                false,
+                false,
+                false,
+                true
+            ),
+        ]
+    );
+    assert_eq!(list_generation(&store), before + 1);
+
+    let replay = vec![
+        message(&store, "/synthetic/Inbox.mbox", 0, ORIGINAL),
+        message(&store, "/synthetic/Inbox.mbox", 128, ORIGINAL),
+    ];
+    commit(&store, revision + 1, "Inbox", replay).unwrap();
+    assert_eq!(list_rows(&store), rows);
+    assert_eq!(list_generation(&store), before + 1);
+    store.close().unwrap();
+}
+
+/// A newer parser's summary for bytes already listed updates the rows
+/// of every message sharing them, not only the new occurrence's.
+#[test]
+fn a_newer_summary_updates_every_row_sharing_its_bytes() {
+    let (_scratch, _paths, store, revision) = setup();
+    let old = message(&store, "/synthetic/Inbox.mbox", 0, ORIGINAL);
+    commit(&store, revision, "Inbox", vec![old]).unwrap();
+    let before = list_generation(&store);
+
+    let mut newer = message(&store, "/synthetic/Archive.mbox", 0, ORIGINAL);
+    newer.summary.parser_version = 2;
+    newer.summary.subject = Some("Reparsed subject".to_owned());
+    commit(&store, revision + 1, "Archive", vec![newer]).unwrap();
+
+    let subjects: Vec<Option<String>> = list_rows(&store).into_iter().map(|row| row.3).collect();
+    assert_eq!(subjects, vec![Some("Reparsed subject".to_owned()); 2]);
+    assert_eq!(list_generation(&store), before + 1);
+    store.close().unwrap();
+}
