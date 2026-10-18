@@ -8,12 +8,16 @@
 //! `Unified`, `Flagged`, `Thread`) read `d_list_rows` in short reads and
 //! share the store's list generation. `DebugSynthetic` is the pilot's
 //! in-memory source, replaced atomically by `debug_fill_synthetic`.
-//! Every call runs on the runtime's blocking pool (spec/07 "One
-//! runtime"), so the table's mutex is never taken on a caller's thread,
-//! nor held across an await.
+//! Every async call runs on the runtime's blocking pool (spec/07 "One
+//! runtime"), so the table's mutex is never held across an await; the
+//! one caller's-thread use is `subscribe` reading a window's in-memory
+//! mark, an in-memory getter as spec/07 allows.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
+
+use tokio::sync::watch;
 
 use sb_resources::{
     ListAnchor, ListKey, ListPage, ListScope, MailboxRole, PageRead, StoredListRow,
@@ -432,6 +436,47 @@ impl WindowIds {
 /// `ResetRequired` so the shell rebuilds (spec/07).
 pub(crate) struct Windows {
     inner: Mutex<WindowsInner>,
+    /// What subscriptions wait on (spec/07 "Subscriptions"): any change
+    /// wakes every waiting `next`, which checks its own window.
+    versions: watch::Sender<Versions>,
+}
+
+/// The sources' generations, plus what ends a wait: a close or the
+/// engine shutting down.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct Versions {
+    store: u64,
+    synthetic: u64,
+    closes: u64,
+    shut: bool,
+}
+
+/// An open window: its spec and the generation of the last page or id
+/// index its caller received, where a subscription's mark starts. The
+/// caller's side raises it once a result is delivered, so a read
+/// cancelled on the way back moves nothing.
+#[derive(Debug, Clone)]
+struct OpenWindow {
+    spec: WindowSpec,
+    seen: Arc<AtomicU64>,
+}
+
+impl OpenWindow {
+    fn new(spec: WindowSpec, seen: u64) -> Self {
+        Self {
+            spec,
+            seen: Arc::new(AtomicU64::new(seen)),
+        }
+    }
+
+    /// The caller received a page or ids at `generation`.
+    fn delivered(&self, generation: u64) {
+        self.seen.fetch_max(generation, Ordering::AcqRel);
+    }
+
+    fn seen(&self) -> u64 {
+        self.seen.load(Ordering::Acquire)
+    }
 }
 
 #[derive(Default)]
@@ -439,8 +484,8 @@ struct WindowsInner {
     /// The id the next opened window gets — incremented before use,
     /// so the first window is 1 and 0 never names a window.
     next_id: u64,
-    /// The open windows, id → spec.
-    open: HashMap<WindowId, WindowSpec>,
+    /// The open windows.
+    open: HashMap<WindowId, OpenWindow>,
     /// The one debug source (spec/07 "Debug source"): its generation —
     /// 0 before the first fill — and its row count.
     synthetic: SyntheticSource,
@@ -468,7 +513,23 @@ impl Windows {
     pub(crate) fn new() -> Self {
         Self {
             inner: Mutex::new(WindowsInner::default()),
+            versions: watch::Sender::new(Versions::default()),
         }
+    }
+
+    /// The store committed `generation` (spec/07): wake subscriptions.
+    /// Announcements may race a reader, so the newest wins.
+    pub(crate) fn store_moved(&self, generation: u64) {
+        self.versions.send_if_modified(|versions| {
+            let moved = generation > versions.store;
+            versions.store = versions.store.max(generation);
+            moved
+        });
+    }
+
+    /// The engine is shutting down: end every waiting `next`.
+    pub(crate) fn shut(&self) {
+        self.versions.send_modify(|versions| versions.shut = true);
     }
 
     fn lock(&self) -> MutexGuard<'_, WindowsInner> {
@@ -487,10 +548,19 @@ impl Windows {
                 format!("the debug source holds at most {MAX_FILL} rows"),
             ));
         }
-        let mut inner = self.lock();
-        inner.synthetic.generation += 1;
-        inner.synthetic.count = count;
-        Ok(inner.synthetic.generation)
+        let generation = {
+            let mut inner = self.lock();
+            inner.synthetic.generation += 1;
+            inner.synthetic.count = count;
+            inner.synthetic.generation
+        };
+        // Fills race to publish; the newest generation wins.
+        self.versions.send_if_modified(|versions| {
+            let moved = generation > versions.synthetic;
+            versions.synthetic = versions.synthetic.max(generation);
+            moved
+        });
+        Ok(generation)
     }
 
     /// `open_window` (spec/07): resolve the anchor against the current
@@ -502,7 +572,10 @@ impl Windows {
         let source = inner.synthetic;
         let range = resolve(spec, anchor, source.generation, source.count, limit)?;
         let window_id = inner.take_window_id();
-        inner.open.insert(window_id, spec);
+        // The window closes if this page never reaches its caller.
+        inner
+            .open
+            .insert(window_id, OpenWindow::new(spec, source.generation));
         Ok(page(
             window_id,
             source.generation,
@@ -524,22 +597,21 @@ impl Windows {
         limit: u32,
     ) -> Result<Window, EngineError> {
         check_limit(limit)?;
-        let inner = self.lock();
-        let spec = inner
+        let mut inner = self.lock();
+        let source = inner.synthetic;
+        let open = inner
             .open
-            .get(&window_id)
-            .copied()
+            .get_mut(&window_id)
             .ok_or_else(|| EngineError::NotFound {
                 what: format!("window {}", window_id.get()),
             })?;
-        let source = inner.synthetic;
         if generation != source.generation {
             return Err(EngineError::ResetRequired {
                 generation: source.generation,
             });
         }
-        let range = resolve(spec, anchor, generation, source.count, limit)?;
-        Ok(page(window_id, generation, spec, range, source.count))
+        let range = resolve(open.spec, anchor, generation, source.count, limit)?;
+        Ok(page(window_id, generation, open.spec, range, source.count))
     }
 
     /// `window_ids` (spec/07 "The id index"): every row's occurrence
@@ -566,26 +638,37 @@ impl Windows {
     /// `close_window` (spec/07): release the handle. Closing twice, or
     /// an id never opened, is harmless.
     fn close(&self, window_id: WindowId) {
-        self.lock().open.remove(&window_id);
+        let removed = self.lock().open.remove(&window_id).is_some();
+        if removed {
+            // A `next` waiting on this window ends with `NotFound`.
+            self.versions.send_modify(|versions| versions.closes += 1);
+        }
     }
 
-    /// Register a store window whose first page was already read.
-    fn register(&self, spec: WindowSpec) -> WindowId {
+    /// Register a store window whose first page, read at `seen`, is
+    /// already in hand.
+    fn register(&self, spec: WindowSpec, seen: u64) -> WindowId {
         let mut inner = self.lock();
         let window_id = inner.take_window_id();
-        inner.open.insert(window_id, spec);
+        inner.open.insert(window_id, OpenWindow::new(spec, seen));
         window_id
     }
 
-    /// The spec an open window lists, or `NotFound`.
-    fn spec_of(&self, window_id: WindowId) -> Result<WindowSpec, EngineError> {
+    /// An open window, or `NotFound`.
+    fn window(&self, window_id: WindowId) -> Result<OpenWindow, EngineError> {
         self.lock()
             .open
             .get(&window_id)
-            .copied()
+            .cloned()
             .ok_or_else(|| EngineError::NotFound {
                 what: format!("window {}", window_id.get()),
             })
+    }
+
+    /// The generation `window_id`'s caller last received, if it is open:
+    /// a subscription's starting mark. An in-memory getter (spec/07).
+    fn seen(&self, window_id: WindowId) -> Option<u64> {
+        self.lock().open.get(&window_id).map(OpenWindow::seen)
     }
 }
 
@@ -913,7 +996,7 @@ impl Engine {
             let page = store_outcome(read, &anchor)?;
             let opened = self
                 .compute(move || {
-                    let window_id = windows.register(spec);
+                    let window_id = windows.register(spec, page.generation);
                     Ok(Opened {
                         window: Some(store_window(window_id, spec, page)),
                         windows,
@@ -951,11 +1034,14 @@ impl Engine {
         let lookup = Arc::clone(&windows);
         // The lookup and a store read are separate tasks, so a close in
         // between still gets this page: the read saw the window open.
-        let spec = self.compute(move || lookup.spec_of(window_id)).await?;
+        let open = self.compute(move || lookup.window(window_id)).await?;
+        let spec = open.spec;
         let Some(scope) = spec.scope() else {
-            return self
+            let window = self
                 .compute(move || windows.read(window_id, generation, &anchor, limit))
-                .await;
+                .await?;
+            open.delivered(window.generation);
+            return Ok(window);
         };
         // A malformed or foreign cursor is a caller bug, reported before
         // any staleness (as `cursor_rank` does for the synthetic source).
@@ -976,7 +1062,9 @@ impl Engine {
                 resources.read(|tx| read_list_page(tx, scope, store, limit as usize, Some(at)))
             })
             .await?;
-        Ok(store_window(window_id, spec, store_outcome(read, &anchor)?))
+        let window = store_window(window_id, spec, store_outcome(read, &anchor)?);
+        open.delivered(window.generation);
+        Ok(window)
     }
 
     /// `window_ids` (spec/07 "The id index"): the window's rows'
@@ -985,14 +1073,17 @@ impl Engine {
     pub async fn window_ids(&self, window_id: WindowId) -> Result<WindowIds, EngineError> {
         let windows = Arc::clone(self.windows());
         let lookup = Arc::clone(&windows);
-        let spec = self.compute(move || lookup.spec_of(window_id)).await?;
-        let Some(scope) = spec.scope() else {
-            return self.compute(move || windows.ids(window_id)).await;
+        let open = self.compute(move || lookup.window(window_id)).await?;
+        let Some(scope) = open.spec.scope() else {
+            let index = self.compute(move || windows.ids(window_id)).await?;
+            open.delivered(index.generation);
+            return Ok(index);
         };
         let read = self
             .read_through(move |resources| resources.read(|tx| list_ids(tx, scope, None)))
             .await?;
         let (generation, ids) = store_outcome(read, &Anchor::Top)?;
+        open.delivered(generation);
         Ok(WindowIds { generation, ids })
     }
 
@@ -1042,6 +1133,10 @@ impl Drop for Opened {
         self.cleanup.spawn(move || windows.close(window.window_id));
     }
 }
+
+mod subscribe;
+
+pub use subscribe::{Subscription, WindowEvent};
 
 #[cfg(test)]
 mod tests;

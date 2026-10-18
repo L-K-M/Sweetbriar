@@ -52,8 +52,8 @@ pub use sb_store::threads::{
     remove_thread, stored_threads, thread_memberships, thread_revisions, thread_sources,
 };
 pub use sb_store::{
-    ImportSourceSnapshot, Receipt, StoreError, Timestamp, Transaction, Uuid, WriteFuture,
-    WritePriority, run_once,
+    ImportSourceSnapshot, ListObserver, Receipt, StoreError, Timestamp, Transaction, Uuid,
+    WriteFuture, WritePriority, run_once,
 };
 
 #[cfg(not(feature = "test-seams"))]
@@ -110,6 +110,13 @@ impl Resources {
         F: FnOnce(&Transaction) -> Result<T, StoreError> + Send + 'static,
     {
         self.store.write(priority, closure)
+    }
+
+    /// Hear of each list generation once its transaction commits
+    /// (spec/07 "Subscriptions"); the observer runs on the writer
+    /// thread and must return at once.
+    pub fn observe_list_generation(&self, observer: ListObserver) {
+        self.store.observe_list_generation(observer);
     }
 
     /// Run one read through the store's reader pool (spec/03): a short

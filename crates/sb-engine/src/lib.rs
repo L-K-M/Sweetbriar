@@ -30,4 +30,7 @@ pub use engine::Engine;
 pub use error::EngineError;
 pub use import::{ImportJobStatus, ImportSourceStatus, ImportStarted};
 pub use settings::Setting;
-pub use windows::{Anchor, Count, Cursor, ListRow, Window, WindowId, WindowIds, WindowSpec};
+pub use windows::{
+    Anchor, Count, Cursor, ListRow, Subscription, Window, WindowEvent, WindowId, WindowIds,
+    WindowSpec,
+};

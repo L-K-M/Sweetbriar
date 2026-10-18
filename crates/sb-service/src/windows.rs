@@ -250,6 +250,37 @@ impl Core {
     pub async fn close_window(&self, window_id: u64) {
         self.engine().close_window(WindowId::from(window_id)).await;
     }
+
+    /// `subscribe` (spec/07 "Subscriptions"): the window's changes,
+    /// pulled with [`Subscription::next`]. Never blocks.
+    pub fn subscribe(&self, window_id: u64) -> Subscription {
+        Subscription(self.engine().subscribe(WindowId::from(window_id)))
+    }
+}
+
+/// What a window's subscription reports (spec/07).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowEvent {
+    /// The window's rows changed; re-read at this generation.
+    Invalidated { generation: u64 },
+    /// Fallen too far behind: rebuild the id index, then the pages.
+    ResetRequired,
+}
+
+/// One window's stream of events (spec/07 "Subscriptions").
+pub struct Subscription(sb_engine::Subscription);
+
+impl Subscription {
+    /// The next event: at once when the window's source already moved
+    /// past the last one, else when it does. One call at a time.
+    pub async fn next(&self) -> Result<WindowEvent, CoreError> {
+        Ok(match self.0.next().await? {
+            sb_engine::WindowEvent::Invalidated { generation } => {
+                WindowEvent::Invalidated { generation }
+            }
+            sb_engine::WindowEvent::ResetRequired => WindowEvent::ResetRequired,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -279,6 +310,12 @@ mod tests {
             assert_eq!(window.total, Count::Exact(0), "{spec:?}");
             sb_test_support::block_on(core.close_window(window.window_id));
         }
+        // A closed window's subscription says so.
+        let closed = core.subscribe(1);
+        assert!(matches!(
+            sb_test_support::block_on(closed.next()),
+            Err(CoreError::NotFound { .. })
+        ));
         sb_test_support::block_on(core.shutdown());
     }
 }
