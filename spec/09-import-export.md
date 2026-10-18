@@ -109,7 +109,14 @@ user-granted permission path.
    - warnings (metadata the format can't carry: Apple Mail flags, colors,
      mailbox structure beyond the file name).
 
-   It is shown in the Import report window and saved in `recovery/`.
+   It is shown in the Import report window and saved in `recovery/` as
+   `import-report-<job id>.json` (03), a version-1 JSON object. It also
+   names each file's mailbox, kind, byte count, message count, variant
+   and final position, the read-state counts (from headers, archive
+   default, incomplete header extraction), the problems and any failure.
+   - A job that finishes first loses its completed or cancelled
+     snapshots, then gets its report; the report marks that cleanup done.
+     At open, each finished job without a report gets both steps again.
 7. **Sources are never modified or removed.**
 
 **Job lifecycle** (02 `import_jobs` states):

@@ -68,9 +68,11 @@ local drafts. No network yet.
       - **M1.2c3b Engine import jobs — L:** start, inventory, confirmation
         with variant choices, checkpointed ingest, recovery at open,
         cancellation and shutdown pauses. Depends on M1.2c3a.
-      - **M1.2c3c Reports, cleanup and CLI — L:** `import_report.json` in
-        `recovery/`, terminal-job snapshot cleanup, service commands and
-        queries, and `sb-cli import`. Depends on M1.2c3b.
+      - **M1.2c3c Reports and cleanup — M:** the import report in
+        `recovery/` and terminal-job snapshot cleanup, also at open.
+        Depends on M1.2c3b.
+      - **M1.2c3d Service and CLI — M:** service commands, the job query's
+        DTOs and `sb-cli import`. Depends on M1.2c3c.
     - **M1.2c4 Crash qualification — M:** the 50-seed crash/resume suite
       and all original end-to-end M1.2 acceptance checks below. M1.3 waits
       for this qualification. Depends on M1.2c3.
