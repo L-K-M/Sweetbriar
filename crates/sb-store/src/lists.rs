@@ -167,7 +167,9 @@ pub enum PageRead<T> {
     Stale {
         generation: u64,
     },
-    /// The anchor's row is not in the scope at this generation.
+    /// The anchor's row is not in the scope at this generation. For
+    /// `Around` the id is not in the window (spec/07 `NotFound`); for a
+    /// cursor's key it was not minted on this window (`InvalidInput`).
     NotInWindow,
 }
 
@@ -178,6 +180,9 @@ enum Direction {
     Older,
     Newer,
 }
+
+/// The largest page (spec/07 `limit`).
+pub const MAX_PAGE_ROWS: usize = 1_000;
 
 const COLUMNS: &str = "occurrence_id, message_id, account_id, mailbox_id, sort_date, sender,
   subject, snippet, unread, flagged, has_attachments";
@@ -193,9 +198,9 @@ pub fn read_list_page(
     limit: usize,
     at: Option<u64>,
 ) -> Result<PageRead<ListPage>, StoreError> {
-    if limit == 0 {
+    if !(1..=MAX_PAGE_ROWS).contains(&limit) {
         return Err(StoreError::InvalidInput {
-            message: "a list page needs at least one row".to_owned(),
+            message: format!("a list page holds 1 to {MAX_PAGE_ROWS} rows"),
         });
     }
     let generation = list_rows::generation(tx)?;
@@ -257,11 +262,7 @@ pub fn list_ids(
     if at.is_some_and(|at| at != generation) {
         return Ok(PageRead::Stale { generation });
     }
-    let sql = format!(
-        "SELECT occurrence_id FROM d_list_rows WHERE {}
-         ORDER BY sort_date DESC, occurrence_id DESC",
-        scope.predicate()
-    );
+    let sql = ids_sql(scope);
     let params = scope.params(&[]);
     let mut statement = tx.prepare_cached(&sql).map_err(sql_error)?;
     let ids = statement
@@ -332,6 +333,15 @@ fn rows(
         .map_err(sql_error)?
         .collect::<Result<_, _>>()
         .map_err(sql_error)
+}
+
+/// The statement [`list_ids`] runs.
+fn ids_sql(scope: ListScope) -> String {
+    format!(
+        "SELECT occurrence_id FROM d_list_rows WHERE {}
+         ORDER BY sort_date DESC, occurrence_id DESC",
+        scope.predicate()
+    )
 }
 
 /// The statement [`rows`] runs. Top and keyed reads are distinct

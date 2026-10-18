@@ -42,7 +42,7 @@ pub use sb_store::imports::{
     ImportJobState, ImportMessage, MAX_IMPORT_BATCH, MAX_IMPORT_CHANGES_BYTES,
 };
 pub use sb_store::lists::{
-    ListAnchor, ListKey, ListPage, ListScope, MailboxRole, PageRead, StoredListRow,
+    ListAnchor, ListKey, ListPage, ListScope, MAX_PAGE_ROWS, MailboxRole, PageRead, StoredListRow,
     list_generation, list_ids, read_list_page,
 };
 pub use sb_store::settings::{StoredSetting, read_all, upsert};

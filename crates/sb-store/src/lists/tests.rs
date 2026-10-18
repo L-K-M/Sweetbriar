@@ -283,7 +283,7 @@ fn rows_carry_their_messages_tags() {
 
 /// A read at another generation is `Stale` naming the current one; an
 /// anchor whose row is outside the scope is `NotInWindow`; an empty
-/// page request is `InvalidInput`. The id index is window order.
+/// page request, or one over 1,000 rows, is `InvalidInput`. The id index is window order.
 #[test]
 fn stale_generations_and_foreign_anchors_are_reported() {
     let (mut conn, account) = store();
@@ -328,10 +328,12 @@ fn stale_generations_and_foreign_anchors_are_reported() {
         );
     }
     let tx = conn.transaction().unwrap();
-    assert!(matches!(
-        read_list_page(&tx, scope, ListAnchor::Top, 0, None),
-        Err(StoreError::InvalidInput { .. })
-    ));
+    for limit in [0, MAX_PAGE_ROWS + 1] {
+        assert!(matches!(
+            read_list_page(&tx, scope, ListAnchor::Top, limit, None),
+            Err(StoreError::InvalidInput { .. })
+        ));
+    }
     assert_eq!(
         list_ids(&tx, scope, None).unwrap(),
         PageRead::Ready((top.generation, order))
@@ -390,5 +392,18 @@ fn page_reads_use_the_list_indexes() {
                 );
             }
         }
+        // The id index walks the same index, in order.
+        let params = scope.params(&[]);
+        let mut statement = conn
+            .prepare(&format!("EXPLAIN QUERY PLAN {}", ids_sql(scope)))
+            .unwrap();
+        let detail = statement
+            .query_map(bound(&params).as_slice(), |row| row.get::<_, String>(3))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+            .join("\n");
+        assert!(detail.contains(index), "{scope:?} ids: {detail}");
+        assert!(!detail.contains("TEMP B-TREE"), "{scope:?} ids: {detail}");
     }
 }
