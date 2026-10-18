@@ -405,6 +405,46 @@ mod tests {
         sb_test_support::block_on(core.shutdown());
     }
 
+    /// Each spec maps to the service's own, payload and role included,
+    /// and each role round-trips.
+    #[test]
+    fn specs_and_roles_map_variant_for_variant() {
+        const ROLES: [(MailboxRole, sb_service::MailboxRole); 8] = [
+            (MailboxRole::Inbox, sb_service::MailboxRole::Inbox),
+            (MailboxRole::Sent, sb_service::MailboxRole::Sent),
+            (MailboxRole::Drafts, sb_service::MailboxRole::Drafts),
+            (MailboxRole::Trash, sb_service::MailboxRole::Trash),
+            (MailboxRole::Junk, sb_service::MailboxRole::Junk),
+            (MailboxRole::Archive, sb_service::MailboxRole::Archive),
+            (MailboxRole::All, sb_service::MailboxRole::All),
+            (MailboxRole::Flagged, sb_service::MailboxRole::Flagged),
+        ];
+        for (role, service) in ROLES {
+            assert_eq!(role.to_service(), service);
+            assert_eq!(MailboxRole::from_service(service), role);
+            assert_eq!(
+                WindowSpec::Unified { role }.to_service(),
+                sb_service::WindowSpec::Unified(service)
+            );
+        }
+        assert_eq!(
+            WindowSpec::Mailbox { mailbox_id: 7 }.to_service(),
+            sb_service::WindowSpec::Mailbox(7)
+        );
+        assert_eq!(
+            WindowSpec::Thread { thread_id: 9 }.to_service(),
+            sb_service::WindowSpec::Thread(9)
+        );
+        assert_eq!(
+            WindowSpec::Flagged.to_service(),
+            sb_service::WindowSpec::Flagged
+        );
+        assert_eq!(
+            WindowSpec::DebugSynthetic.to_service(),
+            sb_service::WindowSpec::DebugSynthetic
+        );
+    }
+
     /// Every store spec opens over the exported path; over an empty
     /// store each is empty and knows it (spec/07 "Store windows").
     #[test]
