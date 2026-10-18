@@ -785,6 +785,18 @@ public protocol CoreProtocol: AnyObject, Sendable {
     func shutdown() async 
     
     /**
+     * `accounts()` (spec/07): every account, by sort order then id.
+     */
+    func accounts(token: CancelToken) async throws  -> [Account]
+    
+    /**
+     * `mailboxes(account_id)` (spec/07): the account's mailboxes with
+     * their counts, as of one list generation. An unknown account is
+     * `NotFound`.
+     */
+    func mailboxes(token: CancelToken, accountId: String) async throws  -> Mailboxes
+    
+    /**
      * `close_window` (spec/07): release the handle. No token — like
      * `shutdown`, the call can't be cancelled; closing twice, or
      * after the core shut down, is harmless.
@@ -957,6 +969,46 @@ open func shutdown()async   {
 }
     
     /**
+     * `accounts()` (spec/07): every account, by sort order then id.
+     */
+open func accounts(token: CancelToken)async throws  -> [Account]  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_accounts(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterSequenceTypeAccount.lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * `mailboxes(account_id)` (spec/07): the account's mailboxes with
+     * their counts, as of one list generation. An unknown account is
+     * `NotFound`.
+     */
+open func mailboxes(token: CancelToken, accountId: String)async throws  -> Mailboxes  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_mailboxes(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterString.lower(accountId)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeMailboxes_lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
      * `close_window` (spec/07): release the handle. No token — like
      * `shutdown`, the call can't be cancelled; closing twice, or
      * after the core shut down, is harmless.
@@ -1116,6 +1168,79 @@ public func FfiConverterTypeCore_lower(_ value: Core) -> UInt64 {
 
 
 /**
+ * One account (spec/07 `accounts()`).
+ */
+public struct Account: Equatable, Hashable {
+    public var accountId: String
+    public var kind: AccountKind
+    public var displayName: String
+    public var state: AccountState
+    public var stateReason: String?
+    public var sortOrder: Int64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(accountId: String, kind: AccountKind, displayName: String, state: AccountState, stateReason: String?, sortOrder: Int64) {
+        self.accountId = accountId
+        self.kind = kind
+        self.displayName = displayName
+        self.state = state
+        self.stateReason = stateReason
+        self.sortOrder = sortOrder
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension Account: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeAccount: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Account {
+        return
+            try Account(
+                accountId: FfiConverterString.read(from: &buf), 
+                kind: FfiConverterTypeAccountKind.read(from: &buf), 
+                displayName: FfiConverterString.read(from: &buf), 
+                state: FfiConverterTypeAccountState.read(from: &buf), 
+                stateReason: FfiConverterOptionString.read(from: &buf), 
+                sortOrder: FfiConverterInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: Account, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.accountId, into: &buf)
+        FfiConverterTypeAccountKind.write(value.kind, into: &buf)
+        FfiConverterString.write(value.displayName, into: &buf)
+        FfiConverterTypeAccountState.write(value.state, into: &buf)
+        FfiConverterOptionString.write(value.stateReason, into: &buf)
+        FfiConverterInt64.write(value.sortOrder, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAccount_lift(_ buf: RustBuffer) throws -> Account {
+    return try FfiConverterTypeAccount.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAccount_lower(_ value: Account) -> RustBuffer {
+    return FfiConverterTypeAccount.lower(value)
+}
+
+
+/**
  * Where the core keeps what, as the shell spells it (spec/07
  * "Lifecycle"): `data_root` holds the store (spec/03), `cache_root`
  * the disposable renditions. Strings, not paths: paths don't cross
@@ -1270,6 +1395,148 @@ public func FfiConverterTypeListRow_lift(_ buf: RustBuffer) throws -> ListRow {
 #endif
 public func FfiConverterTypeListRow_lower(_ value: ListRow) -> RustBuffer {
     return FfiConverterTypeListRow.lower(value)
+}
+
+
+/**
+ * One mailbox, with its present occurrences and the unread ones.
+ */
+public struct Mailbox: Equatable, Hashable {
+    public var mailboxId: Int64
+    public var accountId: String
+    public var name: String
+    public var delimiter: String?
+    public var role: MailboxRole?
+    public var kind: MailboxKind
+    public var selectable: Bool
+    public var total: UInt64
+    public var unread: UInt64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(mailboxId: Int64, accountId: String, name: String, delimiter: String?, role: MailboxRole?, kind: MailboxKind, selectable: Bool, total: UInt64, unread: UInt64) {
+        self.mailboxId = mailboxId
+        self.accountId = accountId
+        self.name = name
+        self.delimiter = delimiter
+        self.role = role
+        self.kind = kind
+        self.selectable = selectable
+        self.total = total
+        self.unread = unread
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension Mailbox: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeMailbox: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Mailbox {
+        return
+            try Mailbox(
+                mailboxId: FfiConverterInt64.read(from: &buf), 
+                accountId: FfiConverterString.read(from: &buf), 
+                name: FfiConverterString.read(from: &buf), 
+                delimiter: FfiConverterOptionString.read(from: &buf), 
+                role: FfiConverterOptionTypeMailboxRole.read(from: &buf), 
+                kind: FfiConverterTypeMailboxKind.read(from: &buf), 
+                selectable: FfiConverterBool.read(from: &buf), 
+                total: FfiConverterUInt64.read(from: &buf), 
+                unread: FfiConverterUInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: Mailbox, into buf: inout [UInt8]) {
+        FfiConverterInt64.write(value.mailboxId, into: &buf)
+        FfiConverterString.write(value.accountId, into: &buf)
+        FfiConverterString.write(value.name, into: &buf)
+        FfiConverterOptionString.write(value.delimiter, into: &buf)
+        FfiConverterOptionTypeMailboxRole.write(value.role, into: &buf)
+        FfiConverterTypeMailboxKind.write(value.kind, into: &buf)
+        FfiConverterBool.write(value.selectable, into: &buf)
+        FfiConverterUInt64.write(value.total, into: &buf)
+        FfiConverterUInt64.write(value.unread, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMailbox_lift(_ buf: RustBuffer) throws -> Mailbox {
+    return try FfiConverterTypeMailbox.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMailbox_lower(_ value: Mailbox) -> RustBuffer {
+    return FfiConverterTypeMailbox.lower(value)
+}
+
+
+/**
+ * An account's mailboxes as of one list generation.
+ */
+public struct Mailboxes: Equatable, Hashable {
+    public var generation: UInt64
+    public var mailboxes: [Mailbox]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(generation: UInt64, mailboxes: [Mailbox]) {
+        self.generation = generation
+        self.mailboxes = mailboxes
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension Mailboxes: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeMailboxes: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Mailboxes {
+        return
+            try Mailboxes(
+                generation: FfiConverterUInt64.read(from: &buf), 
+                mailboxes: FfiConverterSequenceTypeMailbox.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: Mailboxes, into buf: inout [UInt8]) {
+        FfiConverterUInt64.write(value.generation, into: &buf)
+        FfiConverterSequenceTypeMailbox.write(value.mailboxes, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMailboxes_lift(_ buf: RustBuffer) throws -> Mailboxes {
+    return try FfiConverterTypeMailboxes.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMailboxes_lower(_ value: Mailboxes) -> RustBuffer {
+    return FfiConverterTypeMailboxes.lower(value)
 }
 
 
@@ -1556,6 +1823,158 @@ public func FfiConverterTypeWindowIds_lift(_ buf: RustBuffer) throws -> WindowId
 public func FfiConverterTypeWindowIds_lower(_ value: WindowIds) -> RustBuffer {
     return FfiConverterTypeWindowIds.lower(value)
 }
+
+
+/**
+ * How an account reaches its mail.
+ */
+
+public enum AccountKind: Equatable, Hashable {
+    
+    case local
+    case imap
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension AccountKind: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeAccountKind: FfiConverterRustBuffer {
+    typealias SwiftType = AccountKind
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> AccountKind {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .local
+        
+        case 2: return .imap
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: AccountKind, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .local:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .imap:
+            writeInt(&buf, Int32(2))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAccountKind_lift(_ buf: RustBuffer) throws -> AccountKind {
+    return try FfiConverterTypeAccountKind.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAccountKind_lower(_ value: AccountKind) -> RustBuffer {
+    return FfiConverterTypeAccountKind.lower(value)
+}
+
+
+
+/**
+ * Whether an account syncs.
+ */
+
+public enum AccountState: Equatable, Hashable {
+    
+    case active
+    case paused
+    case needsAttention
+    case disconnected
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension AccountState: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeAccountState: FfiConverterRustBuffer {
+    typealias SwiftType = AccountState
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> AccountState {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .active
+        
+        case 2: return .paused
+        
+        case 3: return .needsAttention
+        
+        case 4: return .disconnected
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: AccountState, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .active:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .paused:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .needsAttention:
+            writeInt(&buf, Int32(3))
+        
+        
+        case .disconnected:
+            writeInt(&buf, Int32(4))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAccountState_lift(_ buf: RustBuffer) throws -> AccountState {
+    return try FfiConverterTypeAccountState.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAccountState_lower(_ value: AccountState) -> RustBuffer {
+    return FfiConverterTypeAccountState.lower(value)
+}
+
 
 
 /**
@@ -1931,6 +2350,196 @@ public func FfiConverterTypeCount_lower(_ value: Count) -> RustBuffer {
 
 
 /**
+ * What a mailbox is.
+ */
+
+public enum MailboxKind: Equatable, Hashable {
+    
+    case folder
+    case label
+    case virtual
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension MailboxKind: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeMailboxKind: FfiConverterRustBuffer {
+    typealias SwiftType = MailboxKind
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> MailboxKind {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .folder
+        
+        case 2: return .label
+        
+        case 3: return .virtual
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: MailboxKind, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .folder:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .label:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .virtual:
+            writeInt(&buf, Int32(3))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMailboxKind_lift(_ buf: RustBuffer) throws -> MailboxKind {
+    return try FfiConverterTypeMailboxKind.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMailboxKind_lower(_ value: MailboxKind) -> RustBuffer {
+    return FfiConverterTypeMailboxKind.lower(value)
+}
+
+
+
+/**
+ * A mailbox's special-use role (spec/02 `mailboxes.role`).
+ */
+
+public enum MailboxRole: Equatable, Hashable {
+    
+    case inbox
+    case sent
+    case drafts
+    case trash
+    case junk
+    case archive
+    case all
+    /**
+     * Bridge's Starred (spec/04).
+     */
+    case flagged
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension MailboxRole: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeMailboxRole: FfiConverterRustBuffer {
+    typealias SwiftType = MailboxRole
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> MailboxRole {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .inbox
+        
+        case 2: return .sent
+        
+        case 3: return .drafts
+        
+        case 4: return .trash
+        
+        case 5: return .junk
+        
+        case 6: return .archive
+        
+        case 7: return .all
+        
+        case 8: return .flagged
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: MailboxRole, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .inbox:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .sent:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .drafts:
+            writeInt(&buf, Int32(3))
+        
+        
+        case .trash:
+            writeInt(&buf, Int32(4))
+        
+        
+        case .junk:
+            writeInt(&buf, Int32(5))
+        
+        
+        case .archive:
+            writeInt(&buf, Int32(6))
+        
+        
+        case .all:
+            writeInt(&buf, Int32(7))
+        
+        
+        case .flagged:
+            writeInt(&buf, Int32(8))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMailboxRole_lift(_ buf: RustBuffer) throws -> MailboxRole {
+    return try FfiConverterTypeMailboxRole.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMailboxRole_lower(_ value: MailboxRole) -> RustBuffer {
+    return FfiConverterTypeMailboxRole.lower(value)
+}
+
+
+
+/**
  * Which window the shell is listing (spec/07). For the pilot only
  * `DebugSynthetic` — the in-memory debug source — exists.
  */
@@ -2022,6 +2631,30 @@ fileprivate struct FfiConverterOptionString: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionTypeMailboxRole: FfiConverterRustBuffer {
+    typealias SwiftType = MailboxRole?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeMailboxRole.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeMailboxRole.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceInt64: FfiConverterRustBuffer {
     typealias SwiftType = [Int64]
 
@@ -2072,6 +2705,31 @@ fileprivate struct FfiConverterSequenceString: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeAccount: FfiConverterRustBuffer {
+    typealias SwiftType = [Account]
+
+    public static func write(_ value: [Account], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeAccount.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [Account] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [Account]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeAccount.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeListRow: FfiConverterRustBuffer {
     typealias SwiftType = [ListRow]
 
@@ -2089,6 +2747,31 @@ fileprivate struct FfiConverterSequenceTypeListRow: FfiConverterRustBuffer {
         seq.reserveCapacity(Int(len))
         for _ in 0 ..< len {
             seq.append(try FfiConverterTypeListRow.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeMailbox: FfiConverterRustBuffer {
+    typealias SwiftType = [Mailbox]
+
+    public static func write(_ value: [Mailbox], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeMailbox.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [Mailbox] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [Mailbox]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeMailbox.read(from: &buf))
         }
         return seq
     }
@@ -2229,6 +2912,12 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_core_shutdown() != 9052) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_accounts() != 35560) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_mailboxes() != 55563) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_core_close_window() != 3551) {

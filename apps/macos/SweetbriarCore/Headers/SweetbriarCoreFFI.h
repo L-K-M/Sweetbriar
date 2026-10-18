@@ -268,6 +268,16 @@ uint64_t uniffi_sb_ffi_fn_method_core_settings(uint64_t ptr, uint64_t token
 uint64_t uniffi_sb_ffi_fn_method_core_shutdown(uint64_t ptr
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_ACCOUNTS
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_ACCOUNTS
+uint64_t uniffi_sb_ffi_fn_method_core_accounts(uint64_t ptr, uint64_t token
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_MAILBOXES
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_MAILBOXES
+uint64_t uniffi_sb_ffi_fn_method_core_mailboxes(uint64_t ptr, uint64_t token, RustBuffer account_id
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_CLOSE_WINDOW
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_CLOSE_WINDOW
 uint64_t uniffi_sb_ffi_fn_method_core_close_window(uint64_t ptr, uint64_t window_id
@@ -617,6 +627,18 @@ uint16_t uniffi_sb_ffi_checksum_method_core_settings(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_SHUTDOWN
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_SHUTDOWN
 uint16_t uniffi_sb_ffi_checksum_method_core_shutdown(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_ACCOUNTS
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_ACCOUNTS
+uint16_t uniffi_sb_ffi_checksum_method_core_accounts(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_MAILBOXES
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_MAILBOXES
+uint16_t uniffi_sb_ffi_checksum_method_core_mailboxes(void
     
 );
 #endif

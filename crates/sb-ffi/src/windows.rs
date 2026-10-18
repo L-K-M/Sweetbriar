@@ -29,6 +29,35 @@ impl WindowSpec {
     }
 }
 
+/// A mailbox's special-use role (spec/02 `mailboxes.role`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum MailboxRole {
+    Inbox,
+    Sent,
+    Drafts,
+    Trash,
+    Junk,
+    Archive,
+    All,
+    /// Bridge's Starred (spec/04).
+    Flagged,
+}
+
+impl MailboxRole {
+    pub(crate) fn from_service(role: sb_service::MailboxRole) -> Self {
+        match role {
+            sb_service::MailboxRole::Inbox => Self::Inbox,
+            sb_service::MailboxRole::Sent => Self::Sent,
+            sb_service::MailboxRole::Drafts => Self::Drafts,
+            sb_service::MailboxRole::Trash => Self::Trash,
+            sb_service::MailboxRole::Junk => Self::Junk,
+            sb_service::MailboxRole::Archive => Self::Archive,
+            sb_service::MailboxRole::All => Self::All,
+            sb_service::MailboxRole::Flagged => Self::Flagged,
+        }
+    }
+}
+
 /// Where a window page read starts (spec/07 "Queries"). Cursors are
 /// opaque strings minted by the core; the shell carries them
 /// unchanged.

@@ -43,6 +43,113 @@ public struct Receipt: Sendable, Equatable {
     }
 }
 
+/// How an account reaches its mail.
+public enum AccountKind: Sendable, Equatable {
+    case local
+    case imap
+}
+
+/// Whether an account syncs.
+public enum AccountState: Sendable, Equatable {
+    case active
+    case paused
+    case needsAttention
+    case disconnected
+}
+
+/// One account (spec/07 `accounts()`).
+public struct Account: Sendable, Equatable {
+    public var accountId: String
+    public var kind: AccountKind
+    public var displayName: String
+    public var state: AccountState
+    public var stateReason: String?
+    public var sortOrder: Int64
+
+    public init(
+        accountId: String,
+        kind: AccountKind,
+        displayName: String,
+        state: AccountState,
+        stateReason: String?,
+        sortOrder: Int64
+    ) {
+        self.accountId = accountId
+        self.kind = kind
+        self.displayName = displayName
+        self.state = state
+        self.stateReason = stateReason
+        self.sortOrder = sortOrder
+    }
+}
+
+/// A mailbox's special-use role (spec/02 `mailboxes.role`).
+public enum MailboxRole: Sendable, Equatable, Hashable {
+    case inbox
+    case sent
+    case drafts
+    case trash
+    case junk
+    case archive
+    case all
+    /// Bridge's Starred (spec/04).
+    case flagged
+}
+
+/// What a mailbox is.
+public enum MailboxKind: Sendable, Equatable {
+    case folder
+    case label
+    case virtual
+}
+
+/// One mailbox, with its present occurrences and the unread ones
+/// (spec/07 `mailboxes(account_id)`).
+public struct Mailbox: Sendable, Equatable {
+    public var mailboxId: Int64
+    public var accountId: String
+    public var name: String
+    public var delimiter: String?
+    public var role: MailboxRole?
+    public var kind: MailboxKind
+    public var selectable: Bool
+    public var total: UInt64
+    public var unread: UInt64
+
+    public init(
+        mailboxId: Int64,
+        accountId: String,
+        name: String,
+        delimiter: String?,
+        role: MailboxRole?,
+        kind: MailboxKind,
+        selectable: Bool,
+        total: UInt64,
+        unread: UInt64
+    ) {
+        self.mailboxId = mailboxId
+        self.accountId = accountId
+        self.name = name
+        self.delimiter = delimiter
+        self.role = role
+        self.kind = kind
+        self.selectable = selectable
+        self.total = total
+        self.unread = unread
+    }
+}
+
+/// An account's mailboxes as of one list generation.
+public struct Mailboxes: Sendable, Equatable {
+    public var generation: UInt64
+    public var mailboxes: [Mailbox]
+
+    public init(generation: UInt64, mailboxes: [Mailbox]) {
+        self.generation = generation
+        self.mailboxes = mailboxes
+    }
+}
+
 /// Which window the shell is listing (spec/07 "Queries"). For the
 /// pilot only `debugSynthetic` — the in-memory debug source — exists.
 public enum WindowSpec: Sendable, Equatable {
