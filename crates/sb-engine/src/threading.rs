@@ -122,15 +122,15 @@ pub(crate) fn threads(inputs: &[ThreadInput]) -> Vec<Vec<i64>> {
     }
 
     for (index, input) in sorted.iter().enumerate() {
-        let references: &[String] = if input.references.is_empty() {
-            input.in_reply_to.as_slice()
-        } else {
-            let skip = input.references.len().saturating_sub(MAX_REFERENCES);
-            &input.references[skip..]
-        };
-        let chain: Vec<usize> = references
+        // In-Reply-To counts only when References holds no valid id
+        // (RFC 5256 §3).
+        let mut references = valid_ids(&input.references);
+        if references.is_empty() {
+            references = valid_ids(input.in_reply_to.as_slice());
+        }
+        let skip = references.len().saturating_sub(MAX_REFERENCES);
+        let chain: Vec<usize> = references[skip..]
             .iter()
-            .filter(|id| !id.is_empty())
             .map(|id| graph.named(id))
             .collect();
         // Earlier references only fill in parents not yet known.
@@ -197,6 +197,14 @@ pub(crate) fn threads(inputs: &[ThreadInput]) -> Vec<Vec<i64>> {
         .collect();
     groups.sort_unstable_by_key(|group| group[0]);
     groups
+}
+
+/// The non-empty ids of `ids`, in order.
+fn valid_ids(ids: &[String]) -> Vec<&str> {
+    ids.iter()
+        .map(String::as_str)
+        .filter(|id| !id.is_empty())
+        .collect()
 }
 
 /// Every message under `root`, the root's own included.
