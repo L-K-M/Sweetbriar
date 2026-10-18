@@ -53,7 +53,9 @@ CREATE TABLE store_meta (
 -- keys: 'store_uuid', 'incarnation' (new UUID after every restore),
 -- 'created_at', 'app_version_last_opened', 'last_migrated_by' (app version),
 -- 'clean_shutdown_at' (03 Integrity: present only between a clean shutdown and the next open),
--- 'list_generation' (an integer in decimal digits; the d_list_rows generation, from migration 3).
+-- 'list_generation' (an integer in decimal digits; the d_list_rows generation, from migration 3),
+-- 'thread_inputs' and 'threads_built' (integers in decimal digits, from migration 4): how often
+-- imports added logical messages, and how many of those the last complete thread rebuild read.
 -- The schema version is PRAGMA user_version, owned by the migration runner;
 -- it is not duplicated here.
 ```
@@ -654,6 +656,8 @@ CREATE TABLE d_thread_members (
   message_id INTEGER NOT NULL REFERENCES logical_messages(message_id),
   PRIMARY KEY (thread_id, message_id)
 ) STRICT;
+-- Migration 4: a message belongs to at most one thread.
+CREATE UNIQUE INDEX d_thread_members_by_message ON d_thread_members(message_id);
 
 -- The list index: one row per present occurrence, maintained by the engine in the
 -- same transaction as occurrence changes, so list windows never join at scroll time.
@@ -706,8 +710,8 @@ CREATE INDEX logical_messages_by_acquisition ON logical_messages(acquisition_id)
     its batch's write budget (03) at the summary it shows; a batch over
     budget fails.
   - `store_meta.list_generation` gains one in each transaction that
-    inserts, changes or removes list rows, and in no other. Windows
-    bind to it (07).
+    inserts, changes or removes list rows or thread memberships, and
+    in no other. Windows bind to it (07).
 - **`d_message_summary` JSON columns** are canonical JSON arrays.
   Address lists (`reply_to_json`, `to_json`, `cc_json`) hold
   `{"address", "name"}` objects, with `null` for a missing part;
@@ -730,7 +734,8 @@ CREATE INDEX logical_messages_by_acquisition ON logical_messages(acquisition_id)
   - Each message links through its valid References ids, or, without
     any, through its first In-Reply-To id. Ids compare exactly, without case
     folding. A missing or repeated Message-ID gives the message a
-    container of its own.
+    container of its own. As for list rows, `message_headers` fields
+    win over the summary's, field by field.
   - A message's own references overrule earlier guesses about its
     parent: the guess is dropped first. A link that would close a cycle
     is dropped too.
@@ -745,6 +750,24 @@ CREATE INDEX logical_messages_by_acquisition ON logical_messages(acquisition_id)
     `[Fwd: …]` wrapper are removed; it compares in lowercase. An empty
     base subject joins nothing. Unrelated messages with one subject
     share a thread too: the cost of JWZ's heuristic.
+  - Membership is rebuilt from all logical messages after each import
+    job's turn ends, and at open, whenever imports added messages
+    since the last complete rebuild (`thread_inputs` above
+    `threads_built`). A message stored since then has no thread yet.
+  - A rebuild publishes changed memberships in transactions within the
+    write budget (03); each is consistent, though a large regrouping
+    shows over several. Each existing thread id goes to the new group
+    holding most of its members (ties: the group with the earliest
+    message); a group given several keeps the smallest, and an id no
+    group is given is removed.
+  - `d_threads` holds the earliest member's base subject, the one
+    account of all members (NULL when they mix accounts), and the
+    newest representative's `sort_date`, as of the last rebuild. A
+    rebuild rewrites every thread whose stored values differ from
+    these, so one interrupted mid-publication heals at the next.
+  - `Thread` windows (07) join a thread's members to their
+    representatives' list rows: the one list read that joins, since a
+    thread is a page or two of rows.
 - **Search tables** are in [06-search](06-search.md).
 
 ## Migrations
@@ -787,7 +810,10 @@ CREATE INDEX logical_messages_by_acquisition ON logical_messages(acquisition_id)
   can't drift. Migration 2 adds the import schema described above.
   Migration 3 adds the list-row support indexes and `list_generation`,
   and fills `d_list_rows` for the occurrences stored before it. It
-  rewrites or drops no existing data.
+  rewrites or drops no existing data. Migration 4 adds the one-thread
+  index and the thread watermarks: both 0, or `thread_inputs` at 1
+  when the store already holds messages, so the first open threads
+  them and an empty store owes nothing.
 - **Before any migration that rewrites or drops data,** the engine takes a
   `VACUUM INTO` snapshot, keeping the last two. This arrives with the
   first such migration; migration 1 has none.

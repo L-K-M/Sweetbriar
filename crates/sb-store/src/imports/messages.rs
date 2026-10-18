@@ -8,7 +8,7 @@ use super::{
     FIND_IMPORT_SOURCE, ImportJobState, advance_import_job, canonical_array, canonical_object,
     import_job, import_job_source, invalid, sql_error,
 };
-use crate::{ObjectId, StoreError, Timestamp, list_rows};
+use crate::{ObjectId, StoreError, Timestamp, list_rows, threads};
 
 /// Spec/09's maximum transaction batch, independent of body size.
 pub const MAX_IMPORT_BATCH: usize = 250;
@@ -236,6 +236,10 @@ pub fn commit_import_batch(
     // One generation per batch that changed what lists show (spec/02).
     if list_rows::refresh(tx, &list.occurrences)? {
         list_rows::advance_generation(tx)?;
+    }
+    // New logical messages make the threads due for a rebuild.
+    if stats.imported > 0 {
+        threads::note_new_messages(tx)?;
     }
     let (source_checkpoint, job_checkpoint) = progress(&stats)?;
     let source_checkpoint = canonical_object(&source_checkpoint)?;

@@ -407,3 +407,68 @@ fn page_reads_use_the_list_indexes() {
         assert!(!detail.contains("TEMP B-TREE"), "{scope:?} ids: {detail}");
     }
 }
+
+/// A `Thread` page lists the thread's messages through their
+/// representatives, in window order; other messages, and other
+/// occurrences of its messages, stay out.
+#[test]
+fn a_thread_lists_its_messages_once() {
+    let (mut conn, account) = store();
+    let inbox = mailbox(&conn, &account, "Inbox", "folder", None);
+    let work = mailbox(&conn, &account, "Work", "label", None);
+    let first = message(&conn, &account);
+    let second = message(&conn, &account);
+    let outsider = message(&conn, &account);
+    let labelled = occurrence(&mut conn, &account, work, first, 1_000, false);
+    let filed = occurrence(&mut conn, &account, inbox, first, 1_000, false);
+    let reply = occurrence(&mut conn, &account, inbox, second, 2_000, false);
+    occurrence(&mut conn, &account, inbox, outsider, 3_000, false);
+    let thread = {
+        let tx = conn.transaction().unwrap();
+        let blank = crate::threads::ThreadDescription {
+            account_scope: None,
+            subject_norm: None,
+            last_date: None,
+        };
+        let thread = crate::threads::create_thread(&tx, blank).unwrap();
+        for message in [first, second] {
+            crate::threads::assign_thread(&tx, message, thread).unwrap();
+        }
+        tx.commit().unwrap();
+        thread
+    };
+    let scope = ListScope::Thread(thread);
+    let top = ready(page(&mut conn, scope, ListAnchor::Top, 10, None));
+    assert_eq!(ids(&top), vec![reply, filed]);
+    let around = ready(page(&mut conn, scope, ListAnchor::Around(filed), 1, None));
+    assert_eq!(ids(&around), vec![filed]);
+    assert!(around.has_more_before);
+    assert_eq!(
+        page(&mut conn, scope, ListAnchor::Around(labelled), 1, None),
+        PageRead::NotInWindow
+    );
+    let tx = conn.transaction().unwrap();
+    assert_eq!(
+        list_ids(&tx, scope, None).unwrap(),
+        PageRead::Ready((top.generation, vec![reply, filed]))
+    );
+}
+
+/// A `Thread` read finds its members by thread and each member's
+/// representative by message, then sorts the thread's rows: the one
+/// list read with a sort step (spec/02).
+#[test]
+fn thread_reads_seek_membership_and_representatives() {
+    let (conn, _account) = store();
+    let scope = ListScope::Thread(1);
+    for keyed in [false, true] {
+        for direction in [Direction::Older, Direction::Newer] {
+            let detail = plan(&conn, &page_sql(scope, keyed, direction), scope, keyed);
+            assert!(detail.contains("SEARCH m"), "{direction:?}: {detail}");
+            assert!(
+                detail.contains("d_list_rows_one_representative"),
+                "{direction:?}: {detail}"
+            );
+        }
+    }
+}

@@ -54,22 +54,36 @@ impl MailboxRole {
 
 /// Which rows a page reads (spec/07 grain): one mailbox's occurrences,
 /// every occurrence in mailboxes of one role, or the flagged logical
-/// messages through their representatives.
+/// messages or one thread's, through their representatives.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ListScope {
     Mailbox(i64),
     Unified(MailboxRole),
     Flagged,
+    Thread(i64),
 }
 
 impl ListScope {
+    /// The rows the scope reads, as `r`. A thread joins its members to
+    /// their representatives: the one list read that joins (spec/02).
+    fn source(self) -> &'static str {
+        match self {
+            Self::Thread(_) => {
+                "d_thread_members m
+                 JOIN d_list_rows r ON r.message_id = m.message_id AND r.representative = 1"
+            }
+            _ => "d_list_rows r",
+        }
+    }
+
     /// The scope's predicate. `Flagged` spells its literals so the
     /// partial `d_list_rows_flagged` index applies at prepare time.
     fn predicate(self) -> &'static str {
         match self {
-            Self::Mailbox(_) => "mailbox_id = :scope",
-            Self::Unified(_) => "mailbox_role = :scope",
-            Self::Flagged => "flagged = 1 AND representative = 1",
+            Self::Mailbox(_) => "r.mailbox_id = :scope",
+            Self::Unified(_) => "r.mailbox_role = :scope",
+            Self::Flagged => "r.flagged = 1 AND r.representative = 1",
+            Self::Thread(_) => "m.thread_id = :scope",
         }
     }
 
@@ -77,7 +91,7 @@ impl ListScope {
     /// then `extra`.
     fn params(self, extra: &[(&'static str, i64)]) -> Vec<(&'static str, Value)> {
         let scope = match self {
-            Self::Mailbox(mailbox) => Some(Value::Integer(mailbox)),
+            Self::Mailbox(id) | Self::Thread(id) => Some(Value::Integer(id)),
             Self::Unified(role) => Some(Value::Text(role.as_str().to_owned())),
             Self::Flagged => None,
         };
@@ -184,8 +198,8 @@ enum Direction {
 /// The largest page (spec/07 `limit`).
 pub const MAX_PAGE_ROWS: usize = 1_000;
 
-const COLUMNS: &str = "occurrence_id, message_id, account_id, mailbox_id, sort_date, sender,
-  subject, snippet, unread, flagged, has_attachments";
+const COLUMNS: &str = "r.occurrence_id, r.message_id, r.account_id, r.mailbox_id, r.sort_date,
+  r.sender, r.subject, r.snippet, r.unread, r.flagged, r.has_attachments";
 
 /// Read one page of `scope` from `anchor`: at most `limit` rows, in
 /// window order, with their tags. With `at`, a store at another
@@ -338,8 +352,9 @@ fn rows(
 /// The statement [`list_ids`] runs.
 fn ids_sql(scope: ListScope) -> String {
     format!(
-        "SELECT occurrence_id FROM d_list_rows WHERE {}
-         ORDER BY sort_date DESC, occurrence_id DESC",
+        "SELECT r.occurrence_id FROM {} WHERE {}
+         ORDER BY r.sort_date DESC, r.occurrence_id DESC",
+        scope.source(),
         scope.predicate()
     )
 }
@@ -353,13 +368,14 @@ fn page_sql(scope: ListScope, keyed: bool, direction: Direction) -> String {
         Direction::Newer => (">", "ASC"),
     };
     let seek = if keyed {
-        format!("AND (sort_date, occurrence_id) {comparison} (:date, :occurrence)")
+        format!("AND (r.sort_date, r.occurrence_id) {comparison} (:date, :occurrence)")
     } else {
         String::new()
     };
     format!(
-        "SELECT {COLUMNS} FROM d_list_rows WHERE {} {seek}
-         ORDER BY sort_date {order}, occurrence_id {order} LIMIT :count",
+        "SELECT {COLUMNS} FROM {} WHERE {} {seek}
+         ORDER BY r.sort_date {order}, r.occurrence_id {order} LIMIT :count",
+        scope.source(),
         scope.predicate()
     )
 }
@@ -371,8 +387,9 @@ fn rows_at(
     key: ListKey,
 ) -> Result<Option<StoredListRow>, StoreError> {
     let sql = format!(
-        "SELECT {COLUMNS} FROM d_list_rows
-         WHERE occurrence_id = :occurrence AND sort_date = :date AND {}",
+        "SELECT {COLUMNS} FROM {}
+         WHERE r.occurrence_id = :occurrence AND r.sort_date = :date AND {}",
+        scope.source(),
         scope.predicate()
     );
     let params = scope.params(&[(":date", key.sort_date), (":occurrence", key.occurrence_id)]);
@@ -393,7 +410,8 @@ fn key_of(
     occurrence: i64,
 ) -> Result<Option<ListKey>, StoreError> {
     let sql = format!(
-        "SELECT sort_date FROM d_list_rows WHERE occurrence_id = :occurrence AND {}",
+        "SELECT r.sort_date FROM {} WHERE r.occurrence_id = :occurrence AND {}",
+        scope.source(),
         scope.predicate()
     );
     let params = scope.params(&[(":occurrence", occurrence)]);

@@ -18,6 +18,7 @@ mod source_snapshots;
 mod store;
 #[cfg(test)]
 mod testing;
+pub mod threads;
 mod writer;
 
 // The seam vocabulary sb-types owns (spec/01 rules 2 and 3), re-exported

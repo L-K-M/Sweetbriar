@@ -352,7 +352,10 @@ impl Engine {
                 })
                 // Recovery runs here, off the caller's thread, before
                 // the engine is handed out (spec/09).
-                .and_then(|engine| engine.recover_imports().map(|()| engine));
+                .and_then(|engine| engine.recover_imports().map(|()| engine))
+                // Messages imported before the last complete rebuild
+                // get their threads in the background (spec/02).
+                .inspect(Engine::schedule_threads);
             // A caller that stopped waiting drops the engine here.
             let _ = opened.send(engine);
         }))

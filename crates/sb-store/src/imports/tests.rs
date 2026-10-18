@@ -562,6 +562,10 @@ fn list_generation(store: &Store) -> u64 {
     reading(store, |tx| crate::list_rows::generation(tx))
 }
 
+fn thread_inputs(store: &Store) -> u64 {
+    reading(store, crate::threads::thread_revisions).inputs
+}
+
 /// An imported batch lists every new occurrence with its summary's
 /// display fields — `Date` as the sort date, else the first-seen time —
 /// in the same transaction, and advances the list generation once; a
@@ -586,6 +590,7 @@ fn imported_occurrences_are_listed_in_their_batch() {
     );
     undated.summary.subject = None;
     let before = list_generation(&store);
+    let inputs = thread_inputs(&store);
 
     commit(&store, revision, "Inbox", vec![dated, copy, undated]).unwrap();
 
@@ -631,6 +636,8 @@ fn imported_occurrences_are_listed_in_their_batch() {
         ]
     );
     assert_eq!(list_generation(&store), before + 1);
+    // New logical messages make the threads due once per batch.
+    assert_eq!(thread_inputs(&store), inputs + 1);
 
     let replay = vec![
         message(&store, "/synthetic/Inbox.mbox", 0, ORIGINAL),
@@ -639,6 +646,7 @@ fn imported_occurrences_are_listed_in_their_batch() {
     commit(&store, revision + 1, "Inbox", replay).unwrap();
     assert_eq!(list_rows(&store), rows);
     assert_eq!(list_generation(&store), before + 1);
+    assert_eq!(thread_inputs(&store), inputs + 1);
     store.close().unwrap();
 }
 

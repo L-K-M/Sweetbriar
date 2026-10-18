@@ -12,7 +12,7 @@ use sb_types::id::Uuid;
 
 use crate::Seams;
 use crate::StoreError;
-use crate::list_rows;
+use crate::{list_rows, threads};
 
 /// The app version the workspace `Cargo.toml` carries: what
 /// `last_migrated_by` and `app_version_last_opened` record (spec/02).
@@ -31,7 +31,7 @@ pub(crate) struct Migration {
 
 /// The production migration list, in order. Version 1 creates schema
 /// v1 (spec/02, spec/06); version 2 adds durable imports; version 3
-/// starts the list projection.
+/// starts the list projection; version 4 keeps thread membership.
 pub(crate) const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 1,
@@ -44,6 +44,10 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 3,
         run: migration_3,
+    },
+    Migration {
+        version: 4,
+        run: migration_4,
     },
 ];
 
@@ -478,6 +482,34 @@ fn migration_3(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
     )
     .map_err(bug)?;
     list_rows::fill(tx)
+}
+
+/// Migration 4 (spec/02): one thread per message, and watermarks that
+/// make the first open thread the messages imported before, if any.
+fn migration_4(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
+    tx.execute_batch(include_str!("schema/v4.sql"))
+        .map_err(bug)?;
+    let held: bool = tx
+        .query_row("SELECT EXISTS(SELECT 1 FROM logical_messages)", [], |row| {
+            row.get(0)
+        })
+        .map_err(bug)?;
+    let inputs = if held {
+        threads::OWED_AT_MIGRATION
+    } else {
+        threads::FIRST_BUILT
+    };
+    for (key, value) in [
+        (threads::INPUTS_KEY, inputs),
+        (threads::BUILT_KEY, threads::FIRST_BUILT),
+    ] {
+        tx.execute(
+            "INSERT INTO store_meta (key, value) VALUES (?1, ?2)",
+            params![key, value.to_string()],
+        )
+        .map_err(bug)?;
+    }
+    Ok(())
 }
 
 /// One version-4 UUID from the randomness seam. A seam that can't

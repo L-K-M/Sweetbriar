@@ -46,6 +46,11 @@ pub use sb_store::lists::{
     list_generation, list_ids, read_list_page,
 };
 pub use sb_store::settings::{StoredSetting, read_all, upsert};
+pub use sb_store::threads::{
+    StoredThread, ThreadDescription, ThreadRevisions, ThreadSource, assign_thread, create_thread,
+    describe_thread, mark_threads_built, note_membership_change, remove_empty_threads,
+    remove_thread, stored_threads, thread_memberships, thread_revisions, thread_sources,
+};
 pub use sb_store::{
     ImportSourceSnapshot, Receipt, StoreError, Timestamp, Transaction, Uuid, WriteFuture,
     WritePriority, run_once,
