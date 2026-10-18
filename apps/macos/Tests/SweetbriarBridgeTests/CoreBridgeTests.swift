@@ -237,6 +237,62 @@ func anImportRunsOverTheBridge() async throws {
     await bridge.shutdown()
 }
 
+/// An imported mailbox crosses the bridge field by field (spec/07
+/// `mailboxes`): distinct total and unread counts, at the generation
+/// its window shows.
+@Test(.timeLimit(.minutes(1)))
+func anImportedMailboxCrossesTheBridge() async throws {
+    let (dir, config) = tempConfig()
+    defer { try? FileManager.default.removeItem(at: dir) }
+
+    let bridge = try await CoreBridge.open(
+        config: config,
+        snapshots: await sinkBatcher(clock: ManualFrameClock())
+    )
+    let source = dir.appendingPathComponent("Inbox.mbox")
+    let mbox = "From a@example.test Sat Oct 17 12:00:00 2026\nStatus: RO\nSubject: Read\n\nx\n"
+        + "From a@example.test Sat Oct 17 12:00:00 2026\nStatus: O\nSubject: Unread\n\ny\n"
+    try Data(mbox.utf8).write(to: source)
+
+    let started = try await bridge.startImport(paths: [source.path])
+    let deadline = ContinuousClock.now + .seconds(50)
+    var confirmed = false
+    while true {
+        let job = try await bridge.importJob(id: started.jobId)
+        if job.state == .awaitingConfirmation, !confirmed {
+            try await bridge.confirmImport(jobId: started.jobId, variants: [])
+            confirmed = true
+        }
+        if job.state == .completed {
+            break
+        }
+        try #require(!job.state.isFinished, "the import ended \(job.state)")
+        try #require(ContinuousClock.now < deadline, "the import never finished")
+        try await Task.sleep(for: .milliseconds(20))
+    }
+
+    let archive = try #require(try await bridge.accounts().first)
+    #expect(archive.displayName == "Local Archive")
+    #expect(archive.stateReason == nil)
+    #expect(archive.sortOrder == 0)
+    let list = try await bridge.mailboxes(accountId: archive.accountId)
+    let inbox = try #require(list.mailboxes.first)
+    #expect(list.mailboxes.count == 1)
+    #expect(inbox.accountId == archive.accountId)
+    #expect(inbox.name == "Inbox")
+    #expect(inbox.delimiter == nil)
+    #expect(inbox.role == nil)
+    #expect(inbox.kind == .folder)
+    #expect(inbox.selectable)
+    #expect(inbox.total == 2)
+    #expect(inbox.unread == 1)
+    let window = try await bridge.openWindow(spec: .mailbox(inbox.mailboxId), anchor: .top, limit: 10)
+    #expect(list.generation == window.generation)
+    #expect(window.rows.count == 2)
+
+    await bridge.shutdown()
+}
+
 @Test(.timeLimit(.minutes(1)))
 func aCallOnACancelledTaskThrowsAndWritesNothing() async throws {
     let (dir, config) = tempConfig()
