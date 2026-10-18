@@ -51,6 +51,19 @@ pub enum MailboxRole {
 }
 
 impl MailboxRole {
+    pub(crate) fn from_engine(role: sb_engine::MailboxRole) -> Self {
+        match role {
+            sb_engine::MailboxRole::Inbox => Self::Inbox,
+            sb_engine::MailboxRole::Sent => Self::Sent,
+            sb_engine::MailboxRole::Drafts => Self::Drafts,
+            sb_engine::MailboxRole::Trash => Self::Trash,
+            sb_engine::MailboxRole::Junk => Self::Junk,
+            sb_engine::MailboxRole::Archive => Self::Archive,
+            sb_engine::MailboxRole::All => Self::All,
+            sb_engine::MailboxRole::Flagged => Self::Flagged,
+        }
+    }
+
     fn to_engine(self) -> sb_engine::MailboxRole {
         match self {
             Self::Inbox => sb_engine::MailboxRole::Inbox,

@@ -50,6 +50,22 @@ impl MailboxRole {
             Self::Flagged => "flagged",
         }
     }
+
+    /// The role `mailboxes.role` spells as `text`.
+    pub(crate) fn parse(text: &str) -> Option<Self> {
+        [
+            Self::Inbox,
+            Self::Sent,
+            Self::Drafts,
+            Self::Trash,
+            Self::Junk,
+            Self::Archive,
+            Self::All,
+            Self::Flagged,
+        ]
+        .into_iter()
+        .find(|role| role.as_str() == text)
+    }
 }
 
 /// Which rows a page reads (spec/07 grain): one mailbox's occurrences,

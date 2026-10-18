@@ -13,6 +13,7 @@ mod engine;
 mod error;
 mod import;
 mod settings;
+mod sidebar;
 mod threading;
 mod threads;
 mod windows;
@@ -21,9 +22,10 @@ mod windows;
 // needs, re-exported by item through this layer (spec/01 rule 3;
 // `sb-service` itself re-exports nothing).
 pub use sb_resources::{
-    ImportJobCheckpoint, ImportJobState, ImportProblem, ImportProblemKind, ImportTotals,
-    MailboxRole, MboxQuoting, MboxVariant, Receipt, SourceInventory, SourceKind, SourcePosition,
-    Timestamp, default_cache_root, default_data_root,
+    AccountKind, AccountState, ImportJobCheckpoint, ImportJobState, ImportProblem,
+    ImportProblemKind, ImportTotals, MailboxKind, MailboxList, MailboxRole, MboxQuoting,
+    MboxVariant, Receipt, SourceInventory, SourceKind, SourcePosition, StoredAccount,
+    StoredMailbox, Timestamp, default_cache_root, default_data_root,
 };
 
 pub use engine::Engine;
