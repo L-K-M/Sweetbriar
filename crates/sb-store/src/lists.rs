@@ -65,7 +65,8 @@ pub enum ListScope {
 
 impl ListScope {
     /// Whether the scope lists logical messages, one row each, rather
-    /// than occurrences (spec/07 grain).
+    /// than occurrences (spec/07 grain). Search and view scopes, once
+    /// they exist, belong here too.
     fn per_message(self) -> bool {
         matches!(self, Self::Flagged | Self::Thread(_))
     }
@@ -137,7 +138,8 @@ pub enum ListAnchor {
     After(ListKey),
     /// Rows strictly newer than the key's row.
     Before(ListKey),
-    /// The page centred on this occurrence.
+    /// The page centred on this occurrence's row: in per-message
+    /// scopes, its message's row.
     Around(i64),
 }
 
