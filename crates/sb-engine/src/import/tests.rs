@@ -319,10 +319,9 @@ fn plant(engine: &Engine, path: &Path, state: ImportJobState, committed: usize) 
             mailbox: sources[0].mailbox(),
             messages: &messages,
             position,
-            progress: SourceProgress::Partial,
             flags_incomplete: 0,
         };
-        commit_import_job_batch(tx, &batch, record.checkpoint(), now).map(drop)
+        commit_import_job_batch(tx, &batch, now).map(drop)
     }))
     .unwrap();
     id
@@ -481,6 +480,38 @@ fn a_start_dropped_after_submission_is_still_scheduled() {
         &engine,
         &job_id(&receipt),
         ImportJobState::AwaitingConfirmation,
+    );
+    block_on(engine.shutdown()).unwrap();
+}
+
+#[test]
+fn a_damaged_job_row_does_not_stop_the_store_from_opening() {
+    let scratch = ScratchDir::new("import-damaged-row");
+    let path = scratch.path().join("Three.mbox");
+    fs::write(&path, mbox(3)).unwrap();
+    let root = scratch.path().join("store");
+    let engine = open(&root);
+    let damaged = plant(&engine, &path, ImportJobState::Running, 0);
+    let waiting = plant(&engine, &path, ImportJobState::AwaitingConfirmation, 0);
+    let job = damaged.clone();
+    block_on(engine.resources().write(WritePriority::Sync, move |tx| {
+        tx.execute(
+            "UPDATE import_jobs SET checkpoint_json = '{\"v\":1,\"next\":9}' WHERE job_id = ?1",
+            [&job],
+        )
+        .map(drop)
+        .map_err(|e| StoreError::internal(e.to_string()))
+    }))
+    .unwrap();
+    block_on(engine.shutdown()).unwrap();
+
+    // The damaged job stays as stored, as evidence; the rest still works.
+    let engine = open(&root);
+    let error = block_on(engine.import_job(&damaged)).unwrap_err();
+    assert!(matches!(error, EngineError::Corrupt { .. }), "{error:?}");
+    assert_eq!(
+        status(&engine, &waiting).state(),
+        ImportJobState::AwaitingConfirmation
     );
     block_on(engine.shutdown()).unwrap();
 }

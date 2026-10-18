@@ -19,9 +19,9 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use sb_resources::{
     AcquiredMessage, FlagExtraction, ImportInventory, ImportInventoryOutcome, ImportJobBatch,
-    ImportJobCheckpoint, ImportJobState, ImportMessage, MAX_IMPORT_BATCH, MAX_IMPORT_CHANGES_BYTES,
-    MboxVariant, Receipt, Resources, SourceAcquisition, SourceInventory, SourcePosition,
-    SourceProgress, StoreError, WritePriority, advance_import_job, commit_import_job_batch,
+    ImportJobCheckpoint, ImportJobRecord, ImportJobState, ImportMessage, MAX_IMPORT_BATCH,
+    MAX_IMPORT_CHANGES_BYTES, MboxVariant, Receipt, Resources, SourceAcquisition, SourceInventory,
+    SourcePosition, StoreError, WritePriority, advance_import_job, commit_import_job_batch,
     create_import_job, import_job, import_job_source, record_import_sources,
     recoverable_import_jobs, run_once,
 };
@@ -339,11 +339,13 @@ impl Engine {
     }
 
     /// Recovery at open (spec/09): an interrupted inventory fails, a
-    /// waiting job keeps waiting, a running job resumes. Runs on the
-    /// open thread, which may block.
+    /// waiting job keeps waiting, a running job resumes. A job whose row
+    /// no longer decodes stays as stored, as evidence: its query reports
+    /// `Corrupt`, and the rest of the store opens. Runs on the open
+    /// thread, which may block.
     pub(crate) fn recover_imports(&self) -> Result<(), EngineError> {
         let jobs = self.resources().read(recoverable_import_jobs)?;
-        for job in jobs {
+        for job in jobs.into_iter().flatten() {
             match job.state() {
                 ImportJobState::Inventory => {
                     let now = self.resources().now();
@@ -571,17 +573,12 @@ async fn run_ingest(worker: &Worker, claim: &Claim) -> Result<(), String> {
                     mailbox: source.mailbox().to_owned(),
                     messages: gathered.messages,
                     position: gathered.position,
-                    progress: if finished {
-                        SourceProgress::Finished
-                    } else {
-                        SourceProgress::Partial
-                    },
                     flags_incomplete: gathered.flags_incomplete,
                 };
-                match commit(worker, batch, &checkpoint).await {
+                match commit(worker, batch).await {
                     Ok(committed) => {
-                        checkpoint = committed;
-                        revision += 1;
+                        checkpoint = committed.checkpoint().clone();
+                        revision = committed.revision();
                         position = gathered.position;
                     }
                     // Cancelled since the last commit: the batch goes.
@@ -690,17 +687,11 @@ struct Batch {
     mailbox: String,
     messages: Vec<ImportMessage>,
     position: SourcePosition,
-    progress: SourceProgress,
     flags_incomplete: u64,
 }
 
-async fn commit(
-    worker: &Worker,
-    batch: Batch,
-    checkpoint: &ImportJobCheckpoint,
-) -> Result<ImportJobCheckpoint, StoreError> {
+async fn commit(worker: &Worker, batch: Batch) -> Result<ImportJobRecord, StoreError> {
     let now = worker.resources().now();
-    let checkpoint = checkpoint.clone();
     worker
         .resources()
         .write(PRIORITY, move |tx| {
@@ -711,10 +702,9 @@ async fn commit(
                 mailbox: &batch.mailbox,
                 messages: &batch.messages,
                 position: batch.position,
-                progress: batch.progress,
                 flags_incomplete: batch.flags_incomplete,
             };
-            commit_import_job_batch(tx, &rows, &checkpoint, now)
+            commit_import_job_batch(tx, &rows, now)
         })
         .await
 }
