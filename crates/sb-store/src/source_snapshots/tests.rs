@@ -111,7 +111,7 @@ fn capture_copies_exact_bytes_and_reopen_is_seekable() {
     assert_eq!(snapshot.byte_length(), bytes.len() as u64);
     assert_eq!(snapshot.sha256(), sha256_of(&bytes));
     assert_eq!(snapshot.sha256_hex().len(), 64);
-    assert_eq!(seen, vec![0, 65_536, 70_000]);
+    assert_eq!(seen, vec![0, STREAM_CHUNK as u64, 70_000]);
     let token = snapshot.token();
     assert!(is_token(token), "the token is not lowercase hex: {token}");
     assert_eq!(
@@ -309,7 +309,11 @@ fn cancellation_removes_only_the_attempts_file() {
         }
     });
     assert!(matches!(result, Ok(ImportSourceCapture::Cancelled)));
-    assert_eq!(calls, vec![0, 65_536], "cancelled after the first chunk");
+    assert_eq!(
+        calls,
+        vec![0, STREAM_CHUNK as u64],
+        "cancelled after the first chunk"
+    );
     assert!(copies(real_fs().as_ref(), &recovery).is_empty());
     assert_eq!(std::fs::read(&source).unwrap(), vec![7u8; 70_000]);
 }
@@ -323,7 +327,7 @@ fn an_occupied_private_name_is_preserved() {
     std::fs::write(&source, b"payload").unwrap();
 
     // Occupy the first name seed 9 draws; the capture must move on.
-    let mut drawn = [0u8; 16];
+    let mut drawn = [0u8; TOKEN_BYTES];
     SeededRandom::new(9).fill(&mut drawn).unwrap();
     let occupied = recovery.join(format!("import-source-{}", hex(&drawn)));
     std::fs::write(&occupied, b"an earlier attempt's file").unwrap();
@@ -508,6 +512,25 @@ fn copy_bounded_bounds_retries_and_reports_offsets() {
         copy(&mut EndlessRead, 5).unwrap_err(),
         StoreError::Unavailable { .. }
     ));
+}
+
+#[test]
+fn growth_is_reported_before_writing_the_detection_byte() {
+    let mut storage = [0u8; 3];
+    let mut dest = Cursor::new(storage.as_mut_slice());
+    let error = copy_bounded(
+        &mut Cursor::new(b"abcX"),
+        &mut dest,
+        3,
+        &mut |_| ControlFlow::Continue(()),
+        Path::new("/growing"),
+    )
+    .unwrap_err();
+    match error {
+        StoreError::Unavailable { reason } => assert!(reason.contains("grew"), "{reason}"),
+        other => panic!("expected a source growth error, got {other:?}"),
+    }
+    assert_eq!(dest.position(), 0, "the detection read must not be written");
 }
 
 /// After a successful capture — file and directory flushed — a power

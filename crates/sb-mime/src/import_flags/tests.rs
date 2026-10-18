@@ -23,9 +23,10 @@ fn absent_headers_differ_from_present_unread_headers() {
     let absent = import_flags(b"Subject: archive\n\nBody\n", &Limits::default());
     assert_eq!(absent.seen(), None);
     assert!(absent.is_complete());
-    let extended = import_flags(b"X-Status: F\n\n", &Limits::default());
+    let extended = import_flags(b"X-Status: F\r\n\r\nbody\n", &Limits::default());
     assert_eq!(extended.seen(), Some(false));
     assert!(extended.flagged());
+    assert!(extended.is_complete());
     assert_eq!(
         import_flags(b"X-Status: R\n\n", &Limits::default()).seen(),
         Some(true)
@@ -56,6 +57,7 @@ fn body_nested_and_continuation_lookalikes_do_not_set_flags() {
         b"Subject: test\n X-Status: FADT\n\n",
         b"Bad field\n Status: R\n\n",
         b"X-Status-Other: FADT\n\n",
+        b"Subject: test\n \nStatus: R\n\n",
     ] {
         let flags = import_flags(message, &Limits::default());
         assert_eq!(flags.seen(), None);

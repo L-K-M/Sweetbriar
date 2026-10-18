@@ -336,6 +336,12 @@ fn copy_bounded(
         if n == 0 {
             break;
         }
+        if consumed + n as u64 > expected {
+            return Err(StoreError::unavailable(format!(
+                "the import source {} grew while being copied: it had {expected} bytes when the copy began but yielded the byte at offset {expected}",
+                source_label.display()
+            )));
+        }
         dest.write_all(&chunk[..n]).map_err(|e| {
             StoreError::unavailable(format!(
                 "cannot write the import source copy after {consumed} bytes: {e}"
@@ -346,12 +352,6 @@ fn copy_bounded(
         if progress(consumed).is_break() {
             return Ok(Copied::Cancelled);
         }
-    }
-    if consumed > expected {
-        return Err(StoreError::unavailable(format!(
-            "the import source {} grew while being copied: it had {expected} bytes when the copy began but yielded the byte at offset {expected}",
-            source_label.display()
-        )));
     }
     if consumed < expected {
         return Err(StoreError::unavailable(format!(
@@ -421,8 +421,7 @@ fn is_token(token: &str) -> bool {
             .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
-/// Retry a seam call that failed `Interrupted`, as spec/03 requires
-/// for the source and snapshot streams.
+/// Retry interrupted source and snapshot stream operations.
 fn retry_interrupted<T>(mut call: impl FnMut() -> io::Result<T>) -> io::Result<T> {
     loop {
         match call() {

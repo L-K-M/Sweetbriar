@@ -89,6 +89,7 @@ impl Store {
 
     /// Capture stable import input before inventory or a referencing
     /// transaction. Blocking file I/O; progress may cancel the copy.
+    /// Async callers must use a blocking thread for the full source copy.
     pub fn capture_import_source(
         &self,
         source: &Path,
@@ -99,6 +100,7 @@ impl Store {
 
     /// Verify the whole private copy before allowing offset-based reads.
     /// This never reopens the original source path.
+    /// Async callers must use a blocking thread for the full hash check.
     pub fn open_import_source(
         &self,
         snapshot: &crate::ImportSourceSnapshot,
