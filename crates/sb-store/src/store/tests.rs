@@ -557,6 +557,12 @@ impl Fs for HookedFs {
     fn open(&self, path: &Path) -> io::Result<Box<dyn sb_types::fs::ReadFile>> {
         self.inner.open(path)
     }
+    fn open_regular(
+        &self,
+        path: &Path,
+    ) -> io::Result<(Box<dyn sb_types::fs::ReadFile>, sb_types::fs::Metadata)> {
+        self.inner.open_regular(path)
+    }
     fn metadata(&self, path: &Path) -> io::Result<Option<sb_types::fs::Metadata>> {
         self.inner.metadata(path)
     }

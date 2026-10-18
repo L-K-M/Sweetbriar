@@ -237,6 +237,32 @@ impl Fs for SimFs {
         }
     }
 
+    fn open_regular(&self, path: &Path) -> io::Result<(Box<dyn sb_types::fs::ReadFile>, Metadata)> {
+        // One op-lock hold resolves the node and reads its length, so
+        // the handle and the metadata it reports are one atomic look,
+        // as `RealFs`'s open-then-fstat is.
+        let _op = self.op();
+        let path = normalise(path)?;
+        if relative_components(&path).next().is_none() {
+            return Err(not_regular(&path)); // "/" is a directory
+        }
+        match self.child(&path) {
+            Some(Child::File(node)) => {
+                let len = node
+                    .lock()
+                    .expect("a panicking thread held a sim file")
+                    .live
+                    .len() as u64;
+                Ok((
+                    Box::new(SimReadFile { node, pos: 0 }),
+                    Metadata::new(FileKind::File, len),
+                ))
+            }
+            Some(Child::Dir(_)) => Err(not_regular(&path)),
+            None => Err(io::Error::from(io::ErrorKind::NotFound)),
+        }
+    }
+
     fn metadata(&self, path: &Path) -> io::Result<Option<Metadata>> {
         let _op = self.op();
         let path = normalise(path)?;
@@ -412,6 +438,15 @@ impl SimFs {
             .expect("a panicking thread held the sim tree");
         root.live.len() as u64
     }
+}
+
+/// The `open_regular` refusal: `path` names a directory (the sim has
+/// no other non-file kinds), not a regular file.
+fn not_regular(path: &Path) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidInput,
+        format!("{} is not a regular file", path.display()),
+    )
 }
 
 /// The final component of a normalised path; only the root has none.
@@ -665,5 +700,38 @@ mod tests {
         let mut all = String::new();
         file.read_to_string(&mut all).unwrap();
         assert_eq!(all, "0123456789");
+    }
+
+    /// `open_regular` hands back the node and its length in one look:
+    /// a rename afterwards rebinds neither the handle nor the length
+    /// it reported.
+    #[test]
+    fn open_regular_binds_the_handle_and_len_to_the_node() {
+        let fs = durable_dir();
+        put(&fs, Path::new("/a/f"), b"kept", Flush::FileAndDir);
+        let (mut handle, md) = fs.open_regular(Path::new("/a/f")).unwrap();
+        assert_eq!(md.kind(), FileKind::File);
+        assert_eq!(md.len(), 4);
+
+        fs.rename(Path::new("/a/f"), Path::new("/a/g")).unwrap();
+        put(&fs, Path::new("/a/f"), b"new!", Flush::FileAndDir);
+
+        let mut read = String::new();
+        handle.read_to_string(&mut read).unwrap();
+        assert_eq!(read, "kept");
+        assert_eq!(md.len(), 4);
+    }
+
+    /// Directories and missing paths are refused, not opened; the
+    /// sim's only non-file kind is the directory.
+    #[test]
+    fn open_regular_refuses_non_files_and_missing_paths() {
+        let fs = durable_dir();
+        for path in ["/a", "/"] {
+            let err = fs.open_regular(Path::new(path)).err().unwrap();
+            assert_eq!(err.kind(), io::ErrorKind::InvalidInput, "{path}");
+        }
+        let missing = fs.open_regular(Path::new("/a/missing"));
+        assert_eq!(missing.err().unwrap().kind(), io::ErrorKind::NotFound);
     }
 }
