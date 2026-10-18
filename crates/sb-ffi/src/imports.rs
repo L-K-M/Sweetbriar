@@ -269,4 +269,100 @@ mod tests {
 
         sb_test_support::block_on(core.shutdown());
     }
+
+    /// A command cancelled before it holds the core records nothing:
+    /// its idempotency key is still free for another command.
+    #[test]
+    fn a_cancelled_start_leaves_its_key_unused() {
+        let scratch = ScratchDir::new("ffi-import-cancel-key");
+        let core = scratch_core(&scratch);
+        let path = mbox(scratch.path());
+
+        let cancelled = token();
+        cancelled.cancel();
+        let err = sb_test_support::block_on(core.start_import(
+            cancelled,
+            "key-1".to_owned(),
+            vec![path],
+            ImportTarget::LocalArchive,
+        ))
+        .unwrap_err();
+        assert!(matches!(err, CoreError::Cancelled));
+
+        let receipt = sb_test_support::block_on(core.set_setting(
+            token(),
+            "key-1".to_owned(),
+            "appearance.compose_cue".to_owned(),
+            "strong".to_owned(),
+        ))
+        .unwrap();
+        assert_eq!(receipt.command, "set_setting");
+
+        sb_test_support::block_on(core.shutdown());
+    }
+
+    /// Each ambiguous source keeps the variant chosen for it, by
+    /// ordinal: both variants, past ordinal 0.
+    #[test]
+    fn each_source_keeps_its_chosen_variant() {
+        let scratch = ScratchDir::new("ffi-import-variants");
+        let core = scratch_core(&scratch);
+        let paths: Vec<String> = ["A.mbox", "B.mbox"]
+            .iter()
+            .map(|name| {
+                let path = scratch.path().join(name);
+                std::fs::write(&path, AMBIGUOUS).unwrap();
+                path.to_string_lossy().into_owned()
+            })
+            .collect();
+        let job = sb_test_support::block_on(core.start_import(
+            token(),
+            "import-1".to_owned(),
+            paths,
+            ImportTarget::LocalArchive,
+        ))
+        .unwrap()
+        .job_id;
+        wait(&core, &job, |state| {
+            state != sb_service::ImportJobState::Inventory
+        });
+
+        let choices = vec![
+            VariantChoice {
+                ordinal: 0,
+                variant: MboxVariant::Mboxo,
+            },
+            VariantChoice {
+                ordinal: 1,
+                variant: MboxVariant::Mboxrd,
+            },
+        ];
+        sb_test_support::block_on(core.confirm_import(
+            token(),
+            "confirm-1".to_owned(),
+            job.clone(),
+            choices,
+        ))
+        .unwrap();
+        wait(&core, &job, sb_service::ImportJobState::is_finished);
+
+        let variants: Vec<_> = sb_test_support::block_on(async {
+            let guard = core.service.read().await;
+            let job = guard.as_ref().unwrap().import_job(&job).await.unwrap();
+            assert_eq!(job.state, sb_service::ImportJobState::Completed);
+            job.sources
+                .into_iter()
+                .map(|source| source.variant)
+                .collect()
+        });
+        assert_eq!(
+            variants,
+            vec![
+                Some(sb_service::MboxVariant::Mboxo),
+                Some(sb_service::MboxVariant::Mboxrd),
+            ]
+        );
+
+        sb_test_support::block_on(core.shutdown());
+    }
 }
