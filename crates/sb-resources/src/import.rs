@@ -275,9 +275,8 @@ pub enum ImportInventoryOutcome {
     /// The walk finished; `problems` identifies rejected paths.
     Complete(ImportInventory),
     /// The progress callback asked to stop. Completed sources and
-    /// problems seen so far are kept; a snapshot captured for a
-    /// source the walk never counted stays in `recovery/` as evidence
-    /// until the engine's terminal-job cleanup (spec/03).
+    /// problems seen so far are kept; a capture the walk never counted
+    /// is removed, since nothing references it (spec/03).
     Cancelled(ImportInventory),
 }
 
@@ -522,11 +521,16 @@ impl Walker<'_> {
                     Scan::Counted(_) => {
                         return self.failed(&canonical, "snapshot length changed during inventory");
                     }
+                    // A copy that never becomes a source is referenced by
+                    // nothing, so it goes now (spec/03); the original stays.
                     Scan::Cancelled => {
                         self.cancelled = true;
-                        return;
+                        return self.discard(&snapshot);
                     }
-                    Scan::Failed(error) => return self.failed(&canonical, error),
+                    Scan::Failed(error) => {
+                        self.discard(&snapshot);
+                        return self.failed(&canonical, error);
+                    }
                 }
             }
         };
@@ -538,6 +542,14 @@ impl Walker<'_> {
             messages,
             quoting,
         });
+    }
+
+    /// Remove a capture that will not become a source, best-effort: a
+    /// failed removal leaves an unreferenced leftover (spec/03).
+    fn discard(&self, snapshot: &ImportSourceSnapshot) {
+        let _ = self
+            .store
+            .remove_import_sources(std::slice::from_ref(snapshot));
     }
 
     /// Discovery needs only metadata; capture revalidates the opened handle.

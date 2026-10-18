@@ -514,6 +514,23 @@ pub fn import_job_sources(
         .collect()
 }
 
+/// Every source row `id` has recorded, inventoried or not: terminal-job
+/// cleanup and reports cover them all (spec/03, 09).
+pub fn recorded_import_job_sources(
+    tx: &Transaction,
+    id: &str,
+) -> Result<Vec<(SourceInventory, SourcePosition)>, StoreError> {
+    rows::import_job_source_rows(tx, id)?
+        .into_iter()
+        .map(|row| {
+            let source =
+                SourceInventory::from_json(row.source_json()).map_err(|e| corrupt(id, e))?;
+            let position = position_from_json(row.checkpoint_json()).map_err(|e| corrupt(id, e))?;
+            Ok((source, position))
+        })
+        .collect()
+}
+
 /// One recorded source and where its ingest continues.
 pub fn import_job_source(
     tx: &Transaction,
