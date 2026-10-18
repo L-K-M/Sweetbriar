@@ -62,7 +62,15 @@ local drafts. No network yet.
         publication and summary/flag mapping. Depends on M1.2c2a.
     - **M1.2c3 Jobs, service and CLI — L:** confirmation, checkpointed
       scheduling/recovery/cancellation, commands, reports and `sb-cli import`.
-      Depends on M1.2c2b.
+      Depends on M1.2c2b. Split before implementation:
+      - **M1.2c3a Job payloads — M:** typed requests, job checkpoints and
+        source positions over the store's rows, in `sb-resources`.
+      - **M1.2c3b Engine import jobs — L:** start, inventory, confirmation
+        with variant choices, checkpointed ingest, recovery at open,
+        cancellation and shutdown pauses. Depends on M1.2c3a.
+      - **M1.2c3c Reports, cleanup and CLI — L:** `import_report.json` in
+        `recovery/`, terminal-job snapshot cleanup, service commands and
+        queries, and `sb-cli import`. Depends on M1.2c3b.
     - **M1.2c4 Crash qualification — M:** the 50-seed crash/resume suite
       and all original end-to-end M1.2 acceptance checks below. M1.3 waits
       for this qualification. Depends on M1.2c3.
