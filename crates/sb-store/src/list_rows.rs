@@ -78,31 +78,28 @@ pub(crate) fn refresh(tx: &Transaction, occurrences: &BTreeSet<i64>) -> Result<b
     for &occurrence in occurrences {
         // A row's previous message loses it when the occurrence moves on.
         let before: Option<i64> = tx
-            .query_row(
-                "SELECT message_id FROM d_list_rows WHERE occurrence_id = ?1",
-                [occurrence],
-                |row| row.get(0),
-            )
+            .prepare_cached("SELECT message_id FROM d_list_rows WHERE occurrence_id = ?1")
+            .and_then(|mut statement| statement.query_row([occurrence], |row| row.get(0)))
             .optional()
             .map_err(sql_error)?;
         messages.extend(before);
         let current: Option<i64> = tx
-            .query_row(
-                "SELECT message_id FROM occurrences WHERE occurrence_id = ?1",
-                [occurrence],
-                |row| row.get(0),
-            )
+            .prepare_cached("SELECT message_id FROM occurrences WHERE occurrence_id = ?1")
+            .and_then(|mut statement| statement.query_row([occurrence], |row| row.get(0)))
             .optional()
             .map_err(sql_error)?;
         messages.extend(current);
 
-        let upserted = tx.execute(&upsert, [occurrence]).map_err(sql_error)?;
+        let upserted = tx
+            .prepare_cached(&upsert)
+            .and_then(|mut statement| statement.execute([occurrence]))
+            .map_err(sql_error)?;
         let removed = tx
-            .execute(
+            .prepare_cached(
                 "DELETE FROM d_list_rows WHERE occurrence_id = ?1 AND NOT EXISTS
                    (SELECT 1 FROM occurrences WHERE occurrence_id = ?1 AND state = 'present')",
-                [occurrence],
             )
+            .and_then(|mut statement| statement.execute([occurrence]))
             .map_err(sql_error)?;
         changed |= upserted + removed > 0;
     }
@@ -112,14 +109,14 @@ pub(crate) fn refresh(tx: &Transaction, occurrences: &BTreeSet<i64>) -> Result<b
     Ok(changed)
 }
 
-/// The occurrences of every message whose body is `acquisition`: a
-/// replaced summary changes all their rows (spec/02).
+/// The occurrences of every message whose body is `acquisition`: its
+/// first summary changes all their rows (spec/02).
 pub(crate) fn sharing_acquisition(
     tx: &Transaction,
     acquisition: i64,
 ) -> Result<BTreeSet<i64>, StoreError> {
     let mut statement = tx
-        .prepare(
+        .prepare_cached(
             "SELECT o.occurrence_id FROM logical_messages lm
              JOIN occurrences o ON o.message_id = lm.message_id
              WHERE lm.acquisition_id = ?1",
@@ -137,32 +134,29 @@ pub(crate) fn sharing_acquisition(
 /// bit changed.
 fn elect(tx: &Transaction, message: i64) -> Result<bool, StoreError> {
     let winner: Option<i64> = tx
-        .query_row(
-            &format!(
-                "SELECT o.occurrence_id FROM occurrences o
-                 JOIN mailboxes mb ON mb.mailbox_id = o.mailbox_id
-                 WHERE o.message_id = ?1 AND o.state = 'present'
-                 ORDER BY {KIND_RANK}, o.occurrence_id LIMIT 1"
-            ),
-            [message],
-            |row| row.get(0),
-        )
+        .prepare_cached(&format!(
+            "SELECT o.occurrence_id FROM occurrences o
+             JOIN mailboxes mb ON mb.mailbox_id = o.mailbox_id
+             WHERE o.message_id = ?1 AND o.state = 'present'
+             ORDER BY {KIND_RANK}, o.occurrence_id LIMIT 1"
+        ))
+        .and_then(|mut statement| statement.query_row([message], |row| row.get(0)))
         .optional()
         .map_err(sql_error)?;
     let cleared = tx
-        .execute(
+        .prepare_cached(
             "UPDATE d_list_rows SET representative = 0
              WHERE message_id = ?1 AND representative = 1 AND occurrence_id IS NOT ?2",
-            params![message, winner],
         )
+        .and_then(|mut statement| statement.execute(params![message, winner]))
         .map_err(sql_error)?;
     let marked = match winner {
         Some(winner) => tx
-            .execute(
+            .prepare_cached(
                 "UPDATE d_list_rows SET representative = 1
                  WHERE occurrence_id = ?1 AND representative = 0",
-                [winner],
             )
+            .and_then(|mut statement| statement.execute([winner]))
             .map_err(sql_error)?,
         None => 0,
     };
