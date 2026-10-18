@@ -169,9 +169,11 @@ pub fn commit_import_batch(
             "an import batch exceeds {MAX_IMPORT_BATCH} messages"
         )));
     }
-    let change_bytes = batch.messages.iter().fold(0usize, |size, message| {
-        size.saturating_add(message.change_budget_bytes())
-    });
+    // The mailbox name is stored in both its row and its unique index.
+    let change_bytes = batch.messages.iter().fold(
+        batch.mailbox_name.len().saturating_mul(2),
+        |size, message| size.saturating_add(message.change_budget_bytes()),
+    );
     if change_bytes > MAX_IMPORT_CHANGES_BYTES {
         return Err(invalid(
             "import metadata exceeds the background-write budget",
