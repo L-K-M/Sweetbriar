@@ -53,7 +53,7 @@ CREATE TABLE store_meta (
 -- keys: 'store_uuid', 'incarnation' (new UUID after every restore),
 -- 'created_at', 'app_version_last_opened', 'last_migrated_by' (app version),
 -- 'clean_shutdown_at' (03 Integrity: present only between a clean shutdown and the next open),
--- 'list_generation' (decimal; the d_list_rows generation, from migration 3).
+-- 'list_generation' (an integer in decimal digits; the d_list_rows generation, from migration 3).
 -- The schema version is PRAGMA user_version, owned by the migration runner;
 -- it is not duplicated here.
 ```
@@ -679,7 +679,7 @@ CREATE INDEX d_list_rows_unified ON d_list_rows(mailbox_role, sort_date DESC, oc
 CREATE INDEX d_list_rows_flagged ON d_list_rows(sort_date DESC, occurrence_id DESC)
   WHERE flagged = 1 AND representative = 1;
 -- Migration 3: at most one representative row per message, and the messages
--- sharing an acquisition, whose rows a replaced summary updates.
+-- sharing an acquisition, whose rows its first summary updates.
 CREATE UNIQUE INDEX d_list_rows_one_representative ON d_list_rows(message_id)
   WHERE representative = 1;
 CREATE INDEX logical_messages_by_acquisition ON logical_messages(acquisition_id);
@@ -702,8 +702,9 @@ CREATE INDEX logical_messages_by_acquisition ON logical_messages(acquisition_id)
     a stored summary, even an older parser's; summaries for a newer
     parser come from rebuilding the derived tables. An import that
     stores the first summary of bytes already held updates the rows of
-    every message sharing them; when those rows exceed the batch's
-    write budget (03), the batch fails.
+    every message sharing them. Each row an import writes counts toward
+    its batch's write budget (03) at the summary it shows; a batch over
+    budget fails.
   - `store_meta.list_generation` gains one in each transaction that
     inserts, changes or removes list rows, and in no other. Windows
     bind to it (07).

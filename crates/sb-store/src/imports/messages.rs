@@ -419,18 +419,27 @@ fn store_message(
     .map_err(sql_error)?;
     list.occurrences.insert(tx.last_insert_rowid());
     stats.imported += 1;
-    if save_summary(tx, acquisition, &message.summary)? {
+    let stored = save_summary(tx, acquisition, &message.summary)?;
+    if stored && !inserted {
         // A first summary for bytes already held changes the rows of
         // every message sharing them (spec/02).
-        if !inserted {
-            let sharing = list_rows::sharing_acquisition(tx, acquisition)?;
-            list.extra_bytes = list.extra_bytes.saturating_add(
-                sharing
-                    .len()
-                    .saturating_mul(list_row_bytes(&message.summary)),
-            );
-            list.occurrences.extend(sharing);
-        }
+        let sharing = list_rows::sharing_acquisition(tx, acquisition)?;
+        list.extra_bytes = list.extra_bytes.saturating_add(
+            sharing
+                .len()
+                .saturating_mul(list_row_bytes(&message.summary)),
+        );
+        list.occurrences.extend(sharing);
+    }
+    if !stored {
+        // The new row shows the stored summary, which an older parser
+        // may have read longer than this message's estimate.
+        let shown = stored_list_row_bytes(tx, acquisition)?;
+        list.extra_bytes = list
+            .extra_bytes
+            .saturating_add(shown.saturating_sub(list_row_bytes(&message.summary)));
+    }
+    if stored {
         tx.execute(
             "INSERT INTO d_index_queue (doc_id, reason, enqueued_at) VALUES (?1, ?2, ?3)
              ON CONFLICT(doc_id) DO UPDATE SET reason = excluded.reason, enqueued_at = excluded.enqueued_at",
@@ -438,6 +447,24 @@ fn store_message(
         ).map_err(sql_error)?;
     }
     Ok(())
+}
+
+/// What a list row showing `acquisition`'s stored summary costs the
+/// batch budget, as [`list_row_bytes`] counts it.
+fn stored_list_row_bytes(tx: &Transaction, acquisition: i64) -> Result<usize, StoreError> {
+    let text: i64 = tx
+        .query_row(
+            "SELECT coalesce(length(CAST(subject AS BLOB)), 0)
+                  + coalesce(length(CAST(from_addr AS BLOB)), 0)
+                  + coalesce(length(CAST(from_name AS BLOB)), 0)
+                  + coalesce(length(CAST(snippet AS BLOB)), 0)
+             FROM d_message_summary WHERE acquisition_id = ?1",
+            [acquisition],
+            |row| row.get(0),
+        )
+        .map_err(sql_error)?;
+    let text = usize::try_from(text).unwrap_or(usize::MAX);
+    Ok(LIST_ROW_BUDGET.saturating_add(text.saturating_mul(LIST_ROW_TEXT_COPIES)))
 }
 
 /// Store `acquisition`'s first summary; an existing one, even from an
