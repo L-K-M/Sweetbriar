@@ -17,7 +17,7 @@ Rests on research [04-data-safety](../research/04-data-safety.md)
 | **Fuzz** | MIME parser, mbox splitter, query parser (`cargo-fuzz`) | Nightly, Linux |
 | **FFI** | Rust built for `aarch64-apple-darwin`; UniFFI Swift bindings generated and compiled under Swift 6 strict concurrency; binding drift check | macOS CI, PRs touching `crates/` or `apps/` |
 | **Swift unit** | Adapter, view models (Swift Testing) | macOS CI, same PRs |
-| **UI** | XCUITest smoke flows: launch, open mailbox, open message, compose and save draft | macOS nightly |
+| **UI** | XCUITest smoke flows: launch, open mailbox, open message, compose and save draft; the M1.4 import flow (a bundled synthetic `.mbox` imported through File → Import… into fresh roots: inventory, two occurrences listed, the report window) | macOS nightly; the import flow also on every PR's macOS CI |
 | **Manual qualification** | On the owner's Mac against real Proton Bridge: the checklist per milestone (plan) | Owner, per milestone |
 
 Every behaviour in the spec that says **must** has at least one automated

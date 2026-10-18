@@ -45,6 +45,15 @@ restores its draft by `draft_id`.
   mailboxes are below, folders and labels grouped as Bridge exposes them
   (04).
 - **Built with** an `NSOutlineView`, source-list style.
+- **Mailboxes** come from `mailboxes(account_id)` (07), with unread
+  counts. Imported mailboxes are flat, named after their sources; no
+  role or hierarchy is read into a file name. IMAP hierarchy uses the
+  server's delimiter (M2). A mailbox that isn't selectable opens no
+  window.
+- **Until their steps land,** Drafts (local), Out Box and saved views
+  are shown disabled with a note, and the reader is a placeholder
+  (M1.5). Before M1.10's appearance service, accounts show a neutral
+  symbol and their name; no color is derived from an id.
 
 ## Message list
 
@@ -88,6 +97,18 @@ restores its draft by `draft_id`.
     generation to every open prototype model, which rebuilds.
   - Selection is held by `occurrence_id`, so a 10k-row selection
     fetches no rows.
+  - **Opening a store window** shows its first page at once, as a
+    provisional prefix, before `window_ids` completes; rank jumps and
+    range selection wait for the exact index. The index and pages
+    shown must share a generation.
+  - **Invalidation** (07 Subscriptions) refreshes the id index on the
+    same handle, then re-reads the pages around the visible and
+    selected rows. An invalidation during a refresh schedules another.
+    One id fetch and one pending `next` run beside the two page reads.
+  - **In logical-message windows** a selected id the new index lacks is
+    looked up with `Around(old_id)` and limit 1 before it is dropped,
+    so the selection follows its message (07); only `NotFound` removes
+    it. These lookups are the one exception to 200-row pages.
   - Rows have one height per list: production heights vary with the
     preview mode and font, not per row (research 08).
 - **Rows:**
@@ -246,6 +267,18 @@ run on the CI artifact.
   this Mac, for both implementations, and shows the numbers to copy.
   Launching the app with `-runListBenchmark <report.json>` runs the
   same benchmark, writes the report there and quits (macOS CI uses it).
+  - Its **store mode** (M1.4) runs the production sidebar and list over
+    an imported mailbox: 30 alternating mailbox switches, then the
+    synthetic run's scroll and selection sequences. It never writes to
+    the store and stops if the list generation moves. Switch timing
+    runs from the sidebar click to the first frame showing the new
+    rows; only nonempty mailboxes count toward first-row samples.
+  - Smaller mailboxes use in-range selection endpoints and report the
+    span reached; a 500k scroll or 10k selection result needs a mailbox
+    that large. Refresh rate and display come from each run's window;
+    a run whose window changes display is discarded.
+  - The report keeps functional checks apart from budget verdicts. CI
+    numbers are diagnostic; the owner's Mac decides (plan O9).
 - **Composer Probe** (plan M0.11) opens a compose window: the composer's
   editor in plain or Markdown mode, without the core.
 

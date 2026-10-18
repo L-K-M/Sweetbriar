@@ -173,6 +173,42 @@ local drafts. No network yet.
 
 ### M1.4 Sidebar and message list in the app — M, macos-ci + owner
 
+- **PR split (2026-10-18):** M1.3 supplied the list machinery but no
+  sidebar queries and no Swift access to store windows, subscriptions or
+  imports, so this step is larger than M. Implement in order below;
+  together these keep every deliverable and acceptance check, and M1.5
+  waits for all of them.
+  - **M1.4a Contracts — S:** this split and the spec decisions the
+    others implement (07, 08, 09, 11). No code.
+  - **M1.4b Sidebar queries — L:** `accounts()` and
+    `mailboxes(account_id)` with per-mailbox totals and unread counts,
+    through store, resources, engine and service.
+  - **M1.4c Sidebar FFI — L:** their exports, regenerated bindings and
+    the bridge's DTOs and wrappers. Depends on M1.4b.
+  - **M1.4d Window and subscription FFI — L:** the store specs,
+    `MailboxRole` and the pull `Subscription`. Owns "FFI exports for
+    M1.3".
+  - **M1.4e Import command FFI — L:** `start_import`, `confirm_import`
+    with per-source variant choices, `cancel_job`.
+  - **M1.4f Import vocabulary FFI — L:** job states, sources, problems
+    and totals. Depends on M1.4e.
+  - **M1.4g Job query and report — L:** `import_job` and
+    `import_report`, which returns a published report only. Depends on
+    M1.4f.
+  - **M1.4h List model — L:** `ListWindowModel` over a store window:
+    the first page shown before the id index arrives, subscriptions,
+    rebuilds on the same handle and selection following its message.
+    Depends on M1.4c and M1.4d.
+  - **M1.4i Main window — L:** the sidebar outline and the AppKit list
+    in a split view, replacing the settings demo. Depends on M1.4h.
+  - **M1.4j Import UI — L:** File → Import… with inventory and variant
+    choice, the progress sheet and the Import report window. Depends on
+    M1.4e–g and M1.4i.
+  - **M1.4k Store-backed benchmark — L:** Run List Benchmark's store
+    mode. Depends on M1.4i and M1.4j.
+  - **M1.4l Qualification — M:** the import XCUITest on PR macOS CI and
+    the owner checklists for O5 and O9. Depends on M1.4j and M1.4k.
+
 - **Goal:** the macOS main window shows the real local archive.
 - **Spec:** 08 (Sidebar, Message list).
 - **Depends on:** M1.3, M0.10.

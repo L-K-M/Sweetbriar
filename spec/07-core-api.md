@@ -183,7 +183,14 @@ struct ListRow {
 - **Other queries:**
   - `get_message(message_id)` → headers, occurrences, `thread_id`, tags, note and
     body availability;
-  - `accounts()`, `identities(account_id)`, `mailboxes(account_id)`;
+  - `accounts()` → every account's id, kind, display name, state and
+    reason, and sort order, ordered by sort order then id;
+  - `identities(account_id)`;
+  - `mailboxes(account_id)` → each mailbox's id, name, delimiter, role,
+    kind and whether it is selectable, with its present occurrences and
+    the unread ones among them, read in one short transaction and tagged
+    with the `list_generation` it shows. An unknown account is
+    `NotFound`; empty mailboxes are listed;
   - `appearance()` → resolved colors and monograms;
   - `coverage(scope)`, `health()`;
   - `out_box()`;
@@ -191,7 +198,10 @@ struct ListRow {
     update time and any live attempt's state (the sidebar's Drafts
     (local), 08);
   - `draft(draft_id)`, `saved_views()`, `settings()`;
-  - `import_job(job_id)` → state, inventory, problems and counts (09).
+  - `import_job(job_id)` → state, inventory, problems and counts (09);
+  - `import_report(job_id)` → a finished job's published report, its
+    path and version-1 JSON, or none while it is still being written; an
+    unfinished job is `Conflict` and an unreadable report an error.
 
 ## Subscriptions
 
@@ -283,6 +293,11 @@ fn release_lease(lease_id: LeaseId);
   calls in flight and closes the core; any call after it is
   `Unavailable`. Swift makes its own idempotency keys (`UUID()`), so the
   service's key helper isn't exported.
+- **Subscriptions over FFI:** `subscribe` is async in the adapter and
+  returns a Rust-owned `Subscription` object, whose `next` takes a fresh
+  `CancelToken` per call. A pending `next` holds nothing that blocks
+  `shutdown`, which wakes it with `Unavailable`. `shutdown` and
+  `close_window` take no token: they are cleanup and always complete.
 - **UniFFI version:** pinned. The Swift 6 async callback fix is
   unreleased in 0.32.2 (research 01), so the pilot exposes **no async
   callback traits from Swift to Rust**. Platform services needed by the
