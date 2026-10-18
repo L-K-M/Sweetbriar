@@ -33,6 +33,8 @@ fn mbox(dir: &Path, name: &str, messages: &[(&str, Option<&str>)]) -> PathBuf {
     path
 }
 
+/// Import `path` and wait until its thread rebuild has published too:
+/// that moves the list generation, so windows open only after it.
 fn import(engine: &Engine, path: PathBuf) {
     let id = block_on(engine.start_import(&engine.new_idempotency_key(), vec![path]))
         .unwrap()
@@ -41,6 +43,16 @@ fn import(engine: &Engine, path: PathBuf) {
     settle(engine, &id, ImportJobState::AwaitingConfirmation);
     block_on(engine.confirm_import(&engine.new_idempotency_key(), &id, Vec::new())).unwrap();
     settle(engine, &id, ImportJobState::Completed);
+    let deadline = Instant::now() + PATIENCE;
+    while engine
+        .resources()
+        .read(sb_resources::thread_revisions)
+        .unwrap()
+        .stale()
+    {
+        assert!(Instant::now() < deadline, "threads were never built");
+        std::thread::sleep(Duration::from_millis(5));
+    }
 }
 
 fn settle(engine: &Engine, id: &str, state: ImportJobState) {
@@ -192,7 +204,17 @@ fn store_windows_page_and_reset() {
         block_on(engine.read_window(id, generation, Anchor::Around(ids.ids()[4]), 10)).unwrap();
     assert_eq!(around.total(), Count::Exact(5));
 
-    // A cursor carried to another spec, or an id outside the window.
+    // A malformed cursor, one carried to another spec, or an id outside
+    // the window.
+    assert!(matches!(
+        block_on(engine.read_window(
+            id,
+            generation,
+            Anchor::After("sbw1|nope".to_owned().into()),
+            2
+        )),
+        Err(EngineError::InvalidInput { .. })
+    ));
     let flagged = block_on(engine.open_window(WindowSpec::Flagged, Anchor::Top, 2)).unwrap();
     assert!(matches!(
         block_on(engine.read_window(
