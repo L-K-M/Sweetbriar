@@ -52,7 +52,8 @@ CREATE TABLE store_meta (
 ) STRICT;
 -- keys: 'store_uuid', 'incarnation' (new UUID after every restore),
 -- 'created_at', 'app_version_last_opened', 'last_migrated_by' (app version),
--- 'clean_shutdown_at' (03 Integrity: present only between a clean shutdown and the next open).
+-- 'clean_shutdown_at' (03 Integrity: present only between a clean shutdown and the next open),
+-- 'list_generation' (decimal; the d_list_rows generation, from migration 3).
 -- The schema version is PRAGMA user_version, owned by the migration runner;
 -- it is not duplicated here.
 ```
@@ -677,6 +678,11 @@ CREATE INDEX d_list_rows_unified ON d_list_rows(mailbox_role, sort_date DESC, oc
   mailbox_id, message_id, account_id, sender, subject, snippet, unread, flagged, has_attachments);
 CREATE INDEX d_list_rows_flagged ON d_list_rows(sort_date DESC, occurrence_id DESC)
   WHERE flagged = 1 AND representative = 1;
+-- Migration 3: at most one representative row per message, and the messages
+-- sharing an acquisition, whose rows a replaced summary updates.
+CREATE UNIQUE INDEX d_list_rows_one_representative ON d_list_rows(message_id)
+  WHERE representative = 1;
+CREATE INDEX logical_messages_by_acquisition ON logical_messages(acquisition_id);
 ```
 
 - **`d_list_rows`** is the covering index for keyset-paginated mailbox
@@ -685,6 +691,19 @@ CREATE INDEX d_list_rows_flagged ON d_list_rows(sort_date DESC, occurrence_id DE
   `d_message_summary.date_header` (imports), else `first_seen_at`. It is derived, but kept transactionally
   current, because the list must reflect a flag change instantly.
   Unified views ("all inboxes") page over `d_list_rows_unified` by role.
+  - Rows exist for exactly the `present` occurrences.
+  - `subject` and `sender` come from `message_headers` when it holds
+    them, else from `d_message_summary`. `sender` is the first From
+    mailbox's display name, else its address. `snippet` and
+    `has_attachments` come from the summary; without one they are NULL
+    and 0.
+  - The transaction that changes an occurrence, its mailbox or its
+    display sources updates the affected rows. A summary replaced by a
+    newer parser updates the rows of every message sharing its
+    acquisition.
+  - `store_meta.list_generation` gains one in each transaction that
+    inserts, changes or removes list rows, and in no other. Windows
+    bind to it (07).
 - **`d_message_summary` JSON columns** are canonical JSON arrays.
   Address lists (`reply_to_json`, `to_json`, `cc_json`) hold
   `{"address", "name"}` objects, with `null` for a missing part;
@@ -742,6 +761,9 @@ CREATE INDEX d_list_rows_flagged ON d_list_rows(sort_date DESC, occurrence_id DE
   these two documents' SQL blocks and requires the migrated schema to
   match the complete migration sequence, so the spec and the migrations
   can't drift. Migration 2 adds the import schema described above.
+  Migration 3 adds the list-row support indexes and `list_generation`,
+  and fills `d_list_rows` for the occurrences stored before it. It
+  rewrites or drops no existing data.
 - **Before any migration that rewrites or drops data,** the engine takes a
   `VACUUM INTO` snapshot, keeping the last two. This arrives with the
   first such migration; migration 1 has none.
