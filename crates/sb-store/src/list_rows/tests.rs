@@ -461,3 +461,39 @@ proptest! {
         }
     }
 }
+
+/// The writer announces a list generation after the job that made it
+/// commits, once; a rolled-back job and a write that leaves the
+/// generation announce nothing (spec/07 "Subscriptions").
+#[test]
+fn committed_generations_are_announced_once() {
+    use std::sync::{Arc, Mutex};
+
+    let (_scratch, paths) = crate::testing::scratch_paths("list-observer");
+    let store = crate::open(&paths, &test_seams(real_fs())).unwrap();
+    let heard = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&heard);
+    store.observe_list_generation(Arc::new(move |generation| {
+        sink.lock().unwrap().push(generation);
+    }));
+    let write = |advance: bool, fail: bool| {
+        sb_test_support::block_on(store.write(crate::WritePriority::User, move |tx| {
+            if advance {
+                advance_generation(tx)?;
+            }
+            if fail {
+                return Err(StoreError::internal("rolled back"));
+            }
+            Ok(())
+        }))
+    };
+    write(true, false).unwrap();
+    assert!(write(true, true).is_err());
+    write(false, false).unwrap();
+    write(true, false).unwrap();
+    assert_eq!(
+        *heard.lock().unwrap(),
+        vec![FIRST_GENERATION + 1, FIRST_GENERATION + 2]
+    );
+    store.close().unwrap();
+}

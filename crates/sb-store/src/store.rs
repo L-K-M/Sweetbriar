@@ -28,7 +28,7 @@ use crate::schema::{
     run_migrations,
 };
 use crate::source_snapshots::ImportSourceSnapshots;
-use crate::writer::{WriteFuture, WritePriority, Writer};
+use crate::writer::{ListObserver, WriteFuture, WritePriority, Writer};
 
 /// The SQLite build spec/01's crate table pins (rusqlite 0.40.2 →
 /// libsqlite3-sys 0.38.2 → SQLite 3.53.2); `open` refuses any other.
@@ -144,6 +144,13 @@ impl Store {
         F: FnOnce(&rusqlite::Transaction) -> Result<T, StoreError> + Send + 'static,
     {
         self.writer.submit(priority, closure)
+    }
+
+    /// Hear of each list generation after the transaction that made it
+    /// commits (spec/07 "Subscriptions"). The observer runs on the
+    /// writer thread and must return at once.
+    pub fn observe_list_generation(&self, observer: ListObserver) {
+        self.writer.observe_list_generation(observer);
     }
 
     /// Run one read through the reader pool (spec/03): a short

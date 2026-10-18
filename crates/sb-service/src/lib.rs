@@ -15,4 +15,6 @@ pub use imports::{
     ImportJob, ImportJobState, ImportProblem, ImportProblemKind, ImportSource, ImportSourceKind,
     ImportStarted, ImportTarget, ImportTotals, MboxVariant,
 };
-pub use windows::{Anchor, Count, ListRow, MailboxRole, Window, WindowIds, WindowSpec};
+pub use windows::{
+    Anchor, Count, ListRow, MailboxRole, Subscription, Window, WindowEvent, WindowIds, WindowSpec,
+};

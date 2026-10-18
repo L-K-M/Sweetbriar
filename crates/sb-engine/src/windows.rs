@@ -14,6 +14,8 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
 
+use tokio::sync::watch;
+
 use sb_resources::{
     ListAnchor, ListKey, ListPage, ListScope, MailboxRole, PageRead, StoredListRow,
     list_generation, list_ids, read_list_page,
@@ -429,6 +431,27 @@ impl WindowIds {
 /// `ResetRequired` so the shell rebuilds (spec/07).
 pub(crate) struct Windows {
     inner: Mutex<WindowsInner>,
+    /// What subscriptions wait on (spec/07 "Subscriptions"): any change
+    /// wakes every waiting `next`, which checks its own window.
+    versions: watch::Sender<Versions>,
+}
+
+/// The sources' generations, plus what ends a wait: a close or the
+/// engine shutting down.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct Versions {
+    store: u64,
+    synthetic: u64,
+    closes: u64,
+    shut: bool,
+}
+
+/// An open window: its spec and the generation of the last page or id
+/// index it handed out, where a subscription's mark starts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct OpenWindow {
+    spec: WindowSpec,
+    seen: u64,
 }
 
 #[derive(Default)]
@@ -436,8 +459,8 @@ struct WindowsInner {
     /// The id the next opened window gets — incremented before use,
     /// so the first window is 1 and 0 never names a window.
     next_id: u64,
-    /// The open windows, id → spec.
-    open: HashMap<WindowId, WindowSpec>,
+    /// The open windows.
+    open: HashMap<WindowId, OpenWindow>,
     /// The one debug source (spec/07 "Debug source"): its generation —
     /// 0 before the first fill — and its row count.
     synthetic: SyntheticSource,
@@ -465,6 +488,29 @@ impl Windows {
     pub(crate) fn new() -> Self {
         Self {
             inner: Mutex::new(WindowsInner::default()),
+            versions: watch::Sender::new(Versions::default()),
+        }
+    }
+
+    /// The store committed `generation` (spec/07): wake subscriptions.
+    /// Announcements may race a reader, so the newest wins.
+    pub(crate) fn store_moved(&self, generation: u64) {
+        self.versions.send_if_modified(|versions| {
+            let moved = generation > versions.store;
+            versions.store = versions.store.max(generation);
+            moved
+        });
+    }
+
+    /// The engine is shutting down: end every waiting `next`.
+    pub(crate) fn shut(&self) {
+        self.versions.send_modify(|versions| versions.shut = true);
+    }
+
+    /// A window handed out a page or ids at `generation`.
+    fn saw(&self, window_id: WindowId, generation: u64) {
+        if let Some(open) = self.lock().open.get_mut(&window_id) {
+            open.seen = open.seen.max(generation);
         }
     }
 
@@ -484,10 +530,15 @@ impl Windows {
                 format!("the debug source holds at most {MAX_FILL} rows"),
             ));
         }
-        let mut inner = self.lock();
-        inner.synthetic.generation += 1;
-        inner.synthetic.count = count;
-        Ok(inner.synthetic.generation)
+        let generation = {
+            let mut inner = self.lock();
+            inner.synthetic.generation += 1;
+            inner.synthetic.count = count;
+            inner.synthetic.generation
+        };
+        self.versions
+            .send_modify(|versions| versions.synthetic = generation);
+        Ok(generation)
     }
 
     /// `open_window` (spec/07): resolve the anchor against the current
@@ -499,7 +550,13 @@ impl Windows {
         let source = inner.synthetic;
         let range = resolve(spec, anchor, source.generation, source.count, limit)?;
         let window_id = inner.take_window_id();
-        inner.open.insert(window_id, spec);
+        inner.open.insert(
+            window_id,
+            OpenWindow {
+                spec,
+                seen: source.generation,
+            },
+        );
         Ok(page(
             window_id,
             source.generation,
@@ -521,22 +578,22 @@ impl Windows {
         limit: u32,
     ) -> Result<Window, EngineError> {
         check_limit(limit)?;
-        let inner = self.lock();
-        let spec = inner
+        let mut inner = self.lock();
+        let source = inner.synthetic;
+        let open = inner
             .open
-            .get(&window_id)
-            .copied()
+            .get_mut(&window_id)
             .ok_or_else(|| EngineError::NotFound {
                 what: format!("window {}", window_id.get()),
             })?;
-        let source = inner.synthetic;
         if generation != source.generation {
             return Err(EngineError::ResetRequired {
                 generation: source.generation,
             });
         }
-        let range = resolve(spec, anchor, generation, source.count, limit)?;
-        Ok(page(window_id, generation, spec, range, source.count))
+        let range = resolve(open.spec, anchor, generation, source.count, limit)?;
+        open.seen = generation;
+        Ok(page(window_id, generation, open.spec, range, source.count))
     }
 
     /// `window_ids` (spec/07 "The id index"): every row's occurrence
@@ -545,13 +602,15 @@ impl Windows {
     /// are 4 MB (spec/07) — is built after it.
     fn ids(&self, window_id: WindowId) -> Result<WindowIds, EngineError> {
         let source = {
-            let inner = self.lock();
-            if !inner.open.contains_key(&window_id) {
+            let mut inner = self.lock();
+            let source = inner.synthetic;
+            let Some(open) = inner.open.get_mut(&window_id) else {
                 return Err(EngineError::NotFound {
                     what: format!("window {}", window_id.get()),
                 });
-            }
-            inner.synthetic
+            };
+            open.seen = source.generation;
+            source
         };
         let n = u64::from(source.count);
         Ok(WindowIds {
@@ -563,19 +622,28 @@ impl Windows {
     /// `close_window` (spec/07): release the handle. Closing twice, or
     /// an id never opened, is harmless.
     fn close(&self, window_id: WindowId) {
-        self.lock().open.remove(&window_id);
+        if self.lock().open.remove(&window_id).is_some() {
+            // A `next` waiting on this window ends with `NotFound`.
+            self.versions.send_modify(|versions| versions.closes += 1);
+        }
     }
 
-    /// Register a store window whose first page was already read.
-    fn register(&self, spec: WindowSpec) -> WindowId {
+    /// Register a store window whose first page, read at `seen`, is
+    /// already in hand.
+    fn register(&self, spec: WindowSpec, seen: u64) -> WindowId {
         let mut inner = self.lock();
         let window_id = inner.take_window_id();
-        inner.open.insert(window_id, spec);
+        inner.open.insert(window_id, OpenWindow { spec, seen });
         window_id
     }
 
     /// The spec an open window lists, or `NotFound`.
     fn spec_of(&self, window_id: WindowId) -> Result<WindowSpec, EngineError> {
+        Ok(self.window(window_id)?.spec)
+    }
+
+    /// An open window, or `NotFound`.
+    fn window(&self, window_id: WindowId) -> Result<OpenWindow, EngineError> {
         self.lock()
             .open
             .get(&window_id)
@@ -910,7 +978,7 @@ impl Engine {
             let page = store_outcome(read, &anchor)?;
             let opened = self
                 .compute(move || {
-                    let window_id = windows.register(spec);
+                    let window_id = windows.register(spec, page.generation);
                     Ok(Opened {
                         window: Some(store_window(window_id, spec, page)),
                         windows,
@@ -966,7 +1034,12 @@ impl Engine {
         }
         let read = self
             .read_through(move |resources| {
-                resources.read(|tx| read_list_page(tx, scope, store, limit as usize, Some(at)))
+                let read =
+                    resources.read(|tx| read_list_page(tx, scope, store, limit as usize, Some(at)));
+                if let Ok(PageRead::Ready(page)) = &read {
+                    windows.saw(window_id, page.generation);
+                }
+                read
             })
             .await?;
         Ok(store_window(window_id, spec, store_outcome(read, &anchor)?))
@@ -983,7 +1056,13 @@ impl Engine {
             return self.compute(move || windows.ids(window_id)).await;
         };
         let read = self
-            .read_through(move |resources| resources.read(|tx| list_ids(tx, scope, None)))
+            .read_through(move |resources| {
+                let read = resources.read(|tx| list_ids(tx, scope, None));
+                if let Ok(PageRead::Ready((generation, _))) = &read {
+                    windows.saw(window_id, *generation);
+                }
+                read
+            })
             .await?;
         let (generation, ids) = store_outcome(read, &Anchor::Top)?;
         Ok(WindowIds { generation, ids })
@@ -1035,6 +1114,10 @@ impl Drop for Opened {
         self.cleanup.spawn(move || windows.close(window.window_id));
     }
 }
+
+mod subscribe;
+
+pub use subscribe::{Subscription, WindowEvent};
 
 #[cfg(test)]
 mod tests;

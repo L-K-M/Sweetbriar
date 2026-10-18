@@ -15,7 +15,7 @@ use tokio::task::{JoinError, JoinHandle};
 use crate::EngineError;
 use crate::import::ImportJobs;
 use crate::windows::Windows;
-use sb_resources::Resources;
+use sb_resources::{Resources, list_generation};
 
 /// The name of the worker a dropped engine closes its store on.
 const CLOSE_THREAD_NAME: &str = "sb-engine-close";
@@ -341,11 +341,19 @@ impl Engine {
             let engine = open(&data_root)
                 .map_err(EngineError::from)
                 .and_then(|resources| {
+                    // Subscriptions hear every committed list generation
+                    // from here on, starting from the current one.
+                    let windows = Arc::new(Windows::new());
+                    let announced = Arc::clone(&windows);
+                    resources.observe_list_generation(Arc::new(move |generation| {
+                        announced.store_moved(generation);
+                    }));
+                    windows.store_moved(resources.read(list_generation)?);
                     Ok(Self {
                         resources: Some(Arc::new(resources)),
                         blocking: Arc::default(),
                         runtime,
-                        windows: Arc::new(Windows::new()),
+                        windows,
                         imports: Arc::default(),
                         cleanup: start_cleanup_worker()?,
                     })
@@ -378,6 +386,12 @@ impl Engine {
         &self.windows
     }
 
+    /// The runtime's handle, for work a subscription dispatches after
+    /// the call that made it returned.
+    pub(crate) fn runtime_handle(&self) -> tokio::runtime::Handle {
+        self.runtime.handle().clone()
+    }
+
     /// The import job registry; crate-visible for the `import` module.
     pub(crate) fn imports(&self) -> &Arc<ImportJobs> {
         &self.imports
@@ -403,6 +417,7 @@ impl Engine {
     /// caller, who has nothing left to do: the next open's
     /// `quick_check` is the safety net (spec/03).
     pub async fn shutdown(mut self) -> Result<(), EngineError> {
+        self.windows.shut();
         let resources = self
             .resources
             .take()
@@ -519,6 +534,7 @@ impl Drop for Engine {
     /// no new thread. A process exiting first is an unclean end, which
     /// the next open's `quick_check` covers (spec/03).
     fn drop(&mut self) {
+        self.windows.shut();
         let Some(resources) = self.resources.take() else {
             return;
         };

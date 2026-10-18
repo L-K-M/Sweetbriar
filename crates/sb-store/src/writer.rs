@@ -23,6 +23,7 @@ use rusqlite::TransactionBehavior;
 use rusqlite::config::DbConfig;
 
 use crate::StoreError;
+use crate::list_rows;
 use crate::schema::classify;
 
 /// A write's place in the writer's queue (spec/01): user commands
@@ -56,7 +57,14 @@ const PRIORITY_QUEUES: usize = 3;
 struct WriterShared {
     state: Mutex<WriterState>,
     ready: Condvar,
+    /// Told each new `list_generation` after the job that made it
+    /// committed (spec/07 "Subscriptions").
+    observer: Mutex<Option<ListObserver>>,
 }
+
+/// What hears of each committed list generation. Called on the writer
+/// thread between jobs, so it must return at once.
+pub type ListObserver = Arc<dyn Fn(u64) + Send + Sync>;
 
 struct WriterState {
     /// One FIFO queue per priority, indexed by [`WritePriority::queue`].
@@ -175,7 +183,9 @@ fn wait_for<'a, T>(
 /// writer's connection and resolves its future; `abandon` resolves it
 /// without running it.
 trait QueuedWrite: Send {
-    fn run(self: Box<Self>, conn: &mut Connection);
+    /// Run the job; `committed` runs after a successful commit and
+    /// before the job's future resolves.
+    fn run(self: Box<Self>, conn: &mut Connection, committed: &mut dyn FnMut(&Connection));
     fn abandon(self: Box<Self>, err: StoreError);
 }
 
@@ -190,9 +200,9 @@ where
     T: Send + 'static,
     F: FnOnce(&Transaction) -> Result<T, StoreError> + Send + 'static,
 {
-    fn run(self: Box<Self>, conn: &mut Connection) {
+    fn run(self: Box<Self>, conn: &mut Connection, committed: &mut dyn FnMut(&Connection)) {
         let Write { closure, slot } = *self;
-        run_write(conn, closure, &slot);
+        run_write(conn, closure, &slot, committed);
     }
 
     fn abandon(self: Box<Self>, err: StoreError) {
@@ -204,8 +214,12 @@ where
 /// IMMEDIATE` transaction, committed when the closure returns `Ok`,
 /// rolled back when it returns `Err` or panics — the panic is caught,
 /// so the writer keeps serving — and the future always resolves.
-fn run_write<T, F>(conn: &mut Connection, closure: F, slot: &Arc<Slot<T>>)
-where
+fn run_write<T, F>(
+    conn: &mut Connection,
+    closure: F,
+    slot: &Arc<Slot<T>>,
+    committed: &mut dyn FnMut(&Connection),
+) where
     T: Send + 'static,
     F: FnOnce(&Transaction) -> Result<T, StoreError> + Send + 'static,
 {
@@ -232,7 +246,10 @@ where
         Ok(Ok(value)) => match tx.commit() {
             // A failed commit drops the transaction inside rusqlite,
             // rolling the write back.
-            Ok(()) => slot.resolve(Ok(value)),
+            Ok(()) => {
+                committed(conn);
+                slot.resolve(Ok(value));
+            }
             Err(e) => slot.resolve(Err(classify(e, "commit a write transaction"))),
         },
     }
@@ -375,6 +392,12 @@ impl Writer {
         Self::new_with(conn, spawn_os_thread)
     }
 
+    /// Install the one observer of committed list generations,
+    /// replacing any earlier one.
+    pub(crate) fn observe_list_generation(&self, observer: ListObserver) {
+        *lock(&self.shared.observer) = Some(observer);
+    }
+
     /// [`Writer::new`] with the thread spawner as a parameter. If it
     /// refuses, `conn` is dropped here, still not checkpointing on
     /// close: only the running thread lifts that (spec/02: no
@@ -387,6 +410,7 @@ impl Writer {
                 closed: false,
             }),
             ready: Condvar::new(),
+            observer: Mutex::new(None),
         });
         let thread_shared = Arc::clone(&shared);
         let handle = spawn(Box::new(move || serve(conn, thread_shared)))
@@ -521,12 +545,17 @@ fn serve(mut conn: Connection, shared: Arc<WriterShared>) -> Result<(), StoreErr
     }
 }
 
-/// The writer's serve loop: run jobs by priority; when the queue
-/// drains after work, checkpoint.
+/// The writer's serve loop: run jobs by priority, announcing each new
+/// list generation once its job committed; when the queue drains after
+/// work, checkpoint.
 fn writer_loop(conn: &mut Connection, shared: &Arc<WriterShared>) {
+    let mut announced = list_rows::generation(conn).ok();
     loop {
         match shared.next() {
-            Next::Job(job) => job.run(conn),
+            Next::Job(job) => {
+                // A caller whose write resolved finds it announced.
+                job.run(conn, &mut |conn| announce(conn, shared, &mut announced));
+            }
             Next::Drained => {
                 // The idle checkpoint (spec/03): with the queue drained
                 // after work, truncate the WAL so it never grows
@@ -539,6 +568,22 @@ fn writer_loop(conn: &mut Connection, shared: &Arc<WriterShared>) {
             }
             Next::Done => return,
         }
+    }
+}
+
+/// Tell the observer of a list generation the job just committed; one
+/// that left the generation announces nothing.
+fn announce(conn: &Connection, shared: &WriterShared, announced: &mut Option<u64>) {
+    let Ok(current) = list_rows::generation(conn) else {
+        return;
+    };
+    if *announced == Some(current) {
+        return;
+    }
+    *announced = Some(current);
+    let observer = lock(&shared.observer).clone();
+    if let Some(observer) = observer {
+        observer(current);
     }
 }
 

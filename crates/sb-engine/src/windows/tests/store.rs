@@ -15,7 +15,7 @@ use crate::{Anchor, Count, Engine, EngineError, MailboxRole, WindowSpec};
 const PATIENCE: Duration = Duration::from_secs(300);
 
 /// A mbox of `(subject, date header)` messages, in file order.
-fn mbox(dir: &Path, name: &str, messages: &[(&str, Option<&str>)]) -> PathBuf {
+pub(super) fn mbox(dir: &Path, name: &str, messages: &[(&str, Option<&str>)]) -> PathBuf {
     let text: String = messages
         .iter()
         .enumerate()
@@ -33,7 +33,7 @@ fn mbox(dir: &Path, name: &str, messages: &[(&str, Option<&str>)]) -> PathBuf {
     path
 }
 
-fn import(engine: &Engine, path: PathBuf) {
+pub(super) fn import(engine: &Engine, path: PathBuf) {
     let id = block_on(engine.start_import(&engine.new_idempotency_key(), vec![path]))
         .unwrap()
         .job_id()
@@ -54,12 +54,12 @@ fn settle(engine: &Engine, id: &str, state: ImportJobState) {
     }
 }
 
-fn sql_error(e: impl std::fmt::Display) -> StoreError {
+pub(super) fn sql_error(e: impl std::fmt::Display) -> StoreError {
     StoreError::internal(e.to_string())
 }
 
 /// One value `sql` reads.
-fn value(engine: &Engine, sql: &'static str) -> i64 {
+pub(super) fn value(engine: &Engine, sql: &'static str) -> i64 {
     engine
         .resources()
         .read(|tx| tx.query_row(sql, [], |row| row.get(0)).map_err(sql_error))
@@ -68,7 +68,7 @@ fn value(engine: &Engine, sql: &'static str) -> i64 {
 
 /// Run `f` as a user write, then refresh the list rows of every
 /// occurrence: what a later writer that changes occurrences does.
-fn rewrite(
+pub(super) fn rewrite(
     engine: &Engine,
     f: impl FnOnce(&Transaction) -> Result<(), StoreError> + Send + 'static,
 ) {
