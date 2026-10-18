@@ -19,6 +19,7 @@ use sb_store::StorePaths;
 
 mod acquire;
 mod import;
+mod import_jobs;
 
 // The engine's names, re-exported by item so the engine states bounds
 // and maps errors without depending on a leaf (spec/01 rule 3). The
@@ -29,9 +30,16 @@ pub use import::{
     ImportInventory, ImportInventoryOutcome, ImportProblem, ImportProblemKind, ImportProgress,
     SourceInventory, SourceKind,
 };
+pub use import_jobs::{
+    ImportJobBatch, ImportJobCheckpoint, ImportJobRecord, ImportTotals, LISTED_PROBLEMS,
+    advance_import_job, commit_import_job_batch, create_import_job, import_job, import_job_source,
+    record_import_sources, recoverable_import_jobs,
+};
 pub use sb_mime::{MboxQuoting, MboxVariant};
 pub use sb_platform::{default_cache_root, default_data_root};
-pub use sb_store::imports::ImportMessage;
+pub use sb_store::imports::{
+    ImportJobState, ImportMessage, MAX_IMPORT_BATCH, MAX_IMPORT_CHANGES_BYTES,
+};
 pub use sb_store::settings::{StoredSetting, read_all, upsert};
 pub use sb_store::{
     ImportSourceSnapshot, Receipt, StoreError, Timestamp, Transaction, Uuid, WriteFuture,

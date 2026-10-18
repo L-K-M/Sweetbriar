@@ -112,6 +112,36 @@ user-granted permission path.
    It is shown in the Import report window and saved in `recovery/`.
 7. **Sources are never modified or removed.**
 
+**Job lifecycle** (02 `import_jobs` states):
+
+- `start_import(paths, target)` records the request and inventories in
+  the background, in `inventory`. The pilot's only target is the local
+  archive.
+- A finished inventory records its sources in order and waits in
+  `awaiting_confirmation`; nothing is ingested before `confirm_import`.
+  Its problems stay with the job: all counted, the first 50 listed.
+- `confirm_import(job_id, variants)` chooses `mboxo` or `mboxrd` for
+  exactly the `Ambiguous` sources, by inventory ordinal. A missing, extra
+  or repeated choice is `InvalidInput`. The job becomes `running`.
+- Ingest takes sources in ordinal order. It ends `completed` once every
+  source's position equals its inventory, or `failed`, checkpoints
+  intact, when a source fails: a missing or corrupt snapshot, an
+  unreadable region or a count mismatch.
+- `cancel_job(id)` makes the job `cancelled` before it returns, so the
+  cancellation survives a crash. An inventory stops at its next check
+  and ingest at its next message; the uncommitted batch in flight is
+  discarded, while committed batches stay imported. A finished job is
+  `Conflict`.
+- Shutdown pauses ingest at its next message, committing the batch in
+  flight; the job stays `running`. At open, an interrupted inventory becomes `failed` (the user
+  starts a new one), a waiting job keeps waiting and a running job
+  resumes from its checkpoints.
+- Shells poll `import_job(id)` (07) for the state, inventory, problems
+  and counts.
+- A source checkpoint is `{"v":1,"offset":…,"messages":…}`. The job
+  checkpoint holds the problems, the confirmed variant choices, the next
+  unfinished source and the running totals.
+
 **Acceptance:** importing a fixture set (09 fixtures in 11-testing)
 reproduces exact byte hashes for every message, survives `kill -9` at any
 point and resumes with identical final counts.

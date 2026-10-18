@@ -61,6 +61,28 @@ pub enum ImportProblemKind {
     Failed,
 }
 
+impl ImportProblemKind {
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::Inaccessible => "inaccessible",
+            Self::Unsupported => "unsupported",
+            Self::NonUtf8 => "non_utf8",
+            Self::Failed => "failed",
+        }
+    }
+
+    pub(crate) fn from_name(name: &str) -> Option<Self> {
+        [
+            Self::Inaccessible,
+            Self::Unsupported,
+            Self::NonUtf8,
+            Self::Failed,
+        ]
+        .into_iter()
+        .find(|kind| kind.name() == name)
+    }
+}
+
 /// One reported path and why it was skipped. A problem never discards
 /// other discovered sources.
 #[derive(Debug, Clone)]
@@ -71,6 +93,10 @@ pub struct ImportProblem {
 }
 
 impl ImportProblem {
+    pub(crate) fn new(path: PathBuf, kind: ImportProblemKind, detail: String) -> Self {
+        Self { path, kind, detail }
+    }
+
     /// The failed path, canonical when resolution succeeded.
     pub fn path(&self) -> &Path {
         &self.path
@@ -638,7 +664,7 @@ fn folder_name(path: &Path) -> Option<String> {
     path.parent()?.file_name()?.to_str().map(str::to_owned)
 }
 
-fn invalid(message: impl Into<String>) -> StoreError {
+pub(crate) fn invalid(message: impl Into<String>) -> StoreError {
     StoreError::InvalidInput {
         message: message.into(),
     }
@@ -662,7 +688,7 @@ fn required_str<'a>(
         .ok_or_else(|| invalid(format!("import source {name} must be a string")))
 }
 
-fn required_u64(
+pub(crate) fn required_u64(
     object: &serde_json::Map<String, serde_json::Value>,
     name: &str,
 ) -> Result<u64, StoreError> {

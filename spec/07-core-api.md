@@ -60,7 +60,7 @@ async fn Core::shutdown(self);   // flush writer, release the lease
 |---|---|
 | Accounts | `add_bridge_account(params)`, `update_account(id, params)`, `pause_account(id)`, `resume_account(id)`, `disconnect_account(id)`, `set_account_appearance(id, appearance)` |
 | Identities | `upsert_identity(params)`, `set_default_identity(id)` |
-| Import/export | `start_import(paths, target)` → job id, `cancel_job(id)`, `start_export(scope, format, destination)` |
+| Import/export | `start_import(paths, target)` → job id, `confirm_import(job_id, variants)` (09), `cancel_job(id)`, `start_export(scope, format, destination)` |
 | Messages | `set_flags(selection, add, remove)`, `move_messages(selection, to_mailbox)`, `delete_to_trash(selection)`, `add_label(selection, label_mailbox)` (server label, 04), `add_tag(selection, tag)` and `remove_tag(selection, tag)` (local only), `set_note(message_id, text)` (one note per message; empty text removes it), `undo(token)` |
 | Drafts | `create_draft(context)` → draft id (`context` is new, reply, reply-all or forward, with source occurrence), `save_draft(draft_id, base_revision_id, content)` → revision id, `discard_draft(id)` (refused while an attempt is live, 05) |
 | Sending | `send_draft(draft_id, revision_id, acks)` → attempt id (the current revision only; `acks` lists warnings the user confirmed for that revision, e.g. `cross_account`; a missing one gets `Conflict` naming it, 05), `cancel_send(attempt_id)` (in `held` or `queued`), `resolve_unknown_send(attempt_id, resolution)`, `retry_rejected_recipients(attempt_id)` (05), `confirm_send_route(attempt_id)` (after an account reconfiguration, 05) |
@@ -179,7 +179,8 @@ struct ListRow {
   - `drafts()` → local drafts with state, route, subject, recipients,
     update time and any live attempt's state (the sidebar's Drafts
     (local), 08);
-  - `draft(draft_id)`, `saved_views()`, `settings()`.
+  - `draft(draft_id)`, `saved_views()`, `settings()`;
+  - `import_job(job_id)` → state, inventory, problems and counts (09).
 
 ## Subscriptions
 
