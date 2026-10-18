@@ -485,12 +485,22 @@ fn migration_3(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
 }
 
 /// Migration 4 (spec/02): one thread per message, and watermarks that
-/// make the first open thread the messages imported before.
+/// make the first open thread the messages imported before, if any.
 fn migration_4(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
     tx.execute_batch(include_str!("schema/v4.sql"))
         .map_err(bug)?;
+    let held: bool = tx
+        .query_row("SELECT EXISTS(SELECT 1 FROM logical_messages)", [], |row| {
+            row.get(0)
+        })
+        .map_err(bug)?;
+    let inputs = if held {
+        threads::OWED_AT_MIGRATION
+    } else {
+        threads::FIRST_BUILT
+    };
     for (key, value) in [
-        (threads::INPUTS_KEY, threads::FIRST_INPUTS),
+        (threads::INPUTS_KEY, inputs),
         (threads::BUILT_KEY, threads::FIRST_BUILT),
     ] {
         tx.execute(

@@ -78,8 +78,8 @@ fn message(
     id
 }
 
-/// A migrated store owes one rebuild; imports add to the owed count;
-/// a rebuild's mark never moves the watermark back.
+/// An empty store owes nothing; imports add to the owed count; a
+/// rebuild's mark never moves the watermark back.
 #[test]
 fn watermarks_track_owed_rebuilds() {
     let (mut conn, _account) = store();
@@ -88,18 +88,47 @@ fn watermarks_track_owed_rebuilds() {
     assert_eq!(
         first,
         ThreadRevisions {
-            inputs: FIRST_INPUTS,
+            inputs: 0,
+            built: 0
+        }
+    );
+    assert!(!first.stale());
+    note_new_messages(&tx).unwrap();
+    note_new_messages(&tx).unwrap();
+    assert!(thread_revisions(&tx).unwrap().stale());
+    mark_threads_built(&tx, 2).unwrap();
+    mark_threads_built(&tx, 1).unwrap();
+    let built = thread_revisions(&tx).unwrap();
+    assert_eq!(
+        built,
+        ThreadRevisions {
+            inputs: 2,
+            built: 2
+        }
+    );
+    assert!(!built.stale());
+}
+
+/// A store holding messages before migration 4 owes one rebuild.
+#[test]
+fn migration_4_owes_a_rebuild_only_for_held_messages() {
+    let mut conn = Connection::open_in_memory().unwrap();
+    run_migrations(&mut conn, &test_seams(real_fs()), &MIGRATIONS[..3]).unwrap();
+    conn.execute(
+        "INSERT INTO logical_messages (account_id, created_at)
+         SELECT account_id, ?1 FROM accounts WHERE provider = 'local_archive'",
+        [FIXED_NOW_MS],
+    )
+    .unwrap();
+    run_migrations(&mut conn, &test_seams(real_fs()), MIGRATIONS).unwrap();
+    let tx = conn.transaction().unwrap();
+    assert_eq!(
+        thread_revisions(&tx).unwrap(),
+        ThreadRevisions {
+            inputs: OWED_AT_MIGRATION,
             built: FIRST_BUILT
         }
     );
-    assert!(first.stale());
-    note_new_messages(&tx).unwrap();
-    assert_eq!(thread_revisions(&tx).unwrap().inputs, FIRST_INPUTS + 1);
-    mark_threads_built(&tx, FIRST_INPUTS + 1).unwrap();
-    mark_threads_built(&tx, FIRST_INPUTS).unwrap();
-    let built = thread_revisions(&tx).unwrap();
-    assert_eq!(built.built, FIRST_INPUTS + 1);
-    assert!(!built.stale());
 }
 
 /// Sources page by message id, with references decoded and header

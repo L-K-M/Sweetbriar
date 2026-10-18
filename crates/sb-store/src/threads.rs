@@ -21,10 +21,10 @@ pub(crate) const INPUTS_KEY: &str = "thread_inputs";
 /// How many of those the last complete rebuild read (spec/02).
 pub(crate) const BUILT_KEY: &str = "threads_built";
 
-/// Migration 4's starting watermarks: one pending rebuild, for the
-/// messages imported before threads were kept.
-pub(crate) const FIRST_INPUTS: u64 = 1;
+/// Migration 4's starting watermarks: nothing built, and one rebuild
+/// owed only when messages were imported before threads were kept.
 pub(crate) const FIRST_BUILT: u64 = 0;
+pub(crate) const OWED_AT_MIGRATION: u64 = 1;
 
 /// What one logical message gives threading: header fields where
 /// `message_headers` holds them, else the summary's (spec/02).
