@@ -15,6 +15,9 @@ use sb_types::fs::{Fs, Location};
 use super::*;
 use crate::testing::{FIXED_NOW_MS, crash_write, scratch_paths, test_seams};
 
+/// A schema version past the app's: a store "newer than the app".
+const NEWER_VERSION: u32 = crate::schema::LATEST_SCHEMA_VERSION + 1;
+
 /// `open` on a fresh scratch store.
 fn open_scratch(label: &str) -> (ScratchDir, StorePaths, Store) {
     let (scratch, paths) = scratch_paths(label);
@@ -439,7 +442,8 @@ fn version_mismatch_is_internal_before_the_schema_verdict() {
     let (_scratch, paths, store) = open_scratch("version-before-verdict");
     store.close().unwrap();
     let raw = rusqlite::Connection::open(paths.state_db()).unwrap();
-    raw.execute_batch("PRAGMA user_version = 3;").unwrap();
+    raw.execute_batch(&format!("PRAGMA user_version = {NEWER_VERSION};"))
+        .unwrap();
     raw.close().unwrap();
 
     let wrong = PinnedSqlite {
@@ -885,7 +889,8 @@ fn a_newer_store_opens_read_only_and_stays_unchanged() {
         .close()
         .unwrap();
     let raw = rusqlite::Connection::open(paths.state_db()).unwrap();
-    raw.execute_batch("PRAGMA user_version = 3;").unwrap();
+    raw.execute_batch(&format!("PRAGMA user_version = {NEWER_VERSION};"))
+        .unwrap();
     raw.close().unwrap();
 
     let before = fs::read(paths.state_db()).unwrap();
@@ -921,8 +926,10 @@ fn a_newer_store_with_a_changed_store_meta_opens_read_only() {
         .close()
         .unwrap();
     let raw = rusqlite::Connection::open(paths.state_db()).unwrap();
-    raw.execute_batch("ALTER TABLE store_meta ADD COLUMN note TEXT; PRAGMA user_version = 3;")
-        .unwrap();
+    raw.execute_batch(&format!(
+        "ALTER TABLE store_meta ADD COLUMN note TEXT; PRAGMA user_version = {NEWER_VERSION};"
+    ))
+    .unwrap();
     raw.close().unwrap();
 
     let read_only = open_read_only(&paths, &test_seams(real_fs())).unwrap();
@@ -961,8 +968,10 @@ fn a_newer_store_with_crashed_wal_frames_opens_read_only_untouched() {
         .unwrap();
     crash_write(
         &paths,
-        "PRAGMA user_version = 3;
-         UPDATE store_meta SET value = '9.9.9' WHERE key = 'last_migrated_by';",
+        &format!(
+            "PRAGMA user_version = {NEWER_VERSION};
+             UPDATE store_meta SET value = '9.9.9' WHERE key = 'last_migrated_by';"
+        ),
     );
 
     let before = fs::read(paths.state_db()).unwrap();
@@ -976,7 +985,7 @@ fn a_newer_store_with_crashed_wal_frames_opens_read_only_untouched() {
                 .map_err(|e| StoreError::internal(e.to_string()))
         })
         .unwrap();
-    assert_eq!(version, 3);
+    assert_eq!(version, i64::from(NEWER_VERSION));
     read_only.close().unwrap();
     assert_eq!(
         fs::read(paths.state_db()).unwrap(),

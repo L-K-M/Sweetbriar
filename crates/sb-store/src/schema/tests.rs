@@ -102,7 +102,8 @@ fn a_fresh_store_reaches_the_latest_version_with_its_meta() {
     assert_ne!(store_uuid, incarnation);
     assert_v4_uuid(store_uuid);
     assert_v4_uuid(incarnation);
-    assert_eq!(meta.len(), 5, "unexpected extra store_meta keys: {meta:?}");
+    assert_eq!(meta.get("list_generation").unwrap(), "1");
+    assert_eq!(meta.len(), 6, "unexpected extra store_meta keys: {meta:?}");
 }
 
 /// 2. Reopening runs no migration: `created_at` and both UUIDs
@@ -412,17 +413,29 @@ fn a_newer_user_version_is_newer_store_and_touches_nothing() {
     let (_scratch, paths) = closed_store("schema-newer");
     for (sql, named) in [
         (
-            "PRAGMA user_version = 3;
-             UPDATE store_meta SET value = '9.9.9' WHERE key = 'last_migrated_by';",
+            format!(
+                "PRAGMA user_version = {};
+                 UPDATE store_meta SET value = '9.9.9' WHERE key = 'last_migrated_by';",
+                LATEST_SCHEMA_VERSION + 1
+            ),
             "9.9.9",
         ),
         (
-            "PRAGMA user_version = 4; DELETE FROM store_meta;",
+            format!(
+                "PRAGMA user_version = {}; DELETE FROM store_meta;",
+                LATEST_SCHEMA_VERSION + 2
+            ),
             "unknown",
         ),
-        ("PRAGMA user_version = 5; DROP TABLE store_meta;", "unknown"),
+        (
+            format!(
+                "PRAGMA user_version = {}; DROP TABLE store_meta;",
+                LATEST_SCHEMA_VERSION + 3
+            ),
+            "unknown",
+        ),
     ] {
-        tamper(&paths, sql);
+        tamper(&paths, &sql);
         let before = fs::read(paths.state_db()).unwrap();
         match crate::open(&paths, &test_seams(real_fs())).unwrap_err() {
             StoreError::NewerStore { app_version } => assert_eq!(app_version, named),
@@ -811,8 +824,11 @@ fn a_refused_database_with_crashed_wal_frames_stays_untouched() {
     let (_scratch, paths) = closed_store("schema-newer-crash");
     crash_write(
         &paths,
-        "PRAGMA user_version = 3;
-         UPDATE store_meta SET value = '9.9.9' WHERE key = 'last_migrated_by';",
+        &format!(
+            "PRAGMA user_version = {};
+             UPDATE store_meta SET value = '9.9.9' WHERE key = 'last_migrated_by';",
+            LATEST_SCHEMA_VERSION + 1
+        ),
     );
     let before = fs::read(paths.state_db()).unwrap();
     match crate::open(&paths, &test_seams(real_fs())).unwrap_err() {

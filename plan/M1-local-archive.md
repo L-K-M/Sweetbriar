@@ -116,6 +116,32 @@ local drafts. No network yet.
 
 ### M1.3 List windows and subscriptions — L, linux
 
+- **PR split (2026-10-18):** implement in order below. Together these
+  retain every deliverable and acceptance check of M1.3; M1.4 waits for
+  all of them. Each PR stays under the plan's 1,500-line limit.
+  - **M1.3a List projection — L:** `d_list_rows` and the `representative`
+    flag maintained in the import transaction, a migration that adds
+    their support indexes and fills rows for existing imports, and the
+    store's list generation. Owns the representative property test.
+  - **M1.3b Store pages — L:** keyset Top/After/Before/Around reads for
+    `Mailbox`, `Unified` and `Flagged`, id-only reads and the batched
+    per-page tag lookup. Owns the `EXPLAIN QUERY PLAN` tests. Depends on
+    M1.3a.
+  - **M1.3c Threading algorithm — L:** JWZ over parsed header fields,
+    with no persistence. Depends on M1.3a; may run alongside M1.3b.
+  - **M1.3d Thread persistence — L:** `d_threads` and
+    `d_thread_members` rebuilt after imports and at open, and the
+    `Thread` page read. Depends on M1.3b and M1.3c.
+  - **M1.3e Store windows — L:** engine and service windows for
+    `Mailbox`, `Unified`, `Flagged` and `Thread` with every anchor; the
+    pilot's `DebugSynthetic` keeps working. Owns the Flagged-once and
+    import-by-`Date` checks. Depends on M1.3d.
+  - **M1.3f Subscriptions — L:** `subscribe` / `next`, coalescing and
+    `ResetRequired`. Owns the flag-change wakeup and slow-consumer
+    checks. Depends on M1.3e.
+  - **M1.3g Qualification — M:** the 100k-row timings and selection
+    surviving invalidation. Depends on M1.3f.
+
 - **Goal:** keyset-paginated windows over `d_list_rows`, with
   pull-based invalidation.
 - **Spec:** 07 (Queries, Subscriptions), 02 (`d_list_rows`), 03 (short
