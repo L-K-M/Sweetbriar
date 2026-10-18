@@ -421,6 +421,44 @@ fn oversized_metadata_cannot_hold_the_writer_for_an_unbounded_batch() {
 }
 
 #[test]
+fn mailbox_names_share_the_metadata_and_checkpoint_budget() {
+    let (_scratch, _paths, store, revision) = setup();
+    for length in [
+        MAX_IMPORT_CHANGES_BYTES / 2 + 1,
+        MAX_IMPORT_CHANGES_BYTES / 2,
+    ] {
+        // The name enters the mailbox row and its unique index. The
+        // second case leaves no room for even an empty batch's checkpoints.
+        let error = commit(&store, revision, &"m".repeat(length), Vec::new());
+        assert!(matches!(error, Err(StoreError::InvalidInput { .. })));
+        assert_eq!(count(&store, "mailboxes"), 0);
+        assert_eq!(
+            reading(&store, |tx| import_job(tx, JOB)).revision(),
+            revision
+        );
+        assert_eq!(
+            reading(&store, |tx| import_job_source(tx, JOB, 0)).checkpoint_json(),
+            "{\"v\":1}"
+        );
+    }
+
+    let mailbox = "m".repeat(MAX_IMPORT_CHANGES_BYTES / 4);
+    let mut entry = message(&store, "/synthetic/Inbox.mbox", 0, ORIGINAL);
+    entry.summary.subject = Some("s".repeat(MAX_IMPORT_CHANGES_BYTES / 2));
+    assert!(matches!(
+        commit(&store, revision, &mailbox, vec![entry]),
+        Err(StoreError::InvalidInput { .. })
+    ));
+    assert_eq!(count(&store, "mailboxes"), 0);
+    assert_eq!(count(&store, "acquisitions"), 0);
+    assert_eq!(count(&store, "occurrences"), 0);
+    assert_eq!(
+        reading(&store, |tx| import_job(tx, JOB)).revision(),
+        revision
+    );
+}
+
+#[test]
 fn migration_preserves_a_v1_archive_and_its_originals() {
     let (_scratch, paths) = scratch_paths("import-upgrade");
     let store = crate::store::open_with(
