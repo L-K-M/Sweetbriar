@@ -482,4 +482,15 @@ fn a_stale_batch_is_a_conflict_and_impossible_ones_are_refused() {
     assert!(matches!(stale, StoreError::Conflict { .. }), "{stale:?}");
     let job = res.read(|tx| import_job(tx, JOB)).unwrap();
     assert_eq!(job.checkpoint().totals().processed, 2);
+
+    // A job no longer running conflicts even at its current revision.
+    let now = res.now();
+    let cancelled = write(&res, move |tx| {
+        let job = import_job(tx, JOB)?;
+        let state = ImportJobState::Cancelled;
+        advance_import_job(tx, JOB, job.revision(), state, job.checkpoint(), now)
+    })
+    .unwrap();
+    let ended = commit_at(&res, &sources, cancelled.revision(), vec![], end, 0).unwrap_err();
+    assert!(matches!(ended, StoreError::Conflict { .. }), "{ended:?}");
 }

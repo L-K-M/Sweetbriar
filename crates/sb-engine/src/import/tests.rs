@@ -383,37 +383,47 @@ fn a_confirmation_read_before_the_inventory_finished_is_refused() {
     fs::write(&path, mbox(3)).unwrap();
     let engine = open(&scratch.path().join("store"));
     let id = plant(&engine, &path, ImportJobState::Inventory, 0);
+    // The confirmation read the job while it was still in inventory: it
+    // validated nothing, so it expects nothing.
+    let in_inventory = status(&engine, &id);
+    assert_eq!(in_inventory.state(), ImportJobState::Inventory);
 
-    // Hold the writer, and queue the inventory's finish behind it.
-    let (release, held) = std::sync::mpsc::channel::<()>();
-    let blocker = engine.resources().write(WritePriority::User, move |_| {
-        held.recv().ok();
-        Ok(())
-    });
+    // The inventory then finishes before the confirmation's write.
     let (job, now) = (id.clone(), engine.resources().now());
-    let finish = engine.resources().write(WritePriority::User, move |tx| {
+    let waiting = block_on(engine.resources().write(WritePriority::User, move |tx| {
         let current = import_job(tx, &job)?;
         let (source, _) = import_job_source(tx, &job, 0)?;
         let checkpoint = ImportJobCheckpoint::inventoried(&[source], &[]);
-        let waiting = ImportJobState::AwaitingConfirmation;
-        advance_import_job(tx, &job, current.revision(), waiting, &checkpoint, now).map(drop)
-    });
-    // The confirmation reads the job while it is still in inventory;
-    // its write then queues behind the finish.
-    let confirmed = std::thread::scope(|scope| {
-        let confirming = scope.spawn(|| confirm(&engine, &id, vec![]));
-        std::thread::sleep(Duration::from_millis(300));
-        release.send(()).unwrap();
-        confirming.join().unwrap()
-    });
-    block_on(blocker).unwrap();
-    block_on(finish).unwrap();
+        let state = ImportJobState::AwaitingConfirmation;
+        advance_import_job(tx, &job, current.revision(), state, &checkpoint, now)
+    }))
+    .unwrap();
 
-    let error = confirmed.unwrap_err();
-    assert!(matches!(error, EngineError::Conflict { .. }), "{error:?}");
+    // A write expecting nothing, or an older revision, conflicts; only
+    // the revision actually validated is accepted.
+    let stale = [
+        None,
+        Some((waiting.revision() - 1, waiting.checkpoint().clone())),
+    ];
+    for expected in stale {
+        let (job, key) = (id.clone(), engine.new_idempotency_key());
+        let error = block_on(engine.resources().write(WritePriority::User, move |tx| {
+            confirm_in(tx, &key, &job, expected, now)
+        }))
+        .unwrap_err();
+        assert!(matches!(error, StoreError::Conflict { .. }), "{error:?}");
+    }
     let job = status(&engine, &id);
     assert_eq!(job.state(), ImportJobState::AwaitingConfirmation);
     assert_eq!(job.sources().len(), 1);
+
+    let (job, key) = (id.clone(), engine.new_idempotency_key());
+    let expected = Some((waiting.revision(), waiting.checkpoint().clone()));
+    block_on(engine.resources().write(WritePriority::User, move |tx| {
+        confirm_in(tx, &key, &job, expected, now)
+    }))
+    .unwrap();
+    assert_eq!(status(&engine, &id).state(), ImportJobState::Running);
     block_on(engine.shutdown()).unwrap();
 }
 
@@ -679,5 +689,49 @@ fn reports_and_cleanup_cover_rows_recorded_before_the_inventory_finished() {
         1,
         "a failed job keeps its snapshot as evidence"
     );
+    block_on(engine.shutdown()).unwrap();
+}
+
+#[test]
+fn an_unreadable_recovery_directory_does_not_keep_the_store_closed() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let scratch = ScratchDir::new("import-recovery-unreadable");
+    let path = scratch.path().join("Three.mbox");
+    fs::write(&path, mbox(3)).unwrap();
+    let root = scratch.path().join("store");
+    let engine = open(&root);
+    // Cancelled without its cleanup, as a crash after the transition
+    // leaves it: the next open owes it a report.
+    let id = plant(&engine, &path, ImportJobState::AwaitingConfirmation, 0);
+    let (job, now) = (id.clone(), engine.resources().now());
+    block_on(engine.resources().write(WritePriority::Sync, move |tx| {
+        let current = import_job(tx, &job)?;
+        let state = ImportJobState::Cancelled;
+        advance_import_job(
+            tx,
+            &job,
+            current.revision(),
+            state,
+            current.checkpoint(),
+            now,
+        )
+        .map(drop)
+    }))
+    .unwrap();
+    block_on(engine.shutdown()).unwrap();
+
+    // Nothing inside `recovery/` can be looked up.
+    let recovery = root.join("recovery");
+    fs::set_permissions(&recovery, fs::Permissions::from_mode(0o600)).unwrap();
+    let opened = block_on(Engine::open(&root));
+    fs::set_permissions(&recovery, fs::Permissions::from_mode(0o700)).unwrap();
+    let engine = opened.expect("cleanup trouble must not keep the store closed");
+    block_on(engine.shutdown()).unwrap();
+
+    // Once readable again, the next open finishes the cleanup.
+    let engine = open(&root);
+    assert!(report(&engine, &id).contains("\"state\": \"cancelled\""));
+    assert_eq!(snapshots(&root), 0);
     block_on(engine.shutdown()).unwrap();
 }

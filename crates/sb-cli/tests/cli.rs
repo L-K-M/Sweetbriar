@@ -314,6 +314,8 @@ fn import_reports_problems_and_rejects_bad_arguments() {
         &["import", "--variant"],
         &["import", "--variant", "mbox", "x"],
         &["import", "--variant", "mboxo", "--variant", "mboxrd", "x"],
+        &["import", "--varaint", "mboxo", "x"],
+        &["import", "--"],
     ] {
         let out = cli(&root, args);
         assert_eq!(out.status.code(), Some(2), "args {args:?} must be usage");
