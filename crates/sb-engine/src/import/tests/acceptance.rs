@@ -6,6 +6,7 @@
 use std::env;
 use std::sync::Arc;
 
+use sb_resources::ImportTotals;
 use sb_test_support::{CutFs, real_fs, run_crash_cut_points};
 
 use super::*;
@@ -231,45 +232,84 @@ fn the_same_file_decodes_by_its_chosen_variant_and_the_job_asks_first() {
     }
 }
 
-/// 50 distinct cut points in `1..=total` (all of them if fewer), drawn
-/// by splitmix64 from a fixed seed so a failure replays exactly.
-fn cut_points(total: u64) -> Vec<u64> {
-    let wanted = CUT_POINTS.min(usize::try_from(total).unwrap_or(usize::MAX));
+/// 50 distinct cut points in `first..=last`, drawn by splitmix64 from
+/// a fixed seed so a failure replays exactly.
+fn cut_points(first: u64, last: u64) -> Vec<u64> {
+    let span = last.saturating_sub(first) + 1;
+    assert!(
+        first <= last && span >= CUT_POINTS as u64,
+        "only {span} import operations to cut: is the filesystem seam connected?"
+    );
     let mut state = CUT_SEED;
     let mut points = std::collections::BTreeSet::new();
-    while points.len() < wanted {
+    while points.len() < CUT_POINTS {
         state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
         let mut z = state;
         z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
         z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        points.insert(1 + (z ^ (z >> 31)) % total);
+        points.insert(first + (z ^ (z >> 31)) % span);
     }
     points.into_iter().collect()
 }
 
-/// After a cut: reopen on the real filesystem, let recovery run, then
-/// finish whatever the cut left (spec/09). An interrupted inventory
-/// failed at open, and a cut before the start left no job: either way
-/// the user starts the import again.
-fn finish_after_cut(engine: &Engine, paths: &[PathBuf]) {
-    let ids = strings(engine, "SELECT job_id FROM import_jobs ORDER BY created_at");
-    let mut completed = false;
-    for id in ids {
-        match status(engine, &id).state() {
-            ImportJobState::AwaitingConfirmation => {
-                finish_waiting(engine, &id);
-                completed = true;
-            }
-            ImportJobState::Running => {
-                settle(engine, &id, ImportJobState::Completed);
-                completed = true;
-            }
-            ImportJobState::Completed => completed = true,
-            state => assert_eq!(state, ImportJobState::Failed, "job {id}"),
+/// Each job's state as the cut left it, read through the store before
+/// the engine's recovery can change it.
+fn states_before_recovery(root: &Path) -> Vec<(String, ImportJobState)> {
+    let resources = Resources::open(root).unwrap();
+    let jobs = resources
+        .read(|tx| {
+            let mut jobs = recoverable_import_jobs(tx)?;
+            jobs.extend(finished_import_jobs(tx)?);
+            Ok(jobs)
+        })
+        .unwrap();
+    resources.close().unwrap();
+    jobs.into_iter()
+        .map(|job| {
+            let job = job.unwrap();
+            (job.id().to_owned(), job.state())
+        })
+        .collect()
+}
+
+/// After a cut and the engine's recovery, finish the job the cut left,
+/// under its own id (spec/09). Only an interrupted inventory, which
+/// recovery fails, or a cut before the job existed may start again.
+fn finish_after_cut(
+    engine: &Engine,
+    before: &[(String, ImportJobState)],
+    paths: &[PathBuf],
+) -> ImportJobStatus {
+    match before {
+        [] => drive(engine, paths),
+        [(id, ImportJobState::Inventory)] => {
+            let failed = status(engine, id);
+            assert_eq!(failed.state(), ImportJobState::Failed);
+            assert_eq!(failed.checkpoint().failure(), Some(INTERRUPTED_INVENTORY));
+            drive(engine, paths)
         }
+        [(id, ImportJobState::AwaitingConfirmation)] => finish_waiting(engine, id),
+        [(id, ImportJobState::Running)] => settle(engine, id, ImportJobState::Completed),
+        [(id, ImportJobState::Completed)] => settle(engine, id, ImportJobState::Completed),
+        other => panic!("a cut left unexpected jobs: {other:?}"),
     }
-    if !completed {
-        drive(engine, paths);
+}
+
+/// What a completed job says about itself, beyond the store's rows.
+#[derive(Debug, PartialEq, Eq)]
+struct Outcome {
+    totals: ImportTotals,
+    positions: Vec<SourcePosition>,
+}
+
+fn outcome(job: &ImportJobStatus) -> Outcome {
+    Outcome {
+        totals: job.checkpoint().totals(),
+        positions: job
+            .sources()
+            .iter()
+            .map(ImportSourceStatus::position)
+            .collect(),
     }
 }
 
@@ -278,14 +318,16 @@ fn imports_reach_the_uncut_counts_after_crash_cuts_at_seeded_points() {
     let scratch = ScratchDir::new("import-crash-cuts");
     let paths = fixture_set(&scratch.path().join("fixtures"));
 
-    // An uncut run measures the operations and the final counts.
+    // An uncut run measures the import's operations, after the engine's
+    // own startup, and what the finished job and the store hold.
     let uncut = Arc::new(CutFs::new(real_fs(), u64::MAX));
     let root = scratch.path().join("uncut");
     let engine = block_on(Engine::open_with_fs(&root, uncut.clone())).unwrap();
-    drive(&engine, &paths);
-    let expected = counts(&engine);
+    let first = uncut.operations() + 1;
+    let done = drive(&engine, &paths);
+    let expected = (counts(&engine), outcome(&done));
     block_on(engine.shutdown()).unwrap();
-    let points = cut_points(uncut.operations());
+    let points = cut_points(first, uncut.operations());
 
     let killed = run_crash_cut_points(
         CUT_N_ENV,
@@ -294,23 +336,18 @@ fn imports_reach_the_uncut_counts_after_crash_cuts_at_seeded_points() {
         &points,
         &mut |n| scratch.path().join(format!("cut-{n}")).join("store"),
         &mut |root| {
+            let before = states_before_recovery(root);
             let engine = open(root);
-            finish_after_cut(&engine, &paths);
-            assert_eq!(
-                counts(&engine),
-                expected,
-                "after a cut in {}",
-                root.display()
-            );
+            let done = finish_after_cut(&engine, &before, &paths);
+            let found = (counts(&engine), outcome(&done));
+            assert_eq!(found, expected, "after a cut in {}", root.display());
+            let report = fs::read_to_string(done.report_path().unwrap()).unwrap();
+            assert!(report.contains("\"state\": \"completed\""), "{report}");
             assert_intact(&engine, root);
             block_on(engine.shutdown()).unwrap();
         },
     );
-    assert!(
-        killed * 2 >= points.len() as u64,
-        "only {killed} of {} cuts landed",
-        points.len()
-    );
+    assert_eq!(killed, points.len() as u64, "every sampled cut must land");
 }
 
 /// The crash-cut child: the fixture import on `CutFs`, killed at the
