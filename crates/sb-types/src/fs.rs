@@ -14,6 +14,20 @@ pub trait Fs: Send + Sync {
     fn create(&self, path: &Path) -> io::Result<Box<dyn WriteFile>>;
     /// Open an existing file for reading and seeking.
     fn open(&self, path: &Path) -> io::Result<Box<dyn ReadFile>>;
+    /// Open `path` for reading and seeking only when it names a
+    /// regular file, and return the `Metadata` of the file actually
+    /// opened with the handle. One operation: a `metadata` look
+    /// followed by [`Fs::open`] can be raced into opening a fifo,
+    /// device or socket swapped in between the two calls. Fails with
+    /// `ErrorKind::InvalidInput` when `path` opens to anything but a
+    /// regular file — promptly: a fifo without a writer must not
+    /// park the caller — and with the filesystem's own error
+    /// (`NotFound`, permissions, …) otherwise, including kinds that
+    /// cannot be opened at all. The handle and its `Metadata` stay
+    /// bound to the opened file: renaming or replacing `path`
+    /// afterwards changes neither. A symlink to a regular file counts
+    /// as regular.
+    fn open_regular(&self, path: &Path) -> io::Result<(Box<dyn ReadFile>, Metadata)>;
     /// Describe `path`, following symlinks; `Ok(None)` when it does not
     /// exist.
     fn metadata(&self, path: &Path) -> io::Result<Option<Metadata>>;

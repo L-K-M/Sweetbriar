@@ -689,6 +689,12 @@ impl Fs for RaceFs {
     fn open(&self, path: &Path) -> std::io::Result<Box<dyn sb_types::fs::ReadFile>> {
         self.inner.open(path)
     }
+    fn open_regular(
+        &self,
+        path: &Path,
+    ) -> std::io::Result<(Box<dyn sb_types::fs::ReadFile>, sb_types::fs::Metadata)> {
+        self.inner.open_regular(path)
+    }
     fn read_dir(&self, path: &Path) -> std::io::Result<Vec<PathBuf>> {
         self.inner.read_dir(path)
     }
@@ -912,6 +918,13 @@ impl Fs for RecordFs {
         self.note("open");
         self.inner.open(path)
     }
+    fn open_regular(
+        &self,
+        path: &Path,
+    ) -> std::io::Result<(Box<dyn sb_types::fs::ReadFile>, sb_types::fs::Metadata)> {
+        self.note("open_regular");
+        self.inner.open_regular(path)
+    }
     fn metadata(&self, path: &Path) -> std::io::Result<Option<sb_types::fs::Metadata>> {
         self.note("metadata");
         self.inner.metadata(path)
@@ -1057,6 +1070,16 @@ impl Fs for VanishFs {
             self.inner.remove(path)?;
         }
         self.inner.open(path)
+    }
+
+    fn open_regular(
+        &self,
+        path: &Path,
+    ) -> std::io::Result<(Box<dyn sb_types::fs::ReadFile>, sb_types::fs::Metadata)> {
+        if path == self.vanishing {
+            self.inner.remove(path)?;
+        }
+        self.inner.open_regular(path)
     }
 
     fn create(&self, path: &Path) -> std::io::Result<Box<dyn sb_types::fs::WriteFile>> {
