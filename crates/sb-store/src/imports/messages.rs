@@ -115,17 +115,7 @@ impl ImportMessage {
     /// three times; bodies never enter it.
     pub fn change_budget_bytes(&self) -> usize {
         let summary = &self.summary;
-        let list_text = [
-            &summary.subject,
-            &summary.from_addr,
-            &summary.from_name,
-            &summary.snippet,
-        ]
-        .into_iter()
-        .flatten()
-        .fold(LIST_ROW_BUDGET, |size, text| {
-            size.saturating_add(text.len().saturating_mul(LIST_ROW_TEXT_COPIES))
-        });
+        let list_text = list_row_bytes(summary);
         [
             &summary.header_message_id,
             &summary.subject,
@@ -153,6 +143,29 @@ impl ImportMessage {
             |size, text| size.saturating_add(text.len()),
         )
     }
+}
+
+/// What one list row showing `summary` costs the batch budget.
+fn list_row_bytes(summary: &ImportSummary) -> usize {
+    [
+        &summary.subject,
+        &summary.from_addr,
+        &summary.from_name,
+        &summary.snippet,
+    ]
+    .into_iter()
+    .flatten()
+    .fold(LIST_ROW_BUDGET, |size, text| {
+        size.saturating_add(text.len().saturating_mul(LIST_ROW_TEXT_COPIES))
+    })
+}
+
+/// The list rows a batch must refresh, and the bytes of those beyond
+/// its messages' own estimates.
+#[derive(Default)]
+struct ListChanges {
+    occurrences: BTreeSet<i64>,
+    extra_bytes: usize,
 }
 
 pub struct ImportBatch<'a> {
@@ -210,20 +223,18 @@ pub fn commit_import_batch(
     import_job_source(tx, batch.job_id, batch.source_ordinal)?;
     let (account, mailbox) = local_mailbox(tx, batch.mailbox_name)?;
     let mut stats = ImportBatchStats::default();
-    let mut touched = BTreeSet::new();
+    let mut list = ListChanges::default();
     for message in batch.messages {
-        store_message(
-            tx,
-            &account,
-            mailbox,
-            message,
-            now,
-            &mut stats,
-            &mut touched,
-        )?;
+        store_message(tx, &account, mailbox, message, now, &mut stats, &mut list)?;
+    }
+    let change_bytes = change_bytes.saturating_add(list.extra_bytes);
+    if change_bytes > MAX_IMPORT_CHANGES_BYTES {
+        return Err(invalid(
+            "import list rows exceed the background-write budget",
+        ));
     }
     // One generation per batch that changed what lists show (spec/02).
-    if list_rows::refresh(tx, &touched)? {
+    if list_rows::refresh(tx, &list.occurrences)? {
         list_rows::advance_generation(tx)?;
     }
     let (source_checkpoint, job_checkpoint) = progress(&stats)?;
@@ -290,7 +301,7 @@ fn store_message(
     message: &ImportMessage,
     now: Timestamp,
     stats: &mut ImportBatchStats,
-    touched: &mut BTreeSet<i64>,
+    list: &mut ListChanges,
 ) -> Result<(), StoreError> {
     let hash = message.object.sha256_hex();
     let length = i64::try_from(message.object.byte_length())
@@ -406,12 +417,19 @@ fn store_message(
         ],
     )
     .map_err(sql_error)?;
-    touched.insert(tx.last_insert_rowid());
+    list.occurrences.insert(tx.last_insert_rowid());
     stats.imported += 1;
     if save_summary(tx, acquisition, &message.summary)? {
-        // A newer parser's summary changes every row showing these bytes.
+        // A first summary for bytes already held changes the rows of
+        // every message sharing them (spec/02).
         if !inserted {
-            touched.extend(list_rows::sharing_acquisition(tx, acquisition)?);
+            let sharing = list_rows::sharing_acquisition(tx, acquisition)?;
+            list.extra_bytes = list.extra_bytes.saturating_add(
+                sharing
+                    .len()
+                    .saturating_mul(list_row_bytes(&message.summary)),
+            );
+            list.occurrences.extend(sharing);
         }
         tx.execute(
             "INSERT INTO d_index_queue (doc_id, reason, enqueued_at) VALUES (?1, ?2, ?3)
@@ -422,6 +440,8 @@ fn store_message(
     Ok(())
 }
 
+/// Store `acquisition`'s first summary; an existing one, even from an
+/// older parser, stays (spec/02). Returns whether one was stored.
 fn save_summary(
     tx: &Transaction,
     acquisition: i64,
@@ -440,14 +460,7 @@ fn save_summary(
          header_message_id, subject, from_addr, from_name, reply_to_json, to_json, cc_json,
          date_header, in_reply_to, references_json, list_id, delivered_to_json, has_attachments, snippet)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
-         ON CONFLICT(acquisition_id) DO UPDATE SET parser_version = excluded.parser_version,
-         parse_state = excluded.parse_state, header_message_id = excluded.header_message_id,
-         subject = excluded.subject, from_addr = excluded.from_addr, from_name = excluded.from_name,
-         reply_to_json = excluded.reply_to_json, to_json = excluded.to_json, cc_json = excluded.cc_json,
-         date_header = excluded.date_header, in_reply_to = excluded.in_reply_to,
-         references_json = excluded.references_json, list_id = excluded.list_id,
-         delivered_to_json = excluded.delivered_to_json, has_attachments = excluded.has_attachments,
-         snippet = excluded.snippet WHERE excluded.parser_version > d_message_summary.parser_version",
+         ON CONFLICT(acquisition_id) DO NOTHING",
         params![acquisition, summary.parser_version, summary.parse_state.name(),
             summary.header_message_id, summary.subject, summary.from_addr, summary.from_name,
             reply_to?, to?, cc?, summary.date_header, summary.in_reply_to, references?,

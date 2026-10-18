@@ -642,10 +642,10 @@ fn imported_occurrences_are_listed_in_their_batch() {
     store.close().unwrap();
 }
 
-/// A newer parser's summary for bytes already listed updates the rows
-/// of every message sharing them, not only the new occurrence's.
+/// A newer parser's summary for bytes already stored replaces nothing:
+/// every row keeps showing the stored summary (spec/02).
 #[test]
-fn a_newer_summary_updates_every_row_sharing_its_bytes() {
+fn a_newer_parser_never_replaces_a_stored_summary() {
     let (_scratch, _paths, store, revision) = setup();
     let old = message(&store, "/synthetic/Inbox.mbox", 0, ORIGINAL);
     commit(&store, revision, "Inbox", vec![old]).unwrap();
@@ -657,7 +657,95 @@ fn a_newer_summary_updates_every_row_sharing_its_bytes() {
     commit(&store, revision + 1, "Archive", vec![newer]).unwrap();
 
     let subjects: Vec<Option<String>> = list_rows(&store).into_iter().map(|row| row.3).collect();
-    assert_eq!(subjects, vec![Some("Reparsed subject".to_owned()); 2]);
+    assert_eq!(
+        subjects,
+        vec![Some("Duplicate source message".to_owned()); 2]
+    );
+    assert_eq!(
+        count(&store, "d_message_summary WHERE parser_version = 1"),
+        1
+    );
+    assert_eq!(count(&store, "d_index_queue WHERE reason = 'reextract'"), 0);
+    // The new occurrence's row is the batch's only list change.
     assert_eq!(list_generation(&store), before + 1);
+    store.close().unwrap();
+}
+
+/// `held` messages sharing `bytes`' acquisition, which has no summary
+/// yet, each with a listed occurrence in a local folder.
+fn hold_without_summary(store: &Store, bytes: &'static [u8], held: usize) {
+    let object = store.objects().publish(bytes).unwrap();
+    writing(store, move |tx| {
+        let account: String = tx
+            .query_row(
+                "SELECT account_id FROM accounts WHERE provider = 'local_archive'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(sql_error)?;
+        tx.execute(
+            "INSERT INTO mailboxes (account_id, remote_name, kind, selectable, sync_state)
+             VALUES (?1, 'Held', 'folder', 1, 'synced')",
+            [&account],
+        )
+        .map_err(sql_error)?;
+        let mailbox = tx.last_insert_rowid();
+        tx.execute(
+            "INSERT INTO acquisitions (content_sha256, byte_length, object_state, first_acquired_at)
+             VALUES (?1, ?2, 'published', ?3)",
+            params![object.sha256_hex(), bytes.len() as i64, FIXED_NOW_MS],
+        )
+        .map_err(sql_error)?;
+        let acquisition = tx.last_insert_rowid();
+        let mut occurrences = std::collections::BTreeSet::new();
+        for _ in 0..held {
+            tx.execute(
+                "INSERT INTO logical_messages (account_id, acquisition_id, created_at)
+                 VALUES (?1, ?2, ?3)",
+                params![account, acquisition, FIXED_NOW_MS],
+            )
+            .map_err(sql_error)?;
+            let message = tx.last_insert_rowid();
+            tx.execute(
+                "INSERT INTO occurrences (account_id, mailbox_id, message_id, state,
+                 first_seen_at, last_seen_at) VALUES (?1, ?2, ?3, 'present', ?4, ?4)",
+                params![account, mailbox, message, FIXED_NOW_MS],
+            )
+            .map_err(sql_error)?;
+            occurrences.insert(tx.last_insert_rowid());
+        }
+        crate::list_rows::refresh(tx, &occurrences)?;
+        Ok(())
+    });
+}
+
+/// An import that stores the first summary of bytes already held shows
+/// it on every row sharing them; when those rows would exceed the
+/// batch's write budget, the batch fails whole instead (spec/02, 03).
+#[test]
+fn a_first_summary_updates_every_sharing_row_within_the_budget() {
+    let (_scratch, _paths, store, revision) = setup();
+    hold_without_summary(&store, ORIGINAL, 3);
+    let first = message(&store, "/synthetic/Inbox.mbox", 0, ORIGINAL);
+    commit(&store, revision, "Inbox", vec![first]).unwrap();
+    let subjects: Vec<Option<String>> = list_rows(&store).into_iter().map(|row| row.3).collect();
+    assert_eq!(
+        subjects,
+        vec![Some("Duplicate source message".to_owned()); 4]
+    );
+
+    let (_scratch, _paths, store, revision) = setup();
+    hold_without_summary(&store, ORIGINAL, 300);
+    let before = (list_rows(&store), list_generation(&store));
+    let mut wide = message(&store, "/synthetic/Inbox.mbox", 0, ORIGINAL);
+    wide.summary.subject = Some("s".repeat(8 * 1024));
+    assert!(wide.change_budget_bytes() < MAX_IMPORT_CHANGES_BYTES);
+    assert!(matches!(
+        commit(&store, revision, "Inbox", vec![wide]),
+        Err(StoreError::InvalidInput { .. })
+    ));
+    assert_eq!((list_rows(&store), list_generation(&store)), before);
+    assert_eq!(count(&store, "d_message_summary"), 0);
+    assert_eq!(count(&store, "occurrences"), 300);
     store.close().unwrap();
 }
