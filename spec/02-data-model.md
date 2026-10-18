@@ -725,6 +725,20 @@ CREATE INDEX logical_messages_by_acquisition ON logical_messages(acquisition_id)
   denormalized into `d_list_rows`.
 - **Threads** are computed locally (JWZ plus provider hints when present).
   Manual thread merge and split, and their merge log, are *later*.
+  - A thread is a set of logical messages. One graph spans every
+    account, so a thread may mix accounts.
+  - Each message links through its References ids, or, without any,
+    through its first In-Reply-To id. Ids compare exactly, without case
+    folding. A missing or repeated Message-ID gives the message a
+    container of its own.
+  - A link that would close a cycle is dropped; a message's own
+    references overrule earlier guesses about its parent.
+  - Roots whose base subjects are equal share a thread, as in JWZ. The
+    base subject follows RFC 5256: whitespace collapsed, trailing
+    `(fwd)`, leading `Re:`/`Fw:`/`Fwd:` and `[…]` blobs, and a
+    `[Fwd: …]` wrapper removed; it compares in lowercase. An empty base
+    subject joins nothing. Unrelated messages with one subject share a
+    thread too: the cost of JWZ's heuristic.
 - **Search tables** are in [06-search](06-search.md).
 
 ## Migrations
