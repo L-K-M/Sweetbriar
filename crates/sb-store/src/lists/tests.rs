@@ -425,7 +425,12 @@ fn a_thread_lists_its_messages_once() {
     occurrence(&mut conn, &account, inbox, outsider, 3_000, false);
     let thread = {
         let tx = conn.transaction().unwrap();
-        let thread = crate::threads::create_thread(&tx, None, None).unwrap();
+        let blank = crate::threads::ThreadDescription {
+            account_scope: None,
+            subject_norm: None,
+            last_date: None,
+        };
+        let thread = crate::threads::create_thread(&tx, blank).unwrap();
         for message in [first, second] {
             crate::threads::assign_thread(&tx, message, thread).unwrap();
         }

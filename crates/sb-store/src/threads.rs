@@ -36,6 +36,17 @@ pub struct ThreadSource {
     pub references: Vec<String>,
     pub in_reply_to: Option<String>,
     pub subject: Option<String>,
+    /// The representative's `sort_date`; `None` without one.
+    pub representative_date: Option<i64>,
+}
+
+/// A thread as stored (spec/02 `d_threads`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredThread {
+    pub thread_id: i64,
+    pub account_scope: Option<String>,
+    pub subject_norm: Option<String>,
+    pub last_date: Option<i64>,
 }
 
 /// The two watermarks: a rebuild is due while `built < inputs`.
@@ -70,10 +81,11 @@ pub fn thread_sources(
                COALESCE(h.header_message_id, s.header_message_id),
                COALESCE(h.references_json, s.references_json),
                COALESCE(h.in_reply_to, s.in_reply_to),
-               COALESCE(h.subject, s.subject)
+               COALESCE(h.subject, s.subject), r.sort_date
              FROM logical_messages lm
              LEFT JOIN message_headers h ON h.message_id = lm.message_id
              LEFT JOIN d_message_summary s ON s.acquisition_id = lm.acquisition_id
+             LEFT JOIN d_list_rows r ON r.message_id = lm.message_id AND r.representative = 1
              WHERE lm.message_id > ?1 ORDER BY lm.message_id LIMIT ?2",
         )
         .map_err(sql_error)?;
@@ -86,12 +98,13 @@ pub fn thread_sources(
                 row.get::<_, Option<String>>(3)?,
                 row.get::<_, Option<String>>(4)?,
                 row.get::<_, Option<String>>(5)?,
+                row.get::<_, Option<i64>>(6)?,
             ))
         })
         .map_err(sql_error)?;
     let mut sources = Vec::new();
     for row in rows {
-        let (message_id, account_id, header_id, references, in_reply_to, subject) =
+        let (message_id, account_id, header_id, references, in_reply_to, subject, date) =
             row.map_err(sql_error)?;
         // Canonical arrays of strings; NULL is the empty list (spec/02).
         let references = match references {
@@ -107,9 +120,36 @@ pub fn thread_sources(
             references,
             in_reply_to,
             subject,
+            representative_date: date,
         });
     }
     Ok(sources)
+}
+
+/// Up to `limit` stored threads after thread `after`, by id.
+pub fn stored_threads(
+    tx: &Transaction,
+    after: i64,
+    limit: usize,
+) -> Result<Vec<StoredThread>, StoreError> {
+    let mut statement = tx
+        .prepare_cached(
+            "SELECT thread_id, account_scope, subject_norm, last_date FROM d_threads
+             WHERE thread_id > ?1 ORDER BY thread_id LIMIT ?2",
+        )
+        .map_err(sql_error)?;
+    statement
+        .query_map(params![after, limit_value(limit)], |row| {
+            Ok(StoredThread {
+                thread_id: row.get(0)?,
+                account_scope: row.get(1)?,
+                subject_norm: row.get(2)?,
+                last_date: row.get(3)?,
+            })
+        })
+        .map_err(sql_error)?
+        .collect::<Result<_, _>>()
+        .map_err(sql_error)
 }
 
 /// Up to `limit` stored memberships after message `after`, as
@@ -134,31 +174,53 @@ pub fn thread_memberships(
         .map_err(sql_error)
 }
 
+/// What a rebuild stores for one thread (spec/02 `d_threads`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ThreadDescription<'a> {
+    pub account_scope: Option<&'a str>,
+    pub subject_norm: Option<&'a str>,
+    pub last_date: Option<i64>,
+}
+
 /// A new, empty thread's id.
 pub fn create_thread(
     tx: &Transaction,
-    account_scope: Option<&str>,
-    subject_norm: Option<&str>,
+    described: ThreadDescription<'_>,
 ) -> Result<i64, StoreError> {
-    tx.prepare_cached("INSERT INTO d_threads (account_scope, subject_norm) VALUES (?1, ?2)")
-        .and_then(|mut statement| statement.execute(params![account_scope, subject_norm]))
-        .map_err(sql_error)?;
+    tx.prepare_cached(
+        "INSERT INTO d_threads (account_scope, subject_norm, last_date) VALUES (?1, ?2, ?3)",
+    )
+    .and_then(|mut statement| {
+        statement.execute(params![
+            described.account_scope,
+            described.subject_norm,
+            described.last_date
+        ])
+    })
+    .map_err(sql_error)?;
     Ok(tx.last_insert_rowid())
 }
 
-/// Set a thread's account and subject; returns whether they changed.
+/// Store a thread's description; returns whether it changed.
 pub fn describe_thread(
     tx: &Transaction,
     thread: i64,
-    account_scope: Option<&str>,
-    subject_norm: Option<&str>,
+    described: ThreadDescription<'_>,
 ) -> Result<bool, StoreError> {
     let changed = tx
         .prepare_cached(
-            "UPDATE d_threads SET account_scope = ?2, subject_norm = ?3
-             WHERE thread_id = ?1 AND (account_scope, subject_norm) IS NOT (?2, ?3)",
+            "UPDATE d_threads SET account_scope = ?2, subject_norm = ?3, last_date = ?4
+             WHERE thread_id = ?1
+               AND (account_scope, subject_norm, last_date) IS NOT (?2, ?3, ?4)",
         )
-        .and_then(|mut statement| statement.execute(params![thread, account_scope, subject_norm]))
+        .and_then(|mut statement| {
+            statement.execute(params![
+                thread,
+                described.account_scope,
+                described.subject_norm,
+                described.last_date
+            ])
+        })
         .map_err(sql_error)?;
     Ok(changed > 0)
 }
@@ -204,21 +266,6 @@ pub fn remove_empty_threads(tx: &Transaction) -> Result<(), StoreError> {
            (SELECT 1 FROM d_thread_members m WHERE m.thread_id = d_threads.thread_id)",
         [],
     )
-    .map_err(sql_error)?;
-    Ok(())
-}
-
-/// Recompute `thread`'s `last_date`: its newest representative's
-/// `sort_date`, or NULL without one (spec/02).
-pub fn date_thread(tx: &Transaction, thread: i64) -> Result<(), StoreError> {
-    tx.prepare_cached(
-        "UPDATE d_threads SET last_date =
-           (SELECT max(r.sort_date) FROM d_thread_members m
-            JOIN d_list_rows r ON r.message_id = m.message_id AND r.representative = 1
-            WHERE m.thread_id = ?1)
-         WHERE thread_id = ?1",
-    )
-    .and_then(|mut statement| statement.execute([thread]))
     .map_err(sql_error)?;
     Ok(())
 }

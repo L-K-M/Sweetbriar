@@ -155,6 +155,7 @@ fn sources_page_by_message_with_headers_first() {
             references: vec!["a@x".to_owned(), "b@x".to_owned()],
             in_reply_to: None,
             subject: Some("Plan".to_owned()),
+            representative_date: Some(1_000),
         }]
     );
     let rest = thread_sources(&tx, first, 10).unwrap();
@@ -165,17 +166,27 @@ fn sources_page_by_message_with_headers_first() {
     assert!(rest[0].references.is_empty());
 }
 
-/// Assigning reports only real changes, a message holds one thread,
-/// removal takes leftover members, and a thread's date is its newest
-/// representative's.
+/// Assigning and describing report only real changes, a message holds
+/// one thread, removal takes leftover members, sources carry their
+/// representatives' dates, and stored threads read back as written.
 #[test]
 fn memberships_change_only_when_they_differ() {
     let (mut conn, account) = store();
     let older = message(&mut conn, &account, "Plan", "[]", 1_000);
     let newer = message(&mut conn, &account, "Plan", "[]", 3_000);
     let tx = conn.transaction().unwrap();
-    let one = create_thread(&tx, Some(&account), Some("plan")).unwrap();
-    let two = create_thread(&tx, None, None).unwrap();
+    let blank = ThreadDescription {
+        account_scope: None,
+        subject_norm: None,
+        last_date: None,
+    };
+    let planned = ThreadDescription {
+        account_scope: Some(&account),
+        subject_norm: Some("plan"),
+        last_date: Some(3_000),
+    };
+    let one = create_thread(&tx, planned).unwrap();
+    let two = create_thread(&tx, blank).unwrap();
     assert!(assign_thread(&tx, older, one).unwrap());
     assert!(!assign_thread(&tx, older, one).unwrap());
     assert!(assign_thread(&tx, newer, two).unwrap());
@@ -184,18 +195,35 @@ fn memberships_change_only_when_they_differ() {
         thread_memberships(&tx, 0, 10).unwrap(),
         vec![(older, one), (newer, one)]
     );
-    assert!(!describe_thread(&tx, one, Some(&account), Some("plan")).unwrap());
-    assert!(describe_thread(&tx, one, None, Some("plan")).unwrap());
-
-    date_thread(&tx, one).unwrap();
-    let last: Option<i64> = tx
-        .query_row(
-            "SELECT last_date FROM d_threads WHERE thread_id = ?1",
-            [one],
-            |row| row.get(0),
-        )
-        .unwrap();
-    assert_eq!(last, Some(3_000));
+    assert!(!describe_thread(&tx, one, planned).unwrap());
+    let undated = ThreadDescription {
+        last_date: None,
+        ..planned
+    };
+    assert!(describe_thread(&tx, one, undated).unwrap());
+    assert_eq!(
+        stored_threads(&tx, 0, 10).unwrap(),
+        vec![
+            StoredThread {
+                thread_id: one,
+                account_scope: Some(account.clone()),
+                subject_norm: Some("plan".to_owned()),
+                last_date: None,
+            },
+            StoredThread {
+                thread_id: two,
+                account_scope: None,
+                subject_norm: None,
+                last_date: None,
+            },
+        ]
+    );
+    let dates: Vec<Option<i64>> = thread_sources(&tx, 0, 10)
+        .unwrap()
+        .iter()
+        .map(|source| source.representative_date)
+        .collect();
+    assert_eq!(dates, vec![Some(1_000), Some(3_000)]);
 
     assert!(!remove_thread(&tx, two).unwrap());
     assert!(remove_thread(&tx, one).unwrap());
@@ -207,6 +235,6 @@ fn memberships_change_only_when_they_differ() {
             params![thread, older],
         )
     };
-    insert(create_thread(&tx, None, None).unwrap()).unwrap();
-    assert!(insert(create_thread(&tx, None, None).unwrap()).is_err());
+    insert(create_thread(&tx, blank).unwrap()).unwrap();
+    assert!(insert(create_thread(&tx, blank).unwrap()).is_err());
 }

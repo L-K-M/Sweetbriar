@@ -14,9 +14,10 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use sb_resources::{
-    MAX_IMPORT_CHANGES_BYTES, Resources, StoreError, ThreadSource, WritePriority, assign_thread,
-    create_thread, date_thread, describe_thread, mark_threads_built, note_membership_change,
-    remove_empty_threads, remove_thread, thread_memberships, thread_revisions, thread_sources,
+    MAX_IMPORT_CHANGES_BYTES, Resources, StoreError, StoredThread, ThreadDescription, ThreadSource,
+    WritePriority, assign_thread, create_thread, describe_thread, mark_threads_built,
+    note_membership_change, remove_empty_threads, remove_thread, stored_threads,
+    thread_memberships, thread_revisions, thread_sources,
 };
 
 use crate::Engine;
@@ -140,7 +141,16 @@ async fn rebuild(worker: &Worker) -> Result<(), StoreError> {
     .await?
     .into_iter()
     .collect();
-    let plan = read(worker, move |_| plan(&sources, &memberships)).await?;
+    let stored: HashMap<i64, StoredThread> = gather(
+        worker,
+        |tx, after| stored_threads(tx, after, PAGE),
+        |t| t.thread_id,
+    )
+    .await?
+    .into_iter()
+    .map(|thread| (thread.thread_id, thread))
+    .collect();
+    let plan = read(worker, move |_| plan(&sources, &memberships, &stored)).await?;
 
     let mut created: HashMap<usize, i64> = HashMap::new();
     for chunk in plan.chunks() {
@@ -213,17 +223,26 @@ struct PlannedThread {
     members: Vec<i64>,
     account_scope: Option<String>,
     subject_norm: Option<String>,
+    last_date: Option<i64>,
+}
+
+impl PlannedThread {
+    fn description(&self) -> ThreadDescription<'_> {
+        ThreadDescription {
+            account_scope: self.account_scope.as_deref(),
+            subject_norm: self.subject_norm.as_deref(),
+            last_date: self.last_date,
+        }
+    }
 }
 
 /// One step of publication.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Step {
-    /// Create the planned thread, or describe the one it keeps.
+    /// Create the planned thread, or rewrite the one it keeps.
     Describe(usize),
     /// Move a message into the planned thread.
     Assign { message: i64, thread: usize },
-    /// Recompute the planned thread's `last_date`.
-    Date(usize),
     /// Remove an id no group was given.
     Remove(i64),
 }
@@ -268,8 +287,14 @@ impl Plan {
 /// (message → thread) there (spec/02): each existing id goes to the
 /// group holding most of its members, ties to the group with the
 /// earliest message; a group given several keeps the smallest; ids
-/// given to no group are removed. Pure.
-fn plan(sources: &[ThreadSource], memberships: &HashMap<i64, i64>) -> Result<Plan, StoreError> {
+/// given to no group are removed. A kept thread whose `stored`
+/// description differs from the computed one is rewritten, so a
+/// publication cut short converges at the next rebuild. Pure.
+fn plan(
+    sources: &[ThreadSource],
+    memberships: &HashMap<i64, i64>,
+    stored: &HashMap<i64, StoredThread>,
+) -> Result<Plan, StoreError> {
     let inputs: Vec<ThreadInput> = sources
         .iter()
         .map(|source| ThreadInput {
@@ -311,10 +336,6 @@ fn plan(sources: &[ThreadSource], memberships: &HashMap<i64, i64>) -> Result<Pla
         }
     }
     removed.sort_unstable();
-    let mut held: HashMap<i64, usize> = HashMap::new();
-    for &thread in memberships.values() {
-        *held.entry(thread).or_default() += 1;
-    }
 
     let mut threads = Vec::with_capacity(groups.len());
     let mut steps = Vec::new();
@@ -332,32 +353,39 @@ fn plan(sources: &[ThreadSource], memberships: &HashMap<i64, i64>) -> Result<Pla
             .get(&members[0])
             .and_then(|s| s.subject.as_deref())
             .map(base_subject);
-        let moving: Vec<i64> = members
+        let last_date = members
             .iter()
-            .copied()
-            .filter(|m| kept.is_none() || memberships.get(m).copied() != kept)
-            .collect();
-        // A kept thread changes when members join or leave it; only a
-        // changed or new thread is described and dated again.
-        let staying = members.len() - moving.len();
-        let changed = match kept {
-            None => true,
-            Some(id) => !moving.is_empty() || held.get(&id).copied().unwrap_or(0) != staying,
-        };
-        if changed {
-            steps.push(Step::Describe(group));
-            steps.extend(moving.iter().map(|&message| Step::Assign {
-                message,
-                thread: group,
-            }));
-            steps.push(Step::Date(group));
-        }
-        threads.push(PlannedThread {
+            .filter_map(|m| by_id.get(m).and_then(|s| s.representative_date))
+            .max();
+        let planned = PlannedThread {
             kept,
             members,
             account_scope,
             subject_norm,
+            last_date,
+        };
+        let moving: Vec<i64> = planned
+            .members
+            .iter()
+            .copied()
+            .filter(|m| kept.is_none() || memberships.get(m).copied() != kept)
+            .collect();
+        // Describing first means a thread exists before its members
+        // move in; a kept one is rewritten only when it differs.
+        let described = kept.and_then(|id| stored.get(&id)).is_some_and(|stored| {
+            let wanted = planned.description();
+            stored.account_scope.as_deref() == wanted.account_scope
+                && stored.subject_norm.as_deref() == wanted.subject_norm
+                && stored.last_date == wanted.last_date
         });
+        if !described {
+            steps.push(Step::Describe(group));
+        }
+        steps.extend(moving.iter().map(|&message| Step::Assign {
+            message,
+            thread: group,
+        }));
+        threads.push(planned);
     }
     steps.extend(removed.into_iter().map(Step::Remove));
     Ok(Plan {
@@ -382,14 +410,12 @@ fn publish(
         match *step {
             Step::Describe(index) => {
                 let planned = &threads[index];
-                let scope = planned.account_scope.as_deref();
-                let subject = planned.subject_norm.as_deref();
                 match planned.kept {
                     Some(id) => {
-                        describe_thread(tx, id, scope, subject)?;
+                        describe_thread(tx, id, planned.description())?;
                     }
                     None => {
-                        let id = create_thread(tx, scope, subject)?;
+                        let id = create_thread(tx, planned.description())?;
                         known.insert(index, id);
                         made.insert(index, id);
                     }
@@ -398,7 +424,6 @@ fn publish(
             Step::Assign { message, thread } => {
                 changed |= assign_thread(tx, message, id_of(threads, &known, thread)?)?;
             }
-            Step::Date(thread) => date_thread(tx, id_of(threads, &known, thread)?)?,
             Step::Remove(id) => changed |= remove_thread(tx, id)?,
         }
     }

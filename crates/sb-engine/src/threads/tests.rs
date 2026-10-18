@@ -18,15 +18,33 @@ fn source(message_id: i64, header: &str, references: &[&str], subject: &str) -> 
         references: references.iter().map(|r| (*r).to_owned()).collect(),
         in_reply_to: None,
         subject: Some(subject.to_owned()),
+        representative_date: Some(message_id * 1_000),
     }
+}
+
+/// A stored thread with the description the plan would compute.
+fn stored(thread_id: i64, subject: &str, last_date: i64) -> (i64, StoredThread) {
+    (
+        thread_id,
+        StoredThread {
+            thread_id,
+            account_scope: Some(ACCOUNT.to_owned()),
+            subject_norm: Some(subject.to_owned()),
+            last_date: Some(last_date),
+        },
+    )
 }
 
 fn kept(plan: &Plan) -> Vec<Option<i64>> {
     plan.threads.iter().map(|thread| thread.kept).collect()
 }
 
-/// A first rebuild makes a thread per group: describe, every member,
-/// then the date; nothing is removed.
+fn assign(message: i64, thread: usize) -> Step {
+    Step::Assign { message, thread }
+}
+
+/// A first rebuild makes a thread per group: describe, then every
+/// member; nothing is removed.
 #[test]
 fn a_first_plan_creates_every_thread() {
     let sources = [
@@ -34,49 +52,48 @@ fn a_first_plan_creates_every_thread() {
         source(2, "b@x", &["a@x"], "Re: Lunch"),
         source(3, "c@x", &[], "Budget"),
     ];
-    let plan = plan(&sources, &HashMap::new()).unwrap();
+    let plan = plan(&sources, &HashMap::new(), &HashMap::new()).unwrap();
     assert_eq!(kept(&plan), vec![None, None]);
     assert_eq!(
         plan.steps,
         vec![
             Step::Describe(0),
-            Step::Assign {
-                message: 1,
-                thread: 0
-            },
-            Step::Assign {
-                message: 2,
-                thread: 0
-            },
-            Step::Date(0),
+            assign(1, 0),
+            assign(2, 0),
             Step::Describe(1),
-            Step::Assign {
-                message: 3,
-                thread: 1
-            },
-            Step::Date(1),
+            assign(3, 1),
         ]
     );
     assert_eq!(plan.threads[0].subject_norm.as_deref(), Some("lunch"));
     assert_eq!(plan.threads[0].account_scope.as_deref(), Some(ACCOUNT));
+    assert_eq!(plan.threads[0].last_date, Some(2_000));
 }
 
-/// A rebuild over unchanged memberships writes nothing.
+/// A rebuild over unchanged memberships and descriptions writes
+/// nothing; a stale description alone is rewritten, which is how a
+/// publication cut short between members and metadata heals.
 #[test]
-fn an_unchanged_grouping_plans_no_writes() {
+fn only_differences_are_written() {
     let sources = [
         source(1, "a@x", &[], "Lunch"),
         source(2, "b@x", &["a@x"], "Re: Lunch"),
     ];
     let memberships = HashMap::from([(1, 7), (2, 7)]);
-    let plan = plan(&sources, &memberships).unwrap();
-    assert_eq!(kept(&plan), vec![Some(7)]);
-    assert!(plan.steps.is_empty());
+    let current = HashMap::from([stored(7, "lunch", 2_000)]);
+    let quiet = plan(&sources, &memberships, &current).unwrap();
+    assert_eq!(kept(&quiet), vec![Some(7)]);
+    assert!(quiet.steps.is_empty());
+
+    let mut undated = current.clone();
+    undated.get_mut(&7).unwrap().last_date = None;
+    let healing = plan(&sources, &memberships, &undated).unwrap();
+    assert_eq!(healing.steps, vec![Step::Describe(0)]);
 }
 
 /// Merging threads keeps the smallest id and removes the other; a
-/// split keeps the id for the earlier group on a tie, and the other
-/// group gets a new thread (spec/02).
+/// split keeps the id for the earlier group on a tie, rewritten with
+/// the date of the members it keeps, and the other group gets a new
+/// thread (spec/02).
 #[test]
 fn merges_and_splits_keep_ids_by_spec_rule() {
     let merged = [
@@ -84,23 +101,12 @@ fn merges_and_splits_keep_ids_by_spec_rule() {
         source(2, "b@x", &["a@x"], "Re: Plan"),
         source(3, "c@x", &["b@x"], "Re: Plan"),
     ];
-    let plan_merged = plan(&merged, &HashMap::from([(1, 9), (2, 9), (3, 5)])).unwrap();
+    let before = HashMap::from([stored(5, "plan", 3_000), stored(9, "plan", 2_000)]);
+    let plan_merged = plan(&merged, &HashMap::from([(1, 9), (2, 9), (3, 5)]), &before).unwrap();
     assert_eq!(kept(&plan_merged), vec![Some(5)]);
     assert_eq!(
         plan_merged.steps,
-        vec![
-            Step::Describe(0),
-            Step::Assign {
-                message: 1,
-                thread: 0
-            },
-            Step::Assign {
-                message: 2,
-                thread: 0
-            },
-            Step::Date(0),
-            Step::Remove(9),
-        ]
+        vec![assign(1, 0), assign(2, 0), Step::Remove(9)]
     );
 
     let split = [
@@ -110,24 +116,17 @@ fn merges_and_splits_keep_ids_by_spec_rule() {
         source(4, "d@x", &["c@x"], "Re: Two"),
     ];
     let memberships = HashMap::from([(1, 4), (2, 4), (3, 4), (4, 4)]);
-    let plan_split = plan(&split, &memberships).unwrap();
+    let before = HashMap::from([stored(4, "one", 4_000)]);
+    let plan_split = plan(&split, &memberships, &before).unwrap();
     assert_eq!(kept(&plan_split), vec![Some(4), None]);
-    // The kept thread lost members, so it is described and dated again.
+    assert_eq!(plan_split.threads[0].last_date, Some(2_000));
     assert_eq!(
         plan_split.steps,
         vec![
             Step::Describe(0),
-            Step::Date(0),
             Step::Describe(1),
-            Step::Assign {
-                message: 3,
-                thread: 1
-            },
-            Step::Assign {
-                message: 4,
-                thread: 1
-            },
-            Step::Date(1),
+            assign(3, 1),
+            assign(4, 1),
         ]
     );
 }
@@ -137,7 +136,8 @@ fn merges_and_splits_keep_ids_by_spec_rule() {
 fn mixed_accounts_leave_the_scope_empty() {
     let mut other = source(2, "b@x", &["a@x"], "Re: Plan");
     other.account_id = "00000000-0000-4000-8000-0000000000bb".to_owned();
-    let plan = plan(&[source(1, "a@x", &[], "Plan"), other], &HashMap::new()).unwrap();
+    let sources = [source(1, "a@x", &[], "Plan"), other];
+    let plan = plan(&sources, &HashMap::new(), &HashMap::new()).unwrap();
     assert_eq!(plan.threads[0].account_scope, None);
 }
 
@@ -147,7 +147,7 @@ fn chunks_stay_within_the_batch_bound() {
     let sources: Vec<ThreadSource> = (1..=600)
         .map(|id| source(id, &format!("{id}@x"), &["root@x"], "Many"))
         .collect();
-    let plan = plan(&sources, &HashMap::new()).unwrap();
+    let plan = plan(&sources, &HashMap::new(), &HashMap::new()).unwrap();
     let chunks = plan.chunks();
     assert_eq!(
         chunks.iter().map(|c| c.len()).sum::<usize>(),
