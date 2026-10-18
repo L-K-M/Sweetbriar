@@ -82,6 +82,14 @@ impl Fs for CutFs {
         self.inner.open(path)
     }
 
+    fn open_regular(
+        &self,
+        path: &Path,
+    ) -> std::io::Result<(Box<dyn sb_types::fs::ReadFile>, Metadata)> {
+        self.trip();
+        self.inner.open_regular(path)
+    }
+
     fn metadata(&self, path: &Path) -> std::io::Result<Option<Metadata>> {
         self.trip();
         self.inner.metadata(path)
@@ -241,11 +249,12 @@ mod tests {
     const ROOT_ENV: &str = "SB_CUT_TEST_ROOT";
 
     /// Every operation `CutFs` counts, by the name the child takes.
-    const OPS: [&str; 13] = [
+    const OPS: [&str; 14] = [
         "create",
         "write",
         "sync_all",
         "open",
+        "open_regular",
         "metadata",
         "read_dir",
         "create_dir",
@@ -286,6 +295,7 @@ mod tests {
                 handle.sync_all()
             }
             "open" => cut.open(&file).map(drop),
+            "open_regular" => cut.open_regular(&file).map(drop),
             "metadata" => cut.metadata(&file).map(drop),
             "read_dir" => cut.read_dir(&root).map(drop),
             "create_dir" => cut.create_dir(&root.join("dir")),

@@ -4,6 +4,7 @@
 
 use std::fs::{File, OpenOptions, TryLockError};
 use std::io;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
 use sb_types::fs::{FileKind, Fs, Lease, Location, LockError, Metadata, WriteFile};
@@ -24,6 +25,24 @@ impl Fs for RealFs {
 
     fn open(&self, path: &Path) -> io::Result<Box<dyn sb_types::fs::ReadFile>> {
         Ok(Box::new(File::open(path)?))
+    }
+
+    fn open_regular(&self, path: &Path) -> io::Result<(Box<dyn sb_types::fs::ReadFile>, Metadata)> {
+        // O_NONBLOCK so a fifo open returns instead of waiting for a
+        // writer, O_NOCTTY so a terminal device can't become this
+        // process's controlling tty; neither changes how a regular
+        // file reads. `metadata` on the opened handle then says what
+        // was really opened — a path swapped mid-open can't slip a
+        // non-file past the check.
+        let file = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NONBLOCK | libc::O_NOCTTY)
+            .open(path)?;
+        let md = file.metadata()?;
+        if !md.is_file() {
+            return Err(not_regular(path));
+        }
+        Ok((Box::new(file), Metadata::new(file_kind(&md), md.len())))
     }
 
     fn metadata(&self, path: &Path) -> io::Result<Option<Metadata>> {
@@ -84,6 +103,15 @@ impl Fs for RealFs {
     fn location(&self, path: &Path) -> io::Result<Location> {
         location::classify(path)
     }
+}
+
+/// The `open_regular` refusal: `path` resolved to a fifo, device,
+/// socket or directory, not a regular file.
+fn not_regular(path: &Path) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidInput,
+        format!("{} is not a regular file", path.display()),
+    )
 }
 
 fn file_kind(md: &std::fs::Metadata) -> FileKind {
@@ -161,7 +189,12 @@ impl WriteFile for RealWriteFile {
 
 #[cfg(test)]
 mod tests {
+    use std::env;
+    use std::ffi::CString;
     use std::io::{Read, Seek, SeekFrom, Write};
+    use std::process::{Child, Command, ExitStatus};
+    use std::thread;
+    use std::time::{Duration, Instant};
 
     use super::*;
 
@@ -340,5 +373,131 @@ mod tests {
         written.sync_all().unwrap();
         drop(written);
         RealFs.sync_dir(&scratch.0).unwrap();
+    }
+
+    /// `open_regular` hands back the file's bytes and its metadata in
+    /// one step; a missing path is `NotFound`, not `InvalidInput`.
+    #[test]
+    fn open_regular_returns_the_file_and_its_metadata() {
+        let scratch = Scratch::new("open-regular");
+        let fs = RealFs;
+        let file = scratch.0.join("a.txt");
+        std::fs::write(&file, b"hello").unwrap();
+
+        let (mut handle, md) = fs.open_regular(&file).unwrap();
+        assert_eq!(md.kind(), FileKind::File);
+        assert_eq!(md.len(), 5);
+        let mut read = String::new();
+        handle.seek(SeekFrom::Start(1)).unwrap();
+        handle.read_to_string(&mut read).unwrap();
+        assert_eq!(read, "ello");
+
+        let missing = fs.open_regular(&scratch.0.join("missing"));
+        assert_eq!(missing.err().unwrap().kind(), io::ErrorKind::NotFound);
+    }
+
+    /// The handle and metadata belong to the file that was opened:
+    /// renaming the path and putting a different file there changes
+    /// neither.
+    #[test]
+    fn open_regular_stays_bound_to_the_opened_file() {
+        let scratch = Scratch::new("open-regular-bound");
+        let fs = RealFs;
+        let file = scratch.0.join("a");
+        std::fs::write(&file, b"original").unwrap();
+
+        let (mut handle, md) = fs.open_regular(&file).unwrap();
+        fs.rename(&file, &scratch.0.join("b")).unwrap();
+        std::fs::write(&file, b"replacement").unwrap();
+
+        let mut read = String::new();
+        handle.read_to_string(&mut read).unwrap();
+        assert_eq!(read, "original");
+        assert_eq!(md.len(), 8);
+    }
+
+    /// A symlink to a regular file counts as regular; everything else
+    /// — a directory, a device — is `InvalidInput`.
+    #[test]
+    fn open_regular_refuses_non_files_but_follows_symlinks() {
+        let scratch = Scratch::new("open-regular-kinds");
+        let fs = RealFs;
+        let file = scratch.0.join("target");
+        std::fs::write(&file, b"through the link").unwrap();
+        let alias = scratch.0.join("alias");
+        std::os::unix::fs::symlink(&file, &alias).unwrap();
+
+        let (mut handle, md) = fs.open_regular(&alias).unwrap();
+        assert_eq!(md.kind(), FileKind::File);
+        let mut read = String::new();
+        handle.read_to_string(&mut read).unwrap();
+        assert_eq!(read, "through the link");
+
+        for path in [scratch.0.clone(), PathBuf::from("/dev/null")] {
+            let err = fs.open_regular(&path).err().expect("non-file opened");
+            assert_eq!(
+                err.kind(),
+                io::ErrorKind::InvalidInput,
+                "{}",
+                path.display()
+            );
+        }
+    }
+
+    /// Wait for `child`, killing it once `deadline` passes: a child
+    /// blocked in a fifo open fails here instead of hanging the job.
+    fn wait_with_deadline(mut child: Child, deadline: Duration) -> ExitStatus {
+        let started = Instant::now();
+        loop {
+            if let Some(status) = child.try_wait().expect("wait for the child") {
+                return status;
+            }
+            if started.elapsed() > deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("the child ran past {deadline:?}");
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// Not a test: `open_regular_refuses_a_writerless_fifo` runs it as
+    /// a child so a blocking open would hang the child, not this run.
+    /// Reads the fifo path from `SB_OPEN_REGULAR_FIFO` and must exit
+    /// having seen `InvalidInput`.
+    #[test]
+    #[ignore = "spawned by open_regular_refuses_a_writerless_fifo"]
+    fn open_regular_fifo_child() {
+        let path = PathBuf::from(env::var("SB_OPEN_REGULAR_FIFO").expect("fifo path env"));
+        match RealFs.open_regular(&path) {
+            Err(e) if e.kind() == io::ErrorKind::InvalidInput => {}
+            Err(e) => panic!("expected InvalidInput, got {e}"),
+            Ok(_) => panic!("open_regular opened a fifo"),
+        }
+    }
+
+    /// A fifo `open` blocks until a writer shows up, so a metadata
+    /// look that saw a regular file proves nothing about the open
+    /// that follows. `open_regular` must refuse a writerless fifo
+    /// promptly instead; the child deadline proves it came back.
+    #[test]
+    fn open_regular_refuses_a_writerless_fifo() {
+        let scratch = Scratch::new("open-regular-fifo");
+        let fifo = scratch.0.join("fifo");
+        let path = CString::new(fifo.as_os_str().as_encoded_bytes()).unwrap();
+        // SAFETY: `path` is a valid C string and 0o644 a sane mode.
+        assert_eq!(unsafe { libc::mkfifo(path.as_ptr(), 0o644) }, 0);
+
+        let exe = env::current_exe().unwrap();
+        let child = Command::new(exe)
+            .args(["--exact", "fs::tests::open_regular_fifo_child", "--ignored"])
+            .env("SB_OPEN_REGULAR_FIFO", &fifo)
+            .spawn()
+            .unwrap();
+        let status = wait_with_deadline(child, Duration::from_secs(30));
+        assert!(
+            status.success(),
+            "open_regular did not refuse a writerless fifo promptly: {status}"
+        );
     }
 }
