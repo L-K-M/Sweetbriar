@@ -11,10 +11,11 @@
 //! then conflicts and the worker ends.
 //! ```
 
-use std::collections::HashSet;
+use std::collections::HashMap;
+use std::future::Future;
 use std::ops::ControlFlow;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use sb_resources::{
     AcquiredMessage, FlagExtraction, ImportInventory, ImportInventoryOutcome, ImportJobBatch,
@@ -25,7 +26,7 @@ use sb_resources::{
     recoverable_import_jobs, run_once,
 };
 
-use crate::engine::Worker;
+use crate::engine::{Spawn, Worker};
 use crate::{Engine, EngineError};
 
 /// The commands' names in `command_receipts` (spec/07).
@@ -45,49 +46,72 @@ const SOURCE_ROW_BYTES: usize = 256;
 
 const INTERRUPTED_INVENTORY: &str = "the inventory was interrupted; start a new import";
 
-/// Jobs with a live worker in this process, each with its cancel flag.
-/// One worker per job: a second start for the same job is a no-op.
+/// Jobs with a live worker in this process. One worker owns a job at a
+/// time; an ingest asked for meanwhile is handed to that worker before
+/// it lets go, under the same lock, so no request is lost in a handoff.
 #[derive(Default)]
 pub(crate) struct ImportJobs {
-    live: Mutex<HashSet<String>>,
-    cancelled: Mutex<HashSet<String>>,
+    live: Mutex<HashMap<String, Live>>,
+}
+
+/// What a live worker's job has been asked since it started.
+#[derive(Default)]
+struct Live {
+    ingest_requested: bool,
+    cancelled: bool,
 }
 
 impl ImportJobs {
-    fn lock<T>(set: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-        set.lock()
+    fn lock(&self) -> MutexGuard<'_, HashMap<String, Live>> {
+        self.live
+            .lock()
             .expect("a panicking thread held the import job registry")
     }
 
     /// Tell a live worker its job was cancelled, so it stops early.
     fn cancel(&self, id: &str) {
-        if Self::lock(&self.live).contains(id) {
-            Self::lock(&self.cancelled).insert(id.to_owned());
+        if let Some(live) = self.lock().get_mut(id) {
+            live.cancelled = true;
         }
     }
 }
 
-/// A worker's hold on its job; dropping it, at the worker's end, frees
-/// the job for another worker.
+/// What a worker does with its job.
+enum Task {
+    Inventory(Vec<PathBuf>),
+    Ingest,
+}
+
+/// A worker's hold on its job, released at the worker's end.
 struct Claim {
     jobs: Arc<ImportJobs>,
     id: String,
+    held: bool,
 }
 
 impl Claim {
-    fn new(jobs: &Arc<ImportJobs>, id: &str) -> Option<Self> {
-        if !ImportJobs::lock(&jobs.live).insert(id.to_owned()) {
+    /// Claim `id` for a new worker, or hand an ingest request to the
+    /// worker that holds it.
+    fn new(jobs: &Arc<ImportJobs>, id: &str, task: &Task) -> Option<Self> {
+        let mut live = jobs.lock();
+        if let Some(holder) = live.get_mut(id) {
+            holder.ingest_requested |= matches!(task, Task::Ingest);
             return None;
         }
+        live.insert(id.to_owned(), Live::default());
         Some(Self {
             jobs: Arc::clone(jobs),
             id: id.to_owned(),
+            held: true,
         })
     }
 
     /// Whether `cancel_job` reached this job.
     fn cancelled(&self) -> bool {
-        ImportJobs::lock(&self.jobs.cancelled).contains(&self.id)
+        self.jobs
+            .lock()
+            .get(&self.id)
+            .is_some_and(|live| live.cancelled)
     }
 
     /// A check blocking work polls: cancelled, or shutting down.
@@ -95,14 +119,30 @@ impl Claim {
         let shutdown = worker.shutdown_check();
         let jobs = Arc::clone(&self.jobs);
         let id = self.id.clone();
-        move || shutdown() || ImportJobs::lock(&jobs.cancelled).contains(&id)
+        move || shutdown() || jobs.lock().get(&id).is_some_and(|live| live.cancelled)
+    }
+
+    /// End the worker's turn: take an ingest handed over meanwhile, or
+    /// let go of the job, in one step under the registry's lock.
+    fn next_or_release(&mut self) -> Option<Task> {
+        let mut live = self.jobs.lock();
+        if let Some(holder) = live.get_mut(&self.id)
+            && holder.ingest_requested
+        {
+            holder.ingest_requested = false;
+            return Some(Task::Ingest);
+        }
+        live.remove(&self.id);
+        self.held = false;
+        None
     }
 }
 
 impl Drop for Claim {
     fn drop(&mut self) {
-        ImportJobs::lock(&self.jobs.cancelled).remove(&self.id);
-        ImportJobs::lock(&self.jobs.live).remove(&self.id);
+        if self.held {
+            self.jobs.lock().remove(&self.id);
+        }
     }
 }
 
@@ -166,27 +206,27 @@ impl Engine {
         let id = self.resources().new_uuid_string();
         let now = self.resources().now();
         let fresh = format!("{{\"job_id\":\"{id}\"}}");
-        let (key, job, requested, result) = (
-            idempotency_key.to_owned(),
-            id.clone(),
-            paths.clone(),
-            fresh.clone(),
-        );
-        let receipt = self
-            .resources()
-            .write(WritePriority::User, move |tx| {
-                run_once(tx, &key, START_IMPORT, now, |tx| {
-                    create_import_job(tx, &job, &requested, now)?;
-                    Ok(result)
+        let key = idempotency_key.to_owned();
+        let jobs = Arc::clone(self.imports());
+        self.command(move |worker| async move {
+            let (job, requested, result) = (id.clone(), paths.clone(), fresh.clone());
+            let receipt = worker
+                .resources()
+                .write(WritePriority::User, move |tx| {
+                    run_once(tx, &key, START_IMPORT, now, |tx| {
+                        create_import_job(tx, &job, &requested, now)?;
+                        Ok(result)
+                    })
                 })
-            })
-            .await?;
-        if receipt.result_json() == fresh {
-            // Refused during shutdown: the job stays in inventory, and
-            // the next open fails it visibly.
-            self.spawn_inventory(id, paths)?;
-        }
-        Ok(receipt)
+                .await?;
+            if receipt.result_json() == fresh {
+                // Refused during shutdown: the job stays in inventory,
+                // and the next open fails it visibly.
+                spawn_job(&worker, &jobs, id, Task::Inventory(paths))?;
+            }
+            Ok(receipt)
+        })
+        .await
     }
 
     /// `confirm_import(job_id, variants)` (spec/07, 09): choose a variant
@@ -197,36 +237,52 @@ impl Engine {
         job_id: &str,
         variants: Vec<(u64, MboxVariant)>,
     ) -> Result<Receipt, EngineError> {
-        // Validate against the stored inventory first, so a bad choice
-        // names its field; the write re-checks the state.
+        // Validate a waiting job's inventory first, so a bad choice names
+        // its field. The write accepts only that revision; anything else
+        // is decided there, where a repeated key still finds its receipt.
         let id = job_id.to_owned();
         let job = self
             .read_through(move |resources| resources.read(|tx| import_job(tx, &id)))
             .await?;
-        let checkpoint = job
-            .checkpoint()
-            .with_variants(&variants)
-            .map_err(|message| EngineError::invalid_input("variants", message))?;
+        let expected = match job.state() {
+            ImportJobState::AwaitingConfirmation => Some((
+                job.revision(),
+                job.checkpoint()
+                    .with_variants(&variants)
+                    .map_err(|message| EngineError::invalid_input("variants", message))?,
+            )),
+            _ => None,
+        };
         let now = self.resources().now();
         let (key, id) = (idempotency_key.to_owned(), job_id.to_owned());
-        let receipt = self
-            .resources()
-            .write(WritePriority::User, move |tx| {
-                run_once(tx, &key, CONFIRM_IMPORT, now, |tx| {
-                    let job = import_job(tx, &id)?;
-                    if job.state() != ImportJobState::AwaitingConfirmation {
-                        return Err(StoreError::Conflict {
-                            detail: format!("import job {id} is not awaiting confirmation"),
-                        });
-                    }
-                    let state = ImportJobState::Running;
-                    advance_import_job(tx, &id, job.revision(), state, &checkpoint, now)?;
-                    Ok(format!("{{\"job_id\":\"{id}\",\"state\":\"running\"}}"))
+        let jobs = Arc::clone(self.imports());
+        self.command(move |worker| async move {
+            let job = id.clone();
+            let receipt = worker
+                .resources()
+                .write(WritePriority::User, move |tx| {
+                    run_once(tx, &key, CONFIRM_IMPORT, now, |tx| {
+                        let current = import_job(tx, &job)?;
+                        let Some((revision, checkpoint)) = expected.filter(|(revision, _)| {
+                            current.state() == ImportJobState::AwaitingConfirmation
+                                && current.revision() == *revision
+                        }) else {
+                            return Err(StoreError::Conflict {
+                                detail: format!(
+                                    "import job {job} is not awaiting the confirmation given"
+                                ),
+                            });
+                        };
+                        let state = ImportJobState::Running;
+                        advance_import_job(tx, &job, revision, state, &checkpoint, now)?;
+                        Ok(format!("{{\"job_id\":\"{job}\",\"state\":\"running\"}}"))
+                    })
                 })
-            })
-            .await?;
-        self.spawn_ingest(job_id.to_owned())?;
-        Ok(receipt)
+                .await?;
+            spawn_job(&worker, &jobs, id, Task::Ingest)?;
+            Ok(receipt)
+        })
+        .await
     }
 
     /// `cancel_job(id)` (spec/07, 09): the job is `cancelled` once this
@@ -299,33 +355,67 @@ impl Engine {
                         advance_import_job(tx, &id, revision, state, &checkpoint, now).map(drop)
                     }))?;
                 }
-                ImportJobState::Running => self.spawn_ingest(job.id().to_owned())?,
+                ImportJobState::Running => {
+                    spawn_job(self, self.imports(), job.id().to_owned(), Task::Ingest)?;
+                }
                 _ => (),
             }
         }
         Ok(())
     }
 
-    fn spawn_inventory(&self, id: String, paths: Vec<PathBuf>) -> Result<(), EngineError> {
-        let Some(claim) = Claim::new(self.imports(), &id) else {
-            return Ok(());
-        };
-        self.spawn_worker(move |worker| inventory(worker, claim, paths))
+    /// Run an accepted command and the work it schedules as one worker,
+    /// so a caller that stops waiting cannot strand an accepted job.
+    async fn command<T, F, Fut>(&self, body: F) -> Result<T, EngineError>
+    where
+        T: Send + 'static,
+        F: FnOnce(Worker) -> Fut,
+        Fut: Future<Output = Result<T, EngineError>> + Send + 'static,
+    {
+        let (answer, answered) = tokio::sync::oneshot::channel();
+        self.spawn_worker(move |worker| {
+            let run = body(worker);
+            async move {
+                let _ = answer.send(run.await);
+            }
+        })?;
+        answered
+            .await
+            .map_err(|_| EngineError::internal("an import command ended without an answer"))?
     }
+}
 
-    fn spawn_ingest(&self, id: String) -> Result<(), EngineError> {
-        let Some(claim) = Claim::new(self.imports(), &id) else {
-            return Ok(());
-        };
-        self.spawn_worker(move |worker| ingest(worker, claim))
+/// Start a worker for `id`, or hand an ingest to the one that holds it.
+fn spawn_job(
+    spawner: &impl Spawn,
+    jobs: &Arc<ImportJobs>,
+    id: String,
+    task: Task,
+) -> Result<(), EngineError> {
+    let Some(claim) = Claim::new(jobs, &id, &task) else {
+        return Ok(());
+    };
+    spawner.spawn_worker(move |worker| run_job(worker, claim, task))
+}
+
+/// One worker's turns on its job: the first task, then any ingest
+/// handed over before it let go.
+async fn run_job(worker: Worker, mut claim: Claim, task: Task) {
+    let mut task = Some(task);
+    while let Some(current) = task {
+        match current {
+            Task::Inventory(paths) => inventory(&worker, &claim, paths).await,
+            Task::Ingest => ingest(&worker, &claim).await,
+        }
+        task = claim.next_or_release();
     }
 }
 
 /// Inventory the chosen paths, record the sources, then wait for
 /// confirmation. A cancel already recorded `cancelled`; a shutdown
 /// leaves `inventory` for the next open to fail.
-async fn inventory(worker: Worker, claim: Claim, paths: Vec<PathBuf>) {
-    let stop = claim.stop_check(&worker);
+async fn inventory(worker: &Worker, claim: &Claim, paths: Vec<PathBuf>) {
+    let stop = claim.stop_check(worker);
     let outcome = worker
         .blocking(move |resources| {
             resources.inventory_import_sources(&paths, |_| {
@@ -340,12 +430,32 @@ async fn inventory(worker: Worker, claim: Claim, paths: Vec<PathBuf>) {
     let inventory = match outcome {
         Ok(ImportInventoryOutcome::Complete(inventory)) => inventory,
         Ok(ImportInventoryOutcome::Cancelled(_)) => return,
-        Err(error) => return fail(&worker, &claim.id, error.to_string()).await,
+        Err(error) => return fail(worker, &claim.id, error.to_string()).await,
     };
-    match record(&worker, &claim.id, &inventory).await {
+    match record(worker, &claim.id, &inventory).await {
+        Ok(()) => (),
         // A cancel that won the race already ended the job.
-        Ok(()) | Err(StoreError::Conflict { .. }) => (),
-        Err(error) => fail(&worker, &claim.id, error.to_string()).await,
+        Err(StoreError::Conflict { .. }) if moved_on(worker, &claim.id, None).await => (),
+        Err(error) => fail(worker, &claim.id, error.to_string()).await,
+    }
+}
+
+/// Whether the job left this worker's hands: no longer at `revision`
+/// (`None`: no longer in inventory), as a cancel leaves it. Any other
+/// `Conflict` is a real one and fails the job.
+async fn moved_on(worker: &Worker, id: &str, revision: Option<i64>) -> bool {
+    let job = id.to_owned();
+    let current = worker
+        .blocking(move |resources| resources.read(|tx| import_job(tx, &job)))
+        .await;
+    let Ok(Ok(current)) = current else {
+        return false;
+    };
+    match revision {
+        None => current.state() != ImportJobState::Inventory,
+        Some(revision) => {
+            current.state() != ImportJobState::Running || current.revision() != revision
+        }
     }
 }
 
@@ -395,9 +505,9 @@ async fn record(worker: &Worker, id: &str, inventory: &ImportInventory) -> Resul
 
 /// Ingest a running job from its checkpoints; a failure is recorded on
 /// the job, checkpoints intact.
-async fn ingest(worker: Worker, claim: Claim) {
-    if let Err(detail) = run_ingest(&worker, &claim).await {
-        fail(&worker, &claim.id, detail).await;
+async fn ingest(worker: &Worker, claim: &Claim) {
+    if let Err(detail) = run_ingest(worker, claim).await {
+        fail(worker, &claim.id, detail).await;
     }
 }
 
@@ -475,7 +585,11 @@ async fn run_ingest(worker: &Worker, claim: &Claim) -> Result<(), String> {
                         position = gathered.position;
                     }
                     // Cancelled since the last commit: the batch goes.
-                    Err(StoreError::Conflict { .. }) => return Ok(()),
+                    Err(StoreError::Conflict { .. })
+                        if moved_on(worker, &id, Some(revision)).await =>
+                    {
+                        return Ok(());
+                    }
                     Err(error) => return Err(error.to_string()),
                 }
             }
@@ -500,7 +614,8 @@ async fn run_ingest(worker: &Worker, claim: &Claim) -> Result<(), String> {
         })
         .await
     {
-        Ok(()) | Err(StoreError::Conflict { .. }) => Ok(()),
+        Ok(()) => Ok(()),
+        Err(StoreError::Conflict { .. }) if moved_on(worker, &id, Some(revision)).await => Ok(()),
         Err(error) => Err(error.to_string()),
     }
 }

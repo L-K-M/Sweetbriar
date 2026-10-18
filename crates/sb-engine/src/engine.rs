@@ -219,6 +219,60 @@ impl Worker {
     }
 }
 
+/// Starts [`Worker`]s: the engine, or a worker handing work on. Refused
+/// once shutdown has begun.
+pub(crate) trait Spawn {
+    fn spawn_worker<F, Fut>(&self, body: F) -> Result<(), EngineError>
+    where
+        F: FnOnce(Worker) -> Fut,
+        Fut: std::future::Future<Output = ()> + Send + 'static;
+}
+
+impl Spawn for Engine {
+    fn spawn_worker<F, Fut>(&self, body: F) -> Result<(), EngineError>
+    where
+        F: FnOnce(Worker) -> Fut,
+        Fut: std::future::Future<Output = ()> + Send + 'static,
+    {
+        spawn(
+            self.resources(),
+            &self.blocking,
+            self.runtime.handle(),
+            body,
+        )
+    }
+}
+
+impl Spawn for Worker {
+    fn spawn_worker<F, Fut>(&self, body: F) -> Result<(), EngineError>
+    where
+        F: FnOnce(Worker) -> Fut,
+        Fut: std::future::Future<Output = ()> + Send + 'static,
+    {
+        spawn(&self.resources, &self.blocking, &self.handle, body)
+    }
+}
+
+fn spawn<F, Fut>(
+    resources: &Arc<Resources>,
+    blocking: &Arc<BlockingWork>,
+    handle: &Handle,
+    body: F,
+) -> Result<(), EngineError>
+where
+    F: FnOnce(Worker) -> Fut,
+    Fut: std::future::Future<Output = ()> + Send + 'static,
+{
+    let worker = Worker {
+        resources: Arc::clone(resources),
+        running: Arc::new(blocking.start()?),
+        blocking: Arc::clone(blocking),
+        handle: handle.clone(),
+    };
+    handle.spawn(body(worker));
+    Ok(())
+}
+
 /// One counted blocking task; dropping it, at the task's end, counts it
 /// out.
 struct Running(Arc<BlockingWork>);
@@ -301,23 +355,6 @@ impl Engine {
     /// The import job registry; crate-visible for the `import` module.
     pub(crate) fn imports(&self) -> &Arc<ImportJobs> {
         &self.imports
-    }
-
-    /// Start a [`Worker`] running `body` on the runtime; refused once
-    /// shutdown has begun.
-    pub(crate) fn spawn_worker<F, Fut>(&self, body: F) -> Result<(), EngineError>
-    where
-        F: FnOnce(Worker) -> Fut,
-        Fut: std::future::Future<Output = ()> + Send + 'static,
-    {
-        let worker = Worker {
-            resources: Arc::clone(self.resources()),
-            running: Arc::new(self.blocking.start()?),
-            blocking: Arc::clone(&self.blocking),
-            handle: self.runtime.handle().clone(),
-        };
-        self.runtime.handle().spawn(body(worker));
-        Ok(())
     }
 
     /// Wait for `future` on the calling thread. Only for the open

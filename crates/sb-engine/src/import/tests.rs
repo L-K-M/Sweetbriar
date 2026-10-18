@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 use sb_test_support::{ScratchDir, block_on};
 
 use super::*;
+use crate::engine::Spawn;
 
 /// How long a test waits for a worker before failing.
 const PATIENCE: Duration = Duration::from_secs(120);
@@ -57,7 +58,7 @@ fn settle(engine: &Engine, id: &str, state: ImportJobState) -> ImportJobStatus {
     let deadline = Instant::now() + PATIENCE;
     loop {
         let current = status(engine, id);
-        let live = ImportJobs::lock(&engine.imports().live).contains(id);
+        let live = engine.imports().lock().contains_key(id);
         if current.state() == state && !live {
             return current;
         }
@@ -74,7 +75,7 @@ fn settle(engine: &Engine, id: &str, state: ImportJobState) -> ImportJobStatus {
 /// Wait until no worker holds `id`, whatever its state.
 fn idle(engine: &Engine, id: &str) {
     let deadline = Instant::now() + PATIENCE;
-    while ImportJobs::lock(&engine.imports().live).contains(id) {
+    while engine.imports().lock().contains_key(id) {
         assert!(Instant::now() < deadline, "the worker for {id} never ended");
         std::thread::sleep(Duration::from_millis(10));
     }
@@ -291,10 +292,11 @@ fn plant(engine: &Engine, path: &Path, state: ImportJobState, committed: usize) 
     let (job, paths) = (id.clone(), vec![path.to_path_buf()]);
     block_on(engine.resources().write(WritePriority::Sync, move |tx| {
         create_import_job(tx, &job, &paths, now)?;
+        // An inventory records its sources before it finishes.
+        record_import_sources(tx, &job, 0, &sources)?;
         if state == ImportJobState::Inventory {
             return Ok(());
         }
-        record_import_sources(tx, &job, 0, &sources)?;
         let checkpoint = ImportJobCheckpoint::inventoried(&sources, &[]);
         let waiting = ImportJobState::AwaitingConfirmation;
         let mut record = advance_import_job(tx, &job, 1, waiting, &checkpoint, now)?;
@@ -371,5 +373,114 @@ fn a_missing_snapshot_fails_the_job_with_its_checkpoints_intact() {
     assert!(failure.contains(&token), "{failure}");
     assert_eq!(failed.sources()[0].position(), SourcePosition::START);
     assert_eq!(count(&engine, "SELECT count(*) FROM occurrences"), 0);
+    block_on(engine.shutdown()).unwrap();
+}
+
+#[test]
+fn a_confirmation_read_before_the_inventory_finished_is_refused() {
+    let scratch = ScratchDir::new("import-stale-confirm");
+    let path = scratch.path().join("Three.mbox");
+    fs::write(&path, mbox(3)).unwrap();
+    let engine = open(&scratch.path().join("store"));
+    let id = plant(&engine, &path, ImportJobState::Inventory, 0);
+
+    // Hold the writer, and queue the inventory's finish behind it.
+    let (release, held) = std::sync::mpsc::channel::<()>();
+    let blocker = engine.resources().write(WritePriority::User, move |_| {
+        held.recv().ok();
+        Ok(())
+    });
+    let (job, now) = (id.clone(), engine.resources().now());
+    let finish = engine.resources().write(WritePriority::User, move |tx| {
+        let current = import_job(tx, &job)?;
+        let (source, _) = import_job_source(tx, &job, 0)?;
+        let checkpoint = ImportJobCheckpoint::inventoried(&[source], &[]);
+        let waiting = ImportJobState::AwaitingConfirmation;
+        advance_import_job(tx, &job, current.revision(), waiting, &checkpoint, now).map(drop)
+    });
+    // The confirmation reads the job while it is still in inventory;
+    // its write then queues behind the finish.
+    let confirmed = std::thread::scope(|scope| {
+        let confirming = scope.spawn(|| confirm(&engine, &id, vec![]));
+        std::thread::sleep(Duration::from_millis(300));
+        release.send(()).unwrap();
+        confirming.join().unwrap()
+    });
+    block_on(blocker).unwrap();
+    block_on(finish).unwrap();
+
+    let error = confirmed.unwrap_err();
+    assert!(matches!(error, EngineError::Conflict { .. }), "{error:?}");
+    let job = status(&engine, &id);
+    assert_eq!(job.state(), ImportJobState::AwaitingConfirmation);
+    assert_eq!(job.sources().len(), 1);
+    block_on(engine.shutdown()).unwrap();
+}
+
+#[test]
+fn a_confirmation_during_the_inventory_handoff_still_ingests() {
+    let scratch = ScratchDir::new("import-handoff");
+    let path = scratch.path().join("Three.mbox");
+    fs::write(&path, mbox(3)).unwrap();
+    let engine = open(&scratch.path().join("store"));
+    let id = plant(&engine, &path, ImportJobState::AwaitingConfirmation, 0);
+    // The inventory worker has recorded the inventory but not let go:
+    // the confirmation's ingest is handed to it, not dropped.
+    let paths = vec![path.clone()];
+    let mut inventory = Claim::new(engine.imports(), &id, &Task::Inventory(paths)).unwrap();
+    confirm(&engine, &id, vec![]).unwrap();
+    let Some(next) = inventory.next_or_release() else {
+        panic!("the confirmation's ingest was dropped");
+    };
+    engine
+        .spawn_worker(move |worker| run_job(worker, inventory, next))
+        .unwrap();
+    settle(&engine, &id, ImportJobState::Completed);
+    block_on(engine.shutdown()).unwrap();
+}
+
+#[test]
+fn a_reimport_with_the_other_variant_fails_visibly() {
+    let scratch = ScratchDir::new("import-variant-conflict");
+    let engine = open(&scratch.path().join("store"));
+    let quoting = fixtures().join("quoting.mbox");
+    let first = start(&engine, std::slice::from_ref(&quoting));
+    settle(&engine, &first, ImportJobState::AwaitingConfirmation);
+    confirm(&engine, &first, vec![(0, MboxVariant::Mboxo)]).unwrap();
+    settle(&engine, &first, ImportJobState::Completed);
+
+    // Same source identity, different decoded bytes: a real conflict.
+    let second = start(&engine, &[quoting]);
+    settle(&engine, &second, ImportJobState::AwaitingConfirmation);
+    confirm(&engine, &second, vec![(0, MboxVariant::Mboxrd)]).unwrap();
+    let failed = settle(&engine, &second, ImportJobState::Failed);
+    let failure = failed.checkpoint().failure().unwrap();
+    assert!(failure.contains("different bytes"), "{failure}");
+    block_on(engine.shutdown()).unwrap();
+}
+
+#[test]
+fn a_start_dropped_after_submission_is_still_scheduled() {
+    let scratch = ScratchDir::new("import-dropped-start");
+    let engine = open(&scratch.path().join("store"));
+    let key = engine.new_idempotency_key();
+    let paths = vec![fixtures().join("Inbox.mbox")];
+    let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+    {
+        let mut started = Box::pin(engine.start_import(&key, paths.clone()));
+        let _ = started.as_mut().poll(&mut cx);
+    }
+    // The command's write lands without its caller.
+    let deadline = Instant::now() + PATIENCE;
+    while count(&engine, "SELECT count(*) FROM command_receipts") == 0 {
+        assert!(Instant::now() < deadline, "the start never committed");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let receipt = block_on(engine.start_import(&key, paths)).unwrap();
+    settle(
+        &engine,
+        &job_id(&receipt),
+        ImportJobState::AwaitingConfirmation,
+    );
     block_on(engine.shutdown()).unwrap();
 }
