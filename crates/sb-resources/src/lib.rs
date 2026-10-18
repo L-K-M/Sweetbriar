@@ -41,6 +41,10 @@ pub use sb_platform::{default_cache_root, default_data_root};
 pub use sb_store::imports::{
     ImportJobState, ImportMessage, MAX_IMPORT_BATCH, MAX_IMPORT_CHANGES_BYTES,
 };
+pub use sb_store::lists::{
+    ListAnchor, ListKey, ListPage, ListScope, MailboxRole, PageRead, StoredListRow,
+    list_generation, list_ids, read_list_page,
+};
 pub use sb_store::settings::{StoredSetting, read_all, upsert};
 pub use sb_store::{
     ImportSourceSnapshot, Receipt, StoreError, Timestamp, Transaction, Uuid, WriteFuture,
