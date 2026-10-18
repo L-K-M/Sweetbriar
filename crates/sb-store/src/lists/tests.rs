@@ -348,10 +348,12 @@ fn stale_generations_and_foreign_anchors_are_reported() {
 
 /// The plan of `sql` bound with `scope`'s parameters, one detail line
 /// per step.
-fn plan(conn: &Connection, sql: &str, scope: ListScope, keyed: bool) -> String {
+fn plan(conn: &Connection, sql: &str, scope: ListScope, seek: Seek) -> String {
     let mut extra = vec![(":count", 10)];
-    if keyed {
-        extra.extend([(":date", 0), (":occurrence", 0)]);
+    match seek {
+        Seek::Top => {}
+        Seek::Ties => extra.extend([(":date", 0), (":occurrence", 0)]),
+        Seek::Beyond => extra.push((":date", 0)),
     }
     let params = scope.params(&extra);
     let mut statement = conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
@@ -377,19 +379,26 @@ fn page_reads_use_the_list_indexes() {
         ),
         (ListScope::Flagged, "d_list_rows_flagged"),
     ] {
-        for keyed in [false, true] {
+        for seek in [Seek::Top, Seek::Ties, Seek::Beyond] {
             for direction in [Direction::Older, Direction::Newer] {
-                let detail = plan(&conn, &page_sql(scope, keyed, direction), scope, keyed);
+                let detail = plan(&conn, &page_sql(scope, seek, direction), scope, seek);
                 assert!(detail.contains(index), "{scope:?} {direction:?}: {detail}");
                 assert!(
                     !detail.contains("TEMP B-TREE"),
                     "{scope:?} {direction:?}: {detail}"
                 );
-                // A cursor seeks into the index instead of scanning to it.
+                // A cursor seeks into the index instead of scanning to it;
+                // tied dates seek on the date and the occurrence id both.
                 assert!(
-                    !keyed || detail.starts_with("SEARCH"),
+                    seek == Seek::Top || detail.starts_with("SEARCH"),
                     "{scope:?}: {detail}"
                 );
+                if seek == Seek::Ties {
+                    assert!(
+                        detail.contains("sort_date=? AND occurrence_id"),
+                        "{scope:?}: {detail}"
+                    );
+                }
             }
         }
         // The id index walks the same index, in order.
@@ -409,8 +418,8 @@ fn page_reads_use_the_list_indexes() {
 }
 
 /// A `Thread` page lists the thread's messages through their
-/// representatives, in window order; other messages, and other
-/// occurrences of its messages, stay out.
+/// representatives, in window order; other messages stay out, and any
+/// occurrence of a member finds its message's row.
 #[test]
 fn a_thread_lists_its_messages_once() {
     let (mut conn, account) = store();
@@ -422,7 +431,7 @@ fn a_thread_lists_its_messages_once() {
     let labelled = occurrence(&mut conn, &account, work, first, 1_000, false);
     let filed = occurrence(&mut conn, &account, inbox, first, 1_000, false);
     let reply = occurrence(&mut conn, &account, inbox, second, 2_000, false);
-    occurrence(&mut conn, &account, inbox, outsider, 3_000, false);
+    let outsider_row = occurrence(&mut conn, &account, inbox, outsider, 3_000, false);
     let thread = {
         let tx = conn.transaction().unwrap();
         let blank = crate::threads::ThreadDescription {
@@ -443,8 +452,18 @@ fn a_thread_lists_its_messages_once() {
     let around = ready(page(&mut conn, scope, ListAnchor::Around(filed), 1, None));
     assert_eq!(ids(&around), vec![filed]);
     assert!(around.has_more_before);
+    // Another occurrence of a listed message finds the message's row
+    // (spec/07): selection follows a message whose representative moved.
+    let by_other = ready(page(
+        &mut conn,
+        scope,
+        ListAnchor::Around(labelled),
+        1,
+        None,
+    ));
+    assert_eq!(ids(&by_other), vec![filed]);
     assert_eq!(
-        page(&mut conn, scope, ListAnchor::Around(labelled), 1, None),
+        page(&mut conn, scope, ListAnchor::Around(outsider_row), 1, None),
         PageRead::NotInWindow
     );
     let tx = conn.transaction().unwrap();
@@ -461,14 +480,68 @@ fn a_thread_lists_its_messages_once() {
 fn thread_reads_seek_membership_and_representatives() {
     let (conn, _account) = store();
     let scope = ListScope::Thread(1);
-    for keyed in [false, true] {
+    for seek in [Seek::Top, Seek::Ties, Seek::Beyond] {
         for direction in [Direction::Older, Direction::Newer] {
-            let detail = plan(&conn, &page_sql(scope, keyed, direction), scope, keyed);
+            let detail = plan(&conn, &page_sql(scope, seek, direction), scope, seek);
             assert!(detail.contains("SEARCH m"), "{direction:?}: {detail}");
             assert!(
                 detail.contains("d_list_rows_one_representative"),
                 "{direction:?}: {detail}"
             );
         }
+    }
+}
+
+/// A large group of tied dates pages like any other rows: cursor reads
+/// seek within the tie, then past it, in both directions.
+#[test]
+fn tied_dates_page_through_the_tie_and_past_it() {
+    let (mut conn, account) = store();
+    let inbox = mailbox(&conn, &account, "Inbox", "folder", None);
+    let mut keyed = Vec::new();
+    for i in 0..40 {
+        let message = message(&conn, &account);
+        // Thirty rows share one date; ten are older, two by two.
+        let date = if i < 30 {
+            9_000
+        } else {
+            1_000 * ((i - 30) / 2)
+        };
+        let id = occurrence(&mut conn, &account, inbox, message, date, false);
+        keyed.push((date, id));
+    }
+    keyed.sort_by(|a, b| b.cmp(a));
+    let order: Vec<i64> = keyed.into_iter().map(|(_, id)| id).collect();
+    let scope = ListScope::Mailbox(inbox);
+    for limit in [1, 4, 29, 31] {
+        let mut current = ready(page(&mut conn, scope, ListAnchor::Top, limit, None));
+        let mut seen = ids(&current);
+        while current.has_more_after {
+            let last = current.rows.last().unwrap().key();
+            current = ready(page(&mut conn, scope, ListAnchor::After(last), limit, None));
+            seen.extend(ids(&current));
+            assert!(
+                seen.len() <= order.len(),
+                "forward walk repeats, limit {limit}"
+            );
+        }
+        assert_eq!(seen, order, "forward, limit {limit}");
+        let mut back = ids(&current);
+        while current.has_more_before {
+            let first = current.rows.first().unwrap().key();
+            current = ready(page(
+                &mut conn,
+                scope,
+                ListAnchor::Before(first),
+                limit,
+                None,
+            ));
+            back.splice(0..0, ids(&current));
+            assert!(
+                back.len() <= order.len(),
+                "backward walk repeats, limit {limit}"
+            );
+        }
+        assert_eq!(back, order, "backward, limit {limit}");
     }
 }

@@ -64,6 +64,13 @@ pub enum ListScope {
 }
 
 impl ListScope {
+    /// Whether the scope lists logical messages, one row each, rather
+    /// than occurrences (spec/07 grain). Search and view scopes, once
+    /// they exist, belong here too.
+    fn per_message(self) -> bool {
+        matches!(self, Self::Flagged | Self::Thread(_))
+    }
+
     /// The rows the scope reads, as `r`. A thread joins its members to
     /// their representatives: the one list read that joins (spec/02).
     fn source(self) -> &'static str {
@@ -131,7 +138,8 @@ pub enum ListAnchor {
     After(ListKey),
     /// Rows strictly newer than the key's row.
     Before(ListKey),
-    /// The page centred on this occurrence.
+    /// The page centred on this occurrence's row: in per-message
+    /// scopes, its message's row.
     Around(i64),
 }
 
@@ -331,16 +339,56 @@ fn rows(
     direction: Direction,
     count: usize,
 ) -> Result<Vec<StoredListRow>, StoreError> {
-    let sql = page_sql(scope, from.is_some(), direction);
-    let count = i64::try_from(count).unwrap_or(i64::MAX);
-    let params = match from {
-        Some(key) => scope.params(&[
-            (":date", key.sort_date),
-            (":occurrence", key.occurrence_id),
-            (":count", count),
-        ]),
-        None => scope.params(&[(":count", count)]),
+    let Some(key) = from else {
+        return seek(tx, scope, Seek::Top, direction, None, count);
     };
+    // The key's own date first, then the dates past it: two index
+    // ranges, so a large group of tied dates is never scanned through.
+    let mut rows = seek(tx, scope, Seek::Ties, direction, Some(key), count)?;
+    if rows.len() < count {
+        let rest = seek(
+            tx,
+            scope,
+            Seek::Beyond,
+            direction,
+            Some(key),
+            count - rows.len(),
+        )?;
+        rows.extend(rest);
+    }
+    Ok(rows)
+}
+
+/// Which rows past a key one statement reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Seek {
+    /// From the newest (or oldest) row, no key.
+    Top,
+    /// Rows on the key's `sort_date`, past its occurrence.
+    Ties,
+    /// Rows on dates past the key's.
+    Beyond,
+}
+
+/// Up to `count` rows of one [`Seek`], nearest first.
+fn seek(
+    tx: &Transaction,
+    scope: ListScope,
+    seek: Seek,
+    direction: Direction,
+    key: Option<ListKey>,
+    count: usize,
+) -> Result<Vec<StoredListRow>, StoreError> {
+    let sql = page_sql(scope, seek, direction);
+    let count = i64::try_from(count).unwrap_or(i64::MAX);
+    let mut extra = vec![(":count", count)];
+    if let Some(key) = key {
+        extra.push((":date", key.sort_date));
+        if seek == Seek::Ties {
+            extra.push((":occurrence", key.occurrence_id));
+        }
+    }
+    let params = scope.params(&extra);
     let mut statement = tx.prepare_cached(&sql).map_err(sql_error)?;
     statement
         .query_map(bound(&params).as_slice(), read_row)
@@ -362,15 +410,17 @@ fn ids_sql(scope: ListScope) -> String {
 /// The statement [`rows`] runs. Top and keyed reads are distinct
 /// statements: an optional bound in one statement would defeat the
 /// index seek.
-fn page_sql(scope: ListScope, keyed: bool, direction: Direction) -> String {
+fn page_sql(scope: ListScope, seek: Seek, direction: Direction) -> String {
     let (comparison, order) = match direction {
         Direction::Older => ("<", "DESC"),
         Direction::Newer => (">", "ASC"),
     };
-    let seek = if keyed {
-        format!("AND (r.sort_date, r.occurrence_id) {comparison} (:date, :occurrence)")
-    } else {
-        String::new()
+    let seek = match seek {
+        Seek::Top => String::new(),
+        Seek::Ties => {
+            format!("AND r.sort_date = :date AND r.occurrence_id {comparison} :occurrence")
+        }
+        Seek::Beyond => format!("AND r.sort_date {comparison} :date"),
     };
     format!(
         "SELECT {COLUMNS} FROM {} WHERE {} {seek}
@@ -409,21 +459,37 @@ fn key_of(
     scope: ListScope,
     occurrence: i64,
 ) -> Result<Option<ListKey>, StoreError> {
-    let sql = format!(
-        "SELECT r.sort_date FROM {} WHERE r.occurrence_id = :occurrence AND {}",
-        scope.source(),
-        scope.predicate()
-    );
+    // A logical-message window lists one row per message: any of its
+    // occurrences finds that row, so selection follows a message whose
+    // representative changed (spec/07).
+    let sql = if scope.per_message() {
+        format!(
+            "SELECT r.sort_date, r.occurrence_id FROM {}
+             JOIN occurrences o ON o.message_id = r.message_id
+             WHERE o.occurrence_id = :occurrence AND {}",
+            scope.source(),
+            scope.predicate()
+        )
+    } else {
+        format!(
+            "SELECT r.sort_date, r.occurrence_id FROM {}
+             WHERE r.occurrence_id = :occurrence AND {}",
+            scope.source(),
+            scope.predicate()
+        )
+    };
     let params = scope.params(&[(":occurrence", occurrence)]);
-    let date: Option<i64> = tx
-        .prepare_cached(&sql)
-        .and_then(|mut statement| statement.query_row(bound(&params).as_slice(), |row| row.get(0)))
+    tx.prepare_cached(&sql)
+        .and_then(|mut statement| {
+            statement.query_row(bound(&params).as_slice(), |row| {
+                Ok(ListKey {
+                    sort_date: row.get(0)?,
+                    occurrence_id: row.get(1)?,
+                })
+            })
+        })
         .optional()
-        .map_err(sql_error)?;
-    Ok(date.map(|sort_date| ListKey {
-        sort_date,
-        occurrence_id: occurrence,
-    }))
+        .map_err(sql_error)
 }
 
 fn read_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredListRow> {

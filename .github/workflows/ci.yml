@@ -55,6 +55,29 @@ jobs:
       - name: check-layers
         run: cargo xtask check-layers
 
+  # Plan M1.3: list window timings over 100k synthetic rows, recorded in
+  # this job's log on every push to main and never asserted (the target
+  # is under 5 ms). Not part of the merge gate below.
+  window-timings:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+      - name: Log toolchain and image
+        run: |
+          rustup show
+          rustc -Vv
+          echo "Runner image: ${ImageOS:-unknown} ${ImageVersion:-unknown}"
+      - name: Record window timings
+        run: >
+          cargo test -p sb-engine --release --lib list_window_timings
+          -- --ignored --nocapture
+
   deny:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
