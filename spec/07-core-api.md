@@ -116,7 +116,15 @@ struct ListRow {
 - **Grain:** `Mailbox` and `Unified` windows list occurrences. `Flagged`,
   `Search`, `View` and `Thread` list logical messages, one row each,
   through the representative occurrence (02). `Flagged` covers flagged
-  messages in every account (`d_list_rows_flagged`).
+  messages in every account (`d_list_rows_flagged`): a message is
+  there when its representative is flagged.
+- **Store windows** (every spec but `DebugSynthetic`) read `d_list_rows`
+  in short read transactions (03), and their generation is the store's
+  `list_generation` (02), shared by all of them. `Unified(role)` names
+  one `mailboxes.role`. A display field the store lacks is an empty
+  string. Store windows don't count rows: `total` is `Exact` when the
+  page holds the whole window, else `AtLeast` the page's rows plus one
+  for each side with more. `window_ids` gives the exact count.
 - Rows carry **display fields only**: no MIME trees and no bodies. The
   account color is resolved by the shell from `account_id` through
   `appearance()`.
@@ -133,7 +141,8 @@ struct ListRow {
   sort-specific: `(sort_date, occurrence_id)` for date order, `(score,
   occurrence_id)` for relevance order. They are bound to the window's
   generation, so a stale cursor gets `CoreError::ResetRequired`.
-  - A cursor names its row, its spec and its generation. `open_window`
+  - A cursor names its row, its spec (with its mailbox, role or thread)
+    and its generation. `open_window`
     honours one minted on the same spec at its opening generation; one
     from another generation is `ResetRequired`, and one from another
     spec, or malformed, is `InvalidInput`.
