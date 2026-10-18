@@ -13,6 +13,7 @@ use tokio::runtime::{Handle, Runtime};
 use tokio::task::{JoinError, JoinHandle};
 
 use crate::EngineError;
+use crate::import::ImportJobs;
 use crate::windows::Windows;
 use sb_resources::Resources;
 
@@ -56,6 +57,8 @@ pub struct Engine {
     /// "Queries"): in memory only — no store reads. Shared with the
     /// runtime tasks the window calls run on.
     windows: Arc<Windows>,
+    /// Import jobs with a live worker, and their cancel flags (spec/09).
+    imports: Arc<ImportJobs>,
     /// The worker reserved at open that closes the store if the engine
     /// is dropped without `shutdown`; it ends when this sender drops.
     cleanup: std::sync::mpsc::Sender<Cleanup>,
@@ -133,6 +136,11 @@ impl BlockingWork {
         Ok(Running(Arc::clone(self)))
     }
 
+    /// Whether shutdown has begun, for long work that pauses itself.
+    fn closing(&self) -> bool {
+        self.state().closing
+    }
+
     /// Refuse new blocking tasks and wait until the running ones end.
     fn close_and_wait(&self) {
         let mut state = self.state();
@@ -166,6 +174,48 @@ impl Detached {
             f();
             drop(running);
         });
+    }
+}
+
+/// A long-running engine task such as an import job (spec/01
+/// "Background jobs"). It counts as blocking work for its whole life, so
+/// shutdown waits for it, and it sees shutdown begin so it can pause.
+/// Fields drop in order: the store handle before the count.
+pub(crate) struct Worker {
+    resources: Arc<Resources>,
+    running: Arc<Running>,
+    blocking: Arc<BlockingWork>,
+    handle: Handle,
+}
+
+impl Worker {
+    pub(crate) fn resources(&self) -> &Resources {
+        &self.resources
+    }
+
+    /// A check that blocking work can poll: has shutdown begun?
+    pub(crate) fn shutdown_check(&self) -> impl Fn() -> bool + Send + Sync + 'static {
+        let blocking = Arc::clone(&self.blocking);
+        move || blocking.closing()
+    }
+
+    /// Run `f` with the store on the blocking pool, inside this worker's
+    /// count; the handle goes back before the count does.
+    pub(crate) async fn blocking<T, F>(&self, f: F) -> Result<T, EngineError>
+    where
+        T: Send + 'static,
+        F: FnOnce(&Resources) -> T + Send + 'static,
+    {
+        let resources = Arc::clone(&self.resources);
+        let running = Arc::clone(&self.running);
+        let task = self.handle.spawn_blocking(move || {
+            let result = f(&resources);
+            drop(resources);
+            drop(running);
+            result
+        });
+        task.await
+            .map_err(|join| join_failed("run an engine job", join))
     }
 }
 
@@ -219,9 +269,13 @@ impl Engine {
                         blocking: Arc::default(),
                         runtime,
                         windows: Arc::new(Windows::new()),
+                        imports: Arc::default(),
                         cleanup: start_cleanup_worker()?,
                     })
-                });
+                })
+                // Recovery runs here, off the caller's thread, before
+                // the engine is handed out (spec/09).
+                .and_then(|engine| engine.recover_imports().map(|()| engine));
             // A caller that stopped waiting drops the engine here.
             let _ = opened.send(engine);
         }))
@@ -242,6 +296,34 @@ impl Engine {
     /// implement its share of `Engine`.
     pub(crate) fn windows(&self) -> &Arc<Windows> {
         &self.windows
+    }
+
+    /// The import job registry; crate-visible for the `import` module.
+    pub(crate) fn imports(&self) -> &Arc<ImportJobs> {
+        &self.imports
+    }
+
+    /// Start a [`Worker`] running `body` on the runtime; refused once
+    /// shutdown has begun.
+    pub(crate) fn spawn_worker<F, Fut>(&self, body: F) -> Result<(), EngineError>
+    where
+        F: FnOnce(Worker) -> Fut,
+        Fut: std::future::Future<Output = ()> + Send + 'static,
+    {
+        let worker = Worker {
+            resources: Arc::clone(self.resources()),
+            running: Arc::new(self.blocking.start()?),
+            blocking: Arc::clone(&self.blocking),
+            handle: self.runtime.handle().clone(),
+        };
+        self.runtime.handle().spawn(body(worker));
+        Ok(())
+    }
+
+    /// Wait for `future` on the calling thread. Only for the open
+    /// thread, which is outside the runtime and may block.
+    pub(crate) fn block_on<F: std::future::Future>(&self, future: F) -> F::Output {
+        self.runtime.handle().block_on(future)
     }
 
     /// A fresh UUID string for a command's idempotency key (spec/07
