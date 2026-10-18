@@ -55,7 +55,11 @@ user-granted permission path.
      so when the variant is unknown and such lines exist, the job asks
      the user, records the choice with its checkpoint, and the report
      names it;
-   - publish the bytes (03);
+   - publish the bytes (03), streaming them. Parsing and flag extraction
+     see at most the MIME byte budget plus one byte (10), so a larger
+     message keeps its exact bytes and imports as `partial`. A read
+     failure names the source offset and stops the job; a truncated
+     message is never stored;
    - insert or reuse the acquisition, add an `acquisition_sources` row
      (`import_mbox` or `import_eml`, with source path and offset), create
      a logical message and an occurrence in the local archive, in a
@@ -64,6 +68,10 @@ user-granted permission path.
    - Batches are at most 250 messages per transaction. The job records
      its progress (file and offset), so it can resume after a crash or
      quit without duplicating.
+   - A source's progress is its next unread offset plus the messages
+     consumed. An mbox resumes at a recorded separator; an EML file is
+     one message at offset 0. Ending with a count other than the
+     inventory's stops the job as corrupt.
 3. **Duplicates.**
    - Bytes are deduplicated: identical bytes share one acquisition and
      one object.

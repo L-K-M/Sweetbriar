@@ -321,3 +321,31 @@ impl Seek for ShortSource<'_> {
         self.cursor.seek(position)
     }
 }
+
+#[test]
+fn resumed_scans_keep_absolute_offsets_and_require_a_separator() {
+    let mut source = ENVELOPE.to_vec();
+    source.extend_from_slice(b"first\n");
+    let second = source.len();
+    source.extend_from_slice(ENVELOPE);
+    source.extend_from_slice(b"second\n");
+    let full = records(&source, 4);
+
+    let resumed: Vec<_> = MboxScanner::resume(BufReader::new(&source[second..]), second as u64)
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(resumed, full[1..]);
+
+    // The end of the source resumes to an empty tail.
+    let len = source.len() as u64;
+    assert_eq!(MboxScanner::resume(BufReader::new(&[][..]), len).count(), 0);
+
+    // A recorded offset that is not a separator is refused, not skipped.
+    let inside = second + 1;
+    let mut scanner = MboxScanner::resume(BufReader::new(&source[inside..]), inside as u64);
+    assert!(matches!(
+        scanner.next(),
+        Some(Err(MboxError::MissingSeparator { offset })) if offset == inside as u64
+    ));
+    assert!(scanner.next().is_none());
+}

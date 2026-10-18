@@ -685,6 +685,11 @@ CREATE INDEX d_list_rows_flagged ON d_list_rows(sort_date DESC, occurrence_id DE
   `d_message_summary.date_header` (imports), else `first_seen_at`. It is derived, but kept transactionally
   current, because the list must reflect a flag change instantly.
   Unified views ("all inboxes") page over `d_list_rows_unified` by role.
+- **`d_message_summary` JSON columns** are canonical JSON arrays.
+  Address lists (`reply_to_json`, `to_json`, `cc_json`) hold
+  `{"address", "name"}` objects, with `null` for a missing part;
+  `references_json` and `delivered_to_json` hold strings. An empty list
+  is NULL. `date_header` is UTC milliseconds.
 - **The representative occurrence** stands for its logical message in
   per-message windows (`Flagged`, `Search`, `View`, `Thread`; 07). It
   is the message's present occurrence in a `folder` mailbox, else in a
