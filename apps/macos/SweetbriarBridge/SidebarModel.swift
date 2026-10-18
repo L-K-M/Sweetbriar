@@ -59,6 +59,8 @@ public final class SidebarModel {
 
     /// The unified section's id, also its entries' prefix.
     public static let unifiedSectionID = "unified"
+    /// The Unified Inbox entry's id: the main window's first choice.
+    public static let unifiedInboxID = "\(unifiedSectionID)/inbox"
     /// The note on a mailbox that isn't selectable (spec/08).
     static let notSelectableNote = "This mailbox holds no messages of its own."
     /// The note on entries whose steps haven't landed (spec/08).
@@ -143,7 +145,7 @@ public final class SidebarModel {
         title: "Unified",
         entries: [
             Entry(
-                id: "\(unifiedSectionID)/inbox",
+                id: unifiedInboxID,
                 title: "Inbox",
                 unread: nil,
                 target: .window(.unified(.inbox))

@@ -30,7 +30,7 @@ private struct RecordedEvent {
 /// One run's live measurement state: the sampler's tick log and the
 /// events posted so far, with render-ready evaluated per tick.
 @MainActor
-private final class RunContext {
+private final class RunContext: NSObject {
     let sampler = BenchmarkTickSampler()
     private(set) var events: [RecordedEvent] = []
     /// A tick saw the model leave the fill's generation — the run
@@ -54,8 +54,48 @@ private final class RunContext {
     /// When the run must stop, whatever it is doing: its time budget.
     let deadline: ContinuousClock.Instant
 
-    init(deadline: ContinuousClock.Instant) {
+    private(set) var displayChanged = false
+    private weak var window: NSWindow?
+    private let initialDisplayID: UInt32?
+
+    init(deadline: ContinuousClock.Instant, window: NSWindow) {
         self.deadline = deadline
+        self.window = window
+        initialDisplayID = Self.displayID(window.screen)
+        super.init()
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(screenDidChange(_:)),
+            name: NSWindow.didChangeScreenNotification, object: window
+        )
+    }
+
+    /// The display's number in a screen's device description.
+    private static let screenNumberKey = NSDeviceDescriptionKey("NSScreenNumber")
+
+    /// Which display `screen` is, to notice a run moving between them.
+    static func displayID(_ screen: NSScreen?) -> UInt32? {
+        (screen?.deviceDescription[screenNumberKey] as? NSNumber)?.uint32Value
+    }
+
+    @objc
+    private func screenDidChange(_ notification: Notification) {
+        checkDisplay()
+    }
+
+    private func checkDisplay() {
+        if Self.displayID(window?.screen) != initialDisplayID {
+            displayChanged = true
+        }
+    }
+
+    /// Stop observing the window before teardown can detach it from its display.
+    func stopSampling() {
+        checkDisplay()
+        sealedAt = CACurrentMediaTime()
+        sampler.stop()
+        NotificationCenter.default.removeObserver(
+            self, name: NSWindow.didChangeScreenNotification, object: window
+        )
     }
 
     /// The run overran its budget.
@@ -66,7 +106,7 @@ private final class RunContext {
     /// The run must post no further input: another generation, or no
     /// time left.
     var stopped: Bool {
-        generationChanged || overBudget
+        generationChanged || displayChanged || overBudget
     }
 
     /// Flag the abort from outside a tick — an open that landed on
@@ -119,6 +159,7 @@ private final class RunContext {
     /// its render-ready (plan M0.10: "the first tick after which its
     /// rows are laid out and visible").
     func tickDidFire(_ index: Int) {
+        checkDisplay()
         let ticks = sampler.ticks
         guard index < ticks.count else { return }
         if ticks[index].generationChanged {
@@ -162,6 +203,7 @@ final class ListBenchmarkRunner {
     /// 500k ids can) still leaves a report. Checked between inputs —
     /// a blocked main thread overruns it by the length of the block.
     private static let runBudget: Duration = .seconds(300)
+    private static let openTimeout: Duration = .seconds(30)
 
     private let session: CoreSession
     private let clock = ContinuousClock()
@@ -208,6 +250,10 @@ final class ListBenchmarkRunner {
                 "the benchmark couldn't start: \(error.localizedDescription)"
             )
         }
+        if let display = runs.first?.display {
+            environment.refreshRateHertz = display.refreshRateHertz
+            environment.nominalIntervalMilliseconds = runs[0].intervals.nominalMilliseconds
+        }
         for run in runs {
             failures.append(contentsOf: run.failures.map {
                 "\(run.implementation) \(run.pass.rawValue): \($0)"
@@ -220,6 +266,230 @@ final class ListBenchmarkRunner {
             runs: runs,
             comparison: BenchmarkComparison.evaluate(runs: runs)
         )
+    }
+
+    /// Store mode uses the already-open main window and only queries the archive.
+    func runStore(controller: MainWindowController?) async -> ListBenchmarkReport {
+        var environment = BenchmarkEnvironment.collect()
+        environment.baselineFootprintBytes = SystemProbes.physicalFootprint()
+        var report = ListBenchmarkReport(
+            ok: false, failures: [], environment: environment,
+            runs: [], comparison: nil, mode: .store
+        )
+        guard let controller, let window = controller.window else {
+            report.failures = ["the main window is unavailable"]
+            return report
+        }
+        do {
+            let bridge = try await session.bridge()
+            let ready = await checkWithin(Self.openTimeout) {
+                controller.sidebarModel != nil && controller.messageList != nil
+            }
+            guard ready, let sidebarModel = controller.sidebarModel,
+                  let sidebar = controller.sidebar, let pane = controller.messageList else {
+                report.failures = ["the production sidebar and list did not open"]
+                return report
+            }
+            // Read counts through the bridge; the sidebar does not display totals.
+            var mailboxes: [StoreBenchmarkPlan.Mailbox] = []
+            var generation: UInt64?
+            for account in try await bridge.accounts() {
+                let result = try await bridge.mailboxes(accountId: account.accountId)
+                if let generation, generation != result.generation {
+                    report.failures = ["the archive generation moved while choosing mailboxes"]
+                    return report
+                }
+                generation = result.generation
+                mailboxes += result.mailboxes.filter { $0.selectable }.map {
+                    StoreBenchmarkPlan.Mailbox(
+                        entryID: "\(account.accountId)/\($0.mailboxId)", count: $0.total
+                    )
+                }
+            }
+            let pair = StoreBenchmarkPlan.switchPair(
+                mailboxes, fallback: SidebarModel.unifiedInboxID
+            )
+            guard pair.count == 2, let generation else {
+                report.failures = ["the store has no nonempty selectable mailbox"]
+                return report
+            }
+            // A launch can reach us while the sidebar's first reload is in flight.
+            let entriesReady = await checkWithin(Self.openTimeout) {
+                pair.allSatisfy { sidebarModel.entry(id: $0) != nil }
+                    || sidebarModel.lastError != nil
+            }
+            guard entriesReady, sidebarModel.lastError == nil else {
+                report.failures = ["the sidebar could not load the benchmark mailboxes"]
+                return report
+            }
+            guard let content = window.contentView else {
+                report.failures = ["the main window has no content view"]
+                return report
+            }
+            NSApp.activate()
+            controller.showWindow(nil)
+            window.makeKeyAndOrderFront(nil)
+            var failures: [String] = []
+            if !(await awaitSteadyForeground(window)) {
+                failures.append("the window wasn't key and the app active")
+            }
+            let windowWasKey = window.isKeyWindow
+            let appWasActive = NSApp.isActive
+            let screen = window.screen
+            let fps = Double(screen?.maximumFramesPerSecond ?? 0)
+            if fps <= 0 { failures.append("the run window has no display refresh rate") }
+            report.environment.refreshRateHertz = fps
+            report.environment.nominalIntervalMilliseconds = fps > 0 ? 1_000 / fps : 0
+            report.environment.windowSize =
+                "\(Int(content.bounds.width))x\(Int(content.bounds.height))"
+            let context = RunContext(deadline: clock.now + Self.runBudget, window: window)
+            let footprint = FootprintSampler()
+            let baseline = SystemProbes.physicalFootprint()
+            footprint.start()
+            // The hook sees provisional and exact indexes, even between display ticks.
+            pane.onIndexChangedForBenchmark = { [weak context] seen in
+                if seen != generation { context?.markGenerationChanged() }
+            }
+            pane.onPagesDeliveredForBenchmark = { [weak context, weak pane] pages in
+                guard let model = pane?.model, let list = pane?.list else { return }
+                context?.record(
+                    phase: "pageDeliveries", detail: "pages \(pages)",
+                    postedAt: CACurrentMediaTime()
+                ) { [weak model, weak list, weak pane] in
+                    // A replaced list has no visible rows of these pages.
+                    guard let model, let list, pane?.model === model else { return true }
+                    return Self.deliveredRowsShown(pages, list: list, model: model)
+                }
+            }
+            context.sampler.extras = { [weak pane, weak window] in
+                var extras = BenchmarkTickSampler.Extras()
+                extras.windowKey = window?.isKeyWindow == true
+                extras.appActive = NSApp.isActive
+                if let model = pane?.model, let list = pane?.list {
+                    extras.generationChanged = model.generation != 0
+                        && model.generation != generation
+                    extras.scrollPosition = Self.scrollPosition(of: list)
+                    extras.visibleRowsPopulated = Self.allVisibleRowsPopulated(
+                        list: list, model: model
+                    )
+                }
+                return extras
+            }
+            context.sampler.onTick = { [weak context] in context?.tickDidFire($0) }
+            context.sampler.onCommitPoint = { [weak context] in context?.commitPointPassed() }
+            context.sampler.start(on: content)
+            defer {
+                pane.onIndexChangedForBenchmark = nil
+                pane.onPagesDeliveredForBenchmark = nil
+            }
+
+            /// Await a fresh choice, not the old rows still showing while teardown runs.
+            @MainActor
+            func choose(_ entryID: String, phase: String) async -> Int? {
+                guard !context.stopped,
+                      let entry = sidebarModel.entry(id: entryID),
+                      case .window(let spec) = entry.target else { return nil }
+                let serial = pane.choiceSerial + 1
+                let postedAt = postInput { sidebar.choose(entryID: entryID) }
+                let event = context.record(
+                    phase: phase, detail: entryID, postedAt: postedAt
+                ) { [weak pane] in
+                    guard let pane, pane.choiceSerial == serial,
+                          pane.shownSpec == spec, pane.failureForBenchmark == nil,
+                          let model = pane.model, let list = pane.list else { return false }
+                    return model.count > 0
+                        ? Self.allVisibleRowsPopulated(list: list, model: model)
+                        : model.hasExactIndex
+                }
+                await awaitRenderReady(event, context: context, within: Self.openTimeout)
+                guard context.events[event].renderReadyTick != nil else {
+                    failures.append("sidebar choice \(entryID) never rendered")
+                    return nil
+                }
+                return event
+            }
+
+            context.phase = "preparing"
+            // Start on the other mailbox so all 30 timed choices are switches.
+            let prepared = await choose(pair[1], phase: "preparing") != nil
+            var completed = 0
+            var firstRowsSamples: [Double] = []
+            if prepared && failures.isEmpty {
+                context.phase = "mailboxSwitch"
+                for index in 0 ..< StoreBenchmarkPlan.switchCount where !context.stopped {
+                    guard let eventIndex = await choose(pair[index % 2], phase: "mailboxSwitch")
+                    else { break }
+                    completed += 1
+                    let event = context.events[eventIndex]
+                    if (pane.model?.count ?? 0) > 0, let tick = event.renderReadyTick {
+                        firstRowsSamples.append(
+                            (context.sampler.ticks[tick].firedAt - event.postedAt) * 1_000
+                        )
+                    }
+                }
+            }
+            if completed != StoreBenchmarkPlan.switchCount {
+                failures.append("completed \(completed) of \(StoreBenchmarkPlan.switchCount) mailbox switches")
+            }
+            context.phase = "preparing"
+            let largestReady = await choose(pair[0], phase: "preparing") != nil
+            if !largestReady { failures.append("the largest mailbox could not be shown") }
+            var rowCount = 0
+            if largestReady, !context.stopped, failures.isEmpty,
+               let model = pane.model, let list = pane.list {
+                let indexed = await checkWithin(Self.openTimeout, context: context) {
+                    model.hasExactIndex || pane.failureForBenchmark != nil
+                }
+                rowCount = model.count
+                if !indexed || pane.failureForBenchmark != nil || rowCount == 0 {
+                    failures.append("the largest mailbox's exact index could not be loaded")
+                } else {
+                    context.phase = "jumps"
+                    failures += await runJumpPhase(context: context, list: list, model: model)
+                    if !context.stopped {
+                        context.phase = "wheel"
+                        failures += await runWheelPhase(
+                            context: context, window: window, list: list, model: model
+                        )
+                    }
+                    if !context.stopped {
+                        context.phase = "selection"
+                        failures += await runSelectionPhase(
+                            context: context, window: window, list: list, model: model
+                        )
+                    }
+                }
+            }
+            if context.overBudget { failures.append("the store run exceeded its time budget") }
+            context.phase = "draining"
+            await drainRenderReady(context: context)
+            context.stopSampling()
+            let peak = footprint.stop()
+            if !context.foregroundLosses.isEmpty {
+                failures.append("the run lost the foreground")
+            }
+            var run = assembleRun(
+                context: context, implementation: .appkit, pass: .cold,
+                generation: generation, failures: failures,
+                windowWasKey: windowWasKey, appWasActive: appWasActive,
+                baseline: baseline, sampledPeak: peak, screen: screen
+            )
+            let firstRows = BenchmarkStatistics.summarize(
+                context.displayChanged ? [] : firstRowsSamples
+            )
+            run.firstRowsMilliseconds = firstRows.count > 0 ? firstRows.p95 : nil
+            report.environment.rowCount = rowCount
+            report.runs = [run]
+            report.failures = run.failures
+            report.ok = run.ok
+            report.store = StoreBenchmarkResult.evaluate(
+                run: run, pair: pair, completedSwitches: completed,
+                firstRows: firstRows, rowCount: rowCount
+            )
+        } catch {
+            report.failures = ["the store benchmark couldn't start: \(error.localizedDescription)"]
+        }
+        return report
     }
 
     // MARK: - One run
@@ -265,10 +535,13 @@ final class ListBenchmarkRunner {
         // The screen answers the nominal interval — read it before
         // the window's death can nil it.
         let screen = window.screen
+        if (screen?.maximumFramesPerSecond ?? 0) <= 0 {
+            failures.append("the run window has no display refresh rate")
+        }
 
         // The run's display link runs continuously — separate from
         // the model's pausing clock.
-        let context = RunContext(deadline: clock.now + Self.runBudget)
+        let context = RunContext(deadline: clock.now + Self.runBudget, window: window)
         let footprint = FootprintSampler()
         footprint.start()
         log("\(implementation.rawValue) \(pass.rawValue): opening")
@@ -384,8 +657,7 @@ final class ListBenchmarkRunner {
         }
         context.phase = "draining"
         await drainRenderReady(context: context)
-        context.sealedAt = CACurrentMediaTime()
-        context.sampler.stop()
+        context.stopSampling()
         let peakFootprint = footprint.stop()
         if let first = context.firstForegroundLoss {
             let lost = context.foregroundLosses.sorted { $0.key < $1.key }
@@ -427,17 +699,18 @@ final class ListBenchmarkRunner {
         // The state is read before the deadline: a list that blocks
         // the main thread past it (SwiftUI over 500k ids can) has
         // opened by the time this loop runs again, and is measured.
-        let deadline = clock.now + .seconds(30)
+        let deadline = clock.now + Self.openTimeout
         while true {
             if let error = controller.openFailure {
                 return "the list failed to open: \(error.localizedDescription)"
             }
             if let model = controller.listModel,
                controller.prototypeList != nil {
-                if model.generation == generation {
+                // First-row timing is independent; rank jumps need the full index.
+                if model.generation == generation, model.hasExactIndex {
                     return nil
                 }
-                if model.generation != 0 {
+                if model.generation != 0, model.generation != generation {
                     return "the model opened at generation "
                         + "\(model.generation), not \(generation)"
                 }
@@ -447,6 +720,7 @@ final class ListBenchmarkRunner {
                 // runs once this task yields: look once more.
                 try? await Task.sleep(for: .milliseconds(500))
                 if controller.listModel?.generation == generation,
+                   controller.listModel?.hasExactIndex == true,
                    controller.prototypeList != nil {
                     return nil
                 }
@@ -559,6 +833,7 @@ final class ListBenchmarkRunner {
             if i > 0, gap > .zero {
                 try? await Task.sleep(for: gap)
             }
+            guard !context.stopped else { break }
             let postedAt = postInput { list.scrollToRank(rank) }
             previousPost = clock.now
             lastJump = context.record(
@@ -602,6 +877,12 @@ final class ListBenchmarkRunner {
         list: any PrototypeList,
         model: ListWindowModel
     ) async -> [String] {
+        // A mailbox that fits the viewport has no wheel travel to measure.
+        if let scroll = list.listView as? NSScrollView,
+           let document = scroll.documentView,
+           document.frame.height <= scroll.contentView.bounds.height {
+            return []
+        }
         var failures: [String] = []
         let windowNumber = window.windowNumber
         let bounds = list.listView.convert(list.listView.bounds, to: nil)
@@ -623,6 +904,9 @@ final class ListBenchmarkRunner {
         }
         let start = clock.now
         for i in 0 ..< 200 where !context.stopped {
+            // Small store mailboxes may exhaust their upward travel early.
+            if let scroll = list.listView as? NSScrollView,
+               scroll.contentView.bounds.minY <= 0 { break }
             if let event = Self.wheelEvent(
                 at: centre, windowNumber: windowNumber
             ) {
@@ -695,7 +979,7 @@ final class ListBenchmarkRunner {
             let positioned = await position(
                 context: context, list: list, model: model, rank: rank
             )
-            guard positioned else { return false }
+            guard positioned, !context.stopped else { return false }
             guard let rect = list.rowRect(forRank: rank) else {
                 failures.append("no row rect for rank \(rank)")
                 return false
@@ -723,9 +1007,12 @@ final class ListBenchmarkRunner {
             return took
         }
 
-        let anchor = 100_000
-        // 1. Plain click at 100,000 — the anchor the shift-click
-        // extends from.
+        guard let endpoints = StoreBenchmarkPlan.selection(count: model.count) else {
+            return ["selection found no rows"]
+        }
+        let anchor = endpoints.lowerBound
+        let end = endpoints.upperBound
+        // 1. Plain click seeds the range anchor.
         let clicked = await click(
             anchor,
             modifiers: [],
@@ -736,27 +1023,23 @@ final class ListBenchmarkRunner {
             failures.append("click at rank \(anchor) never took")
         }
 
-        // 2. Jump to 109,999, shift-click it: the selection must be
-        // exactly ranks 100,000…109,999.
-        let shiftExpected = Self.ids(model: model, ranks: 100_000 ... 109_999)
+        // 2. Shift-click the other endpoint: exactly the planned span.
+        let shiftExpected = Self.ids(model: model, ranks: endpoints)
         let shiftClicked = await click(
-            109_999,
+            end,
             modifiers: [.shift],
             expect: shiftExpected,
-            detail: "shift-click rank 109999"
+            detail: "shift-click rank \(end)"
         )
         if !shiftClicked {
             failures.append(
-                "shift-click: selection is not ranks 100,000…109,999"
+                "shift-click: selection is not ranks \(anchor)…\(end)"
             )
         } else {
-            // 3. Back at 100,000, ⌘-click 100,000…100,009 — each
-            // toggles its row out of the selection; after the last,
-            // exactly 100,010…109,999 remain.
-            for rank in 100_000 ... 100_009 where !context.stopped {
-                let expected = Self.ids(
-                    model: model, ranks: (rank + 1) ... 109_999
-                )
+            // 3. Toggle up to ten anchor rows out of that selection.
+            for rank in anchor ... min(anchor + 9, end) where !context.stopped {
+                let expected: Set<Int64> = rank < end
+                    ? Self.ids(model: model, ranks: (rank + 1) ... end) : []
                 let toggled = await click(
                     rank,
                     modifiers: [.command],
@@ -783,6 +1066,7 @@ final class ListBenchmarkRunner {
         model: ListWindowModel,
         rank: Int
     ) async -> Bool {
+        guard !context.stopped else { return false }
         if list.visibleRanks.contains(rank),
            Self.allVisibleRowsPopulated(list: list, model: model) {
             return true
@@ -889,16 +1173,14 @@ final class ListBenchmarkRunner {
         context: RunContext?,
         deadline: ContinuousClock.Instant
     ) async -> Bool {
-        while !condition() {
-            if context?.stopped == true {
-                return false
-            }
+        while true {
+            if context?.stopped == true { return false }
+            if condition() { return true }
             if clock.now >= deadline {
                 return false
             }
             try? await Task.sleep(for: .milliseconds(5))
         }
-        return true
     }
 
     /// `check` bounded `within` of `since` (defaults to now) — the
@@ -996,6 +1278,18 @@ final class ListBenchmarkRunner {
         screen: NSScreen?
     ) -> BenchmarkRun {
         let fps = Double(screen?.maximumFramesPerSecond ?? 0)
+        if context.displayChanged {
+            var discarded = failedRun(
+                implementation, pass, generation,
+                failures: checkFailures + ["the window changed display; measurement discarded"],
+                baseline: baseline
+            )
+            discarded.generationChanged = context.generationChanged
+            discarded.display = BenchmarkDisplay(
+                id: RunContext.displayID(screen), refreshRateHertz: fps, changed: true
+            )
+            return discarded
+        }
         let nominalMs = fps > 0 ? 1_000 / fps : 0
 
         // An event posted after the drain — a straggling delivery —
@@ -1058,7 +1352,10 @@ final class ListBenchmarkRunner {
             footprintRiseBytes: Int64(peak) - Int64(baseline),
             phases: reduction.phases,
             intervals: reduction.intervals,
-            events: reduction.events
+            events: reduction.events,
+            display: BenchmarkDisplay(
+                id: RunContext.displayID(screen), refreshRateHertz: fps, changed: false
+            )
         )
     }
 
@@ -1106,12 +1403,11 @@ final class ListBenchmarkRunner {
 extension BenchmarkEnvironment {
     /// The machine description (plan M0.10): sysctls for the model,
     /// CPU brand and the virtualized flag; the OS and Xcode versions;
-    /// the main screen's refresh rate; the list's fixed shape. The
+    /// the list's fixed shape. Each run supplies its window's refresh rate. The
     /// baseline footprint and row count are filled by the run.
     @MainActor
     static func collect() -> BenchmarkEnvironment {
         let info = Bundle.main.infoDictionary
-        let fps = Double(NSScreen.main?.maximumFramesPerSecond ?? 0)
         let size = ListPrototypeWindowController.contentSize
         return BenchmarkEnvironment(
             hwModel: SystemProbes.sysctlString("hw.model"),
@@ -1120,8 +1416,8 @@ extension BenchmarkEnvironment {
             osVersion: ProcessInfo.processInfo.operatingSystemVersionString,
             xcodeVersion: info?["DTXcode"] as? String ?? "",
             xcodeBuild: info?["DTXcodeBuild"] as? String ?? "",
-            refreshRateHertz: fps,
-            nominalIntervalMilliseconds: fps > 0 ? 1_000 / fps : 0,
+            refreshRateHertz: 0,
+            nominalIntervalMilliseconds: 0,
             rowCount: 0,
             rowPitchPoints: Double(MessageRowMetrics.pitch),
             windowSize:

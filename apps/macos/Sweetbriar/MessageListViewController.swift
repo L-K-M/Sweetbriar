@@ -12,8 +12,8 @@ final class MessageListViewController: NSViewController {
     private let bridge: CoreBridge
     private let formatter = MessageRowFormatter()
     private var clock: DisplayLinkClock?
-    private var model: ListWindowModel?
-    private var list: AppKitPrototypeList?
+    private(set) var model: ListWindowModel?
+    private(set) var list: AppKitPrototypeList?
     private var openError: (any Error)?
     private var opening = false
 
@@ -29,6 +29,13 @@ final class MessageListViewController: NSViewController {
 
     /// The selection, by occurrence id, whenever it changes.
     var onSelectionChange: (@MainActor (Set<Int64>) -> Void)?
+
+    /// Measurement hooks are installed before each model opens.
+    var onPagesDeliveredForBenchmark: (@MainActor ([Int]) -> Void)?
+    var onIndexChangedForBenchmark: (@MainActor (UInt64) -> Void)?
+    private(set) var shownSpec: WindowSpec?
+    private(set) var choiceSerial = 0
+    var failureForBenchmark: (any Error)? { openError ?? model?.lastError }
 
     init(bridge: CoreBridge) {
         self.bridge = bridge
@@ -60,6 +67,8 @@ final class MessageListViewController: NSViewController {
     /// a fresh list.
     func show(_ spec: WindowSpec) async {
         let ticket = tickets.next()
+        shownSpec = spec
+        choiceSerial += 1
         opening = true
         updateStatus()
         await teardown()
@@ -68,6 +77,9 @@ final class MessageListViewController: NSViewController {
         let clock = self.clock ?? DisplayLinkClock(view: view)
         self.clock = clock
         let model = ListWindowModel(source: bridge, spec: spec, clock: clock)
+        model.onPagesDeliveredForBenchmark = { [weak self] pages in
+            self?.onPagesDeliveredForBenchmark?(pages)
+        }
         let list = AppKitPrototypeList(
             model: model,
             formatter: formatter,
@@ -113,6 +125,7 @@ final class MessageListViewController: NSViewController {
 
     private func indexDidChange() {
         updateStatus()
+        if let model { onIndexChangedForBenchmark?(model.generation) }
         guard let model, model.hasExactIndex else { return }
         onGeneration?(model.generation)
     }

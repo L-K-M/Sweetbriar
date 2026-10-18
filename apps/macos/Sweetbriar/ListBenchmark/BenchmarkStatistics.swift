@@ -95,7 +95,7 @@ enum BenchmarkTimeline {
     /// terminal one (to the stop) are no frames.
     static func frameDurations(frameTimes: [Double], isFrame: [Bool]) -> [Double?] {
         guard frameTimes.count > 1 else { return [] }
-        return (1 ..< frameTimes.count).map { i in
+        return (1 ..< frameTimes.count).map { i -> Double? in
             isFrame[i] && isFrame[i - 1]
                 ? (frameTimes[i] - frameTimes[i - 1]) * 1_000
                 : nil
@@ -146,9 +146,11 @@ extension BenchmarkTimeline {
     /// The opening's phase: from the window opening to its first rows.
     static let openingPhase = "firstRows"
 
-    /// The phases with statistics of their own; the opening counts
-    /// toward the overall ones.
-    static let measuredPhases = ["jumps", "wheel", "selection", "pageDeliveries"]
+    /// Phases contributing to overall statistics; the opening also
+    /// contributes its active intervals.
+    static let measuredPhases = [
+        "jumps", "wheel", "selection", "pageDeliveries", "mailboxSwitch", "preparing",
+    ]
 
     /// Reduce a run (plan M0.10): per phase and overall, main-thread
     /// CPU over active intervals, latency over rendered events, and
