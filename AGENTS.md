@@ -52,6 +52,11 @@ compiler must be on `PATH`. Its compile options come from
 - the notices drift check;
 - the Dovecot protocol suite once M2 lands (`cargo xtask ci --docker`).
 
+On pushes to main, CI's `window-timings` job also records the M1.3
+list window timings over 100k rows; they are never asserted. Run them
+locally with `cargo test -p sb-engine --release --lib
+list_window_timings -- --ignored --nocapture`.
+
 **Only in macOS CI (`.github/workflows/macos.yml`):**
 
 - `cargo test --workspace --target aarch64-apple-darwin` (M0.1 shape);
