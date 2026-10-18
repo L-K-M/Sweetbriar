@@ -63,7 +63,8 @@ struct WriterShared {
 }
 
 /// What hears of each committed list generation. Called on the writer
-/// thread between jobs, so it must return at once.
+/// thread between a commit and its future resolving, so it must return
+/// at once and never panic.
 pub type ListObserver = Arc<dyn Fn(u64) + Send + Sync>;
 
 struct WriterState {
@@ -574,6 +575,8 @@ fn writer_loop(conn: &mut Connection, shared: &Arc<WriterShared>) {
 /// Tell the observer of a list generation the job just committed; one
 /// that left the generation announces nothing.
 fn announce(conn: &Connection, shared: &WriterShared, announced: &mut Option<u64>) {
+    // An unreadable generation is a corrupt store, which the next read
+    // reports; the writer keeps serving rather than failing a commit.
     let Ok(current) = list_rows::generation(conn) else {
         return;
     };

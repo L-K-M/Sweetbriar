@@ -16,6 +16,7 @@ use std::sync::{Arc, Mutex};
 use tokio::runtime::Handle;
 
 use super::{OpenWindow, Versions, WindowId, WindowSpec, Windows};
+use crate::engine::join_failed;
 use crate::{Engine, EngineError};
 
 /// How many generations a consumer may fall behind before `next`
@@ -37,21 +38,23 @@ pub struct Subscription {
     window_id: WindowId,
     windows: Arc<Windows>,
     runtime: Handle,
-    /// The generation the last event named; `None` until the first,
-    /// when the window's last page sets it.
+    /// The generation the last event named: at first, that of the last
+    /// page or id index the window's caller had received when
+    /// subscribing. `None` for a window not open then.
     mark: Mutex<Option<u64>>,
     waiting: AtomicBool,
 }
 
 impl Engine {
-    /// `subscribe` (spec/07): a subscription to `window_id`'s changes.
-    /// Nothing is looked up until `next`, so this never blocks.
+    /// `subscribe` (spec/07): a subscription to `window_id`'s changes,
+    /// marked at the generation its caller last received. Only that
+    /// in-memory mark is read here; no I/O.
     pub fn subscribe(&self, window_id: WindowId) -> Subscription {
         Subscription {
             window_id,
             windows: Arc::clone(self.windows()),
             runtime: self.runtime_handle(),
-            mark: Mutex::new(None),
+            mark: Mutex::new(self.windows().seen(window_id)),
             waiting: AtomicBool::new(false),
         }
     }
@@ -73,7 +76,7 @@ impl Subscription {
             }
             let open = self.window().await?;
             let current = source_generation(open.spec, seen);
-            let mark = *self.lock_mark().get_or_insert(open.seen);
+            let mark = *self.lock_mark().get_or_insert(open.seen());
             if current > mark {
                 *self.lock_mark() = Some(current);
                 return Ok(if current - mark > MAX_UNSEEN_GENERATIONS {
@@ -94,10 +97,16 @@ impl Subscription {
     async fn window(&self) -> Result<OpenWindow, EngineError> {
         let windows = Arc::clone(&self.windows);
         let window_id = self.window_id;
-        self.runtime
+        match self
+            .runtime
             .spawn_blocking(move || windows.window(window_id))
             .await
-            .map_err(|_| shut_down())?
+        {
+            Ok(open) => open,
+            // A panic is a bug; a cancelled task means the runtime is gone.
+            Err(join) if join.is_panic() => Err(join_failed("read the window table", join)),
+            Err(_) => Err(shut_down()),
+        }
     }
 
     fn lock_mark(&self) -> std::sync::MutexGuard<'_, Option<u64>> {
