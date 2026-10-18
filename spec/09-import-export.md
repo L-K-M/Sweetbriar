@@ -144,7 +144,18 @@ user-granted permission path.
   starts a new one), a waiting job keeps waiting and a running job
   resumes from its checkpoints.
 - Shells poll `import_job(id)` (07) for the state, inventory, problems
-  and counts, and, once the job finishes, the report's path.
+  and counts, and, once the report is written, its path; a terminal
+  state alone doesn't mean the report exists. `import_report(id)`
+  returns the report itself once written.
+- **In the app** (08), File → Import… picks supported files, packages
+  and folders. The inventory and its problems are shown before
+  confirmation, and an ambiguous source needs its own variant choice.
+  Progress is polled with at most one request in flight. Closing the
+  progress sheet leaves the job running; Cancel waits for `cancel_job`'s
+  receipt. The shell keeps its active job's id and reattaches after a
+  restart. A failed or cancelled job says so, and its committed messages
+  stay visible. A report that isn't written yet shows as pending, with
+  Retry; it is never shown as written.
 - `sb-cli import [--variant mboxo|mboxrd] <paths>…` prints the
   inventory, then confirms with that variant for every ambiguous source.
   When one needs a choice and none was given, it cancels the job and
