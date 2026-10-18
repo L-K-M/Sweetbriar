@@ -345,7 +345,13 @@ protocol CallToken: Sendable {
 
 extension SweetbriarCore.CancelToken: CallToken {}
 
-extension CoreBridge: ListWindowSource {}
+extension CoreBridge: ListWindowSource {
+    public func windowEvents(id: UInt64) async throws -> any WindowEventSource {
+        try await subscribe(windowId: id)
+    }
+}
+
+extension WindowSubscription: WindowEventSource {}
 
 extension Setting {
     /// Map the generated record field by field.

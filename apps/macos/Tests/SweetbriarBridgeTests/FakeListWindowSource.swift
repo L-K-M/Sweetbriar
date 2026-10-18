@@ -1,9 +1,11 @@
 // `FakeListWindowSource`: an in-memory `ListWindowSource` that
 // implements spec/07's paging formulas over `count` synthetic rows
 // (occurrence ids run `count` down to 1, dense and descending, like
-// the real debug source). It records every read, counts what is in
-// flight, can park reads on a gate, sees cancellation, and answers
-// `resetRequired` once `fill` has bumped the generation.
+// the real debug source) or a list of ids a test chose. It records
+// every read, counts what is in flight, can park reads on a gate,
+// sees cancellation, answers `resetRequired` once `fill` has bumped
+// the generation, and hands each window a subscription the test
+// feeds.
 
 import Foundation
 @testable import SweetbriarBridge
@@ -19,6 +21,15 @@ actor FakeListWindowSource: ListWindowSource {
 
     private var generation: UInt64 = 0
     private var rowCount = 0
+    /// Ids a test chose, in window order, with their ranks; nil for
+    /// the dense synthetic ids.
+    private var chosenIDs: [Int64]?
+    private var chosenRanks: [Int64: Int] = [:]
+    /// Per-message `Around`: an id no longer listed resolves to the
+    /// row its message is listed by now (spec/07).
+    private var representatives: [Int64: Int64] = [:]
+    /// Each window's subscription, by window id.
+    private var subscriptions: [UInt64: FakeWindowEvents] = [:]
     private var nextWindowId: UInt64 = 1
     private var open: Set<UInt64> = []
 
@@ -49,6 +60,10 @@ actor FakeListWindowSource: ListWindowSource {
     /// it before answering — a stale index arriving late.
     private var indexGate: ThrowingGate?
 
+    /// When set, the next `windowIDs` refills the rows with this many
+    /// first — a change landing between the opening page and its index.
+    private var refillBeforeIndex: Int?
+
     /// When set, the next `readWindow` answers rows whose occurrence
     /// ids don't match the index — the model's exact-page check
     /// should refuse them and rebuild.
@@ -61,7 +76,41 @@ actor FakeListWindowSource: ListWindowSource {
     func fill(_ count: Int) -> UInt64 {
         generation += 1
         rowCount = count
+        chosenIDs = nil
+        chosenRanks = [:]
         return generation
+    }
+
+    /// Replace the rows with `ids`, in window order, and bump the
+    /// generation. Returns the new generation.
+    @discardableResult
+    func fill(ids: [Int64]) -> UInt64 {
+        generation += 1
+        rowCount = ids.count
+        chosenIDs = ids
+        chosenRanks = Dictionary(
+            ids.enumerated().map { ($0.element, $0.offset) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        return generation
+    }
+
+    /// Make `Around(old)` find `new`'s row once `old` is no longer
+    /// listed, as a logical message's new representative.
+    func represent(_ old: Int64, by new: Int64) {
+        representatives[old] = new
+    }
+
+    /// Send `event` to every open window's subscription.
+    func emit(_ event: WindowEvent) async {
+        for events in subscriptions.values {
+            await events.emit(event)
+        }
+    }
+
+    /// The subscription of window `id`, once the model pulled it.
+    func events(of id: UInt64) -> FakeWindowEvents? {
+        subscriptions[id]
     }
 
     /// Park every read on `gate` until it opens.
@@ -73,6 +122,11 @@ actor FakeListWindowSource: ListWindowSource {
     /// snapshot it took on entry.
     func gateNextIndexRead(_ gate: ThrowingGate) {
         indexGate = gate
+    }
+
+    /// Refill with `count` rows as the next `windowIDs` begins.
+    func refillOnNextIndexRead(_ count: Int) {
+        refillBeforeIndex = count
     }
 
     /// Make the next read answer rows whose ids don't match the
@@ -158,10 +212,14 @@ actor FakeListWindowSource: ListWindowSource {
         guard open.contains(id) else {
             throw CoreFailure.notFound(what: "window \(id)")
         }
+        if let refill = refillBeforeIndex {
+            refillBeforeIndex = nil
+            fill(refill)
+        }
         let count = rowCount
         let snapshot = WindowIDs(
             generation: generation,
-            ids: (0 ..< count).map { Int64(count - $0) }
+            ids: chosenIDs ?? (0 ..< count).map { Int64(count - $0) }
         )
         if let gate = indexGate {
             indexGate = nil
@@ -179,6 +237,19 @@ actor FakeListWindowSource: ListWindowSource {
         }
         open.remove(id)
         closedWindows.append(id)
+        if let events = subscriptions[id] {
+            await events.finish(CoreFailure.notFound(what: "window \(id)"))
+        }
+    }
+
+    /// `subscribe` (spec/07): the window's events, fed by `emit`.
+    func windowEvents(id: UInt64) async throws -> any WindowEventSource {
+        guard open.contains(id) else {
+            throw CoreFailure.notFound(what: "window \(id)")
+        }
+        let events = subscriptions[id] ?? FakeWindowEvents()
+        subscriptions[id] = events
+        return events
     }
 
     /// Hold the next `closeWindow` on `gate` before it releases the
@@ -216,14 +287,24 @@ actor FakeListWindowSource: ListWindowSource {
             let rank = try cursorRank(cursor)
             return max(rank - l, 0) ..< rank
         case .around(let occurrenceId):
-            guard occurrenceId >= 1, occurrenceId <= Int64(n) else {
+            guard let rank = rank(of: occurrenceId, in: n)
+                ?? representatives[occurrenceId].flatMap({ rank(of: $0, in: n) })
+            else {
                 throw CoreFailure.notFound(what: "occurrence \(occurrenceId)")
             }
-            let rank = n - Int(occurrenceId)
             let pageLen = min(l, n)
             let start = max(0, min(rank - pageLen / 2, n - pageLen))
             return start ..< (start + pageLen)
         }
+    }
+
+    /// Where `id` sits among `n` rows, if listed.
+    private func rank(of id: Int64, in n: Int) -> Int? {
+        if chosenIDs != nil {
+            return chosenRanks[id]
+        }
+        guard id >= 1, id <= Int64(n) else { return nil }
+        return n - Int(id)
     }
 
     /// The rank a fake cursor names — `f|<generation>|<rank>` —
@@ -276,7 +357,7 @@ actor FakeListWindowSource: ListWindowSource {
     /// `count − rank` (spec/07), the rest is filler that varies by
     /// rank.
     private func row(at rank: Int, count: Int) -> ListRow {
-        let occurrenceId = Int64(count - rank)
+        let occurrenceId = chosenIDs?[rank] ?? Int64(count - rank)
         return ListRow(
             occurrenceId: occurrenceId,
             messageId: occurrenceId,
@@ -291,5 +372,62 @@ actor FakeListWindowSource: ListWindowSource {
             hasAttachments: rank % 7 == 0,
             tags: []
         )
+    }
+}
+
+/// One window's fake subscription (spec/07): events queue until a
+/// `next` takes them; a `next` with none waits, ends on cancellation,
+/// and fails once the window closes. Counts its calls and the most
+/// waiting at once.
+actor FakeWindowEvents: WindowEventSource {
+    private var queued: [WindowEvent] = []
+    private var waiter: CheckedContinuation<WindowEvent, any Error>?
+    private var ended: (any Error)?
+    /// Every `next` call, counted on entry.
+    private(set) var nextCalls = 0
+    /// The most `next` calls waiting at once.
+    private(set) var maxWaiting = 0
+    private var waiting = 0
+
+    func emit(_ event: WindowEvent) {
+        if let waiter {
+            self.waiter = nil
+            waiter.resume(returning: event)
+            return
+        }
+        queued.append(event)
+    }
+
+    func finish(_ error: any Error) {
+        ended = error
+        if let waiter {
+            self.waiter = nil
+            waiter.resume(throwing: error)
+        }
+    }
+
+    func next() async throws -> WindowEvent {
+        nextCalls += 1
+        if !queued.isEmpty {
+            return queued.removeFirst()
+        }
+        if let ended {
+            throw ended
+        }
+        try Task.checkCancellation()
+        waiting += 1
+        maxWaiting = max(maxWaiting, waiting)
+        defer { waiting -= 1 }
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { waiter = $0 }
+        } onCancel: {
+            Task { await self.cancelWaiter() }
+        }
+    }
+
+    private func cancelWaiter() {
+        guard let waiter else { return }
+        self.waiter = nil
+        waiter.resume(throwing: CancellationError())
     }
 }

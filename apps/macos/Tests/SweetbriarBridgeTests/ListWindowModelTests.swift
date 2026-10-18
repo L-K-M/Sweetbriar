@@ -591,9 +591,10 @@ func aRebuildAfterAFillReadsTheRangeTheListLastShowed() async throws {
     await model.close()
 }
 
-/// `onIndexChanged` fires each time the id index is replaced — on
-/// `open` and on every rebuild — after `ids` holds the new index, so
-/// a list reloads wholesale with the right row count.
+/// `onIndexChanged` fires each time the id index is replaced — for
+/// the opening page's provisional prefix, its exact index, and every
+/// rebuild — after `ids` holds the new index, so a list reloads
+/// wholesale with the right row count.
 @MainActor
 @Test(.timeLimit(.minutes(1)))
 func theIndexHookFiresOnOpenAndEveryRebuild() async throws {
@@ -605,11 +606,11 @@ func theIndexHookFiresOnOpenAndEveryRebuild() async throws {
     model.onIndexChanged = { counts.append(model.count) }
 
     try await model.open()
-    #expect(counts == [300])
+    #expect(counts == [200, 300])
 
     _ = await fake.fill(500)
     try await model.rebuild()
-    #expect(counts == [300, 500])
+    #expect(counts == [200, 300, 500])
 
     await model.close()
 }
@@ -845,4 +846,220 @@ func aModelOverTheRealCoreReadsTheSyntheticRows() async throws {
 
     await model.close()
     await bridge.shutdown()
+}
+
+// MARK: - Store windows (M1.4h)
+
+/// The opening page shows at once as a provisional prefix, before the
+/// id index arrives; the index of the same generation keeps it, so
+/// page 0 is never read again (spec/08 "Opening a store window").
+@MainActor
+@Test(.timeLimit(.minutes(1)))
+func theOpeningPageShowsBeforeTheIndex() async throws {
+    let n = 1_000
+    let fake = FakeListWindowSource()
+    _ = await fake.fill(n)
+    let gate = ThrowingGate()
+    await fake.gateNextIndexRead(gate)
+    let clock = ManualFrameClock()
+    let model = ListWindowModel(source: fake, spec: .mailbox(1), clock: clock)
+
+    let opening = Task { try await model.open() }
+    try #require(await eventually { await fake.indexReads.count == 1 })
+    #expect(model.count == ListWindowModel.pageSize)
+    #expect(!model.hasExactIndex)
+    model.setVisible(0 ..< 50)
+    try #require(await settle(clock) { model.row(at: 0) != nil })
+    #expect(model.row(at: 199)?.occurrenceId == syntheticId(199, n))
+
+    await gate.open()
+    try await opening.value
+    #expect(model.hasExactIndex)
+    #expect(model.count == n)
+    #expect(model.row(at: 0)?.occurrenceId == syntheticId(0, n))
+    try #require(await settle(clock) { model.row(at: 200) != nil })
+    #expect(await fake.readCount(anchor: .around(syntheticId(100, n))) == 0)
+
+    await model.close()
+}
+
+/// A change landing between the opening page and its index moves the
+/// generation: the prefix's rows are dropped and page 0 is read at
+/// the index's generation, so the index and the pages shown agree.
+@MainActor
+@Test(.timeLimit(.minutes(1)))
+func aChangeBeforeTheIndexReReadsTheOpeningPage() async throws {
+    let n = 1_000
+    let fake = FakeListWindowSource()
+    let first = await fake.fill(n)
+    await fake.refillOnNextIndexRead(n)
+    let clock = ManualFrameClock()
+    let model = try await openModel(over: fake, clock: clock)
+    #expect(model.generation == first + 1)
+
+    model.setVisible(0 ..< 50)
+    try #require(await settle(clock) { model.row(at: 0) != nil })
+    let pageZero = await fake.reads.filter { $0.anchor == .around(syntheticId(100, n)) }
+    #expect(pageZero.map(\.generation) == [first + 1])
+
+    await model.close()
+}
+
+/// An invalidation refreshes the id index on the same handle, then
+/// re-reads the visible pages at the new generation; rows the new
+/// index keeps in place stay shown meanwhile (spec/08).
+@MainActor
+@Test(.timeLimit(.minutes(1)))
+func anInvalidationRefreshesTheIndexAndKeepsRowsInPlace() async throws {
+    let n = 1_000
+    let fake = FakeListWindowSource()
+    _ = await fake.fill(n)
+    let clock = ManualFrameClock()
+    let model = try await openModel(over: fake, clock: clock)
+    model.setVisible(0 ..< 50)
+    try #require(await settle(clock) { model.row(at: 0) != nil && model.row(at: 200) != nil })
+
+    let gate = ThrowingGate()
+    await fake.setGate(gate)
+    let recorder = PageBatchRecorder()
+    model.onPagesDelivered = { batch in
+        recorder.record(batch)
+    }
+    let changed = await fake.fill(n)
+    await fake.emit(.invalidated(generation: changed))
+    try #require(await eventually { await model.generation == changed })
+    #expect(await fake.indexReads.count == 2)
+    #expect(model.row(at: 0)?.occurrenceId == syntheticId(0, n))
+    try #require(await eventually {
+        await fake.reads.filter { $0.generation == changed }.count == 2
+    })
+
+    await gate.open()
+    try #require(await settle(clock) { deliveredBatches(recorder) == [0, 1] })
+    #expect(model.row(at: 0)?.occurrenceId == syntheticId(0, n))
+    #expect(model.count == n)
+
+    await model.close()
+}
+
+/// An invalidation during a refresh schedules another; one at the
+/// installed generation is ignored (spec/08).
+@MainActor
+@Test(.timeLimit(.minutes(1)))
+func anInvalidationDuringARefreshSchedulesAnother() async throws {
+    let fake = FakeListWindowSource()
+    let opened = await fake.fill(300)
+    let clock = ManualFrameClock()
+    let model = try await openModel(over: fake, clock: clock)
+
+    await fake.emit(.invalidated(generation: opened))
+    try await Task.sleep(for: .milliseconds(50))
+    #expect(await fake.indexReads.count == 1)
+
+    let gate = ThrowingGate()
+    await fake.gateNextIndexRead(gate)
+    let second = await fake.fill(400)
+    await fake.emit(.invalidated(generation: second))
+    try #require(await eventually { await fake.indexReads.count == 2 })
+    let third = await fake.fill(500)
+    await fake.emit(.invalidated(generation: third))
+
+    await gate.open()
+    try #require(await eventually { await model.generation == third })
+    #expect(model.count == 500)
+    #expect(await fake.indexReads.count == 3)
+
+    await model.close()
+}
+
+/// `resetRequired` from the subscription rebuilds: the index again,
+/// every page cleared and re-read (spec/08).
+@MainActor
+@Test(.timeLimit(.minutes(1)))
+func aResetEventRebuildsTheModel() async throws {
+    let n = 1_000
+    let fake = FakeListWindowSource()
+    _ = await fake.fill(n)
+    let clock = ManualFrameClock()
+    let model = try await openModel(over: fake, clock: clock)
+    model.setVisible(0 ..< 50)
+    try #require(await settle(clock) { model.row(at: 0) != nil })
+
+    let gate = ThrowingGate()
+    await fake.setGate(gate)
+    let changed = await fake.fill(n)
+    await fake.emit(.resetRequired)
+    try #require(await eventually { await model.generation == changed })
+    #expect(model.row(at: 0) == nil)
+
+    await gate.open()
+    try #require(await settle(clock) { model.row(at: 0) != nil })
+
+    await model.close()
+}
+
+/// In a window of logical messages a selected id the new index lacks
+/// is looked up with `Around(id)` and limit 1, so the selection
+/// follows its message; only `notFound` drops it (spec/07, 08).
+@MainActor
+@Test(.timeLimit(.minutes(1)))
+func theSelectionFollowsItsMessageInAMessageWindow() async throws {
+    let fake = FakeListWindowSource()
+    _ = await fake.fill(ids: [10, 9, 8])
+    let clock = ManualFrameClock()
+    let model = ListWindowModel(source: fake, spec: .flagged, clock: clock)
+    var changes: [Set<Int64>] = []
+    model.onSelectionChanged = { changes.append($0) }
+    try await model.open()
+    model.select([9, 8])
+
+    await fake.represent(9, by: 7)
+    let moved = await fake.fill(ids: [10, 7, 8])
+    await fake.emit(.invalidated(generation: moved))
+    try #require(await eventually { await model.selection == [7, 8] })
+    #expect(await fake.readCount(anchor: .around(9)) == 1)
+    #expect(await fake.reads.last?.limit == 1)
+
+    let gone = await fake.fill(ids: [10, 8])
+    await fake.emit(.invalidated(generation: gone))
+    try #require(await eventually { await model.selection == [8] })
+    #expect(changes == [[7, 8], [8]])
+
+    await model.close()
+}
+
+/// In a window of occurrences a selected id the new index lacks is
+/// dropped without a lookup.
+@MainActor
+@Test(.timeLimit(.minutes(1)))
+func theSelectionDropsAMissingOccurrence() async throws {
+    let fake = FakeListWindowSource()
+    _ = await fake.fill(ids: [3, 2, 1])
+    let clock = ManualFrameClock()
+    let model = ListWindowModel(source: fake, spec: .mailbox(1), clock: clock)
+    try await model.open()
+    model.select([2, 1])
+
+    let changed = await fake.fill(ids: [3, 1])
+    await fake.emit(.invalidated(generation: changed))
+    try #require(await eventually { await model.selection == [1] })
+    #expect(await fake.readCount(anchor: .around(2)) == 0)
+
+    await model.close()
+}
+
+/// One `next` waits at a time, and `close` ends it.
+@MainActor
+@Test(.timeLimit(.minutes(1)))
+func closeEndsTheSubscription() async throws {
+    let fake = FakeListWindowSource()
+    _ = await fake.fill(300)
+    let clock = ManualFrameClock()
+    let model = try await openModel(over: fake, clock: clock)
+    try #require(await eventually { await fake.events(of: 1)?.nextCalls == 1 })
+
+    await model.close()
+    let events = try #require(await fake.events(of: 1))
+    #expect(await events.nextCalls == 1)
+    #expect(await events.maxWaiting == 1)
 }
