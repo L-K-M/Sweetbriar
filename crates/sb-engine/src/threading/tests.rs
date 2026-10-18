@@ -86,6 +86,31 @@ fn own_references_overrule_guessed_parents() {
     assert_eq!(threads_in_any_order(&inputs), vec![vec![1, 2], vec![3]]);
 }
 
+/// References without a valid id fall back to In-Reply-To (RFC 5256
+/// §3), as no References at all do.
+#[test]
+fn references_without_valid_ids_fall_back_to_in_reply_to() {
+    let mut empty_ids = reply_to(2, "b@x", "a@x", "Reply");
+    empty_ids.references = vec![String::new()];
+    let inputs = [input(1, Some("a@x"), &[], "First"), empty_ids];
+    assert_eq!(threads_in_any_order(&inputs), vec![vec![1, 2]]);
+}
+
+/// A placeholder root takes the subject of the earliest stored message
+/// under it, not of the message reached first (spec/02): message 1
+/// hangs under message 3, so a traversal meets "Beta" first, yet the
+/// root merges with the other "Alpha".
+#[test]
+fn a_placeholder_root_takes_its_earliest_messages_subject() {
+    let inputs = [
+        input(1, Some("one@x"), &["p@x", "mid@x"], "Alpha"),
+        input(2, Some("two@x"), &["p@x"], "Beta"),
+        input(3, Some("mid@x"), &["p@x"], "Beta"),
+        input(4, Some("four@x"), &[], "Alpha"),
+    ];
+    assert_eq!(threads_in_any_order(&inputs), vec![vec![1, 2, 3, 4]]);
+}
+
 /// References win over In-Reply-To; In-Reply-To links only a message
 /// without References.
 #[test]
