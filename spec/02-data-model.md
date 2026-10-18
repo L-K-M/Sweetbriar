@@ -810,8 +810,9 @@ CREATE INDEX logical_messages_by_acquisition ON logical_messages(acquisition_id)
   Migration 3 adds the list-row support indexes and `list_generation`,
   and fills `d_list_rows` for the occurrences stored before it. It
   rewrites or drops no existing data. Migration 4 adds the one-thread
-  index and the thread watermarks, `thread_inputs` at 1 so the first
-  open builds threads for messages imported earlier.
+  index and the thread watermarks: both 0, or `thread_inputs` at 1
+  when the store already holds messages, so the first open threads
+  them and an empty store owes nothing.
 - **Before any migration that rewrites or drops data,** the engine takes a
   `VACUUM INTO` snapshot, keeping the last two. This arrives with the
   first such migration; migration 1 has none.
