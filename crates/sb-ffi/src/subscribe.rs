@@ -118,22 +118,42 @@ mod tests {
         sb_test_support::block_on(core.shutdown());
     }
 
-    /// A cancelled `next` answers `Cancelled` and frees the one-call
-    /// slot; the change it waited for is still reported afterwards.
+    /// A pending `next` holds the one-call slot: an overlapping call is
+    /// `InvalidInput`. Cancelled while it waits — even with the change
+    /// it waited for already in — it answers `Cancelled`, frees the
+    /// slot and moves no mark, so the next call reports that change.
     #[test]
-    fn a_cancelled_next_frees_the_subscription() {
+    fn a_next_cancelled_while_it_waits_frees_the_subscription() {
         let (_scratch, core) = scratch_core("ffi-subscribe-cancel");
         let (_window, subscription) = subscribed(&core);
 
+        let waiting = token();
+        let mut pending = pin!(subscription.next(Arc::clone(&waiting)));
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(pending.as_mut().poll(&mut cx).is_pending());
+        let err = sb_test_support::block_on(subscription.next(token())).unwrap_err();
+        assert!(matches!(err, CoreError::InvalidInput { .. }), "{err}");
+
+        let generation = sb_test_support::block_on(core.debug_fill_synthetic(token(), 5)).unwrap();
+        waiting.cancel();
+        let err = sb_test_support::block_on(pending).unwrap_err();
+        assert!(matches!(err, CoreError::Cancelled), "{err}");
+
+        let event = sb_test_support::block_on(subscription.next(token())).unwrap();
+        assert_eq!(event, WindowEvent::Invalidated { generation });
+
+        sb_test_support::block_on(core.shutdown());
+    }
+
+    /// A token cancelled before the call answers `Cancelled` at once.
+    #[test]
+    fn a_next_under_a_cancelled_token_answers_cancelled() {
+        let (_scratch, core) = scratch_core("ffi-subscribe-precancel");
+        let (_window, subscription) = subscribed(&core);
         let cancelled = token();
         cancelled.cancel();
         let err = sb_test_support::block_on(subscription.next(cancelled)).unwrap_err();
         assert!(matches!(err, CoreError::Cancelled));
-
-        let generation = sb_test_support::block_on(core.debug_fill_synthetic(token(), 5)).unwrap();
-        let event = sb_test_support::block_on(subscription.next(token())).unwrap();
-        assert_eq!(event, WindowEvent::Invalidated { generation });
-
         sb_test_support::block_on(core.shutdown());
     }
 
