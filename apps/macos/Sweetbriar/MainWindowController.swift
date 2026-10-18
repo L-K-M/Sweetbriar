@@ -24,14 +24,12 @@ final class MainWindowController: NSWindowController {
 
     private let session: CoreSession
     private let statusLabel = NSTextField(labelWithString: "Opening the archive…")
-    private var sidebarModel: SidebarModel?
-    private var sidebar: SidebarViewController?
-    private var messageList: MessageListViewController?
+    private(set) var sidebarModel: SidebarModel?
+    private(set) var sidebar: SidebarViewController?
+    private(set) var messageList: MessageListViewController?
     private var imports: ImportCoordinator?
     private let reader = ReaderPlaceholderViewController()
 
-    /// The sidebar's first choice once it has loaded.
-    private static let initialEntryID = "\(SidebarModel.unifiedSectionID)/inbox"
 
     init(session: CoreSession) {
         self.session = session
@@ -126,7 +124,7 @@ final class MainWindowController: NSWindowController {
         Task { @MainActor in
             await sidebarModel.reload()
             sidebar.reloadSections()
-            sidebar.choose(entryID: Self.initialEntryID)
+            sidebar.choose(entryID: SidebarModel.unifiedInboxID)
             await imports.reattach()
         }
     }

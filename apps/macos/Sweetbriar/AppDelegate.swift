@@ -62,7 +62,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // `-runListBenchmark <report.json>` (spec/08 "Debug menu"):
         // the same benchmark the menu runs, then the report written
         // to the path and the app quits — macOS CI drives it.
-        if let reportPath = UserDefaults.standard.string(
+        if let reportPath = UserDefaults.standard.string(forKey: "runStoreBenchmark") {
+            startBenchmark(mode: .store, reportPath: reportPath)
+        } else if let reportPath = UserDefaults.standard.string(
             forKey: "runListBenchmark"
         ) {
             startBenchmark(reportPath: reportPath)
@@ -84,6 +86,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             },
             onRunBenchmark: { [weak self] in
                 self?.startBenchmark()
+            },
+            onRunStoreBenchmark: { [weak self] in
+                self?.startBenchmark(mode: .store)
             },
             isBenchmarkEnabled: { [weak self] in
                 self?.benchmarkRunner == nil
@@ -171,7 +176,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// fresh prototype windows, then the report in a window. With a
     /// `reportPath` — the launch-argument run — the report is written
     /// there, a short summary prints to stdout, and the app quits.
-    private func startBenchmark(reportPath: String? = nil) {
+    private func startBenchmark(
+        mode: BenchmarkMode = .synthetic, reportPath: String? = nil
+    ) {
         guard let session, benchmarkRunner == nil else { return }
         let runner = ListBenchmarkRunner(session: session)
         benchmarkRunner = runner
@@ -182,7 +189,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 await prototype.closeAndAwaitModel()
                 self?.prototypeController = nil
             }
-            let report = await runner.run()
+            let report: ListBenchmarkReport
+            switch mode {
+            case .synthetic:
+                report = await runner.run()
+            case .store:
+                report = await runner.runStore(controller: self?.mainWindow)
+            }
             guard let self else { return }
             benchmarkRunner = nil
             guard let reportPath else {

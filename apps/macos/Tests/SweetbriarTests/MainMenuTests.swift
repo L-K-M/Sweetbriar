@@ -112,3 +112,36 @@ struct MainMenuTests {
     }
 }
 #endif
+
+#if canImport(AppKit)
+@Suite("benchmark menu availability", .serialized)
+@MainActor
+struct BenchmarkMenuTests {
+    @Test("both benchmark commands share the in-flight gate and dispatch their own action")
+    func benchmarkCommands() throws {
+        var enabled = true
+        var syntheticRuns = 0
+        var storeRuns = 0
+        let builder = MainMenuBuilder(
+            onFillSynthetic: {}, onShowPrototype: {}, onImplementationChanged: { _ in },
+            onRunBenchmark: { syntheticRuns += 1 },
+            onRunStoreBenchmark: { storeRuns += 1 },
+            isBenchmarkEnabled: { enabled }, onShowComposerProbe: {}, onImport: {}
+        )
+        let menu = builder.makeMainMenu()
+        let debug = try #require(menu.items.compactMap(\.submenu).first { $0.title == "Debug" })
+        let synthetic = try #require(debug.items.first { $0.title == "Run List Benchmark" })
+        let store = try #require(debug.items.first { $0.title == "Run Store Benchmark" })
+        #expect(builder.validateMenuItem(synthetic))
+        #expect(builder.validateMenuItem(store))
+        enabled = false
+        #expect(!builder.validateMenuItem(synthetic))
+        #expect(!builder.validateMenuItem(store))
+        enabled = true
+        #expect(NSApp.sendAction(try #require(synthetic.action), to: builder, from: synthetic))
+        #expect(NSApp.sendAction(try #require(store.action), to: builder, from: store))
+        #expect(syntheticRuns == 1)
+        #expect(storeRuns == 1)
+    }
+}
+#endif
