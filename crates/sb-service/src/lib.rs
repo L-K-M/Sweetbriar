@@ -6,8 +6,13 @@
 
 mod api;
 mod error;
+mod imports;
 mod windows;
 
 pub use api::{Core, CoreConfig, Receipt, Setting, open_core};
 pub use error::CoreError;
+pub use imports::{
+    ImportJob, ImportJobState, ImportProblem, ImportProblemKind, ImportSource, ImportSourceKind,
+    ImportStarted, ImportTarget, ImportTotals, MboxVariant,
+};
 pub use windows::{Anchor, Count, ListRow, Window, WindowIds, WindowSpec};

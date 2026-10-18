@@ -58,6 +58,19 @@ pub struct Receipt {
     pub created_at_ms: i64,
 }
 
+impl Receipt {
+    pub(crate) fn from_engine(receipt: &sb_engine::Receipt) -> Self {
+        // Named, so the engine's item re-export is what this compiles
+        // against (spec/01 rule 3), not an inferred leaf type.
+        let created_at: sb_engine::Timestamp = receipt.created_at();
+        Self {
+            command: receipt.command().to_owned(),
+            result_json: receipt.result_json().to_owned(),
+            created_at_ms: created_at.as_millis(),
+        }
+    }
+}
+
 /// One setting as `settings()` reports it (spec/02): the effective
 /// value and whether it is the registry's default.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -90,14 +103,7 @@ impl Core {
         value: &str,
     ) -> Result<Receipt, CoreError> {
         let receipt = self.engine.set_setting(idempotency_key, key, value).await?;
-        // Named, so the engine's item re-export is what this compiles
-        // against (spec/01 rule 3), not an inferred leaf type.
-        let created_at: sb_engine::Timestamp = receipt.created_at();
-        Ok(Receipt {
-            command: receipt.command().to_owned(),
-            result_json: receipt.result_json().to_owned(),
-            created_at_ms: created_at.as_millis(),
-        })
+        Ok(Receipt::from_engine(&receipt))
     }
 
     /// `settings()` (spec/07 "Queries"): every registered key with its
