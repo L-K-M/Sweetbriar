@@ -64,6 +64,7 @@ final class MainMenuBuilder: NSObject {
     private let onRunBenchmark: @MainActor () -> Void
     private let isBenchmarkEnabled: @MainActor () -> Bool
     private let onShowComposerProbe: @MainActor () -> Void
+    private let onImport: @MainActor () -> Void
 
     /// `NSMenuItem.identifier`s that `validateMenuItem` treats
     /// specially.
@@ -91,13 +92,15 @@ final class MainMenuBuilder: NSObject {
     ///     false while a run is in flight.
     ///   - onShowComposerProbe: open the Composer Probe window or
     ///     bring it forward (plan M0.11).
+    ///   - onImport: File → Import… (spec/09 "In the app").
     init(
         onFillSynthetic: @escaping @MainActor () -> Void,
         onShowPrototype: @escaping @MainActor () -> Void,
         onImplementationChanged: @escaping @MainActor (PrototypeImplementation) -> Void,
         onRunBenchmark: @escaping @MainActor () -> Void,
         isBenchmarkEnabled: @escaping @MainActor () -> Bool,
-        onShowComposerProbe: @escaping @MainActor () -> Void
+        onShowComposerProbe: @escaping @MainActor () -> Void,
+        onImport: @escaping @MainActor () -> Void
     ) {
         self.onFillSynthetic = onFillSynthetic
         self.onShowPrototype = onShowPrototype
@@ -105,6 +108,7 @@ final class MainMenuBuilder: NSObject {
         self.onRunBenchmark = onRunBenchmark
         self.isBenchmarkEnabled = isBenchmarkEnabled
         self.onShowComposerProbe = onShowComposerProbe
+        self.onImport = onImport
         super.init()
     }
 
@@ -113,6 +117,7 @@ final class MainMenuBuilder: NSObject {
     func makeMainMenu() -> NSMenu {
         let menu = NSMenu()
         menu.addItem(makeAppMenu())
+        menu.addItem(makeFileMenu())
         menu.addItem(makeEditMenu())
         menu.addItem(makeFormatMenu())
         menu.addItem(makeWindowMenu())
@@ -149,6 +154,20 @@ final class MainMenuBuilder: NSObject {
             "Quit Sweetbriar",
             action: #selector(NSApplication.terminate(_:)),
             key: "q"
+        ))
+        item.submenu = menu
+        return item
+    }
+
+    /// File: Import… (spec/09 "In the app").
+    private func makeFileMenu() -> NSMenuItem {
+        let item = NSMenuItem()
+        let menu = NSMenu(title: "File")
+        menu.addItem(Self.item(
+            "Import…",
+            action: #selector(importMail(_:)),
+            key: "I",
+            target: self
         ))
         item.submenu = menu
         return item
@@ -295,6 +314,11 @@ final class MainMenuBuilder: NSObject {
     @objc
     private func fillSyntheticRows(_ sender: NSMenuItem) {
         onFillSynthetic()
+    }
+
+    @objc
+    private func importMail(_ sender: NSMenuItem) {
+        onImport()
     }
 
     @objc
