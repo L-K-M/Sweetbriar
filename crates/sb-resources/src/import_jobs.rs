@@ -25,6 +25,10 @@ pub const LISTED_PROBLEMS: usize = 50;
 /// The pilot's one import destination (spec/09).
 const LOCAL_ARCHIVE: &str = "local_archive";
 
+/// What the source formats cannot carry (spec/09 "Report").
+const FORMAT_WARNING: &str = "mbox and EML files carry no Apple Mail flags beyond read state, \
+no colors and no mailbox structure beyond the file name; none was imported";
+
 /// Running totals (spec/09 "Report"), summed over committed batches. A
 /// plain value record, like the store's batch statistics.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -210,24 +214,13 @@ impl ImportJobCheckpoint {
             .iter()
             .map(|(ordinal, variant)| json!([ordinal, variant_name(*variant)]))
             .collect();
-        let problems: Vec<Value> = self
-            .problems
-            .iter()
-            .map(|problem| {
-                json!({
-                    "path": problem.path().to_string_lossy(),
-                    "kind": problem.kind().name(),
-                    "detail": problem.detail(),
-                })
-            })
-            .collect();
         json!({
             "v": FORMAT_VERSION,
             "sources": self.sources,
             "next": self.next,
             "ambiguous": self.ambiguous,
             "variants": variants,
-            "problems": problems,
+            "problems": problems_json(&self.problems),
             "problem_count": self.problem_count,
             "totals": self.totals.to_value(),
             "failure": self.failure,
@@ -363,6 +356,69 @@ impl ImportJobRecord {
     }
 }
 
+/// The import report (spec/09 "Report"): version-1 JSON derived from
+/// the job's rows, indented for the people who read it.
+pub fn import_report(
+    job: &ImportJobRecord,
+    sources: &[(SourceInventory, SourcePosition)],
+) -> String {
+    let checkpoint = job.checkpoint();
+    let totals = checkpoint.totals();
+    let files: Vec<Value> = (0..)
+        .zip(sources)
+        .map(|(ordinal, (source, position))| {
+            json!({
+                "ordinal": ordinal,
+                "path": source.path().to_string_lossy(),
+                "mailbox": source.mailbox(),
+                "kind": source.kind().name(),
+                "sha256": source.snapshot().sha256_hex(),
+                "bytes": source.snapshot().byte_length(),
+                "messages": source.message_count(),
+                "variant": checkpoint.variant(ordinal).map(variant_name),
+                "position": {"offset": position.offset(), "messages": position.messages()},
+            })
+        })
+        .collect();
+    let found: u64 = sources
+        .iter()
+        .map(|(source, _)| source.message_count())
+        .sum();
+    let bytes_in: u64 = sources
+        .iter()
+        .map(|(source, _)| source.snapshot().byte_length())
+        .sum();
+    let warnings: &[&str] = if sources.is_empty() {
+        &[]
+    } else {
+        &[FORMAT_WARNING]
+    };
+    let report = json!({
+        "v": FORMAT_VERSION,
+        "job_id": job.id(),
+        "state": state_name(job.state()),
+        "failure": checkpoint.failure(),
+        "files": files,
+        "messages": {
+            "found": found,
+            "processed": totals.processed,
+            "imported": totals.imported,
+            "duplicates": totals.duplicates,
+            "rejected": totals.rejected,
+        },
+        "bytes": {"in": bytes_in, "stored": totals.bytes_stored},
+        "read_state": {
+            "from_headers": totals.read_from_headers,
+            "archive_default": totals.read_default,
+            "incomplete_headers": totals.flags_incomplete,
+        },
+        "problems": problems_json(checkpoint.problems()),
+        "problem_count": checkpoint.problem_count(),
+        "warnings": warnings,
+    });
+    serde_json::to_string_pretty(&report).expect("a JSON value always serializes")
+}
+
 /// One source's batch and where it leaves that source.
 pub struct ImportJobBatch<'a> {
     pub job_id: &'a str,
@@ -412,6 +468,17 @@ pub fn recoverable_import_jobs(
         .collect())
 }
 
+/// Finished jobs, oldest first, for terminal-job cleanup at open. Each
+/// decodes on its own, as recoverable jobs do.
+pub fn finished_import_jobs(
+    tx: &Transaction,
+) -> Result<Vec<Result<ImportJobRecord, StoreError>>, StoreError> {
+    Ok(rows::finished_import_jobs(tx)?
+        .into_iter()
+        .map(ImportJobRecord::decode)
+        .collect())
+}
+
 /// Record `sources` as ordinals `first..` while the job is in inventory.
 pub fn record_import_sources(
     tx: &Transaction,
@@ -435,6 +502,16 @@ pub fn advance_import_job(
 ) -> Result<ImportJobRecord, StoreError> {
     let job = rows::advance_import_job(tx, id, revision, state, &checkpoint.to_json(), now)?;
     ImportJobRecord::decode(job)
+}
+
+/// Every recorded source of `job`, in ordinal order.
+pub fn import_job_sources(
+    tx: &Transaction,
+    job: &ImportJobRecord,
+) -> Result<Vec<(SourceInventory, SourcePosition)>, StoreError> {
+    (0..job.checkpoint().sources())
+        .map(|ordinal| import_job_source(tx, job.id(), ordinal))
+        .collect()
 }
 
 /// One recorded source and where its ingest continues.
@@ -515,6 +592,30 @@ fn position_from_json(json: &str) -> Result<SourcePosition, StoreError> {
         required_u64(object, "offset")?,
         required_u64(object, "messages")?,
     ))
+}
+
+fn problems_json(problems: &[ImportProblem]) -> Vec<Value> {
+    problems
+        .iter()
+        .map(|problem| {
+            json!({
+                "path": problem.path().to_string_lossy(),
+                "kind": problem.kind().name(),
+                "detail": problem.detail(),
+            })
+        })
+        .collect()
+}
+
+fn state_name(state: ImportJobState) -> &'static str {
+    match state {
+        ImportJobState::Inventory => "inventory",
+        ImportJobState::AwaitingConfirmation => "awaiting_confirmation",
+        ImportJobState::Running => "running",
+        ImportJobState::Completed => "completed",
+        ImportJobState::Cancelled => "cancelled",
+        ImportJobState::Failed => "failed",
+    }
 }
 
 fn variant_name(variant: MboxVariant) -> &'static str {

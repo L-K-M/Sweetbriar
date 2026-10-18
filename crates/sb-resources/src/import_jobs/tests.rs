@@ -383,3 +383,39 @@ fn an_oversized_request_is_refused_before_writing() {
         Err(StoreError::NotFound { .. })
     ));
 }
+
+#[test]
+fn a_report_lists_files_counts_and_warnings() {
+    let (scratch, res) = resources("report");
+    let (sources, revision) = running_job(&res, &scratch, &[("Two.mbox", TWO)]);
+    let now = res.now();
+    let job = write(&res, move |tx| {
+        let job = import_job(tx, JOB)?;
+        advance_import_job(
+            tx,
+            JOB,
+            revision,
+            ImportJobState::Completed,
+            job.checkpoint(),
+            now,
+        )
+    })
+    .unwrap();
+    let rows = vec![(sources[0].clone(), SourcePosition::START)];
+    let report: Value = serde_json::from_str(&import_report(&job, &rows)).unwrap();
+    assert_eq!(report["v"], 1);
+    assert_eq!(report["job_id"], JOB);
+    assert_eq!(report["state"], "completed");
+    assert_eq!(report["failure"], Value::Null);
+    let file = &report["files"][0];
+    assert_eq!(file["mailbox"], "Two");
+    assert_eq!(file["kind"], "mbox");
+    assert_eq!(file["sha256"], sources[0].snapshot().sha256_hex());
+    assert_eq!(file["bytes"], TWO.len());
+    assert_eq!(file["messages"], 2);
+    assert_eq!(file["variant"], Value::Null);
+    assert_eq!(report["messages"]["found"], 2);
+    assert_eq!(report["bytes"]["in"], TWO.len());
+    assert_eq!(report["read_state"]["archive_default"], 0);
+    assert_eq!(report["warnings"].as_array().unwrap().len(), 1);
+}

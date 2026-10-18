@@ -20,6 +20,7 @@ use sb_types::time::Clock;
 
 use crate::StoreError;
 use crate::StorePaths;
+use crate::import_reports::ImportReports;
 use crate::objects::FileObjectStore;
 use crate::readers::Readers;
 use crate::schema::{
@@ -74,6 +75,7 @@ pub struct Store {
     writer: Writer,
     objects: FileObjectStore,
     source_snapshots: ImportSourceSnapshots,
+    import_reports: ImportReports,
     lease: Box<dyn Lease>,
     /// The clock [`Store::close`] stamps the clean-shutdown marker
     /// with, held from the seams the store opened with.
@@ -106,6 +108,31 @@ impl Store {
         snapshot: &crate::ImportSourceSnapshot,
     ) -> Result<Box<dyn sb_types::fs::ReadFile>, StoreError> {
         self.source_snapshots.open(snapshot)
+    }
+
+    /// Terminal-job cleanup (spec/03): remove these private copies and
+    /// flush `recovery/`. Missing copies count as removed. Blocking.
+    pub fn remove_import_sources(
+        &self,
+        snapshots: &[crate::ImportSourceSnapshot],
+    ) -> Result<(), StoreError> {
+        self.source_snapshots.remove(snapshots)
+    }
+
+    /// Durably replace `job`'s report in `recovery/` (spec/03, 09).
+    /// Blocking.
+    pub fn write_import_report(&self, job: &str, report: &[u8]) -> Result<(), StoreError> {
+        self.import_reports.write(job, report)
+    }
+
+    /// Whether `job`'s report exists: a finished job's cleanup is done.
+    pub fn import_report_exists(&self, job: &str) -> Result<bool, StoreError> {
+        self.import_reports.exists(job)
+    }
+
+    /// Where `job`'s report lives, for the user to open.
+    pub fn import_report_path(&self, job: &str) -> Result<PathBuf, StoreError> {
+        self.import_reports.path(job)
     }
 
     /// Submit one write to the writer (spec/03 "Write discipline"):
@@ -143,6 +170,7 @@ impl Store {
             writer,
             objects,
             source_snapshots,
+            import_reports,
             lease,
             clock,
         } = self;
@@ -154,6 +182,7 @@ impl Store {
         let writer_closed = writer.close();
         drop(objects);
         drop(source_snapshots);
+        drop(import_reports);
         drop(lease);
         marker.and(readers_closed).and(writer_closed)
     }
@@ -285,6 +314,11 @@ pub(crate) fn open_with(
         writer,
         objects,
         source_snapshots: ImportSourceSnapshots::new(
+            Arc::clone(seams.fs_arc()),
+            Arc::clone(seams.random_arc()),
+            paths.recovery().to_path_buf(),
+        ),
+        import_reports: ImportReports::new(
             Arc::clone(seams.fs_arc()),
             Arc::clone(seams.random_arc()),
             paths.recovery().to_path_buf(),

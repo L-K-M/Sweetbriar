@@ -563,3 +563,39 @@ fn a_captured_copy_survives_power_loss() {
     );
     assert_eq!(read_all(&snaps, &snapshot), b"durable by capture alone");
 }
+
+#[test]
+fn cleanup_removes_copies_and_counts_missing_ones_as_removed() {
+    let (_scratch, recovery, sources) = real_dirs("snapshot-cleanup");
+    let source = sources.join("a.mbox");
+    std::fs::write(&source, b"From a\n\nbody\n").unwrap();
+    let snaps = capturer(real_fs(), &recovery, 11);
+    let first = captured(&snaps, &source);
+    let second = captured(&snaps, &source);
+    snaps.remove(std::slice::from_ref(&first)).unwrap();
+    // The first is already gone; removing it again succeeds.
+    snaps.remove(&[first.clone(), second.clone()]).unwrap();
+    assert!(copies(real_fs().as_ref(), &recovery).is_empty());
+    assert!(matches!(
+        open_err(&snaps, &first),
+        StoreError::NotFound { .. }
+    ));
+    // The original is never touched.
+    assert_eq!(std::fs::read(&source).unwrap(), b"From a\n\nbody\n");
+
+    // Removal and flush failures are reported, not skipped.
+    for op in [FsOp::Remove, FsOp::SyncDir] {
+        let kept = captured(&snaps, &source);
+        let faulty = capturer(
+            Arc::new(FaultFs::new(real_fs(), op, 1, FaultKind::Eio)),
+            &recovery,
+            12,
+        );
+        let error = faulty.remove(std::slice::from_ref(&kept)).unwrap_err();
+        assert!(
+            matches!(error, StoreError::Unavailable { .. }),
+            "{op:?}: {error:?}"
+        );
+        snaps.remove(&[kept]).unwrap();
+    }
+}

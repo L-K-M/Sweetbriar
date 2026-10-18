@@ -5,8 +5,9 @@ mod jobs;
 mod messages;
 
 pub use jobs::{
-    ImportJob, ImportJobSource, ImportJobState, advance_import_job, create_import_job, import_job,
-    import_job_source, record_import_source, recoverable_import_jobs,
+    ImportJob, ImportJobSource, ImportJobState, advance_import_job, create_import_job,
+    finished_import_jobs, import_job, import_job_source, record_import_source,
+    recoverable_import_jobs,
 };
 pub use messages::{
     ImportBatch, ImportBatchStats, ImportFlags, ImportMessage, ImportParseState, ImportReadState,

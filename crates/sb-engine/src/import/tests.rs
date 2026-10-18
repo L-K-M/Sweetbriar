@@ -515,3 +515,96 @@ fn a_damaged_job_row_does_not_stop_the_store_from_opening() {
     );
     block_on(engine.shutdown()).unwrap();
 }
+
+/// The private snapshots `recovery/` holds.
+fn snapshots(root: &Path) -> usize {
+    fs::read_dir(root.join("recovery"))
+        .unwrap()
+        .filter(|entry| {
+            entry
+                .as_ref()
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with("import-source-")
+        })
+        .count()
+}
+
+fn report(engine: &Engine, id: &str) -> String {
+    fs::read_to_string(engine.resources().import_report_path(id).unwrap()).unwrap()
+}
+
+#[test]
+fn a_finished_job_leaves_a_report_and_only_failures_keep_snapshots() {
+    let scratch = ScratchDir::new("import-reports");
+    let root = scratch.path().join("store");
+    let engine = open(&root);
+
+    let completed = start(&engine, &[fixtures().join("Inbox.mbox")]);
+    settle(&engine, &completed, ImportJobState::AwaitingConfirmation);
+    confirm(&engine, &completed, vec![]).unwrap();
+    settle(&engine, &completed, ImportJobState::Completed);
+    let text = report(&engine, &completed);
+    assert!(text.contains("\"state\": \"completed\""), "{text}");
+    assert!(text.contains("\"imported\": 2"), "{text}");
+    assert_eq!(snapshots(&root), 0);
+
+    let cancelled = start(&engine, &[fixtures().join("Inbox.mbox")]);
+    settle(&engine, &cancelled, ImportJobState::AwaitingConfirmation);
+    assert_eq!(snapshots(&root), 1);
+    block_on(engine.cancel_job(&engine.new_idempotency_key(), &cancelled)).unwrap();
+    assert!(report(&engine, &cancelled).contains("\"state\": \"cancelled\""));
+    assert_eq!(snapshots(&root), 0);
+
+    // A failure keeps the other snapshots as evidence.
+    let two = scratch.path().join("Two.mbox");
+    fs::write(&two, mbox(2)).unwrap();
+    let failed = start(&engine, &[fixtures().join("Inbox.mbox"), two]);
+    let waiting = settle(&engine, &failed, ImportJobState::AwaitingConfirmation);
+    let token = waiting.sources()[1].source().snapshot().token().to_owned();
+    fs::remove_file(root.join("recovery").join(format!("import-source-{token}"))).unwrap();
+    confirm(&engine, &failed, vec![]).unwrap();
+    settle(&engine, &failed, ImportJobState::Failed);
+    let text = report(&engine, &failed);
+    assert!(
+        text.contains("\"state\": \"failed\"") && text.contains(&token),
+        "{text}"
+    );
+    assert_eq!(snapshots(&root), 1);
+    block_on(engine.shutdown()).unwrap();
+}
+
+#[test]
+fn open_redoes_cleanup_for_a_finished_job_without_a_report() {
+    let scratch = ScratchDir::new("import-report-sweep");
+    let path = scratch.path().join("Three.mbox");
+    fs::write(&path, mbox(3)).unwrap();
+    let root = scratch.path().join("store");
+    let engine = open(&root);
+    // Cancelled without its cleanup, as a crash right after the
+    // transition leaves it.
+    let id = plant(&engine, &path, ImportJobState::AwaitingConfirmation, 0);
+    let (job, now) = (id.clone(), engine.resources().now());
+    block_on(engine.resources().write(WritePriority::Sync, move |tx| {
+        let current = import_job(tx, &job)?;
+        let state = ImportJobState::Cancelled;
+        advance_import_job(
+            tx,
+            &job,
+            current.revision(),
+            state,
+            current.checkpoint(),
+            now,
+        )
+        .map(drop)
+    }))
+    .unwrap();
+    assert_eq!(snapshots(&root), 1);
+    block_on(engine.shutdown()).unwrap();
+
+    let engine = open(&root);
+    assert!(report(&engine, &id).contains("\"state\": \"cancelled\""));
+    assert_eq!(snapshots(&root), 0);
+    block_on(engine.shutdown()).unwrap();
+}

@@ -25,7 +25,7 @@ pub enum SourceKind {
 }
 
 impl SourceKind {
-    fn name(self) -> &'static str {
+    pub(crate) fn name(self) -> &'static str {
         match self {
             Self::Mbox => "mbox",
             Self::Eml => "eml",

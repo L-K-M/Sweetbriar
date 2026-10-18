@@ -22,8 +22,8 @@ use sb_resources::{
     ImportJobCheckpoint, ImportJobRecord, ImportJobState, ImportMessage, MAX_IMPORT_BATCH,
     MAX_IMPORT_CHANGES_BYTES, MboxVariant, Receipt, Resources, SourceAcquisition, SourceInventory,
     SourcePosition, StoreError, WritePriority, advance_import_job, commit_import_job_batch,
-    create_import_job, import_job, import_job_source, record_import_sources,
-    recoverable_import_jobs, run_once,
+    create_import_job, finished_import_jobs, import_job, import_job_source, import_job_sources,
+    import_report, record_import_sources, recoverable_import_jobs, run_once,
 };
 
 use crate::engine::{Spawn, Worker};
@@ -312,6 +312,12 @@ impl Engine {
             })
             .await?;
         self.imports().cancel(job_id);
+        // The cancel is durable either way; a failed cleanup is redone
+        // at the next open, which finds no report.
+        let id = job_id.to_owned();
+        let _ = self
+            .read_through(move |resources| finish(resources, &id))
+            .await;
         Ok(receipt)
     }
 
@@ -322,12 +328,10 @@ impl Engine {
         self.read_through(move |resources| {
             resources.read(|tx| {
                 let job = import_job(tx, &id)?;
-                let sources = (0..job.checkpoint().sources())
-                    .map(|ordinal| {
-                        let (source, position) = import_job_source(tx, &id, ordinal)?;
-                        Ok(ImportSourceStatus { source, position })
-                    })
-                    .collect::<Result<_, StoreError>>()?;
+                let sources = import_job_sources(tx, &job)?
+                    .into_iter()
+                    .map(|(source, position)| ImportSourceStatus { source, position })
+                    .collect();
                 Ok(ImportJobStatus {
                     state: job.state(),
                     sources,
@@ -339,23 +343,34 @@ impl Engine {
     }
 
     /// Recovery at open (spec/09): an interrupted inventory fails, a
-    /// waiting job keeps waiting, a running job resumes. A job whose row
-    /// no longer decodes stays as stored, as evidence: its query reports
+    /// waiting job keeps waiting, a running job resumes, and a finished
+    /// job without a report gets its cleanup again. A job whose row no
+    /// longer decodes stays as stored, as evidence: its query reports
     /// `Corrupt`, and the rest of the store opens. Runs on the open
-    /// thread, which may block.
+    /// thread, which may block. Cleanup failures wait for the next open.
     pub(crate) fn recover_imports(&self) -> Result<(), EngineError> {
+        for job in self
+            .resources()
+            .read(finished_import_jobs)?
+            .into_iter()
+            .flatten()
+        {
+            if !self.resources().import_report_exists(job.id())? {
+                let _ = finish(self.resources(), job.id());
+            }
+        }
         let jobs = self.resources().read(recoverable_import_jobs)?;
         for job in jobs.into_iter().flatten() {
             match job.state() {
                 ImportJobState::Inventory => {
                     let now = self.resources().now();
                     let checkpoint = job.checkpoint().with_failure(INTERRUPTED_INVENTORY);
-                    let id = job.id().to_owned();
-                    let revision = job.revision();
+                    let (id, revision) = (job.id().to_owned(), job.revision());
                     self.block_on(self.resources().write(PRIORITY, move |tx| {
                         let state = ImportJobState::Failed;
                         advance_import_job(tx, &id, revision, state, &checkpoint, now).map(drop)
                     }))?;
+                    let _ = finish(self.resources(), job.id());
                 }
                 ImportJobState::Running => {
                     spawn_job(self, self.imports(), job.id().to_owned(), Task::Ingest)?;
@@ -409,6 +424,7 @@ async fn run_job(worker: Worker, mut claim: Claim, task: Task) {
             Task::Inventory(paths) => inventory(&worker, &claim, paths).await,
             Task::Ingest => ingest(&worker, &claim).await,
         }
+        finished(&worker, &claim.id).await;
         task = claim.next_or_release();
     }
 }
@@ -431,15 +447,70 @@ async fn inventory(worker: &Worker, claim: &Claim, paths: Vec<PathBuf>) {
         .await;
     let inventory = match outcome {
         Ok(ImportInventoryOutcome::Complete(inventory)) => inventory,
-        Ok(ImportInventoryOutcome::Cancelled(_)) => return,
+        Ok(ImportInventoryOutcome::Cancelled(inventory)) => {
+            return discard_if_cancelled(worker, claim, inventory).await;
+        }
         Err(error) => return fail(worker, &claim.id, error.to_string()).await,
     };
     match record(worker, &claim.id, &inventory).await {
         Ok(()) => (),
         // A cancel that won the race already ended the job.
-        Err(StoreError::Conflict { .. }) if moved_on(worker, &claim.id, None).await => (),
+        Err(StoreError::Conflict { .. }) if moved_on(worker, &claim.id, None).await => {
+            discard_if_cancelled(worker, claim, inventory).await;
+        }
         Err(error) => fail(worker, &claim.id, error.to_string()).await,
     }
+}
+
+/// A cancelled inventory's captures are known only to this worker, so it
+/// removes them (spec/03). A shutdown keeps them: the next open fails the
+/// job, and they stay as evidence.
+async fn discard_if_cancelled(worker: &Worker, claim: &Claim, inventory: ImportInventory) {
+    if !claim.cancelled() {
+        return;
+    }
+    let snapshots: Vec<_> = inventory
+        .sources()
+        .iter()
+        .map(|source| source.snapshot().clone())
+        .collect();
+    let _ = worker
+        .blocking(move |resources| resources.remove_import_sources(&snapshots))
+        .await;
+}
+
+/// Run terminal-job cleanup when a worker's turn ends; a paused job is
+/// left alone, and a failed cleanup is redone at the next open.
+async fn finished(worker: &Worker, id: &str) {
+    let id = id.to_owned();
+    let _ = worker
+        .blocking(move |resources| finish(resources, &id))
+        .await;
+}
+
+/// Terminal-job cleanup (spec/03, 09): a completed or cancelled job's
+/// snapshots go, then its report is written, marking the cleanup done.
+/// An unfinished job is left alone. Blocking.
+fn finish(resources: &Resources, id: &str) -> Result<(), StoreError> {
+    let (job, sources) = resources.read(|tx| {
+        let job = import_job(tx, id)?;
+        let sources = import_job_sources(tx, &job)?;
+        Ok((job, sources))
+    })?;
+    if !job.is_finished() {
+        return Ok(());
+    }
+    if matches!(
+        job.state(),
+        ImportJobState::Completed | ImportJobState::Cancelled
+    ) {
+        let snapshots: Vec<_> = sources
+            .iter()
+            .map(|(source, _)| source.snapshot().clone())
+            .collect();
+        resources.remove_import_sources(&snapshots)?;
+    }
+    resources.write_import_report(id, &import_report(&job, &sources))
 }
 
 /// Whether the job left this worker's hands: no longer at `revision`
