@@ -21,11 +21,13 @@
 mod api;
 mod cancel;
 mod error;
+mod sidebar;
 mod windows;
 
 pub use api::{Core, CoreConfig, Receipt, Setting, open_core, platform_default_config};
 pub use cancel::CancelToken;
 pub use error::CoreError;
-pub use windows::{Anchor, Count, ListRow, Window, WindowIds, WindowSpec};
+pub use sidebar::{Account, AccountKind, AccountState, Mailbox, MailboxKind, Mailboxes};
+pub use windows::{Anchor, Count, ListRow, MailboxRole, Window, WindowIds, WindowSpec};
 
 uniffi::setup_scaffolding!();

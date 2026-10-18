@@ -100,6 +100,29 @@ public final class CoreBridge: Sendable {
         )
     }
 
+    /// `accounts()` (spec/07): every account, by sort order then id.
+    public func accounts() async throws -> [Account] {
+        let token = SweetbriarCore.CancelToken()
+        let accounts = try await Self.withCancellation(token: token) {
+            try await self.core.accounts(token: token)
+        }
+        return accounts.map(Account.init)
+    }
+
+    /// `mailboxes(account_id)` (spec/07): the account's mailboxes with
+    /// their counts, as of one list generation. An unknown account is
+    /// `notFound`.
+    public func mailboxes(accountId: String) async throws -> Mailboxes {
+        let token = SweetbriarCore.CancelToken()
+        let list = try await Self.withCancellation(token: token) {
+            try await self.core.mailboxes(token: token, accountId: accountId)
+        }
+        return Mailboxes(
+            generation: list.generation,
+            mailboxes: list.mailboxes.map(Mailbox.init)
+        )
+    }
+
     /// `open_window` (spec/07): register a window over `spec` and
     /// return its first page at the source's current generation.
     public func openWindow(
@@ -220,6 +243,88 @@ extension Setting {
             key: generated.key,
             value: generated.value,
             isDefault: generated.isDefault
+        )
+    }
+}
+
+extension Account {
+    /// Map the generated record field by field.
+    fileprivate init(_ generated: SweetbriarCore.Account) {
+        let kind: AccountKind
+        switch generated.kind {
+        case .local:
+            kind = .local
+        case .imap:
+            kind = .imap
+        }
+        let state: AccountState
+        switch generated.state {
+        case .active:
+            state = .active
+        case .paused:
+            state = .paused
+        case .needsAttention:
+            state = .needsAttention
+        case .disconnected:
+            state = .disconnected
+        }
+        self.init(
+            accountId: generated.accountId,
+            kind: kind,
+            displayName: generated.displayName,
+            state: state,
+            stateReason: generated.stateReason,
+            sortOrder: generated.sortOrder
+        )
+    }
+}
+
+extension MailboxRole {
+    /// Map the generated enum case by case.
+    fileprivate init(_ generated: SweetbriarCore.MailboxRole) {
+        switch generated {
+        case .inbox:
+            self = .inbox
+        case .sent:
+            self = .sent
+        case .drafts:
+            self = .drafts
+        case .trash:
+            self = .trash
+        case .junk:
+            self = .junk
+        case .archive:
+            self = .archive
+        case .all:
+            self = .all
+        case .flagged:
+            self = .flagged
+        }
+    }
+}
+
+extension Mailbox {
+    /// Map the generated record field by field.
+    fileprivate init(_ generated: SweetbriarCore.Mailbox) {
+        let kind: MailboxKind
+        switch generated.kind {
+        case .folder:
+            kind = .folder
+        case .label:
+            kind = .label
+        case .virtual:
+            kind = .virtual
+        }
+        self.init(
+            mailboxId: generated.mailboxId,
+            accountId: generated.accountId,
+            name: generated.name,
+            delimiter: generated.delimiter,
+            role: generated.role.map(MailboxRole.init),
+            kind: kind,
+            selectable: generated.selectable,
+            total: generated.total,
+            unread: generated.unread
         )
     }
 }

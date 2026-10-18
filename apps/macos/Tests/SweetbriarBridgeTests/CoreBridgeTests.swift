@@ -34,6 +34,40 @@ func settingRoundTripThenShutdownAnswersUnavailable() async throws {
     }
 }
 
+/// The sidebar queries cross the bridge (spec/07): a fresh core lists
+/// its local archive with no mailboxes yet, and an unknown account is
+/// `notFound`.
+@Test
+func aFreshCoreListsItsLocalArchive() async throws {
+    let (dir, config) = tempConfig()
+    defer { try? FileManager.default.removeItem(at: dir) }
+
+    let bridge = try await CoreBridge.open(
+        config: config,
+        snapshots: await sinkBatcher(clock: ManualFrameClock())
+    )
+    let accounts = try await bridge.accounts()
+    #expect(accounts.count == 1)
+    let archive = try #require(accounts.first)
+    #expect(archive.kind == .local)
+    #expect(archive.state == .active)
+
+    let list = try await bridge.mailboxes(accountId: archive.accountId)
+    #expect(list.mailboxes.isEmpty)
+
+    do {
+        _ = try await bridge.mailboxes(accountId: "no-such-account")
+        Issue.record("an unknown account must throw")
+    } catch let failure as CoreFailure {
+        guard case .notFound = failure else {
+            Issue.record("expected .notFound, got \(failure)")
+            return
+        }
+    }
+
+    await bridge.shutdown()
+}
+
 @Test(.timeLimit(.minutes(1)))
 func aCallOnACancelledTaskThrowsAndWritesNothing() async throws {
     let (dir, config) = tempConfig()
