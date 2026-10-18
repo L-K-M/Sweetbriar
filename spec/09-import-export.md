@@ -22,6 +22,19 @@ user-granted permission path.
 1. **Inventory.** Walk the chosen files and count candidate messages
    (mbox `From ` separators, `.eml` files) and bytes. The UI shows the
    inventory before anything is imported.
+   - Visit chosen roots in request order and directory entries in sorted
+     order. A `.mbox` directory contributes only its `mbox` file; ignore
+     its sidecars. Other directories are walked recursively for `.eml`
+     files, `.mbox` files and packages. Extensions are case-insensitive.
+     An explicitly chosen regular file without `.eml` is an mbox candidate.
+   - Resolve symlinks and visit each canonical directory and source file
+     once, including overlapping roots. Report inaccessible paths,
+     unsupported explicitly chosen entries and non-UTF-8 paths visibly,
+     without treating them as empty. One path's failure does not discard
+     other discovered sources.
+   - File/package mailbox names use the stem; EML files discovered in a
+     folder share that folder's name. Nested folders use their own names.
+     Empty mbox files are valid inventories with zero messages.
    - Capture each regular source into a private durable snapshot (03)
      before counting. Its token, SHA-256 and byte length identify the copy;
      offsets, inventory and ingest all refer to that same captured stream.
@@ -29,6 +42,12 @@ user-granted permission path.
    - Resume verifies and reopens the private copy. A missing or corrupt
      snapshot stops the job visibly; it never substitutes the original
      path's current contents.
+   - Source inventory metadata is a version-1 JSON object containing the
+     canonical path, mailbox name, source kind, snapshot reference, message
+     count and mbox quoting requirement. Reconstructing it validates the
+     version and required fields. Variant choices belong to checkpoints,
+     not the immutable inventory. Cancellation is checked during discovery,
+     copying and scan reads, including within a long mbox line.
 2. **Ingest.** For each message, in source order:
    - extract the exact bytes, undoing the variant's `From ` quoting:
      mboxrd removes one `>` from every `>+From ` line; mboxo only turns
