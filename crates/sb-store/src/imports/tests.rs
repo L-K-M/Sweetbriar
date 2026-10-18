@@ -749,3 +749,34 @@ fn a_first_summary_updates_every_sharing_row_within_the_budget() {
     assert_eq!(count(&store, "occurrences"), 300);
     store.close().unwrap();
 }
+
+/// A row for bytes whose summary is stored shows that summary, so the
+/// batch is charged for it, not for the incoming one: 250 copies of
+/// bytes stored with an 8 KiB subject, imported under a parser that
+/// reads a short one, exceed the budget and commit nothing (spec/02).
+#[test]
+fn rows_showing_a_stored_summary_are_charged_for_it() {
+    let (_scratch, _paths, store, revision) = setup();
+    let mut long = message(&store, "/synthetic/Inbox.mbox", 0, ORIGINAL);
+    long.summary.subject = Some("s".repeat(8 * 1024));
+    commit(&store, revision, "Inbox", vec![long]).unwrap();
+    let before = (list_rows(&store), list_generation(&store));
+
+    let copies: Vec<ImportMessage> = (1..=250)
+        .map(|offset| {
+            let mut copy = message(&store, "/synthetic/Copies.mbox", offset * 128, ORIGINAL);
+            copy.summary.parser_version = 2;
+            copy.summary.subject = Some("short".to_owned());
+            copy
+        })
+        .collect();
+    let estimate: usize = copies.iter().map(ImportMessage::change_budget_bytes).sum();
+    assert!(estimate < MAX_IMPORT_CHANGES_BYTES);
+    assert!(matches!(
+        commit(&store, revision + 1, "Copies", copies),
+        Err(StoreError::InvalidInput { .. })
+    ));
+    assert_eq!((list_rows(&store), list_generation(&store)), before);
+    assert_eq!(count(&store, "occurrences"), 1);
+    store.close().unwrap();
+}
