@@ -28,6 +28,7 @@ use sb_resources::{
 };
 
 use crate::engine::{Spawn, Worker};
+use crate::threads::{ThreadRebuilds, schedule_threads};
 use crate::{Engine, EngineError};
 
 /// The commands' names in `command_receipts` (spec/07).
@@ -53,6 +54,8 @@ const INTERRUPTED_INVENTORY: &str = "the inventory was interrupted; start a new 
 #[derive(Default)]
 pub(crate) struct ImportJobs {
     live: Mutex<HashMap<String, Live>>,
+    /// The thread rebuild each worker's turn may start (spec/02).
+    threads: Arc<ThreadRebuilds>,
 }
 
 /// What a live worker's job has been asked since it started.
@@ -63,6 +66,10 @@ struct Live {
 }
 
 impl ImportJobs {
+    pub(crate) fn threads(&self) -> &Arc<ThreadRebuilds> {
+        &self.threads
+    }
+
     fn lock(&self) -> MutexGuard<'_, HashMap<String, Live>> {
         self.live
             .lock()
@@ -476,6 +483,8 @@ async fn run_job(worker: Worker, mut claim: Claim, task: Task) {
             Task::Ingest => ingest(&worker, &claim).await,
         }
         finished(&worker, &claim.id).await;
+        // The turn may have added messages to thread (spec/02).
+        schedule_threads(&worker, claim.jobs.threads());
         task = claim.next_or_release();
     }
 }

@@ -13,9 +13,8 @@ mod engine;
 mod error;
 mod import;
 mod settings;
-// The thread rebuild (M1.3d) is its first caller outside tests.
-#[cfg_attr(not(test), allow(dead_code))]
 mod threading;
+mod threads;
 mod windows;
 
 // The engine's API types and the platform defaults the layer above
