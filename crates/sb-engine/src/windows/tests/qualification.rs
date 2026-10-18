@@ -172,13 +172,16 @@ fn median_ms(mut call: impl FnMut()) -> f64 {
 
 /// Plan M1.3 timing acceptance: over 100k synthetic rows, a first page
 /// and a deep keyset page of 200 for each store spec, through the
-/// engine. Recorded by CI (`window-timings`), never asserted: the
+/// engine. Rows share dates in groups, so keyed reads seek through
+/// ties as well as past them. Recorded by CI (`window-timings`), never asserted: the
 /// target is under 5 ms. Run with `--release --ignored --nocapture`.
 #[test]
 #[ignore = "timing record for CI, run with --release --ignored --nocapture"]
 fn list_window_timings() {
     const ROWS: i64 = 100_000;
     const PAGE: u32 = 200;
+    // Rows per shared date: a page spans four tie groups.
+    const TIED: i64 = 50;
     let (_scratch, engine) = engine("window-timings");
     let built = Instant::now();
     rewrite(&engine, |tx| {
@@ -193,7 +196,7 @@ fn list_window_timings() {
              INSERT INTO occurrences (account_id, mailbox_id, message_id, internal_date,
                f_seen, f_flagged, state, first_seen_at, last_seen_at)
                SELECT lm.account_id, (SELECT mailbox_id FROM mailboxes WHERE role = 'inbox'),
-                 lm.message_id, lm.message_id * 60000, lm.message_id % 3 = 0,
+                 lm.message_id, lm.message_id / {TIED} * 60000, lm.message_id % 3 = 0,
                  lm.message_id % 10 = 0, 'present', 0, 0
                FROM logical_messages lm;"
         ))

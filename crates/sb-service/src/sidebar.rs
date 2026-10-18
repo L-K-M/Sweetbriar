@@ -142,4 +142,80 @@ mod tests {
         ));
         sb_test_support::block_on(core.shutdown());
     }
+
+    /// An imported mailbox crosses with every field, its counts and the
+    /// generation its rows show.
+    #[test]
+    fn an_imported_mailbox_crosses_with_its_counts() {
+        use std::time::{Duration, Instant};
+
+        use crate::{Anchor, ImportJobState, ImportTarget, WindowSpec};
+
+        let scratch = sb_test_support::ScratchDir::new("service-sidebar-import");
+        let config = CoreConfig {
+            data_root: scratch.path().join("store"),
+            cache_root: scratch.path().join("cache"),
+        };
+        let core = sb_test_support::block_on(open_core(config)).unwrap();
+        let archive = sb_test_support::block_on(core.accounts()).unwrap()[0]
+            .account_id
+            .clone();
+
+        let path = scratch.path().join("Inbox.mbox");
+        std::fs::write(
+            &path,
+            "From a@example.test Sat Oct 17 12:00:00 2026\nStatus: RO\nSubject: Read\n\nx\n\
+             From a@example.test Sat Oct 17 12:00:00 2026\nStatus: O\nSubject: Unread\n\ny\n",
+        )
+        .unwrap();
+        let key = core.new_idempotency_key();
+        let started = sb_test_support::block_on(core.start_import(
+            &key,
+            vec![path],
+            ImportTarget::LocalArchive,
+        ))
+        .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(300);
+        loop {
+            let job = sb_test_support::block_on(core.import_job(&started.job_id)).unwrap();
+            if job.state == ImportJobState::AwaitingConfirmation {
+                let key = core.new_idempotency_key();
+                sb_test_support::block_on(core.confirm_import(&key, &started.job_id, Vec::new()))
+                    .unwrap();
+            }
+            if job.state == ImportJobState::Completed {
+                break;
+            }
+            assert!(Instant::now() < deadline, "the import never finished");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        let list = sb_test_support::block_on(core.mailboxes(&archive)).unwrap();
+        let [inbox] = list.mailboxes.as_slice() else {
+            panic!("one mailbox: {:?}", list.mailboxes);
+        };
+        let window = sb_test_support::block_on(core.open_window(
+            WindowSpec::Mailbox(inbox.mailbox_id),
+            Anchor::Top,
+            10,
+        ))
+        .unwrap();
+        assert_eq!(list.generation, window.generation);
+        assert_eq!(window.rows.len(), 2);
+        assert_eq!(
+            inbox,
+            &Mailbox {
+                mailbox_id: window.rows[0].mailbox_id,
+                account_id: archive,
+                name: "Inbox".to_owned(),
+                delimiter: None,
+                role: None,
+                kind: MailboxKind::Folder,
+                selectable: true,
+                total: 2,
+                unread: 1,
+            }
+        );
+        sb_test_support::block_on(core.shutdown());
+    }
 }

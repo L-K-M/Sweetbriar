@@ -41,7 +41,8 @@ type Summary<'a> = (
     u64,
 );
 
-/// A listed occurrence in `mailbox`, read or not.
+/// A listed occurrence in `mailbox`, read or not, committed the way a
+/// writer commits one: rows refreshed, then the generation advanced.
 fn occurrence(conn: &mut Connection, account: &str, mailbox: i64, seen: bool) {
     let tx = conn.transaction().unwrap();
     tx.execute(
@@ -58,6 +59,7 @@ fn occurrence(conn: &mut Connection, account: &str, mailbox: i64, seen: bool) {
     .unwrap();
     let id = tx.last_insert_rowid();
     list_rows::refresh(&tx, &BTreeSet::from([id])).unwrap();
+    list_rows::advance_generation(&tx).unwrap();
     tx.commit().unwrap();
 }
 
@@ -70,7 +72,9 @@ fn accounts_list_in_sort_order() {
         "INSERT INTO accounts (account_id, kind, provider, display_name, state, state_reason,
          sort_order, created_at)
          VALUES ('00000000-0000-4000-8000-0000000000b0', 'imap', 'proton_bridge', 'Work',
-                 'needs_attention', 'Bridge is not running', -1, 0)",
+                 'needs_attention', 'Bridge is not running', -1, 0),
+                ('00000000-0000-4000-8000-0000000000a0', 'imap', 'proton_bridge', 'Home',
+                 'paused', NULL, -1, 0)",
         [],
     )
     .unwrap();
@@ -79,6 +83,15 @@ fn accounts_list_in_sort_order() {
     assert_eq!(
         listed,
         vec![
+            // Equal sort orders fall back to the id.
+            StoredAccount {
+                account_id: "00000000-0000-4000-8000-0000000000a0".to_owned(),
+                kind: AccountKind::Imap,
+                display_name: "Home".to_owned(),
+                state: AccountState::Paused,
+                state_reason: None,
+                sort_order: -1,
+            },
             StoredAccount {
                 account_id: "00000000-0000-4000-8000-0000000000b0".to_owned(),
                 kind: AccountKind::Imap,
@@ -109,12 +122,17 @@ fn mailboxes_carry_counts_and_their_generation() {
     let inbox = mailbox(&conn, &archive, "Inbox", "folder", Some("inbox"));
     let all = mailbox(&conn, &archive, "All Mail", "virtual", Some("all"));
     let archived = mailbox(&conn, &archive, "Archive", "folder", None);
+    let before = {
+        let tx = conn.transaction().unwrap();
+        mailboxes(&tx, &archive).unwrap().unwrap().generation
+    };
     occurrence(&mut conn, &archive, inbox, false);
     occurrence(&mut conn, &archive, inbox, true);
     occurrence(&mut conn, &archive, work, false);
     let tx = conn.transaction().unwrap();
     let list = mailboxes(&tx, &archive).unwrap().unwrap();
-    assert_eq!(list.generation, list_rows::generation(&tx).unwrap());
+    // Each occurrence's write advanced the generation the list shows.
+    assert_eq!(list.generation, before + 3);
     let summary: Vec<Summary> = list
         .mailboxes
         .iter()
@@ -158,10 +176,25 @@ fn mailboxes_carry_counts_and_their_generation() {
 }
 
 /// An unknown account has no mailbox list; a known one without
-/// mailboxes has an empty one.
+/// mailboxes has an empty one, even when another account has some.
 #[test]
 fn unknown_accounts_have_no_mailbox_list() {
     let (mut conn, archive) = store();
+    conn.execute(
+        "INSERT INTO accounts (account_id, kind, provider, display_name, state, sort_order,
+         created_at)
+         VALUES ('00000000-0000-4000-8000-0000000000b0', 'imap', 'proton_bridge', 'Work',
+                 'active', 1, 0)",
+        [],
+    )
+    .unwrap();
+    mailbox(
+        &conn,
+        "00000000-0000-4000-8000-0000000000b0",
+        "INBOX",
+        "folder",
+        Some("inbox"),
+    );
     let tx = conn.transaction().unwrap();
     assert_eq!(mailboxes(&tx, "no-such-account").unwrap(), None);
     assert!(
