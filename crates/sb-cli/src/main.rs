@@ -314,7 +314,7 @@ fn outcome(job: &ImportJob) -> Result<(), u8> {
         totals.read_from_headers, totals.read_default, totals.flags_incomplete
     );
     if let Some(failure) = &job.failure {
-        println!("failure: {failure}");
+        eprintln!("sb-cli: the import failed: {failure}");
     }
     if let Some(report) = &job.report_path {
         println!("report: {}", report.display());

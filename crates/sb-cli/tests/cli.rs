@@ -291,6 +291,9 @@ fn an_ambiguous_mbox_needs_a_variant() {
         "{text}"
     );
     assert!(text.contains("read state: 1 from headers"), "{text}");
+    // The choice reaches the engine as given, not its opposite.
+    let report = std::fs::read_to_string(report_path(&out)).expect("the report was written");
+    assert!(report.contains("\"variant\": \"mboxrd\""), "{report}");
 }
 
 /// A missing path is reported as a problem, not an empty import, and
