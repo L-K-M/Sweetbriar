@@ -166,6 +166,31 @@ fn sources_page_by_message_with_headers_first() {
     assert!(rest[0].references.is_empty());
 }
 
+/// The cleanup removes threads without members, as a crash between
+/// creating a thread and filling it leaves, and keeps the rest.
+#[test]
+fn empty_threads_are_removed() {
+    let (mut conn, account) = store();
+    let message = message(&mut conn, &account, "Plan", "[]", 1_000);
+    let tx = conn.transaction().unwrap();
+    let blank = ThreadDescription {
+        account_scope: None,
+        subject_norm: None,
+        last_date: None,
+    };
+    let filled = create_thread(&tx, blank).unwrap();
+    let empty = create_thread(&tx, blank).unwrap();
+    assign_thread(&tx, message, filled).unwrap();
+    remove_empty_threads(&tx).unwrap();
+    let left: Vec<i64> = stored_threads(&tx, 0, 10)
+        .unwrap()
+        .iter()
+        .map(|thread| thread.thread_id)
+        .collect();
+    assert_eq!(left, vec![filled]);
+    assert_ne!(filled, empty);
+}
+
 /// Assigning and describing report only real changes, a message holds
 /// one thread, removal takes leftover members, sources carry their
 /// representatives' dates, and stored threads read back as written.
