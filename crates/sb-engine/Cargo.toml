@@ -16,3 +16,5 @@ tokio = { version = "=1.53.2", default-features = false, features = ["rt-multi-t
 
 [dev-dependencies]
 sb-test-support = { version = "0.0.1", path = "../sb-test-support" }
+# The import crash-cut suite opens the engine on `CutFs` (spec/11).
+sb-resources = { version = "0.0.1", path = "../sb-resources", features = ["test-seams"] }

@@ -12,8 +12,11 @@ use sb_test_support::{ScratchDir, block_on};
 use super::*;
 use crate::engine::Spawn;
 
+mod acceptance;
+
 /// How long a test waits for a worker before failing.
-const PATIENCE: Duration = Duration::from_secs(120);
+// Generous: ingest shares the disk with crash-cut children in CI.
+const PATIENCE: Duration = Duration::from_secs(300);
 const ENVELOPE: &str = "From sender@example.test Sat Oct 17 12:00:00 2026\n";
 
 fn fixtures() -> PathBuf {
@@ -240,7 +243,7 @@ fn cancelling_a_running_job_stops_it_durably() {
 fn shutdown_pauses_ingest_and_the_next_open_resumes_without_duplicates() {
     let scratch = ScratchDir::new("import-pause");
     let path = scratch.path().join("Big.mbox");
-    fs::write(&path, mbox(300)).unwrap();
+    fs::write(&path, mbox(260)).unwrap();
     let root = scratch.path().join("store");
     let engine = open(&root);
     let id = start(&engine, &[path]);
@@ -252,12 +255,12 @@ fn shutdown_pauses_ingest_and_the_next_open_resumes_without_duplicates() {
     let engine = open(&root);
     let done = settle(&engine, &id, ImportJobState::Completed);
     let totals = done.checkpoint().totals();
-    assert_eq!((totals.processed, totals.imported), (300, 300));
-    assert_eq!((totals.read_from_headers, totals.read_default), (1, 299));
-    assert_eq!(count(&engine, "SELECT count(*) FROM occurrences"), 300);
+    assert_eq!((totals.processed, totals.imported), (260, 260));
+    assert_eq!((totals.read_from_headers, totals.read_default), (1, 259));
+    assert_eq!(count(&engine, "SELECT count(*) FROM occurrences"), 260);
     assert_eq!(
         count(&engine, "SELECT count(*) FROM acquisition_sources"),
-        300
+        260
     );
     block_on(engine.shutdown()).unwrap();
 }

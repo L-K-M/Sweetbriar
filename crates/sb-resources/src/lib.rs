@@ -47,7 +47,11 @@ pub use sb_store::{
     WritePriority, run_once,
 };
 
-use sb_store::{Clock, Fs, Random, Seams, Store, open};
+#[cfg(feature = "test-seams")]
+pub use sb_store::Fs;
+#[cfg(not(feature = "test-seams"))]
+use sb_store::Fs;
+use sb_store::{Clock, Random, Seams, Store, open};
 
 /// The store and the seams it opened with, held for the engine: one
 /// process's whole reach into the leaves (spec/01).
@@ -65,8 +69,18 @@ impl Resources {
     /// `sb-platform`'s filesystem, clock and randomness behind the
     /// seam traits.
     pub fn open(data_root: &Path) -> Result<Self, StoreError> {
+        Self::open_on(data_root, Arc::new(RealFs))
+    }
+
+    /// [`Resources::open`] on an injected filesystem: crash-cut suites
+    /// kill the process at a chosen operation (spec/11).
+    #[cfg(feature = "test-seams")]
+    pub fn open_with_fs(data_root: &Path, fs: Arc<dyn Fs>) -> Result<Self, StoreError> {
+        Self::open_on(data_root, fs)
+    }
+
+    fn open_on(data_root: &Path, fs: Arc<dyn Fs>) -> Result<Self, StoreError> {
         let paths = StorePaths::new(data_root)?;
-        let fs: Arc<dyn Fs> = Arc::new(RealFs);
         let clock: Arc<dyn Clock> = Arc::new(SystemClock);
         let random: Arc<dyn Random> = Arc::new(OsRandom);
         let seams = Seams::new(Arc::clone(&fs), Arc::clone(&clock), Arc::clone(&random));

@@ -50,6 +50,12 @@ impl CutFs {
         }
     }
 
+    /// How many operations ran so far: an uncut run (`nth` past every
+    /// operation) measures where cut points can land.
+    pub fn operations(&self) -> u64 {
+        self.count.load(Ordering::SeqCst)
+    }
+
     /// Count one operation; kill the process if it is the cut point.
     fn trip(&self) {
         let n = self.count.fetch_add(1, Ordering::SeqCst) + 1;
@@ -217,6 +223,45 @@ pub fn run_crash_cuts(
             "the child never survived {MAX_CUT_POINTS} cut points"
         );
     }
+}
+
+/// Run `child` once per cut point in `points`, as [`run_crash_cuts`]
+/// does, for suites that sample cut points (a seeded set) instead of
+/// sweeping them all. A run that survives its point (it made fewer
+/// operations this time) is skipped; `check` sees each killed run.
+/// Returns how many runs were killed.
+pub fn run_crash_cut_points(
+    cut_env: &str,
+    root_env: &str,
+    child: &str,
+    points: &[u64],
+    fresh_root: &mut dyn FnMut(u64) -> PathBuf,
+    check: &mut dyn FnMut(&Path),
+) -> u64 {
+    let exe = env::current_exe().expect("the test binary path");
+    let mut killed = 0;
+    for &n in points {
+        let root = fresh_root(n);
+        let spawned = Command::new(&exe)
+            .args(["--exact", child, "--ignored"])
+            .env(cut_env, n.to_string())
+            .env(root_env, &root)
+            .spawn()
+            .expect("spawn the crash-cut child");
+        let status = wait_with_deadline(spawned, CHILD_DEADLINE);
+        if status.success() {
+            continue;
+        }
+        let signal = std::os::unix::process::ExitStatusExt::signal(&status);
+        assert_eq!(
+            signal,
+            Some(libc::SIGKILL),
+            "crash-cut child at N={n} exited abnormally: {status}"
+        );
+        check(&root);
+        killed += 1;
+    }
+    killed
 }
 
 /// Wait for `child`, killing it and failing loudly once `deadline`
