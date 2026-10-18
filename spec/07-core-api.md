@@ -152,7 +152,9 @@ struct ListRow {
     200 rows at a time.
   - `Around(id)`: with `id` at rank `r` of `N` rows and `L = min(limit,
     N)`, the page starts at rank `clamp(r − ⌊L/2⌋, 0, N − L)`. An id not
-    in the window at the caller's generation is `NotFound`.
+    in the window at the caller's generation is `NotFound`. In
+    logical-message windows `id` may name any occurrence of a listed
+    message: the page centres on that message's row.
 - **The id index:** `window_ids` returns the window's rows' occurrence
   ids in window order, with their generation (research 01/03: 500k ids
   are 4 MB). A list maps a row position to an id and reads `Around(id)`,
@@ -227,7 +229,9 @@ enum WindowEvent { Invalidated { generation: u64 }, ResetRequired }
 - **Selection** is by stable `occurrence_id`, so it survives
   invalidation while its occurrence stays in the window; a departed id
   leaves the selection. In logical-message windows the representative
-  occurrence can change (02); M1.3 settles how selection follows it.
+  occurrence can change (02). Selection then follows the message:
+  `Around` with the old id centres on the message's row, and the shell
+  moves its selection to the row with the same `message_id`.
 
 ## Body and attachment leases
 
