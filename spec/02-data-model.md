@@ -702,8 +702,9 @@ CREATE INDEX logical_messages_by_acquisition ON logical_messages(acquisition_id)
     a stored summary, even an older parser's; summaries for a newer
     parser come from rebuilding the derived tables. An import that
     stores the first summary of bytes already held updates the rows of
-    every message sharing them; when those rows exceed the batch's
-    write budget (03), the batch fails.
+    every message sharing them. Each row an import writes counts toward
+    its batch's write budget (03) at the summary it shows; a batch over
+    budget fails.
   - `store_meta.list_generation` gains one in each transaction that
     inserts, changes or removes list rows, and in no other. Windows
     bind to it (07).
