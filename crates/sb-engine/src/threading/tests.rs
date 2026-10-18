@@ -181,6 +181,134 @@ fn base_subjects_follow_rfc_5256() {
     }
 }
 
+/// A message's own references drop a guessed parent before its own
+/// link is checked (RFC 5256 §3 step 1.B): message 1 names itself
+/// under x, so the guess x→m goes and the refused self-link leaves m a
+/// root.
+#[test]
+fn a_refused_own_link_still_drops_the_guess() {
+    let inputs = [
+        input(1, Some("m@x"), &["x@x", "m@x"], "M"),
+        input(2, Some("x@x"), &[], "X"),
+    ];
+    assert_eq!(threads_in_any_order(&inputs), vec![vec![1], vec![2]]);
+}
+
+/// Only ASCII spaces, tabs and line breaks are whitespace (RFC 5256 §2.1).
+#[test]
+fn unicode_separators_are_not_whitespace() {
+    assert_ne!(
+        base_subject("Alpha\u{2028}Beta"),
+        base_subject("Alpha Beta")
+    );
+    assert_eq!(base_subject("Alpha\t\r\n Beta"), "alpha beta");
+    assert_eq!(base_subject("\u{a0}Re: x"), "\u{a0}re: x");
+}
+
+/// Subjects built to make extraction quadratic — thousands of blobs,
+/// trailers or nested wrappers in one 256 KiB header — stay fast.
+#[test]
+fn hostile_subjects_are_linear() {
+    const HEADER: usize = 256 * 1024;
+    let blobs = format!("{}Lunch", "[x]".repeat(HEADER / 3));
+    let trailers = format!("Lunch{}", " (fwd)".repeat(HEADER / 6));
+    let wrapped = format!(
+        "{}Lunch{}",
+        "[fwd: ".repeat(HEADER / 12),
+        "]".repeat(HEADER / 12)
+    );
+    let leaders = format!("{}Lunch", "Re: ".repeat(HEADER / 4));
+    let started = Instant::now();
+    assert_eq!(base_subject(&blobs), "lunch");
+    assert_eq!(base_subject(&trailers), "lunch");
+    assert_eq!(base_subject(&wrapped), "lunch");
+    assert_eq!(base_subject(&leaders), "lunch");
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        started.elapsed()
+    );
+}
+
+/// Many messages first guessed under one shared parent, then seen with
+/// no references of their own, regroup in linear time.
+#[test]
+fn regrouping_many_guessed_siblings_is_linear() {
+    const COUNT: i64 = 100_000;
+    let mut inputs = Vec::new();
+    for i in 0..COUNT {
+        let victim = format!("victim{i}@x");
+        inputs.push(input(
+            i + 1,
+            Some(&format!("guess{i}@x")),
+            &["root@x", &victim],
+            "",
+        ));
+        inputs.push(input(COUNT + i + 1, Some(&victim), &[], ""));
+    }
+    let started = Instant::now();
+    let grouped = threads(&inputs);
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "{:?}",
+        started.elapsed()
+    );
+    // Each guess hangs under its victim, now a root of its own.
+    assert_eq!(grouped.len(), COUNT as usize);
+    assert!(grouped.iter().all(|group| group.len() == 2));
+}
+
+/// Only the last references count: a real message named only by a
+/// discarded reference stays apart, one named by a kept one joins.
+#[test]
+fn only_the_last_references_count() {
+    let fillers = |set: &str, count: usize| -> Vec<String> {
+        (0..count).map(|i| format!("{i}@{set}")).collect()
+    };
+    // One reference too many: the first, naming message 1, is dropped.
+    let past = fillers("past", MAX_REFERENCES);
+    let mut dropping = vec!["dropped@x"];
+    dropping.extend(past.iter().map(String::as_str));
+    // Exactly the bound: the first, naming message 2, still counts.
+    let within = fillers("within", MAX_REFERENCES - 1);
+    let mut keeping = vec!["kept@x"];
+    keeping.extend(within.iter().map(String::as_str));
+    let inputs = [
+        input(1, Some("dropped@x"), &[], "Dropped"),
+        input(2, Some("kept@x"), &[], "Kept"),
+        input(3, Some("long@x"), &dropping, "Long"),
+        input(4, Some("other@x"), &keeping, "Other"),
+    ];
+    assert_eq!(
+        threads_in_any_order(&inputs),
+        vec![vec![1], vec![2, 4], vec![3]]
+    );
+}
+
+/// The depth bound is exact: a link whose parent lies more than
+/// `MAX_DEPTH` levels below its root is dropped.
+#[test]
+fn the_depth_bound_is_exact() {
+    let deepest = MAX_DEPTH as i64 + 2;
+    let mut inputs = vec![input(1, Some("1@deep"), &[], "Part 1")];
+    for id in 2..=deepest + 2 {
+        let parent = format!("{}@deep", id - 1);
+        inputs.push(reply_to(
+            id,
+            &format!("{id}@deep"),
+            &parent,
+            &format!("Part {id}"),
+        ));
+    }
+    assert_eq!(
+        threads(&inputs),
+        vec![
+            (1..=deepest).collect::<Vec<_>>(),
+            vec![deepest + 1, deepest + 2]
+        ]
+    );
+}
+
 /// A hostile chain of 20,000 references threads quickly: only the
 /// last 128 count, and a reply naming them in reverse, which would
 /// close cycles everywhere, still joins.

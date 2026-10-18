@@ -10,17 +10,19 @@
 //!   thread = every message under one merged root
 //! ```
 //!
-//! Containers live in an arena and every walk is iterative, so a
-//! hostile chain of references costs time, never stack.
+//! Containers live in an arena that only records parents while links
+//! change, so moving a container costs O(1); children are gathered once
+//! at the end. Every walk is iterative and bounded, so hostile input
+//! costs bounded time and no stack.
 
 use std::collections::{BTreeMap, HashMap};
 
 /// How many of a message's last References ids count (spec/02).
-const MAX_REFERENCES: usize = 128;
+const MAX_REFERENCES: usize = 64;
 
-/// How deep a parent may lie for a link to it to count (spec/02): each
-/// cycle check walks at most this far.
-const MAX_DEPTH: usize = 1_024;
+/// How deep a parent may lie for a link to it to count (spec/02); a
+/// root is at depth 0. Each cycle check walks at most this far.
+const MAX_DEPTH: usize = 256;
 
 /// What threading reads from one logical message.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,12 +39,11 @@ pub(crate) struct ThreadInput {
 
 /// One node of the reference graph: a message, or a placeholder for an
 /// id only seen in references.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, Copy)]
 struct Container {
     /// Index into the sorted inputs.
     message: Option<usize>,
     parent: Option<usize>,
-    children: Vec<usize>,
 }
 
 /// The containers and the ids that name them.
@@ -69,50 +70,28 @@ impl<'a> Graph<'a> {
     }
 
     /// Whether `child` may hang under `parent`: not if `child` is
-    /// `parent` or above it, nor if `parent` lies deeper than
+    /// `parent` or above it (a cycle), nor if `parent` lies deeper than
     /// [`MAX_DEPTH`].
     fn may_link(&self, parent: usize, child: usize) -> bool {
-        let mut current = Some(parent);
+        let mut at = parent;
         for _ in 0..=MAX_DEPTH {
-            let Some(at) = current else {
-                return true;
-            };
             if at == child {
                 return false;
             }
-            current = self.containers[at].parent;
+            match self.containers[at].parent {
+                Some(up) => at = up,
+                None => return true,
+            }
         }
         false
-    }
-
-    fn unlink(&mut self, child: usize) {
-        let Some(parent) = self.containers[child].parent.take() else {
-            return;
-        };
-        self.containers[parent].children.retain(|&c| c != child);
     }
 
     /// Make `parent` the parent of `child`, unless [`Graph::may_link`]
     /// refuses.
     fn link(&mut self, parent: usize, child: usize) {
-        if !self.may_link(parent, child) {
-            return;
+        if self.may_link(parent, child) {
+            self.containers[child].parent = Some(parent);
         }
-        self.unlink(child);
-        self.containers[child].parent = Some(parent);
-        self.containers[parent].children.push(child);
-    }
-
-    /// Every message under `root`, in pre-order with children in the
-    /// order they were linked.
-    fn messages_under(&self, root: usize) -> Vec<usize> {
-        let mut found = Vec::new();
-        let mut stack = vec![root];
-        while let Some(at) = stack.pop() {
-            found.extend(self.containers[at].message);
-            stack.extend(self.containers[at].children.iter().rev());
-        }
-        found
     }
 }
 
@@ -143,17 +122,14 @@ pub(crate) fn threads(inputs: &[ThreadInput]) -> Vec<Vec<i64>> {
     }
 
     for (index, input) in sorted.iter().enumerate() {
-        let references: Vec<&str> = if input.references.is_empty() {
-            input.in_reply_to.iter().map(String::as_str).collect()
+        let references: &[String] = if input.references.is_empty() {
+            input.in_reply_to.as_slice()
         } else {
             let skip = input.references.len().saturating_sub(MAX_REFERENCES);
-            input.references[skip..]
-                .iter()
-                .map(String::as_str)
-                .collect()
+            &input.references[skip..]
         };
         let chain: Vec<usize> = references
-            .into_iter()
+            .iter()
             .filter(|id| !id.is_empty())
             .map(|id| graph.named(id))
             .collect();
@@ -163,25 +139,36 @@ pub(crate) fn threads(inputs: &[ThreadInput]) -> Vec<Vec<i64>> {
                 graph.link(pair[0], pair[1]);
             }
         }
-        // The message's own last reference overrules any guess.
+        // The message's own last reference overrules any guess, which
+        // goes first even when that link is refused (RFC 5256 §3 1.B).
         let container = own[index];
-        match chain.last() {
-            Some(&parent) => graph.link(parent, container),
-            None => graph.unlink(container),
+        graph.containers[container].parent = None;
+        if let Some(&parent) = chain.last() {
+            graph.link(parent, container);
         }
     }
 
-    let roots: Vec<usize> = (0..graph.containers.len())
-        .filter(|&at| graph.containers[at].parent.is_none())
-        .collect();
+    // Children in container order: messages first, by message id.
+    let mut children: Vec<Vec<usize>> = vec![Vec::new(); graph.containers.len()];
+    let mut roots = Vec::new();
+    for (at, container) in graph.containers.iter().enumerate() {
+        match container.parent {
+            Some(parent) => children[parent].push(at),
+            None => roots.push(at),
+        }
+    }
+
     let mut merged = UnionFind::new(roots.len());
     let mut by_subject: HashMap<String, usize> = HashMap::new();
     let mut members = Vec::with_capacity(roots.len());
     for (slot, &root) in roots.iter().enumerate() {
-        let under = graph.messages_under(root);
-        let subject = under
-            .first()
-            .and_then(|&first| sorted[first].subject.as_deref())
+        let under = messages_under(&graph, &children, root);
+        // A placeholder root takes its earliest message's subject.
+        let first = graph.containers[root]
+            .message
+            .or(under.iter().copied().min());
+        let subject = first
+            .and_then(|first| sorted[first].subject.as_deref())
             .map(base_subject)
             .filter(|subject| !subject.is_empty());
         if let Some(subject) = subject {
@@ -212,6 +199,17 @@ pub(crate) fn threads(inputs: &[ThreadInput]) -> Vec<Vec<i64>> {
     groups
 }
 
+/// Every message under `root`, the root's own included.
+fn messages_under(graph: &Graph<'_>, children: &[Vec<usize>], root: usize) -> Vec<usize> {
+    let mut found = Vec::new();
+    let mut stack = vec![root];
+    while let Some(at) = stack.pop() {
+        found.extend(graph.containers[at].message);
+        stack.extend(children[at].iter().copied());
+    }
+    found
+}
+
 /// Disjoint sets over root slots, for subject merging.
 struct UnionFind {
     parent: Vec<usize>,
@@ -238,73 +236,76 @@ impl UnionFind {
     }
 }
 
-/// RFC 5256's base subject, lowercased (spec/02): whitespace collapsed,
-/// then trailing `(fwd)`, leading `Re:`/`Fw:`/`Fwd:` and `[…]` blobs, and
-/// a `[Fwd: …]` wrapper removed until nothing changes.
+/// RFC 5256's base subject, lowercased (spec/02): runs of spaces, tabs
+/// and line breaks become one space, then trailing `(fwd)`, leading
+/// `Re:`/`Fw:`/`Fwd:` and `[…]` blobs, and a `[Fwd: …]` wrapper are
+/// removed until nothing changes. Every step only narrows a slice, so
+/// the work is linear in the subject's length.
 ///
 /// `"Re: [list] Fwd: Lunch (fwd)"` → `"lunch"`.
 pub(crate) fn base_subject(subject: &str) -> String {
-    let mut text = subject.split_whitespace().collect::<Vec<_>>().join(" ");
+    // Step 1: only RFC whitespace, not Unicode separators.
+    let normalized = subject
+        .split([' ', '\t', '\r', '\n'])
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let mut text = normalized.as_str();
     loop {
-        // RFC 5256 step 2: trailers.
+        // Step 2: trailers.
         loop {
-            let trimmed = text.trim_end();
-            match strip_suffix_ignoring_case(trimmed, "(fwd)") {
-                Some(rest) => text = rest.to_owned(),
-                None => {
-                    text = trimmed.to_owned();
-                    break;
-                }
+            text = text.trim_end_matches(' ');
+            match strip_suffix_ignoring_case(text, "(fwd)") {
+                Some(rest) => text = rest,
+                None => break,
             }
         }
         // Steps 3–5: leaders and leading blobs.
-        loop {
-            let before = text.len();
-            text = strip_leader(&text);
-            if let Some(rest) = strip_blob(&text).filter(|rest| !rest.is_empty()) {
-                text = rest.to_owned();
-            }
-            if text.len() == before {
-                break;
-            }
-        }
+        text = strip_leaders(text);
         // Step 6: a `[Fwd: …]` wrapper starts the cycle again.
-        if let Some(inner) =
-            strip_prefix_ignoring_case(&text, "[fwd:").and_then(|rest| rest.strip_suffix(']'))
-        {
-            text = inner.trim().to_owned();
-            continue;
+        match strip_prefix_ignoring_case(text, "[fwd:").and_then(|rest| rest.strip_suffix(']')) {
+            Some(inner) => text = inner,
+            None => return text.to_lowercase(),
         }
-        return text.to_lowercase();
     }
 }
 
-/// Remove one `subj-leader`: blobs then `re`, `fw` or `fwd`, an
-/// optional blob and `:` — or leading whitespace.
-fn strip_leader(text: &str) -> String {
-    let trimmed = text.trim_start();
-    if trimmed.len() != text.len() {
-        return trimmed.to_owned();
+/// RFC 5256 steps 3–5: drop every `subj-leader` — blobs then `re`, `fw`
+/// or `fwd`, an optional blob and `:` — and then the leading blobs
+/// whose removal leaves text. Each blob is scanned once: blobs that no
+/// leader follows are removed together, which is where repeating steps
+/// 3 and 4 one blob at a time ends.
+fn strip_leaders(mut text: &str) -> &str {
+    loop {
+        text = text.trim_start_matches(' ');
+        let mut after_blobs = text;
+        let mut last_blob = None;
+        while let Some(rest) = strip_blob(after_blobs) {
+            last_blob = Some(after_blobs);
+            after_blobs = rest;
+        }
+        if let Some(rest) = strip_reply_or_forward(after_blobs) {
+            text = rest;
+            continue;
+        }
+        // Step 4: the last blob stays when nothing follows it.
+        return match last_blob {
+            Some(last) if after_blobs.is_empty() => last,
+            _ => after_blobs,
+        };
     }
-    let mut rest = text;
-    while let Some(after) = strip_blob(rest) {
-        rest = after;
-    }
+}
+
+/// `text` after a leading `re`, `fw` or `fwd`, an optional blob and
+/// `:`, or `None` when it doesn't start with one.
+fn strip_reply_or_forward(text: &str) -> Option<&str> {
     // `fwd` before `fw`: the longer leader wins.
-    let Some(mut after) = ["re", "fwd", "fw"]
+    let after = ["re", "fwd", "fw"]
         .into_iter()
-        .find_map(|word| strip_prefix_ignoring_case(rest, word))
-    else {
-        return text.to_owned();
-    };
-    after = after.trim_start();
-    if let Some(unblobbed) = strip_blob(after) {
-        after = unblobbed;
-    }
-    match after.strip_prefix(':') {
-        Some(subject) => subject.trim_start().to_owned(),
-        None => text.to_owned(),
-    }
+        .find_map(|word| strip_prefix_ignoring_case(text, word))?
+        .trim_start_matches(' ');
+    let after = strip_blob(after).unwrap_or(after);
+    after.strip_prefix(':')
 }
 
 /// `text` without `prefix`, compared ignoring ASCII case.
@@ -321,15 +322,16 @@ fn strip_suffix_ignoring_case<'a>(text: &'a str, suffix: &str) -> Option<&'a str
     tail.eq_ignore_ascii_case(suffix).then(|| &text[..start])
 }
 
-/// `text` without a leading `[…]` blob and its trailing whitespace, if
-/// it starts with one.
+/// `text` without a leading `[…]` blob and the spaces after it, if it
+/// starts with one. The scan stops at the first bracket, so a run of
+/// nested `[` costs no more than its length.
 fn strip_blob(text: &str) -> Option<&str> {
     let inner = text.strip_prefix('[')?;
-    let close = inner.find(']')?;
-    if inner[..close].contains('[') {
+    let close = inner.find(['[', ']'])?;
+    if inner.as_bytes()[close] != b']' {
         return None;
     }
-    Some(inner[close + 1..].trim_start())
+    Some(inner[close + 1..].trim_start_matches(' '))
 }
 
 #[cfg(test)]
