@@ -1,0 +1,8 @@
+From: Sender <sender@example.test>
+To: Reader <reader@example.test>
+Subject: Archive status flags
+Message-ID: <status-flags@example.test>
+Status: O
+X-Status: FADT
+
+Archive flags stay local.

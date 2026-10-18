@@ -46,6 +46,26 @@ local drafts. No network yet.
     scheduling/recovery/cancellation, service commands, report JSON in
     `recovery/` and `sb-cli import`. Run all end-to-end acceptance checks
     below, including the 50-seed crash/resume suite.
+    Split before implementation into these PRs:
+    - **M1.2c1 Source snapshots and flags — L:** bounded, durable private
+      source copies in `recovery/`, verified seekable reopening and bounded
+      `Status`/`X-Status` extraction. May run alongside M1.2b: it depends
+      only on M0.5 and M1.1. Tests cover changed originals, snapshot
+      corruption, cancellation, I/O/flush failures and flag/header limits.
+    - **M1.2c2 Inventory and acquisition adapter — L:** Apple Mail package
+      and EML-folder discovery, source inventory and variant requirements,
+      exact publication and MIME-summary/flag mapping through `sb-resources`.
+      Depends on M1.2b and M1.2c1. Split before implementation:
+      - **M1.2c2a Discovery and inventory — M:** deterministic source discovery,
+        snapshot inventory, variant requirements and serializable source metadata.
+      - **M1.2c2b Acquisition adapter — L:** bounded parsing, exact streaming
+        publication and summary/flag mapping. Depends on M1.2c2a.
+    - **M1.2c3 Jobs, service and CLI — L:** confirmation, checkpointed
+      scheduling/recovery/cancellation, commands, reports and `sb-cli import`.
+      Depends on M1.2c2b.
+    - **M1.2c4 Crash qualification — M:** the 50-seed crash/resume suite
+      and all original end-to-end M1.2 acceptance checks below. M1.3 waits
+      for this qualification. Depends on M1.2c3.
 - **Goal:** import mbox and EML into the local archive account with exact
   bytes, resumable jobs and a reconciliation report.
 - **Spec:** 09 (Import), 03 (publication before reference), 02
@@ -279,6 +299,9 @@ local drafts. No network yet.
   - after restore: accounts `paused`, intents `quarantined`, attempts in
     `held`, `queued` or `submitting` become `outcome_unknown`, and a new
     incarnation UUID;
+  - unfinished import jobs become `failed` with requests/checkpoints
+    intact; restore never substitutes original paths for private source
+    copies absent from the backup;
   - restore never deletes the previous data root: it's renamed to
     `<data root>.preserved-<old incarnation>`;
   - GC's grace clock: an orphan gets a `gc_grace` pin on first sight and

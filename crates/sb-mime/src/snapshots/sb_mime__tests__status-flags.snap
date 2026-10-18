@@ -1,0 +1,45 @@
+---
+source: crates/sb-mime/src/tests.rs
+expression: outcome
+---
+Parsed(
+    MessageSummary {
+        message_id: Some(
+            "status-flags@example.test",
+        ),
+        subject: Some(
+            "Archive status flags",
+        ),
+        from: Some(
+            MailboxAddress {
+                name: Some(
+                    "Sender",
+                ),
+                address: Some(
+                    "sender@example.test",
+                ),
+            },
+        ),
+        reply_to: [],
+        to: [
+            MailboxAddress {
+                name: Some(
+                    "Reader",
+                ),
+                address: Some(
+                    "reader@example.test",
+                ),
+            },
+        ],
+        cc: [],
+        date: None,
+        in_reply_to: None,
+        references: [],
+        list_id: None,
+        delivered_to: [],
+        has_attachments: false,
+        snippet: Some(
+            "Archive flags stay local.\n",
+        ),
+    },
+)

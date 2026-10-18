@@ -22,6 +22,13 @@ user-granted permission path.
 1. **Inventory.** Walk the chosen files and count candidate messages
    (mbox `From ` separators, `.eml` files) and bytes. The UI shows the
    inventory before anything is imported.
+   - Capture each regular source into a private durable snapshot (03)
+     before counting. Its token, SHA-256 and byte length identify the copy;
+     offsets, inventory and ingest all refer to that same captured stream.
+     Later changes to the original cannot change a running job's bytes.
+   - Resume verifies and reopens the private copy. A missing or corrupt
+     snapshot stops the job visibly; it never substitutes the original
+     path's current contents.
 2. **Ingest.** For each message, in source order:
    - extract the exact bytes, undoing the variant's `From ` quoting:
      mboxrd removes one `>` from every `>+From ` line; mboxo only turns
@@ -54,6 +61,15 @@ user-granted permission path.
 4. **Flags.** Read state comes from `Status` and `X-Status` headers where
    present. Otherwise imported messages are marked read: an archive isn't
    new mail. The report counts each case.
+   - Header names are case-insensitive; flag letters are the ASCII codes:
+     `R` means read, and `X-Status` uses `F` (flagged), `A` (answered),
+     `D` (deleted) and `T` (draft). A present `Status` or `X-Status` header
+     without `R` anywhere means unread. Repeated/folded values combine
+     their flag letters; unrecognized letters are ignored.
+   - Extraction obeys the MIME header byte/field limits. Known admitted
+     flags survive a limit breach and still apply. With no admitted status
+     header, apply the archive's default read state. Report incomplete
+     extraction separately, not as proof that no status headers existed.
 5. **Rejects.** Unparseable messages are still stored as acquisitions,
    since bytes are kept even when parsing fails, and flagged
    `parse_state='failed'`. Unreadable regions of a source file are
