@@ -553,9 +553,7 @@ mod tests {
         ))
         .unwrap()
         .job_id;
-        wait(&core, &job, |state| {
-            state != sb_service::ImportJobState::Inventory
-        });
+        wait(&core, &job, |state| state != ImportJobState::Inventory);
 
         let choices = vec![
             VariantChoice {
@@ -574,23 +572,12 @@ mod tests {
             choices,
         ))
         .unwrap();
-        wait(&core, &job, sb_service::ImportJobState::is_finished);
-
-        let variants: Vec<_> = sb_test_support::block_on(async {
-            let guard = core.service.read().await;
-            let job = guard.as_ref().unwrap().import_job(&job).await.unwrap();
-            assert_eq!(job.state, sb_service::ImportJobState::Completed);
-            job.sources
-                .into_iter()
-                .map(|source| source.variant)
-                .collect()
-        });
+        let done = wait(&core, &job, finished);
+        assert_eq!(done.state, ImportJobState::Completed);
+        let variants: Vec<_> = done.sources.iter().map(|source| source.variant).collect();
         assert_eq!(
             variants,
-            vec![
-                Some(sb_service::MboxVariant::Mboxo),
-                Some(sb_service::MboxVariant::Mboxrd),
-            ]
+            vec![Some(MboxVariant::Mboxo), Some(MboxVariant::Mboxrd)]
         );
 
         sb_test_support::block_on(core.shutdown());
