@@ -5,7 +5,9 @@
 //! test-support executor like every engine test.
 
 use std::pin::pin;
+use std::sync::{Arc, mpsc};
 use std::task::{Context, Waker};
+use std::time::Duration;
 
 use sb_test_support::ScratchDir;
 
@@ -19,6 +21,30 @@ fn scratch_engine(label: &str) -> (ScratchDir, Engine) {
     let engine = sb_test_support::block_on(Engine::open(scratch.path().join("store")))
         .expect("the engine opens");
     (scratch, engine)
+}
+
+/// Run `f` while another thread holds the window table, which every
+/// window call locks. Work `f` dispatches cannot finish before `f`
+/// returns, so a first poll answers `Pending` however fast the pool is.
+/// Work run on the caller's thread instead waits out the hold and is
+/// seen finished.
+fn with_table_held<T>(engine: &Engine, f: impl FnOnce() -> T) -> T {
+    const HOLD: Duration = Duration::from_secs(2);
+    let windows = Arc::clone(engine.windows());
+    let (held, wait_held) = mpsc::channel();
+    let (release, wait_release) = mpsc::channel::<()>();
+    std::thread::scope(|scope| {
+        scope.spawn(move || {
+            let _table = windows.lock();
+            held.send(()).unwrap();
+            // Released by `release` dropping, or after `HOLD` at worst.
+            let _ = wait_release.recv_timeout(HOLD);
+        });
+        wait_held.recv().unwrap();
+        let result = f();
+        drop(release);
+        result
+    })
 }
 
 /// Fill the debug source, returning the new generation.
@@ -656,7 +682,7 @@ fn window_calls_run_on_the_engine_runtime() {
 
     let mut index = pin!(engine.window_ids(window.window_id()));
     assert!(
-        index.as_mut().poll(&mut cx).is_pending(),
+        with_table_held(&engine, || index.as_mut().poll(&mut cx).is_pending()),
         "the id index was built on the caller's thread"
     );
     let index = sb_test_support::block_on(index).expect("the index arrives");
@@ -665,7 +691,7 @@ fn window_calls_run_on_the_engine_runtime() {
     let mut page =
         pin!(engine.read_window(window.window_id(), generation, Anchor::Around(1), 1_000));
     assert!(
-        page.as_mut().poll(&mut cx).is_pending(),
+        with_table_held(&engine, || page.as_mut().poll(&mut cx).is_pending()),
         "the page was built on the caller's thread"
     );
     let page = sb_test_support::block_on(page).expect("the page arrives");
@@ -687,8 +713,10 @@ fn an_open_dropped_after_dispatch_leaves_no_window() {
     let mut cx = Context::from_waker(Waker::noop());
 
     let mut dropped = Box::pin(engine.open_window(WindowSpec::DebugSynthetic, Anchor::Top, 5));
-    assert!(dropped.as_mut().poll(&mut cx).is_pending());
-    drop(dropped);
+    with_table_held(&engine, || {
+        assert!(dropped.as_mut().poll(&mut cx).is_pending());
+        drop(dropped);
+    });
 
     let next =
         sb_test_support::block_on(engine.open_window(WindowSpec::DebugSynthetic, Anchor::Top, 5))
@@ -732,7 +760,10 @@ fn a_dropped_finished_open_cleans_up_off_the_dropping_thread() {
     let mut cx = Context::from_waker(Waker::noop());
 
     let mut open = Box::pin(engine.open_window(WindowSpec::DebugSynthetic, Anchor::Top, 5));
-    assert!(open.as_mut().poll(&mut cx).is_pending());
+    assert!(with_table_held(&engine, || open
+        .as_mut()
+        .poll(&mut cx)
+        .is_pending()));
 
     // The work registers window 1 and finishes; nobody claims it.
     let deadline = std::time::Instant::now() + PATIENCE;

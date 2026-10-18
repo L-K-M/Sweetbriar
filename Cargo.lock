@@ -651,6 +651,8 @@ dependencies = [
  "sb-platform",
  "sb-smtp",
  "sb-store",
+ "sb-test-support",
+ "serde_json",
 ]
 
 [[package]]

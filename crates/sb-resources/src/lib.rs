@@ -7,23 +7,35 @@
 //! with the real seams (`RealFs`, `SystemClock`, `OsRandom`) built from
 //! `sb-platform` (spec/01 rule 5 — no leaf ever constructs them), and
 //! exposes exactly what the engine needs: writes, reads, close, the
-//! settings helpers, receipts, a new idempotency-key UUID and the
-//! platform's default roots.
+//! settings helpers, receipts, a new idempotency-key UUID, import
+//! source inventory and the platform's default roots.
 
-use std::path::Path;
+use std::ops::ControlFlow;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use sb_platform::{OsRandom, RealFs, SystemClock};
 use sb_store::StorePaths;
 
+mod acquire;
+mod import;
+
 // The engine's names, re-exported by item so the engine states bounds
 // and maps errors without depending on a leaf (spec/01 rule 3). The
 // default roots climb the same way, for the service's platform
 // defaults.
+pub use acquire::{AcquiredMessage, FlagExtraction, SourceAcquisition, SourcePosition};
+pub use import::{
+    ImportInventory, ImportInventoryOutcome, ImportProblem, ImportProblemKind, ImportProgress,
+    SourceInventory, SourceKind,
+};
+pub use sb_mime::{MboxQuoting, MboxVariant};
 pub use sb_platform::{default_cache_root, default_data_root};
+pub use sb_store::imports::ImportMessage;
 pub use sb_store::settings::{StoredSetting, read_all, upsert};
 pub use sb_store::{
-    Receipt, StoreError, Timestamp, Transaction, Uuid, WriteFuture, WritePriority, run_once,
+    ImportSourceSnapshot, Receipt, StoreError, Timestamp, Transaction, Uuid, WriteFuture,
+    WritePriority, run_once,
 };
 
 use sb_store::{Clock, Fs, Random, Seams, Store, open};
@@ -32,6 +44,7 @@ use sb_store::{Clock, Fs, Random, Seams, Store, open};
 /// process's whole reach into the leaves (spec/01).
 pub struct Resources {
     store: Store,
+    fs: Arc<dyn Fs>,
     clock: Arc<dyn Clock>,
     random: Arc<dyn Random>,
 }
@@ -50,6 +63,7 @@ impl Resources {
         let seams = Seams::new(Arc::clone(&fs), Arc::clone(&clock), Arc::clone(&random));
         Ok(Self {
             store: open(&paths, &seams)?,
+            fs,
             clock,
             random,
         })
@@ -75,6 +89,39 @@ impl Resources {
         f: impl FnOnce(&Transaction) -> Result<T, StoreError>,
     ) -> Result<T, StoreError> {
         self.store.read(f)
+    }
+
+    /// Discover sources in request order and count durable private copies
+    /// (spec/09). Blocking file I/O: run on a blocking thread. `Break`
+    /// requests an explicit `Cancelled` outcome, preserving earlier results.
+    pub fn inventory_import_sources(
+        &self,
+        roots: &[PathBuf],
+        progress: impl FnMut(ImportProgress<'_>) -> ControlFlow<()>,
+    ) -> ImportInventoryOutcome {
+        import::inventory(&self.store, self.fs.as_ref(), roots, progress)
+    }
+
+    /// Verify and reopen `source`'s snapshot to acquire messages from
+    /// `position` (spec/09). Only an `Ambiguous` source needs `variant`.
+    /// Blocking: the whole snapshot is hashed again first (spec/03).
+    pub fn open_import_acquisition(
+        &self,
+        source: &SourceInventory,
+        variant: Option<MboxVariant>,
+        position: SourcePosition,
+    ) -> Result<SourceAcquisition, StoreError> {
+        acquire::open(&self.store, source, variant, position)
+    }
+
+    /// Publish the next message's exact bytes and summarize them under
+    /// the spec/10 limits, or `None` once the source's count is consumed.
+    /// Blocking. Nothing is committed: the job batches the results.
+    pub fn acquire_import_message(
+        &self,
+        acquisition: &mut SourceAcquisition,
+    ) -> Result<Option<AcquiredMessage>, StoreError> {
+        acquire::next(&self.store, acquisition, &sb_mime::Limits::default())
     }
 
     /// Close the store: the clean-shutdown marker, the writer, the
