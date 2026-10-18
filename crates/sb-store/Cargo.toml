@@ -19,6 +19,11 @@ sha2 = { version = "=0.11.1", default-features = false }
 # Canonical import provenance and checkpoints (spec/02); same pin as xtask.
 serde_json = "=1.0.151"
 
+[features]
+# Test-only writes for the layers above, as M1.3e's window tests need:
+# never enabled outside dev-dependencies.
+test-seams = []
+
 [dev-dependencies]
 sb-test-support = { version = "0.0.1", path = "../sb-test-support" }
 # spec/01 crate table: model tests (spec/11), here the list projection's

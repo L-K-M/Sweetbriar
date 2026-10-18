@@ -43,4 +43,7 @@ pub use receipts::{Receipt, run_once};
 pub use settings::{StoredSetting, read_all, upsert};
 pub use source_snapshots::{ImportSourceCapture, ImportSourceSnapshot};
 pub use store::{ReadOnlyStore, Seams, Store, open, open_read_only};
+
+#[cfg(feature = "test-seams")]
+pub use list_rows::refresh_list_rows;
 pub use writer::{WriteFuture, WritePriority, Writer};

@@ -8,18 +8,59 @@ use sb_engine::WindowId;
 
 use crate::{Core, CoreError};
 
-/// Which window a shell is listing (spec/07). For the pilot only
-/// `DebugSynthetic` — the in-memory debug source — exists.
+/// Which window a shell is listing (spec/07): the store's lists, or
+/// the pilot's in-memory debug source.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WindowSpec {
     /// The synthetic source filled by `Core::debug_fill_synthetic`.
     DebugSynthetic,
+    /// One mailbox's occurrences.
+    Mailbox(i64),
+    /// Every occurrence in mailboxes of one role.
+    Unified(MailboxRole),
+    /// Flagged logical messages, once each.
+    Flagged,
+    /// One thread's logical messages, once each.
+    Thread(i64),
 }
 
 impl WindowSpec {
     fn to_engine(self) -> sb_engine::WindowSpec {
         match self {
             Self::DebugSynthetic => sb_engine::WindowSpec::DebugSynthetic,
+            Self::Mailbox(id) => sb_engine::WindowSpec::Mailbox(id),
+            Self::Unified(role) => sb_engine::WindowSpec::Unified(role.to_engine()),
+            Self::Flagged => sb_engine::WindowSpec::Flagged,
+            Self::Thread(id) => sb_engine::WindowSpec::Thread(id),
+        }
+    }
+}
+
+/// A mailbox's special-use role (spec/02 `mailboxes.role`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MailboxRole {
+    Inbox,
+    Sent,
+    Drafts,
+    Trash,
+    Junk,
+    Archive,
+    All,
+    /// Bridge's Starred (spec/04).
+    Flagged,
+}
+
+impl MailboxRole {
+    fn to_engine(self) -> sb_engine::MailboxRole {
+        match self {
+            Self::Inbox => sb_engine::MailboxRole::Inbox,
+            Self::Sent => sb_engine::MailboxRole::Sent,
+            Self::Drafts => sb_engine::MailboxRole::Drafts,
+            Self::Trash => sb_engine::MailboxRole::Trash,
+            Self::Junk => sb_engine::MailboxRole::Junk,
+            Self::Archive => sb_engine::MailboxRole::Archive,
+            Self::All => sb_engine::MailboxRole::All,
+            Self::Flagged => sb_engine::MailboxRole::Flagged,
         }
     }
 }
@@ -208,5 +249,36 @@ impl Core {
     /// harmless; the shell closes every window it opens.
     pub async fn close_window(&self, window_id: u64) {
         self.engine().close_window(WindowId::from(window_id)).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{CoreConfig, open_core};
+
+    /// Every store window spec opens through the service; over an empty
+    /// store each is empty and knows it (spec/07 "Store windows").
+    #[test]
+    fn store_windows_open_through_the_service() {
+        let scratch = sb_test_support::ScratchDir::new("service-store-windows");
+        let config = CoreConfig {
+            data_root: scratch.path().join("store"),
+            cache_root: scratch.path().join("cache"),
+        };
+        let core = sb_test_support::block_on(open_core(config)).unwrap();
+        for spec in [
+            WindowSpec::Mailbox(1),
+            WindowSpec::Unified(MailboxRole::Inbox),
+            WindowSpec::Flagged,
+            WindowSpec::Thread(1),
+        ] {
+            let window =
+                sb_test_support::block_on(core.open_window(spec, Anchor::Top, 10)).unwrap();
+            assert!(window.rows.is_empty(), "{spec:?}");
+            assert_eq!(window.total, Count::Exact(0), "{spec:?}");
+            sb_test_support::block_on(core.close_window(window.window_id));
+        }
+        sb_test_support::block_on(core.shutdown());
     }
 }

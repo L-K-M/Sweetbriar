@@ -808,3 +808,5 @@ fn a_dropped_finished_open_cleans_up_off_the_dropping_thread() {
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
 }
+
+mod store;

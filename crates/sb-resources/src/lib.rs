@@ -56,11 +56,11 @@ pub use sb_store::{
     WritePriority, run_once,
 };
 
-#[cfg(feature = "test-seams")]
-pub use sb_store::Fs;
 #[cfg(not(feature = "test-seams"))]
 use sb_store::Fs;
 use sb_store::{Clock, Random, Seams, Store, open};
+#[cfg(feature = "test-seams")]
+pub use sb_store::{Fs, refresh_list_rows};
 
 /// The store and the seams it opened with, held for the engine: one
 /// process's whole reach into the leaves (spec/01).

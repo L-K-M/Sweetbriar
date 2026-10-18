@@ -109,6 +109,21 @@ pub(crate) fn refresh(tx: &Transaction, occurrences: &BTreeSet<i64>) -> Result<b
     Ok(changed)
 }
 
+/// [`refresh`], then a generation when rows changed: what a writer that
+/// changes occurrences does, for tests above this crate that build
+/// stores imports can't (labels, flags, moves).
+#[cfg(feature = "test-seams")]
+pub fn refresh_list_rows(
+    tx: &Transaction,
+    occurrences: &BTreeSet<i64>,
+) -> Result<bool, StoreError> {
+    let changed = refresh(tx, occurrences)?;
+    if changed {
+        advance_generation(tx)?;
+    }
+    Ok(changed)
+}
+
 /// The occurrences of every message whose body is `acquisition`: its
 /// first summary changes all their rows (spec/02).
 pub(crate) fn sharing_acquisition(
