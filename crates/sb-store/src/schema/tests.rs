@@ -16,7 +16,7 @@ use sb_types::time::Timestamp;
 use super::*;
 use crate::StorePaths;
 use crate::store::{PINNED_SQLITE, WRITER_PRAGMAS};
-use crate::testing::{FIXED_NOW_MS, reading, scratch_paths, test_seams};
+use crate::testing::{FIXED_NOW_MS, extra_migration, reading, scratch_paths, test_seams};
 
 /// Seams with a different clock and seed, to prove a reopen rewrote
 /// nothing it shouldn't have.
@@ -68,20 +68,26 @@ fn assert_v4_uuid(uuid: &str) {
     );
 }
 
-/// 1. A fresh store reaches `user_version` 1 with its metadata:
+/// 1. A fresh store reaches the latest schema with its metadata:
 ///    both version keys carry the workspace version, `created_at`
 ///    the clock, and `store_uuid`/`incarnation` two distinct v4
 ///    UUIDs.
 #[test]
-fn a_fresh_store_reaches_version_1_with_its_meta() {
+fn a_fresh_store_reaches_the_latest_version_with_its_meta() {
     let (_scratch, paths) = scratch_paths("schema-fresh");
     let store = crate::open(&paths, &test_seams(real_fs())).unwrap();
     assert_eq!(
         reading(&store, |tx| Ok(one_int(tx, "PRAGMA user_version"))),
-        1
+        i64::from(LATEST_SCHEMA_VERSION)
     );
 
-    let meta = reading(&store, |tx| Ok(store_meta(tx)));
+    let meta =
+        reading(&store, |tx| {
+            assert_eq!(one_int(tx,
+            "SELECT count(*) FROM accounts WHERE provider = 'local_archive' AND kind = 'local'
+             AND display_name = 'Local Archive' AND state = 'active' AND sort_order = 0"), 1);
+            Ok(store_meta(tx))
+        });
     assert_eq!(
         meta.get("last_migrated_by").unwrap(),
         env!("CARGO_PKG_VERSION")
@@ -118,7 +124,7 @@ fn reopening_runs_no_migration() {
     let second = crate::open(&paths, &other_seams()).unwrap();
     assert_eq!(
         reading(&second, |tx| Ok(one_int(tx, "PRAGMA user_version"))),
-        1
+        i64::from(LATEST_SCHEMA_VERSION)
     );
     let meta = reading(&second, |tx| Ok(store_meta(tx)));
     assert_eq!(meta.get("created_at").unwrap(), &created_at);
@@ -303,30 +309,27 @@ fn migration_2_orphan(tx: &rusqlite::Transaction, _seams: &Seams) -> Result<(), 
 }
 
 /// 6. A migration whose checks find a problem rolls back and yields
-///    `Corrupt`: `user_version` is still 1 and the orphan table is
+///    `Corrupt`: the production version remains and the orphan table is
 ///    absent (spec/02 "Migrations").
 #[test]
 fn a_migration_leaving_a_foreign_key_violation_rolls_back() {
     let (_scratch, paths) = scratch_paths("schema-fk-rollback");
-    let failing: &[Migration] = &[
-        MIGRATIONS[0],
-        Migration {
-            version: 2,
-            run: migration_2_orphan,
-        },
-    ];
+    let failing = extra_migration(migration_2_orphan);
     match crate::store::open_with(
         &paths,
         &test_seams(real_fs()),
         WRITER_PRAGMAS,
         crate::store::READER_PRAGMAS,
         &PINNED_SQLITE,
-        failing,
+        &failing,
     )
     .unwrap_err()
     {
         StoreError::Corrupt { detail } => {
-            assert!(detail.contains("migration 2"), "{detail}");
+            assert!(
+                detail.contains(&format!("migration {}", LATEST_SCHEMA_VERSION + 1)),
+                "{detail}"
+            );
             assert!(detail.contains("foreign-key"), "{detail}");
             assert!(detail.contains("m2_probe"), "{detail}");
         }
@@ -336,7 +339,7 @@ fn a_migration_leaving_a_foreign_key_violation_rolls_back() {
     let store = crate::open(&paths, &test_seams(real_fs())).unwrap();
     assert_eq!(
         reading(&store, |tx| Ok(one_int(tx, "PRAGMA user_version"))),
-        1
+        i64::from(LATEST_SCHEMA_VERSION)
     );
     assert_eq!(
         reading(&store, |tx| {
@@ -409,15 +412,15 @@ fn a_newer_user_version_is_newer_store_and_touches_nothing() {
     let (_scratch, paths) = closed_store("schema-newer");
     for (sql, named) in [
         (
-            "PRAGMA user_version = 2;
+            "PRAGMA user_version = 3;
              UPDATE store_meta SET value = '9.9.9' WHERE key = 'last_migrated_by';",
             "9.9.9",
         ),
         (
-            "PRAGMA user_version = 3; DELETE FROM store_meta;",
+            "PRAGMA user_version = 4; DELETE FROM store_meta;",
             "unknown",
         ),
-        ("PRAGMA user_version = 4; DROP TABLE store_meta;", "unknown"),
+        ("PRAGMA user_version = 5; DROP TABLE store_meta;", "unknown"),
     ] {
         tamper(&paths, sql);
         let before = fs::read(paths.state_db()).unwrap();
@@ -579,22 +582,25 @@ fn a_quick_check_finding_rolls_back_schema_and_metadata() {
         &paths,
         "UPDATE store_meta SET value = 'previous-app' WHERE key = 'last_migrated_by';",
     );
-    let migrations = [
-        MIGRATIONS[0],
-        Migration {
-            version: 2,
-            run: migration_2_bad_check,
-        },
-    ];
+    let migrations = extra_migration(migration_2_bad_check);
     match open_err(&paths, &migrations) {
         StoreError::Corrupt { detail } => {
-            assert!(detail.contains("migration 2's quick_check"), "{detail}");
+            assert!(
+                detail.contains(&format!(
+                    "migration {}'s quick_check",
+                    LATEST_SCHEMA_VERSION + 1
+                )),
+                "{detail}"
+            );
         }
         err => panic!("expected Corrupt, got {err:?}"),
     }
 
     let raw = Connection::open(paths.state_db()).unwrap();
-    assert_eq!(one_int(&raw, "PRAGMA user_version"), 1);
+    assert_eq!(
+        one_int(&raw, "PRAGMA user_version"),
+        i64::from(LATEST_SCHEMA_VERSION)
+    );
     assert_eq!(store_meta(&raw)["last_migrated_by"], "previous-app");
     assert_eq!(
         one_int(
@@ -619,13 +625,7 @@ fn a_failed_open_leaves_crashed_wal_frames_in_the_wal() {
     let (_scratch, paths) = closed_store("schema-failed-open-crash");
     crash_write(&paths, "INSERT INTO store_meta VALUES ('crash', 'frame');");
     let before = fs::read(paths.state_db()).unwrap();
-    let migrations = [
-        MIGRATIONS[0],
-        Migration {
-            version: 2,
-            run: migration_2_sql_bug,
-        },
-    ];
+    let migrations = extra_migration(migration_2_sql_bug);
     let err = open_err(&paths, &migrations);
     assert!(matches!(err, StoreError::Internal { .. }), "{err:?}");
     assert_eq!(
@@ -647,18 +647,15 @@ fn closing_an_opened_store_checkpoints() {
 #[test]
 fn a_migration_bug_is_internal_and_rolls_back() {
     let (_scratch, paths) = closed_store("schema-sql-bug");
-    let migrations = [
-        MIGRATIONS[0],
-        Migration {
-            version: 2,
-            run: migration_2_sql_bug,
-        },
-    ];
+    let migrations = extra_migration(migration_2_sql_bug);
     let err = open_err(&paths, &migrations);
     assert!(matches!(err, StoreError::Internal { .. }), "{err:?}");
 
     let raw = Connection::open(paths.state_db()).unwrap();
-    assert_eq!(one_int(&raw, "PRAGMA user_version"), 1);
+    assert_eq!(
+        one_int(&raw, "PRAGMA user_version"),
+        i64::from(LATEST_SCHEMA_VERSION)
+    );
     assert_eq!(
         one_int(
             &raw,
@@ -693,13 +690,7 @@ fn the_full_integrity_check_runs_after_the_migrations() {
     assert_eq!(pragma_strings(&raw, "PRAGMA quick_check").unwrap(), ["ok"]);
     raw.close().unwrap();
 
-    let migrations = [
-        MIGRATIONS[0],
-        Migration {
-            version: 2,
-            run: migration_2_noop,
-        },
-    ];
+    let migrations = extra_migration(migration_2_noop);
     match open_err(&paths, &migrations) {
         StoreError::Corrupt { detail } => {
             assert!(
@@ -750,7 +741,7 @@ fn failing_randomness_is_unavailable_and_retryable() {
     let store = crate::open(&paths, &test_seams(real_fs())).unwrap();
     assert_eq!(
         reading(&store, |tx| Ok(one_int(tx, "PRAGMA user_version"))),
-        1
+        i64::from(LATEST_SCHEMA_VERSION)
     );
 }
 
@@ -820,7 +811,7 @@ fn a_refused_database_with_crashed_wal_frames_stays_untouched() {
     let (_scratch, paths) = closed_store("schema-newer-crash");
     crash_write(
         &paths,
-        "PRAGMA user_version = 2;
+        "PRAGMA user_version = 3;
          UPDATE store_meta SET value = '9.9.9' WHERE key = 'last_migrated_by';",
     );
     let before = fs::read(paths.state_db()).unwrap();
@@ -889,6 +880,12 @@ fn a_store_the_runner_cannot_write_is_unavailable() {
     assert!(matches!(err, StoreError::Unavailable { .. }), "{err:?}");
 }
 
+/// Appending a migration must not reinterpret an existing store version.
+#[test]
+fn historical_migration_ids_are_pinned() {
+    assert_eq!([MIGRATIONS[0].version, MIGRATIONS[1].version], [1, 2]);
+}
+
 /// The runner relies on its list being strictly increasing; an
 /// unordered or repeated version is a bug in the list: `Internal`.
 #[test]
@@ -907,7 +904,7 @@ fn an_unordered_migration_list_is_internal() {
             Err(StoreError::Internal { .. })
         ));
     }
-    assert_eq!(check_ordered(MIGRATIONS).unwrap(), 1);
+    assert_eq!(check_ordered(MIGRATIONS).unwrap(), LATEST_SCHEMA_VERSION);
 }
 
 /// An index or trigger added to a real store's `store_meta` through a

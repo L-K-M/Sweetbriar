@@ -4,6 +4,7 @@
 #![forbid(unsafe_code)]
 
 mod error;
+pub mod imports;
 mod objects;
 mod paths;
 mod readers;
