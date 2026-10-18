@@ -30,6 +30,10 @@ pub(crate) type OpenBody = Box<dyn FnOnce() + Send>;
 /// thread; a test can refuse, as an exhausted OS would.
 pub(crate) type SpawnOpen = fn(OpenBody) -> std::io::Result<()>;
 
+/// Opens the store's resources on the open thread: production uses the
+/// real seams, crash-cut tests an injected filesystem.
+type OpenResources = Box<dyn FnOnce(&Path) -> Result<Resources, sb_resources::StoreError> + Send>;
+
 /// The production [`SpawnOpen`]: a named, detached OS thread.
 fn spawn_open_thread(body: OpenBody) -> std::io::Result<()> {
     std::thread::Builder::new()
@@ -311,11 +315,30 @@ impl Engine {
         data_root: impl AsRef<Path>,
         spawn: SpawnOpen,
     ) -> Result<Self, EngineError> {
-        let data_root = data_root.as_ref().to_path_buf();
+        Self::open_on(data_root.as_ref(), spawn, Box::new(Resources::open)).await
+    }
+
+    /// [`Engine::open`] on an injected filesystem, for crash-cut suites
+    /// (spec/11).
+    #[cfg(test)]
+    pub(crate) async fn open_with_fs(
+        data_root: impl AsRef<Path>,
+        fs: Arc<dyn sb_resources::Fs>,
+    ) -> Result<Self, EngineError> {
+        let open = Box::new(move |root: &Path| Resources::open_with_fs(root, fs));
+        Self::open_on(data_root.as_ref(), spawn_open_thread, open).await
+    }
+
+    async fn open_on(
+        data_root: &Path,
+        spawn: SpawnOpen,
+        open: OpenResources,
+    ) -> Result<Self, EngineError> {
+        let data_root = data_root.to_path_buf();
         let runtime = OwnedRuntime::start()?;
         let (opened, received) = tokio::sync::oneshot::channel();
         spawn(Box::new(move || {
-            let engine = Resources::open(&data_root)
+            let engine = open(&data_root)
                 .map_err(EngineError::from)
                 .and_then(|resources| {
                     Ok(Self {

@@ -16,5 +16,10 @@ sb-platform = { version = "0.0.1", path = "../sb-platform" }
 # pin as sb-store, no serde derive.
 serde_json = "=1.0.151"
 
+[features]
+# Crash-cut suites open the store on an injected filesystem seam
+# (spec/11); only dev-dependencies enable it, never a production build.
+test-seams = []
+
 [dev-dependencies]
 sb-test-support = { version = "0.0.1", path = "../sb-test-support" }
