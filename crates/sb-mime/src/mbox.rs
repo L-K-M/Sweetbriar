@@ -163,6 +163,16 @@ impl<R: BufRead> MboxScanner<R> {
         }
     }
 
+    /// Continue at `offset`, a separator an earlier scan of the same
+    /// verified bytes reported, with `source` already positioned there.
+    /// Offsets stay absolute; a non-separator is `MissingSeparator`.
+    pub fn resume(source: R, offset: u64) -> Self {
+        Self {
+            position: offset,
+            ..Self::new(source)
+        }
+    }
+
     fn next_record(&mut self) -> Result<Option<MboxRecord>, MboxError> {
         loop {
             let line_start = self.position;

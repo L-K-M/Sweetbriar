@@ -91,6 +91,7 @@ pub struct ImportSummary {
 }
 
 /// The object comes from publish, never from a re-serialization.
+#[derive(Debug)]
 pub struct ImportMessage {
     pub object: ObjectId,
     pub source_kind: ImportSourceKind,

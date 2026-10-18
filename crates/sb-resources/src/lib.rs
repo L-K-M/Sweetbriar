@@ -17,18 +17,21 @@ use std::sync::Arc;
 use sb_platform::{OsRandom, RealFs, SystemClock};
 use sb_store::StorePaths;
 
+mod acquire;
 mod import;
 
 // The engine's names, re-exported by item so the engine states bounds
 // and maps errors without depending on a leaf (spec/01 rule 3). The
 // default roots climb the same way, for the service's platform
 // defaults.
+pub use acquire::{AcquiredMessage, FlagExtraction, SourceAcquisition, SourcePosition};
 pub use import::{
     ImportInventory, ImportInventoryOutcome, ImportProblem, ImportProblemKind, ImportProgress,
     SourceInventory, SourceKind,
 };
-pub use sb_mime::MboxQuoting;
+pub use sb_mime::{MboxQuoting, MboxVariant};
 pub use sb_platform::{default_cache_root, default_data_root};
+pub use sb_store::imports::ImportMessage;
 pub use sb_store::settings::{StoredSetting, read_all, upsert};
 pub use sb_store::{
     ImportSourceSnapshot, Receipt, StoreError, Timestamp, Transaction, Uuid, WriteFuture,
@@ -97,6 +100,28 @@ impl Resources {
         progress: impl FnMut(ImportProgress<'_>) -> ControlFlow<()>,
     ) -> ImportInventoryOutcome {
         import::inventory(&self.store, self.fs.as_ref(), roots, progress)
+    }
+
+    /// Verify and reopen `source`'s snapshot to acquire messages from
+    /// `position` (spec/09). Only an `Ambiguous` source needs `variant`.
+    /// Blocking: the whole snapshot is hashed again first (spec/03).
+    pub fn open_import_acquisition(
+        &self,
+        source: &SourceInventory,
+        variant: Option<MboxVariant>,
+        position: SourcePosition,
+    ) -> Result<SourceAcquisition, StoreError> {
+        acquire::open(&self.store, source, variant, position)
+    }
+
+    /// Publish the next message's exact bytes and summarize them under
+    /// the spec/10 limits, or `None` once the source's count is consumed.
+    /// Blocking. Nothing is committed: the job batches the results.
+    pub fn acquire_import_message(
+        &self,
+        acquisition: &mut SourceAcquisition,
+    ) -> Result<Option<AcquiredMessage>, StoreError> {
+        acquire::next(&self.store, acquisition, &sb_mime::Limits::default())
     }
 
     /// Close the store: the clean-shutdown marker, the writer, the
