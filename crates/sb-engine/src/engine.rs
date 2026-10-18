@@ -550,7 +550,7 @@ impl std::fmt::Debug for Engine {
 
 /// A blocking task failed to run to completion: it was cancelled or
 /// panicked, which the engine treats as an internal failure.
-fn join_failed(what: &str, join: JoinError) -> EngineError {
+pub(crate) fn join_failed(what: &str, join: JoinError) -> EngineError {
     let why = if join.is_panic() {
         "panicked"
     } else {

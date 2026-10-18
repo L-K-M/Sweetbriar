@@ -197,3 +197,84 @@ fn a_debug_fill_invalidates_synthetic_windows() {
     }
     block_on(engine.shutdown()).unwrap();
 }
+
+/// A read cancelled on its way back delivered nothing, so it moves no
+/// mark: a later subscription still reports the generations its caller
+/// never saw.
+#[test]
+fn a_cancelled_read_moves_no_mark() {
+    let (_scratch, engine, window) = listed("subscribe-cancelled-read");
+    toggle_flags(&engine, 2);
+    {
+        let mut cx = Context::from_waker(Waker::noop());
+        let mut index = pin!(engine.window_ids(window.window_id()));
+        // The first poll looks the window up; once that is back, the
+        // second starts the store read.
+        assert!(index.as_mut().poll(&mut cx).is_pending());
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(index.as_mut().poll(&mut cx).is_pending());
+        // Let the read finish on the pool, then drop it undelivered.
+        std::thread::sleep(Duration::from_millis(300));
+    }
+    let subscription = engine.subscribe(window.window_id());
+    let mut next = pin!(subscription.next());
+    assert_eq!(
+        finish(next.as_mut()).unwrap(),
+        WindowEvent::Invalidated {
+            generation: window.generation() + 2
+        }
+    );
+    block_on(engine.shutdown()).unwrap();
+}
+
+/// The mark is taken when subscribing: a read between `subscribe` and
+/// the first `next` moves it no more than an event would skip it.
+#[test]
+fn the_mark_is_taken_at_subscribe() {
+    let (_scratch, engine, window) = listed("subscribe-mark");
+    let subscription = engine.subscribe(window.window_id());
+    toggle_flags(&engine, 1);
+    let index = block_on(engine.window_ids(window.window_id())).unwrap();
+    assert_eq!(index.generation(), window.generation() + 1);
+    assert_eq!(
+        block_on(subscription.next()).unwrap(),
+        WindowEvent::Invalidated {
+            generation: window.generation() + 1
+        }
+    );
+    block_on(engine.shutdown()).unwrap();
+}
+
+/// Racing debug fills publish the newest generation, whatever order
+/// they finish in.
+#[test]
+fn racing_fills_publish_the_newest_generation() {
+    let (_scratch, engine, _window) = listed("subscribe-racing-fills");
+    let synthetic =
+        block_on(engine.open_window(WindowSpec::DebugSynthetic, Anchor::Top, 5)).unwrap();
+    let newest = std::thread::scope(|scope| {
+        let fillers: Vec<_> = (0..4)
+            .map(|_| {
+                scope.spawn(|| {
+                    (0..300)
+                        .map(|n| block_on(engine.debug_fill_synthetic(n)).unwrap())
+                        .max()
+                        .unwrap()
+                })
+            })
+            .collect();
+        fillers
+            .into_iter()
+            .map(|f| f.join().unwrap())
+            .max()
+            .unwrap()
+    });
+    // What every subscription waits on names the newest fill.
+    assert_eq!(engine.windows().versions.borrow().synthetic, newest);
+    assert_eq!(
+        block_on(engine.subscribe(synthetic.window_id()).next()).unwrap(),
+        WindowEvent::ResetRequired,
+        "1,200 fills are past the lag bound"
+    );
+    block_on(engine.shutdown()).unwrap();
+}
