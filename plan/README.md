@@ -107,7 +107,7 @@ that needs it.
 | O6 | Install Proton Mail Bridge 3.27.1+ (paid Proton plan with Mail), sign in, export its TLS certificate | M2 |
 | O7 | Run the per-milestone qualification checklists against your real Proton account | M2.Q onward |
 | O8 | Optional: enrol in the Apple Developer Program, for signed builds, Keychain access groups, notarization and later distribution. Ad-hoc builds suffice for the pilot except where M2.3 qualifies the data-protection Keychain (see there) | M2.3 / M6 |
-| O9 | Run the list benchmark's store-backed mode (Debug → Run List Benchmark) over an imported mailbox on your Mac | M1.4 |
+| O9 | Run the list benchmark's store-backed mode (Debug → Run Store Benchmark) over an imported mailbox on your Mac | M1.4 |
 
 ## Definition of done for the pilot
 
