@@ -11,15 +11,21 @@
 
 mod engine;
 mod error;
+mod import;
 mod settings;
 mod windows;
 
 // The engine's API types and the platform defaults the layer above
 // needs, re-exported by item through this layer (spec/01 rule 3;
 // `sb-service` itself re-exports nothing).
-pub use sb_resources::{Receipt, Timestamp, default_cache_root, default_data_root};
+pub use sb_resources::{
+    ImportJobCheckpoint, ImportJobState, ImportProblem, ImportProblemKind, ImportTotals,
+    MboxQuoting, MboxVariant, Receipt, SourceInventory, SourceKind, SourcePosition, Timestamp,
+    default_cache_root, default_data_root,
+};
 
 pub use engine::Engine;
 pub use error::EngineError;
+pub use import::{ImportJobStatus, ImportSourceStatus};
 pub use settings::Setting;
 pub use windows::{Anchor, Count, Cursor, ListRow, Window, WindowId, WindowIds, WindowSpec};
