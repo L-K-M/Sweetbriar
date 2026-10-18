@@ -14,6 +14,7 @@ mod readers;
 mod receipts;
 mod schema;
 pub mod settings;
+pub mod sidebar;
 mod source_snapshots;
 mod store;
 #[cfg(test)]

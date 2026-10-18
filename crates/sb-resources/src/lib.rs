@@ -46,6 +46,10 @@ pub use sb_store::lists::{
     list_generation, list_ids, read_list_page,
 };
 pub use sb_store::settings::{StoredSetting, read_all, upsert};
+pub use sb_store::sidebar::{
+    AccountKind, AccountState, MailboxKind, MailboxList, StoredAccount, StoredMailbox, accounts,
+    mailboxes,
+};
 pub use sb_store::threads::{
     StoredThread, ThreadDescription, ThreadRevisions, ThreadSource, assign_thread, create_thread,
     describe_thread, mark_threads_built, note_membership_change, remove_empty_threads,

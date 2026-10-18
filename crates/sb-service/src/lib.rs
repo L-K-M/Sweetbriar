@@ -7,6 +7,7 @@
 mod api;
 mod error;
 mod imports;
+mod sidebar;
 mod windows;
 
 pub use api::{Core, CoreConfig, Receipt, Setting, open_core};
@@ -15,6 +16,7 @@ pub use imports::{
     ImportJob, ImportJobState, ImportProblem, ImportProblemKind, ImportSource, ImportSourceKind,
     ImportStarted, ImportTarget, ImportTotals, MboxVariant,
 };
+pub use sidebar::{Account, AccountKind, AccountState, Mailbox, MailboxKind, Mailboxes};
 pub use windows::{
     Anchor, Count, ListRow, MailboxRole, Subscription, Window, WindowEvent, WindowIds, WindowSpec,
 };
