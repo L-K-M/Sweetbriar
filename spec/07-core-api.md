@@ -251,7 +251,8 @@ enum WindowEvent { Invalidated { generation: u64 }, ResetRequired }
 async fn open_body(message_id: i64, preferred: BodyKind) -> Result<BodyLease, CoreError>;
 // BodyKind: SanitizedHtml | PlainText | Source
 struct BodyLease { lease_id: LeaseId, kind: BodyKind, file_path: String, byte_length: u64,
-                   remote_content_blocked: u32, warnings: Vec<RenderWarning> }
+                   remote_content_blocked: u32, warnings: Vec<RenderWarning>,
+                   manifest_path: Option<String> }
 async fn open_attachment(message_id: i64, part_id: String) -> Result<AttachmentLease, CoreError>;
 fn release_lease(lease_id: LeaseId);
 ```
@@ -265,6 +266,36 @@ fn release_lease(lease_id: LeaseId);
   disposable.
 - **Not yet downloaded:** if the body isn't acquired yet, `open_body`
   fetches it (online) or returns `Unavailable` (offline).
+- **Lease tokens** are unguessable and never reused in a core's life;
+  each open returns a new lease. `release_lease` revokes access at once
+  and queues the cleanup; an unknown or released token does nothing.
+  An open either hands its lease to the caller or removes it: one
+  cancelled after its files were written leaves nothing live.
+- **Bounds:** the MIME limits (10) apply to every extraction. A
+  rendition file holds at most 50,000,000 bytes, one lease 100,000,000,
+  all live leases 512,000,000 and at most 64 of them; past a budget the
+  open is `Unavailable` naming the quota, and no live lease is evicted.
+- **Which body:** `preferred` is a preference; `kind` names what the
+  file holds. The last supported candidate of the requested kind in a
+  multipart/alternative wins; a multipart/related root is its `start`
+  part, else its first child. Attached messages and attached text are
+  never the body. Asked for HTML with none, the lease is plain text;
+  asked for plain text with only HTML, the text of the sanitized HTML.
+  Source is the acquisition's exact bytes.
+- **The manifest:** a sanitized HTML lease also carries
+  `manifest_path`, a version-1 JSON file in its directory listing each
+  `sweetbriar-cid:` resource (opaque id, file, verified media type,
+  length), each link's destination with its warnings (10), and the
+  message's attachments (part id, display name, media type, decoded
+  length).
+- **`AttachmentLease`** `{ lease_id, file_path, byte_length, part_id,
+  display_name, media_type }`: the decoded part under a generated file
+  name, with the quarantine attribute set before it is returned (10).
+  It lives until released, independent of any body lease.
+- **`RenderWarning`** is a code with an optional part id:
+  `partial_parse`, `charset_replaced`, `unsupported_content`,
+  `missing_cid`, `ambiguous_cid`, `unsafe_url`, `rendition_limit`,
+  `count_saturated`.
 
 ## Threading, cancellation and FFI rules
 

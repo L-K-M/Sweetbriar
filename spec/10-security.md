@@ -70,6 +70,23 @@ and D24, D29.
   - no scripts, forms, iframes, objects, `<base>` or meta refresh;
   - CSS is restricted, with no `url()` except `sweetbriar-cid:` and no
     loading at-rules (`@import`, `@font-face`, `@namespace` with a URL).
+    `style` elements are dropped; inline styles keep only an allow-list
+    of inert properties (colors, fonts, text alignment and decoration,
+    white space, margins, padding, borders, widths), parsed with
+    `cssparser`. No custom properties, `var()`, `expression()` or fixed
+    positioning;
+  - `cid:` URLs resolve only within the body's own multipart/related
+    part, never by path. The renderer mints
+    `sweetbriar-cid://<lease token>/<resource id>`; a sender's own
+    `sweetbriar-cid:` URLs are removed first. Only PNG, JPEG, GIF and
+    WebP whose bytes match are served; other parts stay attachments;
+  - `remote_content_blocked` counts each removed network-capable
+    resource URL once (each `src`, `srcset` candidate, CSS URL and
+    link hint), relative ones included, saturating with a warning.
+    Hyperlinks don't count;
+  - each link's destination is the anchor's title, and the manifest
+    (07) records its warnings: link text naming another domain, a raw
+    IP, user info.
   - The `WKWebView` setup in 08 adds a second, independent layer.
 - **Attachments:** the user opens them explicitly. Files are written to a
   per-lease cache directory with the quarantine attribute set, so
