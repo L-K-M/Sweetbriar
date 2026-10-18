@@ -22,8 +22,8 @@ mod windows;
 // `sb-service` itself re-exports nothing).
 pub use sb_resources::{
     ImportJobCheckpoint, ImportJobState, ImportProblem, ImportProblemKind, ImportTotals,
-    MboxQuoting, MboxVariant, Receipt, SourceInventory, SourceKind, SourcePosition, Timestamp,
-    default_cache_root, default_data_root,
+    MailboxRole, MboxQuoting, MboxVariant, Receipt, SourceInventory, SourceKind, SourcePosition,
+    Timestamp, default_cache_root, default_data_root,
 };
 
 pub use engine::Engine;

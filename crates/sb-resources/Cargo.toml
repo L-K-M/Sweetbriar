@@ -19,7 +19,7 @@ serde_json = "=1.0.154"
 [features]
 # Crash-cut suites open the store on an injected filesystem seam
 # (spec/11); only dev-dependencies enable it, never a production build.
-test-seams = []
+test-seams = ["sb-store/test-seams"]
 
 [dev-dependencies]
 sb-test-support = { version = "0.0.1", path = "../sb-test-support" }

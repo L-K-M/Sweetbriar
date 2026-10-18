@@ -4,15 +4,21 @@
 //! A *window* is a handle over a spec: `open_window` registers it and
 //! answers the first page, `read_window` pages it at the generation the
 //! caller holds, `window_ids` hands the shell the whole id index, and
-//! `close_window` releases the handle. The pilot's only spec is
-//! `DebugSynthetic`: one in-memory source per core, replaced atomically
-//! by `debug_fill_synthetic`. Everything here is in memory — the window
-//! code never touches the store — but each call still runs on the
-//! runtime's blocking pool (spec/07 "One runtime"), so the mutex below
-//! is never taken on a caller's thread, nor held across an await.
+//! `close_window` releases the handle. Store windows (`Mailbox`,
+//! `Unified`, `Flagged`, `Thread`) read `d_list_rows` in short reads and
+//! share the store's list generation. `DebugSynthetic` is the pilot's
+//! in-memory source, replaced atomically by `debug_fill_synthetic`.
+//! Every call runs on the runtime's blocking pool (spec/07 "One
+//! runtime"), so the table's mutex is never taken on a caller's thread,
+//! nor held across an await.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
+
+use sb_resources::{
+    ListAnchor, ListKey, ListPage, ListScope, MailboxRole, PageRead, StoredListRow,
+    list_generation, list_ids, read_list_page,
+};
 
 use crate::engine::Detached;
 use crate::{Engine, EngineError};
@@ -170,22 +176,46 @@ impl From<u64> for WindowId {
     }
 }
 
-/// Which window a shell is listing (spec/07 "Queries"). For the pilot
-/// only `DebugSynthetic` — the debug source below — exists; the real
-/// specs land with the store-backed lists.
+/// Which window a shell is listing (spec/07 "Queries"): the store's
+/// lists, or the pilot's in-memory debug source.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WindowSpec {
     /// The in-memory synthetic source, filled by `debug_fill_synthetic`.
     DebugSynthetic,
+    /// One mailbox's occurrences.
+    Mailbox(i64),
+    /// Every occurrence in mailboxes of one role ("all inboxes").
+    Unified(MailboxRole),
+    /// Flagged logical messages, through their representatives.
+    Flagged,
+    /// One thread's logical messages, through their representatives.
+    Thread(i64),
 }
 
 impl WindowSpec {
     /// The tag a cursor names its spec with (spec/07: "a cursor names
-    /// its row, its spec and its generation"), so a cursor carried to
-    /// a window over another spec is caught.
-    fn tag(self) -> &'static str {
+    /// its row, its spec and its generation"), mailbox, role or thread
+    /// included, so a cursor carried to a window over another spec is
+    /// caught.
+    fn tag(self) -> String {
         match self {
-            Self::DebugSynthetic => "debug-synthetic",
+            Self::DebugSynthetic => "debug-synthetic".to_owned(),
+            Self::Mailbox(id) => format!("mailbox:{id}"),
+            Self::Unified(role) => format!("unified:{}", role.as_str()),
+            Self::Flagged => "flagged".to_owned(),
+            Self::Thread(id) => format!("thread:{id}"),
+        }
+    }
+
+    /// The store scope a store window reads; `None` for the debug
+    /// source.
+    fn scope(self) -> Option<ListScope> {
+        match self {
+            Self::DebugSynthetic => None,
+            Self::Mailbox(id) => Some(ListScope::Mailbox(id)),
+            Self::Unified(role) => Some(ListScope::Unified(role)),
+            Self::Flagged => Some(ListScope::Flagged),
+            Self::Thread(id) => Some(ListScope::Thread(id)),
         }
     }
 }
@@ -366,7 +396,9 @@ impl Window {
         self.has_more_before
     }
 
-    /// The window's row count; the synthetic source always knows it.
+    /// The window's row count: exact for the synthetic source; for a
+    /// store window exact only when the page holds the whole window,
+    /// else at least what the page shows plus one per side with more.
     pub fn total(&self) -> Count {
         self.total
     }
@@ -536,6 +568,109 @@ impl Windows {
     fn close(&self, window_id: WindowId) {
         self.lock().open.remove(&window_id);
     }
+
+    /// Register a store window whose first page was already read.
+    fn register(&self, spec: WindowSpec) -> WindowId {
+        let mut inner = self.lock();
+        let window_id = inner.take_window_id();
+        inner.open.insert(window_id, spec);
+        window_id
+    }
+
+    /// The spec an open window lists, or `NotFound`.
+    fn spec_of(&self, window_id: WindowId) -> Result<WindowSpec, EngineError> {
+        self.lock()
+            .open
+            .get(&window_id)
+            .copied()
+            .ok_or_else(|| EngineError::NotFound {
+                what: format!("window {}", window_id.get()),
+            })
+    }
+}
+
+/// A store window's anchor as the store reads it, with the generation a
+/// cursor was minted at (spec/07 "Paging").
+fn store_anchor(
+    spec: WindowSpec,
+    anchor: &Anchor,
+) -> Result<(ListAnchor, Option<u64>), EngineError> {
+    Ok(match anchor {
+        Anchor::Top => (ListAnchor::Top, None),
+        Anchor::Around(id) => (ListAnchor::Around(*id), None),
+        Anchor::After(cursor) => {
+            let (minted, key) = decode_cursor(spec, cursor)?;
+            (ListAnchor::After(key), Some(minted))
+        }
+        Anchor::Before(cursor) => {
+            let (minted, key) = decode_cursor(spec, cursor)?;
+            (ListAnchor::Before(key), Some(minted))
+        }
+    })
+}
+
+/// A store read's outcome as spec/07 answers it: another generation is
+/// `ResetRequired`; an anchor outside the window is `NotFound` for
+/// `Around` and `InvalidInput` for a cursor.
+fn store_outcome<T>(read: PageRead<T>, anchor: &Anchor) -> Result<T, EngineError> {
+    match read {
+        PageRead::Ready(value) => Ok(value),
+        PageRead::Stale { generation } => Err(EngineError::ResetRequired { generation }),
+        PageRead::NotInWindow => Err(match anchor {
+            Anchor::Around(id) => EngineError::NotFound {
+                what: format!("occurrence {id}"),
+            },
+            _ => EngineError::invalid_input("anchor", "the cursor's row is not in the window"),
+        }),
+    }
+}
+
+/// A store page as the window's answer: edge cursors, the store's
+/// more-rows flags, and a total exact only when the page holds the
+/// whole window (spec/07 "Store windows").
+fn store_window(window_id: WindowId, spec: WindowSpec, page: ListPage) -> Window {
+    let ListPage {
+        generation,
+        rows,
+        has_more_before,
+        has_more_after,
+    } = page;
+    let rows: Vec<ListRow> = rows.into_iter().map(list_row).collect();
+    let shown = rows.len() as u64;
+    let total = if has_more_before || has_more_after {
+        Count::AtLeast(shown + u64::from(has_more_before) + u64::from(has_more_after))
+    } else {
+        Count::Exact(shown)
+    };
+    Window {
+        window_id,
+        generation,
+        before: rows.first().map(|row| mint_cursor(spec, generation, row)),
+        after: rows.last().map(|row| mint_cursor(spec, generation, row)),
+        has_more_before,
+        has_more_after,
+        total,
+        rows,
+    }
+}
+
+/// A stored row as the shell lists it; a missing display field is an
+/// empty string (spec/07).
+fn list_row(row: StoredListRow) -> ListRow {
+    ListRow {
+        occurrence_id: row.occurrence_id,
+        message_id: row.message_id,
+        account_id: row.account_id,
+        mailbox_id: row.mailbox_id,
+        sort_date: row.sort_date,
+        sender: row.sender.unwrap_or_default(),
+        subject: row.subject.unwrap_or_default(),
+        snippet: row.snippet.unwrap_or_default(),
+        unread: row.unread,
+        flagged: row.flagged,
+        has_attachments: row.has_attachments,
+        tags: row.tags,
+    }
 }
 
 /// Reject a `limit` outside `1..=1000` (spec/07), checked before
@@ -639,25 +774,8 @@ fn cursor_rank(
     n: u64,
 ) -> Result<u64, EngineError> {
     let invalid = |message: &str| EngineError::invalid_input("anchor", message);
-    let fields: Vec<&str> = cursor.0.split('|').collect();
-    let [tag, cursor_spec, minted, sort_date, id]: [&str; 5] = fields
-        .try_into()
-        .map_err(|_| invalid("the cursor is malformed"))?;
-    if tag != CURSOR_TAG {
-        return Err(invalid("the cursor is malformed"));
-    }
-    if cursor_spec != spec.tag() {
-        return Err(invalid("the cursor names a different window spec"));
-    }
-    let minted_generation = minted
-        .parse::<u64>()
-        .map_err(|_| invalid("the cursor is malformed"))?;
-    let cursor_sort_date = sort_date
-        .parse::<i64>()
-        .map_err(|_| invalid("the cursor is malformed"))?;
-    let cursor_id = id
-        .parse::<i64>()
-        .map_err(|_| invalid("the cursor is malformed"))?;
+    let (minted_generation, key) = decode_cursor(spec, cursor)?;
+    let (cursor_sort_date, cursor_id) = (key.sort_date, key.occurrence_id);
     if minted_generation != generation {
         return Err(EngineError::ResetRequired { generation });
     }
@@ -669,6 +787,31 @@ fn cursor_rank(
         return Err(invalid("the cursor's row doesn't match the window"));
     }
     Ok(rank)
+}
+
+/// The generation `cursor` was minted at and the row it names, once its
+/// shape and spec check out: malformed, or from another spec, is
+/// `InvalidInput` (spec/07).
+fn decode_cursor(spec: WindowSpec, cursor: &Cursor) -> Result<(u64, ListKey), EngineError> {
+    let invalid = |message: &str| EngineError::invalid_input("anchor", message);
+    let fields: Vec<&str> = cursor.0.split('|').collect();
+    let [tag, cursor_spec, minted, sort_date, id]: [&str; 5] = fields
+        .try_into()
+        .map_err(|_| invalid("the cursor is malformed"))?;
+    if tag != CURSOR_TAG {
+        return Err(invalid("the cursor is malformed"));
+    }
+    if cursor_spec != spec.tag() {
+        return Err(invalid("the cursor names a different window spec"));
+    }
+    let malformed = |_| invalid("the cursor is malformed");
+    Ok((
+        minted.parse().map_err(malformed)?,
+        ListKey {
+            sort_date: sort_date.parse().map_err(malformed)?,
+            occurrence_id: id.parse().map_err(malformed)?,
+        },
+    ))
 }
 
 /// Build the window's answer for `[start, end)`: only those ranks'
@@ -757,6 +900,29 @@ impl Engine {
     ) -> Result<Window, EngineError> {
         let windows = Arc::clone(self.windows());
         let cleanup = self.detached();
+        if let Some(scope) = spec.scope() {
+            // The first page is read before the window exists, so a
+            // failed read registers nothing.
+            check_limit(limit)?;
+            let (store, minted) = store_anchor(spec, &anchor)?;
+            let read = self
+                .read_through(move |resources| {
+                    resources.read(|tx| read_list_page(tx, scope, store, limit as usize, minted))
+                })
+                .await?;
+            let page = store_outcome(read, &anchor)?;
+            let opened = self
+                .compute(move || {
+                    let window_id = windows.register(spec);
+                    Ok(Opened {
+                        window: Some(store_window(window_id, spec, page)),
+                        windows,
+                        cleanup,
+                    })
+                })
+                .await?;
+            return Ok(opened.into_window());
+        }
         let opened = self
             .compute(move || {
                 let window = windows.open(spec, &anchor, limit)?;
@@ -779,9 +945,38 @@ impl Engine {
         anchor: Anchor,
         limit: u32,
     ) -> Result<Window, EngineError> {
+        // A bad limit is reported before the window is looked up.
+        check_limit(limit)?;
         let windows = Arc::clone(self.windows());
-        self.compute(move || windows.read(window_id, generation, &anchor, limit))
-            .await
+        let lookup = Arc::clone(&windows);
+        // The lookup and a store read are separate tasks, so a close in
+        // between still gets this page: the read saw the window open.
+        let spec = self.compute(move || lookup.spec_of(window_id)).await?;
+        let Some(scope) = spec.scope() else {
+            return self
+                .compute(move || windows.read(window_id, generation, &anchor, limit))
+                .await;
+        };
+        // A malformed or foreign cursor is a caller bug, reported before
+        // any staleness (as `cursor_rank` does for the synthetic source).
+        let (store, minted) = store_anchor(spec, &anchor)?;
+        // A cursor from another generation than the caller's is stale
+        // whatever the store's is now; the error names the current one.
+        let at = minted.unwrap_or(generation);
+        if at != generation {
+            let current = self
+                .read_through(|resources| resources.read(list_generation))
+                .await?;
+            return Err(EngineError::ResetRequired {
+                generation: current,
+            });
+        }
+        let read = self
+            .read_through(move |resources| {
+                resources.read(|tx| read_list_page(tx, scope, store, limit as usize, Some(at)))
+            })
+            .await?;
+        Ok(store_window(window_id, spec, store_outcome(read, &anchor)?))
     }
 
     /// `window_ids` (spec/07 "The id index"): the window's rows'
@@ -789,7 +984,16 @@ impl Engine {
     /// generation.
     pub async fn window_ids(&self, window_id: WindowId) -> Result<WindowIds, EngineError> {
         let windows = Arc::clone(self.windows());
-        self.compute(move || windows.ids(window_id)).await
+        let lookup = Arc::clone(&windows);
+        let spec = self.compute(move || lookup.spec_of(window_id)).await?;
+        let Some(scope) = spec.scope() else {
+            return self.compute(move || windows.ids(window_id)).await;
+        };
+        let read = self
+            .read_through(move |resources| resources.read(|tx| list_ids(tx, scope, None)))
+            .await?;
+        let (generation, ids) = store_outcome(read, &Anchor::Top)?;
+        Ok(WindowIds { generation, ids })
     }
 
     /// `close_window` (spec/07): release the handle. Closing twice is
