@@ -178,7 +178,7 @@ impl ImportSourceSnapshots {
                 ),
             });
         }
-        let mut input = retry_interrupted(|| self.fs.open(&canonical))
+        let (mut input, md) = retry_interrupted(|| self.fs.open_regular(&canonical))
             .map_err(|e| source_err("read", &canonical, e))?;
         let (path, token, mut dest) = self.create_private()?;
         // From here this attempt's private file exists: every early
@@ -225,7 +225,17 @@ impl ImportSourceSnapshots {
         let path = self.private_path(&snapshot.token);
         let step = format!("open the import source snapshot {}", snapshot.token);
         let unavailable = |e: io::Error| StoreError::unavailable(format!("cannot {step}: {e}"));
-        let Some(md) = self.fs.metadata(&path).map_err(unavailable)? else {
+        let open_error = |e: io::Error| match e.kind() {
+            io::ErrorKind::NotFound => {
+                StoreError::not_found(format!("import source snapshot {}", snapshot.token))
+            }
+            io::ErrorKind::InvalidInput => StoreError::corrupt(format!(
+                "import source snapshot {} is not a regular file",
+                snapshot.token
+            )),
+            _ => unavailable(e),
+        };
+        let Some(md) = self.fs.metadata(&path).map_err(open_error)? else {
             return Err(StoreError::not_found(format!(
                 "import source snapshot {}",
                 snapshot.token
@@ -237,6 +247,8 @@ impl ImportSourceSnapshots {
                 snapshot.token
             )));
         }
+        let (mut file, md) =
+            retry_interrupted(|| self.fs.open_regular(&path)).map_err(open_error)?;
         if md.len() != snapshot.byte_length() {
             return Err(StoreError::corrupt(format!(
                 "import source snapshot {} is {} bytes; {} were captured",
@@ -245,12 +257,6 @@ impl ImportSourceSnapshots {
                 snapshot.byte_length()
             )));
         }
-        let mut file = retry_interrupted(|| self.fs.open(&path)).map_err(|e| match e.kind() {
-            io::ErrorKind::NotFound => {
-                StoreError::not_found(format!("import source snapshot {}", snapshot.token))
-            }
-            _ => unavailable(e),
-        })?;
         verify(&mut file, snapshot)?;
         file.seek(SeekFrom::Start(0)).map_err(unavailable)?;
         Ok(file)
@@ -291,12 +297,15 @@ impl ImportSourceSnapshots {
 }
 
 /// Map a failed seam call on a source: a vanished file is `NotFound`,
-/// anything else `Unavailable`.
+/// a special file is `InvalidInput`, other failures `Unavailable`.
 fn source_err(op: &str, source: &Path, e: io::Error) -> StoreError {
     match e.kind() {
         io::ErrorKind::NotFound => {
             StoreError::not_found(format!("import source {}", source.display()))
         }
+        io::ErrorKind::InvalidInput => StoreError::InvalidInput {
+            message: format!("cannot {op} the import source {}: {e}", source.display()),
+        },
         _ => StoreError::unavailable(format!(
             "cannot {op} the import source {}: {e}",
             source.display()
