@@ -514,6 +514,23 @@ pub fn import_job_sources(
         .collect()
 }
 
+/// Every source row `id` has recorded, inventoried or not: terminal-job
+/// cleanup and reports cover them all (spec/03, 09).
+pub fn recorded_import_job_sources(
+    tx: &Transaction,
+    id: &str,
+) -> Result<Vec<(SourceInventory, SourcePosition)>, StoreError> {
+    rows::import_job_source_rows(tx, id)?
+        .into_iter()
+        .map(|row| {
+            let source =
+                SourceInventory::from_json(row.source_json()).map_err(|e| corrupt(id, e))?;
+            let position = position_from_json(row.checkpoint_json()).map_err(|e| corrupt(id, e))?;
+            Ok((source, position))
+        })
+        .collect()
+}
+
 /// One recorded source and where its ingest continues.
 pub fn import_job_source(
     tx: &Transaction,
@@ -536,15 +553,29 @@ pub fn commit_import_job_batch(
     batch: &ImportJobBatch<'_>,
     now: Timestamp,
 ) -> Result<ImportJobRecord, StoreError> {
-    let mut committed = import_job(tx, batch.job_id)?.checkpoint().clone();
+    let job = import_job(tx, batch.job_id)?;
+    // A batch the job has moved past is a quiet `Conflict`, as the store
+    // reports it, before any check that would fail the job.
+    if job.state() != ImportJobState::Running || job.revision() != batch.revision {
+        return Err(StoreError::Conflict {
+            detail: format!(
+                "import job {} is not running at revision {}",
+                batch.job_id, batch.revision
+            ),
+        });
+    }
+    let mut committed = job.checkpoint().clone();
     if batch.ordinal != committed.next {
         return Err(StoreError::internal(format!(
             "an import batch for source {} cannot precede or skip source {}",
             batch.ordinal, committed.next
         )));
     }
-    let (source, _) = import_job_source(tx, batch.job_id, batch.ordinal)?;
-    if batch.position.messages() > source.message_count()
+    // Each message advances the position by one, within the inventory.
+    let (source, stored) = import_job_source(tx, batch.job_id, batch.ordinal)?;
+    let advanced = stored.messages().checked_add(batch.messages.len() as u64);
+    if advanced != Some(batch.position.messages())
+        || batch.position.messages() > source.message_count()
         || batch.flags_incomplete > batch.messages.len() as u64
     {
         return Err(StoreError::internal(

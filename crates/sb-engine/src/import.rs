@@ -23,7 +23,8 @@ use sb_resources::{
     MAX_IMPORT_CHANGES_BYTES, MboxVariant, Receipt, Resources, SourceAcquisition, SourceInventory,
     SourcePosition, StoreError, WritePriority, advance_import_job, commit_import_job_batch,
     create_import_job, finished_import_jobs, import_job, import_job_source, import_job_sources,
-    import_report, record_import_sources, recoverable_import_jobs, run_once,
+    import_report, record_import_sources, recorded_import_job_sources, recoverable_import_jobs,
+    run_once,
 };
 
 use crate::engine::{Spawn, Worker};
@@ -499,11 +500,16 @@ async fn inventory(worker: &Worker, claim: &Claim, paths: Vec<PathBuf>) {
     }
 }
 
-/// A cancelled inventory's captures are known only to this worker, so it
-/// removes them (spec/03). A shutdown keeps them: the next open fails the
-/// job, and they stay as evidence.
+/// A cancelled inventory's unrecorded captures are known only to this
+/// worker, so it removes them (spec/03). The durable state decides: the
+/// in-memory flag lands after the cancel's write. A shutdown keeps them:
+/// the next open fails the job, and they stay as evidence.
 async fn discard_if_cancelled(worker: &Worker, claim: &Claim, inventory: ImportInventory) {
-    if !claim.cancelled() {
+    let job = claim.id.clone();
+    let state = worker
+        .blocking(move |resources| resources.read(|tx| import_job(tx, &job)))
+        .await;
+    if !matches!(state, Ok(Ok(job)) if job.state() == ImportJobState::Cancelled) {
         return;
     }
     let snapshots: Vec<_> = inventory
@@ -531,7 +537,7 @@ async fn finished(worker: &Worker, id: &str) {
 fn finish(resources: &Resources, id: &str) -> Result<(), StoreError> {
     let (job, sources) = resources.read(|tx| {
         let job = import_job(tx, id)?;
-        let sources = import_job_sources(tx, &job)?;
+        let sources = recorded_import_job_sources(tx, id)?;
         Ok((job, sources))
     })?;
     if !job.is_finished() {

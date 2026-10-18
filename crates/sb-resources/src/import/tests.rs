@@ -580,7 +580,7 @@ fn cancellation_during_capture_is_an_explicit_outcome() {
 }
 
 #[test]
-fn cancellation_inside_a_long_scan_line_keeps_the_snapshot() {
+fn cancellation_inside_a_long_scan_line_removes_its_capture() {
     let (scratch, res) = resources("cancel-scan");
     let mbox = scratch.path().join("Long.mbox");
     let mut bytes = b"From s@t.test\n\n".to_vec();
@@ -596,9 +596,8 @@ fn cancellation_inside_a_long_scan_line_keeps_the_snapshot() {
         ImportInventoryOutcome::Complete(_) => panic!("cancellation was not reported"),
     };
     assert!(inventory.sources().is_empty());
-    // The completed private copy stays as recovery evidence until the
-    // engine's terminal-job cleanup (spec/03).
-    assert_eq!(snapshot_names(&scratch).len(), 1);
+    // Nothing references the uncounted copy, so it goes (spec/03).
+    assert!(snapshot_names(&scratch).is_empty());
 }
 
 /// Yields at most `left` bytes of `inner`, then fails.
@@ -703,4 +702,34 @@ fn deeply_nested_sources_do_not_consume_the_thread_stack() {
         }
         std::thread::sleep(Duration::from_millis(10));
     }
+}
+
+#[test]
+fn captures_that_never_become_sources_are_removed() {
+    let (scratch, res) = resources("unused-captures");
+    let mbox = scratch.path().join("Big.mbox");
+    fs::write(&mbox, MBOX_TWO).unwrap();
+    // Cancelled during the scan: the finished copy is not left behind.
+    let outcome = res.inventory_import_sources(std::slice::from_ref(&mbox), |event| match event {
+        ImportProgress::Scanning { .. } => ControlFlow::Break(()),
+        _ => ControlFlow::Continue(()),
+    });
+    assert!(matches!(outcome, ImportInventoryOutcome::Cancelled(_)));
+    assert!(
+        snapshot_names(&scratch).is_empty(),
+        "{:?}",
+        snapshot_names(&scratch)
+    );
+
+    // A scan that fails (a preamble before the first separator) is a
+    // problem, and its copy goes too.
+    let bad = scratch.path().join("Bad.mbox");
+    fs::write(&bad, b"not an mbox\n").unwrap();
+    let inventory = run(&res, &[bad]);
+    assert_eq!(inventory.problems()[0].kind(), ImportProblemKind::Failed);
+    assert!(
+        snapshot_names(&scratch).is_empty(),
+        "{:?}",
+        snapshot_names(&scratch)
+    );
 }

@@ -419,3 +419,67 @@ fn a_report_lists_files_counts_and_warnings() {
     assert_eq!(report["read_state"]["archive_default"], 0);
     assert_eq!(report["warnings"].as_array().unwrap().len(), 1);
 }
+
+/// Commit `messages` from acquisition at `position` for source 0.
+fn commit_at(
+    res: &Resources,
+    sources: &[SourceInventory],
+    revision: i64,
+    messages: Vec<ImportMessage>,
+    position: SourcePosition,
+    flags_incomplete: u64,
+) -> Result<ImportJobRecord, StoreError> {
+    let mailbox = sources[0].mailbox().to_owned();
+    let now = res.now();
+    write(res, move |tx| {
+        let batch = ImportJobBatch {
+            job_id: JOB,
+            revision,
+            ordinal: 0,
+            mailbox: &mailbox,
+            messages: &messages,
+            position,
+            flags_incomplete,
+        };
+        commit_import_job_batch(tx, &batch, now)
+    })
+}
+
+#[test]
+fn a_stale_batch_is_a_conflict_and_impossible_ones_are_refused() {
+    let (scratch, res) = resources("batch-claims");
+    let (sources, revision) = running_job(&res, &scratch, &[("Two.mbox", TWO)]);
+    let mut acquisition = res
+        .open_import_acquisition(&sources[0], None, SourcePosition::START)
+        .unwrap();
+    let mut next = || {
+        res.acquire_import_message(&mut acquisition)
+            .unwrap()
+            .unwrap()
+    };
+    let first = next();
+    let after_first = first.next_position();
+    let second = next();
+    let end = second.next_position();
+    let first = vec![first.into_message()];
+    let job = commit_at(&res, &sources, revision, first, after_first, 0).unwrap();
+
+    // Positions must advance by exactly the batch's messages, within
+    // the inventory, and incomplete flags cannot exceed the messages.
+    let current = job.revision();
+    let beyond = SourcePosition::new(sources[0].snapshot().byte_length(), 3);
+    for (position, flags) in [(SourcePosition::START, 0), (beyond, 0), (after_first, 1)] {
+        let error = commit_at(&res, &sources, current, vec![], position, flags).unwrap_err();
+        assert!(matches!(error, StoreError::Internal { .. }), "{error:?}");
+    }
+
+    // Finish the source, then replay a batch the job has moved past:
+    // a quiet conflict, never an invariant failure that fails the job.
+    let second = vec![second.into_message()];
+    let job = commit_at(&res, &sources, current, second, end, 0).unwrap();
+    assert_eq!(job.checkpoint().next(), 1);
+    let stale = commit_at(&res, &sources, current, vec![], after_first, 0).unwrap_err();
+    assert!(matches!(stale, StoreError::Conflict { .. }), "{stale:?}");
+    let job = res.read(|tx| import_job(tx, JOB)).unwrap();
+    assert_eq!(job.checkpoint().totals().processed, 2);
+}

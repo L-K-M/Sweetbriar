@@ -240,6 +240,30 @@ pub fn import_job_source(
     ).optional().map_err(sql_error)?.ok_or_else(|| StoreError::not_found("import job source"))
 }
 
+/// Every recorded source row of a job, in ordinal order, including rows
+/// an interrupted inventory recorded before its final checkpoint.
+pub fn import_job_source_rows(
+    tx: &Transaction,
+    job_id: &str,
+) -> Result<Vec<ImportJobSource>, StoreError> {
+    let mut statement = tx
+        .prepare(
+            "SELECT source_json, checkpoint_json FROM import_job_sources WHERE job_id = ?1
+             ORDER BY ordinal",
+        )
+        .map_err(sql_error)?;
+    statement
+        .query_map([job_id], |row| {
+            Ok(ImportJobSource {
+                source_json: row.get(0)?,
+                checkpoint_json: row.get(1)?,
+            })
+        })
+        .map_err(sql_error)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(sql_error)
+}
+
 pub(super) fn source_progress(
     tx: &Transaction,
     job_id: &str,
