@@ -217,3 +217,102 @@ fn the_default_root_works_on_a_fresh_system() {
     };
     assert!(created.exists(), "no store at {}", created.display());
 }
+
+fn fixture(name: &str) -> String {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/import")
+        .join(name)
+        .to_str()
+        .expect("fixture paths are UTF-8")
+        .to_owned()
+}
+
+/// The report path `import` printed.
+fn report_path(out: &Output) -> PathBuf {
+    let text = stdout(out);
+    let line = text
+        .lines()
+        .find_map(|line| line.strip_prefix("report: "))
+        .unwrap_or_else(|| panic!("no report line in {text}"));
+    PathBuf::from(line)
+}
+
+/// `import` runs one job to completion and prints its inventory,
+/// totals and report; importing the same file again adds no
+/// occurrences (spec/09 re-import idempotence).
+#[test]
+fn import_runs_to_completion_and_reimport_adds_nothing() {
+    let (_scratch, root) = scratch("cli-import");
+    let inbox = fixture("Inbox.mbox");
+
+    let out = cli(&root, &["import", &inbox]);
+    assert!(out.status.success(), "import failed: {}", stderr(&out));
+    let text = stdout(&out);
+    assert!(text.contains("inventory: 1 sources, 2 messages"), "{text}");
+    assert!(text.contains("-> Inbox: 2 messages"), "{text}");
+    assert!(
+        text.contains("Completed: 2 imported of 2 processed, 1 duplicates, 0 unparseable"),
+        "{text}"
+    );
+    assert!(
+        text.contains("read state: 0 from headers, 2 by default"),
+        "{text}"
+    );
+    let report = std::fs::read_to_string(report_path(&out)).expect("the report was written");
+    assert!(report.contains("\"state\": \"completed\""), "{report}");
+
+    let out = cli(&root, &["import", &inbox]);
+    assert!(out.status.success(), "re-import failed: {}", stderr(&out));
+    let text = stdout(&out);
+    assert!(
+        text.contains("Completed: 0 imported of 2 processed, 2 duplicates"),
+        "{text}"
+    );
+}
+
+/// A source whose `>>From ` lines decode differently needs `--variant`;
+/// without it the job is cancelled, never guessed (spec/09).
+#[test]
+fn an_ambiguous_mbox_needs_a_variant() {
+    let (_scratch, root) = scratch("cli-variant");
+    let quoting = fixture("quoting.mbox");
+
+    let out = cli(&root, &["import", &quoting]);
+    assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
+    assert!(stdout(&out).contains("needs a variant"), "{}", stdout(&out));
+    assert!(stderr(&out).contains("--variant mboxo or --variant mboxrd"));
+    assert!(stderr(&out).contains("the import was cancelled"));
+
+    let out = cli(&root, &["import", "--variant", "mboxrd", &quoting]);
+    assert!(out.status.success(), "import failed: {}", stderr(&out));
+    let text = stdout(&out);
+    assert!(
+        text.contains("Completed: 1 imported of 1 processed"),
+        "{text}"
+    );
+    assert!(text.contains("read state: 1 from headers"), "{text}");
+}
+
+/// A missing path is reported as a problem, not an empty import, and
+/// `import`'s own argument errors are usage errors.
+#[test]
+fn import_reports_problems_and_rejects_bad_arguments() {
+    let (scratch, root) = scratch("cli-import-args");
+    let missing = scratch.path().join("missing.mbox");
+    let out = cli(&root, &["import", missing.to_str().unwrap()]);
+    assert!(out.status.success(), "import failed: {}", stderr(&out));
+    let text = stdout(&out);
+    assert!(text.contains("inventory: 0 sources"), "{text}");
+    assert!(text.contains("problems: 1"), "{text}");
+    assert!(text.contains("Inaccessible"), "{text}");
+
+    for args in [
+        &["import"][..],
+        &["import", "--variant"],
+        &["import", "--variant", "mbox", "x"],
+        &["import", "--variant", "mboxo", "--variant", "mboxrd", "x"],
+    ] {
+        let out = cli(&root, args);
+        assert_eq!(out.status.code(), Some(2), "args {args:?} must be usage");
+    }
+}

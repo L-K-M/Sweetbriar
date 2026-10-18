@@ -14,7 +14,7 @@
 use std::collections::HashMap;
 use std::future::Future;
 use std::ops::ControlFlow;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use sb_resources::{
@@ -146,12 +146,30 @@ impl Drop for Claim {
     }
 }
 
+/// What `start_import` answers: its receipt and the job it names.
+#[derive(Debug, Clone)]
+pub struct ImportStarted {
+    receipt: Receipt,
+    job_id: String,
+}
+
+impl ImportStarted {
+    pub fn receipt(&self) -> &Receipt {
+        &self.receipt
+    }
+
+    pub fn job_id(&self) -> &str {
+        &self.job_id
+    }
+}
+
 /// One import job as `import_job` reports it (spec/07, 09).
 #[derive(Debug, Clone)]
 pub struct ImportJobStatus {
     state: ImportJobState,
     sources: Vec<ImportSourceStatus>,
     checkpoint: ImportJobCheckpoint,
+    report_path: Option<PathBuf>,
 }
 
 impl ImportJobStatus {
@@ -167,6 +185,11 @@ impl ImportJobStatus {
     /// Problems, variant choices, totals and any failure.
     pub fn checkpoint(&self) -> &ImportJobCheckpoint {
         &self.checkpoint
+    }
+
+    /// Where the report lives once the job has finished (spec/09).
+    pub fn report_path(&self) -> Option<&Path> {
+        self.report_path.as_deref()
     }
 }
 
@@ -196,7 +219,7 @@ impl Engine {
         &self,
         idempotency_key: &str,
         paths: Vec<PathBuf>,
-    ) -> Result<Receipt, EngineError> {
+    ) -> Result<ImportStarted, EngineError> {
         if paths.is_empty() {
             return Err(EngineError::invalid_input(
                 "paths",
@@ -224,7 +247,15 @@ impl Engine {
                 // and the next open fails it visibly.
                 spawn_job(&worker, &jobs, id, Task::Inventory(paths))?;
             }
-            Ok(receipt)
+            // A repeated key's receipt names the first job; this crate
+            // wrote that JSON, so it reads back exactly.
+            let job_id = receipt
+                .result_json()
+                .strip_prefix("{\"job_id\":\"")
+                .and_then(|rest| rest.strip_suffix("\"}"))
+                .ok_or_else(|| EngineError::internal("a start_import receipt names no job"))?
+                .to_owned();
+            Ok(ImportStarted { receipt, job_id })
         })
         .await
     }
@@ -332,10 +363,16 @@ impl Engine {
                     .into_iter()
                     .map(|(source, position)| ImportSourceStatus { source, position })
                     .collect();
+                let report_path = if job.is_finished() {
+                    Some(resources.import_report_path(&id)?)
+                } else {
+                    None
+                };
                 Ok(ImportJobStatus {
                     state: job.state(),
                     sources,
                     checkpoint: job.checkpoint().clone(),
+                    report_path,
                 })
             })
         })

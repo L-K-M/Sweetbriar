@@ -35,18 +35,12 @@ fn mbox(count: usize) -> Vec<u8> {
         .into_bytes()
 }
 
-fn job_id(receipt: &Receipt) -> String {
-    receipt
-        .result_json()
-        .split('"')
-        .nth(3)
-        .expect("the receipt names its job")
-        .to_owned()
-}
-
 fn start(engine: &Engine, paths: &[PathBuf]) -> String {
     let key = engine.new_idempotency_key();
-    job_id(&block_on(engine.start_import(&key, paths.to_vec())).unwrap())
+    block_on(engine.start_import(&key, paths.to_vec()))
+        .unwrap()
+        .job_id()
+        .to_owned()
 }
 
 fn status(engine: &Engine, id: &str) -> ImportJobStatus {
@@ -169,10 +163,14 @@ fn a_repeated_start_key_returns_its_job_and_starts_nothing() {
     let paths = vec![fixtures().join("Inbox.mbox")];
     let first = block_on(engine.start_import(&key, paths.clone())).unwrap();
     let second = block_on(engine.start_import(&key, paths)).unwrap();
-    assert_eq!(first.result_json(), second.result_json());
+    assert_eq!(
+        first.receipt().result_json(),
+        second.receipt().result_json()
+    );
+    assert_eq!(first.job_id(), second.job_id());
     settle(
         &engine,
-        &job_id(&first),
+        first.job_id(),
         ImportJobState::AwaitingConfirmation,
     );
     assert_eq!(count(&engine, "SELECT count(*) FROM import_jobs"), 1);
@@ -475,10 +473,10 @@ fn a_start_dropped_after_submission_is_still_scheduled() {
         assert!(Instant::now() < deadline, "the start never committed");
         std::thread::sleep(Duration::from_millis(10));
     }
-    let receipt = block_on(engine.start_import(&key, paths)).unwrap();
+    let started = block_on(engine.start_import(&key, paths)).unwrap();
     settle(
         &engine,
-        &job_id(&receipt),
+        started.job_id(),
         ImportJobState::AwaitingConfirmation,
     );
     block_on(engine.shutdown()).unwrap();
@@ -532,7 +530,9 @@ fn snapshots(root: &Path) -> usize {
 }
 
 fn report(engine: &Engine, id: &str) -> String {
-    fs::read_to_string(engine.resources().import_report_path(id).unwrap()).unwrap()
+    let job = status(engine, id);
+    let path = job.report_path().expect("a finished job names its report");
+    fs::read_to_string(path).unwrap()
 }
 
 #[test]
