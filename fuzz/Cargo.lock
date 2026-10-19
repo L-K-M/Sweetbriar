@@ -691,6 +691,7 @@ dependencies = [
  "encoding_rs",
  "lol_html",
  "mail-parser",
+ "markup5ever",
  "sb-types",
  "url",
 ]

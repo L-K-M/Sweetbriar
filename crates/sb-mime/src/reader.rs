@@ -412,16 +412,29 @@ fn reader_run(bytes: &[u8], limits: &Limits) -> Result<RenderInput, ParseFailure
     for (index, node) in nodes.iter().enumerate() {
         result.part_ids.push(node.id.clone());
         if selection.plain == Some(index) || selection.html == Some(index) {
-            let text = node.part.text_contents().unwrap_or_default();
-            if text.contains('\u{fffd}') && charset_replaced(node) {
+            let (text, replaced) = decoded_body(node);
+            // Admission measured upstream's text; this decoder can expand
+            // it (a label upstream reads as UTF-8), so it is bounded again,
+            // with admission's outcome.
+            if text.len() as u64 > limits.max_decoded_part_bytes() {
+                let mut refused = RenderInput {
+                    parse_warnings: vec![ParseWarning::PartTooLarge {
+                        limit: limits.max_decoded_part_bytes(),
+                    }],
+                    ..RenderInput::default()
+                };
+                refused.warn(RenderWarningCode::PartialParse, None);
+                return Ok(refused);
+            }
+            if replaced {
                 result.warn(RenderWarningCode::CharsetReplaced, Some(node.id.clone()));
             }
             let body = SelectedBody {
                 part_id: node.id.clone(),
                 text: if selection.plain == Some(index) {
-                    plain_text(text, node.part)
+                    plain_text(&text, node.part)
                 } else {
-                    text.to_owned()
+                    text
                 },
             };
             if selection.plain == Some(index) {
@@ -565,39 +578,37 @@ fn decoded<'a>(node: &'a Node<'_>, limits: &Limits) -> Result<Cow<'a, [u8]>, Att
     Ok(bytes)
 }
 
-/// Whether decoding the part's charset replaced bytes it couldn't read,
-/// given its text holds a U+FFFD: the decoder says so, since the U+FFFD
-/// may be the sender's own. A label upstream doesn't know is read as
-/// UTF-8, as upstream falls back to.
-fn charset_replaced(node: &Node<'_>) -> bool {
+/// A body's text and whether decoding replaced bytes its charset can't
+/// read. A charset encoding_rs knows is decoded here, by WHATWG rules
+/// (a byte order mark decides UTF-16's endianness), so the text shown and
+/// the warning come from one decoder and a literal U+FFFD is no loss. For
+/// a charset only upstream decodes (UTF-7) its text stands and a U+FFFD
+/// is the only sign; an unknown label is read as UTF-8, as upstream does.
+fn decoded_body(node: &Node<'_>) -> (String, bool) {
+    let upstream = || {
+        let text = node.part.text_contents().unwrap_or_default().to_owned();
+        let replaced = text.contains('\u{fffd}');
+        (text, replaced)
+    };
     let Ok(bytes) = transfer_decoded(node) else {
-        return true;
+        return upstream();
     };
     let label = node
         .part
         .content_type()
         .and_then(|c| c.attribute("charset"))
         .unwrap_or("utf-8");
-    let Some(encoding) = encoding_rs::Encoding::for_label(label.as_bytes()) else {
-        // Upstream's own decoders (UTF-7) report nothing; their U+FFFD
-        // is the only sign.
-        return charset_decoder(label.as_bytes()).is_some() || std::str::from_utf8(&bytes).is_err();
-    };
-
-    // Generic UTF-16 follows its byte order mark, as upstream's does.
-    let (encoding, bytes) = match encoding_rs::Encoding::for_bom(&bytes) {
-        Some((bom, length)) if is_utf16(encoding) && is_utf16(bom) => (bom, &bytes[length..]),
-        _ => (encoding, &bytes[..]),
-    };
-
-    // Upstream's tables leave bytes unmapped that WHATWG maps (windows-125x
-    // C1 holes, e.g. 0x81). A charset that can't encode U+FFFD shows one
-    // only after replacing.
-    encoding.decode_without_bom_handling(bytes).1 || encoding.encode("\u{fffd}").2
-}
-
-fn is_utf16(encoding: &'static encoding_rs::Encoding) -> bool {
-    encoding == encoding_rs::UTF_16LE || encoding == encoding_rs::UTF_16BE
+    if let Some(encoding) = encoding_rs::Encoding::for_label(label.as_bytes()) {
+        let (text, _, replaced) = encoding.decode(&bytes);
+        return (text.into_owned(), replaced);
+    }
+    if charset_decoder(label.as_bytes()).is_some() {
+        return upstream();
+    }
+    match String::from_utf8(bytes.into_owned()) {
+        Ok(text) => (text, false),
+        Err(error) => (String::from_utf8_lossy(error.as_bytes()).into_owned(), true),
+    }
 }
 
 fn transfer_decoded<'a>(node: &'a Node<'_>) -> Result<Cow<'a, [u8]>, AttachmentError> {
