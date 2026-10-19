@@ -329,6 +329,31 @@ fn acquired_messages_commit_as_import_batches() {
         r#"[{"address":"reader@example.test","name":"Reader"},{"address":"other@example.test","name":null}]"#
     );
     assert_eq!(date, 1_792_238_400_000);
+
+    // Reader operations reach the stored import through item re-exports and
+    // verify the original outside the metadata transaction.
+    let (message, acquisition) = res
+        .read(|tx| {
+            let occurrence = sql(tx.query_row(
+            "SELECT o.occurrence_id FROM occurrences o JOIN logical_messages m USING (message_id)
+             JOIN d_message_summary s USING (acquisition_id) WHERE s.subject = 'Rich summary'",
+            [], |row| row.get(0),
+        ))?;
+            let id = crate::message_for_occurrence(tx, occurrence)?;
+            Ok((
+                crate::get_message(tx, id)?,
+                crate::best_acquisition(tx, id)?.unwrap(),
+            ))
+        })
+        .unwrap();
+    assert_eq!(message.account_display_name, "Local Archive");
+    assert_eq!(message.headers.subject.as_deref(), Some("Rich summary"));
+    assert_eq!(
+        message.headers.to[0].address.as_deref(),
+        Some("reader@example.test")
+    );
+    assert_eq!(message.body_availability, crate::BodyAvailability::Acquired);
+    assert_eq!(res.read_acquisition(&acquisition).unwrap(), RICH);
 }
 
 /// sb-resources has no SQLite dependency of its own to name errors with.

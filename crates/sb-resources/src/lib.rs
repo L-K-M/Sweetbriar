@@ -47,6 +47,11 @@ pub use sb_store::lists::{
     ListAnchor, ListKey, ListPage, ListScope, MAX_PAGE_ROWS, MailboxRole, PageRead, StoredListRow,
     list_generation, list_ids, read_list_page,
 };
+pub use sb_store::messages::{
+    BodyAvailability, MAX_READER_HEADER_BYTES, MAX_READER_MESSAGE_BYTES, ReaderAddress,
+    ReaderHeaders, ReaderMessage, ReaderOccurrence, ReaderTag, StoredAcquisition, best_acquisition,
+    get_message, message_for_occurrence,
+};
 pub use sb_store::settings::{StoredSetting, read_all, upsert};
 pub use sb_store::sidebar::{
     AccountKind, AccountState, MailboxKind, MailboxList, StoredAccount, StoredMailbox, accounts,
@@ -134,6 +139,12 @@ impl Resources {
         f: impl FnOnce(&Transaction) -> Result<T, StoreError>,
     ) -> Result<T, StoreError> {
         self.store.read(f)
+    }
+
+    /// Read exact acquisition bytes after EOF verifies integrity, under the
+    /// 100 MB limit. Blocking I/O; call after the metadata transaction ends.
+    pub fn read_acquisition(&self, acquisition: &StoredAcquisition) -> Result<Vec<u8>, StoreError> {
+        self.store.read_acquisition(acquisition)
     }
 
     /// Discover sources in request order and count durable private copies
