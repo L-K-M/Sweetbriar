@@ -86,7 +86,7 @@ impl RenditionCache {
         Self::open_on(cache_root, Arc::new(RealFs), Arc::new(OsRandom))
     }
 
-    fn open_on(
+    pub(crate) fn open_on(
         cache_root: &Path,
         fs: Arc<dyn Fs>,
         random: Arc<dyn Random>,

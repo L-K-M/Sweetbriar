@@ -830,6 +830,11 @@ public protocol CoreProtocol: AnyObject, Sendable {
     func messageForOccurrence(token: CancelToken, occurrenceId: Int64) async throws  -> Int64
     
     /**
+     * Open a decoded attachment; cancellation drops the pending lease guard.
+     */
+    func openAttachment(token: CancelToken, messageId: Int64, partId: String) async throws  -> AttachmentLease
+    
+    /**
      * Open a rendition; cancellation drops the service's pending lease guard.
      */
     func openBody(token: CancelToken, messageId: Int64, preferred: BodyKind) async throws  -> BodyLease
@@ -1169,6 +1174,25 @@ open func messageForOccurrence(token: CancelToken, occurrenceId: Int64)async thr
             completeFunc: ffi_sb_ffi_rust_future_complete_i64,
             freeFunc: ffi_sb_ffi_rust_future_free_i64,
             liftFunc: FfiConverterInt64.lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * Open a decoded attachment; cancellation drops the pending lease guard.
+     */
+open func openAttachment(token: CancelToken, messageId: Int64, partId: String)async throws  -> AttachmentLease  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_open_attachment(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterInt64.lower(messageId),FfiConverterString.lower(partId)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeAttachmentLease_lift,
             errorHandler: FfiConverterTypeCoreError_lift
         )
 }
@@ -1638,6 +1662,76 @@ public func FfiConverterTypeAccount_lift(_ buf: RustBuffer) throws -> Account {
 #endif
 public func FfiConverterTypeAccount_lower(_ value: Account) -> RustBuffer {
     return FfiConverterTypeAccount.lower(value)
+}
+
+
+public struct AttachmentLease: Equatable, Hashable {
+    public var leaseId: String
+    public var filePath: String
+    public var byteLength: UInt64
+    public var partId: String
+    public var displayName: String
+    public var mediaType: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(leaseId: String, filePath: String, byteLength: UInt64, partId: String, displayName: String, mediaType: String) {
+        self.leaseId = leaseId
+        self.filePath = filePath
+        self.byteLength = byteLength
+        self.partId = partId
+        self.displayName = displayName
+        self.mediaType = mediaType
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension AttachmentLease: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeAttachmentLease: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> AttachmentLease {
+        return
+            try AttachmentLease(
+                leaseId: FfiConverterString.read(from: &buf), 
+                filePath: FfiConverterString.read(from: &buf), 
+                byteLength: FfiConverterUInt64.read(from: &buf), 
+                partId: FfiConverterString.read(from: &buf), 
+                displayName: FfiConverterString.read(from: &buf), 
+                mediaType: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: AttachmentLease, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.leaseId, into: &buf)
+        FfiConverterString.write(value.filePath, into: &buf)
+        FfiConverterUInt64.write(value.byteLength, into: &buf)
+        FfiConverterString.write(value.partId, into: &buf)
+        FfiConverterString.write(value.displayName, into: &buf)
+        FfiConverterString.write(value.mediaType, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAttachmentLease_lift(_ buf: RustBuffer) throws -> AttachmentLease {
+    return try FfiConverterTypeAttachmentLease.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAttachmentLease_lower(_ value: AttachmentLease) -> RustBuffer {
+    return FfiConverterTypeAttachmentLease.lower(value)
 }
 
 
@@ -5314,6 +5408,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_core_message_for_occurrence() != 18415) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_open_attachment() != 15600) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_core_open_body() != 26124) {
