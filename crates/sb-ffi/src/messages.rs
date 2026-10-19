@@ -1,4 +1,4 @@
-//! Reader metadata, body lease DTOs and queries (spec/07, spec/08).
+//! Reader metadata, body and attachment lease DTOs and queries (spec/07, spec/08).
 
 use crate::{CancelToken, Core, CoreError};
 use std::sync::Arc;
@@ -196,8 +196,46 @@ impl BodyLease {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct AttachmentLease {
+    pub lease_id: String,
+    pub file_path: String,
+    pub byte_length: u64,
+    pub part_id: String,
+    pub display_name: String,
+    pub media_type: String,
+}
+
+impl AttachmentLease {
+    fn from_service(value: sb_service::AttachmentLease) -> Self {
+        Self {
+            lease_id: value.lease_id,
+            file_path: value.file_path,
+            byte_length: value.byte_length,
+            part_id: value.part_id,
+            display_name: value.display_name,
+            media_type: value.media_type,
+        }
+    }
+}
+
 #[uniffi::export]
 impl Core {
+    /// Open a decoded attachment; cancellation drops the pending lease guard.
+    pub async fn open_attachment(
+        &self,
+        token: Arc<CancelToken>,
+        message_id: i64,
+        part_id: String,
+    ) -> Result<AttachmentLease, CoreError> {
+        let value = self
+            .query(&token, async |core| {
+                core.open_attachment(message_id, part_id).await
+            })
+            .await?;
+        Ok(AttachmentLease::from_service(value))
+    }
+
     /// Open a rendition; cancellation drops the service's pending lease guard.
     pub async fn open_body(
         &self,
@@ -249,3 +287,6 @@ mod tests;
 
 #[cfg(test)]
 mod body_tests;
+
+#[cfg(test)]
+mod attachment_tests;

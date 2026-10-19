@@ -76,6 +76,15 @@ public final class CoreBridge: Sendable {
         return BodyLease(value)
     }
 
+    /// Open a decoded attachment. Release the lease when finished with the file.
+    public func openAttachment(messageID: Int64, partID: String) async throws -> AttachmentLease {
+        let token = SweetbriarCore.CancelToken()
+        let value = try await Self.withCancellation(token: token) {
+            try await self.core.openAttachment(token: token, messageId: messageID, partId: partID)
+        }
+        return AttachmentLease(value)
+    }
+
     /// Revoke immediately; file cleanup runs on the core's worker.
     public func releaseLease(_ leaseID: String) {
         core.releaseLease(leaseId: leaseID)
@@ -832,6 +841,16 @@ extension BodyLease {
                 RenderWarning(code: RenderWarningCode($0.code), partId: $0.partId)
             },
             manifestPath: generated.manifestPath
+        )
+    }
+}
+
+extension AttachmentLease {
+    fileprivate init(_ generated: SweetbriarCore.AttachmentLease) {
+        self.init(
+            leaseId: generated.leaseId, filePath: generated.filePath,
+            byteLength: generated.byteLength, partId: generated.partId,
+            displayName: generated.displayName, mediaType: generated.mediaType
         )
     }
 }

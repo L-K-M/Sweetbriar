@@ -41,6 +41,6 @@ pub use windows::{Anchor, Count, ListRow, MailboxRole, Window, WindowIds, Window
 uniffi::setup_scaffolding!();
 
 pub use messages::{
-    BodyAvailability, BodyKind, BodyLease, ReaderAddress, ReaderHeaders, ReaderMessage,
-    ReaderOccurrence, ReaderTag, RenderWarning, RenderWarningCode,
+    AttachmentLease, BodyAvailability, BodyKind, BodyLease, ReaderAddress, ReaderHeaders,
+    ReaderMessage, ReaderOccurrence, ReaderTag, RenderWarning, RenderWarningCode,
 };
