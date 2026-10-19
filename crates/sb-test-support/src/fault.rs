@@ -15,6 +15,11 @@ use sb_types::fs::{Fs, Lease, Location, LockError, Metadata, WriteFile};
 /// the `Fs` (or write-handle) method they wrap.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FsOp {
+    CreatePrivateDir,
+    RestrictDir,
+    RemoveDirAll,
+    Quarantine,
+    ReadDir,
     /// `write` on a file the wrapper handed out.
     Write,
     /// `sync_all` on a file the wrapper handed out.
@@ -47,6 +52,11 @@ pub enum FaultKind {
 /// How many calls of each operation have gone through, per kind.
 #[derive(Default)]
 struct Counts {
+    create_private_dir: u64,
+    restrict_dir: u64,
+    remove_dir_all: u64,
+    quarantine: u64,
+    read_dir: u64,
     write: u64,
     sync_file: u64,
     sync_dir: u64,
@@ -59,6 +69,11 @@ struct Counts {
 impl Counts {
     fn slot(&mut self, op: FsOp) -> &mut u64 {
         match op {
+            FsOp::CreatePrivateDir => &mut self.create_private_dir,
+            FsOp::RestrictDir => &mut self.restrict_dir,
+            FsOp::RemoveDirAll => &mut self.remove_dir_all,
+            FsOp::Quarantine => &mut self.quarantine,
+            FsOp::ReadDir => &mut self.read_dir,
             FsOp::Write => &mut self.write,
             FsOp::SyncFile => &mut self.sync_file,
             FsOp::SyncDir => &mut self.sync_dir,
@@ -166,6 +181,9 @@ impl Fs for FaultFs {
     }
 
     fn read_dir(&self, path: &Path) -> io::Result<Vec<PathBuf>> {
+        if let Some(kind) = self.plan.fire(FsOp::ReadDir) {
+            return Err(fault_error(kind));
+        }
         self.inner.read_dir(path)
     }
 
@@ -174,6 +192,34 @@ impl Fs for FaultFs {
             return Err(fault_error(kind));
         }
         self.inner.create_dir(path)
+    }
+
+    fn create_private_dir(&self, path: &Path) -> io::Result<()> {
+        if let Some(kind) = self.plan.fire(FsOp::CreatePrivateDir) {
+            return Err(fault_error(kind));
+        }
+        self.inner.create_private_dir(path)
+    }
+
+    fn restrict_dir(&self, path: &Path) -> io::Result<()> {
+        if let Some(kind) = self.plan.fire(FsOp::RestrictDir) {
+            return Err(fault_error(kind));
+        }
+        self.inner.restrict_dir(path)
+    }
+
+    fn remove_dir_all(&self, path: &Path) -> io::Result<()> {
+        if let Some(kind) = self.plan.fire(FsOp::RemoveDirAll) {
+            return Err(fault_error(kind));
+        }
+        self.inner.remove_dir_all(path)
+    }
+
+    fn quarantine(&self, path: &Path) -> io::Result<()> {
+        if let Some(kind) = self.plan.fire(FsOp::Quarantine) {
+            return Err(fault_error(kind));
+        }
+        self.inner.quarantine(path)
     }
 
     fn sync_dir(&self, path: &Path) -> io::Result<()> {

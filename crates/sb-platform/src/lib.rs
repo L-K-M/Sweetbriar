@@ -17,3 +17,7 @@ pub use clock::SystemClock;
 pub use fs::RealFs;
 pub use random::OsRandom;
 pub use roots::{default_cache_root, default_data_root};
+
+// Adjacent item exports let resources compose platform seams without a store.
+pub use sb_types::fs::{Fs, Lease, LockError};
+pub use sb_types::random::Random;

@@ -4,7 +4,7 @@
 
 use std::fs::{File, OpenOptions, TryLockError};
 use std::io;
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use sb_types::fs::{FileKind, Fs, Lease, Location, LockError, Metadata, WriteFile};
@@ -65,6 +65,28 @@ impl Fs for RealFs {
         std::fs::create_dir(path)
     }
 
+    fn create_private_dir(&self, path: &Path) -> io::Result<()> {
+        std::fs::DirBuilder::new().mode(0o700).create(path)
+    }
+
+    fn restrict_dir(&self, path: &Path) -> io::Result<()> {
+        if !std::fs::symlink_metadata(path)?.is_dir() {
+            return Err(io::ErrorKind::InvalidInput.into());
+        }
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
+    }
+
+    fn remove_dir_all(&self, path: &Path) -> io::Result<()> {
+        match std::fs::remove_dir_all(path) {
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+            result => result,
+        }
+    }
+
+    fn quarantine(&self, path: &Path) -> io::Result<()> {
+        quarantine(path)
+    }
+
     fn sync_dir(&self, path: &Path) -> io::Result<()> {
         flush_durably(&File::open(path)?)
     }
@@ -103,6 +125,38 @@ impl Fs for RealFs {
     fn location(&self, path: &Path) -> io::Result<Location> {
         location::classify(path)
     }
+}
+
+/// Linux has no Gatekeeper quarantine attribute. This is deliberately a no-op.
+#[cfg(target_os = "linux")]
+fn quarantine(_path: &Path) -> io::Result<()> {
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn quarantine(path: &Path) -> io::Result<()> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    let path = CString::new(path.as_os_str().as_bytes())
+        .map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
+    // Stable quarantine record: downloaded, unknown timestamp, Sweetbriar agent.
+    let value = b"0081;00000000;Sweetbriar;";
+    // SAFETY: path and name are terminated; value points to `len` readable bytes.
+    let result = unsafe {
+        libc::setxattr(
+            path.as_ptr(),
+            c"com.apple.quarantine".as_ptr(),
+            value.as_ptr().cast(),
+            value.len(),
+            0,
+            libc::XATTR_NOFOLLOW,
+        )
+    };
+    if result == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
 }
 
 /// The `open_regular` refusal: `path` resolved to a fifo, device,
@@ -215,6 +269,70 @@ mod tests {
     impl Drop for Scratch {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn private_directories_and_recursive_removal_do_not_follow_symlinks() {
+        use std::os::unix::fs::symlink;
+        let scratch = Scratch::new("private-dir");
+        let dir = scratch.0.join("private");
+        RealFs.create_private_dir(&dir).unwrap();
+        assert_eq!(
+            std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        assert_eq!(
+            RealFs.create_private_dir(&dir).unwrap_err().kind(),
+            io::ErrorKind::AlreadyExists
+        );
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        RealFs.restrict_dir(&dir).unwrap();
+        assert_eq!(
+            std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        let outside = scratch.0.join("outside");
+        std::fs::create_dir(&outside).unwrap();
+        std::fs::write(outside.join("keep"), b"safe").unwrap();
+        let link = dir.join("link");
+        symlink(&outside, &link).unwrap();
+        assert!(RealFs.restrict_dir(&link).is_err());
+        RealFs.remove_dir_all(&dir).unwrap();
+        RealFs.remove_dir_all(&dir).unwrap();
+        RealFs
+            .remove_dir_all(&scratch.0.join("missing/child"))
+            .unwrap();
+        assert_eq!(std::fs::read(outside.join("keep")).unwrap(), b"safe");
+    }
+
+    #[test]
+    fn quarantine_platform_contract() {
+        let scratch = Scratch::new("quarantine");
+        let path = scratch.0.join("attachment");
+        std::fs::write(&path, b"untrusted").unwrap();
+        RealFs.quarantine(&path).unwrap();
+        #[cfg(target_os = "linux")]
+        RealFs.quarantine(&scratch.0.join("missing")).unwrap();
+        #[cfg(target_os = "macos")]
+        {
+            use std::os::unix::ffi::OsStrExt;
+            let name = CString::new(path.as_os_str().as_bytes()).unwrap();
+            let mut bytes = [0u8; 128];
+            // SAFETY: terminated strings and a writable buffer of the supplied length.
+            let len = unsafe {
+                libc::getxattr(
+                    name.as_ptr(),
+                    c"com.apple.quarantine".as_ptr(),
+                    bytes.as_mut_ptr().cast(),
+                    bytes.len(),
+                    0,
+                    libc::XATTR_NOFOLLOW,
+                )
+            };
+            assert!(len > 0);
+            assert!(bytes[..len as usize].starts_with(b"0081;"));
+            assert!(RealFs.quarantine(&scratch.0.join("missing")).is_err());
         }
     }
 

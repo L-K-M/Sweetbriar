@@ -35,6 +35,24 @@ pub trait Fs: Send + Sync {
     fn read_dir(&self, path: &Path) -> io::Result<Vec<PathBuf>>;
     /// Create one directory level; fails if it already exists.
     fn create_dir(&self, path: &Path) -> io::Result<()>;
+    /// Create one owner-only directory (0700), exclusively.
+    /// Legacy adapters fail closed until they implement this operation.
+    fn create_private_dir(&self, _path: &Path) -> io::Result<()> {
+        Err(io::ErrorKind::Unsupported.into())
+    }
+    /// Restrict an existing directory to its owner (0700), refusing symlinks.
+    fn restrict_dir(&self, _path: &Path) -> io::Result<()> {
+        Err(io::ErrorKind::Unsupported.into())
+    }
+    /// Remove a directory tree without following symlinks. Missing is success.
+    fn remove_dir_all(&self, _path: &Path) -> io::Result<()> {
+        Err(io::ErrorKind::Unsupported.into())
+    }
+    /// Mark an untrusted file before exposure. macOS sets quarantine;
+    /// Linux is explicitly a no-op and provides no Gatekeeper protection.
+    fn quarantine(&self, _path: &Path) -> io::Result<()> {
+        Err(io::ErrorKind::Unsupported.into())
+    }
     /// Durably flush a directory's entries; returns only after they are
     /// on stable storage.
     fn sync_dir(&self, path: &Path) -> io::Result<()>;
