@@ -178,6 +178,13 @@ fn html_tree_repair_preserves_text_and_comments_do_not_merge_entities() {
 }
 
 #[test]
+fn noscript_fallback_is_text_without_raw_markup() {
+    let doc = html("<body><noscript><p>fallback &amp; <b>kept</b></p></noscript></body>");
+    assert_eq!(doc.body_authored(), "fallback & kept");
+    assert_eq!(doc.state(), SearchState::Indexed);
+}
+
+#[test]
 fn dense_html_text_and_deep_markup_do_not_serialize_or_recurse() {
     let dense = "&amp;©&nbsp;".repeat(100_000);
     let doc = html(&format!("<p>{dense}</p>"));
