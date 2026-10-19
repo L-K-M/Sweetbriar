@@ -218,7 +218,7 @@ fn header_budget_is_aggregate_and_utf8_bytes() {
         header_message_id = NULL",
     )
     .unwrap();
-    let subject = "é".repeat(MAX_READER_HEADER_BYTES / 2);
+    let subject = "é".repeat(MAX_STORED_HEADER_BYTES / 2);
     tx.execute("UPDATE message_headers SET subject = ?1", [&subject])
         .unwrap();
     assert_eq!(get_message(&tx, 20).unwrap().headers.subject, Some(subject));
@@ -232,13 +232,31 @@ fn header_budget_is_aggregate_and_utf8_bytes() {
     tx.execute(
         "INSERT INTO d_message_summary (acquisition_id, parser_version, parse_state,
         subject, from_name, has_attachments) VALUES (50, 1, 'ok', ?1, 'x', 0)",
-        ["x".repeat(MAX_READER_HEADER_BYTES)],
+        ["x".repeat(MAX_STORED_HEADER_BYTES)],
     )
     .unwrap();
     assert!(matches!(
         get_message(&tx, 20),
         Err(StoreError::Corrupt { .. })
     ));
+}
+
+/// The import writer stores an admitted header block as JSON, which is
+/// larger: `a,` becomes `{"address":"a","name":null},`. A full block of
+/// such recipients reads back whole.
+#[test]
+fn stored_json_of_an_admitted_header_block_reads_back() {
+    let mut conn = database();
+    let tx = conn.transaction().unwrap();
+    let recipients = MAX_READER_HEADER_BYTES / "a,".len();
+    let json = format!(
+        "[{}]",
+        vec![r#"{"address":"a","name":null}"#; recipients].join(",")
+    );
+    assert!(json.len() > MAX_READER_HEADER_BYTES);
+    tx.execute("UPDATE message_headers SET to_json = ?1", [&json])
+        .unwrap();
+    assert_eq!(get_message(&tx, 20).unwrap().headers.to.len(), recipients);
 }
 
 #[test]
@@ -292,6 +310,51 @@ fn shared_acquisition_keeps_each_accounts_identity_and_exact_bytes() {
     let acquisition = stored_acquisition(&store);
     assert_eq!(acquisition.acquisition_id(), 50);
     assert_eq!(*acquisition.object(), object);
+    assert_eq!(store.read_acquisition(&acquisition).unwrap(), ORIGINAL);
+    store.close().unwrap();
+}
+
+/// Each message reads the acquisition it records, not the newest one.
+#[test]
+fn each_message_reads_its_own_acquisition() {
+    let (_scratch, paths) = scratch_paths("reader-selected");
+    let store = crate::open(&paths, &test_seams(real_fs())).unwrap();
+    let older = store.objects().publish(ORIGINAL).unwrap();
+    let newer = store
+        .objects()
+        .publish(&b"Subject: Newer\r\n\r\nOther body"[..])
+        .unwrap();
+    writing(&store, move |tx| {
+        seed(tx);
+        for (id, object, acquired_at) in [(50, &older, 1), (51, &newer, 2)] {
+            tx.execute(
+                "INSERT INTO acquisitions (acquisition_id, content_sha256, byte_length,
+                  object_state, first_acquired_at) VALUES (?1, ?2, ?3, 'published', ?4)",
+                params![
+                    id,
+                    object.sha256_hex(),
+                    i64::try_from(object.byte_length()).unwrap(),
+                    acquired_at
+                ],
+            )
+            .unwrap();
+        }
+        tx.execute_batch(
+            "INSERT INTO d_message_summary (acquisition_id, parser_version, parse_state,
+              subject, has_attachments)
+             VALUES (50, 1, 'ok', 'Older', 0), (51, 1, 'ok', 'Newer', 0);
+             UPDATE logical_messages SET acquisition_id = 50 WHERE message_id = 20;
+             UPDATE logical_messages SET acquisition_id = 51 WHERE message_id = 22;",
+        )
+        .unwrap();
+        Ok(())
+    });
+
+    let (message, acquisition) = store
+        .read(|tx| Ok((get_message(tx, 20)?, best_acquisition(tx, 20)?.unwrap())))
+        .unwrap();
+    assert_eq!(message.headers.subject.as_deref(), Some("Older"));
+    assert_eq!(acquisition.acquisition_id(), 50);
     assert_eq!(store.read_acquisition(&acquisition).unwrap(), ORIGINAL);
     store.close().unwrap();
 }
