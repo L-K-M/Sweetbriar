@@ -212,6 +212,34 @@ fn hostile_table_repair_is_partial_instead_of_quadratic_sibling_scans() {
 }
 
 #[test]
+fn formatting_list_comparisons_cannot_bypass_the_html_work_budget() {
+    let body = (0..9_000)
+        .map(|n| format!("<b id='{n}'>"))
+        .collect::<String>();
+    let doc = html(&format!("{body}kept"));
+    assert_eq!(doc.state(), SearchState::Partial);
+    assert_eq!(
+        doc.truncated_fields(),
+        ["body_authored", "body_quoted", "body_signature"]
+    );
+}
+
+#[test]
+fn attributes_on_ignored_tags_are_still_charged() {
+    let attrs = (0..2_100)
+        .map(|n| format!("a{n}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let body = format!("<p>{}kept", format!("</span {attrs}>x").repeat(100));
+    let doc = html(&body);
+    assert_eq!(doc.state(), SearchState::Partial);
+    assert_eq!(
+        doc.truncated_fields(),
+        ["body_authored", "body_quoted", "body_signature"]
+    );
+}
+
+#[test]
 fn an_html_work_limit_keeps_headers_names_and_other_body_candidates() {
     let hostile = format!(
         "Content-Type: text/html\r\n\r\n<table>{}</table>",

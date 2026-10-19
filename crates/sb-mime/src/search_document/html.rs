@@ -6,9 +6,11 @@ use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use html5ever::tendril::{StrTendril, TendrilSink};
-use html5ever::tree_builder::{ElementFlags, NodeOrText, QuirksMode, TreeSink};
-use html5ever::{Attribute, ExpandedName, QualName, local_name, ns};
+use html5ever::buffer_queue::BufferQueue;
+use html5ever::tendril::StrTendril;
+use html5ever::tokenizer::{TagKind, Token, TokenSink, TokenSinkResult, Tokenizer};
+use html5ever::tree_builder::{ElementFlags, NodeOrText, QuirksMode, TreeBuilder, TreeSink};
+use html5ever::{Attribute, ExpandedName, QualName, TokenizerResult, local_name, ns};
 
 use super::{Kind, Line, append_html_text, boundary, is_block};
 
@@ -225,19 +227,118 @@ impl TreeSink for Tree {
     }
 }
 
+// These costs happen inside html5ever, before/without TreeSink callbacks.
+// Forward the real tokens and namespace decisions, never re-tokenize HTML.
+struct BudgetedBuilder {
+    inner: TreeBuilder<Handle, Tree>,
+    input_bytes: Cell<usize>,
+    token_end_bound: Cell<usize>,
+    formatting_count: Cell<usize>,
+    formatting_cost: Cell<usize>,
+}
+
+impl TokenSink for BudgetedBuilder {
+    type Handle = Handle;
+
+    fn process_token(&self, token: Token, line: u64) -> TokenSinkResult<Handle> {
+        let tree = &self.inner.sink;
+        tree.charge(1);
+        if let Token::TagToken(tag) = &token {
+            // A token may start in the preceding feed chunk. Each attempted
+            // attribute consumes input, including duplicates the tokenizer drops.
+            let span = self
+                .input_bytes
+                .get()
+                .saturating_sub(self.token_end_bound.get())
+                .saturating_add(INPUT_CHUNK_BYTES);
+            tree.charge(tag.attrs.len().saturating_mul(span.max(tag.attrs.len())));
+            if tag.kind == TagKind::StartTag
+                && matches!(
+                    tag.name.as_ref(),
+                    "a" | "b"
+                        | "big"
+                        | "code"
+                        | "em"
+                        | "font"
+                        | "i"
+                        | "nobr"
+                        | "s"
+                        | "small"
+                        | "strike"
+                        | "strong"
+                        | "tt"
+                        | "u"
+                )
+            {
+                let bytes = tag.attrs.iter().fold(tag.name.len(), |n, attr| {
+                    n.saturating_add(attr.name.local.len())
+                        .saturating_add(attr.value.len())
+                        .saturating_add(1)
+                });
+                let cost = bytes
+                    .saturating_add(1)
+                    .saturating_mul(tag.attrs.len().saturating_add(1));
+                // History overestimates a list after pruning or markers, avoiding
+                // a second implementation of HTML5's formatting-list state.
+                tree.charge(
+                    self.formatting_cost
+                        .get()
+                        .saturating_add(self.formatting_count.get().saturating_mul(cost)),
+                );
+                self.formatting_count
+                    .set(self.formatting_count.get().saturating_add(1));
+                self.formatting_cost
+                    .set(self.formatting_cost.get().saturating_add(cost));
+            }
+        }
+        if !matches!(token, Token::ParseError(_)) {
+            self.token_end_bound.set(self.input_bytes.get());
+        }
+        if tree.check_budget().is_err() {
+            // The caller discards this candidate after the current bounded feed.
+            // Do not give the tree builder any more work once its budget is gone.
+            return TokenSinkResult::Continue;
+        }
+        self.inner.process_token(token, line)
+    }
+
+    fn end(&self) {
+        if self.inner.sink.check_budget().is_ok() {
+            self.inner.end();
+        }
+    }
+
+    fn adjusted_current_node_present_but_not_in_html_namespace(&self) -> bool {
+        self.inner
+            .adjusted_current_node_present_but_not_in_html_namespace()
+    }
+}
+
 pub(super) fn html_lines(html: &str) -> Result<Vec<Line>, HtmlLimit> {
     let tree = Tree::default();
     tree.anonymous(None); // Document node is always index zero.
-    let mut parser = html5ever::parse_document(tree, Default::default());
+    let tokenizer = Tokenizer::new(
+        BudgetedBuilder {
+            inner: TreeBuilder::new(tree, Default::default()),
+            input_bytes: Cell::new(0),
+            token_end_bound: Cell::new(0),
+            formatting_count: Cell::new(0),
+            formatting_cost: Cell::new(0),
+        },
+        Default::default(),
+    );
+    let input = BufferQueue::default();
     let mut offset = 0;
     let mut pending = 0;
     while offset < html.len() {
         let end = html.floor_char_boundary((offset + INPUT_CHUNK_BYTES).min(html.len()));
-        let tree = &parser.tokenizer.sink.sink;
+        let tree = &tokenizer.sink.inner.sink;
         let before = tree.mutations.get();
         tree.charge(end - offset);
-        parser.process(StrTendril::from_slice(&html[offset..end]));
-        let tree = &parser.tokenizer.sink.sink;
+        tokenizer.sink.input_bytes.set(end);
+        input.push_back(StrTendril::from_slice(&html[offset..end]));
+        while !matches!(tokenizer.feed(&input), TokenizerResult::Done) {}
+        let tree = &tokenizer.sink.inner.sink;
         tree.check_budget()?;
         pending = if tree.mutations.get() == before {
             pending + end - offset
@@ -249,7 +350,8 @@ pub(super) fn html_lines(html: &str) -> Result<Vec<Line>, HtmlLimit> {
         }
         offset = end;
     }
-    let tree = parser.finish();
+    tokenizer.end();
+    let tree = tokenizer.sink.inner.sink;
     tree.check_budget()?;
     let mut lines = vec![Line {
         kind: Kind::Authored,
