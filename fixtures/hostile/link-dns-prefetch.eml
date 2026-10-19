@@ -1,0 +1,6 @@
+X-Sweetbriar-Fixture: Resource hint dns-prefetch
+X-Sweetbriar-Expect: remote
+MIME-Version: 1.0
+Content-Type: text/html; charset=utf-8
+
+<link rel="dns-prefetch" href="//attack.invalid/resource" as="style">

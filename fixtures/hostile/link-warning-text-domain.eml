@@ -1,0 +1,6 @@
+X-Sweetbriar-Fixture: Link warning text-domain
+X-Sweetbriar-Expect: link=https://destination.invalid/x|text_domain blocked=0
+MIME-Version: 1.0
+Content-Type: text/html; charset=utf-8
+
+<a href="https://destination.invalid/x">https://trusted.invalid</a>

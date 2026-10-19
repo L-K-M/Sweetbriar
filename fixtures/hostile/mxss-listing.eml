@@ -1,0 +1,5 @@
+X-Sweetbriar-Fixture: Raw text and formatting breakout listing
+MIME-Version: 1.0
+Content-Type: text/html; charset=utf-8
+
+<listing><p title="</listing><img src=/leak onerror=bad()>">x</p></listing><script>bad()</script>

@@ -1,0 +1,6 @@
+X-Sweetbriar-Fixture: Refresh and base URL rebasing
+X-Sweetbriar-Expect: remote
+MIME-Version: 1.0
+Content-Type: text/html; charset=utf-8
+
+<base href="https://attack.invalid/"><meta http-equiv="refresh" content="0;url=https://attack.invalid/refresh"><a href="relative">relative</a><img src="relative">

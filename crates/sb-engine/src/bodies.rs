@@ -70,7 +70,28 @@ impl<T> Drop for PendingLease<T> {
     }
 }
 
+/// In-memory lease revocation, independent of the core's async lifecycle lock.
+pub struct LeaseReleaser {
+    registry: Arc<Leases>,
+    cleanup: Detached,
+}
+
+impl LeaseReleaser {
+    pub fn release_lease(&self, lease_id: &str) {
+        self.registry.revoke(lease_id);
+        let registry = self.registry.clone();
+        self.cleanup.spawn(move || registry.clean());
+    }
+}
+
 impl Engine {
+    pub fn lease_releaser(&self) -> LeaseReleaser {
+        LeaseReleaser {
+            registry: self.leases().clone(),
+            cleanup: self.detached(),
+        }
+    }
+
     pub async fn open_body(
         &self,
         message_id: i64,
@@ -133,9 +154,7 @@ impl Engine {
     }
 
     pub fn release_lease(&self, lease_id: &str) {
-        self.leases().revoke(lease_id);
-        let registry = self.leases().clone();
-        self.detached().spawn(move || registry.clean());
+        self.lease_releaser().release_lease(lease_id);
     }
 }
 

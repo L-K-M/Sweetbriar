@@ -295,7 +295,7 @@ func anImportedMailboxCrossesTheBridge() async throws {
 
 /// Import `paths` and wait for the finished job, confirming with no
 /// variants.
-private func importAndFinish(_ bridge: CoreBridge, paths: [String]) async throws -> ImportJob {
+func importAndFinish(_ bridge: CoreBridge, paths: [String]) async throws -> ImportJob {
     let started = try await bridge.startImport(paths: paths)
     let deadline = ContinuousClock.now + .seconds(50)
     var confirmed = false
@@ -523,5 +523,137 @@ func readerMetadataCrossesTheBridge() async throws {
     }
     await bridge.closeWindow(id: window.windowId)
     await bridge.closeWindow(id: thread.windowId)
+    await bridge.shutdown()
+}
+
+/// Real cache files, manifests, warnings and exact source survive the bridge.
+@Test(.timeLimit(.minutes(1)))
+func bodyLeasesCrossTheBridge() async throws {
+    let (dir, config) = tempConfig()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let bridge = try await CoreBridge.open(
+        config: config, snapshots: await sinkBatcher(clock: ManualFrameClock())
+    )
+    let source = dir.appendingPathComponent("Body.mbox")
+    let raw = "Subject: Body\nContent-Type: text/html\n\n"
+        + "<p>Hello</p><img src=\"https://remote.test/a\"><img src=\"cid:absent\">\n"
+    try Data(("From sender@example.test Sat Oct 17 12:00:00 2026\n" + raw).utf8).write(to: source)
+    let job = try await importAndFinish(bridge, paths: [source.path])
+    #expect(job.state == .completed)
+    let archive = try #require(try await bridge.accounts().first)
+    let mailbox = try #require(try await bridge.mailboxes(accountId: archive.accountId).mailboxes.first)
+    let window = try await bridge.openWindow(spec: .mailbox(mailbox.mailboxId), anchor: .top, limit: 10)
+    let row = try #require(window.rows.first)
+    for kind: BodyKind in [.sanitizedHtml, .plainText, .source] {
+        let lease = try await bridge.openBody(messageID: row.messageId, preferred: kind)
+        #expect(lease.kind == kind)
+        #expect(lease.leaseId.count == 64)
+        let bytes = try Data(contentsOf: URL(fileURLWithPath: lease.filePath))
+        #expect(lease.byteLength == UInt64(bytes.count))
+        if kind == .source {
+            #expect(bytes == Data(raw.utf8))
+            #expect(lease.manifestPath == nil)
+            #expect(lease.remoteContentBlocked == 0)
+            #expect(lease.warnings.isEmpty)
+        } else {
+            let manifest = try #require(lease.manifestPath)
+            let json = try String(contentsOfFile: manifest, encoding: .utf8)
+            #expect(json == "{\"v\":1,\"resources\":[],\"links\":[],\"attachments\":[]}")
+            #expect(lease.remoteContentBlocked == 1)
+            #expect(lease.warnings.contains(RenderWarning(code: .missingCid, partId: nil)))
+            let text = try #require(String(data: bytes, encoding: .utf8))
+            #expect(text.contains("Hello"))
+            #expect(!text.contains("https://remote.test"))
+            if kind == .sanitizedHtml { #expect(text.contains("<p>Hello</p>")) }
+            else { #expect(!text.contains("<")) }
+        }
+        let directory = URL(fileURLWithPath: lease.filePath).deletingLastPathComponent().path
+        bridge.releaseLease(lease.leaseId)
+        bridge.releaseLease(lease.leaseId)
+        let deadline = ContinuousClock.now + .seconds(10)
+        while FileManager.default.fileExists(atPath: directory) {
+            try #require(ContinuousClock.now < deadline, "release left the lease directory")
+            try await Task.sleep(for: .milliseconds(5))
+        }
+    }
+    bridge.releaseLease("unknown")
+    do {
+        _ = try await bridge.openBody(messageID: -1, preferred: .source)
+        Issue.record("an unknown message must throw")
+    } catch let failure as CoreFailure {
+        guard case .notFound = failure else { throw failure }
+    }
+    let cancelled = Task {
+        withUnsafeCurrentTask { $0?.cancel() }
+        return try await bridge.openBody(messageID: row.messageId, preferred: .source)
+    }
+    do {
+        _ = try await cancelled.value
+        Issue.record("a cancelled task must throw")
+    } catch is CancellationError {}
+    await bridge.closeWindow(id: window.windowId)
+    await bridge.shutdown()
+    bridge.releaseLease("after-shutdown")
+}
+
+/// A real imported attachment retains its decoded bytes and metadata.
+@Test(.timeLimit(.minutes(1)))
+func attachmentLeasesCrossTheBridge() async throws {
+    let (dir, config) = tempConfig()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let bridge = try await CoreBridge.open(
+        config: config, snapshots: await sinkBatcher(clock: ManualFrameClock())
+    )
+    let source = dir.appendingPathComponent("Attachment.mbox")
+    let raw = "Subject: Attachment\nContent-Type: multipart/mixed; boundary=o\n\n"
+        + "--o\nContent-Type: text/plain\n\nbody\n"
+        + "--o\nContent-Type: application/pdf\n"
+        + "Content-Disposition: attachment; filename=report.pdf\n"
+        + "Content-Transfer-Encoding: base64\n\nJVBERi0xLjQ=\n--o--\n"
+    try Data(("From sender@example.test Sat Oct 17 12:00:00 2026\n" + raw).utf8).write(to: source)
+    let job = try await importAndFinish(bridge, paths: [source.path])
+    #expect(job.state == .completed)
+    let archive = try #require(try await bridge.accounts().first)
+    let mailbox = try #require(try await bridge.mailboxes(accountId: archive.accountId).mailboxes.first)
+    let window = try await bridge.openWindow(spec: .mailbox(mailbox.mailboxId), anchor: .top, limit: 10)
+    let row = try #require(window.rows.first)
+    let lease = try await bridge.openAttachment(messageID: row.messageId, partID: "1.2")
+    #expect(lease.leaseId.count == 64)
+    #expect(lease.partId == "1.2")
+    #expect(lease.displayName == "report.pdf")
+    #expect(lease.mediaType == "application/pdf")
+    #expect(lease.byteLength == 8)
+    #expect(try Data(contentsOf: URL(fileURLWithPath: lease.filePath)) == Data("%PDF-1.4".utf8))
+    let directory = URL(fileURLWithPath: lease.filePath).deletingLastPathComponent().path
+    bridge.releaseLease(lease.leaseId)
+    bridge.releaseLease(lease.leaseId)
+    let deadline = ContinuousClock.now + .seconds(10)
+    while FileManager.default.fileExists(atPath: directory) {
+        try #require(ContinuousClock.now < deadline, "release left the attachment directory")
+        try await Task.sleep(for: .milliseconds(5))
+    }
+    #expect(!FileManager.default.fileExists(atPath: lease.filePath))
+    do {
+        _ = try await bridge.openAttachment(messageID: row.messageId, partID: "1.1")
+        Issue.record("a body part must throw")
+    } catch let failure as CoreFailure {
+        guard case .notFound = failure else { throw failure }
+    }
+    do {
+        _ = try await bridge.openAttachment(messageID: row.messageId, partID: "1..2")
+        Issue.record("a malformed part id must throw")
+    } catch let failure as CoreFailure {
+        guard case .invalidInput(let field, _) = failure else { throw failure }
+        #expect(field == "part_id")
+    }
+    let cancelled = Task {
+        withUnsafeCurrentTask { $0?.cancel() }
+        return try await bridge.openAttachment(messageID: row.messageId, partID: "1.2")
+    }
+    do {
+        _ = try await cancelled.value
+        Issue.record("a cancelled attachment open must throw")
+    } catch is CancellationError {}
+    await bridge.closeWindow(id: window.windowId)
     await bridge.shutdown()
 }

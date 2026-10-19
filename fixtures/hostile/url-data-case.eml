@@ -1,0 +1,5 @@
+X-Sweetbriar-Fixture: Obfuscated data case
+MIME-Version: 1.0
+Content-Type: text/html; charset=utf-8
+
+<a href="DATA:bad">x</a><img src="DATA:bad"><form action="DATA:bad"><button formaction="DATA:bad">x</button></form><svg><a xlink:href="DATA:bad">x</a></svg>

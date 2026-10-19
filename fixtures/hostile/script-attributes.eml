@@ -1,0 +1,5 @@
+X-Sweetbriar-Fixture: Script in attributes
+MIME-Version: 1.0
+Content-Type: text/html; charset=utf-8
+
+<script src="https://attack.invalid/x" type="module" defer>bad()</script>
