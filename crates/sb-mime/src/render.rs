@@ -3,7 +3,8 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use ammonia::{Builder, UrlRelative};
-use lol_html::{RewriteStrSettings, element, rewrite_str, text};
+use lol_html::html_content::{ContentType, TextType};
+use lol_html::{RewriteStrSettings, doc_text, element, rewrite_str, text};
 use url::{Host, Url};
 
 // Text structure and table layout only. No active or foreign-namespace elements.
@@ -124,6 +125,15 @@ const TAG_ATTRIBUTES: &[(&str, &[&str])] = &[
     ),
 ];
 const LINK_SCHEMES: &[&str] = &["http", "https", "mailto"];
+/// Longest link destination kept, and its title.
+const MAX_HREF_BYTES: usize = 4096;
+/// Longest value kept for any other attribute: layout numbers and codes.
+const MAX_ATTRIBUTE_BYTES: usize = 256;
+/// A text run's escaping cost, bytes times escaped characters, past which
+/// `split_dense_text` splits it: about 1,000 bytes of `&`.
+const SPLIT_COST: usize = 1 << 20;
+/// Splits a text node in two; empty, it renders as nothing.
+const TEXT_BREAK: &str = "<span></span>";
 
 /// Per-destination link warnings in the spec/07 rendition manifest.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -183,6 +193,17 @@ pub enum HtmlSanitizeError {
     Panic,
 }
 
+impl std::fmt::Display for HtmlSanitizeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Rewrite => "the HTML rewriter failed",
+            Self::Panic => "an HTML parser panicked",
+        })
+    }
+}
+
+impl std::error::Error for HtmlSanitizeError {}
+
 fn policy() -> Builder<'static> {
     let mut policy = Builder::new();
     policy
@@ -200,9 +221,17 @@ fn policy() -> Builder<'static> {
         .link_rel(None)
         .attribute_filter(|tag, attr, value| {
             if tag == "a" && attr == "href" {
-                return safe_destination(value).map(|url| url.to_string().into());
+                return safe_destination(value)
+                    .map(|url| url.to_string())
+                    .filter(|href| href.len() <= MAX_HREF_BYTES)
+                    .map(Into::into);
             }
-            Some(value.into())
+            let limit = if attr == "title" {
+                MAX_HREF_BYTES
+            } else {
+                MAX_ATTRIBUTE_BYTES
+            };
+            (value.len() <= limit).then(|| value.into())
         });
     // No style or resource-bearing attributes: M1.5d adds checked CSS and CID
     // rewriting/counting before this final allow-list boundary.
@@ -236,9 +265,10 @@ fn sanitize_run(decoded_html: &str) -> Result<SanitizedHtml, HtmlSanitizeError> 
         panic!("sb-mime sanitizer test tripwire");
     }
     let policy = policy();
+    let split = split_dense_text(decoded_html)?;
     // Normalize namespaces and malformed trees before collecting links, so
     // removed subtrees cannot contribute warning records.
-    let normalized = policy.clean(decoded_html).to_string();
+    let normalized = policy.clean(&split).to_string();
     let anchors = std::cell::RefCell::new(Vec::<(Url, String)>::new());
     let rewritten = rewrite_str(
         &normalized,
@@ -278,7 +308,8 @@ fn sanitize_run(decoded_html: &str) -> Result<SanitizedHtml, HtmlSanitizeError> 
             warnings.insert(LinkWarning::UserInfo);
         }
         let label = decode_serialized(&label);
-        if label_hosts(&label).any(|host| url.host_str().is_some_and(|target| host != target)) {
+        let targets = destination_hosts(&url);
+        if label_hosts(&label).any(|host| !targets.contains(&host)) {
             warnings.insert(LinkWarning::TextDomain);
         }
     }
@@ -303,6 +334,73 @@ fn decode_serialized(value: &str) -> String {
         .replace("&quot;", "\"")
         .replace("&nbsp;", "\u{a0}")
         .replace("&amp;", "&")
+}
+
+/// The domains a destination reaches: its host, or a `mailto:` link's
+/// recipient domains, normalized as `label_hosts` normalizes.
+fn destination_hosts(url: &Url) -> Vec<String> {
+    if let Some(host) = url.host_str() {
+        return vec![host.to_owned()];
+    }
+    url.path()
+        .split(',')
+        .filter_map(|recipient| {
+            let domain = recipient.rsplit_once('@')?.1;
+            let url = Url::parse(&format!("https://{domain}")).ok()?;
+            url.host_str().map(str::to_owned)
+        })
+        .collect()
+}
+
+/// html5ever 0.40's serializer rescans for the next `<` or `>` at every
+/// `&` and U+0080–U+00BF it escapes, so a text node costs about its length
+/// times those characters: 100,000 `&` took 35 seconds. Once a run's cost
+/// reaches `SPLIT_COST` it is split with an empty `<span>`, which renders
+/// as nothing, outside any character reference. Only ordinary text is
+/// split; raw text such as `<title>` would show the tag.
+fn split_dense_text(html: &str) -> Result<String, HtmlSanitizeError> {
+    #[derive(Default)]
+    struct Run {
+        bytes: usize,
+        escapes: usize,
+        in_reference: bool,
+    }
+    let run = std::cell::RefCell::new(Run::default());
+    rewrite_str(
+        html,
+        RewriteStrSettings::new().append_document_content_handler(doc_text!(|chunk| {
+            let mut run = run.borrow_mut();
+            if chunk.text_type() != TextType::Data {
+                *run = Run::default();
+                return Ok(());
+            }
+            let mut split = String::new();
+            let mut changed = false;
+            for c in chunk.as_str().chars() {
+                // Only a name or number character continues a reference.
+                let continues = run.in_reference && (c.is_ascii_alphanumeric() || c == '#');
+                if !continues && run.bytes.saturating_mul(run.escapes) >= SPLIT_COST {
+                    split.push_str(TEXT_BREAK);
+                    *run = Run::default();
+                    changed = true;
+                }
+                split.push(c);
+                run.bytes += c.len_utf8();
+                if c == '&' || ('\u{80}'..='\u{bf}').contains(&c) {
+                    run.escapes += 1;
+                }
+                run.in_reference = c == '&' || continues;
+            }
+            if chunk.last_in_text_node() {
+                *run = Run::default();
+            }
+            if changed {
+                chunk.replace(&split, ContentType::Html);
+            }
+            Ok(())
+        })),
+    )
+    .map_err(|_| HtmlSanitizeError::Rewrite)
 }
 
 fn label_hosts(label: &str) -> impl Iterator<Item = String> + '_ {
@@ -615,6 +713,80 @@ mod tests {
             sanitize_html(r#"<a href="https://example.invalid/">first.last@example.invalid</a>"#)
                 .unwrap();
         assert!(result.links()[0].warnings().is_empty());
+    }
+
+    #[test]
+    fn mailto_labels_compare_with_the_recipient_domain() {
+        for (destination, label) in [
+            ("mailto:support@real.invalid", "support@phish.invalid"),
+            ("mailto:support@real.invalid", "https://phish.invalid/"),
+            ("mailto:?subject=hello", "phish.invalid"),
+        ] {
+            let html = format!(r#"<a href="{destination}">{label}</a>"#);
+            assert_eq!(
+                sanitize_html(&html).unwrap().links()[0].warnings(),
+                &[LinkWarning::TextDomain],
+                "{label}"
+            );
+        }
+        for label in [
+            "support@real.invalid",
+            "SUPPORT@REAL.INVALID",
+            "other.invalid",
+            "Write to us",
+        ] {
+            let html =
+                format!(r#"<a href="mailto:support@real.invalid,b@other.invalid">{label}</a>"#);
+            assert!(
+                sanitize_html(&html).unwrap().links()[0]
+                    .warnings()
+                    .is_empty(),
+                "{label}"
+            );
+        }
+    }
+
+    /// The pinned serializer rescans for `<` or `>` at every `&` and
+    /// U+0080–U+00BF it meets (html5ever 0.40), so a dense text node costs
+    /// its length squared: 100,000 `&` took 35 seconds. Dense runs are split.
+    #[test]
+    fn dense_escapes_are_split_into_short_text_runs() {
+        const UNITS: usize = 20_000;
+        for (unit, decoded) in [
+            ("&amp;", "&"),
+            ("&", "&"),
+            ("&nbsp;", "\u{a0}"),
+            ("\u{a0}", "\u{a0}"),
+            ("©", "©"),
+        ] {
+            let html = format!("<p>{}&lt;b&gt;</p>", unit.repeat(UNITS));
+            let result = sanitize_html(&html).unwrap();
+            assert_inert(result.html());
+            let longest = result.html().split(['<', '>']).map(str::len).max().unwrap();
+            assert!(longest < 8 * 1024, "{unit:?}: a {longest}-byte run");
+            let text = mail_parser::decoders::html::html_to_text(result.html());
+            assert_eq!(text.matches(decoded).count(), UNITS, "{unit:?}");
+            assert!(text.trim_end().ends_with("<b>"), "{unit:?}");
+        }
+    }
+
+    /// Attribute values escape the same way, so long ones are dropped.
+    #[test]
+    fn long_attribute_values_are_dropped() {
+        let long_query = "&".repeat(MAX_HREF_BYTES);
+        let html = format!(
+            r#"<ol start="{}" type="1"><li>x</li></ol><a href="https://example.invalid/?{long_query}">long</a><a href="https://example.invalid/?a&b">short</a>"#,
+            "&".repeat(MAX_ATTRIBUTE_BYTES + 1)
+        );
+        let result = sanitize_html(&html).unwrap();
+        let elements = assert_inert(result.html());
+        let list = elements.iter().find(|el| el.tag == "ol").unwrap();
+        assert!(!list.attrs.contains_key("start"));
+        assert_eq!(list.attrs.get("type").map(String::as_str), Some("1"));
+        let anchors: Vec<_> = elements.iter().filter(|el| el.tag == "a").collect();
+        assert!(anchors[0].attrs.is_empty());
+        assert!(anchors[1].attrs.contains_key("href"));
+        assert_eq!(result.links().len(), 1);
     }
 
     #[test]
