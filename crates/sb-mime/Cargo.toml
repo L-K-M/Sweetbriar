@@ -16,12 +16,17 @@ mail-parser = { version = "=0.11.9", features = ["full_encoding"] }
 # directly whether decoding replaced anything (spec/07
 # `charset_replaced`): a literal U+FFFD in the text is not a loss.
 encoding_rs = "=0.8.42"
-# spec/10 "Rendering" (M1.5): parsing URLs for the renderer's resource
-# and link policy — never by regex.
+# spec/10 "Rendering" (M1.5): parsing inline CSS and URLs for the
+# renderer's resource and link policy — never by regex. cssparser 0.38
+# is ammonia's own.
+cssparser = "=0.38.0"
 url = "=2.5.8"
 # spec/10 "Rendering": the streaming first pass that rewrites `cid:`
 # URLs and inventories remote resources before sanitizing.
 lol_html = "=3.0.1"
+# spec/10 "Rendering": the final allow-list sanitizer. 4.2.4 carries
+# the fix for RUSTSEC-2026-0373 (case-varied CSS `URL()`).
+ammonia = "=4.2.4"
 
 [dev-dependencies]
 # spec/01 crate table: snapshot testing of the fixtures/eml corpus.

@@ -17,6 +17,8 @@ exceptions = [
     { crate = "dtoa-short@0.3.5", allow = ["MPL-2.0"] },
     { crate = "cssparser-macros@0.6.1", allow = ["MPL-2.0"] },
     { crate = "selectors@0.37.0", allow = ["MPL-2.0"] },
+    { crate = "cssparser@0.38.0", allow = ["MPL-2.0"] },
+    { crate = "cssparser-macros@0.7.1", allow = ["MPL-2.0"] },
 ]
 
 [licenses.private]
