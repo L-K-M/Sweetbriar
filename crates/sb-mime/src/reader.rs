@@ -2,6 +2,7 @@
 
 use std::borrow::Cow;
 
+use mail_parser::decoders::charsets::map::charset_decoder;
 use mail_parser::parsers::MessageStream;
 use mail_parser::{Encoding, Message, MessageParser, MessagePart, MimeHeaders, PartType};
 
@@ -144,7 +145,8 @@ impl RenderInput {
     pub fn resources(&self) -> &[RelatedResource] {
         &self.resources
     }
-    /// Every non-selected part, including alternative bodies and containers.
+    /// Every non-selected leaf part outside attached messages; an attached
+    /// message is one attachment.
     pub fn attachments(&self) -> &[AttachmentDescriptor] {
         &self.attachments
     }
@@ -507,7 +509,7 @@ const MAX_DISPLAY_NAME_BYTES: usize = 255;
 fn display_name(name: Option<&str>) -> String {
     let mut result = String::new();
     for c in name.unwrap_or("attachment").chars() {
-        let c = if c.is_control() || matches!(c, '/' | '\\' | ':') {
+        let c = if c.is_control() || disguises(c) || matches!(c, '/' | '\\' | ':') {
             '_'
         } else {
             c
@@ -523,6 +525,21 @@ fn display_name(name: Option<&str>) -> String {
     result
 }
 
+/// Characters that can disguise a name without showing: bidi marks,
+/// embeddings, overrides and isolates (`invoice\u{202e}gpj.exe` shows as
+/// `invoiceexe.jpg`), zero-width characters, and line and paragraph
+/// separators.
+fn disguises(c: char) -> bool {
+    matches!(
+        c,
+        '\u{061c}'
+            | '\u{200b}'..='\u{200f}'
+            | '\u{2028}'..='\u{202e}'
+            | '\u{2060}'..='\u{2069}'
+            | '\u{feff}'
+    )
+}
+
 fn decoded<'a>(node: &'a Node<'_>, limits: &Limits) -> Result<Cow<'a, [u8]>, AttachmentError> {
     let bytes = transfer_decoded(node)?;
     if bytes.len() as u64 > limits.max_decoded_part_bytes() {
@@ -531,10 +548,10 @@ fn decoded<'a>(node: &'a Node<'_>, limits: &Limits) -> Result<Cow<'a, [u8]>, Att
     Ok(bytes)
 }
 
-/// Whether decoding the part's charset replaced bytes it couldn't read:
-/// the decoder says so, rather than a U+FFFD in the text, which may be
-/// the sender's own. An unknown label is read as UTF-8, as upstream
-/// falls back to.
+/// Whether decoding the part's charset replaced bytes it couldn't read,
+/// given its text holds a U+FFFD: the decoder says so, since the U+FFFD
+/// may be the sender's own. A label upstream doesn't know is read as
+/// UTF-8, as upstream falls back to.
 fn charset_replaced(node: &Node<'_>) -> bool {
     let Ok(bytes) = transfer_decoded(node) else {
         return true;
@@ -544,10 +561,26 @@ fn charset_replaced(node: &Node<'_>) -> bool {
         .content_type()
         .and_then(|c| c.attribute("charset"))
         .unwrap_or("utf-8");
-    match encoding_rs::Encoding::for_label(label.as_bytes()) {
-        Some(encoding) => encoding.decode_without_bom_handling(&bytes).1,
-        None => std::str::from_utf8(&bytes).is_err(),
-    }
+    let Some(encoding) = encoding_rs::Encoding::for_label(label.as_bytes()) else {
+        // Upstream's own decoders (UTF-7) report nothing; their U+FFFD
+        // is the only sign.
+        return charset_decoder(label.as_bytes()).is_some() || std::str::from_utf8(&bytes).is_err();
+    };
+
+    // Generic UTF-16 follows its byte order mark, as upstream's does.
+    let (encoding, bytes) = match encoding_rs::Encoding::for_bom(&bytes) {
+        Some((bom, length)) if is_utf16(encoding) && is_utf16(bom) => (bom, &bytes[length..]),
+        _ => (encoding, &bytes[..]),
+    };
+
+    // Upstream's tables leave bytes unmapped that WHATWG maps (windows-125x
+    // C1 holes, e.g. 0x81). A charset that can't encode U+FFFD shows one
+    // only after replacing.
+    encoding.decode_without_bom_handling(bytes).1 || encoding.encode("\u{fffd}").2
+}
+
+fn is_utf16(encoding: &'static encoding_rs::Encoding) -> bool {
+    encoding == encoding_rs::UTF_16LE || encoding == encoding_rs::UTF_16BE
 }
 
 fn transfer_decoded<'a>(node: &'a Node<'_>) -> Result<Cow<'a, [u8]>, AttachmentError> {
