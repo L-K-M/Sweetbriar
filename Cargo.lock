@@ -835,6 +835,7 @@ dependencies = [
 name = "sb-mime"
 version = "0.0.1"
 dependencies = [
+ "encoding_rs",
  "insta",
  "mail-parser",
  "sb-types",
