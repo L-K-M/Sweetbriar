@@ -198,6 +198,23 @@ allowed first-party dependencies.
 - **Clock and randomness** come through the `Clock` and `Random` seams
   (rule 5), so tests are deterministic.
 
+### Search ownership (M1.6)
+
+`sb-mime` owns bounded reader-independent extraction (06), with no store
+access. `sb-store::query` owns the AST, JSON/text parser and formatter,
+validation, parameterized SQL, search keys and scoped coverage reads.
+`sb-resources` maps extraction output into store publication inputs and
+exposes typed acquisition/queue/query operations; it never schedules jobs.
+`sb-engine` owns index and received-address workers, rebuild progress,
+Search handles and invalidation. `sb-service` defines its own DTOs,
+including parse spans and coverage; `sb-ffi` and `SweetbriarBridge` map
+those for macOS. No MIME or SQLite types cross the service boundary.
+The fuzz crate can depend directly on the leaf parser, as its MIME target
+does; the application layer graph stays unchanged. Reuse existing parser,
+JSON and HTML dependencies; any new direct dependency, including timezone
+data needed by 06, is pinned and justified at implementation, with lockfile
+and notices changes included in that step's size.
+
 ## Crates and versions
 
 Versions verified 2026-10-12. Each step pins exact versions; `Cargo.lock`
@@ -212,7 +229,7 @@ is committed, and updates are their own PRs.
 | MIME composing | `mail-builder` | 1.0.0 | |
 | Color math | `palette` | pin at first use (M1.10) | Contrast and derived tints for account colors |
 | Markdown | `pulldown-cmark` | pin at first use | Raw HTML disabled (05) |
-| HTML sanitizing | `ammonia`, `lol_html` | 4.2.4, 3.0.1 | Per 10; `html5ever` only through `ammonia` |
+| HTML sanitizing | `ammonia`, `lol_html`, `markup5ever` | 4.2.4, 3.0.1, 0.40.0 | Per 10; `html5ever` only through `ammonia`; `markup5ever` (already ammonia's) for its HTML5 character-reference table |
 | CSS and URL parsing | `cssparser`, `url` | 0.38.0, 2.5.8 | The renderer's resource and link policy (10) |
 | IMAP | `io-imap` | 0.7.1 | **Spike first** (plan M2.1): check it handles Bridge's quirks (synchronizing literals, LIST attributes, UIDPLUS receipts, raw UTF-8 resilience). Fallback: `async-imap` 0.12.0 (`runtime-tokio`, no default features) |
 | SMTP | `lettre` (tokio + rustls features, no native-tls) | 0.11.23 | Raw-message submission of `mail-builder` output. Must expose enough to detect "connection lost after DATA" (05) |
