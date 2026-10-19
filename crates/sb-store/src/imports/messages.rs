@@ -233,6 +233,9 @@ pub fn commit_import_batch(
             "import list rows exceed the background-write budget",
         ));
     }
+    if !batch.messages.is_empty() {
+        crate::index::advance_generation(tx)?;
+    }
     // One generation per batch that changed what lists show (spec/02).
     if list_rows::refresh(tx, &list.occurrences)? {
         list_rows::advance_generation(tx)?;
@@ -359,6 +362,16 @@ fn store_message(
         [acquisition],
     )
     .map_err(sql_error)?;
+    crate::index::enqueue_one(
+        tx,
+        acquisition,
+        if inserted {
+            crate::index::IndexReason::New
+        } else {
+            crate::index::IndexReason::Reextract
+        },
+        now,
+    )?;
     stats.processed += 1;
     stats.duplicates += u64::from(!inserted);
     stats.rejected += u64::from(matches!(
@@ -442,13 +455,6 @@ fn store_message(
         list.extra_bytes = list
             .extra_bytes
             .saturating_add(shown.saturating_sub(list_row_bytes(&message.summary)));
-    }
-    if stored {
-        tx.execute(
-            "INSERT INTO d_index_queue (doc_id, reason, enqueued_at) VALUES (?1, ?2, ?3)
-             ON CONFLICT(doc_id) DO UPDATE SET reason = excluded.reason, enqueued_at = excluded.enqueued_at",
-            params![acquisition, if inserted { "new" } else { "reextract" }, now.as_millis()],
-        ).map_err(sql_error)?;
     }
     Ok(())
 }

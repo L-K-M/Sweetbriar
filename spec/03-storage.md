@@ -148,7 +148,7 @@ recreated.
 
 The FTS5 layout, queue revisions and recovery protocol are in 06. Tables
 already present in schema v1 are reused; contract additions use new
-forward migrations with the usual snapshot and integrity checks (02).
+forward migrations (index storage is migration 5) with the usual snapshot and integrity checks (02).
 No migration rewrites an old migration or extracts MIME inside a write.
 Index batches run at low priority, at most 200 documents and 2,000,000
 bytes of new extracted column values per transaction; a single document

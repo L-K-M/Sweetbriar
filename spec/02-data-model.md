@@ -56,7 +56,7 @@ CREATE TABLE store_meta (
 -- 'list_generation' (an integer in decimal digits; the d_list_rows generation, from migration 3),
 -- 'thread_inputs' and 'threads_built' (integers in decimal digits, from migration 4): how often
 -- imports added logical messages, and how many of those the last complete thread rebuild read.
--- M1.6: 'index_inputs', 'search_extractor_version' (06) and
+-- Migration 5: 'index_inputs', 'search_extractor_version' (06) and
 -- 'search_generation' (07), integers in decimal digits; search has its own
 -- generation so index-only writes leave ordinary list windows alone.
 -- The schema version is PRAGMA user_version, owned by the migration runner;
@@ -858,7 +858,9 @@ CREATE INDEX logical_messages_by_acquisition ON logical_messages(acquisition_id)
   rewrites or drops no existing data. Migration 4 adds the one-thread
   index and the thread watermarks: both 0, or `thread_inputs` at 1
   when the store already holds messages, so the first open threads
-  them and an empty store owes nothing.
+  them and an empty store owes nothing. Migration 5 adds search queue revisions
+  and its oldest-first index, initializes the search watermarks, and queues
+  existing acquisitions (06), without changing authoritative rows.
 - **Before any migration that rewrites or drops data,** the engine takes a
   `VACUUM INTO` snapshot, keeping the last two. This arrives with the
   first such migration; migration 1 has none.

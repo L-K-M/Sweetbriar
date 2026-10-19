@@ -673,7 +673,14 @@ fn a_newer_parser_never_replaces_a_stored_summary() {
         count(&store, "d_message_summary WHERE parser_version = 1"),
         1
     );
-    assert_eq!(count(&store, "d_index_queue WHERE reason = 'reextract'"), 0);
+    assert_eq!(count(&store, "d_index_queue WHERE reason = 'reextract'"), 1);
+    reading(&store, |tx| {
+        let pending = crate::index::pending_batch(tx, 200)?;
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].revision, 2);
+        assert_eq!(crate::index::search_generation(tx)?, 3);
+        Ok(())
+    });
     // The new occurrence's row is the batch's only list change.
     assert_eq!(list_generation(&store), before + 1);
     store.close().unwrap();
@@ -785,6 +792,36 @@ fn rows_showing_a_stored_summary_are_charged_for_it() {
         Err(StoreError::InvalidInput { .. })
     ));
     assert_eq!((list_rows(&store), list_generation(&store)), before);
+    assert_eq!(count(&store, "occurrences"), 1);
+    store.close().unwrap();
+}
+
+/// Source replay must supersede work even when it returns before summary
+/// insertion; a newer extraction must never acknowledge the replay's revision.
+#[test]
+fn source_replay_requeues_a_failed_summary_with_a_fresh_revision() {
+    let (_scratch, _paths, store, revision) = setup();
+    let mut first = message(&store, "/synthetic/Inbox.mbox", 0, ORIGINAL);
+    first.summary.parse_state = ImportParseState::Failed;
+    commit(&store, revision, "Inbox", vec![first]).unwrap();
+    let before = reading(&store, |tx| {
+        Ok(crate::index::pending_batch(tx, 200)?.remove(0))
+    });
+    let replay = message(&store, "/synthetic/Inbox.mbox", 0, ORIGINAL);
+    commit(&store, revision + 1, "Inbox", vec![replay]).unwrap();
+    reading(&store, |tx| {
+        let pending = crate::index::pending_batch(tx, 200)?;
+        assert_eq!(pending.len(), 1);
+        assert!(pending[0].revision > before.revision);
+        assert_eq!(pending[0].enqueued_at, before.enqueued_at);
+        assert_eq!(pending[0].reason, crate::index::IndexReason::Reextract);
+        assert_eq!(crate::index::search_generation(tx)?, 3);
+        Ok(())
+    });
+    assert_eq!(
+        count(&store, "d_message_summary WHERE parse_state = 'failed'"),
+        1
+    );
     assert_eq!(count(&store, "occurrences"), 1);
     store.close().unwrap();
 }
