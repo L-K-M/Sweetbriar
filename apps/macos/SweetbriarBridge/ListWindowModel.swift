@@ -1,11 +1,19 @@
-// `ListWindowModel`: the paging engine behind both prototype lists
+// `ListWindowModel`: the paging engine behind the message lists
 // (spec/08 "Message list"). It holds the window's id index and pages
 // in fixed 200-row pages; keeps at most three pages of rows — the
 // visible ones pinned, the next page in the scroll direction
 // prefetched, the rest going least recently used first; runs at most
 // two reads at a time; and delivers every page through the frame
-// batcher, at most once per frame. Free of AppKit so the bridge's
-// Linux tests exercise it directly.
+// batcher, at most once per frame. It shows the opening page before
+// the index arrives, follows the window's subscription, and holds the
+// selection by id. Free of AppKit so the bridge's Linux tests exercise
+// it directly.
+//
+//   open ──► first page (provisional prefix) ──► window_ids (exact)
+//     │
+//     └──► subscription: next ─► invalidated ─► one index fetch at a
+//                                resetRequired   time, then the pages
+//                                                and the selection
 
 import Observation
 
@@ -36,6 +44,15 @@ public protocol ListWindowSource: Sendable {
 
     /// `close_window`: release the handle. Uncancellable.
     func closeWindow(id: UInt64) async
+
+    /// `subscribe`: the window's change events, pulled one at a time.
+    func windowEvents(id: UInt64) async throws -> any WindowEventSource
+}
+
+/// A window's subscription as the model pulls it (spec/07
+/// "Subscriptions"): one `next` at a time.
+public protocol WindowEventSource: Sendable {
+    func next() async throws -> WindowEvent
 }
 
 /// The paging state of one list (spec/08 "Message list").
@@ -69,8 +86,20 @@ public final class ListWindowModel {
     public private(set) var generation: UInt64 = 0
 
     /// The window's id index: every row's occurrence id in window
-    /// order (spec/07). Selection is held by these ids.
+    /// order (spec/07). Selection is held by these ids. Until
+    /// `hasExactIndex`, only the opening page's ids: a provisional
+    /// prefix.
     public private(set) var ids: [Int64] = []
+
+    /// Whether `ids` is the window's whole index rather than the
+    /// opening page's prefix: rank jumps and range selection wait for
+    /// it (spec/08).
+    public private(set) var hasExactIndex = false
+
+    /// The selected rows, by occurrence id (spec/08). After each new
+    /// index an id it lacks is dropped — or, in a window of logical
+    /// messages, followed to its message's row (spec/07).
+    public private(set) var selection: Set<Int64> = []
 
     /// How many rows the window lists — the list's row count.
     public var count: Int { ids.count }
@@ -98,6 +127,11 @@ public final class ListWindowModel {
     /// pages. Fires before the wanted pages re-request.
     @ObservationIgnored
     public var onIndexChanged: @MainActor () -> Void = {}
+
+    /// Called on the main actor when a new index changed the
+    /// selection — not for the list's own `select` calls.
+    @ObservationIgnored
+    public var onSelectionChanged: @MainActor (Set<Int64>) -> Void = { _ in }
 
     private let source: any ListWindowSource
     private let spec: WindowSpec
@@ -153,10 +187,16 @@ public final class ListWindowModel {
     @ObservationIgnored
     private var closing: Task<Void, Never>?
 
-    /// Whether an id index is installed — a failed opening fetch then
-    /// leaves the window to the rebuild that installed it.
+    /// The generation each loaded page's rows were read at. A page
+    /// whose rows are older than `generation` is re-read; its rows
+    /// stay shown meanwhile when the new index still puts them there.
     @ObservationIgnored
-    private var hasIndex = false
+    private var rowsGeneration: [Int: UInt64] = [:]
+
+    /// The pull loop over the window's subscription; cancelled by
+    /// `close`.
+    @ObservationIgnored
+    private var subscription: Task<Void, Never>?
 
     /// Pages whose last read failed (other than `resetRequired`, which
     /// rebuilds). Retried on the next visibility change.
@@ -194,12 +234,25 @@ public final class ListWindowModel {
     @ObservationIgnored
     private var reverseIndex: [Int64: Int]?
 
-    /// True while `rebuild` awaits the id index: reads issued then
-    /// would run at the stale generation, so `pump` holds off. Also
-    /// the dedup flag for concurrent `resetRequired` triggers —
-    /// `scheduleRebuild` claims it before its task starts.
+    /// The one index fetch beside the page reads (spec/08): claimed
+    /// before its task starts, held until the selection is reconciled.
     @ObservationIgnored
-    private var rebuilding = false
+    private var fetching = false
+
+    /// True while page reads must wait: a fetch awaits the id index
+    /// (reads would run at the stale generation), or the selection's
+    /// lookups run, which count against the two reads (spec/08).
+    @ObservationIgnored
+    private var holdingReads = false
+
+    /// `rebuild` calls waiting for the index-fetch slot to go idle.
+    @ObservationIgnored
+    private var idleWaiters: [CheckedContinuation<Void, Never>] = []
+
+    /// A fetch asked for while one ran: it runs once that one ends, so
+    /// an invalidation during a refresh isn't lost (spec/08).
+    @ObservationIgnored
+    private var pendingFetch: FetchMode?
 
     /// - Parameters:
     ///   - source: where window queries go — the `CoreBridge`, or a
@@ -253,13 +306,21 @@ public final class ListWindowModel {
     }
 
     /// Open the window and load its id index (spec/08): `openWindow`
-    /// at `top` with a one-page limit, then `windowIDs`. A fill
-    /// landing between the two moves the generation — the fresh index
-    /// is the same answer a rebuild would refetch, so it is adopted.
-    /// No page is read here: `setVisible` drives fetching.
+    /// at `top` with a one-page limit, shown at once as a provisional
+    /// prefix, then `windowIDs`. The index keeps the prefix's rows
+    /// when it shares their generation; a change landing between the
+    /// two moves it, and the pages are read again at the index's. The
+    /// subscription starts with the window, so no change is missed.
+    /// No other page is read here: `setVisible` drives fetching.
     public func open() async throws {
         guard !closed, !opening, windowId == nil else { return }
         opening = true
+        // Defers run last-first: the opening ends, then a fetch asked
+        // for meanwhile starts.
+        defer {
+            runPendingFetch()
+            resumeIdleWaiters()
+        }
         defer { opening = false }
         let window = try await source.openWindow(
             spec: spec,
@@ -271,19 +332,45 @@ public final class ListWindowModel {
             throw CancellationError()
         }
         windowId = window.windowId
+        showProvisional(window)
+        startSubscription(window.windowId)
         let index: WindowIDs
         do {
             index = try await source.windowIDs(id: window.windowId)
         } catch {
-            guard !hasIndex else { return }
+            guard !hasExactIndex else { return }
+            subscription?.cancel()
+            dropAllRows()
+            ids = []
+            reverseIndex = nil
+            onIndexChanged()
             await source.closeWindow(id: window.windowId)
             windowId = nil
             throw error
         }
+        let provisional = generation
         guard !closed, install(index) else { return }
+        if index.generation == provisional {
+            retainMatchingRows()
+        } else {
+            dropAllRows()
+            serials = [:]
+            pendingDelivery = [:]
+        }
+        onIndexChanged()
+        await reconcileSelection(window.windowId)
+        applyVisibility()
+    }
+
+    /// The opening page as the window's provisional prefix: its ids
+    /// stand in for the index and its rows land as page 0 on the next
+    /// frame (spec/08 "Opening a store window").
+    private func showProvisional(_ window: ListWindow) {
+        generation = window.generation
+        ids = window.rows.map(\.occurrenceId)
+        reverseIndex = nil
         seedFirstPage(from: window)
         onIndexChanged()
-        applyVisibility()
     }
 
     /// Install a fetched id index, unless one from a later generation
@@ -292,11 +379,11 @@ public final class ListWindowModel {
     /// older (perhaps empty) index that no read would ever correct.
     /// Returns whether it was installed.
     private func install(_ index: WindowIDs) -> Bool {
-        guard !hasIndex || index.generation >= generation else { return false }
+        guard !hasExactIndex || index.generation >= generation else { return false }
         generation = index.generation
         ids = index.ids
         reverseIndex = nil
-        hasIndex = true
+        hasExactIndex = true
         return true
     }
 
@@ -368,23 +455,43 @@ public final class ListWindowModel {
     /// Rebuild the model on its existing window (spec/08): cancel
     /// every read, refetch the id index on the same handle, clear the
     /// cache and re-request the wanted pages. `resetRequired` triggers
-    /// it internally; the Debug menu calls it after a fill. A second
-    /// call while one rebuild is running does nothing — the running
-    /// one refetches a fresh index anyway.
+    /// it internally; the Debug menu calls it after a fill. While the
+    /// opening or another fetch holds the one index-fetch slot, the
+    /// rebuild runs once it ends, and this returns after it; its
+    /// failure is then `lastError`.
     public func rebuild() async throws {
-        guard !closed, !rebuilding, let wid = windowId else { return }
-        try await rebuildNow(wid)
-    }
-
-    /// The rebuild body once `rebuilding` has been claimed: holds off
-    /// `pump` until the fresh index is in, then applies visibility so
-    /// the wanted pages re-read at the new generation.
-    private func rebuildNow(_ wid: UInt64) async throws {
-        guard !closed else {
-            rebuilding = false
+        guard !closed, windowId != nil || opening else { return }
+        if fetching || opening {
+            pendingFetch = .rebuild
+            await withCheckedContinuation { idleWaiters.append($0) }
             return
         }
-        rebuilding = true
+        guard let wid = windowId else { return }
+        fetching = true
+        try await fetchIndex(wid, mode: .rebuild)
+    }
+
+    /// Hold the selection, by occurrence id (spec/08). The model keeps
+    /// it across new indexes; `onSelectionChanged` reports the changes
+    /// a new index makes.
+    public func select(_ ids: Set<Int64>) {
+        selection = ids
+    }
+
+    /// The index fetch once `fetching` has been claimed: holds off
+    /// `pump` until the fresh index is in, applies visibility so the
+    /// wanted pages re-read at the new generation, then reconciles the
+    /// selection. A rebuild clears every page; a refresh keeps the
+    /// rows the new index still puts where they were, shown until
+    /// their re-read lands. A fetch asked for meanwhile runs next.
+    private func fetchIndex(_ wid: UInt64, mode: FetchMode) async throws {
+        defer {
+            fetching = false
+            runPendingFetch()
+            resumeIdleWaiters()
+        }
+        guard !closed else { return }
+        holdingReads = true
         for (_, entry) in inFlight {
             entry.task.cancel()
         }
@@ -392,19 +499,184 @@ public final class ListWindowModel {
         do {
             index = try await source.windowIDs(id: wid)
         } catch {
-            rebuilding = false
+            holdingReads = false
+            pump()
             throw error
         }
-        rebuilding = false
-        guard !closed, install(index) else { return }
+        guard !closed, install(index) else {
+            holdingReads = false
+            pump()
+            return
+        }
         serials = [:]
         pendingDelivery = [:]
         failedPages = []
+        switch mode {
+        case .rebuild:
+            dropAllRows()
+        case .refresh:
+            retainMatchingRows()
+        }
+        onIndexChanged()
+        await reconcileSelection(wid)
+        holdingReads = false
+        applyVisibility()
+    }
+
+    /// Resume `rebuild` callers once the index-fetch slot is idle: no
+    /// opening, no fetch, none pending.
+    private func resumeIdleWaiters() {
+        guard !opening, !fetching, pendingFetch == nil else { return }
+        let waiters = idleWaiters
+        idleWaiters = []
+        for waiter in waiters {
+            waiter.resume()
+        }
+    }
+
+    /// Ask for an index fetch: now if the slot is free, else once the
+    /// running fetch — or the opening's — ends.
+    private func scheduleFetch(_ mode: FetchMode) {
+        guard !closed else { return }
+        if fetching || opening {
+            pendingFetch = max(pendingFetch ?? mode, mode)
+            return
+        }
+        guard let wid = windowId else { return }
+        fetching = true
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await self.fetchIndex(wid, mode: mode)
+            } catch is CancellationError {
+            } catch {
+                self.lastError = error
+            }
+        }
+    }
+
+    /// Start the fetch asked for while the slot was busy, if any.
+    private func runPendingFetch() {
+        guard let mode = pendingFetch else { return }
+        pendingFetch = nil
+        scheduleFetch(mode)
+    }
+
+    /// Pull the window's subscription (spec/07): one `next` at a time.
+    /// An invalidation past the installed generation refreshes the
+    /// index; `resetRequired` rebuilds. The loop holds the model
+    /// weakly and ends with `close`, the window or the core.
+    private func startSubscription(_ wid: UInt64) {
+        let source = self.source
+        subscription = Task { [weak self] in
+            do {
+                let events = try await source.windowEvents(id: wid)
+                while !Task.isCancelled {
+                    let event = try await events.next()
+                    guard let self else { return }
+                    self.handle(event)
+                }
+            } catch is CancellationError {
+            } catch {
+                guard let self, !self.closed else { return }
+                self.lastError = error
+            }
+        }
+    }
+
+    private func handle(_ event: WindowEvent) {
+        switch event {
+        case .invalidated(let changed):
+            guard !hasExactIndex || changed > generation else { return }
+            scheduleFetch(.refresh)
+        case .resetRequired:
+            scheduleFetch(.rebuild)
+        }
+    }
+
+    /// After a new index, follow the selection (spec/08): an id the
+    /// index lacks is dropped, except in a window of logical messages,
+    /// where `Around(id)` with limit 1 finds its message's row first;
+    /// only `notFound` drops it there. A lookup that fails otherwise
+    /// keeps the id for the next index. Ids the list deselected
+    /// meanwhile stay deselected.
+    private func reconcileSelection(_ wid: UInt64) async {
+        let gen = generation
+        let missing = selection.filter { index(of: $0) == nil }
+        guard !missing.isEmpty else { return }
+        // The lookups are reads too: page reads hold off meanwhile, and
+        // those still unwinding finish first, so at most two run.
+        let held = holdingReads
+        holdingReads = true
+        defer { holdingReads = held }
+        for entry in inFlight.values {
+            await entry.task.value
+        }
+        // old id → the row that replaces it; nil drops it.
+        var replacements: [Int64: Int64?] = [:]
+        for id in missing {
+            guard spec.listsMessages else {
+                replacements.updateValue(nil, forKey: id)
+                continue
+            }
+            do {
+                let found = try await source.readWindow(
+                    id: wid,
+                    generation: gen,
+                    anchor: .around(id),
+                    limit: 1
+                )
+                replacements.updateValue(found.rows.first?.occurrenceId, forKey: id)
+            } catch let failure as CoreFailure {
+                if case .notFound = failure {
+                    replacements.updateValue(nil, forKey: id)
+                }
+            } catch {}
+        }
+        guard !closed, gen == generation else { return }
+        var next = selection
+        for (old, replacement) in replacements where next.contains(old) {
+            next.remove(old)
+            if let new = replacement, index(of: new) != nil {
+                next.insert(new)
+            }
+        }
+        guard next != selection else { return }
+        selection = next
+        onSelectionChanged(next)
+    }
+
+    /// Clear every page's rows; the `Page` objects stay.
+    private func dropAllRows() {
         for page in pages.values where page.rows != nil {
             page.rows = nil
         }
-        onIndexChanged()
-        applyVisibility()
+        rowsGeneration = [:]
+    }
+
+    /// Keep a page's rows only while the new index puts exactly those
+    /// rows there; the rest become placeholders. Kept rows read at an
+    /// older generation are re-read (`needsRead`).
+    private func retainMatchingRows() {
+        for (k, page) in pages {
+            guard let rows = page.rows else { continue }
+            let s = k * Self.pageSize
+            let L = min(Self.pageSize, ids.count - s)
+            let matches = L > 0
+                && rows.count == L
+                && rows.map(\.occurrenceId).elementsEqual(ids[s ..< s + L])
+            if !matches {
+                page.rows = nil
+                rowsGeneration[k] = nil
+            }
+        }
+    }
+
+    /// Whether page `k` needs a read: no rows, or rows from an older
+    /// generation.
+    private func needsRead(_ k: Int) -> Bool {
+        guard pages[k]?.rows != nil else { return true }
+        return rowsGeneration[k] != generation
     }
 
     /// Cancel every read and release the window (spec/07: the shell
@@ -417,6 +689,14 @@ public final class ListWindowModel {
         }
         if closed { return }
         closed = true
+        subscription?.cancel()
+        // No fetch runs after a close: waiting rebuilds return.
+        pendingFetch = nil
+        let waiters = idleWaiters
+        idleWaiters = []
+        for waiter in waiters {
+            waiter.resume()
+        }
         for (_, entry) in inFlight {
             entry.task.cancel()
         }
@@ -473,7 +753,7 @@ public final class ListWindowModel {
     /// not yet landed, or failed until the next visibility change is
     /// skipped.
     private func pump() {
-        guard !closed, !rebuilding, windowId != nil else {
+        guard !closed, !holdingReads, windowId != nil else {
             return
         }
         for k in requestOrder where inFlight.count < Self.inFlightLimit {
@@ -481,7 +761,7 @@ public final class ListWindowModel {
                   inFlight[k] == nil,
                   pendingDelivery[k] == nil,
                   !failedPages.contains(k),
-                  pages[k]?.rows == nil
+                  needsRead(k)
             else { continue }
             startRead(k)
         }
@@ -625,6 +905,7 @@ public final class ListWindowModel {
                 let page = pages[completion.page] ?? Page(index: completion.page)
                 pages[completion.page] = page
                 page.rows = window.rows
+                rowsGeneration[completion.page] = completion.generation
                 stamp &+= 1
                 lruStamp[completion.page] = stamp
                 landed.append(completion.page)
@@ -647,28 +928,13 @@ public final class ListWindowModel {
             onPagesDeliveredForBenchmark(landed)
             onPagesDelivered(landed)
         }
-        if reset {
-            scheduleRebuild()
+        // A fetch already running installs a fresh index anyway: the
+        // reads that failed were issued before it began.
+        if reset, !fetching {
+            scheduleFetch(.rebuild)
         }
         evictOverflow()
         pump()
-    }
-
-    /// Kick off a rebuild from inside a delivery. `rebuilding` claims
-    /// the slot before the task starts, so concurrent triggers
-    /// collapse into it and `pump` holds off — it refetches a fresh
-    /// index either way.
-    private func scheduleRebuild() {
-        guard !closed, !rebuilding, let wid = windowId else { return }
-        rebuilding = true
-        Task { [weak self] in
-            guard let self else { return }
-            do {
-                try await self.rebuildNow(wid)
-            } catch {
-                self.lastError = error
-            }
-        }
     }
 
     /// Pages holding rows beyond the cap go least recently used
@@ -685,6 +951,7 @@ public final class ListWindowModel {
         for k in evictable {
             guard excess > 0 else { return }
             pages[k]?.rows = nil
+            rowsGeneration[k] = nil
             lruStamp[k] = nil
             excess -= 1
         }
@@ -694,6 +961,15 @@ public final class ListWindowModel {
     private func touch(_ k: Int) {
         stamp &+= 1
         lruStamp[k] = stamp
+    }
+
+    /// What an index fetch does with the loaded pages, weakest first:
+    /// a pending fetch takes the stronger of two asks.
+    private enum FetchMode: Comparable {
+        /// Keep the rows the new index still puts where they were.
+        case refresh
+        /// Clear every page.
+        case rebuild
     }
 
     /// Which way the visible range last moved.
@@ -711,5 +987,18 @@ public final class ListWindowModel {
         var serial: UInt64
         var generation: UInt64
         var result: Result<ListWindow, any Error>
+    }
+}
+
+extension WindowSpec {
+    /// Whether the window lists logical messages, one row each, rather
+    /// than occurrences (spec/07 grain).
+    var listsMessages: Bool {
+        switch self {
+        case .flagged, .thread:
+            return true
+        case .debugSynthetic, .mailbox, .unified:
+            return false
+        }
     }
 }
