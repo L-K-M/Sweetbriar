@@ -138,7 +138,13 @@ fn extract(inputs: SearchInputs) -> SearchDocument {
         let mut candidate_seen = HashSet::new();
         let lines = match body.kind() {
             SearchBodyKind::Plain => plain_lines(body.text()),
-            SearchBodyKind::Html => html_lines(body.text()),
+            SearchBodyKind::Html => match html_lines(body.text()) {
+                Ok(lines) => lines,
+                Err(_) => {
+                    affected.extend_from_slice(&COLUMNS[4..7]);
+                    continue;
+                }
+            },
         };
         for paragraph in lines.split(|line| line.text.trim().is_empty()) {
             let key = paragraph
