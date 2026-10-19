@@ -114,3 +114,24 @@ public struct CIDResourceResolver: Sendable {
         )
     }
 }
+
+/// Authorization is exact to the current rendition's recorded destinations.
+public enum ReaderLinkDecision: Sendable, Equatable {
+    case open(URL)
+    case confirm(URL, reasons: [String])
+    case refuse
+
+    public static func decide(_ url: URL, manifest: RenditionManifest) -> Self {
+        guard ["http", "https", "mailto"].contains(url.scheme?.lowercased() ?? ""),
+              let link = manifest.links.first(where: { $0.href == url.absoluteString }) else { return .refuse }
+        let reasons = link.warnings.map { warning in
+            switch warning {
+            case "text_domain": "The link text names a different domain."
+            case "raw_ip": "The destination uses an IP address instead of a domain name."
+            case "user_info": "The destination contains user information before the host name."
+            default: "The destination has an unrecognized safety warning (\(warning))."
+            }
+        }
+        return reasons.isEmpty ? .open(url) : .confirm(url, reasons: reasons)
+    }
+}

@@ -165,37 +165,3 @@ final class MessageListViewController: NSViewController {
         statusLabel.isHidden = text == nil
     }
 }
-
-/// The reader's pane until the reader lands (spec/08, plan M1.5): it
-/// says what is selected.
-@MainActor
-final class ReaderPlaceholderViewController: NSViewController {
-    private let label = NSTextField(labelWithString: "")
-
-    override func loadView() {
-        let content = NSView()
-        label.alignment = .center
-        label.textColor = .secondaryLabelColor
-        label.translatesAutoresizingMaskIntoConstraints = false
-        content.addSubview(label)
-        NSLayoutConstraint.activate([
-            label.centerXAnchor.constraint(equalTo: content.centerXAnchor),
-            label.centerYAnchor.constraint(equalTo: content.centerYAnchor),
-            label.widthAnchor.constraint(lessThanOrEqualTo: content.widthAnchor, constant: -40),
-        ])
-        view = content
-        show(selectionCount: 0)
-    }
-
-    /// Say how many messages are selected.
-    func show(selectionCount count: Int) {
-        switch count {
-        case 0:
-            label.stringValue = "No message selected"
-        case 1:
-            label.stringValue = "1 message selected. Reading arrives in a later update."
-        default:
-            label.stringValue = "\(count) messages selected"
-        }
-    }
-}
