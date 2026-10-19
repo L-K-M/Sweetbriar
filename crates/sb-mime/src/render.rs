@@ -1,4 +1,4 @@
-//! Inert HTML policy. Resource/CSS rewriting and rendition limits belong to M1.5d.
+//! Inert HTML allow-list, applied after resource and CSS rewriting.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
@@ -183,7 +183,14 @@ pub enum HtmlSanitizeError {
     Panic,
 }
 
-fn policy() -> Builder<'static> {
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ResourcePolicy {
+    Strip,
+    Rewritten,
+}
+
+fn policy(minted: &HashSet<String>, resources: ResourcePolicy) -> Builder<'static> {
+    let minted = minted.clone();
     let mut policy = Builder::new();
     policy
         .tags(TAGS.iter().copied().collect::<HashSet<_>>())
@@ -198,14 +205,21 @@ fn policy() -> Builder<'static> {
         .url_schemes(LINK_SCHEMES.iter().copied().collect())
         .url_relative(UrlRelative::Deny)
         .link_rel(None)
-        .attribute_filter(|tag, attr, value| {
+        .attribute_filter(move |tag, attr, value| {
+            if tag == "img" && attr == "src" {
+                return minted.contains(value).then(|| value.into());
+            }
             if tag == "a" && attr == "href" {
                 return safe_destination(value).map(|url| url.to_string().into());
             }
             Some(value.into())
         });
-    // No style or resource-bearing attributes: M1.5d adds checked CSS and CID
-    // rewriting/counting before this final allow-list boundary.
+    if resources == ResourcePolicy::Rewritten {
+        policy.add_generic_attributes(["style"]);
+        policy.add_tags(["img"]);
+        policy.add_tag_attributes("img", ["src", "alt", "width", "height"]);
+        policy.add_url_schemes(["sweetbriar-cid"]);
+    }
     policy
 }
 
@@ -227,15 +241,20 @@ fn safe_destination(value: &str) -> Option<Url> {
 /// Link records are sorted by canonical destination for deterministic output.
 /// Unwinds are contained across both HTML parsers; panic payloads are discarded.
 pub fn sanitize_html(decoded_html: &str) -> Result<SanitizedHtml, HtmlSanitizeError> {
-    std::panic::catch_unwind(|| sanitize_run(decoded_html)).unwrap_or(Err(HtmlSanitizeError::Panic))
+    std::panic::catch_unwind(|| sanitize_run(decoded_html, &HashSet::new(), ResourcePolicy::Strip))
+        .unwrap_or(Err(HtmlSanitizeError::Panic))
 }
 
-fn sanitize_run(decoded_html: &str) -> Result<SanitizedHtml, HtmlSanitizeError> {
+pub(crate) fn sanitize_run(
+    decoded_html: &str,
+    minted: &HashSet<String>,
+    resources: ResourcePolicy,
+) -> Result<SanitizedHtml, HtmlSanitizeError> {
     #[cfg(test)]
     if decoded_html == tests::PANIC_MARKER {
         panic!("sb-mime sanitizer test tripwire");
     }
-    let policy = policy();
+    let policy = policy(minted, resources);
     // Normalize namespaces and malformed trees before collecting links, so
     // removed subtrees cannot contribute warning records.
     let normalized = policy.clean(decoded_html).to_string();
@@ -490,7 +509,12 @@ mod tests {
             assert_inert(result.html());
             // HTML5 reparsing/serialization must be stable, including raw-text
             // and foreign-content transitions handled by the final sanitizer.
-            assert_eq!(policy().clean(result.html()).to_string(), result.html());
+            assert_eq!(
+                policy(&HashSet::new(), ResourcePolicy::Strip)
+                    .clean(result.html())
+                    .to_string(),
+                result.html()
+            );
             assert!(result.links().is_empty());
             if input.contains("outside") {
                 assert!(result.html().contains("outside"));

@@ -25,6 +25,10 @@ pub enum RenderWarningCode {
     CharsetReplaced,
     UnsupportedContent,
     AmbiguousCid,
+    MissingCid,
+    UnsafeUrl,
+    RenditionLimit,
+    CountSaturated,
 }
 
 impl RenderWarningCode {
@@ -34,6 +38,10 @@ impl RenderWarningCode {
             Self::CharsetReplaced => "charset_replaced",
             Self::UnsupportedContent => "unsupported_content",
             Self::AmbiguousCid => "ambiguous_cid",
+            Self::MissingCid => "missing_cid",
+            Self::UnsafeUrl => "unsafe_url",
+            Self::RenditionLimit => "rendition_limit",
+            Self::CountSaturated => "count_saturated",
         }
     }
 }
@@ -45,6 +53,10 @@ pub struct RenderWarning {
 }
 
 impl RenderWarning {
+    pub(crate) fn new(code: RenderWarningCode, part_id: Option<PartId>) -> Self {
+        Self { code, part_id }
+    }
+
     pub fn code(&self) -> RenderWarningCode {
         self.code
     }
@@ -128,6 +140,7 @@ pub struct RenderInput {
     plain: Option<SelectedBody>,
     html: Option<SelectedBody>,
     resources: Vec<RelatedResource>,
+    ambiguous_cids: Vec<String>,
     attachments: Vec<AttachmentDescriptor>,
     part_ids: Vec<PartId>,
     warnings: Vec<RenderWarning>,
@@ -143,6 +156,9 @@ impl RenderInput {
     }
     pub fn resources(&self) -> &[RelatedResource] {
         &self.resources
+    }
+    pub(crate) fn ambiguous_cids(&self) -> &[String] {
+        &self.ambiguous_cids
     }
     /// Every non-selected part, including alternative bodies and containers.
     pub fn attachments(&self) -> &[AttachmentDescriptor] {
@@ -447,6 +463,7 @@ fn reader_run(bytes: &[u8], limits: &Limits) -> Result<RenderInput, ParseFailure
         }
         for (id, matches) in ids {
             if matches.len() != 1 {
+                result.ambiguous_cids.push(id.to_owned());
                 for i in matches {
                     result.warn(RenderWarningCode::AmbiguousCid, Some(nodes[i].id.clone()));
                 }
