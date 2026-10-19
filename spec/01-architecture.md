@@ -229,7 +229,7 @@ is committed, and updates are their own PRs.
 | MIME composing | `mail-builder` | 1.0.0 | |
 | Color math | `palette` | pin at first use (M1.10) | Contrast and derived tints for account colors |
 | Markdown | `pulldown-cmark` | pin at first use | Raw HTML disabled (05) |
-| HTML sanitizing | `ammonia`, `lol_html` | pin at first use | Per 10; `html5ever` only through `ammonia` |
+| HTML sanitizing | `ammonia`, `lol_html` | pin at first use; `lol_html` 3.0.1 | Per 10; `html5ever` only through `ammonia` |
 | URL parsing | `url` | 2.5.8 | The renderer's resource and link policy (10) |
 | IMAP | `io-imap` | 0.7.1 | **Spike first** (plan M2.1): check it handles Bridge's quirks (synchronizing literals, LIST attributes, UIDPLUS receipts, raw UTF-8 resilience). Fallback: `async-imap` 0.12.0 (`runtime-tokio`, no default features) |
 | SMTP | `lettre` (tokio + rustls features, no native-tls) | 0.11.23 | Raw-message submission of `mail-builder` output. Must expose enough to detect "connection lost after DATA" (05) |
