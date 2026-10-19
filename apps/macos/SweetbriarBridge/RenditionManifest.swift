@@ -122,11 +122,17 @@ public enum ReaderLinkDecision: Sendable, Equatable {
     case refuse
 
     public static func decide(_ url: URL, manifest: RenditionManifest) -> Self {
-        guard ["http", "https", "mailto"].contains(url.scheme?.lowercased() ?? ""),
-              let clicked = Destination(url.absoluteString) else { return .refuse }
-        // One destination can be spelled several ways; its warnings are
-        // the union of every listed spelling's.
-        let listed = manifest.links.filter { Destination($0.href) == clicked }
+        guard ["http", "https", "mailto"].contains(url.scheme?.lowercased() ?? "") else {
+            return .refuse
+        }
+        // WebKit hands a click over as a Foundation URL, which escapes
+        // characters the sanitizer's WHATWG serializer keeps (`[` `]` in a
+        // query). A listed href matches after that same conversion, and only
+        // exactly: any other spelling is another request to the server.
+        let clicked = url.absoluteString
+        let listed = manifest.links.filter {
+            $0.href == clicked || URL(string: $0.href)?.absoluteString == clicked
+        }
         guard !listed.isEmpty else { return .refuse }
         var warnings: [String] = []
         for warning in listed.flatMap(\.warnings) where !warnings.contains(warning) {
@@ -141,34 +147,5 @@ public enum ReaderLinkDecision: Sendable, Equatable {
             }
         }
         return reasons.isEmpty ? .open(url) : .confirm(url, reasons: reasons)
-    }
-}
-
-/// A link destination compared by its decoded components. WebKit hands
-/// clicks over as Foundation URLs, which percent-encode characters the
-/// sanitizer's serializer keeps (`filter[status]` arrives as
-/// `filter%5Bstatus%5D`), so spellings differ while destinations agree.
-private struct Destination: Equatable {
-    let scheme: String
-    let user: String?
-    let password: String?
-    let host: String?
-    let port: Int?
-    let path: String
-    let query: String?
-    let fragment: String?
-
-    init?(_ string: String) {
-        guard let parts = URLComponents(string: string, encodingInvalidCharacters: true),
-              let scheme = parts.scheme else { return nil }
-        let decoded = { (part: String?) in part.map { $0.removingPercentEncoding ?? $0 } }
-        self.scheme = scheme.lowercased()
-        user = decoded(parts.percentEncodedUser)
-        password = decoded(parts.percentEncodedPassword)
-        host = parts.percentEncodedHost.map { ($0.removingPercentEncoding ?? $0).lowercased() }
-        port = parts.port
-        path = decoded(parts.percentEncodedPath) ?? ""
-        query = decoded(parts.percentEncodedQuery)
-        fragment = decoded(parts.percentEncodedFragment)
     }
 }

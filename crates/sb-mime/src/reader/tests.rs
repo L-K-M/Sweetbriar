@@ -534,56 +534,61 @@ fn filename_only_text_is_an_attachment() {
     );
 }
 
-/// The decoder decides `charset_replaced`: a literal U+FFFD the sender
-/// wrote in UTF-16LE is no loss, malformed UTF-16LE is.
+/// One decoder produces the body text and `charset_replaced`, so the
+/// warning names exactly the U+FFFD the reader shows: a literal U+FFFD the
+/// sender wrote is no loss, bytes the charset can't read are.
 #[test]
 fn charset_replaced_comes_from_the_decoder() {
-    let part = |body: &[u8]| {
-        let mut raw = b"Content-Type: text/plain; charset=utf-16le\r\nContent-Transfer-Encoding: base64\r\n\r\n".to_vec();
-        raw.extend(base64(body).as_bytes());
-        raw
-    };
-    let replaced = |raw: &[u8]| {
-        render_input(raw, &Limits::default())
-            .unwrap()
-            .warnings()
-            .iter()
-            .any(|w| w.code() == RenderWarningCode::CharsetReplaced)
-    };
-    assert!(
-        !replaced(&part(&[0x41, 0x00, 0xFD, 0xFF])),
-        "a literal U+FFFD"
-    );
-    assert!(
-        replaced(&part(&[0x41, 0x00, 0x00, 0xD8])),
-        "a lone surrogate"
-    );
-
-    let labelled = |charset: &str, body: &[u8]| {
+    let decoded = |charset: &str, body: &[u8]| {
         let mut raw = format!(
             "Content-Type: text/plain; charset={charset}\r\nContent-Transfer-Encoding: base64\r\n\r\n"
         )
         .into_bytes();
         raw.extend(base64(body).as_bytes());
-        raw
+        let input = render_input(&raw, &Limits::default()).unwrap();
+        let replaced = input
+            .warnings()
+            .iter()
+            .any(|w| w.code() == RenderWarningCode::CharsetReplaced);
+        (input.plain().unwrap().text().to_owned(), replaced)
     };
-    // Upstream's tables leave windows-1252's 0x81 unmapped where WHATWG
-    // maps it to a C1 control; the charset can't encode U+FFFD.
-    assert!(
-        replaced(&labelled("windows-1252", b"a\x81b")),
-        "an unmapped windows-1252 byte"
+
+    assert_eq!(
+        decoded("utf-16le", &[0x41, 0x00, 0xFD, 0xFF]),
+        ("A\u{fffd}".into(), false),
+        "a literal U+FFFD"
     );
-    // Generic UTF-16 follows its byte order mark.
-    assert!(
-        !replaced(&labelled("utf-16", &[0xFE, 0xFF, 0xFF, 0xFD])),
-        "a literal big-endian U+FFFD"
+    assert_eq!(
+        decoded("utf-16le", &[0x41, 0x00, 0x00, 0xD8]),
+        ("A\u{fffd}".into(), true),
+        "a lone surrogate"
     );
-    assert!(
-        replaced(&labelled("utf-16", &[0xFE, 0xFF, 0xD8, 0x00])),
-        "a big-endian lone surrogate"
+    // WHATWG maps windows-1252's 0x81 to a C1 control, so nothing is lost.
+    assert_eq!(
+        decoded("windows-1252", b"a\x81b"),
+        ("a\u{81}b".into(), false),
+        "windows-1252 0x81"
     );
+    assert_eq!(
+        decoded("iso-8859-6", b"a\xa1b"),
+        ("a\u{fffd}b".into(), true),
+        "an unmapped iso-8859-6 byte"
+    );
+    // A byte order mark decides UTF-16's endianness, whatever the label.
+    for charset in ["utf-16", "utf-16le", "utf-16be"] {
+        assert_eq!(
+            decoded(charset, &[0xFE, 0xFF, 0xFF, 0xFD]),
+            ("\u{fffd}".into(), false),
+            "{charset}: a literal big-endian U+FFFD"
+        );
+        assert_eq!(
+            decoded(charset, &[0xFE, 0xFF, 0xD8, 0x00]),
+            ("\u{fffd}".into(), true),
+            "{charset}: a big-endian lone surrogate"
+        );
+    }
     // A charset only upstream decodes: its U+FFFD is the only report.
-    assert!(replaced(&labelled("utf-7", b"+A-")), "malformed UTF-7");
+    assert!(decoded("utf-7", b"+A-").1, "malformed UTF-7");
 }
 
 /// Standard base64, for building fixtures.
@@ -601,4 +606,27 @@ fn base64(bytes: &[u8]) -> String {
         }
     }
     out
+}
+
+/// The body decoder can expand text past what admission measured (a
+/// padded label upstream reads as UTF-8 is windows-1252 to encoding_rs):
+/// such a body is refused like any part over the decoded-part limit.
+#[test]
+fn decoded_bodies_stay_within_the_part_limit() {
+    let raw = "Content-Type: text/plain; charset=\" windows-1252 \"\r\n\r\n\u{e9}".as_bytes();
+    let input = render_input(raw, &Limits::default().with_max_decoded_part_bytes(2)).unwrap();
+    assert!(input.plain().is_none(), "an expanded body over the limit");
+    assert!(
+        input
+            .parse_warnings()
+            .contains(&ParseWarning::PartTooLarge { limit: 2 })
+    );
+    assert!(
+        input
+            .warnings()
+            .iter()
+            .any(|w| w.code() == RenderWarningCode::PartialParse)
+    );
+    let fits = render_input(raw, &Limits::default().with_max_decoded_part_bytes(4)).unwrap();
+    assert_eq!(fits.plain().unwrap().text(), "\u{c3}\u{a9}");
 }
