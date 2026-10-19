@@ -55,7 +55,10 @@ registered in the resolution.
   most 1,024 UTF-8 bytes at a time. Stop between chunks after 10,000 arena
   nodes, 4,000,000 work units, or 16,384 input bytes without a tree mutation.
   Charge input/text bytes, node/name comparisons, squared attribute counts,
-  and the length of sibling lists scanned or shifted. This bounds tree repair
+  and the length of sibling lists scanned or shifted. At the tokenizer boundary,
+  also charge attribute scans using a conservative tag-span bound (including
+  ignored tags), and potential formatting-list comparisons before tree building.
+  This bounds tree repair
   and unfinished tokens without approximating HTML context. On exhaustion,
   omit that candidate's body and mark all three body fields partial; keep
   decoded headers, filenames and other candidates. No time-based cutoff.
