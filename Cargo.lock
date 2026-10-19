@@ -1164,6 +1164,7 @@ dependencies = [
  "insta",
  "lol_html",
  "mail-parser",
+ "markup5ever",
  "sb-types",
  "sha2",
  "url",
