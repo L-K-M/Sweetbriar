@@ -1,0 +1,5 @@
+X-Sweetbriar-Fixture: Obfuscated vbscript case
+MIME-Version: 1.0
+Content-Type: text/html; charset=utf-8
+
+<a href="VBSCRIPT:bad">x</a><img src="VBSCRIPT:bad"><form action="VBSCRIPT:bad"><button formaction="VBSCRIPT:bad">x</button></form><svg><a xlink:href="VBSCRIPT:bad">x</a></svg>

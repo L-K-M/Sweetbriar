@@ -88,6 +88,7 @@ pub async fn open_core(
     })
     .await?;
     Ok(Arc::new(Core {
+        lease_releaser: service.lease_releaser(),
         service: RwLock::new(Some(service)),
     }))
 }
@@ -99,6 +100,8 @@ pub async fn open_core(
 /// lock futures are all that is needed here.
 #[derive(uniffi::Object)]
 pub struct Core {
+    /// Independent of the lifecycle lock so synchronous release never waits on I/O.
+    pub(crate) lease_releaser: sb_service::LeaseReleaser,
     /// The live service core; `None` once `shutdown` took it.
     /// Crate-visible so each domain module (`windows`) can implement
     /// its share of the exported `Core` methods.

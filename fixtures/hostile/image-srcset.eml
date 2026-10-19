@@ -1,0 +1,6 @@
+X-Sweetbriar-Fixture: Responsive images and protocol-relative and relative resources
+X-Sweetbriar-Expect: remote
+MIME-Version: 1.0
+Content-Type: text/html; charset=utf-8
+
+<picture><source srcset="//attack.invalid/a 1x, /b 2x"><img src="https://attack.invalid/c" srcset="d 1x, https://attack.invalid/e 2x"></picture>

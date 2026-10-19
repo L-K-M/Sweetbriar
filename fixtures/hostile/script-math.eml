@@ -1,0 +1,5 @@
+X-Sweetbriar-Fixture: Script in math
+MIME-Version: 1.0
+Content-Type: text/html; charset=utf-8
+
+<math><annotation-xml encoding="text/html"><script>bad()</script></annotation-xml></math>

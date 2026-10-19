@@ -641,3 +641,65 @@ public struct ReaderMessage: Sendable, Equatable {
         self.bodyAvailability = bodyAvailability
     }
 }
+
+/// The rendition requested, or the actual contents of a returned lease.
+public enum BodyKind: Sendable, Equatable {
+    case sanitizedHtml, plainText, source
+}
+
+public enum RenderWarningCode: Sendable, Equatable {
+    case partialParse, charsetReplaced, unsupportedContent, missingCid
+    case ambiguousCid, unsafeUrl, renditionLimit, countSaturated
+}
+
+public struct RenderWarning: Sendable, Equatable {
+    public var code: RenderWarningCode
+    public var partId: String?
+
+    public init(code: RenderWarningCode, partId: String?) {
+        self.code = code
+        self.partId = partId
+    }
+}
+
+/// Cache files remain valid until release or core shutdown.
+public struct BodyLease: Sendable, Equatable {
+    public var leaseId: String
+    public var kind: BodyKind
+    public var filePath: String
+    public var byteLength: UInt64
+    public var remoteContentBlocked: UInt32
+    public var warnings: [RenderWarning]
+    public var manifestPath: String?
+
+    public init(leaseId: String, kind: BodyKind, filePath: String, byteLength: UInt64,
+                remoteContentBlocked: UInt32, warnings: [RenderWarning], manifestPath: String?) {
+        self.leaseId = leaseId
+        self.kind = kind
+        self.filePath = filePath
+        self.byteLength = byteLength
+        self.remoteContentBlocked = remoteContentBlocked
+        self.warnings = warnings
+        self.manifestPath = manifestPath
+    }
+}
+
+/// A decoded attachment, valid until release or core shutdown.
+public struct AttachmentLease: Sendable, Equatable {
+    public var leaseId: String
+    public var filePath: String
+    public var byteLength: UInt64
+    public var partId: String
+    public var displayName: String
+    public var mediaType: String
+
+    public init(leaseId: String, filePath: String, byteLength: UInt64,
+                partId: String, displayName: String, mediaType: String) {
+        self.leaseId = leaseId
+        self.filePath = filePath
+        self.byteLength = byteLength
+        self.partId = partId
+        self.displayName = displayName
+        self.mediaType = mediaType
+    }
+}

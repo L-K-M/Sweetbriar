@@ -116,6 +116,8 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.sweetbriar.SweetbriarUITests
         GENERATE_INFOPLIST_FILE: YES
         TEST_TARGET_NAME: Sweetbriar
+        # The runner inherits these: the reader canary needs loopback.
+        CODE_SIGN_ENTITLEMENTS: Tests/SweetbriarUITests/SweetbriarUITests.entitlements
 
 schemes:
   Sweetbriar:

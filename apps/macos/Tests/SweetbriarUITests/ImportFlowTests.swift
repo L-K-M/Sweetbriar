@@ -3,7 +3,7 @@ import XCTest
 /// The M1.4 import flow (spec/11 "UI"): a bundled synthetic `.mbox`
 /// imported through File → Import… into fresh roots — the inventory,
 /// the import, the report window, then the mailbox listing its two
-/// messages. Runs on every PR's macOS CI.
+/// messages, then selects a row and reads its body. Runs on every PR's macOS CI.
 final class ImportFlowTests: XCTestCase {
     private static let timeout: TimeInterval = 60
     private static let mailbox = "ImportFlow"
@@ -82,5 +82,13 @@ final class ImportFlowTests: XCTestCase {
             evaluatedWith: rows
         )
         wait(for: [listed], timeout: Self.timeout)
+        rows.element(boundBy: 0).click()
+        let body = window.textViews["readerBody"]
+        XCTAssertTrue(body.waitForExistence(timeout: Self.timeout))
+        let read = expectation(
+            for: NSPredicate(format: "value CONTAINS %@", "Import flow reader body."),
+            evaluatedWith: body
+        )
+        wait(for: [read], timeout: Self.timeout)
     }
 }

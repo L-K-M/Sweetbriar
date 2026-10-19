@@ -1,0 +1,16 @@
+X-Sweetbriar-Fixture: Remote-looking Content-ID is local within related
+X-Sweetbriar-Expect: resources=1
+MIME-Version: 1.0
+Content-Type: multipart/related; boundary=b
+
+--b
+Content-Type: text/html
+
+<img src="cid:https://attack.invalid/pixel"><p style="background-image:url('cid:https://attack.invalid/pixel')">x</p>
+--b
+Content-Type: image/png
+Content-ID: <https://attack.invalid/pixel>
+Content-Transfer-Encoding: base64
+
+iVBORw0KGgo=
+--b--

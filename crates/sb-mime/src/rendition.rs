@@ -646,6 +646,49 @@ mod tests {
         assert_eq!(result.manifest().links().len(), 1);
     }
 
+    /// Safe-link acceptance (plan M1.5, spec/10): http, https and mailto
+    /// anchors keep `href` and `title` equal to the real destination; a
+    /// javascript:, data: or relative href is dropped, its label kept.
+    #[test]
+    fn safe_links_survive_and_unsafe_links_are_removed() {
+        let result = run(
+            r#"<a href="http://example.invalid/x?a=1&amp;b=2" title="sender lie">site</a>
+            <a href="HTTPS://EXAMPLE.INVALID/Path">site</a>
+            <a href="mailto:reader@example.invalid?subject=Hi&amp;cc=team@example.invalid">mail</a>
+            <a href="javascript:alert(1)" title="trusted">script</a>
+            <a href="data:text/html;base64,PHNjcmlwdD4=">data</a>
+            <a href="/relative/path">relative</a>
+            <a href="//example.invalid/protocol-relative">relative</a>
+            <a href="page.html">relative</a>"#,
+        );
+        let els = elements(result.content());
+        let anchors: Vec<_> = els.iter().filter(|e| e.0 == "a").collect();
+        assert_eq!(anchors.len(), 8, "{anchors:?}");
+        let safe = [
+            "http://example.invalid/x?a=1&b=2",
+            "https://example.invalid/Path",
+            "mailto:reader@example.invalid?subject=Hi&cc=team@example.invalid",
+        ];
+        for ((_, attrs), destination) in anchors.iter().zip(safe) {
+            assert_eq!(attrs["href"], destination);
+            assert_eq!(attrs["title"], destination);
+        }
+        for (_, attrs) in &anchors[3..] {
+            assert!(!attrs.contains_key("href"), "{attrs:?}");
+            assert!(!attrs.contains_key("title"), "{attrs:?}");
+        }
+        // The manifest lists each surviving destination once and nothing else.
+        let links = result.manifest().links();
+        let destinations: Vec<&str> = links.iter().map(LinkRecord::destination).collect();
+        assert_eq!(destinations, safe);
+        assert!(links.iter().all(|l| l.warnings().is_empty()));
+        let text = mail_parser::decoders::html::html_to_text(result.content());
+        for label in ["site", "mail", "script", "data", "relative"] {
+            assert!(text.contains(label), "{label}: {text}");
+        }
+        assert!(!text.contains("alert"), "{text}");
+    }
+
     #[test]
     fn css_function_escapes_and_case_are_inventoried_even_when_disallowed() {
         for function in ["url", "uRl", r"u\72l", "URL"] {

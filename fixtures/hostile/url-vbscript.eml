@@ -1,0 +1,5 @@
+X-Sweetbriar-Fixture: Unsafe URL in every navigation and resource attribute
+MIME-Version: 1.0
+Content-Type: text/html; charset=utf-8
+
+<a href="vbscript:msgbox(1)">link</a><img src="vbscript:msgbox(1)"><form action="vbscript:msgbox(1)"><input src="vbscript:msgbox(1)"><button formaction="vbscript:msgbox(1)">go</button></form><svg><a xlink:href="vbscript:msgbox(1)">x</a></svg>

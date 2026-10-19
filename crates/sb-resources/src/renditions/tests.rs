@@ -387,6 +387,30 @@ fn startup_reports_errors_removing_stray_files_and_can_retry() {
     assert!(fs.read_dir(&reopened.0.namespace).unwrap().is_empty());
 }
 
+#[test]
+fn named_publication_rejects_paths_and_duplicate_names() {
+    let fs = sim();
+    let cache = cache(fs.clone());
+    let mut files = cache.reserve(&[1, 1]).unwrap();
+    for name in ["", ".", "..", "../outside", "/absolute", "a/b", "a\\b"] {
+        assert!(
+            files
+                .publish_named(0, name, b"x", RenditionProtection::Internal)
+                .is_err()
+        );
+    }
+    let path = files
+        .publish_named(0, "manifest.json", b"x", RenditionProtection::Internal)
+        .unwrap();
+    assert_eq!(contents(fs.as_ref(), &path), b"x");
+    assert!(
+        files
+            .publish_named(1, "manifest.json", b"y", RenditionProtection::Internal)
+            .is_err()
+    );
+    assert_eq!(contents(fs.as_ref(), &path), b"x");
+}
+
 // ---------------------------------------------------------------------------
 // Crash cuts (spec/11: every durable transition).
 //
@@ -405,7 +429,7 @@ const STRAY_FILE: &str = ".DS_Store";
 
 /// Every operation of the child's lifecycle, in order: open and sweep,
 /// reserve, publish both files, remove.
-const LIFECYCLE_OPERATIONS: [&str; 26] = [
+const LIFECYCLE_OPERATIONS: [&str; 28] = [
     "metadata",
     "canonicalize",
     "lock_exclusive",
@@ -419,11 +443,13 @@ const LIFECYCLE_OPERATIONS: [&str; 26] = [
     "sync_dir",
     "create_private_dir",
     "sync_dir",
+    "metadata",
     "create",
     "write",
     "sync_all",
     "rename",
     "sync_dir",
+    "metadata",
     "create",
     "write",
     "quarantine",

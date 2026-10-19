@@ -1,0 +1,6 @@
+X-Sweetbriar-Fixture: Legacy background attributes
+X-Sweetbriar-Expect: remote
+MIME-Version: 1.0
+Content-Type: text/html; charset=utf-8
+
+<body background="https://attack.invalid/body"><table background="/table"><tr background="/tr"><td background="/td">x</td></tr></table></body>

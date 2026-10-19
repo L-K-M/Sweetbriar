@@ -9,6 +9,10 @@
 //! one query (`settings()`), end to end.
 #![forbid(unsafe_code)]
 
+mod bodies;
+pub use bodies::{
+    AttachmentLease, BodyKind, BodyLease, LeaseReleaser, RenderWarning, RenderWarningCode,
+};
 mod engine;
 mod error;
 mod import;

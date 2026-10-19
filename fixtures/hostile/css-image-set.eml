@@ -1,0 +1,6 @@
+X-Sweetbriar-Fixture: Inline CSS image-set
+X-Sweetbriar-Expect: remote
+MIME-Version: 1.0
+Content-Type: text/html; charset=utf-8
+
+<p style='background-image:image-set("https://attack.invalid/a" 1x,url(/b) 2x)'>x</p>

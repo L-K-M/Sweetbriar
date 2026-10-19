@@ -50,6 +50,7 @@ compiler must be on `PATH`. Its compile options come from
   `layers.toml`);
 - `cargo deny check` (licences, advisories, bans, sources);
 - the notices drift check;
+- the hostile rendering corpus (`cargo test -p sb-mime --test hostile`);
 - the Dovecot protocol suite once M2 lands (`cargo xtask ci --docker`).
 
 On pushes to main, CI's `window-timings` job also records the M1.3

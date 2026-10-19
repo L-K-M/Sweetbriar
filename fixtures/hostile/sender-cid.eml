@@ -1,0 +1,6 @@
+X-Sweetbriar-Fixture: Forged lease URL and CID path traversal
+X-Sweetbriar-Expect: resources=0 missing_cid
+MIME-Version: 1.0
+Content-Type: text/html; charset=utf-8
+
+<img src="sweetbriar-cid://hostile-token/r1"><p style="background-image:url(sweetbriar-cid://hostile-token/r1)">x</p><img src="cid:../../etc/passwd">
