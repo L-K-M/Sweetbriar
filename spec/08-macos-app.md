@@ -136,6 +136,43 @@ restores its draft by `draft_id`.
   100 ms at p95. Scrolling a 500k-row mailbox spends < 5 ms of main-thread
   work per update. Selection feedback takes under 50 ms at p95.
 
+## Search (M1.6)
+
+- The main window's search field uses the core parser/formatter (06, 07).
+  Chips represent AST clauses; editing text or chips preserves grouping,
+  negation, explicit timezone/clock and ids. Complex Boolean groups remain
+  editable text, never flattened into a different query. No Swift parser.
+- Scope controls choose All accounts, one account or one mailbox; default
+  All accounts. Names are presentation only, ids are sent to the core.
+  Sort is Relevance (default) or Date. A scope chip is distinct from an
+  `in:` membership clause; show both when both constrain the query.
+- Debounce committed text by 30 ms; marked text is not submitted. An invalid
+  edit shows an inline error at the returned UTF-8 span (converted to Swift
+  string/UTF-16 indices), retaining the previous results labelled with their
+  last valid query. Clearing the field closes search and restores the
+  preceding mailbox/list selection. A new query/scope/sort takes a request
+  ticket, cancels the old request and closes its handle. Late completions
+  cannot replace current results; any late-opened handle is closed.
+- Use the production message list and reader. Search requests 50 rows for
+  the first page, then the normal id index and 200-row pages. Until the
+  index arrives, show those first rows without waiting for it. Selection
+  follows logical message through invalidation (07); reopen at Top if the
+  selected message is no longer a hit. Date order stays strictly chronological.
+- Show scoped coverage below results whenever `indexed < total_messages`,
+  and unknown exclusions whenever nonzero, including zero-hit searches:
+  "312 messages not yet searchable". Expose indexed/partial/failed/pending,
+  acquired bodies, headers and queued documents with their denominators;
+  partial and failed are not complete. Counts come from the page's Search
+  status, never a later snapshot attached to older rows. Queue/rebuild
+  progress is visible and updates on coverage-only invalidation. When
+  Search is unavailable because its extractor target is newer than the
+  app supports, show standalone coverage's blocked state and the required
+  app update, rather than a queue that appears to run forever.
+- Show "Attachment contents are not searched; CJK word search is limited"
+  in search coverage details even with complete indexing. Empty scopes show
+  zero messages, never a misleading incomplete percentage. No automatic
+  server search, fuzzy expansion or language-query rewriting in the pilot.
+
 ## Reader
 
 - **HTML:** sanitized sender layout, shown in **one reused `WKWebView`

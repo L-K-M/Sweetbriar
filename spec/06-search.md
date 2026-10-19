@@ -14,14 +14,14 @@ registered in the resolution.
 
   | Field | Contents |
   |---|---|
-  | `subject` | |
+  | `subject` | decoded root Subject header |
   | `from` | address and display name |
-  | `to_text` | |
-  | `cc_text` | |
-  | `body_authored` | text before the detected quote or signature boundary |
+  | `to_text` | decoded root To mailboxes: display names and addresses |
+  | `cc_text` | decoded root Cc mailboxes: display names and addresses |
+  | `body_authored` | text outside positively detected quotes and signatures |
   | `body_quoted` | quoted text |
   | `body_signature` | signature |
-  | `attachment_names` | |
+  | `attachment_names` | decoded MIME attachment filenames, in part order |
   | `attachment_text` | later; PDF via PDFKit on macOS |
 
 - **When quote detection is unsure,** the text goes into `body_authored`.
@@ -30,11 +30,44 @@ registered in the resolution.
   from HTML parts by stripping markup (`html5ever`). If both exist, both
   are indexed, deduplicated by normalized paragraph.
 - **Limits:**
-  - at most 1 MB of text per message and 64 KB per attachment name list;
+  - at most 1,000,000 UTF-8 bytes per message and 64,000 per attachment
+    name list (decimal units);
   - parsing runs with depth and size caps (10-security).
   - A message hitting a cap is marked `partial` in coverage.
 - **Versioning:** the `extractor_version` is stored. A version bump
   re-queues every document.
+
+### Extraction v1 details (M1.6a)
+
+- `from` maps to `from_text`; flatten all root From mailboxes, including
+  groups, with names and addresses separated by newlines. These fields
+  come from the acquisition, not the display snippet or the sanitized
+  reader. Missing fields are empty, not extraction failures.
+- Traverse inline plain and HTML body candidates in MIME part order,
+  including both alternatives; exclude attachment bodies and nested
+  `message/rfc822` contents. Attachment names include attached messages,
+  but no file contents. `attachment_text` has no pilot column or predicate.
+- Decode transfer encodings and charsets with the MIME parser's limits
+  (10); decode format=flowed before partitioning plain text. For HTML,
+  `html5ever` emits text nodes with block boundaries; script/style contents
+  are omitted, entities decoded and no URLs fetched. No reader cache is read.
+- Normalize line endings to LF. For paragraph deduplication, a blank line
+  separates paragraphs; collapse Unicode whitespace to one ASCII space
+  and trim for comparison, case preserved. Keep the first equal paragraph
+  across plain/HTML candidates, with its first classification and text.
+- V1 detects only explicit quotes (plain lines whose first non-space
+  character is `>`, HTML `blockquote`) and signatures (a plain `-- ` line
+  starts a signature through that candidate's end, excluding quoted text).
+  Everything else is authored. Delimiters stay with their classified text;
+  uncertain reply headings and signatures stay authored. No stemming.
+- Caps count UTF-8 bytes: 1,000,000 total across the eight columns, of which
+  at most 64,000 are attachment names. Fill in schema column order, cutting
+  at a character boundary. `truncated_fields` is a sorted, unique JSON
+  array of column names whose text may be missing, including later fields
+  starved of budget. A MIME limit marks every potentially affected field;
+  use all eight when the affected set is unknown. `partial` requires a
+  nonempty mask. A parser failure is `failed`, with empty columns; an I/O
+  failure is reported and never published as a successful empty document.
 
 ## Schema
 
@@ -78,12 +111,13 @@ CREATE TABLE d_index_queue (              -- work for the index job; durable wat
 - **Keeping FTS5 in step:** `d_search_fts` is an external-content table,
   so SQLite doesn't index `d_search_docs` changes by itself. In one writer
   transaction per batch, the index job:
-  1. for a re-extraction, issues FTS5's `'delete'` command with the old
-     values;
+  1. when replacing an indexed/partial row, issues FTS5's `'delete'`
+     command with the old values;
   2. writes the `d_search_docs` row;
-  3. inserts the new values into `d_search_fts`;
+  3. inserts the new values into `d_search_fts` unless extraction failed;
   4. deletes the `d_index_queue` entry.
-  - A crash leaves the queue entry, and the batch reruns.
+  - A crash before commit leaves the queue entry and the batch reruns;
+    after commit the complete batch is already visible.
 - **Tokenizer:** plain `unicode61`, so `alice@example.com` indexes as
   `alice`, `example`, `com` and `A-1234` as `a`, `1234`. Searching for
   `example` or `1234` finds them.
@@ -94,8 +128,8 @@ CREATE TABLE d_index_queue (              -- work for the index job; durable wat
     `"paid invoice"` matches "Paid invoice.".)
   - An earlier draft used `tokenchars`; it was dropped because it glued
     sentence punctuation into tokens and broke substring matches.
-  - **Exact address equality** (`from:… is`) uses `d_message_summary`,
-    not FTS.
+  - **Exact address equality** (`from.is:…`) uses `message_headers`
+    for synced mail, else `d_message_summary`, never FTS.
   - A second, trigram-tokenized table for substring and CJK search is
     *later*, behind the Tantivy-or-trigram decision.
   - **Pilot limitation:** CJK text is indexed by `unicode61`, which
@@ -105,9 +139,68 @@ CREATE TABLE d_index_queue (              -- work for the index job; durable wat
   weights subject, from, to, cc, authored, quoted, signature and
   attachment names. These are starting values, validated against the
   judged task set.
-- **Rebuild:** dropping all `d_search_*` tables and re-queueing every
-  acquisition must reproduce the index. Rebuild is a visible, resumable
-  operation.
+- **Rebuild:** derived search state is reproducible from acquisitions
+  and the target extractor version. Clearing it and re-queueing every
+  acquisition must reproduce the index. The visible, resumable rebuild
+  protocol below preserves the table layout and queue revision counter.
+
+### Queue, versions and recovery (M1.6a)
+
+The SQL block above is the implemented schema, used by the schema-drift
+test. M1.6d adds `revision INTEGER NOT NULL CHECK (revision >= 1)` to
+`d_index_queue` in a forward migration, then updates that SQL block with
+the migration. It also adds `d_index_queue_oldest`, an index on
+`d_index_queue(enqueued_at, doc_id)`. These requirements describe that
+target schema.
+
+- The tables above already exist in schema v1. Do not edit that migration.
+  An additive migration adds queue revisions, initializes the metadata
+  below, assigns distinct revisions to existing pending entries and queues
+  every acquisition lacking current extraction. Set `index_inputs` to the
+  largest assigned revision (0 for no work). Enqueue new acquisitions
+  even if summary parsing failed; summary insertion is not the enqueue
+  condition. The queue key is an acquisition, never an occurrence or a
+  logical message.
+- `store_meta.index_inputs` is a monotonically increasing integer, initially
+  0. Every enqueue/upsert increments it and copies it into `revision`.
+  `enqueued_at` is the oldest still-pending request time, for progress,
+  not a correctness watermark. Requeue replaces the reason from current
+  source state: `delete` removes a derived document, never an acquisition.
+  Restored published bytes enqueue `reextract` and supersede `delete`.
+- The queue is the durable watermark: there is no "largest processed id"
+  that could skip older requeued work. Workers read `(doc_id, revision)`
+  ordered by `enqueued_at ASC, doc_id ASC` using that index, and extract
+  outside write transactions. In the writer they publish only if that
+  revision and target extractor version still match. A stale result writes
+  nothing, including no queue deletion. Accepted publication deletes only that revision. This avoids
+  acknowledging newer work that arrived during extraction.
+- `store_meta.search_extractor_version` holds the target version (v1 starts
+  at 1). An app unable to read that target version never downgrades it
+  or runs indexing. Coverage reports `BlockedNewerExtractor` with the
+  target version (07); Search opens return `Unavailable` explaining that
+  an app update is required. Other list windows remain available. This is
+  an index capability state, not a schema migration error. A version change
+  queues every acquisition in the same transaction as the target change.
+  Old-version documents are unknown until replaced.
+  Explicit rebuild atomically clears FTS before docs and queues all
+  acquisitions; unavailable objects get `delete`, published ones `reextract`.
+  Clear FTS with its external-content `delete-all` command before deleting
+  docs, preserving layout and the queue revision counter. Queue length
+  and target version are visible progress; no maximum-id watermark.
+  Cancellation leaves committed batches and pending work; open resumes it.
+- Batch publication is all-or-nothing, including FTS delete/insert, docs,
+  queue acknowledgements and search generation (07). A delete removes the
+  old FTS values before its docs row; failed documents have no FTS row.
+  Replacing a failed row therefore needs no FTS delete. SQL/I/O failure
+  leaves work pending and reports an error, with retry backoff; a permanent
+  parse failure publishes `failed` and acknowledges only that revision.
+  Failed/partial documents retry after a version change, restored bytes
+  or an explicit rebuild, not in a tight loop. Startup after any crash
+  sees either the old batch and queue or the complete new batch.
+- Missing or quarantined acquisitions cannot use stale indexed text:
+  search treats them as unknown immediately, and the state-change
+  transaction queues `delete`. Re-publication queues extraction. Rebuilds
+  and retries never touch authoritative rows or `seen_addresses` history.
 
 ## Query AST v1
 
@@ -120,7 +213,7 @@ shared by the search field, saved views and, later, rules.
   {"text": "invoice"},
   {"not": {"flag": "seen"}},
   {"date": {"after": "2026-01-01", "tz": "Europe/Zurich"}},
-  {"account": "uuid"}, {"mailbox": 42}
+  {"account": "12345678-1234-4234-8234-123456789abc"}, {"mailbox": 42}
 ]}}
 ```
 
@@ -133,8 +226,8 @@ shared by the search field, saved views and, later, rules.
 | `flag` | `seen`, `flagged`, `answered`, `draft` |
 | `tag`, `has` | `has` takes `attachment` or `note` |
 | `date` | `before`, `after`, `on`, `within_days`; always with an explicit IANA timezone; relative dates also carry the evaluation clock |
-| `size` | |
-| `account`, `mailbox` | Scope |
+| `size` | exact byte length comparison (`lt`, `eq`, `gt`) |
+| `account`, `mailbox` | account or present-mailbox membership predicate; outer scope is in 07 |
 | `and`, `or`, `not` | Combinators |
 
 **Rules:**
@@ -161,6 +254,101 @@ shared by the search field, saved views and, later, rules.
   Invalid syntax returns an error with a position, never a silent
   reinterpretation.
 
+### V1 wire types and text grammar (M1.6a)
+
+The JSON envelope is exactly `{ "v": 1, "q": Node }`. Reject unknown
+versions, duplicate/unknown keys, enum values and mixed node forms.
+Canonical JSON follows 02 (sorted keys, no insignificant whitespace).
+Nodes have these shapes:
+
+| Shape | Operands |
+|---|---|
+| `{"text": string}` | literal term or phrase, never raw MATCH syntax |
+| `{"field": field, "op": op, "value": string}` | fields/operators from the table above |
+| `{"flag": flag}` | `seen`, `flagged`, `answered`, `draft` |
+| `{"tag": uuid}`, `{"has": kind}` | tag id; `attachment` or `note` |
+| `{"date": {op: value, "tz": zone}}` | exactly one of `before`, `after`, `on` (ISO civil date) or `within_days` (positive u32); the last also requires `clock` (UTC i64 milliseconds) |
+| `{"size": {"op": op, "bytes": n}}` | `lt`, `eq`, `gt`; nonnegative i64 bytes |
+| `{"account": uuid}`, `{"mailbox": id}` | canonical UUID; positive i64 mailbox id |
+| `{"and": [Node, ...]}`, `{"or": [Node, ...]}` | empty AND is true (empty search); OR is nonempty |
+| `{"not": Node}` | one operand |
+
+`from`/`to`/`cc` `is` compares a parsed addr-spec's local part exactly and
+domain case-insensitively; `domain` compares the entire domain,
+not its suffix. Domain keys use Unicode lowercase, without IDNA or other
+rewriting in v1; local parts are never case-folded or Unicode-normalized.
+Reject invalid addresses/domains. For imports the summary
+contains only the first From mailbox; that is v1's exact-From source,
+whereas FTS includes all From mailboxes. Empty known lists give false;
+missing headers and absent/failed summaries give unknown. `size` uses
+acquired byte length, else the chosen occurrence's RFC822.SIZE; absent size is unknown.
+Attachment presence uses a nonfailed summary, else unknown; note/tag
+predicates read authoritative local metadata. Flags use the chosen
+occurrence, like its display row.
+
+```text
+query   := or_expr | empty
+or_expr := and_expr ("OR" and_expr)*
+and_expr:= unary (("AND")? unary)*
+unary   := ("-" | "NOT") unary | "(" query ")" | atom
+atom    := value | key ":" value
+key     := [a-z]+ ("." [a-z]+)?
+value   := bare | '"' quoted '"'
+```
+
+- Whitespace is Unicode whitespace. Uppercase `AND`, `OR`, `NOT` are
+  reserved whole tokens; precedence is unary, AND, OR. Keys are lowercase
+  and case-sensitive. Bare values exclude whitespace, parentheses, quotes,
+  backslashes and colons. A colon after a key introduces its value with no
+  surrounding whitespace; an unknown well-formed key is `unknown_key` at
+  that key. A recognized field with an unsupported operator suffix is
+  `invalid_operator` at the suffix. A malformed key prefix is
+  `unexpected_token` at that prefix (`12:30` points at `12`); an extra
+  colon in a value is `unexpected_token` at the colon. Quote literal colons, reserved words or a leading minus.
+  `()` is an explicit empty AND (true), so even nested empty AND nodes
+  round-trip. Inside quotes only `\"` and `\\` are escapes; no other
+  escapes: `"\q"` is `invalid_value` at the two-byte escape, not literal
+  text. A missing value points at the next token or EOF (`from.is:` uses
+  `[8,8)`). A value must be nonempty and full-text values must contain a
+  tokenizer token. JSON validation rejects the same invalid field/operator
+  pairs as text validation.
+- Keys: `from`, `to`, `cc`, `subject`, `body`, `attachment` mean `contains`;
+  `from.is`, `to.is`, `cc.is` mean `is`; `.domain` selects `domain`.
+  Invalid pairs such as `body.is:x` fail at the operator. `has` accepts
+  `attachment`/`note`; `is` accepts `unread` (NOT seen), `read`, `flagged`,
+  `answered`, `draft`. `tag` and `account` take UUIDs; `in` takes a mailbox
+  id, never an ambiguous display name. Chips show resolved names but
+  serialize ids. `size.lt`, `size.eq`, `size.gt` take decimal bytes.
+- `before`, `after`, `on` take `YYYY-MM-DD@IANA-zone`; `within` takes
+  `days@IANA-zone@clock-ms`. The parser also accepts a date without `@zone`
+  or days without context using its required `ParseContext { tz, clock }`.
+  The canonical formatter always emits explicit context, so reopening never
+  changes relative dates. Validate zone names and dates; never use the
+  machine's timezone implicitly. `before` is strictly before local day
+  start, `after` is at or after next local day start, `on` is that local
+  day, and `within_days` is `[clock - days*86,400,000, clock]`.
+  Day start is the earliest instant on that civil date; a skipped civil
+  date or arithmetic overflow is invalid input. Predicates use sort_date.
+- Each text value is one literal token sequence; multiple tokens in one
+  value are a phrase. Thus punctuation identifiers and quoted phrases use
+  the same unicode61 tokenization as the index. No implicit prefix, fuzzy
+  match or raw FTS operators in v1; `*` is punctuation, not an operator.
+  The prefix index remains reserved for a later explicit prefix contract.
+- Canonical formatting preserves tree order and groups expressions as
+  needed; parsing it reconstructs the same tree modulo flattened AND/OR
+  groups, singleton AND/OR and `is:unread`'s NOT spelling. Chips edit this
+  tree, not SQL.
+- Limits: 16,384 UTF-8 input bytes (text or JSON), 256 nodes, depth 32.
+  Canonical text and JSON must also fit the byte limit; reject a conversion
+  that would exceed it with `limit`, rather than emit an unreadable query.
+  Return `SearchParseError { start, end, code }`: zero-based, half-open
+  UTF-8 byte offsets at character boundaries, EOF `[len,len)`. Codes are
+  `unexpected_token`, `missing_value`, `unclosed_quote`, `unclosed_group`,
+  `unknown_key`, `invalid_operator`, `invalid_value`, `limit`. Point at the
+  offending token; an unclosed construct points at its opening delimiter.
+  JSON errors use the offending value span. Never fall back to text on an
+  error. Service/FFI preserve the span; shells convert to native indices.
+
 ## Execution
 
 - Filters (account, mailbox, flags, dates) are applied **inside** the SQL
@@ -168,8 +356,9 @@ shared by the search field, saved views and, later, rules.
   under a large one's.
 - **Grain:** one row per logical message, its representative occurrence
   (02, `d_list_rows`). With a `mailbox` scope, rows are that mailbox's
-  occurrences instead. Counts are messages. A message with no present
-  occurrence isn't a hit; it appears in the Recovery list (04).
+  occurrences instead (one chosen per message; detailed below). Counts
+  are messages. A message with no present occurrence isn't a hit; it
+  appears in the Recovery list (04).
 - **Results stream:** the first 50 hits are ranked or date-sorted; more
   are fetched on scroll with keyset paging.
   - Date-sorted results page by `(sort_date, occurrence_id)`.
@@ -181,6 +370,42 @@ shared by the search field, saved views and, later, rules.
   authoritative tables, so they are always current.
 - **Server search** (IMAP `SEARCH` on Bridge) is *later*. Bridge
   searches Proton's encrypted store with limitations (04).
+
+### SQL and ordering details (M1.6a)
+
+- Compile node results as true/false/unknown (SQL NULL), with Kleene
+  AND/OR/NOT: false AND unknown is false, true OR unknown is true. Only
+  true is a hit; count final unknown separately. A truncated-field FTS
+  leaf is unknown even if its retained prefix contains the term, retaining
+  v1's conservative rule above. Unqualified text depends on all eight
+  columns; `body` depends on all three body columns. No summary fallback
+  for an unindexed FTS predicate. Queueing a same-version re-extraction
+  keeps the last committed document usable until replacement, unless its
+  object is unavailable. Target-version changes make old versions unknown.
+- Bind all operands, including quoted/escaped MATCH literals. Never
+  interpolate user FTS or SQL. Apply the full Boolean predicate and scope
+  before score, keyset boundary and limit. Use EXISTS for membership/tag
+  filters rather than multiplying hits through joins. Well-formed AST
+  account/mailbox/tag ids with no stored entity yield false; they are not
+  syntax errors or unknown data. Unknown outer scope ids are errors (07).
+- Search scope (07) selects candidates first. All/Account choose the
+  ordinary representative. Mailbox chooses the lowest-id present
+  occurrence of each message in that mailbox. An AST `mailbox` node tests
+  whether that message has a present occurrence there; it does not change
+  the display occurrence, including under OR/NOT. This explicitly refines
+  "that mailbox's occurrences" above to one hit per message even when
+  a mailbox holds several copies of the same provider message. Different
+  logical messages sharing one acquisition still give separate hits.
+- Date order is `(sort_date DESC, occurrence_id DESC)`. Relevance is
+  `(score ASC, occurrence_id DESC)`: SQLite BM25's smaller score is better.
+  For a Boolean tree, sum the weighted BM25 values of matching FTS leaves
+  in positive polarity (under an even number of NOTs), once per distinct
+  `(column set, token sequence)`. Negated/unknown/nonmatching leaves add
+  zero. No positive leaves means score 0. Filter-only hits in a mixed OR
+  also score 0; no recency boost or score rounding. Corpus statistics are
+  those of the whole current FTS table; scope filters precede result limit,
+  not BM25's corpus statistics. Rebuild with unchanged input/version must
+  reproduce scores, order and coverage as well as the matching ids.
 
 ## Coverage
 

@@ -23,6 +23,49 @@ Rests on research [04-data-safety](../research/04-data-safety.md)
 Every behaviour in the spec that says **must** has at least one automated
 test, except where the spec says "manual qualification".
 
+## Search qualification (M1.6)
+
+- Parser tests cover every 06 node/text form, canonical round-trips and
+  UTF-8 error spans, invalid operators, limits, dates/timezones and clocks.
+  The `query` fuzz target exercises UTF-8 text and v1 JSON validation,
+  parse/format/parse equivalence and valid error ranges; arbitrary non-UTF-8
+  inputs are rejected without panic. Use the existing isolated fuzz nightly,
+  release/ASan configuration, separate corpus/cache and finding artifacts:
+  60 seconds, 1 MB input ceiling, 2 GiB RSS, 10-second per-input timeout.
+  The parser's 16,384-byte limit still applies. Synthetic seeds cover all
+  operators, punctuation identifiers, nested negation and non-ASCII text.
+- Store/compiler tests cover the three-valued truth tables, partial masks,
+  exact phrases/addresses/domains, filters before limit, representative
+  selection, mailbox membership under OR/NOT, score ties and three pages
+  ordered differently by relevance and date. Worker tests kill/reopen at
+  FTS delete, docs write, FTS insert and queue acknowledgement, including
+  concurrent requeue/version changes. A resumed rebuild reproduces ids,
+  scores/order and coverage; address backfill replay preserves counts.
+- Engine/service tests cover short-snapshot rows/status, coverage-only
+  invalidation, out-of-scope BM25 changes, cursor identity/bits/generation,
+  cancellation and shutdown. Swift tests cover DTO mapping, chip round-trips,
+  error-index conversion and stale request suppression; a PR macOS UI test
+  imports synthetic mail and searches by address, subject and body phrase,
+  changes scope/sort and observes results plus incomplete coverage.
+- Add a reproducible, ignored release search timing runner over 100,000
+  synthetic logical messages. Record cold/warm first-50-query p50/p95/p99
+  for exact identifier, phrase, scoped filter and negative-body queries,
+  during idle and background import/index writes. Also record commit-to-
+  searchable freshness p95, full rebuild duration, dataset seed/version,
+  sample count, query set, exact-unknown-count time, coverage/queue state,
+  machine/OS/build/SQLite versions and active workload. No owner mail or
+  owner query text in CI artifacts.
+  Use a fixed 1,000-query warm sample per workload and report failures rather
+  than dropping failed samples. Cold means reopened core/read connections;
+  record OS cache state rather than claiming caches were flushed.
+- Linux push-to-main CI records that runner's machine-readable artifact,
+  like M1.3's window timings, with no timing assertions. M1.6q records a
+  dated owner's-Mac run in qualification against 06's cached-search,
+  freshness and rebuild budgets. Also record end-to-end last-keystroke to
+  first rows (including debounce) against 08; core timing alone does not
+  qualify the UI. Missing an owner budget is a finding to resolve, not a
+  weakened threshold. No Tantivy/trigram spike in M1.6.
+
 ## The fake IMAP/SMTP server
 
 - An in-process, scriptable server in a `test-support` module, built on
