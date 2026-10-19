@@ -165,6 +165,13 @@ The engine pauses/retries failed I/O visibly through 07's operational
 status, and shutdown drains only submitted writes; unsubmitted extraction
 work remains queued.
 
+For `StoreError::Unavailable` caused by filesystem I/O, retain its
+optional `std::io::ErrorKind` beside the existing reason. Object-open/read
+and quarantine failures preserve available native kinds; SQLite environment
+failures map their known codes to the corresponding kind. Callers classify
+the typed cause, never the formatted message. This internal detail preserves
+the existing `CoreError` category and reason.
+
 ## Object store
 
 ### Contract

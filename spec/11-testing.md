@@ -42,9 +42,11 @@ test, except where the spec says "manual qualification".
   FTS delete, docs write, FTS insert and queue acknowledgement, including
   concurrent requeue/version changes. A resumed rebuild reproduces ids,
   scores/order and coverage (M1.6e2); address backfill replay preserves counts.
-  M1.6d2 checks bounded reset/enqueue transactions, phase checkpoint crashes,
-  same-version epoch races and concurrent inserts/availability changes.
-  M1.6e checks I/O pause/backoff/retry and failed-writer read errors;
+  M1.6d2 checks same-version epoch races, durable job state and pause gates.
+  M1.6d3 checks bounded reset/enqueue transactions, phase checkpoint crashes
+  and concurrent inserts/availability changes. M1.6d4 checks typed storage
+  causes without changing core error mappings.
+  M1.6e1 checks I/O pause/backoff/retry and failed-writer read errors;
   M1.6e2 checks durable job identity, cancel/reopen/resume and phase recovery.
 - Engine/service tests cover short-snapshot rows/status, coverage-only
   invalidation, out-of-scope BM25 changes, cursor identity/bits/generation,
