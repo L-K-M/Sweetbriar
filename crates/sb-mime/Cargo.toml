@@ -31,6 +31,8 @@ ammonia = "=4.2.4"
 # uses (spec/10 "Rendering"): the sanitizer decodes text references itself
 # so html5ever 0.40's quadratic escaping never sees an `&` (render.rs).
 markup5ever = "=0.40.0"
+# spec/06 text-node extraction; already resolved through ammonia. No serialization.
+html5ever = "=0.40.1"
 
 [dev-dependencies]
 # spec/01 crate table: snapshot testing of the fixtures/eml corpus.

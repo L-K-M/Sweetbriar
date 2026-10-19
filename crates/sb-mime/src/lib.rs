@@ -20,6 +20,7 @@ mod render;
 mod render_css;
 mod rendition;
 mod search;
+mod search_document;
 mod summary;
 mod walk;
 
@@ -40,6 +41,7 @@ pub use reader::{
 pub use render::{HtmlSanitizeError, LinkRecord, LinkWarning, SanitizedHtml, sanitize_html};
 pub use rendition::{MAX_RENDITION_BYTES, Manifest, RenderKind, Rendition, Resource, render};
 pub use search::{SearchAttachmentName, SearchBody, SearchBodyKind, SearchInputs, search_inputs};
+pub use search_document::{SEARCH_EXTRACTOR_VERSION, SearchDocument, SearchState, search_document};
 pub use summary::{MailboxAddress, MessageSummary, PARSER_VERSION};
 
 use mail_parser::parsers::MessageStream;
