@@ -122,11 +122,17 @@ public enum ReaderLinkDecision: Sendable, Equatable {
     case refuse
 
     public static func decide(_ url: URL, manifest: RenditionManifest) -> Self {
-        guard ["http", "https", "mailto"].contains(url.scheme?.lowercased() ?? ""),
-              let clicked = Destination(url.absoluteString) else { return .refuse }
-        // One destination can be spelled several ways; its warnings are
-        // the union of every listed spelling's.
-        let listed = manifest.links.filter { Destination($0.href) == clicked }
+        guard ["http", "https", "mailto"].contains(url.scheme?.lowercased() ?? "") else {
+            return .refuse
+        }
+        // WebKit hands a click over as a Foundation URL, which escapes
+        // characters the sanitizer's WHATWG serializer keeps (`[` `]` in a
+        // query). A listed href matches after that same conversion, and only
+        // exactly: any other spelling is another request to the server.
+        let clicked = url.absoluteString
+        let listed = manifest.links.filter {
+            $0.href == clicked || URL(string: $0.href)?.absoluteString == clicked
+        }
         guard !listed.isEmpty else { return .refuse }
         var warnings: [String] = []
         for warning in listed.flatMap(\.warnings) where !warnings.contains(warning) {
@@ -141,63 +147,5 @@ public enum ReaderLinkDecision: Sendable, Equatable {
             }
         }
         return reasons.isEmpty ? .open(url) : .confirm(url, reasons: reasons)
-    }
-}
-
-/// A link destination compared component by component, as bytes.
-/// WebKit hands clicks over as Foundation URLs, which percent-encode
-/// characters the sanitizer's serializer keeps (`filter[status]` arrives
-/// as `filter%5Bstatus%5D`), so escapes are undone, except a component's
-/// own separators: `a%2Fb` and `a/b` are different destinations, and so
-/// are `x%26y` and `x&y` in a query. Bytes, not strings: decoding would
-/// merge malformed escapes (`%FF`, `%FE`) and Unicode equivalents.
-private struct Destination: Equatable {
-    let scheme: [UInt8]
-    let user: [UInt8]?
-    let password: [UInt8]?
-    let host: [UInt8]?
-    let port: Int?
-    let path: [UInt8]
-    let query: [UInt8]?
-    let fragment: [UInt8]?
-
-    init?(_ string: String) {
-        guard let parts = URLComponents(string: string, encodingInvalidCharacters: true),
-              let scheme = parts.scheme else { return nil }
-        self.scheme = Self.lowercased(Array(scheme.utf8))
-        user = parts.percentEncodedUser.map { Self.unescaped($0, keeping: ":@") }
-        password = parts.percentEncodedPassword.map { Self.unescaped($0, keeping: ":@") }
-        host = parts.percentEncodedHost.map { Self.lowercased(Self.unescaped($0, keeping: "")) }
-        port = parts.port
-        path = Self.unescaped(parts.percentEncodedPath, keeping: "/?#;")
-        query = parts.percentEncodedQuery.map { Self.unescaped($0, keeping: "&=+;#") }
-        fragment = parts.percentEncodedFragment.map { Self.unescaped($0, keeping: "") }
-    }
-
-    /// Undo percent-escapes byte by byte, except for `%` itself and the
-    /// separators in `kept`, whose escapes stay (in upper-case hex).
-    private static func unescaped(_ text: String, keeping kept: String) -> [UInt8] {
-        let kept = Set(kept.utf8).union([UInt8(ascii: "%")])
-        var bytes: [UInt8] = []
-        var input = Array(text.utf8)[...]
-        while let byte = input.popFirst() {
-            guard byte == UInt8(ascii: "%"), input.count >= 2,
-                  let value = UInt8(String(decoding: input.prefix(2), as: UTF8.self), radix: 16)
-            else {
-                bytes.append(byte)
-                continue
-            }
-            input = input.dropFirst(2)
-            if kept.contains(value) {
-                bytes.append(contentsOf: Array(String(format: "%%%02X", value).utf8))
-            } else {
-                bytes.append(value)
-            }
-        }
-        return bytes
-    }
-
-    private static func lowercased(_ bytes: [UInt8]) -> [UInt8] {
-        bytes.map { (UInt8(ascii: "A")...UInt8(ascii: "Z")).contains($0) ? $0 + 32 : $0 }
     }
 }
