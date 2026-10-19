@@ -10,8 +10,14 @@ use crate::{ObjectId, ObjectStore, Store, StoreError, read_error_as_store_error}
 
 /// Spec/10's decimal raw-message limit, also used by the MIME leaf.
 pub const MAX_READER_MESSAGE_BYTES: u64 = 100_000_000;
-/// The MIME admission header budget; checked before copying or decoding JSON.
+/// The MIME admission header budget.
 pub const MAX_READER_HEADER_BYTES: usize = 262_144;
+/// Stored header text of one message, checked before copying or decoding
+/// JSON: an admitted header block as the import writer stores it. Address
+/// JSON is ~14 bytes per raw byte at worst (`a,` becomes
+/// `{"address":"a","name":null},`) and decoding can triple a byte (U+FFFD);
+/// 32× bounds both.
+const MAX_STORED_HEADER_BYTES: usize = 32 * MAX_READER_HEADER_BYTES;
 const READ_CHUNK_BYTES: usize = 64 * 1024;
 
 /// Availability recorded in SQLite, not a filesystem verification promise.
@@ -278,7 +284,7 @@ fn headers(tx: &Transaction, message: i64) -> Result<ReaderHeaders, StoreError> 
          JOIN d_message_summary s USING (acquisition_id) WHERE m.message_id = ?1",
             [message],
             |row| {
-                let mut budget = MAX_READER_HEADER_BYTES;
+                let mut budget = MAX_STORED_HEADER_BYTES;
                 Ok((|| {
                     let name = header_text(row, 0, &mut budget)?;
                     let address = header_text(row, 1, &mut budget)?;
@@ -308,7 +314,7 @@ fn headers(tx: &Transaction, message: i64) -> Result<ReaderHeaders, StoreError> 
          FROM message_headers WHERE message_id = ?1",
         [message],
         |row| {
-            let mut budget = MAX_READER_HEADER_BYTES;
+            let mut budget = MAX_STORED_HEADER_BYTES;
             Ok((|| {
                 let from = header_text(row, 0, &mut budget)?;
                 build_headers(
