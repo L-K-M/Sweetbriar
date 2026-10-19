@@ -28,7 +28,7 @@ allow = [
 # MPL-2.0 is file-level copyleft, allowed by named exception per package
 # and version (spec/01): UniFFI's crates, which entered the graph with
 # sb-ffi and sb-bindgen in M0.8, and the CSS parsing family the M1.5
-# renderer uses.
+# renderer uses: lol_html's here, ammonia's with M1.5c1c.
 exceptions = [
     { crate = "uniffi@0.32.2", allow = ["MPL-2.0"] },
     { crate = "uniffi_core@0.32.2", allow = ["MPL-2.0"] },
@@ -38,12 +38,12 @@ exceptions = [
     { crate = "uniffi_bindgen@0.32.2", allow = ["MPL-2.0"] },
     { crate = "uniffi_internal_macros@0.32.2", allow = ["MPL-2.0"] },
     { crate = "uniffi_udl@0.32.2", allow = ["MPL-2.0"] },
-    { crate = "cssparser@0.38.0", allow = ["MPL-2.0"] },
-    { crate = "cssparser-macros@0.7.1", allow = ["MPL-2.0"] },
-    { crate = "dtoa-short@0.3.5", allow = ["MPL-2.0"] },
     { crate = "cssparser@0.36.0", allow = ["MPL-2.0"] },
+    { crate = "dtoa-short@0.3.5", allow = ["MPL-2.0"] },
     { crate = "cssparser-macros@0.6.1", allow = ["MPL-2.0"] },
     { crate = "selectors@0.37.0", allow = ["MPL-2.0"] },
+    { crate = "cssparser@0.38.0", allow = ["MPL-2.0"] },
+    { crate = "cssparser-macros@0.7.1", allow = ["MPL-2.0"] },
 ]
 
 # Sweetbriar's own crates are publish = false; their Unlicense OR 0BSD
