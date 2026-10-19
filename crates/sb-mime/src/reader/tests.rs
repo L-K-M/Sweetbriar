@@ -254,6 +254,16 @@ fn attachment_names_lengths_and_extraction() {
         Err(AttachmentError::LimitExceeded)
     );
     assert_eq!(display_name(Some("a\0b\n/c\\d:e")), "a_b__c_d_e");
+    // Bidi overrides, invisible characters and separators can disguise
+    // a name: `invoice\u{202e}gpj.exe` shows as `invoiceexe.jpg`.
+    assert_eq!(
+        display_name(Some("invoice\u{202e}gpj.exe")),
+        "invoice_gpj.exe"
+    );
+    assert_eq!(
+        display_name(Some("a\u{200b}b\u{2066}c\u{2028}d\u{feff}e\u{61c}f")),
+        "a_b_c_d_e_f"
+    );
     for name in ["", " ", ".", ".."] {
         assert_eq!(display_name(Some(name)), "attachment");
     }
@@ -548,6 +558,32 @@ fn charset_replaced_comes_from_the_decoder() {
         replaced(&part(&[0x41, 0x00, 0x00, 0xD8])),
         "a lone surrogate"
     );
+
+    let labelled = |charset: &str, body: &[u8]| {
+        let mut raw = format!(
+            "Content-Type: text/plain; charset={charset}\r\nContent-Transfer-Encoding: base64\r\n\r\n"
+        )
+        .into_bytes();
+        raw.extend(base64(body).as_bytes());
+        raw
+    };
+    // Upstream's tables leave windows-1252's 0x81 unmapped where WHATWG
+    // maps it to a C1 control; the charset can't encode U+FFFD.
+    assert!(
+        replaced(&labelled("windows-1252", b"a\x81b")),
+        "an unmapped windows-1252 byte"
+    );
+    // Generic UTF-16 follows its byte order mark.
+    assert!(
+        !replaced(&labelled("utf-16", &[0xFE, 0xFF, 0xFF, 0xFD])),
+        "a literal big-endian U+FFFD"
+    );
+    assert!(
+        replaced(&labelled("utf-16", &[0xFE, 0xFF, 0xD8, 0x00])),
+        "a big-endian lone surrogate"
+    );
+    // A charset only upstream decodes: its U+FFFD is the only report.
+    assert!(replaced(&labelled("utf-7", b"+A-")), "malformed UTF-7");
 }
 
 /// Standard base64, for building fixtures.
