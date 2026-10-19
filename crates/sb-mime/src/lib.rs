@@ -16,6 +16,7 @@ mod limits;
 mod mbox;
 mod outcome;
 mod reader;
+mod render;
 mod summary;
 mod walk;
 
@@ -33,6 +34,7 @@ pub use reader::{
     AttachmentDescriptor, AttachmentError, PartId, RelatedResource, RenderInput, RenderWarning,
     RenderWarningCode, SelectedBody, extract_attachment, render_input,
 };
+pub use render::{HtmlSanitizeError, LinkRecord, LinkWarning, SanitizedHtml, sanitize_html};
 pub use summary::{MailboxAddress, MessageSummary, PARSER_VERSION};
 
 use mail_parser::parsers::MessageStream;
