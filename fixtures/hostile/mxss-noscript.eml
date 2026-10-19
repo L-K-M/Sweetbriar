@@ -1,0 +1,5 @@
+X-Sweetbriar-Fixture: Raw text and formatting breakout noscript
+MIME-Version: 1.0
+Content-Type: text/html; charset=utf-8
+
+<noscript><p title="</noscript><img src=/leak onerror=bad()>">x</p></noscript><script>bad()</script>

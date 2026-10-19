@@ -1,0 +1,5 @@
+X-Sweetbriar-Fixture: Unsafe URL in every navigation and resource attribute
+MIME-Version: 1.0
+Content-Type: text/html; charset=utf-8
+
+<a href="jav&#x61;script:bad()">link</a><img src="jav&#x61;script:bad()"><form action="jav&#x61;script:bad()"><input src="jav&#x61;script:bad()"><button formaction="jav&#x61;script:bad()">go</button></form><svg><a xlink:href="jav&#x61;script:bad()">x</a></svg>

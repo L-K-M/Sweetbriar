@@ -1,0 +1,5 @@
+X-Sweetbriar-Fixture: Obfuscated javascript control
+MIME-Version: 1.0
+Content-Type: text/html; charset=utf-8
+
+<a href="ja&#9;&#10;&#13;vascript:bad">x</a><img src="ja&#9;&#10;&#13;vascript:bad"><form action="ja&#9;&#10;&#13;vascript:bad"><button formaction="ja&#9;&#10;&#13;vascript:bad">x</button></form><svg><a xlink:href="ja&#9;&#10;&#13;vascript:bad">x</a></svg>

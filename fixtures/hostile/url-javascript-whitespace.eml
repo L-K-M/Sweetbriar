@@ -1,0 +1,5 @@
+X-Sweetbriar-Fixture: Obfuscated javascript whitespace
+MIME-Version: 1.0
+Content-Type: text/html; charset=utf-8
+
+<a href=" 	javascript:bad ">x</a><img src=" 	javascript:bad "><form action=" 	javascript:bad "><button formaction=" 	javascript:bad ">x</button></form><svg><a xlink:href=" 	javascript:bad ">x</a></svg>
