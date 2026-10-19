@@ -164,16 +164,16 @@ func importCommandsCrossTheBridge() async throws {
     await bridge.shutdown()
 }
 
-/// Poll `importJob` until `done` accepts its state, within a bound.
+/// Poll `importJob` until `done` accepts it, within a bound.
 private func waitForJob(
     _ bridge: CoreBridge,
     id: String,
-    until done: (ImportJobState) -> Bool
+    until done: (ImportJob) -> Bool
 ) async throws -> ImportJob {
     let deadline = ContinuousClock.now + .seconds(50)
     while true {
         let job = try await bridge.importJob(id: id)
-        if done(job.state) {
+        if done(job) {
             return job
         }
         guard ContinuousClock.now < deadline else {
@@ -184,8 +184,8 @@ private func waitForJob(
 }
 
 /// An import over the bridge (spec/09): the inventory shows the
-/// ambiguous source before confirmation, and the job completes with
-/// its totals.
+/// ambiguous source before confirmation, the job completes with its
+/// totals, and its report is published at the path the job names.
 @Test(.timeLimit(.minutes(1)))
 func anImportRunsOverTheBridge() async throws {
     let (dir, config) = tempConfig()
@@ -200,8 +200,17 @@ func anImportRunsOverTheBridge() async throws {
     try Data(mbox.utf8).write(to: source)
 
     let started = try await bridge.startImport(paths: [source.path])
-    let waiting = try await waitForJob(bridge, id: started.jobId) { $0 != .inventory }
+    let waiting = try await waitForJob(bridge, id: started.jobId) { $0.state != .inventory }
     #expect(waiting.state == .awaitingConfirmation)
+    do {
+        _ = try await bridge.importReport(jobId: started.jobId)
+        Issue.record("an unfinished job has no report")
+    } catch let failure as CoreFailure {
+        guard case .conflict = failure else {
+            Issue.record("expected .conflict, got \(failure)")
+            return
+        }
+    }
     let inventoried = try #require(waiting.sources.first)
     #expect(waiting.sources.count == 1)
     #expect(inventoried.mailbox == "Inbox")
@@ -213,8 +222,14 @@ func anImportRunsOverTheBridge() async throws {
         jobId: started.jobId,
         variants: [VariantChoice(ordinal: inventoried.ordinal, variant: .mboxrd)]
     )
-    let done = try await waitForJob(bridge, id: started.jobId) { $0.isFinished }
+    // A finished state alone doesn't mean the report exists.
+    let done = try await waitForJob(bridge, id: started.jobId) {
+        $0.state.isFinished && $0.reportPath != nil
+    }
     #expect(done.state == .completed)
+    let report = try #require(try await bridge.importReport(jobId: started.jobId))
+    #expect(report.path == done.reportPath)
+    #expect(report.json.contains("\"state\": \"completed\""))
     #expect(done.sources.first?.variant == .mboxrd)
     #expect(done.totals.imported == 1)
     #expect(done.problemCount == 0)

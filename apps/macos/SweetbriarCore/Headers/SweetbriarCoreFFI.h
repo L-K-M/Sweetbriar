@@ -283,6 +283,11 @@ uint64_t uniffi_sb_ffi_fn_method_core_confirm_import(uint64_t ptr, uint64_t toke
 uint64_t uniffi_sb_ffi_fn_method_core_import_job(uint64_t ptr, uint64_t token, RustBuffer job_id
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_IMPORT_REPORT
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_IMPORT_REPORT
+uint64_t uniffi_sb_ffi_fn_method_core_import_report(uint64_t ptr, uint64_t token, RustBuffer job_id
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_START_IMPORT
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_START_IMPORT
 uint64_t uniffi_sb_ffi_fn_method_core_start_import(uint64_t ptr, uint64_t token, RustBuffer idempotency_key, RustBuffer paths, RustBuffer target
@@ -685,6 +690,12 @@ uint16_t uniffi_sb_ffi_checksum_method_core_confirm_import(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_IMPORT_JOB
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_IMPORT_JOB
 uint16_t uniffi_sb_ffi_checksum_method_core_import_job(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_IMPORT_REPORT
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_IMPORT_REPORT
+uint16_t uniffi_sb_ffi_checksum_method_core_import_report(void
     
 );
 #endif

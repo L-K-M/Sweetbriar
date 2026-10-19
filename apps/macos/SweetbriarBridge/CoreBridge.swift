@@ -162,6 +162,17 @@ public final class CoreBridge: Sendable {
         return ImportJob(job)
     }
 
+    /// `import_report(job_id)` (spec/07, 09): a finished job's report,
+    /// or `nil` while it is still being written. An unfinished job is
+    /// `conflict`.
+    public func importReport(jobId: String) async throws -> ImportReport? {
+        let token = SweetbriarCore.CancelToken()
+        let report = try await Self.withCancellation(token: token) {
+            try await self.core.importReport(token: token, jobId: jobId)
+        }
+        return report.map { ImportReport(path: $0.path, json: $0.json) }
+    }
+
     /// `accounts()` (spec/07): every account, by sort order then id.
     public func accounts() async throws -> [Account] {
         let token = SweetbriarCore.CancelToken()

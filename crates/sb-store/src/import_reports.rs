@@ -3,7 +3,7 @@
 //! flushed, renamed over the final name and the directory flushed:
 //! readers see the old report or the new one, never a torn file.
 
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -59,6 +59,39 @@ impl ImportReports {
             StoreError::unavailable(format!("cannot check the import report {job}: {e}"))
         })?;
         Ok(md.is_some_and(|md| md.kind() == FileKind::File))
+    }
+
+    /// `job`'s report as last written, or `None` while there is none
+    /// (spec/07 `import_report`). Writes replace it whole, so this
+    /// never sees a torn one. A report that isn't UTF-8, or is longer
+    /// than `max_bytes` — more than its writer could have written — is
+    /// `Corrupt`; one that can't be read is `Unavailable`.
+    pub(crate) fn read(&self, job: &str, max_bytes: u64) -> Result<Option<String>, StoreError> {
+        let path = self.path(job)?;
+        let unreadable = |e: io::Error| {
+            StoreError::unavailable(format!("cannot read the import report {job}: {e}"))
+        };
+        let (file, md) = match self.fs.open_regular(&path) {
+            Ok(opened) => opened,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(unreadable(e)),
+        };
+        let oversized =
+            || StoreError::corrupt(format!("the import report {job} is over {max_bytes} bytes"));
+        if md.len() > max_bytes {
+            return Err(oversized());
+        }
+        // Bounded again while reading: the file may grow after the look.
+        let mut bytes = Vec::new();
+        file.take(max_bytes + 1)
+            .read_to_end(&mut bytes)
+            .map_err(unreadable)?;
+        if bytes.len() as u64 > max_bytes {
+            return Err(oversized());
+        }
+        String::from_utf8(bytes)
+            .map(Some)
+            .map_err(|_| StoreError::corrupt(format!("the import report {job} is not UTF-8")))
     }
 
     /// Replace `job`'s report with `bytes` durably (spec/03). A failure

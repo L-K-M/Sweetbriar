@@ -11,7 +11,7 @@
 //! then conflicts and the worker ends.
 //! ```
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
@@ -54,6 +54,10 @@ const INTERRUPTED_INVENTORY: &str = "the inventory was interrupted; start a new 
 #[derive(Default)]
 pub(crate) struct ImportJobs {
     live: Mutex<HashMap<String, Live>>,
+    /// Finished jobs whose report this engine wrote, or found at open:
+    /// `import_job` names a report path from this, so a poll does no
+    /// filesystem work (spec/09: a path only once the report is written).
+    reports: Mutex<HashSet<String>>,
     /// The thread rebuild each worker's turn may start (spec/02).
     threads: Arc<ThreadRebuilds>,
 }
@@ -74,6 +78,22 @@ impl ImportJobs {
         self.live
             .lock()
             .expect("a panicking thread held the import job registry")
+    }
+
+    /// Remember that `id`'s report is written.
+    fn note_report(&self, id: &str) {
+        self.reports
+            .lock()
+            .expect("a panicking thread held the import report registry")
+            .insert(id.to_owned());
+    }
+
+    /// Whether `id`'s report is known to be written.
+    fn report_written(&self, id: &str) -> bool {
+        self.reports
+            .lock()
+            .expect("a panicking thread held the import report registry")
+            .contains(id)
     }
 
     /// Tell a live worker its job was cancelled, so it stops early.
@@ -195,9 +215,28 @@ impl ImportJobStatus {
         &self.checkpoint
     }
 
-    /// Where the report lives once the job has finished (spec/09).
+    /// Where the report lives, once it is written (spec/09): a finished
+    /// job names none until then.
     pub fn report_path(&self) -> Option<&Path> {
         self.report_path.as_deref()
+    }
+}
+
+/// A finished job's published report (spec/07 `import_report`): where
+/// it lives and its version-1 JSON.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportReport {
+    path: PathBuf,
+    json: String,
+}
+
+impl ImportReport {
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn json(&self) -> &str {
+        &self.json
     }
 }
 
@@ -338,36 +377,77 @@ impl Engine {
         self.imports().cancel(job_id);
         // The cancel is durable either way; a failed cleanup is redone
         // at the next open, which finds no report.
-        let id = job_id.to_owned();
+        // Noted inside the blocking work: a caller dropping this future
+        // mid-cleanup must not leave a written report unnamed.
+        let (id, imports) = (job_id.to_owned(), Arc::clone(self.imports()));
         let _ = self
-            .read_through(move |resources| finish(resources, &id))
+            .read_through(move |resources| {
+                let written = finish(resources, &id);
+                if matches!(written, Ok(true)) {
+                    imports.note_report(&id);
+                }
+                written
+            })
             .await;
         Ok(receipt)
     }
 
     /// `import_job(job_id)` (spec/07): state, inventory, problems and
-    /// counts, from one read.
+    /// counts, from one read, and the report's path once this engine
+    /// wrote the report or found it at open. A poll does no filesystem
+    /// work; `import_report` reads the report itself.
     pub async fn import_job(&self, job_id: &str) -> Result<ImportJobStatus, EngineError> {
         let id = job_id.to_owned();
         self.read_through(move |resources| {
-            resources.read(|tx| {
+            let (job, sources) = resources.read(|tx| {
                 let job = import_job(tx, &id)?;
                 let sources = import_job_sources(tx, &job)?
                     .into_iter()
                     .map(|(source, position)| ImportSourceStatus { source, position })
                     .collect();
-                let report_path = if job.is_finished() {
-                    Some(resources.import_report_path(&id)?)
-                } else {
-                    None
-                };
-                Ok(ImportJobStatus {
-                    state: job.state(),
-                    sources,
-                    checkpoint: job.checkpoint().clone(),
-                    report_path,
-                })
+                Ok((job, sources))
+            })?;
+            let report_path = if job.is_finished() {
+                Some(resources.import_report_path(&id)?)
+            } else {
+                None
+            };
+            Ok(ImportJobStatus {
+                state: job.state(),
+                sources,
+                checkpoint: job.checkpoint().clone(),
+                report_path,
             })
+        })
+        .await
+        .map(|mut status| {
+            if !self.imports().report_written(job_id) {
+                status.report_path = None;
+            }
+            status
+        })
+    }
+
+    /// `import_report(job_id)` (spec/07, 09): a finished job's report,
+    /// or `None` while it is still being written. An unfinished job is
+    /// `Conflict`; an unreadable report is an error.
+    pub async fn import_report(&self, job_id: &str) -> Result<Option<ImportReport>, EngineError> {
+        let id = job_id.to_owned();
+        self.read_through(move |resources| {
+            let (job, sources) = resources.read(|tx| {
+                let job = import_job(tx, &id)?;
+                let sources = recorded_import_job_sources(tx, &id)?.len();
+                Ok((job, sources))
+            })?;
+            if !job.is_finished() {
+                return Err(StoreError::Conflict {
+                    detail: format!("import job {id} has not finished"),
+                });
+            }
+            let path = resources.import_report_path(&id)?;
+            Ok(resources
+                .read_import_report(&id, sources)?
+                .map(|json| ImportReport { path, json }))
         })
         .await
     }
@@ -387,8 +467,9 @@ impl Engine {
         {
             // Best-effort, like the cleanup it gates: an unreadable
             // `recovery/` must not keep the store closed.
-            if !matches!(self.resources().import_report_exists(job.id()), Ok(true)) {
-                let _ = finish(self.resources(), job.id());
+            let found = matches!(self.resources().import_report_exists(job.id()), Ok(true));
+            if found || matches!(finish(self.resources(), job.id()), Ok(true)) {
+                self.imports().note_report(job.id());
             }
         }
         let jobs = self.resources().read(recoverable_import_jobs)?;
@@ -402,7 +483,9 @@ impl Engine {
                         let state = ImportJobState::Failed;
                         advance_import_job(tx, &id, revision, state, &checkpoint, now).map(drop)
                     }))?;
-                    let _ = finish(self.resources(), job.id());
+                    if matches!(finish(self.resources(), job.id()), Ok(true)) {
+                        self.imports().note_report(job.id());
+                    }
                 }
                 ImportJobState::Running => {
                     spawn_job(self, self.imports(), job.id().to_owned(), Task::Ingest)?;
@@ -482,7 +565,7 @@ async fn run_job(worker: Worker, mut claim: Claim, task: Task) {
             Task::Inventory(paths) => inventory(&worker, &claim, paths).await,
             Task::Ingest => ingest(&worker, &claim).await,
         }
-        finished(&worker, &claim.id).await;
+        finished(&worker, &claim).await;
         // The turn may have added messages to thread (spec/02).
         schedule_threads(&worker, claim.jobs.threads());
         task = claim.next_or_release();
@@ -546,24 +629,29 @@ async fn discard_if_cancelled(worker: &Worker, claim: &Claim, inventory: ImportI
 
 /// Run terminal-job cleanup when a worker's turn ends; a paused job is
 /// left alone, and a failed cleanup is redone at the next open.
-async fn finished(worker: &Worker, id: &str) {
-    let id = id.to_owned();
+async fn finished(worker: &Worker, claim: &Claim) {
+    let (id, jobs) = (claim.id.clone(), Arc::clone(&claim.jobs));
     let _ = worker
-        .blocking(move |resources| finish(resources, &id))
+        .blocking(move |resources| {
+            if matches!(finish(resources, &id), Ok(true)) {
+                jobs.note_report(&id);
+            }
+        })
         .await;
 }
 
 /// Terminal-job cleanup (spec/03, 09): a completed or cancelled job's
 /// snapshots go, then its report is written, marking the cleanup done.
-/// An unfinished job is left alone. Blocking.
-fn finish(resources: &Resources, id: &str) -> Result<(), StoreError> {
+/// An unfinished job is left alone. Answers whether the report was
+/// written. Blocking.
+fn finish(resources: &Resources, id: &str) -> Result<bool, StoreError> {
     let (job, sources) = resources.read(|tx| {
         let job = import_job(tx, id)?;
         let sources = recorded_import_job_sources(tx, id)?;
         Ok((job, sources))
     })?;
     if !job.is_finished() {
-        return Ok(());
+        return Ok(false);
     }
     if matches!(
         job.state(),
@@ -575,7 +663,8 @@ fn finish(resources: &Resources, id: &str) -> Result<(), StoreError> {
             .collect();
         resources.remove_import_sources(&snapshots)?;
     }
-    resources.write_import_report(id, &import_report(&job, &sources))
+    resources.write_import_report(id, &import_report(&job, &sources))?;
+    Ok(true)
 }
 
 /// Whether the job left this worker's hands: no longer at `revision`

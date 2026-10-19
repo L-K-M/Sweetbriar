@@ -13,8 +13,8 @@ mod windows;
 pub use api::{Core, CoreConfig, Receipt, Setting, open_core};
 pub use error::CoreError;
 pub use imports::{
-    ImportJob, ImportJobState, ImportProblem, ImportProblemKind, ImportSource, ImportSourceKind,
-    ImportStarted, ImportTarget, ImportTotals, MboxVariant,
+    ImportJob, ImportJobState, ImportProblem, ImportProblemKind, ImportReport, ImportSource,
+    ImportSourceKind, ImportStarted, ImportTarget, ImportTotals, MboxVariant,
 };
 pub use sidebar::{Account, AccountKind, AccountState, Mailbox, MailboxKind, Mailboxes};
 pub use windows::{

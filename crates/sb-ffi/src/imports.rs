@@ -182,8 +182,16 @@ pub struct ImportJob {
     pub problem_count: u64,
     pub totals: ImportTotals,
     pub failure: Option<String>,
-    /// The report's path, once the job has finished.
+    /// The report's path, once it is written (spec/09).
     pub report_path: Option<String>,
+}
+
+/// A finished job's published report (spec/07 `import_report`).
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct ImportReport {
+    pub path: String,
+    /// The version-1 JSON object (spec/09 "Report").
+    pub json: String,
 }
 
 impl ImportJob {
@@ -307,6 +315,23 @@ impl Core {
             .query(&token, async |core| core.import_job(&job_id).await)
             .await?;
         Ok(ImportJob::from_service(job))
+    }
+
+    /// `import_report(job_id)` (spec/07, 09): a finished job's report,
+    /// or `None` while it is still being written. A query. An
+    /// unfinished job is `Conflict`.
+    pub async fn import_report(
+        &self,
+        token: Arc<CancelToken>,
+        job_id: String,
+    ) -> Result<Option<ImportReport>, CoreError> {
+        let report = self
+            .query(&token, async |core| core.import_report(&job_id).await)
+            .await?;
+        Ok(report.map(|report| ImportReport {
+            path: report.path.to_string_lossy().into_owned(),
+            json: report.json,
+        }))
     }
 }
 
@@ -484,18 +509,25 @@ mod tests {
         sb_test_support::block_on(core.import_job(token(), job_id.to_owned())).unwrap()
     }
 
-    fn finished(state: ImportJobState) -> bool {
-        matches!(
-            state,
+    /// Finished, with its report written: a finished state alone
+    /// doesn't mean the report exists (spec/09).
+    fn published(job: &ImportJob) -> bool {
+        let finished = matches!(
+            job.state,
             ImportJobState::Completed | ImportJobState::Cancelled | ImportJobState::Failed
-        )
+        );
+        finished && job.report_path.is_some()
     }
 
-    fn wait(core: &Core, job_id: &str, done: impl Fn(ImportJobState) -> bool) -> ImportJob {
+    fn inventoried(job: &ImportJob) -> bool {
+        job.state != ImportJobState::Inventory
+    }
+
+    fn wait(core: &Core, job_id: &str, done: impl Fn(&ImportJob) -> bool) -> ImportJob {
         let deadline = Instant::now() + PATIENCE;
         loop {
             let job = job(core, job_id);
-            if done(job.state) {
+            if done(&job) {
                 return job;
             }
             assert!(Instant::now() < deadline, "the job never settled");
@@ -528,10 +560,12 @@ mod tests {
         assert_eq!(start(&core, "import-1", &path).job_id, started.job_id);
         let id = started.job_id;
 
-        let waiting = wait(&core, &id, |state| state != ImportJobState::Inventory);
+        let waiting = wait(&core, &id, inventoried);
         assert_eq!(waiting.id, id);
         assert_eq!(waiting.state, ImportJobState::AwaitingConfirmation);
         assert_eq!(waiting.report_path, None);
+        let err = sb_test_support::block_on(core.import_report(token(), id.clone())).unwrap_err();
+        assert!(matches!(err, CoreError::Conflict { .. }), "{err}");
         let [source] = waiting.sources.as_slice() else {
             panic!("one source: {:?}", waiting.sources);
         };
@@ -567,7 +601,7 @@ mod tests {
             vec![choice],
         ))
         .unwrap();
-        let done = wait(&core, &id, finished);
+        let done = wait(&core, &id, published);
         assert_eq!(done.state, ImportJobState::Completed);
         assert_eq!(done.sources[0].variant, Some(MboxVariant::Mboxrd));
         assert_eq!(done.sources[0].messages_done, 1);
@@ -575,6 +609,16 @@ mod tests {
         assert_eq!(done.totals.imported, 1);
         assert_eq!(done.problem_count, 0);
         assert_eq!(done.failure, None);
+
+        let report = sb_test_support::block_on(core.import_report(token(), id.clone()))
+            .unwrap()
+            .expect("a finished job's report is published");
+        assert_eq!(done.report_path.as_deref(), Some(report.path.as_str()));
+        assert!(
+            report.json.contains("\"state\": \"completed\""),
+            "{}",
+            report.json
+        );
 
         let err = sb_test_support::block_on(core.cancel_job(token(), "cancel-1".to_owned(), id))
             .unwrap_err();
@@ -603,7 +647,7 @@ mod tests {
         assert!(matches!(err, CoreError::Cancelled));
 
         let id = start(&core, "import-2", &path).job_id;
-        wait(&core, &id, |state| state != ImportJobState::Inventory);
+        wait(&core, &id, inventoried);
         let receipt =
             sb_test_support::block_on(core.cancel_job(token(), "cancel-1".to_owned(), id.clone()))
                 .unwrap();
@@ -623,7 +667,7 @@ mod tests {
         let missing = missing.to_string_lossy().into_owned();
 
         let id = start(&core, "import-1", &missing).job_id;
-        let job = wait(&core, &id, |state| state != ImportJobState::Inventory);
+        let job = wait(&core, &id, inventoried);
         assert_eq!(job.problem_count, 1);
         let [problem] = job.problems.as_slice() else {
             panic!("one problem: {:?}", job.problems);
@@ -691,7 +735,7 @@ mod tests {
         ))
         .unwrap()
         .job_id;
-        wait(&core, &job, |state| state != ImportJobState::Inventory);
+        wait(&core, &job, inventoried);
 
         let choices = vec![
             VariantChoice {
@@ -710,7 +754,7 @@ mod tests {
             choices,
         ))
         .unwrap();
-        let done = wait(&core, &job, finished);
+        let done = wait(&core, &job, published);
         assert_eq!(done.state, ImportJobState::Completed);
         let variants: Vec<_> = done.sources.iter().map(|source| source.variant).collect();
         assert_eq!(

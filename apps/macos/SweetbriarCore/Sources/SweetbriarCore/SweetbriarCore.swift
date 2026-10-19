@@ -806,6 +806,13 @@ public protocol CoreProtocol: AnyObject, Sendable {
     func importJob(token: CancelToken, jobId: String) async throws  -> ImportJob
     
     /**
+     * `import_report(job_id)` (spec/07, 09): a finished job's report,
+     * or `None` while it is still being written. A query. An
+     * unfinished job is `Conflict`.
+     */
+    func importReport(token: CancelToken, jobId: String) async throws  -> ImportReport?
+    
+    /**
      * `start_import(paths, target)` (spec/07): record the job and
      * inventory it in the background. A repeated key names the first
      * job and starts nothing.
@@ -1062,6 +1069,27 @@ open func importJob(token: CancelToken, jobId: String)async throws  -> ImportJob
             completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
             freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
             liftFunc: FfiConverterTypeImportJob_lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * `import_report(job_id)` (spec/07, 09): a finished job's report,
+     * or `None` while it is still being written. A query. An
+     * unfinished job is `Conflict`.
+     */
+open func importReport(token: CancelToken, jobId: String)async throws  -> ImportReport?  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_import_report(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterString.lower(jobId)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterOptionTypeImportReport.lift,
             errorHandler: FfiConverterTypeCoreError_lift
         )
 }
@@ -1602,7 +1630,7 @@ public struct ImportJob: Equatable, Hashable {
     public var totals: ImportTotals
     public var failure: String?
     /**
-     * The report's path, once the job has finished.
+     * The report's path, once it is written (spec/09).
      */
     public var reportPath: String?
 
@@ -1616,7 +1644,7 @@ public struct ImportJob: Equatable, Hashable {
          * The first problems; `problem_count` counts them all.
          */problems: [ImportProblem], problemCount: UInt64, totals: ImportTotals, failure: String?, 
         /**
-         * The report's path, once the job has finished.
+         * The report's path, once it is written (spec/09).
          */reportPath: String?) {
         self.id = id
         self.state = state
@@ -1741,6 +1769,69 @@ public func FfiConverterTypeImportProblem_lift(_ buf: RustBuffer) throws -> Impo
 #endif
 public func FfiConverterTypeImportProblem_lower(_ value: ImportProblem) -> RustBuffer {
     return FfiConverterTypeImportProblem.lower(value)
+}
+
+
+/**
+ * A finished job's published report (spec/07 `import_report`).
+ */
+public struct ImportReport: Equatable, Hashable {
+    public var path: String
+    /**
+     * The version-1 JSON object (spec/09 "Report").
+     */
+    public var json: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(path: String, 
+        /**
+         * The version-1 JSON object (spec/09 "Report").
+         */json: String) {
+        self.path = path
+        self.json = json
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension ImportReport: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeImportReport: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ImportReport {
+        return
+            try ImportReport(
+                path: FfiConverterString.read(from: &buf), 
+                json: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ImportReport, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.path, into: &buf)
+        FfiConverterString.write(value.json, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeImportReport_lift(_ buf: RustBuffer) throws -> ImportReport {
+    return try FfiConverterTypeImportReport.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeImportReport_lower(_ value: ImportReport) -> RustBuffer {
+    return FfiConverterTypeImportReport.lower(value)
 }
 
 
@@ -3871,6 +3962,30 @@ fileprivate struct FfiConverterOptionString: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionTypeImportReport: FfiConverterRustBuffer {
+    typealias SwiftType = ImportReport?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeImportReport.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeImportReport.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionTypeMailboxRole: FfiConverterRustBuffer {
     typealias SwiftType = MailboxRole?
 
@@ -4260,6 +4375,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_core_import_job() != 61512) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_import_report() != 60188) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_core_start_import() != 35998) {

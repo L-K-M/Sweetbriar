@@ -5,7 +5,7 @@
 
 use std::path::PathBuf;
 use std::process::ExitCode;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use sb_service::{
     Core, CoreConfig, CoreError, ImportJob, ImportJobState, ImportTarget, MboxVariant, open_core,
@@ -19,6 +19,8 @@ const ERROR_EXIT: u8 = 1;
 
 /// How often `import` polls its job; shells poll `import_job` (spec/09).
 const IMPORT_POLL: Duration = Duration::from_millis(100);
+/// How long `import` waits for a finished job's report to be written.
+const REPORT_PATIENCE: Duration = Duration::from_secs(10);
 
 fn main() -> ExitCode {
     let invocation = match parse(std::env::args().skip(1)) {
@@ -227,7 +229,7 @@ fn import(core: &Core, variant: Option<MboxVariant>, paths: &[PathBuf]) -> Resul
         state != ImportJobState::Inventory
     })?;
     if job.state != ImportJobState::AwaitingConfirmation {
-        return outcome(&job);
+        return outcome(&with_report(core, job)?);
     }
     print_inventory(&job);
 
@@ -257,7 +259,19 @@ fn import(core: &Core, variant: Option<MboxVariant>, paths: &[PathBuf]) -> Resul
     let key = core.new_idempotency_key();
     block_on(core.confirm_import(&key, &job.id, variants)).map_err(error_exit)?;
     let job = wait(core, &job.id, ImportJobState::is_finished)?;
-    outcome(&job)
+    outcome(&with_report(core, job)?)
+}
+
+/// The finished `job` once its report is written, or as it stands
+/// after `REPORT_PATIENCE`: a finished state alone doesn't mean the
+/// report exists (spec/09).
+fn with_report(core: &Core, mut job: ImportJob) -> Result<ImportJob, u8> {
+    let deadline = Instant::now() + REPORT_PATIENCE;
+    while job.report_path.is_none() && Instant::now() < deadline {
+        std::thread::sleep(IMPORT_POLL);
+        job = block_on(core.import_job(&job.id)).map_err(error_exit)?;
+    }
+    Ok(job)
 }
 
 /// Poll the job until `done` accepts its state.
@@ -325,8 +339,9 @@ fn outcome(job: &ImportJob) -> Result<(), u8> {
     if let Some(failure) = &job.failure {
         eprintln!("sb-cli: the import failed: {failure}");
     }
-    if let Some(report) = &job.report_path {
-        println!("report: {}", report.display());
+    match &job.report_path {
+        Some(report) => println!("report: {}", report.display()),
+        None => eprintln!("sb-cli: the report isn't written yet; the next open writes it"),
     }
     match job.state {
         ImportJobState::Completed => Ok(()),
