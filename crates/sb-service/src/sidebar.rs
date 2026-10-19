@@ -190,16 +190,33 @@ mod tests {
             std::thread::sleep(Duration::from_millis(10));
         }
 
-        let list = sb_test_support::block_on(core.mailboxes(&archive)).unwrap();
+        // The thread rebuild the import scheduled can still advance the
+        // list generation between two reads: read until the list and
+        // its window agree.
+        let (list, window) = loop {
+            let list = sb_test_support::block_on(core.mailboxes(&archive)).unwrap();
+            let [inbox] = list.mailboxes.as_slice() else {
+                panic!("one mailbox: {:?}", list.mailboxes);
+            };
+            let window = sb_test_support::block_on(core.open_window(
+                WindowSpec::Mailbox(inbox.mailbox_id),
+                Anchor::Top,
+                10,
+            ))
+            .unwrap();
+            if list.generation == window.generation {
+                break (list, window);
+            }
+            sb_test_support::block_on(core.close_window(window.window_id));
+            assert!(
+                Instant::now() < deadline,
+                "the list generation never settled"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        };
         let [inbox] = list.mailboxes.as_slice() else {
             panic!("one mailbox: {:?}", list.mailboxes);
         };
-        let window = sb_test_support::block_on(core.open_window(
-            WindowSpec::Mailbox(inbox.mailbox_id),
-            Anchor::Top,
-            10,
-        ))
-        .unwrap();
         assert_eq!(list.generation, window.generation);
         assert_eq!(window.rows.len(), 2);
         assert_eq!(

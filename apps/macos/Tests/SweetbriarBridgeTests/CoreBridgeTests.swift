@@ -340,7 +340,11 @@ func importTotalsAndProblemsCrossTheBridge() async throws {
     #expect(first.totals.readFromHeaders == 2)
     #expect(first.totals.readDefault == 1)
     let inventoried = try #require(first.sources.first)
-    #expect(inventoried.path == source.path)
+    // The core records canonical paths: on macOS /var is /private/var.
+    #expect(
+        URL(fileURLWithPath: inventoried.path).resolvingSymlinksInPath()
+            == source.resolvingSymlinksInPath()
+    )
     #expect(inventoried.bytes == UInt64(mbox.utf8.count))
     #expect(inventoried.sha256.count == 64)
     #expect(inventoried.messagesDone == 3)
@@ -353,7 +357,7 @@ func importTotalsAndProblemsCrossTheBridge() async throws {
     #expect(second.totals.duplicates == 3)
     #expect(second.problemCount == 1)
     let problem = try #require(second.problems.first)
-    #expect(problem.path == missing)
+    #expect(problem.path.hasSuffix("/missing.mbox"))
     #expect(problem.kind == .inaccessible)
     #expect(!problem.detail.isEmpty)
 
