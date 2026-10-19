@@ -358,6 +358,17 @@ impl Engine {
         Self::open_on(data_root.as_ref(), spawn_open_thread, open).await
     }
 
+    #[cfg(test)]
+    pub(crate) async fn open_with_cache_fs(
+        data_root: &Path,
+        cache_root: &Path,
+        fs: Arc<dyn sb_resources::Fs>,
+    ) -> Result<Self, EngineError> {
+        let cache = cache_root.to_owned();
+        let open = Box::new(move |data: &Path| Resources::open_with_cache_fs(data, &cache, fs));
+        Self::open_on(data_root, spawn_open_thread, open).await
+    }
+
     async fn open_on(
         data_root: &Path,
         spawn: SpawnOpen,

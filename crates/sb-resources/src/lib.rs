@@ -18,7 +18,7 @@ use sb_platform::{OsRandom, RealFs, SystemClock};
 use sb_store::StorePaths;
 
 mod bodies;
-pub use bodies::{BodyKind, BodyLease, PublishedBody};
+pub use bodies::{AttachmentLease, BodyKind, BodyLease, PublishedAttachment, PublishedBody};
 pub use sb_mime::{RenderWarning, RenderWarningCode};
 mod acquire;
 mod import;
