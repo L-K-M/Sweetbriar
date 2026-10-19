@@ -62,6 +62,7 @@ final class MainMenuBuilder: NSObject {
     private let onShowPrototype: @MainActor () -> Void
     private let onImplementationChanged: @MainActor (PrototypeImplementation) -> Void
     private let onRunBenchmark: @MainActor () -> Void
+    private let onRunStoreBenchmark: @MainActor () -> Void
     private let isBenchmarkEnabled: @MainActor () -> Bool
     private let onShowComposerProbe: @MainActor () -> Void
     private let onImport: @MainActor () -> Void
@@ -98,6 +99,7 @@ final class MainMenuBuilder: NSObject {
         onShowPrototype: @escaping @MainActor () -> Void,
         onImplementationChanged: @escaping @MainActor (PrototypeImplementation) -> Void,
         onRunBenchmark: @escaping @MainActor () -> Void,
+        onRunStoreBenchmark: @escaping @MainActor () -> Void,
         isBenchmarkEnabled: @escaping @MainActor () -> Bool,
         onShowComposerProbe: @escaping @MainActor () -> Void,
         onImport: @escaping @MainActor () -> Void
@@ -106,6 +108,7 @@ final class MainMenuBuilder: NSObject {
         self.onShowPrototype = onShowPrototype
         self.onImplementationChanged = onImplementationChanged
         self.onRunBenchmark = onRunBenchmark
+        self.onRunStoreBenchmark = onRunStoreBenchmark
         self.isBenchmarkEnabled = isBenchmarkEnabled
         self.onShowComposerProbe = onShowComposerProbe
         self.onImport = onImport
@@ -264,6 +267,15 @@ final class MainMenuBuilder: NSObject {
         benchmark.toolTip =
             "Run the four list benchmark runs and show the report"
         menu.addItem(benchmark)
+        let storeBenchmark = Self.item(
+            "Run Store Benchmark",
+            action: #selector(runStoreBenchmark(_:)),
+            target: self
+        )
+        storeBenchmark.identifier = ItemID.benchmark
+        storeBenchmark.toolTip =
+            "Run the list benchmark over the imported mailboxes and show the report"
+        menu.addItem(storeBenchmark)
         menu.addItem(.separator())
         menu.addItem(Self.item(
             "Composer Probe",
@@ -343,6 +355,11 @@ final class MainMenuBuilder: NSObject {
     @objc
     private func runListBenchmark(_ sender: NSMenuItem) {
         onRunBenchmark()
+    }
+
+    @objc
+    private func runStoreBenchmark(_ sender: NSMenuItem) {
+        onRunStoreBenchmark()
     }
 
     /// Debug → Composer Probe (spec/08, plan M0.11).

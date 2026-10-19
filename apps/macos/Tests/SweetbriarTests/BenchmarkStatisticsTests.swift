@@ -280,3 +280,30 @@ struct ReducerTests {
     }
 }
 
+
+@Suite("store timeline")
+struct StoreTimelineTests {
+    @Test("switch and preparation intervals contribute to overall work")
+    func switchWork() {
+        let samples = (0 ... 3).map { index in
+            TimelineSample(
+                firedAt: Double(index) / 100, frameTime: Double(index) / 100,
+                cpuNanoseconds: UInt64(index) * 1_000_000, footprintBytes: 100,
+                isFrame: index > 0, generationChanged: false
+            )
+        }
+        let reduction = BenchmarkTimeline.reduce(
+            samples: samples,
+            events: [
+                TimelineEvent(phase: "preparing", detail: "initial choice",
+                              postedAt: 0.001, readySample: 1),
+                TimelineEvent(phase: "mailboxSwitch", detail: "mailbox",
+                              postedAt: 0.011, readySample: 3),
+            ], sealedAt: .infinity, nominalMilliseconds: 10
+        )
+        #expect(reduction.phases.overall.cpuMilliseconds.samples == [1, 1, 1])
+        #expect(reduction.phases.overall.latencyMilliseconds.count == 2)
+        #expect(reduction.intervals.activeCount == 3)
+        #expect(reduction.firstRowsMilliseconds == nil)
+    }
+}

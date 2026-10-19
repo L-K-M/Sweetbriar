@@ -4,14 +4,16 @@
 
 import Foundation
 
-/// The whole report: `ok` is every check across every run having
-/// passed; `failures` gives each reason, prefixed with its run.
+/// The whole report: `ok` covers functional checks across every run;
+/// budget verdicts live separately in `comparison` or `store`.
 struct ListBenchmarkReport: Codable, Equatable {
     var ok: Bool
     var failures: [String]
     var environment: BenchmarkEnvironment
     var runs: [BenchmarkRun]
     var comparison: BenchmarkComparison?
+    var mode: BenchmarkMode = .synthetic
+    var store: StoreBenchmarkResult?
 
     /// Pretty-printed, sorted-keys JSON (plan M0.10).
     func encoded() throws -> Data {
@@ -23,7 +25,8 @@ struct ListBenchmarkReport: Codable, Equatable {
     /// The short stdout summary the launch-argument run prints before
     /// quitting (spec/08 "Debug menu").
     var stdoutSummary: String {
-        var lines = ["list-benchmark: ok=\(ok)"]
+        let name = mode == .store ? "store-benchmark" : "list-benchmark"
+        var lines = ["\(name): ok=\(ok)"]
         for failure in failures {
             lines.append("  failed: \(failure)")
         }
@@ -104,7 +107,7 @@ struct BenchmarkRun: Codable, Equatable {
     var generation: UInt64
     var generationChanged: Bool
 
-    /// Window opening → render-ready of the first visible rows.
+    /// Window opening → render-ready; store mode uses the nonempty switches' p95.
     var firstRowsMilliseconds: Double?
     /// The footprint at the run's start (before the window opened).
     var baselineFootprintBytes: UInt64
@@ -120,6 +123,130 @@ struct BenchmarkRun: Codable, Equatable {
     /// Every posted input and page delivery, with its latency — the
     /// raw samples the percentiles summarize.
     var events: [BenchmarkEvent]
+    var display: BenchmarkDisplay?
+}
+
+/// Per-run display metadata; a changed display invalidates the measurement.
+struct BenchmarkDisplay: Codable, Equatable {
+    var id: UInt32?
+    var refreshRateHertz: Double
+    var changed: Bool
+}
+
+enum BenchmarkMode: String, Codable {
+    case synthetic
+    case store
+}
+
+/// Store-mode coverage and budgets are separate from functional `ok`.
+struct StoreBenchmarkResult: Codable, Equatable {
+    var switchEntryIDs: [String]
+    var completedSwitches: Int
+    var firstRows: SampleStatistics
+    var rowCount: Int
+    var selectionAnchor: Int
+    var selectionEnd: Int
+    var selectionSpanReached: Int
+    var scrollSpanReached: Int
+    var budgets: [StoreBenchmarkBudget]
+}
+
+extension StoreBenchmarkResult {
+    static func evaluate(
+        run: BenchmarkRun, pair: [String], completedSwitches: Int,
+        firstRows: SampleStatistics, rowCount: Int
+    ) -> StoreBenchmarkResult {
+        let endpoints = StoreBenchmarkPlan.selection(count: rowCount)
+        let shiftRendered = run.events.contains {
+            $0.phase == "selection" && $0.detail.hasPrefix("shift-click")
+                && $0.renderReadyIntervalIndex != nil
+        }
+        let selectionSpan = shiftRendered ? (endpoints?.count ?? 0) : 0
+        let jumpRanks = run.events.filter {
+            $0.phase == "jumps" && $0.renderReadyIntervalIndex != nil
+        }.compactMap { Int($0.detail.split(separator: " ").last ?? "") }
+        let scrollSpan = jumpRanks.min().flatMap { low in
+            jumpRanks.max().map { $0 - low + 1 }
+        } ?? 0
+        return StoreBenchmarkResult(
+            switchEntryIDs: pair, completedSwitches: completedSwitches,
+            firstRows: firstRows, rowCount: rowCount,
+            selectionAnchor: endpoints?.lowerBound ?? 0,
+            selectionEnd: endpoints?.upperBound ?? 0,
+            selectionSpanReached: selectionSpan, scrollSpanReached: scrollSpan,
+            budgets: StoreBenchmarkPlan.budgets(
+                run: run, firstRows: firstRows, rowCount: rowCount,
+                selectionSpan: selectionSpan, scrollSpan: scrollSpan
+            )
+        )
+    }
+}
+
+struct StoreBenchmarkBudget: Codable, Equatable {
+    var name: String
+    var p95Milliseconds: Double?
+    var limitMilliseconds: Double
+    /// nil means coverage or functional validity was insufficient.
+    var met: Bool?
+}
+
+/// Foundation-only choices shared by the runner and its tests.
+enum StoreBenchmarkPlan {
+    static let switchCount = 30
+    static let scrollRowTarget = 500_000
+    static let selectionRowTarget = 10_000
+
+    struct Mailbox: Equatable {
+        var entryID: String
+        var count: UInt64
+    }
+
+    /// The two largest nonempty mailboxes, ties by entry id; with only
+    /// one, it and `fallback` (the Unified Inbox's entry).
+    static func switchPair(_ mailboxes: [Mailbox], fallback: String) -> [String] {
+        let sorted = mailboxes.filter { $0.count > 0 }.sorted {
+            $0.count == $1.count ? $0.entryID < $1.entryID : $0.count > $1.count
+        }
+        guard let first = sorted.first else { return [] }
+        return [first.entryID, sorted.dropFirst().first?.entryID ?? fallback]
+    }
+
+    static func selection(count: Int) -> ClosedRange<Int>? {
+        guard count > 0 else { return nil }
+        let span = min(count, selectionRowTarget)
+        let anchor = min(100_000, count - span)
+        return anchor ... anchor + span - 1
+    }
+
+    static func budgets(
+        run: BenchmarkRun, firstRows: SampleStatistics, rowCount: Int,
+        selectionSpan: Int, scrollSpan: Int
+    ) -> [StoreBenchmarkBudget] {
+        func budget(
+            _ name: String, _ samples: SampleStatistics,
+            limit: Double, covered: Bool
+        ) -> StoreBenchmarkBudget {
+            let measured = samples.count > 0 ? samples.p95 : nil
+            return StoreBenchmarkBudget(
+                name: name, p95Milliseconds: measured, limitMilliseconds: limit,
+                met: run.ok && covered ? measured.map { $0 < limit } : nil
+            )
+        }
+        let feedback = BenchmarkStatistics.summarize(run.events.filter {
+            $0.phase == "selection" && !$0.detail.hasPrefix("position jump")
+                && $0.renderReadyIntervalIndex != nil
+        }.map(\.latencyMilliseconds))
+        return [
+            budget("mailbox.firstRows", firstRows, limit: 100,
+                   covered: firstRows.count > 0),
+            budget("jumps.cpu", run.phases.jumps.cpuMilliseconds, limit: 5,
+                   covered: rowCount >= scrollRowTarget && scrollSpan >= scrollRowTarget),
+            budget("wheel.cpu", run.phases.wheel.cpuMilliseconds, limit: 5,
+                   covered: rowCount >= scrollRowTarget && scrollSpan >= scrollRowTarget),
+            budget("selection.feedback", feedback, limit: 50,
+                   covered: selectionSpan >= selectionRowTarget),
+        ]
+    }
 }
 
 /// Per phase (jumps, wheel, selection, page deliveries) and overall.
@@ -243,4 +370,20 @@ struct BenchmarkBarResult: Codable, Equatable {
     var appkit: Double?
     var swiftui: Double?
     var limit: Double?
+}
+
+// Old synthetic reports predate the mode key; their meaning is unchanged.
+extension ListBenchmarkReport {
+    init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            ok: try values.decode(Bool.self, forKey: .ok),
+            failures: try values.decode([String].self, forKey: .failures),
+            environment: try values.decode(BenchmarkEnvironment.self, forKey: .environment),
+            runs: try values.decode([BenchmarkRun].self, forKey: .runs),
+            comparison: try values.decodeIfPresent(BenchmarkComparison.self, forKey: .comparison),
+            mode: try values.decodeIfPresent(BenchmarkMode.self, forKey: .mode) ?? .synthetic,
+            store: try values.decodeIfPresent(StoreBenchmarkResult.self, forKey: .store)
+        )
+    }
 }

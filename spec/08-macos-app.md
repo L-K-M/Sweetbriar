@@ -270,9 +270,11 @@ run on the CI artifact.
   this Mac, for both implementations, and shows the numbers to copy.
   Launching the app with `-runListBenchmark <report.json>` runs the
   same benchmark, writes the report there and quits (macOS CI uses it).
-  - Its **store mode** (M1.4) runs the production sidebar and list over
-    an imported mailbox: 30 alternating mailbox switches, then the
-    synthetic run's scroll and selection sequences. It never writes to
+  - Its **store mode** (M1.4), the **Run Store Benchmark** item and the
+    `-runStoreBenchmark <report.json>` launch argument, runs the
+    production sidebar and list over an imported mailbox: 30
+    alternating mailbox switches, then the synthetic run's scroll and
+    selection sequences. It never writes to
     the store and stops if the list generation moves. Switch timing
     runs from the sidebar click to the first frame showing the new
     rows; only nonempty mailboxes count toward first-row samples.
