@@ -1,9 +1,11 @@
 //! Inert HTML allow-list, applied after resource and CSS rewriting.
 
+use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::rc::Rc;
 
 use ammonia::{Builder, UrlRelative};
-use lol_html::html_content::{ContentType, TextType};
+use lol_html::html_content::ContentType;
 use lol_html::{RewriteStrSettings, doc_text, element, rewrite_str, text};
 use url::{Host, Url};
 
@@ -131,9 +133,9 @@ const MAX_HREF_BYTES: usize = 4096;
 const MAX_ATTRIBUTE_BYTES: usize = 256;
 /// Longest checked inline style kept.
 const MAX_STYLE_BYTES: usize = 4096;
-/// Stands in for `&` in text between the first parse and the last
-/// serialization (see `neutralize_text`). Private use, so mail never needs
-/// it as itself; a sender's own is passed through as a reference.
+/// Begins a character spelled `PLACEHOLDER` + hex + `;` in text between
+/// the first parse and the last serialization (see `neutralize_text`).
+/// Private use, and a sender's own is spelled that way too.
 const PLACEHOLDER: char = '\u{e000}';
 
 /// Per-destination link warnings in the spec/07 rendition manifest.
@@ -288,7 +290,7 @@ pub(crate) fn sanitize_run(
     let neutral = neutralize_text(decoded_html)?;
     // Normalize namespaces and malformed trees before collecting links, so
     // removed subtrees cannot contribute warning records.
-    let normalized = policy.clean(&neutral).to_string();
+    let normalized = keep_pre_newline(&policy.clean(&neutral).to_string())?;
     let anchors = std::cell::RefCell::new(Vec::<(Url, String)>::new());
     let rewritten = rewrite_str(
         &normalized,
@@ -334,7 +336,7 @@ pub(crate) fn sanitize_run(
         }
     }
     Ok(SanitizedHtml {
-        html: restore_text(&policy.clean(&rewritten).to_string())?,
+        html: restore_text(&keep_pre_newline(&policy.clean(&rewritten).to_string())?)?,
         links: destinations
             .into_iter()
             .map(|(destination, warnings)| LinkRecord {
@@ -377,52 +379,132 @@ fn destination_hosts(url: &Url) -> Vec<String> {
 /// times those characters: 100,000 `&` took 35 seconds. Which text nodes
 /// form only the tree builder knows (it joins text around ignored tags,
 /// fosters text out of tables, drops comments), so instead no such
-/// character reaches it: in ordinary text, before the first parse, every
-/// `&` becomes `PLACEHOLDER` (`&amp;` stays text as `\u{e000}amp;`) and
-/// every U+0080–U+00BF a reference spelled the same way. Every serialization
-/// is then linear; `restore_text` turns the placeholders back into `&`.
-/// Raw text (title, style) is left alone: the allow-list drops it.
+/// character reaches it. Before the first parse each text node's
+/// references are decoded as HTML5's tokenizer decodes them, at its
+/// boundaries, and every `&`, `<`, `>` and U+0080–U+00BF in the result is
+/// spelled `PLACEHOLDER` + hex + `;`. Every serialization is then linear;
+/// `restore_text` spells them back. Raw text is neutralized too, since
+/// lol_html and html5ever can disagree about it; html5ever's drops anyway.
 fn neutralize_text(html: &str) -> Result<String, HtmlSanitizeError> {
+    per_text_node(html, |text| {
+        // The parser turns source line breaks into line feeds before it
+        // decodes anything; only a referenced carriage return survives.
+        let text = text.replace("\r\n", "\n").replace('\r', "\n");
+        let mut neutral = String::with_capacity(text.len());
+        for c in decode_references(&text).chars() {
+            // A decoded carriage return too: as itself the next parse
+            // would normalize it to a line feed.
+            if matches!(
+                c,
+                '&' | '<' | '>' | '\r' | PLACEHOLDER | '\u{80}'..='\u{bf}'
+            ) {
+                neutral.push(PLACEHOLDER);
+                neutral.push_str(&format!("{:X};", u32::from(c)));
+            } else {
+                neutral.push(c);
+            }
+        }
+        neutral
+    })
+}
+
+/// HTML5 parsing drops a line feed right after `<pre>`, and html5ever
+/// 0.40's serializer doesn't put one back, so every pass (and the browser)
+/// would lose a leading blank line. After each serialization a `<pre>`
+/// whose text starts with a line feed gets one more for the next parse.
+fn keep_pre_newline(html: &str) -> Result<String, HtmlSanitizeError> {
+    let after_pre = Rc::new(Cell::new(false));
+    let on_element = Rc::clone(&after_pre);
     rewrite_str(
         html,
-        RewriteStrSettings::new().append_document_content_handler(doc_text!(|chunk| {
-            if chunk.text_type() != TextType::Data {
-                return Ok(());
-            }
-            let text = chunk.as_str();
-            if !text.contains(|c: char| {
-                c == '&' || c == PLACEHOLDER || ('\u{80}'..='\u{bf}').contains(&c)
-            }) {
-                return Ok(());
-            }
-            let mut neutral = String::with_capacity(text.len());
-            for c in text.chars() {
-                match c {
-                    '&' => neutral.push(PLACEHOLDER),
-                    PLACEHOLDER | '\u{80}'..='\u{bf}' => {
-                        neutral.push(PLACEHOLDER);
-                        neutral.push_str(&format!("#x{:X};", u32::from(c)));
-                    }
-                    c => neutral.push(c),
+        RewriteStrSettings::new()
+            .append_element_content_handler(element!("*", move |el| {
+                let is_pre = el.tag_name() == "pre";
+                on_element.set(is_pre);
+                if is_pre {
+                    let ended = Rc::clone(&on_element);
+                    let handler: lol_html::EndTagHandler<'static> = Box::new(move |_| {
+                        ended.set(false);
+                        Ok(())
+                    });
+                    el.on_end_tag(handler)?;
                 }
-            }
-            chunk.replace(&neutral, ContentType::Html);
-            Ok(())
-        })),
+                Ok(())
+            }))
+            .append_document_content_handler(doc_text!(|chunk| {
+                if chunk.as_str().is_empty() {
+                    return Ok(());
+                }
+                if after_pre.replace(false) && chunk.as_str().starts_with('\n') {
+                    chunk.before("\n", ContentType::Text);
+                }
+                Ok(())
+            })),
     )
     .map_err(|_| HtmlSanitizeError::Rewrite)
 }
 
 /// Undo `neutralize_text` in the final, serialized text: each placeholder
-/// is the `&` of a reference again. Attributes are never touched, so a
-/// placeholder there stays the literal character it was.
+/// spells its character again, `&`, `<` and `>` as references. Attributes
+/// are never touched.
 fn restore_text(html: &str) -> Result<String, HtmlSanitizeError> {
+    per_text_node(html, |text| {
+        let mut restored = String::with_capacity(text.len());
+        for c in restored_chars(text) {
+            match c {
+                '&' => restored.push_str("&amp;"),
+                '<' => restored.push_str("&lt;"),
+                '>' => restored.push_str("&gt;"),
+                '\r' => restored.push_str("&#13;"),
+                c => restored.push(c),
+            }
+        }
+        restored
+    })
+}
+
+/// A link's label as the reader shows it: the neutral text's characters.
+fn decode_label(label: &str) -> String {
+    restored_chars(label).collect()
+}
+
+/// The characters of neutral text, placeholders spelled out.
+fn restored_chars(text: &str) -> impl Iterator<Item = char> + '_ {
+    let mut rest = text;
+    std::iter::from_fn(move || {
+        let mut chars = rest.chars();
+        let c = chars.next()?;
+        if c == PLACEHOLDER
+            && let Some((hex, tail)) = chars.as_str().split_once(';')
+            && let Some(decoded) = u32::from_str_radix(hex, 16).ok().and_then(char::from_u32)
+        {
+            rest = tail;
+            return Some(decoded);
+        }
+        rest = chars.as_str();
+        Some(c)
+    })
+}
+
+/// Rewrite each ordinary text node of `html` whole (lol_html may hand it
+/// over in chunks) with `rewrite`, whose result is markup.
+fn per_text_node(
+    html: &str,
+    mut rewrite: impl FnMut(&str) -> String,
+) -> Result<String, HtmlSanitizeError> {
+    let mut node = String::new();
     rewrite_str(
         html,
         RewriteStrSettings::new().append_document_content_handler(doc_text!(|chunk| {
-            if chunk.text_type() == TextType::Data && chunk.as_str().contains(PLACEHOLDER) {
-                let restored = chunk.as_str().replace(PLACEHOLDER, "&");
-                chunk.replace(&restored, ContentType::Html);
+            // Every kind of text: lol_html and html5ever can disagree about
+            // raw text in malformed foreign content, and what html5ever
+            // treats as raw text the allow-list drops anyway.
+            node.push_str(chunk.as_str());
+            if chunk.last_in_text_node() {
+                chunk.replace(&rewrite(&node), ContentType::Html);
+                node.clear();
+            } else {
+                chunk.remove();
             }
             Ok(())
         })),
@@ -430,11 +512,79 @@ fn restore_text(html: &str) -> Result<String, HtmlSanitizeError> {
     .map_err(|_| HtmlSanitizeError::Rewrite)
 }
 
-/// A link's label as the reader shows it: the serialized text with its
-/// placeholders restored and every reference decoded, so an obfuscated
-/// `&#x70;aypal.example` still names its domain.
-fn decode_label(label: &str) -> String {
-    mail_parser::decoders::html::html_to_text(&label.replace(PLACEHOLDER, "&"))
+/// Decode `text`'s character references as HTML5's tokenizer does in
+/// ordinary text: html5ever 0.40's algorithm (tokenizer/char_ref), with
+/// the same entity table and C1 remapping, so the sanitized text reads
+/// exactly as the sender's would.
+fn decode_references(text: &str) -> String {
+    use markup5ever::data::{C1_REPLACEMENTS, NAMED_ENTITIES};
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find('&') {
+        out.push_str(&rest[..at]);
+        let after = &rest[at + 1..];
+        if let Some(numeric) = after.strip_prefix('#') {
+            let (hex, digits) = match numeric.strip_prefix(['x', 'X']) {
+                Some(hex) => (true, hex),
+                None => (false, numeric),
+            };
+            let base = if hex { 16 } else { 10 };
+            let length = digits
+                .find(|c: char| !c.is_digit(base))
+                .unwrap_or(digits.len());
+            if length == 0 {
+                // No digits: the `&` is literal, `#` and `x` plain text.
+                out.push('&');
+                rest = after;
+                continue;
+            }
+            let value = digits[..length]
+                .chars()
+                .try_fold(0u32, |n, d| {
+                    n.checked_mul(base)?.checked_add(d.to_digit(base)?)
+                })
+                .filter(|&n| n <= 0x10FFFF);
+            out.push(match value {
+                None | Some(0 | 0xD800..=0xDFFF) => '\u{fffd}',
+                Some(n @ 0x80..=0x9F) => C1_REPLACEMENTS[(n - 0x80) as usize]
+                    .unwrap_or_else(|| char::from_u32(n).expect("a C1 scalar")),
+                Some(n) => char::from_u32(n).expect("a checked scalar"),
+            });
+            let tail = &digits[length..];
+            rest = tail.strip_prefix(';').unwrap_or(tail);
+            continue;
+        }
+        // Named: extend while the table has the prefix, keeping the
+        // longest name with a value.
+        let mut best = None;
+        for (end, _) in after.char_indices().skip(1).chain([(after.len(), ' ')]) {
+            match NAMED_ENTITIES.get(&after[..end]) {
+                Some(&(first, second)) => {
+                    if first != 0 {
+                        best = Some((end, first, second));
+                    }
+                }
+                None => break,
+            }
+        }
+        match best {
+            Some((end, first, second)) => {
+                out.extend(
+                    [first, second]
+                        .into_iter()
+                        .filter(|&c| c != 0)
+                        .filter_map(char::from_u32),
+                );
+                rest = &after[end..];
+            }
+            None => {
+                out.push('&');
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 fn label_hosts(label: &str) -> impl Iterator<Item = String> + '_ {
@@ -853,6 +1003,83 @@ mod tests {
                 .clean(&first)
                 .to_string();
             assert!(!rescanned(&last), "the final pass");
+        }
+    }
+
+    /// Text reads as HTML5 reads it, references decoded at the boundaries
+    /// the tokenizer sees: a multi-character entity names its domain, a
+    /// comment still ends a reference, and a literal C1 character stays.
+    #[test]
+    fn text_decodes_as_html5_reads_it() {
+        let result =
+            sanitize_html(r#"<a href="https://fordbank.example/">&fjlig;ordbank.example</a>"#)
+                .unwrap();
+        assert_eq!(result.links()[0].warnings(), &[LinkWarning::TextDomain]);
+        for (html, shown) in [
+            ("<p>&#x<!--x-->41;</p>", "&#x41;"),
+            ("<p>&not<!--x-->in;</p>", "\u{ac}in;"),
+            ("<p>&#65x &notit; &amp</p>", "Ax \u{ac}it; &"),
+            ("<p>\u{80}&#x80;</p>", "\u{80}\u{20ac}"),
+        ] {
+            let text =
+                mail_parser::decoders::html::html_to_text(sanitize_html(html).unwrap().html());
+            assert_eq!(text.trim(), shown, "{html}");
+        }
+    }
+
+    /// lol_html and html5ever disagree about raw text in malformed foreign
+    /// content; text html5ever keeps must be neutral whatever lol_html
+    /// called it. A decoded carriage return survives the reparse.
+    #[test]
+    fn text_is_neutral_whatever_its_context() {
+        let dense = format!(
+            "<svg><td><foreignObject></td><xmp><pre>{}\u{e000}3C;</pre>",
+            "&amp;".repeat(2_000)
+        );
+        let first = policy(&HashSet::new(), ResourcePolicy::Strip)
+            .clean(&neutralize_text(&dense).unwrap())
+            .to_string();
+        assert!(!rescanned(&first), "the first pass");
+        let result = sanitize_html(&dense).unwrap();
+        assert!(
+            !result.html().contains("&amp;amp;"),
+            "{}",
+            &result.html()[..200]
+        );
+        assert!(
+            !result.html().contains("&lt;</pre>"),
+            "a sender's placeholder"
+        );
+        for (html, sanitized) in [
+            ("<pre>&#13;X</pre>", "<pre>&#13;X</pre>"),
+            ("<pre>&#13;&#10;X</pre>", "<pre>&#13;\nX</pre>"),
+        ] {
+            let result = sanitize_html(html).unwrap();
+            assert!(
+                result.html().contains(sanitized),
+                "{html}: {:?}",
+                result.html()
+            );
+        }
+    }
+
+    /// Every HTML5 parse drops the line feed right after `<pre>`, the
+    /// browser's included, so a `<pre>` keeps the blank lines it shows.
+    #[test]
+    fn pre_keeps_its_leading_blank_lines() {
+        for (html, sanitized) in [
+            ("<pre>\ncode</pre>", "<pre>code</pre>"),
+            ("<pre>\n\ncode</pre>", "<pre>\n\ncode</pre>"),
+            ("<pre>\n\n\ncode</pre>", "<pre>\n\n\ncode</pre>"),
+            ("<pre></pre>\ntext", "<pre></pre>\ntext"),
+            ("<pre><b>\nx</b></pre>", "<pre><b>\nx</b></pre>"),
+        ] {
+            let result = sanitize_html(html).unwrap();
+            assert!(
+                result.html().contains(sanitized),
+                "{html:?}: {:?}",
+                result.html()
+            );
         }
     }
 
