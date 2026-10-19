@@ -58,6 +58,38 @@ public final class CoreBridge: Sendable {
         )
     }
 
+    /// Read the message headers, account and read-only metadata.
+    public func getMessage(messageId: Int64) async throws -> ReaderMessage {
+        let token = SweetbriarCore.CancelToken()
+        let value = try await Self.withCancellation(token: token) {
+            try await self.core.getMessage(token: token, messageId: messageId)
+        }
+        return ReaderMessage(value)
+    }
+
+    /// Open a body file. Release the lease when the reader discards it.
+    public func openBody(messageID: Int64, preferred: BodyKind) async throws -> BodyLease {
+        let token = SweetbriarCore.CancelToken()
+        let value = try await Self.withCancellation(token: token) {
+            try await self.core.openBody(token: token, messageId: messageID, preferred: preferred.generated)
+        }
+        return BodyLease(value)
+    }
+
+    /// Revoke immediately; file cleanup runs on the core's worker.
+    public func releaseLease(_ leaseID: String) {
+        core.releaseLease(leaseId: leaseID)
+    }
+
+    /// Resolve a list selection to its logical message.
+    public func messageForOccurrence(occurrenceId: Int64) async throws -> Int64 {
+        let token = SweetbriarCore.CancelToken()
+        let value = try await Self.withCancellation(token: token) {
+            try await self.core.messageForOccurrence(token: token, occurrenceId: occurrenceId)
+        }
+        return value
+    }
+
     /// Every registered setting with its effective value. The snapshot
     /// also goes to the batcher for `@MainActor` observers.
     public func settings() async throws -> [Setting] {
@@ -684,6 +716,122 @@ extension ListWindow {
             hasMoreAfter: generated.hasMoreAfter,
             hasMoreBefore: generated.hasMoreBefore,
             total: ListCount(generated.total)
+        )
+    }
+}
+
+extension BodyAvailability {
+    fileprivate init(_ generated: SweetbriarCore.BodyAvailability) {
+        switch generated {
+        case .notAcquired: self = .notAcquired
+        case .acquired: self = .acquired
+        case .acquisitionMissing: self = .acquisitionMissing
+        case .acquisitionCorrupt: self = .acquisitionCorrupt
+        }
+    }
+}
+
+extension ReaderAddress {
+    fileprivate init(_ generated: SweetbriarCore.ReaderAddress) {
+        self.init(
+            name: generated.name,
+            address: generated.address
+        )
+    }
+}
+
+extension ReaderHeaders {
+    fileprivate init(_ generated: SweetbriarCore.ReaderHeaders) {
+        self.init(
+            from: generated.from.map { ReaderAddress($0) },
+            to: generated.to.map { ReaderAddress($0) },
+            cc: generated.cc.map { ReaderAddress($0) },
+            date: generated.date,
+            subject: generated.subject,
+            messageId: generated.messageId
+        )
+    }
+}
+
+extension ReaderOccurrence {
+    fileprivate init(_ generated: SweetbriarCore.ReaderOccurrence) {
+        self.init(
+            occurrenceId: generated.occurrenceId,
+            mailboxId: generated.mailboxId,
+            mailboxName: generated.mailboxName
+        )
+    }
+}
+
+extension ReaderTag {
+    fileprivate init(_ generated: SweetbriarCore.ReaderTag) {
+        self.init(
+            tagId: generated.tagId,
+            name: generated.name,
+            colorSrgb: generated.colorSrgb
+        )
+    }
+}
+
+extension ReaderMessage {
+    fileprivate init(_ generated: SweetbriarCore.ReaderMessage) {
+        self.init(
+            messageId: generated.messageId,
+            headers: ReaderHeaders(generated.headers),
+            accountId: generated.accountId,
+            accountDisplayName: generated.accountDisplayName,
+            occurrences: generated.occurrences.map { ReaderOccurrence($0) },
+            threadId: generated.threadId,
+            tags: generated.tags.map { ReaderTag($0) },
+            note: generated.note,
+            bodyAvailability: BodyAvailability(generated.bodyAvailability)
+        )
+    }
+}
+
+extension BodyKind {
+    fileprivate var generated: SweetbriarCore.BodyKind {
+        switch self {
+        case .sanitizedHtml: .sanitizedHtml
+        case .plainText: .plainText
+        case .source: .source
+        }
+    }
+
+    fileprivate init(_ generated: SweetbriarCore.BodyKind) {
+        switch generated {
+        case .sanitizedHtml: self = .sanitizedHtml
+        case .plainText: self = .plainText
+        case .source: self = .source
+        }
+    }
+}
+
+extension RenderWarningCode {
+    fileprivate init(_ generated: SweetbriarCore.RenderWarningCode) {
+        switch generated {
+        case .partialParse: self = .partialParse
+        case .charsetReplaced: self = .charsetReplaced
+        case .unsupportedContent: self = .unsupportedContent
+        case .missingCid: self = .missingCid
+        case .ambiguousCid: self = .ambiguousCid
+        case .unsafeUrl: self = .unsafeUrl
+        case .renditionLimit: self = .renditionLimit
+        case .countSaturated: self = .countSaturated
+        }
+    }
+}
+
+extension BodyLease {
+    fileprivate init(_ generated: SweetbriarCore.BodyLease) {
+        self.init(
+            leaseId: generated.leaseId, kind: BodyKind(generated.kind),
+            filePath: generated.filePath, byteLength: generated.byteLength,
+            remoteContentBlocked: generated.remoteContentBlocked,
+            warnings: generated.warnings.map {
+                RenderWarning(code: RenderWarningCode($0.code), partId: $0.partId)
+            },
+            manifestPath: generated.manifestPath
         )
     }
 }

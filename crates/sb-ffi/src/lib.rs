@@ -9,8 +9,8 @@
 //! runtime-agnostic lock for their duration and `shutdown` takes the
 //! write side, so it waits for calls in flight; a call after
 //! `shutdown` answers `Unavailable`; a second `shutdown` does
-//! nothing. Exported functions are async — the foreign caller polls
-//! them, and nothing blocks the caller's thread. The service's
+//! nothing. Async functions are polled by the foreign caller; synchronous
+//! lease release revokes in memory and queues cleanup on the engine. The service's
 //! idempotency-key helper is deliberately not exported: Swift makes
 //! its own UUIDs.
 //!
@@ -22,6 +22,7 @@ mod api;
 mod cancel;
 mod error;
 mod imports;
+mod messages;
 mod sidebar;
 mod subscribe;
 mod windows;
@@ -38,3 +39,8 @@ pub use subscribe::{Subscription, WindowEvent};
 pub use windows::{Anchor, Count, ListRow, MailboxRole, Window, WindowIds, WindowSpec};
 
 uniffi::setup_scaffolding!();
+
+pub use messages::{
+    BodyAvailability, BodyKind, BodyLease, ReaderAddress, ReaderHeaders, ReaderMessage,
+    ReaderOccurrence, ReaderTag, RenderWarning, RenderWarningCode,
+};

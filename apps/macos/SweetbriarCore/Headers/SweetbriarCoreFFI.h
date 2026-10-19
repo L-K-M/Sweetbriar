@@ -293,6 +293,26 @@ uint64_t uniffi_sb_ffi_fn_method_core_import_report(uint64_t ptr, uint64_t token
 uint64_t uniffi_sb_ffi_fn_method_core_start_import(uint64_t ptr, uint64_t token, RustBuffer idempotency_key, RustBuffer paths, RustBuffer target
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_GET_MESSAGE
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_GET_MESSAGE
+uint64_t uniffi_sb_ffi_fn_method_core_get_message(uint64_t ptr, uint64_t token, int64_t message_id
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_MESSAGE_FOR_OCCURRENCE
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_MESSAGE_FOR_OCCURRENCE
+uint64_t uniffi_sb_ffi_fn_method_core_message_for_occurrence(uint64_t ptr, uint64_t token, int64_t occurrence_id
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_OPEN_BODY
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_OPEN_BODY
+uint64_t uniffi_sb_ffi_fn_method_core_open_body(uint64_t ptr, uint64_t token, int64_t message_id, RustBuffer preferred
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_RELEASE_LEASE
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_RELEASE_LEASE
+void uniffi_sb_ffi_fn_method_core_release_lease(uint64_t ptr, RustBuffer lease_id, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_ACCOUNTS
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_ACCOUNTS
 uint64_t uniffi_sb_ffi_fn_method_core_accounts(uint64_t ptr, uint64_t token
@@ -702,6 +722,30 @@ uint16_t uniffi_sb_ffi_checksum_method_core_import_report(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_START_IMPORT
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_START_IMPORT
 uint16_t uniffi_sb_ffi_checksum_method_core_start_import(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_GET_MESSAGE
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_GET_MESSAGE
+uint16_t uniffi_sb_ffi_checksum_method_core_get_message(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_MESSAGE_FOR_OCCURRENCE
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_MESSAGE_FOR_OCCURRENCE
+uint16_t uniffi_sb_ffi_checksum_method_core_message_for_occurrence(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_OPEN_BODY
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_OPEN_BODY
+uint16_t uniffi_sb_ffi_checksum_method_core_open_body(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_RELEASE_LEASE
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_RELEASE_LEASE
+uint16_t uniffi_sb_ffi_checksum_method_core_release_lease(void
     
 );
 #endif
