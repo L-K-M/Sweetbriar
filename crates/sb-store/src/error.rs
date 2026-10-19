@@ -3,6 +3,7 @@
 
 use std::error::Error;
 use std::fmt;
+use std::io;
 
 /// A store failure, mapped one-to-one onto `CoreError` variants.
 /// `Clone` because a stopped writer resolves every queued future with
@@ -16,8 +17,14 @@ pub enum StoreError {
     Locked,
     /// The store can't be used: a synced or network location, a root it
     /// didn't create, a setting that won't stick, a failed flush
-    /// (`CoreError::Unavailable`).
-    Unavailable { reason: String },
+    /// (`CoreError::Unavailable`). `io_kind` is the native kind of the
+    /// filesystem or SQLite-environment failure behind it, when known
+    /// (spec/03 "Search writes"); callers classify this typed cause,
+    /// never the formatted `reason`.
+    Unavailable {
+        reason: String,
+        io_kind: Option<io::ErrorKind>,
+    },
     /// The store is damaged: a missing layout directory, an unreadable
     /// `state.sqlite`, an object that failed verification
     /// (`CoreError::Corrupt`).
@@ -45,6 +52,27 @@ impl StoreError {
     pub(crate) fn unavailable(reason: impl Into<String>) -> Self {
         Self::Unavailable {
             reason: reason.into(),
+            io_kind: None,
+        }
+    }
+
+    /// `unavailable` carrying the known native kind of the underlying
+    /// I/O failure, attached without parsing the formatted reason.
+    pub(crate) fn unavailable_io(reason: impl Into<String>, kind: io::ErrorKind) -> Self {
+        Self::Unavailable {
+            reason: reason.into(),
+            io_kind: Some(kind),
+        }
+    }
+
+    /// The native kind of the I/O failure behind `Unavailable`, when it
+    /// was preserved; `None` for the other variants and for unavailable
+    /// causes with no known kind. Read-only: the kind is set where the
+    /// failure is observed.
+    pub fn io_kind(&self) -> Option<io::ErrorKind> {
+        match self {
+            Self::Unavailable { io_kind, .. } => *io_kind,
+            _ => None,
         }
     }
 
@@ -74,7 +102,9 @@ impl fmt::Display for StoreError {
         match self {
             Self::NotFound { what } => write!(f, "not found: {what}"),
             Self::Locked => f.write_str("the store is owned by another process"),
-            Self::Unavailable { reason } => write!(f, "the store is unavailable: {reason}"),
+            Self::Unavailable { reason, .. } => {
+                write!(f, "the store is unavailable: {reason}")
+            }
             Self::Corrupt { detail } => write!(f, "the store is corrupt: {detail}"),
             Self::NewerStore { app_version } => write!(
                 f,
@@ -88,3 +118,51 @@ impl fmt::Display for StoreError {
 }
 
 impl Error for StoreError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `unavailable` carries no known cause; `unavailable_io` carries
+    /// the kind it was given, and `io_kind` never invents one for the
+    /// other variants (spec/03 "Search writes").
+    #[test]
+    fn io_kind_is_known_only_where_a_failure_was_seen() {
+        let plain = StoreError::unavailable("body is not acquired");
+        assert_eq!(plain.io_kind(), None);
+        let typed = StoreError::unavailable_io(
+            "cannot open the object: permission denied",
+            io::ErrorKind::PermissionDenied,
+        );
+        assert_eq!(typed.io_kind(), Some(io::ErrorKind::PermissionDenied));
+        for error in [
+            StoreError::not_found("object x"),
+            StoreError::corrupt("detail"),
+            StoreError::internal("detail"),
+            StoreError::Locked,
+            StoreError::conflict("detail"),
+        ] {
+            assert_eq!(error.io_kind(), None, "{error:?}");
+        }
+    }
+
+    /// Cloning preserves the typed cause and `Display` still spells
+    /// only the reason, so formatted output is unchanged.
+    #[test]
+    fn clone_keeps_the_kind_and_display_keeps_the_reason() {
+        let error = StoreError::unavailable_io(
+            "cannot read the object: storage is full",
+            io::ErrorKind::StorageFull,
+        );
+        let cloned = error.clone();
+        assert_eq!(cloned.io_kind(), Some(io::ErrorKind::StorageFull));
+        assert_eq!(
+            cloned.to_string(),
+            "the store is unavailable: cannot read the object: storage is full"
+        );
+        assert_eq!(
+            StoreError::unavailable("same reason, no cause").to_string(),
+            "the store is unavailable: same reason, no cause"
+        );
+    }
+}

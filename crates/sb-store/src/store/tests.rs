@@ -412,7 +412,7 @@ fn pragma_mismatch_is_unavailable_and_releases_the_lease() {
     )
     .unwrap_err()
     {
-        StoreError::Unavailable { reason } => {
+        StoreError::Unavailable { reason, .. } => {
             assert!(reason.contains("journal_mode"), "{reason}");
         }
         err => panic!("expected Unavailable, got {err:?}"),
@@ -616,7 +616,7 @@ fn non_local_locations_are_unavailable_and_create_nothing() {
             ..HookedFs::new(&paths)
         };
         match open(&paths, &test_seams(Arc::new(fs))).unwrap_err() {
-            StoreError::Unavailable { reason } => {
+            StoreError::Unavailable { reason, .. } => {
                 assert!(reason.contains(&named), "{reason}");
             }
             err => panic!("expected Unavailable, got {err:?}"),
@@ -712,7 +712,7 @@ fn unrelated_data_root_is_unavailable_and_untouched() {
     fs::create_dir(root).unwrap();
     fs::write(root.join("stray.txt"), b"mine").unwrap();
     match open(&paths, &test_seams(real_fs())).unwrap_err() {
-        StoreError::Unavailable { reason } => {
+        StoreError::Unavailable { reason, .. } => {
             assert!(reason.contains("stray.txt"), "{reason}");
         }
         err => panic!("expected Unavailable, got {err:?}"),
@@ -819,7 +819,7 @@ fn failed_creation_flush_is_unavailable_and_retryable() {
             ..HookedFs::new(&paths)
         };
         match open(&paths, &test_seams(Arc::new(fs))).unwrap_err() {
-            StoreError::Unavailable { reason } => {
+            StoreError::Unavailable { reason, .. } => {
                 assert!(reason.contains("injected flush failure"), "{reason}");
             }
             err => panic!("expected Unavailable, got {err:?}"),

@@ -50,20 +50,22 @@ fn queue(conn: &mut Connection, count: usize, time: i64) {
     tx.commit().unwrap();
 }
 
-fn batch(conn: &Connection, text: &str) -> Vec<IndexPublication> {
-    pending_batch(conn, MAX_INDEX_BATCH)
-        .unwrap()
+fn batch(conn: &Connection, text: &str) -> (IndexFence, Vec<IndexPublication>) {
+    let captured = pending_batch(conn, MAX_INDEX_BATCH).unwrap();
+    let documents = captured
+        .documents
         .into_iter()
         .map(|pending| IndexPublication {
             pending,
             document: Some(document(text)),
         })
-        .collect()
+        .collect();
+    (captured.fence, documents)
 }
 
-fn publish(conn: &mut Connection, batch: &[IndexPublication]) -> usize {
+fn publish(conn: &mut Connection, fence: IndexFence, batch: &[IndexPublication]) -> usize {
     let tx = conn.transaction().unwrap();
-    let count = publish_batch(&tx, 1, batch).unwrap();
+    let count = publish_batch(&tx, fence, batch).unwrap();
     tx.commit().unwrap();
     count
 }
@@ -99,7 +101,7 @@ fn snapshot(conn: &Connection) -> String {
         .unwrap()
         .collect::<Result<_, _>>()
         .unwrap();
-    let pending = pending_batch(conn, MAX_INDEX_BATCH).unwrap();
+    let pending = pending_batch(conn, MAX_INDEX_BATCH).unwrap().documents;
     format!(
         "{docs:?}/{pending:?}/{postings:?}/{:?}/{:?}/{}",
         hits(conn, "oldtoken"),
@@ -121,7 +123,7 @@ fn v1_upgrade_backfills_all_acquisitions_and_preserves_pending_age() {
     )
     .unwrap();
     run_migrations(&mut conn, &seams, MIGRATIONS).unwrap();
-    let pending = pending_batch(&conn, 200).unwrap();
+    let pending = pending_batch(&conn, 200).unwrap().documents;
     assert_eq!(
         pending.iter().map(|p| p.doc_id).collect::<Vec<_>>(),
         [99, 2, 1, 3]
@@ -136,7 +138,7 @@ fn v1_upgrade_backfills_all_acquisitions_and_preserves_pending_age() {
     assert_eq!(target_version(&conn).unwrap(), 1);
     assert_eq!(search_generation(&conn).unwrap(), 1);
     queue(&mut conn, 1, 100);
-    let pending = pending_batch(&conn, 200).unwrap();
+    let pending = pending_batch(&conn, 200).unwrap().documents;
     assert_eq!(pending[2].revision, 5);
     assert_eq!(pending[2].enqueued_at, now(1));
     let plan: String = conn.query_row(
@@ -153,18 +155,18 @@ fn concurrent_writer_requeue_rejects_only_the_stale_document() {
         acquisitions(tx, 2);
         enqueue(tx, &[(1, IndexReason::New), (2, IndexReason::New)], now(10))
     });
-    let extracted = reading(&store, |tx| Ok(batch(tx, "oldtoken")));
+    let (fence, extracted) = reading(&store, |tx| Ok(batch(tx, "oldtoken")));
     // A distinct writer submission commits while extraction holds old tokens.
     writing(&store, |tx| {
         enqueue(tx, &[(1, IndexReason::Reextract)], now(20))
     });
     let stale_revision = extracted[0].pending.revision;
     assert_eq!(
-        writing(&store, move |tx| publish_batch(tx, 1, &extracted)),
+        writing(&store, move |tx| publish_batch(tx, fence, &extracted)),
         1
     );
     reading(&store, |tx| {
-        let pending = pending_batch(tx, 200)?;
+        let pending = pending_batch(tx, 200)?.documents;
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].doc_id, 1);
         assert!(pending[0].revision > stale_revision);
@@ -181,14 +183,14 @@ fn old_target_and_already_acknowledged_tokens_write_nothing() {
     let mut conn = connection();
     acquisitions(&conn, 1);
     queue(&mut conn, 1, 1);
-    let batch = batch(&conn, "oldtoken");
+    let (fence, batch) = batch(&conn, "oldtoken");
     conn.execute(
         "UPDATE store_meta SET value='2' WHERE key='search_extractor_version'",
         [],
     )
     .unwrap();
     let before = snapshot(&conn);
-    assert_eq!(publish(&mut conn, &batch), 0);
+    assert_eq!(publish(&mut conn, fence, &batch), 0);
     assert_eq!(snapshot(&conn), before);
     assert_eq!(target_version(&conn).unwrap(), 2);
     conn.execute(
@@ -196,9 +198,9 @@ fn old_target_and_already_acknowledged_tokens_write_nothing() {
         [],
     )
     .unwrap();
-    assert_eq!(publish(&mut conn, &batch), 1);
+    assert_eq!(publish(&mut conn, fence, &batch), 1);
     let after = snapshot(&conn);
-    assert_eq!(publish(&mut conn, &batch), 0);
+    assert_eq!(publish(&mut conn, fence, &batch), 0);
     assert_eq!(snapshot(&conn), after);
 }
 
@@ -207,18 +209,18 @@ fn reextraction_replaces_postings_and_failed_rows_have_no_fts_entry() {
     let mut conn = connection();
     acquisitions(&conn, 1);
     queue(&mut conn, 1, 1);
-    let first = batch(&conn, "oldtoken");
-    publish(&mut conn, &first);
+    let (fence, first) = batch(&conn, "oldtoken");
+    publish(&mut conn, fence, &first);
     assert_eq!(hits(&conn, "oldtoken"), [1]);
     queue(&mut conn, 1, 2);
-    let replacement = batch(&conn, "newtoken");
-    publish(&mut conn, &replacement);
+    let (fence, replacement) = batch(&conn, "newtoken");
+    publish(&mut conn, fence, &replacement);
     assert!(hits(&conn, "oldtoken").is_empty());
     assert_eq!(hits(&conn, "newtoken"), [1]);
     queue(&mut conn, 1, 3);
-    let mut failed = batch(&conn, "");
+    let (fence, mut failed) = batch(&conn, "");
     failed[0].document.as_mut().unwrap().state = IndexState::Failed;
-    publish(&mut conn, &failed);
+    publish(&mut conn, fence, &failed);
     assert!(hits(&conn, "newtoken").is_empty());
     assert_eq!(
         conn.query_row("SELECT state FROM d_search_docs", [], |r| r
@@ -226,7 +228,7 @@ fn reextraction_replaces_postings_and_failed_rows_have_no_fts_entry() {
             .unwrap(),
         "failed"
     );
-    assert!(pending_batch(&conn, 200).unwrap().is_empty());
+    assert!(pending_batch(&conn, 200).unwrap().documents.is_empty());
     assert_eq!(
         conn.query_row(
             "SELECT count(*) FROM d_search_fts_docsize WHERE id=1",
@@ -238,17 +240,19 @@ fn reextraction_replaces_postings_and_failed_rows_have_no_fts_entry() {
     );
     // A failed old row has no posting to delete; a later retry still works.
     queue(&mut conn, 1, 4);
-    let retry = batch(&conn, "newtoken");
-    publish(&mut conn, &retry);
+    let (fence, retry) = batch(&conn, "newtoken");
+    publish(&mut conn, fence, &retry);
     assert_eq!(hits(&conn, "newtoken"), [1]);
     conn.execute("UPDATE acquisitions SET object_state='missing'", [])
         .unwrap();
     let tx = conn.transaction().unwrap();
     enqueue(&tx, &[(1, IndexReason::Delete)], now(5)).unwrap();
     tx.commit().unwrap();
-    let pending = pending_batch(&conn, 200).unwrap().remove(0);
+    let captured = pending_batch(&conn, 200).unwrap();
+    let pending = captured.documents.into_iter().next().unwrap();
     publish(
         &mut conn,
+        captured.fence,
         &[IndexPublication {
             pending,
             document: None,
@@ -274,39 +278,39 @@ fn count_and_byte_bounds_reject_without_acknowledging_work() {
     let mut conn = connection();
     acquisitions(&conn, 201);
     assert!(pending_batch(&conn, 201).is_err());
-    assert!(pending_batch(&conn, 0).unwrap().is_empty());
+    assert!(pending_batch(&conn, 0).unwrap().documents.is_empty());
     let tx = conn.transaction().unwrap();
     assert!(enqueue(&tx, &vec![(1, IndexReason::New); 201], now(1)).is_err());
     tx.rollback().unwrap();
     queue(&mut conn, 200, 1);
-    let publications = batch(&conn, "newtoken");
+    let (fence, publications) = batch(&conn, "newtoken");
     let before = snapshot(&conn);
     let tx = conn.transaction().unwrap();
     let mut too_many = publications.clone();
     too_many.push(publications[0].clone());
-    assert!(publish_batch(&tx, 1, &too_many).is_err());
+    assert!(publish_batch(&tx, fence, &too_many).is_err());
     tx.rollback().unwrap();
     assert_eq!(snapshot(&conn), before);
     // Exactly 200 documents succeeds and advances the generation once.
-    assert_eq!(publish(&mut conn, &publications), 200);
+    assert_eq!(publish(&mut conn, fence, &publications), 200);
     queue(&mut conn, 3, 2);
-    let mut large = batch(&conn, "newtoken");
+    let (fence, mut large) = batch(&conn, "newtoken");
     large[0].document = Some(document(&"x".repeat(1_000_000)));
     large[1].document = Some(document(&"y".repeat(1_000_000)));
     let tx = conn.transaction().unwrap();
-    assert!(publish_batch(&tx, 1, &large).is_err());
+    assert!(publish_batch(&tx, fence, &large).is_err());
     tx.rollback().unwrap();
-    assert_eq!(pending_batch(&conn, 200).unwrap().len(), 3);
+    assert_eq!(pending_batch(&conn, 200).unwrap().documents.len(), 3);
     // Exactly 2,000,000 new column bytes fits; the third remains pending.
-    assert_eq!(publish(&mut conn, &large[..2]), 2);
-    assert_eq!(pending_batch(&conn, 200).unwrap().len(), 1);
+    assert_eq!(publish(&mut conn, fence, &large[..2]), 2);
+    assert_eq!(pending_batch(&conn, 200).unwrap().documents.len(), 1);
 }
 
-fn prepare_cuts(conn: &mut Connection) -> Vec<IndexPublication> {
+fn prepare_cuts(conn: &mut Connection) -> (IndexFence, Vec<IndexPublication>) {
     acquisitions(conn, 4);
     queue(conn, 4, 1);
-    let old = batch(conn, "oldtoken");
-    publish(conn, &old);
+    let (fence, old) = batch(conn, "oldtoken");
+    publish(conn, fence, &old);
     conn.execute(
         "UPDATE acquisitions SET object_state='missing' WHERE acquisition_id=4",
         [],
@@ -328,8 +332,8 @@ fn prepare_cuts(conn: &mut Connection) -> Vec<IndexPublication> {
     cut_batch(conn)
 }
 
-fn cut_batch(conn: &Connection) -> Vec<IndexPublication> {
-    let mut batch = batch(conn, "newtoken");
+fn cut_batch(conn: &Connection) -> (IndexFence, Vec<IndexPublication>) {
+    let (fence, mut batch) = batch(conn, "newtoken");
     let partial = batch[1].document.as_mut().unwrap();
     partial.state = IndexState::Partial;
     partial.truncated_fields = vec!["body_authored".to_owned()];
@@ -338,7 +342,7 @@ fn cut_batch(conn: &Connection) -> Vec<IndexPublication> {
         ..document("")
     });
     batch[3].document = None;
-    batch
+    (fence, batch)
 }
 
 // 1 version read, 6/6/5/4 operations for indexed/partial/failed/delete,
@@ -350,7 +354,7 @@ fn rollback_at_every_publication_operation_preserves_the_whole_old_batch() {
     for nth in 1..PUBLICATION_CUTS {
         // post-commit is covered by the process-kill test
         let mut conn = connection();
-        let batch = prepare_cuts(&mut conn);
+        let (fence, batch) = prepare_cuts(&mut conn);
         let before = snapshot(&conn);
         let mut calls = 0;
         let mut cut = || {
@@ -363,13 +367,13 @@ fn rollback_at_every_publication_operation_preserves_the_whole_old_batch() {
         let result = (|| {
             cut()?;
             let tx = conn.transaction().unwrap();
-            publish_with_cut(&tx, 1, &batch, &mut cut)?;
+            publish_with_cut(&tx, fence, &batch, &mut cut)?;
             cut()?;
             tx.commit().map_err(sql_error)
         })();
         assert!(result.is_err(), "cut {nth} was not exercised");
         assert_eq!(snapshot(&conn), before, "cut {nth}");
-        assert_eq!(publish(&mut conn, &batch), 4);
+        assert_eq!(publish(&mut conn, fence, &batch), 4);
     }
 }
 
@@ -386,7 +390,7 @@ fn publication_cut_child() {
         "PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA trusted_schema=OFF;",
     )
     .unwrap();
-    let batch = cut_batch(&conn);
+    let (fence, batch) = cut_batch(&conn);
     let fs = CutFs::new(real_fs(), nth);
     let mut cut = || {
         fs.metadata(Path::new(&root))
@@ -395,7 +399,7 @@ fn publication_cut_child() {
     };
     cut().unwrap();
     let tx = conn.transaction().unwrap();
-    publish_with_cut(&tx, 1, &batch, &mut cut).unwrap();
+    publish_with_cut(&tx, fence, &batch, &mut cut).unwrap();
     cut().unwrap();
     tx.commit().unwrap();
     cut().unwrap();
@@ -406,9 +410,9 @@ fn publication_cut_child() {
 fn crash_cuts_leave_old_or_new_docs_postings_queue_and_generation_never_a_mix() {
     let scratch = ScratchDir::new("index-cuts");
     let mut reference = connection();
-    let batch = prepare_cuts(&mut reference);
+    let (fence, batch) = prepare_cuts(&mut reference);
     let old = snapshot(&reference);
-    publish(&mut reference, &batch);
+    publish(&mut reference, fence, &batch);
     let new = snapshot(&reference);
     assert_ne!(old, new);
     let mut saw_old = false;
@@ -437,8 +441,8 @@ fn crash_cuts_leave_old_or_new_docs_postings_queue_and_generation_never_a_mix() 
             saw_old |= actual == old;
             saw_new |= actual == new;
             if actual == old {
-                let batch = cut_batch(&conn);
-                assert_eq!(publish(&mut conn, &batch), 4);
+                let (fence, batch) = cut_batch(&conn);
+                assert_eq!(publish(&mut conn, fence, &batch), 4);
             }
             assert_eq!(snapshot(&conn), new);
             let check: String = conn
@@ -457,10 +461,10 @@ fn every_fts_column_is_deleted_and_reinserted_with_its_own_values() {
     acquisitions(&conn, 1);
     for token in ["oldtoken", "newtoken"] {
         queue(&mut conn, 1, 1);
-        let mut batch = batch(&conn, "");
+        let (fence, mut batch) = batch(&conn, "");
         batch[0].document.as_mut().unwrap().columns =
             std::array::from_fn(|i| format!("{token}{i}"));
-        publish(&mut conn, &batch);
+        publish(&mut conn, fence, &batch);
     }
     for (i, field) in FIELDS.iter().enumerate() {
         assert!(hits(&conn, &format!("{field}:oldtoken{i}")).is_empty());
@@ -473,7 +477,7 @@ fn invalid_documents_and_duplicate_tokens_leave_work_pending() {
     let mut conn = connection();
     acquisitions(&conn, 1);
     queue(&mut conn, 1, 1);
-    let good = batch(&conn, "newtoken");
+    let (fence, good) = batch(&conn, "newtoken");
     let before = snapshot(&conn);
     let mut bad_docs = vec![];
     let mut doc = document("newtoken");
@@ -504,12 +508,12 @@ fn invalid_documents_and_duplicate_tokens_leave_work_pending() {
         let mut batch = good.clone();
         batch[0].document = Some(bad);
         let tx = conn.transaction().unwrap();
-        assert!(publish_batch(&tx, 1, &batch).is_err());
+        assert!(publish_batch(&tx, fence, &batch).is_err());
         tx.rollback().unwrap();
         assert_eq!(snapshot(&conn), before);
     }
     let tx = conn.transaction().unwrap();
-    assert!(publish_batch(&tx, 1, &[good[0].clone(), good[0].clone()]).is_err());
+    assert!(publish_batch(&tx, fence, &[good[0].clone(), good[0].clone()]).is_err());
     tx.rollback().unwrap();
     assert_eq!(snapshot(&conn), before);
 }
@@ -523,17 +527,18 @@ fn restored_bytes_supersede_delete_and_preserve_the_pending_age() {
     let tx = conn.transaction().unwrap();
     enqueue(&tx, &[(1, IndexReason::Delete)], now(10)).unwrap();
     tx.commit().unwrap();
+    let delete_fence = pending_batch(&conn, 1).unwrap();
     let delete = IndexPublication {
-        pending: pending_batch(&conn, 1).unwrap().remove(0),
+        pending: delete_fence.documents.into_iter().next().unwrap(),
         document: None,
     };
     conn.execute("UPDATE acquisitions SET object_state='published'", [])
         .unwrap();
     queue(&mut conn, 1, 20);
     let before = snapshot(&conn);
-    assert_eq!(publish(&mut conn, &[delete]), 0);
+    assert_eq!(publish(&mut conn, delete_fence.fence, &[delete]), 0);
     assert_eq!(snapshot(&conn), before);
-    let pending = pending_batch(&conn, 1).unwrap().remove(0);
+    let pending = pending_batch(&conn, 1).unwrap().documents.remove(0);
     assert_eq!(pending.reason, IndexReason::Reextract);
     assert_eq!(pending.enqueued_at, now(10));
     let tx = conn.transaction().unwrap();

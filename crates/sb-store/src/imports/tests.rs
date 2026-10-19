@@ -675,7 +675,7 @@ fn a_newer_parser_never_replaces_a_stored_summary() {
     );
     assert_eq!(count(&store, "d_index_queue WHERE reason = 'reextract'"), 1);
     reading(&store, |tx| {
-        let pending = crate::index::pending_batch(tx, 200)?;
+        let pending = crate::index::pending_batch(tx, 200)?.documents;
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].revision, 2);
         assert_eq!(crate::index::search_generation(tx)?, 3);
@@ -805,12 +805,12 @@ fn source_replay_requeues_a_failed_summary_with_a_fresh_revision() {
     first.summary.parse_state = ImportParseState::Failed;
     commit(&store, revision, "Inbox", vec![first]).unwrap();
     let before = reading(&store, |tx| {
-        Ok(crate::index::pending_batch(tx, 200)?.remove(0))
+        Ok(crate::index::pending_batch(tx, 200)?.documents.remove(0))
     });
     let replay = message(&store, "/synthetic/Inbox.mbox", 0, ORIGINAL);
     commit(&store, revision + 1, "Inbox", vec![replay]).unwrap();
     reading(&store, |tx| {
-        let pending = crate::index::pending_batch(tx, 200)?;
+        let pending = crate::index::pending_batch(tx, 200)?.documents;
         assert_eq!(pending.len(), 1);
         assert!(pending[0].revision > before.revision);
         assert_eq!(pending[0].enqueued_at, before.enqueued_at);

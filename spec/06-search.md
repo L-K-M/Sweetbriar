@@ -170,9 +170,9 @@ acquisition with a distinct fresh revision. `index_inputs` becomes the largest
 assigned revision (0 for no work), independently of `search_generation`. Existing
 pending times are preserved; otherwise the acquisition time supplies the age.
 The column default is only for the additive migration; every runtime enqueue
-assigns a fresh revision. M1.6d2 separately migrates the durable rebuild/worker
-record specified in 07, initializing the monotonic epoch to 0 with no rebuild
-job or pause. These future fields stay in prose until their migration lands.
+assigns a fresh revision. Migration 6 adds the durable rebuild/worker
+record specified in 07 (the SQL block at the end of this section),
+initializing the monotonic epoch to 0 with no rebuild job or pause.
 
 - The tables above already exist in schema v1. Do not edit that migration.
   An additive migration adds queue revisions, initializes the metadata
@@ -222,6 +222,8 @@ job or pause. These future fields stay in prose until their migration lands.
   with each old indexed/partial row's values before deleting its docs row
   (failed rows have no FTS entry). It commits its cursor and progress with
   those changes. No runtime `delete-all` or corpus-wide DELETE is allowed.
+  Reset and enqueue scan limits must be 1–200; reject a zero-sized batch
+  instead of advancing generation without doing work or changing phase.
   After docs drain, persist phase `enqueue` and an acquisition cursor.
 - Enqueue keyset-scans acquisitions in batches of at most 200. In each
   transaction, queue/upsert each acquisition from its current availability
@@ -257,6 +259,61 @@ job or pause. These future fields stay in prose until their migration lands.
   search treats them as unknown immediately, and the state-change
   transaction queues `delete`. Re-publication queues extraction. Rebuilds
   and retries never touch authoritative rows or `seen_addresses` history.
+
+Migration 6 adds the durable records as kept operational state, so no `d_`
+prefix. `search_index_state` is one checked singleton row: the monotonic
+rebuild epoch, the user pause and the I/O pause fields (code, bounded
+caller-sanitized message, UTC-millisecond retry deadline, persisted
+attempt count). Messages are bounded to 512 UTF-8 bytes; the attempt count
+remains readable independently of whether an I/O pause is active.
+`search_rebuild_jobs` is the kept job record: table
+membership is the durable job kind, a unique monotonic epoch makes the
+latest row the active-or-last job, and the partial unique index enforces
+at most one non-complete rebuild. The triggers make the same id unable to
+name both kinds; UUID rarity is not the invariant.
+
+```sql
+CREATE TABLE search_index_state (           -- exactly one row, id = 0
+  id           INTEGER PRIMARY KEY CHECK (id = 0),
+  epoch        INTEGER NOT NULL CHECK (epoch >= 0),
+  user_paused  INTEGER NOT NULL DEFAULT 0 CHECK (user_paused IN (0,1)),
+  io_code      TEXT CHECK (io_code IS NULL OR io_code IN
+                 ('storage_full','permission_denied','storage_unavailable','other_io')),
+  io_message   TEXT CHECK (io_message IS NULL OR length(CAST(io_message AS BLOB)) <= 512),
+  io_retry_at  INTEGER CHECK (io_retry_at IS NULL OR io_retry_at >= 0),
+  io_attempts  INTEGER NOT NULL DEFAULT 0 CHECK (io_attempts >= 0),
+  CHECK ((io_code IS NULL) = (io_message IS NULL)
+     AND (io_code IS NULL) = (io_retry_at IS NULL))
+) STRICT;
+INSERT INTO search_index_state (id, epoch) VALUES (0, 0);
+
+CREATE TABLE search_rebuild_jobs (          -- table membership is the durable job kind
+  job_id      TEXT PRIMARY KEY,
+  epoch       INTEGER NOT NULL UNIQUE CHECK (epoch >= 1),
+  phase       TEXT NOT NULL CHECK (phase IN ('reset','enqueue','index','complete')),
+  doc_cursor  INTEGER NOT NULL DEFAULT 0 CHECK (doc_cursor >= 0),
+  acq_cursor  INTEGER NOT NULL DEFAULT 0 CHECK (acq_cursor >= 0),
+  phase_count INTEGER NOT NULL DEFAULT 0 CHECK (phase_count >= 0)
+) STRICT;
+
+-- At most one non-complete rebuild job (07).
+CREATE UNIQUE INDEX search_rebuild_jobs_one_active
+  ON search_rebuild_jobs((phase <> 'complete')) WHERE phase <> 'complete';
+
+-- The same id never names both kinds; UUID rarity is not the invariant.
+CREATE TRIGGER import_jobs_search_rebuild_id BEFORE INSERT ON import_jobs
+  WHEN EXISTS(SELECT 1 FROM search_rebuild_jobs WHERE job_id = NEW.job_id)
+BEGIN SELECT RAISE(ABORT, 'job id already names a search rebuild job'); END;
+CREATE TRIGGER search_rebuild_jobs_import_id BEFORE INSERT ON search_rebuild_jobs
+  WHEN EXISTS(SELECT 1 FROM import_jobs WHERE job_id = NEW.job_id)
+BEGIN SELECT RAISE(ABORT, 'job id already names an import job'); END;
+CREATE TRIGGER import_jobs_search_rebuild_id_update BEFORE UPDATE OF job_id ON import_jobs
+  WHEN EXISTS(SELECT 1 FROM search_rebuild_jobs WHERE job_id = NEW.job_id)
+BEGIN SELECT RAISE(ABORT, 'job id already names a search rebuild job'); END;
+CREATE TRIGGER search_rebuild_jobs_import_id_update BEFORE UPDATE OF job_id ON search_rebuild_jobs
+  WHEN EXISTS(SELECT 1 FROM import_jobs WHERE job_id = NEW.job_id)
+BEGIN SELECT RAISE(ABORT, 'job id already names an import job'); END;
+```
 
 ## Query AST v1
 

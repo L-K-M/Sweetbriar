@@ -487,13 +487,13 @@ fn copy_bounded_bounds_retries_and_reports_offsets() {
         error: Some(io::ErrorKind::ConnectionReset),
     };
     match copy(&mut source, 100).unwrap_err() {
-        StoreError::Unavailable { reason } => assert!(reason.contains("100"), "{reason}"),
+        StoreError::Unavailable { reason, .. } => assert!(reason.contains("100"), "{reason}"),
         other => panic!("expected Unavailable, got {other:?}"),
     }
 
     // Shorter than observed: ends early, offset named.
     match copy(&mut Cursor::new(b"abcde".to_vec()), 10).unwrap_err() {
-        StoreError::Unavailable { reason } => {
+        StoreError::Unavailable { reason, .. } => {
             assert!(reason.contains("5") && reason.contains("10"), "{reason}");
         }
         other => panic!("expected Unavailable, got {other:?}"),
@@ -501,7 +501,7 @@ fn copy_bounded_bounds_retries_and_reports_offsets() {
 
     // Longer than observed: caught one byte past the size.
     match copy(&mut Cursor::new(b"0123456789X".to_vec()), 10).unwrap_err() {
-        StoreError::Unavailable { reason } => {
+        StoreError::Unavailable { reason, .. } => {
             assert!(reason.contains("offset 10"), "{reason}");
         }
         other => panic!("expected Unavailable, got {other:?}"),
@@ -527,7 +527,7 @@ fn growth_is_reported_before_writing_the_detection_byte() {
     )
     .unwrap_err();
     match error {
-        StoreError::Unavailable { reason } => assert!(reason.contains("grew"), "{reason}"),
+        StoreError::Unavailable { reason, .. } => assert!(reason.contains("grew"), "{reason}"),
         other => panic!("expected a source growth error, got {other:?}"),
     }
     assert_eq!(dest.position(), 0, "the detection read must not be written");

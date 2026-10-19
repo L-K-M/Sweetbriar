@@ -68,7 +68,10 @@ impl From<StoreError> for EngineError {
         match err {
             StoreError::NotFound { what } => Self::NotFound { what },
             StoreError::Locked => Self::Locked,
-            StoreError::Unavailable { reason } => Self::Unavailable { reason },
+            // `io_kind` is the store's internal cause detail (spec/03
+            // "Search writes"); the core error keeps only the existing
+            // category and reason.
+            StoreError::Unavailable { reason, .. } => Self::Unavailable { reason },
             StoreError::Corrupt { detail } => Self::Corrupt { detail },
             StoreError::NewerStore { app_version } => Self::NewerStore { app_version },
             // The store's own invalid-input source is the data root's
@@ -105,3 +108,26 @@ impl fmt::Display for EngineError {
 }
 
 impl std::error::Error for EngineError {}
+
+#[cfg(test)]
+mod tests {
+    use std::io;
+
+    use super::*;
+
+    /// `StoreError::Unavailable`'s internal `io_kind` is dropped at
+    /// the core-error boundary while the category and reason survive
+    /// (spec/03 "Search writes", spec/07 "Errors").
+    #[test]
+    fn the_store_error_mapping_drops_the_internal_io_kind() {
+        let error = EngineError::from(StoreError::Unavailable {
+            reason: "cannot open the object: permission denied".to_owned(),
+            io_kind: Some(io::ErrorKind::PermissionDenied),
+        });
+        assert!(matches!(error, EngineError::Unavailable { .. }));
+        assert_eq!(
+            error.to_string(),
+            "the core is unavailable: cannot open the object: permission denied"
+        );
+    }
+}

@@ -355,22 +355,37 @@ local drafts. No network yet.
     delete-then-insert.
     Owns the FTS5 tables deliverable and re-extraction/crash acceptance.
     Test older-store upgrade, concurrent requeue and rollback at each cut.
-  - **M1.6d2 Rebuild storage — L:** durable rebuild/job-kind and operational
-    status metadata, epochs, publication epoch/pause gates, bounded
-    reset/enqueue helpers and checkpoints through a forward migration.
-    Depends on d. Owns store tests for the 200-document/2,000,000-new-byte
-    bounds, crash replay at each phase boundary, concurrent acquisition/
-    availability enqueue and same-version stale-worker rejection. No
-    corpus-wide runtime clear/enqueue; preserves the queue revision counter.
-  - **M1.6e Index job — L:** acquisition reads and extraction through
-    resources, engine worker, low-priority bounded publication, startup
-    recovery and durable I/O pause/backoff/immediate retry. Depends on d2.
+  - **M1.6d2 Rebuild state and fences — L:** forward migration for durable
+    rebuild/job-kind and operational status metadata; start/restart, epochs,
+    independent user/I/O pauses, and publication epoch/phase/pause gates.
+    Depends on d. Tests cover older-store preservation, kind guards,
+    singleton/idempotent start, durable pauses, status generations and
+    same-version stale-worker rejection, retaining publication bounds.
+  - **M1.6d3 Bounded rebuild phases — L:** reset/enqueue helpers and committed
+    scan/progress checkpoints, index-phase progress and atomic completion.
+    Depends on d2. Tests cover the 200-document bounds, crash replay at each
+    phase boundary and concurrent acquisition/availability enqueue behind
+    the scan cursor. No corpus-wide runtime clear/enqueue; preserves the
+    queue revision counter. This separates the oversized d2 implementation
+    without reducing its mandatory safety or regression coverage.
+  - **M1.6d4 Storage failure causes — M:** preserve optional native I/O kinds
+    through unavailable object reads/quarantine and SQLite environment
+    failures, so the indexer can classify causes without parsing messages.
+    Depends on d3. Tests cover injected kinds, clone/display preservation and
+    existing core-error mappings. No new core error category or dependency.
+  - **M1.6e Extraction facade — L:** acquisition lookup and bounded reads,
+    MIME-to-storage mapping and publication-budget preparation in resources.
+    Depends on d4. Tests cover all columns/states, size refusal versus I/O
+    failure, cancellation, captured fences and bounded retained data. An
+    oversized acquisition is partial coverage, not an endless I/O retry.
+  - **M1.6e1 Index job — L:** engine worker, low-priority bounded publication,
+    startup recovery and durable I/O pause/backoff/immediate retry. Depends on e.
     Owns the extraction job/watermark deliverable. Real-worker tests cover
     failure/restart/re-publication, actionable errors/deadlines, failed-writer
     read unavailability and retry without dropping pending work.
   - **M1.6e2 Rebuild orchestration — L:** engine start/cancel/resume,
     automatic version-change jobs, global worker pause and phase progress;
-    depends on e. Owns identical-rebuild acceptance. Real-worker tests cover
+    depends on e1. Owns identical-rebuild acceptance. Real-worker tests cover
     durable ids, singleton/idempotent start, cancelled startup staying paused,
     explicit resume, version changes preserving pause, crash recovery through
     reset/enqueue/index, completion, foreground yielding between batches

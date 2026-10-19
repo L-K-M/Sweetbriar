@@ -34,6 +34,10 @@ pub enum FsOp {
     Create,
     /// `Fs::remove`.
     Remove,
+    /// `Fs::open`.
+    Open,
+    /// `read` on a read handle the wrapper handed out.
+    Read,
 }
 
 /// The shape of the injected failure.
@@ -47,6 +51,9 @@ pub enum FaultKind {
     NoSpace,
     /// `EIO`: the storage layer failed.
     Eio,
+    /// An error of a chosen `io::ErrorKind`, for causes the named kinds
+    /// do not cover (e.g. `PermissionDenied`).
+    Kind(io::ErrorKind),
 }
 
 /// How many calls of each operation have gone through, per kind.
@@ -64,6 +71,8 @@ struct Counts {
     create_dir: u64,
     create: u64,
     remove: u64,
+    open: u64,
+    read: u64,
 }
 
 impl Counts {
@@ -81,6 +90,8 @@ impl Counts {
             FsOp::CreateDir => &mut self.create_dir,
             FsOp::Create => &mut self.create,
             FsOp::Remove => &mut self.remove,
+            FsOp::Open => &mut self.open,
+            FsOp::Read => &mut self.read,
         }
     }
 }
@@ -125,6 +136,7 @@ fn fault_error(kind: FaultKind) -> io::Error {
         // `ShortWrite` already wrote its half; the error that ends the
         // write is the same one a failing device would give.
         FaultKind::Eio | FaultKind::ShortWrite => io::Error::from_raw_os_error(libc::EIO),
+        FaultKind::Kind(kind) => io::Error::from(kind),
     }
 }
 
@@ -169,11 +181,24 @@ impl Fs for FaultFs {
     }
 
     fn open(&self, path: &Path) -> io::Result<Box<dyn sb_types::fs::ReadFile>> {
-        self.inner.open(path)
+        if let Some(kind) = self.plan.fire(FsOp::Open) {
+            return Err(fault_error(kind));
+        }
+        Ok(Box::new(FaultRead {
+            inner: self.inner.open(path)?,
+            plan: self.plan.clone(),
+        }))
     }
 
     fn open_regular(&self, path: &Path) -> io::Result<(Box<dyn sb_types::fs::ReadFile>, Metadata)> {
-        self.inner.open_regular(path)
+        let (file, metadata) = self.inner.open_regular(path)?;
+        Ok((
+            Box::new(FaultRead {
+                inner: file,
+                plan: self.plan.clone(),
+            }),
+            metadata,
+        ))
     }
 
     fn metadata(&self, path: &Path) -> io::Result<Option<Metadata>> {
@@ -291,6 +316,28 @@ impl WriteFile for FaultWrite {
             return Err(fault_error(kind));
         }
         self.inner.sync_all()
+    }
+}
+
+/// A read handle whose `read` counts (and can fail) like any other
+/// operation; `seek` and the rest pass through.
+struct FaultRead {
+    inner: Box<dyn sb_types::fs::ReadFile>,
+    plan: Arc<FaultPlan>,
+}
+
+impl io::Read for FaultRead {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        if let Some(kind) = self.plan.fire(FsOp::Read) {
+            return Err(fault_error(kind));
+        }
+        self.inner.read(buf)
+    }
+}
+
+impl io::Seek for FaultRead {
+    fn seek(&mut self, position: io::SeekFrom) -> io::Result<u64> {
+        self.inner.seek(position)
     }
 }
 

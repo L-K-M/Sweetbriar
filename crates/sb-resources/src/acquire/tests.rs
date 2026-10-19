@@ -578,7 +578,7 @@ fn unreadable_regions_name_their_offset_and_store_nothing() {
     }
     let before = mbox.position();
     let error = next(&res.store, &mut mbox, &Limits::default()).unwrap_err();
-    let StoreError::Unavailable { reason } = &error else {
+    let StoreError::Unavailable { reason, .. } = &error else {
         panic!("{error:?}");
     };
     assert!(reason.contains(&format!("byte {third}")), "{reason}");
@@ -589,7 +589,7 @@ fn unreadable_regions_name_their_offset_and_store_nothing() {
     // interrupted first read was retried rather than reported.
     let mut eml = failing(SourceKind::Eml, RICH.to_vec(), 1, 40);
     let error = next(&res.store, &mut eml, &Limits::default()).unwrap_err();
-    let StoreError::Unavailable { reason } = &error else {
+    let StoreError::Unavailable { reason, .. } = &error else {
         panic!("{error:?}");
     };
     assert!(

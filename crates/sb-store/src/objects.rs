@@ -257,7 +257,8 @@ impl Shelf {
         removals_at_open: u64,
     ) -> Result<(), StoreError> {
         let step = "quarantine the object";
-        let failed = |e: io::Error| StoreError::unavailable(format!("cannot {step}: {e}"));
+        let failed =
+            |e: io::Error| StoreError::unavailable_io(format!("cannot {step}: {e}"), e.kind());
         let parent = source.parent().ok_or_else(|| {
             StoreError::unavailable(format!("cannot {step}: no source directory"))
         })?;
@@ -283,14 +284,19 @@ impl Shelf {
             let mut suffix = [0u8; 8];
             self.random
                 .fill(&mut suffix)
-                .map_err(|e| StoreError::unavailable(format!("cannot {step}: {e}")))?;
+                .map_err(|e| StoreError::unavailable_io(format!("cannot {step}: {e}"), e.kind()))?;
             let dest = self
                 .recovery
                 .join(format!("object-{}-{}", id.sha256_hex(), hex(&suffix)));
             match self.fs.metadata(&dest) {
                 Ok(None) => return Ok(dest),
                 Ok(Some(_)) => continue,
-                Err(e) => return Err(StoreError::unavailable(format!("cannot {step}: {e}"))),
+                Err(e) => {
+                    return Err(StoreError::unavailable_io(
+                        format!("cannot {step}: {e}"),
+                        e.kind(),
+                    ));
+                }
             }
         }
         Err(StoreError::unavailable(format!(
@@ -301,7 +307,8 @@ impl Shelf {
     /// Remove a published object (GC only), then flush its directory.
     fn remove(&self, id: &ObjectId, path: &Path) -> Result<(), StoreError> {
         let step = "remove the object";
-        let failed = |e: io::Error| StoreError::unavailable(format!("cannot {step}: {e}"));
+        let failed =
+            |e: io::Error| StoreError::unavailable_io(format!("cannot {step}: {e}"), e.kind());
         {
             let mut moves = self.moves();
             match self.fs.metadata(path).map_err(failed)? {
@@ -374,8 +381,9 @@ impl FileObjectStore {
     /// failed `create` removes nothing, since the name may be another
     /// publisher's live temp file.
     fn write_temp(&self, tmp: &Path, bytes: &mut dyn Read) -> Result<ObjectId, StoreError> {
-        let failed =
-            |e: io::Error| StoreError::unavailable(format!("cannot write the temp object: {e}"));
+        let failed = |e: io::Error| {
+            StoreError::unavailable_io(format!("cannot write the temp object: {e}"), e.kind())
+        };
         let mut file = self.fs.create(tmp).map_err(failed)?;
         let mut streamed = || -> io::Result<ObjectId> {
             let mut hasher = Sha256::new();
@@ -414,9 +422,10 @@ impl FileObjectStore {
             if let Err(e) = self.fs.create_dir(dir)
                 && e.kind() != io::ErrorKind::AlreadyExists
             {
-                return Err(StoreError::unavailable(format!(
-                    "cannot create the object's directory chain: {e}"
-                )));
+                return Err(StoreError::unavailable_io(
+                    format!("cannot create the object's directory chain: {e}"),
+                    e.kind(),
+                ));
             }
         }
         // One chain flushes at a time; a concurrent publish of the same
@@ -438,9 +447,10 @@ impl FileObjectStore {
                 durable.insert(chain);
                 Ok(())
             }
-            Err(e) => Err(StoreError::unavailable(format!(
-                "cannot flush the object's directory chain: {e}"
-            ))),
+            Err(e) => Err(StoreError::unavailable_io(
+                format!("cannot flush the object's directory chain: {e}"),
+                e.kind(),
+            )),
         }
     }
 
@@ -449,7 +459,7 @@ impl FileObjectStore {
     fn is_dir(&self, path: &Path) -> Result<bool, StoreError> {
         Ok(matches!(
             self.fs.metadata(path).map_err(|e| {
-                StoreError::unavailable(format!("cannot list the objects: {e}"))
+                StoreError::unavailable_io(format!("cannot list the objects: {e}"), e.kind())
             })?,
             Some(md) if md.kind() == FileKind::Directory
         ))
@@ -461,9 +471,9 @@ impl ObjectStore for FileObjectStore {
         let mut bytes = bytes;
         // Step 1: the temp file, its name from the randomness seam.
         let mut name = [0u8; 16];
-        self.random
-            .fill(&mut name)
-            .map_err(|e| StoreError::unavailable(format!("cannot name the temp object: {e}")))?;
+        self.random.fill(&mut name).map_err(|e| {
+            StoreError::unavailable_io(format!("cannot name the temp object: {e}"), e.kind())
+        })?;
         let tmp = self.objects_tmp.join(hex(&name));
         // Later errors try to remove the temp file; that best-effort
         // cleanup never hides the real one.
@@ -477,9 +487,10 @@ impl ObjectStore for FileObjectStore {
         let final_path = self.object_path(&id);
         if let Err(e) = self.shelf.install(&tmp, &final_path) {
             let _ = self.fs.remove(&tmp);
-            return Err(StoreError::unavailable(format!(
-                "cannot install the object at its path: {e}"
-            )));
+            return Err(StoreError::unavailable_io(
+                format!("cannot install the object at its path: {e}"),
+                e.kind(),
+            ));
         }
         // Step 4: persist the rename — also when the file already
         // existed, since an earlier failed publish may have renamed it
@@ -488,9 +499,10 @@ impl ObjectStore for FileObjectStore {
             .parent()
             .expect("the chain directory always has a parent");
         if let Err(e) = self.fs.sync_dir(dir) {
-            return Err(StoreError::unavailable(format!(
-                "cannot flush the object's directory: {e}"
-            )));
+            return Err(StoreError::unavailable_io(
+                format!("cannot flush the object's directory: {e}"),
+                e.kind(),
+            ));
         }
         Ok(id)
     }
@@ -504,7 +516,7 @@ impl ObjectStore for FileObjectStore {
         let Some(md) = self
             .fs
             .metadata(&path)
-            .map_err(|e| StoreError::unavailable(format!("cannot {step}: {e}")))?
+            .map_err(|e| StoreError::unavailable_io(format!("cannot {step}: {e}"), e.kind()))?
         else {
             return Err(StoreError::not_found(format!("object {}", id.sha256_hex())));
         };
@@ -530,7 +542,12 @@ impl ObjectStore for FileObjectStore {
             Err(e) if e.kind() == io::ErrorKind::NotFound => {
                 return Err(StoreError::not_found(format!("object {}", id.sha256_hex())));
             }
-            Err(e) => return Err(StoreError::unavailable(format!("cannot {step}: {e}"))),
+            Err(e) => {
+                return Err(StoreError::unavailable_io(
+                    format!("cannot {step}: {e}"),
+                    e.kind(),
+                ));
+            }
         };
         Ok(ObjectReader {
             file,
@@ -545,8 +562,9 @@ impl ObjectStore for FileObjectStore {
     }
 
     fn exists(&self, id: &ObjectId) -> Result<bool, StoreError> {
-        file_exists(self.fs.as_ref(), &self.object_path(id))
-            .map_err(|e| StoreError::unavailable(format!("cannot stat the object: {e}")))
+        file_exists(self.fs.as_ref(), &self.object_path(id)).map_err(|e| {
+            StoreError::unavailable_io(format!("cannot stat the object: {e}"), e.kind())
+        })
     }
 
     fn list(&self) -> Result<ObjectIter, StoreError> {
@@ -557,7 +575,7 @@ impl ObjectStore for FileObjectStore {
         let ab_dirs = self
             .fs
             .read_dir(&self.objects_sha256)
-            .map_err(|e| StoreError::unavailable(format!("cannot {step}: {e}")))?;
+            .map_err(|e| StoreError::unavailable_io(format!("cannot {step}: {e}"), e.kind()))?;
         for ab in ab_dirs {
             if !self.is_dir(&ab)? {
                 continue;
@@ -565,20 +583,18 @@ impl ObjectStore for FileObjectStore {
             let cd_dirs = self
                 .fs
                 .read_dir(&ab)
-                .map_err(|e| StoreError::unavailable(format!("cannot {step}: {e}")))?;
+                .map_err(|e| StoreError::unavailable_io(format!("cannot {step}: {e}"), e.kind()))?;
             for cd in cd_dirs {
                 if !self.is_dir(&cd)? {
                     continue;
                 }
-                let entries = self
-                    .fs
-                    .read_dir(&cd)
-                    .map_err(|e| StoreError::unavailable(format!("cannot {step}: {e}")))?;
+                let entries = self.fs.read_dir(&cd).map_err(|e| {
+                    StoreError::unavailable_io(format!("cannot {step}: {e}"), e.kind())
+                })?;
                 for entry in entries {
-                    let Some(md) = self
-                        .fs
-                        .metadata(&entry)
-                        .map_err(|e| StoreError::unavailable(format!("cannot {step}: {e}")))?
+                    let Some(md) = self.fs.metadata(&entry).map_err(|e| {
+                        StoreError::unavailable_io(format!("cannot {step}: {e}"), e.kind())
+                    })?
                     else {
                         continue;
                     };

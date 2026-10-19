@@ -3,6 +3,8 @@
 //! that also sets `user_version` and `last_migrated_by`, verified by
 //! `foreign_key_check` and `quick_check` before it commits.
 
+use std::io;
+
 use rusqlite::Connection;
 use rusqlite::Transaction;
 use rusqlite::TransactionBehavior;
@@ -31,7 +33,9 @@ pub(crate) struct Migration {
 
 /// The production migration list, in order. Version 1 creates schema
 /// v1 (spec/02, spec/06); version 2 adds durable imports; version 3
-/// starts the list projection; version 4 keeps thread membership; version 5 versions the search queue.
+/// starts the list projection; version 4 keeps thread membership;
+/// version 5 versions the search queue; version 6 adds the durable
+/// search index state and rebuild jobs.
 pub(crate) const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 1,
@@ -52,6 +56,10 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 5,
         run: migration_5,
+    },
+    Migration {
+        version: 6,
+        run: migration_6,
     },
 ];
 
@@ -405,10 +413,26 @@ pub(crate) fn classify(e: rusqlite::Error, what: &str) -> StoreError {
         | ErrorCode::DatabaseBusy
         | ErrorCode::DatabaseLocked
         | ErrorCode::OutOfMemory
-        | ErrorCode::FileLockingProtocolFailed => {
-            StoreError::unavailable(format!("{what} could not write the store: {e}"))
-        }
+        | ErrorCode::FileLockingProtocolFailed => StoreError::unavailable_io(
+            format!("{what} could not write the store: {e}"),
+            sqlite_io_kind(err.code),
+        ),
         _ => StoreError::internal(format!("{what} failed: {e}")),
+    }
+}
+
+/// The `io::ErrorKind` a SQLite environment code stands for (spec/03
+/// "Search writes"): only the cause the code itself names. An
+/// ambiguous environment code is `Other`, never a cause guessed from
+/// message text.
+fn sqlite_io_kind(code: ErrorCode) -> io::ErrorKind {
+    match code {
+        ErrorCode::DiskFull => io::ErrorKind::StorageFull,
+        ErrorCode::PermissionDenied => io::ErrorKind::PermissionDenied,
+        ErrorCode::ReadOnly => io::ErrorKind::ReadOnlyFilesystem,
+        ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked => io::ErrorKind::ResourceBusy,
+        ErrorCode::OutOfMemory => io::ErrorKind::OutOfMemory,
+        _ => io::ErrorKind::Other,
     }
 }
 
@@ -543,6 +567,13 @@ fn migration_5(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
     // The clock is deliberately not used: existing pending age and the original
     // acquisition time give deterministic oldest-first upgrade work.
     Ok(())
+}
+
+/// Migration 6 (spec/06 "Queue, versions and recovery"): the durable
+/// rebuild/worker records of spec/07. Additive only: epoch 0, no job,
+/// no pause; existing imports, queue and documents are untouched.
+fn migration_6(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
+    tx.execute_batch(include_str!("schema/v6.sql")).map_err(bug)
 }
 
 /// One version-4 UUID from the randomness seam. A seam that can't

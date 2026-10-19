@@ -56,6 +56,7 @@ pub struct PublishedAttachment {
 fn unavailable(reason: impl Into<String>) -> StoreError {
     StoreError::Unavailable {
         reason: reason.into(),
+        io_kind: None,
     }
 }
 
