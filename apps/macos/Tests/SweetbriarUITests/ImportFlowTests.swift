@@ -48,7 +48,17 @@ final class ImportFlowTests: XCTestCase {
         XCTAssertTrue(showReport.waitForExistence(timeout: Self.timeout))
         XCTAssertTrue(app.staticTexts["Import finished"].exists)
         showReport.click()
-        XCTAssertTrue(app.windows["importReport"].waitForExistence(timeout: Self.timeout))
+        let report = app.windows["importReport"]
+        XCTAssertTrue(report.waitForExistence(timeout: Self.timeout))
+
+        // The report window covers the sheet, so a click on its Close
+        // button would land on the report: close the report first.
+        report.buttons[XCUIIdentifierCloseWindow].click()
+        let reportGone = expectation(
+            for: NSPredicate(format: "exists == false"),
+            evaluatedWith: report
+        )
+        wait(for: [reportGone], timeout: Self.timeout)
 
         // The sheet must be gone before the window takes a click.
         app.buttons["importClose"].click()

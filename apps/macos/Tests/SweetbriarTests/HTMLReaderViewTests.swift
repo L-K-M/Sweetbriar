@@ -168,7 +168,8 @@ func readerRuleListCompilesAndBlocksHTTPResources() async throws {
 }
 
 @MainActor
-private final class SchemeTask: NSObject, WKURLSchemeTask {
+// WKURLSchemeTask's callbacks are nonisolated; the mock stays main-actor confined.
+private final class SchemeTask: NSObject, @preconcurrency WKURLSchemeTask {
     let request: URLRequest
     var response: URLResponse?
     var data = Data()
