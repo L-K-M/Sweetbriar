@@ -162,8 +162,9 @@ CREATE INDEX d_index_queue_oldest ON d_index_queue(enqueued_at, doc_id);
 
 The SQL block above is the implemented schema, used by the schema-drift
 test. Migration 5 adds queue revisions and the oldest-first index, initializes
-`index_inputs`, `search_generation` (1) and `search_extractor_version` (1),
-and backfills every acquisition with a distinct fresh revision. Existing
+`search_generation` and `search_extractor_version` to 1, and backfills every
+acquisition with a distinct fresh revision. `index_inputs` becomes the largest
+assigned revision (0 for no work), independently of `search_generation`. Existing
 pending times are preserved; otherwise the acquisition time supplies the age.
 The column default is only for the additive migration; every runtime enqueue
 assigns a fresh revision. M1.6d2 separately migrates the durable rebuild/worker
