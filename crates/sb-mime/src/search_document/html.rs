@@ -9,7 +9,9 @@ use std::rc::Rc;
 use html5ever::buffer_queue::BufferQueue;
 use html5ever::tendril::StrTendril;
 use html5ever::tokenizer::{TagKind, Token, TokenSink, TokenSinkResult, Tokenizer};
-use html5ever::tree_builder::{ElementFlags, NodeOrText, QuirksMode, TreeBuilder, TreeSink};
+use html5ever::tree_builder::{
+    ElementFlags, NodeOrText, QuirksMode, TreeBuilder, TreeBuilderOpts, TreeSink,
+};
 use html5ever::{Attribute, ExpandedName, QualName, TokenizerResult, local_name, ns};
 
 use super::{Kind, Line, append_html_text, boundary, is_block};
@@ -319,7 +321,13 @@ pub(super) fn html_lines(html: &str) -> Result<Vec<Line>, HtmlLimit> {
     tree.anonymous(None); // Document node is always index zero.
     let tokenizer = Tokenizer::new(
         BudgetedBuilder {
-            inner: TreeBuilder::new(tree, Default::default()),
+            inner: TreeBuilder::new(
+                tree,
+                TreeBuilderOpts {
+                    scripting_enabled: false,
+                    ..Default::default()
+                },
+            ),
             input_bytes: Cell::new(0),
             token_end_bound: Cell::new(0),
             formatting_count: Cell::new(0),

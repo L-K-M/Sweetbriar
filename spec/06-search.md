@@ -50,11 +50,14 @@ registered in the resolution.
 - Decode transfer encodings and charsets with the MIME parser's limits
   (10); decode format=flowed before partitioning plain text. For HTML,
   `html5ever` emits text nodes with block boundaries; script/style contents
-  are omitted, entities decoded and no URLs fetched. No reader cache is read.
+  are omitted, entities decoded and no URLs fetched. Parse with scripting
+  disabled so `noscript` fallback markup contributes text, not raw tags.
+  No reader cache is read.
 - Bound HTML tree building independently of the MIME byte limits. Feed at
   most 1,024 UTF-8 bytes at a time. Stop between chunks after 10,000 arena
   nodes, 4,000,000 work units, or 16,384 input bytes without a tree mutation.
-  Charge input/text bytes, node/name comparisons, squared attribute counts,
+  Charge input/text bytes, node/name comparisons, per-tag attribute counts
+  squared (n² for a tag carrying n attributes),
   and the length of sibling lists scanned or shifted. At the tokenizer boundary,
   also charge attribute scans using a conservative tag-span bound (including
   ignored tags), and potential formatting-list comparisons before tree building.
@@ -162,8 +165,9 @@ CREATE INDEX d_index_queue_oldest ON d_index_queue(enqueued_at, doc_id);
 
 The SQL block above is the implemented schema, used by the schema-drift
 test. Migration 5 adds queue revisions and the oldest-first index, initializes
-`index_inputs`, `search_generation` (1) and `search_extractor_version` (1),
-and backfills every acquisition with a distinct fresh revision. Existing
+`search_generation` and `search_extractor_version` to 1, and backfills every
+acquisition with a distinct fresh revision. `index_inputs` becomes the largest
+assigned revision (0 for no work), independently of `search_generation`. Existing
 pending times are preserved; otherwise the acquisition time supplies the age.
 The column default is only for the additive migration; every runtime enqueue
 assigns a fresh revision. Migration 6 adds the durable rebuild/worker
