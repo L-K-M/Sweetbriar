@@ -222,6 +222,8 @@ initializing the monotonic epoch to 0 with no rebuild job or pause.
   with each old indexed/partial row's values before deleting its docs row
   (failed rows have no FTS entry). It commits its cursor and progress with
   those changes. No runtime `delete-all` or corpus-wide DELETE is allowed.
+  Reset and enqueue scan limits must be 1–200; reject a zero-sized batch
+  instead of advancing generation without doing work or changing phase.
   After docs drain, persist phase `enqueue` and an acquisition cursor.
 - Enqueue keyset-scans acquisitions in batches of at most 200. In each
   transaction, queue/upsert each acquisition from its current availability
