@@ -35,9 +35,16 @@ final class ReaderCIDHandler: NSObject, WKURLSchemeHandler {
     private var resolver: CIDResourceResolver?
     private var ticket: UInt64 = 0
     private let currentTicket: () -> UInt64
+    private let readResource: @Sendable (URL) async throws -> Data
 
-    init(currentTicket: @escaping () -> UInt64) {
+    /// `readResource` is the generation tests' deterministic read seam;
+    /// shipping callers take the file-read default.
+    init(
+        currentTicket: @escaping () -> UInt64,
+        readResource: @escaping @Sendable (URL) async throws -> Data = { try Data(contentsOf: $0) }
+    ) {
         self.currentTicket = currentTicket
+        self.readResource = readResource
     }
 
     func replace(with rendition: HTMLRendition?, ticket: UInt64) {
@@ -50,17 +57,28 @@ final class ReaderCIDHandler: NSObject, WKURLSchemeHandler {
     }
 
     func webView(_ webView: WKWebView, start urlSchemeTask: any WKURLSchemeTask) {
+        start(urlSchemeTask)
+    }
+
+    /// The task handle lets qualification await the entire late completion.
+    @discardableResult
+    func start(_ urlSchemeTask: any WKURLSchemeTask) -> Task<Void, Never>? {
         guard let url = urlSchemeTask.request.url,
               let resource = resolver?.resolve(url, currentTicket: currentTicket()) else {
             urlSchemeTask.didFailWithError(URLError(.noPermissionsToReadFile))
-            return
+            return nil
         }
         let id = ObjectIdentifier(urlSchemeTask)
         let requestedTicket = ticket
         pending[id] = Pending(task: urlSchemeTask, ticket: requestedTicket)
-        Task { @MainActor [weak self] in
-            let result = await Task.detached(priority: .userInitiated) {
-                Result { try Data(contentsOf: resource.fileURL) }
+        let readResource = self.readResource
+        return Task { @MainActor [weak self] in
+            let result: Result<Data, any Error> = await Task.detached(priority: .userInitiated) {
+                do {
+                    return .success(try await readResource(resource.fileURL))
+                } catch {
+                    return .failure(error)
+                }
             }.value
             // Retain task identity across I/O, even if WebKit stops it meanwhile.
             guard let self, let item = self.pending[id], item.task === urlSchemeTask else { return }
@@ -118,11 +136,12 @@ final class HTMLReaderView: NSView, WKNavigationDelegate, WKUIDelegate {
 
     init(
         currentTicket: @escaping () -> UInt64,
+        readResource: @escaping @Sendable (URL) async throws -> Data = { try Data(contentsOf: $0) },
         compileRules: @escaping @MainActor () async throws -> WKContentRuleList = { try await ReaderContentRules.compiled() }
     ) {
         self.currentTicket = currentTicket
         self.compileRules = compileRules
-        cidHandler = ReaderCIDHandler(currentTicket: currentTicket)
+        cidHandler = ReaderCIDHandler(currentTicket: currentTicket, readResource: readResource)
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
         configuration.defaultWebpagePreferences.allowsContentJavaScript = false

@@ -321,7 +321,8 @@ local drafts. No network yet.
     loads, so it isn't used;
   - switching messages quickly never shows the previous message's
     resources (generation test);
-  - **owner:** reading real imported mail looks right.
+  - **owner:** reading real imported mail looks right; record results in
+    [qualification/M1.5.md](qualification/M1.5.md).
 
 ### M1.6 Search — L, linux + macos-ci
 

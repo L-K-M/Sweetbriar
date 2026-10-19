@@ -23,13 +23,17 @@ final class ReaderViewController: NSViewController {
         model: ReaderModel,
         opener: @escaping @MainActor (URL) -> Bool = { NSWorkspace.shared.open($0) },
         confirmer: @escaping @MainActor (URL, [String]) async -> Bool = ReaderViewController.confirmLink,
+        readResource: @escaping @Sendable (URL) async throws -> Data = { try Data(contentsOf: $0) },
         compileRules: @escaping @MainActor () async throws -> WKContentRuleList = { try await ReaderContentRules.compiled() }
     ) {
         self.model = model
         self.opener = opener
         self.confirmer = confirmer
         super.init(nibName: nil, bundle: nil)
-        html = HTMLReaderView(currentTicket: { [weak model] in model?.navigationTicket ?? 0 }, compileRules: compileRules)
+        html = HTMLReaderView(
+            currentTicket: { [weak model] in model?.navigationTicket ?? 0 },
+            readResource: readResource, compileRules: compileRules
+        )
         html.linkActivated = { [weak self] url in
             guard let self else { return }
             let ticket = model.navigationTicket
