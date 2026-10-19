@@ -14,6 +14,10 @@ use crate::{Anchor, Engine, EngineError, WindowEvent, WindowSpec};
 
 const PATIENCE: Duration = Duration::from_secs(60);
 
+/// How many reads `a_cancelled_read_moves_no_mark` starts before it
+/// gives up on dropping one undelivered.
+const CANCEL_ATTEMPTS: usize = 10;
+
 /// An engine holding one imported message, and its mailbox's window;
 /// `import` waits for the thread rebuild that moves the generation too.
 fn listed(label: &str) -> (ScratchDir, Engine, crate::Window) {
@@ -204,25 +208,37 @@ fn a_debug_fill_invalidates_synthetic_windows() {
 #[test]
 fn a_cancelled_read_moves_no_mark() {
     let (_scratch, engine, window) = listed("subscribe-cancelled-read");
-    toggle_flags(&engine, 2);
-    {
-        let mut cx = Context::from_waker(Waker::noop());
+    let mut generation = window.generation();
+    let mut cx = Context::from_waker(Waker::noop());
+    let mut attempts = 0;
+    loop {
+        toggle_flags(&engine, 2);
+        generation += 2;
         let mut index = pin!(engine.window_ids(window.window_id()));
         // The first poll looks the window up; once that is back, the
         // second starts the store read.
-        assert!(index.as_mut().poll(&mut cx).is_pending());
-        std::thread::sleep(Duration::from_millis(100));
-        assert!(index.as_mut().poll(&mut cx).is_pending());
-        // Let the read finish on the pool, then drop it undelivered.
-        std::thread::sleep(Duration::from_millis(300));
+        let started = index.as_mut().poll(&mut cx).is_pending() && {
+            std::thread::sleep(Duration::from_millis(100));
+            index.as_mut().poll(&mut cx).is_pending()
+        };
+        if started {
+            // Let the read finish on the pool, then drop it undelivered.
+            std::thread::sleep(Duration::from_millis(300));
+            break;
+        }
+        // A busy machine can run the read before its first poll, which
+        // then delivers it; cut fresh generations and try again.
+        attempts += 1;
+        assert!(
+            attempts < CANCEL_ATTEMPTS,
+            "every read finished before its first poll"
+        );
     }
     let subscription = engine.subscribe(window.window_id());
     let mut next = pin!(subscription.next());
     assert_eq!(
         finish(next.as_mut()).unwrap(),
-        WindowEvent::Invalidated {
-            generation: window.generation() + 2
-        }
+        WindowEvent::Invalidated { generation }
     );
     block_on(engine.shutdown()).unwrap();
 }
