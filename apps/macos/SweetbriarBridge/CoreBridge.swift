@@ -67,6 +67,20 @@ public final class CoreBridge: Sendable {
         return ReaderMessage(value)
     }
 
+    /// Open a body file. Release the lease when the reader discards it.
+    public func openBody(messageID: Int64, preferred: BodyKind) async throws -> BodyLease {
+        let token = SweetbriarCore.CancelToken()
+        let value = try await Self.withCancellation(token: token) {
+            try await self.core.openBody(token: token, messageId: messageID, preferred: preferred.generated)
+        }
+        return BodyLease(value)
+    }
+
+    /// Revoke immediately; file cleanup runs on the core's worker.
+    public func releaseLease(_ leaseID: String) {
+        core.releaseLease(leaseId: leaseID)
+    }
+
     /// Resolve a list selection to its logical message.
     public func messageForOccurrence(occurrenceId: Int64) async throws -> Int64 {
         let token = SweetbriarCore.CancelToken()
@@ -771,6 +785,53 @@ extension ReaderMessage {
             tags: generated.tags.map { ReaderTag($0) },
             note: generated.note,
             bodyAvailability: BodyAvailability(generated.bodyAvailability)
+        )
+    }
+}
+
+extension BodyKind {
+    fileprivate var generated: SweetbriarCore.BodyKind {
+        switch self {
+        case .sanitizedHtml: .sanitizedHtml
+        case .plainText: .plainText
+        case .source: .source
+        }
+    }
+
+    fileprivate init(_ generated: SweetbriarCore.BodyKind) {
+        switch generated {
+        case .sanitizedHtml: self = .sanitizedHtml
+        case .plainText: self = .plainText
+        case .source: self = .source
+        }
+    }
+}
+
+extension RenderWarningCode {
+    fileprivate init(_ generated: SweetbriarCore.RenderWarningCode) {
+        switch generated {
+        case .partialParse: self = .partialParse
+        case .charsetReplaced: self = .charsetReplaced
+        case .unsupportedContent: self = .unsupportedContent
+        case .missingCid: self = .missingCid
+        case .ambiguousCid: self = .ambiguousCid
+        case .unsafeUrl: self = .unsafeUrl
+        case .renditionLimit: self = .renditionLimit
+        case .countSaturated: self = .countSaturated
+        }
+    }
+}
+
+extension BodyLease {
+    fileprivate init(_ generated: SweetbriarCore.BodyLease) {
+        self.init(
+            leaseId: generated.leaseId, kind: BodyKind(generated.kind),
+            filePath: generated.filePath, byteLength: generated.byteLength,
+            remoteContentBlocked: generated.remoteContentBlocked,
+            warnings: generated.warnings.map {
+                RenderWarning(code: RenderWarningCode($0.code), partId: $0.partId)
+            },
+            manifestPath: generated.manifestPath
         )
     }
 }
