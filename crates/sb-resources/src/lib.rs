@@ -17,6 +17,9 @@ use std::sync::Arc;
 use sb_platform::{OsRandom, RealFs, SystemClock};
 use sb_store::StorePaths;
 
+mod bodies;
+pub use bodies::{AttachmentLease, BodyKind, BodyLease, PublishedAttachment, PublishedBody};
+pub use sb_mime::{RenderWarning, RenderWarningCode};
 mod acquire;
 mod import;
 mod import_jobs;
@@ -77,6 +80,7 @@ pub use sb_store::{Fs, refresh_list_rows};
 /// process's whole reach into the leaves (spec/01).
 pub struct Resources {
     store: Store,
+    renditions: Option<RenditionCache>,
     fs: Arc<dyn Fs>,
     clock: Arc<dyn Clock>,
     random: Arc<dyn Random>,
@@ -106,6 +110,7 @@ impl Resources {
         let seams = Seams::new(Arc::clone(&fs), Arc::clone(&clock), Arc::clone(&random));
         Ok(Self {
             store: open(&paths, &seams)?,
+            renditions: None,
             fs,
             clock,
             random,

@@ -86,7 +86,7 @@ impl RenditionCache {
         Self::open_on(cache_root, Arc::new(RealFs), Arc::new(OsRandom))
     }
 
-    fn open_on(
+    pub(crate) fn open_on(
         cache_root: &Path,
         fs: Arc<dyn Fs>,
         random: Arc<dyn Random>,
@@ -215,6 +215,28 @@ impl RenditionFiles {
         bytes: &[u8],
         protection: RenditionProtection,
     ) -> Result<PathBuf, RenditionError> {
+        self.publish_named(index, &format!("file-{index}"), bytes, protection)
+    }
+
+    /// Publish a generated, single-component name in this reservation.
+    pub(crate) fn publish_named(
+        &mut self,
+        index: usize,
+        name: &str,
+        bytes: &[u8],
+        protection: RenditionProtection,
+    ) -> Result<PathBuf, RenditionError> {
+        if name.is_empty()
+            || name == "."
+            || name == ".."
+            || !name
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b".-_".contains(&b))
+        {
+            return Err(
+                io::Error::new(io::ErrorKind::InvalidInput, "invalid generated filename").into(),
+            );
+        }
         if self.status != Status::Active
             || self.sizes.get(index).copied() != Some(bytes.len() as u64)
             || self.published.contains(&index)
@@ -223,7 +245,7 @@ impl RenditionFiles {
                 io::Error::new(io::ErrorKind::InvalidInput, "invalid reserved file").into(),
             );
         }
-        let result = self.write_file(index, bytes, protection);
+        let result = self.write_file(index, name, bytes, protection);
         if result.is_err() {
             self.status = Status::Failed;
         } else {
@@ -235,12 +257,20 @@ impl RenditionFiles {
     fn write_file(
         &self,
         index: usize,
+        name: &str,
         bytes: &[u8],
         protection: RenditionProtection,
     ) -> Result<PathBuf, RenditionError> {
         let fs = &self.cache.fs;
         let temporary = self.directory.join(format!("file-{index}.tmp"));
-        let final_path = self.directory.join(format!("file-{index}"));
+        let final_path = self.directory.join(name);
+        if fs.metadata(&final_path)?.is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "duplicate generated filename",
+            )
+            .into());
+        }
         let mut file = fs.create(&temporary)?;
         file.write_all(bytes)?;
         if matches!(protection, RenditionProtection::Quarantine) {

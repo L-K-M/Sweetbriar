@@ -4,6 +4,8 @@
 //! it — L1 sees service DTOs only (spec/01 rules 1 and 3).
 #![forbid(unsafe_code)]
 
+mod bodies;
+pub use bodies::{AttachmentLease, BodyKind, BodyLease, RenderWarning, RenderWarningCode};
 mod api;
 mod error;
 mod imports;
