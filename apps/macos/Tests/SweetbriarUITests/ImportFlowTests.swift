@@ -50,9 +50,20 @@ final class ImportFlowTests: XCTestCase {
         showReport.click()
         XCTAssertTrue(app.windows["importReport"].waitForExistence(timeout: Self.timeout))
 
+        // The sheet must be gone before the window takes a click.
         app.buttons["importClose"].click()
+        let sheetGone = expectation(
+            for: NSPredicate(format: "exists == false"),
+            evaluatedWith: app.sheets.firstMatch
+        )
+        wait(for: [sheetGone], timeout: Self.timeout)
         let entry = sidebar.staticTexts[Self.mailbox]
         XCTAssertTrue(entry.waitForExistence(timeout: Self.timeout))
+        let hittable = expectation(
+            for: NSPredicate(format: "hittable == true"),
+            evaluatedWith: entry
+        )
+        wait(for: [hittable], timeout: Self.timeout)
         entry.click()
 
         let rows = window.tables["messageList"].tableRows
