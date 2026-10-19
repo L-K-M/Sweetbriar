@@ -683,3 +683,23 @@ public struct BodyLease: Sendable, Equatable {
         self.manifestPath = manifestPath
     }
 }
+
+/// A decoded attachment, valid until release or core shutdown.
+public struct AttachmentLease: Sendable, Equatable {
+    public var leaseId: String
+    public var filePath: String
+    public var byteLength: UInt64
+    public var partId: String
+    public var displayName: String
+    public var mediaType: String
+
+    public init(leaseId: String, filePath: String, byteLength: UInt64,
+                partId: String, displayName: String, mediaType: String) {
+        self.leaseId = leaseId
+        self.filePath = filePath
+        self.byteLength = byteLength
+        self.partId = partId
+        self.displayName = displayName
+        self.mediaType = mediaType
+    }
+}
