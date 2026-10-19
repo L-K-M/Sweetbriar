@@ -1,4 +1,4 @@
-//! Inert HTML policy. Resource/CSS rewriting and rendition limits belong to M1.5d.
+//! Inert HTML allow-list, applied after resource and CSS rewriting.
 
 use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -131,6 +131,8 @@ const LINK_SCHEMES: &[&str] = &["http", "https", "mailto"];
 const MAX_HREF_BYTES: usize = 4096;
 /// Longest value kept for any other attribute: layout numbers and codes.
 const MAX_ATTRIBUTE_BYTES: usize = 256;
+/// Longest checked inline style kept.
+const MAX_STYLE_BYTES: usize = 4096;
 /// Begins a character spelled `PLACEHOLDER` + hex + `;` in text between
 /// the first parse and the last serialization (see `neutralize_text`).
 /// Private use, and a sender's own is spelled that way too.
@@ -205,7 +207,14 @@ impl std::fmt::Display for HtmlSanitizeError {
 
 impl std::error::Error for HtmlSanitizeError {}
 
-fn policy() -> Builder<'static> {
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ResourcePolicy {
+    Strip,
+    Rewritten,
+}
+
+fn policy(minted: &HashSet<String>, resources: ResourcePolicy) -> Builder<'static> {
+    let minted = minted.clone();
     let mut policy = Builder::new();
     policy
         .tags(TAGS.iter().copied().collect::<HashSet<_>>())
@@ -220,22 +229,29 @@ fn policy() -> Builder<'static> {
         .url_schemes(LINK_SCHEMES.iter().copied().collect())
         .url_relative(UrlRelative::Deny)
         .link_rel(None)
-        .attribute_filter(|tag, attr, value| {
+        .attribute_filter(move |tag, attr, value| {
+            if tag == "img" && attr == "src" {
+                return minted.contains(value).then(|| value.into());
+            }
             if tag == "a" && attr == "href" {
                 return safe_destination(value)
                     .map(|url| url.to_string())
                     .filter(|href| href.len() <= MAX_HREF_BYTES)
                     .map(Into::into);
             }
-            let limit = if attr == "title" {
-                MAX_HREF_BYTES
-            } else {
-                MAX_ATTRIBUTE_BYTES
+            let limit = match attr {
+                "title" => MAX_HREF_BYTES,
+                "style" => MAX_STYLE_BYTES,
+                _ => MAX_ATTRIBUTE_BYTES,
             };
             (value.len() <= limit).then(|| value.into())
         });
-    // No style or resource-bearing attributes: M1.5d adds checked CSS and CID
-    // rewriting/counting before this final allow-list boundary.
+    if resources == ResourcePolicy::Rewritten {
+        policy.add_generic_attributes(["style"]);
+        policy.add_tags(["img"]);
+        policy.add_tag_attributes("img", ["src", "alt", "width", "height"]);
+        policy.add_url_schemes(["sweetbriar-cid"]);
+    }
     policy
 }
 
@@ -257,15 +273,20 @@ fn safe_destination(value: &str) -> Option<Url> {
 /// Link records are sorted by canonical destination for deterministic output.
 /// Unwinds are contained across both HTML parsers; panic payloads are discarded.
 pub fn sanitize_html(decoded_html: &str) -> Result<SanitizedHtml, HtmlSanitizeError> {
-    std::panic::catch_unwind(|| sanitize_run(decoded_html)).unwrap_or(Err(HtmlSanitizeError::Panic))
+    std::panic::catch_unwind(|| sanitize_run(decoded_html, &HashSet::new(), ResourcePolicy::Strip))
+        .unwrap_or(Err(HtmlSanitizeError::Panic))
 }
 
-fn sanitize_run(decoded_html: &str) -> Result<SanitizedHtml, HtmlSanitizeError> {
+pub(crate) fn sanitize_run(
+    decoded_html: &str,
+    minted: &HashSet<String>,
+    resources: ResourcePolicy,
+) -> Result<SanitizedHtml, HtmlSanitizeError> {
     #[cfg(test)]
     if decoded_html == tests::PANIC_MARKER {
         panic!("sb-mime sanitizer test tripwire");
     }
-    let policy = policy();
+    let policy = policy(minted, resources);
     let neutral = neutralize_text(decoded_html)?;
     // Normalize namespaces and malformed trees before collecting links, so
     // removed subtrees cannot contribute warning records.
@@ -974,9 +995,13 @@ mod tests {
             }
         }
         for html in inputs {
-            let first = policy().clean(&neutralize_text(&html).unwrap()).to_string();
+            let first = policy(&HashSet::new(), ResourcePolicy::Strip)
+                .clean(&neutralize_text(&html).unwrap())
+                .to_string();
             assert!(!rescanned(&first), "the first pass");
-            let last = policy().clean(&first).to_string();
+            let last = policy(&HashSet::new(), ResourcePolicy::Strip)
+                .clean(&first)
+                .to_string();
             assert!(!rescanned(&last), "the final pass");
         }
     }
@@ -1011,7 +1036,7 @@ mod tests {
             "<svg><td><foreignObject></td><xmp><pre>{}\u{e000}3C;</pre>",
             "&amp;".repeat(2_000)
         );
-        let first = policy()
+        let first = policy(&HashSet::new(), ResourcePolicy::Strip)
             .clean(&neutralize_text(&dense).unwrap())
             .to_string();
         assert!(!rescanned(&first), "the first pass");

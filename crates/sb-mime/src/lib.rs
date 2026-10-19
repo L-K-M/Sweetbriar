@@ -17,6 +17,8 @@ mod mbox;
 mod outcome;
 mod reader;
 mod render;
+mod render_css;
+mod rendition;
 mod summary;
 mod walk;
 
@@ -35,6 +37,7 @@ pub use reader::{
     RenderWarningCode, SelectedBody, extract_attachment, render_input,
 };
 pub use render::{HtmlSanitizeError, LinkRecord, LinkWarning, SanitizedHtml, sanitize_html};
+pub use rendition::{MAX_RENDITION_BYTES, Manifest, RenderKind, Rendition, Resource, render};
 pub use summary::{MailboxAddress, MessageSummary, PARSER_VERSION};
 
 use mail_parser::parsers::MessageStream;
