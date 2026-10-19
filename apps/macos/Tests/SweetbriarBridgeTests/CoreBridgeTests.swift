@@ -295,7 +295,7 @@ func anImportedMailboxCrossesTheBridge() async throws {
 
 /// Import `paths` and wait for the finished job, confirming with no
 /// variants.
-private func importAndFinish(_ bridge: CoreBridge, paths: [String]) async throws -> ImportJob {
+func importAndFinish(_ bridge: CoreBridge, paths: [String]) async throws -> ImportJob {
     let started = try await bridge.startImport(paths: paths)
     let deadline = ContinuousClock.now + .seconds(50)
     var confirmed = false
