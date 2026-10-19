@@ -410,7 +410,8 @@ enum WindowEvent { Invalidated { generation: u64 }, ResetRequired }
 async fn open_body(message_id: i64, preferred: BodyKind) -> Result<BodyLease, CoreError>;
 // BodyKind: SanitizedHtml | PlainText | Source
 struct BodyLease { lease_id: LeaseId, kind: BodyKind, file_path: String, byte_length: u64,
-                   remote_content_blocked: u32, warnings: Vec<RenderWarning> }
+                   remote_content_blocked: u32, warnings: Vec<RenderWarning>,
+                   manifest_path: Option<String> }
 async fn open_attachment(message_id: i64, part_id: String) -> Result<AttachmentLease, CoreError>;
 fn release_lease(lease_id: LeaseId);
 ```
@@ -424,6 +425,52 @@ fn release_lease(lease_id: LeaseId);
   disposable.
 - **Not yet downloaded:** if the body isn't acquired yet, `open_body`
   fetches it (online) or returns `Unavailable` (offline).
+- **One core owns the leases' cache:** it takes `renditions.lock` in
+  the cache root (03), then sweeps stale lease directories. Another
+  core opening the same cache root opens, but its leases are
+  `Unavailable`, so it never removes leases it doesn't own.
+- **Lease tokens** are unguessable and never reused in a core's life;
+  each open returns a new lease. `release_lease` revokes access at once
+  and queues the cleanup; an unknown or released token does nothing.
+  An open either hands its lease to the caller or removes it: one
+  cancelled after its files were written leaves nothing live.
+- **Bounds:** the MIME limits (10) apply to every extraction. A
+  rendition file holds at most 50,000,000 bytes, one lease 100,000,000,
+  all live leases 512,000,000 and at most 64 of them; past a budget the
+  open is `Unavailable` naming the quota, and no live lease is evicted.
+- **Which body:** `preferred` is a preference; `kind` names what the
+  file holds. The last supported candidate of the requested kind in a
+  multipart/alternative wins; a multipart/related root is its `start`
+  part, else its first child. Attached messages and attached text are
+  never the body. Asked for HTML with none, the lease is plain text;
+  asked for plain text with only HTML, the text of the sanitized HTML.
+  Source is the acquisition's exact bytes.
+- **The manifest:** a sanitized HTML or plain text lease also carries
+  `manifest_path`, a version-1 JSON file in its directory; a source
+  lease has none. It lists the message's attachments, and for HTML the
+  `sweetbriar-cid:` resources and the links:
+
+  ```json
+  { "v": 1,
+    "resources": [ { "id": "r1", "file": "r1.png", "media_type": "image/png", "bytes": 1234 } ],
+    "links": [ { "href": "https://example.com/x", "warnings": ["text_domain", "raw_ip", "user_info"] } ],
+    "attachments": [ { "part_id": "1.2", "display_name": "a.pdf",
+                       "media_type": "application/pdf", "bytes": 5678 } ] }
+  ```
+
+  `file` names a file in the lease directory: no separators, never
+  `..`. A reader refuses a manifest that names anything else, lists a
+  file twice, or is over 4,000,000 bytes. `links` holds each
+  destination once, with the union of its anchors' warnings, since a
+  click reports the destination, not the anchor.
+- **`AttachmentLease`** `{ lease_id, file_path, byte_length, part_id,
+  display_name, media_type }`: the decoded part under a generated file
+  name, with the quarantine attribute set before it is returned (10).
+  It lives until released, independent of any body lease.
+- **`RenderWarning`** is a code with an optional part id:
+  `partial_parse`, `charset_replaced`, `unsupported_content`,
+  `missing_cid`, `ambiguous_cid`, `unsafe_url`, `rendition_limit`,
+  `count_saturated`.
 
 ## Threading, cancellation and FFI rules
 

@@ -241,6 +241,55 @@ local drafts. No network yet.
 
 ### M1.5 Safe rendering and the reader — L, linux + macos-ci
 
+- **PR split (2026-10-18):** the renderer, the leases and the reader
+  don't fit one PR, and the new crates' lockfile and notices alone
+  exceed one. In order; M1.6 waits for all of them.
+  - **M1.5a Contracts — S:** this split and the decisions in 01, 03,
+    07, 08, 10 and 11 the others implement. No code.
+  - **M1.5b Render input and plain text — L:** bounded body selection
+    (multipart/alternative, multipart/related), stable part ids,
+    attachment descriptors, literal UTF-8 plain text with format=flowed
+    decoded (RFC 3676).
+  - **M1.5c1a–c Dependencies — M, L, M:** `url`, then `lol_html`, then
+    `ammonia` with the `cssparser` it already brings, exact pins with
+    their named MPL-2.0 exceptions, the workspace's and the fuzz
+    crate's lockfiles and policy, and notices. No behavior.
+  - **M1.5c2 HTML allow-list — L:** the tag, attribute and link policy,
+    with the final `ammonia` pass. Depends on b and c1c.
+  - **M1.5d Resource and CSS rewriting — L:** `sb-mime::render`
+    complete: `cid:` rewriting, remote resource stripping and counting,
+    the CSS policy, the rendition manifest. Owns the renderer
+    deliverable.
+  - **M1.5e Reader store queries — L:** message metadata and the
+    integrity-checked acquisition read, store through resources.
+  - **M1.5f Lease cache — L:** the private per-lease cache, budgets,
+    cleanup and macOS quarantine through `sb-platform`.
+  - **M1.5g Body leases — L:** `open_body` and `release_lease` through
+    service. Depends on d, e and f.
+  - **M1.5h Attachment leases — L:** `open_attachment` through service.
+    Depends on b, e, f and g.
+  - **M1.5i Reader metadata FFI — L:** `get_message` exported and
+    bridged. Depends on e.
+  - **M1.5j Body FFI — L:** body leases exported and bridged. Depends on
+    g.
+  - **M1.5k Attachment FFI — L:** attachment leases exported and
+    bridged; owns the lease deliverable. Depends on h and j.
+  - **M1.5l Reader model and plain text — L:** the selection ticket
+    (navigation generation) and the TextKit 2 plain and source views.
+    Depends on i and j.
+  - **M1.5m WebKit pane — L:** the reused `WKWebView`, rule list and
+    `sweetbriar-cid:` handler. Depends on l.
+  - **M1.5n Reader presentation — L:** the header and "Received in"
+    chip, link interception and warnings, attachments; replaces the
+    reader placeholder. Owns the safe-link acceptance check. Depends on
+    k and m.
+  - **M1.5o Hostile corpus — L:** `fixtures/hostile/` and its Linux
+    invariant runner. Owns the first acceptance check. Depends on d, m
+    and n.
+  - **M1.5p macOS qualification — M:** the zero-connections and
+    generation tests on PR macOS CI and the owner checklist. Depends on
+    o.
+
 - **Goal:** messages render as sanitized sender layout or literal plain
   text in the reader, with nothing loaded remotely.
 - **Spec:** 08 (Reader), 10 (Rendering), 07 (Body and attachment leases).

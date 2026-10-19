@@ -252,7 +252,9 @@ is committed, and updates are their own PRs.
   BSD-2-Clause, BSD-3-Clause, ISC, 0BSD, Unlicense, CC0-1.0, Zlib,
   Unicode-3.0.
 - **MPL-2.0** is allowed by **named exception per package and version**:
-  UniFFI's crates today. It is file-level copyleft. Unmodified, it needs
+  UniFFI's crates, and the CSS parsing family `ammonia` and `lol_html`
+  depend on (`cssparser`, `cssparser-macros`, `dtoa-short`,
+  `selectors`), added by M1.5. It is file-level copyleft. Unmodified, it needs
   notices plus a pointer to the source; a modified MPL file must be
   published.
 - **LGPL** is allowed only for dynamically linked Linux platform

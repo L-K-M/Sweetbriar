@@ -194,13 +194,18 @@ restores its draft by `draft_id`.
   - a custom `WKURLSchemeHandler` for `sweetbriar-cid:` serves only
     resources from the current message's lease;
   - a navigation generation counter drops responses for a previously
-    shown message.
+    shown message: every selection change takes a new ticket, and
+    every body, resource, link and error completion checks it before
+    it shows anything; a stale lease is released.
 - **Remote content** (images, CSS, fonts that would load automatically)
   is always blocked in the pilot. A "Load remote content" option, per
   message or per sender, is *later*: it needs a separate rendition and
   rule-list policy.
 - **Hyperlinks** stay clickable. A click opens the link in the default
   browser after the warnings below; the reader itself never navigates.
+  Only a user-activated click on the current message opens anything;
+  redirects, frames, downloads and other schemes are refused, and
+  `target=_blank` follows the same rule.
 - **Plain text** renders natively in an `NSTextView` (TextKit 2):
   literal, no Markdown interpretation, with quotes styled by depth.
 - **Reading view:** a toggle, off by default. It renders the semantic
@@ -210,8 +215,9 @@ restores its draft by `draft_id`.
 - **Header area:**
   - from, to and date;
   - the "Received in <account>" chip in the account color with its
-    label;
-  - tags and the note.
+    label, from the selected occurrence's account. Until M1.10's
+    appearance service the chip is neutral, with its label;
+  - tags and the note, read-only until the metadata commands.
 - **Links** show their real destination on hover. A warning appears
   when:
   - the link text's domain differs from the target's;

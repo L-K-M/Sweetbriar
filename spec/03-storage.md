@@ -21,6 +21,11 @@ Rests on research [04-data-safety](../research/04-data-safety.md),
     import-report-<job id>.json    import job reports (09)
 <cache root>/                     macOS: ~/Library/Caches/Sweetbriar/   Linux: $XDG_CACHE_HOME/sweetbriar/
   previews/, thumbnails/          disposable
+  renditions.lock                 held by the one core using renditions/
+  renditions/<lease token>/       one private directory per body or
+                                  attachment lease (07); removed on
+                                  release, at shutdown, and at open by
+                                  the core that took the lock
 ```
 
 A writable open first creates any missing ancestors of the data root,
