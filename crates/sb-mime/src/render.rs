@@ -313,6 +313,9 @@ fn sanitize_run(decoded_html: &str) -> Result<SanitizedHtml, HtmlSanitizeError> 
             warnings.insert(LinkWarning::TextDomain);
         }
     }
+    // The first pass removed markup between short text nodes, so their
+    // text now runs together: split again before the final serialization.
+    let rewritten = split_dense_text(&rewritten)?;
     Ok(SanitizedHtml {
         html: policy.clean(&rewritten).to_string(),
         links: destinations
@@ -769,6 +772,23 @@ mod tests {
             let text = mail_parser::decoders::html::html_to_text(result.html());
             assert_eq!(text.matches(decoded).count(), UNITS, "{unit:?}");
             assert!(text.trim_end().ends_with("<b>"), "{unit:?}");
+        }
+    }
+
+    /// Markup the sanitizer removes (a disallowed element, a comment)
+    /// leaves its neighbours' text contiguous for the final pass, so short
+    /// source text nodes can still serialize as one dense run.
+    #[test]
+    fn removed_markup_does_not_rejoin_dense_text() {
+        for unit in [
+            "<font>&amp;</font>",
+            "&amp;<!--x-->",
+            "<blink>&nbsp;</blink>",
+        ] {
+            let html = format!("<p>{}</p>", unit.repeat(20_000));
+            let result = sanitize_html(&html).unwrap();
+            let longest = result.html().split(['<', '>']).map(str::len).max().unwrap();
+            assert!(longest < 8 * 1024, "{unit:?}: a {longest}-byte run");
         }
     }
 
