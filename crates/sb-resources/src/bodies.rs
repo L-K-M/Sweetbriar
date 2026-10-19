@@ -5,7 +5,8 @@ use sb_mime::{Limits, RenderKind, render, render_input};
 use sb_platform::RealFs;
 
 use crate::{
-    Fs, RenditionCache, RenditionError, RenditionFiles, RenditionProtection, Resources, StoreError,
+    Fs, RenderWarningCode, RenditionCache, RenditionError, RenditionFiles, RenditionProtection,
+    Resources, StoreError,
 };
 
 /// spec/07: a reader refuses a manifest over this, so none is written.
@@ -137,6 +138,15 @@ impl Resources {
         // Reserve exact sizes before publication. Tokens have a fixed length,
         // so rendering with the reservation's token preserves the sizes.
         let rendition = render(&input, &"0".repeat(64), preferred);
+        // spec/07: past a budget the open is Unavailable, not the
+        // renderer's placeholder.
+        if rendition
+            .warnings()
+            .iter()
+            .any(|warning| warning.code() == RenderWarningCode::RenditionLimit)
+        {
+            return Err(unavailable("rendition quota: 50,000,000 bytes per file"));
+        }
         let manifest = rendition.manifest().to_json();
         if manifest.len() > MAX_MANIFEST_BYTES {
             return Err(unavailable("rendition quota: 4,000,000 bytes per manifest"));

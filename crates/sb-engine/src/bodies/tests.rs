@@ -20,9 +20,15 @@ fn wait(mut condition: impl FnMut() -> bool) {
 }
 
 fn imported(root: &Path, cache: &Path) -> (Engine, Vec<i64>) {
+    imported_with(root, cache, &[PLAIN, HTML, RELATED])
+}
+
+/// An engine over `root` and `cache` that imported `bodies`, one message
+/// each, and their message ids in import order.
+fn imported_with(root: &Path, cache: &Path, bodies: &[&str]) -> (Engine, Vec<i64>) {
     let engine = block_on(Engine::open_with_cache(root, cache)).unwrap();
     let mbox = root.parent().unwrap().join("bodies.mbox");
-    let bytes = [PLAIN, HTML, RELATED]
+    let bytes = bodies
         .iter()
         .map(|body| format!("From sender@example.test Sat Oct 17 12:00:00 2026\n{body}"))
         .collect::<String>();
@@ -49,7 +55,7 @@ fn imported(root: &Path, cache: &Path) -> (Engine, Vec<i64>) {
                 .unwrap())
         })
         .unwrap();
-    assert_eq!(ids.len(), 3);
+    assert_eq!(ids.len(), bodies.len());
     (engine, ids)
 }
 
@@ -307,5 +313,26 @@ fn non_utf8_cache_paths_fail_without_returning_a_lossy_lease() {
         assert!(engine.leases().state.lock().unwrap().live.is_empty());
         assert_eq!(fs::read_dir(cache.join("renditions")).unwrap().count(), 0);
     }
+    block_on(engine.shutdown()).unwrap();
+}
+
+/// spec/07: past the 50,000,000-byte rendition cap the open is
+/// Unavailable naming the quota, not a placeholder lease. 600,000
+/// references to one image pass it once each names its lease URL.
+#[test]
+fn an_oversized_rendition_is_unavailable_without_a_lease() {
+    let scratch = ScratchDir::new("body-rendition-cap");
+    let cache = scratch.path().join("cache");
+    let references = "<img src=\"cid:pic\">".repeat(600_000);
+    let body = RELATED.replace("<img src=\"cid:pic\">", &references);
+    let (engine, ids) = imported_with(&scratch.path().join("data"), &cache, &[&body]);
+    match block_on(engine.open_body(ids[0], BodyKind::SanitizedHtml)) {
+        Err(EngineError::Unavailable { reason }) => {
+            assert!(reason.contains("50,000,000"), "{reason}");
+        }
+        other => panic!("an oversized rendition opened: {other:?}"),
+    }
+    assert!(engine.leases().state.lock().unwrap().live.is_empty());
+    assert_eq!(fs::read_dir(cache.join("renditions")).unwrap().count(), 0);
     block_on(engine.shutdown()).unwrap();
 }
