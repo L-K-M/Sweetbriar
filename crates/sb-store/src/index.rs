@@ -2,13 +2,16 @@
 //! Call mutation helpers once per writer transaction and propagate any error
 //! out of the closure so the whole transaction rolls back. Submit index writes
 //! at `WritePriority::Index`; extraction and acquisition reads happen beforehand.
-//! Rebuild epoch and pause fencing are added by M1.6d2.
+//! [`rebuild`] owns the durable job/worker records; publication rechecks
+//! the captured [`IndexFence`] and pauses before any effect.
 
 use std::collections::BTreeSet;
 
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 use crate::{StoreError, Timestamp, schema::classify};
+
+pub mod rebuild;
 
 pub const MAX_INDEX_BATCH: usize = 200;
 pub const MAX_INDEX_BATCH_BYTES: usize = 2_000_000;
@@ -114,6 +117,23 @@ pub struct IndexPublication {
     pub document: Option<IndexDocument>,
 }
 
+/// What a worker captured in the same read as its pending rows (spec/06):
+/// the rebuild epoch and the target extractor version. Publication rechecks
+/// both, plus job/phase and pauses, in the writer before any effect;
+/// a stale or paused worker's submission is a quiet no-op.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IndexFence {
+    pub epoch: i64,
+    pub version: u32,
+}
+
+/// One read's worth of pending work and the fence captured with it.
+#[derive(Debug, Clone)]
+pub struct IndexBatch {
+    pub fence: IndexFence,
+    pub documents: Vec<PendingDocument>,
+}
+
 /// Target capability, including newer versions this app must not downgrade.
 pub fn target_version(conn: &Connection) -> Result<u32, StoreError> {
     u32::try_from(meta_integer(conn, "search_extractor_version")?)
@@ -177,10 +197,12 @@ pub(crate) fn enqueue_one(
     Ok(())
 }
 
-/// Capture tokens in a short read transaction, then extract outside SQLite.
-/// The byte limit is checked on extracted values at publication time.
-pub fn pending_batch(conn: &Connection, limit: usize) -> Result<Vec<PendingDocument>, StoreError> {
+/// Capture tokens and the fence in one short read transaction, then
+/// extract outside SQLite. The byte limit is checked on extracted values
+/// at publication time.
+pub fn pending_batch(conn: &Connection, limit: usize) -> Result<IndexBatch, StoreError> {
     check_count(limit)?;
+    let fence = rebuild::fence(conn)?;
     let mut stmt = conn
         .prepare(
             "SELECT doc_id, revision, reason, enqueued_at FROM d_index_queue
@@ -197,38 +219,41 @@ pub fn pending_batch(conn: &Connection, limit: usize) -> Result<Vec<PendingDocum
             ))
         })
         .map_err(sql_error)?;
-    rows.map(|row| {
-        let (doc_id, revision, reason, time) = row.map_err(sql_error)?;
-        let reason = match reason.as_str() {
-            "new" => IndexReason::New,
-            "reextract" => IndexReason::Reextract,
-            "delete" => IndexReason::Delete,
-            _ => return Err(StoreError::corrupt("invalid index queue reason")),
-        };
-        Ok(PendingDocument {
-            doc_id,
-            revision,
-            reason,
-            enqueued_at: Timestamp::from_millis(time),
+    let documents = rows
+        .map(|row| {
+            let (doc_id, revision, reason, time) = row.map_err(sql_error)?;
+            let reason = match reason.as_str() {
+                "new" => IndexReason::New,
+                "reextract" => IndexReason::Reextract,
+                "delete" => IndexReason::Delete,
+                _ => return Err(StoreError::corrupt("invalid index queue reason")),
+            };
+            Ok(PendingDocument {
+                doc_id,
+                revision,
+                reason,
+                enqueued_at: Timestamp::from_millis(time),
+            })
         })
-    })
-    .collect()
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(IndexBatch { fence, documents })
 }
 
-/// Publish only still-current tokens at the captured target version. Returns
-/// the accepted document count; stale entries write nothing and remain queued.
-/// A mixed batch may accept current documents while skipping stale documents.
+/// Publish only still-current tokens under the captured fence. Returns
+/// the accepted document count; stale, paused or phase-gated submissions
+/// write nothing and remain queued. A mixed batch may accept current
+/// documents while skipping stale documents.
 pub fn publish_batch(
     tx: &Transaction,
-    version: u32,
+    fence: IndexFence,
     batch: &[IndexPublication],
 ) -> Result<usize, StoreError> {
-    publish_with_cut(tx, version, batch, &mut || Ok(()))
+    publish_with_cut(tx, fence, batch, &mut || Ok(()))
 }
 
 fn publish_with_cut(
     tx: &Transaction,
-    version: u32,
+    fence: IndexFence,
     batch: &[IndexPublication],
     cut: &mut impl FnMut() -> Result<(), StoreError>,
 ) -> Result<usize, StoreError> {
@@ -244,7 +269,7 @@ fn publish_with_cut(
             return Err(invalid("invalid or duplicate index publication token"));
         }
         if let Some(doc) = &item.document {
-            doc.validate(version)?;
+            doc.validate(fence.version)?;
             bytes = bytes.saturating_add(doc.column_bytes());
         }
     }
@@ -254,7 +279,7 @@ fn publish_with_cut(
         ));
     }
     cut()?;
-    if target_version(tx)? != version {
+    if !rebuild::publication_open(tx, fence)? {
         return Ok(0);
     }
     let mut accepted = 0;
@@ -297,7 +322,7 @@ fn publish_with_cut(
                    attachment_names) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
                 params![
                     id,
-                    version,
+                    fence.version,
                     doc.state.as_str(),
                     mask,
                     c[0],
