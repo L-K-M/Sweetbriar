@@ -377,13 +377,18 @@ impl Engine {
         self.imports().cancel(job_id);
         // The cancel is durable either way; a failed cleanup is redone
         // at the next open, which finds no report.
-        let id = job_id.to_owned();
-        let written = self
-            .read_through(move |resources| finish(resources, &id))
+        // Noted inside the blocking work: a caller dropping this future
+        // mid-cleanup must not leave a written report unnamed.
+        let (id, imports) = (job_id.to_owned(), Arc::clone(self.imports()));
+        let _ = self
+            .read_through(move |resources| {
+                let written = finish(resources, &id);
+                if matches!(written, Ok(true)) {
+                    imports.note_report(&id);
+                }
+                written
+            })
             .await;
-        if matches!(written, Ok(true)) {
-            self.imports().note_report(job_id);
-        }
         Ok(receipt)
     }
 
@@ -429,7 +434,11 @@ impl Engine {
     pub async fn import_report(&self, job_id: &str) -> Result<Option<ImportReport>, EngineError> {
         let id = job_id.to_owned();
         self.read_through(move |resources| {
-            let job = resources.read(|tx| import_job(tx, &id))?;
+            let (job, sources) = resources.read(|tx| {
+                let job = import_job(tx, &id)?;
+                let sources = recorded_import_job_sources(tx, &id)?.len();
+                Ok((job, sources))
+            })?;
             if !job.is_finished() {
                 return Err(StoreError::Conflict {
                     detail: format!("import job {id} has not finished"),
@@ -437,7 +446,7 @@ impl Engine {
             }
             let path = resources.import_report_path(&id)?;
             Ok(resources
-                .read_import_report(&id)?
+                .read_import_report(&id, sources)?
                 .map(|json| ImportReport { path, json }))
         })
         .await
@@ -621,13 +630,14 @@ async fn discard_if_cancelled(worker: &Worker, claim: &Claim, inventory: ImportI
 /// Run terminal-job cleanup when a worker's turn ends; a paused job is
 /// left alone, and a failed cleanup is redone at the next open.
 async fn finished(worker: &Worker, claim: &Claim) {
-    let id = claim.id.clone();
-    let written = worker
-        .blocking(move |resources| finish(resources, &id))
+    let (id, jobs) = (claim.id.clone(), Arc::clone(&claim.jobs));
+    let _ = worker
+        .blocking(move |resources| {
+            if matches!(finish(resources, &id), Ok(true)) {
+                jobs.note_report(&id);
+            }
+        })
         .await;
-    if matches!(written, Ok(Ok(true))) {
-        claim.jobs.note_report(&claim.id);
-    }
 }
 
 /// Terminal-job cleanup (spec/03, 09): a completed or cancelled job's
