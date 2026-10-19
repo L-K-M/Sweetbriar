@@ -648,13 +648,11 @@ func theBenchmarkHookSeesTheSameDeliveriesAsTheLists() async throws {
     await model.close()
 }
 
-/// An index older than the installed one is dropped (spec/08): a
-/// list opening on the empty source while the Debug menu fills and
-/// rebuilds keeps the refill's index when the opening's stale one
-/// lands last.
+/// One index fetch at a time (spec/08): a rebuild asked for while the
+/// opening's index is in flight runs after it, and returns once done.
 @MainActor
 @Test(.timeLimit(.minutes(1)))
-func aStaleIndexLandingAfterARebuildIsDropped() async throws {
+func aRebuildAskedForWhileOpeningRunsAfterIt() async throws {
     let fake = FakeListWindowSource()
     let gate = ThrowingGate()
     await fake.gateNextIndexRead(gate)
@@ -665,18 +663,19 @@ func aStaleIndexLandingAfterARebuildIsDropped() async throws {
     let opening = Task { try await model.open() }
     try #require(await eventually { await fake.indexReads.count == 1 })
 
-    // The fill and its rebuild land first.
     let n = 1_000
     let generation = await fake.fill(n)
-    try await model.rebuild()
-    #expect(model.generation == generation)
-    #expect(model.count == n)
+    let rebuilding = Task { try await model.rebuild() }
+    try await Task.sleep(for: .milliseconds(50))
+    #expect(await fake.indexReads.count == 1)
 
-    // The stale generation-0 index lands last and is dropped.
     await gate.open()
     try await opening.value
+    try await rebuilding.value
     #expect(model.generation == generation)
     #expect(model.count == n)
+    #expect(await fake.indexReads.count == 2)
+    #expect(await fake.maxIndexInFlight == 1)
 
     await model.close()
 }
@@ -1048,7 +1047,8 @@ func theSelectionDropsAMissingOccurrence() async throws {
     await model.close()
 }
 
-/// One `next` waits at a time, and `close` ends it.
+/// One `next` waits at a time, and `close` cancels it before the window
+/// closes — the close alone would also end it.
 @MainActor
 @Test(.timeLimit(.minutes(1)))
 func closeEndsTheSubscription() async throws {
@@ -1057,9 +1057,43 @@ func closeEndsTheSubscription() async throws {
     let clock = ManualFrameClock()
     let model = try await openModel(over: fake, clock: clock)
     try #require(await eventually { await fake.events(of: 1)?.nextCalls == 1 })
-
-    await model.close()
     let events = try #require(await fake.events(of: 1))
+
+    let gate = Gate()
+    await fake.gateNextClose(gate)
+    let closing = Task { await model.close() }
+    try #require(await eventually { await events.cancelledNexts == 1 })
+    await gate.open()
+    await closing.value
     #expect(await events.nextCalls == 1)
     #expect(await events.maxWaiting == 1)
+}
+
+/// The selection's lookups count against the two reads (spec/08): a
+/// refresh that must follow a selected message waits for the page
+/// reads in flight, then looks it up, then reads pages.
+@MainActor
+@Test(.timeLimit(.minutes(1)))
+func selectionLookupsStayWithinTwoReads() async throws {
+    let fake = FakeListWindowSource()
+    let ids = (1 ... 1_000).reversed().map { Int64($0) }
+    _ = await fake.fill(ids: ids)
+    let clock = ManualFrameClock()
+    let model = ListWindowModel(source: fake, spec: .flagged, clock: clock)
+    try await model.open()
+    let gate = ThrowingGate()
+    await fake.setGate(gate)
+    model.setVisible(0 ..< 450) // pages 0, 1, 2: two reads park
+    try #require(await eventually { await fake.reads.count == 2 })
+    model.select([900])
+
+    await fake.represent(900, by: 2_000)
+    let moved = await fake.fill(ids: ids.map { $0 == 900 ? 2_000 : $0 })
+    await fake.emit(.invalidated(generation: moved))
+    try #require(await eventually { await fake.readCount(anchor: .around(900)) == 1 })
+    await gate.open()
+    try #require(await eventually { await model.selection == [2_000] })
+    #expect(await fake.maxInFlight <= ListWindowModel.inFlightLimit)
+
+    await model.close()
 }
