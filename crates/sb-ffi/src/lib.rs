@@ -22,6 +22,7 @@ mod api;
 mod cancel;
 mod error;
 mod imports;
+mod messages;
 mod sidebar;
 mod subscribe;
 mod windows;
@@ -38,3 +39,7 @@ pub use subscribe::{Subscription, WindowEvent};
 pub use windows::{Anchor, Count, ListRow, MailboxRole, Window, WindowIds, WindowSpec};
 
 uniffi::setup_scaffolding!();
+
+pub use messages::{
+    BodyAvailability, ReaderAddress, ReaderHeaders, ReaderMessage, ReaderOccurrence, ReaderTag,
+};

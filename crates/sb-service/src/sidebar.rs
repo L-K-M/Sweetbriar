@@ -164,7 +164,7 @@ mod tests {
         let path = scratch.path().join("Inbox.mbox");
         std::fs::write(
             &path,
-            "From a@example.test Sat Oct 17 12:00:00 2026\nStatus: RO\nSubject: Read\n\nx\n\
+            "From a@example.test Sat Oct 17 12:00:00 2026\nStatus: RO\nFrom: Sender <sender@example.test>\nTo: Recipient <to@example.test>\nCc: Copy <cc@example.test>\nDate: Sat, 17 Oct 2026 12:00:00 +0000\nMessage-ID: <reader@example.test>\nSubject: Read\n\nx\n\
              From a@example.test Sat Oct 17 12:00:00 2026\nStatus: O\nSubject: Unread\n\ny\n",
         )
         .unwrap();
@@ -233,6 +233,57 @@ mod tests {
                 unread: 1,
             }
         );
+
+        // Reader metadata uses the occurrence selected by the list (M1.5i).
+        use crate::{BodyAvailability, ReaderAddress, ReaderOccurrence};
+        let address = |name: &str, email: &str| ReaderAddress {
+            name: Some(name.into()),
+            address: Some(email.into()),
+        };
+
+        let row = window
+            .rows
+            .iter()
+            .find(|row| row.subject == "Read")
+            .unwrap();
+        let id = sb_test_support::block_on(core.message_for_occurrence(row.occurrence_id)).unwrap();
+        assert_eq!(id, row.message_id);
+        let message = sb_test_support::block_on(core.get_message(id)).unwrap();
+        assert_eq!(message.message_id, id);
+        assert_eq!(
+            message.headers.from,
+            vec![address("Sender", "sender@example.test")]
+        );
+        assert_eq!(
+            message.headers.to,
+            vec![address("Recipient", "to@example.test")]
+        );
+        assert_eq!(message.headers.cc, vec![address("Copy", "cc@example.test")]);
+        assert_eq!(message.headers.date, Some(1_792_238_400_000));
+        assert_eq!(message.headers.subject.as_deref(), Some("Read"));
+        assert_eq!(
+            message.headers.message_id.as_deref(),
+            Some("reader@example.test")
+        );
+        assert_eq!(message.account_id, inbox.account_id);
+        assert_eq!(message.account_display_name, "Local Archive");
+        assert_eq!(
+            message.occurrences,
+            vec![ReaderOccurrence {
+                occurrence_id: row.occurrence_id,
+                mailbox_id: inbox.mailbox_id,
+                mailbox_name: "Inbox".into(),
+            }]
+        );
+        assert_eq!(message.body_availability, BodyAvailability::Acquired);
+        assert!(matches!(
+            sb_test_support::block_on(core.get_message(-1)),
+            Err(CoreError::NotFound { .. })
+        ));
+        assert!(matches!(
+            sb_test_support::block_on(core.message_for_occurrence(-1)),
+            Err(CoreError::NotFound { .. })
+        ));
         sb_test_support::block_on(core.shutdown());
     }
 }

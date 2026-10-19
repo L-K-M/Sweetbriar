@@ -560,3 +560,84 @@ extension CoreFailure {
         }
     }
 }
+
+/// Recorded availability; this does not promise filesystem integrity.
+public enum BodyAvailability: Sendable, Equatable {
+    case notAcquired, acquired, acquisitionMissing, acquisitionCorrupt
+}
+
+public struct ReaderAddress: Sendable, Equatable {
+    public var name: String?
+    public var address: String?
+
+    public init(name: String?, address: String?) {
+        self.name = name
+        self.address = address
+    }
+}
+
+public struct ReaderHeaders: Sendable, Equatable {
+    public var from: [ReaderAddress]
+    public var to: [ReaderAddress]
+    public var cc: [ReaderAddress]
+    public var date: Int64?
+    public var subject: String?
+    public var messageId: String?
+
+    public init(from: [ReaderAddress], to: [ReaderAddress], cc: [ReaderAddress], date: Int64?, subject: String?, messageId: String?) {
+        self.from = from
+        self.to = to
+        self.cc = cc
+        self.date = date
+        self.subject = subject
+        self.messageId = messageId
+    }
+}
+
+public struct ReaderOccurrence: Sendable, Equatable {
+    public var occurrenceId: Int64
+    public var mailboxId: Int64
+    public var mailboxName: String
+
+    public init(occurrenceId: Int64, mailboxId: Int64, mailboxName: String) {
+        self.occurrenceId = occurrenceId
+        self.mailboxId = mailboxId
+        self.mailboxName = mailboxName
+    }
+}
+
+public struct ReaderTag: Sendable, Equatable {
+    public var tagId: String
+    public var name: String
+    public var colorSrgb: String?
+
+    public init(tagId: String, name: String, colorSrgb: String?) {
+        self.tagId = tagId
+        self.name = name
+        self.colorSrgb = colorSrgb
+    }
+}
+
+public struct ReaderMessage: Sendable, Equatable {
+    public var messageId: Int64
+    public var headers: ReaderHeaders
+    public var accountId: String
+    public var accountDisplayName: String
+    public var occurrences: [ReaderOccurrence]
+    public var threadId: Int64?
+    public var tags: [ReaderTag]
+    public var note: String?
+    public var bodyAvailability: BodyAvailability
+
+    public init(messageId: Int64, headers: ReaderHeaders, accountId: String, accountDisplayName: String, occurrences: [ReaderOccurrence], threadId: Int64?, tags: [ReaderTag], note: String?, bodyAvailability: BodyAvailability) {
+        self.messageId = messageId
+        self.headers = headers
+        self.accountId = accountId
+        self.accountDisplayName = accountDisplayName
+        self.occurrences = occurrences
+        self.threadId = threadId
+        self.tags = tags
+        self.note = note
+        self.bodyAvailability = bodyAvailability
+    }
+}
