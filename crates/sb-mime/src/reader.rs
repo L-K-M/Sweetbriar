@@ -395,9 +395,7 @@ fn reader_run(bytes: &[u8], limits: &Limits) -> Result<RenderInput, ParseFailure
         result.part_ids.push(node.id.clone());
         if selection.plain == Some(index) || selection.html == Some(index) {
             let text = node.part.text_contents().unwrap_or_default();
-            if text.contains('\u{fffd}')
-                && !transfer_decoded(node).is_ok_and(|bytes| bytes.as_ref() == text.as_bytes())
-            {
+            if text.contains('\u{fffd}') && charset_replaced(node) {
                 result.warn(RenderWarningCode::CharsetReplaced, Some(node.id.clone()));
             }
             let body = SelectedBody {
@@ -531,6 +529,25 @@ fn decoded<'a>(node: &'a Node<'_>, limits: &Limits) -> Result<Cow<'a, [u8]>, Att
         return Err(AttachmentError::LimitExceeded);
     }
     Ok(bytes)
+}
+
+/// Whether decoding the part's charset replaced bytes it couldn't read:
+/// the decoder says so, rather than a U+FFFD in the text, which may be
+/// the sender's own. An unknown label is read as UTF-8, as upstream
+/// falls back to.
+fn charset_replaced(node: &Node<'_>) -> bool {
+    let Ok(bytes) = transfer_decoded(node) else {
+        return true;
+    };
+    let label = node
+        .part
+        .content_type()
+        .and_then(|c| c.attribute("charset"))
+        .unwrap_or("utf-8");
+    match encoding_rs::Encoding::for_label(label.as_bytes()) {
+        Some(encoding) => encoding.decode_without_bom_handling(&bytes).1,
+        None => std::str::from_utf8(&bytes).is_err(),
+    }
 }
 
 fn transfer_decoded<'a>(node: &'a Node<'_>) -> Result<Cow<'a, [u8]>, AttachmentError> {
