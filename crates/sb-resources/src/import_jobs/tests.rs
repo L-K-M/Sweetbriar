@@ -384,6 +384,21 @@ fn an_oversized_request_is_refused_before_writing() {
     ));
 }
 
+/// A report stays inside the budget its readers allow, even for names
+/// JSON escapes at six bytes a byte, and the budget grows per source.
+#[test]
+fn a_report_fits_its_budget() {
+    let (scratch, res) = resources("report-budget");
+    let name = format!("{}.mbox", "\u{1}".repeat(240));
+    let (sources, _) = running_job(&res, &scratch, &[(name.as_str(), TWO)]);
+    let job = res.read(|tx| import_job(tx, JOB)).unwrap();
+    let rows = vec![(sources[0].clone(), SourcePosition::START)];
+    let report = import_report(&job, &rows);
+    assert!(report.contains("\\u0001"), "the name is escaped");
+    assert!(report.len() as u64 <= import_report_budget(rows.len()));
+    assert!(import_report_budget(2) > import_report_budget(1));
+}
+
 #[test]
 fn a_report_lists_files_counts_and_warnings() {
     let (scratch, res) = resources("report");

@@ -114,19 +114,26 @@ struct MainMenuTests {
 #endif
 
 #if canImport(AppKit)
+/// What the menu's callbacks saw: a reference the sendable callbacks
+/// share, since they can't capture a mutable local.
+@MainActor
+private final class MenuProbe {
+    var enabled = true
+    var syntheticRuns = 0
+    var storeRuns = 0
+}
+
 @Suite("benchmark menu availability", .serialized)
 @MainActor
 struct BenchmarkMenuTests {
     @Test("both benchmark commands share the in-flight gate and dispatch their own action")
     func benchmarkCommands() throws {
-        var enabled = true
-        var syntheticRuns = 0
-        var storeRuns = 0
+        let probe = MenuProbe()
         let builder = MainMenuBuilder(
             onFillSynthetic: {}, onShowPrototype: {}, onImplementationChanged: { _ in },
-            onRunBenchmark: { syntheticRuns += 1 },
-            onRunStoreBenchmark: { storeRuns += 1 },
-            isBenchmarkEnabled: { enabled }, onShowComposerProbe: {}, onImport: {}
+            onRunBenchmark: { probe.syntheticRuns += 1 },
+            onRunStoreBenchmark: { probe.storeRuns += 1 },
+            isBenchmarkEnabled: { probe.enabled }, onShowComposerProbe: {}, onImport: {}
         )
         let menu = builder.makeMainMenu()
         let debug = try #require(menu.items.compactMap(\.submenu).first { $0.title == "Debug" })
@@ -134,14 +141,14 @@ struct BenchmarkMenuTests {
         let store = try #require(debug.items.first { $0.title == "Run Store Benchmark" })
         #expect(builder.validateMenuItem(synthetic))
         #expect(builder.validateMenuItem(store))
-        enabled = false
+        probe.enabled = false
         #expect(!builder.validateMenuItem(synthetic))
         #expect(!builder.validateMenuItem(store))
-        enabled = true
+        probe.enabled = true
         #expect(NSApp.sendAction(try #require(synthetic.action), to: builder, from: synthetic))
         #expect(NSApp.sendAction(try #require(store.action), to: builder, from: store))
-        #expect(syntheticRuns == 1)
-        #expect(storeRuns == 1)
+        #expect(probe.syntheticRuns == 1)
+        #expect(probe.storeRuns == 1)
     }
 }
 #endif

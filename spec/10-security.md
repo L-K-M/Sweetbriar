@@ -70,11 +70,20 @@ and D24, D29.
   - no scripts, forms, iframes, objects, `<base>` or meta refresh;
   - CSS is restricted, with no `url()` except `sweetbriar-cid:` and no
     loading at-rules (`@import`, `@font-face`, `@namespace` with a URL).
-    `style` elements are dropped; inline styles keep only an allow-list
-    of inert properties (colors, fonts, text alignment and decoration,
-    white space, margins, padding, borders, widths), parsed with
-    `cssparser`. No custom properties, `var()`, `expression()` or fixed
-    positioning;
+    `style` elements are dropped. An inline `style` keeps, declaration
+    by declaration, only these properties, parsed with `cssparser`:
+    `color`, `background-color`, `font-family`, `font-size`,
+    `font-weight`, `font-style`, `text-align`, `text-decoration`,
+    `text-indent`, `line-height`, `vertical-align`, `white-space`,
+    `list-style-type`, `margin` and `padding` with their sides,
+    `border` with its sides and its `-width`, `-style` and `-color`
+    parts, `border-collapse`, `border-spacing`, `width`, `min-width`,
+    `max-width`, `height`, and `background-image` holding only a minted
+    `sweetbriar-cid:` URL. Values are keywords, numbers, lengths and
+    percentages, colors (`#hex`, names, `rgb()`, `rgba()`, `hsl()`,
+    `hsla()`) and font names; any other function, `!important`, a
+    custom property or `var()` drops the declaration, and the rest of
+    the style stays;
   - `cid:` URLs resolve only within the body's own multipart/related
     part, never by path. The renderer mints
     `sweetbriar-cid://<lease token>/<resource id>`; a sender's own
@@ -85,8 +94,9 @@ and D24, D29.
     link hint), relative ones included, saturating with a warning.
     Hyperlinks don't count;
   - each link's destination is the anchor's title, and the manifest
-    (07) records its warnings: link text naming another domain, a raw
-    IP, user info.
+    (07) records its warnings per destination: link text naming another
+    domain (`text_domain`), a raw IP (`raw_ip`), user info
+    (`user_info`); hosts are compared parsed, not as strings.
   - The `WKWebView` setup in 08 adds a second, independent layer.
 - **Attachments:** the user opens them explicitly. Files are written to a
   per-lease cache directory with the quarantine attribute set, so
