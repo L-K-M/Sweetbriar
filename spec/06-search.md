@@ -97,8 +97,11 @@ CREATE VIRTUAL TABLE d_search_fts USING fts5(
 CREATE TABLE d_index_queue (              -- work for the index job; durable watermark
   doc_id      INTEGER PRIMARY KEY,
   reason      TEXT NOT NULL CHECK (reason IN ('new','reextract','delete')),
-  enqueued_at INTEGER NOT NULL
+  enqueued_at INTEGER NOT NULL,
+  revision    INTEGER NOT NULL DEFAULT 1 CHECK (revision >= 1)
 ) STRICT;
+
+CREATE INDEX d_index_queue_oldest ON d_index_queue(enqueued_at, doc_id);
 ```
 
 - **Placement (pilot):** FTS5 lives in the same database file as derived
@@ -147,13 +150,14 @@ CREATE TABLE d_index_queue (              -- work for the index job; durable wat
 ### Queue, versions and recovery (M1.6a)
 
 The SQL block above is the implemented schema, used by the schema-drift
-test. M1.6d adds `revision INTEGER NOT NULL CHECK (revision >= 1)` to
-`d_index_queue` in a forward migration, then updates that SQL block with
-the migration. It also adds `d_index_queue_oldest`, an index on
-`d_index_queue(enqueued_at, doc_id)`. These requirements describe that
-target schema. M1.6d2 separately migrates the durable rebuild/worker record
-specified in 07, initializing the monotonic epoch to 0 with no rebuild job
-or pause. These future fields stay in prose until their migration lands.
+test. Migration 5 adds queue revisions and the oldest-first index, initializes
+`index_inputs`, `search_generation` (1) and `search_extractor_version` (1),
+and backfills every acquisition with a distinct fresh revision. Existing
+pending times are preserved; otherwise the acquisition time supplies the age.
+The column default is only for the additive migration; every runtime enqueue
+assigns a fresh revision. M1.6d2 separately migrates the durable rebuild/worker
+record specified in 07, initializing the monotonic epoch to 0 with no rebuild
+job or pause. These future fields stay in prose until their migration lands.
 
 - The tables above already exist in schema v1. Do not edit that migration.
   An additive migration adds queue revisions, initializes the metadata
