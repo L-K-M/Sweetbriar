@@ -85,6 +85,13 @@ fn attached_messages_and_text_are_never_bodies_but_have_ids() {
     assert_eq!(result.plain().unwrap().text(), "right");
     assert!(result.html().is_none());
     assert!(result.part_ids().iter().any(|id| id.as_str() == "1.1.1"));
+    // The attached message is one attachment; its own part isn't listed.
+    let ids: Vec<_> = result
+        .attachments()
+        .iter()
+        .map(|a| a.part_id().as_str())
+        .collect();
+    assert_eq!(ids, ["1.1", "1.2"]);
     let bytes = extract_attachment(raw.as_bytes(), "1.1", &Limits::default()).unwrap();
     assert!(bytes.starts_with(b"Subject: inner"));
     // The attached message is the attachment, not its parts.
@@ -515,4 +522,47 @@ fn filename_only_text_is_an_attachment() {
         extract_attachment(raw.as_bytes(), "1.1", &Limits::default()).unwrap(),
         b"file"
     );
+}
+
+/// The decoder decides `charset_replaced`: a literal U+FFFD the sender
+/// wrote in UTF-16LE is no loss, malformed UTF-16LE is.
+#[test]
+fn charset_replaced_comes_from_the_decoder() {
+    let part = |body: &[u8]| {
+        let mut raw = b"Content-Type: text/plain; charset=utf-16le\r\nContent-Transfer-Encoding: base64\r\n\r\n".to_vec();
+        raw.extend(base64(body).as_bytes());
+        raw
+    };
+    let replaced = |raw: &[u8]| {
+        render_input(raw, &Limits::default())
+            .unwrap()
+            .warnings()
+            .iter()
+            .any(|w| w.code() == RenderWarningCode::CharsetReplaced)
+    };
+    assert!(
+        !replaced(&part(&[0x41, 0x00, 0xFD, 0xFF])),
+        "a literal U+FFFD"
+    );
+    assert!(
+        replaced(&part(&[0x41, 0x00, 0x00, 0xD8])),
+        "a lone surrogate"
+    );
+}
+
+/// Standard base64, for building fixtures.
+fn base64(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::new();
+    for chunk in bytes.chunks(3) {
+        let n = chunk.iter().fold(0u32, |n, &b| n << 8 | u32::from(b)) << (8 * (3 - chunk.len()));
+        for i in 0..4 {
+            if i <= chunk.len() {
+                out.push(ALPHABET[(n >> (18 - 6 * i) & 63) as usize] as char);
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
 }

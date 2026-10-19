@@ -12,6 +12,10 @@ sb-types = { version = "0.0.1", path = "../sb-types" }
 # keeps single/multi-byte charset coverage; Sweetbriar enforces the
 # resource budgets before delegating (see src/walk.rs).
 mail-parser = { version = "=0.11.9", features = ["full_encoding"] }
+# The charset decoder mail-parser's `full_encoding` already uses, asked
+# directly whether decoding replaced anything (spec/07
+# `charset_replaced`): a literal U+FFFD in the text is not a loss.
+encoding_rs = "=0.8.42"
 
 [dev-dependencies]
 # spec/01 crate table: snapshot testing of the fixtures/eml corpus.
