@@ -246,7 +246,7 @@ mod tests {
              From a@example.test Sat Oct 17 12:00:00 2026\nStatus: O\nSubject: Unread\n\ny\n",
         )
         .unwrap();
-        let generation = sb_test_support::block_on(async {
+        sb_test_support::block_on(async {
             let guard = core.service.read().await;
             let service = guard.as_ref().unwrap();
             let key = service.new_idempotency_key();
@@ -271,19 +271,41 @@ mod tests {
                 assert!(Instant::now() < deadline, "the import never finished");
                 std::thread::sleep(Duration::from_millis(10));
             }
-            let list = service.mailboxes(&archive).await.unwrap();
-            let window = service
-                .open_window(
-                    sb_service::WindowSpec::Mailbox(list.mailboxes[0].mailbox_id),
-                    sb_service::Anchor::Top,
-                    1,
-                )
-                .await
-                .unwrap();
-            window.generation
         });
 
-        let list = sb_test_support::block_on(core.mailboxes(token(), archive.clone())).unwrap();
+        // The thread rebuild the import scheduled can still advance the
+        // list generation between two reads: read until the list and
+        // the mailbox's window agree.
+        let window_generation = || {
+            sb_test_support::block_on(async {
+                let guard = core.service.read().await;
+                let service = guard.as_ref().unwrap();
+                let list = service.mailboxes(&archive).await.unwrap();
+                let window = service
+                    .open_window(
+                        sb_service::WindowSpec::Mailbox(list.mailboxes[0].mailbox_id),
+                        sb_service::Anchor::Top,
+                        1,
+                    )
+                    .await
+                    .unwrap();
+                service.close_window(window.window_id).await;
+                window.generation
+            })
+        };
+        let deadline = Instant::now() + Duration::from_secs(300);
+        let (list, generation) = loop {
+            let list = sb_test_support::block_on(core.mailboxes(token(), archive.clone())).unwrap();
+            let generation = window_generation();
+            if list.generation == generation {
+                break (list, generation);
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the list generation never settled"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        };
         assert_eq!(list.generation, generation);
         let [inbox] = list.mailboxes.as_slice() else {
             panic!("one mailbox: {:?}", list.mailboxes);
