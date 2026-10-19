@@ -14,7 +14,8 @@ concurrency:
 
 jobs:
   changes:
-    runs-on: macos-26
+    # Bookkeeping needs no Mac; macOS runners are scarce (spec/11).
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     # paths-filter lists a PR's changed files through the GitHub API.
     permissions:
@@ -197,7 +198,7 @@ jobs:
   macos:
     if: always()
     needs: [changes, build]
-    runs-on: macos-26
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - name: Log image
