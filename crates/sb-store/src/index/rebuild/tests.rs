@@ -1,5 +1,7 @@
 //! State and publication-fence acceptance. Phase driving belongs to M1.6d3.
 
+mod batches;
+
 use rusqlite::{Connection, params};
 use sb_test_support::real_fs;
 
