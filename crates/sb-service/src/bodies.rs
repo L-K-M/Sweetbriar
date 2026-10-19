@@ -1,4 +1,4 @@
-//! Service-owned body lease DTOs (spec/07).
+//! Service-owned body and attachment lease DTOs (spec/07).
 use crate::{Core, CoreError};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -80,6 +80,16 @@ impl LeaseReleaser {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AttachmentLease {
+    pub lease_id: String,
+    pub file_path: String,
+    pub byte_length: u64,
+    pub part_id: String,
+    pub display_name: String,
+    pub media_type: String,
+}
+
 impl Core {
     pub fn lease_releaser(&self) -> LeaseReleaser {
         LeaseReleaser {
@@ -114,6 +124,22 @@ impl Core {
         })
     }
 
+    pub async fn open_attachment(
+        &self,
+        message_id: i64,
+        part_id: String,
+    ) -> Result<AttachmentLease, CoreError> {
+        let attachment = self.engine().open_attachment(message_id, part_id).await?;
+        Ok(AttachmentLease {
+            lease_id: attachment.lease_id,
+            file_path: attachment.file_path,
+            byte_length: attachment.byte_length,
+            part_id: attachment.part_id,
+            display_name: attachment.display_name,
+            media_type: attachment.media_type,
+        })
+    }
+
     pub fn release_lease(&self, lease_id: &str) {
         self.engine().release_lease(lease_id);
     }
@@ -121,3 +147,6 @@ impl Core {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod attachment_tests;

@@ -1,7 +1,8 @@
-//! Blocking composition for body leases. The engine owns their lifetime.
+//! Blocking composition for body and attachment leases. The engine owns their lifetime.
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-use sb_mime::{Limits, RenderKind, render, render_input};
+use sb_mime::{AttachmentError, Limits, RenderKind, extract_attachment, render, render_input};
 use sb_platform::RealFs;
 
 use crate::{
@@ -33,6 +34,22 @@ pub struct BodyLease {
 /// Keep `files` alive until the engine revokes the public lease.
 pub struct PublishedBody {
     pub lease: BodyLease,
+    pub files: RenditionFiles,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AttachmentLease {
+    pub lease_id: String,
+    pub file_path: String,
+    pub byte_length: u64,
+    pub part_id: String,
+    pub display_name: String,
+    pub media_type: String,
+}
+
+/// Keep the decoded attachment alive independently of any body lease.
+pub struct PublishedAttachment {
+    pub lease: AttachmentLease,
     pub files: RenditionFiles,
 }
 
@@ -75,6 +92,24 @@ impl Resources {
     /// Validate canonical roots before touching the disposable namespace.
     /// A held cache lock disables leases, not the rest of the core.
     pub fn open_with_cache(data_root: &Path, cache_root: &Path) -> Result<Self, StoreError> {
+        Self::open_cache_on(data_root, cache_root, Arc::new(RealFs))
+    }
+
+    /// Inject cache filesystem operations for lease publication fault tests.
+    #[cfg(feature = "test-seams")]
+    pub fn open_with_cache_fs(
+        data_root: &Path,
+        cache_root: &Path,
+        fs: Arc<dyn Fs>,
+    ) -> Result<Self, StoreError> {
+        Self::open_cache_on(data_root, cache_root, fs)
+    }
+
+    fn open_cache_on(
+        data_root: &Path,
+        cache_root: &Path,
+        fs: Arc<dyn Fs>,
+    ) -> Result<Self, StoreError> {
         let data = resolved(&RealFs, data_root).map_err(|e| unavailable(e.to_string()))?;
         let cache = resolved(&RealFs, cache_root).map_err(|e| unavailable(e.to_string()))?;
         if cache.starts_with(&data) || data.starts_with(cache.join("renditions")) {
@@ -83,12 +118,76 @@ impl Resources {
             });
         }
         let mut resources = Self::open(data_root)?;
-        resources.renditions = match RenditionCache::open(cache_root) {
-            Ok(cache) => Some(cache),
-            Err(RenditionError::Locked) => None,
-            Err(e) => return Err(cache_error(e)),
-        };
+        resources.renditions =
+            match RenditionCache::open_on(cache_root, fs, Arc::new(sb_platform::OsRandom)) {
+                Ok(cache) => Some(cache),
+                Err(RenditionError::Locked) => None,
+                Err(e) => return Err(cache_error(e)),
+            };
         Ok(resources)
+    }
+
+    fn acquired_body(&self, message: i64) -> Result<Vec<u8>, StoreError> {
+        let acquisition = self
+            .read(|tx| crate::best_acquisition(tx, message))?
+            .ok_or_else(|| unavailable("body is not acquired"))?;
+        self.read_acquisition(&acquisition)
+            .map_err(|error| match error {
+                StoreError::NotFound { .. } => {
+                    unavailable("body is not acquired: acquisition object is missing")
+                }
+                other => other,
+            })
+    }
+
+    fn lease_cache(&self) -> Result<&RenditionCache, StoreError> {
+        self.renditions
+            .as_ref()
+            .ok_or_else(|| unavailable("rendition cache is in use or not configured"))
+    }
+
+    pub fn publish_attachment(
+        &self,
+        message: i64,
+        part_id: String,
+    ) -> Result<PublishedAttachment, StoreError> {
+        let bytes = self.acquired_body(message)?;
+        let cache = self.lease_cache()?;
+        let limits = Limits::default();
+        // Extraction rechecks admission and only accepts attachment leaf IDs.
+        let decoded =
+            extract_attachment(&bytes, &part_id, &limits).map_err(|error| match error {
+                AttachmentError::UnknownPart | AttachmentError::BodyPart => StoreError::NotFound {
+                    what: "attachment".into(),
+                },
+                other => unavailable(format!("cannot extract attachment: {other:?}")),
+            })?;
+        let input = render_input(&bytes, &limits)
+            .map_err(|error| unavailable(format!("cannot read attachment metadata: {error:?}")))?;
+        let descriptor = input
+            .attachments()
+            .iter()
+            .find(|attachment| attachment.part_id().as_str() == part_id)
+            .ok_or_else(|| StoreError::NotFound {
+                what: "attachment".into(),
+            })?;
+        let mut files = cache
+            .reserve(&[decoded.len() as u64])
+            .map_err(cache_error)?;
+        let path = files
+            .publish(0, &decoded, RenditionProtection::Quarantine)
+            .map_err(cache_error)?;
+        Ok(PublishedAttachment {
+            lease: AttachmentLease {
+                lease_id: files.token().into(),
+                file_path: path_text(&path)?,
+                byte_length: decoded.len() as u64,
+                part_id,
+                display_name: descriptor.display_name().into(),
+                media_type: descriptor.media_type().into(),
+            },
+            files,
+        })
     }
 
     pub fn publish_body(
@@ -96,21 +195,8 @@ impl Resources {
         message: i64,
         preferred: BodyKind,
     ) -> Result<PublishedBody, StoreError> {
-        let acquisition = self
-            .read(|tx| crate::best_acquisition(tx, message))?
-            .ok_or_else(|| unavailable("body is not acquired"))?;
-        let cache = self
-            .renditions
-            .as_ref()
-            .ok_or_else(|| unavailable("rendition cache is in use or not configured"))?;
-        let bytes = self
-            .read_acquisition(&acquisition)
-            .map_err(|error| match error {
-                StoreError::NotFound { .. } => {
-                    unavailable("body is not acquired: acquisition object is missing")
-                }
-                other => other,
-            })?;
+        let bytes = self.acquired_body(message)?;
+        let cache = self.lease_cache()?;
         if preferred == BodyKind::Source {
             let mut files = cache.reserve(&[bytes.len() as u64]).map_err(cache_error)?;
             let path = files
