@@ -106,6 +106,9 @@ targets:
     platform: macOS
     sources:
       - Tests/SweetbriarUITests
+      # The import flow's synthetic mailbox (spec/11).
+      - path: Tests/Fixtures/ImportFlow.mbox
+        buildPhase: resources
     dependencies:
       - target: Sweetbriar
     settings:

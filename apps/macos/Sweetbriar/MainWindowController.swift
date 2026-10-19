@@ -125,7 +125,7 @@ final class MainWindowController: NSWindowController {
             await sidebarModel.reload()
             sidebar.reloadSections()
             sidebar.choose(entryID: SidebarModel.unifiedInboxID)
-            imports.reattach()
+            await imports.reattach()
         }
     }
 

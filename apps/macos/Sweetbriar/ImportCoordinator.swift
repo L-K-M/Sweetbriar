@@ -13,6 +13,9 @@ import UniformTypeIdentifiers
 final class ImportCoordinator {
     /// Where the active job's id is kept across launches.
     private static let activeJobKey = "import.activeJobId"
+    /// `-importPath <path>`: File → Import… takes this path instead of
+    /// asking — the UI test's seam past the open panel (spec/11).
+    private static let importPathKey = "importPath"
 
     private let bridge: CoreBridge
     private weak var window: NSWindow?
@@ -36,6 +39,10 @@ final class ImportCoordinator {
             guard sheet == nil else { return }
             session.attach(jobId: jobId)
             showSheet()
+            return
+        }
+        if let path = UserDefaults.standard.string(forKey: Self.importPathKey) {
+            await start(paths: [path])
             return
         }
         let panel = NSOpenPanel()
@@ -65,13 +72,26 @@ final class ImportCoordinator {
         showSheet()
     }
 
-    /// Reattach to the job a previous launch left, if any (spec/09).
-    func reattach() {
+    /// Reattach to the job a previous launch left, if any (spec/09). A
+    /// job this store doesn't know — another store's — is let go.
+    func reattach() async {
         guard session == nil,
-              let id = UserDefaults.standard.string(forKey: Self.activeJobKey)
+              let id = UserDefaults.standard.string(forKey: Self.activeJobKey),
+              !id.isEmpty
         else {
             return
         }
+        do {
+            _ = try await bridge.importJob(id: id)
+        } catch let failure as CoreFailure {
+            if case .notFound = failure {
+                UserDefaults.standard.removeObject(forKey: Self.activeJobKey)
+            }
+            return
+        } catch {
+            return
+        }
+        guard session == nil else { return }
         let session = makeSession()
         session.attach(jobId: id)
         showSheet()
