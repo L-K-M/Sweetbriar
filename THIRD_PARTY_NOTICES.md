@@ -2496,15 +2496,11 @@ SOFTWARE.
 
 Used by:
 - `phf 0.13.1` — <https://github.com/rust-phf/rust-phf>
-- `phf 0.14.0` — <https://github.com/rust-phf/rust-phf>
 - `phf_codegen 0.13.1` — <https://github.com/rust-phf/rust-phf>
 - `phf_codegen 0.14.0` — <https://github.com/rust-phf/rust-phf>
 - `phf_generator 0.13.1` — <https://github.com/rust-phf/rust-phf>
-- `phf_generator 0.14.0` — <https://github.com/rust-phf/rust-phf>
 - `phf_macros 0.13.1` — <https://github.com/rust-phf/rust-phf>
-- `phf_macros 0.14.0` — <https://github.com/rust-phf/rust-phf>
 - `phf_shared 0.13.1` — <https://github.com/rust-phf/rust-phf>
-- `phf_shared 0.14.0` — <https://github.com/rust-phf/rust-phf>
 
 ```text
 The MIT License (MIT)
@@ -3164,9 +3160,7 @@ Exhibit B - "Incompatible With Secondary Licenses" Notice
 
 Used by:
 - `cssparser-macros 0.6.1` — <https://github.com/servo/rust-cssparser>
-- `cssparser-macros 0.7.1` — <https://github.com/servo/rust-cssparser>
 - `cssparser 0.36.0` — <https://github.com/servo/rust-cssparser>
-- `cssparser 0.38.0` — <https://github.com/servo/rust-cssparser>
 
 ```text
 Mozilla Public License Version 2.0
