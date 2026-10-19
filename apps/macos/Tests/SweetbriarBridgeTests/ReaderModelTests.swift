@@ -54,7 +54,8 @@ private final class FakeReaderSource: ReaderSource, @unchecked Sendable {
         try await delay(messageID, at: .body)
         return BodyLease(
             leaseId: "\(messageID)-\(preferred)", kind: preferred, filePath: path,
-            byteLength: 0, remoteContentBlocked: 0, warnings: [], manifestPath: nil
+            byteLength: 0, remoteContentBlocked: 0, warnings: [],
+            manifestPath: preferred == .sanitizedHtml ? path + ".json" : nil
         )
     }
 
@@ -244,20 +245,35 @@ private func readerDropsStaleMetadataBeforeOpeningBody(phase: FakeReaderSource.P
 }
 
 @Test @MainActor
-func readerKeepsPreferredAndActualRenditionKind() async throws {
+func readerHTMLStateAndFailClosedFallbackUseCurrentTicket() async throws {
     let file = try readerFile()
-    defer { try? FileManager.default.removeItem(at: file) }
+    let manifest = URL(fileURLWithPath: file.path + ".json")
+    try Data(#"{"v":1,"resources":[],"links":[],"attachments":[]}"#.utf8).write(to: manifest)
+    defer {
+        try? FileManager.default.removeItem(at: file)
+        try? FileManager.default.removeItem(at: manifest)
+    }
     let fake = FakeReaderSource(path: file.path)
     let model = ReaderModel(source: fake, preferred: .sanitizedHtml)
     await model.show(occurrenceID: 1)
     #expect(fake.opened.map(\.1) == [.sanitizedHtml])
-    guard case .rendition(let message, let lease, let text) = model.state else {
-        Issue.record("expected HTML rendition for the later pane")
+    guard case .html(let message, let rendition) = model.state else {
+        Issue.record("expected HTML state")
         return
     }
     #expect(message.messageId == 1)
-    #expect(lease.kind == .sanitizedHtml)
-    #expect(text == "literal **text**\n> quote\n")
+    #expect(rendition.token == model.currentLease?.leaseId)
+    #expect(rendition.htmlFile == file)
+    #expect(rendition.directory == file.deletingLastPathComponent())
+    #expect(rendition.manifest.resources.isEmpty)
+    await model.ruleListUnavailable(ticket: 0)
+    #expect(fake.opened.count == 1)
+    await model.ruleListUnavailable(ticket: model.navigationTicket)
+    expectPlain(model, id: 1)
+    #expect(fake.released == ["1-sanitizedHtml"])
+    await model.show(occurrenceID: 2)
+    expectPlain(model, id: 2)
+    #expect(fake.opened.map(\.1) == [.sanitizedHtml, .plainText, .plainText])
     model.close()
 }
 
@@ -290,4 +306,57 @@ func readerSameSelectionStillTakesNewTicket() async throws {
     #expect(fake.released == ["1-plainText"])
     model.close()
     #expect(fake.released == ["1-plainText", "1-plainText"])
+}
+
+@Test(.timeLimit(.minutes(1))) @MainActor
+func readerRealRelatedImageManifestParsesAndResolves() async throws {
+    let (dir, config) = tempConfig()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let bridge = try await CoreBridge.open(config: config, snapshots: sinkBatcher(clock: ManualFrameClock()))
+    let file = dir.appendingPathComponent("Related.mbox")
+    let raw = """
+    From sender@example.test Sat Oct 17 12:00:00 2026
+    Subject: Related image
+    MIME-Version: 1.0
+    Content-Type: multipart/related; boundary="related"
+
+    --related
+    Content-Type: text/html; charset=utf-8
+
+    <p>Image</p><img src="cid:pixel">
+    --related
+    Content-Type: image/png
+    Content-ID: <pixel>
+    Content-Transfer-Encoding: base64
+
+    iVBORw0KGgo=
+    --related--
+
+    """
+    try Data(raw.utf8).write(to: file)
+    #expect(try await importAndFinish(bridge, paths: [file.path]).state == .completed)
+    let account = try #require(try await bridge.accounts().first)
+    let mailbox = try #require(try await bridge.mailboxes(accountId: account.accountId).mailboxes.first)
+    let window = try await bridge.openWindow(spec: .mailbox(mailbox.mailboxId), anchor: .top, limit: 10)
+    let row = try #require(window.rows.first)
+    let model = ReaderModel(source: bridge, preferred: .sanitizedHtml)
+    await model.show(occurrenceID: row.occurrenceId)
+    guard case .html(_, let rendition) = model.state else {
+        Issue.record("expected real HTML rendition, got \(model.state)")
+        model.close()
+        await bridge.shutdown()
+        return
+    }
+    let resource = try #require(rendition.manifest.resources.first)
+    let url = try #require(URL(string: "sweetbriar-cid://\(rendition.token)/\(resource.id)"))
+    let resolver = CIDResourceResolver(rendition: rendition, ticket: model.navigationTicket)
+    let resolved = try #require(resolver.resolve(url, currentTicket: model.navigationTicket))
+    #expect(resolved.mediaType == "image/png")
+    #expect(try Data(contentsOf: resolved.fileURL) == Data([137, 80, 78, 71, 13, 10, 26, 10]))
+    #expect(try String(contentsOf: rendition.htmlFile, encoding: .utf8).contains(url.absoluteString))
+    model.clear()
+    #expect(resolver.resolve(url, currentTicket: model.navigationTicket) == nil)
+    model.close()
+    await bridge.closeWindow(id: window.windowId)
+    await bridge.shutdown()
 }

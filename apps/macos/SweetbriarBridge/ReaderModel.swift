@@ -19,8 +19,7 @@ public final class ReaderModel {
         case loading
         case plainText(message: ReaderMessage, text: String)
         case source(message: ReaderMessage, text: String)
-        /// The actual kind is retained for M1.5m's HTML pane.
-        case rendition(message: ReaderMessage, lease: BodyLease, text: String)
+        case html(message: ReaderMessage, rendition: HTMLRendition)
         case unavailable(CoreFailure)
         case failed(any Error)
     }
@@ -35,6 +34,7 @@ public final class ReaderModel {
     private let source: any ReaderSource
     private let preferred: BodyKind
     private var closed = false
+    private var htmlAvailable = true
 
     public init(source: any ReaderSource, preferred: BodyKind = .plainText) {
         self.source = source
@@ -61,6 +61,15 @@ public final class ReaderModel {
         await load(occurrenceID: occurrenceID)
     }
 
+    /// The pane calls this if the process-wide rule list cannot be compiled.
+    /// Stale pane completions must never replace a newer selection.
+    public func ruleListUnavailable(ticket: UInt64) async {
+        guard !closed, ticket == navigationTicket else { return }
+        htmlAvailable = false
+        guard !isShowingSource, let occurrenceID else { return }
+        await load(occurrenceID: occurrenceID)
+    }
+
     public func clear() {
         invalidate()
         occurrenceID = nil
@@ -83,7 +92,7 @@ public final class ReaderModel {
     private func load(occurrenceID: Int64) async {
         invalidate()
         let ticket = navigationTicket
-        let kind: BodyKind = isShowingSource ? .source : preferred
+        let kind: BodyKind = isShowingSource ? .source : (htmlAvailable ? preferred : .plainText)
         state = .loading
         do {
             let id = try await source.messageForOccurrence(occurrenceId: occurrenceID)
@@ -96,6 +105,25 @@ public final class ReaderModel {
                 return
             }
             leaseOwner = ReaderLeaseOwner(lease: lease, source: source)
+            if lease.kind == .sanitizedHtml {
+                guard htmlAvailable, let path = lease.manifestPath else {
+                    throw RenditionManifest.Invalid.unsafeResource
+                }
+                let rendition = try await Task.detached {
+                    let htmlFile = URL(fileURLWithPath: lease.filePath)
+                    let manifestFile = URL(fileURLWithPath: path)
+                    guard manifestFile.deletingLastPathComponent() == htmlFile.deletingLastPathComponent() else {
+                        throw RenditionManifest.Invalid.unsafeResource
+                    }
+                    return HTMLRendition(
+                        token: lease.leaseId, htmlFile: htmlFile,
+                        manifest: try RenditionManifest.read(from: manifestFile)
+                    )
+                }.value
+                guard ticket == navigationTicket else { return }
+                state = .html(message: message, rendition: rendition)
+                return
+            }
             // Source is arbitrary acquisition bytes, not necessarily UTF-8.
             // Replacement characters keep it inspectable without interpreting it.
             let text = try await Task.detached {
@@ -106,7 +134,7 @@ public final class ReaderModel {
             switch lease.kind {
             case .plainText: state = .plainText(message: message, text: text)
             case .source: state = .source(message: message, text: text)
-            case .sanitizedHtml: state = .rendition(message: message, lease: lease, text: text)
+            case .sanitizedHtml: preconditionFailure("HTML handled before text decoding")
             }
         } catch {
             guard ticket == navigationTicket else { return }
