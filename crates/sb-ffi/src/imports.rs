@@ -344,6 +344,142 @@ mod tests {
     use crate::api::{CoreConfig, open_core};
     use sb_test_support::ScratchDir;
 
+    /// Every field of a job crosses as itself: distinct counters,
+    /// every enum case, populated options, and a path that isn't UTF-8
+    /// spelled lossily.
+    #[test]
+    fn a_job_maps_field_for_field() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let raw =
+            std::path::PathBuf::from(std::ffi::OsString::from_vec(b"/tmp/a\xffb.mbox".to_vec()));
+        let source = |ordinal, kind, variant| sb_service::ImportSource {
+            ordinal,
+            path: format!("/tmp/{ordinal}.mbox").into(),
+            mailbox: format!("Box {ordinal}"),
+            kind,
+            messages: 10 + ordinal,
+            bytes: 100 + ordinal,
+            sha256: format!("hash-{ordinal}"),
+            needs_variant: ordinal == 1,
+            variant,
+            messages_done: 20 + ordinal,
+        };
+        let problem = |kind, detail: &str| sb_service::ImportProblem {
+            path: raw.clone(),
+            kind,
+            detail: detail.to_owned(),
+        };
+        let states = [
+            (
+                sb_service::ImportJobState::Inventory,
+                ImportJobState::Inventory,
+            ),
+            (
+                sb_service::ImportJobState::AwaitingConfirmation,
+                ImportJobState::AwaitingConfirmation,
+            ),
+            (sb_service::ImportJobState::Running, ImportJobState::Running),
+            (
+                sb_service::ImportJobState::Completed,
+                ImportJobState::Completed,
+            ),
+            (
+                sb_service::ImportJobState::Cancelled,
+                ImportJobState::Cancelled,
+            ),
+            (sb_service::ImportJobState::Failed, ImportJobState::Failed),
+        ];
+        for (service_state, state) in states {
+            let job = sb_service::ImportJob {
+                id: "job-1".to_owned(),
+                state: service_state,
+                sources: vec![
+                    source(0, sb_service::ImportSourceKind::Mbox, None),
+                    source(
+                        1,
+                        sb_service::ImportSourceKind::Mbox,
+                        Some(sb_service::MboxVariant::Mboxrd),
+                    ),
+                    source(
+                        2,
+                        sb_service::ImportSourceKind::Eml,
+                        Some(sb_service::MboxVariant::Mboxo),
+                    ),
+                ],
+                problems: vec![
+                    problem(sb_service::ImportProblemKind::Inaccessible, "gone"),
+                    problem(sb_service::ImportProblemKind::Unsupported, "odd"),
+                    problem(sb_service::ImportProblemKind::NonUtf8, "bytes"),
+                    problem(sb_service::ImportProblemKind::Failed, "broke"),
+                ],
+                problem_count: 7,
+                totals: sb_service::ImportTotals {
+                    processed: 1,
+                    imported: 2,
+                    duplicates: 3,
+                    rejected: 4,
+                    bytes_stored: 5,
+                    read_from_headers: 6,
+                    read_default: 7,
+                    flags_incomplete: 8,
+                },
+                failure: Some("why".to_owned()),
+                report_path: Some(raw.clone()),
+            };
+            let lossy = raw.to_string_lossy().into_owned();
+            assert!(lossy.contains('\u{fffd}'), "{lossy}");
+            let expected_source = |ordinal: u64, kind, variant| ImportSource {
+                ordinal,
+                path: format!("/tmp/{ordinal}.mbox"),
+                mailbox: format!("Box {ordinal}"),
+                kind,
+                messages: 10 + ordinal,
+                bytes: 100 + ordinal,
+                sha256: format!("hash-{ordinal}"),
+                needs_variant: ordinal == 1,
+                variant,
+                messages_done: 20 + ordinal,
+            };
+            let expected_problem = |kind, detail: &str| ImportProblem {
+                path: lossy.clone(),
+                kind,
+                detail: detail.to_owned(),
+            };
+            assert_eq!(
+                ImportJob::from_service(job),
+                ImportJob {
+                    id: "job-1".to_owned(),
+                    state,
+                    sources: vec![
+                        expected_source(0, ImportSourceKind::Mbox, None),
+                        expected_source(1, ImportSourceKind::Mbox, Some(MboxVariant::Mboxrd)),
+                        expected_source(2, ImportSourceKind::Eml, Some(MboxVariant::Mboxo)),
+                    ],
+                    problems: vec![
+                        expected_problem(ImportProblemKind::Inaccessible, "gone"),
+                        expected_problem(ImportProblemKind::Unsupported, "odd"),
+                        expected_problem(ImportProblemKind::NonUtf8, "bytes"),
+                        expected_problem(ImportProblemKind::Failed, "broke"),
+                    ],
+                    problem_count: 7,
+                    totals: ImportTotals {
+                        processed: 1,
+                        imported: 2,
+                        duplicates: 3,
+                        rejected: 4,
+                        bytes_stored: 5,
+                        read_from_headers: 6,
+                        read_default: 7,
+                        flags_incomplete: 8,
+                    },
+                    failure: Some("why".to_owned()),
+                    report_path: Some(lossy.clone()),
+                }
+            );
+        }
+    }
+
     /// How long a test waits for the import worker before failing.
     const PATIENCE: Duration = Duration::from_secs(300);
     const POLL: Duration = Duration::from_millis(20);
