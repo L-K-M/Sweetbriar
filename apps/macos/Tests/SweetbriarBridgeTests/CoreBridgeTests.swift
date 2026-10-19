@@ -293,6 +293,77 @@ func anImportedMailboxCrossesTheBridge() async throws {
     await bridge.shutdown()
 }
 
+/// Import `paths` and wait for the finished job, confirming with no
+/// variants.
+private func importAndFinish(_ bridge: CoreBridge, paths: [String]) async throws -> ImportJob {
+    let started = try await bridge.startImport(paths: paths)
+    let deadline = ContinuousClock.now + .seconds(50)
+    var confirmed = false
+    while true {
+        let job = try await bridge.importJob(id: started.jobId)
+        if job.state == .awaitingConfirmation, !confirmed {
+            try await bridge.confirmImport(jobId: started.jobId, variants: [])
+            confirmed = true
+        }
+        if job.state.isFinished {
+            return job
+        }
+        try #require(ContinuousClock.now < deadline, "the import never finished")
+        try await Task.sleep(for: .milliseconds(20))
+    }
+}
+
+/// A job's totals, sources and problems cross the bridge as
+/// themselves: a re-import of the same mailbox counts duplicates
+/// apart from imports, and a missing path is a problem with its path
+/// and reason (spec/09).
+@Test(.timeLimit(.minutes(1)))
+func importTotalsAndProblemsCrossTheBridge() async throws {
+    let (dir, config) = tempConfig()
+    defer { try? FileManager.default.removeItem(at: dir) }
+
+    let bridge = try await CoreBridge.open(
+        config: config,
+        snapshots: await sinkBatcher(clock: ManualFrameClock())
+    )
+    let source = dir.appendingPathComponent("Inbox.mbox")
+    let mbox = "From a@example.test Sat Oct 17 12:00:00 2026\nStatus: RO\nSubject: One\n\nx\n"
+        + "From a@example.test Sat Oct 17 12:00:00 2026\nStatus: O\nSubject: Two\n\ny\n"
+        + "From a@example.test Sat Oct 17 12:00:00 2026\nSubject: Three\n\nz\n"
+    try Data(mbox.utf8).write(to: source)
+
+    let first = try await importAndFinish(bridge, paths: [source.path])
+    #expect(first.state == .completed)
+    #expect(first.totals.processed == 3)
+    #expect(first.totals.imported == 3)
+    #expect(first.totals.duplicates == 0)
+    #expect(first.totals.readFromHeaders == 2)
+    #expect(first.totals.readDefault == 1)
+    let inventoried = try #require(first.sources.first)
+    // The core records canonical paths: on macOS /var is /private/var.
+    #expect(
+        URL(fileURLWithPath: inventoried.path).resolvingSymlinksInPath()
+            == source.resolvingSymlinksInPath()
+    )
+    #expect(inventoried.bytes == UInt64(mbox.utf8.count))
+    #expect(inventoried.sha256.count == 64)
+    #expect(inventoried.messagesDone == 3)
+    #expect(first.failure == nil)
+
+    let missing = dir.appendingPathComponent("missing.mbox").path
+    let second = try await importAndFinish(bridge, paths: [source.path, missing])
+    #expect(second.totals.processed == 3)
+    #expect(second.totals.imported == 0)
+    #expect(second.totals.duplicates == 3)
+    #expect(second.problemCount == 1)
+    let problem = try #require(second.problems.first)
+    #expect(problem.path.hasSuffix("/missing.mbox"))
+    #expect(problem.kind == .inaccessible)
+    #expect(!problem.detail.isEmpty)
+
+    await bridge.shutdown()
+}
+
 @Test(.timeLimit(.minutes(1)))
 func aCallOnACancelledTaskThrowsAndWritesNothing() async throws {
     let (dir, config) = tempConfig()

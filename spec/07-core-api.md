@@ -266,6 +266,10 @@ fn release_lease(lease_id: LeaseId);
   disposable.
 - **Not yet downloaded:** if the body isn't acquired yet, `open_body`
   fetches it (online) or returns `Unavailable` (offline).
+- **One core owns the leases' cache:** it takes `renditions.lock` in
+  the cache root (03), then sweeps stale lease directories. Another
+  core opening the same cache root opens, but its leases are
+  `Unavailable`, so it never removes leases it doesn't own.
 - **Lease tokens** are unguessable and never reused in a core's life;
   each open returns a new lease. `release_lease` revokes access at once
   and queues the cleanup; an unknown or released token does nothing.
@@ -282,14 +286,28 @@ fn release_lease(lease_id: LeaseId);
   never the body. Asked for HTML with none, the lease is plain text;
   asked for plain text with only HTML, the text of the sanitized HTML.
   Source is the acquisition's exact bytes.
-- **The manifest:** a sanitized HTML lease also carries
-  `manifest_path`, a version-1 JSON file in its directory listing each
-  `sweetbriar-cid:` resource (opaque id, file, verified media type,
-  length), each link's destination with its warnings (10), and the
-  message's attachments (part id, display name, media type, decoded
-  length, unknown when its transfer encoding is damaged). Attachments
-  are the leaf parts beside the bodies; an attached message counts
-  once, as itself, and its parts aren't extracted on their own.
+- **The manifest:** a sanitized HTML or plain text lease also carries
+  `manifest_path`, a version-1 JSON file in its directory; a source
+  lease has none. It lists the message's attachments, and for HTML the
+  `sweetbriar-cid:` resources and the links:
+
+  ```json
+  { "v": 1,
+    "resources": [ { "id": "r1", "file": "r1.png", "media_type": "image/png", "bytes": 1234 } ],
+    "links": [ { "href": "https://example.com/x", "warnings": ["text_domain", "raw_ip", "user_info"] } ],
+    "attachments": [ { "part_id": "1.2", "display_name": "a.pdf",
+                       "media_type": "application/pdf", "bytes": 5678 } ] }
+  ```
+
+  `file` names a file in the lease directory: no separators, never
+  `..`. A reader refuses a manifest that names anything else, lists a
+  file twice, or is over 4,000,000 bytes. `links` holds each
+  destination once, with the union of its anchors' warnings, since a
+  click reports the destination, not the anchor.
+  Attachments are the leaf parts beside the bodies; an attached
+  message counts once, as itself, and its parts aren't extracted on
+  their own. An attachment's `bytes` is `null` when its transfer
+  encoding is damaged.
 - **`AttachmentLease`** `{ lease_id, file_path, byte_length, part_id,
   display_name, media_type }`: the decoded part under a generated file
   name, with the quarantine attribute set before it is returned (10).

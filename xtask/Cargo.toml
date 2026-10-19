@@ -13,7 +13,7 @@ rust-version.workspace = true
 # layers.toml.
 [dependencies]
 serde = { version = "=1.0.229", features = ["derive"] }
-serde_json = "=1.0.151"
+serde_json = "=1.0.154"
 toml = "=1.1.8"
 # The check-ffi lint reads UniFFI's own metadata (the same
 # symbol-table bytes `sb-bindgen` generates from) to detect async
