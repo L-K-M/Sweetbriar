@@ -31,7 +31,9 @@ pub(crate) struct Migration {
 
 /// The production migration list, in order. Version 1 creates schema
 /// v1 (spec/02, spec/06); version 2 adds durable imports; version 3
-/// starts the list projection; version 4 keeps thread membership; version 5 versions the search queue.
+/// starts the list projection; version 4 keeps thread membership;
+/// version 5 versions the search queue; version 6 adds the durable
+/// search index state and rebuild jobs.
 pub(crate) const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 1,
@@ -52,6 +54,10 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 5,
         run: migration_5,
+    },
+    Migration {
+        version: 6,
+        run: migration_6,
     },
 ];
 
@@ -543,6 +549,13 @@ fn migration_5(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
     // The clock is deliberately not used: existing pending age and the original
     // acquisition time give deterministic oldest-first upgrade work.
     Ok(())
+}
+
+/// Migration 6 (spec/06 "Queue, versions and recovery"): the durable
+/// rebuild/worker records of spec/07. Additive only: epoch 0, no job,
+/// no pause; existing imports, queue and documents are untouched.
+fn migration_6(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
+    tx.execute_batch(include_str!("schema/v6.sql")).map_err(bug)
 }
 
 /// One version-4 UUID from the randomness seam. A seam that can't
