@@ -76,6 +76,159 @@ public struct ImportStarted: Sendable, Equatable {
     }
 }
 
+/// An import job's state (spec/02 `import_jobs`).
+public enum ImportJobState: Sendable, Equatable {
+    case inventory
+    case awaitingConfirmation
+    case running
+    case completed
+    case cancelled
+    case failed
+
+    /// Completed, cancelled or failed: nothing more will change.
+    public var isFinished: Bool {
+        switch self {
+        case .completed, .cancelled, .failed:
+            return true
+        case .inventory, .awaitingConfirmation, .running:
+            return false
+        }
+    }
+}
+
+/// What a source holds.
+public enum ImportSourceKind: Sendable, Equatable {
+    case mbox
+    case eml
+}
+
+/// Why a chosen or discovered path did not become a source (spec/09).
+public enum ImportProblemKind: Sendable, Equatable {
+    case inaccessible
+    case unsupported
+    case nonUtf8
+    case failed
+}
+
+/// One inventoried source and how far its ingest has got.
+public struct ImportSource: Sendable, Equatable {
+    public var ordinal: UInt64
+    public var path: String
+    public var mailbox: String
+    public var kind: ImportSourceKind
+    public var messages: UInt64
+    public var bytes: UInt64
+    public var sha256: String
+    /// A `>>From ` line exists, so `confirmImport` must choose a variant.
+    public var needsVariant: Bool
+    public var variant: MboxVariant?
+    public var messagesDone: UInt64
+
+    public init(
+        ordinal: UInt64,
+        path: String,
+        mailbox: String,
+        kind: ImportSourceKind,
+        messages: UInt64,
+        bytes: UInt64,
+        sha256: String,
+        needsVariant: Bool,
+        variant: MboxVariant?,
+        messagesDone: UInt64
+    ) {
+        self.ordinal = ordinal
+        self.path = path
+        self.mailbox = mailbox
+        self.kind = kind
+        self.messages = messages
+        self.bytes = bytes
+        self.sha256 = sha256
+        self.needsVariant = needsVariant
+        self.variant = variant
+        self.messagesDone = messagesDone
+    }
+}
+
+/// A path that did not become a source, and why.
+public struct ImportProblem: Sendable, Equatable {
+    public var path: String
+    public var kind: ImportProblemKind
+    public var detail: String
+
+    public init(path: String, kind: ImportProblemKind, detail: String) {
+        self.path = path
+        self.kind = kind
+        self.detail = detail
+    }
+}
+
+/// Running totals (spec/09 "Report").
+public struct ImportTotals: Sendable, Equatable {
+    public var processed: UInt64
+    public var imported: UInt64
+    public var duplicates: UInt64
+    public var rejected: UInt64
+    public var bytesStored: UInt64
+    public var readFromHeaders: UInt64
+    public var readDefault: UInt64
+    public var flagsIncomplete: UInt64
+
+    public init(
+        processed: UInt64,
+        imported: UInt64,
+        duplicates: UInt64,
+        rejected: UInt64,
+        bytesStored: UInt64,
+        readFromHeaders: UInt64,
+        readDefault: UInt64,
+        flagsIncomplete: UInt64
+    ) {
+        self.processed = processed
+        self.imported = imported
+        self.duplicates = duplicates
+        self.rejected = rejected
+        self.bytesStored = bytesStored
+        self.readFromHeaders = readFromHeaders
+        self.readDefault = readDefault
+        self.flagsIncomplete = flagsIncomplete
+    }
+}
+
+/// One import job as `importJob` reports it (spec/07).
+public struct ImportJob: Sendable, Equatable {
+    public var id: String
+    public var state: ImportJobState
+    /// The inventory in ordinal order; empty until it finishes.
+    public var sources: [ImportSource]
+    /// The first problems; `problemCount` counts them all.
+    public var problems: [ImportProblem]
+    public var problemCount: UInt64
+    public var totals: ImportTotals
+    public var failure: String?
+    /// The report's path, once the job has finished.
+    public var reportPath: String?
+
+    public init(
+        id: String,
+        state: ImportJobState,
+        sources: [ImportSource],
+        problems: [ImportProblem],
+        problemCount: UInt64,
+        totals: ImportTotals,
+        failure: String?,
+        reportPath: String?
+    ) {
+        self.id = id
+        self.state = state
+        self.sources = sources
+        self.problems = problems
+        self.problemCount = problemCount
+        self.totals = totals
+        self.failure = failure
+        self.reportPath = reportPath
+    }
+}
+
 /// How an account reaches its mail.
 public enum AccountKind: Sendable, Equatable {
     case local

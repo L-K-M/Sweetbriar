@@ -29,7 +29,10 @@ mod windows;
 pub use api::{Core, CoreConfig, Receipt, Setting, open_core, platform_default_config};
 pub use cancel::CancelToken;
 pub use error::CoreError;
-pub use imports::{ImportStarted, ImportTarget, MboxVariant, VariantChoice};
+pub use imports::{
+    ImportJob, ImportJobState, ImportProblem, ImportProblemKind, ImportSource, ImportSourceKind,
+    ImportStarted, ImportTarget, ImportTotals, MboxVariant, VariantChoice,
+};
 pub use sidebar::{Account, AccountKind, AccountState, Mailbox, MailboxKind, Mailboxes};
 pub use subscribe::{Subscription, WindowEvent};
 pub use windows::{Anchor, Count, ListRow, MailboxRole, Window, WindowIds, WindowSpec};
