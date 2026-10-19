@@ -104,7 +104,7 @@ The repository is public, so GitHub-hosted runners are free.
 | Workflow | Trigger | Runner | Jobs |
 |---|---|---|---|
 | `ci.yml` | every PR and push to `main` | `ubuntu-24.04` | `cargo fmt --check`; `cargo clippy --workspace --all-targets -- -D warnings`; `cargo test --workspace`; `cargo doc` (deny broken links); `cargo xtask check-layers` (with the pinned nightly installed for rustdoc JSON); `cargo deny check`; `cargo about generate` to a temp file and diff against `THIRD_PARTY_NOTICES.md`; Dovecot protocol suite |
-| `macos.yml` | **every** PR and push to `main` | `macos-26` | A `changes` job (path filter on `crates/`, `xtask/`, `apps/`, `Cargo.toml`, `Cargo.lock`, `.cargo/`, `rust-toolchain.toml` and `.github/workflows/macos.yml`); the build jobs run only if it matched (job-level `if:`): `cargo test` (aarch64); `cargo xtask check-layers` (rustdoc JSON on macOS); `cargo xtask ffi`; `cargo xtask check-ffi` (drift); `xcodegen generate`; `xcodebuild build` + `test` with Swift 6 strict concurrency; upload `.xcresult` on failure. A final `macos` job always runs and succeeds when the build jobs succeeded or were skipped, so the merge gate always has a result |
+| `macos.yml` | **every** PR and push to `main` | `macos-26`; its `changes` and `macos` jobs on `ubuntu-24.04` | A `changes` job (path filter on `crates/`, `xtask/`, `apps/`, `Cargo.toml`, `Cargo.lock`, `.cargo/`, `rust-toolchain.toml` and `.github/workflows/macos.yml`); the build jobs run only if it matched (job-level `if:`): `cargo test` (aarch64); `cargo xtask check-layers` (rustdoc JSON on macOS); `cargo xtask ffi`; `cargo xtask check-ffi` (drift); `xcodegen generate`; `xcodebuild build` + `test` with Swift 6 strict concurrency; upload `.xcresult` on failure. A final `macos` job always runs and succeeds when the build jobs succeeded or were skipped, so the merge gate always has a result |
 | `nightly.yml` | schedule (daily) + manual | `ubuntu-24.04`, `macos-26`, `xcode-27` (advisory) | full fault-injection and proptest runs, fuzzing (time-boxed), XCUITest smoke, unsigned `.dmg` artifact |
 | `release.yml` | tag `v*` | `macos-26` | unsigned (ad-hoc) `.dmg` attached to the GitHub Release; Developer ID signing, notarization and Sparkle come later (plan) |
 
@@ -115,6 +115,9 @@ The repository is public, so GitHub-hosted runners are free.
   Linux uses `ubuntu-24.04`, the LTS behind `ubuntu-latest`; the research
   also allows `ubuntu-26.04`, which the pinned Rust toolchain doesn't
   need.
+  Jobs that need no Mac, such as path filters and aggregate gates, run
+  on Linux: macOS runners are scarce, and each such job would otherwise
+  wait in their queue.
 - **Workflow hygiene:**
   - `permissions: contents: read` by default;
   - `concurrency` with cancel-in-progress for PRs only;
