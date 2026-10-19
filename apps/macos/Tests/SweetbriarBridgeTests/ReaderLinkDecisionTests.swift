@@ -83,3 +83,28 @@ func readerKeepsEncodedSeparatorsDistinct() throws {
         #expect(ReaderLinkDecision.decide(url, manifest: manifest) == .open(url), "\(listed)")
     }
 }
+
+/// Destinations compare as bytes: malformed UTF-8 escapes stay distinct,
+/// and so do composed and decomposed spellings of one character.
+@Test
+func readerComparesDestinationBytes() throws {
+    let data = try JSONSerialization.data(withJSONObject: [
+        "v": 1, "resources": [], "attachments": [],
+        "links": [
+            ["href": "https://example.test/%FF", "warnings": []],
+            ["href": "https://example.test/caf%C3%A9", "warnings": []],
+            ["href": "mailto:a%FF@example.test", "warnings": []],
+        ],
+    ])
+    let manifest = try RenditionManifest.parse(data)
+    for unlisted in [
+        "https://example.test/%FE",
+        "https://example.test/cafe%CC%81",
+        "mailto:a%FE@example.test",
+    ] {
+        let url = try #require(URL(string: unlisted))
+        #expect(ReaderLinkDecision.decide(url, manifest: manifest) == .refuse, "\(unlisted)")
+    }
+    let listed = try #require(URL(string: "https://example.test/%ff"))
+    #expect(ReaderLinkDecision.decide(listed, manifest: manifest) == .open(listed))
+}

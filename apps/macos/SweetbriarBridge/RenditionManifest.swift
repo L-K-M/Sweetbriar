@@ -144,29 +144,30 @@ public enum ReaderLinkDecision: Sendable, Equatable {
     }
 }
 
-/// A link destination compared component by component. WebKit hands
-/// clicks over as Foundation URLs, which percent-encode characters the
-/// sanitizer's serializer keeps (`filter[status]` arrives as
-/// `filter%5Bstatus%5D`), so escapes are undone, except a component's own
-/// separators: `a%2Fb` and `a/b` are different destinations, and so are
-/// `x%26y` and `x&y` in a query.
+/// A link destination compared component by component, as bytes.
+/// WebKit hands clicks over as Foundation URLs, which percent-encode
+/// characters the sanitizer's serializer keeps (`filter[status]` arrives
+/// as `filter%5Bstatus%5D`), so escapes are undone, except a component's
+/// own separators: `a%2Fb` and `a/b` are different destinations, and so
+/// are `x%26y` and `x&y` in a query. Bytes, not strings: decoding would
+/// merge malformed escapes (`%FF`, `%FE`) and Unicode equivalents.
 private struct Destination: Equatable {
-    let scheme: String
-    let user: String?
-    let password: String?
-    let host: String?
+    let scheme: [UInt8]
+    let user: [UInt8]?
+    let password: [UInt8]?
+    let host: [UInt8]?
     let port: Int?
-    let path: String
-    let query: String?
-    let fragment: String?
+    let path: [UInt8]
+    let query: [UInt8]?
+    let fragment: [UInt8]?
 
     init?(_ string: String) {
         guard let parts = URLComponents(string: string, encodingInvalidCharacters: true),
               let scheme = parts.scheme else { return nil }
-        self.scheme = scheme.lowercased()
+        self.scheme = Self.lowercased(Array(scheme.utf8))
         user = parts.percentEncodedUser.map { Self.unescaped($0, keeping: ":@") }
         password = parts.percentEncodedPassword.map { Self.unescaped($0, keeping: ":@") }
-        host = parts.percentEncodedHost.map { Self.unescaped($0, keeping: "").lowercased() }
+        host = parts.percentEncodedHost.map { Self.lowercased(Self.unescaped($0, keeping: "")) }
         port = parts.port
         path = Self.unescaped(parts.percentEncodedPath, keeping: "/?#;")
         query = parts.percentEncodedQuery.map { Self.unescaped($0, keeping: "&=+;#") }
@@ -175,7 +176,7 @@ private struct Destination: Equatable {
 
     /// Undo percent-escapes byte by byte, except for `%` itself and the
     /// separators in `kept`, whose escapes stay (in upper-case hex).
-    private static func unescaped(_ text: String, keeping kept: String) -> String {
+    private static func unescaped(_ text: String, keeping kept: String) -> [UInt8] {
         let kept = Set(kept.utf8).union([UInt8(ascii: "%")])
         var bytes: [UInt8] = []
         var input = Array(text.utf8)[...]
@@ -193,6 +194,10 @@ private struct Destination: Equatable {
                 bytes.append(value)
             }
         }
-        return String(decoding: bytes, as: UTF8.self)
+        return bytes
+    }
+
+    private static func lowercased(_ bytes: [UInt8]) -> [UInt8] {
+        bytes.map { (UInt8(ascii: "A")...UInt8(ascii: "Z")).contains($0) ? $0 + 32 : $0 }
     }
 }
