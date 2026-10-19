@@ -382,7 +382,7 @@ private func attachmentManifestFile(for file: URL) throws -> URL {
 }
 
 @Test @MainActor
-func readerRetainsAttachmentsAcrossBodyChangesAndReleasesOnSelectionClearCloseAndDeinit() async throws {
+func handedAttachmentsSurviveSelectionClearCloseAndDeinit() async throws {
     let file = try readerFile()
     let manifest = try attachmentManifestFile(for: file)
     defer {
@@ -399,20 +399,20 @@ func readerRetainsAttachmentsAcrossBodyChangesAndReleasesOnSelectionClearCloseAn
     await model?.showSource(false)
     #expect(!fake.released.contains("attachment-1"))
     await model?.show(occurrenceID: 2)
-    #expect(fake.released.filter { $0 == "attachment-1" }.count == 1)
+    #expect(!fake.released.contains("attachment-1"))
     _ = try await model?.openAttachment(partID: "1.2")
     model?.clear()
-    #expect(fake.released.contains("attachment-2"))
+    #expect(!fake.released.contains("attachment-2"))
     await model?.show(occurrenceID: 3)
     _ = try await model?.openAttachment(partID: "1.2")
     model?.close()
-    #expect(fake.released.contains("attachment-3"))
+    #expect(!fake.released.contains("attachment-3"))
     #expect(try await model?.openAttachment(partID: "1.2") == nil)
     model = ReaderModel(source: fake, preferred: .sanitizedHtml)
     await model?.show(occurrenceID: 4)
     _ = try await model?.openAttachment(partID: "1.2")
     model = nil
-    #expect(fake.released.contains("attachment-4"))
+    #expect(!fake.released.contains("attachment-4"))
 }
 
 @Test(arguments: [false, true]) @MainActor
@@ -436,7 +436,7 @@ func readerReleasesLateAttachmentWithoutHandingOutFile(close: Bool) async throws
 }
 
 @Test(.timeLimit(.minutes(1))) @MainActor
-func readerOpensRealImportedAttachmentAndKeepsItUntilClose() async throws {
+func handedAttachmentFileLivesUntilCoreShutdown() async throws {
     let (dir, config) = tempConfig()
     defer { try? FileManager.default.removeItem(at: dir) }
     let bridge = try await CoreBridge.open(config: config, snapshots: sinkBatcher(clock: ManualFrameClock()))
@@ -475,7 +475,8 @@ func readerOpensRealImportedAttachmentAndKeepsItUntilClose() async throws {
     await model.showSource(true)
     #expect(FileManager.default.fileExists(atPath: url.path))
     model.close()
-    #expect(await eventually { !FileManager.default.fileExists(atPath: url.path) })
+    #expect(FileManager.default.fileExists(atPath: url.path))
     await bridge.closeWindow(id: window.windowId)
     await bridge.shutdown()
+    #expect(!FileManager.default.fileExists(atPath: url.path))
 }

@@ -32,7 +32,6 @@ public final class ReaderModel {
     public var currentLease: BodyLease? { leaseOwner?.lease }
     public private(set) var manifest: RenditionManifest?
     private var leaseOwner: ReaderLeaseOwner?
-    private var attachmentOwners: [AttachmentLeaseOwner] = []
 
     private let source: any ReaderSource
     private let preferred: BodyKind
@@ -48,7 +47,6 @@ public final class ReaderModel {
     /// overlap these operations; cancellation is not the freshness check.
     public func show(occurrenceID: Int64) async {
         guard !closed else { return }
-        attachmentOwners.removeAll()
         manifest = nil
         self.occurrenceID = occurrenceID
         isShowingSource = false
@@ -77,7 +75,6 @@ public final class ReaderModel {
 
     public func clear() {
         invalidate()
-        attachmentOwners.removeAll()
         manifest = nil
         occurrenceID = nil
         isShowingSource = false
@@ -91,8 +88,8 @@ public final class ReaderModel {
         clear()
     }
 
-    /// The returned file is quarantined by the core and owned until selection
-    /// changes or close. A body/source switch does not revoke an opened file.
+    /// The core keeps a handed-out, quarantined file until shutdown: an
+    /// external app may still be opening it after this pane changes or closes.
     public func openAttachment(partID: String) async throws -> URL? {
         guard !closed, let message = currentMessage,
               manifest?.attachments.contains(where: { $0.partID == partID }) == true else { return nil }
@@ -102,7 +99,6 @@ public final class ReaderModel {
             source.releaseLease(lease.leaseId)
             return nil
         }
-        attachmentOwners.append(AttachmentLeaseOwner(leaseID: lease.leaseId, source: source))
         return URL(fileURLWithPath: lease.filePath)
     }
 
@@ -200,16 +196,4 @@ private final class ReaderLeaseOwner: Sendable {
     }
 
     deinit { source.releaseLease(lease.leaseId) }
-}
-
-private final class AttachmentLeaseOwner: Sendable {
-    private let leaseID: String
-    private let source: any ReaderSource
-
-    init(leaseID: String, source: any ReaderSource) {
-        self.leaseID = leaseID
-        self.source = source
-    }
-
-    deinit { source.releaseLease(leaseID) }
 }
