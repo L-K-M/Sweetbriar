@@ -9,7 +9,17 @@ maximum-db-staleness = "P1D"
 [licenses]
 confidence-threshold = 0.95
 allow = ["MIT", "Apache-2.0", "BSD-3-Clause", "Unicode-3.0", "Unlicense", "0BSD"]
-exceptions = [{ crate = "libfuzzer-sys@0.4.13", allow = ["NCSA"] }]
+exceptions = [
+    { crate = "libfuzzer-sys@0.4.13", allow = ["NCSA"] },
+    # The renderer's CSS parsing family, MPL-2.0 by name and version as
+    # in the workspace's deny.toml (spec/01).
+    { crate = "cssparser@0.38.0", allow = ["MPL-2.0"] },
+    { crate = "cssparser-macros@0.7.1", allow = ["MPL-2.0"] },
+    { crate = "dtoa-short@0.3.5", allow = ["MPL-2.0"] },
+    { crate = "cssparser@0.36.0", allow = ["MPL-2.0"] },
+    { crate = "cssparser-macros@0.6.1", allow = ["MPL-2.0"] },
+    { crate = "selectors@0.37.0", allow = ["MPL-2.0"] },
+]
 
 [licenses.private]
 ignore = false
