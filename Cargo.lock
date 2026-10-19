@@ -1161,6 +1161,7 @@ dependencies = [
  "ammonia",
  "cssparser 0.38.0",
  "encoding_rs",
+ "html5ever",
  "insta",
  "lol_html",
  "mail-parser",
