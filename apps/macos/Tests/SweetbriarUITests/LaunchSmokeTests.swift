@@ -13,10 +13,10 @@ final class LaunchSmokeTests: XCTestCase {
         let window = app.windows["Sweetbriar"]
         XCTAssertTrue(window.waitForExistence(timeout: Self.launchTimeout))
 
-        // A visible window alone could hide a failed Rust core open.
-        let setting = window.staticTexts.matching(
-            NSPredicate(format: "value BEGINSWITH %@", "Compose cue: ")
-        ).firstMatch
-        XCTAssertTrue(setting.waitForExistence(timeout: Self.launchTimeout))
+        // A visible window alone could hide a failed Rust core open:
+        // the sidebar lists the local archive only once the core
+        // answered `accounts()`.
+        let archive = window.outlines["sidebar"].staticTexts["Local Archive"]
+        XCTAssertTrue(archive.waitForExistence(timeout: Self.launchTimeout))
     }
 }

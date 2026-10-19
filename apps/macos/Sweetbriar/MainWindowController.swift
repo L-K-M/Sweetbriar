@@ -1,0 +1,127 @@
+// The main window (spec/08 "Windows"): sidebar | message list |
+// reader, as an `NSSplitViewController`. It shows the core's open
+// status until the core is up, then the sidebar over `SidebarModel`
+// with the Unified Inbox chosen.
+//
+//   ┌──────────┬──────────────────┬──────────────┐
+//   │ Sidebar  │ Message list     │ Reader       │
+//   │ (model)  │ (ListWindowModel)│ (placeholder)│
+//   └────┬─────┴────────▲─────────┴──────▲───────┘
+//        │ choose(spec) │   selection    │
+//        └──────────────┘ ───────────────┘
+//   a list's newer generation ──► the sidebar re-reads its counts
+
+import AppKit
+import SweetbriarBridge
+
+@MainActor
+final class MainWindowController: NSWindowController {
+    static let defaultContentSize = NSSize(width: 1100, height: 700)
+    /// The window's title, also how UI tests find it.
+    static let title = "Sweetbriar"
+    private static let sidebarMinimumWidth: CGFloat = 180
+    private static let listMinimumWidth: CGFloat = 320
+
+    private let session: CoreSession
+    private let statusLabel = NSTextField(labelWithString: "Opening the archive…")
+    private var sidebarModel: SidebarModel?
+    private var sidebar: SidebarViewController?
+    private var messageList: MessageListViewController?
+    private let reader = ReaderPlaceholderViewController()
+
+    /// The sidebar's first choice once it has loaded.
+    private static let initialEntryID = "\(SidebarModel.unifiedSectionID)/inbox"
+
+    init(session: CoreSession) {
+        self.session = session
+        let window = NSWindow(
+            contentRect: NSRect(origin: .zero, size: Self.defaultContentSize),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = Self.title
+        window.isReleasedWhenClosed = false
+        let content = NSView(frame: NSRect(origin: .zero, size: Self.defaultContentSize))
+        statusLabel.alignment = .center
+        statusLabel.textColor = .secondaryLabelColor
+        statusLabel.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(statusLabel)
+        NSLayoutConstraint.activate([
+            statusLabel.centerXAnchor.constraint(equalTo: content.centerXAnchor),
+            statusLabel.centerYAnchor.constraint(equalTo: content.centerYAnchor),
+            statusLabel.widthAnchor.constraint(lessThanOrEqualTo: content.widthAnchor, constant: -40),
+        ])
+        window.contentView = content
+        super.init(window: window)
+        window.center()
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("MainWindowController is built in code")
+    }
+
+    /// Wait for the core, then build the panes; a failed open stays in
+    /// the window.
+    func start() {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let bridge = try await session.bridge()
+                install(bridge)
+            } catch {
+                statusLabel.stringValue = "Couldn't open the archive: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    private func install(_ bridge: CoreBridge) {
+        guard let window else { return }
+        let sidebarModel = SidebarModel(source: bridge)
+        let sidebar = SidebarViewController(model: sidebarModel)
+        let messageList = MessageListViewController(bridge: bridge)
+        sidebar.onChoose = { [weak messageList] spec in
+            guard let messageList else { return }
+            Task { @MainActor in
+                await messageList.show(spec)
+            }
+        }
+        messageList.onGeneration = { [weak self] generation in
+            self?.listSaw(generation)
+        }
+        messageList.onSelectionChange = { [weak self] ids in
+            self?.reader.show(selectionCount: ids.count)
+        }
+
+        let split = NSSplitViewController()
+        let sidebarItem = NSSplitViewItem(sidebarWithViewController: sidebar)
+        sidebarItem.minimumThickness = Self.sidebarMinimumWidth
+        let listItem = NSSplitViewItem(contentListWithViewController: messageList)
+        listItem.minimumThickness = Self.listMinimumWidth
+        split.addSplitViewItem(sidebarItem)
+        split.addSplitViewItem(listItem)
+        split.addSplitViewItem(NSSplitViewItem(viewController: reader))
+        let frame = window.frame
+        window.contentViewController = split
+        window.setFrame(frame, display: true)
+
+        self.sidebarModel = sidebarModel
+        self.sidebar = sidebar
+        self.messageList = messageList
+        Task { @MainActor in
+            await sidebarModel.reload()
+            sidebar.reloadSections()
+            sidebar.choose(entryID: Self.initialEntryID)
+        }
+    }
+
+    /// A list saw `generation`: the sidebar re-reads if it shows an
+    /// older one.
+    private func listSaw(_ generation: UInt64) {
+        guard let sidebarModel, let sidebar, generation > sidebarModel.generation else { return }
+        Task { @MainActor in
+            await sidebarModel.noteGeneration(generation)
+            sidebar.reloadSections()
+        }
+    }
+}
