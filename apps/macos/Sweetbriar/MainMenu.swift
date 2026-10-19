@@ -273,6 +273,8 @@ final class MainMenuBuilder: NSObject {
             target: self
         )
         storeBenchmark.identifier = ItemID.benchmark
+        storeBenchmark.toolTip =
+            "Run the list benchmark over the imported mailboxes and show the report"
         menu.addItem(storeBenchmark)
         menu.addItem(.separator())
         menu.addItem(Self.item(

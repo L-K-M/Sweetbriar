@@ -5,6 +5,7 @@
 // while it opens, when it is empty, and when it failed.
 
 import AppKit
+import Observation
 import SweetbriarBridge
 
 @MainActor
@@ -97,6 +98,7 @@ final class MessageListViewController: NSViewController {
         self.list = list
         onSelectionChange?([])
 
+        observeFailures(of: model)
         do {
             try await model.open()
         } catch {
@@ -121,6 +123,20 @@ final class MessageListViewController: NSViewController {
         list?.removeFromSuperview()
         list = nil
         await old?.close()
+    }
+
+    /// Show the model's read failures as they happen: a page read or
+    /// the subscription can fail after the list opened.
+    private func observeFailures(of model: ListWindowModel) {
+        withObservationTracking {
+            _ = model.lastError
+        } onChange: { [weak self, weak model] in
+            Task { @MainActor [weak self, weak model] in
+                guard let self, let model, self.model === model else { return }
+                self.updateStatus()
+                self.observeFailures(of: model)
+            }
+        }
     }
 
     private func indexDidChange() {

@@ -239,10 +239,15 @@ public final class ListWindowModel {
     @ObservationIgnored
     private var fetching = false
 
-    /// True while a fetch awaits the id index: reads issued then would
-    /// run at the stale generation, so `pump` holds off.
+    /// True while page reads must wait: a fetch awaits the id index
+    /// (reads would run at the stale generation), or the selection's
+    /// lookups run, which count against the two reads (spec/08).
     @ObservationIgnored
-    private var awaitingIndex = false
+    private var holdingReads = false
+
+    /// `rebuild` calls waiting for the index-fetch slot to go idle.
+    @ObservationIgnored
+    private var idleWaiters: [CheckedContinuation<Void, Never>] = []
 
     /// A fetch asked for while one ran: it runs once that one ends, so
     /// an invalidation during a refresh isn't lost (spec/08).
@@ -312,7 +317,10 @@ public final class ListWindowModel {
         opening = true
         // Defers run last-first: the opening ends, then a fetch asked
         // for meanwhile starts.
-        defer { runPendingFetch() }
+        defer {
+            runPendingFetch()
+            resumeIdleWaiters()
+        }
         defer { opening = false }
         let window = try await source.openWindow(
             spec: spec,
@@ -350,8 +358,8 @@ public final class ListWindowModel {
             pendingDelivery = [:]
         }
         onIndexChanged()
-        applyVisibility()
         await reconcileSelection(window.windowId)
+        applyVisibility()
     }
 
     /// The opening page as the window's provisional prefix: its ids
@@ -447,11 +455,18 @@ public final class ListWindowModel {
     /// Rebuild the model on its existing window (spec/08): cancel
     /// every read, refetch the id index on the same handle, clear the
     /// cache and re-request the wanted pages. `resetRequired` triggers
-    /// it internally; the Debug menu calls it after a fill. A call
-    /// while an index fetch runs does nothing — the running one
-    /// fetches a fresh index anyway.
+    /// it internally; the Debug menu calls it after a fill. While the
+    /// opening or another fetch holds the one index-fetch slot, the
+    /// rebuild runs once it ends, and this returns after it; its
+    /// failure is then `lastError`.
     public func rebuild() async throws {
-        guard !closed, !fetching, let wid = windowId else { return }
+        guard !closed, windowId != nil || opening else { return }
+        if fetching || opening {
+            pendingFetch = .rebuild
+            await withCheckedContinuation { idleWaiters.append($0) }
+            return
+        }
+        guard let wid = windowId else { return }
         fetching = true
         try await fetchIndex(wid, mode: .rebuild)
     }
@@ -473,9 +488,10 @@ public final class ListWindowModel {
         defer {
             fetching = false
             runPendingFetch()
+            resumeIdleWaiters()
         }
         guard !closed else { return }
-        awaitingIndex = true
+        holdingReads = true
         for (_, entry) in inFlight {
             entry.task.cancel()
         }
@@ -483,12 +499,12 @@ public final class ListWindowModel {
         do {
             index = try await source.windowIDs(id: wid)
         } catch {
-            awaitingIndex = false
+            holdingReads = false
             pump()
             throw error
         }
-        awaitingIndex = false
         guard !closed, install(index) else {
+            holdingReads = false
             pump()
             return
         }
@@ -502,8 +518,20 @@ public final class ListWindowModel {
             retainMatchingRows()
         }
         onIndexChanged()
-        applyVisibility()
         await reconcileSelection(wid)
+        holdingReads = false
+        applyVisibility()
+    }
+
+    /// Resume `rebuild` callers once the index-fetch slot is idle: no
+    /// opening, no fetch, none pending.
+    private func resumeIdleWaiters() {
+        guard !opening, !fetching, pendingFetch == nil else { return }
+        let waiters = idleWaiters
+        idleWaiters = []
+        for waiter in waiters {
+            waiter.resume()
+        }
     }
 
     /// Ask for an index fetch: now if the slot is free, else once the
@@ -576,6 +604,14 @@ public final class ListWindowModel {
         let gen = generation
         let missing = selection.filter { index(of: $0) == nil }
         guard !missing.isEmpty else { return }
+        // The lookups are reads too: page reads hold off meanwhile, and
+        // those still unwinding finish first, so at most two run.
+        let held = holdingReads
+        holdingReads = true
+        defer { holdingReads = held }
+        for entry in inFlight.values {
+            await entry.task.value
+        }
         // old id → the row that replaces it; nil drops it.
         var replacements: [Int64: Int64?] = [:]
         for id in missing {
@@ -654,6 +690,13 @@ public final class ListWindowModel {
         if closed { return }
         closed = true
         subscription?.cancel()
+        // No fetch runs after a close: waiting rebuilds return.
+        pendingFetch = nil
+        let waiters = idleWaiters
+        idleWaiters = []
+        for waiter in waiters {
+            waiter.resume()
+        }
         for (_, entry) in inFlight {
             entry.task.cancel()
         }
@@ -710,7 +753,7 @@ public final class ListWindowModel {
     /// not yet landed, or failed until the next visibility change is
     /// skipped.
     private func pump() {
-        guard !closed, !awaitingIndex, windowId != nil else {
+        guard !closed, !holdingReads, windowId != nil else {
             return
         }
         for k in requestOrder where inFlight.count < Self.inFlightLimit {
