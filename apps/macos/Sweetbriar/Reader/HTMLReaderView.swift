@@ -99,8 +99,8 @@ final class ReaderCIDHandler: NSObject, WKURLSchemeHandler {
     }
 }
 
-/// Not installed in the main window until M1.5n. The caller supplies the
-/// model's live ticket so invalidation is effective even before the next show.
+/// The caller supplies the model's live ticket so invalidation is
+/// effective even before the next show.
 @MainActor
 final class HTMLReaderView: NSView, WKNavigationDelegate, WKUIDelegate {
     let webView: WKWebView

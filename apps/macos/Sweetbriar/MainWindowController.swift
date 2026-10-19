@@ -5,7 +5,7 @@
 //
 //   ┌──────────┬──────────────────┬──────────────┐
 //   │ Sidebar  │ Message list     │ Reader       │
-//   │ (model)  │ (ListWindowModel)│ (placeholder)│
+//   │ (model)  │ (ListWindowModel)│ (reader)     │
 //   └────┬─────┴────────▲─────────┴──────▲───────┘
 //        │ choose(spec) │   selection    │
 //        └──────────────┘ ───────────────┘
@@ -15,7 +15,7 @@ import AppKit
 import SweetbriarBridge
 
 @MainActor
-final class MainWindowController: NSWindowController {
+final class MainWindowController: NSWindowController, NSWindowDelegate {
     static let defaultContentSize = NSSize(width: 1100, height: 700)
     /// The window's title, also how UI tests find it.
     static let title = "Sweetbriar"
@@ -28,7 +28,8 @@ final class MainWindowController: NSWindowController {
     private(set) var sidebar: SidebarViewController?
     private(set) var messageList: MessageListViewController?
     private var imports: ImportCoordinator?
-    private let reader = ReaderPlaceholderViewController()
+    private var reader: ReaderViewController?
+    private var closed = false
 
 
     init(session: CoreSession) {
@@ -53,6 +54,7 @@ final class MainWindowController: NSWindowController {
         ])
         window.contentView = content
         super.init(window: window)
+        window.delegate = self
         window.center()
     }
 
@@ -74,6 +76,19 @@ final class MainWindowController: NSWindowController {
         }
     }
 
+    override func showWindow(_ sender: Any?) {
+        super.showWindow(sender)
+        guard closed else { return }
+        closed = false
+        reader?.select(messageList?.list?.selectedIDs ?? [])
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        closed = true
+        // Dock reopen reuses this controller, so release without retiring its model.
+        reader?.select([])
+    }
+
     /// File → Import…, once the core is up.
     func beginImport() {
         guard let imports else { return }
@@ -87,6 +102,8 @@ final class MainWindowController: NSWindowController {
         let sidebarModel = SidebarModel(source: bridge)
         let sidebar = SidebarViewController(model: sidebarModel)
         let messageList = MessageListViewController(bridge: bridge)
+        let reader = ReaderViewController(model: ReaderModel(source: bridge, preferred: .sanitizedHtml))
+        self.reader = reader
         sidebar.onChoose = { [weak messageList] spec in
             guard let messageList else { return }
             Task { @MainActor in
@@ -97,7 +114,8 @@ final class MainWindowController: NSWindowController {
             self?.listSaw(generation)
         }
         messageList.onSelectionChange = { [weak self] ids in
-            self?.reader.show(selectionCount: ids.count)
+            guard let self, !self.closed else { return }
+            self.reader?.select(ids)
         }
 
         let split = NSSplitViewController()

@@ -11,16 +11,21 @@ private final class FakeReaderSource: ReaderSource, @unchecked Sendable {
     let path: String
     let delayedID: Int64?
     let gate = Gate()
+    let attachmentGate = Gate()
+    var attachmentParked: Bool { lock.withLock { parkedAttachment } }
+    private var parkedAttachment = false
+    let delayAttachment: Bool
     let failure: CoreFailure?
     let phase: Phase
 
     enum Phase: CaseIterable, Sendable { case lookup, metadata, body }
 
-    init(path: String, delayedID: Int64? = nil, failure: CoreFailure? = nil, phase: Phase = .body) {
+    init(path: String, delayedID: Int64? = nil, failure: CoreFailure? = nil, phase: Phase = .body, delayAttachment: Bool = false) {
         self.path = path
         self.delayedID = delayedID
         self.failure = failure
         self.phase = phase
+        self.delayAttachment = delayAttachment
     }
 
     var released: [String] { lock.withLock { releases } }
@@ -57,6 +62,15 @@ private final class FakeReaderSource: ReaderSource, @unchecked Sendable {
             byteLength: 0, remoteContentBlocked: 0, warnings: [],
             manifestPath: preferred == .sanitizedHtml ? path + ".json" : nil
         )
+    }
+
+    func openAttachment(messageID: Int64, partID: String) async throws -> AttachmentLease {
+        if delayAttachment {
+            lock.withLock { parkedAttachment = true }
+            await attachmentGate.wait()
+        }
+        return AttachmentLease(leaseId: "attachment-\(messageID)", filePath: path, byteLength: 0,
+                               partId: partID, displayName: "Test", mediaType: "text/plain")
     }
 
     func releaseLease(_ leaseID: String) { lock.withLock { releases.append(leaseID) } }
@@ -359,4 +373,110 @@ func readerRealRelatedImageManifestParsesAndResolves() async throws {
     model.close()
     await bridge.closeWindow(id: window.windowId)
     await bridge.shutdown()
+}
+
+private func attachmentManifestFile(for file: URL) throws -> URL {
+    let manifest = URL(fileURLWithPath: file.path + ".json")
+    try Data(#"{"v":1,"resources":[],"links":[],"attachments":[{"part_id":"1.2","display_name":"test.txt","media_type":"text/plain","bytes":5}]}"#.utf8).write(to: manifest)
+    return manifest
+}
+
+@Test @MainActor
+func handedAttachmentsSurviveSelectionClearCloseAndDeinit() async throws {
+    let file = try readerFile()
+    let manifest = try attachmentManifestFile(for: file)
+    defer {
+        try? FileManager.default.removeItem(at: file)
+        try? FileManager.default.removeItem(at: manifest)
+    }
+    let fake = FakeReaderSource(path: file.path)
+    var model: ReaderModel? = ReaderModel(source: fake, preferred: .sanitizedHtml)
+    await model?.show(occurrenceID: 1)
+    #expect(try await model?.openAttachment(partID: "unknown") == nil)
+    #expect(try await model?.openAttachment(partID: "1.2") == file)
+    await model?.showSource(true)
+    #expect(!fake.released.contains("attachment-1"))
+    await model?.showSource(false)
+    #expect(!fake.released.contains("attachment-1"))
+    await model?.show(occurrenceID: 2)
+    #expect(!fake.released.contains("attachment-1"))
+    _ = try await model?.openAttachment(partID: "1.2")
+    model?.clear()
+    #expect(!fake.released.contains("attachment-2"))
+    await model?.show(occurrenceID: 3)
+    _ = try await model?.openAttachment(partID: "1.2")
+    model?.close()
+    #expect(!fake.released.contains("attachment-3"))
+    #expect(try await model?.openAttachment(partID: "1.2") == nil)
+    model = ReaderModel(source: fake, preferred: .sanitizedHtml)
+    await model?.show(occurrenceID: 4)
+    _ = try await model?.openAttachment(partID: "1.2")
+    model = nil
+    #expect(!fake.released.contains("attachment-4"))
+}
+
+@Test(arguments: [false, true]) @MainActor
+func readerReleasesLateAttachmentWithoutHandingOutFile(close: Bool) async throws {
+    let file = try readerFile()
+    let manifest = try attachmentManifestFile(for: file)
+    defer {
+        try? FileManager.default.removeItem(at: file)
+        try? FileManager.default.removeItem(at: manifest)
+    }
+    let fake = FakeReaderSource(path: file.path, delayAttachment: true)
+    let model = ReaderModel(source: fake, preferred: .sanitizedHtml)
+    await model.show(occurrenceID: 1)
+    let pending = Task { try await model.openAttachment(partID: "1.2") }
+    try #require(await eventually { fake.attachmentParked })
+    if close { model.close() } else { await model.show(occurrenceID: 2) }
+    await fake.attachmentGate.open()
+    #expect(try await pending.value == nil)
+    #expect(fake.released.filter { $0 == "attachment-1" }.count == 1)
+    model.close()
+}
+
+@Test(.timeLimit(.minutes(1))) @MainActor
+func handedAttachmentFileLivesUntilCoreShutdown() async throws {
+    let (dir, config) = tempConfig()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let bridge = try await CoreBridge.open(config: config, snapshots: sinkBatcher(clock: ManualFrameClock()))
+    let file = dir.appendingPathComponent("Attachment.mbox")
+    let raw = """
+    From sender@example.test Sat Oct 17 12:00:00 2026
+    Subject: Attachment model integration
+    MIME-Version: 1.0
+    Content-Type: multipart/mixed; boundary="mixed"
+
+    --mixed
+    Content-Type: text/plain
+
+    Body with attachment.
+    --mixed
+    Content-Type: text/plain
+    Content-Disposition: attachment; filename="hello.txt"
+    Content-Transfer-Encoding: base64
+
+    aGVsbG8=
+    --mixed--
+
+    """
+    try Data(raw.utf8).write(to: file)
+    #expect(try await importAndFinish(bridge, paths: [file.path]).state == .completed)
+    let account = try #require(try await bridge.accounts().first)
+    let mailbox = try #require(try await bridge.mailboxes(accountId: account.accountId).mailboxes.first)
+    let window = try await bridge.openWindow(spec: .mailbox(mailbox.mailboxId), anchor: .top, limit: 10)
+    let row = try #require(window.rows.first)
+    let model = ReaderModel(source: bridge)
+    await model.show(occurrenceID: row.occurrenceId)
+    let attachment = try #require(model.manifest?.attachments.first)
+    #expect(attachment.displayName == "hello.txt")
+    let url = try #require(try await model.openAttachment(partID: attachment.partID))
+    #expect(try Data(contentsOf: url) == Data("hello".utf8))
+    await model.showSource(true)
+    #expect(FileManager.default.fileExists(atPath: url.path))
+    model.close()
+    #expect(FileManager.default.fileExists(atPath: url.path))
+    await bridge.closeWindow(id: window.windowId)
+    await bridge.shutdown()
+    #expect(!FileManager.default.fileExists(atPath: url.path))
 }

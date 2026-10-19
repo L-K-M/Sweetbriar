@@ -6,6 +6,7 @@ public protocol ReaderSource: Sendable {
     func messageForOccurrence(occurrenceId: Int64) async throws -> Int64
     func getMessage(messageId: Int64) async throws -> ReaderMessage
     func openBody(messageID: Int64, preferred: BodyKind) async throws -> BodyLease
+    func openAttachment(messageID: Int64, partID: String) async throws -> AttachmentLease
     func releaseLease(_ leaseID: String)
 }
 
@@ -29,6 +30,7 @@ public final class ReaderModel {
     public private(set) var occurrenceID: Int64?
     public private(set) var isShowingSource = false
     public var currentLease: BodyLease? { leaseOwner?.lease }
+    public private(set) var manifest: RenditionManifest?
     private var leaseOwner: ReaderLeaseOwner?
 
     private let source: any ReaderSource
@@ -45,6 +47,7 @@ public final class ReaderModel {
     /// overlap these operations; cancellation is not the freshness check.
     public func show(occurrenceID: Int64) async {
         guard !closed else { return }
+        manifest = nil
         self.occurrenceID = occurrenceID
         isShowingSource = false
         await load(occurrenceID: occurrenceID)
@@ -72,6 +75,7 @@ public final class ReaderModel {
 
     public func clear() {
         invalidate()
+        manifest = nil
         occurrenceID = nil
         isShowingSource = false
         state = .empty
@@ -82,6 +86,39 @@ public final class ReaderModel {
     public func close() {
         closed = true
         clear()
+    }
+
+    /// The core keeps a handed-out, quarantined file until shutdown: an
+    /// external app may still be opening it after this pane changes or closes.
+    public func openAttachment(partID: String) async throws -> URL? {
+        guard !closed, let message = currentMessage,
+              manifest?.attachments.contains(where: { $0.partID == partID }) == true else { return nil }
+        let ticket = navigationTicket
+        let lease = try await source.openAttachment(messageID: message.messageId, partID: partID)
+        guard !closed, ticket == navigationTicket else {
+            source.releaseLease(lease.leaseId)
+            return nil
+        }
+        return URL(fileURLWithPath: lease.filePath)
+    }
+
+    public var currentMessage: ReaderMessage? {
+        switch state {
+        case .plainText(let message, _), .source(let message, _), .html(let message, _): message
+        default: nil
+        }
+    }
+
+    private func readManifest(_ lease: BodyLease) async throws -> RenditionManifest {
+        try await Task.detached {
+            guard let path = lease.manifestPath else { throw RenditionManifest.Invalid.unsafeResource }
+            let htmlFile = URL(fileURLWithPath: lease.filePath)
+            let manifestFile = URL(fileURLWithPath: path)
+            guard manifestFile.deletingLastPathComponent() == htmlFile.deletingLastPathComponent() else {
+                throw RenditionManifest.Invalid.unsafeResource
+            }
+            return try RenditionManifest.read(from: manifestFile)
+        }.value
     }
 
     private func invalidate() {
@@ -106,23 +143,22 @@ public final class ReaderModel {
             }
             leaseOwner = ReaderLeaseOwner(lease: lease, source: source)
             if lease.kind == .sanitizedHtml {
-                guard htmlAvailable, let path = lease.manifestPath else {
+                guard htmlAvailable, lease.manifestPath != nil else {
                     throw RenditionManifest.Invalid.unsafeResource
                 }
-                let rendition = try await Task.detached {
-                    let htmlFile = URL(fileURLWithPath: lease.filePath)
-                    let manifestFile = URL(fileURLWithPath: path)
-                    guard manifestFile.deletingLastPathComponent() == htmlFile.deletingLastPathComponent() else {
-                        throw RenditionManifest.Invalid.unsafeResource
-                    }
-                    return HTMLRendition(
-                        token: lease.leaseId, htmlFile: htmlFile,
-                        manifest: try RenditionManifest.read(from: manifestFile)
-                    )
-                }.value
+                let parsed = try await readManifest(lease)
                 guard ticket == navigationTicket else { return }
+                manifest = parsed
+                let rendition = HTMLRendition(
+                    token: lease.leaseId, htmlFile: URL(fileURLWithPath: lease.filePath), manifest: parsed
+                )
                 state = .html(message: message, rendition: rendition)
                 return
+            }
+            if lease.kind == .plainText, lease.manifestPath != nil {
+                let parsed = try await readManifest(lease)
+                guard ticket == navigationTicket else { return }
+                manifest = parsed
             }
             // Source is arbitrary acquisition bytes, not necessarily UTF-8.
             // Replacement characters keep it inspectable without interpreting it.

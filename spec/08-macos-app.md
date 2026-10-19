@@ -206,6 +206,13 @@ restores its draft by `draft_id`.
   Only a user-activated click on the current message opens anything;
   redirects, frames, downloads and other schemes are refused, and
   `target=_blank` follows the same rule.
+- **Opened attachments** stay in the core's bounded, quarantined lease
+  cache until core shutdown. An external application's launch acceptance
+  does not mean it has read the file. Selection changes, pane close and
+  model destruction therefore release body leases, not attachment files
+  already handed out. Stale attachment completions are released before
+  handoff. The normal lease quotas (07) still apply; no untracked copies
+  or timed eviction are used.
 - **Plain text** renders natively in an `NSTextView` (TextKit 2):
   literal, no Markdown interpretation, with quotes styled by depth.
 - **Reading view:** a toggle, off by default. It renders the semantic

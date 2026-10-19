@@ -114,3 +114,38 @@ public struct CIDResourceResolver: Sendable {
         )
     }
 }
+
+/// Authorization is exact to the current rendition's recorded destinations.
+public enum ReaderLinkDecision: Sendable, Equatable {
+    case open(URL)
+    case confirm(URL, reasons: [String])
+    case refuse
+
+    public static func decide(_ url: URL, manifest: RenditionManifest) -> Self {
+        guard ["http", "https", "mailto"].contains(url.scheme?.lowercased() ?? "") else {
+            return .refuse
+        }
+        // WebKit hands a click over as a Foundation URL, which escapes
+        // characters the sanitizer's WHATWG serializer keeps (`[` `]` in a
+        // query). A listed href matches after that same conversion, and only
+        // exactly: any other spelling is another request to the server.
+        let clicked = url.absoluteString
+        let listed = manifest.links.filter {
+            $0.href == clicked || URL(string: $0.href)?.absoluteString == clicked
+        }
+        guard !listed.isEmpty else { return .refuse }
+        var warnings: [String] = []
+        for warning in listed.flatMap(\.warnings) where !warnings.contains(warning) {
+            warnings.append(warning)
+        }
+        let reasons = warnings.map { warning in
+            switch warning {
+            case "text_domain": "The link text names a different domain."
+            case "raw_ip": "The destination uses an IP address instead of a domain name."
+            case "user_info": "The destination contains user information before the host name."
+            default: "The destination has an unrecognized safety warning (\(warning))."
+            }
+        }
+        return reasons.isEmpty ? .open(url) : .confirm(url, reasons: reasons)
+    }
+}
