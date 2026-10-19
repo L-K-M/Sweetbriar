@@ -862,7 +862,7 @@ CREATE INDEX logical_messages_by_acquisition ON logical_messages(acquisition_id)
   and its oldest-first index, initializes the search watermarks, and queues
   existing acquisitions (06), without changing authoritative rows.
   Migration 6 adds the durable search index state and rebuild jobs of 06
-  and 07 — epoch 0, no job, no pause, and the cross-kind job-id guards —
+  and 07: epoch 0, no job, no pause, and the cross-kind job-id guards,
   again without touching existing data.
 - **Before any migration that rewrites or drops data,** the engine takes a
   `VACUUM INTO` snapshot, keeping the last two. This arrives with the
