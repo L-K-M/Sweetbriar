@@ -130,9 +130,14 @@ impl Store {
         self.import_reports.exists(job)
     }
 
-    /// `job`'s report as last written, or `None` while there is none.
-    pub fn read_import_report(&self, job: &str) -> Result<Option<String>, StoreError> {
-        self.import_reports.read(job)
+    /// `job`'s report as last written, or `None` while there is none;
+    /// one over `max_bytes` is `Corrupt`.
+    pub fn read_import_report(
+        &self,
+        job: &str,
+        max_bytes: u64,
+    ) -> Result<Option<String>, StoreError> {
+        self.import_reports.read(job, max_bytes)
     }
 
     /// Where `job`'s report lives, for the user to open.

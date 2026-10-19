@@ -5,6 +5,8 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::pin::pin;
+use std::task::{Context, Waker};
 use std::time::{Duration, Instant};
 
 use sb_test_support::{ScratchDir, block_on};
@@ -645,6 +647,52 @@ fn import_report_returns_only_a_published_report() {
         matches!(unknown, Err(EngineError::NotFound { .. })),
         "{unknown:?}"
     );
+    block_on(engine.shutdown()).unwrap();
+}
+
+/// A caller dropping `cancel_job` while its cleanup runs still leaves
+/// the report it wrote named by `import_job`: the record is kept inside
+/// the cleanup, not after the caller's await.
+#[test]
+fn a_dropped_cancel_still_names_its_report() {
+    let scratch = ScratchDir::new("import-dropped-cancel");
+    let root = scratch.path().join("store");
+    let engine = open(&root);
+    let id = start(&engine, &[fixtures().join("Inbox.mbox")]);
+    settle(&engine, &id, ImportJobState::AwaitingConfirmation);
+    let written = root
+        .join("recovery")
+        .join(format!("import-report-{id}.json"));
+
+    let key = engine.new_idempotency_key();
+    {
+        let mut cancelling = pin!(engine.cancel_job(&key, &id));
+        let mut cx = Context::from_waker(Waker::noop());
+        let deadline = Instant::now() + PATIENCE;
+        // Poll until the cleanup has written the report, then stop: the
+        // future is dropped, at this block's end, without the poll that
+        // would see it finish.
+        while !written.exists() {
+            if cancelling.as_mut().poll(&mut cx).is_ready() {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the cleanup never wrote the report"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    let deadline = Instant::now() + PATIENCE;
+    while status(&engine, &id).report_path().is_none() {
+        assert!(
+            Instant::now() < deadline,
+            "the written report stayed unnamed"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(status(&engine, &id).report_path(), Some(written.as_path()));
     block_on(engine.shutdown()).unwrap();
 }
 
