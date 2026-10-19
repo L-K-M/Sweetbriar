@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use ammonia::{Builder, UrlRelative};
-use lol_html::html_content::{ContentType, TextType};
+use lol_html::html_content::ContentType;
 use lol_html::{RewriteStrSettings, doc_text, element, rewrite_str, text};
 use url::{Host, Url};
 
@@ -356,17 +356,25 @@ fn destination_hosts(url: &Url) -> Vec<String> {
 /// times those characters: 100,000 `&` took 35 seconds. Which text nodes
 /// form only the tree builder knows (it joins text around ignored tags,
 /// fosters text out of tables, drops comments), so instead no such
-/// character reaches it. Before the first parse each ordinary text node's
+/// character reaches it. Before the first parse each text node's
 /// references are decoded as HTML5's tokenizer decodes them, at its
 /// boundaries, and every `&`, `<`, `>` and U+0080–U+00BF in the result is
 /// spelled `PLACEHOLDER` + hex + `;`. Every serialization is then linear;
-/// `restore_text` spells them back. Raw text (title, style) is left alone:
-/// the allow-list drops it.
+/// `restore_text` spells them back. Raw text is neutralized too, since
+/// lol_html and html5ever can disagree about it; html5ever's drops anyway.
 fn neutralize_text(html: &str) -> Result<String, HtmlSanitizeError> {
     per_text_node(html, |text| {
+        // The parser turns source line breaks into line feeds before it
+        // decodes anything; only a referenced carriage return survives.
+        let text = text.replace("\r\n", "\n").replace('\r', "\n");
         let mut neutral = String::with_capacity(text.len());
-        for c in decode_references(text).chars() {
-            if matches!(c, '&' | '<' | '>' | PLACEHOLDER | '\u{80}'..='\u{bf}') {
+        for c in decode_references(&text).chars() {
+            // A decoded carriage return too: as itself the next parse
+            // would normalize it to a line feed.
+            if matches!(
+                c,
+                '&' | '<' | '>' | '\r' | PLACEHOLDER | '\u{80}'..='\u{bf}'
+            ) {
                 neutral.push(PLACEHOLDER);
                 neutral.push_str(&format!("{:X};", u32::from(c)));
             } else {
@@ -388,6 +396,7 @@ fn restore_text(html: &str) -> Result<String, HtmlSanitizeError> {
                 '&' => restored.push_str("&amp;"),
                 '<' => restored.push_str("&lt;"),
                 '>' => restored.push_str("&gt;"),
+                '\r' => restored.push_str("&#13;"),
                 c => restored.push(c),
             }
         }
@@ -428,9 +437,9 @@ fn per_text_node(
     rewrite_str(
         html,
         RewriteStrSettings::new().append_document_content_handler(doc_text!(|chunk| {
-            if chunk.text_type() != TextType::Data {
-                return Ok(());
-            }
+            // Every kind of text: lol_html and html5ever can disagree about
+            // raw text in malformed foreign content, and what html5ever
+            // treats as raw text the allow-list drops anyway.
             node.push_str(chunk.as_str());
             if chunk.last_in_text_node() {
                 chunk.replace(&rewrite(&node), ContentType::Html);
@@ -952,6 +961,42 @@ mod tests {
             let text =
                 mail_parser::decoders::html::html_to_text(sanitize_html(html).unwrap().html());
             assert_eq!(text.trim(), shown, "{html}");
+        }
+    }
+
+    /// lol_html and html5ever disagree about raw text in malformed foreign
+    /// content; text html5ever keeps must be neutral whatever lol_html
+    /// called it. A decoded carriage return survives the reparse.
+    #[test]
+    fn text_is_neutral_whatever_its_context() {
+        let dense = format!(
+            "<svg><td><foreignObject></td><xmp><pre>{}\u{e000}3C;</pre>",
+            "&amp;".repeat(2_000)
+        );
+        let first = policy()
+            .clean(&neutralize_text(&dense).unwrap())
+            .to_string();
+        assert!(!rescanned(&first), "the first pass");
+        let result = sanitize_html(&dense).unwrap();
+        assert!(
+            !result.html().contains("&amp;amp;"),
+            "{}",
+            &result.html()[..200]
+        );
+        assert!(
+            !result.html().contains("&lt;</pre>"),
+            "a sender's placeholder"
+        );
+        for (html, sanitized) in [
+            ("<pre>&#13;X</pre>", "<pre>&#13;X</pre>"),
+            ("<pre>&#13;&#10;X</pre>", "<pre>&#13;\nX</pre>"),
+        ] {
+            let result = sanitize_html(html).unwrap();
+            assert!(
+                result.html().contains(sanitized),
+                "{html}: {:?}",
+                result.html()
+            );
         }
     }
 
