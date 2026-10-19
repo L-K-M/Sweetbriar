@@ -14,6 +14,20 @@ use super::{Kind, Line, append_html_text, boundary, is_block};
 
 type Handle = Rc<Node>;
 
+// Feed the actual HTML5 parser in bounded turns; no separate HTML preflight
+// can reliably predict its repaired tree or raw-text context (spec/06).
+const INPUT_CHUNK_BYTES: usize = 1_024;
+const MAX_NODES: usize = 10_000;
+const MAX_WORK: usize = 4_000_000;
+const MAX_PENDING_BYTES: usize = 16_384;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum HtmlLimit {
+    Nodes,
+    Work,
+    PendingToken,
+}
+
 struct Node {
     id: usize,
     name: QualName,
@@ -27,14 +41,37 @@ struct Node {
 #[derive(Default)]
 struct Tree {
     nodes: RefCell<Vec<Handle>>,
+    work: Cell<usize>,
+    mutations: Cell<usize>,
 }
 
 impl Tree {
+    fn charge(&self, amount: usize) {
+        self.work.set(self.work.get().saturating_add(amount));
+    }
+
+    fn mutated(&self) {
+        self.mutations.set(self.mutations.get().saturating_add(1));
+    }
+
+    fn check_budget(&self) -> Result<(), HtmlLimit> {
+        if self.nodes.borrow().len() > MAX_NODES {
+            return Err(HtmlLimit::Nodes);
+        }
+        if self.work.get() > MAX_WORK {
+            return Err(HtmlLimit::Work);
+        }
+        Ok(())
+    }
+
     fn node(&self, id: usize) -> Handle {
+        self.charge(1);
         self.nodes.borrow()[id].clone()
     }
 
     fn create(&self, name: QualName, text: Option<StrTendril>, integration: bool) -> Handle {
+        self.charge(1);
+        self.mutated();
         let mut nodes = self.nodes.borrow_mut();
         let node = Rc::new(Node {
             id: nodes.len(),
@@ -55,20 +92,22 @@ impl Tree {
 
     fn detach(&self, node: &Handle) {
         if let Some(parent) = node.parent.take() {
-            self.node(parent)
-                .children
-                .borrow_mut()
-                .retain(|id| *id != node.id);
+            let parent = self.node(parent);
+            self.charge(parent.children.borrow().len());
+            self.mutated();
+            parent.children.borrow_mut().retain(|id| *id != node.id);
         }
     }
 
     fn insert(&self, parent: &Handle, index: usize, child: NodeOrText<Handle>) {
+        self.mutated();
         let child = match child {
             NodeOrText::AppendNode(node) => {
                 self.detach(&node);
                 node
             }
             NodeOrText::AppendText(text) => {
+                self.charge(text.len());
                 if index > 0 {
                     let previous = self.node(parent.children.borrow()[index - 1]);
                     if let Some(contents) = &previous.text {
@@ -80,6 +119,7 @@ impl Tree {
             }
         };
         child.parent.set(Some(parent.id));
+        self.charge(parent.children.borrow().len().saturating_sub(index));
         parent.children.borrow_mut().insert(index, child.id);
     }
 }
@@ -97,9 +137,12 @@ impl TreeSink for Tree {
         self.node(0)
     }
     fn elem_name<'a>(&'a self, target: &'a Handle) -> ExpandedName<'a> {
+        self.charge(1);
         target.name.expanded()
     }
-    fn create_element(&self, name: QualName, _: Vec<Attribute>, flags: ElementFlags) -> Handle {
+    fn create_element(&self, name: QualName, attrs: Vec<Attribute>, flags: ElementFlags) -> Handle {
+        // The tokenizer checks each attribute against earlier attributes.
+        self.charge(attrs.len().saturating_mul(attrs.len()));
         let node = self.create(name, None, flags.mathml_annotation_xml_integration_point);
         if flags.template {
             node.template.set(Some(self.anonymous(None).id));
@@ -138,6 +181,7 @@ impl TreeSink for Tree {
         )
     }
     fn same_node(&self, a: &Handle, b: &Handle) -> bool {
+        self.charge(1);
         a.id == b.id
     }
     fn set_quirks_mode(&self, _: QuirksMode) {}
@@ -152,6 +196,7 @@ impl TreeSink for Tree {
         if let NodeOrText::AppendNode(node) = &child {
             self.detach(node);
         }
+        self.charge(parent.children.borrow().len());
         let index = parent
             .children
             .borrow()
@@ -160,12 +205,16 @@ impl TreeSink for Tree {
             .expect("sibling belongs to parent");
         self.insert(&parent, index, child);
     }
-    fn add_attrs_if_missing(&self, _: &Handle, _: Vec<Attribute>) {}
+    fn add_attrs_if_missing(&self, _: &Handle, attrs: Vec<Attribute>) {
+        self.charge(attrs.len().saturating_mul(attrs.len()));
+    }
     fn remove_from_parent(&self, target: &Handle) {
         self.detach(target);
     }
     fn reparent_children(&self, node: &Handle, new_parent: &Handle) {
         let children = node.children.take();
+        self.charge(children.len());
+        self.mutated();
         for id in &children {
             self.node(*id).parent.set(Some(new_parent.id));
         }
@@ -176,10 +225,32 @@ impl TreeSink for Tree {
     }
 }
 
-pub(super) fn html_lines(html: &str) -> Vec<Line> {
+pub(super) fn html_lines(html: &str) -> Result<Vec<Line>, HtmlLimit> {
     let tree = Tree::default();
     tree.anonymous(None); // Document node is always index zero.
-    let tree = html5ever::parse_document(tree, Default::default()).one(html);
+    let mut parser = html5ever::parse_document(tree, Default::default());
+    let mut offset = 0;
+    let mut pending = 0;
+    while offset < html.len() {
+        let end = html.floor_char_boundary((offset + INPUT_CHUNK_BYTES).min(html.len()));
+        let tree = &parser.tokenizer.sink.sink;
+        let before = tree.mutations.get();
+        tree.charge(end - offset);
+        parser.process(StrTendril::from_slice(&html[offset..end]));
+        let tree = &parser.tokenizer.sink.sink;
+        tree.check_budget()?;
+        pending = if tree.mutations.get() == before {
+            pending + end - offset
+        } else {
+            0
+        };
+        if pending > MAX_PENDING_BYTES {
+            return Err(HtmlLimit::PendingToken);
+        }
+        offset = end;
+    }
+    let tree = parser.finish();
+    tree.check_budget()?;
     let mut lines = vec![Line {
         kind: Kind::Authored,
         text: String::new(),
@@ -221,5 +292,33 @@ pub(super) fn html_lines(html: &str) -> Vec<Line> {
                 .map(|id| (*id, quoted, false)),
         );
     }
-    lines
+    Ok(lines)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wide_trees_have_a_node_budget() {
+        let source = "<span></span>".repeat(MAX_NODES);
+        assert_eq!(html_lines(&source).err(), Some(HtmlLimit::Nodes));
+    }
+
+    #[test]
+    fn attribute_duplicate_checks_are_charged_as_quadratic_work() {
+        let attrs = (0..2_100)
+            .map(|n| format!("a{n}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let source = format!("<p {attrs}>kept</p>");
+        assert!(source.len() < MAX_PENDING_BYTES);
+        assert_eq!(html_lines(&source).err(), Some(HtmlLimit::Work));
+    }
+
+    #[test]
+    fn unfinished_tokens_cannot_accumulate_unbounded_attributes_or_text() {
+        let source = format!("<p title='{}", "a".repeat(MAX_PENDING_BYTES));
+        assert_eq!(html_lines(&source).err(), Some(HtmlLimit::PendingToken));
+    }
 }

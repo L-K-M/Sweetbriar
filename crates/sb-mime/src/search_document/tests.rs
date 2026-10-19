@@ -184,7 +184,59 @@ fn dense_html_text_and_deep_markup_do_not_serialize_or_recurse() {
     assert_eq!(doc.body_authored(), "&©\u{a0}".repeat(100_000));
     assert_eq!(doc.state(), SearchState::Indexed);
     let deep = format!("{}text{}", "<div>".repeat(5_000), "</div>".repeat(5_000));
-    assert_eq!(html(&deep).body_authored(), "text");
+    assert_eq!(html(&deep).state(), SearchState::Partial);
+    let ordinary = format!("{}text{}", "<div>".repeat(64), "</div>".repeat(64));
+    assert_eq!(html(&ordinary).body_authored(), "text");
+}
+
+#[test]
+fn hostile_html_nesting_is_partial_instead_of_unbounded_tree_work() {
+    let body = format!("{}text{}", "<div>".repeat(20_000), "</div>".repeat(20_000));
+    let doc = html(&body);
+    assert_eq!(doc.state(), SearchState::Partial);
+    assert_eq!(
+        doc.truncated_fields(),
+        ["body_authored", "body_quoted", "body_signature"]
+    );
+}
+
+#[test]
+fn hostile_table_repair_is_partial_instead_of_quadratic_sibling_scans() {
+    let body = format!("<table>{}</table>", "x<b></b>".repeat(20_000));
+    let doc = html(&body);
+    assert_eq!(doc.state(), SearchState::Partial);
+    assert_eq!(
+        doc.truncated_fields(),
+        ["body_authored", "body_quoted", "body_signature"]
+    );
+}
+
+#[test]
+fn an_html_work_limit_keeps_headers_names_and_other_body_candidates() {
+    let hostile = format!(
+        "Content-Type: text/html\r\n\r\n<table>{}</table>",
+        "x<b></b>".repeat(20_000)
+    );
+    let raw = format!(
+        "Subject: known\r\n{}",
+        multipart(
+            "mixed",
+            &[
+                &hostile,
+                "Content-Type: text/plain\r\n\r\nretained",
+                "Content-Type: application/pdf; name=keep.pdf\r\n\r\nignored",
+            ]
+        )
+    );
+    let doc = document(&raw);
+    assert_eq!(doc.subject(), "known");
+    assert_eq!(doc.body_authored(), "retained");
+    assert_eq!(doc.attachment_names(), "keep.pdf");
+    assert_eq!(doc.state(), SearchState::Partial);
+    assert_eq!(
+        doc.truncated_fields(),
+        ["body_authored", "body_quoted", "body_signature"]
+    );
 }
 
 #[test]
