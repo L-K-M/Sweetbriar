@@ -320,7 +320,11 @@ func aCompletionForAPageNoLongerWantedIsDropped() async throws {
     model.setVisible(2_000 ..< 2_050)
     await clock.tick()
 
-    try #require(await settle(clock) { model.row(at: 2_000) != nil })
+    // Pages 10 and 11 read independently and may land in different
+    // frames: settle until both have.
+    try #require(await settle(clock) {
+        model.row(at: 2_000) != nil && model.row(at: 2_200) != nil
+    })
     #expect(model.row(at: 2_000)?.occurrenceId == syntheticId(2_000, n))
     // The late completions for 3 and 4 landed nowhere.
     #expect(model.row(at: 600) == nil)
