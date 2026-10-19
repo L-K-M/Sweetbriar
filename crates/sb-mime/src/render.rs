@@ -1,6 +1,8 @@
 //! Inert HTML policy. Resource/CSS rewriting and rendition limits belong to M1.5d.
 
+use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::rc::Rc;
 
 use ammonia::{Builder, UrlRelative};
 use lol_html::html_content::ContentType;
@@ -267,7 +269,7 @@ fn sanitize_run(decoded_html: &str) -> Result<SanitizedHtml, HtmlSanitizeError> 
     let neutral = neutralize_text(decoded_html)?;
     // Normalize namespaces and malformed trees before collecting links, so
     // removed subtrees cannot contribute warning records.
-    let normalized = policy.clean(&neutral).to_string();
+    let normalized = keep_pre_newline(&policy.clean(&neutral).to_string())?;
     let anchors = std::cell::RefCell::new(Vec::<(Url, String)>::new());
     let rewritten = rewrite_str(
         &normalized,
@@ -313,7 +315,7 @@ fn sanitize_run(decoded_html: &str) -> Result<SanitizedHtml, HtmlSanitizeError> 
         }
     }
     Ok(SanitizedHtml {
-        html: restore_text(&policy.clean(&rewritten).to_string())?,
+        html: restore_text(&keep_pre_newline(&policy.clean(&rewritten).to_string())?)?,
         links: destinations
             .into_iter()
             .map(|(destination, warnings)| LinkRecord {
@@ -383,6 +385,42 @@ fn neutralize_text(html: &str) -> Result<String, HtmlSanitizeError> {
         }
         neutral
     })
+}
+
+/// HTML5 parsing drops a line feed right after `<pre>`, and html5ever
+/// 0.40's serializer doesn't put one back, so every pass (and the browser)
+/// would lose a leading blank line. After each serialization a `<pre>`
+/// whose text starts with a line feed gets one more for the next parse.
+fn keep_pre_newline(html: &str) -> Result<String, HtmlSanitizeError> {
+    let after_pre = Rc::new(Cell::new(false));
+    let on_element = Rc::clone(&after_pre);
+    rewrite_str(
+        html,
+        RewriteStrSettings::new()
+            .append_element_content_handler(element!("*", move |el| {
+                let is_pre = el.tag_name() == "pre";
+                on_element.set(is_pre);
+                if is_pre {
+                    let ended = Rc::clone(&on_element);
+                    let handler: lol_html::EndTagHandler<'static> = Box::new(move |_| {
+                        ended.set(false);
+                        Ok(())
+                    });
+                    el.on_end_tag(handler)?;
+                }
+                Ok(())
+            }))
+            .append_document_content_handler(doc_text!(|chunk| {
+                if chunk.as_str().is_empty() {
+                    return Ok(());
+                }
+                if after_pre.replace(false) && chunk.as_str().starts_with('\n') {
+                    chunk.before("\n", ContentType::Text);
+                }
+                Ok(())
+            })),
+    )
+    .map_err(|_| HtmlSanitizeError::Rewrite)
 }
 
 /// Undo `neutralize_text` in the final, serialized text: each placeholder
@@ -995,6 +1033,26 @@ mod tests {
             assert!(
                 result.html().contains(sanitized),
                 "{html}: {:?}",
+                result.html()
+            );
+        }
+    }
+
+    /// Every HTML5 parse drops the line feed right after `<pre>`, the
+    /// browser's included, so a `<pre>` keeps the blank lines it shows.
+    #[test]
+    fn pre_keeps_its_leading_blank_lines() {
+        for (html, sanitized) in [
+            ("<pre>\ncode</pre>", "<pre>code</pre>"),
+            ("<pre>\n\ncode</pre>", "<pre>\n\ncode</pre>"),
+            ("<pre>\n\n\ncode</pre>", "<pre>\n\n\ncode</pre>"),
+            ("<pre></pre>\ntext", "<pre></pre>\ntext"),
+            ("<pre><b>\nx</b></pre>", "<pre><b>\nx</b></pre>"),
+        ] {
+            let result = sanitize_html(html).unwrap();
+            assert!(
+                result.html().contains(sanitized),
+                "{html:?}: {:?}",
                 result.html()
             );
         }
