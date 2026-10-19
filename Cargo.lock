@@ -1160,6 +1160,7 @@ version = "0.0.1"
 dependencies = [
  "ammonia",
  "cssparser 0.38.0",
+ "encoding_rs",
  "insta",
  "lol_html",
  "mail-parser",
