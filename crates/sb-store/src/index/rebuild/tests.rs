@@ -455,6 +455,26 @@ fn user_and_io_pause_survive_reopen_enqueue_and_version_restart() {
 }
 
 #[test]
+fn a_missing_state_row_cannot_report_successful_pause_or_retry_progress() {
+    let mut conn = connection();
+    conn.execute("DELETE FROM search_index_state", []).unwrap();
+    let generation = search_generation(&conn).unwrap();
+    let tx = conn.transaction().unwrap();
+    let outcomes = [
+        set_user_pause(&tx, UserPause::Pause),
+        pause_for_io(&tx, SearchIoCode::StorageFull, "full", now(10), 1),
+        clear_io_pause(&tx),
+    ];
+    tx.commit().unwrap();
+    assert!(
+        outcomes
+            .iter()
+            .all(|result| matches!(result, Err(StoreError::Corrupt { .. })))
+    );
+    assert_eq!(search_generation(&conn).unwrap(), generation);
+}
+
+#[test]
 fn status_writes_advance_generation_once_and_stale_work_does_not() {
     let mut conn = connection();
     acquisitions(&conn, 1);

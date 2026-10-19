@@ -411,6 +411,7 @@ pub enum UserPause {
 /// Set or release the durable user pause. Commits status and advances
 /// `search_generation` once, even with no queue change (spec/07).
 pub fn set_user_pause(tx: &Transaction, pause: UserPause) -> Result<(), StoreError> {
+    status(tx)?;
     tx.execute(
         "UPDATE search_index_state SET user_paused = ?1 WHERE id = 0",
         [matches!(pause, UserPause::Pause) as i64],
@@ -433,6 +434,7 @@ pub fn pause_for_io(
     if message.len() > MAX_IO_MESSAGE_BYTES || retry_at.as_millis() < 0 {
         return Err(invalid("invalid search I/O pause"));
     }
+    status(tx)?;
     tx.execute(
         "UPDATE search_index_state
          SET io_code = ?1, io_message = ?2, io_retry_at = ?3, io_attempts = ?4
@@ -451,6 +453,7 @@ pub fn pause_for_io(
 /// Leave the I/O pause when a retry starts. Keeps the attempt counter
 /// and never touches the user pause. Advances `search_generation`.
 pub fn clear_io_pause(tx: &Transaction) -> Result<(), StoreError> {
+    status(tx)?;
     tx.execute(
         "UPDATE search_index_state
          SET io_code = NULL, io_message = NULL, io_retry_at = NULL
