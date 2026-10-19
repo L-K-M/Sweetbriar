@@ -37,6 +37,9 @@ actor FakeListWindowSource: ListWindowSource {
     private(set) var reads: [ReadCall] = []
     /// The window id of every `windowIDs` call.
     private(set) var indexReads: [UInt64] = []
+    /// `windowIDs` calls running now, and the most at once.
+    private var indexInFlight = 0
+    private(set) var maxIndexInFlight = 0
     /// Every window `closeWindow` released.
     private(set) var closedWindows: [UInt64] = []
     /// How many reads ended by their task being cancelled.
@@ -209,6 +212,9 @@ actor FakeListWindowSource: ListWindowSource {
     /// `count` down to 1, dense.
     func windowIDs(id: UInt64) async throws -> WindowIDs {
         indexReads.append(id)
+        indexInFlight += 1
+        maxIndexInFlight = max(maxIndexInFlight, indexInFlight)
+        defer { indexInFlight -= 1 }
         guard open.contains(id) else {
             throw CoreFailure.notFound(what: "window \(id)")
         }
@@ -387,6 +393,8 @@ actor FakeWindowEvents: WindowEventSource {
     private(set) var nextCalls = 0
     /// The most `next` calls waiting at once.
     private(set) var maxWaiting = 0
+    /// Waiting `next` calls that ended by cancellation.
+    private(set) var cancelledNexts = 0
     private var waiting = 0
 
     func emit(_ event: WindowEvent) {
@@ -428,6 +436,7 @@ actor FakeWindowEvents: WindowEventSource {
     private func cancelWaiter() {
         guard let waiter else { return }
         self.waiter = nil
+        cancelledNexts += 1
         waiter.resume(throwing: CancellationError())
     }
 }

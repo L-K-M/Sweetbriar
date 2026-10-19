@@ -23,12 +23,16 @@ final class ImportSheetController: NSViewController {
     private static let width: CGFloat = 520
     /// Problems listed in the sheet; the report has them all.
     private static let listedProblems = 5
+    /// The tallest the variant choices grow before they scroll, so the
+    /// buttons stay on screen however many sources need a choice.
+    private static let choicesMaxHeight: CGFloat = 240
 
     private let session: ImportSession
     private let headline = NSTextField(labelWithString: "")
     private let detail = NSTextField(wrappingLabelWithString: "")
     private let progress = NSProgressIndicator()
     private let choices = NSStackView()
+    private let choicesScroll = NSScrollView()
     private let problems = NSTextField(wrappingLabelWithString: "")
     private let reportStatus = NSTextField(labelWithString: "")
     private let confirmButton = NSButton(title: "Import", target: nil, action: nil)
@@ -85,7 +89,36 @@ final class ImportSheetController: NSViewController {
         let report = NSStackView(views: [reportStatus, retryButton])
         report.orientation = .horizontal
 
-        let stack = NSStackView(views: [headline, detail, progress, choices, problems, report, buttons])
+        // The choices scroll inside a bounded height; the stack sits in a
+        // flipped view so they start at the top.
+        let choicesDocument = FlippedView()
+        choicesDocument.translatesAutoresizingMaskIntoConstraints = false
+        choices.translatesAutoresizingMaskIntoConstraints = false
+        choicesDocument.addSubview(choices)
+        choicesScroll.documentView = choicesDocument
+        choicesScroll.hasVerticalScroller = true
+        choicesScroll.autohidesScrollers = true
+        choicesScroll.drawsBackground = false
+        choicesScroll.translatesAutoresizingMaskIntoConstraints = false
+        let fitsContent = choicesScroll.heightAnchor.constraint(
+            equalTo: choicesDocument.heightAnchor
+        )
+        fitsContent.priority = .defaultLow
+        NSLayoutConstraint.activate([
+            choices.leadingAnchor.constraint(equalTo: choicesDocument.leadingAnchor),
+            choices.trailingAnchor.constraint(equalTo: choicesDocument.trailingAnchor),
+            choices.topAnchor.constraint(equalTo: choicesDocument.topAnchor),
+            choices.bottomAnchor.constraint(equalTo: choicesDocument.bottomAnchor),
+            choicesDocument.widthAnchor.constraint(
+                equalTo: choicesScroll.contentView.widthAnchor
+            ),
+            choicesScroll.heightAnchor.constraint(
+                lessThanOrEqualToConstant: Self.choicesMaxHeight
+            ),
+            fitsContent,
+        ])
+
+        let stack = NSStackView(views: [headline, detail, progress, choicesScroll, problems, report, buttons])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 12
@@ -105,6 +138,7 @@ final class ImportSheetController: NSViewController {
             progress.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -40),
             detail.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -40),
             problems.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -40),
+            choicesScroll.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -40),
         ])
         view = content
         observe()
@@ -216,10 +250,10 @@ final class ImportSheetController: NSViewController {
             view.removeFromSuperview()
         }
         guard !sources.isEmpty else {
-            choices.isHidden = true
+            choicesScroll.isHidden = true
             return
         }
-        choices.isHidden = false
+        choicesScroll.isHidden = false
         let note = NSTextField(wrappingLabelWithString:
             "These sources have lines starting “>From”, which mbox variants read differently. Choose how to read each."
         )
@@ -271,7 +305,8 @@ final class ImportSheetController: NSViewController {
         case 2:
             session.choose(.mboxo, forSource: ordinal)
         default:
-            break
+            // "Choose…" again: no variant until one is picked.
+            session.clearChoice(forSource: ordinal)
         }
     }
 
@@ -326,4 +361,10 @@ final class ImportSheetController: NSViewController {
             _ = alert.runModal()
         }
     }
+}
+
+/// A view laying out top-down, so a scroll view's content starts at the
+/// top.
+private final class FlippedView: NSView {
+    override var isFlipped: Bool { true }
 }

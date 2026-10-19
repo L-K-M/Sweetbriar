@@ -13,6 +13,11 @@ final class SidebarViewController: NSViewController {
     static let accessibilityID = "sidebar"
     private static let entryCellID = NSUserInterfaceItemIdentifier("SidebarEntry")
     private static let headerCellID = NSUserInterfaceItemIdentifier("SidebarHeader")
+    /// An account's neutral symbol before M1.10's appearance service.
+    private static let accountSymbol = NSImage(
+        systemSymbolName: "person.crop.circle",
+        accessibilityDescription: nil
+    )
 
     private let model: SidebarModel
     private let outlineView = NSOutlineView()
@@ -153,6 +158,11 @@ extension SidebarViewController: NSOutlineViewDataSource, NSOutlineViewDelegate 
             let cell = outlineView.makeView(withIdentifier: Self.headerCellID, owner: nil)
                 as? NSTableCellView ?? makeHeaderCell()
             cell.textField?.stringValue = section.section.title
+            // Accounts carry a neutral symbol until M1.10 gives them
+            // colors and monograms (spec/08 "Sidebar").
+            let isAccount = section.section.id != SidebarModel.unifiedSectionID
+            cell.imageView?.image = isAccount ? Self.accountSymbol : nil
+            cell.imageView?.isHidden = !isAccount
             return cell
         }
         guard let node = item as? EntryNode else { return nil }
@@ -177,14 +187,23 @@ extension SidebarViewController: NSOutlineViewDataSource, NSOutlineViewDelegate 
     private func makeHeaderCell() -> NSTableCellView {
         let cell = NSTableCellView()
         cell.identifier = Self.headerCellID
+        let symbol = NSImageView()
+        symbol.translatesAutoresizingMaskIntoConstraints = false
+        symbol.contentTintColor = .secondaryLabelColor
+        symbol.setAccessibilityElement(false)
         let label = NSTextField(labelWithString: "")
         label.translatesAutoresizingMaskIntoConstraints = false
-        cell.addSubview(label)
+        let row = NSStackView(views: [symbol, label])
+        row.orientation = .horizontal
+        row.spacing = 4
+        row.translatesAutoresizingMaskIntoConstraints = false
+        cell.addSubview(row)
+        cell.imageView = symbol
         cell.textField = label
         NSLayoutConstraint.activate([
-            label.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 2),
-            label.trailingAnchor.constraint(lessThanOrEqualTo: cell.trailingAnchor),
-            label.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+            row.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 2),
+            row.trailingAnchor.constraint(lessThanOrEqualTo: cell.trailingAnchor),
+            row.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
         ])
         return cell
     }

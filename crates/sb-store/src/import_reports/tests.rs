@@ -8,6 +8,8 @@ use sb_test_support::{FaultFs, FaultKind, FsOp, ScratchDir, SeededRandom, real_f
 use super::*;
 
 const JOB: &str = "00000000-0000-4000-8000-0000000000c4";
+/// A read limit far above the test reports.
+const LIMIT: u64 = 1024;
 
 fn reports(fs: Arc<dyn Fs>, scratch: &ScratchDir) -> ImportReports {
     ImportReports::new(
@@ -48,17 +50,36 @@ fn a_report_is_replaced_whole_and_leaves_no_temporary_file() {
 fn a_report_reads_back_as_written() {
     let scratch = ScratchDir::new("report-read");
     let reports = reports(real_fs(), &scratch);
-    assert_eq!(reports.read(JOB).unwrap(), None);
+    assert_eq!(reports.read(JOB, LIMIT).unwrap(), None);
     reports.write(JOB, b"{\"v\":1}").unwrap();
-    assert_eq!(reports.read(JOB).unwrap().as_deref(), Some("{\"v\":1}"));
+    assert_eq!(
+        reports.read(JOB, LIMIT).unwrap().as_deref(),
+        Some("{\"v\":1}")
+    );
 
     reports.write(JOB, &[0xff, 0xfe]).unwrap();
-    let error = reports.read(JOB).unwrap_err();
+    let error = reports.read(JOB, LIMIT).unwrap_err();
     assert!(matches!(error, StoreError::Corrupt { .. }), "{error:?}");
     assert!(matches!(
-        reports.read("../x"),
+        reports.read("../x", LIMIT),
         Err(StoreError::InvalidInput { .. })
     ));
+}
+
+/// A report longer than its writer could have written is `Corrupt`; one
+/// exactly at the limit reads.
+#[test]
+fn a_report_past_its_limit_is_corrupt() {
+    let scratch = ScratchDir::new("report-limit");
+    let reports = reports(real_fs(), &scratch);
+    reports.write(JOB, b"{\"v\":1}").unwrap();
+    let exact = "{\"v\":1}".len() as u64;
+    assert_eq!(
+        reports.read(JOB, exact).unwrap().as_deref(),
+        Some("{\"v\":1}")
+    );
+    let error = reports.read(JOB, exact - 1).unwrap_err();
+    assert!(matches!(error, StoreError::Corrupt { .. }), "{error:?}");
 }
 
 #[test]
