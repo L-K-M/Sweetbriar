@@ -139,6 +139,27 @@ recreated.
   - On failure: stop remote effects, keep the store read-only, copy the
     files to `recovery/`, and tell the user. Never repair by deleting.
 
+### Search writes (M1.6)
+
+The FTS5 layout, queue revisions and recovery protocol are in 06. Tables
+already present in schema v1 are reused; contract additions use new
+forward migrations with the usual snapshot and integrity checks (02).
+No migration rewrites an old migration or extracts MIME inside a write.
+Index batches run at low priority, at most 200 documents and 2,000,000
+bytes of new extracted column values per transaction; a single document
+fits 06's cap. Acquisition file reads, MIME/HTML parsing and hashing finish
+before submission. Writer publication rechecks queue revision, rebuild
+epoch, target version and pause state. FTS updates are explicit, not triggers
+under `trusted_schema=OFF`.
+Index transactions advance `search_generation` with their docs/queue
+changes; ordinary `list_generation` changes only for its existing inputs.
+Runtime rebuild/version reset and enqueue use 06's durable phases, at most
+200 documents per low-priority transaction, yielding between batches. No
+corpus-wide runtime clear/enqueue transaction is exempt from these bounds.
+The engine pauses/retries failed I/O visibly through 07's operational
+status, and shutdown drains only submitted writes; unsubmitted extraction
+work remains queued.
+
 ## Object store
 
 ### Contract

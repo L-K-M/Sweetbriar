@@ -56,6 +56,9 @@ CREATE TABLE store_meta (
 -- 'list_generation' (an integer in decimal digits; the d_list_rows generation, from migration 3),
 -- 'thread_inputs' and 'threads_built' (integers in decimal digits, from migration 4): how often
 -- imports added logical messages, and how many of those the last complete thread rebuild read.
+-- M1.6: 'index_inputs', 'search_extractor_version' (06) and
+-- 'search_generation' (07), integers in decimal digits; search has its own
+-- generation so index-only writes leave ordinary list windows alone.
 -- The schema version is PRAGMA user_version, owned by the migration runner;
 -- it is not duplicated here.
 ```
@@ -398,6 +401,48 @@ canonical form.
 A full `contacts` table (D22) is *later*. `seen_addresses` is
 technically derived but kept: rebuilding it would lose sent-to counts
 from discarded drafts. It is listed in the backup.
+
+### Received-address population (M1.6)
+
+- Read the summary's first From, Reply-To, To and Cc mailboxes; ignore
+  missing/invalid addr-specs and empty group names. No Bcc inference and
+  no scraping bodies. Deduplicate canonical addresses within one logical
+  message. Preserve local-part case and spelling; lowercase only the
+  domain as in 06. `times_received` means appearances in these received
+  headers, not the number of acquisitions or labels. M1.6 never changes
+  `times_sent_to`. This includes Sent-role messages and the owner's own
+  addresses: these are header-observation counts, not inferred direction.
+  Imported mailbox roles are unreliable and a message may have several
+  labels, so M1.6 applies no role/direction or self-address filter. Completion
+  may offer an own address; no automatic identity suppression is implied.
+- M1.6m adds a kept `STRICT` table `seen_address_messages`, with
+  `message_id INTEGER NOT NULL REFERENCES logical_messages(message_id)`,
+  `canonical TEXT NOT NULL REFERENCES seen_addresses(canonical)` and
+  `PRIMARY KEY (message_id, canonical)`. This is a target migration contract,
+  not part of the implemented SQL blocks above; add its executable SQL
+  alongside the migration so the schema-drift test continues to prove both.
+
+  In one writer transaction, insert/upsert the address row, insert the
+  ledger key if absent and increment `times_received` only for a new key.
+  Several logical messages sharing bytes each contribute once; several
+  occurrences of one message contribute once. Failed summaries contribute
+  nothing; later successful summaries may add new addresses, never remove
+  historical counts. Rebuilding derived tables never clears this ledger.
+- `last_seen_at` is the earliest occurrence `first_seen_at` of the logical
+  message, not its untrusted Date header or the backfill clock. The largest
+  observation time wins `email`, `display_name`, `last_account_id`; for
+  equal times the lexicographically largest `(email, name-or-empty,
+  account_id)` wins. Replay must not change that choice. Missing names
+  remain NULL; no invented display name. Address normalization is the
+  same as exact-address search (06).
+- An additive migration creates an empty ledger, preserving all existing
+  address rows and sent history. A resumable engine pass scans messages
+  with summaries in bounded message-id batches, and runs after import or
+  summary replacement as well as startup. Batch replay is safe without
+  a maximum-id watermark; late summaries of old ids must be revisited.
+  At M1.6 entry the received population has no earlier writer; a future
+  upgrade from a populated version must preserve its ledger with its counts.
+  This pass populates completion data; composer presentation remains M1.9.
 
 ## Drafts
 
@@ -766,8 +811,8 @@ CREATE INDEX logical_messages_by_acquisition ON logical_messages(acquisition_id)
     rebuild rewrites every thread whose stored values differ from
     these, so one interrupted mid-publication heals at the next.
   - `Thread` windows (07) join a thread's members to their
-    representatives' list rows: the one list read that joins, since a
-    thread is a page or two of rows.
+    representatives' list rows; Search also joins its derived/filter
+    sources (06). Ordinary mailbox lists keep the covering-index path.
 - **Search tables** are in [06-search](06-search.md).
 
 ## Migrations
