@@ -287,7 +287,9 @@ fn release_lease(lease_id: LeaseId);
   `sweetbriar-cid:` resource (opaque id, file, verified media type,
   length), each link's destination with its warnings (10), and the
   message's attachments (part id, display name, media type, decoded
-  length).
+  length, unknown when its transfer encoding is damaged). Attachments
+  are the leaf parts beside the bodies; an attached message counts
+  once, as itself, and its parts aren't extracted on their own.
 - **`AttachmentLease`** `{ lease_id, file_path, byte_length, part_id,
   display_name, media_type }`: the decoded part under a generated file
   name, with the quarantine attribute set before it is returned (10).

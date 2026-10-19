@@ -15,6 +15,7 @@ mod import_flags;
 mod limits;
 mod mbox;
 mod outcome;
+mod reader;
 mod summary;
 mod walk;
 
@@ -28,6 +29,10 @@ pub use mbox::{
     inventory_mbox,
 };
 pub use outcome::{ParseFailure, ParseOutcome, ParseWarning};
+pub use reader::{
+    AttachmentDescriptor, AttachmentError, PartId, RelatedResource, RenderInput, RenderWarning,
+    RenderWarningCode, SelectedBody, extract_attachment, render_input,
+};
 pub use summary::{MailboxAddress, MessageSummary, PARSER_VERSION};
 
 use mail_parser::parsers::MessageStream;
