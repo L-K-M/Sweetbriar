@@ -465,6 +465,10 @@ fn release_lease(lease_id: LeaseId);
   file twice, or is over 4,000,000 bytes. `links` holds each
   destination once, with the union of its anchors' warnings, since a
   click reports the destination, not the anchor.
+  Attachments are the leaf parts beside the bodies; an attached
+  message counts once, as itself, and its parts aren't extracted on
+  their own. An attachment's `bytes` is `null` when its transfer
+  encoding is damaged.
 - **`AttachmentLease`** `{ lease_id, file_path, byte_length, part_id,
   display_name, media_type }`: the decoded part under a generated file
   name, with the quarantine attribute set before it is returned (10).
