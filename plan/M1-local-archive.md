@@ -250,9 +250,10 @@ local drafts. No network yet.
     (multipart/alternative, multipart/related), stable part ids,
     attachment descriptors, literal UTF-8 plain text with format=flowed
     decoded (RFC 3676).
-  - **M1.5c1a–c Dependencies — L, M, M:** `url` and `cssparser`, then
-    `lol_html`, then `ammonia`, exact pins with their named MPL-2.0
-    exceptions, lockfile and notices. No behavior.
+  - **M1.5c1a–c Dependencies — M, L, M:** `url`, then `lol_html`, then
+    `ammonia` with the `cssparser` it already brings, exact pins with
+    their named MPL-2.0 exceptions, the workspace's and the fuzz
+    crate's lockfiles and policy, and notices. No behavior.
   - **M1.5c2 HTML allow-list — L:** the tag, attribute and link policy,
     with the final `ammonia` pass. Depends on b and c1c.
   - **M1.5d Resource and CSS rewriting — L:** `sb-mime::render`
