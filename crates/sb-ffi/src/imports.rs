@@ -570,7 +570,9 @@ mod tests {
             panic!("one source: {:?}", waiting.sources);
         };
         assert_eq!(source.ordinal, 0);
-        assert_eq!(source.path, path);
+        // The core records canonical paths: on macOS /var is /private/var.
+        let canonical = std::fs::canonicalize(&path).unwrap();
+        assert_eq!(source.path, canonical.to_string_lossy());
         assert_eq!(source.mailbox, "Inbox");
         assert_eq!(source.kind, ImportSourceKind::Mbox);
         assert_eq!(source.messages, 1);
@@ -670,7 +672,7 @@ mod tests {
         let [problem] = job.problems.as_slice() else {
             panic!("one problem: {:?}", job.problems);
         };
-        assert_eq!(problem.path, missing);
+        assert!(problem.path.ends_with("/missing.mbox"), "{}", problem.path);
         assert_eq!(problem.kind, ImportProblemKind::Inaccessible);
 
         let err = sb_test_support::block_on(core.import_job(token(), "no-such-job".to_owned()))
