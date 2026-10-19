@@ -6,6 +6,7 @@
 mod error;
 mod import_reports;
 pub mod imports;
+pub mod index;
 mod list_rows;
 pub mod lists;
 pub mod messages;

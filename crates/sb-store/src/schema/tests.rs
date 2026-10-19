@@ -105,7 +105,10 @@ fn a_fresh_store_reaches_the_latest_version_with_its_meta() {
     assert_eq!(meta.get("list_generation").unwrap(), "1");
     assert_eq!(meta.get("thread_inputs").unwrap(), "0");
     assert_eq!(meta.get("threads_built").unwrap(), "0");
-    assert_eq!(meta.len(), 8, "unexpected extra store_meta keys: {meta:?}");
+    assert_eq!(meta.get("index_inputs").unwrap(), "0");
+    assert_eq!(meta.get("search_generation").unwrap(), "1");
+    assert_eq!(meta.get("search_extractor_version").unwrap(), "1");
+    assert_eq!(meta.len(), 11, "unexpected extra store_meta keys: {meta:?}");
 }
 
 /// 2. Reopening runs no migration: `created_at` and both UUIDs
@@ -949,7 +952,10 @@ fn objects_added_to_store_meta_in_crashed_wal_are_refused() {
             "UPDATE store_meta SET value = 'prior-opener' WHERE key = 'app_version_last_opened';
              UPDATE store_meta SET value = 'prior-shutdown' WHERE key = 'clean_shutdown_at';
              UPDATE store_meta SET value = 'prior-threads' WHERE key = 'thread_inputs';
-             UPDATE store_meta SET value = 'prior-built' WHERE key = 'threads_built';",
+             UPDATE store_meta SET value = 'prior-built' WHERE key = 'threads_built';
+             UPDATE store_meta SET value = 'prior-index' WHERE key = 'index_inputs';
+             UPDATE store_meta SET value = 'prior-search' WHERE key = 'search_generation';
+             UPDATE store_meta SET value = 'prior-extractor' WHERE key = 'search_extractor_version';",
         );
         crash_write(&paths, sql);
         assert_corrupt_untouched(&paths, NO_IDENTITY);

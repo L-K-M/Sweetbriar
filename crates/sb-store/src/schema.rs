@@ -31,7 +31,7 @@ pub(crate) struct Migration {
 
 /// The production migration list, in order. Version 1 creates schema
 /// v1 (spec/02, spec/06); version 2 adds durable imports; version 3
-/// starts the list projection; version 4 keeps thread membership.
+/// starts the list projection; version 4 keeps thread membership; version 5 versions the search queue.
 pub(crate) const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 1,
@@ -48,6 +48,10 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 4,
         run: migration_4,
+    },
+    Migration {
+        version: 5,
+        run: migration_5,
     },
 ];
 
@@ -509,6 +513,35 @@ fn migration_4(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
         )
         .map_err(bug)?;
     }
+    Ok(())
+}
+
+/// Search storage reuses v1's FTS tables; all acquisitions become pending,
+/// including failed summaries and bytes whose availability needs reconciliation.
+fn migration_5(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
+    tx.execute_batch(include_str!("schema/v5.sql"))
+        .map_err(bug)?;
+    tx.execute_batch(
+        "INSERT INTO store_meta (key, value) VALUES
+         ('index_inputs', '0'), ('search_generation', '1'), ('search_extractor_version', '1');
+         INSERT INTO d_index_queue (doc_id, reason, enqueued_at, revision)
+         SELECT acquisition_id,
+                CASE WHEN object_state = 'published' THEN 'reextract' ELSE 'delete' END,
+                first_acquired_at, 1 FROM acquisitions WHERE true
+         ON CONFLICT(doc_id) DO UPDATE SET reason = excluded.reason;
+         WITH revisions AS (
+           SELECT doc_id, row_number() OVER (ORDER BY enqueued_at, doc_id) AS revision
+           FROM d_index_queue
+         )
+         UPDATE d_index_queue SET revision =
+           (SELECT revision FROM revisions WHERE revisions.doc_id = d_index_queue.doc_id);
+         UPDATE store_meta SET value = CAST(
+           (SELECT coalesce(max(revision), 0) FROM d_index_queue) AS TEXT)
+           WHERE key = 'index_inputs';",
+    )
+    .map_err(bug)?;
+    // The clock is deliberately not used: existing pending age and the original
+    // acquisition time give deterministic oldest-first upgrade work.
     Ok(())
 }
 
