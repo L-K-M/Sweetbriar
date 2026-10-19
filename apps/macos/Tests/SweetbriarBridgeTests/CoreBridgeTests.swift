@@ -68,6 +68,59 @@ func aFreshCoreListsItsLocalArchive() async throws {
     await bridge.shutdown()
 }
 
+/// Every store spec opens over the bridge; over an empty store each
+/// is empty and knows it (spec/07 "Store windows").
+@Test
+func storeWindowsOpenOverTheBridge() async throws {
+    let (dir, config) = tempConfig()
+    defer { try? FileManager.default.removeItem(at: dir) }
+
+    let bridge = try await CoreBridge.open(
+        config: config,
+        snapshots: await sinkBatcher(clock: ManualFrameClock())
+    )
+    let specs: [WindowSpec] = [.mailbox(1), .unified(.inbox), .flagged, .thread(1)]
+    for spec in specs {
+        let window = try await bridge.openWindow(spec: spec, anchor: .top, limit: 10)
+        #expect(window.rows.isEmpty, "\(spec)")
+        #expect(window.total == .exact(n: 0), "\(spec)")
+        await bridge.closeWindow(id: window.windowId)
+    }
+
+    await bridge.shutdown()
+}
+
+/// A subscription crosses the bridge (spec/07 "Subscriptions"): a fill
+/// invalidates the window at its new generation, and a pending `next`
+/// ends with `unavailable` once the core shuts down.
+@Test(.timeLimit(.minutes(1)))
+func aSubscriptionReportsAFillAndEndsAtShutdown() async throws {
+    let (dir, config) = tempConfig()
+    defer { try? FileManager.default.removeItem(at: dir) }
+
+    let bridge = try await CoreBridge.open(
+        config: config,
+        snapshots: await sinkBatcher(clock: ManualFrameClock())
+    )
+    let window = try await bridge.openWindow(spec: .debugSynthetic, anchor: .top, limit: 10)
+    let subscription = try await bridge.subscribe(windowId: window.windowId)
+
+    let generation = try await bridge.debugFillSynthetic(count: 5)
+    #expect(try await subscription.next() == .invalidated(generation: generation))
+
+    let pending = Task { try await subscription.next() }
+    await bridge.shutdown()
+    switch await pending.result {
+    case .success(let event):
+        Issue.record("expected .unavailable, got \(event)")
+    case .failure(let error):
+        guard case .unavailable = error as? CoreFailure else {
+            Issue.record("expected .unavailable, got \(error)")
+            return
+        }
+    }
+}
+
 @Test(.timeLimit(.minutes(1)))
 func aCallOnACancelledTaskThrowsAndWritesNothing() async throws {
     let (dir, config) = tempConfig()

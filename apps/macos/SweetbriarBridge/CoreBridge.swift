@@ -179,6 +179,16 @@ public final class CoreBridge: Sendable {
         return WindowIDs(generation: index.generation, ids: index.ids)
     }
 
+    /// `subscribe` (spec/07 "Subscriptions"): the window's changes from
+    /// what it last delivered, pulled with `WindowSubscription.next()`.
+    public func subscribe(windowId: UInt64) async throws -> WindowSubscription {
+        let token = SweetbriarCore.CancelToken()
+        let subscription = try await Self.withCancellation(token: token) {
+            try await self.core.subscribe(token: token, windowId: windowId)
+        }
+        return WindowSubscription(subscription)
+    }
+
     /// `close_window` (spec/07): release the handle. No token — like
     /// `shutdown`, the call can't be cancelled; closing twice is
     /// harmless.
@@ -222,6 +232,34 @@ public final class CoreBridge: Sendable {
             }
         } onCancel: {
             token.cancel()
+        }
+    }
+}
+
+/// One window's stream of events (spec/07 "Subscriptions"). Pull with
+/// `next()`, one call at a time; cancelling the calling task cancels
+/// the call, and a pending call ends with `unavailable` once the core
+/// shuts down.
+public final class WindowSubscription: Sendable {
+    private let subscription: SweetbriarCore.Subscription
+
+    fileprivate init(_ subscription: SweetbriarCore.Subscription) {
+        self.subscription = subscription
+    }
+
+    /// The next event: at once when the window's source already moved
+    /// past the last one, else when it does. A closed window is
+    /// `notFound`; a second concurrent call is `invalidInput`.
+    public func next() async throws -> WindowEvent {
+        let token = SweetbriarCore.CancelToken()
+        let event = try await CoreBridge.withCancellation(token: token) {
+            try await self.subscription.next(token: token)
+        }
+        switch event {
+        case .invalidated(let generation):
+            return .invalidated(generation: generation)
+        case .resetRequired:
+            return .resetRequired
         }
     }
 }
@@ -301,6 +339,28 @@ extension MailboxRole {
             self = .flagged
         }
     }
+
+    /// Map the bridge enum onto the generated one.
+    fileprivate var generated: SweetbriarCore.MailboxRole {
+        switch self {
+        case .inbox:
+            return .inbox
+        case .sent:
+            return .sent
+        case .drafts:
+            return .drafts
+        case .trash:
+            return .trash
+        case .junk:
+            return .junk
+        case .archive:
+            return .archive
+        case .all:
+            return .all
+        case .flagged:
+            return .flagged
+        }
+    }
 }
 
 extension Mailbox {
@@ -335,6 +395,14 @@ extension WindowSpec {
         switch self {
         case .debugSynthetic:
             return .debugSynthetic
+        case .mailbox(let mailboxId):
+            return .mailbox(mailboxId: mailboxId)
+        case .unified(let role):
+            return .unified(role: role.generated)
+        case .flagged:
+            return .flagged
+        case .thread(let threadId):
+            return .thread(threadId: threadId)
         }
     }
 }
