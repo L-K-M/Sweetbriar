@@ -7,6 +7,7 @@
 mod api;
 mod error;
 mod imports;
+mod messages;
 mod sidebar;
 mod windows;
 
@@ -19,4 +20,8 @@ pub use imports::{
 pub use sidebar::{Account, AccountKind, AccountState, Mailbox, MailboxKind, Mailboxes};
 pub use windows::{
     Anchor, Count, ListRow, MailboxRole, Subscription, Window, WindowEvent, WindowIds, WindowSpec,
+};
+
+pub use messages::{
+    BodyAvailability, ReaderAddress, ReaderHeaders, ReaderMessage, ReaderOccurrence, ReaderTag,
 };

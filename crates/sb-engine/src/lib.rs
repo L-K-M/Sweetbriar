@@ -12,6 +12,7 @@
 mod engine;
 mod error;
 mod import;
+mod messages;
 mod settings;
 mod sidebar;
 mod threading;
@@ -35,4 +36,8 @@ pub use settings::Setting;
 pub use windows::{
     Anchor, Count, Cursor, ListRow, Subscription, Window, WindowEvent, WindowId, WindowIds,
     WindowSpec,
+};
+
+pub use sb_resources::{
+    BodyAvailability, ReaderAddress, ReaderHeaders, ReaderMessage, ReaderOccurrence, ReaderTag,
 };
