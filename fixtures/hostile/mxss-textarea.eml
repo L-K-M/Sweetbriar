@@ -1,0 +1,5 @@
+X-Sweetbriar-Fixture: Raw text and formatting breakout textarea
+MIME-Version: 1.0
+Content-Type: text/html; charset=utf-8
+
+<textarea><p title="</textarea><img src=/leak onerror=bad()>">x</p></textarea><script>bad()</script>

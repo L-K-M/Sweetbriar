@@ -1,0 +1,5 @@
+X-Sweetbriar-Fixture: Foreign namespace integration points and malformed table
+MIME-Version: 1.0
+Content-Type: text/html; charset=utf-8
+
+<math><mtext><table><mglyph><style><!--</style><img title="--><img src=/leak onerror=bad()>"></table></mtext></math><svg><desc><table><style><img src=x onerror=bad()></style></table></desc></svg>

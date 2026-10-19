@@ -1,0 +1,6 @@
+X-Sweetbriar-Fixture: Media poster streams and subtitles
+X-Sweetbriar-Expect: remote
+MIME-Version: 1.0
+Content-Type: text/html; charset=utf-8
+
+<video poster="https://attack.invalid/poster" src="/video"><source src="/source"><track src="/track"></video><audio src="//attack.invalid/audio"></audio>

@@ -1,0 +1,5 @@
+X-Sweetbriar-Fixture: Obfuscated vbscript whitespace
+MIME-Version: 1.0
+Content-Type: text/html; charset=utf-8
+
+<a href=" 	vbscript:bad ">x</a><img src=" 	vbscript:bad "><form action=" 	vbscript:bad "><button formaction=" 	vbscript:bad ">x</button></form><svg><a xlink:href=" 	vbscript:bad ">x</a></svg>

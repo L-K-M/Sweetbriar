@@ -1,0 +1,6 @@
+X-Sweetbriar-Fixture: Link warning mailto-safe
+X-Sweetbriar-Expect: link=mailto:a@destination.invalid|none blocked=0
+MIME-Version: 1.0
+Content-Type: text/html; charset=utf-8
+
+<a href="mailto:a@destination.invalid">a@destination.invalid</a>

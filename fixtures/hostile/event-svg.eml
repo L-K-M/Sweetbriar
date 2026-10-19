@@ -1,0 +1,5 @@
+X-Sweetbriar-Fixture: SVG animation and obscure legacy event handlers
+MIME-Version: 1.0
+Content-Type: text/html; charset=utf-8
+
+<svg onbegin="bad()" onend="bad()" onrepeat="bad()"><animate onbegin="bad()" onrepeat="bad()" attributeName="href" values="javascript:bad()"></animate></svg><marquee onbounce="bad()" onfinish="bad()" onstart="bad()">x</marquee><p onbeforexrselect="bad()" onbeforepointerdown="bad()">x</p>
