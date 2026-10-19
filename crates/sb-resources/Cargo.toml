@@ -14,7 +14,7 @@ sb-smtp = { version = "0.0.1", path = "../sb-smtp" }
 sb-platform = { version = "0.0.1", path = "../sb-platform" }
 # Version-1 `import_job_sources.source_json` metadata (spec/09); same
 # pin as sb-store, no serde derive.
-serde_json = "=1.0.151"
+serde_json = "=1.0.154"
 
 [features]
 # Crash-cut suites open the store on an injected filesystem seam

@@ -103,8 +103,9 @@ restores its draft by `draft_id`.
     shown must share a generation.
   - **Invalidation** (07 Subscriptions) refreshes the id index on the
     same handle, then re-reads the pages around the visible and
-    selected rows. Rows the new index keeps at their ranks stay shown
-    until their re-read lands; the rest show as placeholders. An
+    selected rows. A page whose rows the new index keeps at their ranks
+    stays shown until its re-read lands; other pages show placeholders,
+    since the cache holds whole pages only. An
     invalidation during a refresh schedules another. One id fetch and
     one pending `next` run beside the two page reads.
   - **In logical-message windows** a selected id the new index lacks is
