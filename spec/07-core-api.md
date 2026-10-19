@@ -62,6 +62,7 @@ async fn Core::shutdown(self);   // flush writer, release the lease
 | Accounts | `add_bridge_account(params)`, `update_account(id, params)`, `pause_account(id)`, `resume_account(id)`, `disconnect_account(id)`, `set_account_appearance(id, appearance)` |
 | Identities | `upsert_identity(params)`, `set_default_identity(id)` |
 | Import/export | `start_import(paths, target)` → job id, `confirm_import(job_id, variants)` (09), `cancel_job(id)`, `start_export(scope, format, destination)` |
+| Search index | `start_search_rebuild()` → job id, `resume_search_rebuild(job_id)`, `retry_search_index()`; `cancel_job(id)` also routes to rebuild jobs |
 | Messages | `set_flags(selection, add, remove)`, `move_messages(selection, to_mailbox)`, `delete_to_trash(selection)`, `add_label(selection, label_mailbox)` (server label, 04), `add_tag(selection, tag)` and `remove_tag(selection, tag)` (local only), `set_note(message_id, text)` (one note per message; empty text removes it), `undo(token)` |
 | Drafts | `create_draft(context)` → draft id (`context` is new, reply, reply-all or forward, with source occurrence), `save_draft(draft_id, base_revision_id, content)` → revision id, `discard_draft(id)` (refused while an attempt is live, 05) |
 | Sending | `send_draft(draft_id, revision_id, acks)` → attempt id (the current revision only; `acks` lists warnings the user confirmed for that revision, e.g. `cross_account`; a missing one gets `Conflict` naming it, 05), `cancel_send(attempt_id)` (in `held` or `queued`), `resolve_unknown_send(attempt_id, resolution)`, `retry_rejected_recipients(attempt_id)` (05), `confirm_send_route(attempt_id)` (after an account reconfiguration, 05) |
@@ -217,9 +218,21 @@ struct Coverage {
     total_messages: u64, headers_synced: u64,
     bodies_acquired: u64, indexed: u64, partial: u64, failed: u64,
     pending: u64, queue_length: u64, index_state: SearchIndexState,
+    rebuild: Option<SearchRebuildProgress>,
     limitations: Vec<SearchLimitation>, // v1: cjk_unsegmented, attachment_text_unavailable
 }
-enum SearchIndexState { Ready, Running, BlockedNewerExtractor }
+enum SearchIndexState {
+    Ready, Running, PausedByUser,
+    PausedIo { code: SearchIoCode, message: String, retry_at: i64 },
+    BlockedNewerExtractor,
+}
+// SearchIoCode: storage_full, permission_denied, storage_unavailable, other_io.
+struct SearchRebuildProgress {
+    job_id: String, phase: SearchRebuildPhase, processed: u64,
+    pending_documents: u64, // global queue length while active, zero at completion
+}
+enum SearchRebuildPhase { Reset, Enqueue, Index, Complete }
+// processed counts committed docs in this phase; resets at phase transitions.
 struct SearchStatus { coverage: Coverage, excluded_unknown: u64 }
 async fn coverage(scope: SearchScope) -> Result<Coverage, CoreError>;
 async fn parse_search(text: String, context: ParseContext) -> Result<String, CoreError>;
@@ -249,7 +262,8 @@ async fn format_search(query_json: String) -> Result<String, CoreError>;
   exact and not limited to the page.
 - `store_meta.search_generation` starts at 1. It advances once per committed
   transaction affecting any list generation, search document/FTS/queue,
-  target version, acquisition availability or query source (headers,
+  target version, rebuild epoch/phase/progress, operational pause/retry state,
+  acquisition availability or query source (headers,
   flags, membership, tags, notes, summaries, size). Whole-search invalidation
   is conservative across scopes. A coverage-only change also advances it.
   Ordinary list windows keep `list_generation`; index-only writes don't
@@ -280,17 +294,72 @@ async fn format_search(query_json: String) -> Result<String, CoreError>;
   when several messages share one document. `queue_length` instead counts
   distinct queued acquisitions linked to scoped messages; never occurrences.
   Empty scope has zero counts and no incomplete percentage. `index_state`
-  is `BlockedNewerExtractor` when the target is unsupported, else `Running`
-  while any queue work remains globally, else `Ready`. Ready means the
-  queue drained, not complete coverage. A blocked indexer reports its
-  target version through standalone coverage; Search opens return
-  `Unavailable` with an update-required explanation, not `NewerStore`.
+  is `BlockedNewerExtractor` when the target is unsupported; otherwise
+  `PausedByUser` takes precedence over `PausedIo`, then `Running` while a
+  rebuild is in reset/enqueue or any queue work remains globally, else
+  `Ready`. Ready means the queue drained, not complete coverage. During
+  reset/enqueue all messages are pending (indexed/partial/failed are zero).
+  Operational state is global even for empty scopes. A blocked indexer
+  reports its target version through standalone coverage; Search opens
+  return `Unavailable` with an update-required explanation, not `NewerStore`.
+- `PausedIo` retains pending work and supplies a sanitized actionable
+  error (for example, free disk space or restore access), error code and
+  next automatic retry UTC-millisecond deadline. Retry uses bounded backoff;
+  `retry_search_index()` requests an immediate attempt without discarding
+  work. Enter/leave pause, an updated error/deadline, and retry initiation
+  each commit status and advance `search_generation`, even if no queue row
+  changes. Notify existing Search subscriptions after commit. Standalone
+  coverage is pollable, including while Search is unavailable during reset.
+  Persist the pause with the job/worker status; on reopen retain the error
+  until retry begins, honouring its deadline. If the writer itself cannot
+  persist status, coverage/Search reads return actionable `Unavailable`
+  instead of a stale Running snapshot; recovery commits status/generation
+  before resuming reads/work. No successful progress is reported on failed I/O.
 - `excluded_unknown` counts scoped candidates whose final query value is
   unknown (06), not every incomplete document. Coverage is query-independent;
   a filter can prove a candidate false despite an unavailable body. Search
   status and standalone coverage have the same shape/generation. V1 exposes
   both limitations even when indexing is complete; no percentage claims
   attachment contents or CJK segmentation were searched.
+
+### Search rebuild controls (M1.6)
+
+- Search commands use the normal idempotency-key/receipt protocol; the
+  start receipt contains the durable job id. There is at most one active
+  rebuild per store, globally across scopes. Start while one is active
+  returns that job, including if paused, without another reset or implicit
+  resume. Start after completion creates a new id/epoch. Automatic version
+  changes create a job if needed, otherwise reuse the active id with a new
+  epoch/reset cursor; they preserve a user pause. Unsupported targets never
+  run. The durable record includes id, epoch, phase, scan cursor, committed
+  phase count and pause/error/retry state. This is a forward migration (06),
+  not a modification of the v1 SQL fences.
+- `cancel_job(id)` dispatches by the durable job kind to import or search
+  rebuild handling; it must no longer search only import jobs. Rebuild
+  cancellation durably pauses the entire index worker, including ordinary
+  queued acquisitions, at the next bounded writer boundary. A submitted
+  transaction may commit before cancellation; after the cancellation receipt
+  no further batch may publish or advance a phase. Discard unsubmitted
+  extraction. Keep committed docs, queue, phase and cursors. Repeated cancel
+  is harmless; cancel on a completed rebuild is a no-op. Unknown ids return
+  `NotFound` and ids of unsupported job kinds return `InvalidInput`.
+- User cancellation survives shutdown/open and new acquisitions. Only
+  `resume_search_rebuild(job_id)` releases it, resuming the same phase/id
+  from committed work; this is not a fresh rebuild. Resume on a completed
+  job is a no-op, on an unknown id is `NotFound`, and on another job kind is
+  `InvalidInput`. Resume on an already running rebuild is harmless. An I/O
+  pause still requires its scheduled or explicit retry; retry never clears
+  a user pause. Automatic uncancelled crash recovery needs no user action.
+- Coverage exposes the active or most recently completed rebuild id, phase,
+  phase count and global pending-document count; together with operational
+  state these are the progress query. Coverage's scoped `queue_length` must
+  not be presented as global rebuild progress. Cancellation/resume/completion
+  advances search generation even without queue changes. Service owns these
+  commands and DTOs; UniFFI/Swift adapters expose the same routing and states.
+  Request
+  cancellation on an async start call does not cancel a committed job: the
+  caller recovers it via coverage or the same idempotency key. Job cancellation
+  is the explicit command above, separate from closing a Search window.
 
 ## Subscriptions
 

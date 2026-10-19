@@ -164,7 +164,16 @@ restores its draft by `draft_id`.
   acquired bodies, headers and queued documents with their denominators;
   partial and failed are not complete. Counts come from the page's Search
   status, never a later snapshot attached to older rows. Queue/rebuild
-  progress is visible and updates on coverage-only invalidation. When
+  progress is visible and updates on coverage-only invalidation. Search
+  coverage details provide Rebuild, Cancel and Resume controls through 07's
+  commands and durable job id, plus Retry now for an I/O pause. Show phase,
+  committed phase count and global pending-document count from rebuild
+  progress (not the scoped queue count); cancelled work is labelled
+  paused until Resume, including after relaunch. An I/O pause shows its
+  actionable error and next retry time rather than a running spinner. Poll
+  standalone coverage while reset/enqueue makes Search unavailable, showing
+  phase/progress and controls there too. Starting a rebuild is explicit;
+  closing a window never cancels the job. When
   Search is unavailable because its extractor target is newer than the
   app supports, show standalone coverage's blocked state and the required
   app update, rather than a queue that appears to run forever.

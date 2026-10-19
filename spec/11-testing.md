@@ -35,18 +35,28 @@ test, except where the spec says "manual qualification".
   The parser's 16,384-byte limit still applies. Synthetic seeds cover all
   operators, punctuation identifiers, nested negation and non-ASCII text.
 - Store/compiler tests cover the three-valued truth tables, partial masks,
-  exact phrases/addresses/domains, filters before limit, representative
-  selection, mailbox membership under OR/NOT, score ties and three pages
-  ordered differently by relevance and date. Worker tests kill/reopen at
+  incomplete-summary attachment/address negation (M1.6h), complete absence
+  and complete-header precedence, exact phrases/addresses/domains, filters
+  before limit, representative selection, mailbox membership under OR/NOT,
+  score ties and three pages ordered differently by relevance and date. Worker tests kill/reopen at
   FTS delete, docs write, FTS insert and queue acknowledgement, including
   concurrent requeue/version changes. A resumed rebuild reproduces ids,
-  scores/order and coverage; address backfill replay preserves counts.
+  scores/order and coverage (M1.6e2); address backfill replay preserves counts.
+  M1.6d2 checks bounded reset/enqueue transactions, phase checkpoint crashes,
+  same-version epoch races and concurrent inserts/availability changes.
+  M1.6e checks I/O pause/backoff/retry and failed-writer read errors;
+  M1.6e2 checks durable job identity, cancel/reopen/resume and phase recovery.
 - Engine/service tests cover short-snapshot rows/status, coverage-only
   invalidation, out-of-scope BM25 changes, cursor identity/bits/generation,
-  cancellation and shutdown. Swift tests cover DTO mapping, chip round-trips,
+  cancellation and shutdown. M1.6j checks operational-state generation and
+  subscription changes without queue changes; M1.6k2 checks service job-kind
+  routing/idempotency, M1.6l2 checks status/progress FFI mappings and M1.6l4
+  checks control exports. Swift tests cover DTO mapping, chip round-trips,
   error-index conversion and stale request suppression; a PR macOS UI test
   imports synthetic mail and searches by address, subject and body phrase,
-  changes scope/sort and observes results plus incomplete coverage.
+  changes scope/sort and observes results plus incomplete coverage (M1.6p).
+  M1.6p2 owns the separate rebuild/cancel/relaunch/resume and I/O-retry UI
+  flow, including standalone progress while Search is unavailable.
 - Add a reproducible, ignored release search timing runner over 100,000
   synthetic logical messages. Record cold/warm first-50-query p50/p95/p99
   for exact identifier, phrase, scoped filter and negative-body queries,

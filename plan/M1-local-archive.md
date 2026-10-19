@@ -302,17 +302,33 @@ local drafts. No network yet.
     with existing acquisitions backfilled and an oldest-first queue index.
     Owns import enqueue/upsert changes outside the summary-insert gate.
     Store helpers for enqueue, conditional batch publication,
-    delete-then-insert and rebuild reset.
+    delete-then-insert.
     Owns the FTS5 tables deliverable and re-extraction/crash acceptance.
     Test older-store upgrade, concurrent requeue and rollback at each cut.
+  - **M1.6d2 Rebuild storage — L:** durable rebuild/job-kind and operational
+    status metadata, epochs, publication epoch/pause gates, bounded
+    reset/enqueue helpers and checkpoints through a forward migration.
+    Depends on d. Owns store tests for the 200-document/2,000,000-new-byte
+    bounds, crash replay at each phase boundary, concurrent acquisition/
+    availability enqueue and same-version stale-worker rejection. No
+    corpus-wide runtime clear/enqueue; preserves the queue revision counter.
   - **M1.6e Index job — L:** acquisition reads and extraction through
-    resources, engine worker, low-priority bounded batches, startup resume,
-    version changes and visible rebuild progress/cancellation. Owns the
-    extraction job/watermark deliverable and identical-rebuild acceptance.
-    Tests use the real worker, including failure, restart and re-publication.
+    resources, engine worker, low-priority bounded publication, startup
+    recovery and durable I/O pause/backoff/immediate retry. Depends on d2.
+    Owns the extraction job/watermark deliverable. Real-worker tests cover
+    failure/restart/re-publication, actionable errors/deadlines, failed-writer
+    read unavailability and retry without dropping pending work.
+  - **M1.6e2 Rebuild orchestration — L:** engine start/cancel/resume,
+    automatic version-change jobs, global worker pause and phase progress;
+    depends on e. Owns identical-rebuild acceptance. Real-worker tests cover
+    durable ids, singleton/idempotent start, cancelled startup staying paused,
+    explicit resume, version changes preserving pause, crash recovery through
+    reset/enqueue/index, completion, foreground yielding between batches
+    and cancellation's writer boundary.
   - **M1.6f Query AST — M:** `sb-store::query` v1 types, strict JSON
     validation, limits and canonical serialization, including all filter
-    operands and explicit time context. Round-trip and invalid-input tests.
+    operands and explicit time context. Depends on e2. Round-trip and
+    invalid-input tests.
   - **M1.6g Text syntax — L:** parser, canonical formatter, typed error
     spans; every AST form has a lossless text spelling. Owns parser/error
     position acceptance and rejection of invalid `is`/`domain` operators.
@@ -321,6 +337,10 @@ local drafts. No network yet.
     limit, scope and representative selection. Owns identifier/phrase,
     unknown-under-negation, filters-before-limit and one-hit-per-message
     acceptance. Test partial fields, OR/NOT, labels and absent occurrences.
+    Owns regressions where a partial MIME walk stops before a later
+    attachment (`NOT has:attachment` is unknown), and partial address lists
+    make negated `is`/`domain` unknown. Include retained positive values,
+    complete absent values, complete-header precedence and unknown counts.
   - **M1.6i Search paging — L:** date/relevance ordering and opaque
     cursors, first 50 hits, id index and Around/Before/After in store reads.
     Owns both cursor deliverables and three-page relevance acceptance;
@@ -328,23 +348,37 @@ local drafts. No network yet.
   - **M1.6j Search windows and coverage — L:** resources and engine
     Search handles, generation observation, scoped coverage/unknown counts,
     lifecycle and subscriptions. Store queries and worker integration tests
-    cover atomic rows/coverage, coverage-only invalidations and cancellation.
+    cover atomic rows/coverage, coverage-only invalidations and window
+    cancellation. Owns generation/subscription tests for pause, changed retry
+    deadline/error, retry, reset/phase progress, cancel/resume and completion
+    with unchanged queues, plus empty-scope global state and reset counts.
   - **M1.6k Service search API — M:** service-owned Search, parser and
     coverage DTOs, error spans and sort/scope mapping; no leaf re-exports.
     Owns the Search window and `coverage(scope)` deliverables through service.
+  - **M1.6k2 Service index controls — M:** service start/resume/retry APIs
+    using k's coverage/progress/operational DTOs; depends on k. Extend
+    `cancel_job` routing to rebuild jobs. Owns service tests for receipt/key
+    replay, job-kind dispatch/errors, post-commit request cancellation and
+    coverage recovery of the durable job id. No engine/store re-exports.
   - **M1.6l1 Parser FFI — L:** parse/format exports, typed errors and
     generated bindings, with the Swift adapter and mapping/cancellation
-    tests. Depends on k; binding drift is checked in each FFI step.
+    tests. Depends on k2; binding drift is checked in each FFI step.
   - **M1.6l2 Coverage FFI — L:** scope/coverage DTOs, export, generated
-    bindings and Swift adapter/tests. Depends on l1.
+    bindings and Swift adapter/tests, including job progress, operational
+    pause/error/deadline mapping. Depends on l1.
   - **M1.6l3 Search window FFI — L:** Search spec/status in windows,
     generated bindings and Swift adapter/tests. Owns end-to-end API
     delivery; depends on l2. Separating these exports budgets generated
     output and Swift mapping within each PR, as M1.5 did for reader FFI.
+  - **M1.6l4 Index controls FFI — L:** start/cancel/resume/retry exports,
+    receipts/job ids, generated bindings and Swift adapter/tests using l2's
+    progress/status DTOs; depends on l3. Owns control FFI delivery, command
+    error mapping and explicit job cancellation versus request cancellation.
+    Binding drift/import checks must pass.
   - **M1.6m Seen addresses — L:** kept deduplication ledger, resumable
     summary backfill and ongoing population through resources/engine.
-    Owns completion case-preservation acceptance; replay, shared-byte,
-    multi-label, failed-summary and rebuild tests. No composer UI yet.
+    Depends on l4. Owns completion case-preservation acceptance; replay,
+    shared-byte, multi-label, failed-summary and rebuild tests. No composer UI yet.
   - **M1.6n Parser fuzzing — M:** `query` cargo-fuzz target, synthetic
     seeds, its isolated lockfile/policy, nightly job and reproduction docs.
     Owns the parser fuzz deliverable; bounded parse/format/JSON invariants.
@@ -357,10 +391,17 @@ local drafts. No network yet.
     first 50 then paging, coverage/unknown/partial/failed/CJK note. Owns
     results and coverage-note delivery; macOS CI flow imports synthetic
     mail, searches, changes scope/sort and observes indexing invalidation.
+  - **M1.6p2 Index controls UI — L:** rebuild start/cancel/resume, phase
+    progress, I/O pause/error/deadline and Retry now through the bridge;
+    depends on p. Owns macOS CI control-flow acceptance: start a rebuild,
+    observe standalone progress during reset/enqueue, cancel, relaunch and
+    verify still paused, resume to completion, inject I/O failure and retry.
+    Verify coverage-only updates with no queue change and controls while
+    Search is unavailable. No window-close cancellation of durable jobs.
   - **M1.6q Latency recording — M:** reproducible 100k synthetic workload
     and machine-readable search timings (11); owns latency acceptance.
-    Linux CI records without timing assertions; owner records Mac results
-    against 06's budgets and verifies known-message searches for M1.Q.
+    Depends on p2. Linux CI records without timing assertions; owner records
+    Mac results against 06's budgets and verifies known-message searches for M1.Q.
 
 - **Goal:** FTS5 search with the query AST v1, the text syntax, chips and
   coverage.
@@ -390,7 +431,7 @@ local drafts. No network yet.
     unknown;
   - **M1.6h:** filters apply before limit (a small account's hit survives next to
     a large one);
-  - **M1.6e:** rebuilding the index reproduces identical results;
+  - **M1.6e2:** rebuilding the index reproduces identical results;
   - **M1.6d:** re-extraction updates FTS5 through the delete-then-insert sequence,
     and a crash mid-batch reruns it (06);
   - **M1.6i:** relevance paging across three pages, whose dates are in a different

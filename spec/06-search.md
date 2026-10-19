@@ -151,7 +151,9 @@ test. M1.6d adds `revision INTEGER NOT NULL CHECK (revision >= 1)` to
 `d_index_queue` in a forward migration, then updates that SQL block with
 the migration. It also adds `d_index_queue_oldest`, an index on
 `d_index_queue(enqueued_at, doc_id)`. These requirements describe that
-target schema.
+target schema. M1.6d2 separately migrates the durable rebuild/worker record
+specified in 07, initializing the monotonic epoch to 0 with no rebuild job
+or pause. These future fields stay in prose until their migration lands.
 
 - The tables above already exist in schema v1. Do not edit that migration.
   An additive migration adds queue revisions, initializes the metadata
@@ -171,23 +173,58 @@ target schema.
   that could skip older requeued work. Workers read `(doc_id, revision)`
   ordered by `enqueued_at ASC, doc_id ASC` using that index, and extract
   outside write transactions. In the writer they publish only if that
-  revision and target extractor version still match. A stale result writes
-  nothing, including no queue deletion. Accepted publication deletes only that revision. This avoids
+  revision, rebuild epoch and target extractor version still match, and
+  indexing is not paused. A stale result writes nothing, including no queue
+  deletion. Accepted publication deletes only that revision. This avoids
   acknowledging newer work that arrived during extraction.
 - `store_meta.search_extractor_version` holds the target version (v1 starts
   at 1). An app unable to read that target version never downgrades it
   or runs indexing. Coverage reports `BlockedNewerExtractor` with the
   target version (07); Search opens return `Unavailable` explaining that
   an app update is required. Other list windows remain available. This is
-  an index capability state, not a schema migration error. A version change
-  queues every acquisition in the same transaction as the target change.
-  Old-version documents are unknown until replaced.
-  Explicit rebuild atomically clears FTS before docs and queues all
-  acquisitions; unavailable objects get `delete`, published ones `reextract`.
-  Clear FTS with its external-content `delete-all` command before deleting
-  docs, preserving layout and the queue revision counter. Queue length
-  and target version are visible progress; no maximum-id watermark.
-  Cancellation leaves committed batches and pending work; open resumes it.
+  an index capability state, not a schema migration error.
+- Runtime version changes and explicit rebuilds use the same durable,
+  bounded protocol. A short start transaction sets the target version,
+  increments a monotonic rebuild epoch, creates a singleton rebuild job
+  (07), and records phase `reset` with empty cursors (or restarts the active
+  job on a version change, preserving its user pause). It does not scan,
+  clear or enqueue the corpus. Every worker captures the epoch as well as
+  revision/version; publication rechecks all three in the writer. Starting
+  a reset therefore rejects already-extracted work, even at the same version.
+- During `reset` and `enqueue`, extraction/publication is suspended.
+  Search reads/opens return `Unavailable` explaining the rebuild phase;
+  existing handles invalidate. Coverage remains readable, with all scoped
+  messages pending throughout reset/enqueue; it never reports old documents
+  as current. Ordinary lists remain usable. No old FTS corpus participates
+  in ranking during reset. Starting a version change also makes old-version
+  documents unknown immediately.
+- Reset keyset-scans derived docs by doc id. Each low-priority transaction
+  removes at most 200 documents, issuing FTS's external-content `'delete'`
+  with each old indexed/partial row's values before deleting its docs row
+  (failed rows have no FTS entry). It commits its cursor and progress with
+  those changes. No runtime `delete-all` or corpus-wide DELETE is allowed.
+  After docs drain, persist phase `enqueue` and an acquisition cursor.
+- Enqueue keyset-scans acquisitions in batches of at most 200. In each
+  transaction, queue/upsert each acquisition from its current availability
+  (`reextract` for published bytes, `delete` otherwise), assign fresh queue
+  revisions, and commit the cursor/progress. Preserve the revision counter
+  and existing pending entries. New acquisitions and availability changes
+  still enqueue in their own publication transactions, including behind
+  the scan cursor; they cannot be missed. End-of-scan switches atomically
+  to phase `index`, enabling ordinary queue processing. Queue membership,
+  not a scan cursor, remains the extraction acknowledgement watermark.
+- Each phase transition, batch and completion checks the active epoch/job
+  and pause state in the writer; stale or paused work cannot move cursors,
+  publish documents or acknowledge requests.
+  Cursors and phase changes commit with their effects, so crash/open resumes
+  exactly that phase. Yield to foreground writes between every batch; all
+  reset/enqueue/publication transactions obey 03's bounds. Completion is a
+  writer transaction observing an empty queue in phase `index`. Progress
+  exposes phase, committed phase document count and global live queue length,
+  including increments of the index-phase count with accepted publication,
+  not an unbounded pre-count or a misleading fixed-total percentage.
+  Cancellation and explicit resume use 07's durable job controls; cancelled
+  work does not restart on open. An uncancelled job resumes on open.
 - Batch publication is all-or-nothing, including FTS delete/insert, docs,
   queue acknowledgements and search generation (07). A delete removes the
   old FTS values before its docs row; failed documents have no FTS row.
@@ -235,7 +272,8 @@ shared by the search field, saved views and, later, rules.
 - **Unknown under negation.** A message whose body isn't downloaded or
   indexed is `unknown` for every FTS predicate (`text`, and `contains`
   on any field), and for `is`/`domain` when neither `message_headers`
-  nor a summary exists. So is a document
+  nor a complete summary exists (partial summaries follow the conservative
+  rule below). So is a document
   indexed as `partial` (an extraction cap was hit), for the fields that
   were truncated: a term beyond the cap may still be in the message.
   `not unknown` stays `unknown`, so it never matches. Results show a count of messages
@@ -280,11 +318,23 @@ rewriting in v1; local parts are never case-folded or Unicode-normalized.
 Reject invalid addresses/domains. For imports the summary
 contains only the first From mailbox; that is v1's exact-From source,
 whereas FTS includes all From mailboxes. Empty known lists give false;
-missing headers and absent/failed summaries give unknown. `size` uses
-acquired byte length, else the chosen occurrence's RFC822.SIZE; absent size is unknown.
-Attachment presence uses a nonfailed summary, else unknown; note/tag
-predicates read authoritative local metadata. Flags use the chosen
-occurrence, like its display row.
+missing headers and absent/failed summaries give unknown. A partial summary
+has no field-level completeness information in v1: all summary-backed
+address `is`/`domain` predicates are conservatively unknown, including when
+some addresses were retained. A complete `message_headers` source may still
+supply a known result. Never infer a negative from an incomplete list.
+`size` uses acquired byte length, else the chosen occurrence's RFC822.SIZE;
+absent size is unknown.
+Attachment presence uses a complete summary, else unknown. In particular,
+a partial MIME walk can stop before an attachment, so a retained
+`has_attachments=false` cannot prove absence. V1 treats attachment presence
+from any partial summary as unknown even when its retained value is true;
+future field-level completeness must be explicit before relaxing this rule.
+Thus `NOT has:attachment` and negated address equality/domain stay unknown
+for partial summaries unless a complete header source supplies the address
+result. Candidates whose final expression is unknown contribute to
+excluded-unknown counts. Note/tag predicates read authoritative local
+metadata. Flags use the chosen occurrence, like its display row.
 
 ```text
 query   := or_expr | empty
