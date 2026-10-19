@@ -40,7 +40,8 @@ impl SearchBody {
     }
 }
 
-/// An actual decoded MIME filename, without reader display-name rewriting.
+/// An actual decoded MIME filename from a named attachment or inline part,
+/// without reader display-name rewriting. Attached subtrees remain opaque.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SearchAttachmentName {
     part_id: PartId,
@@ -58,8 +59,9 @@ impl SearchAttachmentName {
 }
 
 /// Owned inputs for the later search extractor. Bodies and names each retain
-/// MIME order. Missing headers are empty. Search column caps, paragraph
-/// deduplication and classification are applied by M1.6c, not at this boundary.
+/// MIME order. Headers cover Subject, From, To and Cc; missing fields are empty.
+/// Search column caps, paragraph deduplication and classification are applied
+/// by M1.6c, not at this boundary.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SearchInputs {
     subject: String,
@@ -178,9 +180,10 @@ fn run(bytes: &[u8], limits: &Limits) -> Result<SearchInputs, ParseFailure> {
         let (text, charset_replaced) = decoded_body(node);
         // The shared decoder can expand beyond upstream's materialized size.
         if text.len() as u64 > limits.max_decoded_part_bytes() {
-            return Ok(refused(vec![ParseWarning::PartTooLarge {
+            result.parse_warnings.push(ParseWarning::PartTooLarge {
                 limit: limits.max_decoded_part_bytes(),
-            }]));
+            });
+            return Ok(refused(result.parse_warnings));
         }
         let text = match kind {
             SearchBodyKind::Plain => plain_text(&text, part),

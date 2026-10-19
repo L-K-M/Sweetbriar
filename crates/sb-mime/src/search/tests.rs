@@ -285,6 +285,45 @@ fn admission_limits_refuse_all_content_like_reader() {
 }
 
 #[test]
+fn post_decode_refusal_keeps_prior_damage_warnings() {
+    let raw = format!(
+        "Subject: retained only if admitted\r\n{}",
+        multipart(
+            "mixed",
+            &[
+                "Content-Type: text/plain\r\nContent-Transfer-Encoding: base64\r\n\r\n!",
+                "Content-Type: text/plain; charset=\" windows-1252 \"\r\n\r\né",
+            ],
+        )
+    );
+    let limits = Limits::default().with_max_decoded_part_bytes(3);
+    let (_, admitted) = crate::reader::admitted(raw.as_bytes(), &limits)
+        .unwrap_or_else(|_| panic!("fixture must reach post-admission decoding"));
+    assert!(
+        admitted
+            .iter()
+            .any(|w| matches!(w, ParseWarning::Malformed { .. }))
+    );
+    let result = search_inputs(raw.as_bytes(), &limits).unwrap();
+    let reader = render_input(raw.as_bytes(), &limits).unwrap();
+    for warnings in [result.parse_warnings(), reader.parse_warnings()] {
+        assert!(
+            warnings
+                .iter()
+                .any(|w| matches!(w, ParseWarning::Malformed { .. })),
+            "lost admission damage: {warnings:?}"
+        );
+        assert!(warnings.contains(&ParseWarning::PartTooLarge { limit: 3 }));
+    }
+    assert!(result.bodies().is_empty());
+    assert!(result.attachment_names().is_empty());
+    assert!(result.subject().is_empty());
+    assert!(reader.plain().is_none());
+    assert!(reader.html().is_none());
+    assert!(reader.attachments().is_empty());
+}
+
+#[test]
 fn damaged_candidates_warn_instead_of_succeeding_silently() {
     let raw = multipart(
         "alternative",

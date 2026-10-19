@@ -417,10 +417,11 @@ fn reader_run(bytes: &[u8], limits: &Limits) -> Result<RenderInput, ParseFailure
             // it (a label upstream reads as UTF-8), so it is bounded again,
             // with admission's outcome.
             if text.len() as u64 > limits.max_decoded_part_bytes() {
+                result.parse_warnings.push(ParseWarning::PartTooLarge {
+                    limit: limits.max_decoded_part_bytes(),
+                });
                 let mut refused = RenderInput {
-                    parse_warnings: vec![ParseWarning::PartTooLarge {
-                        limit: limits.max_decoded_part_bytes(),
-                    }],
+                    parse_warnings: result.parse_warnings,
                     ..RenderInput::default()
                 };
                 refused.warn(RenderWarningCode::PartialParse, None);
