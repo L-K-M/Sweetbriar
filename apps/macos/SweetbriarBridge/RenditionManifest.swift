@@ -144,10 +144,12 @@ public enum ReaderLinkDecision: Sendable, Equatable {
     }
 }
 
-/// A link destination compared by its decoded components. WebKit hands
+/// A link destination compared component by component. WebKit hands
 /// clicks over as Foundation URLs, which percent-encode characters the
 /// sanitizer's serializer keeps (`filter[status]` arrives as
-/// `filter%5Bstatus%5D`), so spellings differ while destinations agree.
+/// `filter%5Bstatus%5D`), so escapes are undone, except a component's own
+/// separators: `a%2Fb` and `a/b` are different destinations, and so are
+/// `x%26y` and `x&y` in a query.
 private struct Destination: Equatable {
     let scheme: String
     let user: String?
@@ -161,14 +163,36 @@ private struct Destination: Equatable {
     init?(_ string: String) {
         guard let parts = URLComponents(string: string, encodingInvalidCharacters: true),
               let scheme = parts.scheme else { return nil }
-        let decoded = { (part: String?) in part.map { $0.removingPercentEncoding ?? $0 } }
         self.scheme = scheme.lowercased()
-        user = decoded(parts.percentEncodedUser)
-        password = decoded(parts.percentEncodedPassword)
-        host = parts.percentEncodedHost.map { ($0.removingPercentEncoding ?? $0).lowercased() }
+        user = parts.percentEncodedUser.map { Self.unescaped($0, keeping: ":@") }
+        password = parts.percentEncodedPassword.map { Self.unescaped($0, keeping: ":@") }
+        host = parts.percentEncodedHost.map { Self.unescaped($0, keeping: "").lowercased() }
         port = parts.port
-        path = decoded(parts.percentEncodedPath) ?? ""
-        query = decoded(parts.percentEncodedQuery)
-        fragment = decoded(parts.percentEncodedFragment)
+        path = Self.unescaped(parts.percentEncodedPath, keeping: "/?#;")
+        query = parts.percentEncodedQuery.map { Self.unescaped($0, keeping: "&=+;#") }
+        fragment = parts.percentEncodedFragment.map { Self.unescaped($0, keeping: "") }
+    }
+
+    /// Undo percent-escapes byte by byte, except for `%` itself and the
+    /// separators in `kept`, whose escapes stay (in upper-case hex).
+    private static func unescaped(_ text: String, keeping kept: String) -> String {
+        let kept = Set(kept.utf8).union([UInt8(ascii: "%")])
+        var bytes: [UInt8] = []
+        var input = Array(text.utf8)[...]
+        while let byte = input.popFirst() {
+            guard byte == UInt8(ascii: "%"), input.count >= 2,
+                  let value = UInt8(String(decoding: input.prefix(2), as: UTF8.self), radix: 16)
+            else {
+                bytes.append(byte)
+                continue
+            }
+            input = input.dropFirst(2)
+            if kept.contains(value) {
+                bytes.append(contentsOf: Array(String(format: "%%%02X", value).utf8))
+            } else {
+                bytes.append(value)
+            }
+        }
+        return String(decoding: bytes, as: UTF8.self)
     }
 }

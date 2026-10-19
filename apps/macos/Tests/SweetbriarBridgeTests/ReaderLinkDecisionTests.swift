@@ -61,3 +61,25 @@ func readerMatchesDestinationsAcrossPercentEncoding() throws {
     let elsewhere = try #require(URL(string: "https://example.test/search?filter%5Bstatus%5D=closed"))
     #expect(ReaderLinkDecision.decide(elsewhere, manifest: manifest) == .refuse)
 }
+
+/// Escaping a component's own separators changes the destination: a
+/// listed `a%2Fb` doesn't admit `a/b`, nor an escaped `&` a new parameter.
+@Test
+func readerKeepsEncodedSeparatorsDistinct() throws {
+    let data = try JSONSerialization.data(withJSONObject: [
+        "v": 1, "resources": [], "attachments": [],
+        "links": [
+            ["href": "https://example.test/a%2Fb", "warnings": []],
+            ["href": "https://example.test/?a=x%26admin%3Dtrue", "warnings": []],
+        ],
+    ])
+    let manifest = try RenditionManifest.parse(data)
+    for unlisted in ["https://example.test/a/b", "https://example.test/?a=x&admin=true"] {
+        let url = try #require(URL(string: unlisted))
+        #expect(ReaderLinkDecision.decide(url, manifest: manifest) == .refuse, "\(unlisted)")
+    }
+    for listed in ["https://example.test/a%2fb", "https://example.test/?a=x%26admin%3dtrue"] {
+        let url = try #require(URL(string: listed))
+        #expect(ReaderLinkDecision.decide(url, manifest: manifest) == .open(url), "\(listed)")
+    }
+}
