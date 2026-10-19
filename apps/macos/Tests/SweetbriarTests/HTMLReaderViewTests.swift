@@ -155,9 +155,11 @@ func readerRuleListCompilesAndBlocksHTTPResources() async throws {
     configuration.websiteDataStore = .nonPersistent()
     configuration.defaultWebpagePreferences.allowsContentJavaScript = false
     let control = WKWebView(frame: .zero, configuration: configuration)
+    // An ordinary http origin: under an unregistered custom scheme WebKit
+    // may refuse the page's loads, and the control would prove nothing.
     control.loadHTMLString(
         try String(contentsOf: fixture.htmlFile, encoding: .utf8),
-        baseURL: URL(string: "sweetbriar-cid://test-token/__body_1")
+        baseURL: URL(string: "http://127.0.0.1:\(port.rawValue)/")
     )
     try #require(await waitForHTML { counter.value > 0 })
     control.stopLoading()
