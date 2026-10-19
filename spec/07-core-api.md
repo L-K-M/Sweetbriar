@@ -33,6 +33,7 @@ pub enum CoreError {
     NeedsMigration { from: u32, to: u32 },
     NewerStore { app_version: String }, // store migrated by a newer app; read-only
     InvalidInput { field: String, message: String },
+    SearchParse { start: u32, end: u32, code: SearchParseCode }, // 06 UTF-8 spans
     Conflict { detail: String },  // e.g. draft revision base mismatch
     ResetRequired { generation: u64 }, // stale window cursor; reopen from Top or Around
     Cancelled,
@@ -61,6 +62,7 @@ async fn Core::shutdown(self);   // flush writer, release the lease
 | Accounts | `add_bridge_account(params)`, `update_account(id, params)`, `pause_account(id)`, `resume_account(id)`, `disconnect_account(id)`, `set_account_appearance(id, appearance)` |
 | Identities | `upsert_identity(params)`, `set_default_identity(id)` |
 | Import/export | `start_import(paths, target)` → job id, `confirm_import(job_id, variants)` (09), `cancel_job(id)`, `start_export(scope, format, destination)` |
+| Search index | `start_search_rebuild()` → job id, `resume_search_rebuild(job_id)`, `retry_search_index()`; `cancel_job(id)` also routes to rebuild jobs |
 | Messages | `set_flags(selection, add, remove)`, `move_messages(selection, to_mailbox)`, `delete_to_trash(selection)`, `add_label(selection, label_mailbox)` (server label, 04), `add_tag(selection, tag)` and `remove_tag(selection, tag)` (local only), `set_note(message_id, text)` (one note per message; empty text removes it), `undo(token)` |
 | Drafts | `create_draft(context)` → draft id (`context` is new, reply, reply-all or forward, with source occurrence), `save_draft(draft_id, base_revision_id, content)` → revision id, `discard_draft(id)` (refused while an attempt is live, 05) |
 | Sending | `send_draft(draft_id, revision_id, acks)` → attempt id (the current revision only; `acks` lists warnings the user confirmed for that revision, e.g. `cross_account`; a missing one gets `Conflict` naming it, 05), `cancel_send(attempt_id)` (in `held` or `queued`), `resolve_unknown_send(attempt_id, resolution)`, `retry_rejected_recipients(attempt_id)` (05), `confirm_send_route(attempt_id)` (after an account reconfiguration, 05) |
@@ -90,7 +92,7 @@ async fn open_window(spec: WindowSpec, anchor: Anchor, limit: u32) -> Result<Win
 async fn read_window(window_id: WindowId, generation: u64, anchor: Anchor, limit: u32) -> Result<Window, CoreError>;
 async fn window_ids(window_id: WindowId) -> Result<WindowIds, CoreError>;
 async fn close_window(window_id: WindowId);
-// WindowSpec: Mailbox(id) | Unified(role) | Flagged | Search(query_json) | View(id) | Thread(thread_id)
+// WindowSpec: Mailbox(id) | Unified(role) | Flagged | Search(SearchSpec) | View(id) | Thread(thread_id)
 // (Account(id, role) is later. The sidebar uses Mailbox, Unified, Flagged and View,
 // plus drafts() and out_box(); Thread backs the reader's conversation context.)
 // (DebugSynthetic: the pilot's in-memory source for the list prototype, below.)
@@ -104,6 +106,7 @@ struct Window {
     has_more_after: bool,
     has_more_before: bool,
     total: Count,             // Exact(n) | AtLeast(n) | Unknown
+    search: Option<SearchStatus>, // Search only; same read snapshot as rows
 }
 struct WindowIds { generation: u64, ids: Vec<i64> } // the rows' occurrence ids, in window order
 struct ListRow {
@@ -115,12 +118,13 @@ struct ListRow {
 
 - **Grain:** `Mailbox` and `Unified` windows list occurrences. `Flagged`,
   `Search`, `View` and `Thread` list logical messages, one row each,
-  through the representative occurrence (02). `Flagged` covers flagged
-  messages in every account (`d_list_rows_flagged`): a message is
-  there when its representative is flagged.
-- **Store windows** (every spec but `DebugSynthetic`) read `d_list_rows`
-  in short read transactions (03), and their generation is the store's
-  `list_generation` (02), shared by all of them. `Unified(role)` names
+  through the representative occurrence (02); Search with a Mailbox scope
+  chooses its occurrence within that mailbox instead (below). `Flagged`
+  covers flagged messages in every account (`d_list_rows_flagged`): a
+  message is there when its representative is flagged.
+- **Store list windows** (every spec but `DebugSynthetic` and `Search`)
+  read `d_list_rows` in short read transactions (03), and share the store's
+  `list_generation` (02). `Unified(role)` names
   one `mailboxes.role`. A display field the store lacks is an empty
   string. Store windows don't count rows: `total` is `Exact` when the
   page holds the whole window, else `AtLeast` the page's rows plus one
@@ -139,8 +143,8 @@ struct ListRow {
     opens. A read of a closed or unknown window is `NotFound`.
 - **Paging** is by keyset cursor, never `OFFSET`. Cursors are opaque and
   sort-specific: `(sort_date, occurrence_id)` for date order, `(score,
-  occurrence_id)` for relevance order. They are bound to the window's
-  generation, so a stale cursor gets `CoreError::ResetRequired`.
+  occurrence_id)` for relevance order (ascending score, descending id).
+  They are bound to the window's generation, so a stale cursor gets `CoreError::ResetRequired`.
   - A cursor names its row, its spec (with its mailbox, role or thread)
     and its generation. `open_window`
     honours one minted on the same spec at its opening generation; one
@@ -149,7 +153,7 @@ struct ListRow {
   - `After(c)` returns the rows strictly after `c`'s row, `Before(c)`
     those strictly before it; every page is in window order.
   - `limit` is 1–1,000; anything else is `InvalidInput`. Shells read
-    200 rows at a time.
+    200 rows at a time (Search opens with 50, below).
   - `Around(id)`: with `id` at rank `r` of `N` rows and `L = min(limit,
     N)`, the page starts at rank `clamp(r − ⌊L/2⌋, 0, N − L)`. An id not
     in the window at the caller's generation is `NotFound`. In
@@ -203,6 +207,160 @@ struct ListRow {
     path and version-1 JSON, or none while it is still being written; an
     unfinished job is `Conflict` and an unreadable report an error.
 
+### Search windows and coverage (M1.6a)
+
+```rust
+struct SearchSpec { query_json: String, scope: SearchScope, sort: SearchSort }
+enum SearchScope { All, Account(String), Mailbox(i64) }
+enum SearchSort { Date, Relevance }
+struct Coverage {
+    generation: u64, extractor_version: u32, // target version
+    total_messages: u64, headers_synced: u64,
+    bodies_acquired: u64, indexed: u64, partial: u64, failed: u64,
+    pending: u64, queue_length: u64, index_state: SearchIndexState,
+    rebuild: Option<SearchRebuildProgress>,
+    limitations: Vec<SearchLimitation>, // v1: cjk_unsegmented, attachment_text_unavailable
+}
+enum SearchIndexState {
+    Ready, Running, PausedByUser,
+    PausedIo { code: SearchIoCode, message: String, retry_at: i64 },
+    BlockedNewerExtractor,
+}
+// SearchIoCode: storage_full, permission_denied, storage_unavailable, other_io.
+struct SearchRebuildProgress {
+    job_id: String, phase: SearchRebuildPhase, processed: u64,
+    pending_documents: u64, // global queue length while active, zero at completion
+}
+enum SearchRebuildPhase { Reset, Enqueue, Index, Complete }
+// processed counts committed docs in this phase; resets at phase transitions.
+struct SearchStatus { coverage: Coverage, excluded_unknown: u64 }
+async fn coverage(scope: SearchScope) -> Result<Coverage, CoreError>;
+async fn parse_search(text: String, context: ParseContext) -> Result<String, CoreError>;
+async fn format_search(query_json: String) -> Result<String, CoreError>;
+// Parse returns canonical v1 JSON; format returns canonical text (06).
+// ParseContext { tz: String, clock: i64 }; SearchParseCode is the enum in 06.
+```
+
+- Search is a store-backed window with the usual lifecycle, subscriptions,
+  limits, id index and anchors. It reads the 06 compiler over `d_list_rows`
+  plus search/filter tables. Scope is an outer constraint, intersected
+  with the query, never an instruction to widen it. Unknown scope ids are
+  `NotFound`; invalid ids, sort or query are invalid input. Query validation
+  uses `SearchParse` with the 06 span/code, also through FFI. Changing query,
+  scope or sort opens a new handle. The UI defaults to All/Relevance.
+- An AST mailbox clause is a membership predicate; only `SearchScope::Mailbox`
+  changes the chosen occurrence (06). This distinguishes `in:42 OR in:43`
+  from an outer Mailbox(42) scope. Every scope still has one hit per message.
+- `open_window` honours its explicit limit; shells request 50 Search rows
+  first and 200 thereafter. Around/id-index behavior is unchanged. Exact
+  unknown counts deliberately require evaluating all scoped candidates;
+  the first-page timing includes this cost. Counts/status may be cached by
+  canonical query, scope and search generation for later pages, never
+  reused across generations. M1.6q records count time separately; 06/08's
+  budgets still apply to the complete response. Search `total` follows
+  the existing Exact/AtLeast rule for true hits; unknowns are separate,
+  exact and not limited to the page.
+- `store_meta.search_generation` starts at 1. It advances once per committed
+  transaction affecting any list generation, search document/FTS/queue,
+  target version, rebuild epoch/phase/progress, operational pause/retry state,
+  acquisition availability or query source (headers,
+  flags, membership, tags, notes, summaries, size). Whole-search invalidation
+  is conservative across scopes. A coverage-only change also advances it.
+  Ordinary list windows keep `list_generation`; index-only writes don't
+  invalidate them. Search readers read generation, rows, counts and
+  coverage in one short transaction. The writer announces only after commit;
+  rollback announces nothing. Relevance paging resets after any such change
+  because even an out-of-scope document can change BM25 corpus statistics.
+- Search cursors are opaque strings containing canonical JSON with keys
+  `v` (1), `store` (store UUID), `incarnation`, `spec` (canonical v1 AST,
+  scope and sort), `generation`, `occurrence_id` and exactly one of
+  `sort_date` (i64) or `score_bits` (16 lowercase hex digits representing
+  the f64 IEEE-754 bits). Preserve the SQLite score exactly, no decimal
+  rounding; reject nonfinite scores and canonicalize negative zero to zero.
+  Validate structure/spec/sort before generation, then validate the key
+  against its row in that generation. Malformed, foreign-spec or forged
+  row/key cursors are `InvalidInput`; stale generation or incarnation is
+  `ResetRequired`. Same-spec cursors may reopen a handle in the same store
+  and generation. A foreign store is `InvalidInput`. Cursors are neither
+  credentials nor stable bookmarks. Date/relevance comparators are in 06.
+- Coverage scope counts distinct logical messages with a present occurrence
+  in that scope, regardless of query; mailbox scope chooses its row as
+  above. `headers_synced` counts those with `message_headers` or a nonfailed
+  summary, including imports. `bodies_acquired` counts linked acquisitions
+  whose object is published. `indexed`, `partial`, `failed` are disjoint
+  current-target document states for those acquired bodies; `pending` is
+  `total_messages - indexed - partial - failed`, including unavailable
+  bodies and old-version docs. These state counts count messages, even
+  when several messages share one document. `queue_length` instead counts
+  distinct queued acquisitions linked to scoped messages; never occurrences.
+  Empty scope has zero counts and no incomplete percentage. `index_state`
+  is `BlockedNewerExtractor` when the target is unsupported; otherwise
+  `PausedByUser` takes precedence over `PausedIo`, then `Running` while a
+  rebuild is in reset/enqueue or any queue work remains globally, else
+  `Ready`. Ready means the queue drained, not complete coverage. During
+  reset/enqueue all messages are pending (indexed/partial/failed are zero).
+  Operational state is global even for empty scopes. A blocked indexer
+  reports its target version through standalone coverage; Search opens
+  return `Unavailable` with an update-required explanation, not `NewerStore`.
+- `PausedIo` retains pending work and supplies a sanitized actionable
+  error (for example, free disk space or restore access), error code and
+  next automatic retry UTC-millisecond deadline. Retry uses bounded backoff;
+  `retry_search_index()` requests an immediate attempt without discarding
+  work. Enter/leave pause, an updated error/deadline, and retry initiation
+  each commit status and advance `search_generation`, even if no queue row
+  changes. Notify existing Search subscriptions after commit. Standalone
+  coverage is pollable, including while Search is unavailable during reset.
+  Persist the pause with the job/worker status; on reopen retain the error
+  until retry begins, honouring its deadline. If the writer itself cannot
+  persist status, coverage/Search reads return actionable `Unavailable`
+  instead of a stale Running snapshot; recovery commits status/generation
+  before resuming reads/work. No successful progress is reported on failed I/O.
+- `excluded_unknown` counts scoped candidates whose final query value is
+  unknown (06), not every incomplete document. Coverage is query-independent;
+  a filter can prove a candidate false despite an unavailable body. Search
+  status and standalone coverage have the same shape/generation. V1 exposes
+  both limitations even when indexing is complete; no percentage claims
+  attachment contents or CJK segmentation were searched.
+
+### Search rebuild controls (M1.6)
+
+- Search commands use the normal idempotency-key/receipt protocol; the
+  start receipt contains the durable job id. There is at most one active
+  rebuild per store, globally across scopes. Start while one is active
+  returns that job, including if paused, without another reset or implicit
+  resume. Start after completion creates a new id/epoch. Automatic version
+  changes create a job if needed, otherwise reuse the active id with a new
+  epoch/reset cursor; they preserve a user pause. Unsupported targets never
+  run. The durable record includes id, epoch, phase, scan cursor, committed
+  phase count and pause/error/retry state. This is a forward migration (06),
+  not a modification of the v1 SQL fences.
+- `cancel_job(id)` dispatches by the durable job kind to import or search
+  rebuild handling; it must no longer search only import jobs. Rebuild
+  cancellation durably pauses the entire index worker, including ordinary
+  queued acquisitions, at the next bounded writer boundary. A submitted
+  transaction may commit before cancellation; after the cancellation receipt
+  no further batch may publish or advance a phase. Discard unsubmitted
+  extraction. Keep committed docs, queue, phase and cursors. Repeated cancel
+  is harmless; cancel on a completed rebuild is a no-op. Unknown ids return
+  `NotFound` and ids of unsupported job kinds return `InvalidInput`.
+- User cancellation survives shutdown/open and new acquisitions. Only
+  `resume_search_rebuild(job_id)` releases it, resuming the same phase/id
+  from committed work; this is not a fresh rebuild. Resume on a completed
+  job is a no-op, on an unknown id is `NotFound`, and on another job kind is
+  `InvalidInput`. Resume on an already running rebuild is harmless. An I/O
+  pause still requires its scheduled or explicit retry; retry never clears
+  a user pause. Automatic uncancelled crash recovery needs no user action.
+- Coverage exposes the active or most recently completed rebuild id, phase,
+  phase count and global pending-document count; together with operational
+  state these are the progress query. Coverage's scoped `queue_length` must
+  not be presented as global rebuild progress. Cancellation/resume/completion
+  advances search generation even without queue changes. Service owns these
+  commands and DTOs; UniFFI/Swift adapters expose the same routing and states.
+  Request
+  cancellation on an async start call does not cancel a committed job: the
+  caller recovers it via coverage or the same idempotency key. Job cancellation
+  is the explicit command above, separate from closing a Search window.
+
 ## Subscriptions
 
 ```rust
@@ -233,8 +391,9 @@ enum WindowEvent { Invalidated { generation: u64 }, ResetRequired }
   - A second `next` while one waits is `InvalidInput`; a cancelled
     `next` moves nothing. A closed or unknown window's `next` is
     `NotFound`, and shutdown ends a waiting one with `Unavailable`.
-  - The store announces a new `list_generation` only after the
-    transaction that made it commits (03).
+  - The store announces a new `list_generation` (or Search's
+    `search_generation`) only after the transaction that made it commits
+    (03).
 - **Snapshot isolation:** a window is not a held read transaction. Each
   read is a short transaction, and `generation` ties the rows to one
   committed state.

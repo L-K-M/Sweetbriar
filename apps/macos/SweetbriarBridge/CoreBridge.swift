@@ -58,6 +58,24 @@ public final class CoreBridge: Sendable {
         )
     }
 
+    /// Read the message headers, account and read-only metadata.
+    public func getMessage(messageId: Int64) async throws -> ReaderMessage {
+        let token = SweetbriarCore.CancelToken()
+        let value = try await Self.withCancellation(token: token) {
+            try await self.core.getMessage(token: token, messageId: messageId)
+        }
+        return ReaderMessage(value)
+    }
+
+    /// Resolve a list selection to its logical message.
+    public func messageForOccurrence(occurrenceId: Int64) async throws -> Int64 {
+        let token = SweetbriarCore.CancelToken()
+        let value = try await Self.withCancellation(token: token) {
+            try await self.core.messageForOccurrence(token: token, occurrenceId: occurrenceId)
+        }
+        return value
+    }
+
     /// Every registered setting with its effective value. The snapshot
     /// also goes to the batcher for `@MainActor` observers.
     public func settings() async throws -> [Setting] {
@@ -684,6 +702,75 @@ extension ListWindow {
             hasMoreAfter: generated.hasMoreAfter,
             hasMoreBefore: generated.hasMoreBefore,
             total: ListCount(generated.total)
+        )
+    }
+}
+
+extension BodyAvailability {
+    fileprivate init(_ generated: SweetbriarCore.BodyAvailability) {
+        switch generated {
+        case .notAcquired: self = .notAcquired
+        case .acquired: self = .acquired
+        case .acquisitionMissing: self = .acquisitionMissing
+        case .acquisitionCorrupt: self = .acquisitionCorrupt
+        }
+    }
+}
+
+extension ReaderAddress {
+    fileprivate init(_ generated: SweetbriarCore.ReaderAddress) {
+        self.init(
+            name: generated.name,
+            address: generated.address
+        )
+    }
+}
+
+extension ReaderHeaders {
+    fileprivate init(_ generated: SweetbriarCore.ReaderHeaders) {
+        self.init(
+            from: generated.from.map { ReaderAddress($0) },
+            to: generated.to.map { ReaderAddress($0) },
+            cc: generated.cc.map { ReaderAddress($0) },
+            date: generated.date,
+            subject: generated.subject,
+            messageId: generated.messageId
+        )
+    }
+}
+
+extension ReaderOccurrence {
+    fileprivate init(_ generated: SweetbriarCore.ReaderOccurrence) {
+        self.init(
+            occurrenceId: generated.occurrenceId,
+            mailboxId: generated.mailboxId,
+            mailboxName: generated.mailboxName
+        )
+    }
+}
+
+extension ReaderTag {
+    fileprivate init(_ generated: SweetbriarCore.ReaderTag) {
+        self.init(
+            tagId: generated.tagId,
+            name: generated.name,
+            colorSrgb: generated.colorSrgb
+        )
+    }
+}
+
+extension ReaderMessage {
+    fileprivate init(_ generated: SweetbriarCore.ReaderMessage) {
+        self.init(
+            messageId: generated.messageId,
+            headers: ReaderHeaders(generated.headers),
+            accountId: generated.accountId,
+            accountDisplayName: generated.accountDisplayName,
+            occurrences: generated.occurrences.map { ReaderOccurrence($0) },
+            threadId: generated.threadId,
+            tags: generated.tags.map { ReaderTag($0) },
+            note: generated.note,
+            bodyAvailability: BodyAvailability(generated.bodyAvailability)
         )
     }
 }
