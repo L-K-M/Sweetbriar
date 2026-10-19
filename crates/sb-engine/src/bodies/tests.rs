@@ -292,7 +292,9 @@ fn missing_and_corrupt_acquisitions_never_publish_a_lease() {
     block_on(engine.shutdown()).unwrap();
 }
 
-#[cfg(unix)]
+// Linux only: APFS refuses a non-UTF-8 name (EILSEQ), so on macOS the
+// cache can't be created there at all.
+#[cfg(target_os = "linux")]
 #[test]
 fn non_utf8_cache_paths_fail_without_returning_a_lossy_lease() {
     use std::ffi::OsString;
