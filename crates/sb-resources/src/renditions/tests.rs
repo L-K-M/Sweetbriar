@@ -383,3 +383,27 @@ fn startup_reports_errors_removing_stray_files_and_can_retry() {
     let reopened = RenditionCache::open_on(root, fault, Arc::new(Tokens::default())).unwrap();
     assert!(fs.read_dir(&reopened.0.namespace).unwrap().is_empty());
 }
+
+#[test]
+fn named_publication_rejects_paths_and_duplicate_names() {
+    let fs = sim();
+    let cache = cache(fs.clone());
+    let mut files = cache.reserve(&[1, 1]).unwrap();
+    for name in ["", ".", "..", "../outside", "/absolute", "a/b", "a\\b"] {
+        assert!(
+            files
+                .publish_named(0, name, b"x", RenditionProtection::Internal)
+                .is_err()
+        );
+    }
+    let path = files
+        .publish_named(0, "manifest.json", b"x", RenditionProtection::Internal)
+        .unwrap();
+    assert_eq!(contents(fs.as_ref(), &path), b"x");
+    assert!(
+        files
+            .publish_named(1, "manifest.json", b"y", RenditionProtection::Internal)
+            .is_err()
+    );
+    assert_eq!(contents(fs.as_ref(), &path), b"x");
+}

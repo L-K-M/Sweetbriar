@@ -44,7 +44,11 @@ fn spawn_open_thread(body: OpenBody) -> std::io::Result<()> {
 
 /// What a dropped engine hands its cleanup worker: the store's last
 /// handle and the count of blocking tasks still using it.
-type Cleanup = (Arc<Resources>, Arc<BlockingWork>);
+type Cleanup = (
+    Arc<Resources>,
+    Arc<BlockingWork>,
+    Arc<crate::bodies::Leases>,
+);
 
 /// The engine: one multi-threaded runtime and the store's one handle
 /// (spec/01), plus a cleanup worker reserved at open. Every operation
@@ -63,6 +67,7 @@ pub struct Engine {
     windows: Arc<Windows>,
     /// Import jobs with a live worker, and their cancel flags (spec/09).
     imports: Arc<ImportJobs>,
+    leases: Arc<crate::bodies::Leases>,
     /// The worker reserved at open that closes the store if the engine
     /// is dropped without `shutdown`; it ends when this sender drops.
     cleanup: std::sync::mpsc::Sender<Cleanup>,
@@ -301,6 +306,30 @@ impl Engine {
         Self::open_with(data_root, spawn_open_thread).await
     }
 
+    /// Open with the disposable cache used by body and attachment leases.
+    pub async fn open_with_cache(
+        data_root: impl AsRef<Path>,
+        cache_root: impl AsRef<Path>,
+    ) -> Result<Self, EngineError> {
+        let cache_root = cache_root.as_ref().to_path_buf();
+        Self::open_on(
+            data_root.as_ref(),
+            spawn_open_thread,
+            Box::new(move |data| Resources::open_with_cache(data, &cache_root)),
+        )
+        .await
+        .map_err(|error| match error {
+            EngineError::InvalidInput { message, .. } if message.starts_with("cache root") => {
+                EngineError::invalid_input("cache_root", message)
+            }
+            other => other,
+        })
+    }
+
+    pub(crate) fn leases(&self) -> &Arc<crate::bodies::Leases> {
+        &self.leases
+    }
+
     /// [`Engine::open`] with the open thread's spawner as a parameter,
     /// so a test can refuse it as an exhausted OS would.
     ///
@@ -355,6 +384,7 @@ impl Engine {
                         runtime,
                         windows,
                         imports: Arc::default(),
+                        leases: Arc::default(),
                         cleanup: start_cleanup_worker()?,
                     })
                 })
@@ -423,8 +453,10 @@ impl Engine {
             .take()
             .expect("the store handle lives until shutdown");
         let blocking = Arc::clone(&self.blocking);
+        let leases = self.leases.clone();
         let closing = self.runtime.handle().spawn_blocking(move || {
             blocking.close_and_wait();
+            leases.close();
             close_resources(resources)
         });
         match closing.await {
@@ -506,8 +538,9 @@ fn start_cleanup_worker() -> Result<std::sync::mpsc::Sender<Cleanup>, EngineErro
         .name(CLOSE_THREAD_NAME.to_owned())
         .spawn(move || {
             // A closed channel means the engine shut down normally.
-            if let Ok((resources, blocking)) = handed.recv() {
+            if let Ok((resources, blocking, leases)) = handed.recv() {
                 blocking.close_and_wait();
+                leases.close();
                 let _ = close_resources(resources);
             }
         })
@@ -538,7 +571,9 @@ impl Drop for Engine {
         let Some(resources) = self.resources.take() else {
             return;
         };
-        let _ = self.cleanup.send((resources, Arc::clone(&self.blocking)));
+        let _ = self
+            .cleanup
+            .send((resources, Arc::clone(&self.blocking), self.leases.clone()));
     }
 }
 

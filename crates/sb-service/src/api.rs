@@ -12,8 +12,7 @@ use crate::CoreError;
 
 /// Where the core keeps what (spec/07 "Lifecycle"): the store lives
 /// under `data_root` (spec/03), disposable renditions under
-/// `cache_root`. The pilot's store uses only the data root; the cache
-/// root is carried so later steps don't change the API's shape.
+/// `cache_root`, outside the data root.
 #[derive(Debug, Clone)]
 pub struct CoreConfig {
     pub data_root: PathBuf,
@@ -41,7 +40,7 @@ impl CoreConfig {
 /// authorizes nothing (spec/07); the caller shows the error.
 pub async fn open_core(config: CoreConfig) -> Result<Core, CoreError> {
     Ok(Core {
-        engine: Engine::open(config.data_root).await?,
+        engine: Engine::open_with_cache(config.data_root, config.cache_root).await?,
     })
 }
 
