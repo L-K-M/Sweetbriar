@@ -196,6 +196,16 @@ pub(super) fn enqueue_batch_with_cut(
 /// Only an unpaused, current Index job observing an empty queue may complete.
 /// The observation, phase change and generation advance share one transaction.
 pub fn complete_rebuild(tx: &Transaction, job_id: &str, epoch: i64) -> Result<bool, StoreError> {
+    complete_with_cut(tx, job_id, epoch, &mut || Ok(()))
+}
+
+pub(super) fn complete_with_cut(
+    tx: &Transaction,
+    job_id: &str,
+    epoch: i64,
+    cut: &mut impl FnMut() -> Result<(), StoreError>,
+) -> Result<bool, StoreError> {
+    cut()?;
     let Some(_job) = gated_job(tx, job_id, epoch, RebuildPhase::Index)? else {
         return Ok(false);
     };
@@ -207,11 +217,13 @@ pub fn complete_rebuild(tx: &Transaction, job_id: &str, epoch: i64) -> Result<bo
     if pending {
         return Ok(false);
     }
+    cut()?;
     tx.execute(
         "UPDATE search_rebuild_jobs SET phase = 'complete' WHERE job_id = ?1",
         [job_id],
     )
     .map_err(sql_error)?;
+    cut()?;
     advance_generation(tx)?;
     Ok(true)
 }

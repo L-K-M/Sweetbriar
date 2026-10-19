@@ -4,7 +4,7 @@ use std::path::Path;
 
 use sb_test_support::{CutFs, ScratchDir, run_crash_cuts};
 
-use super::super::batches::{enqueue_batch_with_cut, reset_batch_with_cut};
+use super::super::batches::{complete_with_cut, enqueue_batch_with_cut, reset_batch_with_cut};
 use super::*;
 use crate::Fs;
 
@@ -337,6 +337,10 @@ fn both_pauses_gate_each_real_phase_without_advancing_its_checkpoint() {
 }
 
 fn run_to_completion(conn: &mut Connection, id: &str, epoch: i64) {
+    if job_at(conn, id).phase == RebuildPhase::Complete {
+        assert!(!complete(conn, id, epoch));
+        return;
+    }
     while job_at(conn, id).phase == RebuildPhase::Reset {
         reset(conn, id, epoch, 200);
     }
@@ -375,9 +379,14 @@ fn rebuild_cut_child() {
     cut().unwrap();
     let tx = conn.transaction().unwrap();
     match job_at(&tx, "job").phase {
-        RebuildPhase::Reset => reset_batch_with_cut(&tx, "job", 1, 200, &mut cut).unwrap(),
+        RebuildPhase::Reset => {
+            reset_batch_with_cut(&tx, "job", 1, 200, &mut cut).unwrap();
+        }
         RebuildPhase::Enqueue => {
-            enqueue_batch_with_cut(&tx, "job", 1, 200, now(2), &mut cut).unwrap()
+            enqueue_batch_with_cut(&tx, "job", 1, 200, now(2), &mut cut).unwrap();
+        }
+        RebuildPhase::Index => {
+            assert!(complete_with_cut(&tx, "job", 1, &mut cut).unwrap());
         }
         _ => panic!("seeded job must be mid-run"),
     };
@@ -435,7 +444,11 @@ fn boundary_sweep(
 
 #[test]
 fn phase_errors_roll_back_docs_postings_queue_cursors_progress_and_generation() {
-    for (phase, cuts) in [(RebuildPhase::Reset, 5), (RebuildPhase::Enqueue, 6)] {
+    for (phase, cuts) in [
+        (RebuildPhase::Reset, 5),
+        (RebuildPhase::Enqueue, 6),
+        (RebuildPhase::Index, 3),
+    ] {
         for nth in 1..=cuts {
             let mut conn = connection();
             if phase == RebuildPhase::Reset {
@@ -444,8 +457,12 @@ fn phase_errors_roll_back_docs_postings_queue_cursors_progress_and_generation() 
                 acquisitions(&conn, 3);
             }
             start(&mut conn, "job", 1);
-            if phase == RebuildPhase::Enqueue {
+            if phase != RebuildPhase::Reset {
                 reset(&mut conn, "job", 1, 200);
+            }
+            if phase == RebuildPhase::Index {
+                enqueue_phase(&mut conn, "job", 1, 200);
+                drain(&mut conn, "newtoken");
             }
             let before = snapshot(&conn);
             let mut calls = 0;
@@ -459,10 +476,17 @@ fn phase_errors_roll_back_docs_postings_queue_cursors_progress_and_generation() 
             };
             let result = (|| {
                 let tx = conn.transaction().unwrap();
-                if phase == RebuildPhase::Reset {
-                    reset_batch_with_cut(&tx, "job", 1, 200, &mut cut)?;
-                } else {
-                    enqueue_batch_with_cut(&tx, "job", 1, 200, now(2), &mut cut)?;
+                match phase {
+                    RebuildPhase::Reset => {
+                        reset_batch_with_cut(&tx, "job", 1, 200, &mut cut)?;
+                    }
+                    RebuildPhase::Enqueue => {
+                        enqueue_batch_with_cut(&tx, "job", 1, 200, now(2), &mut cut)?;
+                    }
+                    RebuildPhase::Index => {
+                        assert!(complete_with_cut(&tx, "job", 1, &mut cut)?);
+                    }
+                    RebuildPhase::Complete => unreachable!(),
                 }
                 tx.commit().map_err(sql_error)
             })();
@@ -512,5 +536,23 @@ fn enqueue_boundary_cuts_leave_the_old_scan_or_the_new_one_never_a_mix() {
             enqueue_phase(conn, "job", 1, 200);
         },
         9,
+    );
+}
+
+#[test]
+fn completion_boundary_cuts_leave_index_or_complete_with_its_generation() {
+    boundary_sweep(
+        "complete",
+        |conn| {
+            acquisitions(conn, 2);
+            start(conn, "job", 1);
+            reset(conn, "job", 1, 200);
+            enqueue_phase(conn, "job", 1, 200);
+            drain(conn, "newtoken");
+        },
+        |conn| {
+            assert!(complete(conn, "job", 1));
+        },
+        6,
     );
 }
