@@ -221,6 +221,42 @@ limitations under the License.
 ## BSD 3-Clause "New" or "Revised" License (BSD-3-Clause)
 
 Used by:
+- `lol_html 3.0.1` — <https://github.com/cloudflare/lol-html>
+
+```text
+Copyright (C) 2019, Cloudflare, Inc.
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without modification,
+are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this
+list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice,
+this list of conditions and the following disclaimer in the documentation and/or
+other materials provided with the distribution.
+
+3. Neither the name of the copyright holder nor the names of its contributors
+may be used to endorse or promote products derived from this software without
+specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
+ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+```
+
+## BSD 3-Clause "New" or "Revised" License (BSD-3-Clause)
+
+Used by:
 - `encoding_rs 0.8.42` — <https://github.com/hsivonen/encoding_rs>
 
 ```text
@@ -402,6 +438,35 @@ DEALINGS IN THE SOFTWARE.
 ## MIT License (MIT)
 
 Used by:
+- `mime 0.3.17` — <https://github.com/hyperium/mime>
+
+```text
+Copyright (c) 2014 Sean McArthur
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+
+
+```
+
+## MIT License (MIT)
+
+Used by:
 - `bitflags 2.13.2` — <https://github.com/bitflags/bitflags>
 - `glob 0.3.4` — <https://github.com/rust-lang/glob>
 - `log 0.4.34` — <https://github.com/rust-lang/log>
@@ -492,6 +557,40 @@ NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
 LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
 WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+```
+
+## MIT License (MIT)
+
+Used by:
+- `new_debug_unreachable 1.0.6` — <https://github.com/mbrubeck/rust-debug-unreachable>
+
+```text
+Copyright (c) 2015 Jonathan Reem
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
 
 ```
 
@@ -633,6 +732,40 @@ Used by:
 
 ```text
 Copyright (c) 2016 FullContact, Inc
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+
+```
+
+## MIT License (MIT)
+
+Used by:
+- `rustc_version 0.4.1` — <https://github.com/djc/rustc-version-rs>
+
+```text
+Copyright (c) 2016 The Rust Project Developers
 
 Permission is hereby granted, free of charge, to any
 person obtaining a copy of this software and associated
@@ -1691,6 +1824,36 @@ SOFTWARE.
 ## MIT License (MIT)
 
 Used by:
+- `precomputed-hash 0.1.1` — <https://github.com/emilio/precomputed-hash>
+
+```text
+MIT License
+
+Copyright (c) 2017 Emilio Cobos Álvarez
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+```
+
+## MIT License (MIT)
+
+Used by:
 - `smawk 0.3.3` — <https://github.com/mgeisler/smawk>
 
 ```text
@@ -1946,10 +2109,12 @@ Used by:
 - `quote 1.0.47` — <https://github.com/dtolnay/quote>
 - `rustix 1.1.5` — <https://github.com/bytecodealliance/rustix>
 - `rustversion 1.0.23` — <https://github.com/dtolnay/rustversion>
+- `semver 1.0.28` — <https://github.com/dtolnay/semver>
 - `serde 1.0.229` — <https://github.com/serde-rs/serde>
 - `serde_core 1.0.229` — <https://github.com/serde-rs/serde>
 - `serde_derive 1.0.229` — <https://github.com/serde-rs/serde>
 - `serde_json 1.0.151` — <https://github.com/serde-rs/json>
+- `servo_arc 0.4.3` — <https://github.com/servo/stylo>
 - `syn 2.0.119` — <https://github.com/dtolnay/syn>
 - `syn 3.0.8` — <https://github.com/dtolnay/syn>
 - `thiserror-impl 2.0.21` — <https://github.com/dtolnay/thiserror>
@@ -1987,6 +2152,7 @@ DEALINGS IN THE SOFTWARE.
 ## MIT License (MIT)
 
 Used by:
+- `allocator-api2 0.2.21` — <https://github.com/zakarumych/allocator-api2>
 - `fs-err 3.3.2` — <https://github.com/andrewhickman/fs-err>
 
 ```text
@@ -2128,9 +2294,14 @@ SOFTWARE.
 ## MIT License (MIT)
 
 Used by:
+- `phf 0.13.1` — <https://github.com/rust-phf/rust-phf>
 - `phf 0.14.0` — <https://github.com/rust-phf/rust-phf>
+- `phf_codegen 0.13.1` — <https://github.com/rust-phf/rust-phf>
+- `phf_generator 0.13.1` — <https://github.com/rust-phf/rust-phf>
 - `phf_generator 0.14.0` — <https://github.com/rust-phf/rust-phf>
+- `phf_macros 0.13.1` — <https://github.com/rust-phf/rust-phf>
 - `phf_macros 0.14.0` — <https://github.com/rust-phf/rust-phf>
+- `phf_shared 0.13.1` — <https://github.com/rust-phf/rust-phf>
 - `phf_shared 0.14.0` — <https://github.com/rust-phf/rust-phf>
 
 ```text
@@ -2246,6 +2417,37 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
+
+```
+
+## MIT License (MIT)
+
+Used by:
+- `derive_more-impl 2.1.1` — <https://github.com/JelteF/derive_more>
+- `derive_more 2.1.1` — <https://github.com/JelteF/derive_more>
+
+```text
+The MIT License (MIT)
+
+Copyright (c) 2016 Jelte Fennema
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 
 ```
 
@@ -2759,7 +2961,9 @@ Exhibit B - "Incompatible With Secondary Licenses" Notice
 ## Mozilla Public License 2.0 (MPL-2.0)
 
 Used by:
+- `cssparser-macros 0.6.1` — <https://github.com/servo/rust-cssparser>
 - `cssparser-macros 0.7.1` — <https://github.com/servo/rust-cssparser>
+- `cssparser 0.36.0` — <https://github.com/servo/rust-cssparser>
 - `cssparser 0.38.0` — <https://github.com/servo/rust-cssparser>
 
 ```text
@@ -3142,6 +3346,7 @@ Exhibit B - "Incompatible With Secondary Licenses" Notice
 ## Mozilla Public License 2.0 (MPL-2.0)
 
 Used by:
+- `selectors 0.37.0` — <https://github.com/servo/stylo>
 - `uniffi 0.32.2` — <https://github.com/mozilla/uniffi-rs>
 - `uniffi_bindgen 0.32.2` — <https://github.com/mozilla/uniffi-rs>
 - `uniffi_core 0.32.2` — <https://github.com/mozilla/uniffi-rs>
