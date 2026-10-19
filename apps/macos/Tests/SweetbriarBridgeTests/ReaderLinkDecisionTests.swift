@@ -34,3 +34,30 @@ func readerNamesEveryWarningAndRefusesOtherSchemesEvenWhenListed() throws {
         #expect(ReaderLinkDecision.decide(try #require(URL(string: destination)), manifest: manifest) == .refuse)
     }
 }
+
+/// WebKit hands clicks over as Foundation URLs, which percent-encode
+/// characters the sanitizer's serializer keeps (`[` `]` in a query); the
+/// decision compares destinations, not spellings, and unions the warnings
+/// of hrefs that name one destination.
+@Test
+func readerMatchesDestinationsAcrossPercentEncoding() throws {
+    let sanitized = "https://example.test/search?filter[status]=open"
+    let data = try JSONSerialization.data(withJSONObject: [
+        "v": 1, "resources": [], "attachments": [],
+        "links": [
+            ["href": sanitized, "warnings": []],
+            ["href": "https://Example.test/caf%C3%A9", "warnings": ["raw_ip"]],
+            ["href": "https://example.test/café", "warnings": ["text_domain"]],
+        ],
+    ])
+    let manifest = try RenditionManifest.parse(data)
+    let clicked = try #require(URL(string: "https://example.test/search?filter%5Bstatus%5D=open"))
+    #expect(ReaderLinkDecision.decide(clicked, manifest: manifest) == .open(clicked))
+    let cafe = try #require(URL(string: "https://example.test/caf%C3%A9"))
+    #expect(ReaderLinkDecision.decide(cafe, manifest: manifest) == .confirm(cafe, reasons: [
+        "The destination uses an IP address instead of a domain name.",
+        "The link text names a different domain.",
+    ]))
+    let elsewhere = try #require(URL(string: "https://example.test/search?filter%5Bstatus%5D=closed"))
+    #expect(ReaderLinkDecision.decide(elsewhere, manifest: manifest) == .refuse)
+}
