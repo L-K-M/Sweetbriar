@@ -397,6 +397,19 @@ fn reader_run(bytes: &[u8], limits: &Limits) -> Result<RenderInput, ParseFailure
         result.part_ids.push(node.id.clone());
         if selection.plain == Some(index) || selection.html == Some(index) {
             let (text, replaced) = decoded_body(node);
+            // Admission measured upstream's text; this decoder can expand
+            // it (a label upstream reads as UTF-8), so it is bounded again,
+            // with admission's outcome.
+            if text.len() as u64 > limits.max_decoded_part_bytes() {
+                let mut refused = RenderInput {
+                    parse_warnings: vec![ParseWarning::PartTooLarge {
+                        limit: limits.max_decoded_part_bytes(),
+                    }],
+                    ..RenderInput::default()
+                };
+                refused.warn(RenderWarningCode::PartialParse, None);
+                return Ok(refused);
+            }
             if replaced {
                 result.warn(RenderWarningCode::CharsetReplaced, Some(node.id.clone()));
             }

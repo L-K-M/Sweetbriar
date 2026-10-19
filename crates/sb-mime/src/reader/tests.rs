@@ -607,3 +607,26 @@ fn base64(bytes: &[u8]) -> String {
     }
     out
 }
+
+/// The body decoder can expand text past what admission measured (a
+/// padded label upstream reads as UTF-8 is windows-1252 to encoding_rs):
+/// such a body is refused like any part over the decoded-part limit.
+#[test]
+fn decoded_bodies_stay_within_the_part_limit() {
+    let raw = "Content-Type: text/plain; charset=\" windows-1252 \"\r\n\r\n\u{e9}".as_bytes();
+    let input = render_input(raw, &Limits::default().with_max_decoded_part_bytes(2)).unwrap();
+    assert!(input.plain().is_none(), "an expanded body over the limit");
+    assert!(
+        input
+            .parse_warnings()
+            .contains(&ParseWarning::PartTooLarge { limit: 2 })
+    );
+    assert!(
+        input
+            .warnings()
+            .iter()
+            .any(|w| w.code() == RenderWarningCode::PartialParse)
+    );
+    let fits = render_input(raw, &Limits::default().with_max_decoded_part_bytes(4)).unwrap();
+    assert_eq!(fits.plain().unwrap().text(), "\u{c3}\u{a9}");
+}
