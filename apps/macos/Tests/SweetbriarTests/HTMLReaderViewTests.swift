@@ -157,7 +157,7 @@ func readerRuleListCompilesAndBlocksHTTPResources() async throws {
     let control = WKWebView(frame: .zero, configuration: configuration)
     control.loadHTMLString(
         try String(contentsOf: fixture.htmlFile, encoding: .utf8),
-        baseURL: try #require(URL(string: "sweetbriar-cid://test-token/__body_1"))
+        baseURL: URL(string: "sweetbriar-cid://test-token/__body_1")
     )
     try #require(await waitForHTML { counter.value > 0 })
     control.stopLoading()
