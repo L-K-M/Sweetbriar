@@ -356,6 +356,19 @@ impl ImportJobRecord {
     }
 }
 
+/// The fixed part of a report's size bound: the totals, warnings and the
+/// first problems, each with a path JSON-escaped at worst.
+const REPORT_BASE_BYTES: u64 = 4 * 1024 * 1024;
+/// One source entry's size bound: a 4,096-byte path escaped six bytes a
+/// byte (`\u0001`), its mailbox name likewise, its numbers and keys.
+const REPORT_SOURCE_BYTES: u64 = 32 * 1024;
+
+/// The longest report [`import_report`] writes for a job of `sources`
+/// sources: a reader takes no more than that.
+pub fn import_report_budget(sources: usize) -> u64 {
+    REPORT_BASE_BYTES.saturating_add(REPORT_SOURCE_BYTES.saturating_mul(sources as u64))
+}
+
 /// The import report (spec/09 "Report"): version-1 JSON derived from
 /// the job's rows, indented for the people who read it.
 pub fn import_report(

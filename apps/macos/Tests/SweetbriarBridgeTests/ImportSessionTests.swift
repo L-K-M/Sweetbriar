@@ -26,6 +26,10 @@ actor FakeImportSource: ImportJobSource {
     private var reportAfter: Int? = 0
     /// Polls in `inventory` before the inventory finishes.
     private let inventoryPolls: Int
+    /// When set, each poll waits on it before answering.
+    private var pollGate: Gate?
+    /// Report reads that fail before they answer.
+    private var failingReportReads = 0
 
     init(inventoryPolls: Int = 2) {
         self.inventoryPolls = inventoryPolls
@@ -33,6 +37,15 @@ actor FakeImportSource: ImportJobSource {
 
     func publishReport(after looks: Int?) {
         reportAfter = looks
+    }
+
+    func gatePolls(_ gate: Gate?) {
+        pollGate = gate
+    }
+
+    /// Make the next `count` report reads fail.
+    func failReportReads(_ count: Int) {
+        failingReportReads = count
     }
 
     func startImport(paths: [String], target: ImportTarget) async throws -> ImportStarted {
@@ -65,6 +78,9 @@ actor FakeImportSource: ImportJobSource {
         inFlight += 1
         maxInFlight = max(maxInFlight, inFlight)
         defer { inFlight -= 1 }
+        if let pollGate {
+            await pollGate.wait()
+        }
         try await Task.sleep(for: .milliseconds(2))
         polls += 1
         if state == .inventory, polls >= inventoryPolls {
@@ -77,6 +93,10 @@ actor FakeImportSource: ImportJobSource {
 
     func importReport(jobId: String) async throws -> ImportReport? {
         reportLooks += 1
+        if failingReportReads > 0 {
+            failingReportReads -= 1
+            throw CoreFailure.unavailable(reason: "the report can't be read")
+        }
         guard let reportAfter, reportLooks > reportAfter else { return nil }
         return ImportReport(path: "/tmp/report.json", json: "{\"v\":1}")
     }
@@ -256,4 +276,57 @@ func anImportSessionRunsOverTheRealCore() async throws {
     #expect(report.json.contains("\"state\": \"completed\""))
 
     await bridge.shutdown()
+}
+
+/// A new poll loop waits for the one before it: detaching while a poll
+/// is in flight and attaching again never runs two at once.
+@MainActor
+@Test(.timeLimit(.minutes(1)))
+func aRestartedPollWaitsForTheOneInFlight() async throws {
+    let fake = FakeImportSource(inventoryPolls: 1_000)
+    let gate = Gate()
+    await fake.gatePolls(gate)
+    let session = ImportSession(source: fake, pollInterval: fastPolls)
+    try await session.start(paths: ["/tmp/0.mbox"])
+    try #require(await eventually { await fake.pollCount == 1 })
+
+    session.detach()
+    session.attach(jobId: "job-1")
+    try await Task.sleep(for: .milliseconds(30))
+    #expect(await fake.pollCount == 1)
+
+    await gate.open()
+    try #require(await eventually { await fake.pollCount >= 3 })
+    #expect(await fake.maxInFlight == 1)
+    session.detach()
+}
+
+/// A finished job whose report reads keep failing shows as pending once
+/// the patience runs out, with the error, and polling stops; taking
+/// back a variant needs it chosen again.
+@MainActor
+@Test(.timeLimit(.minutes(1)))
+func failingReportReadsEndPending() async throws {
+    let fake = FakeImportSource(inventoryPolls: 1)
+    await fake.failReportReads(1_000)
+    let session = ImportSession(
+        source: fake,
+        pollInterval: fastPolls,
+        reportPatience: .milliseconds(30)
+    )
+    try await session.start(paths: ["/tmp/0.mbox"])
+    try #require(await eventually { await session.job?.state == .awaitingConfirmation })
+    session.choose(.mboxrd, forSource: 1)
+    session.choose(.mboxrd, forSource: 2)
+    session.clearChoice(forSource: 2)
+    #expect(!session.canConfirm)
+    session.choose(.mboxo, forSource: 2)
+    try await session.confirm()
+
+    try #require(await eventually { await session.report == .pending })
+    #expect(session.lastError != nil)
+    try await Task.sleep(for: .milliseconds(100))
+    let polls = await fake.pollCount
+    try await Task.sleep(for: .milliseconds(50))
+    #expect(await fake.pollCount == polls, "polling stopped")
 }

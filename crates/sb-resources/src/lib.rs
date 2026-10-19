@@ -189,10 +189,16 @@ impl Resources {
         self.store.import_report_exists(job)
     }
 
-    /// `job`'s report as last written, or `None` while there is none.
-    /// Blocking.
-    pub fn read_import_report(&self, job: &str) -> Result<Option<String>, StoreError> {
-        self.store.read_import_report(job)
+    /// `job`'s report as last written, or `None` while there is none;
+    /// one longer than the report writer can write for `sources` sources
+    /// is `Corrupt`. Blocking.
+    pub fn read_import_report(
+        &self,
+        job: &str,
+        sources: usize,
+    ) -> Result<Option<String>, StoreError> {
+        self.store
+            .read_import_report(job, import_jobs::import_report_budget(sources))
     }
 
     /// Where `job`'s report lives, for the user to open.

@@ -17,7 +17,7 @@ rusqlite = { version = "=0.40.2", features = ["bundled", "backup", "limits"] }
 # features — the core hashing needs no `std` extras.
 sha2 = { version = "=0.11.1", default-features = false }
 # Canonical import provenance and checkpoints (spec/02); same pin as xtask.
-serde_json = "=1.0.151"
+serde_json = "=1.0.154"
 
 [features]
 # Test-only writes for the layers above, as M1.3e's window tests need:
