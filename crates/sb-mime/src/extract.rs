@@ -53,7 +53,7 @@ fn fields<'h>(
 }
 
 /// First text value of a header, owned.
-fn text_of(headers: &[Header<'_>], name: HeaderName) -> Option<String> {
+pub(crate) fn text_of(headers: &[Header<'_>], name: HeaderName) -> Option<String> {
     field(headers, name)
         .and_then(HeaderValue::as_text)
         .map(str::to_string)
@@ -75,7 +75,7 @@ fn flatten<'a>(address: &'a Address<'a>) -> Vec<&'a Addr<'a>> {
 }
 
 /// All mailboxes across every occurrence of an address header.
-fn mailboxes(headers: &[Header<'_>], name: HeaderName) -> Vec<MailboxAddress> {
+pub(crate) fn mailboxes(headers: &[Header<'_>], name: HeaderName) -> Vec<MailboxAddress> {
     let mut out = Vec::new();
     for value in fields(headers, name) {
         if let Some(address) = value.as_address() {
