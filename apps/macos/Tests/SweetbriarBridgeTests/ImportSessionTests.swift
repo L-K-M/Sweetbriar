@@ -135,6 +135,12 @@ actor FakeImportSource: ImportJobSource {
 
 private let fastPolls: Duration = .milliseconds(1)
 
+/// Report patience in the tests that let it run out: wide enough that a
+/// busy machine still looks more than once inside it.
+private let reportPatience: Duration = .milliseconds(300)
+/// How long a stopped loop is watched for further polls.
+private let pollWindow: Duration = .milliseconds(100)
+
 /// The inventory shows before confirmation; confirming needs a variant
 /// for each ambiguous source, and sends exactly those; the job then
 /// completes and its report is shown once written. One poll at a time.
@@ -194,7 +200,7 @@ func aMissingReportStaysPendingUntilRetried() async throws {
     let session = ImportSession(
         source: fake,
         pollInterval: fastPolls,
-        reportPatience: .milliseconds(30)
+        reportPatience: reportPatience
     )
     try await session.start(paths: ["/tmp/0.mbox"])
     try #require(await eventually { await session.job?.state == .awaitingConfirmation })
@@ -203,12 +209,12 @@ func aMissingReportStaysPendingUntilRetried() async throws {
     try await session.confirm()
 
     try #require(await eventually { await session.report == .pending })
-    // Past the patience, polling stops.
-    try await Task.sleep(for: .milliseconds(100))
-    let polls = await fake.pollCount
-    try await Task.sleep(for: .milliseconds(50))
-    #expect(await fake.pollCount == polls, "polling stopped")
+    // Past the patience the loop ends, having looked more than once.
+    await session.pollingSettled()
     #expect(await fake.reportLooks > 1, "looked more than once")
+    let polls = await fake.pollCount
+    try await Task.sleep(for: pollWindow)
+    #expect(await fake.pollCount == polls, "polling stopped")
     #expect(session.report == .pending)
 
     await fake.publishReport(after: 0)
@@ -312,7 +318,7 @@ func failingReportReadsEndPending() async throws {
     let session = ImportSession(
         source: fake,
         pollInterval: fastPolls,
-        reportPatience: .milliseconds(30)
+        reportPatience: reportPatience
     )
     try await session.start(paths: ["/tmp/0.mbox"])
     try #require(await eventually { await session.job?.state == .awaitingConfirmation })
@@ -324,9 +330,10 @@ func failingReportReadsEndPending() async throws {
     try await session.confirm()
 
     try #require(await eventually { await session.report == .pending })
+    // The loop ends past the patience with the read's error kept.
+    await session.pollingSettled()
     #expect(session.lastError != nil)
-    try await Task.sleep(for: .milliseconds(100))
     let polls = await fake.pollCount
-    try await Task.sleep(for: .milliseconds(50))
+    try await Task.sleep(for: pollWindow)
     #expect(await fake.pollCount == polls, "polling stopped")
 }
