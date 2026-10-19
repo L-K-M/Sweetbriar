@@ -435,9 +435,11 @@ fn release_lease(lease_id: LeaseId);
   An open either hands its lease to the caller or removes it: one
   cancelled after its files were written leaves nothing live.
 - **Bounds:** the MIME limits (10) apply to every extraction. A
-  rendition file holds at most 50,000,000 bytes, one lease 100,000,000,
-  all live leases 512,000,000 and at most 64 of them; past a budget the
-  open is `Unavailable` naming the quota, and no live lease is evicted.
+  sanitized HTML or plain text file holds at most 50,000,000 bytes, a
+  source copy at most the 100,000,000-byte message limit; one lease
+  holds at most 100,000,000, all live leases 512,000,000 and at most 64
+  of them. Past a budget the open is `Unavailable` naming the quota,
+  and no live lease is evicted.
 - **Which body:** `preferred` is a preference; `kind` names what the
   file holds. The last supported candidate of the requested kind in a
   multipart/alternative wins; a multipart/related root is its `start`

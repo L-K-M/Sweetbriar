@@ -307,6 +307,37 @@ impl Fs for SimFs {
         })
     }
 
+    fn create_private_dir(&self, path: &Path) -> io::Result<()> {
+        self.create_dir(path)
+    }
+
+    fn restrict_dir(&self, path: &Path) -> io::Result<()> {
+        let _op = self.op();
+        self.dir(path)
+            .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))?;
+        Ok(())
+    }
+
+    fn remove_dir_all(&self, path: &Path) -> io::Result<()> {
+        let _op = self.op();
+        let path = normalise(path)?;
+        match self.child(&path) {
+            None => return Ok(()),
+            Some(Child::File(_)) => return Err(io::ErrorKind::NotADirectory.into()),
+            Some(Child::Dir(_)) => {}
+        }
+        let name = file_name(&path)?;
+        self.with_dir(path.parent().unwrap_or(Path::new("/")), |dir| {
+            dir.live.remove(&name);
+            Ok(())
+        })
+    }
+
+    fn quarantine(&self, path: &Path) -> io::Result<()> {
+        self.open_regular(path)?;
+        Ok(())
+    }
+
     fn sync_dir(&self, path: &Path) -> io::Result<()> {
         let _op = self.op();
         let path = normalise(path)?;

@@ -111,6 +111,26 @@ impl Fs for CutFs {
         self.inner.create_dir(path)
     }
 
+    fn create_private_dir(&self, path: &Path) -> std::io::Result<()> {
+        self.trip();
+        self.inner.create_private_dir(path)
+    }
+
+    fn restrict_dir(&self, path: &Path) -> std::io::Result<()> {
+        self.trip();
+        self.inner.restrict_dir(path)
+    }
+
+    fn remove_dir_all(&self, path: &Path) -> std::io::Result<()> {
+        self.trip();
+        self.inner.remove_dir_all(path)
+    }
+
+    fn quarantine(&self, path: &Path) -> std::io::Result<()> {
+        self.trip();
+        self.inner.quarantine(path)
+    }
+
     fn sync_dir(&self, path: &Path) -> std::io::Result<()> {
         self.trip();
         self.inner.sync_dir(path)
@@ -303,7 +323,7 @@ mod tests {
     const ROOT_ENV: &str = "SB_CUT_TEST_ROOT";
 
     /// Every operation `CutFs` counts, by the name the child takes.
-    const OPS: [&str; 14] = [
+    const OPS: [&str; 18] = [
         "create",
         "write",
         "sync_all",
@@ -312,6 +332,10 @@ mod tests {
         "metadata",
         "read_dir",
         "create_dir",
+        "create_private_dir",
+        "restrict_dir",
+        "remove_dir_all",
+        "quarantine",
         "sync_dir",
         "rename",
         "remove",
@@ -331,6 +355,10 @@ mod tests {
         let root = PathBuf::from(env::var(ROOT_ENV).expect("root env"));
         let file = root.join("file");
         fs::write(&file, b"before").unwrap();
+        if op == "remove_dir_all" {
+            fs::create_dir(root.join("victim")).unwrap();
+            fs::write(root.join("victim/keep"), b"before").unwrap();
+        }
         let real: Arc<dyn Fs> = Arc::new(sb_platform::RealFs);
 
         // `write` and `sync_all` act on a handle, so the cut point is
@@ -353,6 +381,10 @@ mod tests {
             "metadata" => cut.metadata(&file).map(drop),
             "read_dir" => cut.read_dir(&root).map(drop),
             "create_dir" => cut.create_dir(&root.join("dir")),
+            "create_private_dir" => cut.create_private_dir(&root.join("dir")),
+            "restrict_dir" => cut.restrict_dir(&root),
+            "remove_dir_all" => cut.remove_dir_all(&root.join("victim")),
+            "quarantine" => cut.quarantine(&file),
             "sync_dir" => cut.sync_dir(&root),
             "rename" => cut.rename(&file, &root.join("renamed")),
             "remove" => cut.remove(&file),
@@ -375,8 +407,10 @@ mod tests {
         let exe = env::current_exe().unwrap();
         let scratch = crate::ScratchDir::new("cut-every-op");
         for op in OPS {
+            use std::os::unix::fs::PermissionsExt;
             let root = scratch.path().join(op);
             fs::create_dir(&root).unwrap();
+            fs::set_permissions(&root, fs::Permissions::from_mode(0o755)).unwrap();
             let child = Command::new(&exe)
                 .args(["--exact", "cut::tests::cut_op_child", "--ignored"])
                 .env(OP_ENV, op)
@@ -395,6 +429,14 @@ mod tests {
             assert!(!root.join("renamed").exists(), "{op}");
             assert!(!root.join("dir").exists(), "{op}");
             assert!(!root.join("lock").exists(), "{op}");
+            assert_eq!(
+                fs::metadata(&root).unwrap().permissions().mode() & 0o777,
+                0o755,
+                "{op}"
+            );
+            if op == "remove_dir_all" {
+                assert_eq!(fs::read(root.join("victim/keep")).unwrap(), b"before");
+            }
             let new = root.join("new");
             match op {
                 "create" => assert!(!new.exists(), "create ran"),
