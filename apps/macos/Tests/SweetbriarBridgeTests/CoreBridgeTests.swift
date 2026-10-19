@@ -121,6 +121,49 @@ func aSubscriptionReportsAFillAndEndsAtShutdown() async throws {
     }
 }
 
+/// The import commands cross the bridge (spec/07, 09): a started job
+/// can be cancelled, a cancelled job can't be confirmed, and an
+/// unknown job is `notFound`.
+@Test(.timeLimit(.minutes(1)))
+func importCommandsCrossTheBridge() async throws {
+    let (dir, config) = tempConfig()
+    defer { try? FileManager.default.removeItem(at: dir) }
+
+    let bridge = try await CoreBridge.open(
+        config: config,
+        snapshots: await sinkBatcher(clock: ManualFrameClock())
+    )
+    let source = dir.appendingPathComponent("Inbox.mbox")
+    try Data("From a@example.test Sat Oct 17 12:00:00 2026\nSubject: one\n\nbody\n".utf8)
+        .write(to: source)
+
+    let started = try await bridge.startImport(paths: [source.path])
+    #expect(started.receipt.command == "start_import")
+    let cancelled = try await bridge.cancelJob(jobId: started.jobId)
+    #expect(cancelled.command == "cancel_job")
+
+    do {
+        try await bridge.confirmImport(jobId: started.jobId, variants: [])
+        Issue.record("a cancelled job must not confirm")
+    } catch let failure as CoreFailure {
+        guard case .conflict = failure else {
+            Issue.record("expected .conflict, got \(failure)")
+            return
+        }
+    }
+    do {
+        try await bridge.cancelJob(jobId: "no-such-job")
+        Issue.record("an unknown job must throw")
+    } catch let failure as CoreFailure {
+        guard case .notFound = failure else {
+            Issue.record("expected .notFound, got \(failure)")
+            return
+        }
+    }
+
+    await bridge.shutdown()
+}
+
 @Test(.timeLimit(.minutes(1)))
 func aCallOnACancelledTaskThrowsAndWritesNothing() async throws {
     let (dir, config) = tempConfig()

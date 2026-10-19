@@ -195,7 +195,7 @@ impl Core {
 
 impl Receipt {
     /// Mirror the service's receipt field by field.
-    fn from_service(receipt: &sb_service::Receipt) -> Self {
+    pub(crate) fn from_service(receipt: &sb_service::Receipt) -> Self {
         Self {
             command: receipt.command.clone(),
             result_json: receipt.result_json.clone(),

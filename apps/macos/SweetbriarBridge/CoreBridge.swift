@@ -93,11 +93,63 @@ public final class CoreBridge: Sendable {
         if let fresh {
             snapshots.post(fresh.map(Setting.init))
         }
-        return Receipt(
-            command: receipt.command,
-            resultJson: receipt.resultJson,
-            createdAtMs: receipt.createdAtMs
-        )
+        return Receipt(receipt)
+    }
+
+    /// `start_import(paths, target)` (spec/07, 09) under a fresh `UUID`
+    /// idempotency key: record the job and inventory it in the
+    /// background. Like every command, once begun it runs to
+    /// completion.
+    public func startImport(
+        paths: [String],
+        target: ImportTarget = .localArchive
+    ) async throws -> ImportStarted {
+        let token = SweetbriarCore.CancelToken()
+        let started = try await Self.withCancellation(token: token) {
+            try await self.core.startImport(
+                token: token,
+                idempotencyKey: UUID().uuidString,
+                paths: paths,
+                target: target.generated
+            )
+        }
+        return ImportStarted(receipt: Receipt(started.receipt), jobId: started.jobId)
+    }
+
+    /// `confirm_import(job_id, variants)` (spec/07, 09): a variant for
+    /// exactly the sources that need one; then ingest. A missing,
+    /// extra or repeated choice is `invalidInput`.
+    @discardableResult
+    public func confirmImport(
+        jobId: String,
+        variants: [VariantChoice]
+    ) async throws -> Receipt {
+        let token = SweetbriarCore.CancelToken()
+        let receipt = try await Self.withCancellation(token: token) {
+            try await self.core.confirmImport(
+                token: token,
+                idempotencyKey: UUID().uuidString,
+                jobId: jobId,
+                variants: variants.map(\.generated)
+            )
+        }
+        return Receipt(receipt)
+    }
+
+    /// `cancel_job(id)` (spec/07, 09): the job is cancelled once this
+    /// returns; committed batches stay imported. A finished job is
+    /// `conflict`.
+    @discardableResult
+    public func cancelJob(jobId: String) async throws -> Receipt {
+        let token = SweetbriarCore.CancelToken()
+        let receipt = try await Self.withCancellation(token: token) {
+            try await self.core.cancelJob(
+                token: token,
+                idempotencyKey: UUID().uuidString,
+                jobId: jobId
+            )
+        }
+        return Receipt(receipt)
     }
 
     /// `accounts()` (spec/07): every account, by sort order then id.
@@ -282,6 +334,41 @@ extension Setting {
             value: generated.value,
             isDefault: generated.isDefault
         )
+    }
+}
+
+extension Receipt {
+    /// Map the generated record field by field.
+    fileprivate init(_ generated: SweetbriarCore.Receipt) {
+        self.init(
+            command: generated.command,
+            resultJson: generated.resultJson,
+            createdAtMs: generated.createdAtMs
+        )
+    }
+}
+
+extension ImportTarget {
+    /// Map the bridge enum onto the generated one.
+    fileprivate var generated: SweetbriarCore.ImportTarget {
+        switch self {
+        case .localArchive:
+            return .localArchive
+        }
+    }
+}
+
+extension VariantChoice {
+    /// Map the bridge record onto the generated one.
+    fileprivate var generated: SweetbriarCore.VariantChoice {
+        let variant: SweetbriarCore.MboxVariant
+        switch self.variant {
+        case .mboxo:
+            variant = .mboxo
+        case .mboxrd:
+            variant = .mboxrd
+        }
+        return SweetbriarCore.VariantChoice(ordinal: ordinal, variant: variant)
     }
 }
 
