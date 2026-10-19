@@ -377,8 +377,10 @@ fn split_dense_text(html: &str) -> Result<String, HtmlSanitizeError> {
             let mut split = String::new();
             let mut changed = false;
             for c in chunk.as_str().chars() {
-                // Only a name or number character continues a reference.
-                let continues = run.in_reference && (c.is_ascii_alphanumeric() || c == '#');
+                // A name or number character continues a reference, and its
+                // `;` ends it: `&amp` + span + `;` would show the `;`.
+                let continues =
+                    run.in_reference && (c.is_ascii_alphanumeric() || c == '#' || c == ';');
                 if !continues && run.bytes.saturating_mul(run.escapes) >= SPLIT_COST {
                     split.push_str(TEXT_BREAK);
                     *run = Run::default();
@@ -389,7 +391,7 @@ fn split_dense_text(html: &str) -> Result<String, HtmlSanitizeError> {
                 if c == '&' || ('\u{80}'..='\u{bf}').contains(&c) {
                     run.escapes += 1;
                 }
-                run.in_reference = c == '&' || continues;
+                run.in_reference = c == '&' || (continues && c != ';');
             }
             if chunk.last_in_text_node() {
                 *run = Run::default();
@@ -767,6 +769,31 @@ mod tests {
             let text = mail_parser::decoders::html::html_to_text(result.html());
             assert_eq!(text.matches(decoded).count(), UNITS, "{unit:?}");
             assert!(text.trim_end().ends_with("<b>"), "{unit:?}");
+        }
+    }
+
+    /// A split never falls inside a character reference, whatever text
+    /// precedes the run: `&amp` + span + `;` would show a semicolon.
+    #[test]
+    fn splits_keep_character_references_whole() {
+        const UNITS: usize = 2_000;
+        for prefix in ["", "x", "xy", "xyz", "é"] {
+            for (unit, decoded) in [
+                ("&amp;", "&"),
+                ("&#38;", "&"),
+                ("&#x26;", "&"),
+                ("&nbsp;", "\u{a0}"),
+                ("&lt;", "<"),
+            ] {
+                let html = format!("<p>{prefix}{}</p>", unit.repeat(UNITS));
+                let result = sanitize_html(&html).unwrap();
+                let text = mail_parser::decoders::html::html_to_text(result.html());
+                assert!(
+                    !text.contains(';'),
+                    "{prefix:?} {unit:?}: a split reference"
+                );
+                assert_eq!(text.matches(decoded).count(), UNITS, "{prefix:?} {unit:?}");
+            }
         }
     }
 
