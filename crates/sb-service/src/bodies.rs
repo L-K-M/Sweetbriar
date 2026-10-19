@@ -69,6 +69,17 @@ pub struct BodyLease {
     pub manifest_path: Option<String>,
 }
 
+/// Revokes leases without waiting on async calls or doing caller-thread I/O.
+pub struct LeaseReleaser {
+    inner: sb_engine::LeaseReleaser,
+}
+
+impl LeaseReleaser {
+    pub fn release_lease(&self, lease_id: &str) {
+        self.inner.release_lease(lease_id);
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AttachmentLease {
     pub lease_id: String,
@@ -80,6 +91,12 @@ pub struct AttachmentLease {
 }
 
 impl Core {
+    pub fn lease_releaser(&self) -> LeaseReleaser {
+        LeaseReleaser {
+            inner: self.engine().lease_releaser(),
+        }
+    }
+
     pub async fn open_body(
         &self,
         message_id: i64,

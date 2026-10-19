@@ -830,6 +830,16 @@ public protocol CoreProtocol: AnyObject, Sendable {
     func messageForOccurrence(token: CancelToken, occurrenceId: Int64) async throws  -> Int64
     
     /**
+     * Open a rendition; cancellation drops the service's pending lease guard.
+     */
+    func openBody(token: CancelToken, messageId: Int64, preferred: BodyKind) async throws  -> BodyLease
+    
+    /**
+     * Revoke in memory now; the engine removes files on its cleanup worker.
+     */
+    func releaseLease(leaseId: String) 
+    
+    /**
      * `accounts()` (spec/07): every account, by sort order then id.
      */
     func accounts(token: CancelToken) async throws  -> [Account]
@@ -1161,6 +1171,37 @@ open func messageForOccurrence(token: CancelToken, occurrenceId: Int64)async thr
             liftFunc: FfiConverterInt64.lift,
             errorHandler: FfiConverterTypeCoreError_lift
         )
+}
+    
+    /**
+     * Open a rendition; cancellation drops the service's pending lease guard.
+     */
+open func openBody(token: CancelToken, messageId: Int64, preferred: BodyKind)async throws  -> BodyLease  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_open_body(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterInt64.lower(messageId),FfiConverterTypeBodyKind_lower(preferred)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeBodyLease_lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * Revoke in memory now; the engine removes files on its cleanup worker.
+     */
+open func releaseLease(leaseId: String)  {try! rustCall() {
+        uniffiCallStatus in
+    uniffi_sb_ffi_fn_method_core_release_lease(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(leaseId),uniffiCallStatus
+    )
+}
 }
     
     /**
@@ -1597,6 +1638,80 @@ public func FfiConverterTypeAccount_lift(_ buf: RustBuffer) throws -> Account {
 #endif
 public func FfiConverterTypeAccount_lower(_ value: Account) -> RustBuffer {
     return FfiConverterTypeAccount.lower(value)
+}
+
+
+public struct BodyLease: Equatable, Hashable {
+    public var leaseId: String
+    public var kind: BodyKind
+    public var filePath: String
+    public var byteLength: UInt64
+    public var remoteContentBlocked: UInt32
+    public var warnings: [RenderWarning]
+    public var manifestPath: String?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(leaseId: String, kind: BodyKind, filePath: String, byteLength: UInt64, remoteContentBlocked: UInt32, warnings: [RenderWarning], manifestPath: String?) {
+        self.leaseId = leaseId
+        self.kind = kind
+        self.filePath = filePath
+        self.byteLength = byteLength
+        self.remoteContentBlocked = remoteContentBlocked
+        self.warnings = warnings
+        self.manifestPath = manifestPath
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension BodyLease: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeBodyLease: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> BodyLease {
+        return
+            try BodyLease(
+                leaseId: FfiConverterString.read(from: &buf), 
+                kind: FfiConverterTypeBodyKind.read(from: &buf), 
+                filePath: FfiConverterString.read(from: &buf), 
+                byteLength: FfiConverterUInt64.read(from: &buf), 
+                remoteContentBlocked: FfiConverterUInt32.read(from: &buf), 
+                warnings: FfiConverterSequenceTypeRenderWarning.read(from: &buf), 
+                manifestPath: FfiConverterOptionString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: BodyLease, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.leaseId, into: &buf)
+        FfiConverterTypeBodyKind.write(value.kind, into: &buf)
+        FfiConverterString.write(value.filePath, into: &buf)
+        FfiConverterUInt64.write(value.byteLength, into: &buf)
+        FfiConverterUInt32.write(value.remoteContentBlocked, into: &buf)
+        FfiConverterSequenceTypeRenderWarning.write(value.warnings, into: &buf)
+        FfiConverterOptionString.write(value.manifestPath, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBodyLease_lift(_ buf: RustBuffer) throws -> BodyLease {
+    return try FfiConverterTypeBodyLease.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBodyLease_lower(_ value: BodyLease) -> RustBuffer {
+    return FfiConverterTypeBodyLease.lower(value)
 }
 
 
@@ -2761,6 +2876,60 @@ public func FfiConverterTypeReceipt_lower(_ value: Receipt) -> RustBuffer {
 }
 
 
+public struct RenderWarning: Equatable, Hashable {
+    public var code: RenderWarningCode
+    public var partId: String?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(code: RenderWarningCode, partId: String?) {
+        self.code = code
+        self.partId = partId
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension RenderWarning: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeRenderWarning: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> RenderWarning {
+        return
+            try RenderWarning(
+                code: FfiConverterTypeRenderWarningCode.read(from: &buf), 
+                partId: FfiConverterOptionString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: RenderWarning, into buf: inout [UInt8]) {
+        FfiConverterTypeRenderWarningCode.write(value.code, into: &buf)
+        FfiConverterOptionString.write(value.partId, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeRenderWarning_lift(_ buf: RustBuffer) throws -> RenderWarning {
+    return try FfiConverterTypeRenderWarning.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeRenderWarning_lower(_ value: RenderWarning) -> RustBuffer {
+    return FfiConverterTypeRenderWarning.lower(value)
+}
+
+
 /**
  * One setting as `settings()` reports it (spec/02): the effective
  * value and whether it is the registry's default.
@@ -3357,6 +3526,79 @@ public func FfiConverterTypeBodyAvailability_lift(_ buf: RustBuffer) throws -> B
 #endif
 public func FfiConverterTypeBodyAvailability_lower(_ value: BodyAvailability) -> RustBuffer {
     return FfiConverterTypeBodyAvailability.lower(value)
+}
+
+
+
+
+public enum BodyKind: Equatable, Hashable {
+    
+    case sanitizedHtml
+    case plainText
+    case source
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension BodyKind: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeBodyKind: FfiConverterRustBuffer {
+    typealias SwiftType = BodyKind
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> BodyKind {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .sanitizedHtml
+        
+        case 2: return .plainText
+        
+        case 3: return .source
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: BodyKind, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .sanitizedHtml:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .plainText:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .source:
+            writeInt(&buf, Int32(3))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBodyKind_lift(_ buf: RustBuffer) throws -> BodyKind {
+    return try FfiConverterTypeBodyKind.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBodyKind_lower(_ value: BodyKind) -> RustBuffer {
+    return FfiConverterTypeBodyKind.lower(value)
 }
 
 
@@ -4197,6 +4439,114 @@ public func FfiConverterTypeMboxVariant_lower(_ value: MboxVariant) -> RustBuffe
 
 
 
+
+public enum RenderWarningCode: Equatable, Hashable {
+    
+    case partialParse
+    case charsetReplaced
+    case unsupportedContent
+    case missingCid
+    case ambiguousCid
+    case unsafeUrl
+    case renditionLimit
+    case countSaturated
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension RenderWarningCode: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeRenderWarningCode: FfiConverterRustBuffer {
+    typealias SwiftType = RenderWarningCode
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> RenderWarningCode {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .partialParse
+        
+        case 2: return .charsetReplaced
+        
+        case 3: return .unsupportedContent
+        
+        case 4: return .missingCid
+        
+        case 5: return .ambiguousCid
+        
+        case 6: return .unsafeUrl
+        
+        case 7: return .renditionLimit
+        
+        case 8: return .countSaturated
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: RenderWarningCode, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .partialParse:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .charsetReplaced:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .unsupportedContent:
+            writeInt(&buf, Int32(3))
+        
+        
+        case .missingCid:
+            writeInt(&buf, Int32(4))
+        
+        
+        case .ambiguousCid:
+            writeInt(&buf, Int32(5))
+        
+        
+        case .unsafeUrl:
+            writeInt(&buf, Int32(6))
+        
+        
+        case .renditionLimit:
+            writeInt(&buf, Int32(7))
+        
+        
+        case .countSaturated:
+            writeInt(&buf, Int32(8))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeRenderWarningCode_lift(_ buf: RustBuffer) throws -> RenderWarningCode {
+    return try FfiConverterTypeRenderWarningCode.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeRenderWarningCode_lower(_ value: RenderWarningCode) -> RustBuffer {
+    return FfiConverterTypeRenderWarningCode.lower(value)
+}
+
+
+
 /**
  * What a window's subscription reports (spec/07).
  */
@@ -4761,6 +5111,31 @@ fileprivate struct FfiConverterSequenceTypeReaderTag: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeRenderWarning: FfiConverterRustBuffer {
+    typealias SwiftType = [RenderWarning]
+
+    public static func write(_ value: [RenderWarning], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeRenderWarning.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [RenderWarning] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [RenderWarning]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeRenderWarning.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeSetting: FfiConverterRustBuffer {
     typealias SwiftType = [Setting]
 
@@ -4939,6 +5314,12 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_core_message_for_occurrence() != 18415) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_open_body() != 26124) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_release_lease() != 61314) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_core_accounts() != 35560) {
