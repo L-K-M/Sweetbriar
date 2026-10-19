@@ -1,7 +1,10 @@
 use std::io::Read;
 use std::sync::atomic::{AtomicU8, Ordering};
+use std::{env, fs};
 
-use sb_test_support::{FaultFs, FaultKind, FsOp, SimFs};
+use sb_test_support::{
+    CutFs, FaultFs, FaultKind, FsOp, ScratchDir, SeededRandom, SimFs, real_fs, run_crash_cuts,
+};
 
 use super::*;
 
@@ -382,4 +385,155 @@ fn startup_reports_errors_removing_stray_files_and_can_retry() {
     assert!(fs.metadata(&debris).unwrap().is_some());
     let reopened = RenditionCache::open_on(root, fault, Arc::new(Tokens::default())).unwrap();
     assert!(fs.read_dir(&reopened.0.namespace).unwrap().is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// Crash cuts (spec/11: every durable transition).
+//
+
+/// The env vars the cut child reads: the cut point and a fresh cache
+/// root.
+const CUT_N_ENV: &str = "SB_RENDITIONS_TEST_CUT_N";
+const CUT_ROOT_ENV: &str = "SB_RENDITIONS_TEST_CUT_ROOT";
+
+/// What the cut child publishes: a rendition, then a quarantined source.
+const CUT_FILES: [&[u8]; 2] = [b"<p>sanitized</p>", b"%PDF-1.7 attachment"];
+
+/// What a previous core left behind: one lease and Finder debris.
+const STALE_LEASE: &str = "stale-lease";
+const STRAY_FILE: &str = ".DS_Store";
+
+/// Every operation of the child's lifecycle, in order: open and sweep,
+/// reserve, publish both files, remove.
+const LIFECYCLE_OPERATIONS: [&str; 26] = [
+    "metadata",
+    "canonicalize",
+    "lock_exclusive",
+    "create_private_dir",
+    "restrict_dir",
+    "sync_dir",
+    "read_dir",
+    "remove_dir_all",
+    "remove_dir_all",
+    "remove",
+    "sync_dir",
+    "create_private_dir",
+    "sync_dir",
+    "create",
+    "write",
+    "sync_all",
+    "rename",
+    "sync_dir",
+    "create",
+    "write",
+    "quarantine",
+    "sync_all",
+    "rename",
+    "sync_dir",
+    "remove_dir_all",
+    "sync_dir",
+];
+
+/// Leave a stale lease and a stray file for the sweep to remove.
+fn leave_debris(root: &Path) {
+    let lease = root.join("renditions").join(STALE_LEASE);
+    fs::create_dir_all(&lease).unwrap();
+    fs::write(lease.join("file-0"), b"stale").unwrap();
+    fs::write(root.join("renditions").join(STRAY_FILE), b"debris").unwrap();
+}
+
+/// Open, reserve, publish both files and remove, through `fs`.
+fn lifecycle(root: &Path, fs: Arc<dyn Fs>) {
+    let cache = RenditionCache::open_on(root, fs, Arc::new(SeededRandom::new(7))).unwrap();
+    let mut files = cache
+        .reserve(&CUT_FILES.map(|bytes| bytes.len() as u64))
+        .unwrap();
+    files
+        .publish(0, CUT_FILES[0], RenditionProtection::Internal)
+        .unwrap();
+    files
+        .publish(1, CUT_FILES[1], RenditionProtection::Quarantine)
+        .unwrap();
+    files.remove().unwrap();
+}
+
+/// Not a test: the crash-cut harness re-executes the test binary to
+/// run this. It leaves debris uncut, then runs the lifecycle through a
+/// `CutFs` that kills the process before the Nth operation.
+#[test]
+#[ignore = "spawned by the crash-cut tests"]
+fn lifecycle_cut_child() {
+    let n: u64 = env::var(CUT_N_ENV)
+        .expect("cut point env")
+        .parse()
+        .expect("a number");
+    let root = PathBuf::from(env::var(CUT_ROOT_ENV).expect("cache root env"));
+    leave_debris(&root);
+    lifecycle(&root, Arc::new(CutFs::new(real_fs(), n)));
+}
+
+/// Published names of the lease directories under `namespace`, with
+/// their bytes. Temporary files are not published.
+fn published_files(namespace: &Path) -> Vec<(String, Vec<u8>)> {
+    let mut found = Vec::new();
+    for lease in fs::read_dir(namespace).unwrap() {
+        let lease = lease.unwrap().path();
+        if !lease.is_dir() || lease.ends_with(STALE_LEASE) {
+            continue;
+        }
+        for file in fs::read_dir(&lease).unwrap() {
+            let file = file.unwrap().path();
+            let name = file.file_name().unwrap().to_string_lossy().into_owned();
+            if name.ends_with(".tmp") {
+                continue;
+            }
+            found.push((name, fs::read(&file).unwrap()));
+        }
+    }
+    found
+}
+
+/// Cut at every operation of the lifecycle. After each cut a published
+/// file is complete, the next open sweeps everything, and a new lease
+/// works.
+#[test]
+fn crash_cuts_leave_complete_files_and_the_next_open_sweeps_them() {
+    let scratch = ScratchDir::new("renditions-crash-cuts");
+    let mut run = 0u64;
+    let cuts = run_crash_cuts(
+        CUT_N_ENV,
+        CUT_ROOT_ENV,
+        "renditions::tests::lifecycle_cut_child",
+        &mut |_| {
+            run += 1;
+            let dir = scratch.path().join(format!("cut-{run}"));
+            fs::create_dir(&dir).unwrap();
+            dir
+        },
+        &mut |dir| {
+            let namespace = dir.join("renditions");
+            for (name, bytes) in published_files(&namespace) {
+                let index: usize = name.strip_prefix("file-").unwrap().parse().unwrap();
+                assert_eq!(bytes, CUT_FILES[index], "a cut published a partial {name}");
+            }
+
+            let cache =
+                RenditionCache::open_on(dir, real_fs(), Arc::new(SeededRandom::new(99))).unwrap();
+            assert!(
+                fs::read_dir(&namespace).unwrap().next().is_none(),
+                "the next open left stale entries"
+            );
+
+            let mut files = cache.reserve(&[CUT_FILES[0].len() as u64]).unwrap();
+            let path = files
+                .publish(0, CUT_FILES[0], RenditionProtection::Internal)
+                .unwrap();
+            assert_eq!(fs::read(path).unwrap(), CUT_FILES[0]);
+            files.remove().unwrap();
+            assert!(fs::read_dir(&namespace).unwrap().next().is_none());
+        },
+    );
+    // One cut per lifecycle operation, no fewer: an operation that
+    // stopped being a cut point would go unswept.
+    assert_eq!(cuts, LIFECYCLE_OPERATIONS.len() as u64);
 }
