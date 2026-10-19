@@ -373,8 +373,11 @@ fn split_dense_text(html: &str) -> Result<String, HtmlSanitizeError> {
         html,
         RewriteStrSettings::new().append_document_content_handler(doc_text!(|chunk| {
             let mut run = run.borrow_mut();
+            // Raw text isn't split (a tag would show), but it is often
+            // dropped (title, style), joining the texts around it: the run
+            // goes on past it.
             if chunk.text_type() != TextType::Data {
-                *run = Run::default();
+                run.in_reference = false;
                 return Ok(());
             }
             let mut split = String::new();
@@ -396,8 +399,12 @@ fn split_dense_text(html: &str) -> Result<String, HtmlSanitizeError> {
                 }
                 run.in_reference = c == '&' || (continues && c != ';');
             }
+            // The run continues past markup: the parser can ignore it (a
+            // stray end tag, a late doctype) or the sanitizer remove it (a
+            // comment, a disallowed element), joining the texts around it.
+            // Only a character reference ends at a tag.
             if chunk.last_in_text_node() {
-                *run = Run::default();
+                run.in_reference = false;
             }
             if changed {
                 chunk.replace(&split, ContentType::Html);
@@ -788,6 +795,29 @@ mod tests {
             let html = format!("<p>{}</p>", unit.repeat(20_000));
             let result = sanitize_html(&html).unwrap();
             let longest = result.html().split(['<', '>']).map(str::len).max().unwrap();
+            assert!(longest < 8 * 1024, "{unit:?}: a {longest}-byte run");
+        }
+    }
+
+    /// Tokens the parser ignores (a stray end tag, a late doctype) don't
+    /// separate text either, so the first serialization, not only the
+    /// final output, must stay free of long dense runs.
+    #[test]
+    fn ignored_tokens_do_not_join_dense_text_before_the_first_pass() {
+        for unit in [
+            "&amp;</bogus>",
+            "&amp;</span>",
+            "&amp;<!DOCTYPE html>",
+            "<font>&amp;</font>",
+            "&amp;<!--x-->",
+            "&amp;<title>x</title>",
+            "&amp;<style>x</style>",
+        ] {
+            let html = format!("<p>{}</p>", unit.repeat(20_000));
+            let first = policy()
+                .clean(&split_dense_text(&html).unwrap())
+                .to_string();
+            let longest = first.split(['<', '>']).map(str::len).max().unwrap();
             assert!(longest < 8 * 1024, "{unit:?}: a {longest}-byte run");
         }
     }
