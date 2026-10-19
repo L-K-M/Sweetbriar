@@ -218,7 +218,8 @@ final class ReaderViewController: NSViewController {
         }
         var lines = ["From: \(addresses(message.headers.from))", "To: \(addresses(message.headers.to))"]
         if let timestamp = message.headers.date {
-            lines.append(Date(timeIntervalSince1970: Double(timestamp)).formatted(date: .abbreviated, time: .shortened))
+            let seconds = Duration.milliseconds(timestamp) / .seconds(1)
+            lines.append(Date(timeIntervalSince1970: seconds).formatted(date: .abbreviated, time: .shortened))
         }
         if !message.tags.isEmpty { lines.append("Tags: " + message.tags.map(\.name).joined(separator: ", ")) }
         if let note = message.note, !note.isEmpty { lines.append("Note: " + note) }

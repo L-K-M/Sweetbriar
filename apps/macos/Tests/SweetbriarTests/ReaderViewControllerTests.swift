@@ -21,7 +21,7 @@ private struct PresentationSource: ReaderSource {
         message = ReaderMessage(
             messageId: 7,
             headers: .init(from: [.init(name: "Sender", address: "sender@example.test")],
-                           to: [.init(name: nil, address: "to@example.test")], cc: [], date: 1_792_238_400,
+                           to: [.init(name: nil, address: "to@example.test")], cc: [], date: 1_792_238_400_000,
                            subject: "Reader", messageId: nil),
             accountId: "selected-account", accountDisplayName: "Selected Archive", occurrences: [],
             threadId: nil, tags: [.init(tagId: "tag", name: "Keep", colorSrgb: nil)],
