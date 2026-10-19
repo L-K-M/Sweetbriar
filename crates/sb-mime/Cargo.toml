@@ -16,6 +16,9 @@ mail-parser = { version = "=0.11.9", features = ["full_encoding"] }
 # directly whether decoding replaced anything (spec/07
 # `charset_replaced`): a literal U+FFFD in the text is not a loss.
 encoding_rs = "=0.8.42"
+# spec/10 "Rendering" (M1.5): parsing URLs for the renderer's resource
+# and link policy — never by regex.
+url = "=2.5.8"
 
 [dev-dependencies]
 # spec/01 crate table: snapshot testing of the fixtures/eml corpus.
