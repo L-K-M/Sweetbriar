@@ -145,6 +145,12 @@ public final class ImportSession {
         startPolling()
     }
 
+    /// Wait until the current poll loop has ended (tests: polling stops
+    /// once the patience runs out).
+    func pollingSettled() async {
+        await polling?.value
+    }
+
     /// Look for a pending report again.
     public func retryReport() {
         guard report == .pending else { return }
