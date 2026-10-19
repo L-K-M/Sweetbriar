@@ -48,6 +48,11 @@ final class AppKitPrototypeList: NSView {
     /// list's own clicks and a new index's changes alike.
     var onSelectionChange: (@MainActor (Set<Int64>) -> Void)?
 
+    /// True while the table's selection is set from the ids, not by the
+    /// user: its callbacks then must not overwrite the model's ids — a
+    /// new index may lack one the model is still following (spec/08).
+    private var restoringSelection = false
+
     /// The selection as occurrence ids — the source of truth the
     /// table's `selectedRowIndexes` is mapped through.
     private var selectedOccurrenceIDs: Set<Int64> = []
@@ -169,6 +174,8 @@ final class AppKitPrototypeList: NSView {
     /// `resetRequired` rebuild): every row changed, so reload fully
     /// and map the selection back onto the new ranks.
     private func indexDidChange() {
+        restoringSelection = true
+        defer { restoringSelection = false }
         // Range selection waits for the exact index (spec/08): the
         // provisional prefix isn't the whole window.
         tableView.allowsMultipleSelection = model.hasExactIndex
@@ -180,6 +187,9 @@ final class AppKitPrototypeList: NSView {
     /// Reapply the id-held selection as row indexes — ids that left
     /// the window drop out silently.
     private func restoreSelection() {
+        let restoring = restoringSelection
+        restoringSelection = true
+        defer { restoringSelection = restoring }
         var indexes = IndexSet()
         for id in selectedOccurrenceIDs {
             if let rank = model.index(of: id) {
@@ -236,6 +246,7 @@ extension AppKitPrototypeList: NSTableViewDataSource, NSTableViewDelegate {
     /// through `occurrenceID`, so no row is ever fetched for it — and
     /// hand it to the model, which keeps it across new indexes.
     func tableViewSelectionDidChange(_ notification: Notification) {
+        guard !restoringSelection else { return }
         let ids = Set(
             tableView.selectedRowIndexes.compactMap {
                 model.occurrenceID(at: $0)

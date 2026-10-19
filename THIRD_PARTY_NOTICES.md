@@ -2113,7 +2113,7 @@ Used by:
 - `serde 1.0.229` — <https://github.com/serde-rs/serde>
 - `serde_core 1.0.229` — <https://github.com/serde-rs/serde>
 - `serde_derive 1.0.229` — <https://github.com/serde-rs/serde>
-- `serde_json 1.0.151` — <https://github.com/serde-rs/json>
+- `serde_json 1.0.154` — <https://github.com/serde-rs/json>
 - `servo_arc 0.4.3` — <https://github.com/servo/stylo>
 - `syn 2.0.119` — <https://github.com/dtolnay/syn>
 - `syn 3.0.8` — <https://github.com/dtolnay/syn>
