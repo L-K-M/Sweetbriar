@@ -590,8 +590,9 @@ fn a_finished_job_leaves_a_report_and_only_failures_keep_snapshots() {
 
 /// `import_report` (spec/07): an unfinished job is `Conflict`, a
 /// finished one returns its published report at the path `import_job`
-/// names, and a report not written yet is `None` there and no path in
-/// `import_job`. An unknown job is `NotFound`.
+/// names, and a finished job whose report isn't written yet — as a
+/// crash right after the transition leaves it — is `None` there and
+/// names no path in `import_job`. An unknown job is `NotFound`.
 #[test]
 fn import_report_returns_only_a_published_report() {
     let scratch = ScratchDir::new("import-report-query");
@@ -615,10 +616,29 @@ fn import_report_returns_only_a_published_report() {
     assert_eq!(report.json(), fs::read_to_string(report.path()).unwrap());
     assert!(report.json().contains("\"state\": \"completed\""));
 
-    // As if the report were still being written.
-    fs::remove_file(report.path()).unwrap();
-    assert_eq!(status(&engine, &id).report_path(), None);
-    assert_eq!(block_on(engine.import_report(&id)).unwrap(), None);
+    let pending = plant(
+        &engine,
+        &fixtures().join("Inbox.mbox"),
+        ImportJobState::AwaitingConfirmation,
+        0,
+    );
+    let (job, now) = (pending.clone(), engine.resources().now());
+    block_on(engine.resources().write(WritePriority::Sync, move |tx| {
+        let current = import_job(tx, &job)?;
+        let state = ImportJobState::Cancelled;
+        advance_import_job(
+            tx,
+            &job,
+            current.revision(),
+            state,
+            current.checkpoint(),
+            now,
+        )
+        .map(drop)
+    }))
+    .unwrap();
+    assert_eq!(status(&engine, &pending).report_path(), None);
+    assert_eq!(block_on(engine.import_report(&pending)).unwrap(), None);
 
     let unknown = block_on(engine.import_report("00000000-0000-4000-8000-00000000dead"));
     assert!(
