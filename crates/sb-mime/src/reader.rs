@@ -232,12 +232,12 @@ pub fn extract_attachment(
     .unwrap_or(Err(AttachmentError::Parse(ParseFailure::Panic)))
 }
 
-enum AdmissionError {
+pub(crate) enum AdmissionError {
     Parse(ParseFailure),
     Limits(Vec<ParseWarning>),
 }
 
-fn admitted<'a>(
+pub(crate) fn admitted<'a>(
     bytes: &'a [u8],
     limits: &Limits,
 ) -> Result<(Message<'a>, Vec<ParseWarning>), AdmissionError> {
@@ -275,11 +275,11 @@ fn admitted<'a>(
     Ok((message, warnings))
 }
 
-struct Node<'a> {
-    id: PartId,
+pub(crate) struct Node<'a> {
+    pub(crate) id: PartId,
     message: &'a Message<'a>,
-    part: &'a MessagePart<'a>,
-    children: Vec<usize>,
+    pub(crate) part: &'a MessagePart<'a>,
+    pub(crate) children: Vec<usize>,
     related: Option<usize>,
     /// Inside an attached message: the attached message is the one
     /// attachment, not each of its parts.
@@ -287,7 +287,7 @@ struct Node<'a> {
 }
 
 // Admission and verification have already bounded recursion to MAX_DEPTH.
-fn collect<'a>(
+pub(crate) fn collect<'a>(
     message: &'a Message<'a>,
     index: usize,
     id: String,
@@ -417,10 +417,11 @@ fn reader_run(bytes: &[u8], limits: &Limits) -> Result<RenderInput, ParseFailure
             // it (a label upstream reads as UTF-8), so it is bounded again,
             // with admission's outcome.
             if text.len() as u64 > limits.max_decoded_part_bytes() {
+                result.parse_warnings.push(ParseWarning::PartTooLarge {
+                    limit: limits.max_decoded_part_bytes(),
+                });
                 let mut refused = RenderInput {
-                    parse_warnings: vec![ParseWarning::PartTooLarge {
-                        limit: limits.max_decoded_part_bytes(),
-                    }],
+                    parse_warnings: result.parse_warnings,
                     ..RenderInput::default()
                 };
                 refused.warn(RenderWarningCode::PartialParse, None);
@@ -584,7 +585,7 @@ fn decoded<'a>(node: &'a Node<'_>, limits: &Limits) -> Result<Cow<'a, [u8]>, Att
 /// the warning come from one decoder and a literal U+FFFD is no loss. For
 /// a charset only upstream decodes (UTF-7) its text stands and a U+FFFD
 /// is the only sign; an unknown label is read as UTF-8, as upstream does.
-fn decoded_body(node: &Node<'_>) -> (String, bool) {
+pub(crate) fn decoded_body(node: &Node<'_>) -> (String, bool) {
     let upstream = || {
         let text = node.part.text_contents().unwrap_or_default().to_owned();
         let replaced = text.contains('\u{fffd}');
@@ -642,7 +643,7 @@ fn transfer_decoded<'a>(node: &'a Node<'_>) -> Result<Cow<'a, [u8]>, AttachmentE
     Ok(bytes)
 }
 
-fn plain_text(text: &str, part: &MessagePart<'_>) -> String {
+pub(crate) fn plain_text(text: &str, part: &MessagePart<'_>) -> String {
     let text = text.replace("\r\n", "\n");
     let ct = part.content_type();
     if !ct
