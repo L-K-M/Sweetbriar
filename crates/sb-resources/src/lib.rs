@@ -20,6 +20,8 @@ use sb_store::StorePaths;
 mod acquire;
 mod import;
 mod import_jobs;
+mod renditions;
+pub use renditions::{RenditionCache, RenditionError, RenditionFiles, RenditionProtection};
 
 // The engine's names, re-exported by item so the engine states bounds
 // and maps errors without depending on a leaf (spec/01 rule 3). The
