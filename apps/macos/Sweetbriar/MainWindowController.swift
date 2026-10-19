@@ -27,6 +27,7 @@ final class MainWindowController: NSWindowController {
     private var sidebarModel: SidebarModel?
     private var sidebar: SidebarViewController?
     private var messageList: MessageListViewController?
+    private var imports: ImportCoordinator?
     private let reader = ReaderPlaceholderViewController()
 
     /// The sidebar's first choice once it has loaded.
@@ -75,6 +76,14 @@ final class MainWindowController: NSWindowController {
         }
     }
 
+    /// File → Import…, once the core is up.
+    func beginImport() {
+        guard let imports else { return }
+        Task { @MainActor in
+            await imports.chooseAndImport()
+        }
+    }
+
     private func install(_ bridge: CoreBridge) {
         guard let window else { return }
         let sidebarModel = SidebarModel(source: bridge)
@@ -105,13 +114,29 @@ final class MainWindowController: NSWindowController {
         window.contentViewController = split
         window.setFrame(frame, display: true)
 
+        let imports = ImportCoordinator(bridge: bridge, window: window)
+        imports.onArchiveChanged = { [weak self] in
+            self?.reloadSidebar()
+        }
+
         self.sidebarModel = sidebarModel
         self.sidebar = sidebar
         self.messageList = messageList
+        self.imports = imports
         Task { @MainActor in
             await sidebarModel.reload()
             sidebar.reloadSections()
             sidebar.choose(entryID: Self.initialEntryID)
+            imports.reattach()
+        }
+    }
+
+    /// Re-read the sidebar: an import changed what it lists.
+    private func reloadSidebar() {
+        guard let sidebarModel, let sidebar else { return }
+        Task { @MainActor in
+            await sidebarModel.reload()
+            sidebar.reloadSections()
         }
     }
 

@@ -85,6 +85,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             },
             onShowComposerProbe: { [weak self] in
                 self?.showComposerProbe()
+            },
+            onImport: { [weak self] in
+                self?.mainWindow?.showWindow(nil)
+                self?.mainWindow?.beginImport()
             }
         )
         NSApplication.shared.mainMenu = builder.makeMainMenu()
