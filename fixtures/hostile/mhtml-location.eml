@@ -1,0 +1,17 @@
+X-Sweetbriar-Fixture: Content-Location must not authorize remote or relative images
+X-Sweetbriar-Expect: remote resources=0
+MIME-Version: 1.0
+Content-Type: multipart/related; boundary=b
+
+--b
+Content-Type: text/html
+Content-Location: https://attack.invalid/
+
+<img src="https://attack.invalid/pixel"><img src="pixel"><img src="mhtml:https://attack.invalid/a!pixel">
+--b
+Content-Type: image/png
+Content-Location: https://attack.invalid/pixel
+Content-Transfer-Encoding: base64
+
+iVBORw0KGgo=
+--b--

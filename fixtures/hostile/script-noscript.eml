@@ -1,0 +1,5 @@
+X-Sweetbriar-Fixture: Script in noscript
+MIME-Version: 1.0
+Content-Type: text/html; charset=utf-8
+
+<noscript><script>bad()</script></noscript>

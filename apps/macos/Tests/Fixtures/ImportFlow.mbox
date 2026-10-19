@@ -6,6 +6,7 @@ Message-ID: <import-flow-1@example.test>
 Status: RO
 
 The first synthetic message.
+Import flow reader body.
 
 From sender@example.test Sat Oct 17 13:00:00 2026
 From: Sender <sender@example.test>
@@ -15,3 +16,4 @@ Message-ID: <import-flow-2@example.test>
 Status: O
 
 The second synthetic message.
+Import flow reader body.

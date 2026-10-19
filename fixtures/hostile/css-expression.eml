@@ -1,0 +1,5 @@
+X-Sweetbriar-Fixture: Inline CSS expression
+MIME-Version: 1.0
+Content-Type: text/html; charset=utf-8
+
+<p style='width:expression(alert(1));color:red'>x</p>

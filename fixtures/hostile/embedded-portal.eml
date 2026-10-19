@@ -1,0 +1,6 @@
+X-Sweetbriar-Fixture: Embedded portal
+X-Sweetbriar-Expect: remote
+MIME-Version: 1.0
+Content-Type: text/html; charset=utf-8
+
+<portal src="https://attack.invalid/load" data="https://attack.invalid/object" code="Bad.class" srcdoc="<script>bad()</script>">bad</portal>

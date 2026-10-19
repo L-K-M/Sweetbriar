@@ -10,7 +10,9 @@
 #![forbid(unsafe_code)]
 
 mod bodies;
-pub use bodies::{AttachmentLease, BodyKind, BodyLease, RenderWarning, RenderWarningCode};
+pub use bodies::{
+    AttachmentLease, BodyKind, BodyLease, LeaseReleaser, RenderWarning, RenderWarningCode,
+};
 mod engine;
 mod error;
 mod import;

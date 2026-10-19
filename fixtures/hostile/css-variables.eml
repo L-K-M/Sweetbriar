@@ -1,0 +1,6 @@
+X-Sweetbriar-Fixture: Inline CSS variables
+X-Sweetbriar-Expect: remote
+MIME-Version: 1.0
+Content-Type: text/html; charset=utf-8
+
+<p style='--x:url(/secret);background-image:var(--x);color:var(--color);width:calc(1px + 1px);height:1px!important'>x</p>

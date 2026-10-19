@@ -1,0 +1,5 @@
+X-Sweetbriar-Fixture: Script in case
+MIME-Version: 1.0
+Content-Type: text/html; charset=utf-8
+
+<ScRiPt>alert(1)</sCrIpT>

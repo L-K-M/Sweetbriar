@@ -1,0 +1,6 @@
+X-Sweetbriar-Fixture: Inline CSS behavior
+X-Sweetbriar-Expect: remote
+MIME-Version: 1.0
+Content-Type: text/html; charset=utf-8
+
+<p style='behavior:url(https://attack.invalid/x.htc)'>x</p>

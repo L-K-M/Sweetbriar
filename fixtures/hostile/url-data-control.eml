@@ -1,0 +1,5 @@
+X-Sweetbriar-Fixture: Obfuscated data control
+MIME-Version: 1.0
+Content-Type: text/html; charset=utf-8
+
+<a href="da&#9;&#10;&#13;ta:bad">x</a><img src="da&#9;&#10;&#13;ta:bad"><form action="da&#9;&#10;&#13;ta:bad"><button formaction="da&#9;&#10;&#13;ta:bad">x</button></form><svg><a xlink:href="da&#9;&#10;&#13;ta:bad">x</a></svg>
