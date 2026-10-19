@@ -107,15 +107,21 @@ public final class ImportSession {
         startPolling()
     }
 
-    /// Stop following; the job itself runs on (spec/09).
+    /// Stop following; the job itself runs on (spec/09). The loop's
+    /// request in flight, if any, still ends before another starts.
     public func detach() {
         polling?.cancel()
-        polling = nil
     }
 
     /// Choose `variant` for the ambiguous source at `ordinal`.
     public func choose(_ variant: MboxVariant, forSource ordinal: UInt64) {
         variants[ordinal] = variant
+    }
+
+    /// Take back the choice for the source at `ordinal`: it needs one
+    /// again before `confirm`.
+    public func clearChoice(forSource ordinal: UInt64) {
+        variants[ordinal] = nil
     }
 
     /// Confirm the inventory with the chosen variants, then follow the
@@ -150,12 +156,15 @@ public final class ImportSession {
     /// once the job waits for confirmation, once the report is
     /// written, or `reportPatience` after the job was seen finished.
     private func startPolling() {
-        polling?.cancel()
+        let previous = polling
+        previous?.cancel()
         guard let jobId else { return }
         let source = self.source
         let interval = pollInterval
         let patience = reportPatience
         polling = Task { [weak self] in
+            // The previous loop's request ends first: one in flight.
+            await previous?.value
             var giveUp: ContinuousClock.Instant?
             while !Task.isCancelled {
                 do {
@@ -172,13 +181,13 @@ public final class ImportSession {
                         return
                     }
                     if job.state.isFinished {
+                        let deadline = giveUp ?? .now + patience
+                        giveUp = deadline
                         if let found = try await source.importReport(jobId: jobId) {
                             self.report = .written(found)
                             return
                         }
                         self.report = .pending
-                        let deadline = giveUp ?? .now + patience
-                        giveUp = deadline
                         if ContinuousClock.now >= deadline {
                             return
                         }
@@ -188,6 +197,15 @@ public final class ImportSession {
                 } catch {
                     guard let self else { return }
                     self.lastError = error
+                    // A finished job whose report can't be read waits
+                    // for Retry once the patience runs out, like one
+                    // not written yet.
+                    if let deadline = giveUp {
+                        self.report = .pending
+                        if ContinuousClock.now >= deadline {
+                            return
+                        }
+                    }
                 }
                 try? await Task.sleep(for: interval)
             }
