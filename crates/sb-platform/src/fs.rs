@@ -140,8 +140,8 @@ fn quarantine(path: &Path) -> io::Result<()> {
 
     let path = CString::new(path.as_os_str().as_bytes())
         .map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
-    // Stable quarantine record: downloaded, unknown timestamp, Sweetbriar agent.
-    let value = b"0081;00000000;Sweetbriar;";
+    let value = quarantine_record(std::time::SystemTime::now());
+    let value = value.as_bytes();
     // SAFETY: path and name are terminated; value points to `len` readable bytes.
     let result = unsafe {
         libc::setxattr(
@@ -157,6 +157,16 @@ fn quarantine(path: &Path) -> io::Result<()> {
         return Err(io::Error::last_os_error());
     }
     Ok(())
+}
+
+/// The quarantine record Gatekeeper reads: downloaded, when (hex Unix
+/// seconds, shown in its open dialog), by Sweetbriar.
+#[cfg(any(target_os = "macos", test))]
+fn quarantine_record(downloaded: std::time::SystemTime) -> String {
+    let seconds = downloaded
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_secs());
+    format!("0081;{seconds:08x};Sweetbriar;")
 }
 
 /// The `open_regular` refusal: `path` resolved to a fifo, device,
@@ -334,6 +344,12 @@ mod tests {
             assert!(bytes[..len as usize].starts_with(b"0081;"));
             assert!(RealFs.quarantine(&scratch.0.join("missing")).is_err());
         }
+    }
+
+    #[test]
+    fn the_quarantine_record_names_its_download_time() {
+        let downloaded = std::time::UNIX_EPOCH + Duration::from_secs(0x6900_0000);
+        assert_eq!(quarantine_record(downloaded), "0081;69000000;Sweetbriar;");
     }
 
     #[test]
