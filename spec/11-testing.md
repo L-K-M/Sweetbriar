@@ -27,6 +27,8 @@ test, except where the spec says "manual qualification".
 
 - Parser tests cover every 06 node/text form, canonical round-trips and
   UTF-8 error spans, invalid operators, limits, dates/timezones and clocks.
+  M1.6f0 owns validated date bounds with bundled zones: DST, midnight gaps/folds,
+  skipped dates, integer/civil overflow and host-environment independence.
   The `query` fuzz target exercises UTF-8 text and v1 JSON validation,
   parse/format/parse equivalence and valid error ranges; arbitrary non-UTF-8
   inputs are rejected without panic. Use the existing isolated fuzz nightly,

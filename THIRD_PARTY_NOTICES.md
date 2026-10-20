@@ -2306,6 +2306,8 @@ Used by:
 - `minimal-lexical 0.2.1` — <https://github.com/Alexhuszagh/minimal-lexical>
 - `once_cell 1.21.4` — <https://github.com/matklad/once_cell>
 - `pin-project-lite 0.2.17` — <https://github.com/taiki-e/pin-project-lite>
+- `portable-atomic-util 0.2.8` — <https://github.com/taiki-e/portable-atomic-util>
+- `portable-atomic 1.15.0` — <https://github.com/taiki-e/portable-atomic>
 - `proc-macro2 1.0.107` — <https://github.com/dtolnay/proc-macro2>
 - `quote 1.0.47` — <https://github.com/dtolnay/quote>
 - `rustix 1.1.5` — <https://github.com/bytecodealliance/rustix>
@@ -2533,6 +2535,9 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ## MIT License (MIT)
 
 Used by:
+- `jiff-core 0.1.1` — <https://github.com/BurntSushi/jiff>
+- `jiff-tzdb 0.1.9` — <https://github.com/BurntSushi/jiff>
+- `jiff 0.2.37` — <https://github.com/BurntSushi/jiff>
 - `memchr 2.8.3` — <https://github.com/BurntSushi/memchr>
 
 ```text

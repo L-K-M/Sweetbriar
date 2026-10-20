@@ -405,9 +405,14 @@ local drafts. No network yet.
     reuse the store JSON codec and counted command owner for post-commit work.
     Service/FFI/DTO routing remains k2/l4. Both slices include their own critical
     proof rather than deferring runtime tests behind a feature.
-  - **M1.6f Query AST — M:** `sb-store::query` v1 types, strict JSON
+  - **M1.6f0 Zoned date operands — L:** validated `sb-store::query` date
+    values and UTC comparison bounds with explicit bundled IANA zones/clock.
+    Depends on e2b. Owns calendar/DST/midnight-gap/fold/skipped-date/overflow
+    and host-environment-independence proof, plus pinned timezone dependency,
+    lockfile and notices. No partially validated AST is exposed to split size.
+  - **M1.6f Query AST — L:** `sb-store::query` v1 types, strict JSON
     validation, limits and canonical serialization, including all filter
-    operands and explicit time context. Depends on e2b. Round-trip and
+    operands and explicit time context. Depends on f0. Round-trip and
     invalid-input tests.
   - **M1.6g Text syntax — L:** parser, canonical formatter, typed error
     spans; every AST form has a lossless text spelling. Owns parser/error
