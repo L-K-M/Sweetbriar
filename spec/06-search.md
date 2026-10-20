@@ -172,8 +172,11 @@ timers, receipts and rebuild orchestration remain in their later steps.
   phase orchestration. Check current state after every wake instead of trusting
   the parked snapshot. Clock-controlled tests advance time and use normal wakes.
 - A failed publication/status write latches actionable read unavailability.
-  Bounded recovery attempts must commit `commit_index_recovery` before clearing
-  that latch or resuming work. Failed recovery keeps the latch and pending work.
+  Preserve the captured typed cause when bulk writes fail but status still fits.
+  Bounded recovery commits a validated typed I/O report, or unchanged current
+  status for a non-I/O failure, before clearing the latch or resuming work.
+  A probe is not successful indexing and must not hide failure history/deadline.
+  Failed recovery keeps the latch and pending work.
   Terminal metadata errors are not disguised as timed I/O retries.
 - Explicit shutdown and Drop wake parked waits before waiting for counted work.
   Cancellation discards unsubmitted extraction; already submitted transactions
