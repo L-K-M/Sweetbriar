@@ -83,6 +83,34 @@ registered in the resolution.
   nonempty mask. A parser failure is `failed`, with empty columns; an I/O
   failure is reported and never published as a successful empty document.
 
+### Preparation boundary (M1.6e)
+
+- Capture pending tokens through a short store read. Before object I/O or MIME
+  work, inspect the current target, epoch, both pauses and rebuild phase in a
+  short read snapshot. A newer target, a pause, reset/enqueue, stale capture
+  and cancellation are explicit outcomes, never a successful empty batch.
+  The raw pending view remains readable while blocked. Version orchestration
+  raises older targets before this boundary runs.
+- Acquisition lookup is by queue acquisition id. Delete requests need no
+  acquisition lookup or body read; normal fenced publication also handles a
+  legacy delete whose acquisition is absent. Missing metadata for another
+  request is an invariant failure, not a transient file-read retry or a reason
+  to invent an unfenced delete.
+- Read one object at a time through full EOF verification outside SQLite.
+  Retain bytes only within the MIME message cap; reject a retention limit above
+  the 100,000,000-byte ceiling (10). A known oversized object is
+  streamed and verified without retaining its body, then yields an empty
+  `partial` document with all eight fields unknown. An I/O or verification
+  failure remains an error with its captured fence/token and lookup/read stage;
+  it never becomes empty extraction success. The existing reader's early size
+  refusal is unchanged.
+- Check cancellation before I/O and between chunks/candidates; discard the
+  unsubmitted preparation on cancellation. Preparation writes no SQLite state
+  and acknowledges no queue entry. Keep at most 200 candidates and 2,000,000
+  new-column bytes for the next publication, leaving other work queued. It may
+  return a valid prefix with the first contextual failure; e1 owns publication,
+  stale-failure checks and pause/retry policy.
+
 ## Schema
 
 ```sql

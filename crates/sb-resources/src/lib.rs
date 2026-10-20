@@ -23,6 +23,10 @@ pub use sb_mime::{RenderWarning, RenderWarningCode};
 mod acquire;
 mod import;
 mod import_jobs;
+mod index;
+pub use index::{
+    IndexBlocked, IndexPreparation, IndexReadFailure, IndexReadStage, PreparedIndexBatch,
+};
 mod renditions;
 pub use renditions::{RenditionCache, RenditionError, RenditionFiles, RenditionProtection};
 
@@ -41,10 +45,16 @@ pub use import_jobs::{
     import_job, import_job_source, import_job_sources, import_report, record_import_sources,
     recorded_import_job_sources, recoverable_import_jobs,
 };
+pub use sb_mime::SEARCH_EXTRACTOR_VERSION;
 pub use sb_mime::{MboxQuoting, MboxVariant};
 pub use sb_platform::{default_cache_root, default_data_root};
 pub use sb_store::imports::{
     ImportJobState, ImportMessage, MAX_IMPORT_BATCH, MAX_IMPORT_CHANGES_BYTES,
+};
+pub use sb_store::index::rebuild::{RebuildPhase, SearchIndexStatus, search_index_status};
+pub use sb_store::index::{
+    IndexBatch, IndexDocument, IndexFence, IndexPublication, IndexReason, IndexState,
+    MAX_INDEX_BATCH, MAX_INDEX_BATCH_BYTES, PendingDocument, publish_batch,
 };
 pub use sb_store::lists::{
     ListAnchor, ListKey, ListPage, ListScope, MAX_PAGE_ROWS, MailboxRole, PageRead, StoredListRow,
