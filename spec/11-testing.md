@@ -49,6 +49,13 @@ test, except where the spec says "manual qualification".
   M1.6e1 checks conditional runtime writes, source observations and rollback;
   M1.6e1b checks I/O pause/backoff/retry and failed-writer read errors;
   M1.6e2 checks durable job identity, cancel/reopen/resume and phase recovery.
+- M1.6e1b's real worker tests also cover coalesced producer wakes, bounded
+  publication, stale source observations, independent holds, shutdown and Drop.
+  An injected clock plus normal wake controls retry deadlines. Real SQLite
+  fixture failures must hold reads unavailable until recovery status commits;
+  typed filesystem faults test cause mapping separately. SIGKILL at worker
+  publication boundaries checks old/new atomic state and restart convergence,
+  complementing storage's internal transaction cuts without a power-loss claim.
 - Engine/service tests cover short-snapshot rows/status, coverage-only
   invalidation, out-of-scope BM25 changes, cursor identity/bits/generation,
   cancellation and shutdown. M1.6j checks operational-state generation and

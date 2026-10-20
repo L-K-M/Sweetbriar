@@ -149,6 +149,45 @@ Every accepted control transaction advances search generation once, including
 status-only events. SQL failure rolls the whole operation back. Runtime worker,
 timers, receipts and rebuild orchestration remain in their later steps.
 
+### Runtime publication worker (M1.6e1b)
+
+- One counted engine worker coalesces startup and committed-import wakeups.
+  A wake arriving during a pass or just before parking is retained. Capture,
+  object reads and extraction use the blocking pool outside the writer;
+  publication uses Index priority and retains the 200-document/2,000,000-byte
+  bounds. Recapture stale or zero-accepted work before another attempt.
+- Publish a valid prepared prefix before handling its contextual failure.
+  Current Read NotFound/Corrupt observations use the conditional availability
+  transaction; Lookup NotFound and other invariant failures surface an explicit
+  read error and stop automatic extraction, never acknowledge or invent data.
+  Only typed Unavailable causes become durable I/O pauses, with fixed facade
+  messages. Recheck the captured fence/token before recording a failure.
+- Consecutive failures increment persisted attempts with saturation. Backoff is
+  1 second doubled per attempt, capped at 60 seconds. A due retry first commits
+  retry begin; immediate requests move the deadline and wake the worker without
+  clearing either hold. Only actual successful work resets history. Reopen
+  retains the error and deadline until a permitted retry starts.
+- User hold, newer extractor target and reset/enqueue prevent extraction. This
+  worker does not clear an I/O hold for a phase it cannot drive; M1.6e2 supplies
+  phase orchestration. Check current state after every wake instead of trusting
+  the parked snapshot. Clock-controlled tests advance time and use normal wakes.
+- A failed publication/status write latches actionable read unavailability.
+  Bounded recovery attempts must commit `commit_index_recovery` before clearing
+  that latch or resuming work. Failed recovery keeps the latch and pending work.
+  Terminal metadata errors are not disguised as timed I/O retries.
+- Explicit shutdown and Drop wake parked waits before waiting for counted work.
+  Cancellation discards unsubmitted extraction; already submitted transactions
+  retain the normal writer commit boundary. No timer keeps shutdown alive.
+
+Worker integration tests exercise real imports, bounded publication, stale
+republication/failures, both holds, retries/reopen, failed status persistence,
+recovery and shutdown. Test-only boundary callbacks may coordinate races and
+process kills; they must not supply results or bypass production decisions.
+SQLite fixture triggers exercise real failed transactions; typed filesystem
+faults separately prove I/O classification. Neither is native SQLite VFS fault
+injection. Process-kill tests cover both sides of worker publication, while the
+storage suite covers internal transaction cuts; neither proves physical loss.
+
 ## Schema
 
 ```sql
