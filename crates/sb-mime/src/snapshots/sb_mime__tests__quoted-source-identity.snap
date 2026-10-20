@@ -1,0 +1,54 @@
+---
+source: crates/sb-mime/src/tests.rs
+expression: outcome
+---
+Parsed(
+    MessageSummary {
+        message_id: None,
+        subject: Some(
+            "Synthetic quoted address source identity",
+        ),
+        from: Some(
+            MailboxAddress {
+                name: None,
+                address: Some(
+                    "\"Foo\"@EXAMPLE.com",
+                ),
+            },
+        ),
+        reply_to: [],
+        to: [
+            MailboxAddress {
+                name: Some(
+                    "One",
+                ),
+                address: Some(
+                    "\"a\\ b\"@EXAMPLE.com",
+                ),
+            },
+            MailboxAddress {
+                name: None,
+                address: Some(
+                    "\"b\"@EXAMPLE.com",
+                ),
+            },
+        ],
+        cc: [
+            MailboxAddress {
+                name: None,
+                address: Some(
+                    "\"a>b,c:d;(e)\"@example.test",
+                ),
+            },
+        ],
+        date: None,
+        in_reply_to: None,
+        references: [],
+        list_id: None,
+        delivered_to: [],
+        has_attachments: false,
+        snippet: Some(
+            "Synthetic source-identity seed.\n",
+        ),
+    },
+)
