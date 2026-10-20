@@ -6,8 +6,8 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
 use sb_resources::{
-    Clock, ImportJobState, Resources, StoreError, Timestamp, UserPause, WritePriority,
-    request_index_retry, search_generation, set_user_pause,
+    Clock, ImportJobState, Resources, SEARCH_EXTRACTOR_VERSION as CURRENT_VERSION, StoreError,
+    Timestamp, UserPause, WritePriority, request_index_retry, search_generation, set_user_pause,
 };
 use sb_test_support::{FaultFs, FaultKind, FsOp, ScratchDir, block_on, execute_sql, real_fs};
 
@@ -17,6 +17,7 @@ use crate::index::Event;
 const MESSAGE: &[u8] = b"Subject: searchable\n\nindexneedle\n";
 const DOCS: &str = "SELECT count(*) FROM d_search_docs";
 const QUEUE: &str = "SELECT count(*) FROM d_index_queue";
+const FUTURE_VERSION: u32 = CURRENT_VERSION + 1;
 const STALE_CHANGES: [&str; 2] = [
     "UPDATE d_index_queue SET revision=revision+1; UPDATE store_meta SET value=CAST(value AS INTEGER)+1 WHERE key='index_inputs'",
     "UPDATE search_index_state SET epoch=epoch+1",
@@ -66,6 +67,7 @@ fn held(root: &Path) -> Engine {
 
 fn held_message(root: &Path, message: &[u8]) -> Engine {
     let engine = block_on(Engine::open(root)).unwrap();
+    empty_startup(&engine);
     pause(&engine, UserPause::Pause);
     import(&engine, &root.with_extension("eml"), message);
     wait(|| {
@@ -76,6 +78,20 @@ fn held_message(root: &Path, message: &[u8]) -> Engine {
             .stale()
     });
     engine
+}
+
+fn empty_startup(engine: &Engine) {
+    // Fresh fixture stores may need a real empty extractor upgrade first.
+    // Establish the baseline before imposing the hold tested by the caller.
+    wait(|| {
+        engine
+            .resources()
+            .read(|tx| {
+                Ok(sb_resources::latest_rebuild(tx)?
+                    .is_none_or(|job| job.phase() == sb_resources::RebuildPhase::Complete))
+            })
+            .unwrap()
+    });
 }
 
 fn status(engine: &Engine) -> sb_resources::SearchIndexStatus {
@@ -108,8 +124,12 @@ impl Clock for TestClock {
 }
 
 fn clocked(root: &Path, fs: Arc<dyn sb_resources::Fs>, at: i64) -> (Engine, Arc<TestClock>) {
+    let fresh = !root.join("state.sqlite").exists();
     let clock = Arc::new(TestClock(AtomicI64::new(at)));
     let engine = block_on(Engine::open_with_clock(root, fs, clock.clone())).unwrap();
+    if fresh {
+        empty_startup(&engine);
+    }
     (engine, clock)
 }
 
@@ -215,6 +235,124 @@ fn a_real_import_is_indexed_without_a_manual_poke() {
             "SELECT count(*) FROM d_search_fts WHERE d_search_fts MATCH 'indexneedle'",
         ),
         1
+    );
+    block_on(engine.shutdown()).unwrap();
+}
+
+#[test]
+fn address_source_upgrade_rebuilds_fts_without_rewriting_legacy_or_source() {
+    const RAW: &[u8] =
+        b"From: \"Foo\"@EXAMPLE.com\r\nSubject: source upgrade\r\n\r\nindexneedle\r\n";
+    assert_eq!(CURRENT_VERSION, 2);
+    let scratch = ScratchDir::new("address-source-upgrade");
+    let root = scratch.path().join("store");
+    let engine = held_message(&root, RAW);
+    pause(&engine, UserPause::Resume);
+    drained(&engine);
+    pause(&engine, UserPause::Pause);
+    parked(&engine);
+    let source = object(&engine, &root);
+    assert_eq!(std::fs::read(&source).unwrap(), RAW);
+    let identity = |engine: &Engine| {
+        engine
+            .resources()
+            .read(|tx| {
+                tx.query_row(
+                    "SELECT m.message_id,o.occurrence_id,m.account_id,o.mailbox_id,
+                        m.acquisition_id,a.content_sha256
+                 FROM logical_messages m JOIN occurrences o USING(message_id)
+                 JOIN acquisitions a ON a.acquisition_id=m.acquisition_id",
+                    [],
+                    |row| {
+                        Ok((
+                            row.get::<_, i64>(0)?,
+                            row.get::<_, i64>(1)?,
+                            row.get::<_, String>(2)?,
+                            row.get::<_, i64>(3)?,
+                            row.get::<_, i64>(4)?,
+                            row.get::<_, String>(5)?,
+                        ))
+                    },
+                )
+                .map_err(|error| StoreError::internal(error.to_string()))
+            })
+            .unwrap()
+    };
+    let original_identity = identity(&engine);
+    block_on(engine.shutdown()).unwrap();
+    // Historical v1 derived values match the observed pre-repair parser.
+    // No authoritative/source row or kept operational history is removed.
+    external(
+        &root.join("state.sqlite"),
+        "BEGIN IMMEDIATE;
+         UPDATE store_meta SET value='1' WHERE key='search_extractor_version';
+         UPDATE d_search_docs SET extractor_version=1,from_text='Foo'||char(10)||'@EXAMPLE.com';
+         UPDATE d_message_summary SET parser_version=1,from_name='Foo',from_addr='@EXAMPLE.com';
+         INSERT INTO d_search_fts(d_search_fts) VALUES('rebuild');
+         COMMIT;",
+    );
+
+    let engine = block_on(Engine::open(&root)).unwrap();
+    let job = engine
+        .resources()
+        .read(|tx| sb_resources::latest_rebuild(tx))
+        .unwrap()
+        .unwrap();
+    assert_eq!(job.phase(), sb_resources::RebuildPhase::Reset);
+    assert!(status(&engine).user_paused());
+    assert_eq!(
+        engine
+            .resources()
+            .read(|tx| sb_resources::target_version(tx))
+            .unwrap(),
+        2
+    );
+    assert_eq!(
+        count(&engine, "SELECT extractor_version FROM d_search_docs"),
+        1
+    );
+    assert_eq!(count(&engine, QUEUE), 0);
+    assert_eq!(identity(&engine), original_identity);
+    assert_eq!(std::fs::read(&source).unwrap(), RAW);
+    block_on(engine.resume_search_rebuild(&engine.new_idempotency_key(), job.id())).unwrap();
+    wait(|| {
+        engine
+            .resources()
+            .read(|tx| sb_resources::latest_rebuild(tx))
+            .unwrap()
+            .is_some_and(|job| job.phase() == sb_resources::RebuildPhase::Complete)
+    });
+    drained(&engine);
+    let (version, from_text): (u32, String) = engine
+        .resources()
+        .read(|tx| {
+            tx.query_row(
+                "SELECT extractor_version,from_text FROM d_search_docs",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .map_err(|error| StoreError::internal(error.to_string()))
+        })
+        .unwrap();
+    assert_eq!((version, from_text.as_str()), (2, "\"Foo\"@EXAMPLE.com"));
+    assert_eq!(identity(&engine), original_identity);
+    assert_eq!(std::fs::read(&source).unwrap(), RAW);
+    assert_eq!(
+        count(&engine, "SELECT parser_version FROM d_message_summary"),
+        1
+    );
+    let legacy: String = engine
+        .resources()
+        .read(|tx| {
+            tx.query_row("SELECT from_addr FROM d_message_summary", [], |row| {
+                row.get(0)
+            })
+            .map_err(|error| StoreError::internal(error.to_string()))
+        })
+        .unwrap();
+    assert_eq!(
+        legacy, "@EXAMPLE.com",
+        "summary refresh is a separate bounded backfill"
     );
     block_on(engine.shutdown()).unwrap();
 }
@@ -519,7 +657,7 @@ fn reset_enqueue_drive_the_due_hold_and_a_newer_target_never_extracts() {
     let root = scratch.path().join("store");
     let engine = held(&root);
     write(&engine, |tx| {
-        sb_resources::start_search_rebuild(tx, "job", 1)
+        sb_resources::start_search_rebuild(tx, "job", CURRENT_VERSION)
     });
     write(&engine, |tx| {
         sb_resources::pause_for_io(
@@ -997,6 +1135,7 @@ mod rebuild {
         let scratch = ScratchDir::new("rebuild-bounded");
         let root = scratch.path().join("store");
         let engine = block_on(Engine::open(&root)).unwrap();
+        empty_startup(&engine);
         pause(&engine, UserPause::Pause);
         let mut bytes = Vec::new();
         for n in 0..201 {
@@ -1025,7 +1164,7 @@ mod rebuild {
         // A real user hold makes the rebuild wait for its start.
         pause(&engine, UserPause::Pause);
         write(&engine, |tx| {
-            sb_resources::start_search_rebuild(tx, "job", 1)
+            sb_resources::start_search_rebuild(tx, "job", CURRENT_VERSION)
         });
         let before_gen = generation(&engine);
         let once = Arc::new(AtomicUsize::new(0));
@@ -1118,7 +1257,7 @@ mod rebuild {
         drained(&engine);
         pause(&engine, UserPause::Pause);
         write(&engine, |tx| {
-            sb_resources::start_search_rebuild(tx, "job", 1)
+            sb_resources::start_search_rebuild(tx, "job", CURRENT_VERSION)
         });
         block_on(engine.shutdown()).unwrap();
         // The held job stays parked across reopen: no auto-resume.
@@ -1136,7 +1275,7 @@ mod rebuild {
         // Plant an uncancelled checkpoint with no engine worker running.
         let resources = Resources::open(&root).unwrap();
         block_on(resources.write(WritePriority::User, |tx| {
-            sb_resources::start_search_rebuild(tx, "uncancelled", 1)
+            sb_resources::start_search_rebuild(tx, "uncancelled", CURRENT_VERSION)
         }))
         .unwrap();
         resources.close().unwrap();
@@ -1148,13 +1287,14 @@ mod rebuild {
     }
 
     /// The durable reconciliation's private available-version input:
-    /// 1->2 creates and reuses jobs under holds while keeping
+    /// Current->future creates and reuses jobs under holds while keeping
     /// completed ids; a same-or-newer target is never touched.
     #[test]
     fn version_reconciliation_creates_and_reuses_jobs_under_both_holds() {
         let scratch = ScratchDir::new("rebuild-versions");
         let root = scratch.path().join("store");
         let engine = block_on(Engine::open(&root)).unwrap();
+        empty_startup(&engine);
         pause(&engine, UserPause::Pause);
         write(&engine, |tx| {
             sb_resources::pause_for_io(
@@ -1168,21 +1308,23 @@ mod rebuild {
         // A completed predecessor keeps its id; the active job is
         // restarted at reset with the same id and a fresh epoch.
         write(&engine, |tx| {
-            sb_resources::start_search_rebuild(tx, "old", 1)?;
+            sb_resources::start_search_rebuild(tx, "old", CURRENT_VERSION)?;
             tx.execute(
                 "UPDATE search_rebuild_jobs SET phase='complete' WHERE job_id='old'",
                 [],
             )
             .map_err(|error| StoreError::internal(error.to_string()))?;
-            sb_resources::start_search_rebuild(tx, "live", 1)?;
+            sb_resources::start_search_rebuild(tx, "live", CURRENT_VERSION)?;
             Ok(())
         });
         let epoch = status(&engine).epoch();
         assert!(!write(&engine, |tx| sb_resources::reconcile_search_target(
-            tx, "ignored", 1
+            tx,
+            "ignored",
+            CURRENT_VERSION
         )));
         assert!(write(&engine, |tx| {
-            sb_resources::reconcile_search_target(tx, "reused", 2)
+            sb_resources::reconcile_search_target(tx, "reused", FUTURE_VERSION)
         }));
         let stored = job(&engine);
         assert_eq!(stored.id(), "live");
@@ -1202,8 +1344,11 @@ mod rebuild {
             }),
             sb_resources::RebuildPhase::Complete
         );
-        assert_eq!(write(&engine, |tx| sb_resources::target_version(tx)), 2);
-        for available in [1, 2] {
+        assert_eq!(
+            write(&engine, |tx| sb_resources::target_version(tx)),
+            FUTURE_VERSION
+        );
+        for available in [CURRENT_VERSION, FUTURE_VERSION] {
             assert!(!write(&engine, move |tx| {
                 sb_resources::reconcile_search_target(tx, "ignored", available)
             }));
@@ -1213,7 +1358,10 @@ mod rebuild {
         block_on(engine.shutdown()).unwrap();
         let engine = block_on(Engine::open(&root)).unwrap();
         parked(&engine);
-        assert_eq!(write(&engine, |tx| sb_resources::target_version(tx)), 2);
+        assert_eq!(
+            write(&engine, |tx| sb_resources::target_version(tx)),
+            FUTURE_VERSION
+        );
         assert_eq!(phase(&engine), "reset");
         assert!(status(&engine).user_paused());
         block_on(engine.shutdown()).unwrap();
@@ -1231,7 +1379,7 @@ mod rebuild {
         drained(&engine);
         pause(&engine, UserPause::Pause);
         write(&engine, |tx| {
-            sb_resources::start_search_rebuild(tx, "job", 1)
+            sb_resources::start_search_rebuild(tx, "job", CURRENT_VERSION)
         });
         let commits = Arc::new(AtomicUsize::new(0));
         let counted = commits.clone();
@@ -1288,7 +1436,7 @@ mod rebuild {
         drained(&engine);
         pause(&engine, UserPause::Pause);
         write(&engine, |tx| {
-            sb_resources::start_search_rebuild(tx, "job", 1)
+            sb_resources::start_search_rebuild(tx, "job", CURRENT_VERSION)
         });
         let engine = Arc::new(engine);
         let weak = Arc::downgrade(&engine);
@@ -1353,7 +1501,7 @@ mod rebuild {
         drained(&engine);
         pause(&engine, UserPause::Pause);
         write(&engine, |tx| {
-            sb_resources::start_search_rebuild(tx, "job", 1)
+            sb_resources::start_search_rebuild(tx, "job", CURRENT_VERSION)
         });
         external(
             &root.join("state.sqlite"),
@@ -1396,7 +1544,7 @@ mod rebuild {
                      INSERT INTO acquisitions(acquisition_id,content_sha256,byte_length,object_state,first_acquired_at)
                      SELECT id,printf('%064x',id),1,'published',1 FROM ids;",
                 ).map_err(|error| StoreError::internal(error.to_string()))?;
-                sb_resources::start_search_rebuild(tx, "native-phase", 1)
+                sb_resources::start_search_rebuild(tx, "native-phase", CURRENT_VERSION)
             })).unwrap();
             let epoch = resources
                 .read(|tx| Ok(sb_resources::search_index_status(tx)?.epoch()))
@@ -1437,7 +1585,7 @@ mod rebuild {
                     .unwrap();
                     if supersede {
                         // Isolate epoch fencing under the SAME supported
-                        // target, rather than mask it with capability2.
+                        // target, rather than mask it with a capability upgrade.
                         write(&engine, |tx| {
                             tx.execute_batch(
                                 "UPDATE search_index_state SET epoch=epoch+1;
@@ -1489,7 +1637,7 @@ mod rebuild {
                         .resources()
                         .read(|tx| sb_resources::target_version(tx))
                         .unwrap(),
-                    1
+                    CURRENT_VERSION
                 );
                 assert!(status(&engine).io_pause().is_none());
                 assert_eq!(status(&engine).io_attempts(), 0);
@@ -1525,7 +1673,7 @@ mod rebuild {
         import(&engine, &scratch.path().join("one.eml"), MESSAGE);
         if rebuild {
             write(&engine, |tx| {
-                sb_resources::start_search_rebuild(tx, "job", 1)
+                sb_resources::start_search_rebuild(tx, "job", CURRENT_VERSION)
             });
         }
         parked(&engine);
@@ -1678,7 +1826,7 @@ mod rebuild {
                 drained(&engine);
                 pause(&engine, UserPause::Pause);
                 write(&engine, |tx| {
-                    sb_resources::start_search_rebuild(tx, "job", 1)
+                    sb_resources::start_search_rebuild(tx, "job", CURRENT_VERSION)
                 });
                 let inputs: i64 = engine
                     .resources()
@@ -1701,9 +1849,11 @@ mod rebuild {
                 let state = snapshot(&resources);
                 let job_phase: String = resources
                     .read(|tx| {
-                        tx.query_row("SELECT phase FROM search_rebuild_jobs", [], |row| {
-                            row.get(0)
-                        })
+                        tx.query_row(
+                            "SELECT phase FROM search_rebuild_jobs ORDER BY epoch DESC LIMIT 1",
+                            [],
+                            |row| row.get(0),
+                        )
                         .map_err(|error| StoreError::internal(error.to_string()))
                     })
                     .unwrap();
@@ -1720,7 +1870,7 @@ mod rebuild {
                         tx.query_row(
                             "SELECT job_id,epoch,doc_cursor,acq_cursor,phase_count,
                         (SELECT CAST(value AS INTEGER) FROM store_meta WHERE key='index_inputs'),
-                        (SELECT user_paused FROM search_index_state) FROM search_rebuild_jobs",
+                         (SELECT user_paused FROM search_index_state) FROM search_rebuild_jobs ORDER BY epoch DESC LIMIT 1",
                             [],
                             |row| {
                                 Ok((
@@ -1742,7 +1892,7 @@ mod rebuild {
                     resources
                         .read(|tx| sb_resources::target_version(tx))
                         .unwrap(),
-                    1
+                    CURRENT_VERSION
                 );
                 let (base_gen, base_epoch, base_inputs) = baselines.borrow()[root];
                 // Every kill lands between committed transactions:
@@ -1873,7 +2023,7 @@ mod controls {
         let engine = held(&scratch.path().join("store"));
         let weird = "weird\"id\\with\u{7}control·non-ascii";
         write(&engine, |tx| {
-            sb_resources::start_search_rebuild(tx, weird, 1)
+            sb_resources::start_search_rebuild(tx, weird, CURRENT_VERSION)
         });
         let deadline = Timestamp::from_millis(
             engine
@@ -2045,7 +2195,7 @@ mod controls {
         pause(&engine, UserPause::Pause);
         import(&engine, &scratch.path().join("one.eml"), MESSAGE);
         write(&engine, |tx| {
-            sb_resources::start_search_rebuild(tx, "job", 1)
+            sb_resources::start_search_rebuild(tx, "job", CURRENT_VERSION)
         });
         write(&engine, |tx| {
             sb_resources::pause_for_io(
@@ -2109,7 +2259,7 @@ mod controls {
         let scratch = ScratchDir::new("controls-replay");
         let engine = held(&scratch.path().join("store"));
         write(&engine, |tx| {
-            sb_resources::start_search_rebuild(tx, "old", 1)?;
+            sb_resources::start_search_rebuild(tx, "old", CURRENT_VERSION)?;
             tx.execute(
                 "UPDATE search_rebuild_jobs SET phase='complete' WHERE job_id='old'",
                 [],
@@ -2212,13 +2362,21 @@ mod controls {
             let (engine, _clock) = clocked(&scratch.path().join("store"), real_fs(), 10_000);
             pause(&engine, UserPause::Pause);
             import(&engine, &scratch.path().join("one.eml"), MESSAGE);
+            let history = count(&engine, "SELECT count(*) FROM search_rebuild_jobs");
+            assert_eq!(
+                count(
+                    &engine,
+                    "SELECT count(*) FROM search_rebuild_jobs WHERE phase<>'complete'"
+                ),
+                0
+            );
             let id = match control {
                 Control::Start => {
                     pause(&engine, UserPause::Resume);
                     drained(&engine);
                     assert_eq!(
                         count(&engine, "SELECT count(*) FROM search_rebuild_jobs"),
-                        0
+                        history
                     );
                     String::new()
                 }
@@ -2266,7 +2424,7 @@ mod controls {
             block_on(writer).unwrap();
             // No replay, manual poke, other command or clock advance.
             wait(|| {
-                count(&engine, "SELECT count(*) FROM search_rebuild_jobs") == 1
+                count(&engine, "SELECT count(*) FROM search_rebuild_jobs") == history + 1
                     && phase(&engine) == "complete"
             });
             assert_eq!(
@@ -2331,7 +2489,7 @@ mod controls {
         let scratch = ScratchDir::new("controls-newer");
         let engine = held(&scratch.path().join("store"));
         write(&engine, |tx| {
-            sb_resources::start_search_rebuild(tx, "future", 2)
+            sb_resources::start_search_rebuild(tx, "future", FUTURE_VERSION)
         });
         let before = generation(&engine);
         let error =
@@ -2345,7 +2503,7 @@ mod controls {
                 .resources()
                 .read(|tx| sb_resources::target_version(tx))
                 .unwrap(),
-            2
+            FUTURE_VERSION
         );
         assert_eq!(job(&engine).id(), "future");
         assert!(status(&engine).user_paused());

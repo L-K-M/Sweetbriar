@@ -65,7 +65,7 @@ fn realistic_message_populates_every_column_and_metadata() {
     assert_eq!(doc.attachment_names(), "café.pdf\nforward.eml");
     assert_eq!(doc.state(), SearchState::Indexed);
     assert_eq!(doc.state().as_str(), "indexed");
-    assert_eq!(doc.extractor_version(), 1);
+    assert_eq!(doc.extractor_version(), 2);
     assert_eq!(SEARCH_EXTRACTOR_VERSION, 2);
     assert_eq!(doc.truncated_fields(), &[] as &[&str]);
     assert_eq!(doc.truncated_fields_json(), "[]");
@@ -409,7 +409,7 @@ fn failures_have_empty_columns_and_partial_input_has_conservative_mask() {
         assert_eq!(doc.state().as_str(), "failed");
         assert!(doc.columns.iter().all(String::is_empty));
         assert!(doc.truncated_fields().is_empty());
-        assert_eq!(doc.extractor_version(), 1);
+        assert_eq!(doc.extractor_version(), 2);
     }
     let raw = multipart(
         "alternative",
