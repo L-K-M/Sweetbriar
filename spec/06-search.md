@@ -603,7 +603,8 @@ value   := bare | '"' quoted '"'
   that key. A recognized field with an unsupported operator suffix is
   `invalid_operator` at the suffix. A malformed key prefix is
   `unexpected_token` at that prefix (`12:30` points at `12`); an extra
-  colon in a value is `unexpected_token` at the colon. Quote literal colons, reserved words or a leading minus.
+  colon in a value is `unexpected_token` at the colon. Quote literal colons,
+  reserved words or an unqualified leading minus.
   `()` is an explicit empty AND (true), so even nested empty AND nodes
   round-trip. Inside quotes only `\"` and `\\` are escapes; no other
   escapes: `"\q"` is `invalid_value` at the two-byte escape, not literal
@@ -833,8 +834,8 @@ An invalid consumed context is an invalid value at that input value token.
   Scalar failures point to the entire value token (quotes included), including
   a date/within context spelled as one value. Unknown keys point to the key;
   invalid field/size suffixes point after the dot (a missing size suffix points
-  to its key). A malformed key prefix points
-  to that prefix; whitespace before a colon fails there, whitespace after it
+  to its key). A malformed key prefix points to that prefix; whitespace before
+  a colon fails at the colon, whitespace after it
   leaves a missing value at the following token/EOF.
 - All twelve JSON node forms have text spellings. Canonical flags use is:read,
   is:flagged, is:answered and is:draft; NOT seen may also parse from is:unread.
@@ -843,11 +844,13 @@ An invalid consumed context is an invalid value at that input value token.
   Date values take exactly date or date@zone; within takes exactly days or
   days@zone@clock. Integer values are ASCII decimal, optional minus only for
   signed slots, no plus/fraction/exponent; leading zeroes are valid values.
+  Minus before an atom is unary NOT; after a key's colon it is value data,
+  subject to the selected operand's validity, not another unary expression.
   Structured scalar validators retain their existing bounds and policies.
 - Empty input and () produce true/empty AND. Parentheses are grouping, not
   extra AST nodes; redundant grouping must not exhaust the Rust call stack.
-  Bound construction to256 AST nodes and depth32 before exposing a Query or
-  recursively formatting it. Unary NOT/minus each count as a node. Preserve
+  Bound normalized construction to 256 AST nodes and depth 32 before exposing
+  a Query or recursively formatting it. Unary NOT/minus each count as a node. Preserve
   group/child order modulo the existing flattening/singleton rules; never
   discard explicit empty AND children during flattening.
 - Missing operands after a key/operator/NOT point to the next token or EOF.
@@ -865,7 +868,7 @@ An invalid consumed context is an invalid value at that input value token.
   This formatter consumes a typed Query, not a source string, so its size error
   invents no source span. It may consistently quote all values and parenthesize
   groups. It escapes only quote/backslash, retains every original scalar and
-  always emits explicit date context. Its output also fits16384 UTF8 bytes.
+  always emits explicit date context. Its output also fits 16384 UTF8 bytes.
 
 Same-slice proof covers precedence/implicit and explicit AND/OR/NOT/minus,
 all forms and field/operator refusals, exact Unicode/escape/key/value/EOF
