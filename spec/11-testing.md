@@ -32,6 +32,9 @@ test, except where the spec says "manual qualification".
   M1.6f0b owns modern bare address/domain validity and original-value/key tests:
   local-as-written, domain Unicode lowercase without rewriting, IP literals,
   invalid legacy/header syntax and UTF-8 byte bounds.
+  M1.6f owns the complete typed JSON boundary: all node/operand shapes,
+  canonical roundtrip, duplicate/unknown/mixed/malformed refusals, exact UTF-8
+  spans, integer/byte/node/depth edges and real native-token validation/errors.
   The `query` fuzz target exercises UTF-8 text and v1 JSON validation,
   parse/format/parse equivalence and valid error ranges; arbitrary non-UTF-8
   inputs are rejected without panic. Use the existing isolated fuzz nightly,

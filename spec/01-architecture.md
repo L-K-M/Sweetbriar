@@ -233,6 +233,7 @@ is committed, and updates are their own PRs.
 | HTML search extraction | `html5ever` | 0.40.1 | Already ammonia's parser; direct text-node traversal with a private tree sink, without sanitizing or serializing (06) |
 | Search dates | `jiff` (`std`, `tzdb-bundle-always`, no default features) | 0.2.37 | Validated explicit IANA date operands (M1.6f0); use only the bundled database, no system timezone/zoneinfo/global clock |
 | Search address domains | `idna` | 1.1.0 | Existing URL dependency reused for validity only (M1.6f0b); comparison keys never use its mapped output |
+| Query JSON | `serde`, `serde_json` (`raw_value`) | 1.0.229, 1.0.154 | Existing packages reused for strict borrowed-value validation, duplicate-key rejection and source spans (M1.6f); no handwritten JSON decoder |
 | CSS and URL parsing | `cssparser`, `url` | 0.38.0, 2.5.8 | The renderer's resource and link policy (10) |
 | IMAP | `io-imap` | 0.7.1 | **Spike first** (plan M2.1): check it handles Bridge's quirks (synchronizing literals, LIST attributes, UIDPLUS receipts, raw UTF-8 resilience). Fallback: `async-imap` 0.12.0 (`runtime-tokio`, no default features) |
 | SMTP | `lettre` (tokio + rustls features, no native-tls) | 0.11.23 | Raw-message submission of `mail-builder` output. Must expose enough to detect "connection lost after DATA" (05) |

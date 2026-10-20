@@ -738,6 +738,57 @@ invalid address/domain or limit for later exact parser spans. The permissive
 MIME header parser is not a strict validator; source/partial-summary unknown
 semantics remain their existing consumer contracts.
 
+### Strict JSON AST boundary (M1.6f)
+
+`sb-store::query::Query::parse_json(input)` is the complete validating boundary
+for the v1 envelope and every node above. A `Query` is immutable, exposes its
+typed `root()` and checked `canonical_json()`, and cannot be produced by an
+unchecked public constructor. The public node vocabulary is a typed view of
+validated queries; no partial/unvalidated AST is returned. Text parsing, SQL,
+storage lookup, windows and service/FFI/UI integration remain their later steps.
+
+- Reuse validated date/address operands and canonical shared UUID parsing;
+  UUID text is exactly lowercase 36-byte hyphenated hexadecimal, with no
+  version/variant rewriting. Nil and syntactically valid unknown ids are valid
+  input, not a store lookup. Mailbox ids are positive i64; sizes nonnegative
+  i64; within-days positive u32 and clocks i64. Integer slots reject floating
+  or exponent spellings such as `1.0` and `1e3`, not just out-of-range values.
+- Decode JSON with existing Serde/serde_json. Preserve duplicate member
+  observations until explicit rejection, including escaped-equivalent names;
+  a normal Value map that silently overwrites duplicates is not validation.
+  Unknown keys, mixed forms, missing fields, wrong types/enums/versions and
+  unsupported field/operator pairs all fail. Never reinterpret bad JSON as text.
+- Every full-text value is nonempty, contains an actual tokenizer token and
+  excludes NUL. A bound quoted MATCH carrier cannot represent NUL even when
+  FTS tokenization finds terms; reject it as `invalid_value`, never truncate.
+  Use the shipped SQLite unicode61/remove_diacritics2 tokenizer in a private
+  in-memory validation oracle, with bound input and memory-only temp storage.
+  Reuse it within one parse; filter-only queries need none. No raw MATCH, source
+  database/schema, filesystem or SQL-compiler side effects participate.
+- Native oracle initialization/SQL failure is a typed store/native failure,
+  distinct from `SearchParseError`; it is never false token absence or invalid
+  user syntax. The parser does not conceal native failure as an empty query.
+- Enforce 16,384 UTF-8 input/output bytes, 256 AST nodes and node-depth32
+  (root depth1). Semantic members/operands do not count as extra AST nodes.
+  Empty AND remains true, empty OR fails; preserve explicit group/order/values
+  in canonical JSON, with sorted object keys and no insignificant whitespace.
+- Parse errors expose byte `start`, `end` and one of the existing eight codes.
+  JSON semantic errors point to the offending VALUE (including its quotes),
+  missing fields to their parent value, and mixed forms to the node object.
+  Unknown members use `unknown_key`, duplicate/mixed/type/enum/version/operand
+  faults `invalid_value`, unsupported field/operator pairs `invalid_operator`
+  at the op value, absent fields `missing_value`, and exceeded bounds `limit`.
+  Malformed syntax uses `unexpected_token`; unclosed strings/containers point
+  to their opening delimiter, missing values at EOF use `[len,len)`. Every
+  span is half-open at UTF-8 boundaries, including oversized multibyte input.
+
+Same-slice tests cover every typed node and operand, exact canonical roundtrip,
+unknown/duplicate/mixed/malformed JSON, UTF-8 spans, all size/depth/node/integer
+edges, native token-presence differences and NUL refusal, literal operator data,
+explicit date context and original address spelling. Token-oracle failure proof
+uses a real failed private SQL operation; no fake parser/native result. Parser
+fuzzing follows M1.6n; no critical validation check is deferred to it.
+
 ## Execution
 
 - Filters (account, mailbox, flags, dates) are applied **inside** the SQL
