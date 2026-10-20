@@ -29,6 +29,9 @@ test, except where the spec says "manual qualification".
   UTF-8 error spans, invalid operators, limits, dates/timezones and clocks.
   M1.6f0 owns validated date bounds with bundled zones: DST, midnight gaps/folds,
   skipped dates, integer/civil overflow and host-environment independence.
+  M1.6f0b owns modern bare address/domain validity and original-value/key tests:
+  local-as-written, domain Unicode lowercase without rewriting, IP literals,
+  invalid legacy/header syntax and UTF-8 byte bounds.
   The `query` fuzz target exercises UTF-8 text and v1 JSON validation,
   parse/format/parse equivalence and valid error ranges; arbitrary non-UTF-8
   inputs are rejected without panic. Use the existing isolated fuzz nightly,

@@ -691,6 +691,53 @@ independence from child-process timezone/zoneinfo environment settings. Reuse
 the datetime implementation; no handwritten timezone rules or weaker lexical
 zone check substitutes for this boundary.
 
+### Address operands (M1.6f0b)
+
+The owner's v1 policy is modern bare addresses with **local-as-written**
+matching. `AddressOperand::parse(value)` and `DomainOperand::parse(value)`
+validate immutable operands, keep the original `value()` and expose their
+comparison `key()`; an address also exposes `local_key()` and `domain_key()`.
+The parser/received-address paths reuse these keys rather than growing another
+split/fold implementation. This step implements no ingestion, schema, SQL,
+query parser, service, FFI or UI changes.
+
+- An address is one dot-atom or quoted local part, then `@`, then a domain.
+  A dot-atom uses ASCII atext or non-ASCII non-control/non-whitespace scalars,
+  separated by single dots, with no leading/trailing/empty atom. A quoted local
+  part keeps its surrounding quotes and quoted-pair backslashes. It permits
+  printable ASCII (space included) and non-control Unicode; backslash pairs
+  escape one printable ASCII character. Empty quoted content is valid syntax.
+  Unescaped inner quotes, controls, tabs/newlines, unterminated quotes/escapes,
+  comments, display names, lists, folding whitespace and obsolete routes fail.
+- The local key is the exact written local part: preserve quoting, escapes,
+  case and Unicode without unquoting, case folding or normalization. Thus
+  `"Foo"@example.com` and `Foo@example.com` are DISTINCT, as are different
+  quoted-pair spellings of the same logical local value.
+- Domain names use existing `idna` UTS46 STD3/hyphen/DNS-length validation,
+  allowing a single trailing root dot but not a root-only or empty name.
+  Unicode mapping is used for validity only. Discard that mapped output:
+  comparison uses `str::to_lowercase()` on the ORIGINAL domain, with no IDNA
+  conversion, Unicode normalization, trailing-dot removal or suffix matching.
+  Unicode and its A-label spelling remain distinct keys.
+- Address literals are bracketed IPv4, or bracketed `IPv6:` followed by a valid
+  IPv6 address (tag case-insensitive). Use the standard IP parser for validity
+  but keep original literal spelling, Unicode-lowercased, as the domain key;
+  do not compress/expand/canonicalize it. Other bracket contents fail. Unquoted
+  outer whitespace, controls and address/header syntax are not domain names.
+- The address key joins its original local key, `@` and domain key. Preserve
+  original operand values separately for lossless AST/text formatting. Reject
+  more than 16,384 UTF-8 INPUT bytes with a distinct limit error before parsing;
+  the query's standard byte ceiling is shared. Do not impose SMTP envelope or
+  64-byte local delivery limits on archive-query operands.
+
+Same-slice tests cover exact local spelling/case/escaping, Unicode originals
+and non-normalization, mapped-IDNA output refusal as a comparison key, aliases
+of IP spelling without canonicalization, real invalid domains/literals and
+modern grammar refusals, and ASCII/multibyte byte limits. Static errors identify
+invalid address/domain or limit for later exact parser spans. The permissive
+MIME header parser is not a strict validator; source/partial-summary unknown
+semantics remain their existing consumer contracts.
+
 ## Execution
 
 - Filters (account, mailbox, flags, dates) are applied **inside** the SQL
