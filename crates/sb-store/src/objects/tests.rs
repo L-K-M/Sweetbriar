@@ -985,9 +985,10 @@ fn a_publish_performs_exactly_the_listed_operations() {
 fn read_error(reader: &mut ObjectReader) -> StoreError {
     let err = reader.read_to_end(&mut Vec::new()).unwrap_err();
     match read_error_as_store_error(&err) {
-        Some(StoreError::Corrupt { detail }) => StoreError::corrupt(detail.clone()),
-        Some(StoreError::Unavailable { reason }) => StoreError::unavailable(reason.clone()),
-        other => panic!("unexpected read error {err}: {other:?}"),
+        // Clone the whole error: the recovery must keep the typed
+        // `io_kind` a quarantine failure carried, not just the reason.
+        Some(error) => error.clone(),
+        None => panic!("unexpected read error {err}"),
     }
 }
 
@@ -1202,4 +1203,74 @@ fn a_taken_temp_name_fails_without_removing_its_file() {
         Err(StoreError::Unavailable { .. })
     ));
     assert_eq!(fs::read(&taken).unwrap(), b"someone else's temp file");
+}
+
+/// `open`'s I/O failures keep their native kinds in `Unavailable`'s
+/// `io_kind`, and a file gone by `open` still decides `NotFound`
+/// (spec/03 "Search writes").
+#[test]
+fn open_failures_keep_their_native_kinds() {
+    for kind in [
+        std::io::ErrorKind::PermissionDenied,
+        std::io::ErrorKind::StorageFull,
+    ] {
+        let (_scratch, paths, sim) = sim_layout("objects-sim-open-kind");
+        let fs: Arc<dyn Fs> = Arc::new(FaultFs::new(
+            sim.clone(),
+            FsOp::Open,
+            1,
+            FaultKind::Kind(kind),
+        ));
+        let store = object_store(fs, &paths, 11);
+        let id = publish(&store, b"payload").unwrap();
+        let Err(error) = store.open(&id) else {
+            panic!("the injected open fault did not fire")
+        };
+        assert!(matches!(error, StoreError::Unavailable { .. }), "{error:?}");
+        assert_eq!(error.io_kind(), Some(kind));
+    }
+    // A file gone by `open` is still `NotFound`: a native kind never
+    // changes the missing-object decision.
+    let (_scratch, paths, sim) = sim_layout("objects-sim-open-gone");
+    let fs: Arc<dyn Fs> = Arc::new(FaultFs::new(
+        sim.clone(),
+        FsOp::Open,
+        1,
+        FaultKind::Kind(std::io::ErrorKind::NotFound),
+    ));
+    let store = object_store(fs, &paths, 11);
+    let id = publish(&store, b"payload").unwrap();
+    assert!(matches!(store.open(&id), Err(StoreError::NotFound { .. })));
+}
+
+/// A quarantine failure's native kind survives being wrapped in the
+/// reader's `io::Error` and recovered; the `Corrupt` a successful
+/// retry reports carries none (spec/03 "Search writes").
+#[test]
+fn a_failed_quarantine_keeps_its_io_kind() {
+    let (_scratch, paths, sim) = sim_layout("objects-sim-quarantine-kind");
+    // The publish makes rename 1; the quarantine's is rename 2.
+    let fs: Arc<dyn Fs> = Arc::new(FaultFs::new(
+        sim.clone(),
+        FsOp::Rename,
+        2,
+        FaultKind::Kind(std::io::ErrorKind::ResourceBusy),
+    ));
+    let store = object_store(fs, &paths, 11);
+    let payload: &[u8] = b"damaged in place";
+    let id = publish(&store, payload).unwrap();
+    let mut flipped = payload.to_vec();
+    flipped[0] ^= 0xff;
+    damage(sim.as_ref(), &object_at(&paths, &id), &flipped);
+
+    let mut reader = store.open(&id).unwrap();
+    let error = read_error(&mut reader);
+    let StoreError::Unavailable { reason, .. } = &error else {
+        panic!("expected Unavailable, got {error:?}")
+    };
+    assert!(reason.contains("cannot quarantine the object"), "{reason}");
+    assert_eq!(error.io_kind(), Some(std::io::ErrorKind::ResourceBusy));
+    let retried = read_error(&mut reader);
+    assert!(matches!(retried, StoreError::Corrupt { .. }), "{retried:?}");
+    assert_eq!(retried.io_kind(), None);
 }

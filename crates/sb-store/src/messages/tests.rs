@@ -1,7 +1,11 @@
+use std::sync::Arc;
+
 use rusqlite::{Connection, params};
-use sb_test_support::real_fs;
+use sb_test_support::{FaultFs, FaultKind, FsOp, ScratchDir, real_fs};
+use sb_types::fs::Fs;
 
 use super::*;
+use crate::StorePaths;
 use crate::schema::{MIGRATIONS, run_migrations};
 use crate::testing::{scratch_paths, test_seams, writing};
 
@@ -414,10 +418,15 @@ fn recorded_object_states_and_oversize_reads_fail_before_io() {
         );
         Ok(())
     });
-    assert!(matches!(
-        store.read_acquisition(&stored_acquisition(&store)),
-        Err(StoreError::Unavailable { .. })
-    ));
+    let Err(oversize) = store.read_acquisition(&stored_acquisition(&store)) else {
+        panic!("an over-limit acquisition read clean")
+    };
+    assert!(
+        matches!(oversize, StoreError::Unavailable { .. }),
+        "{oversize:?}"
+    );
+    // A size refusal decided before any I/O carries no kind.
+    assert_eq!(oversize.io_kind(), None);
     for (state, availability) in [
         ("missing", BodyAvailability::AcquisitionMissing),
         ("quarantined", BodyAvailability::AcquisitionCorrupt),
@@ -482,5 +491,84 @@ fn exact_message_limit_is_admitted_and_verified() {
     let bytes = store.read_acquisition(&stored_acquisition(&store)).unwrap();
     assert_eq!(bytes.len() as u64, MAX_READER_MESSAGE_BYTES);
     assert!(bytes.iter().all(|byte| *byte == b'x'));
+    store.close().unwrap();
+}
+
+/// A reader store over `fs`, seeded with one published acquisition
+/// attached to message 20.
+fn store_with_acquisition(
+    fs: Arc<dyn Fs>,
+    label: &str,
+) -> (ScratchDir, StorePaths, Store, StoredAcquisition) {
+    let (scratch, paths) = scratch_paths(label);
+    let store = crate::open(&paths, &test_seams(fs)).unwrap();
+    let object = store.objects().publish(ORIGINAL).unwrap();
+    writing(&store, move |tx| {
+        seed(tx);
+        attach(tx, &object);
+        Ok(())
+    });
+    let acquisition = stored_acquisition(&store);
+    (scratch, paths, store, acquisition)
+}
+
+/// Injected object-store failures keep their native kinds through
+/// `read_acquisition` (spec/03 "Search writes"): a refused `open` and
+/// a mid-stream raw read each land in `Unavailable`'s `io_kind`.
+#[test]
+fn acquisition_io_failures_keep_their_native_kinds() {
+    for (op, nth, kind) in [
+        (FsOp::Open, 1, std::io::ErrorKind::PermissionDenied),
+        (FsOp::Read, 2, std::io::ErrorKind::StorageFull),
+    ] {
+        let fs: Arc<dyn Fs> = Arc::new(FaultFs::new(real_fs(), op, nth, FaultKind::Kind(kind)));
+        let (_scratch, _paths, store, acquisition) = store_with_acquisition(fs, "reader-io-kind");
+        let Err(error) = store.read_acquisition(&acquisition) else {
+            panic!("{op:?}: the injected fault did not fire")
+        };
+        assert!(
+            matches!(error, StoreError::Unavailable { .. }),
+            "{op:?}: {error:?}"
+        );
+        assert_eq!(error.io_kind(), Some(kind), "{op:?}");
+        assert_eq!(store.read_acquisition(&acquisition).unwrap(), ORIGINAL);
+        store.close().unwrap();
+    }
+}
+
+/// A failed quarantine's kind survives being wrapped in the reader's
+/// `io::Error` and recovered; the `Corrupt` a verified mismatch
+/// reports carries none.
+#[test]
+fn acquisition_quarantine_failure_keeps_its_kind() {
+    // The publish makes rename 1; the quarantine's is rename 2.
+    let fs: Arc<dyn Fs> = Arc::new(FaultFs::new(
+        real_fs(),
+        FsOp::Rename,
+        2,
+        FaultKind::Kind(std::io::ErrorKind::ResourceBusy),
+    ));
+    let (_scratch, paths, store, acquisition) =
+        store_with_acquisition(fs, "reader-quarantine-kind");
+    // Damage in place at the same length: only the EOF hash catches it.
+    let hex = acquisition.object().sha256_hex();
+    let path = paths
+        .objects_sha256()
+        .join(&hex[..2])
+        .join(&hex[2..4])
+        .join(&hex);
+    std::fs::write(&path, vec![b'x'; ORIGINAL.len()]).unwrap();
+    let Err(error) = store.read_acquisition(&acquisition) else {
+        panic!("the injected quarantine fault did not fire")
+    };
+    assert!(matches!(error, StoreError::Unavailable { .. }), "{error:?}");
+    assert_eq!(error.io_kind(), Some(std::io::ErrorKind::ResourceBusy));
+    // The next read retries the quarantine and reports `Corrupt`,
+    // which carries no kind.
+    let Err(error) = store.read_acquisition(&acquisition) else {
+        panic!("the damaged object read clean")
+    };
+    assert!(matches!(error, StoreError::Corrupt { .. }), "{error:?}");
+    assert_eq!(error.io_kind(), None);
     store.close().unwrap();
 }

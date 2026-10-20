@@ -3,6 +3,8 @@
 //! that also sets `user_version` and `last_migrated_by`, verified by
 //! `foreign_key_check` and `quick_check` before it commits.
 
+use std::io;
+
 use rusqlite::Connection;
 use rusqlite::Transaction;
 use rusqlite::TransactionBehavior;
@@ -411,10 +413,26 @@ pub(crate) fn classify(e: rusqlite::Error, what: &str) -> StoreError {
         | ErrorCode::DatabaseBusy
         | ErrorCode::DatabaseLocked
         | ErrorCode::OutOfMemory
-        | ErrorCode::FileLockingProtocolFailed => {
-            StoreError::unavailable(format!("{what} could not write the store: {e}"))
-        }
+        | ErrorCode::FileLockingProtocolFailed => StoreError::unavailable_io(
+            format!("{what} could not write the store: {e}"),
+            sqlite_io_kind(err.code),
+        ),
         _ => StoreError::internal(format!("{what} failed: {e}")),
+    }
+}
+
+/// The `io::ErrorKind` a SQLite environment code stands for (spec/03
+/// "Search writes"): only the cause the code itself names. An
+/// ambiguous environment code is `Other`, never a cause guessed from
+/// message text.
+fn sqlite_io_kind(code: ErrorCode) -> io::ErrorKind {
+    match code {
+        ErrorCode::DiskFull => io::ErrorKind::StorageFull,
+        ErrorCode::PermissionDenied => io::ErrorKind::PermissionDenied,
+        ErrorCode::ReadOnly => io::ErrorKind::ReadOnlyFilesystem,
+        ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked => io::ErrorKind::ResourceBusy,
+        ErrorCode::OutOfMemory => io::ErrorKind::OutOfMemory,
+        _ => io::ErrorKind::Other,
     }
 }
 

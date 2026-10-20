@@ -961,3 +961,48 @@ fn objects_added_to_store_meta_in_crashed_wal_are_refused() {
         assert_corrupt_untouched(&paths, NO_IDENTITY);
     }
 }
+
+/// SQLite environment failures carry the `io::ErrorKind` their code
+/// names; corruption and internal failures carry none, and an
+/// ambiguous environment code is `Other`, never a cause guessed from
+/// message text (spec/03 "Search writes").
+#[test]
+fn sqlite_environment_failures_carry_their_io_kind() {
+    let failure = |code| rusqlite::Error::SqliteFailure(ffi::Error::new(code), None);
+    for (code, kind) in [
+        (ffi::SQLITE_FULL, io::ErrorKind::StorageFull),
+        (ffi::SQLITE_PERM, io::ErrorKind::PermissionDenied),
+        (ffi::SQLITE_READONLY, io::ErrorKind::ReadOnlyFilesystem),
+        (ffi::SQLITE_BUSY, io::ErrorKind::ResourceBusy),
+        (ffi::SQLITE_LOCKED, io::ErrorKind::ResourceBusy),
+        (ffi::SQLITE_NOMEM, io::ErrorKind::OutOfMemory),
+        (ffi::SQLITE_IOERR, io::ErrorKind::Other),
+        (ffi::SQLITE_IOERR_FSYNC, io::ErrorKind::Other),
+        (ffi::SQLITE_CANTOPEN, io::ErrorKind::Other),
+        (ffi::SQLITE_PROTOCOL, io::ErrorKind::Other),
+    ] {
+        let err = classify(failure(code), "a test write");
+        assert!(
+            matches!(err, StoreError::Unavailable { .. }),
+            "{code}: {err:?}"
+        );
+        assert_eq!(err.io_kind(), Some(kind), "{code}: {err:?}");
+    }
+    for code in [
+        ffi::SQLITE_CORRUPT,
+        ffi::SQLITE_NOTADB,
+        ffi::SQLITE_ERROR,
+        ffi::SQLITE_CONSTRAINT,
+    ] {
+        let err = classify(failure(code), "a test write");
+        assert_eq!(err.io_kind(), None, "{code}: {err:?}");
+    }
+    let misleading = rusqlite::Error::SqliteFailure(
+        ffi::Error::new(ffi::SQLITE_IOERR),
+        Some("permission denied and disk is full".to_owned()),
+    );
+    assert_eq!(
+        classify(misleading, "a test write").io_kind(),
+        Some(io::ErrorKind::Other)
+    );
+}

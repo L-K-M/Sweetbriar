@@ -368,15 +368,24 @@ local drafts. No network yet.
     the scan cursor. No corpus-wide runtime clear/enqueue; preserves the
     queue revision counter. This separates the oversized d2 implementation
     without reducing its mandatory safety or regression coverage.
-  - **M1.6e Index job — L:** acquisition reads and extraction through
-    resources, engine worker, low-priority bounded publication, startup
-    recovery and durable I/O pause/backoff/immediate retry. Depends on d3.
+  - **M1.6d4 Storage failure causes — M:** preserve optional native I/O kinds
+    through unavailable object reads/quarantine and SQLite environment
+    failures, so the indexer can classify causes without parsing messages.
+    Depends on d3. Tests cover injected kinds, clone/display preservation and
+    existing core-error mappings. No new core error category or dependency.
+  - **M1.6e Extraction facade — L:** acquisition lookup and bounded reads,
+    MIME-to-storage mapping and publication-budget preparation in resources.
+    Depends on d4. Tests cover all columns/states, size refusal versus I/O
+    failure, cancellation, captured fences and bounded retained data. An
+    oversized acquisition is partial coverage, not an endless I/O retry.
+  - **M1.6e1 Index job — L:** engine worker, low-priority bounded publication,
+    startup recovery and durable I/O pause/backoff/immediate retry. Depends on e.
     Owns the extraction job/watermark deliverable. Real-worker tests cover
     failure/restart/re-publication, actionable errors/deadlines, failed-writer
     read unavailability and retry without dropping pending work.
   - **M1.6e2 Rebuild orchestration — L:** engine start/cancel/resume,
     automatic version-change jobs, global worker pause and phase progress;
-    depends on e. Owns identical-rebuild acceptance. Real-worker tests cover
+    depends on e1. Owns identical-rebuild acceptance. Real-worker tests cover
     durable ids, singleton/idempotent start, cancelled startup staying paused,
     explicit resume, version changes preserving pause, crash recovery through
     reset/enqueue/index, completion, foreground yielding between batches

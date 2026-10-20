@@ -386,6 +386,7 @@ fn strings(list: &[String]) -> Option<String> {
 fn unreadable(path: &str, offset: u64, error: io::Error) -> StoreError {
     StoreError::Unavailable {
         reason: format!("cannot read the message at byte {offset} of {path}: {error}"),
+        io_kind: Some(error.kind()),
     }
 }
 

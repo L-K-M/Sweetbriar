@@ -264,7 +264,10 @@ impl Store {
                 read_error_as_store_error(&error)
                     .cloned()
                     .unwrap_or_else(|| {
-                        StoreError::unavailable(format!("cannot read acquisition: {error}"))
+                        StoreError::unavailable_io(
+                            format!("cannot read acquisition: {error}"),
+                            error.kind(),
+                        )
                     })
             })?;
             if count == 0 {
