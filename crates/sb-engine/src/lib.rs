@@ -16,6 +16,9 @@ pub use bodies::{
 mod engine;
 mod error;
 mod import;
+mod index;
+#[cfg(test)]
+mod index_tests;
 mod messages;
 mod settings;
 mod sidebar;

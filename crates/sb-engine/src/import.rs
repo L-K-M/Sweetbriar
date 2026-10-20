@@ -917,7 +917,7 @@ struct Batch {
 
 async fn commit(worker: &Worker, batch: Batch) -> Result<ImportJobRecord, StoreError> {
     let now = worker.resources().now();
-    worker
+    let committed = worker
         .resources()
         .write(PRIORITY, move |tx| {
             let rows = ImportJobBatch {
@@ -931,7 +931,9 @@ async fn commit(worker: &Worker, batch: Batch) -> Result<ImportJobRecord, StoreE
             };
             commit_import_job_batch(tx, &rows, now)
         })
-        .await
+        .await?;
+    worker.indexer().wake();
+    Ok(committed)
 }
 
 /// Record a failure on an unfinished job. If even that write fails, the
