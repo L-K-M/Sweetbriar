@@ -46,7 +46,8 @@ test, except where the spec says "manual qualification".
   M1.6d3 checks bounded reset/enqueue transactions, phase checkpoint crashes
   and concurrent inserts/availability changes. M1.6d4 checks typed storage
   causes without changing core error mappings.
-  M1.6e1 checks I/O pause/backoff/retry and failed-writer read errors;
+  M1.6e1 checks conditional runtime writes, source observations and rollback;
+  M1.6e1b checks I/O pause/backoff/retry and failed-writer read errors;
   M1.6e2 checks durable job identity, cancel/reopen/resume and phase recovery.
 - Engine/service tests cover short-snapshot rows/status, coverage-only
   invalidation, out-of-scope BM25 changes, cursor identity/bits/generation,
