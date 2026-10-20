@@ -6,6 +6,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::pin::pin;
+use std::sync::mpsc;
 use std::task::{Context, Waker};
 use std::time::{Duration, Instant};
 
@@ -841,5 +842,139 @@ fn an_unreadable_recovery_directory_does_not_keep_the_store_closed() {
     let engine = open(&root);
     assert!(report(&engine, &id).contains("\"state\": \"cancelled\""));
     assert_eq!(snapshots(&root), 0);
+    block_on(engine.shutdown()).unwrap();
+}
+
+/// Receipt-owned cancellation (spec/07 "Engine command boundary"): a
+/// job cancelled under `key`, then `key` replayed naming a DIFFERENT
+/// job must still answer the stored receipt while every post-commit
+/// effect — the worker hint and the report cleanup — targets only the
+/// receipt's own job. `job` is a live import the replay must not
+/// reach.
+fn replayed_cancel_on_live_import(engine: &Engine, job: &Path, key: &str) -> (String, Receipt) {
+    let a = start(engine, &[fixtures().join("Inbox.mbox")]);
+    settle(engine, &a, ImportJobState::AwaitingConfirmation);
+    let receipt = block_on(engine.cancel_job(key, &a)).unwrap();
+
+    let (entered, reached) = mpsc::channel();
+    let (release, released) = mpsc::channel();
+    let released = Mutex::new(released);
+    *engine
+        .imports()
+        .before_task
+        .lock()
+        .expect("a panicking thread held the import job registry") = Some(Arc::new(move || {
+        entered.send(()).unwrap();
+        released.lock().unwrap().recv().unwrap();
+    }));
+    let b = start(engine, &[job.to_path_buf()]);
+    reached.recv_timeout(PATIENCE).unwrap();
+    let replayed = block_on(engine.cancel_job(key, &b)).unwrap();
+    release.send(()).unwrap();
+    *engine
+        .imports()
+        .before_task
+        .lock()
+        .expect("a panicking thread held the import job registry") = None;
+    assert_eq!(replayed.result_json(), receipt.result_json());
+    idle(engine, &b);
+    (b, replayed)
+}
+
+#[test]
+fn a_replayed_cancel_key_cannot_stop_another_live_inventory() {
+    let scratch = ScratchDir::new("import-replay-inventory");
+    let job = scratch.path().join("Two.mbox");
+    fs::write(&job, mbox(2)).unwrap();
+    let engine = open(&scratch.path().join("store"));
+    let key = engine.new_idempotency_key();
+    let (b, _) = replayed_cancel_on_live_import(&engine, &job, &key);
+    // Stranded in `inventory` here is the replay bug: B's worker was
+    // stopped by an effect its key never authorized.
+    assert_eq!(
+        status(&engine, &b).state(),
+        ImportJobState::AwaitingConfirmation
+    );
+    block_on(engine.shutdown()).unwrap();
+}
+
+#[test]
+fn a_replayed_cancel_key_cannot_stop_another_live_ingest() {
+    let scratch = ScratchDir::new("import-replay-ingest");
+    let job = scratch.path().join("Two.mbox");
+    fs::write(&job, mbox(2)).unwrap();
+    let engine = open(&scratch.path().join("store"));
+    let a = start(&engine, &[fixtures().join("Inbox.mbox")]);
+    settle(&engine, &a, ImportJobState::AwaitingConfirmation);
+    let key = engine.new_idempotency_key();
+    let receipt = block_on(engine.cancel_job(&key, &a)).unwrap();
+
+    // B waits for confirmation; its ingest worker blocks at task entry.
+    let b = start(&engine, &[job]);
+    settle(&engine, &b, ImportJobState::AwaitingConfirmation);
+    let (entered, reached) = mpsc::channel();
+    let (release, released) = mpsc::channel();
+    let released = Mutex::new(released);
+    *engine
+        .imports()
+        .before_task
+        .lock()
+        .expect("a panicking thread held the import job registry") = Some(Arc::new(move || {
+        entered.send(()).unwrap();
+        released.lock().unwrap().recv().unwrap();
+    }));
+    confirm(&engine, &b, vec![]).unwrap();
+    reached.recv_timeout(PATIENCE).unwrap();
+    let replayed = block_on(engine.cancel_job(&key, &b)).unwrap();
+    release.send(()).unwrap();
+    *engine
+        .imports()
+        .before_task
+        .lock()
+        .expect("a panicking thread held the import job registry") = None;
+    assert_eq!(replayed.result_json(), receipt.result_json());
+    idle(&engine, &b);
+    // Stranded in `running` here is the same bug on the ingest task.
+    assert_eq!(status(&engine, &b).state(), ImportJobState::Completed);
+    block_on(engine.shutdown()).unwrap();
+}
+
+#[test]
+fn a_replayed_cancel_key_cannot_rewrite_another_jobs_report() {
+    let scratch = ScratchDir::new("import-replay-report");
+    let job = scratch.path().join("Two.mbox");
+    fs::write(&job, mbox(2)).unwrap();
+    let engine = open(&scratch.path().join("store"));
+    let a = start(&engine, &[fixtures().join("Inbox.mbox")]);
+    settle(&engine, &a, ImportJobState::AwaitingConfirmation);
+    let key = engine.new_idempotency_key();
+    let receipt = block_on(engine.cancel_job(&key, &a)).unwrap();
+    // The replay's original-target cleanup still runs: deleting the
+    // finished job's report lets the redo be observed.
+    let a_report = status(&engine, &a).report_path().unwrap().to_path_buf();
+    fs::remove_file(&a_report).unwrap();
+
+    // B finishes and its report is made distinct by extra whitespace —
+    // still valid report JSON, but never what the writer emits.
+    let b = start(&engine, &[job]);
+    settle(&engine, &b, ImportJobState::AwaitingConfirmation);
+    confirm(&engine, &b, vec![]).unwrap();
+    settle(&engine, &b, ImportJobState::Completed);
+    let b_report = status(&engine, &b).report_path().unwrap().to_path_buf();
+    let mut sentinel = fs::read_to_string(&b_report).unwrap();
+    sentinel.push_str("\n\t ");
+    fs::write(&b_report, &sentinel).unwrap();
+
+    let replayed = block_on(engine.cancel_job(&key, &b)).unwrap();
+    assert_eq!(replayed.result_json(), receipt.result_json());
+    assert_eq!(
+        fs::read_to_string(&b_report).unwrap(),
+        sentinel,
+        "a replay rewrote a job its key never named"
+    );
+    assert!(
+        a_report.exists(),
+        "the replay did not redo the receipt target's cleanup"
+    );
     block_on(engine.shutdown()).unwrap();
 }

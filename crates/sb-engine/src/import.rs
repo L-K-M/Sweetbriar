@@ -12,19 +12,19 @@
 //! ```
 
 use std::collections::{HashMap, HashSet};
-use std::future::Future;
 use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use sb_resources::{
     AcquiredMessage, FlagExtraction, ImportInventory, ImportInventoryOutcome, ImportJobBatch,
-    ImportJobCheckpoint, ImportJobRecord, ImportJobState, ImportMessage, MAX_IMPORT_BATCH,
-    MAX_IMPORT_CHANGES_BYTES, MboxVariant, Receipt, Resources, SourceAcquisition, SourceInventory,
-    SourcePosition, StoreError, WritePriority, advance_import_job, commit_import_job_batch,
-    create_import_job, finished_import_jobs, import_job, import_job_source, import_job_sources,
-    import_report, record_import_sources, recorded_import_job_sources, recoverable_import_jobs,
-    run_once,
+    ImportJobCheckpoint, ImportJobRecord, ImportJobState, ImportMessage, JobKind, MAX_IMPORT_BATCH,
+    MAX_IMPORT_CHANGES_BYTES, MboxVariant, RebuildPhase, Receipt, Resources, SourceAcquisition,
+    SourceInventory, SourcePosition, StoreError, UserPause, WritePriority, advance_import_job,
+    commit_import_job_batch, create_import_job, encode_job_receipt, finished_import_jobs,
+    import_job, import_job_source, import_job_sources, import_report, job_kind, rebuild_job,
+    receipt_job_id, record_import_sources, recorded_import_job_sources, recoverable_import_jobs,
+    run_once, set_user_pause,
 };
 
 use crate::engine::{Spawn, Worker};
@@ -60,7 +60,15 @@ pub(crate) struct ImportJobs {
     reports: Mutex<HashSet<String>>,
     /// The thread rebuild each worker's turn may start (spec/02).
     threads: Arc<ThreadRebuilds>,
+    /// A test's callback at a worker's task entry (spec/11): it may
+    /// observe or block the real worker, never supply results.
+    #[cfg(test)]
+    before_task: Mutex<Option<BeforeTask>>,
 }
+
+/// A test hook run once at a worker's task entry.
+#[cfg(test)]
+type BeforeTask = Arc<dyn Fn() + Send + Sync>;
 
 /// What a live worker's job has been asked since it started.
 #[derive(Default)]
@@ -275,7 +283,7 @@ impl Engine {
         }
         let id = self.resources().new_uuid_string();
         let now = self.resources().now();
-        let fresh = format!("{{\"job_id\":\"{id}\"}}");
+        let fresh = encode_job_receipt(&id, None);
         let key = idempotency_key.to_owned();
         let jobs = Arc::clone(self.imports());
         self.command(move |worker| async move {
@@ -294,14 +302,8 @@ impl Engine {
                 // and the next open fails it visibly.
                 spawn_job(&worker, &jobs, id, Task::Inventory(paths))?;
             }
-            // A repeated key's receipt names the first job; this crate
-            // wrote that JSON, so it reads back exactly.
-            let job_id = receipt
-                .result_json()
-                .strip_prefix("{\"job_id\":\"")
-                .and_then(|rest| rest.strip_suffix("\"}"))
-                .ok_or_else(|| EngineError::internal("a start_import receipt names no job"))?
-                .to_owned();
+            // A repeated key's receipt names the first job.
+            let job_id = receipt_job_id(&receipt)?;
             Ok(ImportStarted { receipt, job_id })
         })
         .await
@@ -348,9 +350,11 @@ impl Engine {
         .await
     }
 
-    /// `cancel_job(id)` (spec/07, 09): the job is `cancelled` once this
-    /// returns. A live worker stops at its next message; committed
-    /// batches stay imported. A finished job is `Conflict`.
+    /// `cancel_job(id)` (spec/07, 09): dispatches on the durable job
+    /// kind — an unfinished import is `cancelled` once this returns, an
+    /// active rebuild takes the durable user hold. A live worker stops
+    /// at its next message; committed batches stay imported. A finished
+    /// import is `Conflict`; a completed rebuild is a no-op.
     pub async fn cancel_job(
         &self,
         idempotency_key: &str,
@@ -358,38 +362,46 @@ impl Engine {
     ) -> Result<Receipt, EngineError> {
         let now = self.resources().now();
         let (key, id) = (idempotency_key.to_owned(), job_id.to_owned());
-        let receipt = self
-            .resources()
-            .write(WritePriority::User, move |tx| {
-                run_once(tx, &key, CANCEL_JOB, now, |tx| {
-                    let job = import_job(tx, &id)?;
-                    if job.is_finished() {
-                        return Err(StoreError::Conflict {
-                            detail: format!("import job {id} has already finished"),
-                        });
-                    }
-                    let state = ImportJobState::Cancelled;
-                    advance_import_job(tx, &id, job.revision(), state, job.checkpoint(), now)?;
-                    Ok(format!("{{\"job_id\":\"{id}\",\"state\":\"cancelled\"}}"))
+        let imports = Arc::clone(self.imports());
+        self.command(move |worker| async move {
+            // The write resolves the receipt's target and kept kind in
+            // the same transaction: a repeated key returns the original
+            // receipt, and every post-commit effect then acts on that
+            // id — never the caller's argument (spec/07 "Engine command
+            // boundary"). The replay still redoes its own cleanup.
+            let (receipt, target, kind) = worker
+                .resources()
+                .write(WritePriority::User, move |tx| {
+                    let receipt =
+                        run_once(tx, &key, CANCEL_JOB, now, |tx| cancel_in(tx, &id, now))?;
+                    let target = receipt_job_id(&receipt)?;
+                    let kind = job_kind(tx, &target)?;
+                    Ok((receipt, target, kind))
                 })
-            })
-            .await?;
-        self.imports().cancel(job_id);
-        // The cancel is durable either way; a failed cleanup is redone
-        // at the next open, which finds no report.
-        // Noted inside the blocking work: a caller dropping this future
-        // mid-cleanup must not leave a written report unnamed.
-        let (id, imports) = (job_id.to_owned(), Arc::clone(self.imports()));
-        let _ = self
-            .read_through(move |resources| {
-                let written = finish(resources, &id);
-                if matches!(written, Ok(true)) {
-                    imports.note_report(&id);
+                .await?;
+            match kind {
+                JobKind::Import => {
+                    imports.cancel(&target);
+                    // The cancel is durable either way; a failed cleanup
+                    // is redone at the next open, which finds no report.
+                    // Noted inside the counted work: a caller dropping
+                    // this command must not strand the cleanup.
+                    let (id, jobs) = (target, Arc::clone(&imports));
+                    let _ = worker
+                        .blocking(move |resources| {
+                            let written = finish(resources, &id);
+                            if matches!(written, Ok(true)) {
+                                jobs.note_report(&id);
+                            }
+                            written
+                        })
+                        .await;
                 }
-                written
-            })
-            .await;
-        Ok(receipt)
+                JobKind::SearchRebuild => worker.indexer().wake(),
+            }
+            Ok(receipt)
+        })
+        .await
     }
 
     /// `import_job(job_id)` (spec/07): state, inventory, problems and
@@ -495,26 +507,6 @@ impl Engine {
         }
         Ok(())
     }
-
-    /// Run an accepted command and the work it schedules as one worker,
-    /// so a caller that stops waiting cannot strand an accepted job.
-    async fn command<T, F, Fut>(&self, body: F) -> Result<T, EngineError>
-    where
-        T: Send + 'static,
-        F: FnOnce(Worker) -> Fut,
-        Fut: Future<Output = Result<T, EngineError>> + Send + 'static,
-    {
-        let (answer, answered) = tokio::sync::oneshot::channel();
-        self.spawn_worker(move |worker| {
-            let run = body(worker);
-            async move {
-                let _ = answer.send(run.await);
-            }
-        })?;
-        answered
-            .await
-            .map_err(|_| EngineError::internal("an import command ended without an answer"))?
-    }
 }
 
 /// The confirmation's write: only the waiting revision the caller
@@ -539,8 +531,46 @@ fn confirm_in(
             });
         };
         advance_import_job(tx, job, revision, ImportJobState::Running, &checkpoint, now)?;
-        Ok(format!("{{\"job_id\":\"{job}\",\"state\":\"running\"}}"))
+        Ok(encode_job_receipt(job, Some("running")))
     })
+}
+
+/// The cancel's write, run only for a fresh key: the durable job kind
+/// decides the behavior (spec/07). An unfinished import becomes
+/// `cancelled`; an active rebuild takes the durable user hold; a
+/// completed rebuild is a no-op; an unknown id is `NotFound` and a
+/// different command's key stays `Conflict` in `run_once`.
+fn cancel_in(
+    tx: &sb_resources::Transaction,
+    id: &str,
+    now: sb_resources::Timestamp,
+) -> Result<String, StoreError> {
+    match job_kind(tx, id)? {
+        JobKind::Import => {
+            let job = import_job(tx, id)?;
+            if job.is_finished() {
+                return Err(StoreError::Conflict {
+                    detail: format!("import job {id} has already finished"),
+                });
+            }
+            advance_import_job(
+                tx,
+                id,
+                job.revision(),
+                ImportJobState::Cancelled,
+                job.checkpoint(),
+                now,
+            )?;
+            Ok(encode_job_receipt(id, Some("cancelled")))
+        }
+        JobKind::SearchRebuild => {
+            if rebuild_job(tx, id)?.phase() == RebuildPhase::Complete {
+                return Ok(encode_job_receipt(id, Some("complete")));
+            }
+            set_user_pause(tx, UserPause::Pause)?;
+            Ok(encode_job_receipt(id, Some("paused")))
+        }
+    }
 }
 
 /// Start a worker for `id`, or hand an ingest to the one that holds it.
@@ -559,6 +589,16 @@ fn spawn_job(
 /// One worker's turns on its job: the first task, then any ingest
 /// handed over before it let go.
 async fn run_job(worker: Worker, mut claim: Claim, task: Task) {
+    #[cfg(test)]
+    if let Some(before) = claim
+        .jobs
+        .before_task
+        .lock()
+        .expect("a panicking thread held the import job registry")
+        .clone()
+    {
+        before();
+    }
     let mut task = Some(task);
     while let Some(current) = task {
         match current {

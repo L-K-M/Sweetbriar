@@ -532,6 +532,26 @@ impl Engine {
         }
     }
 
+    /// Run an accepted command and the work it schedules as one worker,
+    /// so a caller that stops waiting cannot strand an accepted job.
+    pub(crate) async fn command<T, F, Fut>(&self, body: F) -> Result<T, EngineError>
+    where
+        T: Send + 'static,
+        F: FnOnce(Worker) -> Fut,
+        Fut: std::future::Future<Output = Result<T, EngineError>> + Send + 'static,
+    {
+        let (answer, answered) = tokio::sync::oneshot::channel();
+        self.spawn_worker(move |worker| {
+            let run = body(worker);
+            async move {
+                let _ = answer.send(run.await);
+            }
+        })?;
+        answered
+            .await
+            .map_err(|_| EngineError::internal("a command ended without an answer"))?
+    }
+
     /// Run `f` on the runtime's blocking pool, where reads belong
     /// (spec/01: nothing blocks a caller's thread), and flatten the
     /// join and the closure's own result into one error. The task is

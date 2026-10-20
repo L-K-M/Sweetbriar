@@ -1679,3 +1679,417 @@ mod rebuild {
         assert!(saw_old && saw_new);
     }
 }
+
+/// Engine rebuild controls (spec/07 "Engine command boundary",
+/// M1.6e2b): the public start/cancel/resume/retry commands over the
+/// real worker — receipts, singleton and kind dispatch, hold
+/// independence, replay safety and dropped callers.
+mod controls {
+    use std::pin::pin;
+    use std::task::{Context, Waker};
+
+    use sb_resources::{RebuildPhase, encode_job_receipt, receipt_job_id};
+
+    use super::*;
+    use crate::EngineError;
+
+    fn job(engine: &Engine) -> sb_resources::RebuildJob {
+        engine
+            .resources()
+            .read(|tx| Ok(sb_resources::latest_rebuild(tx)?.unwrap()))
+            .unwrap()
+    }
+
+    fn phase(engine: &Engine) -> String {
+        engine
+            .resources()
+            .read(|tx| {
+                tx.query_row(
+                    "SELECT phase FROM search_rebuild_jobs ORDER BY epoch DESC LIMIT 1",
+                    [],
+                    |row| row.get(0),
+                )
+                .map_err(|error| StoreError::internal(error.to_string()))
+            })
+            .unwrap()
+    }
+
+    /// A waiting import job for the cancel-drop cases.
+    fn waiting(engine: &Engine, path: &Path) -> String {
+        std::fs::write(path, MESSAGE).unwrap();
+        let id =
+            block_on(engine.start_import(&engine.new_idempotency_key(), vec![path.to_path_buf()]))
+                .unwrap()
+                .job_id()
+                .to_owned();
+        wait(|| {
+            block_on(engine.import_job(&id)).unwrap().state()
+                == ImportJobState::AwaitingConfirmation
+        });
+        id
+    }
+
+    /// Start returns the actual stored id — an arbitrary one, escapes,
+    /// control characters and non-ASCII included — is idempotent per
+    /// key, reuses the active singleton under a fresh key with its
+    /// holds, and takes a new id and epoch only after completion.
+    #[test]
+    fn start_returns_the_actual_id_and_reuses_the_active_job() {
+        let scratch = ScratchDir::new("controls-start");
+        let engine = held(&scratch.path().join("store"));
+        let weird = "weird\"id\\with\u{7}control·non-ascii";
+        write(&engine, |tx| {
+            sb_resources::start_search_rebuild(tx, weird, 1)
+        });
+        let epoch = status(&engine).epoch();
+        let cursor = job(&engine).acq_cursor();
+
+        let key = engine.new_idempotency_key();
+        let first = block_on(engine.start_search_rebuild(&key)).unwrap();
+        assert_eq!(first.job_id(), weird);
+        assert_eq!(receipt_job_id(first.receipt()).unwrap(), weird);
+        assert_eq!(
+            first.receipt().result_json(),
+            encode_job_receipt(weird, None)
+        );
+        // The same key returns the identical receipt and job; a fresh
+        // key while active reuses the stored job without a reset or an
+        // implicit resume.
+        let again = block_on(engine.start_search_rebuild(&key)).unwrap();
+        assert_eq!(again.receipt().result_json(), first.receipt().result_json());
+        let second = block_on(engine.start_search_rebuild(&engine.new_idempotency_key())).unwrap();
+        assert_eq!(second.job_id(), weird);
+        let stored = job(&engine);
+        assert_eq!((stored.epoch(), stored.acq_cursor()), (epoch, cursor));
+        assert!(
+            status(&engine).user_paused(),
+            "start released the user hold"
+        );
+        // Only after completion does a fresh key take a new id/epoch.
+        block_on(engine.resume_search_rebuild(&engine.new_idempotency_key(), weird)).unwrap();
+        wait(|| phase(&engine) == "complete");
+        let third = block_on(engine.start_search_rebuild(&engine.new_idempotency_key())).unwrap();
+        assert_ne!(third.job_id(), weird);
+        assert!(job(&engine).epoch() > epoch);
+        block_on(engine.shutdown()).unwrap();
+    }
+
+    /// The public cancel's durable hold is the zero-later-progress
+    /// boundary for the real worker: after its receipt no docs, queue
+    /// drain or phase commit lands, through a shutdown/open and new
+    /// input, until the same id's resume converges real work.
+    #[test]
+    fn cancel_pauses_the_worker_and_resume_converges_it() {
+        let scratch = ScratchDir::new("controls-cancel");
+        let root = scratch.path().join("store");
+        let engine = held(&root);
+        let commits = Arc::new(AtomicUsize::new(0));
+        let counted = commits.clone();
+        let gate = Arc::new(std::sync::Barrier::new(2));
+        let hooked = gate.clone();
+        hook(&engine, move |event| {
+            if event == Event::Committed && counted.fetch_add(1, Ordering::SeqCst) == 0 {
+                hooked.wait();
+            }
+        });
+        let started = block_on(engine.start_search_rebuild(&engine.new_idempotency_key())).unwrap();
+        pause(&engine, UserPause::Resume);
+        wait(|| commits.load(Ordering::SeqCst) > 0);
+        // The hold commits while the worker sits between phase writes.
+        let receipt =
+            block_on(engine.cancel_job(&engine.new_idempotency_key(), started.job_id())).unwrap();
+        assert_eq!(
+            receipt.result_json(),
+            encode_job_receipt(started.job_id(), Some("paused"))
+        );
+        gate.wait();
+        parked(&engine);
+        std::thread::sleep(Duration::from_millis(50));
+        assert_eq!(commits.load(Ordering::SeqCst), 1, "progress after the hold");
+        assert!(status(&engine).user_paused());
+        let stored = job(&engine);
+        let frozen = (
+            stored.phase(),
+            stored.doc_cursor(),
+            stored.acq_cursor(),
+            count(&engine, DOCS),
+        );
+        block_on(engine.shutdown()).unwrap();
+        // The hold and the committed state survive a reopen.
+        let engine = block_on(Engine::open(&root)).unwrap();
+        parked(&engine);
+        let stored = job(&engine);
+        assert_eq!(
+            (
+                stored.phase(),
+                stored.doc_cursor(),
+                stored.acq_cursor(),
+                count(&engine, DOCS)
+            ),
+            frozen
+        );
+        assert_eq!(stored.id(), started.job_id());
+        // New input lands in the queue without moving the held job.
+        import(
+            &engine,
+            &scratch.path().join("late.eml"),
+            b"Subject: late\n\nindexneedle\n",
+        );
+        parked(&engine);
+        let stored = job(&engine);
+        assert_eq!(
+            (
+                stored.phase(),
+                stored.doc_cursor(),
+                stored.acq_cursor(),
+                count(&engine, DOCS)
+            ),
+            frozen
+        );
+        assert!(status(&engine).user_paused());
+        // Explicit resume releases the hold: the same id and phase
+        // converge with real FTS results.
+        let receipt =
+            block_on(engine.resume_search_rebuild(&engine.new_idempotency_key(), started.job_id()))
+                .unwrap();
+        assert_eq!(
+            receipt.result_json(),
+            encode_job_receipt(started.job_id(), Some("running"))
+        );
+        wait(|| phase(&engine) == "complete");
+        assert_eq!((count(&engine, DOCS), count(&engine, QUEUE)), (2, 0));
+        assert_eq!(
+            count(
+                &engine,
+                "SELECT count(*) FROM d_search_fts WHERE d_search_fts MATCH 'indexneedle'",
+            ),
+            2
+        );
+        block_on(engine.shutdown()).unwrap();
+    }
+
+    /// The holds are independent: resume clears only the user hold
+    /// while a future I/O deadline, error and attempts persist; a
+    /// retry request while user-held moves the deadline to now but can
+    /// never begin; once free, successful work alone resets attempts.
+    /// Deadlines come from the injected clock.
+    #[test]
+    fn resume_and_retry_respect_the_independent_holds() {
+        let scratch = ScratchDir::new("controls-holds");
+        let root = scratch.path().join("store");
+        let (engine, _clock) = clocked(&root, real_fs(), 10_000);
+        pause(&engine, UserPause::Pause);
+        import(&engine, &scratch.path().join("one.eml"), MESSAGE);
+        write(&engine, |tx| {
+            sb_resources::start_search_rebuild(tx, "job", 1)
+        });
+        write(&engine, |tx| {
+            sb_resources::pause_for_io(
+                tx,
+                sb_resources::SearchIoCode::OtherIo,
+                "fixture",
+                Timestamp::from_millis(3_610_000),
+                5,
+            )
+        });
+        // Resume releases only the user hold.
+        block_on(engine.resume_search_rebuild(&engine.new_idempotency_key(), "job")).unwrap();
+        let state = status(&engine);
+        assert!(!state.user_paused());
+        assert_eq!(state.io_pause().unwrap().retry_at().as_millis(), 3_610_000);
+        assert_eq!(state.io_attempts(), 5);
+        parked(&engine);
+        // User-held again: the public retry records the now-deadline
+        // but its wake can never begin the retry.
+        pause(&engine, UserPause::Pause);
+        let receipt = block_on(engine.retry_search_index(&engine.new_idempotency_key())).unwrap();
+        assert_eq!(receipt.result_json(), "{}");
+        parked(&engine);
+        let state = status(&engine);
+        assert!(state.user_paused());
+        assert_eq!(state.io_pause().unwrap().retry_at().as_millis(), 10_000);
+        assert_eq!(state.io_attempts(), 5);
+        // Once the user hold is gone the due retry begins on its own;
+        // only actual work clears the recorded history.
+        block_on(engine.resume_search_rebuild(&engine.new_idempotency_key(), "job")).unwrap();
+        wait(|| phase(&engine) == "complete");
+        assert!(status(&engine).io_pause().is_none());
+        assert_eq!(status(&engine).io_attempts(), 0);
+        assert_eq!((count(&engine, DOCS), count(&engine, QUEUE)), (1, 0));
+        block_on(engine.shutdown()).unwrap();
+    }
+
+    /// Completed ids are no-ops; a replayed key's new argument —
+    /// unknown, another job or another kind — is never resolved, so it
+    /// can never release or mutate the active job's hold; unknown ids
+    /// are `NotFound`, a wrong kind `InvalidInput`, another command's
+    /// key `Conflict`.
+    #[test]
+    fn replays_and_stale_ids_never_touch_the_active_job() {
+        let scratch = ScratchDir::new("controls-replay");
+        let engine = held(&scratch.path().join("store"));
+        write(&engine, |tx| {
+            sb_resources::start_search_rebuild(tx, "old", 1)?;
+            tx.execute(
+                "UPDATE search_rebuild_jobs SET phase='complete' WHERE job_id='old'",
+                [],
+            )
+            .map_err(|error| StoreError::internal(error.to_string()))
+        });
+        write(&engine, |tx| {
+            sb_resources::create_import_job(tx, "import-1", &[], Timestamp::from_millis(0))
+        });
+        let b = block_on(engine.start_search_rebuild(&engine.new_idempotency_key())).unwrap();
+        assert_ne!(b.job_id(), "old");
+        // Completed cancel and resume are receipted no-ops.
+        let key_c = engine.new_idempotency_key();
+        let key_r = engine.new_idempotency_key();
+        let cancel_old = block_on(engine.cancel_job(&key_c, "old")).unwrap();
+        let resume_old = block_on(engine.resume_search_rebuild(&key_r, "old")).unwrap();
+        assert_eq!(
+            cancel_old.result_json(),
+            encode_job_receipt("old", Some("complete"))
+        );
+        assert_eq!(
+            resume_old.result_json(),
+            encode_job_receipt("old", Some("complete"))
+        );
+        // Replays naming another, unknown or wrong-kind id return the
+        // original receipt and change nothing.
+        for arg in ["never-existed", b.job_id(), "import-1"] {
+            assert_eq!(
+                block_on(engine.cancel_job(&key_c, arg))
+                    .unwrap()
+                    .result_json(),
+                cancel_old.result_json()
+            );
+            assert_eq!(
+                block_on(engine.resume_search_rebuild(&key_r, arg))
+                    .unwrap()
+                    .result_json(),
+                resume_old.result_json()
+            );
+        }
+        let stored = job(&engine);
+        assert_eq!(
+            (stored.id(), stored.phase()),
+            (b.job_id(), RebuildPhase::Reset)
+        );
+        assert!(status(&engine).user_paused(), "a replay released the hold");
+        // Typed errors on fresh keys.
+        let error = block_on(engine.cancel_job(&engine.new_idempotency_key(), "never-existed"))
+            .unwrap_err();
+        assert!(matches!(error, EngineError::NotFound { .. }), "{error:?}");
+        let error =
+            block_on(engine.resume_search_rebuild(&engine.new_idempotency_key(), "never-existed"))
+                .unwrap_err();
+        assert!(matches!(error, EngineError::NotFound { .. }), "{error:?}");
+        let error =
+            block_on(engine.resume_search_rebuild(&engine.new_idempotency_key(), "import-1"))
+                .unwrap_err();
+        assert!(
+            matches!(error, EngineError::InvalidInput { .. }),
+            "{error:?}"
+        );
+        // A key spent on another command stays Conflict.
+        let error = block_on(engine.cancel_job(&key_r, b.job_id())).unwrap_err();
+        assert!(matches!(error, EngineError::Conflict { .. }), "{error:?}");
+        // Cancelling the active job itself receipts the hold; a replay
+        // with the completed id still returns that receipt.
+        let key_p = engine.new_idempotency_key();
+        let paused = block_on(engine.cancel_job(&key_p, b.job_id())).unwrap();
+        assert_eq!(
+            paused.result_json(),
+            encode_job_receipt(b.job_id(), Some("paused"))
+        );
+        assert_eq!(
+            block_on(engine.cancel_job(&key_p, "old"))
+                .unwrap()
+                .result_json(),
+            paused.result_json()
+        );
+        assert_eq!(job(&engine).id(), b.job_id());
+        block_on(engine.shutdown()).unwrap();
+    }
+
+    /// A dropped command future still finishes: the counted worker owns
+    /// the write and every post-commit step before it would reply
+    /// (spec/07). Each future is polled once and dropped while the real
+    /// writer is held by a coordinating transaction; nothing is
+    /// replayed and nothing is poked.
+    #[test]
+    fn dropped_command_futures_still_commit_and_act() {
+        let scratch = ScratchDir::new("controls-drop");
+        let root = scratch.path().join("store");
+        let engine = held(&root);
+        write(&engine, |tx| {
+            sb_resources::start_search_rebuild(tx, "job", 1)
+        });
+        let a = waiting(&engine, &scratch.path().join("waiting.eml"));
+        let mut cx = Context::from_waker(Waker::noop());
+        let hold = |engine: &Engine, release: mpsc::Receiver<()>| {
+            let (inside, held) = mpsc::channel();
+            let pending = engine.resources().write(WritePriority::User, move |_tx| {
+                inside.send(()).unwrap();
+                release.recv().unwrap();
+                Ok(())
+            });
+            held.recv_timeout(Duration::from_secs(30)).unwrap();
+            pending
+        };
+        let receipts_before = count(&engine, "SELECT count(*) FROM command_receipts");
+        let (gate, gated) = mpsc::channel();
+        let writer = hold(&engine, gated);
+        let keys: Vec<String> = (0..4).map(|_| engine.new_idempotency_key()).collect();
+        {
+            let mut f = pin!(engine.start_search_rebuild(&keys[0]));
+            assert!(f.as_mut().poll(&mut cx).is_pending());
+        }
+        {
+            let mut f = pin!(engine.resume_search_rebuild(&keys[1], "job"));
+            assert!(f.as_mut().poll(&mut cx).is_pending());
+        }
+        {
+            let mut f = pin!(engine.retry_search_index(&keys[2]));
+            assert!(f.as_mut().poll(&mut cx).is_pending());
+        }
+        {
+            let mut f = pin!(engine.cancel_job(&keys[3], &a));
+            assert!(f.as_mut().poll(&mut cx).is_pending());
+        }
+        gate.send(()).unwrap();
+        block_on(writer).unwrap();
+        // Every accepted command committed and acted without a caller.
+        wait(|| count(&engine, "SELECT count(*) FROM command_receipts") >= receipts_before + 4);
+        wait(|| !status(&engine).user_paused());
+        wait(|| {
+            let dropped = block_on(engine.import_job(&a)).unwrap();
+            dropped.state() == ImportJobState::Cancelled && dropped.report_path().is_some()
+        });
+        assert_eq!(job(&engine).id(), "job");
+        // A dropped cancel's cleanup is owned work that shutdown awaits.
+        let c = waiting(&engine, &scratch.path().join("waiting-2.eml"));
+        let before_cancel = count(&engine, "SELECT count(*) FROM command_receipts");
+        let (gate, gated) = mpsc::channel();
+        let writer = hold(&engine, gated);
+        let key = engine.new_idempotency_key();
+        {
+            let mut f = pin!(engine.cancel_job(&key, &c));
+            assert!(f.as_mut().poll(&mut cx).is_pending());
+        }
+        let closing = std::thread::spawn(move || block_on(engine.shutdown()));
+        gate.send(()).unwrap();
+        block_on(writer).unwrap();
+        closing.join().unwrap().unwrap();
+        let engine = block_on(Engine::open(&root)).unwrap();
+        assert_eq!(
+            count(&engine, "SELECT count(*) FROM command_receipts"),
+            before_cancel + 1
+        );
+        assert_eq!(
+            block_on(engine.import_job(&c)).unwrap().state(),
+            ImportJobState::Cancelled
+        );
+        block_on(engine.shutdown()).unwrap();
+    }
+}

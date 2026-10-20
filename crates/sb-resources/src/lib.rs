@@ -54,10 +54,11 @@ pub use sb_store::imports::{
     ImportJobState, ImportMessage, MAX_IMPORT_BATCH, MAX_IMPORT_CHANGES_BYTES,
 };
 pub use sb_store::index::rebuild::{
-    RebuildJob, RebuildPhase, SearchIndexStatus, SearchIoCode, begin_index_retry,
-    commit_index_recovery, complete_rebuild, latest_rebuild, pause_for_io_if_current,
-    rebuild_enqueue_batch, rebuild_job, rebuild_reset_batch, reconcile_search_target,
-    record_index_attempt_success, request_index_retry, search_index_status,
+    JobKind, RebuildJob, RebuildPhase, SearchIndexStatus, SearchIoCode, UserPause,
+    begin_index_retry, commit_index_recovery, complete_rebuild, job_kind, latest_rebuild,
+    pause_for_io_if_current, rebuild_enqueue_batch, rebuild_job, rebuild_reset_batch,
+    reconcile_search_target, record_index_attempt_success, request_index_retry,
+    search_index_status, set_user_pause, start_search_rebuild,
 };
 pub use sb_store::index::{
     IndexBatch, IndexDocument, IndexFence, IndexPublication, IndexReason, IndexState,
@@ -85,11 +86,11 @@ pub use sb_store::threads::{
 };
 pub use sb_store::{
     ImportSourceSnapshot, ListObserver, Receipt, StoreError, Timestamp, Transaction, Uuid,
-    WriteFuture, WritePriority, run_once,
+    WriteFuture, WritePriority, encode_job_receipt, receipt_job_id, run_once,
 };
 
 #[cfg(feature = "test-seams")]
-pub use sb_store::index::rebuild::{UserPause, pause_for_io, set_user_pause, start_search_rebuild};
+pub use sb_store::index::rebuild::pause_for_io;
 #[cfg(feature = "test-seams")]
 pub use sb_store::index::search_generation;
 #[cfg(not(feature = "test-seams"))]
