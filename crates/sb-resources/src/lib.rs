@@ -55,13 +55,14 @@ pub use sb_store::imports::{
 };
 pub use sb_store::index::rebuild::{
     RebuildJob, RebuildPhase, SearchIndexStatus, SearchIoCode, begin_index_retry,
-    commit_index_recovery, latest_rebuild, pause_for_io_if_current, record_index_attempt_success,
-    request_index_retry, search_index_status,
+    commit_index_recovery, complete_rebuild, latest_rebuild, pause_for_io_if_current,
+    rebuild_enqueue_batch, rebuild_job, rebuild_reset_batch, reconcile_search_target,
+    record_index_attempt_success, request_index_retry, search_index_status,
 };
 pub use sb_store::index::{
     IndexBatch, IndexDocument, IndexFence, IndexPublication, IndexReason, IndexState,
     MAX_INDEX_BATCH, MAX_INDEX_BATCH_BYTES, ObservedAvailability, PendingDocument,
-    note_observed_availability, publish_batch,
+    note_observed_availability, publish_batch, target_version,
 };
 pub use sb_store::lists::{
     ListAnchor, ListKey, ListPage, ListScope, MAX_PAGE_ROWS, MailboxRole, PageRead, StoredListRow,

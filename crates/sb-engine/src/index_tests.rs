@@ -168,7 +168,7 @@ fn object(engine: &Engine, root: &Path) -> std::path::PathBuf {
         .resources()
         .read(|tx| {
             tx.query_row(
-                "SELECT content_sha256 FROM acquisitions LIMIT 1",
+                "SELECT content_sha256 FROM acquisitions ORDER BY acquisition_id LIMIT 1",
                 [],
                 |row| row.get(0),
             )
@@ -514,7 +514,7 @@ fn a_missing_lookup_is_a_terminal_read_error_not_an_io_retry() {
 }
 
 #[test]
-fn reset_and_newer_target_do_not_extract_or_clear_a_due_hold() {
+fn reset_enqueue_drive_the_due_hold_and_a_newer_target_never_extracts() {
     let scratch = ScratchDir::new("index-phase-gate");
     let root = scratch.path().join("store");
     let engine = held(&root);
@@ -535,17 +535,31 @@ fn reset_and_newer_target_do_not_extract_or_clear_a_due_hold() {
     let (engine, _) = clocked(&root, fs.clone(), 10_000);
     pause(&engine, UserPause::Resume);
     parked(&engine);
-    assert_eq!(status(&engine).io_attempts(), 2);
-    assert!(status(&engine).io_pause().is_some());
-    assert_eq!(fs.calls(FsOp::Open), 0);
-    assert_eq!(count(&engine, QUEUE), 1);
+    // The due hold began its retry, reset and enqueue committed
+    // without object I/O (successful work reset the history), then
+    // the index phase's one failed object open recorded the native
+    // cause as a fresh pause.
+    let state = status(&engine);
+    let held_io = state.io_pause().unwrap();
+    assert_eq!(held_io.code(), sb_resources::SearchIoCode::StorageFull);
+    assert_eq!(held_io.retry_at().as_millis(), 11_000);
+    assert_eq!(state.io_attempts(), 1);
+    assert_eq!(fs.calls(FsOp::Open), 1);
+    assert_eq!((count(&engine, DOCS), count(&engine, QUEUE)), (0, 1));
+    assert_eq!(
+        write(&engine, |tx| {
+            Ok(sb_resources::latest_rebuild(tx)?.unwrap().phase())
+        }),
+        sb_resources::RebuildPhase::Index
+    );
+    // A newer stored target is never extracted, driven or downgraded.
     external(
         &root.join("state.sqlite"),
         "UPDATE search_rebuild_jobs SET phase='complete'; UPDATE store_meta SET value='999' WHERE key='search_extractor_version'",
     );
     engine.indexer().wake();
     parked(&engine);
-    assert_eq!(fs.calls(FsOp::Open), 0);
+    assert_eq!(fs.calls(FsOp::Open), 1);
     assert!(status(&engine).io_pause().is_some());
     block_on(engine.shutdown()).unwrap();
 }
@@ -915,4 +929,720 @@ fn process_crashes_on_both_sides_of_worker_publication_converge_after_restart() 
     );
     assert_eq!(cuts, 2);
     assert!(saw_old && saw_new);
+}
+
+/// Real-worker rebuild driver acceptance (spec/06 "Runtime rebuild
+/// driver"): bounded phases, holds, reconciliation and crash cuts,
+/// reusing this file's helpers so no private surface widens.
+mod rebuild {
+    use super::*;
+
+    fn phase(engine: &Engine) -> String {
+        engine
+            .resources()
+            .read(|tx| {
+                tx.query_row(
+                    "SELECT phase FROM search_rebuild_jobs ORDER BY epoch DESC LIMIT 1",
+                    [],
+                    |row| row.get(0),
+                )
+                .map_err(|error| StoreError::internal(error.to_string()))
+            })
+            .unwrap()
+    }
+
+    fn job(engine: &Engine) -> sb_resources::RebuildJob {
+        engine
+            .resources()
+            .read(|tx| Ok(sb_resources::latest_rebuild(tx)?.unwrap()))
+            .unwrap()
+    }
+
+    /// Every durable document field, state and mask plus the FTS hit
+    /// set — the same-version identical-rebuild acceptance compares
+    /// these, never job ids or generations.
+    fn doc_rows(engine: &Engine) -> (Option<String>, Vec<i64>) {
+        engine
+            .resources()
+            .read(|tx| {
+                let fields: Option<String> = tx
+                    .query_row(
+                        "SELECT group_concat(doc_id||'|'||extractor_version||'|'||state||'|'||
+                     truncated_fields||'|'||subject||'|'||from_text||'|'||to_text||'|'||cc_text||'|'||
+                     body_authored||'|'||body_quoted||'|'||body_signature||'|'||attachment_names, ';')
+                     FROM (SELECT * FROM d_search_docs ORDER BY doc_id)",
+                        [],
+                        |row| row.get(0),
+                    )
+                    .map_err(|error| StoreError::internal(error.to_string()))?;
+                let hits = tx
+                    .prepare(
+                        "SELECT rowid FROM d_search_fts
+                         WHERE d_search_fts MATCH 'indexneedle' ORDER BY rowid",
+                    )
+                    .map_err(|error| StoreError::internal(error.to_string()))?
+                    .query_map([], |row| row.get(0))
+                    .map_err(|error| StoreError::internal(error.to_string()))?
+                    .collect::<Result<Vec<i64>, _>>()
+                    .map_err(|error| StoreError::internal(error.to_string()))?;
+                Ok((fields, hits))
+            })
+            .unwrap()
+    }
+
+    /// 201 acquisitions past both 200-row bounds rebuild to identical
+    /// documents; a foreground User write lands between phase batches.
+    #[test]
+    fn a_bounded_rebuild_converges_identically_around_foreground_writes() {
+        let scratch = ScratchDir::new("rebuild-bounded");
+        let root = scratch.path().join("store");
+        let engine = block_on(Engine::open(&root)).unwrap();
+        pause(&engine, UserPause::Pause);
+        let mut bytes = Vec::new();
+        for n in 0..201 {
+            bytes.extend_from_slice(
+                format!("From s Sat Oct 17 12:00:00 2026\nSubject: {n}\n\nindexneedle {n}\n")
+                    .as_bytes(),
+            );
+        }
+        import(&engine, &scratch.path().join("many.mbox"), &bytes);
+        pause(&engine, UserPause::Resume);
+        drained(&engine);
+        let before = doc_rows(&engine);
+        wait(|| {
+            !engine
+                .resources()
+                .read(sb_resources::thread_revisions)
+                .unwrap()
+                .stale()
+        });
+        assert_eq!(count(&engine, DOCS), 201);
+        assert_eq!(before.1.len(), 201);
+        // A real user hold makes the rebuild wait for its start.
+        pause(&engine, UserPause::Pause);
+        write(&engine, |tx| {
+            sb_resources::start_search_rebuild(tx, "job", 1)
+        });
+        let before_gen = generation(&engine);
+        let once = Arc::new(AtomicUsize::new(0));
+        let calls = once.clone();
+        // The first phase commit's barrier interleaves a real User
+        // write before the next bounded batch.
+        let gate = Arc::new(std::sync::Barrier::new(2));
+        let hooked = gate.clone();
+        hook(&engine, move |event| {
+            if event == Event::Committed {
+                let step = calls.fetch_add(1, Ordering::SeqCst);
+                if matches!(step, 0 | 2 | 3) {
+                    hooked.wait();
+                }
+            }
+        });
+        pause(&engine, UserPause::Resume);
+        wait(|| once.load(Ordering::SeqCst) > 0);
+        let checkpoint = job(&engine);
+        assert_eq!(checkpoint.phase(), sb_resources::RebuildPhase::Reset);
+        assert_eq!(
+            (checkpoint.doc_cursor(), checkpoint.phase_count()),
+            (200, 200)
+        );
+        assert_eq!((count(&engine, DOCS), count(&engine, QUEUE)), (1, 0));
+        assert_eq!(
+            generation(&engine),
+            before_gen + 2,
+            "Resume and reset committed"
+        );
+        write(&engine, |tx| {
+            sb_resources::set_user_pause(tx, UserPause::Resume)
+        });
+        gate.wait();
+        // First enqueue batch stops at id200. A real duplicate import
+        // refreshes id1 behind that cursor while the worker is parked.
+        wait(|| once.load(Ordering::SeqCst) >= 3);
+        assert_eq!(job(&engine).acq_cursor(), 200);
+        let token = engine
+            .resources()
+            .pending_index_batch()
+            .unwrap()
+            .documents
+            .into_iter()
+            .find(|pending| pending.doc_id == 1)
+            .unwrap();
+        let bytes = std::fs::read(object(&engine, &root)).unwrap();
+        import(&engine, &scratch.path().join("duplicate.eml"), &bytes);
+        let refreshed = engine
+            .resources()
+            .pending_index_batch()
+            .unwrap()
+            .documents
+            .into_iter()
+            .find(|pending| pending.doc_id == 1)
+            .unwrap();
+        assert!(refreshed.revision > token.revision);
+        assert_eq!(refreshed.enqueued_at, token.enqueued_at);
+        gate.wait();
+        wait(|| once.load(Ordering::SeqCst) >= 4);
+        assert_eq!(job(&engine).phase(), sb_resources::RebuildPhase::Index);
+        let retained = engine
+            .resources()
+            .pending_index_batch()
+            .unwrap()
+            .documents
+            .into_iter()
+            .find(|pending| pending.doc_id == 1)
+            .unwrap();
+        assert_eq!(
+            retained, refreshed,
+            "enqueue lost a producer behind its cursor"
+        );
+        gate.wait();
+        wait(|| phase(&engine) == "complete");
+        assert!(generation(&engine) > before_gen);
+        assert_eq!(doc_rows(&engine), before);
+        assert_eq!(count(&engine, QUEUE), 0);
+        block_on(engine.shutdown()).unwrap();
+    }
+
+    /// Startup resumes a stored uncancelled job at its committed phase
+    /// and leaves a user-held one parked until the hold is released.
+    #[test]
+    fn startup_resumes_an_uncancelled_job_and_keeps_the_user_hold() {
+        let scratch = ScratchDir::new("rebuild-resume");
+        let root = scratch.path().join("store");
+        let engine = held(&root);
+        pause(&engine, UserPause::Resume);
+        drained(&engine);
+        pause(&engine, UserPause::Pause);
+        write(&engine, |tx| {
+            sb_resources::start_search_rebuild(tx, "job", 1)
+        });
+        block_on(engine.shutdown()).unwrap();
+        // The held job stays parked across reopen: no auto-resume.
+        let engine = block_on(Engine::open(&root)).unwrap();
+        parked(&engine);
+        let stored = job(&engine);
+        assert_eq!(stored.id(), "job");
+        assert_eq!(phase(&engine), "reset");
+        assert!(status(&engine).user_paused());
+        assert_eq!(count(&engine, DOCS), 1);
+        pause(&engine, UserPause::Resume);
+        wait(|| phase(&engine) == "complete");
+        assert_eq!((count(&engine, DOCS), count(&engine, QUEUE)), (1, 0));
+        block_on(engine.shutdown()).unwrap();
+        // Plant an uncancelled checkpoint with no engine worker running.
+        let resources = Resources::open(&root).unwrap();
+        block_on(resources.write(WritePriority::User, |tx| {
+            sb_resources::start_search_rebuild(tx, "uncancelled", 1)
+        }))
+        .unwrap();
+        resources.close().unwrap();
+        let engine = block_on(Engine::open(&root)).unwrap();
+        wait(|| phase(&engine) == "complete");
+        assert_eq!(job(&engine).id(), "uncancelled");
+        assert_eq!((count(&engine, DOCS), count(&engine, QUEUE)), (1, 0));
+        block_on(engine.shutdown()).unwrap();
+    }
+
+    /// The durable reconciliation's private available-version input:
+    /// 1->2 creates and reuses jobs under holds while keeping
+    /// completed ids; a same-or-newer target is never touched.
+    #[test]
+    fn version_reconciliation_creates_and_reuses_jobs_under_both_holds() {
+        let scratch = ScratchDir::new("rebuild-versions");
+        let root = scratch.path().join("store");
+        let engine = block_on(Engine::open(&root)).unwrap();
+        pause(&engine, UserPause::Pause);
+        write(&engine, |tx| {
+            sb_resources::pause_for_io(
+                tx,
+                sb_resources::SearchIoCode::OtherIo,
+                "fixture",
+                Timestamp::from_millis(9_000),
+                3,
+            )
+        });
+        // A completed predecessor keeps its id; the active job is
+        // restarted at reset with the same id and a fresh epoch.
+        write(&engine, |tx| {
+            sb_resources::start_search_rebuild(tx, "old", 1)?;
+            tx.execute(
+                "UPDATE search_rebuild_jobs SET phase='complete' WHERE job_id='old'",
+                [],
+            )
+            .map_err(|error| StoreError::internal(error.to_string()))?;
+            sb_resources::start_search_rebuild(tx, "live", 1)?;
+            Ok(())
+        });
+        let epoch = status(&engine).epoch();
+        assert!(!write(&engine, |tx| sb_resources::reconcile_search_target(
+            tx, "ignored", 1
+        )));
+        assert!(write(&engine, |tx| {
+            sb_resources::reconcile_search_target(tx, "reused", 2)
+        }));
+        let stored = job(&engine);
+        assert_eq!(stored.id(), "live");
+        assert_eq!(stored.phase(), sb_resources::RebuildPhase::Reset);
+        assert_eq!(stored.epoch(), epoch + 1);
+        assert_eq!(stored.doc_cursor(), 0);
+        let state = status(&engine);
+        assert!(state.user_paused());
+        assert_eq!(
+            state.io_pause().unwrap().retry_at(),
+            Timestamp::from_millis(9_000)
+        );
+        assert_eq!(state.io_attempts(), 3);
+        assert_eq!(
+            write(&engine, |tx| {
+                Ok(sb_resources::rebuild_job(tx, "old")?.phase())
+            }),
+            sb_resources::RebuildPhase::Complete
+        );
+        assert_eq!(write(&engine, |tx| sb_resources::target_version(tx)), 2);
+        for available in [1, 2] {
+            assert!(!write(&engine, move |tx| {
+                sb_resources::reconcile_search_target(tx, "ignored", available)
+            }));
+        }
+        // The stored target now exceeds the build: the worker cannot
+        // drive it and open's real reconciliation leaves it alone.
+        block_on(engine.shutdown()).unwrap();
+        let engine = block_on(Engine::open(&root)).unwrap();
+        parked(&engine);
+        assert_eq!(write(&engine, |tx| sb_resources::target_version(tx)), 2);
+        assert_eq!(phase(&engine), "reset");
+        assert!(status(&engine).user_paused());
+        block_on(engine.shutdown()).unwrap();
+    }
+
+    /// The durable user hold is the cancellation boundary: after its
+    /// receipt no data or phase write commits, and reopen keeps the
+    /// same id, phase and cursors until the hold is released.
+    #[test]
+    fn a_user_hold_stops_all_later_progress_and_reopen_resumes_on_release() {
+        let scratch = ScratchDir::new("rebuild-hold");
+        let root = scratch.path().join("store");
+        let engine = held(&root);
+        pause(&engine, UserPause::Resume);
+        drained(&engine);
+        pause(&engine, UserPause::Pause);
+        write(&engine, |tx| {
+            sb_resources::start_search_rebuild(tx, "job", 1)
+        });
+        let commits = Arc::new(AtomicUsize::new(0));
+        let counted = commits.clone();
+        let gate = Arc::new(std::sync::Barrier::new(2));
+        let hooked = gate.clone();
+        hook(&engine, move |event| {
+            if event == Event::Committed && counted.fetch_add(1, Ordering::SeqCst) == 0 {
+                hooked.wait();
+            }
+        });
+        pause(&engine, UserPause::Resume);
+        wait(|| commits.load(Ordering::SeqCst) > 0);
+        // The durable hold commits while the worker sits between
+        // phase commits: ZERO data or phase writes may commit after.
+        pause(&engine, UserPause::Pause);
+        gate.wait();
+        parked(&engine);
+        std::thread::sleep(Duration::from_millis(50));
+        assert_eq!(commits.load(Ordering::SeqCst), 1);
+        let stored = job(&engine);
+        let held = (
+            stored.id().to_owned(),
+            stored.phase(),
+            stored.doc_cursor(),
+            stored.acq_cursor(),
+        );
+        block_on(engine.shutdown()).unwrap();
+        let engine = block_on(Engine::open(&root)).unwrap();
+        parked(&engine);
+        let stored = job(&engine);
+        assert_eq!(
+            (
+                stored.id().to_owned(),
+                stored.phase(),
+                stored.doc_cursor(),
+                stored.acq_cursor()
+            ),
+            held
+        );
+        pause(&engine, UserPause::Resume);
+        wait(|| phase(&engine) == "complete");
+        assert_eq!((count(&engine, DOCS), count(&engine, QUEUE)), (1, 0));
+        block_on(engine.shutdown()).unwrap();
+    }
+
+    /// A producer enqueueing behind an empty capture is never stranded:
+    /// the rejected completion recaptures, indexes it and completes.
+    #[test]
+    fn a_producer_behind_completion_is_recaptured_and_finishes() {
+        let scratch = ScratchDir::new("rebuild-producer");
+        let root = scratch.path().join("store");
+        let engine = held(&root);
+        pause(&engine, UserPause::Resume);
+        drained(&engine);
+        pause(&engine, UserPause::Pause);
+        write(&engine, |tx| {
+            sb_resources::start_search_rebuild(tx, "job", 1)
+        });
+        let engine = Arc::new(engine);
+        let weak = Arc::downgrade(&engine);
+        let source = scratch.path().join("late.eml");
+        let once = AtomicUsize::new(0);
+        let (sent, observed) = mpsc::channel();
+        hook(&engine, move |event| {
+            if event != Event::Captured {
+                return;
+            }
+            // The empty Index capture is committed: this producer's
+            // real import lands before the completion transaction.
+            let engine = weak.upgrade().unwrap();
+            if count(&engine, QUEUE) == 0
+                && once
+                    .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
+                    .is_ok()
+            {
+                // A legitimate due metadata retry retains history before
+                // the captured completion is rejected by a new producer.
+                let now = engine.resources().now();
+                let fence = engine.resources().pending_index_batch().unwrap().fence;
+                write(&engine, move |tx| {
+                    sb_resources::pause_for_io(
+                        tx,
+                        sb_resources::SearchIoCode::OtherIo,
+                        "fixture",
+                        now,
+                        5,
+                    )
+                });
+                write(&engine, move |tx| {
+                    sb_resources::begin_index_retry(tx, fence, now)
+                });
+                import(&engine, &source, b"Subject: late\n\nindexneedle\n");
+            } else if once
+                .compare_exchange(1, 2, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+            {
+                sent.send(status(&engine).io_attempts()).unwrap();
+            }
+        });
+        pause(&engine, UserPause::Resume);
+        wait(|| phase(&engine) == "complete");
+        assert_eq!(
+            observed.recv_timeout(Duration::from_secs(30)).unwrap(),
+            5,
+            "a rejected completion is not successful indexing"
+        );
+        assert_eq!((count(&engine, DOCS), count(&engine, QUEUE)), (2, 0));
+        block_on(Arc::try_unwrap(engine).unwrap().shutdown()).unwrap();
+    }
+
+    /// A real generation failure on a phase write gates reads until
+    /// the validated recovery commits; the phase then resumes.
+    #[test]
+    fn a_phase_generation_failure_gates_reads_and_recovers() {
+        let scratch = ScratchDir::new("rebuild-gen-failure");
+        let root = scratch.path().join("store");
+        let engine = held(&root);
+        pause(&engine, UserPause::Resume);
+        drained(&engine);
+        pause(&engine, UserPause::Pause);
+        write(&engine, |tx| {
+            sb_resources::start_search_rebuild(tx, "job", 1)
+        });
+        external(
+            &root.join("state.sqlite"),
+            "CREATE TRIGGER reject_rebuild_generation BEFORE UPDATE OF value ON store_meta WHEN OLD.key='search_generation' BEGIN SELECT RAISE(ABORT,'fixture transaction failure'); END",
+        );
+        // The release itself cannot commit a generation under the
+        // trigger, so the hold is lifted outside the counted ops.
+        external(
+            &root.join("state.sqlite"),
+            "UPDATE search_index_state SET user_paused=0",
+        );
+        engine.indexer().wake();
+        wait(|| {
+            matches!(
+                engine.indexer().status(engine.resources()),
+                Err(StoreError::Unavailable { .. })
+            )
+        });
+        assert_eq!(phase(&engine), "reset");
+        assert_eq!((count(&engine, DOCS), count(&engine, QUEUE)), (1, 0));
+        external(
+            &root.join("state.sqlite"),
+            "DROP TRIGGER reject_rebuild_generation",
+        );
+        engine.indexer().wake();
+        wait(|| phase(&engine) == "complete");
+        assert_eq!((count(&engine, DOCS), count(&engine, QUEUE)), (1, 0));
+        block_on(engine.shutdown()).unwrap();
+    }
+
+    #[test]
+    fn native_enqueue_full_records_its_phase_fence_and_cannot_pause_a_new_epoch() {
+        for supersede in [false, true] {
+            let scratch = ScratchDir::new("rebuild-native-full");
+            let root = scratch.path().join("store");
+            let resources = Resources::open(&root).unwrap();
+            block_on(resources.write(WritePriority::User, |tx| {
+                tx.execute_batch(
+                    "WITH RECURSIVE ids(id) AS (VALUES(1) UNION ALL SELECT id+1 FROM ids WHERE id<1001)
+                     INSERT INTO acquisitions(acquisition_id,content_sha256,byte_length,object_state,first_acquired_at)
+                     SELECT id,printf('%064x',id),1,'published',1 FROM ids;",
+                ).map_err(|error| StoreError::internal(error.to_string()))?;
+                sb_resources::start_search_rebuild(tx, "native-phase", 1)
+            })).unwrap();
+            let epoch = resources
+                .read(|tx| Ok(sb_resources::search_index_status(tx)?.epoch()))
+                .unwrap();
+            block_on(resources.write(WritePriority::User, move |tx| {
+                sb_resources::rebuild_reset_batch(tx, "native-phase", epoch, 200)
+            }))
+            .unwrap();
+            block_on(resources.write(WritePriority::User, |tx| {
+                sb_resources::set_user_pause(tx, UserPause::Pause)
+            }))
+            .unwrap();
+            resources.close().unwrap();
+            let (engine, _) = clocked(&root, real_fs(), 10_000);
+            let engine = Arc::new(engine);
+            parked(&engine);
+            write(&engine, |tx| {
+                let pages: i64 = tx
+                    .query_row("PRAGMA page_count", [], |row| row.get(0))
+                    .map_err(|error| StoreError::internal(error.to_string()))?;
+                tx.query_row(&format!("PRAGMA max_page_count={pages}"), [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .map_err(|error| StoreError::internal(error.to_string()))
+            });
+            let weak = Arc::downgrade(&engine);
+            let once = AtomicUsize::new(0);
+            let (sent, failed) = mpsc::channel();
+            hook(&engine, move |event| {
+                if event == Event::Recovering && once.fetch_add(1, Ordering::SeqCst) == 0 {
+                    let engine = weak.upgrade().unwrap();
+                    sent.send((
+                        phase(&engine),
+                        job(&engine).acq_cursor(),
+                        count(&engine, QUEUE),
+                    ))
+                    .unwrap();
+                    if supersede {
+                        write(&engine, |tx| {
+                            sb_resources::reconcile_search_target(tx, "unused", 2)
+                        });
+                    }
+                }
+            });
+            pause(&engine, UserPause::Resume);
+            assert_eq!(
+                failed.recv_timeout(Duration::from_secs(30)).unwrap(),
+                ("enqueue".into(), 0, 0)
+            );
+            if supersede {
+                wait(|| {
+                    engine.indexer().status(engine.resources()).is_ok()
+                        && engine
+                            .resources()
+                            .read(|tx| sb_resources::target_version(tx))
+                            .unwrap()
+                            == 2
+                });
+                assert_eq!(job(&engine).id(), "native-phase");
+                assert_eq!(job(&engine).phase(), sb_resources::RebuildPhase::Reset);
+                assert_eq!(job(&engine).epoch(), epoch + 1);
+                assert!(status(&engine).io_pause().is_none());
+                assert_eq!(status(&engine).io_attempts(), 0);
+            } else {
+                wait(|| {
+                    engine
+                        .indexer()
+                        .status(engine.resources())
+                        .is_ok_and(|state| state.io_pause().is_some())
+                });
+                let state = status(&engine);
+                assert_eq!(
+                    state.io_pause().unwrap().code(),
+                    sb_resources::SearchIoCode::StorageFull
+                );
+                assert_eq!(state.io_pause().unwrap().retry_at().as_millis(), 11_000);
+                assert_eq!(state.io_attempts(), 1);
+                assert_eq!(phase(&engine), "enqueue");
+                assert_eq!(job(&engine).acq_cursor(), 0);
+            }
+            assert_eq!((count(&engine, DOCS), count(&engine, QUEUE)), (0, 0));
+            block_on(Arc::try_unwrap(engine).unwrap().shutdown()).unwrap();
+        }
+    }
+
+    const REBUILD_CUT_N: &str = "SB_REBUILD_WORKER_CUT_N";
+    const REBUILD_CUT_ROOT: &str = "SB_REBUILD_WORKER_CUT_ROOT";
+
+    #[test]
+    #[ignore = "spawned by the rebuild crash-cut acceptance test"]
+    fn rebuild_cut_child() {
+        use sb_resources::Fs;
+        let nth = std::env::var(REBUILD_CUT_N).unwrap().parse().unwrap();
+        let root = std::path::PathBuf::from(std::env::var_os(REBUILD_CUT_ROOT).unwrap());
+        let engine = block_on(Engine::open(&root)).unwrap();
+        let cuts = Arc::new(sb_test_support::CutFs::new(real_fs(), nth));
+        // One counted operation before the first resume/phase commit,
+        // so the sweep also sees the pre-drive durable state.
+        cuts.metadata(&root).unwrap();
+        let observed = cuts.clone();
+        hook(&engine, move |event| {
+            if matches!(event, Event::Captured | Event::Committed) {
+                observed.metadata(&root).unwrap();
+            }
+        });
+        pause(&engine, UserPause::Resume);
+        wait(|| phase(&engine) == "complete");
+        // The manual op, reset, enqueue, three index captures, the
+        // publication and the completion: eight counted operations.
+        wait(|| cuts.operations() == 8);
+        block_on(engine.shutdown()).unwrap();
+        assert_eq!(cuts.operations(), 8);
+    }
+
+    #[test]
+    fn process_crashes_across_every_rebuild_phase_converge_after_restart() {
+        let scratch = ScratchDir::new("rebuild-worker-cuts");
+        let baselines = std::cell::RefCell::new(std::collections::BTreeMap::new());
+        let (mut saw_old, mut saw_new) = (false, false);
+        let cuts = sb_test_support::run_crash_cuts(
+            REBUILD_CUT_N,
+            REBUILD_CUT_ROOT,
+            "index_tests::rebuild::rebuild_cut_child",
+            &mut |n| {
+                let root = scratch.path().join(format!("rebuild-cut-{n}"));
+                let engine = held(&root);
+                pause(&engine, UserPause::Resume);
+                drained(&engine);
+                pause(&engine, UserPause::Pause);
+                write(&engine, |tx| {
+                    sb_resources::start_search_rebuild(tx, "job", 1)
+                });
+                let inputs: i64 = engine
+                    .resources()
+                    .read(|tx| {
+                        tx.query_row(
+                    "SELECT CAST(value AS INTEGER) FROM store_meta WHERE key='index_inputs'",
+                    [], |row| row.get(0),
+                ).map_err(|error| StoreError::internal(error.to_string()))
+                    })
+                    .unwrap();
+                baselines.borrow_mut().insert(
+                    root.clone(),
+                    (generation(&engine), job(&engine).epoch(), inputs),
+                );
+                block_on(engine.shutdown()).unwrap();
+                root
+            },
+            &mut |root| {
+                let resources = Resources::open(root).unwrap();
+                let state = snapshot(&resources);
+                let job_phase: String = resources
+                    .read(|tx| {
+                        tx.query_row("SELECT phase FROM search_rebuild_jobs", [], |row| {
+                            row.get(0)
+                        })
+                        .map_err(|error| StoreError::internal(error.to_string()))
+                    })
+                    .unwrap();
+                let (id, epoch, doc_cursor, acq_cursor, processed, inputs, held): (
+                    String,
+                    i64,
+                    i64,
+                    i64,
+                    i64,
+                    i64,
+                    bool,
+                ) = resources
+                    .read(|tx| {
+                        tx.query_row(
+                            "SELECT job_id,epoch,doc_cursor,acq_cursor,phase_count,
+                        (SELECT CAST(value AS INTEGER) FROM store_meta WHERE key='index_inputs'),
+                        (SELECT user_paused FROM search_index_state) FROM search_rebuild_jobs",
+                            [],
+                            |row| {
+                                Ok((
+                                    row.get(0)?,
+                                    row.get(1)?,
+                                    row.get(2)?,
+                                    row.get(3)?,
+                                    row.get(4)?,
+                                    row.get(5)?,
+                                    row.get(6)?,
+                                ))
+                            },
+                        )
+                        .map_err(|error| StoreError::internal(error.to_string()))
+                    })
+                    .unwrap();
+                assert_eq!(id, "job");
+                assert_eq!(
+                    resources
+                        .read(|tx| sb_resources::target_version(tx))
+                        .unwrap(),
+                    1
+                );
+                let (base_gen, base_epoch, base_inputs) = baselines.borrow()[root];
+                // Every kill lands between committed transactions:
+                // the durable state is always one of the sequential
+                // phase boundaries, never a torn mix.
+                let valid = [
+                    (
+                        (1, 0, 1, 1),
+                        ("reset", base_epoch, 0, 0, 0),
+                        (base_gen, base_inputs, true),
+                    ),
+                    (
+                        (0, 0, 0, 1),
+                        ("enqueue", base_epoch, 1, 0, 0),
+                        (base_gen + 2, base_inputs, false),
+                    ),
+                    (
+                        (0, 1, 0, 1),
+                        ("index", base_epoch, 1, 1, 0),
+                        (base_gen + 3, base_inputs + 1, false),
+                    ),
+                    (
+                        (1, 0, 1, 1),
+                        ("index", base_epoch, 1, 1, 1),
+                        (base_gen + 4, base_inputs + 1, false),
+                    ),
+                    (
+                        (1, 0, 1, 1),
+                        ("complete", base_epoch, 1, 1, 1),
+                        (base_gen + 5, base_inputs + 1, false),
+                    ),
+                ];
+                let observed = (
+                    (state.docs, state.queue, state.hits, state.acquisitions),
+                    (job_phase.as_str(), epoch, doc_cursor, acq_cursor, processed),
+                    (state.generation, inputs, held),
+                );
+                assert!(
+                    valid.contains(&observed),
+                    "torn rebuild state: {observed:?}"
+                );
+                saw_old |= observed == valid[0];
+                saw_new |= observed == *valid.last().unwrap();
+                resources.close().unwrap();
+                let engine = block_on(Engine::open(root)).unwrap();
+                if status(&engine).user_paused() {
+                    pause(&engine, UserPause::Resume);
+                }
+                wait(|| phase(&engine) == "complete");
+                assert_eq!((count(&engine, DOCS), count(&engine, QUEUE)), (1, 0));
+                assert_eq!(generation(&engine), base_gen + 5);
+                block_on(engine.shutdown()).unwrap();
+            },
+        );
+        assert_eq!(cuts, 8);
+        assert!(saw_old && saw_new);
+    }
 }

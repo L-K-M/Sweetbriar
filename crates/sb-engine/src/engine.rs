@@ -16,7 +16,9 @@ use crate::EngineError;
 use crate::import::ImportJobs;
 use crate::index::IndexJobs;
 use crate::windows::Windows;
-use sb_resources::{Resources, list_generation};
+use sb_resources::{
+    Resources, SEARCH_EXTRACTOR_VERSION, WritePriority, list_generation, reconcile_search_target,
+};
 
 /// The name of the worker a dropped engine closes its store on.
 const CLOSE_THREAD_NAME: &str = "sb-engine-close";
@@ -429,6 +431,9 @@ impl Engine {
                 // Recovery runs here, off the caller's thread, before
                 // the engine is handed out (spec/09).
                 .and_then(|engine| engine.recover_imports().map(|()| engine))
+                // The stored extractor target reconciles before any
+                // scheduling (spec/06 "Runtime rebuild driver").
+                .and_then(|engine| engine.reconcile_index().map(|()| engine))
                 // Messages imported before the last complete rebuild
                 // get their threads in the background (spec/02).
                 .inspect(Engine::schedule_threads)
@@ -474,6 +479,19 @@ impl Engine {
     /// thread, which is outside the runtime and may block.
     pub(crate) fn block_on<F: std::future::Future>(&self, future: F) -> F::Output {
         self.runtime.handle().block_on(future)
+    }
+
+    /// Durable target reconciliation at open (spec/06): an older
+    /// stored target starts or reuses the reset job; a same-or-newer
+    /// target and a stored job's phase, cursors and holds are left
+    /// exactly as committed. Runs on the open thread, outside the
+    /// runtime, so it blocks on the engine's own handle.
+    fn reconcile_index(&self) -> Result<(), EngineError> {
+        let job_id = self.resources().new_uuid_string();
+        self.block_on(self.resources().write(WritePriority::User, move |tx| {
+            reconcile_search_target(tx, &job_id, SEARCH_EXTRACTOR_VERSION)
+        }))?;
+        Ok(())
     }
 
     /// A fresh UUID string for a command's idempotency key (spec/07

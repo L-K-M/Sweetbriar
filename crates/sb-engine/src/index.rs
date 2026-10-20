@@ -1,5 +1,6 @@
-//! One counted publication worker. Pokes survive a pass/park handoff;
-//! only shutdown ends a parked worker (spec/06 runtime publication).
+//! One counted publication worker, now also driving bounded rebuild
+//! phases (spec/06 "Runtime rebuild driver"). Pokes survive a
+//! pass/park handoff; only shutdown ends a parked worker.
 
 #[cfg(test)]
 use std::sync::Arc;
@@ -8,11 +9,12 @@ use std::time::Duration;
 
 use sb_resources::{
     IndexFence, IndexIoContext, IndexIoUpdate, IndexPreparation, IndexReadFailure, IndexReadStage,
-    ObservedAvailability, RebuildPhase, Resources, SEARCH_EXTRACTOR_VERSION, SearchIndexStatus,
-    StoreError, Timestamp, Transaction, WritePriority, begin_index_retry, commit_index_recovery,
-    index_retry_at, latest_rebuild, note_observed_availability, publish_batch,
-    record_index_attempt_success, recover_index_io_failure, report_index_io_failure,
-    search_index_status, search_io_code,
+    MAX_INDEX_BATCH, ObservedAvailability, RebuildPhase, Resources, SEARCH_EXTRACTOR_VERSION,
+    SearchIndexStatus, StoreError, Timestamp, Transaction, WritePriority, begin_index_retry,
+    commit_index_recovery, complete_rebuild, index_retry_at, latest_rebuild,
+    note_observed_availability, publish_batch, rebuild_enqueue_batch, rebuild_job,
+    rebuild_reset_batch, record_index_attempt_success, recover_index_io_failure,
+    report_index_io_failure, search_index_status, search_io_code, target_version,
 };
 
 use crate::Engine;
@@ -65,6 +67,7 @@ pub(crate) enum Event {
     Prepared { documents: usize, bytes: usize },
     Committed,
     Recovered,
+    Recovering,
     RecoveryFailed,
     Parked,
 }
@@ -252,16 +255,30 @@ fn turn(
     }
     // An invariant gets no timed retry. A normal producer wake may
     // revalidate/reprocess repaired inputs, while readers remain gated.
-    let status = if matches!(index.failure(), Some(ReadFailure::Invariant(_))) {
-        resources.read(|tx| search_index_status(tx))?
-    } else {
-        index.status(resources)?
-    };
-    let phase = resources.read(|tx| latest_rebuild(tx).map(|job| job.map(|job| job.phase())))?;
-    if status.user_paused()
-        || matches!(phase, Some(RebuildPhase::Reset | RebuildPhase::Enqueue))
-        || stop()
-    {
+    // The worker answers through the same status gate unless an
+    // invariant is latched; the consistent read then supplies status,
+    // latest job and stored target together.
+    if !matches!(index.failure(), Some(ReadFailure::Invariant(_))) {
+        index.status(resources)?;
+    }
+    // An active job's epoch must agree with the singleton, and
+    // contradictory persistent metadata is an explicit Corrupt, never
+    // an unchanged zero-progress busy loop.
+    let (status, job, target) = resources.read(|tx| {
+        let status = search_index_status(tx)?;
+        let job = latest_rebuild(tx)?;
+        if job.as_ref().is_some_and(|job| {
+            job.phase() != RebuildPhase::Complete && job.epoch() != status.epoch()
+        }) {
+            return Err(StoreError::Corrupt {
+                detail: "the active rebuild epoch disagrees with index status".into(),
+            });
+        }
+        Ok((status, job, target_version(tx)?))
+    })?;
+    // Capability first, then the durable holds: an unsupported target
+    // is never extracted, driven or downgraded.
+    if stop() || target != SEARCH_EXTRACTOR_VERSION || status.user_paused() {
         return Ok(Next::Park(None));
     }
     if let Some(pause) = status.io_pause() {
@@ -277,6 +294,37 @@ fn turn(
             .write(resources, move |tx| begin_index_retry(tx, fence, now))
             .map(|began| if began { Next::More } else { Next::Park(None) });
     }
+    // I/O gating came before ANY phase write; each bounded step is a
+    // separate Index-priority submission under the fence it was read
+    // under, so foreground User/Sync writes interleave between turns.
+    let fence = IndexFence {
+        epoch: status.epoch(),
+        version: target,
+    };
+    if let Some(job) = job
+        .as_ref()
+        .filter(|job| job.phase() != RebuildPhase::Complete)
+    {
+        let id = job.id().to_owned();
+        match job.phase() {
+            RebuildPhase::Reset => {
+                return drive(index, resources, fence, move |tx| {
+                    let before = rebuild_job(tx, &id)?.phase();
+                    let rows = rebuild_reset_batch(tx, &id, fence.epoch, MAX_INDEX_BATCH)?;
+                    Ok(rows > 0 || rebuild_job(tx, &id)?.phase() != before)
+                });
+            }
+            RebuildPhase::Enqueue => {
+                let now = resources.now();
+                return drive(index, resources, fence, move |tx| {
+                    let before = rebuild_job(tx, &id)?.phase();
+                    let rows = rebuild_enqueue_batch(tx, &id, fence.epoch, MAX_INDEX_BATCH, now)?;
+                    Ok(rows > 0 || rebuild_job(tx, &id)?.phase() != before)
+                });
+            }
+            _ => {}
+        }
+    }
     let batch = resources.pending_index_batch()?;
     #[cfg(test)]
     index.event(Event::Captured);
@@ -284,7 +332,18 @@ fn turn(
         return Ok(Next::Park(None));
     }
     if batch.documents.is_empty() {
-        return Ok(Next::Park(None));
+        // Completion shares its empty-queue observation with the gated
+        // job check in ONE writer transaction; whether it is accepted
+        // or rejected, recapture — never a blind park that strands a
+        // producer behind a stale snapshot.
+        let Some(job) = job.filter(|job| job.phase() == RebuildPhase::Index) else {
+            return Ok(Next::Park(None));
+        };
+        let id = job.id().to_owned();
+        let epoch = batch.fence.epoch;
+        return drive(index, resources, batch.fence, move |tx| {
+            complete_rebuild(tx, &id, epoch)
+        });
     }
     let prepared = match resources.prepare_index_batch(batch, stop)? {
         IndexPreparation::Prepared(prepared) => prepared,
@@ -313,14 +372,7 @@ fn turn(
             match index.write(resources, move |tx| publish_batch(tx, fence, &publications)) {
                 Ok(accepted) => accepted,
                 Err(error) if search_io_code(&error).is_some() => {
-                    let now = resources.now();
-                    let update = index.write(resources, move |tx| {
-                        recover_index_io_failure(tx, IndexIoContext::Batch { fence }, &error, now)
-                    })?;
-                    #[cfg(test)]
-                    index.event(Event::Recovered);
-                    index.recovered();
-                    return Ok(update.into());
+                    return recover_io(index, resources, fence, error);
                 }
                 Err(error) => return Err(error),
             };
@@ -335,6 +387,57 @@ fn turn(
         index.recovered();
     }
     Ok(Next::More)
+}
+
+/// One bounded rebuild phase step under the fence it was captured
+/// under. The store operation rechecks epoch, target, phase and both
+/// holds inside the writer transaction, so a stale or newly held call
+/// commits nothing and the caller simply recaptures. Only committed
+/// work resets retry history — the success record stays gated on a
+/// still-current fence, never written for a probe or a stale/held
+/// operation.
+fn drive(
+    index: &IndexJobs,
+    resources: &Resources,
+    fence: IndexFence,
+    step: impl FnOnce(&Transaction) -> Result<bool, StoreError> + Send + 'static,
+) -> Result<Next, StoreError> {
+    match index.write(resources, step) {
+        Ok(changed) => {
+            if changed {
+                #[cfg(test)]
+                index.event(Event::Committed);
+                index.write(resources, move |tx| record_index_attempt_success(tx, fence))?;
+                index.recovered();
+            }
+            Ok(Next::More)
+        }
+        Err(error) if search_io_code(&error).is_some() => {
+            recover_io(index, resources, fence, error)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+/// A failed phase or publication write's typed I/O report under its
+/// ORIGINAL captured fence, before the volatile gate may clear — never
+/// a fresh-fence metadata replay.
+fn recover_io(
+    index: &IndexJobs,
+    resources: &Resources,
+    fence: IndexFence,
+    error: StoreError,
+) -> Result<Next, StoreError> {
+    let now = resources.now();
+    #[cfg(test)]
+    index.event(Event::Recovering);
+    let update = index.write(resources, move |tx| {
+        recover_index_io_failure(tx, IndexIoContext::Batch { fence }, &error, now)
+    })?;
+    #[cfg(test)]
+    index.event(Event::Recovered);
+    index.recovered();
+    Ok(update.into())
 }
 
 fn handle_failure(

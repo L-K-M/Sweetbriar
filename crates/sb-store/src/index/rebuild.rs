@@ -386,6 +386,26 @@ pub fn start_search_rebuild(
     Ok(job_id.to_owned())
 }
 
+/// Startup version reconciliation (spec/06 "Runtime rebuild
+/// driver"): raise an older supported target through the durable
+/// [`start_search_rebuild`], creating or reusing the reset job under
+/// its active id semantics with both holds preserved. A stored target
+/// at or above `available` is untouched — never a downgrade. Returns
+/// whether a rebuild was started. `available` is the caller's
+/// extractor constant; tests pass a higher one to exercise the
+/// version path without pretending a future extractor exists.
+pub fn reconcile_search_target(
+    tx: &Transaction,
+    job_id: &str,
+    available: u32,
+) -> Result<bool, StoreError> {
+    if target_version(tx)? >= available {
+        return Ok(false);
+    }
+    start_search_rebuild(tx, job_id, available)?;
+    Ok(true)
+}
+
 /// The next monotonic rebuild epoch, committed on `search_index_state`.
 fn next_epoch(tx: &Transaction) -> Result<i64, StoreError> {
     let epoch = status(tx)?
