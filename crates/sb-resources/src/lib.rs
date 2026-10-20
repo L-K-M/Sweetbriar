@@ -25,8 +25,9 @@ mod import;
 mod import_jobs;
 mod index;
 pub use index::{
-    IndexBlocked, IndexPreparation, IndexReadFailure, IndexReadStage, PreparedIndexBatch,
-    search_io_code, search_io_message,
+    IndexBlocked, IndexIoContext, IndexIoUpdate, IndexPreparation, IndexReadFailure,
+    IndexReadStage, PreparedIndexBatch, index_retry_at, recover_index_io_failure,
+    report_index_io_failure, search_io_code, search_io_message,
 };
 mod renditions;
 pub use renditions::{RenditionCache, RenditionError, RenditionFiles, RenditionProtection};

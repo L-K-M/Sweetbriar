@@ -149,6 +149,31 @@ Every accepted control transaction advances search generation once, including
 status-only events. SQL failure rolls the whole operation back. Runtime worker,
 timers, receipts and rebuild orchestration remain in their later steps.
 
+### Publication I/O reports (M1.6e1a)
+
+- Resources bridges current control state and extractor capability into typed
+  I/O-report outcomes. Context distinguishes uncaptured metadata from a captured
+  batch fence or document fence/token. Only typed unavailable causes are reported;
+  fixed messages and the 1s exponential/60s capped, saturating retry deadline
+  contain no raw error data. Scheduling and actual attempts stay in the engine.
+- User hold, unsupported target and reset/enqueue block publication retries.
+  An existing future I/O hold retains its error/deadline/history. A due metadata
+  retry may begin atomically; an old captured failure instead requests a fresh
+  capture. New reports recheck their original fence/token, increment persisted
+  attempts with saturation, and advance generation once only when recorded.
+  A superseded captured report is explicit and cannot strand queued input.
+- A bulk SQLite write can fail as full while small status writes still fit.
+  Recovery must preserve that original typed cause and capture: validate current
+  status/target/latest-job metadata and atomically record the permitted I/O pause
+  or republish unchanged protected status. Exactly one recovery generation
+  commits, even when the old cause is stale or a hold blocks overwriting it.
+  Only after that commit may a failed-writer read gate clear. A probe is not
+  successful indexing and must not discard failure history or its retry deadline.
+- Report/recovery SQL failure rolls the whole transition back; failure never
+  acknowledges data or reports success. Owned writer page-count bounds test real
+  SQLITE_FULL separately from failed status persistence. They alter no host-wide
+  storage limit and make no native filesystem-full or power-loss claim.
+
 ## Schema
 
 ```sql
