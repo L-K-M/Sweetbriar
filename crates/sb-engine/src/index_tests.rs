@@ -1421,6 +1421,7 @@ mod rebuild {
             let weak = Arc::downgrade(&engine);
             let once = AtomicUsize::new(0);
             let (sent, failed) = mpsc::channel();
+            let (barrier, recovered) = mpsc::channel();
             hook(&engine, move |event| {
                 if event == Event::Recovering && once.fetch_add(1, Ordering::SeqCst) == 0 {
                     let engine = weak.upgrade().unwrap();
@@ -1431,10 +1432,33 @@ mod rebuild {
                     ))
                     .unwrap();
                     if supersede {
+                        // Isolate epoch fencing under the SAME supported
+                        // target, rather than mask it with capability2.
                         write(&engine, |tx| {
-                            sb_resources::reconcile_search_target(tx, "unused", 2)
+                            tx.execute_batch(
+                                "UPDATE search_index_state SET epoch=epoch+1;
+                             UPDATE search_rebuild_jobs SET epoch=epoch+1;",
+                            )
+                            .map_err(|error| StoreError::internal(error.to_string()))
                         });
                     }
+                }
+                if supersede && event == Event::Recovered {
+                    let engine = weak.upgrade().unwrap();
+                    let state = engine
+                        .resources()
+                        .read(|tx| sb_resources::search_index_status(tx))
+                        .unwrap();
+                    barrier
+                        .send((
+                            state.epoch(),
+                            state.io_pause().map(|pause| pause.code()),
+                            state.io_attempts(),
+                        ))
+                        .unwrap();
+                    write(&engine, |tx| {
+                        sb_resources::set_user_pause(tx, UserPause::Pause)
+                    });
                 }
             });
             pause(&engine, UserPause::Resume);
@@ -1443,17 +1467,26 @@ mod rebuild {
                 ("enqueue".into(), 0, 0)
             );
             if supersede {
+                assert_eq!(
+                    recovered.recv_timeout(Duration::from_secs(30)).unwrap(),
+                    (epoch + 1, None, 0)
+                );
                 wait(|| {
-                    engine.indexer().status(engine.resources()).is_ok()
-                        && engine
-                            .resources()
-                            .read(|tx| sb_resources::target_version(tx))
-                            .unwrap()
-                            == 2
+                    engine
+                        .indexer()
+                        .status(engine.resources())
+                        .is_ok_and(|state| state.user_paused())
                 });
                 assert_eq!(job(&engine).id(), "native-phase");
-                assert_eq!(job(&engine).phase(), sb_resources::RebuildPhase::Reset);
+                assert_eq!(job(&engine).phase(), sb_resources::RebuildPhase::Enqueue);
                 assert_eq!(job(&engine).epoch(), epoch + 1);
+                assert_eq!(
+                    engine
+                        .resources()
+                        .read(|tx| sb_resources::target_version(tx))
+                        .unwrap(),
+                    1
+                );
                 assert!(status(&engine).io_pause().is_none());
                 assert_eq!(status(&engine).io_attempts(), 0);
             } else {
