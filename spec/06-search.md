@@ -738,6 +738,15 @@ invalid address/domain or limit for later exact parser spans. The permissive
 MIME header parser is not a strict validator; source/partial-summary unknown
 semantics remain their existing consumer contracts.
 
+Before the predicate compiler trusts summary address identities, the producer
+must preserve the quoted-local spelling it promises (maintenance address
+fidelity). MIME parser-version 1 may already have changed quoted pairs or lost
+a bare quoted local; exact-address leaves treat those legacy summaries as
+unknown until refreshed, not as authoritative false/true comparisons. Version
+2 preserves modern local quoting/escaping/case/Unicode. The M1.6m bounded
+summary/address backfill refreshes older rows from retained source bytes.
+This does not weaken complete-header precedence or partial-summary unknown.
+
 ### Remaining operands (M1.6f0c)
 
 Before the complete AST, `TextOperand::parse(value)` supplies a validated,
