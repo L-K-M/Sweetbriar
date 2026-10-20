@@ -13,6 +13,10 @@ use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use super::{IndexFence, advance_generation, invalid, sql_error, target_version};
 use crate::{StoreError, Timestamp};
 
+mod batches;
+pub(crate) use batches::count_accepted;
+pub use batches::{complete_rebuild, rebuild_enqueue_batch, rebuild_reset_batch};
+
 /// The durable kind a job id names: its table (spec/07). Migration 6's
 /// cross-kind triggers make one id unable to live in both.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

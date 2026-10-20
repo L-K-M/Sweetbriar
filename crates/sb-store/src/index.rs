@@ -356,6 +356,7 @@ fn publish_with_cut(
         accepted += 1;
     }
     if accepted > 0 {
+        rebuild::count_accepted(tx, fence, accepted)?;
         increment_with_cut(tx, "search_generation", cut)?;
     }
     Ok(accepted)
