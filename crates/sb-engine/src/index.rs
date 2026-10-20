@@ -383,8 +383,7 @@ fn turn(
     if let Some(failure) = failure {
         return handle_failure(resources, index, fence, failure);
     } else if accepted > 0 {
-        index.write(resources, move |tx| record_index_attempt_success(tx, fence))?;
-        index.recovered();
+        return record_success(index, resources, fence);
     }
     Ok(Next::More)
 }
@@ -407,9 +406,27 @@ fn drive(
             if changed {
                 #[cfg(test)]
                 index.event(Event::Committed);
-                index.write(resources, move |tx| record_index_attempt_success(tx, fence))?;
-                index.recovered();
+                return record_success(index, resources, fence);
             }
+            Ok(Next::More)
+        }
+        Err(error) if search_io_code(&error).is_some() => {
+            recover_io(index, resources, fence, error)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+/// Committed work does not make its history write infallible: retain
+/// that write's captured cause through the same validated I/O recovery.
+fn record_success(
+    index: &IndexJobs,
+    resources: &Resources,
+    fence: IndexFence,
+) -> Result<Next, StoreError> {
+    match index.write(resources, move |tx| record_index_attempt_success(tx, fence)) {
+        Ok(_) => {
+            index.recovered();
             Ok(Next::More)
         }
         Err(error) if search_io_code(&error).is_some() => {

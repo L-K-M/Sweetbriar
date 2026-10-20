@@ -1009,6 +1009,10 @@ mod rebuild {
         pause(&engine, UserPause::Resume);
         drained(&engine);
         let before = doc_rows(&engine);
+        assert!(
+            before.0.is_some(),
+            "the document-field comparison must not be vacuous"
+        );
         wait(|| {
             !engine
                 .resources()
@@ -1509,6 +1513,124 @@ mod rebuild {
             assert_eq!((count(&engine, DOCS), count(&engine, QUEUE)), (0, 0));
             block_on(Arc::try_unwrap(engine).unwrap().shutdown()).unwrap();
         }
+    }
+
+    /// A real SQLite-full at the success-history write is still a
+    /// captured I/O failure, even though the preceding work committed.
+    fn full_at_success_record(rebuild: bool) {
+        let scratch = ScratchDir::new("index-success-full");
+        let root = scratch.path().join("store");
+        let (engine, _clock) = clocked(&root, real_fs(), 10_000);
+        pause(&engine, UserPause::Pause);
+        import(&engine, &scratch.path().join("one.eml"), MESSAGE);
+        if rebuild {
+            write(&engine, |tx| {
+                sb_resources::start_search_rebuild(tx, "job", 1)
+            });
+        }
+        parked(&engine);
+        write(&engine, |tx| {
+            tx.execute_batch(
+                "UPDATE search_index_state SET io_attempts=5;
+                 CREATE TABLE success_padding (value BLOB);
+                 CREATE TRIGGER fill_on_success AFTER UPDATE OF io_attempts ON search_index_state
+                 WHEN NEW.io_attempts=0 BEGIN
+                   INSERT INTO success_padding VALUES(zeroblob(1000000));
+                 END;",
+            )
+            .map_err(|error| StoreError::internal(error.to_string()))
+        });
+        write(&engine, |tx| {
+            let pages: i64 = tx
+                .query_row("PRAGMA page_count", [], |row| row.get(0))
+                .map_err(|error| StoreError::internal(error.to_string()))?;
+            tx.query_row(&format!("PRAGMA max_page_count={pages}"), [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .map_err(|error| StoreError::internal(error.to_string()))
+        });
+        // Establish the fixture's native cause through the actual
+        // operation. The failed transaction rolls the user hold back.
+        let fence = engine.resources().pending_index_batch().unwrap().fence;
+        let error = block_on(engine.resources().write(WritePriority::User, move |tx| {
+            set_user_pause(tx, UserPause::Resume)?;
+            sb_resources::record_index_attempt_success(tx, fence)
+        }))
+        .unwrap_err();
+        assert_eq!(
+            sb_resources::search_io_code(&error),
+            Some(sb_resources::SearchIoCode::StorageFull)
+        );
+        assert!(status(&engine).user_paused());
+        let (sent, parked_after_work) = mpsc::channel();
+        let commits = AtomicUsize::new(0);
+        hook(&engine, move |event| {
+            if event == Event::Committed {
+                commits.fetch_add(1, Ordering::SeqCst);
+            }
+            if event == Event::Parked && commits.load(Ordering::SeqCst) > 0 {
+                let _ = sent.send(());
+            }
+        });
+        pause(&engine, UserPause::Resume);
+        parked_after_work
+            .recv_timeout(Duration::from_secs(30))
+            .unwrap();
+        let state = engine
+            .resources()
+            .read(|tx| sb_resources::search_index_status(tx))
+            .unwrap();
+        assert_eq!(
+            state.io_pause().map(|pause| pause.code()),
+            Some(sb_resources::SearchIoCode::StorageFull),
+            "a failed success-history write lost its typed I/O cause"
+        );
+        assert_eq!(state.io_attempts(), 6);
+        assert_eq!(state.io_pause().unwrap().retry_at().as_millis(), 42_000);
+        assert!(engine.indexer().status(engine.resources()).is_ok());
+        if rebuild {
+            assert_eq!(phase(&engine), "enqueue");
+            assert_eq!((count(&engine, DOCS), count(&engine, QUEUE)), (0, 1));
+        } else {
+            assert_eq!((count(&engine, DOCS), count(&engine, QUEUE)), (1, 0));
+        }
+        write(&engine, |tx| {
+            tx.query_row("PRAGMA max_page_count=2147483647", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .map_err(|error| StoreError::internal(error.to_string()))?;
+            tx.execute_batch("DROP TRIGGER fill_on_success")
+                .map_err(|error| StoreError::internal(error.to_string()))
+        });
+        import(
+            &engine,
+            &scratch.path().join("two.eml"),
+            b"Subject: next\n\nindexneedle\n",
+        );
+        retry(&engine);
+        drained(&engine);
+        if rebuild {
+            wait(|| phase(&engine) == "complete");
+        }
+        assert_eq!(count(&engine, DOCS), 2);
+        assert_eq!(
+            count(
+                &engine,
+                "SELECT count(*) FROM d_search_fts WHERE d_search_fts MATCH 'indexneedle'"
+            ),
+            2
+        );
+        block_on(engine.shutdown()).unwrap();
+    }
+
+    #[test]
+    fn native_full_at_phase_success_record_is_durably_reported() {
+        full_at_success_record(true);
+    }
+
+    #[test]
+    fn native_full_at_publication_success_record_is_durably_reported() {
+        full_at_success_record(false);
     }
 
     const REBUILD_CUT_N: &str = "SB_REBUILD_WORKER_CUT_N";
