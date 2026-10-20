@@ -17,6 +17,12 @@ use sb_store::{Store, StoreError, Transaction};
 
 use crate::Resources;
 
+mod io;
+pub use io::{
+    IndexIoContext, IndexIoUpdate, index_retry_at, recover_index_io_failure,
+    report_index_io_failure,
+};
+
 /// What preparing one captured batch yielded. Non-`Prepared` outcomes
 /// are explicit: the queue is neither drained nor acknowledged.
 #[derive(Debug)]
