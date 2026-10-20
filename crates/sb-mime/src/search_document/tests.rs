@@ -66,7 +66,7 @@ fn realistic_message_populates_every_column_and_metadata() {
     assert_eq!(doc.state(), SearchState::Indexed);
     assert_eq!(doc.state().as_str(), "indexed");
     assert_eq!(doc.extractor_version(), 1);
-    assert_eq!(SEARCH_EXTRACTOR_VERSION, 1);
+    assert_eq!(SEARCH_EXTRACTOR_VERSION, 2);
     assert_eq!(doc.truncated_fields(), &[] as &[&str]);
     assert_eq!(doc.truncated_fields_json(), "[]");
     assert_eq!(document(raw), doc);

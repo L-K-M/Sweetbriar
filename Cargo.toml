@@ -50,3 +50,5 @@ overflow-checks = false
 # that parser and its tests; UniFFI versions and template output stay put.
 [patch.crates-io]
 askama_derive = { git = "https://github.com/BigBoyDevBox/askama", rev = "da7f1d08c1690c576e3a7fd0a0f3436bc64e0440" }
+# Release-based source-fidelity repair; no parser API/dependency upgrade.
+mail-parser = { git = "https://github.com/BigBoyDevBox/mail-parser", rev = "41cbc85ce90b52ec33c7c7285f714fcdbcbc2928" }

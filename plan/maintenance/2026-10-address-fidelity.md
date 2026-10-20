@@ -25,6 +25,12 @@ regression proof. Fix this producer before trusting exact-address predicates.
   repository, regenerate lock/notices and retain the release baseline. No
   mutable branch pin, local path patch, broad Git allowance or advisory ignore.
   Include the external patch in the1450 additions-plus-deletions scope.
+  Release baseline:918cc0c891f5e2a0009ccab4e935e91f68c673be (v0.11.9,
+  registry VCS provenance verified). Tested immutable backport:
+  https://github.com/BigBoyDevBox/mail-parser at
+  41cbc85ce90b52ec33c7c7285f714fcdbcbc2928; two files,253 additions/7 deletions,
+  including15 exact-source fixtures. The existing source/name/list/group
+  fixtures stay unchanged. Retain this branch until a fixed registry update.
 - Keep mail-parser's existing containment profile and safety budgets; no
   SMTP/IMAP behavior, sending, schema layout, source-byte mutation or unrelated
   parser/body/rendering cleanup. Source inputs and fixtures are synthetic.
