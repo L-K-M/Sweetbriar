@@ -2293,6 +2293,7 @@ DEALINGS IN THE SOFTWARE.
 ## MIT License (MIT)
 
 Used by:
+- `mail-parser 0.11.9` — <https://github.com/stalwartlabs/mail-parser>
 - `anyhow 1.0.104` — <https://github.com/dtolnay/anyhow>
 - `camino 1.2.6` — <https://github.com/camino-rs/camino>
 - `displaydoc 0.2.7` — <https://github.com/yaahc/displaydoc>
@@ -2301,7 +2302,6 @@ Used by:
 - `hashify 0.2.9` — <https://github.com/stalwartlabs/hashify>
 - `itoa 1.0.18` — <https://github.com/dtolnay/itoa>
 - `linux-raw-sys 0.12.1` — <https://github.com/sunfishcode/linux-raw-sys>
-- `mail-parser 0.11.9` — <https://github.com/stalwartlabs/mail-parser>
 - `minimal-lexical 0.2.1` — <https://github.com/Alexhuszagh/minimal-lexical>
 - `once_cell 1.21.4` — <https://github.com/matklad/once_cell>
 - `pin-project-lite 0.2.17` — <https://github.com/taiki-e/pin-project-lite>

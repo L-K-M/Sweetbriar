@@ -137,6 +137,14 @@ fn a_locked_store_exits_one_naming_locked_and_creates_nothing() {
     let (scratch, root) = scratch("cli-locked");
     let mut config = CoreConfig::platform_default().expect("a home directory in tests");
     config.data_root = root.clone();
+    // Startup may upgrade the extractor. Park this fixture's owner before
+    // measuring writes attributable only to the refused CLI process.
+    let core = sb_test_support::block_on(open_core(config.clone())).expect("initialize the store");
+    sb_test_support::block_on(core.shutdown());
+    sb_test_support::execute_sql(
+        &root.join("state.sqlite"),
+        "UPDATE search_index_state SET user_paused = 1 WHERE id = 0",
+    );
     let core = sb_test_support::block_on(open_core(config)).expect("the test opens the core");
 
     let before = listing(scratch.path());

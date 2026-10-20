@@ -11,7 +11,7 @@ use sb_types::time::Timestamp;
 
 /// `d_message_summary.parser_version` — bump when extraction semantics
 /// change so derived rows get rebuilt.
-pub const PARSER_VERSION: u32 = 1;
+pub const PARSER_VERSION: u32 = 2;
 
 /// One mailbox in an address header: display name and address, each
 /// optional (headers like `From: "Name"` or bare groups produce partial

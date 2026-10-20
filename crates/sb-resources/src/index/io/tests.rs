@@ -34,7 +34,17 @@ fn fixture(label: &str) -> (ScratchDir, Store) {
         Arc::new(FixedClock::new(Timestamp::from_millis(NOW))),
         Arc::new(SeededRandom::new(9)),
     );
-    (scratch, sb_store::open(&paths, &seams).unwrap())
+    let store = sb_store::open(&paths, &seams).unwrap();
+    write(&store, |tx| {
+        tx.execute(
+            "UPDATE store_meta SET value=?1 WHERE key='search_extractor_version'",
+            [SEARCH_EXTRACTOR_VERSION.to_string()],
+        )
+        .map(|_| ())
+        .map_err(|error| StoreError::internal(error.to_string()))
+    })
+    .unwrap();
+    (scratch, store)
 }
 
 fn write<T: Send + 'static>(
@@ -388,8 +398,8 @@ fn holds_phases_and_newer_targets_block_without_writing() {
     let batch = capture(&store2);
     write(&store2, |tx| {
         tx.execute(
-            "UPDATE store_meta SET value = '2' WHERE key = 'search_extractor_version'",
-            [],
+            "UPDATE store_meta SET value=?1 WHERE key='search_extractor_version'",
+            [(SEARCH_EXTRACTOR_VERSION + 1).to_string()],
         )
         .map_err(|error| StoreError::internal(error.to_string()))
     })
@@ -874,6 +884,11 @@ fn an_owned_page_bound_fails_bulk_but_recovery_commits_and_retry_publishes() {
     let root = scratch.path().join("store");
     let resources = Resources::open(&root).unwrap();
     block_on(resources.write(WritePriority::User, move |tx| {
+        tx.execute(
+            "UPDATE store_meta SET value=?1 WHERE key='search_extractor_version'",
+            [SEARCH_EXTRACTOR_VERSION.to_string()],
+        )
+        .map_err(|error| StoreError::internal(error.to_string()))?;
         tx.execute_batch(
             "INSERT INTO acquisitions (acquisition_id, content_sha256, byte_length,
                    object_state, first_acquired_at)

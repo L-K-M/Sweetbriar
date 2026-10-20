@@ -9,7 +9,7 @@ use html::html_lines;
 use crate::{Limits, SearchBodyKind, SearchInputs, search_inputs};
 
 /// Bump whenever extraction semantics change; stored with every search row.
-pub const SEARCH_EXTRACTOR_VERSION: u32 = 1;
+pub const SEARCH_EXTRACTOR_VERSION: u32 = 2;
 const MAX_DOCUMENT_BYTES: usize = 1_000_000;
 const MAX_NAME_BYTES: usize = 64_000;
 const COLUMNS: [&str; 8] = [

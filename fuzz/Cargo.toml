@@ -17,6 +17,10 @@ resolver = "3"
 libfuzzer-sys = "=0.4.13"
 sb-mime = { version = "0.0.1", path = "../crates/sb-mime" }
 
+# The isolated fuzz graph must exercise the same parser repair as the app.
+[patch.crates-io]
+mail-parser = { git = "https://github.com/BigBoyDevBox/mail-parser", rev = "41cbc85ce90b52ec33c7c7285f714fcdbcbc2928" }
+
 [[bin]]
 name = "mime"
 path = "fuzz_targets/mime.rs"

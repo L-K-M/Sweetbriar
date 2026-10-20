@@ -439,6 +439,9 @@ local drafts. No network yet.
     attachment (`NOT has:attachment` is unknown), and partial address lists
     make negated `is`/`domain` unknown. Include retained positive values,
     complete absent values, complete-header precedence and unknown counts.
+    Requires the address-fidelity maintenance in
+    maintenance/2026-10-address-fidelity.md first: legacy parser-version1
+    summary addresses stay unknown until refreshed, not silently matched.
   - **M1.6i Search paging — L:** date/relevance ordering and opaque
     cursors, first 50 hits, id index and Around/Before/After in store reads.
     Owns both cursor deliverables and three-page relevance acceptance;
@@ -475,6 +478,8 @@ local drafts. No network yet.
     Binding drift/import checks must pass.
   - **M1.6m Seen addresses — L:** kept deduplication ledger, resumable
     summary backfill and ongoing population through resources/engine.
+    Refresh older parser-version summaries from retained source bytes before
+    trusting exact local-spelling keys; failures remain observable/unknown.
     Depends on l4. Owns completion case-preservation acceptance; replay,
     shared-byte, multi-label, failed-summary and rebuild tests. No composer UI yet.
   - **M1.6n Parser fuzzing — M:** `query` cargo-fuzz target, synthetic

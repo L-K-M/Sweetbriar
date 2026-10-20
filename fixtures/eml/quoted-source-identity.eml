@@ -1,0 +1,8 @@
+From: "Foo"@EXAMPLE.com
+To: Team: One <"a\ b"@EXAMPLE.com>, "b"@EXAMPLE.com;
+Cc: "a>b,c:d;(e)"@example.test
+Subject: Synthetic quoted address source identity
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Synthetic source-identity seed.

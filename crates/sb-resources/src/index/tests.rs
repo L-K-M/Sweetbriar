@@ -52,6 +52,16 @@ fn store_on(fs: Arc<dyn Fs>, label: &str) -> (ScratchDir, StorePaths, Store) {
     let scratch = ScratchDir::new(label);
     let paths = StorePaths::new(scratch.path().join("store")).unwrap();
     let store = sb_store::open(&paths, &seams(fs)).unwrap();
+    // Facade fixtures begin after the engine's version reconciliation.
+    // Actual legacy-to-current startup is covered by Engine acceptance.
+    write(&store, |tx| {
+        tx.execute(
+            "UPDATE store_meta SET value=?1 WHERE key='search_extractor_version'",
+            [SEARCH_EXTRACTOR_VERSION.to_string()],
+        )
+        .map(|_| ())
+        .map_err(|error| StoreError::internal(error.to_string()))
+    });
     (scratch, paths, store)
 }
 
@@ -536,15 +546,15 @@ fn stale_capture_and_newer_target_block_without_object_io() {
     // A newer stored target outranks both the pause and the stale epoch.
     write(&store, |tx| {
         tx.execute(
-            "UPDATE store_meta SET value = '2' WHERE key = 'search_extractor_version'",
-            [],
+            "UPDATE store_meta SET value=?1 WHERE key='search_extractor_version'",
+            [(SEARCH_EXTRACTOR_VERSION + 1).to_string()],
         )
         .unwrap();
         set_user_pause(tx, UserPause::Pause)
     });
     assert!(matches!(
         prepare(&store, batch, &Limits::default(), &|| false).unwrap(),
-        IndexPreparation::BlockedNewerExtractor { target: 2 }
+        IndexPreparation::BlockedNewerExtractor { target } if target == SEARCH_EXTRACTOR_VERSION + 1
     ));
     assert_no_object_io(&fs, opens, reads);
     store.close().unwrap();
