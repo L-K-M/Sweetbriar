@@ -231,6 +231,7 @@ is committed, and updates are their own PRs.
 | Markdown | `pulldown-cmark` | pin at first use | Raw HTML disabled (05) |
 | HTML sanitizing | `ammonia`, `lol_html`, `markup5ever` | 4.2.4, 3.0.1, 0.40.0 | Per 10; `markup5ever` (already ammonia's) for its HTML5 character-reference table |
 | HTML search extraction | `html5ever` | 0.40.1 | Already ammonia's parser; direct text-node traversal with a private tree sink, without sanitizing or serializing (06) |
+| Search dates | `jiff` (`std`, `tzdb-bundle-always`, no default features) | 0.2.37 | Validated explicit IANA date operands (M1.6f0); use only the bundled database, no system timezone/zoneinfo/global clock |
 | CSS and URL parsing | `cssparser`, `url` | 0.38.0, 2.5.8 | The renderer's resource and link policy (10) |
 | IMAP | `io-imap` | 0.7.1 | **Spike first** (plan M2.1): check it handles Bridge's quirks (synchronizing literals, LIST attributes, UIDPLUS receipts, raw UTF-8 resilience). Fallback: `async-imap` 0.12.0 (`runtime-tokio`, no default features) |
 | SMTP | `lettre` (tokio + rustls features, no native-tls) | 0.11.23 | Raw-message submission of `mail-builder` output. Must expose enough to detect "connection lost after DATA" (05) |

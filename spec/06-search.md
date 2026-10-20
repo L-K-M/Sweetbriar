@@ -648,6 +648,49 @@ value   := bare | '"' quoted '"'
   JSON errors use the offending value span. Never fall back to text on an
   error. Service/FFI preserve the span; shells convert to native indices.
 
+### Zoned date operands (M1.6f0)
+
+`sb-store::query` first supplies a complete validated date boundary for the
+JSON/text parsers to reuse. `DateValue` holds `Before`, `After` or `On` with a
+date string, or `WithinDays { days: u32, clock: Timestamp }`. The immutable
+`DatePredicate::new(value, zone)` validates both operands and keeps the original
+value/zone plus its UTC-millisecond `DateBounds`. No Jiff type crosses this API.
+Errors distinguish the invalid date, timezone, days or clock operand so the
+later parser can preserve its exact input span. This step supplies no parser,
+SQL compiler, schema, service, DTO, FFI or UI entrypoint.
+
+- Absolute dates use exactly ten ASCII bytes `YYYY-MM-DD`, a real proleptic
+  Gregorian date in years 0000 through 9999. Extra time/offset/calendar syntax
+  is invalid. Zones are case-sensitive names or aliases in the bundled IANA
+  database (including `UTC`); offsets, arbitrary POSIX expressions, file paths
+  and the library's unknown-zone sentinel are not implicit fallbacks.
+- Use pinned Jiff with default features disabled and its always-bundled data,
+  explicitly selecting that database. No system timezone, host zoneinfo files,
+  environment-selected database, current clock or filesystem seam is consulted.
+- A day's start is its earliest actual instant. A midnight fold chooses the
+  earlier instant; a gap containing midnight chooses the transition ending
+  that gap, not midnight shifted by the gap's duration. Reject a requested
+  civil date absent entirely from that zone. The upper boundary is the earliest
+  instant at or after the following civil midnight, skipping an absent next
+  date rather than rejecting the existing requested day.
+- Bounds are `Before(end)` (exclusive), `After(start)` (inclusive),
+  `On { start, end }` (half-open), or `WithinDays { start, end }` (closed).
+  `On` uses the requested day's start and upper boundary; `After` uses that
+  upper boundary. A 23/25-hour local day is not forced to 86,400,000 ms.
+- Relative days are positive u32 and always exactly 86,400,000 ms each, even
+  across DST. Their explicit UTC clock is any i64 millisecond timestamp whose
+  checked subtraction fits; keep a closed interval without overflowing `end+1`.
+  Negative/pre-epoch clocks are valid. Reject invalid days and arithmetic or
+  required civil-boundary overflow. Reconstructing the same value and zone
+  never re-evaluates a relative clock.
+
+Same-slice tests cover every bound, strict inputs, aliases/unknown zones,
+DST and midnight gaps/folds (including a gap straddling midnight), entirely
+skipped requested dates and skipped next dates, integer/civil limits and
+independence from child-process timezone/zoneinfo environment settings. Reuse
+the datetime implementation; no handwritten timezone rules or weaker lexical
+zone check substitutes for this boundary.
+
 ## Execution
 
 - Filters (account, mailbox, flags, dates) are applied **inside** the SQL
