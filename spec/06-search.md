@@ -108,7 +108,7 @@ registered in the resolution.
   unsubmitted preparation on cancellation. Preparation writes no SQLite state
   and acknowledges no queue entry. Keep at most 200 candidates and 2,000,000
   new-column bytes for the next publication, leaving other work queued. It may
-  return a valid prefix with the first contextual failure; e1 owns publication,
+  return a valid prefix with the first contextual failure; e1b owns publication,
   stale-failure checks and pause/retry policy.
 
 ### Runtime control transactions (M1.6e1)
