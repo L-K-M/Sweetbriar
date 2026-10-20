@@ -2,11 +2,11 @@
 
 use std::io::Read;
 
-use rusqlite::{OptionalExtension, Row, Transaction};
+use rusqlite::{Connection, OptionalExtension, Row, Transaction};
 use serde_json::Value;
 
 use crate::schema::classify;
-use crate::{ObjectId, ObjectStore, Store, StoreError, read_error_as_store_error};
+use crate::{ObjectId, ObjectReader, ObjectStore, Store, StoreError, read_error_as_store_error};
 
 /// Spec/10's decimal raw-message limit, also used by the MIME leaf.
 pub const MAX_READER_MESSAGE_BYTES: u64 = 100_000_000;
@@ -198,6 +198,27 @@ pub fn best_acquisition(
     .ok_or_else(|| StoreError::not_found(format!("message {message}")))?
 }
 
+/// The acquisition a queue `doc_id` names (spec/06: the queue key is an
+/// acquisition id). `NotFound` for an orphaned queue row; no runtime
+/// producer creates one, so absence is an invariant failure, not a
+/// transient file read.
+pub fn index_acquisition(conn: &Connection, doc_id: i64) -> Result<StoredAcquisition, StoreError> {
+    conn.query_row(
+        "SELECT acquisition_id, content_sha256, byte_length, object_state
+         FROM acquisitions WHERE acquisition_id = ?1",
+        [doc_id],
+        |row| {
+            let hash: String = row.get(1)?;
+            let length: i64 = row.get(2)?;
+            let state: String = row.get(3)?;
+            Ok(acquisition(row.get(0)?, &hash, length, &state))
+        },
+    )
+    .optional()
+    .map_err(sql_error)?
+    .ok_or_else(|| StoreError::not_found(format!("index acquisition {doc_id}")))?
+}
+
 fn acquisition(
     id: i64,
     hash: &str,
@@ -231,24 +252,87 @@ fn acquisition(
     })
 }
 
+/// Availability recorded in SQLite gates any object open: recorded
+/// missing/corrupt states fail explicitly, without filesystem work.
+fn check_availability(acquisition: &StoredAcquisition) -> Result<(), StoreError> {
+    match acquisition.availability {
+        BodyAvailability::AcquisitionMissing => Err(StoreError::not_found("acquisition object")),
+        BodyAvailability::AcquisitionCorrupt => {
+            Err(StoreError::corrupt("acquisition object is quarantined"))
+        }
+        BodyAvailability::NotAcquired => Err(StoreError::unavailable("body is not acquired")),
+        BodyAvailability::Acquired => Ok(()),
+    }
+}
+
+/// The outcome of one verification pass over an open object.
+enum Streamed {
+    /// Read to EOF; the hash and length matched the id.
+    Verified,
+    /// Stopped at a chunk boundary; nothing was verified.
+    Cancelled,
+}
+
+/// One full pass through `reader` to EOF, keeping the reader's
+/// streaming hash verification, quarantine and error recovery.
+/// `sink` retains the bytes; `None` verifies without retaining.
+/// `cancelled` is polled before every chunk; a stop reports
+/// `Streamed::Cancelled` with no verification claim.
+fn drain_object(
+    reader: &mut ObjectReader,
+    mut sink: Option<&mut Vec<u8>>,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Streamed, StoreError> {
+    let mut chunk = [0; READ_CHUNK_BYTES];
+    loop {
+        if cancelled() {
+            return Ok(Streamed::Cancelled);
+        }
+        let count = reader.read(&mut chunk).map_err(|error| {
+            read_error_as_store_error(&error)
+                .cloned()
+                .unwrap_or_else(|| {
+                    StoreError::unavailable_io(
+                        format!("cannot read acquisition: {error}"),
+                        error.kind(),
+                    )
+                })
+        })?;
+        if count == 0 {
+            return Ok(Streamed::Verified);
+        }
+        // ObjectReader refuses growth beyond the declared, admitted length.
+        if let Some(sink) = sink.as_deref_mut() {
+            sink.extend_from_slice(&chunk[..count]);
+        }
+    }
+}
+
+fn never_cancelled() -> bool {
+    false
+}
+
+/// The domain outcome of a bounded, cancellable acquisition read
+/// (spec/06 "Preparation boundary").
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AcquisitionRead {
+    /// The exact bytes, verified to EOF and retained within `retain`.
+    Verified(Vec<u8>),
+    /// Verified to EOF without retention: the declared length exceeded
+    /// `retain`. A bounded size refusal, never an error.
+    Oversized,
+    /// Stopped before object I/O or at a chunk boundary; nothing was
+    /// verified or acknowledged.
+    Cancelled,
+}
+
 impl Store {
     /// Blocking I/O, outside the metadata transaction. Returns exact bytes only
     /// after EOF verifies the hash; corruption uses the existing quarantine path.
     /// Recorded missing/corrupt states fail explicitly. This read does not update
     /// SQLite: acquisition-state writes belong to the engine (spec/03).
     pub fn read_acquisition(&self, acquisition: &StoredAcquisition) -> Result<Vec<u8>, StoreError> {
-        match acquisition.availability {
-            BodyAvailability::AcquisitionMissing => {
-                return Err(StoreError::not_found("acquisition object"));
-            }
-            BodyAvailability::AcquisitionCorrupt => {
-                return Err(StoreError::corrupt("acquisition object is quarantined"));
-            }
-            BodyAvailability::NotAcquired => {
-                return Err(StoreError::unavailable("body is not acquired"));
-            }
-            BodyAvailability::Acquired => {}
-        }
+        check_availability(acquisition)?;
         if acquisition.object.byte_length() > MAX_READER_MESSAGE_BYTES {
             return Err(StoreError::unavailable(
                 "acquisition exceeds the 100 MB message limit",
@@ -258,23 +342,50 @@ impl Store {
         let capacity = usize::try_from(acquisition.object.byte_length())
             .map_err(|_| StoreError::unavailable("acquisition exceeds addressable memory"))?;
         let mut bytes = Vec::with_capacity(capacity);
-        let mut chunk = [0; READ_CHUNK_BYTES];
-        loop {
-            let count = reader.read(&mut chunk).map_err(|error| {
-                read_error_as_store_error(&error)
-                    .cloned()
-                    .unwrap_or_else(|| {
-                        StoreError::unavailable_io(
-                            format!("cannot read acquisition: {error}"),
-                            error.kind(),
-                        )
-                    })
-            })?;
-            if count == 0 {
-                return Ok(bytes);
-            }
-            // ObjectReader refuses growth beyond the declared, admitted length.
-            bytes.extend_from_slice(&chunk[..count]);
+        match drain_object(&mut reader, Some(&mut bytes), &never_cancelled)? {
+            Streamed::Verified => Ok(bytes),
+            Streamed::Cancelled => Err(StoreError::internal(
+                "uncancellable read reported cancelled",
+            )),
+        }
+    }
+
+    /// One verified streaming pass retaining at most `retain` bytes
+    /// (spec/06): the same availability errors and EOF verification as
+    /// [`Store::read_acquisition`], but a declared length over `retain`
+    /// is hashed without keeping the body, a bounded size refusal,
+    /// not the reader's early over-100 MB error. `retain` may not
+    /// exceed the spec/10 100 MB ceiling; a zero `retain` can hold
+    /// only an empty object.
+    pub fn read_acquisition_bounded(
+        &self,
+        acquisition: &StoredAcquisition,
+        retain: u64,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<AcquisitionRead, StoreError> {
+        check_availability(acquisition)?;
+        if retain > MAX_READER_MESSAGE_BYTES {
+            return Err(StoreError::InvalidInput {
+                message: "retention limit exceeds the 100 MB message limit".into(),
+            });
+        }
+        if cancelled() {
+            return Ok(AcquisitionRead::Cancelled);
+        }
+        let mut reader = self.objects().open(&acquisition.object)?;
+        let mut bytes = if acquisition.object.byte_length() <= retain {
+            let capacity = usize::try_from(acquisition.object.byte_length())
+                .map_err(|_| StoreError::unavailable("acquisition exceeds addressable memory"))?;
+            Some(Vec::with_capacity(capacity))
+        } else {
+            None
+        };
+        match drain_object(&mut reader, bytes.as_mut(), cancelled)? {
+            Streamed::Cancelled => Ok(AcquisitionRead::Cancelled),
+            Streamed::Verified => Ok(match bytes {
+                Some(bytes) => AcquisitionRead::Verified(bytes),
+                None => AcquisitionRead::Oversized,
+            }),
         }
     }
 }

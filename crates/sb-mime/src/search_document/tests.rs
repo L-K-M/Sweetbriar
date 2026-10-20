@@ -515,3 +515,19 @@ fn additional_block_elements_separate_html_paragraphs() {
     }
     assert_eq!(html("one<plaintext>two").body_authored(), "one\n\ntwo");
 }
+
+/// The pure size refusal is exactly the document a real MIME size
+/// refusal produces: `Partial`, empty columns, all eight fields masked.
+#[test]
+fn size_refused_matches_a_real_mime_size_refusal() {
+    let raw = "Subject: s\r\nContent-Type: text/plain\r\n\r\nbody";
+    let refused = search_document(raw.as_bytes(), &Limits::default().with_max_message_bytes(4));
+    let doc = SearchDocument::size_refused();
+    assert_eq!(doc, refused);
+    assert_eq!(doc.state(), SearchState::Partial);
+    let mut expected = COLUMNS;
+    expected.sort_unstable();
+    assert_eq!(doc.truncated_fields(), expected);
+    assert!(doc.columns.iter().all(String::is_empty));
+    assert_eq!(doc.extractor_version(), SEARCH_EXTRACTOR_VERSION);
+}
