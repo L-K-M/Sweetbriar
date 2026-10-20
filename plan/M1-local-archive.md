@@ -382,8 +382,12 @@ local drafts. No network yet.
     recovery transactions, observed acquisition availability, typed actionable
     error mapping and the test-seams clock constructor. Depends on e. Owns
     store/resource transition, stale/no-op, persistence and rollback tests.
+  - **M1.6e1a Publication I/O reports — L:** a resources façade for conditional
+    I/O reporting and atomic validated writer recovery, with typed capture and
+    outcomes. Depends on e1. Owns deadline/control/rollback tests and native
+    SQLite-full proof where a bulk publication fails but status writes still fit.
   - **M1.6e1b Index job — L:** engine worker, low-priority bounded publication,
-    startup recovery and durable I/O pause/backoff/immediate retry. Depends on e1.
+    startup recovery and durable I/O pause/backoff/immediate retry. Depends on e1a.
     Owns the extraction job/watermark deliverable. Real-worker tests cover
     failure/restart/re-publication, actionable errors/deadlines, failed-writer
     read unavailability and retry without dropping pending work.
