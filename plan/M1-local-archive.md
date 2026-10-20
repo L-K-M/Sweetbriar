@@ -427,6 +427,9 @@ local drafts. No network yet.
   - **M1.6g Text syntax — L:** parser, canonical formatter, typed error
     spans; every AST form has a lossless text spelling. Owns parser/error
     position acceptance and rejection of invalid `is`/`domain` operators.
+    Reuse checked operands and one private oracle per parse; bound grouping
+    without untrusted Rust-stack recursion. Same-slice grammar, context,
+    roundtrip, exact-span, construction/format budget and native-failure proof.
   - **M1.6h Predicate compiler — L:** parameterized SQL, three-valued
     predicates, exact addresses, dates/flags/tags/size, filters before
     limit, scope and representative selection. Owns identifier/phrase,

@@ -603,7 +603,8 @@ value   := bare | '"' quoted '"'
   that key. A recognized field with an unsupported operator suffix is
   `invalid_operator` at the suffix. A malformed key prefix is
   `unexpected_token` at that prefix (`12:30` points at `12`); an extra
-  colon in a value is `unexpected_token` at the colon. Quote literal colons, reserved words or a leading minus.
+  colon in a value is `unexpected_token` at the colon. Quote literal colons,
+  reserved words or an unqualified leading minus.
   `()` is an explicit empty AND (true), so even nested empty AND nodes
   round-trip. Inside quotes only `\"` and `\\` are escapes; no other
   escapes: `"\q"` is `invalid_value` at the two-byte escape, not literal
@@ -817,6 +818,64 @@ edges, native token-presence differences and NUL refusal, literal operator data,
 explicit date context and original address spelling. Token-oracle failure proof
 uses a real failed private SQL operation; no fake parser/native result. Parser
 fuzzing follows M1.6n; no critical validation check is deferred to it.
+
+### Text boundary and canonical formatter (M1.6g)
+
+`Query::parse_text(input, &ParseContext)` implements the grammar above and
+returns the same immutable checked Query as JSON. `ParseContext::new(tz, clock)`
+borrows its explicit timezone and takes a typed UTC-millisecond Timestamp;
+it reads no host state. Defaults are consulted only by date values that omit
+context. An explicit date/zone or days/zone/clock never uses those defaults.
+An invalid consumed context is an invalid value at that input value token.
+
+- Keep lexical tokens and parser mechanics private. Check raw input bytes
+  before scanning/native work; retain zero-based half-open UTF8 source spans.
+  Decode only the two text escapes above, never JSON escapes or normalization.
+  Scalar failures point to the entire value token (quotes included), including
+  a date/within context spelled as one value. Unknown keys point to the key;
+  invalid field/size suffixes point after the dot (a missing size suffix points
+  to its key). A malformed key prefix points to that prefix; whitespace before
+  a colon fails at the colon, whitespace after it
+  leaves a missing value at the following token/EOF.
+- All twelve JSON node forms have text spellings. Canonical flags use is:read,
+  is:flagged, is:answered and is:draft; NOT seen may also parse from is:unread.
+  Known field stems with unsupported suffixes, and size without lt/eq/gt,
+  are invalid_operator. Other well-formed unknown keys are unknown_key.
+  Date values take exactly date or date@zone; within takes exactly days or
+  days@zone@clock. Integer values are ASCII decimal, optional minus only for
+  signed slots, no plus/fraction/exponent; leading zeroes are valid values.
+  Minus before an atom is unary NOT; after a key's colon it is value data,
+  subject to the selected operand's validity, not another unary expression.
+  Structured scalar validators retain their existing bounds and policies.
+- Empty input and () produce true/empty AND. Parentheses are grouping, not
+  extra AST nodes; redundant grouping must not exhaust the Rust call stack.
+  Bound normalized construction to 256 AST nodes and depth 32 before exposing
+  a Query or recursively formatting it. Unary NOT/minus each count as a node. Preserve
+  group/child order modulo the existing flattening/singleton rules; never
+  discard explicit empty AND children during flattening.
+- Missing operands after a key/operator/NOT point to the next token or EOF.
+  At EOF a pending operand is missing_value; otherwise an unmatched opening
+  parenthesis is unclosed_group at its opener. A stray closing parenthesis or
+  leading binary operator is unexpected_token. Unterminated quoted input points
+  to its opening quote; bad escapes point to the backslash plus escaped scalar.
+  All eight existing codes and UTF8 boundary guarantees remain unchanged.
+- Reuse the checked scalar leaves and one lazy private native token oracle per
+  parse. Keep typed native failure distinct from SearchParseError; filter-only
+  input needs no oracle. No raw MATCH, source database, environment or I/O seam.
+  The existing checked Query finish also bounds canonical JSON output; an
+  expansion failure is limit at the converted text expression.
+- `Query::canonical_text()` returns checked text or `TextFormatError::Limit`.
+  This formatter consumes a typed Query, not a source string, so its size error
+  invents no source span. It may consistently quote all values and parenthesize
+  groups. It escapes only quote/backslash, retains every original scalar and
+  always emits explicit date context. Its output also fits 16384 UTF8 bytes.
+
+Same-slice proof covers precedence/implicit and explicit AND/OR/NOT/minus,
+all forms and field/operator refusals, exact Unicode/escape/key/value/EOF
+spans, explicit/default date context, whole-token reserved words, native
+literal/state/failure semantics, byte/node/depth/formatter edges and deeply
+redundant grouping, plus text/JSON/format roundtrips modulo the stated rules.
+No partial parser/formatter, new dependency, compiler, service or UI ships here.
 
 ## Execution
 
