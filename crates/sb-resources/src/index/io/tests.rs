@@ -884,8 +884,11 @@ fn an_owned_page_bound_fails_bulk_but_recovery_commits_and_retry_publishes() {
     let root = scratch.path().join("store");
     let resources = Resources::open(&root).unwrap();
     block_on(resources.write(WritePriority::User, move |tx| {
-        tx.execute("UPDATE store_meta SET value=?1 WHERE key='search_extractor_version'", [SEARCH_EXTRACTOR_VERSION.to_string()])
-            .map_err(|error| StoreError::internal(error.to_string()))?;
+        tx.execute(
+            "UPDATE store_meta SET value=?1 WHERE key='search_extractor_version'",
+            [SEARCH_EXTRACTOR_VERSION.to_string()],
+        )
+        .map_err(|error| StoreError::internal(error.to_string()))?;
         tx.execute_batch(
             "INSERT INTO acquisitions (acquisition_id, content_sha256, byte_length,
                    object_state, first_acquired_at)

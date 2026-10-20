@@ -31,6 +31,8 @@ regression proof. Fix this producer before trusting exact-address predicates.
   41cbc85ce90b52ec33c7c7285f714fcdbcbc2928; two files,253 additions/7 deletions,
   including15 exact-source fixtures. The existing source/name/list/group
   fixtures stay unchanged. Retain this branch until a fixed registry update.
+  The isolated fuzz workspace uses the same revision and narrow source policy;
+  refresh its separate lock and exercise the source-identity seed under ASan.
 - Keep mail-parser's existing containment profile and safety budgets; no
   SMTP/IMAP behavior, sending, schema layout, source-byte mutation or unrelated
   parser/body/rendering cleanup. Source inputs and fixtures are synthetic.
