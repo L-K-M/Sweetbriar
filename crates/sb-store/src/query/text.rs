@@ -74,7 +74,7 @@ impl TextOperand {
     }
 }
 
-fn check_source(value: &str) -> Result<(), TextError> {
+pub(super) fn check_source(value: &str) -> Result<(), TextError> {
     if value.len() > MAX_QUERY_INPUT_BYTES {
         return Err(TextError::Limit);
     }
@@ -91,12 +91,12 @@ fn check_source(value: &str) -> Result<(), TextError> {
 
 /// One private memory oracle can validate successive values without
 /// reopening it. No unchecked operand can escape from this path either.
-struct TextValidator {
+pub(super) struct TextValidator {
     conn: Connection,
 }
 
 impl TextValidator {
-    fn open() -> Result<Self, StoreError> {
+    pub(super) fn open() -> Result<Self, StoreError> {
         let conn = Connection::open_in_memory()
             .map_err(|error| classify(error, "open the query token oracle"))?;
         conn.execute_batch(
@@ -108,7 +108,7 @@ impl TextValidator {
         Ok(Self { conn })
     }
 
-    fn parse(&self, value: &str) -> Result<TextOperand, TextError> {
+    pub(super) fn parse(&self, value: &str) -> Result<TextOperand, TextError> {
         check_source(value)?;
         self.conn
             .execute("DELETE FROM sb_qt", [])
@@ -234,5 +234,28 @@ mod tests {
             TextError::Store(StoreError::Internal { .. })
         ));
         assert!(error.source().is_some());
+    }
+
+    #[test]
+    fn json_native_failure_is_not_a_parse_verdict_and_filters_need_no_oracle() {
+        for node in [
+            r#"{"text":"needle"}"#,
+            r#"{"field":"body","op":"contains","value":"needle"}"#,
+        ] {
+            let validator = TextValidator::open().unwrap();
+            validator.conn.execute_batch("DROP TABLE sb_qv").unwrap();
+            let input = format!("{{\"v\":1,\"q\":{node}}}");
+            let error = super::super::json::parse(&input, Some(validator)).unwrap_err();
+            assert!(matches!(
+                error,
+                super::super::QueryError::Store(StoreError::Internal { .. })
+            ));
+            assert!(error.source().is_some());
+        }
+        let validator = TextValidator::open().unwrap();
+        validator.conn.execute_batch("DROP TABLE sb_qv").unwrap();
+        assert!(
+            super::super::json::parse(r#"{"v":1,"q":{"flag":"seen"}}"#, Some(validator)).is_ok()
+        );
     }
 }
