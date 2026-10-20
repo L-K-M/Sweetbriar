@@ -32,6 +32,8 @@ test, except where the spec says "manual qualification".
   M1.6f0b owns modern bare address/domain validity and original-value/key tests:
   local-as-written, domain Unicode lowercase without rewriting, IP literals,
   invalid legacy/header syntax and UTF-8 byte bounds.
+  M1.6f0c owns exact native literal/token sequences, explicit NUL/byte/native
+  failures and shared canonical UUID parsing without random-bit rewriting.
   M1.6f owns the complete typed JSON boundary: all node/operand shapes,
   canonical roundtrip, duplicate/unknown/mixed/malformed refusals, exact UTF-8
   spans, integer/byte/node/depth edges and real native-token validation/errors.

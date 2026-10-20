@@ -738,6 +738,35 @@ invalid address/domain or limit for later exact parser spans. The permissive
 MIME header parser is not a strict validator; source/partial-summary unknown
 semantics remain their existing consumer contracts.
 
+### Remaining operands (M1.6f0c)
+
+Before the complete AST, `TextOperand::parse(value)` supplies a validated,
+immutable literal term/phrase with original `value()` and exact native
+normalized `tokens()` in phrase order, including repetitions. It shares the
+query input byte ceiling, rejects empty/NUL/tokenless input explicitly, and
+never treats operator-like text as query syntax or assumes a Rust Unicode
+character classifier matches the index. Canonical shared `Uuid::from_str`
+accepts only lowercase 36-byte hyphenated hexadecimal, reconstructing every
+byte without the random-id constructor's version/variant mutation; nil and
+all canonical version spellings remain valid syntax.
+
+- Use shipped SQLite unicode61/remove_diacritics2 in a private in-memory
+  FTS5/fts5vocab instance oracle; fixed SQL and bound input, memory-only temps,
+  no raw MATCH or source database/schema/filesystem side effects. The exact
+  token sequence is reusable for literal matching and ranking deduplication.
+- A reusable private validator retains one oracle across values; state from
+  an earlier value cannot leak into the next. The public operand has only
+  checked construction and immutable getters, no unchecked source/tokens API.
+- Check the 16,384-byte raw UTF-8 ceiling and empty/NUL conditions before any
+  native initialization. Report invalid/limit as static operand errors and
+  native initialization/SQL errors as typed store failures, never false token
+  absence or empty successful text. Later parsers attach their own spans.
+- Same-slice tests cover ASCII/Unicode/case/diacritics, punctuation/operators,
+  unknown Unicode6.1/private-use/CJK/combining sequences, phrase order/repeated
+  tokens and state reuse, NUL and byte edges, actual failed private SQL, and
+  UUID exact canonical roundtrip/refusal/no-bit-rewriting. No partial AST,
+  JSON/text parser, SQL compiler, worker or service/UI surface ships here.
+
 ### Strict JSON AST boundary (M1.6f)
 
 `sb-store::query::Query::parse_json(input)` is the complete validating boundary
