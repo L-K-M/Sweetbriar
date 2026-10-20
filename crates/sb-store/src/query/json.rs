@@ -10,11 +10,11 @@ use serde::{
 };
 use serde_json::value::RawValue;
 
-use super::text::{TextValidator, check_source};
+use super::text::{TextValidator, validate};
 use super::{
     AddressError, AddressOperand, DateError, DatePredicate, DateValue, DomainOperand, Field,
     FieldPredicate, Flag, Has, MAX_QUERY_DEPTH, MAX_QUERY_INPUT_BYTES, MAX_QUERY_NODES, Node,
-    ParseCode, Query, QueryError, SearchParseError, SizeOp, TextError, TextOperand,
+    ParseCode, Query, QueryError, SearchParseError, SizeOp, TextOperand,
 };
 
 type Span = (usize, usize);
@@ -344,20 +344,7 @@ impl<'a> Parser<'a> {
     fn fulltext(&mut self, raw: &'a RawValue) -> Result<TextOperand, QueryError> {
         let value = self.decode::<String>(raw)?;
         let span = self.span(raw);
-        let rejected = |error| match error {
-            TextError::Store(error) => QueryError::Store(error),
-            TextError::Limit => failure(span, ParseCode::Limit),
-            TextError::Invalid(_) => failure(span, ParseCode::InvalidValue),
-        };
-        check_source(&value).map_err(rejected)?;
-        if self.oracle.is_none() {
-            self.oracle = Some(TextValidator::open()?);
-        }
-        self.oracle
-            .as_ref()
-            .expect("initialized above")
-            .parse(&value)
-            .map_err(rejected)
+        validate(&value, &mut self.oracle).map_err(|error| super::source_text_error(error, span))
     }
 }
 

@@ -22,7 +22,7 @@ pub enum Field {
 }
 
 impl Field {
-    fn as_str(self) -> &'static str {
+    pub(super) fn as_str(self) -> &'static str {
         match self {
             Self::From => "from",
             Self::To => "to",
@@ -52,7 +52,7 @@ pub enum AddressField {
 }
 
 impl AddressField {
-    fn as_str(self) -> &'static str {
+    pub(super) fn as_str(self) -> &'static str {
         match self {
             Self::From => "from",
             Self::To => "to",
@@ -234,6 +234,16 @@ impl Query {
     /// Strict v1 JSON only; never reinterpret a failure as text syntax.
     pub fn parse_json(input: &str) -> Result<Self, QueryError> {
         super::json::parse(input, None)
+    }
+
+    /// Parse text using explicit date defaults, never host timezone/clock state.
+    pub fn parse_text(input: &str, context: &super::ParseContext<'_>) -> Result<Self, QueryError> {
+        super::syntax::parse(input, context, None)
+    }
+
+    /// Canonical text preserves values/order and always spells date context.
+    pub fn canonical_text(&self) -> Result<String, super::TextFormatError> {
+        super::format::render(&self.root)
     }
 
     pub fn root(&self) -> &Node {

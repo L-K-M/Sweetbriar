@@ -1,10 +1,12 @@
-//! Checked v1 search queries and scalar operands (spec/06). JSON parsing
-//! produces an immutable typed query; text syntax follows in M1.6g.
+//! Checked v1 search queries and scalar operands (spec/06). JSON and text
+//! parsing produce one immutable typed query with bounded canonical formats.
 
 mod addresses;
 mod ast;
 mod dates;
+mod format;
 mod json;
+mod syntax;
 mod text;
 
 pub use addresses::{AddressError, AddressOperand, DomainOperand};
@@ -13,6 +15,8 @@ pub use ast::{
     SearchParseError, SizeOp,
 };
 pub use dates::{DateBounds, DateError, DatePredicate, DateValue};
+pub use format::TextFormatError;
+pub use syntax::ParseContext;
 pub use text::{TextError, TextOperand};
 
 /// The shared UTF-8 byte ceiling for query inputs and free-text
@@ -24,5 +28,15 @@ pub const MAX_QUERY_INPUT_BYTES: usize = 16_384;
 const MAX_QUERY_NODES: usize = 256;
 const MAX_QUERY_DEPTH: usize = 32;
 
+fn source_text_error(error: TextError, span: (usize, usize)) -> QueryError {
+    match error {
+        TextError::Store(error) => QueryError::Store(error),
+        TextError::Limit => SearchParseError::new(span, ParseCode::Limit).into(),
+        TextError::Invalid(_) => SearchParseError::new(span, ParseCode::InvalidValue).into(),
+    }
+}
+
+#[cfg(test)]
+mod syntax_tests;
 #[cfg(test)]
 mod tests;

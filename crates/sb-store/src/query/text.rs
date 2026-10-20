@@ -61,8 +61,7 @@ pub struct TextOperand {
 impl TextOperand {
     /// Validate input before native initialization; no raw MATCH is executed.
     pub fn parse(value: &str) -> Result<Self, TextError> {
-        check_source(value)?;
-        TextValidator::open()?.parse(value)
+        validate(value, &mut None)
     }
 
     pub fn value(&self) -> &str {
@@ -74,7 +73,7 @@ impl TextOperand {
     }
 }
 
-pub(super) fn check_source(value: &str) -> Result<(), TextError> {
+fn check_source(value: &str) -> Result<(), TextError> {
     if value.len() > MAX_QUERY_INPUT_BYTES {
         return Err(TextError::Limit);
     }
@@ -89,6 +88,18 @@ pub(super) fn check_source(value: &str) -> Result<(), TextError> {
     Ok(())
 }
 
+/// Both front ends share lazy initialization and pre-native source validation.
+pub(super) fn validate(
+    value: &str,
+    oracle: &mut Option<TextValidator>,
+) -> Result<TextOperand, TextError> {
+    check_source(value)?;
+    if oracle.is_none() {
+        *oracle = Some(TextValidator::open()?);
+    }
+    oracle.as_ref().expect("initialized above").parse(value)
+}
+
 /// One private memory oracle can validate successive values without
 /// reopening it. No unchecked operand can escape from this path either.
 pub(super) struct TextValidator {
@@ -96,7 +107,7 @@ pub(super) struct TextValidator {
 }
 
 impl TextValidator {
-    pub(super) fn open() -> Result<Self, StoreError> {
+    fn open() -> Result<Self, StoreError> {
         let conn = Connection::open_in_memory()
             .map_err(|error| classify(error, "open the query token oracle"))?;
         conn.execute_batch(
@@ -108,7 +119,7 @@ impl TextValidator {
         Ok(Self { conn })
     }
 
-    pub(super) fn parse(&self, value: &str) -> Result<TextOperand, TextError> {
+    fn parse(&self, value: &str) -> Result<TextOperand, TextError> {
         check_source(value)?;
         self.conn
             .execute("DELETE FROM sb_qt", [])
@@ -257,5 +268,38 @@ mod tests {
         assert!(
             super::super::json::parse(r#"{"v":1,"q":{"flag":"seen"}}"#, Some(validator)).is_ok()
         );
+    }
+
+    #[test]
+    fn text_frontend_reuses_native_failure_and_filter_only_boundaries() {
+        let context = super::super::ParseContext::new("UTC", crate::Timestamp::from_millis(0));
+        for input in ["needle", "body:needle"] {
+            let validator = TextValidator::open().unwrap();
+            validator.conn.execute_batch("DROP TABLE sb_qv").unwrap();
+            let error = super::super::syntax::parse(input, &context, Some(validator)).unwrap_err();
+            assert!(matches!(
+                error,
+                super::super::QueryError::Store(StoreError::Internal { .. })
+            ));
+            assert!(error.source().is_some());
+        }
+        for input in ["is:read", "", "()"] {
+            let validator = TextValidator::open().unwrap();
+            validator.conn.execute_batch("DROP TABLE sb_qv").unwrap();
+            assert!(super::super::syntax::parse(input, &context, Some(validator)).is_ok());
+        }
+        for input in ["word\0tail", "!!!"] {
+            let validator = TextValidator::open().unwrap();
+            validator.conn.execute_batch("DROP TABLE sb_qv").unwrap();
+            let error = super::super::syntax::parse(input, &context, Some(validator)).unwrap_err();
+            // NUL is rejected before SQL; token absence needs an actual lookup.
+            match (input, error) {
+                ("word\0tail", super::super::QueryError::Parse(error)) => {
+                    assert_eq!(error.code(), super::super::ParseCode::InvalidValue)
+                }
+                ("!!!", super::super::QueryError::Store(StoreError::Internal { .. })) => {}
+                (_, error) => panic!("unexpected native-boundary result: {error:?}"),
+            }
+        }
     }
 }
