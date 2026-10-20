@@ -1487,6 +1487,8 @@ mod rebuild {
             "a rejected completion is not successful indexing"
         );
         assert_eq!((count(&engine, DOCS), count(&engine, QUEUE)), (2, 0));
+        // A final capture may still be borrowing the fixture's Arc.
+        parked(&engine);
         block_on(Arc::try_unwrap(engine).unwrap().shutdown()).unwrap();
     }
 
