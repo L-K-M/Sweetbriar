@@ -48,11 +48,9 @@ dependencies = [
 [[package]]
 name = "askama_derive"
 version = "0.16.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "071ee5ebf2138e3ad180e0aacf6940c2cab5e6d8333741d9925c7bee2b153f39"
+source = "git+https://github.com/BigBoyDevBox/askama?rev=da7f1d08c1690c576e3a7fd0a0f3436bc64e0440#da7f1d08c1690c576e3a7fd0a0f3436bc64e0440"
 dependencies = [
  "askama_parser",
- "basic-toml",
  "glob",
  "memchr",
  "proc-macro2",
@@ -61,6 +59,7 @@ dependencies = [
  "serde",
  "serde_derive",
  "syn 3.0.8",
+ "toml",
 ]
 
 [[package]]
@@ -75,8 +74,7 @@ dependencies = [
 [[package]]
 name = "askama_parser"
 version = "0.16.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2c5ae75772275d268b03ab8bdccdd12117b6169ee23256942b34e46c9f476583"
+source = "git+https://github.com/BigBoyDevBox/askama?rev=da7f1d08c1690c576e3a7fd0a0f3436bc64e0440#da7f1d08c1690c576e3a7fd0a0f3436bc64e0440"
 dependencies = [
  "rustc-hash",
  "serde",
@@ -90,15 +88,6 @@ name = "autocfg"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
-
-[[package]]
-name = "basic-toml"
-version = "0.1.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba62675e8242a4c4e806d12f11d136e626e6c8361d6b829310732241652a178a"
-dependencies = [
- "serde",
-]
 
 [[package]]
 name = "bitflags"

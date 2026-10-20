@@ -1266,10 +1266,10 @@ DEALINGS IN THE SOFTWARE.
 ## MIT License (MIT)
 
 Used by:
-- `askama 0.16.1` — <https://github.com/askama-rs/askama>
 - `askama_derive 0.16.1` — <https://github.com/askama-rs/askama>
-- `askama_macros 0.16.1` — <https://github.com/askama-rs/askama>
 - `askama_parser 0.16.1` — <https://github.com/askama-rs/askama>
+- `askama 0.16.1` — <https://github.com/askama-rs/askama>
+- `askama_macros 0.16.1` — <https://github.com/askama-rs/askama>
 
 ```text
 Copyright (c) 2017-2020 Dirkjan Ochtman
@@ -2294,7 +2294,6 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 - `anyhow 1.0.104` — <https://github.com/dtolnay/anyhow>
-- `basic-toml 0.1.10` — <https://github.com/dtolnay/basic-toml>
 - `camino 1.2.6` — <https://github.com/camino-rs/camino>
 - `displaydoc 0.2.7` — <https://github.com/yaahc/displaydoc>
 - `dtoa 1.0.11` — <https://github.com/dtolnay/dtoa>
