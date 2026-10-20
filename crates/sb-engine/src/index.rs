@@ -171,10 +171,16 @@ impl Engine {
             .spawn_worker(move |worker| async move {
                 let stop = worker.shutdown_check();
                 let registry = owner.clone();
-                let _ = worker
+                let result = worker
                     .blocking(move |resources| run(resources, &registry, &stop))
                     .await;
-                owner.lock().running = false;
+                let mut state = owner.lock();
+                if result.is_err() {
+                    state.failure = Some(ReadFailure::Invariant(StoreError::internal(
+                        "The index publication worker failed. Restart the app to retry.",
+                    )));
+                }
+                state.running = false;
             })
             .is_err()
         {

@@ -745,6 +745,31 @@ const CUT_N: &str = "SB_INDEX_WORKER_CUT_N";
 const CUT_ROOT: &str = "SB_INDEX_WORKER_CUT_ROOT";
 
 #[test]
+fn a_blocking_worker_panic_surfaces_an_error_and_preserves_unsubmitted_work() {
+    let scratch = ScratchDir::new("index-task-failure");
+    let engine = held(&scratch.path().join("store"));
+    let (sent, reached) = mpsc::channel();
+    hook(&engine, move |event| {
+        if matches!(event, Event::Prepared { .. }) {
+            sent.send(()).unwrap();
+            panic!("injected blocking-task failure");
+        }
+    });
+    pause(&engine, UserPause::Resume);
+    reached.recv_timeout(Duration::from_secs(30)).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while engine.indexer().status(engine.resources()).is_ok() {
+        assert!(
+            Instant::now() < deadline,
+            "a dead worker left status readable"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!((count(&engine, DOCS), count(&engine, QUEUE)), (0, 1));
+    block_on(engine.shutdown()).unwrap();
+}
+
+#[test]
 #[ignore = "spawned by the process-crash acceptance test"]
 fn worker_cut_child() {
     use sb_resources::Fs;
