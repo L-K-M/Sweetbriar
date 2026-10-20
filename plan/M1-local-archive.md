@@ -382,7 +382,7 @@ local drafts. No network yet.
     recovery transactions, observed acquisition availability, typed actionable
     error mapping and the test-seams clock constructor. Depends on e. Owns
     store/resource transition, stale/no-op, persistence and rollback tests.
-  - **M1.6e1a Publication I/O reports — M:** a resources façade for conditional
+  - **M1.6e1a Publication I/O reports — L:** a resources façade for conditional
     I/O reporting and atomic validated writer recovery, with typed capture and
     outcomes. Depends on e1. Owns deadline/control/rollback tests and native
     SQLite-full proof where a bulk publication fails but status writes still fit.
