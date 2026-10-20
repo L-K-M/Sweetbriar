@@ -44,3 +44,9 @@ overflow-checks = false
 [profile.release.package.mail-parser]
 debug-assertions = false
 overflow-checks = false
+
+# RUSTSEC-2026-0374: the published Askama config feature still uses
+# unmaintained basic-toml. This reviewed v0.16.1 backport changes only
+# that parser and its tests; UniFFI versions and template output stay put.
+[patch.crates-io]
+askama_derive = { git = "https://github.com/BigBoyDevBox/askama", rev = "da7f1d08c1690c576e3a7fd0a0f3436bc64e0440" }
