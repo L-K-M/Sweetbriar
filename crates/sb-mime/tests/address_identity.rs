@@ -67,3 +67,12 @@ fn display_decoding_groups_and_first_from_policy_are_preserved() {
     assert_eq!(parsed.cc()[0].name(), Some("É"));
     assert_eq!(parsed.cc()[0].address(), Some("bare@EXAMPLE.com"));
 }
+
+#[test]
+fn search_header_inputs_share_the_preserved_source_identity() {
+    let raw = b"From: \"Foo\"@EXAMPLE.com\r\nTo: Name <\"a\\ b\"@EXAMPLE.com>\r\nSubject: Synthetic\r\n\r\nbody\r\n";
+    let inputs = sb_mime::search_inputs(raw, &Limits::default()).unwrap();
+    assert!(inputs.parse_warnings().is_empty());
+    assert_eq!(inputs.from_text(), r#""Foo"@EXAMPLE.com"#);
+    assert_eq!(inputs.to_text(), "Name\n\"a\\ b\"@EXAMPLE.com");
+}
