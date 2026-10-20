@@ -415,9 +415,14 @@ local drafts. No network yet.
     Depends on f0. Owns quoted/Unicode/IP-literal grammar, invalid-input/byte
     bounds and no-rewriting proof before AST integration. Reuse existing IDNA
     dependency for domain validity only; no ingestion/schema/SQL changes.
+  - **M1.6f0c Remaining operands — M:** validated full-text literal values
+    with exact native token sequences and canonical shared UUID text parsing.
+    Depends on f0b. Owns Unicode/NUL/empty/byte-bound/native-failure and UUID
+    no-bit-rewriting proof. The complete AST follows with its own full grammar,
+    span and budget matrix; no partial AST or later-proof feature is exposed.
   - **M1.6f Query AST — L:** `sb-store::query` v1 types, strict JSON
     validation, limits and canonical serialization, including all filter
-    operands and explicit time context. Depends on f0b. Round-trip and
+    operands and explicit time context. Depends on f0c. Round-trip and
     invalid-input tests.
   - **M1.6g Text syntax — L:** parser, canonical formatter, typed error
     spans; every AST form has a lossless text spelling. Owns parser/error
