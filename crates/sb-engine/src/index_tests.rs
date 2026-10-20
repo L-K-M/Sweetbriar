@@ -450,16 +450,27 @@ fn an_old_io_failure_cannot_pause_a_new_revision_or_epoch() {
         block_on(engine.shutdown()).unwrap();
         let fs = Arc::new(FaultFs::new(real_fs(), FsOp::Open, 1, FaultKind::NoSpace));
         let (engine, _) = clocked(&root, fs, 10_000);
+        parked(&engine);
         let db = root.join("state.sqlite");
         let changed = AtomicUsize::new(0);
+        let (sent, idle) = mpsc::channel();
         hook(&engine, move |event| {
             if matches!(event, Event::Prepared { .. })
                 && changed.fetch_add(1, Ordering::SeqCst) == 0
             {
                 external(&db, update);
             }
+            if event == Event::Parked && changed.load(Ordering::SeqCst) > 0 {
+                let _ = sent.send(());
+            }
         });
         pause(&engine, UserPause::Resume);
+        idle.recv_timeout(Duration::from_secs(30)).unwrap();
+        assert_eq!(
+            count(&engine, QUEUE),
+            0,
+            "a stale failure parked pending input"
+        );
         drained(&engine);
         assert_eq!(count(&engine, DOCS), 1);
         assert_eq!(status(&engine).io_attempts(), 0);

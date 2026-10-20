@@ -475,7 +475,8 @@ fn pause_io(
             retry_at(now, attempts),
             attempts,
         )?;
-        Ok(if changed {
+        // A stale document failure must recapture without another producer wake.
+        Ok(if changed || context.is_some() {
             Next::More
         } else {
             Next::Park(None)
