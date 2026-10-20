@@ -18,6 +18,13 @@ rusqlite = { version = "=0.40.2", features = ["bundled", "backup", "limits"] }
 sha2 = { version = "=0.11.1", default-features = false }
 # Canonical import provenance and checkpoints (spec/02); same pin as xtask.
 serde_json = "=1.0.154"
+# spec/01 crate table: validated explicit IANA date operands (spec/06
+# "Zoned date operands", M1.6f0). Only the bundled database is used; no
+# system timezone, host zoneinfo or global clock feature is enabled.
+jiff = { version = "=0.2.37", default-features = false, features = [
+    "std",
+    "tzdb-bundle-always",
+] }
 
 [features]
 # Test-only writes for the layers above, as M1.3e's window tests need:

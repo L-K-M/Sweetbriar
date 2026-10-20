@@ -12,6 +12,7 @@ pub mod lists;
 pub mod messages;
 mod objects;
 mod paths;
+pub mod query;
 mod readers;
 mod receipts;
 mod schema;
