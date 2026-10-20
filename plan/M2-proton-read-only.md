@@ -165,6 +165,8 @@ signed in, with its TLS certificate exported.
   - with headers but no body, `from:` `is`/`domain` predicates match
     from `message_headers`, and `contains` and `text` count the message
     as unknown, also under negation;
+  - complete header rows preserve 02/06's absent-versus-unidentifiable JSON
+    convention; a present invalid field cannot become a known-empty NULL;
   - reading never sends `\Seen` (command trace);
   - coverage numbers match fixture expectations.
 

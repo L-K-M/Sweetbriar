@@ -944,6 +944,61 @@ No partial parser/formatter, new dependency, compiler, service or UI ships here.
   not BM25's corpus statistics. Rebuild with unchanged input/version must
   reproduce scores, order and coverage as well as the matching ids.
 
+### Predicate reads (M1.6h)
+
+`sb-store::query::counts(&Transaction, &Query, SearchScope)` executes the
+complete checked tree. `SearchScope` is `All`, `Account(Uuid)` or `Mailbox(i64)`;
+nonpositive outer mailbox ids are `InvalidInput`, missing outer entities
+`NotFound`. `QueryCounts` has private fields and immutable `matching_messages()`
+and `excluded_unknown()` u64 getters plus `search_generation()` (stored i64).
+Use the existing Store::read transaction boundary, not a public SQL/plan API.
+
+- Keep the scoped source relation, parameters, compiler and callbacks private.
+  All/Account choose the ordinary representative; Mailbox chooses its lowest
+  present occurrence per message. AST membership never changes that choice.
+  Compile all twelve node forms into bound SQL before LIMIT; metadata uses
+  the chosen occurrence and authoritative tables, without multiplying rows.
+  Aggregate true and final-unknown over every scoped candidate, never a page.
+- Validate the outer scope, then read phase, target, generation and counts in
+  one snapshot. Reset/enqueue return `Unavailable`, even for an empty scope or
+  filter-only query. Standalone coverage and runtime newer-extractor capability
+  gates belong to M1.6j. No count cache or paging/ranking surface ships here.
+- Bind one escaped quoted phrase built from TextOperand's native tokens in
+  fixed column syntax. FTS uses only current-target indexed/partial documents
+  with published objects and complete relevant columns, per the rules above.
+  No raw MATCH, SQL lower() substitute, Rust post-limit filter or summary FTS
+  fallback. Validate relied-on masks against the sorted eight-field vocabulary
+  and state/completeness invariants; malformed stored masks are `Corrupt`.
+- Complete header rows win for exact address leaves, including known-empty
+  NULLs (02). Otherwise require complete parser-version>=2 summaries; legacy1,
+  partial/failed/absent summaries are unknown even with retained matches.
+  Summary From is only its first mailbox. Both NULL from_addr/from_name mean
+  an empty list; otherwise adapt that mailbox as one entry. Name-only recovery
+  is unidentifiable. Any unidentifiable entry makes the entire exact leaf
+  unknown, even with another retained match; empty known lists are false.
+- Reuse the reader's address JSON decoder and typed `Corrupt` policy for bad
+  JSON/shapes/types. Reuse the strict modern addr-spec grammar and original
+  comparison keys; its 16KiB query-input ceiling is not a received-local limit.
+  Complete retained summary metadata remains usable without fetching its raw
+  object. Attachment presence still requires a complete summary, including
+  when a partial walk retained true; legacy complete attachment metadata is
+  unaffected by the address-identity floor.
+- Use private fixed-name UTF8/DETERMINISTIC/INNOCUOUS SQLite scalar callbacks
+  for address comparison and mask validation (`rusqlite` functions, same pin).
+  Keep a query-local typed error relay through execution: abort SQL on decoder
+  corruption and return the original `StoreError::Corrupt`; classify other
+  native errors normally. Never infer error type from text or fake a native
+  corruption code. Freshly prepare and drop owned UDF-bearing statements for
+  each registration; never cache them or leak error state into the next query.
+
+Same-slice proof uses real SQLite stores for every leaf and Kleene composition,
+all column masks/unknown classes, scope/membership/copies/flags/shared bytes,
+literal identifiers/phrases, dates/sizes, malformed/unidentifiable/legacy sources,
+and same-source SQL before LIMIT. Actual resources MIME walks prove partial
+address/attachment negatives and retained positives unknown, with complete
+controls/header precedence. Repeated callback error recovery, real native SQL
+failure and a concurrent writer prove typed failures and snapshot consistency.
+
 ## Coverage
 
 The core exposes, per account and per mailbox:

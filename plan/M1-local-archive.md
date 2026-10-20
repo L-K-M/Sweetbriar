@@ -442,6 +442,10 @@ local drafts. No network yet.
     Requires the address-fidelity maintenance in
     maintenance/2026-10-address-fidelity.md first: legacy parser-version1
     summary addresses stay unknown until refreshed, not silently matched.
+    Expose same-snapshot typed `query::counts` through the existing Store::read
+    boundary; keep compiler/source SQL private for i. Include typed source/mask
+    corruption, callback reuse, real native failure and concurrent-snapshot
+    proof. No paging/ranking/service surface in h; complete before i starts.
   - **M1.6i Search paging — L:** date/relevance ordering and opaque
     cursors, first 50 hits, id index and Around/Before/After in store reads.
     Owns both cursor deliverables and three-page relevance acceptance;
