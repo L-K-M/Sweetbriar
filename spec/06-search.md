@@ -156,7 +156,9 @@ timers, receipts and rebuild orchestration remain in their later steps.
   batch fence or document fence/token. Only typed unavailable causes are reported;
   fixed messages and the 1s exponential/60s capped, saturating retry deadline
   contain no raw error data. Scheduling and actual attempts stay in the engine.
-- User hold, unsupported target and reset/enqueue block publication retries.
+- User hold and unsupported target block retries; reset/enqueue also block
+  document-context publication retries. Once M1.6e2 drives those phases,
+  metadata and captured-batch contexts can retry the supported phase instead.
   An existing future I/O hold retains its error/deadline/history. A due metadata
   retry may begin atomically; an old captured failure instead requests a fresh
   capture. New reports recheck their original fence/token, increment persisted
@@ -192,9 +194,9 @@ timers, receipts and rebuild orchestration remain in their later steps.
   retry begin; immediate requests move the deadline and wake the worker without
   clearing either hold. Only actual successful work resets history. Reopen
   retains the error and deadline until a permitted retry starts.
-- User hold, newer extractor target and reset/enqueue prevent extraction. This
-  worker does not clear an I/O hold for a phase it cannot drive; M1.6e2 supplies
-  phase orchestration. Check current state after every wake instead of trusting
+- User hold, newer extractor target and reset/enqueue prevent document extraction.
+  A retry can begin only for work the worker can drive; M1.6e2 supplies the phase
+  driver. Check current state after every wake instead of trusting
   the parked snapshot. Clock-controlled tests advance time and use normal wakes.
 - A failed publication/status write latches actionable read unavailability.
   Preserve the captured typed cause when bulk writes fail but status still fits.
@@ -215,6 +217,44 @@ SQLite fixture triggers exercise real failed transactions; typed filesystem
 faults separately prove I/O classification. Neither is native SQLite VFS fault
 injection. Process-kill tests cover both sides of worker publication, while the
 storage suite covers internal transaction cuts; neither proves physical loss.
+
+### Runtime rebuild driver (M1.6e2)
+
+- Use the same counted worker, wake/stop mechanism and validated read gate.
+  Read status, target and latest-job metadata consistently. Reject contradictory
+  active-job/epoch metadata explicitly; never busy-loop an unchanged invalid job.
+- Reconcile an older supported target through a durable reset job before any
+  preparation. Keep active id/singleton semantics and both holds; never downgrade
+  a newer target. Startup resumes an uncancelled stored job at its committed
+  phase/cursors and leaves a user-held job parked. Version reconciliation's
+  private available-version input is tested separately from extraction; do not
+  fabricate version0 (invalid) or pretend the current extractor emits version2.
+- Capability and user/I/O holds gate every phase. A due permitted retry commits
+  begin first, then attempts current work. Reset and enqueue use existing bounded
+  200-row store operations, each a separate Index-priority submission that yields
+  to User/Sync writes. Object/MIME work starts only in Index. Completion uses the
+  current job/epoch and an empty-queue check in the same writer transaction.
+- After a stale/zero-progress/rejected completion, recapture status and inputs;
+  a concurrent producer need not send an additional wake. Committed phase changes
+  and progress retain their store generation semantics. Keep independent input
+  revisions, global status and authoritative mail/provenance intact.
+- A phase-write failure retains its ORIGINAL phase fence. Typed I/O reports and
+  validated recovery must not replay it onto a newer epoch; failed persistence
+  retains read unavailability. Metadata faults without a captured phase remain
+  distinct. No error/probe resets history without successful work.
+- A durable user-hold write at User priority is the cancellation boundary: an
+  already submitted transaction may finish BEFORE that write commits, but ZERO
+  batches or phase advances may commit after its receipt. Resume of the same
+  stored phase works only when the hold is explicitly released; startup/version
+  changes never release it. Public engine command/receipt routing is M1.6e2b.
+
+Same-slice real-worker tests cover phase progress/limits and standalone status
+generations, identical same-version field/state/FTS results, concurrent enqueues
+behind the cursor, foreground interleaving, persisted hold/reopen/resume and
+crash/restart boundaries across all phases including completion. Preserve lower
+internal transaction cuts; runtime callbacks only observe/coordinate/kill, never
+replace decisions/results. Native SQLite-full and SQL-failure fixtures remain
+distinct; no physical-power-loss or owner qualification claim.
 
 ## Schema
 
