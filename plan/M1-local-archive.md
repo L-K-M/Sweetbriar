@@ -400,7 +400,9 @@ local drafts. No network yet.
   - **M1.6e2b Rebuild engine controls — L:** engine start/cancel/resume/retry
     entrypoints over the working driver; depends on e2. Owns durable id/kind,
     singleton/idempotent receipts, cancel/reopen/resume, stale completed ids,
-    request-drop safety, legacy import cancel and command-boundary races.
+    request-drop safety, legacy import cancel and command-boundary races. Fix
+    receipt-targeted cancellation replay with a real live-import regression;
+    reuse the store JSON codec and counted command owner for post-commit work.
     Service/FFI/DTO routing remains k2/l4. Both slices include their own critical
     proof rather than deferring runtime tests behind a feature.
   - **M1.6f Query AST — M:** `sb-store::query` v1 types, strict JSON
