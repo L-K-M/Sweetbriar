@@ -7,7 +7,7 @@
 //! submission, scheduling and pause policy.
 
 use sb_mime::{Limits, SEARCH_EXTRACTOR_VERSION, SearchDocument, SearchState, search_document};
-use sb_store::index::rebuild::{RebuildPhase, latest_rebuild, search_index_status};
+use sb_store::index::rebuild::{RebuildPhase, SearchIoCode, latest_rebuild, search_index_status};
 use sb_store::index::{
     IndexBatch, IndexDocument, IndexFence, IndexPublication, IndexReason, IndexState,
     MAX_INDEX_BATCH, MAX_INDEX_BATCH_BYTES, PendingDocument, pending_batch, target_version,
@@ -124,6 +124,56 @@ impl IndexReadFailure {
 pub enum IndexReadStage {
     Lookup,
     Read,
+}
+
+/// spec/07's `SearchIoCode` for one store failure, or `None` when it
+/// can never become an I/O pause (spec/06): only `Unavailable` is a
+/// candidate, classified by its typed `io_kind`, never the formatted
+/// reason, so misleading text cannot reclassify the native cause. A
+/// `NotFound` or `Corrupt` read is an availability observation or an
+/// invariant failure instead, handled through their own store
+/// operations.
+pub fn search_io_code(error: &StoreError) -> Option<SearchIoCode> {
+    let StoreError::Unavailable { .. } = error else {
+        return None;
+    };
+    Some(match error.io_kind() {
+        Some(std::io::ErrorKind::StorageFull) => SearchIoCode::StorageFull,
+        Some(std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::ReadOnlyFilesystem) => {
+            SearchIoCode::PermissionDenied
+        }
+        Some(
+            std::io::ErrorKind::NotFound
+            | std::io::ErrorKind::NotConnected
+            | std::io::ErrorKind::BrokenPipe
+            | std::io::ErrorKind::ConnectionReset
+            | std::io::ErrorKind::ConnectionAborted
+            | std::io::ErrorKind::ConnectionRefused
+            | std::io::ErrorKind::TimedOut,
+        ) => SearchIoCode::StorageUnavailable,
+        _ => SearchIoCode::OtherIo,
+    })
+}
+
+/// The fixed actionable text stored for `code` (spec/06, 07):
+/// sanitized by construction: no path, content or secret can reach
+/// the durable record, bounded far below the store's 512-byte
+/// `io_message` limit.
+pub fn search_io_message(code: SearchIoCode) -> &'static str {
+    match code {
+        SearchIoCode::StorageFull => {
+            "The disk holding the mail store is full. Free disk space; indexing retries by itself."
+        }
+        SearchIoCode::PermissionDenied => {
+            "The mail store's storage denied access. Restore read/write permission on the app's data files and directory; indexing retries by itself."
+        }
+        SearchIoCode::StorageUnavailable => {
+            "The mail store's storage became unavailable. Reconnect the local disk and restore access; indexing retries by itself."
+        }
+        SearchIoCode::OtherIo => {
+            "Indexing hit an unexpected storage error. It retries by itself; restart the app if it persists."
+        }
+    }
 }
 
 impl Resources {

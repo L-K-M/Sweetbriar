@@ -378,14 +378,18 @@ local drafts. No network yet.
     Depends on d4. Tests cover all columns/states, size refusal versus I/O
     failure, cancellation, captured fences and bounded retained data. An
     oversized acquisition is partial coverage, not an endless I/O retry.
-  - **M1.6e1 Index job — L:** engine worker, low-priority bounded publication,
-    startup recovery and durable I/O pause/backoff/immediate retry. Depends on e.
+  - **M1.6e1 Runtime storage controls — L:** conditional failure/pause/retry/
+    recovery transactions, observed acquisition availability, typed actionable
+    error mapping and the test-seams clock constructor. Depends on e. Owns
+    store/resource transition, stale/no-op, persistence and rollback tests.
+  - **M1.6e1b Index job — L:** engine worker, low-priority bounded publication,
+    startup recovery and durable I/O pause/backoff/immediate retry. Depends on e1.
     Owns the extraction job/watermark deliverable. Real-worker tests cover
     failure/restart/re-publication, actionable errors/deadlines, failed-writer
     read unavailability and retry without dropping pending work.
   - **M1.6e2 Rebuild orchestration — L:** engine start/cancel/resume,
     automatic version-change jobs, global worker pause and phase progress;
-    depends on e1. Owns identical-rebuild acceptance. Real-worker tests cover
+    depends on e1b. Owns identical-rebuild acceptance. Real-worker tests cover
     durable ids, singleton/idempotent start, cancelled startup staying paused,
     explicit resume, version changes preserving pause, crash recovery through
     reset/enqueue/index, completion, foreground yielding between batches

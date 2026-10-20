@@ -26,6 +26,7 @@ mod import_jobs;
 mod index;
 pub use index::{
     IndexBlocked, IndexPreparation, IndexReadFailure, IndexReadStage, PreparedIndexBatch,
+    search_io_code, search_io_message,
 };
 mod renditions;
 pub use renditions::{RenditionCache, RenditionError, RenditionFiles, RenditionProtection};
@@ -51,10 +52,15 @@ pub use sb_platform::{default_cache_root, default_data_root};
 pub use sb_store::imports::{
     ImportJobState, ImportMessage, MAX_IMPORT_BATCH, MAX_IMPORT_CHANGES_BYTES,
 };
-pub use sb_store::index::rebuild::{RebuildPhase, SearchIndexStatus, search_index_status};
+pub use sb_store::index::rebuild::{
+    RebuildPhase, SearchIndexStatus, SearchIoCode, begin_index_retry, commit_index_recovery,
+    pause_for_io_if_current, record_index_attempt_success, request_index_retry,
+    search_index_status,
+};
 pub use sb_store::index::{
     IndexBatch, IndexDocument, IndexFence, IndexPublication, IndexReason, IndexState,
-    MAX_INDEX_BATCH, MAX_INDEX_BATCH_BYTES, PendingDocument, publish_batch,
+    MAX_INDEX_BATCH, MAX_INDEX_BATCH_BYTES, ObservedAvailability, PendingDocument,
+    note_observed_availability, publish_batch,
 };
 pub use sb_store::lists::{
     ListAnchor, ListKey, ListPage, ListScope, MAX_PAGE_ROWS, MailboxRole, PageRead, StoredListRow,
@@ -81,10 +87,10 @@ pub use sb_store::{
 };
 
 #[cfg(not(feature = "test-seams"))]
-use sb_store::Fs;
-use sb_store::{Clock, Random, Seams, Store, open};
+use sb_store::{Clock, Fs};
 #[cfg(feature = "test-seams")]
-pub use sb_store::{Fs, refresh_list_rows};
+pub use sb_store::{Clock, Fs, refresh_list_rows};
+use sb_store::{Random, Seams, Store, open};
 
 /// The store and the seams it opened with, held for the engine: one
 /// process's whole reach into the leaves (spec/01).
@@ -103,19 +109,34 @@ impl Resources {
     /// `sb-platform`'s filesystem, clock and randomness behind the
     /// seam traits.
     pub fn open(data_root: &Path) -> Result<Self, StoreError> {
-        Self::open_on(data_root, Arc::new(RealFs))
+        Self::open_on(data_root, Arc::new(RealFs), Arc::new(SystemClock))
     }
 
     /// [`Resources::open`] on an injected filesystem: crash-cut suites
     /// kill the process at a chosen operation (spec/11).
     #[cfg(feature = "test-seams")]
     pub fn open_with_fs(data_root: &Path, fs: Arc<dyn Fs>) -> Result<Self, StoreError> {
-        Self::open_on(data_root, fs)
+        Self::open_on(data_root, fs, Arc::new(SystemClock))
     }
 
-    fn open_on(data_root: &Path, fs: Arc<dyn Fs>) -> Result<Self, StoreError> {
+    /// [`Resources::open`] on injected filesystem and clock seams: the
+    /// same clock reaches the store's seams and [`Resources::now`], so
+    /// writer tests observe deterministic timestamps (spec/11).
+    #[cfg(feature = "test-seams")]
+    pub fn open_with_clock(
+        data_root: &Path,
+        fs: Arc<dyn Fs>,
+        clock: Arc<dyn Clock>,
+    ) -> Result<Self, StoreError> {
+        Self::open_on(data_root, fs, clock)
+    }
+
+    fn open_on(
+        data_root: &Path,
+        fs: Arc<dyn Fs>,
+        clock: Arc<dyn Clock>,
+    ) -> Result<Self, StoreError> {
         let paths = StorePaths::new(data_root)?;
-        let clock: Arc<dyn Clock> = Arc::new(SystemClock);
         let random: Arc<dyn Random> = Arc::new(OsRandom);
         let seams = Seams::new(Arc::clone(&fs), Arc::clone(&clock), Arc::clone(&random));
         Ok(Self {

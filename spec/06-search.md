@@ -108,8 +108,46 @@ registered in the resolution.
   unsubmitted preparation on cancellation. Preparation writes no SQLite state
   and acknowledges no queue entry. Keep at most 200 candidates and 2,000,000
   new-column bytes for the next publication, leaving other work queued. It may
-  return a valid prefix with the first contextual failure; e1 owns publication,
+  return a valid prefix with the first contextual failure; e1b owns publication,
   stale-failure checks and pause/retry policy.
+
+### Runtime control transactions (M1.6e1)
+
+- A read observation of a missing or durably quarantined object rechecks the
+  captured queue revision/reason and the published acquisition. A current
+  observation changes only availability, supersedes the request with a fresh
+  `delete` revision preserving age, and advances search generation once.
+  Republished or requeued input makes an old observation a no-op. Identity,
+  provenance, docs and postings are retained. This source bookkeeping remains
+  allowed during a pause/rebuild; it is not index publication or phase progress.
+- I/O-pause writes recheck epoch/target, user hold, existing I/O hold and any
+  captured document token before storing the error/deadline/history. A document
+  failure also requires the publication phase; phase-level failures may arise
+  in reset/enqueue. Stale or blocked attempts cannot overwrite newer status.
+- Retry request and retry begin are distinct. A request brings an existing I/O
+  deadline to now and records one status generation, preserving the error,
+  attempts and user hold. Begin rechecks the current fence, due deadline and
+  user hold before clearing the I/O error/deadline and recording one generation.
+  Begin applies to any phase; the runtime caller must be able to start that
+  permitted phase's retry. Neither operation releases a user hold. Without an
+  I/O pause they are no-ops.
+- Successful attempts may clear retry history only under a current unpaused
+  context, without clearing holds or changing data. A changed history advances
+  generation once; stale/blocked/unchanged calls are no-ops. Failure history
+  persists across retry begin until success is recorded.
+- Read recovery after a failed writer validates and republishes the current
+  operational status generation before reads resume, preserving holds, errors,
+  history, epoch, target and cursors. This named recovery event is not a bare
+  public counter increment. Missing/corrupt state fails explicitly.
+- The facade maps only typed unavailable causes to I/O-pause codes. Full and
+  denied/read-only storage get their specific codes; known unavailable paths/
+  connections use `storage_unavailable`; ambiguous/unknown causes use `other_io`.
+  Non-unavailable failures are not reclassified as I/O. Fixed actionable text
+  avoids persisting raw paths/content and fits the 512-byte bound.
+
+Every accepted control transaction advances search generation once, including
+status-only events. SQL failure rolls the whole operation back. Runtime worker,
+timers, receipts and rebuild orchestration remain in their later steps.
 
 ## Schema
 

@@ -134,6 +134,104 @@ pub struct IndexBatch {
     pub documents: Vec<PendingDocument>,
 }
 
+/// What a read observed about an object's availability (spec/06
+/// "Runtime control transactions"): the file is gone, or verification
+/// already moved it to `recovery/`. The two recorded states are not
+/// interchangeable, so this is an enum, not a bool.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ObservedAvailability {
+    Missing,
+    Quarantined,
+}
+
+impl ObservedAvailability {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Missing => "missing",
+            Self::Quarantined => "quarantined",
+        }
+    }
+}
+
+/// Whether the queue still holds `token`'s exact revision and reason.
+/// A superseded, requeued or acknowledged request answers false;
+/// anything captured against it is stale and writes nothing.
+pub(crate) fn token_current(tx: &Transaction, token: &PendingDocument) -> Result<bool, StoreError> {
+    tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM d_index_queue
+         WHERE doc_id = ?1 AND revision = ?2 AND reason = ?3)",
+        params![token.doc_id, token.revision, token.reason.as_str()],
+        |row| row.get(0),
+    )
+    .map_err(sql_error)
+}
+
+/// Record a read observation of a missing or durably quarantined object
+/// under its captured queue token (spec/06). The writer rechecks the
+/// token's exact revision/reason and an existing published acquisition:
+/// a superseded request or a republished source is a quiet no-op. A
+/// current observation changes only `object_state`, supersedes the
+/// request with a fresh `delete` revision preserving the oldest pending
+/// age, and advances search generation once. Identity, provenance,
+/// documents, postings, holds, epochs and progress are untouched;
+/// source bookkeeping that stays allowed during a pause or rebuild;
+/// never a publication, acknowledgement or deletion of authority.
+pub fn note_observed_availability(
+    tx: &Transaction,
+    token: &PendingDocument,
+    observed: ObservedAvailability,
+    now: Timestamp,
+) -> Result<bool, StoreError> {
+    observe_availability_with_cut(tx, token, observed, now, &mut || Ok(()))
+}
+
+fn observe_availability_with_cut(
+    tx: &Transaction,
+    token: &PendingDocument,
+    observed: ObservedAvailability,
+    now: Timestamp,
+    cut: &mut impl FnMut() -> Result<(), StoreError>,
+) -> Result<bool, StoreError> {
+    if token.doc_id <= 0 || token.revision <= 0 || token.reason == IndexReason::Delete {
+        return Err(invalid(
+            "an availability observation needs a non-delete queue token",
+        ));
+    }
+    cut()?;
+    if !token_current(tx, token)? {
+        return Ok(false);
+    }
+    cut()?;
+    let state: String = tx
+        .query_row(
+            "SELECT object_state FROM acquisitions WHERE acquisition_id = ?1",
+            [token.doc_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(sql_error)?
+        .ok_or_else(|| StoreError::not_found("index acquisition"))?;
+    // A still-current non-delete token must name a published
+    // acquisition: anything else was already acted on without
+    // superseding the queue, which no runtime path produces.
+    if state != "published" {
+        return Err(StoreError::corrupt(
+            "a current index token names an unavailable acquisition",
+        ));
+    }
+    cut()?;
+    tx.execute(
+        "UPDATE acquisitions SET object_state = ?2 WHERE acquisition_id = ?1",
+        params![token.doc_id, observed.as_str()],
+    )
+    .map_err(sql_error)?;
+    cut()?;
+    enqueue_one(tx, token.doc_id, IndexReason::Delete, now)?;
+    cut()?;
+    advance_generation(tx)?;
+    Ok(true)
+}
+
 /// Target capability, including newer versions this app must not downgrade.
 pub fn target_version(conn: &Connection) -> Result<u32, StoreError> {
     u32::try_from(meta_integer(conn, "search_extractor_version")?)
