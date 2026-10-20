@@ -54,9 +54,9 @@ pub use sb_store::imports::{
     ImportJobState, ImportMessage, MAX_IMPORT_BATCH, MAX_IMPORT_CHANGES_BYTES,
 };
 pub use sb_store::index::rebuild::{
-    RebuildPhase, SearchIndexStatus, SearchIoCode, begin_index_retry, commit_index_recovery,
-    pause_for_io_if_current, record_index_attempt_success, request_index_retry,
-    search_index_status,
+    RebuildJob, RebuildPhase, SearchIndexStatus, SearchIoCode, begin_index_retry,
+    commit_index_recovery, latest_rebuild, pause_for_io_if_current, record_index_attempt_success,
+    request_index_retry, search_index_status,
 };
 pub use sb_store::index::{
     IndexBatch, IndexDocument, IndexFence, IndexPublication, IndexReason, IndexState,
@@ -87,6 +87,10 @@ pub use sb_store::{
     WriteFuture, WritePriority, run_once,
 };
 
+#[cfg(feature = "test-seams")]
+pub use sb_store::index::rebuild::{UserPause, pause_for_io, set_user_pause, start_search_rebuild};
+#[cfg(feature = "test-seams")]
+pub use sb_store::index::search_generation;
 #[cfg(not(feature = "test-seams"))]
 use sb_store::{Clock, Fs};
 #[cfg(feature = "test-seams")]

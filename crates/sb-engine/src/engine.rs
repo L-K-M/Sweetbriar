@@ -14,6 +14,7 @@ use tokio::task::{JoinError, JoinHandle};
 
 use crate::EngineError;
 use crate::import::ImportJobs;
+use crate::index::IndexJobs;
 use crate::windows::Windows;
 use sb_resources::{Resources, list_generation};
 
@@ -67,6 +68,7 @@ pub struct Engine {
     windows: Arc<Windows>,
     /// Import jobs with a live worker, and their cancel flags (spec/09).
     imports: Arc<ImportJobs>,
+    index: Arc<IndexJobs>,
     leases: Arc<crate::bodies::Leases>,
     /// The worker reserved at open that closes the store if the engine
     /// is dropped without `shutdown`; it ends when this sender drops.
@@ -192,12 +194,17 @@ impl Detached {
 /// Fields drop in order: the store handle before the count.
 pub(crate) struct Worker {
     resources: Arc<Resources>,
+    index: Arc<IndexJobs>,
     running: Arc<Running>,
     blocking: Arc<BlockingWork>,
     handle: Handle,
 }
 
 impl Worker {
+    pub(crate) fn indexer(&self) -> &Arc<IndexJobs> {
+        &self.index
+    }
+
     pub(crate) fn resources(&self) -> &Resources {
         &self.resources
     }
@@ -245,6 +252,7 @@ impl Spawn for Engine {
     {
         spawn(
             self.resources(),
+            &self.index,
             &self.blocking,
             self.runtime.handle(),
             body,
@@ -258,12 +266,19 @@ impl Spawn for Worker {
         F: FnOnce(Worker) -> Fut,
         Fut: std::future::Future<Output = ()> + Send + 'static,
     {
-        spawn(&self.resources, &self.blocking, &self.handle, body)
+        spawn(
+            &self.resources,
+            &self.index,
+            &self.blocking,
+            &self.handle,
+            body,
+        )
     }
 }
 
 fn spawn<F, Fut>(
     resources: &Arc<Resources>,
+    index: &Arc<IndexJobs>,
     blocking: &Arc<BlockingWork>,
     handle: &Handle,
     body: F,
@@ -274,6 +289,7 @@ where
 {
     let worker = Worker {
         resources: Arc::clone(resources),
+        index: Arc::clone(index),
         running: Arc::new(blocking.start()?),
         blocking: Arc::clone(blocking),
         handle: handle.clone(),
@@ -359,6 +375,16 @@ impl Engine {
     }
 
     #[cfg(test)]
+    pub(crate) async fn open_with_clock(
+        root: &Path,
+        fs: Arc<dyn sb_resources::Fs>,
+        clock: Arc<dyn sb_resources::Clock>,
+    ) -> Result<Self, EngineError> {
+        let open = Box::new(move |root: &Path| Resources::open_with_clock(root, fs, clock));
+        Self::open_on(root, spawn_open_thread, open).await
+    }
+
+    #[cfg(test)]
     pub(crate) async fn open_with_cache_fs(
         data_root: &Path,
         cache_root: &Path,
@@ -395,6 +421,7 @@ impl Engine {
                         runtime,
                         windows,
                         imports: Arc::default(),
+                        index: Arc::default(),
                         leases: Arc::default(),
                         cleanup: start_cleanup_worker()?,
                     })
@@ -404,7 +431,8 @@ impl Engine {
                 .and_then(|engine| engine.recover_imports().map(|()| engine))
                 // Messages imported before the last complete rebuild
                 // get their threads in the background (spec/02).
-                .inspect(Engine::schedule_threads);
+                .inspect(Engine::schedule_threads)
+                .inspect(Engine::schedule_index);
             // A caller that stopped waiting drops the engine here.
             let _ = opened.send(engine);
         }))
@@ -438,6 +466,10 @@ impl Engine {
         &self.imports
     }
 
+    pub(crate) fn indexer(&self) -> &Arc<IndexJobs> {
+        &self.index
+    }
+
     /// Wait for `future` on the calling thread. Only for the open
     /// thread, which is outside the runtime and may block.
     pub(crate) fn block_on<F: std::future::Future>(&self, future: F) -> F::Output {
@@ -459,6 +491,7 @@ impl Engine {
     /// `quick_check` is the safety net (spec/03).
     pub async fn shutdown(mut self) -> Result<(), EngineError> {
         self.windows.shut();
+        self.index.stop();
         let resources = self
             .resources
             .take()
@@ -579,6 +612,7 @@ impl Drop for Engine {
     /// the next open's `quick_check` covers (spec/03).
     fn drop(&mut self) {
         self.windows.shut();
+        self.index.stop();
         let Some(resources) = self.resources.take() else {
             return;
         };
