@@ -44,9 +44,9 @@ pub enum IndexIoContext<'a> {
 /// scheduler state: the engine decides what to do with them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IndexIoUpdate {
-    /// A user hold, an unsupported target or a reset/enqueue phase
-    /// refuses publication retries; holds are not released and no
-    /// unsupported phase work starts.
+    /// A user hold, an unsupported target or a document-context
+    /// report during reset/enqueue refuses the retry; holds are not
+    /// released and no unsupported phase work starts.
     Blocked,
     /// A durable I/O pause stands. A newly recorded report carries its
     /// fresh deadline; an existing future hold keeps its recorded one.
@@ -150,9 +150,15 @@ fn report(
     };
     // Reconciliation must raise older targets before publication;
     // neither an older nor a newer target can retry with this build.
+    // The same worker now drives reset/enqueue, so metadata and
+    // captured-batch reports may retry the supported phase; only a
+    // document token's publication retry stays blocked there.
     if target != SEARCH_EXTRACTOR_VERSION
         || status.user_paused()
-        || job.is_some_and(|job| matches!(job.phase(), RebuildPhase::Reset | RebuildPhase::Enqueue))
+        || (matches!(context, IndexIoContext::Document { .. })
+            && job.is_some_and(|job| {
+                matches!(job.phase(), RebuildPhase::Reset | RebuildPhase::Enqueue)
+            }))
     {
         return Ok(BLOCKED);
     }

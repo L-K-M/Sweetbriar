@@ -391,16 +391,21 @@ local drafts. No network yet.
     Owns the extraction job/watermark deliverable. Real-worker tests cover
     failure/restart/re-publication, actionable errors/deadlines, failed-writer
     read unavailability and retry without dropping pending work.
-  - **M1.6e2 Rebuild orchestration — L:** engine start/cancel/resume,
-    automatic version-change jobs, global worker pause and phase progress;
-    depends on e1b. Owns identical-rebuild acceptance. Real-worker tests cover
-    durable ids, singleton/idempotent start, cancelled startup staying paused,
-    explicit resume, version changes preserving pause, crash recovery through
-    reset/enqueue/index, completion, foreground yielding between batches
-    and cancellation's writer boundary.
+  - **M1.6e2 Rebuild driver — L:** drive bounded phases/version reconciliation
+    in the existing worker; depends on e1b. Owns identical-rebuild acceptance,
+    committed progress, phase I/O retry, automatic uncancelled recovery,
+    persisted holds, writes behind the enqueue cursor, foreground yielding and
+    real-worker crashes through reset/enqueue/index/completion. A durable user
+    hold's writer boundary stops all later progress/publication.
+  - **M1.6e2b Rebuild engine controls — L:** engine start/cancel/resume/retry
+    entrypoints over the working driver; depends on e2. Owns durable id/kind,
+    singleton/idempotent receipts, cancel/reopen/resume, stale completed ids,
+    request-drop safety, legacy import cancel and command-boundary races.
+    Service/FFI/DTO routing remains k2/l4. Both slices include their own critical
+    proof rather than deferring runtime tests behind a feature.
   - **M1.6f Query AST — M:** `sb-store::query` v1 types, strict JSON
     validation, limits and canonical serialization, including all filter
-    operands and explicit time context. Depends on e2. Round-trip and
+    operands and explicit time context. Depends on e2b. Round-trip and
     invalid-input tests.
   - **M1.6g Text syntax — L:** parser, canonical formatter, typed error
     spans; every AST form has a lossless text spelling. Owns parser/error

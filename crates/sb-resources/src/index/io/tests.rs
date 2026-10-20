@@ -7,8 +7,8 @@ use std::io::ErrorKind;
 use std::sync::Arc;
 
 use sb_store::index::rebuild::{
-    SearchIndexStatus, UserPause, pause_for_io, rebuild_enqueue_batch, rebuild_reset_batch,
-    set_user_pause, start_search_rebuild,
+    SearchIndexStatus, UserPause, pause_for_io, rebuild_reset_batch, set_user_pause,
+    start_search_rebuild,
 };
 use sb_store::index::{
     IndexBatch, IndexDocument, IndexPublication, IndexReason, IndexState, MAX_INDEX_BATCH, enqueue,
@@ -320,8 +320,9 @@ fn holds_phases_and_newer_targets_block_without_writing() {
     assert_eq!(search_gen(&store), held);
     store.close().unwrap();
 
-    // Reset and enqueue phases block as well, on a pause-free store
-    // so the rebuild drivers actually run.
+    // Reset and enqueue now block only a document-context report: the
+    // same worker drives those phases, so metadata and captured-batch
+    // reports retry the supported phase work there.
     let (_s1, store) = fixture("io-blocked-phases");
     queue_doc(&store, 1);
     write(&store, |tx| {
@@ -329,10 +330,38 @@ fn holds_phases_and_newer_targets_block_without_writing() {
     })
     .unwrap();
     let held = search_gen(&store);
+    let batch = capture(&store);
+    let pending = batch.documents[0].clone();
     assert_eq!(
-        report(&store, IndexIoContext::Metadata, full(), now(0).as_millis()).unwrap(),
+        report_doc(&store, batch.fence, pending, now(0)).unwrap(),
         IndexIoUpdate::Blocked
     );
+    // The batch's own phase fence records a pause; a due metadata
+    // report begins the retry with its history preserved.
+    assert_eq!(
+        report(
+            &store,
+            IndexIoContext::Batch { fence: batch.fence },
+            full(),
+            now(0).as_millis()
+        )
+        .unwrap(),
+        IndexIoUpdate::Paused {
+            retry_at: now(1_000)
+        }
+    );
+    assert_eq!(
+        report(
+            &store,
+            IndexIoContext::Metadata,
+            full(),
+            now(1_000).as_millis()
+        )
+        .unwrap(),
+        IndexIoUpdate::RetryBegun
+    );
+    assert_eq!(status(&store).io_attempts(), 1);
+    // Driving reset into enqueue keeps document reports blocked.
     let epoch = store
         .read(|tx| Ok(latest_rebuild(tx)?.unwrap().epoch()))
         .unwrap();
@@ -340,19 +369,16 @@ fn holds_phases_and_newer_targets_block_without_writing() {
         rebuild_reset_batch(tx, "job-1", epoch, MAX_INDEX_BATCH)
     })
     .unwrap();
-    // One row keeps the job inside Enqueue for this pass.
-    write(&store, move |tx| {
-        rebuild_enqueue_batch(tx, "job-1", epoch, 1, Timestamp::from_millis(1))
-    })
-    .unwrap();
+    let batch = capture(&store);
+    let pending = batch.documents[0].clone();
     assert_eq!(
-        report(&store, IndexIoContext::Metadata, full(), now(0).as_millis()).unwrap(),
+        report_doc(&store, batch.fence, pending, now(2_000)).unwrap(),
         IndexIoUpdate::Blocked
     );
     assert_eq!(
         search_gen(&store),
-        held + 2,
-        "only the control writes advanced"
+        held + 3,
+        "only the pause, begin and reset commits advanced"
     );
     store.close().unwrap();
 
