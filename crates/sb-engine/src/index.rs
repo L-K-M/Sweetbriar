@@ -7,11 +7,12 @@ use std::sync::{Condvar, Mutex, MutexGuard};
 use std::time::Duration;
 
 use sb_resources::{
-    IndexFence, IndexPreparation, IndexReadFailure, IndexReadStage, ObservedAvailability,
-    RebuildPhase, Resources, SEARCH_EXTRACTOR_VERSION, SearchIndexStatus, SearchIoCode, StoreError,
-    Timestamp, Transaction, WritePriority, begin_index_retry, commit_index_recovery,
-    latest_rebuild, note_observed_availability, pause_for_io_if_current, publish_batch,
-    record_index_attempt_success, search_index_status, search_io_code, search_io_message,
+    IndexFence, IndexIoContext, IndexIoUpdate, IndexPreparation, IndexReadFailure, IndexReadStage,
+    ObservedAvailability, RebuildPhase, Resources, SEARCH_EXTRACTOR_VERSION, SearchIndexStatus,
+    StoreError, Timestamp, Transaction, WritePriority, begin_index_retry, commit_index_recovery,
+    index_retry_at, latest_rebuild, note_observed_availability, publish_batch,
+    record_index_attempt_success, recover_index_io_failure, report_index_io_failure,
+    search_index_status, search_io_code,
 };
 
 use crate::Engine;
@@ -42,6 +43,16 @@ enum ReadFailure {
 enum Next {
     More,
     Park(Option<Timestamp>),
+}
+
+impl From<IndexIoUpdate> for Next {
+    fn from(update: IndexIoUpdate) -> Self {
+        match update {
+            IndexIoUpdate::Blocked => Self::Park(None),
+            IndexIoUpdate::Paused { retry_at } => Self::Park(Some(retry_at)),
+            IndexIoUpdate::RetryBegun | IndexIoUpdate::Stale => Self::More,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -197,9 +208,9 @@ fn run(resources: &Resources, index: &IndexJobs, shutting_down: &dyn Fn() -> boo
         index.lock().again = false;
         let result = turn(resources, index, &stop).or_else(|error| {
             if !matches!(index.failure(), Some(ReadFailure::Writer(_)))
-                && let Some(code) = search_io_code(&error)
+                && search_io_code(&error).is_some()
             {
-                return pause_io(resources, index, None, code);
+                return pause_io(resources, index, None, error);
             }
             Err(error)
         });
@@ -207,7 +218,7 @@ fn run(resources: &Resources, index: &IndexJobs, shutting_down: &dyn Fn() -> boo
             Ok(next) => next,
             Err(error) => match index.failure() {
                 Some(ReadFailure::Writer(attempts)) => {
-                    Next::Park(Some(retry_at(resources.now(), attempts)))
+                    Next::Park(Some(index_retry_at(resources.now(), attempts)))
                 }
                 _ => {
                     index.lock().failure = Some(ReadFailure::Invariant(error));
@@ -221,86 +232,6 @@ fn run(resources: &Resources, index: &IndexJobs, shutting_down: &dyn Fn() -> boo
             index.wait(resources, until);
         }
     }
-}
-
-fn retry_at(now: Timestamp, attempts: u32) -> Timestamp {
-    let milliseconds = (1_000i64 << attempts.saturating_sub(1).min(6)).min(60_000);
-    Timestamp::from_millis(now.as_millis().saturating_add(milliseconds))
-}
-
-#[cfg(test)]
-#[test]
-fn backoff_caps_and_timestamp_saturates() {
-    for (attempts, delay) in [(1, 1_000), (2, 2_000), (7, 60_000), (u32::MAX, 60_000)] {
-        assert_eq!(
-            retry_at(Timestamp::from_millis(1), attempts).as_millis(),
-            delay + 1
-        );
-    }
-    assert_eq!(
-        retry_at(Timestamp::from_millis(i64::MAX), 3).as_millis(),
-        i64::MAX
-    );
-}
-
-#[cfg(test)]
-#[test]
-fn metadata_faults_back_off_and_begin_due_retries_through_the_writer() {
-    use sb_test_support::{FixedClock, ScratchDir, block_on, real_fs};
-    let runtime = tokio::runtime::Runtime::new().unwrap();
-    let _entered = runtime.enter();
-    let scratch = ScratchDir::new("index-metadata-policy");
-    let now = Timestamp::from_millis(10_000);
-    let resources = Resources::open_with_clock(
-        scratch.path().join("store").as_path(),
-        real_fs(),
-        Arc::new(FixedClock::new(now)),
-    )
-    .unwrap();
-    let index = IndexJobs::default();
-    assert!(matches!(
-        pause_io(&resources, &index, None, SearchIoCode::StorageFull),
-        Ok(Next::More)
-    ));
-    let generation = resources
-        .read(|tx| sb_resources::search_generation(tx))
-        .unwrap();
-    assert!(matches!(
-        pause_io(&resources, &index, None, SearchIoCode::StorageFull),
-        Ok(Next::Park(Some(_)))
-    ));
-    assert_eq!(
-        resources
-            .read(|tx| sb_resources::search_generation(tx))
-            .unwrap(),
-        generation
-    );
-    block_on(resources.write(WritePriority::User, move |tx| {
-        sb_resources::request_index_retry(tx, now)
-    }))
-    .unwrap();
-    assert!(index.status(&resources).unwrap().io_pause().is_some());
-    assert!(matches!(
-        pause_io(&resources, &index, None, SearchIoCode::StorageFull),
-        Ok(Next::More)
-    ));
-    assert!(index.status(&resources).unwrap().io_pause().is_none());
-    assert_eq!(index.status(&resources).unwrap().io_attempts(), 1);
-    assert!(matches!(
-        pause_io(&resources, &index, None, SearchIoCode::StorageFull),
-        Ok(Next::More)
-    ));
-    assert_eq!(
-        index
-            .status(&resources)
-            .unwrap()
-            .io_pause()
-            .unwrap()
-            .retry_at()
-            .as_millis(),
-        12_000
-    );
-    resources.close().unwrap();
 }
 
 fn turn(
@@ -378,7 +309,21 @@ fn turn(
     let accepted = if publications.is_empty() {
         0
     } else {
-        let accepted = index.write(resources, move |tx| publish_batch(tx, fence, &publications))?;
+        let accepted =
+            match index.write(resources, move |tx| publish_batch(tx, fence, &publications)) {
+                Ok(accepted) => accepted,
+                Err(error) if search_io_code(&error).is_some() => {
+                    let now = resources.now();
+                    let update = index.write(resources, move |tx| {
+                        recover_index_io_failure(tx, IndexIoContext::Batch { fence }, &error, now)
+                    })?;
+                    #[cfg(test)]
+                    index.event(Event::Recovered);
+                    index.recovered();
+                    return Ok(update.into());
+                }
+                Err(error) => return Err(error),
+            };
         #[cfg(test)]
         index.event(Event::Committed);
         accepted
@@ -413,8 +358,8 @@ fn handle_failure(
             return Ok(Next::More);
         }
     }
-    if let Some(code) = search_io_code(&error) {
-        return pause_io(resources, index, Some((fence, pending)), code);
+    if search_io_code(&error).is_some() {
+        return pause_io(resources, index, Some((fence, pending)), error);
     }
     let current = resources.pending_index_batch()?;
     if current.fence == fence
@@ -435,51 +380,19 @@ fn pause_io(
     resources: &Resources,
     index: &IndexJobs,
     context: Option<(IndexFence, sb_resources::PendingDocument)>,
-    code: SearchIoCode,
+    error: StoreError,
 ) -> Result<Next, StoreError> {
     let now = resources.now();
-    index.write(resources, move |tx| {
-        let status = search_index_status(tx)?;
-        if status.user_paused()
-            || latest_rebuild(tx)?.is_some_and(|job| {
-                matches!(job.phase(), RebuildPhase::Reset | RebuildPhase::Enqueue)
-            })
-        {
-            return Ok(Next::Park(None));
-        }
-        let fence = context.as_ref().map_or(
-            IndexFence {
-                epoch: status.epoch(),
-                version: SEARCH_EXTRACTOR_VERSION,
-            },
-            |(fence, _)| *fence,
-        );
-        if let Some(pause) = status.io_pause() {
-            if pause.retry_at().as_millis() > now.as_millis() {
-                return Ok(Next::Park(Some(pause.retry_at())));
-            }
-            if context.is_some() || begin_index_retry(tx, fence, now)? {
-                return Ok(Next::More);
-            }
-            return Ok(Next::Park(None));
-        }
-        let attempts = u32::try_from(status.io_attempts())
-            .unwrap_or(u32::MAX)
-            .saturating_add(1);
-        let changed = pause_for_io_if_current(
-            tx,
-            fence,
-            context.as_ref().map(|(_, pending)| pending),
-            code,
-            search_io_message(code),
-            retry_at(now, attempts),
-            attempts,
-        )?;
-        // A stale document failure must recapture without another producer wake.
-        Ok(if changed || context.is_some() {
-            Next::More
-        } else {
-            Next::Park(None)
+    index
+        .write(resources, move |tx| {
+            let context = match context.as_ref() {
+                Some((fence, pending)) => IndexIoContext::Document {
+                    fence: *fence,
+                    pending,
+                },
+                None => IndexIoContext::Metadata,
+            };
+            report_index_io_failure(tx, context, &error, now)
         })
-    })
+        .map(Next::from)
 }

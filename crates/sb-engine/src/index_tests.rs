@@ -61,9 +61,13 @@ fn pause(engine: &Engine, hold: UserPause) {
 }
 
 fn held(root: &Path) -> Engine {
+    held_message(root, MESSAGE)
+}
+
+fn held_message(root: &Path, message: &[u8]) -> Engine {
     let engine = block_on(Engine::open(root)).unwrap();
     pause(&engine, UserPause::Pause);
-    import(&engine, &root.with_extension("eml"), MESSAGE);
+    import(&engine, &root.with_extension("eml"), message);
     wait(|| {
         !engine
             .resources()
@@ -653,6 +657,68 @@ fn a_valid_prefix_commits_before_its_failure_without_resetting_retry_history() {
     retry(&engine);
     drained(&engine);
     assert_eq!(count(&engine, DOCS), 2);
+    block_on(engine.shutdown()).unwrap();
+}
+
+#[test]
+fn native_bulk_full_persists_pause_history_when_status_writes_still_fit() {
+    let scratch = ScratchDir::new("index-native-full");
+    let root = scratch.path().join("store");
+    let message = format!("Subject: bulk\n\n{}", "word ".repeat(100_000));
+    let engine = held_message(&root, message.as_bytes());
+    block_on(engine.shutdown()).unwrap();
+    let (engine, clock) = clocked(&root, real_fs(), 10_000);
+    parked(&engine);
+    let (pages, bound) = write(&engine, |tx| {
+        let pages: i64 = tx
+            .query_row("PRAGMA page_count", [], |row| row.get(0))
+            .map_err(|error| StoreError::internal(error.to_string()))?;
+        let bound: i64 = tx
+            .query_row(&format!("PRAGMA max_page_count={pages}"), [], |row| {
+                row.get(0)
+            })
+            .map_err(|error| StoreError::internal(error.to_string()))?;
+        Ok((pages, bound))
+    });
+    assert_eq!(pages, bound);
+    pause(&engine, UserPause::Resume);
+    wait(|| {
+        engine
+            .indexer()
+            .status(engine.resources())
+            .is_ok_and(|state| state.io_pause().is_some())
+    });
+    let state = status(&engine);
+    assert_eq!(
+        state.io_pause().unwrap().code(),
+        sb_resources::SearchIoCode::StorageFull
+    );
+    assert_eq!(state.io_pause().unwrap().retry_at().as_millis(), 11_000);
+    assert_eq!(state.io_attempts(), 1);
+    assert_eq!((count(&engine, DOCS), count(&engine, QUEUE)), (0, 1));
+    clock.0.store(11_000, Ordering::SeqCst);
+    engine.indexer().wake();
+    wait(|| {
+        engine
+            .indexer()
+            .status(engine.resources())
+            .is_ok_and(|state| state.io_attempts() == 2)
+    });
+    assert_eq!(
+        status(&engine).io_pause().unwrap().retry_at().as_millis(),
+        13_000
+    );
+    assert_eq!((count(&engine, DOCS), count(&engine, QUEUE)), (0, 1));
+    write(&engine, |tx| {
+        tx.query_row("PRAGMA max_page_count=1000000", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .map_err(|error| StoreError::internal(error.to_string()))
+    });
+    retry(&engine);
+    drained(&engine);
+    assert_eq!(count(&engine, DOCS), 1);
+    assert!(status(&engine).io_pause().is_none());
     block_on(engine.shutdown()).unwrap();
 }
 
