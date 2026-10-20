@@ -18,6 +18,7 @@ use crate::index::IndexJobs;
 use crate::windows::Windows;
 use sb_resources::{
     Resources, SEARCH_EXTRACTOR_VERSION, WritePriority, list_generation, reconcile_search_target,
+    target_version,
 };
 
 /// The name of the worker a dropped engine closes its store on.
@@ -487,6 +488,10 @@ impl Engine {
     /// exactly as committed. Runs on the open thread, outside the
     /// runtime, so it blocks on the engine's own handle.
     fn reconcile_index(&self) -> Result<(), EngineError> {
+        // Even a no-op writer job starts the asynchronous idle checkpoint.
+        if self.resources().read(|tx| target_version(tx))? >= SEARCH_EXTRACTOR_VERSION {
+            return Ok(());
+        }
         let job_id = self.resources().new_uuid_string();
         self.block_on(self.resources().write(WritePriority::User, move |tx| {
             reconcile_search_target(tx, &job_id, SEARCH_EXTRACTOR_VERSION)
