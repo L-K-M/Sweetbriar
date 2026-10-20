@@ -95,6 +95,14 @@ impl SearchDocument {
         format!("[{}]", names.join(","))
     }
 
+    /// The document for an acquisition refused on size alone, before
+    /// any MIME work (spec/06 "Preparation boundary"): nothing was
+    /// extracted, so every field is unknown and the mask names all
+    /// eight columns. Pure: no bytes were faked or parsed.
+    pub fn size_refused() -> Self {
+        cap(Default::default(), COLUMNS.to_vec())
+    }
+
     fn failed() -> Self {
         Self {
             columns: Default::default(),

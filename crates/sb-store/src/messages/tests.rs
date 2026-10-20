@@ -572,3 +572,212 @@ fn acquisition_quarantine_failure_keeps_its_kind() {
     assert_eq!(error.io_kind(), None);
     store.close().unwrap();
 }
+
+/// `index_acquisition` resolves each recorded state; an absent row is
+/// `NotFound` (the orphaned-queue invariant failure), and malformed
+/// stored metadata is `Corrupt`.
+#[test]
+fn index_acquisition_resolves_and_validates_queue_metadata() {
+    let mut conn = database();
+    let tx = conn.transaction().unwrap();
+    attach(&tx, &ObjectId::from_parts([7; 32], 9));
+    let found = index_acquisition(&tx, 50).unwrap();
+    assert_eq!(found.acquisition_id(), 50);
+    assert_eq!(found.availability(), BodyAvailability::Acquired);
+    assert_eq!(*found.object(), ObjectId::from_parts([7; 32], 9));
+    for (id, state, availability) in [
+        (60, "missing", BodyAvailability::AcquisitionMissing),
+        (61, "quarantined", BodyAvailability::AcquisitionCorrupt),
+    ] {
+        tx.execute(
+            "INSERT INTO acquisitions (acquisition_id, content_sha256, byte_length,
+             object_state, first_acquired_at) VALUES (?1, ?2, 3, ?3, 0)",
+            params![id, format!("{id:064x}"), state],
+        )
+        .unwrap();
+        assert_eq!(
+            index_acquisition(&tx, id).unwrap().availability(),
+            availability
+        );
+    }
+    assert!(matches!(
+        index_acquisition(&tx, 999),
+        Err(StoreError::NotFound { .. })
+    ));
+    for (id, hash, length) in [
+        (70, "z".repeat(64), 3),
+        (71, "0".repeat(63), 3),
+        (72, "2".repeat(64), -1),
+    ] {
+        tx.execute(
+            "INSERT INTO acquisitions (acquisition_id, content_sha256, byte_length,
+             object_state, first_acquired_at) VALUES (?1, ?2, ?3, 'published', 0)",
+            params![id, hash, length],
+        )
+        .unwrap();
+        assert!(matches!(
+            index_acquisition(&tx, id),
+            Err(StoreError::Corrupt { .. })
+        ));
+    }
+}
+
+/// A bounded read returns the exact EOF-verified bytes while the
+/// declared length fits; beyond `retain` it verifies without keeping
+/// the body: an explicit `Oversized`, not the reader's early error.
+#[test]
+fn bounded_read_verifies_to_eof_retaining_only_within_the_limit() {
+    let never = || false;
+    let (_scratch, _paths, store, acquisition) =
+        store_with_acquisition(real_fs(), "bounded-verify");
+    assert_eq!(
+        store
+            .read_acquisition_bounded(&acquisition, ORIGINAL.len() as u64, &never)
+            .unwrap(),
+        AcquisitionRead::Verified(ORIGINAL.to_vec())
+    );
+    assert_eq!(
+        store
+            .read_acquisition_bounded(&acquisition, ORIGINAL.len() as u64 - 1, &never)
+            .unwrap(),
+        AcquisitionRead::Oversized
+    );
+    // The no-retention pass verified the intact object: it still reads.
+    assert_eq!(store.read_acquisition(&acquisition).unwrap(), ORIGINAL);
+    // Zero retains only an empty object.
+    assert_eq!(
+        store
+            .read_acquisition_bounded(&acquisition, 0, &never)
+            .unwrap(),
+        AcquisitionRead::Oversized
+    );
+    let empty = store.objects().publish(&b""[..]).unwrap();
+    writing(&store, move |tx| {
+        tx.execute(
+            "INSERT INTO acquisitions (acquisition_id, content_sha256, byte_length,
+             object_state, first_acquired_at) VALUES (51, ?1, 0, 'published', 0)",
+            [empty.sha256_hex()],
+        )
+        .unwrap();
+        Ok(())
+    });
+    let empty = store.read(|tx| index_acquisition(tx, 51)).unwrap();
+    assert_eq!(
+        store.read_acquisition_bounded(&empty, 0, &never).unwrap(),
+        AcquisitionRead::Verified(Vec::new())
+    );
+    store.close().unwrap();
+}
+
+/// A same-length-damaged oversized object is `Corrupt`, quarantined
+/// by the EOF hash check, never a success or an empty document.
+#[test]
+fn corrupt_oversized_object_is_corrupt_not_a_read_outcome() {
+    let (_scratch, paths, store, acquisition) =
+        store_with_acquisition(real_fs(), "bounded-corrupt");
+    let hash = acquisition.object().sha256_hex();
+    let path = paths
+        .objects_sha256()
+        .join(&hash[..2])
+        .join(&hash[2..4])
+        .join(&hash);
+    std::fs::write(&path, vec![b'x'; ORIGINAL.len()]).unwrap();
+    assert!(matches!(
+        store.read_acquisition_bounded(&acquisition, 1, &|| false),
+        Err(StoreError::Corrupt { .. })
+    ));
+    assert!(!path.exists());
+    store.close().unwrap();
+}
+
+/// Cancellation is a domain outcome, not an error: before the object
+/// is opened and at a chunk boundary, with no verification claim and
+/// nothing quarantined.
+#[test]
+fn bounded_read_cancels_before_io_and_between_chunks() {
+    let fault = Arc::new(FaultFs::new(
+        real_fs(),
+        FsOp::Open,
+        u64::MAX,
+        FaultKind::Eio,
+    ));
+    let fs: Arc<dyn Fs> = fault.clone();
+    let (_scratch, _paths, store, acquisition) = store_with_acquisition(fs, "bounded-cancel");
+    let opens = fault.calls(FsOp::Open);
+    assert_eq!(
+        store
+            .read_acquisition_bounded(&acquisition, MAX_READER_MESSAGE_BYTES, &|| true)
+            .unwrap(),
+        AcquisitionRead::Cancelled
+    );
+    assert_eq!(
+        fault.calls(FsOp::Open),
+        opens,
+        "cancellation must precede I/O"
+    );
+    // A multi-chunk object stops at a boundary and stays intact.
+    let big = store.objects().publish(&vec![b'y'; 130_000][..]).unwrap();
+    writing(&store, move |tx| {
+        tx.execute(
+            "INSERT INTO acquisitions (acquisition_id, content_sha256, byte_length,
+             object_state, first_acquired_at) VALUES (51, ?1, ?2, 'published', 0)",
+            params![big.sha256_hex(), i64::try_from(big.byte_length()).unwrap()],
+        )
+        .unwrap();
+        Ok(())
+    });
+    let big = store.read(|tx| index_acquisition(tx, 51)).unwrap();
+    let reads = fault.calls(FsOp::Read);
+    let cancelled = || fault.calls(FsOp::Read) > reads + 1;
+    assert_eq!(
+        store
+            .read_acquisition_bounded(&big, MAX_READER_MESSAGE_BYTES, &cancelled)
+            .unwrap(),
+        AcquisitionRead::Cancelled
+    );
+    // The unverified object is untouched; a retry reads it whole.
+    assert_eq!(
+        store
+            .read_acquisition_bounded(&big, MAX_READER_MESSAGE_BYTES, &|| false)
+            .unwrap(),
+        AcquisitionRead::Verified(vec![b'y'; 130_000])
+    );
+    store.close().unwrap();
+}
+
+/// `retain` above the 100 MB ceiling is rejected as a caller error,
+/// and injected object-read faults keep their native kinds.
+#[test]
+fn bounded_read_rejects_over_ceiling_retain_and_keeps_io_kinds() {
+    let (_scratch, _paths, store, acquisition) =
+        store_with_acquisition(real_fs(), "bounded-ceiling");
+    assert!(matches!(
+        store.read_acquisition_bounded(&acquisition, MAX_READER_MESSAGE_BYTES + 1, &|| false),
+        Err(StoreError::InvalidInput { .. })
+    ));
+    store.close().unwrap();
+    for (op, nth, kind) in [
+        (FsOp::Open, 1, std::io::ErrorKind::PermissionDenied),
+        (FsOp::Read, 2, std::io::ErrorKind::StorageFull),
+    ] {
+        let fs: Arc<dyn Fs> = Arc::new(FaultFs::new(real_fs(), op, nth, FaultKind::Kind(kind)));
+        let (_scratch, _paths, store, acquisition) = store_with_acquisition(fs, "bounded-io-kind");
+        let Err(error) =
+            store.read_acquisition_bounded(&acquisition, MAX_READER_MESSAGE_BYTES, &|| false)
+        else {
+            panic!("{op:?}: the injected fault did not fire")
+        };
+        assert!(
+            matches!(error, StoreError::Unavailable { .. }),
+            "{op:?}: {error:?}"
+        );
+        assert_eq!(error.io_kind(), Some(kind), "{op:?}");
+        assert_eq!(
+            store
+                .read_acquisition_bounded(&acquisition, MAX_READER_MESSAGE_BYTES, &|| false)
+                .unwrap(),
+            AcquisitionRead::Verified(ORIGINAL.to_vec())
+        );
+        store.close().unwrap();
+    }
+}
