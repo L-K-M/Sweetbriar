@@ -19,6 +19,8 @@ maintenance backport on 2026-10-20.
   mail/store/API behavior or persistent user data changes.
 - The reviewed fork is `https://github.com/BigBoyDevBox/askama`. Cargo must pin
   the tested immutable revision; source policy allows only that named repository.
+  Revision: `da7f1d08c1690c576e3a7fd0a0f3436bc64e0440` (61 additions, 3 deletions
+  against the release tag, including borrowed-config and malformed-TOML tests).
   The org fork was unavailable to this credential; the authenticated user's
   fork is authorized and available. No arbitrary Git source allowance.
 
