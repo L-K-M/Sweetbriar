@@ -361,6 +361,43 @@ async fn format_search(query_json: String) -> Result<String, CoreError>;
   caller recovers it via coverage or the same idempotency key. Job cancellation
   is the explicit command above, separate from closing a Search window.
 
+#### Engine command boundary (M1.6e2b)
+
+- Engine start returns its receipt and the actual durable job id, including a
+  reused active id. Start stores `{"job_id":...}`; rebuild cancel/resume store
+  that id plus `state` (`paused`, `running` or `complete`); index retry stores
+  `{}`. Import cancellation keeps its existing `cancelled` receipt shape.
+- Resolve a fresh cancel/resume target only inside the receipt transaction.
+  A repeated key for the same command returns the original receipt even when
+  the caller supplies another, unknown or wrong-kind id. No new target lookup
+  or side effect may precede that replay decision. A different command under
+  the key remains `Conflict`.
+- Any post-commit import cancellation hint/report cleanup acts on the RECEIPT's
+  id and kept durable kind, never the new caller argument. Replay may retry
+  cleanup for that original target. A completed import still rejects a fresh
+  cancel; a completed rebuild cancel/resume changes no hold or progress.
+- Use the existing store JSON implementation for the narrow job-receipt codec;
+  generic receipt storage stays opaque. Nonempty stored job ids, including
+  JSON escapes, control characters and non-ASCII, round-trip without assuming
+  UUID syntax. Malformed stored JSON or a missing/empty/non-string job id is
+  `Corrupt`, never an invented target.
+- The existing counted command task owns the durable write AND every required
+  wake, import hint and best-effort report cleanup before replying. Dropping an
+  accepted caller future cannot strand that work. Shutdown still waits for it;
+  cleanup failure retains the durable cancellation for recovery on next open.
+- Start never releases either hold. Resume releases only the user hold, for the
+  current active job; retry only requests a permitted attempt and retains the
+  I/O error/history and user hold until the existing worker transitions them.
+  Completed/stale ids cannot release another rebuild's hold. Every control uses
+  User priority; the committed hold remains the zero-later-progress boundary.
+
+Real-runtime tests exercise singleton/replay/kind routing, arbitrary stored ids,
+cancel at a bounded worker boundary, reopen/same-job resume, independent holds,
+explicit retry and accepted-caller drop. A regression first demonstrates that
+replaying a cancel key with a DIFFERENT live import cannot stop or rewrite that
+job. Coordination hooks observe/block real workers; they never replace results.
+Service, DTO, FFI and UI routing remain their later steps.
+
 ## Subscriptions
 
 ```rust

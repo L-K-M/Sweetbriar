@@ -49,7 +49,9 @@ test, except where the spec says "manual qualification".
   M1.6e1 checks conditional runtime writes, source observations and rollback;
   M1.6e1b checks I/O pause/backoff/retry and failed-writer read errors;
   M1.6e2 checks bounded phase/version driving, holds, progress and phase recovery;
-  M1.6e2b checks engine command identities/receipts and cancel/reopen/resume races.
+  M1.6e2b checks engine command identities/receipts and cancel/reopen/resume races,
+  receipt-key replay against another live import, escaped/malformed receipt ids,
+  independent holds and accepted caller-drop work/wakes through the real driver.
 - M1.6e1b's real worker tests also cover coalesced producer wakes, bounded
   publication, stale source observations, independent holds, shutdown and Drop.
   An injected clock plus normal wake controls retry deadlines. Real SQLite

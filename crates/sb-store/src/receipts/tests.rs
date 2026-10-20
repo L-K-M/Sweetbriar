@@ -169,3 +169,56 @@ fn a_failed_command_stores_no_receipt() {
     );
     assert_eq!(retried.result_json(), "{}");
 }
+
+/// The job-receipt codec (spec/07 "Engine command boundary"): any
+/// nonempty stored id — escapes, control characters and non-ASCII —
+/// round-trips, while malformed stored JSON or a missing, empty or
+/// non-string `job_id` is `Corrupt`, never an invented target.
+#[test]
+fn job_receipts_round_trip_arbitrary_ids_and_refuse_malformed_bodies() {
+    let at = Timestamp::from_millis(FIXED_NOW_MS);
+    for (id, state) in [
+        ("plain-id", None),
+        ("with state", Some("paused")),
+        (
+            "escapes\"and\\backslashes\u{7}and\nnewlines",
+            Some("cancelled"),
+        ),
+        ("unicode·日本語", None),
+    ] {
+        let json = encode_job_receipt(id, state);
+        // The encoded body is valid JSON in the legacy `job_id`-first
+        // key order the handwritten receipts used.
+        assert!(json.starts_with("{\"job_id\":"), "{json}");
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["job_id"], id);
+        assert_eq!(parsed["state"].as_str(), state);
+        let receipt = Receipt::new("cancel_job".to_owned(), json, at);
+        assert_eq!(receipt_job_id(&receipt).unwrap(), id);
+    }
+    // Legacy and reordered stored shapes still decode.
+    for json in [
+        "{\"job_id\":\"legacy\"}",
+        "{\"job_id\":\"legacy\",\"state\":\"cancelled\"}",
+        "{\"state\":\"cancelled\",\"job_id\":\"legacy\"}",
+    ] {
+        let receipt = Receipt::new("cancel_job".to_owned(), json.to_owned(), at);
+        assert_eq!(receipt_job_id(&receipt).unwrap(), "legacy", "{json}");
+    }
+    for json in [
+        "not json",
+        "{\"job_id\":\"\"}",
+        "{\"job_id\":7}",
+        "{\"job_id\":null}",
+        "{}",
+        "[\"job_id\"]",
+        "\"job_id\"",
+        "{\"other\":\"x\"}",
+    ] {
+        let receipt = Receipt::new("cancel_job".to_owned(), json.to_owned(), at);
+        match receipt_job_id(&receipt) {
+            Err(StoreError::Corrupt { .. }) => (),
+            other => panic!("{json} must be Corrupt: {other:?}"),
+        }
+    }
+}

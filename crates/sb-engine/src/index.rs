@@ -34,6 +34,8 @@ struct State {
     again: bool,
     stopping: bool,
     failure: Option<ReadFailure>,
+    #[cfg(test)]
+    waiting: bool,
 }
 
 #[derive(Clone)]
@@ -89,6 +91,13 @@ impl IndexJobs {
 
     pub(super) fn stopped(&self) -> bool {
         self.lock().stopping
+    }
+
+    /// Observe a real Condvar wait with no outstanding producer wake.
+    #[cfg(test)]
+    pub(crate) fn waiting(&self) -> bool {
+        let state = self.lock();
+        state.waiting && !state.again
     }
 
     fn failure(&self) -> Option<ReadFailure> {
@@ -151,13 +160,25 @@ impl IndexJobs {
                 if remaining <= 0 {
                     return;
                 }
+                #[cfg(test)]
+                {
+                    state.waiting = true;
+                }
                 self.ready
                     .wait_timeout(state, Duration::from_millis(remaining as u64))
                     .expect("the index wait poisoned")
                     .0
             } else {
+                #[cfg(test)]
+                {
+                    state.waiting = true;
+                }
                 self.ready.wait(state).expect("the index wait poisoned")
             };
+            #[cfg(test)]
+            {
+                state.waiting = false;
+            }
         }
     }
 

@@ -20,6 +20,7 @@ mod index;
 #[cfg(test)]
 mod index_tests;
 mod messages;
+mod rebuild;
 mod settings;
 mod sidebar;
 mod threading;
@@ -39,6 +40,7 @@ pub use sb_resources::{
 pub use engine::Engine;
 pub use error::EngineError;
 pub use import::{ImportJobStatus, ImportReport, ImportSourceStatus, ImportStarted};
+pub use rebuild::SearchRebuildStarted;
 pub use settings::Setting;
 pub use windows::{
     Anchor, Count, Cursor, ListRow, Subscription, Window, WindowEvent, WindowId, WindowIds,

@@ -42,7 +42,7 @@ pub use objects::{
     FileObjectStore, ObjectId, ObjectIter, ObjectReader, ObjectStore, read_error_as_store_error,
 };
 pub use paths::StorePaths;
-pub use receipts::{Receipt, run_once};
+pub use receipts::{Receipt, encode_job_receipt, receipt_job_id, run_once};
 pub use settings::{StoredSetting, read_all, upsert};
 pub use source_snapshots::{ImportSourceCapture, ImportSourceSnapshot};
 pub use store::{ReadOnlyStore, Seams, Store, open, open_read_only};

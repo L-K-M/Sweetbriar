@@ -10,6 +10,34 @@ use sb_types::time::Timestamp;
 use crate::StoreError;
 use crate::schema::classify;
 
+/// A job command's receipt body (spec/07 "Engine command boundary"):
+/// `{"job_id":"<id>"}` plus the command's optional `"state"` word. The
+/// id is any nonempty stored string — escapes, control characters and
+/// non-ASCII included — so it is encoded as JSON, never pasted into a
+/// template. `serde_json`'s `Map` is sorted, so `job_id` precedes
+/// `state` as the handwritten receipts always had it.
+pub fn encode_job_receipt(job_id: &str, state: Option<&str>) -> String {
+    let mut body = serde_json::Map::new();
+    body.insert("job_id".to_owned(), job_id.into());
+    if let Some(state) = state {
+        body.insert("state".to_owned(), state.into());
+    }
+    serde_json::Value::Object(body).to_string()
+}
+
+/// The job id a stored receipt names (spec/07): a replayed command's
+/// effects target this id, never a new caller argument. Malformed
+/// stored JSON, or a `job_id` that is missing, empty or not a string,
+/// is `Corrupt` — never an invented target.
+pub fn receipt_job_id(receipt: &Receipt) -> Result<String, StoreError> {
+    let parsed: serde_json::Value = serde_json::from_str(receipt.result_json())
+        .map_err(|_| StoreError::corrupt("a stored command receipt is not JSON"))?;
+    match parsed["job_id"].as_str() {
+        Some(id) if !id.is_empty() => Ok(id.to_owned()),
+        _ => Err(StoreError::corrupt("a stored command receipt names no job")),
+    }
+}
+
 /// The recorded outcome of one command (spec/02): what ran, what it
 /// answered, and when. A repeated idempotency key returns this stored
 /// receipt without running anything.
