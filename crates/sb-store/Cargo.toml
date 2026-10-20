@@ -25,6 +25,11 @@ jiff = { version = "=0.2.37", default-features = false, features = [
     "std",
     "tzdb-bundle-always",
 ] }
+# spec/01 crate table: UTS 46 domain-name validity for search address
+# operands (spec/06 "Address operands", M1.6f0b). Already linked via
+# `url`; the mapped output is a validity check only and never becomes a
+# comparison key.
+idna = "=1.1.0"
 
 [features]
 # Test-only writes for the layers above, as M1.3e's window tests need:

@@ -1307,6 +1307,7 @@ dependencies = [
 name = "sb-store"
 version = "0.0.1"
 dependencies = [
+ "idna",
  "jiff",
  "proptest",
  "rusqlite",
