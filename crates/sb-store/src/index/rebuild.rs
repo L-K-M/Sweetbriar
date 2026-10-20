@@ -10,7 +10,10 @@
 
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
-use super::{IndexFence, advance_generation, invalid, sql_error, target_version};
+use super::{
+    IndexFence, PendingDocument, advance_generation, invalid, sql_error, target_version,
+    token_current,
+};
 use crate::{StoreError, Timestamp};
 
 mod batches;
@@ -314,6 +317,13 @@ pub(crate) fn publication_open(tx: &Transaction, fence: IndexFence) -> Result<bo
     if state.epoch != fence.epoch || state.paused() {
         return Ok(false);
     }
+    publication_phase_open(tx)
+}
+
+/// The phase half of [`publication_open`]: no live rebuild, or the
+/// latest job is in `index`. Epoch, target and pauses are the caller's
+/// already-established conditions.
+fn publication_phase_open(tx: &Transaction) -> Result<bool, StoreError> {
     Ok(match latest_rebuild(tx)? {
         Some(job) if job.active() => job.phase == RebuildPhase::Index,
         _ => true,
@@ -420,6 +430,30 @@ pub fn set_user_pause(tx: &Transaction, pause: UserPause) -> Result<(), StoreErr
     advance_generation(tx)
 }
 
+/// The one status update behind both pause writers: the caller has
+/// already validated inputs and inspected the current row.
+fn record_io_pause(
+    tx: &Transaction,
+    code: SearchIoCode,
+    message: &str,
+    retry_at: Timestamp,
+    attempts: u32,
+) -> Result<(), StoreError> {
+    tx.execute(
+        "UPDATE search_index_state
+         SET io_code = ?1, io_message = ?2, io_retry_at = ?3, io_attempts = ?4
+         WHERE id = 0",
+        params![
+            code.as_str(),
+            message,
+            retry_at.as_millis(),
+            attempts as i64
+        ],
+    )
+    .map_err(sql_error)?;
+    Ok(())
+}
+
 /// Record an I/O pause with its actionable message, UTC-millisecond
 /// deadline and bounded-backoff attempt count (spec/07). `attempts`
 /// persists across clears so consecutive failures keep backing off.
@@ -435,18 +469,181 @@ pub fn pause_for_io(
         return Err(invalid("invalid search I/O pause"));
     }
     status(tx)?;
-    tx.execute(
-        "UPDATE search_index_state
-         SET io_code = ?1, io_message = ?2, io_retry_at = ?3, io_attempts = ?4
-         WHERE id = 0",
-        params![
-            code.as_str(),
+    record_io_pause(tx, code, message, retry_at, attempts)?;
+    advance_generation(tx)
+}
+
+/// Record an I/O pause only while the failure is still current
+/// (spec/06 "Runtime control transactions"): epoch and target match
+/// `fence`, neither hold is set, and a per-document failure's captured
+/// token is still exact in a phase that could publish it. A
+/// phase-level failure carries no token and is valid in reset/enqueue
+/// too. A stale or blocked call writes nothing: no status change or
+/// generation, so it can never overwrite newer status.
+pub fn pause_for_io_if_current(
+    tx: &Transaction,
+    fence: IndexFence,
+    token: Option<&PendingDocument>,
+    code: SearchIoCode,
+    message: &str,
+    retry_at: Timestamp,
+    attempts: u32,
+) -> Result<bool, StoreError> {
+    pause_if_current_with_cut(
+        tx,
+        fence,
+        token,
+        IoPauseUpdate {
+            code,
             message,
-            retry_at.as_millis(),
-            attempts as i64
-        ],
+            retry_at,
+            attempts,
+        },
+        &mut || Ok(()),
+    )
+}
+
+struct IoPauseUpdate<'a> {
+    code: SearchIoCode,
+    message: &'a str,
+    retry_at: Timestamp,
+    attempts: u32,
+}
+
+fn pause_if_current_with_cut(
+    tx: &Transaction,
+    fence: IndexFence,
+    token: Option<&PendingDocument>,
+    update: IoPauseUpdate<'_>,
+    cut: &mut impl FnMut() -> Result<(), StoreError>,
+) -> Result<bool, StoreError> {
+    let IoPauseUpdate {
+        code,
+        message,
+        retry_at,
+        attempts,
+    } = update;
+    if message.len() > MAX_IO_MESSAGE_BYTES || retry_at.as_millis() < 0 {
+        return Err(invalid("invalid search I/O pause"));
+    }
+    if target_version(tx)? != fence.version {
+        return Ok(false);
+    }
+    let state = status(tx)?;
+    if state.epoch != fence.epoch || state.paused() {
+        return Ok(false);
+    }
+    if let Some(token) = token {
+        cut()?;
+        if !token_current(tx, token)? {
+            return Ok(false);
+        }
+        cut()?;
+        if !publication_phase_open(tx)? {
+            return Ok(false);
+        }
+    }
+    cut()?;
+    record_io_pause(tx, code, message, retry_at, attempts)?;
+    cut()?;
+    advance_generation(tx)?;
+    Ok(true)
+}
+
+/// `retry_search_index`'s request half (spec/06, 07): an existing I/O
+/// pause's deadline moves to `now`, so the next worker pass may begin
+/// at once. The error, attempt history and the independent user hold
+/// are preserved; without an I/O pause the request is a quiet no-op,
+/// never an implicit resume.
+pub fn request_index_retry(tx: &Transaction, now: Timestamp) -> Result<bool, StoreError> {
+    if now.as_millis() < 0 {
+        return Err(invalid("invalid search retry time"));
+    }
+    if status(tx)?.io_pause.is_none() {
+        return Ok(false);
+    }
+    tx.execute(
+        "UPDATE search_index_state SET io_retry_at = ?1 WHERE id = 0",
+        [now.as_millis()],
     )
     .map_err(sql_error)?;
+    advance_generation(tx)?;
+    Ok(true)
+}
+
+/// Begin a due I/O retry under `fence` (spec/06): epoch and target
+/// current, no user hold, a recorded pause at or past its deadline.
+/// Clears code/message/deadline while attempt history persists; a
+/// stale fence, a user hold, a missing pause and a future deadline
+/// are all quiet no-ops. Phase-agnostic: a pause recorded during
+/// reset/enqueue retries that phase's work, and the caller must
+/// actually be able to start it.
+pub fn begin_index_retry(
+    tx: &Transaction,
+    fence: IndexFence,
+    now: Timestamp,
+) -> Result<bool, StoreError> {
+    if now.as_millis() < 0 {
+        return Err(invalid("invalid search retry time"));
+    }
+    if target_version(tx)? != fence.version {
+        return Ok(false);
+    }
+    let state = status(tx)?;
+    let due = state
+        .io_pause
+        .as_ref()
+        .is_some_and(|pause| pause.retry_at.as_millis() <= now.as_millis());
+    if state.epoch != fence.epoch || state.user_paused || !due {
+        return Ok(false);
+    }
+    tx.execute(
+        "UPDATE search_index_state
+         SET io_code = NULL, io_message = NULL, io_retry_at = NULL
+         WHERE id = 0",
+        [],
+    )
+    .map_err(sql_error)?;
+    advance_generation(tx)?;
+    Ok(true)
+}
+
+/// Record a successful attempt under `fence` (spec/06): with a current
+/// epoch/target and neither hold, reset persisted retry history once.
+/// Stale, held or already-clear calls write nothing. The caller
+/// invokes this only after an actual successful attempt, never at
+/// retry begin or for a recovery probe.
+pub fn record_index_attempt_success(
+    tx: &Transaction,
+    fence: IndexFence,
+) -> Result<bool, StoreError> {
+    if target_version(tx)? != fence.version {
+        return Ok(false);
+    }
+    let state = status(tx)?;
+    if state.epoch != fence.epoch || state.paused() || state.io_attempts == 0 {
+        return Ok(false);
+    }
+    tx.execute(
+        "UPDATE search_index_state SET io_attempts = 0 WHERE id = 0",
+        [],
+    )
+    .map_err(sql_error)?;
+    advance_generation(tx)?;
+    Ok(true)
+}
+
+/// Commit a recovered writer's operational status (spec/06, 07): the
+/// singleton row, the stored target and the latest job metadata must
+/// all still parse, then search generation advances once while holds,
+/// errors, history, epoch, target, cursors and progress stay
+/// byte-identical. The engine clears its volatile failed-writer read
+/// gate only after this commit. Missing or corrupt state fails
+/// explicitly, never reporting successful progress.
+pub fn commit_index_recovery(tx: &Transaction) -> Result<(), StoreError> {
+    status(tx)?;
+    target_version(tx)?;
+    latest_rebuild(tx)?;
     advance_generation(tx)
 }
 

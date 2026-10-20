@@ -645,3 +645,136 @@ fn an_oversized_caller_capture_is_rejected_before_object_io() {
     assert_no_object_io(&fs, opens, reads);
     store.close().unwrap();
 }
+
+/// Classification reads only the typed `io_kind`: every
+/// non-`Unavailable` variant is `None`, and a misleading formatted
+/// reason can never reclassify the native cause.
+#[test]
+fn only_typed_unavailable_causes_map_to_io_pause_codes() {
+    use sb_store::index::rebuild::SearchIoCode;
+    use std::io::ErrorKind;
+
+    let unavailable = |io_kind: Option<ErrorKind>| StoreError::Unavailable {
+        reason: "permission denied reading /private/path".to_owned(),
+        io_kind,
+    };
+    for (kind, expected) in [
+        (Some(ErrorKind::StorageFull), SearchIoCode::StorageFull),
+        (
+            Some(ErrorKind::PermissionDenied),
+            SearchIoCode::PermissionDenied,
+        ),
+        (
+            Some(ErrorKind::ReadOnlyFilesystem),
+            SearchIoCode::PermissionDenied,
+        ),
+        (Some(ErrorKind::NotFound), SearchIoCode::StorageUnavailable),
+        (
+            Some(ErrorKind::NotConnected),
+            SearchIoCode::StorageUnavailable,
+        ),
+        (
+            Some(ErrorKind::BrokenPipe),
+            SearchIoCode::StorageUnavailable,
+        ),
+        (
+            Some(ErrorKind::ConnectionReset),
+            SearchIoCode::StorageUnavailable,
+        ),
+        (
+            Some(ErrorKind::ConnectionAborted),
+            SearchIoCode::StorageUnavailable,
+        ),
+        (
+            Some(ErrorKind::ConnectionRefused),
+            SearchIoCode::StorageUnavailable,
+        ),
+        (Some(ErrorKind::TimedOut), SearchIoCode::StorageUnavailable),
+        (Some(ErrorKind::ResourceBusy), SearchIoCode::OtherIo),
+        (Some(ErrorKind::OutOfMemory), SearchIoCode::OtherIo),
+        (Some(ErrorKind::Other), SearchIoCode::OtherIo),
+        (Some(ErrorKind::UnexpectedEof), SearchIoCode::OtherIo),
+        (Some(ErrorKind::InvalidInput), SearchIoCode::OtherIo),
+        (None, SearchIoCode::OtherIo),
+    ] {
+        assert_eq!(
+            search_io_code(&unavailable(kind)),
+            Some(expected),
+            "{kind:?}"
+        );
+    }
+    for error in [
+        StoreError::NotFound { what: "x".into() },
+        StoreError::Corrupt { detail: "x".into() },
+        StoreError::InvalidInput {
+            message: "x".into(),
+        },
+        StoreError::Conflict { detail: "x".into() },
+        StoreError::Internal { detail: "x".into() },
+        StoreError::NewerStore {
+            app_version: "9".into(),
+        },
+        StoreError::Locked,
+    ] {
+        assert_eq!(search_io_code(&error), None, "{error:?}");
+    }
+}
+
+/// The persisted text is fixed per code, sanitized, actionable and
+/// under the store's 512-byte `io_message` bound.
+#[test]
+fn io_pause_messages_are_fixed_bounded_and_actionable() {
+    use sb_store::index::rebuild::{MAX_IO_MESSAGE_BYTES, SearchIoCode};
+
+    let mut seen = std::collections::BTreeSet::new();
+    for code in [
+        SearchIoCode::StorageFull,
+        SearchIoCode::PermissionDenied,
+        SearchIoCode::StorageUnavailable,
+        SearchIoCode::OtherIo,
+    ] {
+        let message = search_io_message(code);
+        assert!(!message.is_empty() && message.len() < MAX_IO_MESSAGE_BYTES);
+        assert!(seen.insert(message), "{code:?} shares a message");
+    }
+    // Full and denied get their specific actions; the others advise
+    // restoring storage or letting the retry run.
+    assert!(search_io_message(SearchIoCode::StorageFull).contains("disk space"));
+    assert!(search_io_message(SearchIoCode::PermissionDenied).contains("permission"));
+    assert!(search_io_message(SearchIoCode::StorageUnavailable).contains("local disk"));
+}
+
+/// The test-seams clock reaches both the store seams and
+/// [`Resources::now`], while `open` and `open_with_fs` keep the system
+/// clock (spec/11).
+#[cfg(feature = "test-seams")]
+#[test]
+fn open_with_clock_drives_store_and_facade_time() {
+    let fixed = Timestamp::from_millis(1_735_689_600_000);
+    let scratch = ScratchDir::new("index-clock");
+    let root = scratch.path().join("clocked");
+    let res =
+        Resources::open_with_clock(&root, real_fs(), Arc::new(FixedClock::new(fixed))).unwrap();
+    assert_eq!(res.now(), fixed);
+    let created_at: String = res
+        .read(|tx| {
+            tx.query_row(
+                "SELECT value FROM store_meta WHERE key = 'created_at'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|error| StoreError::internal(error.to_string()))
+        })
+        .unwrap();
+    assert_eq!(created_at, fixed.as_millis().to_string());
+    res.close().unwrap();
+
+    // Uninjected opens still take the system clock.
+    let res = Resources::open_with_fs(&scratch.path().join("system"), real_fs()).unwrap();
+    let now = res.now().as_millis();
+    assert!(
+        now > fixed.as_millis(),
+        "the system clock is real time: {now}"
+    );
+    res.close().unwrap();
+}
