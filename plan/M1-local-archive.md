@@ -410,9 +410,14 @@ local drafts. No network yet.
     Depends on e2b. Owns calendar/DST/midnight-gap/fold/skipped-date/overflow
     and host-environment-independence proof, plus pinned timezone dependency,
     lockfile and notices. No partially validated AST is exposed to split size.
+  - **M1.6f0b Address operands — M:** validated modern bare mailbox/domain
+    operands, original values and shared local-as-written/domain-lowercase keys.
+    Depends on f0. Owns quoted/Unicode/IP-literal grammar, invalid-input/byte
+    bounds and no-rewriting proof before AST integration. Reuse existing IDNA
+    dependency for domain validity only; no ingestion/schema/SQL changes.
   - **M1.6f Query AST — L:** `sb-store::query` v1 types, strict JSON
     validation, limits and canonical serialization, including all filter
-    operands and explicit time context. Depends on f0. Round-trip and
+    operands and explicit time context. Depends on f0b. Round-trip and
     invalid-input tests.
   - **M1.6g Text syntax — L:** parser, canonical formatter, typed error
     spans; every AST form has a lossless text spelling. Owns parser/error
