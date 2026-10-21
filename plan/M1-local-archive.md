@@ -453,6 +453,11 @@ local drafts. No network yet.
     cursors, first 50 hits, id index and Around/Before/After in store reads.
     Owns both cursor deliverables and three-page relevance acceptance;
     test tied scores/dates, zero-score queries, mismatched/stale cursors.
+    Pin07's Store page/id APIs and canonical cursor spec object before code.
+    Include exact weighted-score/dedup/polarity, corpus/rebuild, cursor
+    validation precedence/identity, Around non-hit/copy, tags/unknowns and WAL
+    proof. Reuse h's private source/callbacks and existing test fixtures;
+    keep full date/relevance acceptance together within the review budget.
   - **M1.6j Search windows and coverage — L:** resources and engine
     Search handles, generation observation, scoped coverage/unknown counts,
     lifecycle and subscriptions. Store queries and worker integration tests

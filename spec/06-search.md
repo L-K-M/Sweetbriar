@@ -943,6 +943,8 @@ No partial parser/formatter, new dependency, compiler, service or UI ships here.
   those of the whole current FTS table; scope filters precede result limit,
   not BM25's corpus statistics. Rebuild with unchanged input/version must
   reproduce scores, order and coverage as well as the matching ids.
+  Distinct positive contributions are added in first-encounter tree order,
+  preserving deterministic native f64 addition without decimal conversion.
 
 ### Predicate reads (M1.6h)
 
