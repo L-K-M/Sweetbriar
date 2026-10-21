@@ -91,8 +91,18 @@ fn nonnegative_count(value: i64) -> Result<u64, StoreError> {
 
 struct Compiled {
     source: String,
+    predicate: String,
+    scope: &'static str,
+    leaves: Vec<ScoreLeaf>,
     values: Vec<Value>,
     generation: i64,
+}
+
+// Reuse the bound predicate and MATCH phrase for each distinct positive leaf.
+struct ScoreLeaf {
+    literal: String,
+    check: String,
+    phrase: String,
 }
 
 type Relay = Arc<Mutex<Option<StoreError>>>;
@@ -139,6 +149,8 @@ fn compile(tx: &Transaction, query: &Query, scope: SearchScope) -> Result<Compil
     let mut compiler = Compiler {
         target: index::target_version(tx)?,
         values,
+        negated: false,
+        leaves: Vec::new(),
     };
     let predicate = compiler.node(query.root());
     Ok(Compiled {
@@ -146,6 +158,9 @@ fn compile(tx: &Transaction, query: &Query, scope: SearchScope) -> Result<Compil
             "SELECT r.message_id AS id, r.occurrence_id AS chosen_occurrence_id,
              ({predicate}) AS v FROM {SOURCE} WHERE {scope}"
         ),
+        predicate,
+        scope,
+        leaves: compiler.leaves,
         values: compiler.values,
         generation,
     })
@@ -270,6 +285,8 @@ fn complete_fields(state: &str, mask: &str, needed: &str) -> Result<bool, StoreE
 struct Compiler {
     target: u32,
     values: Vec<Value>,
+    negated: bool,
+    leaves: Vec<ScoreLeaf>,
 }
 
 impl Compiler {
@@ -352,7 +369,12 @@ impl Compiler {
             Node::And(children) if children.is_empty() => "1".into(),
             Node::And(children) => self.join(children, " AND "),
             Node::Or(children) => self.join(children, " OR "),
-            Node::Not(child) => format!("NOT ({})", self.node(child)),
+            Node::Not(child) => {
+                self.negated = !self.negated;
+                let inner = self.node(child);
+                self.negated = !self.negated;
+                format!("NOT ({inner})")
+            }
         }
     }
 
@@ -362,22 +384,30 @@ impl Compiler {
     }
 
     fn fts(&mut self, columns: &[&str], value: &TextOperand) -> String {
-        let phrase = format!(
+        let literal = format!(
             "{{{}}} : \"{}\"",
             columns.join(" "),
             value.tokens().join(" ").replace('"', "\"\"")
         );
-        let phrase = self.bind(phrase);
+        let phrase = self.bind(literal.clone());
         let needed = self.bind(columns.join(","));
         let target = self.bind(self.target);
-        format!(
+        let check = format!(
             "CASE WHEN (SELECT {MASK_FN}(d.state, d.truncated_fields, {needed})
                 FROM d_search_docs d WHERE d.doc_id = lm.acquisition_id
                 AND d.state IN ('indexed','partial') AND d.extractor_version = {target}
                 AND a.object_state = 'published')
              THEN EXISTS(SELECT 1 FROM d_search_fts WHERE d_search_fts MATCH {phrase}
                 AND rowid = lm.acquisition_id) ELSE NULL END"
-        )
+        );
+        if !self.negated && !self.leaves.iter().any(|leaf| leaf.literal == literal) {
+            self.leaves.push(ScoreLeaf {
+                literal,
+                check: check.clone(),
+                phrase,
+            });
+        }
+        check
     }
 
     fn address(&mut self, field: AddressField, mode: AddressMatch, key: &str) -> String {
@@ -409,7 +439,8 @@ fn sql_error(error: rusqlite::Error) -> StoreError {
 
 mod paging;
 pub use paging::{
-    SearchAnchor, SearchPage, StoredSearchRow, read_search_date_page, search_date_ids,
+    SearchAnchor, SearchPage, StoredSearchRow, read_search_date_page, read_search_relevance_page,
+    search_date_ids, search_relevance_ids,
 };
 
 #[cfg(test)]

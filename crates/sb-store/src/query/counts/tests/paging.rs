@@ -2,6 +2,8 @@ use super::*;
 use crate::lists::{MAX_PAGE_ROWS, PageRead};
 use crate::query::{SearchAnchor, SearchPage, read_search_date_page, search_date_ids};
 
+mod relevance;
+
 fn read(
     conn: &Connection,
     node: Json,
