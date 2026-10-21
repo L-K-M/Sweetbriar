@@ -6,21 +6,75 @@
 
 use std::fmt;
 
+/// Swift-facing stable query parse codes, not service or engine types.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum SearchParseCode {
+    UnexpectedToken,
+    MissingValue,
+    UnclosedQuote,
+    UnclosedGroup,
+    UnknownKey,
+    InvalidOperator,
+    InvalidValue,
+    Limit,
+}
+
+impl From<sb_service::SearchParseCode> for SearchParseCode {
+    fn from(code: sb_service::SearchParseCode) -> Self {
+        match code {
+            sb_service::SearchParseCode::UnexpectedToken => Self::UnexpectedToken,
+            sb_service::SearchParseCode::MissingValue => Self::MissingValue,
+            sb_service::SearchParseCode::UnclosedQuote => Self::UnclosedQuote,
+            sb_service::SearchParseCode::UnclosedGroup => Self::UnclosedGroup,
+            sb_service::SearchParseCode::UnknownKey => Self::UnknownKey,
+            sb_service::SearchParseCode::InvalidOperator => Self::InvalidOperator,
+            sb_service::SearchParseCode::InvalidValue => Self::InvalidValue,
+            sb_service::SearchParseCode::Limit => Self::Limit,
+        }
+    }
+}
+
 /// A core failure, reported to the shell over FFI (spec/07
 /// "Errors").
 #[derive(Debug, Clone, uniffi::Error)]
 pub enum CoreError {
-    NotFound { what: String },
-    Locked,                         // store owned by another process
-    Unavailable { reason: String }, // offline, Bridge not running, account paused
-    Corrupt { detail: String },     // integrity failure; store goes read-only
-    NeedsMigration { from: u32, to: u32 },
-    NewerStore { app_version: String }, // store migrated by a newer app; read-only
-    InvalidInput { field: String, message: String },
-    Conflict { detail: String }, // e.g. draft revision base mismatch
-    ResetRequired { generation: u64 }, // stale window cursor; reopen from Top or Around
+    NotFound {
+        what: String,
+    },
+    Locked, // store owned by another process
+    Unavailable {
+        reason: String,
+    }, // offline, Bridge not running, account paused
+    Corrupt {
+        detail: String,
+    }, // integrity failure; store goes read-only
+    NeedsMigration {
+        from: u32,
+        to: u32,
+    },
+    NewerStore {
+        app_version: String,
+    }, // store migrated by a newer app; read-only
+    InvalidInput {
+        field: String,
+        message: String,
+    },
+    Conflict {
+        detail: String,
+    }, // e.g. draft revision base mismatch
+    ResetRequired {
+        generation: u64,
+    }, // stale window cursor; reopen from Top or Around
     Cancelled,
-    Internal { detail: String },
+    Internal {
+        detail: String,
+    },
+    // Append to retain the generated tags of existing failures.
+    SearchParse {
+        start: u32,
+        end: u32,
+        code: SearchParseCode,
+    },
 }
 
 impl CoreError {
@@ -51,6 +105,11 @@ impl From<sb_service::CoreError> for CoreError {
             }
             sb_service::CoreError::Cancelled => Self::Cancelled,
             sb_service::CoreError::Internal { detail } => Self::Internal { detail },
+            sb_service::CoreError::SearchParse { start, end, code } => Self::SearchParse {
+                start,
+                end,
+                code: code.into(),
+            },
         }
     }
 }
@@ -82,6 +141,9 @@ impl fmt::Display for CoreError {
             ),
             Self::Cancelled => f.write_str("Cancelled"),
             Self::Internal { detail } => write!(f, "Internal: {detail}"),
+            Self::SearchParse { start, end, code } => {
+                write!(f, "SearchParse: {code:?} at bytes [{start},{end})")
+            }
         }
     }
 }
@@ -99,7 +161,7 @@ mod tests {
         /// One service failure and the check that its mapped value is
         /// the same-named FFI variant.
         type Case = (sb_service::CoreError, fn(&CoreError));
-        let cases: [Case; 11] = [
+        let cases: [Case; 12] = [
             (
                 sb_service::CoreError::NotFound {
                     what: "w".to_owned(),
@@ -165,9 +227,62 @@ mod tests {
                 },
                 |e| assert!(matches!(e, CoreError::Internal { detail } if detail == "i")),
             ),
+            (
+                sb_service::CoreError::SearchParse {
+                    start: 3,
+                    end: 5,
+                    code: sb_service::SearchParseCode::Limit,
+                },
+                |e| {
+                    assert!(matches!(
+                        e,
+                        CoreError::SearchParse {
+                            start: 3,
+                            end: 5,
+                            code: SearchParseCode::Limit
+                        }
+                    ))
+                },
+            ),
         ];
-        for (service_error, assert_maps) in cases {
-            assert_maps(&CoreError::from(service_error));
+        for (index, (service_error, assert_maps)) in cases.into_iter().enumerate() {
+            let mapped = CoreError::from(service_error);
+            let mut bytes = Vec::new();
+            <CoreError as uniffi::Lower<crate::UniFfiTag>>::write(mapped.clone(), &mut bytes);
+            // Existing one-based tags stay fixed; SearchParse is appended last.
+            let tag = i32::from_be_bytes(bytes[..size_of::<i32>()].try_into().unwrap());
+            assert_eq!(tag, i32::try_from(index + 1).unwrap());
+            assert_maps(&mapped);
+        }
+    }
+
+    #[test]
+    fn every_parse_code_and_byte_offset_survives_the_service_boundary() {
+        use sb_service::SearchParseCode as Service;
+        for (code, expected) in [
+            (Service::UnexpectedToken, SearchParseCode::UnexpectedToken),
+            (Service::MissingValue, SearchParseCode::MissingValue),
+            (Service::UnclosedQuote, SearchParseCode::UnclosedQuote),
+            (Service::UnclosedGroup, SearchParseCode::UnclosedGroup),
+            (Service::UnknownKey, SearchParseCode::UnknownKey),
+            (Service::InvalidOperator, SearchParseCode::InvalidOperator),
+            (Service::InvalidValue, SearchParseCode::InvalidValue),
+            (Service::Limit, SearchParseCode::Limit),
+        ] {
+            let mapped = CoreError::from(sb_service::CoreError::SearchParse {
+                start: 3,
+                end: 5,
+                code,
+            });
+            let mut bytes = Vec::new();
+            <CoreError as uniffi::Lower<crate::UniFfiTag>>::write(mapped, &mut bytes);
+            let mut input = bytes.as_slice();
+            let mapped =
+                <CoreError as uniffi::Lift<crate::UniFfiTag>>::try_read(&mut input).unwrap();
+            assert!(input.is_empty());
+            assert!(
+                matches!(mapped, CoreError::SearchParse { start:3,end:5,code } if code==expected)
+            );
         }
     }
 }

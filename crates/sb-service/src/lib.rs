@@ -16,7 +16,7 @@ mod sidebar;
 mod windows;
 
 pub use api::{Core, CoreConfig, Receipt, Setting, open_core};
-pub use error::CoreError;
+pub use error::{CoreError, SearchParseCode};
 pub use imports::{
     ImportJob, ImportJobState, ImportProblem, ImportProblemKind, ImportReport, ImportSource,
     ImportSourceKind, ImportStarted, ImportTarget, ImportTotals, MboxVariant,

@@ -3726,6 +3726,8 @@ enum CoreError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
     case Cancelled
     case Internal(detail: String
     )
+    case SearchParse(start: UInt32, end: UInt32, code: SearchParseCode
+    )
 
     
 
@@ -3785,6 +3787,11 @@ public struct FfiConverterTypeCoreError: FfiConverterRustBuffer {
         case 10: return .Cancelled
         case 11: return .Internal(
             detail: try FfiConverterString.read(from: &buf)
+            )
+        case 12: return .SearchParse(
+            start: try FfiConverterUInt32.read(from: &buf), 
+            end: try FfiConverterUInt32.read(from: &buf), 
+            code: try FfiConverterTypeSearchParseCode.read(from: &buf)
             )
 
          default: throw UniffiInternalError.unexpectedEnumCase
@@ -3851,6 +3858,13 @@ public struct FfiConverterTypeCoreError: FfiConverterRustBuffer {
         case let .Internal(detail):
             writeInt(&buf, Int32(11))
             FfiConverterString.write(detail, into: &buf)
+            
+        
+        case let .SearchParse(start,end,code):
+            writeInt(&buf, Int32(12))
+            FfiConverterUInt32.write(start, into: &buf)
+            FfiConverterUInt32.write(end, into: &buf)
+            FfiConverterTypeSearchParseCode.write(code, into: &buf)
             
         }
     }
@@ -4637,6 +4651,117 @@ public func FfiConverterTypeRenderWarningCode_lift(_ buf: RustBuffer) throws -> 
 #endif
 public func FfiConverterTypeRenderWarningCode_lower(_ value: RenderWarningCode) -> RustBuffer {
     return FfiConverterTypeRenderWarningCode.lower(value)
+}
+
+
+
+/**
+ * Swift-facing stable query parse codes, not service or engine types.
+ */
+
+public enum SearchParseCode: Equatable, Hashable {
+    
+    case unexpectedToken
+    case missingValue
+    case unclosedQuote
+    case unclosedGroup
+    case unknownKey
+    case invalidOperator
+    case invalidValue
+    case limit
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension SearchParseCode: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeSearchParseCode: FfiConverterRustBuffer {
+    typealias SwiftType = SearchParseCode
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SearchParseCode {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .unexpectedToken
+        
+        case 2: return .missingValue
+        
+        case 3: return .unclosedQuote
+        
+        case 4: return .unclosedGroup
+        
+        case 5: return .unknownKey
+        
+        case 6: return .invalidOperator
+        
+        case 7: return .invalidValue
+        
+        case 8: return .limit
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: SearchParseCode, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .unexpectedToken:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .missingValue:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .unclosedQuote:
+            writeInt(&buf, Int32(3))
+        
+        
+        case .unclosedGroup:
+            writeInt(&buf, Int32(4))
+        
+        
+        case .unknownKey:
+            writeInt(&buf, Int32(5))
+        
+        
+        case .invalidOperator:
+            writeInt(&buf, Int32(6))
+        
+        
+        case .invalidValue:
+            writeInt(&buf, Int32(7))
+        
+        
+        case .limit:
+            writeInt(&buf, Int32(8))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSearchParseCode_lift(_ buf: RustBuffer) throws -> SearchParseCode {
+    return try FfiConverterTypeSearchParseCode.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSearchParseCode_lower(_ value: SearchParseCode) -> RustBuffer {
+    return FfiConverterTypeSearchParseCode.lower(value)
 }
 
 

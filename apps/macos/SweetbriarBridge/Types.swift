@@ -485,6 +485,31 @@ public struct WindowIDs: Sendable, Equatable {
     }
 }
 
+/// Stable query parse codes. Spans remain UTF-8 bytes until the editor maps them.
+public enum SearchParseCode: String, Sendable, Equatable {
+    case unexpectedToken = "unexpected_token"
+    case missingValue = "missing_value"
+    case unclosedQuote = "unclosed_quote"
+    case unclosedGroup = "unclosed_group"
+    case unknownKey = "unknown_key"
+    case invalidOperator = "invalid_operator"
+    case invalidValue = "invalid_value"
+    case limit
+
+    init(_ code: SweetbriarCore.SearchParseCode) {
+        switch code {
+        case .unexpectedToken: self = .unexpectedToken
+        case .missingValue: self = .missingValue
+        case .unclosedQuote: self = .unclosedQuote
+        case .unclosedGroup: self = .unclosedGroup
+        case .unknownKey: self = .unknownKey
+        case .invalidOperator: self = .invalidOperator
+        case .invalidValue: self = .invalidValue
+        case .limit: self = .limit
+        }
+    }
+}
+
 /// Every core failure the shell can see, mirroring `CoreError` over
 /// FFI — except `Cancelled`, which callers instead receive as Swift's
 /// `CancellationError` (spec/07 "Errors").
@@ -499,6 +524,7 @@ public enum CoreFailure: Error, Sendable, Equatable {
     case conflict(detail: String)
     case resetRequired(generation: UInt64)
     case internalError(detail: String)
+    case searchParse(start: UInt32, end: UInt32, code: SearchParseCode)
 }
 
 extension CoreFailure: LocalizedError {
@@ -525,6 +551,8 @@ extension CoreFailure: LocalizedError {
             return "The account needs a reset (generation \(generation))."
         case .internalError(let detail):
             return "Internal error: \(detail)"
+        case .searchParse(let start, let end, let code):
+            return "Search \(code.rawValue) at bytes [\(start),\(end))."
         }
     }
 }
@@ -557,6 +585,8 @@ extension CoreFailure {
             self = .unavailable(reason: "cancelled")
         case .Internal(let detail):
             self = .internalError(detail: detail)
+        case .SearchParse(let start, let end, let code):
+            self = .searchParse(start: start, end: end, code: SearchParseCode(code))
         }
     }
 }
