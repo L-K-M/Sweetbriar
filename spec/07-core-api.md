@@ -322,6 +322,54 @@ async fn format_search(query_json: String) -> Result<String, CoreError>;
   both limitations even when indexing is complete; no percentage claims
   attachment contents or CJK segmentation were searched.
 
+### Store search reads (M1.6i1/i2)
+
+M1.6i1 supplies `query::read_search_date_page(&Transaction, &Query, SearchScope,
+SearchAnchor, limit: usize, at: Option<u64>)`, returning
+`Result<lists::PageRead<SearchPage>, StoreError>`. `SearchAnchor` is `Top`,
+`After(String)`, `Before(String)` or `Around(i64)`. `query::search_date_ids`
+takes the same transaction/query/scope and optional generation, returning
+`PageRead<(u64, Vec<i64>)>` in date window order. Limits reuse
+`lists::MAX_PAGE_ROWS`; first-page callers explicitly request 50.
+
+M1.6i2 adds the corresponding `read_search_relevance_page` and
+`search_relevance_ids` entrypoints, with all relevance/score-key proof in that
+step. The service's two-sort API follows both steps. Each Store entrypoint
+supports its complete named sort; date cursors remain compatible after i2.
+
+`SearchPage` has private generation, rows, has-more-before, has-more-after and
+excluded-unknown fields, with immutable getters and `into_rows` extraction.
+Each `StoredSearchRow` privately pairs `lists::StoredListRow` with its opaque
+cursor, exposed through `row()`, `cursor()` and `into_parts()`. Row displays
+and batched tags reuse the list projection. Rows, tags, exact unknowns and
+generation share one short read transaction. Engine handles/status/cache and
+the true-hit Exact/AtLeast mapping remain the following window step's work.
+
+- Key alternatives must agree with the entrypoint's sort. The
+  cursor `spec` is an object with `query` (canonical v1 AST object), `scope`
+  (`"all"`, `{"account":"canonical UUID"}` or `{"mailbox":positive i64}`),
+  and `sort` (`"date"` or `"relevance"`). Identity metadata is validated;
+  invalid/missing store identity is `Corrupt`, not a client input error.
+- Cursor input is bounded to `MAX_QUERY_INPUT_BYTES + 1024` bytes before
+  parsing; nested AST encoding avoids double escaping. Reject duplicate or
+  unknown members, wrong types/version, missing/extra sort-key alternatives
+  and noncanonical serialization. Score rules above still normalize negative
+  zero while preserving every other finite native f64 bit.
+- Reuse h's scope/availability checks, then validate cursor structure,
+  store/spec/sort binding, at/cursor generation and incarnation, then its row
+  and exact key. Staleness returns `PageRead::Stale` at the current generation;
+  a malformed, misbound or forged cursor returns `InvalidInput`. The cursor's
+  id must name the chosen matching row itself, not another present copy.
+- Around may name another occurrence of the matching logical message. A
+  scoped non-hit or missing message returns `PageRead::NotInWindow`, mapping
+  to `NotFound`. Both sorts implement the exact clamp and two-sided keyset
+  behavior above, with no OFFSET. Each id entrypoint uses the same true-hit source.
+- All h predicate, source-precedence, error and snapshot rules apply to date
+  reads. M1.6i2 owns relevance-only score projection, whole-corpus BM25,
+  positive-polarity deduplication and incomplete-leaf score 0. Its distinct
+  positive contributions are added in first-encounter tree order, preserving
+  deterministic native f64 addition without decimal conversion.
+
 ### Search rebuild controls (M1.6)
 
 - Search commands use the normal idempotency-key/receipt protocol; the
