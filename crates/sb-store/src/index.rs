@@ -17,7 +17,7 @@ pub const MAX_INDEX_BATCH: usize = 200;
 pub const MAX_INDEX_BATCH_BYTES: usize = 2_000_000;
 const MAX_DOCUMENT_BYTES: usize = 1_000_000;
 const MAX_ATTACHMENT_NAMES_BYTES: usize = 64_000;
-const FIELDS: [&str; 8] = [
+pub(crate) const FIELDS: [&str; 8] = [
     "subject",
     "from_text",
     "to_text",

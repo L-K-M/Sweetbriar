@@ -63,6 +63,11 @@ impl AddressOperand {
         if value.len() > MAX_QUERY_INPUT_BYTES {
             return Err(AddressError::Limit("input exceeds 16384 UTF-8 bytes"));
         }
+        Self::parse_received(value)
+    }
+
+    // Received locals share the grammar, not the query-input byte ceiling.
+    pub(crate) fn parse_received(value: &str) -> Result<Self, AddressError> {
         let separator = split_local_domain(value)?;
         let domain = &value[separator + 1..];
         validate_domain(domain)?;

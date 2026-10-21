@@ -3,6 +3,7 @@
 
 mod addresses;
 mod ast;
+mod counts;
 mod dates;
 mod format;
 mod json;
@@ -14,6 +15,7 @@ pub use ast::{
     AddressField, Field, FieldPredicate, Flag, Has, Node, ParseCode, Query, QueryError,
     SearchParseError, SizeOp,
 };
+pub use counts::{QueryCounts, SearchScope, counts};
 pub use dates::{DateBounds, DateError, DatePredicate, DateValue};
 pub use format::TextFormatError;
 pub use syntax::ParseContext;
