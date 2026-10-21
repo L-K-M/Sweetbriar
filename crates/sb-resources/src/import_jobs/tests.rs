@@ -509,3 +509,159 @@ fn a_stale_batch_is_a_conflict_and_impossible_ones_are_refused() {
     let ended = commit_at(&res, &sources, cancelled.revision(), vec![], end, 0).unwrap_err();
     assert!(matches!(ended, StoreError::Conflict { .. }), "{ended:?}");
 }
+
+#[test]
+fn bounded_mime_predicates_follow_summary_completeness() {
+    use sb_mime::Limits;
+    use sb_store::imports::ImportParseState;
+    use sb_store::query::{Query, SearchScope, counts};
+    use serde_json::json;
+
+    const MIXED: &[u8] = include_bytes!("../../../../fixtures/eml/multipart-mixed.eml");
+    const FORWARD: &[u8] = include_bytes!("../../../../fixtures/eml/rfc822-forward.eml");
+    const FLOWED: &[u8] = include_bytes!("../../../../fixtures/eml/format-flowed.eml");
+    const CAROL: &str = "carol@example.com";
+    const IVAN: &str = "ivan@example.com";
+
+    // Separate stores keep complete controls from replacing partial summaries
+    // for the same content hash. The forward retains its attachment before cut.
+    for (name, bytes, cap, expected_state, attachment, from) in [
+        ("cut.eml", MIXED, Some(2), "partial", false, CAROL),
+        ("full.eml", MIXED, None, "ok", true, CAROL),
+        ("cut.eml", FORWARD, Some(3), "partial", true, IVAN),
+        ("full.eml", FORWARD, None, "ok", true, IVAN),
+        ("absent.eml", FLOWED, None, "ok", false, "frank@example.com"),
+    ] {
+        let (scratch, res) = resources("predicate-mime");
+        // Start after version reconciliation, like the index facade fixtures.
+        write(&res, |tx| {
+            tx.execute(
+                "UPDATE store_meta SET value=?1 WHERE key='search_extractor_version'",
+                [crate::SEARCH_EXTRACTOR_VERSION.to_string()],
+            )
+            .map(drop)
+            .map_err(|error| StoreError::internal(error.to_string()))
+        })
+        .unwrap();
+        let (sources, revision) = running_job(&res, &scratch, &[(name, bytes)]);
+        let mut opened = res
+            .open_import_acquisition(&sources[0], None, SourcePosition::START)
+            .unwrap();
+        let limits = cap.map_or_else(Limits::default, |parts| {
+            Limits::default().with_max_parts(parts)
+        });
+        let acquired = crate::acquire::next(&res.store, &mut opened, &limits)
+            .unwrap()
+            .unwrap();
+        let summary = &acquired.message().summary;
+        let state = match summary.parse_state {
+            ImportParseState::Parsed => "ok",
+            ImportParseState::Partial => "partial",
+            ImportParseState::Failed => "failed",
+        };
+        assert_eq!(state, expected_state, "{name}");
+        assert_eq!(summary.has_attachments, attachment, "{name}");
+        assert_eq!(summary.from_addr.as_deref(), Some(from), "{name}");
+
+        let position = acquired.next_position();
+        commit_at(
+            &res,
+            &sources,
+            revision,
+            vec![acquired.into_message()],
+            position,
+            0,
+        )
+        .unwrap();
+        let stored = res
+            .read(|tx| {
+                tx.query_row(
+                    "SELECT parse_state,has_attachments FROM d_message_summary",
+                    [],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, bool>(1)?)),
+                )
+                .map_err(|error| StoreError::internal(error.to_string()))
+            })
+            .unwrap();
+        assert_eq!(stored, (expected_state.to_owned(), attachment), "{name}");
+
+        let crate::IndexPreparation::Prepared(prepared) = res
+            .prepare_index_batch(res.pending_index_batch().unwrap(), &|| false)
+            .unwrap()
+        else {
+            panic!("expected index preparation");
+        };
+        let (fence, publications, failure) = prepared.into_parts();
+        assert!(failure.is_none());
+        let published = block_on(res.write(WritePriority::Index, move |tx| {
+            crate::publish_batch(tx, fence, &publications)
+        }))
+        .unwrap();
+        assert_eq!(published, 1);
+        let count = |node| {
+            res.read(|tx| {
+                let query = Query::parse_json(&json!({"v":1,"q":node}).to_string()).unwrap();
+                counts(tx, &query, SearchScope::All)
+                    .map(|value| (value.matching_messages(), value.excluded_unknown()))
+            })
+            .unwrap()
+        };
+        let unknown = u64::from(expected_state == "partial");
+        let known = 1 - unknown;
+        let retained = json!({"field":"from","op":"contains","value":from});
+        assert_eq!(count(retained.clone()), (1, 0));
+        for (node, hits) in [
+            (json!({"has":"attachment"}), u64::from(attachment) * known),
+            (json!({"field":"from","op":"is","value":from}), known),
+            (
+                json!({"field":"from","op":"domain","value":"example.com"}),
+                known,
+            ),
+            (
+                json!({"field":"from","op":"is","value":"absent@unknown.test"}),
+                0,
+            ),
+            (
+                json!({"field":"from","op":"domain","value":"unknown.test"}),
+                0,
+            ),
+        ] {
+            assert_eq!(count(node.clone()), (hits, unknown), "{name} {node}");
+            assert_eq!(count(json!({"not":node.clone()})), (known - hits, unknown));
+            assert_eq!(
+                count(json!({"and":[retained.clone(),node]})),
+                (hits, unknown)
+            );
+        }
+        assert_eq!(count(json!({"or":[retained,{"has":"attachment"}]})), (1, 0));
+        if unknown == 0 {
+            continue;
+        }
+
+        for header in [Some(r#"[{"address":"known@hdr.test"}]"#), None] {
+            write(&res, move |tx| {
+                tx.execute(
+                    "INSERT OR REPLACE INTO message_headers
+                    (message_id,raw_fields,from_json,fetched_at) VALUES(1,x'01',?1,1)",
+                    [header],
+                )
+                .map(drop)
+                .map_err(|error| StoreError::internal(error.to_string()))
+            })
+            .unwrap();
+            assert_eq!(
+                count(json!({"field":"from","op":"is","value":from})),
+                (0, 0)
+            );
+            assert_eq!(
+                count(json!({"not":{"field":"from","op":"is","value":from}})),
+                (1, 0)
+            );
+            assert_eq!(
+                count(json!({"field":"from","op":"domain","value":"hdr.test"})),
+                (u64::from(header.is_some()), 0)
+            );
+            assert_eq!(count(json!({"has":"attachment"})), (0, 1));
+        }
+    }
+}

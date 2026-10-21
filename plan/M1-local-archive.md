@@ -445,6 +445,10 @@ local drafts. No network yet.
     Also qualify the existing-consumer fixture consolidation in
     maintenance/2026-10-store-fixtures.md, then re-size the complete compiler
     and all its proof. No partial compiler or safety/precision relaxation.
+    Expose same-snapshot typed `query::counts` through the existing Store::read
+    boundary; keep compiler/source SQL private for i. Include typed source/mask
+    corruption, callback reuse, real native failure and concurrent-snapshot
+    proof. No paging/ranking/service surface in h; complete before i starts.
   - **M1.6i Search paging — L:** date/relevance ordering and opaque
     cursors, first 50 hits, id index and Around/Before/After in store reads.
     Owns both cursor deliverables and three-page relevance acceptance;

@@ -319,6 +319,11 @@ CREATE TABLE message_headers (                    -- headers fetched at sync, be
   reply-identity rules work before a body is acquired. It is refreshed
   when the body arrives. It isn't derived from acquisitions, so it is
   kept and backed up.
+  Its address JSON uses the summary's `{"address", "name"}` list shape.
+  A complete fetched row covers the required From/To/Cc fields: NULL means
+  an absent field or known-empty list. A present but unidentifiable field
+  retains an entry with a null address, never collapses to whole-column NULL
+  or an empty list. A valid empty group is still known empty (06).
 - **UID reuse.** If the same `(mailbox, uidvalidity, uid)` later names a
   different provider message (a different `X-Pm-Internal-Id`), the old
   row becomes `superseded` and a new row is inserted. History isn't

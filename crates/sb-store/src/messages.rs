@@ -483,7 +483,8 @@ fn build_headers(
     })
 }
 
-fn addresses(json: Option<String>) -> Result<Vec<ReaderAddress>, StoreError> {
+// Predicate reads share the reader's stored-shape and Corrupt policy.
+pub(crate) fn addresses(json: Option<String>) -> Result<Vec<ReaderAddress>, StoreError> {
     let Some(json) = json else {
         return Ok(Vec::new());
     };
