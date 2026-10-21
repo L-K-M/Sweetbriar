@@ -459,6 +459,10 @@ local drafts. No network yet.
     Owns exact weighted-score/dedup/polarity, corpus/rebuild, ties/zero scores,
     three pages whose dates disagree with scores, all anchors/ids/scopes and
     relevance cursor/error/snapshot proof. No acceptance is moved after i2.
+    Compare captured native scores/ids/unknowns before and after unchanged-data
+    FTS rebuild; change out-of-scope corpus statistics under a held WAL snapshot.
+    Exercise first-encounter addition with distinguishable native f64 sums,
+    malformed/nonfinite score keys and date cursor compatibility in this slice.
     The full i draft measured 2138 add+delete before publication; these sort
     outcomes each pair complete behavior with its proof under 1450 per PR.
   - **M1.6j Search windows and coverage — L:** depends on i2. Resources and

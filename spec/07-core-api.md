@@ -334,7 +334,9 @@ takes the same transaction/query/scope and optional generation, returning
 
 M1.6i2 adds the corresponding `read_search_relevance_page` and
 `search_relevance_ids` entrypoints, with all relevance/score-key proof in that
-step. The service's two-sort API follows both steps. Each Store entrypoint
+step. They take the same arguments and return the same types as the date
+entrypoints, with relevance window order. The service's two-sort API follows
+both steps. Each Store entrypoint
 supports its complete named sort; date cursors remain compatible after i2.
 
 `SearchPage` has private generation, rows, has-more-before, has-more-after and
@@ -369,6 +371,10 @@ the true-hit Exact/AtLeast mapping remain the following window step's work.
   positive-polarity deduplication and incomplete-leaf score 0. Its distinct
   positive contributions are added in first-encounter tree order, preserving
   deterministic native f64 addition without decimal conversion.
+- Score bits are a wire representation, not an unsigned ordering key. Keyset
+  comparisons use finite native numeric scores, then descending occurrence id.
+  Decoding a negative-zero score normalizes it before row-key verification;
+  nonfinite cursor scores are `InvalidInput` before staleness is considered.
 
 ### Search rebuild controls (M1.6)
 
