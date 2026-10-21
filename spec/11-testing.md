@@ -71,7 +71,9 @@ test, except where the spec says "manual qualification".
   complementing storage's internal transaction cuts without a power-loss claim.
 - Engine/service tests cover short-snapshot rows/status, coverage-only
   invalidation, out-of-scope BM25 changes, cursor identity/bits/generation,
-  cancellation and shutdown. M1.6j checks operational-state generation and
+  cancellation and shutdown. M1.6j1 proves standalone scoped coverage, global
+  phase/pause/capability state and failed-status read gating/recovery in one
+  snapshot. M1.6j2 checks operational-state generation and
   subscription changes without queue changes; M1.6k2 checks service job-kind
   routing/idempotency, M1.6l2 checks status/progress FFI mappings and M1.6l4
   checks control exports. Swift tests cover DTO mapping, chip round-trips,

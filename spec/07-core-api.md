@@ -376,6 +376,24 @@ the true-hit Exact/AtLeast mapping remain the following window step's work.
   Decoding a negative-zero score normalizes it before row-key verification;
   nonfinite cursor scores are `InvalidInput` before staleness is considered.
 
+### Standalone coverage reads (M1.6j1)
+
+`query::read_search_coverage(&Transaction, SearchScope)` returns an owned
+`StoredSearchCoverage` of the scoped facts and global operational state above.
+It reuses scope validation/selection without the predicate compiler's phase
+gate, so reset/enqueue remain pollable. Scoped queue length counts distinct
+acquisitions; active rebuild pending documents use the global queue. Include
+the active or most-recently-completed job, with zero pending at completion.
+
+Resources applies its build's extractor capability inside that same transaction;
+Store has no MIME/runtime version dependency. Engine exposes `coverage(scope)`
+through `read_through`, with item-re-exported owned value DTOs and its own
+All/Account(String)/Mailbox(i64) scope. Scope input errors name `scope`. The
+memory-only failed-status/invariant read latch brackets the short snapshot;
+neither a wake nor an elapsed deadline clears it without a recovery commit.
+M1.6j1 owns all standalone coverage/error/snapshot proof. M1.6j2 composes this
+transaction-level read with pages and owns complete window/subscription proof.
+
 ### Search rebuild controls (M1.6)
 
 - Search commands use the normal idempotency-key/receipt protocol; the
