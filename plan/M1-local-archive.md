@@ -442,6 +442,9 @@ local drafts. No network yet.
     Requires the address-fidelity maintenance in
     maintenance/2026-10-address-fidelity.md first: legacy parser-version1
     summary addresses stay unknown until refreshed, not silently matched.
+    Also qualify the existing-consumer fixture consolidation in
+    maintenance/2026-10-store-fixtures.md, then re-size the complete compiler
+    and all its proof. No partial compiler or safety/precision relaxation.
     Expose same-snapshot typed `query::counts` through the existing Store::read
     boundary; keep compiler/source SQL private for i. Include typed source/mask
     corruption, callback reuse, real native failure and concurrent-snapshot

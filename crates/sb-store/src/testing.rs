@@ -1,6 +1,8 @@
 //! Helpers the crate's tests share: deterministic seams and scratch
 //! stores.
 
+pub(crate) mod fixtures;
+
 use std::sync::Arc;
 
 use sb_test_support::{FixedClock, ScratchDir, SeededRandom};

@@ -3,42 +3,13 @@ use std::path::Path;
 
 use crate::Fs;
 use crate::schema::{MIGRATIONS, run_migrations};
+use crate::testing::fixtures::{acquisitions, document, index_connection as connection};
 use crate::testing::{reading, scratch_paths, test_seams, writing};
 use rusqlite::Connection;
 use sb_test_support::{CutFs, ScratchDir, real_fs, run_crash_cuts};
 
 fn now(ms: i64) -> Timestamp {
     Timestamp::from_millis(ms)
-}
-
-fn connection() -> Connection {
-    let mut conn = Connection::open_in_memory().unwrap();
-    conn.execute_batch("PRAGMA foreign_keys=ON; PRAGMA trusted_schema=OFF;")
-        .unwrap();
-    run_migrations(&mut conn, &test_seams(real_fs()), MIGRATIONS).unwrap();
-    conn
-}
-
-fn acquisitions(conn: &Connection, count: usize) {
-    for id in 1..=count {
-        conn.execute(
-            "INSERT INTO acquisitions (acquisition_id, content_sha256, byte_length,
-             object_state, first_acquired_at) VALUES (?1, ?2, 1, 'published', ?1)",
-            params![id as i64, format!("{id:064x}")],
-        )
-        .unwrap();
-    }
-}
-
-fn document(text: &str) -> IndexDocument {
-    let mut columns = std::array::from_fn(|_| String::new());
-    columns[0] = text.to_owned();
-    IndexDocument {
-        columns,
-        extractor_version: 1,
-        state: IndexState::Indexed,
-        truncated_fields: vec![],
-    }
 }
 
 fn queue(conn: &mut Connection, count: usize, time: i64) {

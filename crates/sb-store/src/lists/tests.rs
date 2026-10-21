@@ -1,43 +1,21 @@
 use std::collections::BTreeSet;
 
 use rusqlite::{Connection, params};
-use sb_test_support::real_fs;
 
 use super::*;
-use crate::schema::{MIGRATIONS, run_migrations};
-use crate::testing::{FIXED_NOW_MS, test_seams};
+use crate::schema::MIGRATIONS;
+use crate::testing::FIXED_NOW_MS;
+use crate::testing::fixtures::{archive_account, mailbox, migrated};
 
 /// A migrated in-memory store and the local archive's account.
 fn store() -> (Connection, String) {
-    let mut conn = Connection::open_in_memory().unwrap();
-    run_migrations(&mut conn, &test_seams(real_fs()), MIGRATIONS).unwrap();
-    let account = conn
-        .query_row(
-            "SELECT account_id FROM accounts WHERE provider = 'local_archive'",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap();
+    let conn = migrated(MIGRATIONS);
+    let account = archive_account(&conn);
     (conn, account)
 }
 
-fn mailbox(conn: &Connection, account: &str, name: &str, kind: &str, role: Option<&str>) -> i64 {
-    conn.execute(
-        "INSERT INTO mailboxes (account_id, remote_name, role, kind, selectable, sync_state)
-         VALUES (?1, ?2, ?3, ?4, 1, 'synced')",
-        params![account, name, role, kind],
-    )
-    .unwrap();
-    conn.last_insert_rowid()
-}
-
 fn message(conn: &Connection, account: &str) -> i64 {
-    conn.execute(
-        "INSERT INTO logical_messages (account_id, created_at) VALUES (?1, ?2)",
-        params![account, FIXED_NOW_MS],
-    )
-    .unwrap();
-    conn.last_insert_rowid()
+    crate::testing::fixtures::message(conn, account, None)
 }
 
 /// A listed occurrence of `message` dated `date`.
