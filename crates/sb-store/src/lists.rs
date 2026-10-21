@@ -222,7 +222,8 @@ enum Direction {
 /// The largest page (spec/07 `limit`).
 pub const MAX_PAGE_ROWS: usize = 1_000;
 
-const COLUMNS: &str = "r.occurrence_id, r.message_id, r.account_id, r.mailbox_id, r.sort_date,
+pub(crate) const COLUMNS: &str =
+    "r.occurrence_id, r.message_id, r.account_id, r.mailbox_id, r.sort_date,
   r.sender, r.subject, r.snippet, r.unread, r.flagged, r.has_attachments";
 
 /// Read one page of `scope` from `anchor`: at most `limit` rows, in
@@ -330,12 +331,7 @@ fn around(
     let newer = rows(tx, scope, Some(key), Direction::Newer, limit)?;
     let older = rows(tx, scope, Some(key), Direction::Older, limit)?;
     let target = rows_at(tx, scope, key)?;
-    let len = limit.min(1 + newer.len() + older.len());
-    let mut before = (len / 2).min(newer.len());
-    if older.len() < len - 1 - before {
-        before = len - 1 - older.len();
-    }
-    let after = len - 1 - before;
+    let (before, after) = center_counts(limit, newer.len(), older.len());
     let has_more_before = newer.len() > before;
     let has_more_after = older.len() > after;
 
@@ -344,6 +340,16 @@ fn around(
     page.extend(target);
     page.extend(older.into_iter().take(after));
     Ok((page, has_more_before, has_more_after))
+}
+
+/// Side counts for the spec/07 centred-page clamp, shared by list and search.
+pub(crate) fn center_counts(limit: usize, newer: usize, older: usize) -> (usize, usize) {
+    let len = limit.min(1 + newer + older);
+    let mut before = (len / 2).min(newer);
+    if older < len - 1 - before {
+        before = len - 1 - older;
+    }
+    (before, len - 1 - before)
 }
 
 /// Up to `count` rows of `scope` past `from` in `direction`, nearest
@@ -508,7 +514,7 @@ fn key_of(
         .map_err(sql_error)
 }
 
-fn read_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredListRow> {
+pub(crate) fn read_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredListRow> {
     Ok(StoredListRow {
         occurrence_id: row.get(0)?,
         message_id: row.get(1)?,
@@ -527,7 +533,7 @@ fn read_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredListRow> {
 
 /// Fill every row's tags with one query for the page's messages
 /// (spec/02 "Tags in list rows").
-fn attach_tags(tx: &Transaction, rows: &mut [StoredListRow]) -> Result<(), StoreError> {
+pub(crate) fn attach_tags(tx: &Transaction, rows: &mut [StoredListRow]) -> Result<(), StoreError> {
     let mut messages: Vec<i64> = rows.iter().map(|row| row.message_id).collect();
     messages.sort_unstable();
     messages.dedup();

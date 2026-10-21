@@ -71,7 +71,7 @@ pub fn counts(
         "SELECT coalesce(sum(v = 1), 0), coalesce(sum(v IS NULL), 0) FROM ({})",
         compiled.source
     );
-    let (matching, unknown) = compiled.read(tx, &sql, |statement, values| {
+    let (matching, unknown) = compiled.read(tx, &sql, &[], |statement, values| {
         statement.query_row(params_from_iter(values), |row| {
             Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
         })
@@ -103,12 +103,18 @@ impl Compiled {
         &self,
         tx: &Transaction,
         sql: &str,
+        extra: &[Value],
         read: impl FnOnce(&mut Statement<'_>, &[Value]) -> rusqlite::Result<T>,
     ) -> Result<T, StoreError> {
         let relay = register(tx)?;
         let result = (|| {
             let mut statement = tx.prepare(sql)?;
-            read(&mut statement, &self.values)
+            if extra.is_empty() {
+                return read(&mut statement, &self.values);
+            }
+            let mut values = self.values.clone();
+            values.extend_from_slice(extra);
+            read(&mut statement, &values)
         })();
         if let Some(error) = relay.lock().unwrap().take() {
             return Err(error);
@@ -137,7 +143,8 @@ fn compile(tx: &Transaction, query: &Query, scope: SearchScope) -> Result<Compil
     let predicate = compiler.node(query.root());
     Ok(Compiled {
         source: format!(
-            "SELECT r.message_id AS id, ({predicate}) AS v FROM {SOURCE} WHERE {scope}"
+            "SELECT r.message_id AS id, r.occurrence_id AS chosen_occurrence_id,
+             ({predicate}) AS v FROM {SOURCE} WHERE {scope}"
         ),
         values: compiler.values,
         generation,
@@ -399,6 +406,11 @@ impl Compiler {
 fn sql_error(error: rusqlite::Error) -> StoreError {
     classify(error, "read search predicates")
 }
+
+mod paging;
+pub use paging::{
+    SearchAnchor, SearchPage, StoredSearchRow, read_search_date_page, search_date_ids,
+};
 
 #[cfg(test)]
 mod tests;

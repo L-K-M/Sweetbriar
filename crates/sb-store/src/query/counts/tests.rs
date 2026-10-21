@@ -8,6 +8,8 @@ use crate::query::{MAX_QUERY_DEPTH, MAX_QUERY_INPUT_BYTES, MAX_QUERY_NODES};
 use crate::testing::FIXED_NOW_MS;
 use crate::testing::fixtures::{acquisitions, archive_account, index_connection, mailbox, message};
 
+mod paging;
+
 const ABSENT: &str = "ffffffff-ffff-ffff-ffff-ffffffffffff";
 const OTHER_ACCOUNT: &str = "00000000-0000-0000-0000-000000000000";
 const DAY_MS: i64 = 86_400_000;
@@ -187,7 +189,7 @@ fn ids(tx: &Transaction, node: Json, scope: SearchScope, limit: i64) -> Vec<i64>
         compiled.values.len()
     );
     compiled
-        .read(tx, &sql, |statement, values| {
+        .read(tx, &sql, &[], |statement, values| {
             statement
                 .query_map(params_from_iter(values), |row| row.get(0))?
                 .collect()

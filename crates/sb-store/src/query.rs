@@ -15,7 +15,10 @@ pub use ast::{
     AddressField, Field, FieldPredicate, Flag, Has, Node, ParseCode, Query, QueryError,
     SearchParseError, SizeOp,
 };
-pub use counts::{QueryCounts, SearchScope, counts};
+pub use counts::{
+    QueryCounts, SearchAnchor, SearchPage, SearchScope, StoredSearchRow, counts,
+    read_search_date_page, search_date_ids,
+};
 pub use dates::{DateBounds, DateError, DatePredicate, DateValue};
 pub use format::TextFormatError;
 pub use syntax::ParseContext;
