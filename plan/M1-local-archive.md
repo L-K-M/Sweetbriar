@@ -449,18 +449,18 @@ local drafts. No network yet.
     boundary; keep compiler/source SQL private for i. Include typed source/mask
     corruption, callback reuse, real native failure and concurrent-snapshot
     proof. No paging/ranking/service surface in h; complete before i starts.
-  - **M1.6i1 Date search paging — L:** complete date-ordered first50, opaque
+  - **M1.6i1 Date search paging — L:** complete date-ordered first 50, opaque
     date cursors, id index and Around/Before/After Store reads. Owns full date
     cursor/identity/validation, scope/non-hit/copy, tags/unknowns and WAL proof.
     Reuse h's full predicates and private callbacks; expose only named date
-    entrypoints from07, with no unsupported public sort.
+    entrypoints from 07, with no unsupported public sort.
   - **M1.6i2 Relevance search paging — L:** depends on i1. Adds complete
     relevance entrypoints and score_bits cursors, preserving date compatibility.
     Owns exact weighted-score/dedup/polarity, corpus/rebuild, ties/zero scores,
     three pages whose dates disagree with scores, all anchors/ids/scopes and
     relevance cursor/error/snapshot proof. No acceptance is moved after i2.
-    The full i draft measured2138 add+delete before publication; these sort
-    outcomes each pair complete behavior with its proof under1450 per PR.
+    The full i draft measured 2138 add+delete before publication; these sort
+    outcomes each pair complete behavior with its proof under 1450 per PR.
   - **M1.6j Search windows and coverage — L:** depends on i2. Resources and
     engine Search handles, generation observation, scoped coverage/unknown counts,
     lifecycle and subscriptions. Store queries and worker integration tests

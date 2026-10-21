@@ -330,7 +330,7 @@ SearchAnchor, limit: usize, at: Option<u64>)`, returning
 `After(String)`, `Before(String)` or `Around(i64)`. `query::search_date_ids`
 takes the same transaction/query/scope and optional generation, returning
 `PageRead<(u64, Vec<i64>)>` in date window order. Limits reuse
-`lists::MAX_PAGE_ROWS`; first-page callers explicitly request50.
+`lists::MAX_PAGE_ROWS`; first-page callers explicitly request 50.
 
 M1.6i2 adds the corresponding `read_search_relevance_page` and
 `search_relevance_ids` entrypoints, with all relevance/score-key proof in that
@@ -366,7 +366,7 @@ the true-hit Exact/AtLeast mapping remain the following window step's work.
   behavior above, with no OFFSET. Each id entrypoint uses the same true-hit source.
 - All h predicate, source-precedence, error and snapshot rules apply to date
   reads. M1.6i2 owns relevance-only score projection, whole-corpus BM25,
-  positive-polarity deduplication and incomplete-leaf score0. Its distinct
+  positive-polarity deduplication and incomplete-leaf score 0. Its distinct
   positive contributions are added in first-encounter tree order, preserving
   deterministic native f64 addition without decimal conversion.
 

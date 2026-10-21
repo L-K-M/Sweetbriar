@@ -310,6 +310,15 @@ fn cursor_wire_binds_exact_keys_before_generation_then_reopens() {
         Some(first.generation()),
     ));
     assert_eq!(row_ids(&reopened), [3, 2]);
+    let around_pinned = ready(read(
+        &conn,
+        node.clone(),
+        SearchScope::All,
+        SearchAnchor::Around(4),
+        3,
+        Some(first.generation()),
+    ));
+    assert_eq!(row_ids(&around_pinned), [4, 3, 2]);
     let mut bad = vec![
         "not-json".into(),
         "[]".into(),
@@ -444,17 +453,19 @@ fn cursor_wire_binds_exact_keys_before_generation_then_reopens() {
             Err(StoreError::InvalidInput { .. })
         ));
     }
-    assert!(matches!(
-        read(
-            &conn,
-            node.clone(),
-            SearchScope::All,
-            SearchAnchor::Top,
-            2,
-            Some(first.generation() + 1)
-        ),
-        Ok(PageRead::Stale { .. })
-    ));
+    for anchor in [SearchAnchor::Top, SearchAnchor::Around(99999)] {
+        assert!(matches!(
+            read(
+                &conn,
+                node.clone(),
+                SearchScope::All,
+                anchor,
+                2,
+                Some(first.generation() + 1)
+            ),
+            Ok(PageRead::Stale { .. })
+        ));
+    }
     assert!(matches!(
         date_ids(&conn, node, SearchScope::All, Some(first.generation() + 1)),
         Ok(PageRead::Stale { .. })
@@ -492,6 +503,17 @@ fn other_copies_are_around_aliases_but_never_cursor_rows() {
         None,
     ));
     assert_eq!(chosen, alias);
+    let onward = ready(read(
+        &conn,
+        node.clone(),
+        SearchScope::Mailbox(archive),
+        SearchAnchor::After(cursor(&chosen, 0)),
+        2,
+        None,
+    ));
+    assert!(onward.rows().is_empty());
+    assert!(onward.has_more_before());
+    assert!(!onward.has_more_after());
     let bad = forged(&cursor(&chosen, 0), |value| {
         value["occurrence_id"] = json!(other);
         value["sort_date"] = json!(100);
@@ -663,6 +685,17 @@ fn limits_scope_phase_and_identity_failures_are_explicit() {
     .unwrap();
     assert!(matches!(
         date_ids(&conn, node, SearchScope::All, None),
+        Err(StoreError::Corrupt { .. })
+    ));
+    assert!(matches!(
+        read(
+            &conn,
+            json!({"and":[]}),
+            SearchScope::All,
+            SearchAnchor::Top,
+            1,
+            None
+        ),
         Err(StoreError::Corrupt { .. })
     ));
 }
