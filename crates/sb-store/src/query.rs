@@ -17,7 +17,7 @@ pub use ast::{
 };
 pub use counts::{
     QueryCounts, SearchAnchor, SearchPage, SearchScope, StoredSearchRow, counts,
-    read_search_date_page, search_date_ids,
+    read_search_date_page, read_search_relevance_page, search_date_ids, search_relevance_ids,
 };
 pub use dates::{DateBounds, DateError, DatePredicate, DateValue};
 pub use format::TextFormatError;

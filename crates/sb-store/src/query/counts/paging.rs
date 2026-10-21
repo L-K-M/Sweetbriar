@@ -1,5 +1,6 @@
-//! Date search pages, opaque bound cursors and exact unknown counts (spec/07).
+//! Search keysets, opaque sort-bound cursors and exact unknowns (spec/07).
 
+use rusqlite::types::{Type, Value};
 use rusqlite::{OptionalExtension, Transaction, params_from_iter};
 use serde_json::{Value as Json, json};
 
@@ -10,6 +11,7 @@ use crate::{StoreError, Uuid};
 
 const CURSOR_VERSION: u64 = 1;
 const CURSOR_BYTES: usize = MAX_QUERY_INPUT_BYTES + 1024;
+const BM25: &str = "bm25(d_search_fts,4.0,2.0,1.0,1.0,1.0,0.25,0.1,0.75)";
 const CURSOR_FIELDS: [&str; 7] = [
     "v",
     "store",
@@ -20,7 +22,7 @@ const CURSOR_FIELDS: [&str; 7] = [
     "sort_date",
 ];
 
-/// An opaque date cursor or any occurrence of a matching logical message.
+/// An opaque sort-bound cursor or any occurrence of a matching logical message.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SearchAnchor {
     Top,
@@ -41,7 +43,7 @@ impl StoredSearchRow {
     pub fn row(&self) -> &StoredListRow {
         &self.row
     }
-    /// The generation-bound opaque date cursor.
+    /// The generation-bound opaque cursor, passed back byte-for-byte.
     pub fn cursor(&self) -> &str {
         &self.cursor
     }
@@ -66,7 +68,7 @@ impl SearchPage {
     pub fn generation(&self) -> u64 {
         self.generation
     }
-    /// Chosen matching rows in date window order.
+    /// Chosen matching rows in the entrypoint's window order.
     pub fn rows(&self) -> &[StoredSearchRow] {
         &self.rows
     }
@@ -93,12 +95,46 @@ struct Binding {
     incarnation: Uuid,
     spec: Json,
     generation: u64,
+    sort: Sort,
 }
 
 struct Decoded {
     incarnation: Uuid,
     generation: u64,
-    key: ListKey,
+    key: Key,
+}
+
+#[derive(Clone, Copy)]
+enum Sort {
+    Date,
+    Relevance,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Key {
+    Date(ListKey),
+    Score { bits: u64, occurrence_id: i64 },
+}
+
+impl Key {
+    fn occurrence_id(self) -> i64 {
+        match self {
+            Self::Date(key) => key.occurrence_id,
+            Self::Score { occurrence_id, .. } => occurrence_id,
+        }
+    }
+
+    fn scalar(self) -> Value {
+        match self {
+            Self::Date(key) => key.sort_date.into(),
+            Self::Score { bits, .. } => f64::from_bits(bits).into(),
+        }
+    }
+}
+
+struct Hit {
+    row: StoredListRow,
+    key: Key,
 }
 
 #[derive(Clone, Copy)]
@@ -116,13 +152,37 @@ pub fn read_search_date_page(
     limit: usize,
     at: Option<u64>,
 ) -> Result<PageRead<SearchPage>, StoreError> {
+    read_page(tx, query, scope, anchor, limit, at, Sort::Date)
+}
+
+/// Read a native weighted-BM25 page, with every result from the supplied tx.
+pub fn read_search_relevance_page(
+    tx: &Transaction,
+    query: &Query,
+    scope: SearchScope,
+    anchor: SearchAnchor,
+    limit: usize,
+    at: Option<u64>,
+) -> Result<PageRead<SearchPage>, StoreError> {
+    read_page(tx, query, scope, anchor, limit, at, Sort::Relevance)
+}
+
+fn read_page(
+    tx: &Transaction,
+    query: &Query,
+    scope: SearchScope,
+    anchor: SearchAnchor,
+    limit: usize,
+    at: Option<u64>,
+    sort: Sort,
+) -> Result<PageRead<SearchPage>, StoreError> {
     if !(1..=lists::MAX_PAGE_ROWS).contains(&limit) {
         return Err(StoreError::InvalidInput {
             message: format!("a search page needs 1 to {} rows", lists::MAX_PAGE_ROWS),
         });
     }
     let plan = compile(tx, query, scope.clone())?;
-    let binding = Binding::read(tx, query, &scope, generation(plan.generation)?)?;
+    let binding = Binding::read(tx, query, &scope, generation(plan.generation)?, sort)?;
     let cursor = match &anchor {
         SearchAnchor::After(value) | SearchAnchor::Before(value) => Some(binding.decode(value)?),
         _ => None,
@@ -136,25 +196,32 @@ pub fn read_search_date_page(
             generation: binding.generation,
         });
     }
-    let source = hits(&plan);
-    let (mut rows, before, after) = match anchor {
+    let source = hits(&plan, sort);
+    let (hits, before, after) = match anchor {
         SearchAnchor::Top => {
-            let mut rows = seek(tx, &plan, &source, Side::After, None, limit + 1)?;
+            let mut rows = seek(tx, &plan, &source, sort, Side::After, None, limit + 1)?;
             let more = rows.len() > limit;
             rows.truncate(limit);
             (rows, false, more)
         }
         SearchAnchor::After(_) | SearchAnchor::Before(_) => {
             let key = cursor.expect("cursor anchors were decoded above").key;
-            let stored = row_by(tx, &plan, &source, "occurrence_id", key.occurrence_id)?;
-            if stored.is_none_or(|row| row.key() != key) {
+            let stored = row_by(
+                tx,
+                &plan,
+                &source,
+                sort,
+                "occurrence_id",
+                key.occurrence_id(),
+            )?;
+            if stored.is_none_or(|hit| hit.key != key) {
                 return Err(invalid("a search cursor names no chosen hit with that key"));
             }
             let side = match anchor {
                 SearchAnchor::Before(_) => Side::Before,
                 _ => Side::After,
             };
-            let mut rows = seek(tx, &plan, &source, side, Some(key), limit + 1)?;
+            let mut rows = seek(tx, &plan, &source, sort, side, Some(key), limit + 1)?;
             let more = rows.len() > limit;
             rows.truncate(limit);
             match side {
@@ -175,14 +242,30 @@ pub fn read_search_date_page(
                 .optional()
                 .map_err(sql_error)?;
             let target = match message {
-                Some(id) => row_by(tx, &plan, &source, "message_id", id)?,
+                Some(id) => row_by(tx, &plan, &source, sort, "message_id", id)?,
                 None => None,
             };
             let Some(target) = target else {
                 return Ok(PageRead::NotInWindow);
             };
-            let newer = seek(tx, &plan, &source, Side::Before, Some(target.key()), limit)?;
-            let older = seek(tx, &plan, &source, Side::After, Some(target.key()), limit)?;
+            let newer = seek(
+                tx,
+                &plan,
+                &source,
+                sort,
+                Side::Before,
+                Some(target.key),
+                limit,
+            )?;
+            let older = seek(
+                tx,
+                &plan,
+                &source,
+                sort,
+                Side::After,
+                Some(target.key),
+                limit,
+            )?;
             let (before, after) = lists::center_counts(limit, newer.len(), older.len());
             let more_before = newer.len() > before;
             let more_after = older.len() > after;
@@ -193,11 +276,14 @@ pub fn read_search_date_page(
             (rows, more_before, more_after)
         }
     };
+    let keys: Vec<_> = hits.iter().map(|hit| hit.key).collect();
+    let mut rows: Vec<_> = hits.into_iter().map(|hit| hit.row).collect();
     lists::attach_tags(tx, &mut rows)?;
     let rows = rows
         .into_iter()
-        .map(|row| StoredSearchRow {
-            cursor: binding.mint(row.key()),
+        .zip(keys)
+        .map(|(row, key)| StoredSearchRow {
+            cursor: binding.mint(key),
             row,
         })
         .collect();
@@ -221,14 +307,35 @@ pub fn search_date_ids(
     scope: SearchScope,
     at: Option<u64>,
 ) -> Result<PageRead<(u64, Vec<i64>)>, StoreError> {
+    search_ids(tx, query, scope, at, Sort::Date)
+}
+
+/// Every chosen matching occurrence in relevance order, bound to its generation.
+pub fn search_relevance_ids(
+    tx: &Transaction,
+    query: &Query,
+    scope: SearchScope,
+    at: Option<u64>,
+) -> Result<PageRead<(u64, Vec<i64>)>, StoreError> {
+    search_ids(tx, query, scope, at, Sort::Relevance)
+}
+
+fn search_ids(
+    tx: &Transaction,
+    query: &Query,
+    scope: SearchScope,
+    at: Option<u64>,
+    sort: Sort,
+) -> Result<PageRead<(u64, Vec<i64>)>, StoreError> {
     let plan = compile(tx, query, scope)?;
     let generation = generation(plan.generation)?;
     if at.is_some_and(|at| at != generation) {
         return Ok(PageRead::Stale { generation });
     }
+    let order = sort.seek_terms(Side::After).2;
     let sql = format!(
-        "SELECT occurrence_id FROM ({}) ORDER BY sort_date DESC,occurrence_id DESC",
-        hits(&plan)
+        "SELECT occurrence_id FROM ({}) ORDER BY {order}",
+        hits(&plan, sort)
     );
     let ids = plan.read(tx, &sql, &[], |statement, values| {
         statement
@@ -238,35 +345,61 @@ pub fn search_date_ids(
     Ok(PageRead::Ready((generation, ids)))
 }
 
-fn hits(plan: &Compiled) -> String {
-    format!(
-        "SELECT {} FROM ({}) h JOIN d_list_rows r
-        ON r.occurrence_id=h.chosen_occurrence_id WHERE h.v=1",
-        lists::COLUMNS,
-        plan.source
-    )
+fn hits(plan: &Compiled, sort: Sort) -> String {
+    match sort {
+        Sort::Date => format!(
+            "SELECT {} FROM ({}) h JOIN d_list_rows r
+             ON r.occurrence_id=h.chosen_occurrence_id WHERE h.v=1",
+            lists::COLUMNS,
+            plan.source
+        ),
+        Sort::Relevance => {
+            let contributions: Vec<_> = plan
+                .leaves
+                .iter()
+                .map(|leaf| {
+                    format!(
+                        "CASE WHEN ({})=1 THEN coalesce((SELECT {BM25} FROM d_search_fts
+                 WHERE d_search_fts MATCH {} AND rowid=lm.acquisition_id),0.0) ELSE 0.0 END",
+                        leaf.check, leaf.phrase
+                    )
+                })
+                .collect();
+            // SQLite's left-associative addition retains first-encounter order.
+            let score = if contributions.is_empty() {
+                "0.0".into()
+            } else {
+                contributions.join(" + ")
+            };
+            format!(
+                "SELECT {},({score}) AS score FROM {} WHERE {} AND ({})=1",
+                lists::COLUMNS,
+                super::SOURCE,
+                plan.scope,
+                plan.predicate
+            )
+        }
+    }
 }
 
 fn seek(
     tx: &Transaction,
     plan: &Compiled,
     source: &str,
+    sort: Sort,
     side: Side,
-    key: Option<ListKey>,
+    key: Option<Key>,
     limit: usize,
-) -> Result<Vec<StoredListRow>, StoreError> {
-    let (compare, order) = match side {
-        Side::After => ("<", "sort_date DESC,occurrence_id DESC"),
-        Side::Before => (">", "sort_date ASC,occurrence_id ASC"),
+) -> Result<Vec<Hit>, StoreError> {
+    let (column, compare, order) = sort.seek_terms(side);
+    let tie = match side {
+        Side::After => "<",
+        Side::Before => ">",
     };
     let mut values = Vec::new();
     let filter = if let Some(key) = key {
-        values.extend([
-            key.sort_date.into(),
-            key.sort_date.into(),
-            key.occurrence_id.into(),
-        ]);
-        format!("WHERE sort_date {compare} ? OR(sort_date=? AND occurrence_id {compare} ?)")
+        values.extend([key.scalar(), key.scalar(), key.occurrence_id().into()]);
+        format!("WHERE {column} {compare} ? OR({column}=? AND occurrence_id {tie} ?)")
     } else {
         String::new()
     };
@@ -274,7 +407,7 @@ fn seek(
     let sql = format!("SELECT * FROM ({source}) {filter} ORDER BY {order} LIMIT ?");
     plan.read(tx, &sql, &values, |statement, values| {
         statement
-            .query_map(params_from_iter(values), lists::read_row)?
+            .query_map(params_from_iter(values), |row| sort.read_hit(row))?
             .collect()
     })
 }
@@ -283,15 +416,67 @@ fn row_by(
     tx: &Transaction,
     plan: &Compiled,
     source: &str,
+    sort: Sort,
     column: &str,
     id: i64,
-) -> Result<Option<StoredListRow>, StoreError> {
+) -> Result<Option<Hit>, StoreError> {
     let sql = format!("SELECT * FROM ({source}) WHERE {column}=?");
     plan.read(tx, &sql, &[id.into()], |statement, values| {
         statement
-            .query_row(params_from_iter(values), lists::read_row)
+            .query_row(params_from_iter(values), |row| sort.read_hit(row))
             .optional()
     })
+}
+
+impl Sort {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Date => "date",
+            Self::Relevance => "relevance",
+        }
+    }
+
+    fn cursor_field(self) -> &'static str {
+        match self {
+            Self::Date => "sort_date",
+            Self::Relevance => "score_bits",
+        }
+    }
+
+    fn seek_terms(self, side: Side) -> (&'static str, &'static str, &'static str) {
+        match (self, side) {
+            (Self::Date, Side::After) => ("sort_date", "<", "sort_date DESC,occurrence_id DESC"),
+            (Self::Date, Side::Before) => ("sort_date", ">", "sort_date ASC,occurrence_id ASC"),
+            (Self::Relevance, Side::After) => ("score", ">", "score ASC,occurrence_id DESC"),
+            (Self::Relevance, Side::Before) => ("score", "<", "score DESC,occurrence_id ASC"),
+        }
+    }
+
+    fn read_hit(self, row: &rusqlite::Row<'_>) -> rusqlite::Result<Hit> {
+        let display = lists::read_row(row)?;
+        let key = match self {
+            Self::Date => Key::Date(display.key()),
+            Self::Relevance => {
+                let score: f64 = row.get("score")?;
+                if !score.is_finite() {
+                    return Err(rusqlite::Error::FromSqlConversionFailure(
+                        11,
+                        Type::Real,
+                        std::io::Error::other("nonfinite native search score").into(),
+                    ));
+                }
+                Key::Score {
+                    bits: score_bits(score),
+                    occurrence_id: display.occurrence_id,
+                }
+            }
+        };
+        Ok(Hit { row: display, key })
+    }
+}
+
+fn score_bits(score: f64) -> u64 {
+    if score == 0.0 { 0 } else { score.to_bits() }
 }
 
 impl Binding {
@@ -300,6 +485,7 @@ impl Binding {
         query: &Query,
         scope: &SearchScope,
         generation: u64,
+        sort: Sort,
     ) -> Result<Self, StoreError> {
         let identity = |key| {
             let value: Option<String> = tx
@@ -322,17 +508,21 @@ impl Binding {
         Ok(Self {
             store: identity("store_uuid")?,
             incarnation: identity("incarnation")?,
-            spec: json!({"query":query,"scope":scope,"sort":"date"}),
+            spec: json!({"query":query,"scope":scope,"sort":sort.name()}),
             generation,
+            sort,
         })
     }
 
-    fn mint(&self, key: ListKey) -> String {
-        json!({"v":CURSOR_VERSION,"store":self.store.to_string(),
+    fn mint(&self, key: Key) -> String {
+        let mut value = json!({"v":CURSOR_VERSION,"store":self.store.to_string(),
             "incarnation":self.incarnation.to_string(),"spec":self.spec,
-            "generation":self.generation,"occurrence_id":key.occurrence_id,
-            "sort_date":key.sort_date})
-        .to_string()
+            "generation":self.generation,"occurrence_id":key.occurrence_id()});
+        value[self.sort.cursor_field()] = match key {
+            Key::Date(key) => json!(key.sort_date),
+            Key::Score { bits, .. } => json!(format!("{bits:016x}")),
+        };
+        value.to_string()
     }
 
     fn decode(&self, input: &str) -> Result<Decoded, StoreError> {
@@ -350,10 +540,9 @@ impl Binding {
         let object = value
             .as_object()
             .ok_or_else(|| invalid("a search cursor is not an object"))?;
-        if object.len() != CURSOR_FIELDS.len()
-            || object
-                .keys()
-                .any(|key| !CURSOR_FIELDS.contains(&key.as_str()))
+        let mut fields = CURSOR_FIELDS;
+        fields[6] = self.sort.cursor_field();
+        if object.len() != fields.len() || object.keys().any(|key| !fields.contains(&key.as_str()))
         {
             return Err(invalid("a search cursor has missing or unknown fields"));
         }
@@ -371,19 +560,43 @@ impl Binding {
                 "a search cursor has a foreign version, store or spec",
             ));
         }
+        let occurrence_id = object["occurrence_id"]
+            .as_i64()
+            .ok_or_else(|| invalid("invalid cursor occurrence"))?;
+        let key = match self.sort {
+            Sort::Date => Key::Date(ListKey {
+                occurrence_id,
+                sort_date: object["sort_date"]
+                    .as_i64()
+                    .ok_or_else(|| invalid("invalid cursor date"))?,
+            }),
+            Sort::Relevance => {
+                let bits = object["score_bits"]
+                    .as_str()
+                    .filter(|text| {
+                        text.len() == 16
+                            && text
+                                .bytes()
+                                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+                    })
+                    .and_then(|text| u64::from_str_radix(text, 16).ok())
+                    .ok_or_else(|| invalid("invalid cursor score bits"))?;
+                let score = f64::from_bits(bits);
+                if !score.is_finite() {
+                    return Err(invalid("nonfinite cursor score"));
+                }
+                Key::Score {
+                    bits: score_bits(score),
+                    occurrence_id,
+                }
+            }
+        };
         Ok(Decoded {
             incarnation: uuid("incarnation")?,
             generation: object["generation"]
                 .as_u64()
                 .ok_or_else(|| invalid("invalid cursor generation"))?,
-            key: ListKey {
-                occurrence_id: object["occurrence_id"]
-                    .as_i64()
-                    .ok_or_else(|| invalid("invalid cursor occurrence"))?,
-                sort_date: object["sort_date"]
-                    .as_i64()
-                    .ok_or_else(|| invalid("invalid cursor date"))?,
-            },
+            key,
         })
     }
 }
@@ -401,5 +614,5 @@ fn invalid(message: &'static str) -> StoreError {
 }
 
 fn sql_error(error: rusqlite::Error) -> StoreError {
-    crate::schema::classify(error, "read date search pages")
+    crate::schema::classify(error, "read search pages")
 }
