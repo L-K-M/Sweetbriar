@@ -449,17 +449,20 @@ local drafts. No network yet.
     boundary; keep compiler/source SQL private for i. Include typed source/mask
     corruption, callback reuse, real native failure and concurrent-snapshot
     proof. No paging/ranking/service surface in h; complete before i starts.
-  - **M1.6i Search paging — L:** date/relevance ordering and opaque
-    cursors, first 50 hits, id index and Around/Before/After in store reads.
-    Owns both cursor deliverables and three-page relevance acceptance;
-    test tied scores/dates, zero-score queries, mismatched/stale cursors.
-    Pin07's Store page/id APIs and canonical cursor spec object before code.
-    Include exact weighted-score/dedup/polarity, corpus/rebuild, cursor
-    validation precedence/identity, Around non-hit/copy, tags/unknowns and WAL
-    proof. Reuse h's private source/callbacks and existing test fixtures;
-    keep full date/relevance acceptance together within the review budget.
-  - **M1.6j Search windows and coverage — L:** resources and engine
-    Search handles, generation observation, scoped coverage/unknown counts,
+  - **M1.6i1 Date search paging — L:** complete date-ordered first50, opaque
+    date cursors, id index and Around/Before/After Store reads. Owns full date
+    cursor/identity/validation, scope/non-hit/copy, tags/unknowns and WAL proof.
+    Reuse h's full predicates and private callbacks; expose only named date
+    entrypoints from07, with no unsupported public sort.
+  - **M1.6i2 Relevance search paging — L:** depends on i1. Adds complete
+    relevance entrypoints and score_bits cursors, preserving date compatibility.
+    Owns exact weighted-score/dedup/polarity, corpus/rebuild, ties/zero scores,
+    three pages whose dates disagree with scores, all anchors/ids/scopes and
+    relevance cursor/error/snapshot proof. No acceptance is moved after i2.
+    The full i draft measured2138 add+delete before publication; these sort
+    outcomes each pair complete behavior with its proof under1450 per PR.
+  - **M1.6j Search windows and coverage — L:** depends on i2. Resources and
+    engine Search handles, generation observation, scoped coverage/unknown counts,
     lifecycle and subscriptions. Store queries and worker integration tests
     cover atomic rows/coverage, coverage-only invalidations and window
     cancellation. Owns generation/subscription tests for pause, changed retry

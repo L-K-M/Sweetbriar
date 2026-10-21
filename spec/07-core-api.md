@@ -322,15 +322,20 @@ async fn format_search(query_json: String) -> Result<String, CoreError>;
   both limitations even when indexing is complete; no percentage claims
   attachment contents or CJK segmentation were searched.
 
-### Store search reads (M1.6i)
+### Store search reads (M1.6i1/i2)
 
-The Store boundary is `query::read_search_page(&Transaction, &Query,
-SearchScope, SearchSort, SearchAnchor, limit: usize, at: Option<u64>)`, returning
-`Result<lists::PageRead<SearchPage>, StoreError>`. `SearchSort` is `Date` or
-`Relevance`; `SearchAnchor` is `Top`, `After(String)`, `Before(String)` or
-`Around(i64)`. `query::search_ids` takes the same transaction/query/scope/sort
-and optional generation, returning `PageRead<(u64, Vec<i64>)>` in window order.
-Limits reuse `lists::MAX_PAGE_ROWS`; first-page callers explicitly request50.
+M1.6i1 supplies `query::read_search_date_page(&Transaction, &Query, SearchScope,
+SearchAnchor, limit: usize, at: Option<u64>)`, returning
+`Result<lists::PageRead<SearchPage>, StoreError>`. `SearchAnchor` is `Top`,
+`After(String)`, `Before(String)` or `Around(i64)`. `query::search_date_ids`
+takes the same transaction/query/scope and optional generation, returning
+`PageRead<(u64, Vec<i64>)>` in date window order. Limits reuse
+`lists::MAX_PAGE_ROWS`; first-page callers explicitly request50.
+
+M1.6i2 adds the corresponding `read_search_relevance_page` and
+`search_relevance_ids` entrypoints, with all relevance/score-key proof in that
+step. The service's two-sort API follows both steps. Each Store entrypoint
+supports its complete named sort; date cursors remain compatible after i2.
 
 `SearchPage` has private generation, rows, has-more-before, has-more-after and
 excluded-unknown fields, with immutable getters and `into_rows` extraction.
@@ -340,7 +345,7 @@ and batched tags reuse the list projection. Rows, tags, exact unknowns and
 generation share one short read transaction. Engine handles/status/cache and
 the true-hit Exact/AtLeast mapping remain the following window step's work.
 
-- Date/relevance key alternatives must agree with the requested sort. The
+- Key alternatives must agree with the entrypoint's sort. The
   cursor `spec` is an object with `query` (canonical v1 AST object), `scope`
   (`"all"`, `{"account":"canonical UUID"}` or `{"mailbox":positive i64}`),
   and `sort` (`"date"` or `"relevance"`). Identity metadata is validated;
@@ -359,9 +364,11 @@ the true-hit Exact/AtLeast mapping remain the following window step's work.
   scoped non-hit or missing message returns `PageRead::NotInWindow`, mapping
   to `NotFound`. Both sorts implement the exact clamp and two-sided keyset
   behavior above, with no OFFSET. `search_ids` uses the same true-hit source.
-- Score projection runs only for relevance. Whole-corpus BM25 statistics,
-  positive-polarity deduplication, incomplete-leaf score0 and all h predicate,
-  source-precedence, error and snapshot rules remain required for both reads.
+- All h predicate, source-precedence, error and snapshot rules apply to date
+  reads. M1.6i2 owns relevance-only score projection, whole-corpus BM25,
+  positive-polarity deduplication and incomplete-leaf score0. Its distinct
+  positive contributions are added in first-encounter tree order, preserving
+  deterministic native f64 addition without decimal conversion.
 
 ### Search rebuild controls (M1.6)
 
