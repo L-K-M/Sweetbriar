@@ -4,6 +4,7 @@ use rusqlite::{Connection, params};
 use serde_json::{Value as Json, json};
 
 use super::*;
+use crate::query::{MAX_QUERY_DEPTH, MAX_QUERY_INPUT_BYTES, MAX_QUERY_NODES};
 use crate::testing::FIXED_NOW_MS;
 use crate::testing::fixtures::{acquisitions, archive_account, index_connection, mailbox, message};
 
@@ -495,11 +496,11 @@ fn all_kleene_pairs_and_checked_tree_budgets_execute_natively() {
             (json!({"or":[left.clone(),{"not":left.clone()}]}), (6, 3)),
             (json!({"and":[]}), (9, 0)),
             (json!({"not":{"and":[]}}), (0, 0)),
-            (json!({"and":vec![left;255]}), (3, 3)),
+            (json!({"and":vec![left;MAX_QUERY_NODES-1]}), (3, 3)),
         ],
     );
     let mut deep = json!({"and":[]});
-    for _ in 0..31 {
+    for _ in 0..MAX_QUERY_DEPTH - 1 {
         deep = json!({"not":deep});
     }
     check(&conn, &[(deep, (0, 0))]);
@@ -632,7 +633,7 @@ fn exact_keys_preserve_written_locals_domains_and_large_received_locals() {
         summary(&conn, 1, "ok", 2, Summary::sender(stored));
         check(&conn, &[(field("from", op, operand), (expected, 0))]);
     }
-    let huge = format!("{}@large.test", "h".repeat(20_000));
+    let huge = format!("{}@large.test", "h".repeat(MAX_QUERY_INPUT_BYTES + 1));
     assert!(AddressOperand::parse(&huge).is_err());
     summary(&conn, 1, "ok", 2, Summary::sender(&huge));
     check(&conn, &[(field("from", "domain", "large.test"), (1, 0))]);
