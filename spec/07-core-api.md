@@ -363,7 +363,7 @@ the true-hit Exact/AtLeast mapping remain the following window step's work.
 - Around may name another occurrence of the matching logical message. A
   scoped non-hit or missing message returns `PageRead::NotInWindow`, mapping
   to `NotFound`. Both sorts implement the exact clamp and two-sided keyset
-  behavior above, with no OFFSET. `search_ids` uses the same true-hit source.
+  behavior above, with no OFFSET. Each id entrypoint uses the same true-hit source.
 - All h predicate, source-precedence, error and snapshot rules apply to date
   reads. M1.6i2 owns relevance-only score projection, whole-corpus BM25,
   positive-polarity deduplication and incomplete-leaf score0. Its distinct
