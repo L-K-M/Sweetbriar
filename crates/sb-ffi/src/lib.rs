@@ -29,7 +29,7 @@ mod windows;
 
 pub use api::{Core, CoreConfig, Receipt, Setting, open_core, platform_default_config};
 pub use cancel::CancelToken;
-pub use error::CoreError;
+pub use error::{CoreError, SearchParseCode};
 pub use imports::{
     ImportJob, ImportJobState, ImportProblem, ImportProblemKind, ImportReport, ImportSource,
     ImportSourceKind, ImportStarted, ImportTarget, ImportTotals, MboxVariant, VariantChoice,

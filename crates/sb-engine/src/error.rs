@@ -4,7 +4,8 @@
 
 use std::fmt;
 
-use sb_resources::StoreError;
+use crate::SearchParseCode;
+use sb_resources::{QueryError, StoreError};
 
 /// An engine failure, mapped one-to-one onto `CoreError` variants.
 #[derive(Debug, Clone)]
@@ -34,6 +35,12 @@ pub enum EngineError {
     ResetRequired { generation: u64 },
     /// An internal invariant broke (`CoreError::Internal`).
     Internal { detail: String },
+    /// The checked query's half-open UTF-8 span and stable code (spec/06).
+    SearchParse {
+        start: u32,
+        end: u32,
+        code: SearchParseCode,
+    },
 }
 
 impl EngineError {
@@ -83,6 +90,25 @@ impl From<StoreError> for EngineError {
     }
 }
 
+impl From<QueryError> for EngineError {
+    fn from(error: QueryError) -> Self {
+        let error = match error {
+            QueryError::Store(error) => return error.into(),
+            QueryError::Parse(error) => error,
+        };
+        // Private native errors are bounded by the input limit plus one scalar.
+        let (Ok(start), Ok(end)) = (u32::try_from(error.start()), u32::try_from(error.end()))
+        else {
+            return Self::internal("query parse span exceeds the API range");
+        };
+        Self::SearchParse {
+            start,
+            end,
+            code: error.code(),
+        }
+    }
+}
+
 impl fmt::Display for EngineError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -103,6 +129,9 @@ impl fmt::Display for EngineError {
                 )
             }
             Self::Internal { detail } => write!(f, "internal error: {detail}"),
+            Self::SearchParse { start, end, code } => {
+                write!(f, "search {} at bytes [{start},{end})", code.as_str())
+            }
         }
     }
 }
@@ -129,5 +158,63 @@ mod tests {
             error.to_string(),
             "the core is unavailable: cannot open the object: permission denied"
         );
+    }
+
+    #[test]
+    fn real_query_errors_keep_utf8_eof_and_over_limit_spans() {
+        use sb_resources::{MAX_QUERY_INPUT_BYTES, ParseContext, Query, Timestamp};
+        let context = ParseContext::new("UTC", Timestamp::from_millis(0));
+        for (input, start, end, code) in [
+            ("é )", 3, 4, SearchParseCode::UnexpectedToken),
+            ("é AND", 6, 6, SearchParseCode::MissingValue),
+            ("é \"word", 3, 4, SearchParseCode::UnclosedQuote),
+            ("é (word", 3, 4, SearchParseCode::UnclosedGroup),
+        ] {
+            let mapped = EngineError::from(Query::parse_text(input, &context).unwrap_err());
+            assert!(
+                matches!(mapped, EngineError::SearchParse { start:s, end:e, code:c }
+                if (s,e,c)==(start,end,code)),
+                "{mapped:?}"
+            );
+        }
+        let input = r#"{"v":1,"q":{"text":"é"}} !"#;
+        let start = u32::try_from(input.find('!').unwrap()).unwrap();
+        assert!(
+            matches!(EngineError::from(Query::parse_json(input).unwrap_err()),
+            EngineError::SearchParse { start:s,end:e,code:SearchParseCode::UnexpectedToken } if (s,e)==(start,start+1))
+        );
+        let oversized = format!("{}😀", " ".repeat(MAX_QUERY_INPUT_BYTES));
+        let start = u32::try_from(MAX_QUERY_INPUT_BYTES).unwrap();
+        let end = start + u32::try_from('😀'.len_utf8()).unwrap();
+        for error in [
+            Query::parse_json(&oversized).unwrap_err(),
+            Query::parse_text(&oversized, &context).unwrap_err(),
+        ] {
+            assert!(
+                matches!(EngineError::from(error), EngineError::SearchParse { start:s,end:e,code:SearchParseCode::Limit }
+                if (s,e)==(start,end))
+            );
+        }
+    }
+
+    #[test]
+    fn native_query_failures_never_become_search_parse_errors() {
+        for error in [
+            StoreError::Corrupt {
+                detail: "native integrity".into(),
+            },
+            StoreError::Unavailable {
+                reason: "native unavailable".into(),
+                io_kind: None,
+            },
+            StoreError::Internal {
+                detail: "native failure".into(),
+            },
+        ] {
+            let expected = EngineError::from(error.clone());
+            let actual = EngineError::from(QueryError::Store(error));
+            assert_eq!(actual.to_string(), expected.to_string());
+            assert!(!matches!(actual, EngineError::SearchParse { .. }));
+        }
     }
 }

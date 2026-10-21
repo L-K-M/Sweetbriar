@@ -42,6 +42,7 @@ pub use engine::Engine;
 pub use error::EngineError;
 pub use import::{ImportJobStatus, ImportReport, ImportSourceStatus, ImportStarted};
 pub use rebuild::SearchRebuildStarted;
+pub use sb_resources::ParseCode as SearchParseCode;
 pub use sb_resources::{
     Coverage, RebuildPhase as SearchRebuildPhase, SearchIndexState, SearchIoCode, SearchLimitation,
     SearchRebuildProgress,

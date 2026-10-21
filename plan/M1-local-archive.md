@@ -472,14 +472,20 @@ local drafts. No network yet.
     newer-target reporting, failed-status read gating/recovery and same-snapshot
     native/worker proof. Coverage stays pollable during reset/enqueue. No partial
     Search window surface. This read and all its proof fit one PR before j2.
-  - **M1.6j2 Search windows and invalidation (L):** depends on j1. Resources and
+  - **M1.6j2 Typed Search errors (M):** depends on j1. Deliver the complete
+    SearchParse span/code boundary across Engine, Service, FFI, generated Swift
+    and Bridge before raw-query windows need it. Own all eight-code, non-ASCII,
+    EOF/limit and native-error distinction/mapping proof. Preserve byte offsets
+    with checked conversion; no clamp or string fallback. Pull this complete
+    error surface forward from k/l1, leaving their parser methods in place.
+  - **M1.6j3 Search windows and invalidation (L):** depends on j2. Resources and
     engine Search handles, generation observation, atomic rows/coverage/unknowns,
     lifecycle and subscriptions. Store queries and worker integration tests
     cover atomic rows/coverage, coverage-only invalidations and window
     cancellation. Owns generation/subscription tests for pause, changed retry
     deadline/error, retry, reset/phase progress, cancel/resume and completion
     with unchanged queues, plus empty-scope global state and reset counts.
-  - **M1.6k Service search API — M:** depends on j2. Service-owned Search, parser and
+  - **M1.6k Service search API — M:** depends on j3. Service-owned Search, parser and
     coverage DTOs, error spans and sort/scope mapping; no leaf re-exports.
     Owns the Search window and `coverage(scope)` deliverables through service.
   - **M1.6k2 Service index controls — M:** service start/resume/retry APIs

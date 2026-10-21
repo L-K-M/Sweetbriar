@@ -73,7 +73,9 @@ test, except where the spec says "manual qualification".
   invalidation, out-of-scope BM25 changes, cursor identity/bits/generation,
   cancellation and shutdown. M1.6j1 proves standalone scoped coverage, global
   phase/pause/capability state and failed-status read gating/recovery in one
-  snapshot. M1.6j2 checks operational-state generation and
+  snapshot. M1.6j2 proves all eight SearchParse codes/UTF-8 offsets and native
+  failure distinction across Rust/FFI/Bridge, including generated bindings.
+  M1.6j3 checks operational-state generation and
   subscription changes without queue changes; M1.6k2 checks service job-kind
   routing/idempotency, M1.6l2 checks status/progress FFI mappings and M1.6l4
   checks control exports. Swift tests cover DTO mapping, chip round-trips,

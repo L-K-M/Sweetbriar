@@ -9,20 +9,73 @@ use std::fmt;
 
 use sb_engine::EngineError;
 
+/// Stable query parse codes, owned by the service DTO boundary (spec/06).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SearchParseCode {
+    UnexpectedToken,
+    MissingValue,
+    UnclosedQuote,
+    UnclosedGroup,
+    UnknownKey,
+    InvalidOperator,
+    InvalidValue,
+    Limit,
+}
+
+impl From<sb_engine::SearchParseCode> for SearchParseCode {
+    fn from(code: sb_engine::SearchParseCode) -> Self {
+        match code {
+            sb_engine::SearchParseCode::UnexpectedToken => Self::UnexpectedToken,
+            sb_engine::SearchParseCode::MissingValue => Self::MissingValue,
+            sb_engine::SearchParseCode::UnclosedQuote => Self::UnclosedQuote,
+            sb_engine::SearchParseCode::UnclosedGroup => Self::UnclosedGroup,
+            sb_engine::SearchParseCode::UnknownKey => Self::UnknownKey,
+            sb_engine::SearchParseCode::InvalidOperator => Self::InvalidOperator,
+            sb_engine::SearchParseCode::InvalidValue => Self::InvalidValue,
+            sb_engine::SearchParseCode::Limit => Self::Limit,
+        }
+    }
+}
+
 /// A core failure, reported to the shell (spec/07 "Errors").
 #[derive(Debug, Clone)]
 pub enum CoreError {
-    NotFound { what: String },
-    Locked,                         // store owned by another process
-    Unavailable { reason: String }, // offline, Bridge not running, account paused
-    Corrupt { detail: String },     // integrity failure; store goes read-only
-    NeedsMigration { from: u32, to: u32 },
-    NewerStore { app_version: String }, // store migrated by a newer app; read-only
-    InvalidInput { field: String, message: String },
-    Conflict { detail: String }, // e.g. draft revision base mismatch
-    ResetRequired { generation: u64 }, // stale window cursor; reopen from Top or Around
+    NotFound {
+        what: String,
+    },
+    Locked, // store owned by another process
+    Unavailable {
+        reason: String,
+    }, // offline, Bridge not running, account paused
+    Corrupt {
+        detail: String,
+    }, // integrity failure; store goes read-only
+    NeedsMigration {
+        from: u32,
+        to: u32,
+    },
+    NewerStore {
+        app_version: String,
+    }, // store migrated by a newer app; read-only
+    InvalidInput {
+        field: String,
+        message: String,
+    },
+    Conflict {
+        detail: String,
+    }, // e.g. draft revision base mismatch
+    ResetRequired {
+        generation: u64,
+    }, // stale window cursor; reopen from Top or Around
     Cancelled,
-    Internal { detail: String },
+    Internal {
+        detail: String,
+    },
+    SearchParse {
+        start: u32,
+        end: u32,
+        code: SearchParseCode,
+    },
 }
 
 impl From<EngineError> for CoreError {
@@ -37,6 +90,11 @@ impl From<EngineError> for CoreError {
             EngineError::Conflict { detail } => Self::Conflict { detail },
             EngineError::ResetRequired { generation } => Self::ResetRequired { generation },
             EngineError::Internal { detail } => Self::Internal { detail },
+            EngineError::SearchParse { start, end, code } => Self::SearchParse {
+                start,
+                end,
+                code: code.into(),
+            },
         }
     }
 }
@@ -67,8 +125,40 @@ impl fmt::Display for CoreError {
             ),
             Self::Cancelled => f.write_str("Cancelled"),
             Self::Internal { detail } => write!(f, "Internal: {detail}"),
+            Self::SearchParse { start, end, code } => {
+                write!(f, "SearchParse: {code:?} at bytes [{start},{end})")
+            }
         }
     }
 }
 
 impl std::error::Error for CoreError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_parse_code_and_byte_offset_survives_the_engine_boundary() {
+        use sb_engine::SearchParseCode as Native;
+        for (code, expected) in [
+            (Native::UnexpectedToken, SearchParseCode::UnexpectedToken),
+            (Native::MissingValue, SearchParseCode::MissingValue),
+            (Native::UnclosedQuote, SearchParseCode::UnclosedQuote),
+            (Native::UnclosedGroup, SearchParseCode::UnclosedGroup),
+            (Native::UnknownKey, SearchParseCode::UnknownKey),
+            (Native::InvalidOperator, SearchParseCode::InvalidOperator),
+            (Native::InvalidValue, SearchParseCode::InvalidValue),
+            (Native::Limit, SearchParseCode::Limit),
+        ] {
+            let mapped = CoreError::from(EngineError::SearchParse {
+                start: 3,
+                end: 5,
+                code,
+            });
+            assert!(
+                matches!(mapped, CoreError::SearchParse { start:3,end:5,code } if code==expected)
+            );
+        }
+    }
+}

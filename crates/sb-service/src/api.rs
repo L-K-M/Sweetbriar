@@ -196,7 +196,7 @@ mod tests {
         /// One engine failure and the check that its mapped value is
         /// the matching `CoreError` variant.
         type Case = (EngineError, fn(&CoreError));
-        let cases: [Case; 9] = [
+        let cases: [Case; 10] = [
             (
                 EngineError::NotFound {
                     what: "w".to_owned(),
@@ -245,6 +245,23 @@ mod tests {
                     detail: "i".to_owned(),
                 },
                 |e| assert!(matches!(e, CoreError::Internal { .. })),
+            ),
+            (
+                EngineError::SearchParse {
+                    start: 3,
+                    end: 5,
+                    code: sb_engine::SearchParseCode::Limit,
+                },
+                |e| {
+                    assert!(matches!(
+                        e,
+                        CoreError::SearchParse {
+                            start: 3,
+                            end: 5,
+                            code: crate::SearchParseCode::Limit
+                        }
+                    ))
+                },
             ),
         ];
         for (engine_error, assert_maps) in cases {

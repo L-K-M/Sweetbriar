@@ -77,8 +77,8 @@ pub use sb_store::messages::{
     get_message, message_for_occurrence,
 };
 pub use sb_store::query::{
-    SearchIndexState, SearchLimitation, SearchRebuildProgress, SearchScope,
-    StoredSearchCoverage as Coverage,
+    MAX_QUERY_INPUT_BYTES, ParseCode, ParseContext, Query, QueryError, SearchIndexState,
+    SearchLimitation, SearchRebuildProgress, SearchScope, StoredSearchCoverage as Coverage,
 };
 pub use sb_store::settings::{StoredSetting, read_all, upsert};
 pub use sb_store::sidebar::{
