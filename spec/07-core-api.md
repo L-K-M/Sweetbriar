@@ -391,8 +391,22 @@ through `read_through`, with item-re-exported owned value DTOs and its own
 All/Account(String)/Mailbox(i64) scope. Scope input errors name `scope`. The
 memory-only failed-status/invariant read latch brackets the short snapshot;
 neither a wake nor an elapsed deadline clears it without a recovery commit.
-M1.6j1 owns all standalone coverage/error/snapshot proof. M1.6j2 composes this
+M1.6j1 owns all standalone coverage/error/snapshot proof. M1.6j3 composes this
 transaction-level read with pages and owns complete window/subscription proof.
+
+### Typed Search errors (M1.6j2)
+
+Before raw-query windows ship, map native `QueryError::Parse` losslessly to
+`SearchParse { start, end, code }` through Engine, Service, FFI and Bridge.
+The eight stable codes are those in 06; each boundary owns or item-re-exports
+its allowed vocabulary. Native store/token-oracle failures retain their error
+category, never becoming parse errors. Retain no rejected query text.
+
+Convert byte offsets to u32 with checked conversion, never clamp or wrap.
+Native private errors are bounded by the query limit plus one UTF-8 scalar
+(including oversized input); an impossible out-of-range invariant is Internal.
+Preserve all existing error variants and regenerate bindings in the same PR.
+This outcome adds no parser method or partial Search mode; k/l1 deliver those.
 
 ### Search rebuild controls (M1.6)
 
