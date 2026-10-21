@@ -465,14 +465,21 @@ local drafts. No network yet.
     malformed/nonfinite score keys and date cursor compatibility in this slice.
     The full i draft measured 2138 add+delete before publication; these sort
     outcomes each pair complete behavior with its proof under 1450 per PR.
-  - **M1.6j Search windows and coverage — L:** depends on i2. Resources and
-    engine Search handles, generation observation, scoped coverage/unknown counts,
+  - **M1.6j1 Standalone Search coverage (L):** depends on i2. Complete scoped
+    coverage from Store through Resources and Engine, including global state,
+    current target, active/latest rebuild progress and both v1 limitations.
+    Owns scope/copy/shared-byte counts, phase/pause/retry/complete semantics,
+    newer-target reporting, failed-status read gating/recovery and same-snapshot
+    native/worker proof. Coverage stays pollable during reset/enqueue. No partial
+    Search window surface. This read and all its proof fit one PR before j2.
+  - **M1.6j2 Search windows and invalidation (L):** depends on j1. Resources and
+    engine Search handles, generation observation, atomic rows/coverage/unknowns,
     lifecycle and subscriptions. Store queries and worker integration tests
     cover atomic rows/coverage, coverage-only invalidations and window
     cancellation. Owns generation/subscription tests for pause, changed retry
     deadline/error, retry, reset/phase progress, cancel/resume and completion
     with unchanged queues, plus empty-scope global state and reset counts.
-  - **M1.6k Service search API — M:** service-owned Search, parser and
+  - **M1.6k Service search API — M:** depends on j2. Service-owned Search, parser and
     coverage DTOs, error spans and sort/scope mapping; no leaf re-exports.
     Owns the Search window and `coverage(scope)` deliverables through service.
   - **M1.6k2 Service index controls — M:** service start/resume/retry APIs
