@@ -28,7 +28,7 @@ use crate::schema::{
     run_migrations,
 };
 use crate::source_snapshots::ImportSourceSnapshots;
-use crate::writer::{ListObserver, WriteFuture, WritePriority, Writer};
+use crate::writer::{ListObserver, SearchObserver, WriteFuture, WritePriority, Writer};
 
 /// The SQLite build spec/01's crate table pins (rusqlite 0.40.2 →
 /// libsqlite3-sys 0.38.2 → SQLite 3.53.2); `open` refuses any other.
@@ -161,6 +161,12 @@ impl Store {
     /// writer thread and must return at once.
     pub fn observe_list_generation(&self, observer: ListObserver) {
         self.writer.observe_list_generation(observer);
+    }
+
+    /// Hear committed Search generations before their write future resolves.
+    /// Runs on the writer thread; return immediately and never panic.
+    pub fn observe_search_generation(&self, observer: SearchObserver) {
+        self.writer.observe_search_generation(observer);
     }
 
     /// Run one read through the reader pool (spec/03): a short

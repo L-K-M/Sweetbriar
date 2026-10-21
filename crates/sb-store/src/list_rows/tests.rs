@@ -3,6 +3,7 @@ use rusqlite::Connection;
 use sb_test_support::real_fs;
 
 use super::*;
+mod search_observer;
 use crate::schema::{MIGRATIONS, run_migrations};
 use crate::testing::fixtures::{
     archive_account as archive, mailbox as add_mailbox, message as add_message, migrated,
@@ -456,6 +457,24 @@ fn committed_generations_are_announced_once() {
     assert_eq!(
         *heard.lock().unwrap(),
         vec![FIRST_GENERATION + 1, FIRST_GENERATION + 2]
+    );
+    store.close().unwrap();
+}
+
+#[test]
+fn thread_membership_commit_advances_search_generation_once() {
+    let (_scratch, paths) = crate::testing::scratch_paths("thread-search-generation");
+    let store = crate::open(&paths, &test_seams(real_fs())).unwrap();
+    let before = crate::testing::reading(&store, |tx| crate::index::search_generation(tx));
+    let list_before = crate::testing::reading(&store, |tx| generation(tx));
+    crate::testing::writing(&store, crate::threads::note_membership_change);
+    assert_eq!(
+        crate::testing::reading(&store, |tx| generation(tx)),
+        list_before + 1
+    );
+    assert_eq!(
+        crate::testing::reading(&store, |tx| crate::index::search_generation(tx)),
+        before + 1
     );
     store.close().unwrap();
 }

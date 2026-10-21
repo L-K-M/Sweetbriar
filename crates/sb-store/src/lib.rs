@@ -50,4 +50,4 @@ pub use store::{ReadOnlyStore, Seams, Store, open, open_read_only};
 
 #[cfg(feature = "test-seams")]
 pub use list_rows::refresh_list_rows;
-pub use writer::{ListObserver, WriteFuture, WritePriority, Writer};
+pub use writer::{ListObserver, SearchObserver, WriteFuture, WritePriority, Writer};

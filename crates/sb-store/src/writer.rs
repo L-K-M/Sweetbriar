@@ -60,12 +60,16 @@ struct WriterShared {
     /// Told each new `list_generation` after the job that made it
     /// committed (spec/07 "Subscriptions").
     observer: Mutex<Option<ListObserver>>,
+    search_observer: Mutex<Option<SearchObserver>>,
 }
 
 /// What hears of each committed list generation. Called on the writer
 /// thread between a commit and its future resolving, so it must return
 /// at once and never panic.
 pub type ListObserver = Arc<dyn Fn(u64) + Send + Sync>;
+
+/// The same post-commit callback contract, for the independent Search counter.
+pub type SearchObserver = ListObserver;
 
 struct WriterState {
     /// One FIFO queue per priority, indexed by [`WritePriority::queue`].
@@ -399,6 +403,10 @@ impl Writer {
         *lock(&self.shared.observer) = Some(observer);
     }
 
+    pub(crate) fn observe_search_generation(&self, observer: SearchObserver) {
+        *lock(&self.shared.search_observer) = Some(observer);
+    }
+
     /// [`Writer::new`] with the thread spawner as a parameter. If it
     /// refuses, `conn` is dropped here, still not checkpointing on
     /// close: only the running thread lifts that (spec/02: no
@@ -412,6 +420,7 @@ impl Writer {
             }),
             ready: Condvar::new(),
             observer: Mutex::new(None),
+            search_observer: Mutex::new(None),
         });
         let thread_shared = Arc::clone(&shared);
         let handle = spawn(Box::new(move || serve(conn, thread_shared)))
@@ -547,10 +556,13 @@ fn serve(mut conn: Connection, shared: Arc<WriterShared>) -> Result<(), StoreErr
 }
 
 /// The writer's serve loop: run jobs by priority, announcing each new
-/// list generation once its job committed; when the queue drains after
+/// source generation once its job committed; when the queue drains after
 /// work, checkpoint.
 fn writer_loop(conn: &mut Connection, shared: &Arc<WriterShared>) {
-    let mut announced = list_rows::generation(conn).ok();
+    let mut announced = Announced {
+        list: list_rows::generation(conn).ok(),
+        search: observed_search_generation(conn),
+    };
     loop {
         match shared.next() {
             Next::Job(job) => {
@@ -572,19 +584,43 @@ fn writer_loop(conn: &mut Connection, shared: &Arc<WriterShared>) {
     }
 }
 
-/// Tell the observer of a list generation the job just committed; one
-/// that left the generation announces nothing.
-fn announce(conn: &Connection, shared: &WriterShared, announced: &mut Option<u64>) {
-    // An unreadable generation is a corrupt store, which the next read
-    // reports; the writer keeps serving rather than failing a commit.
-    let Ok(current) = list_rows::generation(conn) else {
+struct Announced {
+    list: Option<u64>,
+    search: Option<u64>,
+}
+
+fn observed_search_generation(conn: &Connection) -> Option<u64> {
+    crate::index::search_generation(conn).ok()?.try_into().ok()
+}
+
+/// Independent reads keep one corrupt counter from suppressing the other.
+fn announce(conn: &Connection, shared: &WriterShared, announced: &mut Announced) {
+    announce_one(
+        list_rows::generation(conn).ok(),
+        &shared.observer,
+        &mut announced.list,
+    );
+    announce_one(
+        observed_search_generation(conn),
+        &shared.search_observer,
+        &mut announced.search,
+    );
+}
+
+fn announce_one(
+    current: Option<u64>,
+    observer: &Mutex<Option<ListObserver>>,
+    announced: &mut Option<u64>,
+) {
+    // The appropriate query reports unreadable metadata; never invent an event.
+    let Some(current) = current else {
         return;
     };
     if *announced == Some(current) {
         return;
     }
     *announced = Some(current);
-    let observer = lock(&shared.observer).clone();
+    let observer = lock(observer).clone();
     if let Some(observer) = observer {
         observer(current);
     }

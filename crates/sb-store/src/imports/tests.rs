@@ -92,6 +92,31 @@ fn count(store: &Store, from_clause: &str) -> i64 {
 }
 
 #[test]
+fn changed_replayed_and_empty_imports_preserve_single_source_advancement() {
+    let (_scratch, _paths, store, revision) = setup();
+    let generations = || {
+        reading(&store, |tx| {
+            Ok((
+                crate::list_rows::generation(tx)?,
+                crate::index::search_generation(tx)?,
+            ))
+        })
+    };
+    let before = generations();
+    let first = message(&store, "/synthetic/Inbox.mbox", 0, ORIGINAL);
+    commit(&store, revision, "Inbox", vec![first]).unwrap();
+    assert_eq!(generations(), (before.0 + 1, before.1 + 1));
+    let revision = reading(&store, |tx| Ok(import_job(tx, JOB)?.revision()));
+    let replay = message(&store, "/synthetic/Inbox.mbox", 0, ORIGINAL);
+    commit(&store, revision, "Inbox", vec![replay]).unwrap();
+    assert_eq!(generations(), (before.0 + 1, before.1 + 2));
+    let revision = reading(&store, |tx| Ok(import_job(tx, JOB)?.revision()));
+    commit(&store, revision, "Inbox", Vec::new()).unwrap();
+    assert_eq!(generations(), (before.0 + 1, before.1 + 2));
+    store.close().unwrap();
+}
+
+#[test]
 fn identical_bytes_keep_distinct_occurrences_but_replay_keeps_counts() {
     let (_scratch, paths, store, revision) = setup();
     let first = message(&store, "/synthetic/Inbox.mbox", 0, ORIGINAL);
