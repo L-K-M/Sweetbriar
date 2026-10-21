@@ -478,14 +478,20 @@ local drafts. No network yet.
     EOF/limit and native-error distinction/mapping proof. Preserve byte offsets
     with checked conversion; no clamp or string fallback. Pull this complete
     error surface forward from k/l1, leaving their parser methods in place.
-  - **M1.6j3 Search windows and invalidation (L):** depends on j2. Resources and
+  - **M1.6j3a Committed Search generations (M):** depends on j2. Couple every
+    list-generation change to Search without double-advancing imports; deliver
+    the independent post-commit Store/Resources search observer. Own regression
+    first for real thread-membership commits plus import preservation,
+    commit/rollback/unchanged, observer isolation/replacement and bad/exhausted
+    metadata proof. No partial Engine window or private unused version state.
+  - **M1.6j3b Search windows and invalidation (L):** depends on j3a. Resources and
     engine Search handles, generation observation, atomic rows/coverage/unknowns,
     lifecycle and subscriptions. Store queries and worker integration tests
     cover atomic rows/coverage, coverage-only invalidations and window
     cancellation. Owns generation/subscription tests for pause, changed retry
     deadline/error, retry, reset/phase progress, cancel/resume and completion
     with unchanged queues, plus empty-scope global state and reset counts.
-  - **M1.6k Service search API — M:** depends on j3. Service-owned Search, parser and
+  - **M1.6k Service search API — M:** depends on j3b. Service-owned Search, parser and
     coverage DTOs, error spans and sort/scope mapping; no leaf re-exports.
     Owns the Search window and `coverage(scope)` deliverables through service.
   - **M1.6k2 Service index controls — M:** service start/resume/retry APIs
