@@ -30,7 +30,9 @@ pub use index::{
     report_index_io_failure, search_io_code, search_io_message,
 };
 mod renditions;
+mod search;
 pub use renditions::{RenditionCache, RenditionError, RenditionFiles, RenditionProtection};
+pub use search::read_search_coverage;
 
 // The engine's names, re-exported by item so the engine states bounds
 // and maps errors without depending on a leaf (spec/01 rule 3). The
@@ -73,6 +75,10 @@ pub use sb_store::messages::{
     BodyAvailability, MAX_READER_HEADER_BYTES, MAX_READER_MESSAGE_BYTES, ReaderAddress,
     ReaderHeaders, ReaderMessage, ReaderOccurrence, ReaderTag, StoredAcquisition, best_acquisition,
     get_message, message_for_occurrence,
+};
+pub use sb_store::query::{
+    SearchIndexState, SearchLimitation, SearchRebuildProgress, SearchScope,
+    StoredSearchCoverage as Coverage,
 };
 pub use sb_store::settings::{StoredSetting, read_all, upsert};
 pub use sb_store::sidebar::{

@@ -437,6 +437,11 @@ fn sql_error(error: rusqlite::Error) -> StoreError {
     classify(error, "read search predicates")
 }
 
+mod coverage;
+pub use coverage::{
+    SearchIndexState, SearchLimitation, SearchRebuildProgress, StoredSearchCoverage,
+    read_search_coverage,
+};
 mod paging;
 pub use paging::{
     SearchAnchor, SearchPage, StoredSearchRow, read_search_date_page, read_search_relevance_page,

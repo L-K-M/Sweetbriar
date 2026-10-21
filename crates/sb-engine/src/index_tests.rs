@@ -23,6 +23,8 @@ const STALE_CHANGES: [&str; 2] = [
     "UPDATE search_index_state SET epoch=epoch+1",
 ];
 
+mod coverage;
+
 #[track_caller]
 fn wait(mut ready: impl FnMut() -> bool) {
     // Same observation budget as the import suite on shared CI disks.
@@ -639,6 +641,10 @@ fn a_missing_lookup_is_a_terminal_read_error_not_an_io_retry() {
     });
     assert_eq!(count(&engine, QUEUE), 1);
     assert_eq!(count(&engine, DOCS), 0);
+    assert!(matches!(
+        block_on(engine.coverage(crate::SearchScope::All)),
+        Err(crate::EngineError::NotFound { .. })
+    ));
     assert!(
         engine
             .resources()
@@ -699,6 +705,12 @@ fn reset_enqueue_drive_the_due_hold_and_a_newer_target_never_extracts() {
     parked(&engine);
     assert_eq!(fs.calls(FsOp::Open), 1);
     assert!(status(&engine).io_pause().is_some());
+    let coverage = block_on(engine.coverage(crate::SearchScope::All)).unwrap();
+    assert_eq!(
+        coverage.index_state,
+        crate::SearchIndexState::BlockedNewerExtractor
+    );
+    assert_eq!(coverage.extractor_version, 999);
     block_on(engine.shutdown()).unwrap();
 }
 
@@ -715,7 +727,7 @@ fn failed_publication_and_failed_pause_persistence_gate_reads_until_recovery_com
             if fail_read { 1 } else { u64::MAX },
             FaultKind::NoSpace,
         ));
-        let (engine, _) = clocked(&root, fs, 10_000);
+        let (engine, clock) = clocked(&root, fs, 10_000);
         let engine = Arc::new(engine);
         let before = generation(&engine);
         let db = root.join("state.sqlite");
@@ -737,6 +749,10 @@ fn failed_publication_and_failed_pause_persistence_gate_reads_until_recovery_com
                     engine.indexer().status(engine.resources()),
                     Err(StoreError::Unavailable { .. })
                 ));
+                assert!(matches!(
+                    block_on(engine.coverage(crate::SearchScope::All)),
+                    Err(crate::EngineError::Unavailable { .. })
+                ));
                 assert!(generation(&engine) > before + 1);
                 notified.send(()).unwrap();
             }
@@ -752,9 +768,14 @@ fn failed_publication_and_failed_pause_persistence_gate_reads_until_recovery_com
             )
         });
         let failed = snapshot(engine.resources());
+        assert!(matches!(
+            block_on(engine.coverage(crate::SearchScope::All)),
+            Err(crate::EngineError::Unavailable { .. })
+        ));
         assert_eq!((failed.docs, failed.queue, failed.hits), (0, 1, 0));
         assert_eq!(failed.generation, before + 1, "only Resume committed");
         rejected.try_iter().for_each(drop);
+        clock.0.store(1_000_000, Ordering::SeqCst);
         engine.indexer().wake();
         rejected.recv_timeout(Duration::from_secs(30)).unwrap();
         assert!(matches!(
@@ -762,11 +783,21 @@ fn failed_publication_and_failed_pause_persistence_gate_reads_until_recovery_com
             Err(StoreError::Unavailable { .. })
         ));
         assert_eq!(snapshot(engine.resources()), failed);
+        assert!(matches!(
+            block_on(engine.coverage(crate::SearchScope::All)),
+            Err(crate::EngineError::Unavailable { .. })
+        ));
         external(&db, "DROP TRIGGER reject_index_generation");
         engine.indexer().wake();
         recovering.recv_timeout(Duration::from_secs(30)).unwrap();
         drained(&engine);
         assert_eq!(count(&engine, DOCS), 1);
+        assert_eq!(
+            block_on(engine.coverage(crate::SearchScope::All))
+                .unwrap()
+                .index_state,
+            crate::SearchIndexState::Ready
+        );
         block_on(Arc::try_unwrap(engine).unwrap().shutdown()).unwrap();
     }
 }
@@ -848,6 +879,16 @@ fn native_bulk_full_persists_pause_history_when_status_writes_still_fit() {
     assert_eq!(state.io_pause().unwrap().retry_at().as_millis(), 11_000);
     assert_eq!(state.io_attempts(), 1);
     assert_eq!((count(&engine, DOCS), count(&engine, QUEUE)), (0, 1));
+    let coverage = block_on(engine.coverage(crate::SearchScope::All)).unwrap();
+    assert!(matches!(
+        coverage.index_state,
+        crate::SearchIndexState::PausedIo {
+            code: crate::SearchIoCode::StorageFull,
+            retry_at: 11_000,
+            ..
+        }
+    ));
+    assert_eq!((coverage.pending, coverage.queue_length), (1, 1));
     clock.0.store(11_000, Ordering::SeqCst);
     engine.indexer().wake();
     wait(|| {
@@ -860,6 +901,16 @@ fn native_bulk_full_persists_pause_history_when_status_writes_still_fit() {
         status(&engine).io_pause().unwrap().retry_at().as_millis(),
         13_000
     );
+    assert!(matches!(
+        block_on(engine.coverage(crate::SearchScope::All))
+            .unwrap()
+            .index_state,
+        crate::SearchIndexState::PausedIo {
+            code: crate::SearchIoCode::StorageFull,
+            retry_at: 13_000,
+            ..
+        }
+    ));
     assert_eq!((count(&engine, DOCS), count(&engine, QUEUE)), (0, 1));
     write(&engine, |tx| {
         tx.query_row("PRAGMA max_page_count=1000000", [], |row| {

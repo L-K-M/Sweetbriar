@@ -107,13 +107,19 @@ impl IndexJobs {
     /// The read gate shared by worker status and later Search consumers.
     /// A recovery commit, not a wake or an elapsed deadline, releases it.
     pub(crate) fn status(&self, resources: &Resources) -> Result<SearchIndexStatus, StoreError> {
+        self.readable()?;
+        resources.read(|tx| search_index_status(tx))
+    }
+
+    /// In-memory failure fence, without opening a second metadata snapshot.
+    pub(crate) fn readable(&self) -> Result<(), StoreError> {
         match self.failure() {
             Some(ReadFailure::Writer(_)) => Err(StoreError::Unavailable {
                 reason: "Index status could not be saved. Restore writable local storage; indexing retries automatically.".into(),
                 io_kind: None,
             }),
             Some(ReadFailure::Invariant(error)) => Err(error),
-            None => resources.read(|tx| search_index_status(tx)),
+            None => Ok(()),
         }
     }
 
