@@ -221,7 +221,7 @@ pub(crate) fn generation(conn: &Connection) -> Result<u64, StoreError> {
         .ok_or_else(|| StoreError::corrupt("store_meta has no valid list_generation"))
 }
 
-/// Count one more committed change to the list rows.
+/// List changes also invalidate Search (spec/07), in the same transaction.
 pub(crate) fn advance_generation(tx: &Transaction) -> Result<u64, StoreError> {
     let next = generation(tx)?
         .checked_add(1)
@@ -231,6 +231,7 @@ pub(crate) fn advance_generation(tx: &Transaction) -> Result<u64, StoreError> {
         params![GENERATION_KEY, next.to_string()],
     )
     .map_err(sql_error)?;
+    crate::index::advance_generation(tx)?;
     Ok(next)
 }
 

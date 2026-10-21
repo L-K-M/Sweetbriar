@@ -233,12 +233,12 @@ pub fn commit_import_batch(
             "import list rows exceed the background-write budget",
         ));
     }
-    if !batch.messages.is_empty() {
-        crate::index::advance_generation(tx)?;
-    }
     // One generation per batch that changed what lists show (spec/02).
     if list_rows::refresh(tx, &list.occurrences)? {
         list_rows::advance_generation(tx)?;
+    } else if !batch.messages.is_empty() {
+        // The shared list advance already covers Search when rows changed.
+        crate::index::advance_generation(tx)?;
     }
     // New logical messages make the threads due for a rebuild.
     if stats.imported > 0 {

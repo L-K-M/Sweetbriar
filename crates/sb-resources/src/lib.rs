@@ -91,8 +91,8 @@ pub use sb_store::threads::{
     remove_thread, stored_threads, thread_memberships, thread_revisions, thread_sources,
 };
 pub use sb_store::{
-    ImportSourceSnapshot, ListObserver, Receipt, StoreError, Timestamp, Transaction, Uuid,
-    WriteFuture, WritePriority, encode_job_receipt, receipt_job_id, run_once,
+    ImportSourceSnapshot, ListObserver, Receipt, SearchObserver, StoreError, Timestamp,
+    Transaction, Uuid, WriteFuture, WritePriority, encode_job_receipt, receipt_job_id, run_once,
 };
 
 #[cfg(feature = "test-seams")]
@@ -177,6 +177,12 @@ impl Resources {
     /// thread and must return at once.
     pub fn observe_list_generation(&self, observer: ListObserver) {
         self.store.observe_list_generation(observer);
+    }
+
+    /// Hear Search-only or shared source commits, independently of list changes.
+    /// Runs on the writer thread; return immediately and never panic.
+    pub fn observe_search_generation(&self, observer: SearchObserver) {
+        self.store.observe_search_generation(observer);
     }
 
     /// Run one read through the store's reader pool (spec/03): a short

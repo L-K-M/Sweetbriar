@@ -391,7 +391,7 @@ through `read_through`, with item-re-exported owned value DTOs and its own
 All/Account(String)/Mailbox(i64) scope. Scope input errors name `scope`. The
 memory-only failed-status/invariant read latch brackets the short snapshot;
 neither a wake nor an elapsed deadline clears it without a recovery commit.
-M1.6j1 owns all standalone coverage/error/snapshot proof. M1.6j3 composes this
+M1.6j1 owns all standalone coverage/error/snapshot proof. M1.6j3b composes this
 transaction-level read with pages and owns complete window/subscription proof.
 
 ### Typed Search errors (M1.6j2)
@@ -517,6 +517,14 @@ enum WindowEvent { Invalidated { generation: u64 }, ResetRequired }
   - The store announces a new `list_generation` (or Search's
     `search_generation`) only after the transaction that made it commits
     (03).
+    M1.6j3a supplies independent `observe_search_generation(SearchObserver)`
+    registration on Store and Resources. The callback receives a checked u64
+    after commit and before its write future resolves, must return at once
+    and never panic. Unchanged/failed/rolled-back writes emit nothing; corrupt
+    metadata invents no value. One source's bad metadata does not suppress
+    the other valid source. List changes advance both counters; index-only
+    changes leave list observers untouched. Preserve imports' single advance.
+    M1.6j3a owns all native source/observer proof; j3b adds live subscriptions.
 - **Snapshot isolation:** a window is not a held read transaction. Each
   read is a short transaction, and `generation` ties the rows to one
   committed state.
