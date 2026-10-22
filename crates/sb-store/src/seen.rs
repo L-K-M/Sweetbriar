@@ -223,7 +223,7 @@ fn next_source(tx: &Transaction, after: i64) -> Result<Option<Source>, StoreErro
         coalesce(({SUMMARY_USABLE}),0)
         FROM logical_messages m LEFT JOIN d_message_summary s ON s.acquisition_id=m.acquisition_id
         WHERE m.message_id>?1 ORDER BY m.message_id LIMIT 1");
-    let mut statement = tx.prepare(&sql).map_err(sql_error)?;
+    let mut statement = tx.prepare_cached(&sql).map_err(sql_error)?;
     let mut rows = statement.query([after]).map_err(sql_error)?;
     let Some(row) = rows.next().map_err(sql_error)? else {
         return Ok(None);
@@ -370,18 +370,17 @@ fn observe(tx: &Transaction, source: &Source, key: &Key) -> Result<(), StoreErro
         display_name=CASE WHEN {winner} THEN excluded.display_name ELSE seen_addresses.display_name END,
         last_seen_at=CASE WHEN {winner} THEN excluded.last_seen_at ELSE seen_addresses.last_seen_at END,
         last_account_id=CASE WHEN {winner} THEN excluded.last_account_id ELSE seen_addresses.last_account_id END");
-    tx.execute(
-        &sql,
-        params![
+    tx.prepare_cached(&sql)
+        .map_err(sql_error)?
+        .execute(params![
             key.canonical,
             key.email,
             key.name,
             source.observed,
             received,
             source.account
-        ],
-    )
-    .map_err(sql_error)?;
+        ])
+        .map_err(sql_error)?;
     let inserted = tx.execute("INSERT INTO seen_address_messages(message_id,canonical) VALUES(?1,?2) ON CONFLICT(message_id,canonical) DO NOTHING",
         params![source.message, key.canonical]).map_err(sql_error)?;
     if (inserted != 0) != !exists {
