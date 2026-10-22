@@ -493,7 +493,10 @@ local drafts. No network yet.
     with unchanged queues, plus empty-scope global state and reset counts.
   - **M1.6k Service search API — M:** depends on j3b. Service-owned Search, parser and
     coverage DTOs, error spans and sort/scope mapping; no leaf re-exports.
-    Owns the Search window and `coverage(scope)` deliverables through service.
+    Owns Search windows, `coverage(scope)`, `parse_search` and `format_search`
+    through Core. Include complete DTO/code/span/context mapping and native
+    public-Core import/paging/status/lifecycle proof; format limits are spanless
+    InvalidInput(query_json). Retain ordinary windows and opaque native cursors.
   - **M1.6k2 Service index controls — M:** service start/resume/retry APIs
     using k's coverage/progress/operational DTOs; depends on k. Extend
     `cancel_job` routing to rebuild jobs. Owns service tests for receipt/key

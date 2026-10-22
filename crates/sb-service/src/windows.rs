@@ -6,11 +6,11 @@
 
 use sb_engine::WindowId;
 
-use crate::{Core, CoreError};
+use crate::{Core, CoreError, SearchSpec, SearchStatus};
 
 /// Which window a shell is listing (spec/07): the store's lists, or
 /// the pilot's in-memory debug source.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WindowSpec {
     /// The synthetic source filled by `Core::debug_fill_synthetic`.
     DebugSynthetic,
@@ -22,16 +22,19 @@ pub enum WindowSpec {
     Flagged,
     /// One thread's logical messages, once each.
     Thread(i64),
+    /// Checked query results with same-snapshot Search status.
+    Search(SearchSpec),
 }
 
 impl WindowSpec {
-    fn to_engine(self) -> sb_engine::WindowSpec {
+    fn into_engine(self) -> sb_engine::WindowSpec {
         match self {
             Self::DebugSynthetic => sb_engine::WindowSpec::DebugSynthetic,
             Self::Mailbox(id) => sb_engine::WindowSpec::Mailbox(id),
             Self::Unified(role) => sb_engine::WindowSpec::Unified(role.to_engine()),
             Self::Flagged => sb_engine::WindowSpec::Flagged,
             Self::Thread(id) => sb_engine::WindowSpec::Thread(id),
+            Self::Search(spec) => sb_engine::WindowSpec::Search(spec.into_engine()),
         }
     }
 }
@@ -174,6 +177,7 @@ pub struct Window {
     pub has_more_after: bool,
     pub has_more_before: bool,
     pub total: Count,
+    pub search: Option<SearchStatus>,
 }
 
 impl Window {
@@ -187,6 +191,7 @@ impl Window {
             has_more_after: window.has_more_after(),
             has_more_before: window.has_more_before(),
             total: Count::from_engine(window.total()),
+            search: window.search().map(SearchStatus::from_engine),
         }
     }
 }
@@ -220,7 +225,7 @@ impl Core {
     ) -> Result<Window, CoreError> {
         let window = self
             .engine()
-            .open_window(spec.to_engine(), anchor.into_engine(), limit)
+            .open_window(spec.into_engine(), anchor.into_engine(), limit)
             .await?;
         Ok(Window::from_engine(&window))
     }
@@ -318,9 +323,10 @@ mod tests {
             WindowSpec::Thread(1),
         ] {
             let window =
-                sb_test_support::block_on(core.open_window(spec, Anchor::Top, 10)).unwrap();
+                sb_test_support::block_on(core.open_window(spec.clone(), Anchor::Top, 10)).unwrap();
             assert!(window.rows.is_empty(), "{spec:?}");
             assert_eq!(window.total, Count::Exact(0), "{spec:?}");
+            assert!(window.search.is_none(), "{spec:?}");
             sb_test_support::block_on(core.close_window(window.window_id));
         }
         // A closed window's subscription says so.

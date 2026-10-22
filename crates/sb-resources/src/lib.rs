@@ -79,8 +79,8 @@ pub use sb_store::messages::{
 pub use sb_store::query::{
     MAX_QUERY_INPUT_BYTES, ParseCode, ParseContext, Query, QueryError, SearchAnchor,
     SearchIndexState, SearchLimitation, SearchPage, SearchRebuildProgress, SearchScope,
-    StoredSearchCoverage as Coverage, read_search_date_page, read_search_relevance_page,
-    search_date_ids, search_relevance_ids,
+    StoredSearchCoverage as Coverage, TextFormatError, read_search_date_page,
+    read_search_relevance_page, search_date_ids, search_relevance_ids,
 };
 pub use sb_store::settings::{StoredSetting, read_all, upsert};
 pub use sb_store::sidebar::{
