@@ -1,0 +1,249 @@
+//! Checked Search specs and same-snapshot page/status reads, without count caches.
+
+use super::*;
+use crate::{Coverage, SearchIndexState, SearchScope};
+use sb_resources::{
+    Query, SearchAnchor, SearchPage, SearchScope as StoreScope, StoreError, Transaction,
+    read_search_coverage, read_search_date_page, read_search_relevance_page, search_date_ids,
+    search_relevance_ids,
+};
+
+/// Both complete Store sorts (spec/06); lower native BM25 scores rank first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SearchSort {
+    Date,
+    Relevance,
+}
+
+/// Immutable query packet; open validates it off the caller's thread.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchSpec {
+    query: SearchQuery,
+    scope: SearchScope,
+    sort: SearchSort,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SearchQuery {
+    Json(String),
+    Validated(Arc<Query>),
+}
+
+impl SearchSpec {
+    pub fn new(query_json: String, scope: SearchScope, sort: SearchSort) -> Self {
+        Self {
+            query: SearchQuery::Json(query_json),
+            scope,
+            sort,
+        }
+    }
+
+    fn prepare(mut self) -> Result<Self, EngineError> {
+        self.scope.stored()?;
+        self.query = match self.query {
+            SearchQuery::Json(input) => {
+                SearchQuery::Validated(Arc::new(Query::parse_json(&input)?))
+            }
+            query => query,
+        };
+        Ok(self)
+    }
+
+    fn query(&self) -> Result<Arc<Query>, EngineError> {
+        match &self.query {
+            SearchQuery::Validated(query) => Ok(Arc::clone(query)),
+            SearchQuery::Json(_) => Err(EngineError::internal("unvalidated Search window")),
+        }
+    }
+}
+
+/// Query-independent coverage and exact final unknowns from the page snapshot.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchStatus {
+    coverage: Coverage,
+    excluded_unknown: u64,
+}
+
+impl SearchStatus {
+    pub fn coverage(&self) -> &Coverage {
+        &self.coverage
+    }
+    pub fn excluded_unknown(&self) -> u64 {
+        self.excluded_unknown
+    }
+}
+
+struct SearchRead {
+    page: SearchPage,
+    coverage: Coverage,
+}
+
+impl SearchRead {
+    fn window(self, window_id: WindowId) -> Window {
+        let page = self.page;
+        let before = page.rows().first().map(|row| Cursor(row.cursor().into()));
+        let after = page.rows().last().map(|row| Cursor(row.cursor().into()));
+        let has_more_before = page.has_more_before();
+        let has_more_after = page.has_more_after();
+        let shown = page.rows().len() as u64;
+        let total = if has_more_before || has_more_after {
+            Count::AtLeast(shown + u64::from(has_more_before) + u64::from(has_more_after))
+        } else {
+            Count::Exact(shown)
+        };
+        let status = SearchStatus {
+            coverage: self.coverage,
+            excluded_unknown: page.excluded_unknown(),
+        };
+        Window {
+            window_id,
+            generation: page.generation(),
+            before,
+            after,
+            has_more_before,
+            has_more_after,
+            total,
+            search: Some(status),
+            rows: page
+                .into_rows()
+                .into_iter()
+                .map(|hit| list_row(hit.into_parts().0))
+                .collect(),
+        }
+    }
+}
+
+impl Engine {
+    pub(super) async fn open_search_window(
+        &self,
+        spec: SearchSpec,
+        anchor: Anchor,
+        limit: u32,
+    ) -> Result<Window, EngineError> {
+        check_limit(limit)?;
+        let spec = self.compute(move || spec.prepare()).await?;
+        let read = self.search_page(spec.clone(), anchor, limit, None).await?;
+        let windows = Arc::clone(self.windows());
+        let cleanup = self.detached();
+        #[cfg(test)]
+        let index = Arc::clone(self.indexer());
+        let opened = self
+            .compute(move || {
+                let id = windows.register(WindowSpec::Search(spec), read.page.generation());
+                #[cfg(test)]
+                index.event(crate::index::Event::SearchRegistered {
+                    window_id: id.get(),
+                });
+                Ok(Opened {
+                    window: Some(read.window(id)),
+                    windows,
+                    cleanup,
+                })
+            })
+            .await?;
+        Ok(opened.into_window())
+    }
+
+    pub(super) async fn read_search_window(
+        &self,
+        id: WindowId,
+        spec: SearchSpec,
+        anchor: Anchor,
+        limit: u32,
+        generation: u64,
+    ) -> Result<Window, EngineError> {
+        Ok(self
+            .search_page(spec, anchor, limit, Some(generation))
+            .await?
+            .window(id))
+    }
+
+    async fn search_page(
+        &self,
+        spec: SearchSpec,
+        anchor: Anchor,
+        limit: u32,
+        at: Option<u64>,
+    ) -> Result<SearchRead, EngineError> {
+        let query = spec.query()?;
+        let scope = spec.scope.stored()?;
+        let outcome_anchor = match &anchor {
+            Anchor::Around(id) => Anchor::Around(*id),
+            _ => Anchor::Top,
+        };
+        let native = match anchor {
+            Anchor::Top => SearchAnchor::Top,
+            Anchor::Around(id) => SearchAnchor::Around(id),
+            Anchor::After(cursor) => SearchAnchor::After(cursor.0),
+            Anchor::Before(cursor) => SearchAnchor::Before(cursor.0),
+        };
+        let (coverage, read) = self
+            .search_snapshot(scope.clone(), move |tx| match spec.sort {
+                SearchSort::Date => {
+                    read_search_date_page(tx, &query, scope, native, limit as usize, at)
+                }
+                SearchSort::Relevance => {
+                    read_search_relevance_page(tx, &query, scope, native, limit as usize, at)
+                }
+            })
+            .await?;
+        Ok(SearchRead {
+            coverage,
+            page: store_outcome(read, &outcome_anchor)?,
+        })
+    }
+
+    pub(super) async fn search_window_ids(
+        &self,
+        spec: SearchSpec,
+    ) -> Result<WindowIds, EngineError> {
+        let query = spec.query()?;
+        let scope = spec.scope.stored()?;
+        let (_, read) = self
+            .search_snapshot(scope.clone(), move |tx| match spec.sort {
+                SearchSort::Date => search_date_ids(tx, &query, scope, None),
+                SearchSort::Relevance => search_relevance_ids(tx, &query, scope, None),
+            })
+            .await?;
+        let (generation, ids) = store_outcome(read, &Anchor::Top)?;
+        Ok(WindowIds { generation, ids })
+    }
+
+    /// Page/ids and capability share one snapshot; failure state is never cached.
+    async fn search_snapshot<T, F>(
+        &self,
+        scope: StoreScope,
+        body: F,
+    ) -> Result<(Coverage, T), EngineError>
+    where
+        T: Send + 'static,
+        F: FnOnce(&Transaction) -> Result<T, StoreError> + Send + 'static,
+    {
+        let index = Arc::clone(self.indexer());
+        self.read_through(move |resources| {
+            index.readable()?;
+            let result = resources.read(|tx| {
+                let coverage = read_search_coverage(tx, scope)?;
+                if coverage.index_state == SearchIndexState::BlockedNewerExtractor {
+                    return Err(StoreError::Unavailable {
+                        reason: "Search needs a newer app for this index. Update Sweetbriar."
+                            .into(),
+                        io_kind: None,
+                    });
+                }
+                #[cfg(test)]
+                index.event(crate::index::Event::SearchReadCaptured);
+                Ok((coverage, body(tx)?))
+            });
+            index.readable()?;
+            result
+        })
+        .await
+        .map_err(|error| match error {
+            EngineError::InvalidInput { message, .. } => {
+                EngineError::invalid_input("anchor", message)
+            }
+            error => error,
+        })
+    }
+}

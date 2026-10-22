@@ -190,7 +190,7 @@ fn store_windows_page_and_reset() {
     );
     let spec = WindowSpec::Mailbox(mailbox);
 
-    let first = block_on(engine.open_window(spec, Anchor::Top, 2)).unwrap();
+    let first = block_on(engine.open_window(spec.clone(), Anchor::Top, 2)).unwrap();
     assert_eq!(subjects(&first), vec!["A", "B"]);
     assert_eq!(first.total(), Count::AtLeast(3));
     let (id, generation) = (first.window_id(), first.generation());

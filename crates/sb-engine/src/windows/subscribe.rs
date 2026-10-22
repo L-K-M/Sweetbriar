@@ -21,7 +21,7 @@ use crate::{Engine, EngineError};
 
 /// How many generations a consumer may fall behind before `next`
 /// answers `ResetRequired` (spec/07).
-const MAX_UNSEEN_GENERATIONS: u64 = 32;
+pub(super) const MAX_UNSEEN_GENERATIONS: u64 = 32;
 
 /// What a window's subscription reports (spec/07).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,7 +75,7 @@ impl Subscription {
                 return Err(shut_down());
             }
             let open = self.window().await?;
-            let current = source_generation(open.spec, seen);
+            let current = source_generation(&open.spec, seen);
             let mark = *self.lock_mark().get_or_insert(open.seen());
             if current > mark {
                 *self.lock_mark() = Some(current);
@@ -117,9 +117,10 @@ impl Subscription {
 }
 
 /// The generation of the source `spec` lists.
-fn source_generation(spec: WindowSpec, versions: Versions) -> u64 {
+fn source_generation(spec: &WindowSpec, versions: Versions) -> u64 {
     match spec {
         WindowSpec::DebugSynthetic => versions.synthetic,
+        WindowSpec::Search(_) => versions.search,
         _ => versions.store,
     }
 }

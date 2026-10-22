@@ -215,7 +215,7 @@ fn list_window_timings() {
         ("flagged", WindowSpec::Flagged),
     ] {
         let first = median_ms(|| {
-            let window = block_on(engine.open_window(spec, Anchor::Top, PAGE)).unwrap();
+            let window = block_on(engine.open_window(spec.clone(), Anchor::Top, PAGE)).unwrap();
             block_on(engine.close_window(window.window_id()));
         });
         let window = block_on(engine.open_window(spec, Anchor::Top, PAGE)).unwrap();
