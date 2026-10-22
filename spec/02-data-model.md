@@ -420,12 +420,16 @@ from discarded drafts. It is listed in the backup.
   Imported mailbox roles are unreliable and a message may have several
   labels, so M1.6 applies no role/direction or self-address filter. Completion
   may offer an own address; no automatic identity suppression is implied.
-- M1.6m adds a kept `STRICT` table `seen_address_messages`, with
-  `message_id INTEGER NOT NULL REFERENCES logical_messages(message_id)`,
-  `canonical TEXT NOT NULL REFERENCES seen_addresses(canonical)` and
-  `PRIMARY KEY (message_id, canonical)`. This is a target migration contract,
-  not part of the implemented SQL blocks above; add its executable SQL
-  alongside the migration so the schema-drift test continues to prove both.
+- Migration 7 adds the kept ledger. WITHOUT ROWID stores its canonical key once
+  rather than duplicating the composite primary key, within the per-key budget.
+
+```sql
+CREATE TABLE seen_address_messages (
+  message_id INTEGER NOT NULL REFERENCES logical_messages(message_id),
+  canonical TEXT NOT NULL REFERENCES seen_addresses(canonical),
+  PRIMARY KEY (message_id, canonical)
+) STRICT, WITHOUT ROWID;
+```
 
   For each `(message_id, canonical)` key, in one writer transaction,
   insert/upsert the address row, insert the
@@ -516,6 +520,29 @@ from discarded drafts. It is listed in the backup.
   Executable schema blocks land with those migrations. Older writers refuse a
   newer schema; rollback uses a complete consistent backup, not a schema-number
   downgrade or removal of kept ledger data.
+
+### Current-summary facade (M1.6m1)
+
+Migration 7 seeds `seen_address_target=1`, `seen_address_inputs=1` and
+`seen_address_swept=0`; existing eligible messages owe a pass. Target 1 is the
+received-publication/key-policy capability, distinct from MIME parser version.
+The facade reads owned `(target, inputs, swept)` revisions and begins an opaque
+captured-revision sweep only when work is owed. Newer unsupported targets are
+Unavailable at begin/publication; missing, malformed or zero target is Corrupt.
+
+Prepare consumes a sweep, captures one bounded logical message (including
+ineligible ones) or EOF, then decodes/normalizes outside SQLite. A large
+message's deduplicated keys remain bounded in its opaque continuation across
+chunks. Publish returns Continue, quiet no-effect Recapture or Complete only
+after successful COMMIT; a failed commit exposes no advanced continuation.
+EOF acknowledges only captured R. Prepared private fields and commit-time
+exact source/identity/time/capability checks prevent forged or stale observations.
+
+Import records owed work in O(1), without recipient writes or a new metadata
+budget failure. The native facade caller qualifies library delivery; automatic
+startup/import scheduling remains M1.6m2. Preserve sent/received history and
+derive the single legal-key charge from admitted header/decoded text and actual
+DDL copies; no admission filter or silent key truncation.
 
 ## Drafts
 
