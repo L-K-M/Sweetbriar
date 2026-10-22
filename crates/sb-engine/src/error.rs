@@ -5,7 +5,7 @@
 use std::fmt;
 
 use crate::SearchParseCode;
-use sb_resources::{QueryError, StoreError};
+use sb_resources::{MAX_QUERY_INPUT_BYTES, QueryError, StoreError, TextFormatError};
 
 /// An engine failure, mapped one-to-one onto `CoreError` variants.
 #[derive(Debug, Clone)]
@@ -105,6 +105,19 @@ impl From<QueryError> for EngineError {
             start,
             end,
             code: error.code(),
+        }
+    }
+}
+
+impl From<TextFormatError> for EngineError {
+    fn from(error: TextFormatError) -> Self {
+        match error {
+            TextFormatError::Limit => Self::invalid_input(
+                "query_json",
+                format!(
+                    "canonical Search text exceeds {MAX_QUERY_INPUT_BYTES} UTF-8 bytes; shorten the query"
+                ),
+            ),
         }
     }
 }
@@ -216,5 +229,15 @@ mod tests {
             assert_eq!(actual.to_string(), expected.to_string());
             assert!(!matches!(actual, EngineError::SearchParse { .. }));
         }
+    }
+
+    #[test]
+    fn typed_formatter_limit_is_actionable_without_an_invented_parse_span() {
+        let error = EngineError::from(TextFormatError::Limit);
+        assert!(
+            matches!(&error, EngineError::InvalidInput { field, message }
+            if field == "query_json" && message.contains("16384") && message.contains("shorten"))
+        );
+        assert!(!matches!(error, EngineError::SearchParse { .. }));
     }
 }

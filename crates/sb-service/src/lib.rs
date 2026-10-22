@@ -12,6 +12,7 @@ mod api;
 mod error;
 mod imports;
 mod messages;
+mod search;
 mod sidebar;
 mod windows;
 
@@ -20,6 +21,10 @@ pub use error::{CoreError, SearchParseCode};
 pub use imports::{
     ImportJob, ImportJobState, ImportProblem, ImportProblemKind, ImportReport, ImportSource,
     ImportSourceKind, ImportStarted, ImportTarget, ImportTotals, MboxVariant,
+};
+pub use search::{
+    Coverage, ParseContext, SearchIndexState, SearchIoCode, SearchLimitation, SearchRebuildPhase,
+    SearchRebuildProgress, SearchScope, SearchSort, SearchSpec, SearchStatus,
 };
 pub use sidebar::{Account, AccountKind, AccountState, Mailbox, MailboxKind, Mailboxes};
 pub use windows::{
