@@ -147,6 +147,20 @@ fn a_locked_store_exits_one_naming_locked_and_creates_nothing() {
     );
     let core = sb_test_support::block_on(open_core(config)).expect("the test opens the core");
 
+    // The independent received worker acknowledges even an empty startup sweep.
+    // Wait for its real commit before attributing any change to the refused CLI.
+    let db = root.join("state.sqlite");
+    let inputs = sb_test_support::store_meta_value(&db, "seen_address_inputs")
+        .expect("the input revision exists");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while sb_test_support::store_meta_value(&db, "seen_address_swept").as_ref() != Some(&inputs) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "startup sweep did not settle"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+
     let before = listing(scratch.path());
     let out = cli(&root, &["settings", "get"]);
     assert_eq!(out.status.code(), Some(1));
