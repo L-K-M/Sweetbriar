@@ -519,6 +519,8 @@ local drafts. No network yet.
     SearchCoverage/scopes/state/progress DTOs, CoreBridge method, closed mappings
     and actual Swift adapter/error/cancellation proof over the qualified SDK.
     Both steps check binding drift; no generated type crosses the public bridge.
+    Own all-field/closed-payload mapping tables and actual import/scope/error/
+    task-cancellation/shutdown adapter tests; reuse the qualified SDK proof.
   - **M1.6l3 Search window FFI — L:** Search spec/status in windows,
     generated bindings and Swift adapter/tests. Owns end-to-end API
     delivery; depends on l2b. Separating these exports budgets generated
