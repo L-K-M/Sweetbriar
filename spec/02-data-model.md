@@ -429,6 +429,7 @@ CREATE TABLE seen_address_messages (
   canonical TEXT NOT NULL REFERENCES seen_addresses(canonical),
   PRIMARY KEY (message_id, canonical)
 ) STRICT, WITHOUT ROWID;
+CREATE INDEX occ_by_message_observation ON occurrences(message_id, first_seen_at);
 ```
 
   For each `(message_id, canonical)` key, in one writer transaction,
@@ -526,6 +527,7 @@ CREATE TABLE seen_address_messages (
 Migration 7 seeds `seen_address_target=1`, `seen_address_inputs=1` and
 `seen_address_swept=0`; existing eligible messages owe a pass. Target 1 is the
 received-publication/key-policy capability, distinct from MIME parser version.
+The observation index bounds earliest-occurrence lookup even for many labels.
 The facade reads owned `(target, inputs, swept)` revisions and begins an opaque
 captured-revision sweep only when work is owed. Newer unsupported targets are
 Unavailable at begin/publication; missing, malformed or zero target is Corrupt.
