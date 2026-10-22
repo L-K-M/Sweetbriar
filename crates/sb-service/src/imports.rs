@@ -184,8 +184,8 @@ impl Core {
         Ok(Receipt::from_engine(&receipt))
     }
 
-    /// `cancel_job(id)` (spec/07, 09): the job is cancelled once this
-    /// returns; committed batches stay imported.
+    /// Cancel an import or durably pause Search index work (spec/07, 09).
+    /// Committed work stays; an index user hold survives reopen until resume.
     pub async fn cancel_job(
         &self,
         idempotency_key: &str,
