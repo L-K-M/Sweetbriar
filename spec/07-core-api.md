@@ -708,3 +708,25 @@ fn release_lease(lease_id: LeaseId);
   callback traits from Swift to Rust**. Platform services needed by the
   core (the secret store) are passed as synchronous callback interfaces,
   or implemented in Rust with platform crates.
+
+### Parser FFI boundary (M1.6l1)
+
+The FFI owns a `ParseContext { tz: String, clock: i64 }` record with required
+fields; clock is UTC milliseconds. Its `Core::parse_search(token, text, context)`
+and `format_search(token, query_json)` are cancellable queries through the
+existing lifecycle read-lock/work boundary. The Swift Bridge owns its separate
+Sendable context and returns canonical JSON/text through `parseSearch` and
+`formatSearch`, using one fresh token per call. Generated types stay internal.
+Neither adapter invents defaults or validates unused context eagerly.
+
+Actual exported Rust and Swift calls preserve all eight SearchParse codes,
+half-open UTF8 offsets, EOF and raw/canonical size bounds. Raw text/JSON failures
+remain spanned; only the typed formatter-output limit is spanless, as specified
+above. Canonical text carries explicit zone/clock, and malformed JSON never
+falls back to text. Request cancellation becomes Cancelled/CancellationError;
+native work already started remains counted until completion and shutdown.
+
+Same-outcome tests exercise real core roundtrips/context/errors, pre-cancelled
+and lifecycle-lock-queued Rust queries, Swift tasks cancelled behind a known
+gate, and post-shutdown failures. Commit every pinned regenerated binding;
+drift/import/async-callback checks and real-core Swift tests qualify the boundary.

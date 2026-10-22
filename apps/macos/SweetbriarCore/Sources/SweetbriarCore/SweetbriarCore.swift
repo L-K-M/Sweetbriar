@@ -845,6 +845,16 @@ public protocol CoreProtocol: AnyObject, Sendable {
     func releaseLease(leaseId: String) 
     
     /**
+     * Validate JSON then format canonical text with explicit date context.
+     */
+    func formatSearch(token: CancelToken, queryJson: String) async throws  -> String
+    
+    /**
+     * Parse text to canonical v1 JSON, preserving typed UTF8 error spans.
+     */
+    func parseSearch(token: CancelToken, text: String, context: ParseContext) async throws  -> String
+    
+    /**
      * `accounts()` (spec/07): every account, by sort order then id.
      */
     func accounts(token: CancelToken) async throws  -> [Account]
@@ -1226,6 +1236,44 @@ open func releaseLease(leaseId: String)  {try! rustCall() {
         FfiConverterString.lower(leaseId),uniffiCallStatus
     )
 }
+}
+    
+    /**
+     * Validate JSON then format canonical text with explicit date context.
+     */
+open func formatSearch(token: CancelToken, queryJson: String)async throws  -> String  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_format_search(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterString.lower(queryJson)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterString.lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * Parse text to canonical v1 JSON, preserving typed UTF8 error spans.
+     */
+open func parseSearch(token: CancelToken, text: String, context: ParseContext)async throws  -> String  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_parse_search(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterString.lower(text),FfiConverterTypeParseContext_lower(context)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterString.lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
 }
     
     /**
@@ -2562,6 +2610,69 @@ public func FfiConverterTypeMailboxes_lift(_ buf: RustBuffer) throws -> Mailboxe
 #endif
 public func FfiConverterTypeMailboxes_lower(_ value: Mailboxes) -> RustBuffer {
     return FfiConverterTypeMailboxes.lower(value)
+}
+
+
+/**
+ * Required defaults, consumed only by date values that omit context.
+ */
+public struct ParseContext: Equatable, Hashable {
+    public var tz: String
+    /**
+     * UTC milliseconds since the Unix epoch.
+     */
+    public var clock: Int64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(tz: String, 
+        /**
+         * UTC milliseconds since the Unix epoch.
+         */clock: Int64) {
+        self.tz = tz
+        self.clock = clock
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension ParseContext: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeParseContext: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ParseContext {
+        return
+            try ParseContext(
+                tz: FfiConverterString.read(from: &buf), 
+                clock: FfiConverterInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ParseContext, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.tz, into: &buf)
+        FfiConverterInt64.write(value.clock, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeParseContext_lift(_ buf: RustBuffer) throws -> ParseContext {
+    return try FfiConverterTypeParseContext.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeParseContext_lower(_ value: ParseContext) -> RustBuffer {
+    return FfiConverterTypeParseContext.lower(value)
 }
 
 
@@ -5542,6 +5653,12 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_core_release_lease() != 61314) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_format_search() != 59705) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_parse_search() != 53331) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_core_accounts() != 35560) {
