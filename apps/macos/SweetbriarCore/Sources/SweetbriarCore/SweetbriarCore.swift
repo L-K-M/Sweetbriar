@@ -855,6 +855,11 @@ public protocol CoreProtocol: AnyObject, Sendable {
     func parseSearch(token: CancelToken, text: String, context: ParseContext) async throws  -> String
     
     /**
+     * Query scoped coverage, including global progress while Search is unavailable.
+     */
+    func coverage(token: CancelToken, scope: SearchScope) async throws  -> Coverage
+    
+    /**
      * `accounts()` (spec/07): every account, by sort order then id.
      */
     func accounts(token: CancelToken) async throws  -> [Account]
@@ -1272,6 +1277,25 @@ open func parseSearch(token: CancelToken, text: String, context: ParseContext)as
             completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
             freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
             liftFunc: FfiConverterString.lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * Query scoped coverage, including global progress while Search is unavailable.
+     */
+open func coverage(token: CancelToken, scope: SearchScope)async throws  -> Coverage  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_coverage(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterTypeSearchScope_lower(scope)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeCoverage_lift,
             errorHandler: FfiConverterTypeCoreError_lift
         )
 }
@@ -1914,6 +1938,107 @@ public func FfiConverterTypeCoreConfig_lift(_ buf: RustBuffer) throws -> CoreCon
 #endif
 public func FfiConverterTypeCoreConfig_lower(_ value: CoreConfig) -> RustBuffer {
     return FfiConverterTypeCoreConfig.lower(value)
+}
+
+
+/**
+ * Scoped logical-message counts and global worker state from one snapshot.
+ */
+public struct Coverage: Equatable, Hashable {
+    public var generation: UInt64
+    public var extractorVersion: UInt32
+    public var totalMessages: UInt64
+    public var headersSynced: UInt64
+    public var bodiesAcquired: UInt64
+    public var indexed: UInt64
+    public var partial: UInt64
+    public var failed: UInt64
+    public var pending: UInt64
+    public var queueLength: UInt64
+    public var indexState: SearchIndexState
+    public var rebuild: SearchRebuildProgress?
+    public var limitations: [SearchLimitation]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(generation: UInt64, extractorVersion: UInt32, totalMessages: UInt64, headersSynced: UInt64, bodiesAcquired: UInt64, indexed: UInt64, partial: UInt64, failed: UInt64, pending: UInt64, queueLength: UInt64, indexState: SearchIndexState, rebuild: SearchRebuildProgress?, limitations: [SearchLimitation]) {
+        self.generation = generation
+        self.extractorVersion = extractorVersion
+        self.totalMessages = totalMessages
+        self.headersSynced = headersSynced
+        self.bodiesAcquired = bodiesAcquired
+        self.indexed = indexed
+        self.partial = partial
+        self.failed = failed
+        self.pending = pending
+        self.queueLength = queueLength
+        self.indexState = indexState
+        self.rebuild = rebuild
+        self.limitations = limitations
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension Coverage: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeCoverage: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Coverage {
+        return
+            try Coverage(
+                generation: FfiConverterUInt64.read(from: &buf), 
+                extractorVersion: FfiConverterUInt32.read(from: &buf), 
+                totalMessages: FfiConverterUInt64.read(from: &buf), 
+                headersSynced: FfiConverterUInt64.read(from: &buf), 
+                bodiesAcquired: FfiConverterUInt64.read(from: &buf), 
+                indexed: FfiConverterUInt64.read(from: &buf), 
+                partial: FfiConverterUInt64.read(from: &buf), 
+                failed: FfiConverterUInt64.read(from: &buf), 
+                pending: FfiConverterUInt64.read(from: &buf), 
+                queueLength: FfiConverterUInt64.read(from: &buf), 
+                indexState: FfiConverterTypeSearchIndexState.read(from: &buf), 
+                rebuild: FfiConverterOptionTypeSearchRebuildProgress.read(from: &buf), 
+                limitations: FfiConverterSequenceTypeSearchLimitation.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: Coverage, into buf: inout [UInt8]) {
+        FfiConverterUInt64.write(value.generation, into: &buf)
+        FfiConverterUInt32.write(value.extractorVersion, into: &buf)
+        FfiConverterUInt64.write(value.totalMessages, into: &buf)
+        FfiConverterUInt64.write(value.headersSynced, into: &buf)
+        FfiConverterUInt64.write(value.bodiesAcquired, into: &buf)
+        FfiConverterUInt64.write(value.indexed, into: &buf)
+        FfiConverterUInt64.write(value.partial, into: &buf)
+        FfiConverterUInt64.write(value.failed, into: &buf)
+        FfiConverterUInt64.write(value.pending, into: &buf)
+        FfiConverterUInt64.write(value.queueLength, into: &buf)
+        FfiConverterTypeSearchIndexState.write(value.indexState, into: &buf)
+        FfiConverterOptionTypeSearchRebuildProgress.write(value.rebuild, into: &buf)
+        FfiConverterSequenceTypeSearchLimitation.write(value.limitations, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeCoverage_lift(_ buf: RustBuffer) throws -> Coverage {
+    return try FfiConverterTypeCoverage.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeCoverage_lower(_ value: Coverage) -> RustBuffer {
+    return FfiConverterTypeCoverage.lower(value)
 }
 
 
@@ -3132,6 +3257,68 @@ public func FfiConverterTypeRenderWarning_lift(_ buf: RustBuffer) throws -> Rend
 #endif
 public func FfiConverterTypeRenderWarning_lower(_ value: RenderWarning) -> RustBuffer {
     return FfiConverterTypeRenderWarning.lower(value)
+}
+
+
+public struct SearchRebuildProgress: Equatable, Hashable {
+    public var jobId: String
+    public var phase: SearchRebuildPhase
+    public var processed: UInt64
+    public var pendingDocuments: UInt64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(jobId: String, phase: SearchRebuildPhase, processed: UInt64, pendingDocuments: UInt64) {
+        self.jobId = jobId
+        self.phase = phase
+        self.processed = processed
+        self.pendingDocuments = pendingDocuments
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension SearchRebuildProgress: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeSearchRebuildProgress: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SearchRebuildProgress {
+        return
+            try SearchRebuildProgress(
+                jobId: FfiConverterString.read(from: &buf), 
+                phase: FfiConverterTypeSearchRebuildPhase.read(from: &buf), 
+                processed: FfiConverterUInt64.read(from: &buf), 
+                pendingDocuments: FfiConverterUInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: SearchRebuildProgress, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.jobId, into: &buf)
+        FfiConverterTypeSearchRebuildPhase.write(value.phase, into: &buf)
+        FfiConverterUInt64.write(value.processed, into: &buf)
+        FfiConverterUInt64.write(value.pendingDocuments, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSearchRebuildProgress_lift(_ buf: RustBuffer) throws -> SearchRebuildProgress {
+    return try FfiConverterTypeSearchRebuildProgress.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSearchRebuildProgress_lower(_ value: SearchRebuildProgress) -> RustBuffer {
+    return FfiConverterTypeSearchRebuildProgress.lower(value)
 }
 
 
@@ -4766,6 +4953,244 @@ public func FfiConverterTypeRenderWarningCode_lower(_ value: RenderWarningCode) 
 
 
 
+
+public enum SearchIndexState: Equatable, Hashable {
+    
+    case ready
+    case running
+    case pausedByUser
+    case pausedIo(code: SearchIoCode, message: String, retryAt: Int64
+    )
+    case blockedNewerExtractor
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension SearchIndexState: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeSearchIndexState: FfiConverterRustBuffer {
+    typealias SwiftType = SearchIndexState
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SearchIndexState {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .ready
+        
+        case 2: return .running
+        
+        case 3: return .pausedByUser
+        
+        case 4: return .pausedIo(code: try FfiConverterTypeSearchIoCode.read(from: &buf), message: try FfiConverterString.read(from: &buf), retryAt: try FfiConverterInt64.read(from: &buf)
+        )
+        
+        case 5: return .blockedNewerExtractor
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: SearchIndexState, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .ready:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .running:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .pausedByUser:
+            writeInt(&buf, Int32(3))
+        
+        
+        case let .pausedIo(code,message,retryAt):
+            writeInt(&buf, Int32(4))
+            FfiConverterTypeSearchIoCode.write(code, into: &buf)
+            FfiConverterString.write(message, into: &buf)
+            FfiConverterInt64.write(retryAt, into: &buf)
+            
+        
+        case .blockedNewerExtractor:
+            writeInt(&buf, Int32(5))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSearchIndexState_lift(_ buf: RustBuffer) throws -> SearchIndexState {
+    return try FfiConverterTypeSearchIndexState.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSearchIndexState_lower(_ value: SearchIndexState) -> RustBuffer {
+    return FfiConverterTypeSearchIndexState.lower(value)
+}
+
+
+
+
+public enum SearchIoCode: Equatable, Hashable {
+    
+    case storageFull
+    case permissionDenied
+    case storageUnavailable
+    case otherIo
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension SearchIoCode: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeSearchIoCode: FfiConverterRustBuffer {
+    typealias SwiftType = SearchIoCode
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SearchIoCode {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .storageFull
+        
+        case 2: return .permissionDenied
+        
+        case 3: return .storageUnavailable
+        
+        case 4: return .otherIo
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: SearchIoCode, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .storageFull:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .permissionDenied:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .storageUnavailable:
+            writeInt(&buf, Int32(3))
+        
+        
+        case .otherIo:
+            writeInt(&buf, Int32(4))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSearchIoCode_lift(_ buf: RustBuffer) throws -> SearchIoCode {
+    return try FfiConverterTypeSearchIoCode.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSearchIoCode_lower(_ value: SearchIoCode) -> RustBuffer {
+    return FfiConverterTypeSearchIoCode.lower(value)
+}
+
+
+
+
+public enum SearchLimitation: Equatable, Hashable {
+    
+    case cjkUnsegmented
+    case attachmentTextUnavailable
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension SearchLimitation: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeSearchLimitation: FfiConverterRustBuffer {
+    typealias SwiftType = SearchLimitation
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SearchLimitation {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .cjkUnsegmented
+        
+        case 2: return .attachmentTextUnavailable
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: SearchLimitation, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .cjkUnsegmented:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .attachmentTextUnavailable:
+            writeInt(&buf, Int32(2))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSearchLimitation_lift(_ buf: RustBuffer) throws -> SearchLimitation {
+    return try FfiConverterTypeSearchLimitation.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSearchLimitation_lower(_ value: SearchLimitation) -> RustBuffer {
+    return FfiConverterTypeSearchLimitation.lower(value)
+}
+
+
+
 /**
  * Swift-facing stable query parse codes, not service or engine types.
  */
@@ -4873,6 +5298,165 @@ public func FfiConverterTypeSearchParseCode_lift(_ buf: RustBuffer) throws -> Se
 #endif
 public func FfiConverterTypeSearchParseCode_lower(_ value: SearchParseCode) -> RustBuffer {
     return FfiConverterTypeSearchParseCode.lower(value)
+}
+
+
+
+
+public enum SearchRebuildPhase: Equatable, Hashable {
+    
+    case reset
+    case enqueue
+    case index
+    case complete
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension SearchRebuildPhase: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeSearchRebuildPhase: FfiConverterRustBuffer {
+    typealias SwiftType = SearchRebuildPhase
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SearchRebuildPhase {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .reset
+        
+        case 2: return .enqueue
+        
+        case 3: return .index
+        
+        case 4: return .complete
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: SearchRebuildPhase, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .reset:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .enqueue:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .index:
+            writeInt(&buf, Int32(3))
+        
+        
+        case .complete:
+            writeInt(&buf, Int32(4))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSearchRebuildPhase_lift(_ buf: RustBuffer) throws -> SearchRebuildPhase {
+    return try FfiConverterTypeSearchRebuildPhase.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSearchRebuildPhase_lower(_ value: SearchRebuildPhase) -> RustBuffer {
+    return FfiConverterTypeSearchRebuildPhase.lower(value)
+}
+
+
+
+
+public enum SearchScope: Equatable, Hashable {
+    
+    case all
+    case account(accountId: String
+    )
+    case mailbox(mailboxId: Int64
+    )
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension SearchScope: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeSearchScope: FfiConverterRustBuffer {
+    typealias SwiftType = SearchScope
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SearchScope {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .all
+        
+        case 2: return .account(accountId: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 3: return .mailbox(mailboxId: try FfiConverterInt64.read(from: &buf)
+        )
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: SearchScope, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .all:
+            writeInt(&buf, Int32(1))
+        
+        
+        case let .account(accountId):
+            writeInt(&buf, Int32(2))
+            FfiConverterString.write(accountId, into: &buf)
+            
+        
+        case let .mailbox(mailboxId):
+            writeInt(&buf, Int32(3))
+            FfiConverterInt64.write(mailboxId, into: &buf)
+            
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSearchScope_lift(_ buf: RustBuffer) throws -> SearchScope {
+    return try FfiConverterTypeSearchScope.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSearchScope_lower(_ value: SearchScope) -> RustBuffer {
+    return FfiConverterTypeSearchScope.lower(value)
 }
 
 
@@ -5135,6 +5719,30 @@ fileprivate struct FfiConverterOptionTypeImportReport: FfiConverterRustBuffer {
         switch try readInt(&buf) as Int8 {
         case 0: return nil
         case 1: return try FfiConverterTypeImportReport.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionTypeSearchRebuildProgress: FfiConverterRustBuffer {
+    typealias SwiftType = SearchRebuildProgress?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeSearchRebuildProgress.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeSearchRebuildProgress.read(from: &buf)
         default: throw UniffiInternalError.unexpectedOptionalTag
         }
     }
@@ -5512,6 +6120,31 @@ fileprivate struct FfiConverterSequenceTypeVariantChoice: FfiConverterRustBuffer
         return seq
     }
 }
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeSearchLimitation: FfiConverterRustBuffer {
+    typealias SwiftType = [SearchLimitation]
+
+    public static func write(_ value: [SearchLimitation], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeSearchLimitation.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [SearchLimitation] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [SearchLimitation]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeSearchLimitation.read(from: &buf))
+        }
+        return seq
+    }
+}
 private let UNIFFI_RUST_FUTURE_POLL_READY: Int8 = 0
 private let UNIFFI_RUST_FUTURE_POLL_WAKE: Int8 = 1
 
@@ -5659,6 +6292,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_core_parse_search() != 53331) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_coverage() != 60982) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_core_accounts() != 35560) {

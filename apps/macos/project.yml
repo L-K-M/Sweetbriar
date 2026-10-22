@@ -72,6 +72,19 @@ targets:
         LSMinimumSystemVersion: $(MACOSX_DEPLOYMENT_TARGET)
         NSPrincipalClass: NSApplication
 
+  SweetbriarCoreTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - SweetbriarCore/Tests/SweetbriarCoreTests
+    dependencies:
+      - package: SweetbriarCore
+        product: SweetbriarCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.sweetbriar.SweetbriarCoreTests
+        GENERATE_INFOPLIST_FILE: YES
+
   SweetbriarBridgeTests:
     type: bundle.unit-test
     platform: macOS
@@ -124,6 +137,7 @@ schemes:
     build:
       targets:
         Sweetbriar: all
+        SweetbriarCoreTests: [test]
         SweetbriarBridgeTests:
           - test
         SweetbriarTests:
@@ -133,6 +147,7 @@ schemes:
     test:
       config: Debug
       targets:
+        - SweetbriarCoreTests
         - SweetbriarBridgeTests
         - SweetbriarTests
 

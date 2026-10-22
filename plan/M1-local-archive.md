@@ -508,15 +508,23 @@ local drafts. No network yet.
     tests. Depends on k2; binding drift is checked in each FFI step. Owns
     explicit context, all-code/UTF8/EOF/limit/no-fallback and real-core query
     cancellation/shutdown proof in Rust and Swift in the same outcome.
-  - **M1.6l2 Coverage FFI — L:** scope/coverage DTOs, export, generated
-    bindings and Swift adapter/tests, including job progress, operational
-    pause/error/deadline mapping. Depends on l1.
+  - **M1.6l2a Coverage FFI and SDK — L:** depends on l1. Complete typed scoped
+    coverage export and all operational/progress/limitation DTOs, generated
+    bindings, native Rust export/wire/lifecycle proof and real generated-SDK
+    Swift endpoint/codec tests at first exposure. A Core-package test target
+    joins the main Xcode scheme. No partial record or unused public modes.
+    Whole SDK+adapter footprint estimates 1490–1820 add+delete; qualify the SDK
+    artifact and owned adapter separately under 1450 each, with no proof cut.
+  - **M1.6l2b Coverage Swift adapter — L:** depends on l2a. Complete owned
+    SearchCoverage/scopes/state/progress DTOs, CoreBridge method, closed mappings
+    and actual Swift adapter/error/cancellation proof over the qualified SDK.
+    Both steps check binding drift; no generated type crosses the public bridge.
   - **M1.6l3 Search window FFI — L:** Search spec/status in windows,
     generated bindings and Swift adapter/tests. Owns end-to-end API
-    delivery; depends on l2. Separating these exports budgets generated
+    delivery; depends on l2b. Separating these exports budgets generated
     output and Swift mapping within each PR, as M1.5 did for reader FFI.
   - **M1.6l4 Index controls FFI — L:** start/cancel/resume/retry exports,
-    receipts/job ids, generated bindings and Swift adapter/tests using l2's
+    receipts/job ids, generated bindings and Swift adapter/tests using l2a's
     progress/status DTOs; depends on l3. Owns control FFI delivery, command
     error mapping and explicit job cancellation versus request cancellation.
     Binding drift/import checks must pass.
