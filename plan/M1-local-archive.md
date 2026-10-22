@@ -552,6 +552,12 @@ local drafts. No network yet.
     input/swept revisions, local cursors, coalesced wake/failure/shutdown/drop;
     depends on m1. Own real imports, late old ids, interruption/replay, writer
     failure, lifecycle and rebuild preservation. No new runtime or composer UI.
+    One independent persistent counted worker uses the qualified Resources
+    facade; owned post-COMMIT import wake survives caller drop. Typed failures
+    park/retry independently of Search; corrupt input is never silently skipped.
+    Same-artifact real-worker proof covers park handoff/single-flight, captured-R
+    versus old ids, multi-chunk reopen, native write/COMMIT failures, lifecycle
+    and kept history. Full code/spec/proof must fit 1,450 gross changed lines.
   - **M1.6m3 Verified summary repair and activation — L:** additive immutable
     complete versions, derived message bindings/effective summary, verified
     off-writer parse and bounded source/list activation; depends on m2. Own all

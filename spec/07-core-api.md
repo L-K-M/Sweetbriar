@@ -833,3 +833,33 @@ and incomplete repairs/errors. A finished eligible-source sweep does not claim
 all legacy repairs succeeded; FTS Ready does not mean address maintenance is
 complete. No new composer/service/FFI/Swift surface is implied before its listed
 consumer. Physical source verification and existing safety checks remain binding.
+
+### Current-summary maintenance worker (M1.6m2)
+
+Engine owns one persistent received worker on its existing counted runtime.
+Startup schedules it; repeated schedules coalesce. The counted import producer
+wakes it after successful batch COMMIT, before returning, even if the command
+caller stopped waiting. Replay/empty batches may poke without advancing inputs.
+Its registry and failures are independent of IndexJobs and all Search holds.
+
+Before a fresh begin, clear the pending wake: an earlier poke is covered by the
+fresh read, and a later poke survives the condvar park handoff. No owed work
+parks without polling. Drive Resources begin/prepare/commit with local cursors;
+only a successful COMMIT returns Continue/Recapture/Complete. After Complete,
+begin again so newer input than captured R stays owed and is consumed. A failed
+step discards its continuation; recovery begins a full replay-safe sweep.
+
+Retain the typed StoreError and consecutive attempt count internally. Retry
+only known I/O (`error.io_kind().is_some()`) or writer Internal errors, using the
+existing 1-second doubling backoff capped at 60 seconds, or a relevant wake.
+Corrupt and untyped Unavailable, including unsupported target or closed writer,
+park until a relevant wake/reopen. Never classify formatted reason strings or
+borrow Search's broader unavailable classification. A successful commit, or a
+fresh read proving no owed work, clears the failure. Worker-task failure stays
+explicit; it cannot fail acknowledged imports or gate Search reads/publication.
+
+Shutdown/Drop signal stop before waiting for counted work. Check stop before
+preparation and before submitting its result; discard unsubmitted preparation,
+drain submitted writes and leave unfinished revisions owed for reopen. This
+step has no corrupt-source skip/repair diagnostic API: fail closed and retain
+owed work. Complete legacy repair and its fair per-source handling remain m3/m4.

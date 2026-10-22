@@ -118,6 +118,21 @@ test, except where the spec says "manual qualification".
 - m2 owns real startup/import catch-up, late old ids, captured-revision sweep
   acknowledgement, coalesced wakes, counted caller-drop work, writer failures,
   restart between chunks, shutdown/Drop and preserved kept history on rebuild.
+  Use real MIME imports and actual ledger/count/revision reads, including
+  partial exclusion and independence from FTS holds/failure. A private test hook
+  coordinates the actual worker's preparation/commit/EOF/park boundaries; it
+  never supplies results. Prove one worker under repeated scheduling and a wake
+  at the park handoff, plus an old-id source change after capture of R.
+  Interrupt a multi-chunk real recipient import and reopen without recounting.
+  Drop an accepted confirm request under the real writer lock and observe its
+  owned import/wake. Exercise native write rejection and deferred-FK COMMIT
+  failure, installing TEMP faults on the writer connection; assert no advanced
+  count/ack, exact retry backoff and actual recovery. Malformed source/newer
+  target must park visibly while unrelated import/Search still work. Test both
+  shutdown and Drop parked and after preparation; observe actual store release,
+  drained accepted writes and owed unsubmitted work. Real FTS/thread rebuilds
+  preserve both address tables and sent/received history. Process crash cuts
+  remain m4-owned; m2's interruption test does not claim physical power loss.
 - m3 owns complete-header precedence, verified bytes/no source rewrite,
   stale/newer-version/rollback fences, parse/size/I/O diagnostics, all effective
   consumers and pre-view historical migrations. At least 100,000 logical messages
