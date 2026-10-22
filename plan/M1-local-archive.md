@@ -589,8 +589,8 @@ local drafts. No network yet.
     legacy acquisition, native bounded convergence, old-id/captured-revision
     interleaves, reopen/replay and accurate caught-up-with-deferrals status.
     This delivers corpus functionality, not postponed m3b qualification.
-    Planning allocations for m3a1/m3a2/m3b/m3c are 1370/350/1410/1160 gross.
-    m3a1 budgets Store 430, Resources 130, schema+integration 95, prose 35,
+    Planning allocations for m3a1/m3a2/m3b/m3c are 1415/350/1410/1160 gross.
+    m3a1 budgets Store 430, Resources 130, schema+integration 95, prose 80,
     native proof 580 and reserve 100; m3a2 adds its own persistence code/proof.
     m3b/m3c retain mechanics+facade 400/350, schema+integration 250/100, native
     proof 600/500, prose 60 each and reserve 100/150. These are estimates,
