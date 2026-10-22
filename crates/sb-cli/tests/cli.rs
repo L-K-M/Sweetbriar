@@ -160,6 +160,22 @@ fn a_locked_store_exits_one_naming_locked_and_creates_nothing() {
         );
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
+    // A checkpoint can return busy while the owner's idle checkpoint holds its lock.
+    while std::fs::metadata(root.join("state.sqlite-wal"))
+        .unwrap()
+        .len()
+        != 0
+    {
+        sb_test_support::execute_sql(
+            &db,
+            "PRAGMA busy_timeout=30000; SELECT value FROM store_meta LIMIT 1; PRAGMA wal_checkpoint(TRUNCATE)",
+        );
+        assert!(
+            std::time::Instant::now() < deadline,
+            "startup WAL did not settle"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
 
     let before = listing(scratch.path());
     let out = cli(&root, &["settings", "get"]);
