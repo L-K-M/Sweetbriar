@@ -221,7 +221,17 @@ pub fn prepare(
 }
 
 fn assembly(conn: &Connection, id: i64, version: u32) -> Result<Option<Assembly>, StoreError> {
-    conn.query_row("SELECT source_sha256,source_bytes,date_header,has_attachments,field_lengths,completed_at FROM d_repair_assemblies WHERE acquisition_id=?1 AND parser_target=?2", params![id, version], |r| Ok(Assembly { hash: r.get(0)?, bytes: r.get(1)?, date: r.get(2)?, attachments: r.get(3)?, lengths: r.get(4)?, completed: r.get(5)? })).optional().map_err(sql_error)
+    let acquisition = index_acquisition(conn, id)?;
+    let stored: Option<Assembly> = conn.query_row("SELECT source_sha256,source_bytes,date_header,has_attachments,field_lengths,completed_at FROM d_repair_assemblies WHERE acquisition_id=?1 AND parser_target=?2", params![id, version], |r| Ok(Assembly { hash: r.get(0)?, bytes: r.get(1)?, date: r.get(2)?, attachments: r.get(3)?, lengths: r.get(4)?, completed: r.get(5)? })).optional().map_err(sql_error)?;
+    if stored.as_ref().is_some_and(|value| {
+        value.hash != acquisition.object().sha256_hex()
+            || value.bytes != acquisition.object().byte_length() as i64
+    }) {
+        return Err(StoreError::corrupt(
+            "MIME repair assembly acquisition identity changed",
+        ));
+    }
+    Ok(stored)
 }
 
 pub fn publish(
@@ -240,9 +250,7 @@ pub fn publish(
     let hash = acquisition.object().sha256_hex();
     let bytes = acquisition.object().byte_length() as i64;
     if let Some(stored) = assembly(tx, id, version)? {
-        if stored.hash != hash
-            || stored.bytes != bytes
-            || stored.date != plan.date
+        if stored.date != plan.date
             || stored.attachments != plan.attachments
             || stored.lengths != plan.lengths
         {
@@ -381,19 +389,11 @@ pub fn read_version(
     id: i64,
     build: u32,
 ) -> Result<Option<ImportSummary>, StoreError> {
-    let acquisition = index_acquisition(conn, id)?;
     let version = target(conn)?;
     supported(version, build)?;
     let Some(stored) = assembly(conn, id, version)?.filter(|a| a.completed.is_some()) else {
         return Ok(None);
     };
-    if stored.hash != acquisition.object().sha256_hex()
-        || stored.bytes != acquisition.object().byte_length() as i64
-    {
-        return Err(StoreError::corrupt(
-            "published MIME repair acquisition identity changed",
-        ));
-    }
     let [
         header_message_id,
         subject,
@@ -429,7 +429,6 @@ pub fn read_version(
 }
 
 pub fn status(conn: &Connection, id: i64) -> Result<RepairStatus, StoreError> {
-    index_acquisition(conn, id)?;
     let target = target(conn)?;
     let base = base(conn, id)?;
     let stored = assembly(conn, id, target)?;

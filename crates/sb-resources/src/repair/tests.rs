@@ -141,6 +141,22 @@ fn rich_verified_publication_round_trips_every_field_without_rewriting_history()
     finish(&resources, prepare(&resources));
     assert_eq!(resources.repaired_summary(1).unwrap(), Some(value.clone()));
     assert!(resources.repair_status(1).unwrap().completed_at.is_some());
+    edit(
+        &resources,
+        "UPDATE d_repair_assemblies SET source_bytes=source_bytes+1",
+    );
+    assert!(matches!(
+        block_on(resources.begin_repair(1)),
+        Err(StoreError::Corrupt { .. })
+    ));
+    assert!(matches!(
+        resources.repair_status(1),
+        Err(StoreError::Corrupt { .. })
+    ));
+    edit(
+        &resources,
+        "UPDATE d_repair_assemblies SET source_bytes=source_bytes-1",
+    );
     assert_eq!(snapshot(&resources), before);
     assert!(block_on(resources.begin_repair(1)).unwrap().is_none());
     resources.close().unwrap();
