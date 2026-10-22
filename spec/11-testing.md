@@ -133,13 +133,35 @@ test, except where the spec says "manual qualification".
   drained accepted writes and owed unsubmitted work. Real FTS/thread rebuilds
   preserve both address tables and sent/received history. Process crash cuts
   remain m4-owned; m2's interruption test does not claim physical power loss.
-- m3 owns complete-header precedence, verified bytes/no source rewrite,
-  stale/newer-version/rollback fences, parse/size/I/O diagnostics, all effective
-  consumers and pre-view historical migrations. At least 100,000 logical messages
-  sharing one legacy acquisition must repair through bounded native activations.
-  An over-budget message must retain its whole old binding/list state while
-  other sharing messages progress. Every message's rows must match its own
-  active binding, including deferred ones; maintenance status exposes deferral.
+- m3a owns a complete native Resources caller using real verified retained bytes
+  and the parser, checking every stored field and no base rewrite. Prove fully
+  admitted output exceeding one transaction publishes through bounded pieces,
+  exact reassembly/NULL/empty distinctions, completion-last visibility and no
+  oversized final copy. Include partial/failed/oversized-object/typed-I/O and
+  cancellation outcomes, EOF corruption even on oversized objects, interrupted
+  assembly/reopen/replay, source/target/newer-version fences, native write and
+  failed-COMMIT rollback, additive migration/STRICT/FK/drift/older-writer refusal.
+  A failed future-target attempt with no completed future version must still
+  block an older build's downgrade. Inactive versions/unchanged diagnoses alone
+  do not advance list/Search/population inputs. Diagnose without source text.
+- m3b uses m3a's actual producer for every consumer's header precedence,
+  repaired-NULL known absence and missing-row fallback. Own historical migration
+  3 before the new view, first-wins imports with actual mixed-source pricing,
+  multi-occurrence binding/list alignment, source/version/target/current-binding
+  fences, native write/COMMIT rollback, exact Search/list/thread/population
+  effects and kept address/sent/history counter-once under rebinding. Prove
+  whole-message own-budget deferral while a sharing neighbor progresses,
+  unchanged-witness skip, witness invalidation/reconsideration and bounded
+  inspection including representative dependencies. Every message's rows match
+  its binding, including deferred messages; status exposes incomplete deferral.
+- m3c's first native facade caller repairs at least 100,000 DISTINCT logical
+  messages sharing one legacy acquisition through bounded corpus discovery and
+  activation. Assert per-transaction message/byte bounds and row/binding
+  alignment during convergence, remaining-batch versus own-budget outcomes,
+  unchanged-deferral skip, changed deferred projections, new publications and
+  changed old ids during a captured-R pass, population recapture, failed later
+  writes/COMMIT, restart/replay and caught-up-with-deferrals status. Run this
+  synthetic proof in the normal gate, not as ignored timings or a later step.
 - m4 repeats convergence through real workers, with fair failure/retry handling,
   late repair, crash cuts at staging/activation/ledger boundaries, wake/drop/
   shutdown, preserved sent/received history and failure isolation from FTS.

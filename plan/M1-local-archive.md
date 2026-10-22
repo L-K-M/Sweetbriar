@@ -558,15 +558,39 @@ local drafts. No network yet.
     Same-artifact real-worker proof covers park handoff/single-flight, captured-R
     versus old ids, multi-chunk reopen, native write/COMMIT failures, lifecycle
     and kept history. Full code/spec/proof must fit 1,450 gross changed lines.
-  - **M1.6m3 Verified summary repair and activation — L:** additive immutable
-    complete versions, derived message bindings/effective summary, verified
-    off-writer parse and bounded source/list activation; depends on m2. Own all
-    effective-summary consumers, historical migration safety, source/version
-    fences, diagnostics, no-downgrade/rollback, header precedence, 100k shared
-    messages converging natively, and whole-message budget deferral. First-wins
-    imports and current projection currency remain intact; no address-only repair.
+  - **M1.6m3.0 Repair delivery contracts (S):** depends on m2. Prose-only
+    reslice: full version publication, single-message activation and corpus
+    catch-up are separate complete artifacts. Each has a supported Resources
+    operation and actual native caller at first exposure, as m1 did. Executable
+    schema lands with its implementing migration; no writerless binding view
+    or proof-only successor. Preserve all original m3 behavior before m4.
+  - **M1.6m3a Verified version publication (L):** depends on m3.0. Additive
+    immutable full-version pieces/publication records, typed diagnostics and
+    monotonic MIME-repair target; verified off-writer read/parse and complete
+    Resources publication/status. Own maximum-output bounded staging, complete-
+    only visibility, all fields, replay/interruption, source/target/version
+    fences, native write/COMMIT failure, no-downgrade and migration proof.
+  - **M1.6m3b Single-message activation (L):** depends on m3a. Add bindings and
+    effective relation with the real atomic single-message activation operation,
+    all five runtime consumers and import displayed-source pricing. Own every
+    per-message precedence/NULL/missing-row, historical migration, source/version/
+    binding/target, whole-message budget deferral, rollback, counter/generation
+    and kept-history proof. Native callers use m3a's actual producer.
+  - **M1.6m3c Shared-corpus catch-up (L):** depends on m3b. Complete bounded
+    discovery, batching, continuation, unchanged-deferral skipping and revision
+    catch-up facade; no scheduler yet. Own 100k distinct messages sharing one
+    legacy acquisition, native bounded convergence, old-id/captured-revision
+    interleaves, reopen/replay and accurate caught-up-with-deferrals status.
+    This delivers corpus functionality, not postponed m3b qualification.
+    Planning allocations for m3a/m3b/m3c are 1370/1410/1160 gross, including
+    mechanics+facade 480/400/350, schema+integration 160/250/100, native proof
+    570/600/500, prose 60 each and reserve 100/100/150. These are estimates,
+    not approved fit: independent ranges extend above the cap, especially for
+    m3a/m3b. Re-estimate each concrete API and all owned proof before
+    implementation. If it cannot fit 1450, find another complete consumed
+    boundary before coding; never golf, cut proof or reduce admission to fit.
   - **M1.6m4 Repair runtime — L:** fair repair/activation/population turns on
-    the received-maintenance worker; depends on m3. Own real-worker legacy/shared
+    the received-maintenance worker; depends on m3c. Own real-worker legacy/shared
     convergence, terminal/retry failures, crash cuts, wake/drop/shutdown and
     preserved kept history. Complete the original seen-address/backfill outcome
     before n; no early composer/service/FFI/Swift delivery or deferred proof.

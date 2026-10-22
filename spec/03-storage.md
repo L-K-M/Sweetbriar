@@ -197,6 +197,25 @@ transaction. Kept history is never cleared. Storage exhaustion leaves mail and
 committed history intact, maintenance visibly incomplete, and imports already
 acknowledged unaffected. These bounds do not claim bounded total ledger growth.
 
+Repair version staging also stays within 2,000,000 conservatively charged
+changed bytes per low-priority transaction, including pieces, keys/indexes,
+framing, target/diagnosis metadata and the final publication record. Use pieces
+of at most 64 KiB and at most 16 pieces per staging transaction; prove the full
+charge from the actual DDL. Their 1,048,576 payload bytes leave room for that
+overhead. Pieces must not duplicate payload in index keys. A small final marker
+publishes completeness without an oversized full-row copy. The header admission
+bound and conservative stored-text bound are not a one-row-fit proof; every
+admitted verified complete result must remain fully publishable.
+
+Whole-message activation is priced against the FULL allowance. A fitting
+message that exceeds only a batch's remaining allowance is carried to the next
+batch, never marked deferred. Stream bounded prospective mutations and account
+for retained/replacement text, covering indexes, representative effects, binding
+and accompanying metadata. An overbudget witness must include every dependency
+that could invalidate its non-fit proof; do not load the whole sharing corpus
+or unbounded occurrence fanout to decide deferral. Earlier committed chunks
+survive later failure, including a failed final publication or activation COMMIT.
+
 ## Object store
 
 ### Contract

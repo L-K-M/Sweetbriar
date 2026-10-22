@@ -517,7 +517,7 @@ CREATE INDEX occ_by_message_observation ON occurrences(message_id, first_seen_at
 - Keep both address tables and sent/history counts through Search/thread rebuild,
   upgrade and replay. Never reconstruct received totals by clearing history or
   replacing totals with the ledger's row count. Additive migration 7 owns ledger
-  and sweep state; a later additive migration owns repair versions/bindings.
+  and sweep state; later additive migrations own repair versions and bindings.
   Executable schema blocks land with those migrations. Older writers refuse a
   newer schema; rollback uses a complete consistent backup, not a schema-number
   downgrade or removal of kept ledger data.
@@ -545,6 +545,63 @@ budget failure. The native facade caller qualifies library delivery; automatic
 startup/import scheduling remains M1.6m2. Preserve sent/received history and
 derive the single legal-key charge from admitted header/decoded text and actual
 DDL copies; no admission filter or silent key truncation.
+
+### Verified repair artifacts (M1.6m3a through m3c)
+
+The MIME-repair target is durable and distinct from the received key-policy
+target. Its migration seeds the parser target supported when introduced;
+later builds reconcile it monotonically before repair preparation. Opening
+alone does not raise an existing target. Recheck it before every part write,
+final publication and activation. A newer unsupported target
+is typed Unavailable, with work left owed and imports/reads/Search unaffected.
+A failed future-target attempt still prevents an older build from lowering
+that intent, even when no completed version exists for the future target.
+
+Completed versions are immutable per `(acquisition, parser target)`, checked
+against the acquisition's hash/length. Attempts and diagnoses also fence the
+exact captured source; parser number/state alone is insufficient. Same-key
+differing completed content is an invariant failure, never an overwrite.
+
+Only after EOF verification and a complete successful parse may bounded,
+immutable field pieces be staged. Preserve the full mapped summary, canonical
+JSON bytes and NULL/empty/nonempty distinctions without double escaping.
+Incomplete assemblies are private: a small final publication record makes a
+version visible only after field presence, ordered pieces and byte/count
+totals match. Finalization must not copy the full assembled text into a new
+row. Interruption/reopen can replay matching pieces, never publish omissions
+or overwrite differing pieces. Large admitted output takes more commits,
+not a new size refusal; oversized objects remain a separate verified outcome.
+
+m3a owns version/piece/publication/diagnostic storage and target metadata.
+m3b owns bindings, effective relation and activation/deferral state. Each lands
+its additive schema and executable spec block with its complete implementation.
+Inactive version publication alone changes neither display nor query-source
+revisions. Existing verified-availability observations retain their own fences.
+
+The effective relation selects one whole source per logical message. A repaired
+NULL never falls back to base; no row exists when neither base nor active
+version exists. Preserve each consumer's existing precedence, including reader
+headers fallback only when a summary row is absent. Sharing an acquisition
+does not imply sharing a binding. Imports stay first-wins and price the actual
+per-message displayed source, including mixed bound/unbound sharing messages.
+
+m3b supplies real single-message atomic activation with all five consumers and
+all per-message proof. A budget deferral identifies message/acquisition, current
+binding, candidate/target and relevant projection dependencies, including
+representative effects. Before m3b code, pin bounded inspection and a typed,
+length-framed overbudget witness with cutoff/count: unchanged witnessed required
+mutations alone must still prove non-fit. Changes capable of removing that
+proof permit reconsideration; no global-generation/count-sum shortcut or tail
+blind spot. An unchanged diagnosis does not rewrite itself or advance inputs.
+
+m3c adds bounded corpus discovery/batching and its own durable input/swept
+revisions. Publication and relevant message/source/target/projection changes record
+owed discovery. Capture R, use local cursors, acknowledge only R at exhaustion
+and revisit changed old ids on the next pass. Do not borrow population's swept
+acknowledgement or dirty discovery from its own activation/diagnosis/ack writes.
+Exhausted captured work is distinct from unresolved deferrals or failed repairs.
+All three libraries have supported Resources operations and real native callers;
+all original m3 behavior and proof finish before m4 worker integration.
 
 ## Drafts
 
