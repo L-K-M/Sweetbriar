@@ -517,7 +517,7 @@ CREATE INDEX occ_by_message_observation ON occurrences(message_id, first_seen_at
 - Keep both address tables and sent/history counts through Search/thread rebuild,
   upgrade and replay. Never reconstruct received totals by clearing history or
   replacing totals with the ledger's row count. Additive migration 7 owns ledger
-   and sweep state; later additive migrations own repair versions and bindings.
+  and sweep state; later additive migrations own repair versions and bindings.
   Executable schema blocks land with those migrations. Older writers refuse a
   newer schema; rollback uses a complete consistent backup, not a schema-number
   downgrade or removal of kept ledger data.
@@ -549,9 +549,10 @@ DDL copies; no admission filter or silent key truncation.
 ### Verified repair artifacts (M1.6m3a through m3c)
 
 The MIME-repair target is durable and distinct from the received key-policy
-target. Seed it from the creating build's current parser and reconcile it
-monotonically before repair preparation, not merely on open. Recheck it before
-every part write, final publication and activation. A newer unsupported target
+target. Its migration seeds the parser target supported when introduced;
+later builds reconcile it monotonically before repair preparation. Opening
+alone does not raise an existing target. Recheck it before every part write,
+final publication and activation. A newer unsupported target
 is typed Unavailable, with work left owed and imports/reads/Search unaffected.
 A failed future-target attempt still prevents an older build from lowering
 that intent, even when no completed version exists for the future target.
