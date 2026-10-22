@@ -533,6 +533,9 @@ local drafts. No network yet.
     progress/status DTOs; depends on l3. Owns control FFI delivery, command
     error mapping and explicit job cancellation versus request cancellation.
     Binding drift/import checks must pass.
+    Include real native/SDK/Bridge command, replay, independent-hold, accepted-
+    request drop and per-export lifecycle proof. Public Swift checks both legal
+    fast-completion receipt outcomes; native fixtures deterministically pause.
   - **M1.6m Seen addresses — L:** kept deduplication ledger, resumable
     summary backfill and ongoing population through resources/engine.
     Refresh older parser-version summaries from retained source bytes before
