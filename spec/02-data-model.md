@@ -436,7 +436,9 @@ from discarded drafts. It is listed in the backup.
   failed and legacy summaries contribute nothing until a successful eligible
   refresh. Later eligible summaries may add addresses, never remove historical
   counts. Ineligible sources change neither counts/ledger nor display metadata.
-  Rebuilding derived tables never clears this ledger.
+  `ok` is the persisted complete parser outcome: truncation or limit warnings
+  must persist `partial`, never `ok`. Rebuilding derived tables never clears
+  this ledger.
 - `last_seen_at` is the earliest occurrence `first_seen_at` of the logical
   message, not its untrusted Date header or the backfill clock. The largest
   observation time wins `email`, `display_name`, `last_account_id`; for
@@ -461,9 +463,11 @@ from discarded drafts. It is listed in the backup.
   may span address-key transactions without truncating recipients. A key's
   address upsert, ledger insertion and conditional received increment are atomic.
   Replayed keys still fold eligible metadata: the maximum
-  `(observation_time, email, name-or-empty, account_id)` wins, including a better
-  same-time repaired spelling/name, without another count. `last_seen_at` is
-  that winning time; an older observation never moves the winner backwards.
+  `(observation_time, email, name-or-empty, account_id)` wins, comparing time
+  numerically and text by UTF8 bytes/BINARY collation. A same-time repaired
+  spelling/name wins only if it sorts greater, without another count.
+  `last_seen_at` is that winning time; an older observation never moves the
+  winner backwards.
 - Capture bounded stored sources; normalize/decode outside the read transaction.
   Publish only opaque prepared chunks whose source, message/acquisition/account,
   eligibility and observation-time inputs are rechecked inside the writer.
@@ -471,11 +475,13 @@ from discarded drafts. It is listed in the backup.
   A parser-version number alone is not a mutable-source revision fence.
 - Durable `seen_address_inputs`/`seen_address_swept` revisions track owed work.
   Relevant committed message/effective-summary/observation-input changes advance
-  inputs. A pass captures revision R, scans from the beginning with local
-  message/key cursors, and acknowledges only R after exhaustion. Later changes
-  to old ids remain owed; restart replays committed chunks safely. Ledger writes,
-  diagnostics and acknowledgements do not create new inputs. Startup checks owed
-  work and supported target changes; no durable maximum-message-id shortcut.
+  inputs. When work is owed, a pass captures revision R and scans all logical
+  message ids from the beginning with local message/key cursors; no per-input
+  row revision filter is implied. It acknowledges only R after exhaustion.
+  Later changes to old ids remain owed; restart replays committed chunks safely.
+  Ledger writes, diagnostics and acknowledgements do not create new inputs.
+  Startup checks owed work and supported target changes; no durable
+  maximum-message-id shortcut.
 - Newer full summaries are immutable acquisition-scoped repair versions, not
   in-place replacements of the first-wins base. A derived per-message binding
   selects its active version; absent binding means base. One effective-summary
@@ -495,7 +501,8 @@ from discarded drafts. It is listed in the backup.
   may transition independently; each message stays internally current. A single
   message whose own occurrence/text fan-out exceeds the budget is wholly
   deferred, without a partial binding/list transition; other sharing messages
-  continue. Reconsider that message/candidate only when relevant inputs change.
+  continue. This is observable incomplete maintenance state, never successful
+  repair. Reconsider that message/candidate only when relevant inputs change.
 - Activation advances Search generation once for changed query sources, using
   the existing shared advance when list rows change. Advance list generation
   only for its existing inputs; mark threading owed when its effective source

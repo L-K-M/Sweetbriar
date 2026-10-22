@@ -178,8 +178,11 @@ Recipient expansion is not part of archive-import transactions. Population
 publishes at most 200 address keys and 2,000,000 conservatively charged changed
 bytes per low-priority transaction, including every row/index/text copy and
 framing. A single admitted header-derived key must fit; the query-input byte
-ceiling is not a received-address limit. A recipient-heavy message may span
-many transactions and must eventually contribute every eligible key.
+ceiling is not a received-address limit. Prove that the existing header admission
+bound makes each legal key fit the accounting; do not invent a new key-admission
+filter that drops eligible recipients. Corrupt/out-of-contract stored input is
+an explicit bounded failure, not an infinite retry. A recipient-heavy message
+may span many transactions and must eventually contribute every eligible key.
 
 Repair preparation reads and EOF-verifies retained objects and parses MIME
 outside SQLite, retaining only bounded preparation. Activation handles at most

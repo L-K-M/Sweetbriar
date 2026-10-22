@@ -812,7 +812,7 @@ outcome exceeds its review budget, never a cut to critical proof.
 
 One received-maintenance worker uses the existing counted runtime and
 low-priority writer. It has independent coalesced wake, stop, retry and failure
-state; it never feeds contact failure into the FTS readable gate or borrows
+state; it never feeds its maintenance failure into the FTS readable gate or borrows
 Search rebuild/user/I/O holds. Startup and committed input changes schedule
 owed work. The counted producer owns its post-commit wake before replying;
 caller cancellation cannot strand accepted work. Shutdown/Drop stop preparation,

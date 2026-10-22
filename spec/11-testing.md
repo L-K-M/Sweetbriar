@@ -105,15 +105,16 @@ test, except where the spec says "manual qualification".
   qualify the UI. Missing an owner budget is a finding to resolve, not a
   weakened threshold. No Tantivy/trigram spike in M1.6.
 
-### Received-address proof ownership (M1.6m0)
+### Received-address proof ownership (M1.6m0–m4)
 
 - m1 qualifies the complete Store/Resources library through a real native facade
   caller: additive upgrade/history/STRICT/FK/schema-drift, case/quoted/escaped/
   Unicode keys, within-message dedup and deterministic metadata argmax, replay,
   per-key rollback, distinct shared-byte messages, labels, and zero contribution
   from partial/failed/legacy sources. An admitted recipient-heavy message whose
-  full ledger expansion exceeds 2 MB must finish across bounded commits; a
-  single large valid received key still progresses without the query ceiling.
+  full ledger expansion exceeds 2,000,000 charged bytes must finish across
+  bounded commits; a single large valid received key still progresses without
+  the query ceiling.
 - m2 owns real startup/import catch-up, late old ids, captured-revision sweep
   acknowledgement, coalesced wakes, counted caller-drop work, writer failures,
   restart between chunks, shutdown/Drop and preserved kept history on rebuild.
@@ -122,7 +123,8 @@ test, except where the spec says "manual qualification".
   consumers and pre-view historical migrations. At least 100,000 logical messages
   sharing one legacy acquisition must repair through bounded native activations.
   An over-budget message must retain its whole old binding/list state while
-  other sharing messages progress; no stale display-source/list snapshot.
+  other sharing messages progress. Every message's rows must match its own
+  active binding, including deferred ones; maintenance status exposes deferral.
 - m4 repeats convergence through real workers, with fair failure/retry handling,
   late repair, crash cuts at staging/activation/ledger boundaries, wake/drop/
   shutdown, preserved sent/received history and failure isolation from FTS.
