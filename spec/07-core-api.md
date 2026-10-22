@@ -761,3 +761,21 @@ qualify every closed mapping and payload, real imported coverage/scopes/errors,
 task cancellation through a fresh token, healthy follow-up and shutdown. Pure
 mapping tables are distinguished from native output; no new source protocol or
 UI mode is needed until its actual consumer.
+
+### Search-window FFI and Swift boundary (M1.6l3)
+
+The FFI owns SearchSpec, Date/Relevance SearchSort and SearchStatus, adds Search
+last in WindowSpec and optional search status last in Window, preserving earlier
+tags and field prefixes. The owned Swift equivalents retain every raw query,
+scope, sort, coverage field and excluded-unknown count. SearchSpec/sort/scope are
+Hashable for the existing WindowSpec consumer. Ordinary pages explicitly carry
+no Search status; Search uses the existing logical-message list grain.
+
+Same-outcome Rust wire/mapping and actual exported Rust/Swift tests qualify both
+sorts, scoped real imports, partial-body unknowns, same-snapshot status, opaque
+paging/ids, invalidation, typed errors, cancellation, close and shutdown. Fence
+indexing and thread membership before stable-generation assertions; coalesced
+events may report intermediate commits before the fenced latest one. Regenerate
+the complete pinned SDK and pass binding/import/async-callback checks. Existing
+window methods and qualified core semantics stay in place; controls FFI and
+Search presentation follow their listed outcomes.
