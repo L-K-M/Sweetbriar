@@ -752,3 +752,12 @@ Swift DTOs, CoreBridge.coverage(scope:), exhaustive conversions and actual
 adapter/scope/error/task-cancellation tests. Generated types remain private to
 the adapter. Splitting at these qualified artifact boundaries budgets generated
 output and all proof without delaying critical public SDK verification.
+
+The owned adapter uses public Sendable/Equatable value types with explicit
+initializers; all 13 SearchCoverage fields and operational units stay identical
+to the qualified SDK. Generated-to-owned initializers and scope conversion are
+module-internal, never public generated-type aliases. Same-outcome Swift tests
+qualify every closed mapping and payload, real imported coverage/scopes/errors,
+task cancellation through a fresh token, healthy follow-up and shutdown. Pure
+mapping tables are distinguished from native output; no new source protocol or
+UI mode is needed until its actual consumer.

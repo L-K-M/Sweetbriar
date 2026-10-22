@@ -58,6 +58,15 @@ public final class CoreBridge: Sendable {
         )
     }
 
+    /// Scoped coverage stays available while Search is resetting or requeued.
+    public func coverage(scope: SearchScope) async throws -> SearchCoverage {
+        let token = SweetbriarCore.CancelToken()
+        let value = try await Self.withCancellation(token: token) {
+            try await self.core.coverage(token: token, scope: scope.generated)
+        }
+        return SearchCoverage(value)
+    }
+
     /// Parse Search text into canonical v1 JSON with explicit defaults.
     public func parseSearch(text: String, context: ParseContext) async throws -> String {
         let token = SweetbriarCore.CancelToken()
