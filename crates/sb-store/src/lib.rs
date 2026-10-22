@@ -16,6 +16,7 @@ pub mod query;
 mod readers;
 mod receipts;
 mod schema;
+pub mod seen;
 pub mod settings;
 pub mod sidebar;
 mod source_snapshots;

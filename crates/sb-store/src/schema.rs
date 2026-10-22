@@ -35,7 +35,7 @@ pub(crate) struct Migration {
 /// v1 (spec/02, spec/06); version 2 adds durable imports; version 3
 /// starts the list projection; version 4 keeps thread membership;
 /// version 5 versions the search queue; version 6 adds the durable
-/// search index state and rebuild jobs.
+/// search index state and rebuild jobs; version 7 keeps received-address history.
 pub(crate) const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 1,
@@ -60,6 +60,10 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 6,
         run: migration_6,
+    },
+    Migration {
+        version: 7,
+        run: migration_7,
     },
 ];
 
@@ -574,6 +578,10 @@ fn migration_5(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
 /// no pause; existing imports, queue and documents are untouched.
 fn migration_6(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
     tx.execute_batch(include_str!("schema/v6.sql")).map_err(bug)
+}
+
+fn migration_7(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
+    tx.execute_batch(include_str!("schema/v7.sql")).map_err(bug)
 }
 
 /// One version-4 UUID from the randomness seam. A seam that can't

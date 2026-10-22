@@ -17,7 +17,7 @@ pub const MAX_READER_HEADER_BYTES: usize = 262_144;
 /// JSON is ~14 bytes per raw byte at worst (`a,` becomes
 /// `{"address":"a","name":null},`) and decoding can triple a byte (U+FFFD);
 /// 32× bounds both.
-const MAX_STORED_HEADER_BYTES: usize = 32 * MAX_READER_HEADER_BYTES;
+pub(crate) const MAX_STORED_HEADER_BYTES: usize = 32 * MAX_READER_HEADER_BYTES;
 const READ_CHUNK_BYTES: usize = 64 * 1024;
 
 /// Availability recorded in SQLite, not a filesystem verification promise.

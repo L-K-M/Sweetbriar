@@ -103,13 +103,27 @@ fn changed_replayed_and_empty_imports_preserve_single_source_advancement() {
         })
     };
     let before = generations();
+    let received_before = reading(&store, |tx| Ok(crate::seen::revisions(tx)?.inputs));
     let first = message(&store, "/synthetic/Inbox.mbox", 0, ORIGINAL);
     commit(&store, revision, "Inbox", vec![first]).unwrap();
     assert_eq!(generations(), (before.0 + 1, before.1 + 1));
+    assert_eq!(
+        reading(&store, |tx| Ok(crate::seen::revisions(tx)?.inputs)),
+        received_before + 1
+    );
+    assert_eq!(
+        count(&store, "seen_address_messages"),
+        0,
+        "imports only record owed work"
+    );
     let revision = reading(&store, |tx| Ok(import_job(tx, JOB)?.revision()));
     let replay = message(&store, "/synthetic/Inbox.mbox", 0, ORIGINAL);
     commit(&store, revision, "Inbox", vec![replay]).unwrap();
     assert_eq!(generations(), (before.0 + 1, before.1 + 2));
+    assert_eq!(
+        reading(&store, |tx| Ok(crate::seen::revisions(tx)?.inputs)),
+        received_before + 1
+    );
     let revision = reading(&store, |tx| Ok(import_job(tx, JOB)?.revision()));
     commit(&store, revision, "Inbox", Vec::new()).unwrap();
     assert_eq!(generations(), (before.0 + 1, before.1 + 2));
