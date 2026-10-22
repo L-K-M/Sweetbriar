@@ -30,9 +30,14 @@ pub use index::{
     report_index_io_failure, search_io_code, search_io_message,
 };
 mod renditions;
+mod repair;
 mod search;
 mod seen;
 pub use renditions::{RenditionCache, RenditionError, RenditionFiles, RenditionProtection};
+pub use repair::{
+    RepairCapture, RepairCommit, RepairPreparation, RepairPrepared, RepairStatus, RepairTerminal,
+    RepairTerminalKind,
+};
 pub use search::read_search_coverage;
 pub use seen::{ReceivedCommit, ReceivedPreparation, ReceivedRevisions, ReceivedSweep};
 
@@ -55,7 +60,8 @@ pub use sb_mime::SEARCH_EXTRACTOR_VERSION;
 pub use sb_mime::{MboxQuoting, MboxVariant};
 pub use sb_platform::{default_cache_root, default_data_root};
 pub use sb_store::imports::{
-    ImportJobState, ImportMessage, MAX_IMPORT_BATCH, MAX_IMPORT_CHANGES_BYTES,
+    ImportJobState, ImportMessage, ImportParseState, ImportSummary, MAX_IMPORT_BATCH,
+    MAX_IMPORT_CHANGES_BYTES,
 };
 pub use sb_store::index::rebuild::{
     JobKind, RebuildJob, RebuildPhase, SearchIndexStatus, SearchIoCode, UserPause,

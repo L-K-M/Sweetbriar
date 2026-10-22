@@ -48,7 +48,7 @@ fn canonical_object(json: &str) -> Result<String, StoreError> {
     Ok(value.to_string())
 }
 
-fn canonical_array(json: &Option<String>) -> Result<Option<String>, StoreError> {
+pub(crate) fn canonical_array(json: &Option<String>) -> Result<Option<String>, StoreError> {
     json.as_ref()
         .map(|json| {
             let value: Value =
