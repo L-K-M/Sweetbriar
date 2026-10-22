@@ -863,3 +863,26 @@ preparation and before submitting its result; discard unsubmitted preparation,
 drain submitted writes and leave unfinished revisions owed for reopen. This
 step has no corrupt-source skip/repair diagnostic API: fail closed and retain
 owed work. Complete legacy repair and its fair per-source handling remain m3/m4.
+
+### Repair library delivery (M1.6m3a through m3c)
+
+m3a delivers complete Resources capture/verified preparation/bounded publication
+and status operations, with opaque preparations and commit-only continuations.
+It reuses verified retained reads, current MIME parsing and the full summary
+mapper. Complete publication, quiet stale/replay, cancellation and typed
+terminal/transient failure are distinct; an unsuccessful diagnosis write cannot
+report successful repair. Status never calls an incomplete assembly complete.
+
+m3b delivers actual single-message activation, all five effective-summary
+consumers and displayed-source pricing together. Its native caller uses m3a's
+real producer. Bind-plus-all-list-mutations, whole-message deferral, stale and
+already-current outcomes are explicit. Do not expose an unused batch mode or a
+writerless effective view. Keep a deferred message wholly on its old source
+while another sharing message can activate. Generation, threading and population
+effects occur only after the actual activation COMMIT and for actual inputs.
+
+m3c delivers discovery/continuation/batching/catch-up operations and accurate
+status over that qualified single-message mechanism. Distinguish corpus
+exhaustion from deferred/failed repairs. Its native caller proves corpus
+delivery; m4 later drives these operations with fair counted worker turns,
+independent failures/wakes and lifecycle. No proof-only step or second runtime.
