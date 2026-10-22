@@ -4,6 +4,12 @@ use std::sync::Arc;
 
 use crate::{CancelToken, Core, CoreError};
 
+mod coverage;
+pub use coverage::{
+    Coverage, SearchIndexState, SearchIoCode, SearchLimitation, SearchRebuildPhase,
+    SearchRebuildProgress, SearchScope,
+};
+
 /// Required defaults, consumed only by date values that omit context.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct ParseContext {

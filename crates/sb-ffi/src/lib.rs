@@ -35,7 +35,10 @@ pub use imports::{
     ImportJob, ImportJobState, ImportProblem, ImportProblemKind, ImportReport, ImportSource,
     ImportSourceKind, ImportStarted, ImportTarget, ImportTotals, MboxVariant, VariantChoice,
 };
-pub use search::ParseContext;
+pub use search::{
+    Coverage, ParseContext, SearchIndexState, SearchIoCode, SearchLimitation, SearchRebuildPhase,
+    SearchRebuildProgress, SearchScope,
+};
 pub use sidebar::{Account, AccountKind, AccountState, Mailbox, MailboxKind, Mailboxes};
 pub use subscribe::{Subscription, WindowEvent};
 pub use windows::{Anchor, Count, ListRow, MailboxRole, Window, WindowIds, WindowSpec};

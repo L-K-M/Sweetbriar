@@ -328,6 +328,11 @@ uint64_t uniffi_sb_ffi_fn_method_core_format_search(uint64_t ptr, uint64_t token
 uint64_t uniffi_sb_ffi_fn_method_core_parse_search(uint64_t ptr, uint64_t token, RustBuffer text, RustBuffer context
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_COVERAGE
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_COVERAGE
+uint64_t uniffi_sb_ffi_fn_method_core_coverage(uint64_t ptr, uint64_t token, RustBuffer scope
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_ACCOUNTS
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_ACCOUNTS
 uint64_t uniffi_sb_ffi_fn_method_core_accounts(uint64_t ptr, uint64_t token
@@ -779,6 +784,12 @@ uint16_t uniffi_sb_ffi_checksum_method_core_format_search(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_PARSE_SEARCH
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_PARSE_SEARCH
 uint16_t uniffi_sb_ffi_checksum_method_core_parse_search(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_COVERAGE
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_COVERAGE
+uint16_t uniffi_sb_ffi_checksum_method_core_coverage(void
     
 );
 #endif
