@@ -430,9 +430,11 @@ from discarded drafts. It is listed in the backup.
   In one writer transaction, insert/upsert the address row, insert the
   ledger key if absent and increment `times_received` only for a new key.
   Several logical messages sharing bytes each contribute once; several
-  occurrences of one message contribute once. Failed summaries contribute
-  nothing; later successful summaries may add new addresses, never remove
-  historical counts. Rebuilding derived tables never clears this ledger.
+  occurrences of one message contribute once. Only complete address-source
+  summaries (`parse_state='ok'`, `parser_version>=2`) contribute. Partial,
+  failed and legacy summaries contribute nothing until a successful eligible
+  refresh. Later eligible summaries may add addresses, never remove historical
+  counts. Rebuilding derived tables never clears this ledger.
 - `last_seen_at` is the earliest occurrence `first_seen_at` of the logical
   message, not its untrusted Date header or the backfill clock. The largest
   observation time wins `email`, `display_name`, `last_account_id`; for
