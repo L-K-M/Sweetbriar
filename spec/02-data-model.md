@@ -427,14 +427,16 @@ from discarded drafts. It is listed in the backup.
   not part of the implemented SQL blocks above; add its executable SQL
   alongside the migration so the schema-drift test continues to prove both.
 
-  In one writer transaction, insert/upsert the address row, insert the
+  For each `(message_id, canonical)` key, in one writer transaction,
+  insert/upsert the address row, insert the
   ledger key if absent and increment `times_received` only for a new key.
   Several logical messages sharing bytes each contribute once; several
   occurrences of one message contribute once. Only complete address-source
   summaries (`parse_state='ok'`, `parser_version>=2`) contribute. Partial,
   failed and legacy summaries contribute nothing until a successful eligible
   refresh. Later eligible summaries may add addresses, never remove historical
-  counts. Rebuilding derived tables never clears this ledger.
+  counts. Ineligible sources change neither counts/ledger nor display metadata.
+  Rebuilding derived tables never clears this ledger.
 - `last_seen_at` is the earliest occurrence `first_seen_at` of the logical
   message, not its untrusted Date header or the backfill clock. The largest
   observation time wins `email`, `display_name`, `last_account_id`; for
@@ -450,6 +452,63 @@ from discarded drafts. It is listed in the backup.
   At M1.6 entry the received population has no earlier writer; a future
   upgrade from a populated version must preserve its ledger with its counts.
   This pass populates completion data; composer presentation remains M1.9.
+
+### Bounded received-address maintenance (M1.6m0)
+
+- Population runs after import acknowledgement, not inside its recipient-sized
+  transaction. Import adds only a constant-size owed-input change; population
+  failure cannot retroactively fail an acknowledged archive import. One message
+  may span address-key transactions without truncating recipients. A key's
+  address upsert, ledger insertion and conditional received increment are atomic.
+  Replayed keys still fold eligible metadata: the maximum
+  `(observation_time, email, name-or-empty, account_id)` wins, including a better
+  same-time repaired spelling/name, without another count. `last_seen_at` is
+  that winning time; an older observation never moves the winner backwards.
+- Capture bounded stored sources; normalize/decode outside the read transaction.
+  Publish only opaque prepared chunks whose source, message/acquisition/account,
+  eligibility and observation-time inputs are rechecked inside the writer.
+  Superseded input is recaptured, never counted or acknowledged as newer work.
+  A parser-version number alone is not a mutable-source revision fence.
+- Durable `seen_address_inputs`/`seen_address_swept` revisions track owed work.
+  Relevant committed message/effective-summary/observation-input changes advance
+  inputs. A pass captures revision R, scans from the beginning with local
+  message/key cursors, and acknowledges only R after exhaustion. Later changes
+  to old ids remain owed; restart replays committed chunks safely. Ledger writes,
+  diagnostics and acknowledgements do not create new inputs. Startup checks owed
+  work and supported target changes; no durable maximum-message-id shortcut.
+- Newer full summaries are immutable acquisition-scoped repair versions, not
+  in-place replacements of the first-wins base. A derived per-message binding
+  selects its active version; absent binding means base. One effective-summary
+  relation serves runtime list projection, reader metadata, exact predicates,
+  threading and population. Preserve each consumer's header/source precedence;
+  a repaired NULL is known absence, never a reason to fall back to a base value.
+  Do not copy recipient JSON per logical message or add scroll-time repair work.
+- Verified retained bytes are parsed outside SQLite with the current MIME
+  limits. Stage only complete successful repair versions. Partial/failed parse
+  attempts and oversized objects preserve base display, bind nothing and remain
+  ineligible, with a terminal source/target diagnosis rather than a busy retry.
+  Do not add an oversized-prefix parse that could invent a complete outcome.
+  Infrastructure read failures retain the base and are typed, observable and
+  retryable. Never overwrite a newer source/parser result or downgrade a target.
+- Activate a bounded set of logical messages with their bindings AND all their
+  affected list rows in the same transaction. Different messages sharing bytes
+  may transition independently; each message stays internally current. A single
+  message whose own occurrence/text fan-out exceeds the budget is wholly
+  deferred, without a partial binding/list transition; other sharing messages
+  continue. Reconsider that message/candidate only when relevant inputs change.
+- Activation advances Search generation once for changed query sources, using
+  the existing shared advance when list rows change. Advance list generation
+  only for its existing inputs; mark threading owed when its effective source
+  or representative date changes. Imports keep first-wins behavior and price
+  the summary actually displayed. Historical migration 3 must retain its base
+  fill path, never reference an effective relation introduced by a later migration.
+- Keep both address tables and sent/history counts through Search/thread rebuild,
+  upgrade and replay. Never reconstruct received totals by clearing history or
+  replacing totals with the ledger's row count. Additive migration 7 owns ledger
+  and sweep state; a later additive migration owns repair versions/bindings.
+  Executable schema blocks land with those migrations. Older writers refuse a
+  newer schema; rollback uses a complete consistent backup, not a schema-number
+  downgrade or removal of kept ledger data.
 
 ## Drafts
 
@@ -754,9 +813,11 @@ CREATE INDEX logical_messages_by_acquisition ON logical_messages(acquisition_id)
     `has_attachments` come from the summary; without one they are NULL
     and 0.
   - The transaction that changes an occurrence, its mailbox or its
-    display sources updates the affected rows. An import never replaces
-    a stored summary, even an older parser's; summaries for a newer
-    parser come from rebuilding the derived tables. An import that
+    active display sources updates the affected rows. Received-address repair
+    activates immutable full summary versions per logical message, atomically
+    with that message's rows, as specified above; it never publishes a new source
+    followed by stale-row fan-out. An import never replaces a stored base summary,
+    even an older parser's. An import that
     stores the first summary of bytes already held updates the rows of
     every message sharing them. Each row an import writes counts toward
     its batch's write budget (03) at the summary it shows; a batch over

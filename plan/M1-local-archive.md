@@ -536,12 +536,34 @@ local drafts. No network yet.
     Include real native/SDK/Bridge command, replay, independent-hold, accepted-
     request drop and per-export lifecycle proof. Public Swift checks both legal
     fast-completion receipt outcomes; native fixtures deterministically pause.
-  - **M1.6m Seen addresses — L:** kept deduplication ledger, resumable
-    summary backfill and ongoing population through resources/engine.
-    Refresh older parser-version summaries from retained source bytes before
-    trusting exact local-spelling keys; failures remain observable/unknown.
-    Depends on l4. Owns completion case-preservation acceptance; replay,
-    shared-byte, multi-label, failed-summary and rebuild tests. No composer UI yet.
+  - **M1.6m0 Received-address contracts — S:** depends on l4. Complete-only
+    eligibility, per-key bounded population, immutable repaired-summary versions
+    and per-message atomic activation, replay/failure/lifecycle contracts below.
+    Contract prose only; executable SQL accompanies its implementing migration.
+    Whole ledger/facade/runtime/repair proof exceeds one 1,450-line outcome.
+  - **M1.6m1 Current-summary ledger and facade — L:** additive kept ledger,
+    bounded capture/off-writer normalization/fenced publication through Resources;
+    depends on m0. A native facade caller qualifies the complete library artifact
+    at first exposure. Own migration/history/STRICT/FK/drift, case/quote/Unicode,
+    metadata argmax, per-key rollback/replay, shared-byte/multi-label, ineligible
+    zero-contribution and large-recipient/single-key progress proof. Import only
+    records owed work, never recipient fan-out. Runtime delivery follows m2.
+  - **M1.6m2 Current-summary runtime — L:** counted startup/import population,
+    input/swept revisions, local cursors, coalesced wake/failure/shutdown/drop;
+    depends on m1. Own real imports, late old ids, interruption/replay, writer
+    failure, lifecycle and rebuild preservation. No new runtime or composer UI.
+  - **M1.6m3 Verified summary repair and activation — L:** additive immutable
+    complete versions, derived message bindings/effective summary, verified
+    off-writer parse and bounded source/list activation; depends on m2. Own all
+    effective-summary consumers, historical migration safety, source/version
+    fences, diagnostics, no-downgrade/rollback, header precedence, 100k shared
+    messages converging natively, and whole-message budget deferral. First-wins
+    imports and current projection currency remain intact; no address-only repair.
+  - **M1.6m4 Repair runtime — L:** fair repair/activation/population turns on
+    the received-maintenance worker; depends on m3. Own real-worker legacy/shared
+    convergence, terminal/retry failures, crash cuts, wake/drop/shutdown and
+    preserved kept history. Complete the original seen-address/backfill outcome
+    before n; no early composer/service/FFI/Swift delivery or deferred proof.
   - **M1.6n Parser fuzzing — M:** `query` cargo-fuzz target, synthetic
     seeds, its isolated lockfile/policy, nightly job and reproduction docs.
     Owns the parser fuzz deliverable; bounded parse/format/JSON invariants.

@@ -807,3 +807,29 @@ Swift uses public commands, coverage and reopen, without source database or
 shipping test hooks. Commit complete pinned bindings and pass all boundary
 checks; a full SDK/owned-adapter artifact reslice is required if the complete
 outcome exceeds its review budget, never a cut to critical proof.
+
+### Received-address maintenance lifecycle (M1.6m0)
+
+One received-maintenance worker uses the existing counted runtime and
+low-priority writer. It has independent coalesced wake, stop, retry and failure
+state; it never feeds contact failure into the FTS readable gate or borrows
+Search rebuild/user/I/O holds. Startup and committed input changes schedule
+owed work. The counted producer owns its post-commit wake before replying;
+caller cancellation cannot strand accepted work. Shutdown/Drop stop preparation,
+drain submitted writes and leave unsubmitted/unfinished work owed.
+
+Repair, activation and population get fair bounded turns: a failing legacy
+source cannot starve fresh complete summaries. Typed bounded source/target
+diagnostics distinguish parse/size/unsupported-target/activation-budget outcomes
+from transient I/O and writer failure. Preserve base display on failed repair;
+never persist raw message/header/path data in diagnostic text. Terminal attempts
+are reconsidered only for changed source/target/projection inputs; transient
+failures park until a bounded deadline or relevant wake. Diagnostic writes must
+not wake themselves indefinitely. A failed diagnostic write remains an explicit
+worker failure, not a successful maintenance result.
+
+Store/Resources and internal maintenance status expose owed sweep revisions
+and incomplete repairs/errors. A finished eligible-source sweep does not claim
+all legacy repairs succeeded; FTS Ready does not mean address maintenance is
+complete. No new composer/service/FFI/Swift surface is implied before its listed
+consumer. Physical source verification and existing safety checks remain binding.
