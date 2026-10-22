@@ -21,6 +21,9 @@ mod index;
 mod index_tests;
 mod messages;
 mod rebuild;
+mod received;
+#[cfg(test)]
+mod received_tests;
 mod search;
 mod settings;
 mod sidebar;
