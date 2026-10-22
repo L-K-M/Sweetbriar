@@ -3323,6 +3323,124 @@ public func FfiConverterTypeSearchRebuildProgress_lower(_ value: SearchRebuildPr
 
 
 /**
+ * Raw checked-JSON input, outer scope and sort for a new window handle.
+ */
+public struct SearchSpec: Equatable, Hashable {
+    public var queryJson: String
+    public var scope: SearchScope
+    public var sort: SearchSort
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(queryJson: String, scope: SearchScope, sort: SearchSort) {
+        self.queryJson = queryJson
+        self.scope = scope
+        self.sort = sort
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension SearchSpec: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeSearchSpec: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SearchSpec {
+        return
+            try SearchSpec(
+                queryJson: FfiConverterString.read(from: &buf), 
+                scope: FfiConverterTypeSearchScope.read(from: &buf), 
+                sort: FfiConverterTypeSearchSort.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: SearchSpec, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.queryJson, into: &buf)
+        FfiConverterTypeSearchScope.write(value.scope, into: &buf)
+        FfiConverterTypeSearchSort.write(value.sort, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSearchSpec_lift(_ buf: RustBuffer) throws -> SearchSpec {
+    return try FfiConverterTypeSearchSpec.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSearchSpec_lower(_ value: SearchSpec) -> RustBuffer {
+    return FfiConverterTypeSearchSpec.lower(value)
+}
+
+
+/**
+ * Coverage and excluded unknowns from the same snapshot as the page's rows.
+ */
+public struct SearchStatus: Equatable, Hashable {
+    public var coverage: Coverage
+    public var excludedUnknown: UInt64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(coverage: Coverage, excludedUnknown: UInt64) {
+        self.coverage = coverage
+        self.excludedUnknown = excludedUnknown
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension SearchStatus: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeSearchStatus: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SearchStatus {
+        return
+            try SearchStatus(
+                coverage: FfiConverterTypeCoverage.read(from: &buf), 
+                excludedUnknown: FfiConverterUInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: SearchStatus, into buf: inout [UInt8]) {
+        FfiConverterTypeCoverage.write(value.coverage, into: &buf)
+        FfiConverterUInt64.write(value.excludedUnknown, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSearchStatus_lift(_ buf: RustBuffer) throws -> SearchStatus {
+    return try FfiConverterTypeSearchStatus.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSearchStatus_lower(_ value: SearchStatus) -> RustBuffer {
+    return FfiConverterTypeSearchStatus.lower(value)
+}
+
+
+/**
  * One setting as `settings()` reports it (spec/02): the effective
  * value and whether it is the registry's default.
  */
@@ -3455,10 +3573,11 @@ public struct Window: Equatable, Hashable {
     public var hasMoreAfter: Bool
     public var hasMoreBefore: Bool
     public var total: Count
+    public var search: SearchStatus?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(windowId: UInt64, generation: UInt64, rows: [ListRow], before: String?, after: String?, hasMoreAfter: Bool, hasMoreBefore: Bool, total: Count) {
+    public init(windowId: UInt64, generation: UInt64, rows: [ListRow], before: String?, after: String?, hasMoreAfter: Bool, hasMoreBefore: Bool, total: Count, search: SearchStatus?) {
         self.windowId = windowId
         self.generation = generation
         self.rows = rows
@@ -3467,6 +3586,7 @@ public struct Window: Equatable, Hashable {
         self.hasMoreAfter = hasMoreAfter
         self.hasMoreBefore = hasMoreBefore
         self.total = total
+        self.search = search
     }
 
     
@@ -3492,7 +3612,8 @@ public struct FfiConverterTypeWindow: FfiConverterRustBuffer {
                 after: FfiConverterOptionString.read(from: &buf), 
                 hasMoreAfter: FfiConverterBool.read(from: &buf), 
                 hasMoreBefore: FfiConverterBool.read(from: &buf), 
-                total: FfiConverterTypeCount.read(from: &buf)
+                total: FfiConverterTypeCount.read(from: &buf), 
+                search: FfiConverterOptionTypeSearchStatus.read(from: &buf)
         )
     }
 
@@ -3505,6 +3626,7 @@ public struct FfiConverterTypeWindow: FfiConverterRustBuffer {
         FfiConverterBool.write(value.hasMoreAfter, into: &buf)
         FfiConverterBool.write(value.hasMoreBefore, into: &buf)
         FfiConverterTypeCount.write(value.total, into: &buf)
+        FfiConverterOptionTypeSearchStatus.write(value.search, into: &buf)
     }
 }
 
@@ -5462,6 +5584,75 @@ public func FfiConverterTypeSearchScope_lower(_ value: SearchScope) -> RustBuffe
 
 
 /**
+ * Date descending or native numeric relevance ascending, with stable id ties.
+ */
+
+public enum SearchSort: Equatable, Hashable {
+    
+    case date
+    case relevance
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension SearchSort: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeSearchSort: FfiConverterRustBuffer {
+    typealias SwiftType = SearchSort
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SearchSort {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .date
+        
+        case 2: return .relevance
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: SearchSort, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .date:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .relevance:
+            writeInt(&buf, Int32(2))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSearchSort_lift(_ buf: RustBuffer) throws -> SearchSort {
+    return try FfiConverterTypeSearchSort.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSearchSort_lower(_ value: SearchSort) -> RustBuffer {
+    return FfiConverterTypeSearchSort.lower(value)
+}
+
+
+
+/**
  * What a window's subscription reports (spec/07).
  */
 
@@ -5568,6 +5759,11 @@ public enum WindowSpec: Equatable, Hashable {
      */
     case thread(threadId: Int64
     )
+    /**
+     * Logical-message Search hits, with same-snapshot status.
+     */
+    case search(spec: SearchSpec
+    )
 
 
 
@@ -5602,6 +5798,9 @@ public struct FfiConverterTypeWindowSpec: FfiConverterRustBuffer {
         case 5: return .thread(threadId: try FfiConverterInt64.read(from: &buf)
         )
         
+        case 6: return .search(spec: try FfiConverterTypeSearchSpec.read(from: &buf)
+        )
+        
         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
@@ -5631,6 +5830,11 @@ public struct FfiConverterTypeWindowSpec: FfiConverterRustBuffer {
         case let .thread(threadId):
             writeInt(&buf, Int32(5))
             FfiConverterInt64.write(threadId, into: &buf)
+            
+        
+        case let .search(spec):
+            writeInt(&buf, Int32(6))
+            FfiConverterTypeSearchSpec.write(spec, into: &buf)
             
         }
     }
@@ -5743,6 +5947,30 @@ fileprivate struct FfiConverterOptionTypeSearchRebuildProgress: FfiConverterRust
         switch try readInt(&buf) as Int8 {
         case 0: return nil
         case 1: return try FfiConverterTypeSearchRebuildProgress.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionTypeSearchStatus: FfiConverterRustBuffer {
+    typealias SwiftType = SearchStatus?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeSearchStatus.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeSearchStatus.read(from: &buf)
         default: throw UniffiInternalError.unexpectedOptionalTag
         }
     }

@@ -1,7 +1,7 @@
 // Owned coverage values: the public bridge never exports generated SDK types.
 import SweetbriarCore
 
-public enum SearchScope: Sendable, Equatable {
+public enum SearchScope: Sendable, Equatable, Hashable {
     case all
     case account(String)
     case mailbox(Int64)

@@ -372,6 +372,8 @@ public enum WindowSpec: Sendable, Equatable, Hashable {
     case flagged
     /// One thread's logical messages, once each.
     case thread(Int64)
+    /// Logical-message Search hits with same-snapshot status.
+    case search(SearchSpec)
 }
 
 /// What a window's subscription reports (spec/07 "Subscriptions").
@@ -463,6 +465,7 @@ public struct ListWindow: Sendable, Equatable {
     public var hasMoreAfter: Bool
     public var hasMoreBefore: Bool
     public var total: ListCount
+    public var search: SearchStatus?
 
     public init(
         windowId: UInt64,
@@ -472,7 +475,8 @@ public struct ListWindow: Sendable, Equatable {
         after: String?,
         hasMoreAfter: Bool,
         hasMoreBefore: Bool,
-        total: ListCount
+        total: ListCount,
+        search: SearchStatus?
     ) {
         self.windowId = windowId
         self.generation = generation
@@ -482,6 +486,7 @@ public struct ListWindow: Sendable, Equatable {
         self.hasMoreAfter = hasMoreAfter
         self.hasMoreBefore = hasMoreBefore
         self.total = total
+        self.search = search
     }
 }
 

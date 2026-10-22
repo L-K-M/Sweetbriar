@@ -37,7 +37,7 @@ pub use imports::{
 };
 pub use search::{
     Coverage, ParseContext, SearchIndexState, SearchIoCode, SearchLimitation, SearchRebuildPhase,
-    SearchRebuildProgress, SearchScope,
+    SearchRebuildProgress, SearchScope, SearchSort, SearchSpec, SearchStatus,
 };
 pub use sidebar::{Account, AccountKind, AccountState, Mailbox, MailboxKind, Mailboxes};
 pub use subscribe::{Subscription, WindowEvent};

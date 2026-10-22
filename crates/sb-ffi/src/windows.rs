@@ -12,9 +12,10 @@ use std::sync::Arc;
 use crate::api::Core;
 use crate::cancel::CancelToken;
 use crate::error::CoreError;
+use crate::{SearchSpec, SearchStatus};
 
 /// Which window the shell is listing (spec/07 "Store windows").
-#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
 pub enum WindowSpec {
     /// The synthetic source filled by `debug_fill_synthetic`.
     DebugSynthetic,
@@ -26,16 +27,19 @@ pub enum WindowSpec {
     Flagged,
     /// One thread's logical messages, once each.
     Thread { thread_id: i64 },
+    /// Logical-message Search hits, with same-snapshot status.
+    Search { spec: SearchSpec },
 }
 
 impl WindowSpec {
-    fn to_service(self) -> sb_service::WindowSpec {
+    fn into_service(self) -> sb_service::WindowSpec {
         match self {
             Self::DebugSynthetic => sb_service::WindowSpec::DebugSynthetic,
             Self::Mailbox { mailbox_id } => sb_service::WindowSpec::Mailbox(mailbox_id),
             Self::Unified { role } => sb_service::WindowSpec::Unified(role.to_service()),
             Self::Flagged => sb_service::WindowSpec::Flagged,
             Self::Thread { thread_id } => sb_service::WindowSpec::Thread(thread_id),
+            Self::Search { spec } => sb_service::WindowSpec::Search(spec.into_service()),
         }
     }
 }
@@ -180,6 +184,7 @@ pub struct Window {
     pub has_more_after: bool,
     pub has_more_before: bool,
     pub total: Count,
+    pub search: Option<SearchStatus>,
 }
 
 impl Window {
@@ -194,6 +199,7 @@ impl Window {
             has_more_after: window.has_more_after,
             has_more_before: window.has_more_before,
             total: Count::from_service(window.total),
+            search: window.search.as_ref().map(SearchStatus::from_service),
         }
     }
 }
@@ -222,7 +228,7 @@ impl Core {
     ) -> Result<Window, CoreError> {
         let window = self
             .query(&token, async |core| {
-                core.open_window(spec.to_service(), anchor.into_service(), limit)
+                core.open_window(spec.into_service(), anchor.into_service(), limit)
                     .await
             })
             .await?;
@@ -295,6 +301,9 @@ impl Core {
 }
 
 #[cfg(test)]
+mod search_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::api::{CoreConfig, open_core};
@@ -310,20 +319,20 @@ mod tests {
     }
 
     /// A fresh token, the way the adapter makes one per call.
-    fn fresh_token() -> Arc<CancelToken> {
+    pub(super) fn fresh_token() -> Arc<CancelToken> {
         CancelToken::new()
     }
 
     /// A token already cancelled, as a call under a task cancelled
     /// before it started gets.
-    fn cancelled_token() -> Arc<CancelToken> {
+    pub(super) fn cancelled_token() -> Arc<CancelToken> {
         let token = fresh_token();
         token.cancel();
         token
     }
 
     /// A core over a fresh scratch root and the scratch dir kept alive.
-    fn scratch_core(label: &str) -> (ScratchDir, Arc<Core>) {
+    pub(super) fn scratch_core(label: &str) -> (ScratchDir, Arc<Core>) {
         let scratch = ScratchDir::new(label);
         let core = sb_test_support::block_on(open_core(fresh_token(), scratch_config(&scratch)))
             .expect("a fresh store opens");
@@ -423,24 +432,24 @@ mod tests {
             assert_eq!(role.to_service(), service);
             assert_eq!(MailboxRole::from_service(service), role);
             assert_eq!(
-                WindowSpec::Unified { role }.to_service(),
+                WindowSpec::Unified { role }.into_service(),
                 sb_service::WindowSpec::Unified(service)
             );
         }
         assert_eq!(
-            WindowSpec::Mailbox { mailbox_id: 7 }.to_service(),
+            WindowSpec::Mailbox { mailbox_id: 7 }.into_service(),
             sb_service::WindowSpec::Mailbox(7)
         );
         assert_eq!(
-            WindowSpec::Thread { thread_id: 9 }.to_service(),
+            WindowSpec::Thread { thread_id: 9 }.into_service(),
             sb_service::WindowSpec::Thread(9)
         );
         assert_eq!(
-            WindowSpec::Flagged.to_service(),
+            WindowSpec::Flagged.into_service(),
             sb_service::WindowSpec::Flagged
         );
         assert_eq!(
-            WindowSpec::DebugSynthetic.to_service(),
+            WindowSpec::DebugSynthetic.into_service(),
             sb_service::WindowSpec::DebugSynthetic
         );
     }
@@ -458,9 +467,13 @@ mod tests {
             WindowSpec::Flagged,
             WindowSpec::Thread { thread_id: 1 },
         ] {
-            let window =
-                sb_test_support::block_on(core.open_window(fresh_token(), spec, Anchor::Top, 10))
-                    .unwrap();
+            let window = sb_test_support::block_on(core.open_window(
+                fresh_token(),
+                spec.clone(),
+                Anchor::Top,
+                10,
+            ))
+            .unwrap();
             assert!(window.rows.is_empty(), "{spec:?}");
             assert_eq!(window.total, Count::Exact { n: 0 }, "{spec:?}");
             sb_test_support::block_on(core.close_window(window.window_id));

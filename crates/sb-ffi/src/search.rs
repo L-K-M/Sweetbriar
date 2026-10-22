@@ -9,6 +9,8 @@ pub use coverage::{
     Coverage, SearchIndexState, SearchIoCode, SearchLimitation, SearchRebuildPhase,
     SearchRebuildProgress, SearchScope,
 };
+mod windows;
+pub use windows::{SearchSort, SearchSpec, SearchStatus};
 
 /// Required defaults, consumed only by date values that omit context.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
