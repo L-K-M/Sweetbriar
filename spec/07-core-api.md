@@ -520,7 +520,31 @@ cancel at a bounded worker boundary, reopen/same-job resume, independent holds,
 explicit retry and accepted-caller drop. A regression first demonstrates that
 replaying a cancel key with a DIFFERENT live import cannot stop or rewrite that
 job. Coordination hooks observe/block real workers; they never replace results.
-Service, DTO, FFI and UI routing remain their later steps.
+Service delivery is specified below; FFI and UI routing remain later steps.
+
+#### Service index-control boundary (M1.6k2)
+
+```rust
+struct SearchRebuildStarted { receipt: Receipt, job_id: String }
+async fn start_search_rebuild(key: &str) -> Result<SearchRebuildStarted, CoreError>;
+async fn resume_search_rebuild(key: &str, job_id: &str) -> Result<Receipt, CoreError>;
+async fn retry_search_index(key: &str) -> Result<Receipt, CoreError>;
+```
+
+The service owns the start DTO and uses its existing Receipt and coverage types.
+Core forwards these controls and `cancel_job` to the Engine's counted,
+durable-kind-aware dispatcher. Receipt identity, result JSON, timestamp, stored
+job spelling, replay-before-target-validation and error categories are preserved.
+Request cancellation cannot become a durable job cancellation.
+
+Service tests cover singleton/start-after-completion, key replay/conflicts,
+import/rebuild dispatch, wrong/unknown ids, durable pause/reopen/same-job resume,
+independent I/O and user holds, explicit retry, coverage recovery and committed
+request drops. Native persisted holds may be prepared only while Core is closed.
+A dev-only real SQLite writer lock may pin one pending command poll; release it
+before awaiting or observing commit. Coverage then proves the committed change
+before dropping the owned caller future. Native workers and receipts supply all
+results, with no simulated command output or test mode in the shipping core.
 
 ## Subscriptions
 
