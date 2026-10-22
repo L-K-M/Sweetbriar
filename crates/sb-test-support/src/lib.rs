@@ -27,7 +27,7 @@ use sb_types::time::{Clock, Timestamp};
 pub use cut::{CutFs, CutPoints, run_crash_cut_points, run_crash_cuts};
 pub use fault::{FaultFs, FaultKind, FsOp};
 pub use sim::SimFs;
-pub use sqlite::{execute_sql, store_meta_value};
+pub use sqlite::{execute_sql, store_meta_value, with_sqlite_write_lock};
 #[cfg(target_os = "linux")]
 pub use threads::with_new_threads_refused;
 

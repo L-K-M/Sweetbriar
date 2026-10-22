@@ -498,8 +498,9 @@ local drafts. No network yet.
     public-Core import/paging/status/lifecycle proof; format limits are spanless
     InvalidInput(query_json). Retain ordinary windows and opaque native cursors.
   - **M1.6k2 Service index controls — M:** service start/resume/retry APIs
-    using k's coverage/progress/operational DTOs; depends on k. Extend
-    `cancel_job` routing to rebuild jobs. Owns service tests for receipt/key
+    using k's coverage/progress/operational DTOs; depends on k. Qualify
+    the existing kind-aware `cancel_job` delegation with accurate docs and
+    native dispatch proof. Owns service tests for receipt/key
     replay, job-kind dispatch/errors, post-commit request cancellation and
     coverage recovery of the durable job id. No engine/store re-exports.
   - **M1.6l1 Parser FFI — L:** parse/format exports, typed errors and

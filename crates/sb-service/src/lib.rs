@@ -12,6 +12,7 @@ mod api;
 mod error;
 mod imports;
 mod messages;
+mod rebuild;
 mod search;
 mod sidebar;
 mod windows;
@@ -22,6 +23,7 @@ pub use imports::{
     ImportJob, ImportJobState, ImportProblem, ImportProblemKind, ImportReport, ImportSource,
     ImportSourceKind, ImportStarted, ImportTarget, ImportTotals, MboxVariant,
 };
+pub use rebuild::SearchRebuildStarted;
 pub use search::{
     Coverage, ParseContext, SearchIndexState, SearchIoCode, SearchLimitation, SearchRebuildPhase,
     SearchRebuildProgress, SearchScope, SearchSort, SearchSpec, SearchStatus,
