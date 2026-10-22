@@ -27,7 +27,7 @@ mod coverage;
 mod search_windows;
 
 #[track_caller]
-fn wait(mut ready: impl FnMut() -> bool) {
+pub(super) fn wait(mut ready: impl FnMut() -> bool) {
     // Same observation budget as the import suite on shared CI disks.
     let end = Instant::now() + Duration::from_secs(300);
     while !ready() {
@@ -38,7 +38,7 @@ fn wait(mut ready: impl FnMut() -> bool) {
     }
 }
 
-fn count(engine: &Engine, sql: &str) -> i64 {
+pub(super) fn count(engine: &Engine, sql: &str) -> i64 {
     engine
         .resources()
         .read(|tx| {
@@ -48,7 +48,7 @@ fn count(engine: &Engine, sql: &str) -> i64 {
         .unwrap()
 }
 
-fn write<T: Send + 'static>(
+pub(super) fn write<T: Send + 'static>(
     engine: &Engine,
     body: impl FnOnce(&sb_resources::Transaction) -> Result<T, StoreError> + Send + 'static,
 ) -> T {
@@ -118,7 +118,7 @@ fn parked(engine: &Engine) -> mpsc::Receiver<()> {
 }
 
 #[derive(Default)]
-struct TestClock(AtomicI64);
+pub(super) struct TestClock(pub(super) AtomicI64);
 
 impl Clock for TestClock {
     fn now(&self) -> Timestamp {
@@ -126,7 +126,11 @@ impl Clock for TestClock {
     }
 }
 
-fn clocked(root: &Path, fs: Arc<dyn sb_resources::Fs>, at: i64) -> (Engine, Arc<TestClock>) {
+pub(super) fn clocked(
+    root: &Path,
+    fs: Arc<dyn sb_resources::Fs>,
+    at: i64,
+) -> (Engine, Arc<TestClock>) {
     let fresh = !root.join("state.sqlite").exists();
     let clock = Arc::new(TestClock(AtomicI64::new(at)));
     let engine = block_on(Engine::open_with_clock(root, fs, clock.clone())).unwrap();
@@ -204,7 +208,7 @@ fn object(engine: &Engine, root: &Path) -> std::path::PathBuf {
         .join(hash)
 }
 
-fn import(engine: &Engine, path: &Path, bytes: &[u8]) {
+pub(super) fn import(engine: &Engine, path: &Path, bytes: &[u8]) {
     std::fs::write(path, bytes).unwrap();
     let started =
         block_on(engine.start_import(&engine.new_idempotency_key(), vec![path.into()])).unwrap();
@@ -973,12 +977,12 @@ fn native_bulk_full_persists_pause_history_when_status_writes_still_fit() {
 }
 
 #[derive(Clone, Copy)]
-enum End {
+pub(super) enum End {
     Shutdown,
     Drop,
 }
 
-fn close_and_reopen(engine: Engine, root: &Path, end: End) -> Resources {
+pub(super) fn close_and_reopen(engine: Engine, root: &Path, end: End) -> Resources {
     let (sent, received) = mpsc::channel();
     let root = root.to_owned();
     let thread = std::thread::spawn(move || {

@@ -973,6 +973,7 @@ async fn commit(worker: &Worker, batch: Batch) -> Result<ImportJobRecord, StoreE
         })
         .await?;
     worker.indexer().wake();
+    worker.received().wake();
     Ok(committed)
 }
 

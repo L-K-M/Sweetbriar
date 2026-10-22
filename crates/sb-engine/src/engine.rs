@@ -15,6 +15,7 @@ use tokio::task::{JoinError, JoinHandle};
 use crate::EngineError;
 use crate::import::ImportJobs;
 use crate::index::IndexJobs;
+use crate::received::ReceivedJobs;
 use crate::windows::Windows;
 use sb_resources::{
     Resources, SEARCH_EXTRACTOR_VERSION, WritePriority, list_generation, reconcile_search_target,
@@ -72,7 +73,10 @@ pub struct Engine {
     /// Import jobs with a live worker, and their cancel flags (spec/09).
     imports: Arc<ImportJobs>,
     index: Arc<IndexJobs>,
+    received: Arc<ReceivedJobs>,
     leases: Arc<crate::bodies::Leases>,
+    #[cfg(test)]
+    accepted_commands: std::sync::atomic::AtomicUsize,
     /// The worker reserved at open that closes the store if the engine
     /// is dropped without `shutdown`; it ends when this sender drops.
     cleanup: std::sync::mpsc::Sender<Cleanup>,
@@ -198,12 +202,17 @@ impl Detached {
 pub(crate) struct Worker {
     resources: Arc<Resources>,
     index: Arc<IndexJobs>,
+    received: Arc<ReceivedJobs>,
     running: Arc<Running>,
     blocking: Arc<BlockingWork>,
     handle: Handle,
 }
 
 impl Worker {
+    pub(crate) fn received(&self) -> &Arc<ReceivedJobs> {
+        &self.received
+    }
+
     pub(crate) fn indexer(&self) -> &Arc<IndexJobs> {
         &self.index
     }
@@ -256,6 +265,7 @@ impl Spawn for Engine {
         spawn(
             self.resources(),
             &self.index,
+            &self.received,
             &self.blocking,
             self.runtime.handle(),
             body,
@@ -272,6 +282,7 @@ impl Spawn for Worker {
         spawn(
             &self.resources,
             &self.index,
+            &self.received,
             &self.blocking,
             &self.handle,
             body,
@@ -282,6 +293,7 @@ impl Spawn for Worker {
 fn spawn<F, Fut>(
     resources: &Arc<Resources>,
     index: &Arc<IndexJobs>,
+    received: &Arc<ReceivedJobs>,
     blocking: &Arc<BlockingWork>,
     handle: &Handle,
     body: F,
@@ -293,6 +305,7 @@ where
     let worker = Worker {
         resources: Arc::clone(resources),
         index: Arc::clone(index),
+        received: Arc::clone(received),
         running: Arc::new(blocking.start()?),
         blocking: Arc::clone(blocking),
         handle: handle.clone(),
@@ -436,7 +449,10 @@ impl Engine {
                         windows,
                         imports: Arc::default(),
                         index: Arc::default(),
+                        received: Arc::default(),
                         leases: Arc::default(),
+                        #[cfg(test)]
+                        accepted_commands: std::sync::atomic::AtomicUsize::new(0),
                         cleanup: start_cleanup_worker()?,
                     })
                 })
@@ -449,7 +465,8 @@ impl Engine {
                 // Messages imported before the last complete rebuild
                 // get their threads in the background (spec/02).
                 .inspect(Engine::schedule_threads)
-                .inspect(Engine::schedule_index);
+                .inspect(Engine::schedule_index)
+                .inspect(Engine::schedule_received);
             // A caller that stopped waiting drops the engine here.
             let _ = opened.send(engine);
         }))
@@ -485,6 +502,17 @@ impl Engine {
 
     pub(crate) fn indexer(&self) -> &Arc<IndexJobs> {
         &self.index
+    }
+
+    pub(crate) fn received(&self) -> &Arc<ReceivedJobs> {
+        &self.received
+    }
+
+    /// Observe command acceptance, after any preliminary asynchronous validation.
+    #[cfg(test)]
+    pub(crate) fn accepted_commands(&self) -> usize {
+        self.accepted_commands
+            .load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// Wait for `future` on the calling thread. Only for the open
@@ -526,6 +554,7 @@ impl Engine {
     pub async fn shutdown(mut self) -> Result<(), EngineError> {
         self.windows.shut();
         self.index.stop();
+        self.received.stop();
         let resources = self
             .resources
             .take()
@@ -558,6 +587,9 @@ impl Engine {
                 let _ = answer.send(run.await);
             }
         })?;
+        #[cfg(test)]
+        self.accepted_commands
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         answered
             .await
             .map_err(|_| EngineError::internal("a command ended without an answer"))?
@@ -667,6 +699,7 @@ impl Drop for Engine {
     fn drop(&mut self) {
         self.windows.shut();
         self.index.stop();
+        self.received.stop();
         let Some(resources) = self.resources.take() else {
             return;
         };
