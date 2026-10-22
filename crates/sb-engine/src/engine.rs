@@ -18,7 +18,7 @@ use crate::index::IndexJobs;
 use crate::windows::Windows;
 use sb_resources::{
     Resources, SEARCH_EXTRACTOR_VERSION, WritePriority, list_generation, reconcile_search_target,
-    target_version,
+    search_generation, target_version,
 };
 
 /// The name of the worker a dropped engine closes its store on.
@@ -418,6 +418,17 @@ impl Engine {
                         announced.store_moved(generation);
                     }));
                     windows.store_moved(resources.read(list_generation)?);
+                    let announced = Arc::clone(&windows);
+                    resources.observe_search_generation(Arc::new(move |generation| {
+                        announced.search_moved(generation);
+                    }));
+                    windows.search_moved(resources.read(|tx| {
+                        search_generation(tx)?.try_into().map_err(|_| {
+                            sb_resources::StoreError::Corrupt {
+                                detail: "negative search generation".into(),
+                            }
+                        })
+                    })?);
                     Ok(Self {
                         resources: Some(Arc::new(resources)),
                         blocking: Arc::default(),

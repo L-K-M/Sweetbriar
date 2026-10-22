@@ -65,7 +65,7 @@ pub use sb_store::index::rebuild::{
 pub use sb_store::index::{
     IndexBatch, IndexDocument, IndexFence, IndexPublication, IndexReason, IndexState,
     MAX_INDEX_BATCH, MAX_INDEX_BATCH_BYTES, ObservedAvailability, PendingDocument,
-    note_observed_availability, publish_batch, target_version,
+    note_observed_availability, publish_batch, search_generation, target_version,
 };
 pub use sb_store::lists::{
     ListAnchor, ListKey, ListPage, ListScope, MAX_PAGE_ROWS, MailboxRole, PageRead, StoredListRow,
@@ -77,8 +77,10 @@ pub use sb_store::messages::{
     get_message, message_for_occurrence,
 };
 pub use sb_store::query::{
-    MAX_QUERY_INPUT_BYTES, ParseCode, ParseContext, Query, QueryError, SearchIndexState,
-    SearchLimitation, SearchRebuildProgress, SearchScope, StoredSearchCoverage as Coverage,
+    MAX_QUERY_INPUT_BYTES, ParseCode, ParseContext, Query, QueryError, SearchAnchor,
+    SearchIndexState, SearchLimitation, SearchPage, SearchRebuildProgress, SearchScope,
+    StoredSearchCoverage as Coverage, read_search_date_page, read_search_relevance_page,
+    search_date_ids, search_relevance_ids,
 };
 pub use sb_store::settings::{StoredSetting, read_all, upsert};
 pub use sb_store::sidebar::{
@@ -97,8 +99,6 @@ pub use sb_store::{
 
 #[cfg(feature = "test-seams")]
 pub use sb_store::index::rebuild::pause_for_io;
-#[cfg(feature = "test-seams")]
-pub use sb_store::index::search_generation;
 #[cfg(not(feature = "test-seams"))]
 use sb_store::{Clock, Fs};
 #[cfg(feature = "test-seams")]

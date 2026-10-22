@@ -24,6 +24,7 @@ const STALE_CHANGES: [&str; 2] = [
 ];
 
 mod coverage;
+mod search_windows;
 
 #[track_caller]
 fn wait(mut ready: impl FnMut() -> bool) {
@@ -697,6 +698,16 @@ fn reset_enqueue_drive_the_due_hold_and_a_newer_target_never_extracts() {
         sb_resources::RebuildPhase::Index
     );
     // A newer stored target is never extracted, driven or downgraded.
+    let search = block_on(engine.open_window(
+        crate::WindowSpec::Search(crate::SearchSpec::new(
+            r#"{"v":1,"q":{"and":[]}}"#.into(),
+            crate::SearchScope::All,
+            crate::SearchSort::Date,
+        )),
+        crate::Anchor::Top,
+        1,
+    ))
+    .unwrap();
     external(
         &root.join("state.sqlite"),
         "UPDATE search_rebuild_jobs SET phase='complete'; UPDATE store_meta SET value='999' WHERE key='search_extractor_version'",
@@ -711,6 +722,19 @@ fn reset_enqueue_drive_the_due_hold_and_a_newer_target_never_extracts() {
         crate::SearchIndexState::BlockedNewerExtractor
     );
     assert_eq!(coverage.extractor_version, 999);
+    assert!(matches!(
+        block_on(engine.read_window(
+            search.window_id(),
+            search.generation(),
+            crate::Anchor::Top,
+            1
+        )),
+        Err(crate::EngineError::Unavailable { .. })
+    ));
+    assert!(matches!(
+        block_on(engine.window_ids(search.window_id())),
+        Err(crate::EngineError::Unavailable { .. })
+    ));
     block_on(engine.shutdown()).unwrap();
 }
 
@@ -729,6 +753,16 @@ fn failed_publication_and_failed_pause_persistence_gate_reads_until_recovery_com
         ));
         let (engine, clock) = clocked(&root, fs, 10_000);
         let engine = Arc::new(engine);
+        let search = block_on(engine.open_window(
+            crate::WindowSpec::Search(crate::SearchSpec::new(
+                r#"{"v":1,"q":{"and":[]}}"#.into(),
+                crate::SearchScope::All,
+                crate::SearchSort::Date,
+            )),
+            crate::Anchor::Top,
+            1,
+        ))
+        .unwrap();
         let before = generation(&engine);
         let db = root.join("state.sqlite");
         let install = db.clone();
@@ -768,6 +802,19 @@ fn failed_publication_and_failed_pause_persistence_gate_reads_until_recovery_com
             )
         });
         let failed = snapshot(engine.resources());
+        assert!(matches!(
+            block_on(engine.read_window(
+                search.window_id(),
+                search.generation(),
+                crate::Anchor::Top,
+                1
+            )),
+            Err(crate::EngineError::Unavailable { .. })
+        ));
+        assert!(matches!(
+            block_on(engine.window_ids(search.window_id())),
+            Err(crate::EngineError::Unavailable { .. })
+        ));
         assert!(matches!(
             block_on(engine.coverage(crate::SearchScope::All)),
             Err(crate::EngineError::Unavailable { .. })

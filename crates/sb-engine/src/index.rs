@@ -65,6 +65,8 @@ pub(crate) type Hook = Arc<dyn Fn(Event) + Send + Sync>;
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Event {
+    SearchReadCaptured,
+    SearchRegistered { window_id: u64 },
     Captured,
     Prepared { documents: usize, bytes: usize },
     Committed,
@@ -189,7 +191,7 @@ impl IndexJobs {
     }
 
     #[cfg(test)]
-    fn event(&self, event: Event) {
+    pub(crate) fn event(&self, event: Event) {
         let hook = self.hook.lock().unwrap().clone();
         if let Some(hook) = hook {
             hook(event);

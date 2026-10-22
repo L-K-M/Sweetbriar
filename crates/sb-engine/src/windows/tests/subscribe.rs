@@ -54,7 +54,7 @@ fn toggle_flags(engine: &Engine, times: usize) {
 
 /// Poll `future` with a no-op waker until it finishes or `PATIENCE`
 /// runs out, sleeping between polls.
-fn finish<F: std::future::Future>(future: std::pin::Pin<&mut F>) -> F::Output {
+pub(super) fn finish<F: std::future::Future>(future: std::pin::Pin<&mut F>) -> F::Output {
     let mut future = future;
     let mut cx = Context::from_waker(Waker::noop());
     let deadline = Instant::now() + PATIENCE;

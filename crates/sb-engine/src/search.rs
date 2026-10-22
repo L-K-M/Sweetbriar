@@ -15,14 +15,14 @@ pub enum SearchScope {
 }
 
 impl SearchScope {
-    fn stored(self) -> Result<StoreScope, EngineError> {
+    pub(crate) fn stored(&self) -> Result<StoreScope, EngineError> {
         match self {
             Self::All => Ok(StoreScope::All),
             Self::Account(id) => id
                 .parse()
                 .map(StoreScope::Account)
                 .map_err(|_| EngineError::invalid_input("scope", "an account scope needs a UUID")),
-            Self::Mailbox(id) if id > 0 => Ok(StoreScope::Mailbox(id)),
+            Self::Mailbox(id) if *id > 0 => Ok(StoreScope::Mailbox(*id)),
             Self::Mailbox(_) => Err(EngineError::invalid_input(
                 "scope",
                 "a mailbox scope needs a positive id",

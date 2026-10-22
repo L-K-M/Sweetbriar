@@ -810,5 +810,6 @@ fn a_dropped_finished_open_cleans_up_off_the_dropping_thread() {
 }
 
 mod qualification;
+mod search;
 mod store;
 mod subscribe;

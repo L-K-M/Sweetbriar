@@ -408,6 +408,22 @@ Native private errors are bounded by the query limit plus one UTF-8 scalar
 Preserve all existing error variants and regenerate bindings in the same PR.
 This outcome adds no parser method or partial Search mode; k/l1 deliver those.
 
+### Engine Search windows (M1.6j3b)
+
+Engine `WindowSpec::Search(SearchSpec)` takes
+`SearchSpec::new(query_json: String, scope: SearchScope, sort: SearchSort)`.
+Construction is a pure packet; open validates/parses on counted blocking work
+before registration. Only validated specs enter the window registry, caching
+an immutable `Arc<Query>` for reads/ids/subscriptions. Move oversized input
+into validation without cloning it. SearchSort supports Date and Relevance.
+
+Search pages expose immutable `Window::search()` status (coverage and exact
+excluded_unknown); ordinary windows return none. Reuse the complete Store
+sorts and cursor wire format, one-transaction status, existing true-hit count,
+limits and lifecycle rules above. Query/scope/sort changes open new handles.
+Register the Search observer before seeding its separate source version.
+No counts/status cache or service/FFI Search mode is introduced in this step.
+
 ### Search rebuild controls (M1.6)
 
 - Search commands use the normal idempotency-key/receipt protocol; the

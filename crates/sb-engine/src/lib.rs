@@ -50,8 +50,8 @@ pub use sb_resources::{
 pub use search::SearchScope;
 pub use settings::Setting;
 pub use windows::{
-    Anchor, Count, Cursor, ListRow, Subscription, Window, WindowEvent, WindowId, WindowIds,
-    WindowSpec,
+    Anchor, Count, Cursor, ListRow, SearchSort, SearchSpec, SearchStatus, Subscription, Window,
+    WindowEvent, WindowId, WindowIds, WindowSpec,
 };
 
 pub use sb_resources::{

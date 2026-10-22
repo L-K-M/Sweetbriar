@@ -182,7 +182,7 @@ impl From<u64> for WindowId {
 
 /// Which window a shell is listing (spec/07 "Queries"): the store's
 /// lists, or the pilot's in-memory debug source.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WindowSpec {
     /// The in-memory synthetic source, filled by `debug_fill_synthetic`.
     DebugSynthetic,
@@ -194,6 +194,14 @@ pub enum WindowSpec {
     Flagged,
     /// One thread's logical messages, through their representatives.
     Thread(i64),
+    /// Logical-message Search over either complete Store ordering.
+    Search(SearchSpec),
+}
+
+enum WindowSource<'a> {
+    Synthetic,
+    List(ListScope),
+    Search(&'a SearchSpec),
 }
 
 impl WindowSpec {
@@ -201,25 +209,26 @@ impl WindowSpec {
     /// its row, its spec and its generation"), mailbox, role or thread
     /// included, so a cursor carried to a window over another spec is
     /// caught.
-    fn tag(self) -> String {
+    fn tag(&self) -> String {
         match self {
             Self::DebugSynthetic => "debug-synthetic".to_owned(),
             Self::Mailbox(id) => format!("mailbox:{id}"),
             Self::Unified(role) => format!("unified:{}", role.as_str()),
             Self::Flagged => "flagged".to_owned(),
             Self::Thread(id) => format!("thread:{id}"),
+            Self::Search(_) => "search".into(), // Search never uses the list codec.
         }
     }
 
-    /// The store scope a store window reads; `None` for the debug
-    /// source.
-    fn scope(self) -> Option<ListScope> {
+    /// Explicit dispatch keeps Search from falling back to the synthetic source.
+    fn source(&self) -> WindowSource<'_> {
         match self {
-            Self::DebugSynthetic => None,
-            Self::Mailbox(id) => Some(ListScope::Mailbox(id)),
-            Self::Unified(role) => Some(ListScope::Unified(role)),
-            Self::Flagged => Some(ListScope::Flagged),
-            Self::Thread(id) => Some(ListScope::Thread(id)),
+            Self::DebugSynthetic => WindowSource::Synthetic,
+            Self::Mailbox(id) => WindowSource::List(ListScope::Mailbox(*id)),
+            Self::Unified(role) => WindowSource::List(ListScope::Unified(*role)),
+            Self::Flagged => WindowSource::List(ListScope::Flagged),
+            Self::Thread(id) => WindowSource::List(ListScope::Thread(*id)),
+            Self::Search(spec) => WindowSource::Search(spec),
         }
     }
 }
@@ -362,9 +371,14 @@ pub struct Window {
     has_more_after: bool,
     has_more_before: bool,
     total: Count,
+    search: Option<SearchStatus>,
 }
 
 impl Window {
+    /// Search-only status from the same read snapshot as the page.
+    pub fn search(&self) -> Option<&SearchStatus> {
+        self.search.as_ref()
+    }
     /// The window this page belongs to.
     pub fn window_id(&self) -> WindowId {
         self.window_id
@@ -390,12 +404,12 @@ impl Window {
         self.after.as_ref()
     }
 
-    /// Whether rows lie after the page (higher ranks, older).
+    /// Whether rows lie after the page in this window's order.
     pub fn has_more_after(&self) -> bool {
         self.has_more_after
     }
 
-    /// Whether rows lie before the page (lower ranks, newer).
+    /// Whether rows lie before the page in this window's order.
     pub fn has_more_before(&self) -> bool {
         self.has_more_before
     }
@@ -446,6 +460,7 @@ pub(crate) struct Windows {
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 struct Versions {
     store: u64,
+    search: u64,
     synthetic: u64,
     closes: u64,
     shut: bool,
@@ -527,6 +542,14 @@ impl Windows {
         });
     }
 
+    pub(crate) fn search_moved(&self, generation: u64) {
+        self.versions.send_if_modified(|versions| {
+            let moved = generation > versions.search;
+            versions.search = versions.search.max(generation);
+            moved
+        });
+    }
+
     /// The engine is shutting down: end every waiting `next`.
     pub(crate) fn shut(&self) {
         self.versions.send_modify(|versions| versions.shut = true);
@@ -570,16 +593,16 @@ impl Windows {
         check_limit(limit)?;
         let mut inner = self.lock();
         let source = inner.synthetic;
-        let range = resolve(spec, anchor, source.generation, source.count, limit)?;
+        let range = resolve(&spec, anchor, source.generation, source.count, limit)?;
         let window_id = inner.take_window_id();
         // The window closes if this page never reaches its caller.
         inner
             .open
-            .insert(window_id, OpenWindow::new(spec, source.generation));
+            .insert(window_id, OpenWindow::new(spec.clone(), source.generation));
         Ok(page(
             window_id,
             source.generation,
-            spec,
+            &spec,
             range,
             source.count,
         ))
@@ -610,8 +633,8 @@ impl Windows {
                 generation: source.generation,
             });
         }
-        let range = resolve(open.spec, anchor, generation, source.count, limit)?;
-        Ok(page(window_id, generation, open.spec, range, source.count))
+        let range = resolve(&open.spec, anchor, generation, source.count, limit)?;
+        Ok(page(window_id, generation, &open.spec, range, source.count))
     }
 
     /// `window_ids` (spec/07 "The id index"): every row's occurrence
@@ -675,7 +698,7 @@ impl Windows {
 /// A store window's anchor as the store reads it, with the generation a
 /// cursor was minted at (spec/07 "Paging").
 fn store_anchor(
-    spec: WindowSpec,
+    spec: &WindowSpec,
     anchor: &Anchor,
 ) -> Result<(ListAnchor, Option<u64>), EngineError> {
     Ok(match anchor {
@@ -711,7 +734,7 @@ fn store_outcome<T>(read: PageRead<T>, anchor: &Anchor) -> Result<T, EngineError
 /// A store page as the window's answer: edge cursors, the store's
 /// more-rows flags, and a total exact only when the page holds the
 /// whole window (spec/07 "Store windows").
-fn store_window(window_id: WindowId, spec: WindowSpec, page: ListPage) -> Window {
+fn store_window(window_id: WindowId, spec: &WindowSpec, page: ListPage) -> Window {
     let ListPage {
         generation,
         rows,
@@ -733,6 +756,7 @@ fn store_window(window_id: WindowId, spec: WindowSpec, page: ListPage) -> Window
         has_more_before,
         has_more_after,
         total,
+        search: None,
         rows,
     }
 }
@@ -773,7 +797,7 @@ fn check_limit(limit: u32) -> Result<(), EngineError> {
 /// the newest first — so a `Before` page lists its rows in the same
 /// order every other page uses.
 fn resolve(
-    spec: WindowSpec,
+    spec: &WindowSpec,
     anchor: &Anchor,
     generation: u64,
     n: u32,
@@ -834,7 +858,7 @@ const CURSOR_TAG: &str = "sbw1";
 /// for date order — minted on `spec` at `generation` (spec/07). The
 /// row's `sort_date` goes in too, so a hand-shaped cursor is caught
 /// by the derivation check, not obeyed.
-fn mint_cursor(spec: WindowSpec, generation: u64, row: &ListRow) -> Cursor {
+fn mint_cursor(spec: &WindowSpec, generation: u64, row: &ListRow) -> Cursor {
     Cursor(format!(
         "{CURSOR_TAG}|{}|{generation}|{}|{}",
         spec.tag(),
@@ -851,7 +875,7 @@ fn mint_cursor(spec: WindowSpec, generation: u64, row: &ListRow) -> Cursor {
 /// before the generation: a foreign cursor is a caller bug, not
 /// staleness.
 fn cursor_rank(
-    spec: WindowSpec,
+    spec: &WindowSpec,
     cursor: &Cursor,
     generation: u64,
     n: u64,
@@ -875,7 +899,7 @@ fn cursor_rank(
 /// The generation `cursor` was minted at and the row it names, once its
 /// shape and spec check out: malformed, or from another spec, is
 /// `InvalidInput` (spec/07).
-fn decode_cursor(spec: WindowSpec, cursor: &Cursor) -> Result<(u64, ListKey), EngineError> {
+fn decode_cursor(spec: &WindowSpec, cursor: &Cursor) -> Result<(u64, ListKey), EngineError> {
     let invalid = |message: &str| EngineError::invalid_input("anchor", message);
     let fields: Vec<&str> = cursor.0.split('|').collect();
     let [tag, cursor_spec, minted, sort_date, id]: [&str; 5] = fields
@@ -903,7 +927,7 @@ fn decode_cursor(spec: WindowSpec, cursor: &Cursor) -> Result<(u64, ListKey), En
 fn page(
     window_id: WindowId,
     generation: u64,
-    spec: WindowSpec,
+    spec: &WindowSpec,
     range: (u64, u64),
     n: u32,
 ) -> Window {
@@ -918,6 +942,7 @@ fn page(
         has_more_before: start > 0,
         has_more_after: end < n,
         total: Count::Exact(n),
+        search: None,
         rows,
     }
 }
@@ -981,13 +1006,20 @@ impl Engine {
         anchor: Anchor,
         limit: u32,
     ) -> Result<Window, EngineError> {
+        check_limit(limit)?;
+        let spec = match spec {
+            WindowSpec::Search(search) => {
+                return self.open_search_window(search, anchor, limit).await;
+            }
+            spec => spec,
+        };
         let windows = Arc::clone(self.windows());
         let cleanup = self.detached();
-        if let Some(scope) = spec.scope() {
+        if let WindowSource::List(scope) = spec.source() {
             // The first page is read before the window exists, so a
             // failed read registers nothing.
             check_limit(limit)?;
-            let (store, minted) = store_anchor(spec, &anchor)?;
+            let (store, minted) = store_anchor(&spec, &anchor)?;
             let read = self
                 .read_through(move |resources| {
                     resources.read(|tx| read_list_page(tx, scope, store, limit as usize, minted))
@@ -996,9 +1028,9 @@ impl Engine {
             let page = store_outcome(read, &anchor)?;
             let opened = self
                 .compute(move || {
-                    let window_id = windows.register(spec, page.generation);
+                    let window_id = windows.register(spec.clone(), page.generation);
                     Ok(Opened {
-                        window: Some(store_window(window_id, spec, page)),
+                        window: Some(store_window(window_id, &spec, page)),
                         windows,
                         cleanup,
                     })
@@ -1035,17 +1067,27 @@ impl Engine {
         // The lookup and a store read are separate tasks, so a close in
         // between still gets this page: the read saw the window open.
         let open = self.compute(move || lookup.window(window_id)).await?;
-        let spec = open.spec;
-        let Some(scope) = spec.scope() else {
-            let window = self
-                .compute(move || windows.read(window_id, generation, &anchor, limit))
-                .await?;
-            open.delivered(window.generation);
-            return Ok(window);
+        let scope = match open.spec.source() {
+            WindowSource::Search(spec) => {
+                let window = self
+                    .read_search_window(window_id, spec.clone(), anchor, limit, generation)
+                    .await?;
+                open.delivered(window.generation);
+                return Ok(window);
+            }
+            WindowSource::Synthetic => {
+                let window = self
+                    .compute(move || windows.read(window_id, generation, &anchor, limit))
+                    .await?;
+                open.delivered(window.generation);
+                return Ok(window);
+            }
+            WindowSource::List(scope) => scope,
         };
+        let spec = open.spec.clone();
         // A malformed or foreign cursor is a caller bug, reported before
         // any staleness (as `cursor_rank` does for the synthetic source).
-        let (store, minted) = store_anchor(spec, &anchor)?;
+        let (store, minted) = store_anchor(&spec, &anchor)?;
         // A cursor from another generation than the caller's is stale
         // whatever the store's is now; the error names the current one.
         let at = minted.unwrap_or(generation);
@@ -1062,7 +1104,7 @@ impl Engine {
                 resources.read(|tx| read_list_page(tx, scope, store, limit as usize, Some(at)))
             })
             .await?;
-        let window = store_window(window_id, spec, store_outcome(read, &anchor)?);
+        let window = store_window(window_id, &spec, store_outcome(read, &anchor)?);
         open.delivered(window.generation);
         Ok(window)
     }
@@ -1074,10 +1116,18 @@ impl Engine {
         let windows = Arc::clone(self.windows());
         let lookup = Arc::clone(&windows);
         let open = self.compute(move || lookup.window(window_id)).await?;
-        let Some(scope) = open.spec.scope() else {
-            let index = self.compute(move || windows.ids(window_id)).await?;
-            open.delivered(index.generation);
-            return Ok(index);
+        let scope = match open.spec.source() {
+            WindowSource::Search(spec) => {
+                let ids = self.search_window_ids(spec.clone()).await?;
+                open.delivered(ids.generation);
+                return Ok(ids);
+            }
+            WindowSource::Synthetic => {
+                let index = self.compute(move || windows.ids(window_id)).await?;
+                open.delivered(index.generation);
+                return Ok(index);
+            }
+            WindowSource::List(scope) => scope,
         };
         let read = self
             .read_through(move |resources| resources.read(|tx| list_ids(tx, scope, None)))
@@ -1134,7 +1184,9 @@ impl Drop for Opened {
     }
 }
 
+mod search;
 mod subscribe;
+pub use search::{SearchSort, SearchSpec, SearchStatus};
 
 pub use subscribe::{Subscription, WindowEvent};
 
