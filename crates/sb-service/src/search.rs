@@ -49,6 +49,7 @@ impl SearchSpec {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParseContext {
     pub tz: String,
+    /// UTC milliseconds since the Unix epoch.
     pub clock: i64,
 }
 

@@ -4,7 +4,9 @@ use crate::{
     WindowEvent, WindowSpec, open_core,
 };
 use sb_test_support::{ScratchDir, block_on};
+use std::future::Future;
 use std::path::Path;
+use std::task::{Context, Poll, Waker};
 use std::time::{Duration, Instant};
 
 fn open(scratch: &ScratchDir) -> Core {
@@ -491,18 +493,34 @@ fn native_public_search_preserves_status_scopes_cursors_and_lifecycle() {
         50,
     ))
     .unwrap();
+    // Empty AND reads imported rows without waiting for token indexing.
     assert_eq!(all.rows.len(), 4);
     settled(&core, &all.rows);
     let current = block_on(core.coverage(SearchScope::All))
         .unwrap()
         .generation;
     assert!(current > live.generation);
-    assert_eq!(
-        block_on(subscription.next()).unwrap(),
-        WindowEvent::Invalidated {
-            generation: current
-        }
+    // A read may see a commit before its observer announces it. Consume any
+    // already-announced intermediate generation, then require the final one.
+    let mut next = Box::pin(subscription.next());
+    let mut observed = live.generation;
+    wait(
+        || match next.as_mut().poll(&mut Context::from_waker(Waker::noop())) {
+            Poll::Pending => false,
+            Poll::Ready(Ok(WindowEvent::Invalidated { generation })) => {
+                assert!(generation > observed && generation <= current);
+                observed = generation;
+                if generation == current {
+                    true
+                } else {
+                    next = Box::pin(subscription.next());
+                    false
+                }
+            }
+            Poll::Ready(other) => panic!("expected Search invalidation: {other:?}"),
+        },
     );
+    assert_eq!(observed, current);
     assert!(
         matches!(block_on(core.read_window(live.window_id, live.generation, Anchor::Top, 50)), Err(CoreError::ResetRequired { generation }) if generation == current)
     );
