@@ -88,6 +88,17 @@ public struct ImportStarted: Sendable, Equatable {
     }
 }
 
+/// The stored start receipt and actual new or reused durable rebuild job.
+public struct SearchRebuildStarted: Sendable, Equatable {
+    public var receipt: Receipt
+    public var jobId: String
+
+    public init(receipt: Receipt, jobId: String) {
+        self.receipt = receipt
+        self.jobId = jobId
+    }
+}
+
 /// An import job's state (spec/02 `import_jobs`).
 public enum ImportJobState: Sendable, Equatable {
     case inventory

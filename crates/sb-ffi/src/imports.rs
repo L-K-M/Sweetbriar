@@ -286,9 +286,9 @@ impl Core {
         Ok(Receipt::from_service(&receipt))
     }
 
-    /// `cancel_job(id)` (spec/07, 09): the job is cancelled once this
-    /// returns; committed batches stay imported. A finished job is
-    /// `Conflict`.
+    /// Cancel an import or durably pause Search index work; committed work stays.
+    /// Completed imports are Conflict; completed rebuilds are no-ops.
+    /// An index user hold survives reopen until resume_search_rebuild.
     pub async fn cancel_job(
         &self,
         token: Arc<CancelToken>,

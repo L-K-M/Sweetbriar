@@ -328,6 +328,21 @@ uint64_t uniffi_sb_ffi_fn_method_core_format_search(uint64_t ptr, uint64_t token
 uint64_t uniffi_sb_ffi_fn_method_core_parse_search(uint64_t ptr, uint64_t token, RustBuffer text, RustBuffer context
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_RESUME_SEARCH_REBUILD
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_RESUME_SEARCH_REBUILD
+uint64_t uniffi_sb_ffi_fn_method_core_resume_search_rebuild(uint64_t ptr, uint64_t token, RustBuffer idempotency_key, RustBuffer job_id
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_RETRY_SEARCH_INDEX
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_RETRY_SEARCH_INDEX
+uint64_t uniffi_sb_ffi_fn_method_core_retry_search_index(uint64_t ptr, uint64_t token, RustBuffer idempotency_key
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_START_SEARCH_REBUILD
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_START_SEARCH_REBUILD
+uint64_t uniffi_sb_ffi_fn_method_core_start_search_rebuild(uint64_t ptr, uint64_t token, RustBuffer idempotency_key
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_COVERAGE
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_COVERAGE
 uint64_t uniffi_sb_ffi_fn_method_core_coverage(uint64_t ptr, uint64_t token, RustBuffer scope
@@ -784,6 +799,24 @@ uint16_t uniffi_sb_ffi_checksum_method_core_format_search(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_PARSE_SEARCH
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_PARSE_SEARCH
 uint16_t uniffi_sb_ffi_checksum_method_core_parse_search(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_RESUME_SEARCH_REBUILD
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_RESUME_SEARCH_REBUILD
+uint16_t uniffi_sb_ffi_checksum_method_core_resume_search_rebuild(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_RETRY_SEARCH_INDEX
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_RETRY_SEARCH_INDEX
+uint16_t uniffi_sb_ffi_checksum_method_core_retry_search_index(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_START_SEARCH_REBUILD
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_START_SEARCH_REBUILD
+uint16_t uniffi_sb_ffi_checksum_method_core_start_search_rebuild(void
     
 );
 #endif

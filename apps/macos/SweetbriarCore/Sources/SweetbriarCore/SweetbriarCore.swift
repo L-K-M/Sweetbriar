@@ -785,9 +785,9 @@ public protocol CoreProtocol: AnyObject, Sendable {
     func shutdown() async 
     
     /**
-     * `cancel_job(id)` (spec/07, 09): the job is cancelled once this
-     * returns; committed batches stay imported. A finished job is
-     * `Conflict`.
+     * Cancel an import or durably pause Search index work; committed work stays.
+     * Completed imports are Conflict; completed rebuilds are no-ops.
+     * An index user hold survives reopen until resume_search_rebuild.
      */
     func cancelJob(token: CancelToken, idempotencyKey: String, jobId: String) async throws  -> Receipt
     
@@ -853,6 +853,25 @@ public protocol CoreProtocol: AnyObject, Sendable {
      * Parse text to canonical v1 JSON, preserving typed UTF8 error spans.
      */
     func parseSearch(token: CancelToken, text: String, context: ParseContext) async throws  -> String
+    
+    /**
+     * Release the matching rebuild's user hold, preserving I/O holds and progress.
+     * Completed ids are no-ops; unknown ids are NotFound, other kinds InvalidInput.
+     * A begun command returns its stored receipt despite request cancellation.
+     */
+    func resumeSearchRebuild(token: CancelToken, idempotencyKey: String, jobId: String) async throws  -> Receipt
+    
+    /**
+     * Request a global I/O retry; never release a user hold or invent a job id.
+     * A begun command returns its receipt despite request cancellation; idle retry is a no-op.
+     */
+    func retrySearchIndex(token: CancelToken, idempotencyKey: String) async throws  -> Receipt
+    
+    /**
+     * Start or reuse the active rebuild without releasing either hold.
+     * Once begun, request cancellation cannot cancel the durable job or its receipt.
+     */
+    func startSearchRebuild(token: CancelToken, idempotencyKey: String) async throws  -> SearchRebuildStarted
     
     /**
      * Query scoped coverage, including global progress while Search is unavailable.
@@ -1051,9 +1070,9 @@ open func shutdown()async   {
 }
     
     /**
-     * `cancel_job(id)` (spec/07, 09): the job is cancelled once this
-     * returns; committed batches stay imported. A finished job is
-     * `Conflict`.
+     * Cancel an import or durably pause Search index work; committed work stays.
+     * Completed imports are Conflict; completed rebuilds are no-ops.
+     * An index user hold survives reopen until resume_search_rebuild.
      */
 open func cancelJob(token: CancelToken, idempotencyKey: String, jobId: String)async throws  -> Receipt  {
     return
@@ -1277,6 +1296,67 @@ open func parseSearch(token: CancelToken, text: String, context: ParseContext)as
             completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
             freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
             liftFunc: FfiConverterString.lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * Release the matching rebuild's user hold, preserving I/O holds and progress.
+     * Completed ids are no-ops; unknown ids are NotFound, other kinds InvalidInput.
+     * A begun command returns its stored receipt despite request cancellation.
+     */
+open func resumeSearchRebuild(token: CancelToken, idempotencyKey: String, jobId: String)async throws  -> Receipt  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_resume_search_rebuild(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterString.lower(idempotencyKey),FfiConverterString.lower(jobId)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeReceipt_lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * Request a global I/O retry; never release a user hold or invent a job id.
+     * A begun command returns its receipt despite request cancellation; idle retry is a no-op.
+     */
+open func retrySearchIndex(token: CancelToken, idempotencyKey: String)async throws  -> Receipt  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_retry_search_index(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterString.lower(idempotencyKey)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeReceipt_lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * Start or reuse the active rebuild without releasing either hold.
+     * Once begun, request cancellation cannot cancel the durable job or its receipt.
+     */
+open func startSearchRebuild(token: CancelToken, idempotencyKey: String)async throws  -> SearchRebuildStarted  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_start_search_rebuild(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterString.lower(idempotencyKey)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeSearchRebuildStarted_lift,
             errorHandler: FfiConverterTypeCoreError_lift
         )
 }
@@ -3319,6 +3399,63 @@ public func FfiConverterTypeSearchRebuildProgress_lift(_ buf: RustBuffer) throws
 #endif
 public func FfiConverterTypeSearchRebuildProgress_lower(_ value: SearchRebuildProgress) -> RustBuffer {
     return FfiConverterTypeSearchRebuildProgress.lower(value)
+}
+
+
+/**
+ * The stored start receipt and actual new or reused durable job id.
+ */
+public struct SearchRebuildStarted: Equatable, Hashable {
+    public var receipt: Receipt
+    public var jobId: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(receipt: Receipt, jobId: String) {
+        self.receipt = receipt
+        self.jobId = jobId
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension SearchRebuildStarted: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeSearchRebuildStarted: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SearchRebuildStarted {
+        return
+            try SearchRebuildStarted(
+                receipt: FfiConverterTypeReceipt.read(from: &buf), 
+                jobId: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: SearchRebuildStarted, into buf: inout [UInt8]) {
+        FfiConverterTypeReceipt.write(value.receipt, into: &buf)
+        FfiConverterString.write(value.jobId, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSearchRebuildStarted_lift(_ buf: RustBuffer) throws -> SearchRebuildStarted {
+    return try FfiConverterTypeSearchRebuildStarted.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSearchRebuildStarted_lower(_ value: SearchRebuildStarted) -> RustBuffer {
+    return FfiConverterTypeSearchRebuildStarted.lower(value)
 }
 
 
@@ -6486,7 +6623,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_sb_ffi_checksum_method_core_shutdown() != 9052) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_sb_ffi_checksum_method_core_cancel_job() != 21808) {
+    if (uniffi_sb_ffi_checksum_method_core_cancel_job() != 65113) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_core_confirm_import() != 51860) {
@@ -6520,6 +6657,15 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_core_parse_search() != 53331) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_resume_search_rebuild() != 10208) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_retry_search_index() != 23996) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_start_search_rebuild() != 31264) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_core_coverage() != 60982) {
