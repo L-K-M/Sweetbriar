@@ -505,7 +505,9 @@ local drafts. No network yet.
     coverage recovery of the durable job id. No engine/store re-exports.
   - **M1.6l1 Parser FFI — L:** parse/format exports, typed errors and
     generated bindings, with the Swift adapter and mapping/cancellation
-    tests. Depends on k2; binding drift is checked in each FFI step.
+    tests. Depends on k2; binding drift is checked in each FFI step. Owns
+    explicit context, all-code/UTF8/EOF/limit/no-fallback and real-core query
+    cancellation/shutdown proof in Rust and Swift in the same outcome.
   - **M1.6l2 Coverage FFI — L:** scope/coverage DTOs, export, generated
     bindings and Swift adapter/tests, including job progress, operational
     pause/error/deadline mapping. Depends on l1.
