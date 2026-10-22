@@ -4,7 +4,7 @@ import SweetbriarCore
 
 private enum SDKTestFailure: Error { case timedOut }
 
-private func untilSDK(_ condition: () async throws -> Bool) async throws {
+func untilSDK(_ condition: () async throws -> Bool) async throws {
     let end = ContinuousClock.now + .seconds(60)
     while try await !condition() {
         if ContinuousClock.now >= end { throw SDKTestFailure.timedOut }

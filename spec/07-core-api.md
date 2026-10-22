@@ -781,3 +781,29 @@ events may report intermediate commits before the fenced latest one. Regenerate
 the complete pinned SDK and pass binding/import/async-callback checks. Existing
 window methods and qualified core semantics stay in place; controls FFI and
 Search presentation follow their listed outcomes.
+
+### Index-controls FFI and Swift boundary (M1.6l4)
+
+The FFI owns SearchRebuildStarted and exposes start_search_rebuild,
+resume_search_rebuild and retry_search_index through Core's counted command
+boundary, each with a token and caller key. The owned Swift adapter supplies
+fresh tokens/UUID keys and preserves every receipt field and durable job id.
+Existing cancel_job stays kind-aware: completed imports Conflict; completed
+rebuild cancel/resume is a no-op. Start releases neither hold, resume preserves
+I/O holds, and global retry never releases a user hold. Request cancellation
+is independent of explicit durable job cancellation and window cleanup.
+
+Same-outcome native exported tests own receipt replay before target validation,
+singleton/completed ids, durable pause/reopen/resume, independent holds and
+global retry across phases, plus accepted-request drop and each export's token,
+lifecycle and shutdown behavior. Closed fixtures preserve real epochs and valid
+state; real workers and stored receipts supply every command result. Actual
+SDK/Bridge consumers and wire/owned mapping tests qualify first exposure.
+
+A public Swift cancel can legitimately find a fast rebuild already complete.
+Assert the actual receipt's full paused-or-complete consequences; do not assume
+worker timing. Deterministic active-hold proof stays in native closed fixtures;
+Swift uses public commands, coverage and reopen, without source database or
+shipping test hooks. Commit complete pinned bindings and pass all boundary
+checks; a full SDK/owned-adapter artifact reslice is required if the complete
+outcome exceeds its review budget, never a cut to critical proof.

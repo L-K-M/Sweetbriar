@@ -4,6 +4,8 @@ use std::sync::Arc;
 
 use crate::{CancelToken, Core, CoreError};
 
+mod controls;
+pub use controls::SearchRebuildStarted;
 mod coverage;
 pub use coverage::{
     Coverage, SearchIndexState, SearchIoCode, SearchLimitation, SearchRebuildPhase,

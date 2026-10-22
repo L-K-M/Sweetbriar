@@ -67,6 +67,38 @@ public final class CoreBridge: Sendable {
         return SearchCoverage(value)
     }
 
+    /// Start or reuse a durable rebuild; start never releases a hold.
+    /// Cancelling the calling task cannot cancel a job already committed.
+    public func startSearchRebuild() async throws -> SearchRebuildStarted {
+        let token = SweetbriarCore.CancelToken()
+        let value = try await Self.withCancellation(token: token) {
+            try await self.core.startSearchRebuild(token: token, idempotencyKey: UUID().uuidString)
+        }
+        return SearchRebuildStarted(value)
+    }
+
+    /// Release this active rebuild's user hold, preserving I/O holds and progress.
+    /// Completed ids are no-ops; request cancellation never pauses the durable job.
+    public func resumeSearchRebuild(jobId: String) async throws -> Receipt {
+        let token = SweetbriarCore.CancelToken()
+        let value = try await Self.withCancellation(token: token) {
+            try await self.core.resumeSearchRebuild(
+                token: token, idempotencyKey: UUID().uuidString, jobId: jobId
+            )
+        }
+        return Receipt(value)
+    }
+
+    /// Request a global I/O retry; a user hold still requires explicit resume.
+    /// Like other commands, a begun retry returns its receipt despite task cancellation.
+    public func retrySearchIndex() async throws -> Receipt {
+        let token = SweetbriarCore.CancelToken()
+        let value = try await Self.withCancellation(token: token) {
+            try await self.core.retrySearchIndex(token: token, idempotencyKey: UUID().uuidString)
+        }
+        return Receipt(value)
+    }
+
     /// Parse Search text into canonical v1 JSON with explicit defaults.
     public func parseSearch(text: String, context: ParseContext) async throws -> String {
         let token = SweetbriarCore.CancelToken()
@@ -202,9 +234,9 @@ public final class CoreBridge: Sendable {
         return Receipt(receipt)
     }
 
-    /// `cancel_job(id)` (spec/07, 09): the job is cancelled once this
-    /// returns; committed batches stay imported. A finished job is
-    /// `conflict`.
+    /// Cancel an import or durably pause index work; committed work stays.
+    /// Completed imports conflict; completed rebuilds are no-ops.
+    /// An index user hold survives reopen until `resumeSearchRebuild`.
     @discardableResult
     public func cancelJob(jobId: String) async throws -> Receipt {
         let token = SweetbriarCore.CancelToken()
@@ -444,6 +476,12 @@ extension Receipt {
             resultJson: generated.resultJson,
             createdAtMs: generated.createdAtMs
         )
+    }
+}
+
+extension SearchRebuildStarted {
+    init(_ generated: SweetbriarCore.SearchRebuildStarted) {
+        self.init(receipt: Receipt(generated.receipt), jobId: generated.jobId)
     }
 }
 

@@ -172,7 +172,7 @@ fn coverage_maps_every_field_variant_and_real_wire_payload() {
     }
 }
 
-fn open(scratch: &ScratchDir) -> Arc<Core> {
+pub(in crate::search) fn open(scratch: &ScratchDir) -> Arc<Core> {
     block_on(open_core(
         CancelToken::new(),
         CoreConfig {
@@ -183,11 +183,11 @@ fn open(scratch: &ScratchDir) -> Arc<Core> {
     .unwrap()
 }
 
-fn all(core: &Core) -> Coverage {
+pub(in crate::search) fn all(core: &Core) -> Coverage {
     block_on(core.coverage(CancelToken::new(), SearchScope::All)).unwrap()
 }
 
-fn wait(mut condition: impl FnMut() -> bool) {
+pub(in crate::search) fn wait(mut condition: impl FnMut() -> bool) {
     let end = Instant::now() + Duration::from_secs(60);
     while !condition() {
         assert!(
