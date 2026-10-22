@@ -23,6 +23,7 @@ mod cancel;
 mod error;
 mod imports;
 mod messages;
+mod search;
 mod sidebar;
 mod subscribe;
 mod windows;
@@ -34,6 +35,7 @@ pub use imports::{
     ImportJob, ImportJobState, ImportProblem, ImportProblemKind, ImportReport, ImportSource,
     ImportSourceKind, ImportStarted, ImportTarget, ImportTotals, MboxVariant, VariantChoice,
 };
+pub use search::ParseContext;
 pub use sidebar::{Account, AccountKind, AccountState, Mailbox, MailboxKind, Mailboxes};
 pub use subscribe::{Subscription, WindowEvent};
 pub use windows::{Anchor, Count, ListRow, MailboxRole, Window, WindowIds, WindowSpec};

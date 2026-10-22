@@ -16,6 +16,18 @@ public struct CoreConfig: Sendable, Equatable {
     }
 }
 
+/// Required Search defaults; dates with explicit context never consult these.
+public struct ParseContext: Sendable, Equatable {
+    public var tz: String
+    /// UTC milliseconds since the Unix epoch.
+    public var clock: Int64
+
+    public init(tz: String, clock: Int64) {
+        self.tz = tz
+        self.clock = clock
+    }
+}
+
 /// One registered setting with its effective value (`isDefault` marks
 /// a value never explicitly set).
 public struct Setting: Sendable, Equatable {

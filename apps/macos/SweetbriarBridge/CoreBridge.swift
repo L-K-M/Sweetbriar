@@ -58,6 +58,22 @@ public final class CoreBridge: Sendable {
         )
     }
 
+    /// Parse Search text into canonical v1 JSON with explicit defaults.
+    public func parseSearch(text: String, context: ParseContext) async throws -> String {
+        let token = SweetbriarCore.CancelToken()
+        return try await Self.withCancellation(token: token) {
+            try await self.core.parseSearch(token: token, text: text, context: context.generated)
+        }
+    }
+
+    /// Validate JSON then return canonical text with explicit zone and clock.
+    public func formatSearch(queryJSON: String) async throws -> String {
+        let token = SweetbriarCore.CancelToken()
+        return try await Self.withCancellation(token: token) {
+            try await self.core.formatSearch(token: token, queryJson: queryJSON)
+        }
+    }
+
     /// Read the message headers, account and read-only metadata.
     public func getMessage(messageId: Int64) async throws -> ReaderMessage {
         let token = SweetbriarCore.CancelToken()
@@ -393,6 +409,12 @@ extension CoreBridge: ListWindowSource {
 }
 
 extension WindowSubscription: WindowEventSource {}
+
+extension ParseContext {
+    fileprivate var generated: SweetbriarCore.ParseContext {
+        SweetbriarCore.ParseContext(tz: tz, clock: clock)
+    }
+}
 
 extension Setting {
     /// Map the generated record field by field.
