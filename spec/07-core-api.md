@@ -866,12 +866,19 @@ owed work. Complete legacy repair and its fair per-source handling remain m3/m4.
 
 ### Repair library delivery (M1.6m3a through m3c)
 
-m3a delivers complete Resources capture/verified preparation/bounded publication
-and status operations, with opaque preparations and commit-only continuations.
-It reuses verified retained reads, current MIME parsing and the full summary
-mapper. Complete publication, quiet stale/replay, cancellation and typed
-terminal/transient failure are distinct; an unsuccessful diagnosis write cannot
-report successful repair. Status never calls an incomplete assembly complete.
+m3a1 delivers complete Resources capture/verified preparation/bounded publication,
+publication status and reconstructed summary, with opaque preparations and
+commit-only continuations. It reuses verified retained reads, current MIME
+parsing and the full summary mapper. Complete publication, quiet stale/replay,
+cancellation, typed returned terminal attempts and transient failures are
+distinct. Its caller consumes terminal kind now; durable attempt suppression
+is not promised until m3a2. Status never calls an incomplete assembly complete.
+
+m3a2 adds a persist operation consuming that real opaque attempt, diagnostic
+storage/status and identical-terminal eligibility suppression. No persist method,
+table, status field or unused Diagnosed variant ships before its actual caller
+and native qualification. A failed diagnosis write remains an explicit failure,
+never successful repair. Worker-level timers/wakes remain m4-owned.
 
 m3b delivers actual single-message activation, all five effective-summary
 consumers and displayed-source pricing together. Its native caller uses m3a's

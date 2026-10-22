@@ -572,11 +572,23 @@ row. Interruption/reopen can replay matching pieces, never publish omissions
 or overwrite differing pieces. Large admitted output takes more commits,
 not a new size refusal; oversized objects remain a separate verified outcome.
 
-m3a owns version/piece/publication/diagnostic storage and target metadata.
+m3a1 owns version/piece/publication storage and target metadata; m3a2 adds
+persistent attempts/diagnoses. m3a1 returns a typed terminal attempt, including
+resolved acquisition/hash/length/availability, captured target and kind, for its
+actual caller. m3a2 re-fences that opaque handoff inside its persist transaction;
+it never trusts an acquisition id alone or persists raw source/reason text.
 m3b owns bindings, effective relation and activation/deferral state. Each lands
 its additive schema and executable spec block with its complete implementation.
 Inactive version publication alone changes neither display nor query-source
 revisions. Existing verified-availability observations retain their own fences.
+
+m3a2 suppresses an identical terminal attempt both at begin/prepare eligibility
+and at persistence: no repeated parse or diagnosis rewrite. Same immutable
+`(acquisition, target)` with differing raw hash/length or terminal kind is
+Corrupt, not permission to replace evidence; a new timestamp alone is not a new
+source fence. Changed target/new source identity permits a new attempt. Native
+callers qualify both operations separately; no automatic repair caller ships
+between them, and all original m3a behavior finishes before m3b/m4.
 
 The effective relation selects one whole source per logical message. A repaired
 NULL never falls back to base; no row exists when neither base nor active
