@@ -678,7 +678,7 @@ extension Mailbox {
 
 extension WindowSpec {
     /// Map the bridge enum onto the generated one.
-    fileprivate var generated: SweetbriarCore.WindowSpec {
+    var generated: SweetbriarCore.WindowSpec {
         switch self {
         case .debugSynthetic:
             return .debugSynthetic
@@ -690,6 +690,8 @@ extension WindowSpec {
             return .flagged
         case .thread(let threadId):
             return .thread(threadId: threadId)
+        case .search(let spec):
+            return .search(spec: spec.generated)
         }
     }
 }
@@ -746,7 +748,7 @@ extension ListRow {
 
 extension ListWindow {
     /// Map the generated record field by field.
-    fileprivate init(_ generated: SweetbriarCore.Window) {
+    init(_ generated: SweetbriarCore.Window) {
         self.init(
             windowId: generated.windowId,
             generation: generated.generation,
@@ -755,7 +757,8 @@ extension ListWindow {
             after: generated.after,
             hasMoreAfter: generated.hasMoreAfter,
             hasMoreBefore: generated.hasMoreBefore,
-            total: ListCount(generated.total)
+            total: ListCount(generated.total),
+            search: generated.search.map(SearchStatus.init)
         )
     }
 }

@@ -10,7 +10,7 @@ pub enum SearchScope {
 }
 
 impl SearchScope {
-    fn into_service(self) -> sb_service::SearchScope {
+    pub(super) fn into_service(self) -> sb_service::SearchScope {
         match self {
             Self::All => sb_service::SearchScope::All,
             Self::Account { account_id } => sb_service::SearchScope::Account(account_id),
@@ -38,7 +38,7 @@ pub struct Coverage {
 }
 
 impl Coverage {
-    fn from_service(value: &sb_service::Coverage) -> Self {
+    pub(super) fn from_service(value: &sb_service::Coverage) -> Self {
         Self {
             generation: value.generation,
             extractor_version: value.extractor_version,

@@ -525,6 +525,9 @@ local drafts. No network yet.
     generated bindings and Swift adapter/tests. Owns end-to-end API
     delivery; depends on l2b. Separating these exports budgets generated
     output and Swift mapping within each PR, as M1.5 did for reader FFI.
+    Own both-sort native/Swift paging, scope/status/unknown, subscription,
+    typed-error and lifecycle proof plus complete wire/mapping tests. Retain
+    ordinary windows; Search keeps logical-message grain and opaque cursors.
   - **M1.6l4 Index controls FFI — L:** start/cancel/resume/retry exports,
     receipts/job ids, generated bindings and Swift adapter/tests using l2a's
     progress/status DTOs; depends on l3. Owns control FFI delivery, command

@@ -995,7 +995,7 @@ extension WindowSpec {
     /// than occurrences (spec/07 grain).
     var listsMessages: Bool {
         switch self {
-        case .flagged, .thread:
+        case .flagged, .thread, .search:
             return true
         case .debugSynthetic, .mailbox, .unified:
             return false

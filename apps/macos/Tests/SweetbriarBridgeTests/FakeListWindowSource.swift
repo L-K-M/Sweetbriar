@@ -355,7 +355,8 @@ actor FakeListWindowSource: ListWindowSource {
             after: range.isEmpty ? nil : "f|\(generation)|\(range.upperBound - 1)",
             hasMoreAfter: range.upperBound < count,
             hasMoreBefore: range.lowerBound > 0,
-            total: .exact(n: UInt64(count))
+            total: .exact(n: UInt64(count)),
+            search: nil
         )
     }
 
