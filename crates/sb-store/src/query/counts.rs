@@ -7,13 +7,12 @@ use rusqlite::types::Value;
 use rusqlite::{Statement, Transaction, params_from_iter};
 
 use super::ast::{AddressField, Field, FieldPredicate, Flag, Has, Node, SizeOp};
-use super::{AddressOperand, DateBounds, Query, TextOperand};
+use super::{AddressOperand, DateBounds, Query, SUMMARY_USABLE, TextOperand};
 use crate::index::{self, FIELDS, rebuild};
 use crate::{StoreError, Uuid, messages, schema::classify};
 
 const ADDRESS_FN: &str = "sb_query_address";
 const MASK_FN: &str = "sb_query_complete_fields";
-const SUMMARY_USABLE: &str = "s.parse_state = 'ok' AND s.parser_version >= 2";
 const SOURCE: &str = "d_list_rows r
     JOIN occurrences o ON o.occurrence_id = r.occurrence_id
     JOIN logical_messages lm ON lm.message_id = r.message_id

@@ -243,6 +243,7 @@ pub fn commit_import_batch(
     // New logical messages make the threads due for a rebuild.
     if stats.imported > 0 {
         threads::note_new_messages(tx)?;
+        crate::seen::note_inputs(tx)?;
     }
     let (source_checkpoint, job_checkpoint) = progress(&stats)?;
     let source_checkpoint = canonical_object(&source_checkpoint)?;

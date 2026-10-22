@@ -31,8 +31,10 @@ pub use index::{
 };
 mod renditions;
 mod search;
+mod seen;
 pub use renditions::{RenditionCache, RenditionError, RenditionFiles, RenditionProtection};
 pub use search::read_search_coverage;
+pub use seen::{ReceivedCommit, ReceivedPreparation, ReceivedRevisions, ReceivedSweep};
 
 // The engine's names, re-exported by item so the engine states bounds
 // and maps errors without depending on a leaf (spec/01 rule 3). The
