@@ -241,6 +241,28 @@ async fn format_search(query_json: String) -> Result<String, CoreError>;
 // ParseContext { tz: String, clock: i64 }; SearchParseCode is the enum in 06.
 ```
 
+#### Service Search boundary (M1.6k)
+
+The service owns these DTOs, including `ParseContext`, and maps every scope,
+sort, coverage field, operational state, rebuild phase and limitation explicitly.
+`WindowSpec::Search` owns its query string; a returned Search page includes its
+same-snapshot `SearchStatus`. Ordinary windows keep `search: None`. The service
+carries native cursors unchanged and preserves the existing handle lifecycle,
+subscription events, input fields and stale-generation errors.
+
+Parse/format execute on the engine's counted blocking boundary through Resources'
+checked Query API. The service supplies the explicit timezone and typed clock;
+neither method reads host defaults or the source database. Parse returns bounded
+canonical JSON; format validates JSON first and never tries text on failure.
+Parse failures preserve all eight codes and UTF8 spans. A typed formatter
+`TextFormatError::Limit` becomes `InvalidInput { field: "query_json", .. }` with
+an actionable size message, never a fabricated `SearchParse` source span.
+
+This outcome owns public-Core native import/search/coverage/paging/ids/status,
+scope/sort/cursor/error/subscription/close/shutdown proof and complete DTO/parser
+mapping tests. Index control commands and FFI/Swift exports follow their listed
+steps; they do not add placeholder modes to this boundary.
+
 - Search is a store-backed window with the usual lifecycle, subscriptions,
   limits, id index and anchors. It reads the 06 compiler over `d_list_rows`
   plus search/filter tables. Scope is an outer constraint, intersected
