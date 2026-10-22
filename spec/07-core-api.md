@@ -768,7 +768,9 @@ The FFI owns SearchSpec, Date/Relevance SearchSort and SearchStatus, adds Search
 last in WindowSpec and optional search status last in Window, preserving earlier
 tags and field prefixes. The owned Swift equivalents retain every raw query,
 scope, sort, coverage field and excluded-unknown count. SearchSpec/sort/scope are
-Hashable for the existing WindowSpec consumer. Ordinary pages explicitly carry
+Hashable for the existing WindowSpec consumer. Query equality and hashing use
+UTF8 bytes: exact-address local spellings can distinguish canonically equivalent
+Unicode. Ordinary pages explicitly carry
 no Search status; Search uses the existing logical-message list grain.
 
 Same-outcome Rust wire/mapping and actual exported Rust/Swift tests qualify both
