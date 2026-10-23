@@ -623,6 +623,11 @@ local drafts. No network yet.
     legacy acquisition, native bounded convergence, old-id/captured-revision
     interleaves, reopen/replay and accurate caught-up-with-deferrals status.
     This delivers corpus functionality, not postponed m3b qualification.
+    Pin schema12 input/swept and recorded counts, finite captured-R passes,
+    bounded writer lookahead, opaque Carry and metadata-only EOF turns before
+    implementation. Use the owner's conditional size/GLM waiver if the complete
+    measured artifact exceeds the PR budget; local SWE-2 review replaces GLM
+    for that task. Preserve all native proof and CI rather than size-driven stalls.
     Planning allocations for m3a1/m3a2/m3c are 1415/800/1160 gross.
     m3a1 budgets Store 430, Resources 130, schema+integration 95, prose 80,
     native proof 580 and reserve 100. Re-estimated m3a2 budgets Store 160,
