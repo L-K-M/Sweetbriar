@@ -582,7 +582,7 @@ local drafts. No network yet.
     all five runtime consumers and import displayed-source pricing. Own every
     per-message precedence/NULL/missing-row, historical migration, source/version/
     binding/target, whole-message budget deferral, rollback, counter/generation
-     and kept-history proof. Native callers use m3a1's actual producer.
+    and kept-history proof. Native callers use m3a1's actual producer.
   - **M1.6m3c Shared-corpus catch-up (L):** depends on m3b. Complete bounded
     discovery, batching, continuation, unchanged-deferral skipping and revision
     catch-up facade; no scheduler yet. Own 100k distinct messages sharing one

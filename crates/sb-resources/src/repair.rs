@@ -1,4 +1,4 @@
-//! Native-qualified full versions; activation and persistent attempts follow separately.
+//! Verified full versions and durable terminal attempts; activation follows separately.
 
 use sb_mime::{Limits, PARSER_VERSION, ParseOutcome};
 use sb_store::repair;
@@ -25,6 +25,24 @@ pub enum RepairTerminalKind {
     Partial,
     Failed,
     Oversized,
+}
+
+impl RepairTerminalKind {
+    fn stored(self) -> repair::DiagnosisKind {
+        match self {
+            Self::Partial => repair::DiagnosisKind::Partial,
+            Self::Failed => repair::DiagnosisKind::Failed,
+            Self::Oversized => repair::DiagnosisKind::Oversized,
+        }
+    }
+
+    fn from_stored(kind: repair::DiagnosisKind) -> Self {
+        match kind {
+            repair::DiagnosisKind::Partial => Self::Partial,
+            repair::DiagnosisKind::Failed => Self::Failed,
+            repair::DiagnosisKind::Oversized => Self::Oversized,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -62,6 +80,19 @@ pub enum RepairCommit {
     Recapture,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RepairPersist {
+    Diagnosed,
+    Current,
+    Recapture,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RepairDiagnosis {
+    pub kind: RepairTerminalKind,
+    pub diagnosed_at: Timestamp,
+}
+
 #[derive(Debug)]
 pub struct RepairStatus {
     pub target: u32,
@@ -70,6 +101,7 @@ pub struct RepairStatus {
     pub completed_at: Option<Timestamp>,
     pub pieces: u32,
     pub bytes: u64,
+    pub diagnosis: Option<RepairDiagnosis>,
 }
 
 impl Resources {
@@ -89,7 +121,7 @@ impl Resources {
         if cancelled() {
             return Ok(RepairPreparation::Cancelled);
         }
-        match self.read(|tx| repair::gate(tx, &capture.inner))? {
+        match self.read(|tx| repair::prepare_gate(tx, &capture.inner))? {
             repair::RepairGate::Current => return Ok(RepairPreparation::Current),
             repair::RepairGate::Stale => return Ok(RepairPreparation::Stale),
             repair::RepairGate::Open => {}
@@ -143,6 +175,19 @@ impl Resources {
         })
     }
 
+    pub fn persist_repair_terminal(&self, attempt: RepairTerminal) -> WriteFuture<RepairPersist> {
+        let now = self.now();
+        self.write(WritePriority::Index, move |tx| {
+            repair::persist(tx, attempt.capture, attempt.kind.stored(), now).map(
+                |value| match value {
+                    repair::RepairPersist::Diagnosed => RepairPersist::Diagnosed,
+                    repair::RepairPersist::Current => RepairPersist::Current,
+                    repair::RepairPersist::Recapture => RepairPersist::Recapture,
+                },
+            )
+        })
+    }
+
     pub fn repair_status(&self, acquisition: i64) -> Result<RepairStatus, StoreError> {
         let status = self.read(|tx| repair::status(tx, acquisition))?;
         let state = match status.base_state.as_deref() {
@@ -163,6 +208,10 @@ impl Resources {
             completed_at: status.completed_at.map(Timestamp::from_millis),
             pieces: status.pieces,
             bytes: status.bytes,
+            diagnosis: status.diagnosis.map(|value| RepairDiagnosis {
+                kind: RepairTerminalKind::from_stored(value.kind),
+                diagnosed_at: Timestamp::from_millis(value.diagnosed_at),
+            }),
         })
     }
 

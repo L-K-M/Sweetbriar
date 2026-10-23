@@ -5,7 +5,9 @@ use std::sync::Arc;
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 use crate::imports::{ImportParseState, ImportSummary, canonical_array};
-use crate::messages::{MAX_STORED_HEADER_BYTES, StoredAcquisition, index_acquisition};
+use crate::messages::{
+    BodyAvailability, MAX_STORED_HEADER_BYTES, StoredAcquisition, index_acquisition,
+};
 use crate::{StoreError, Timestamp, schema::classify};
 
 pub const MAX_PIECE_BYTES: usize = 64 * 1024;
@@ -69,6 +71,45 @@ pub enum RepairCommit {
     Recapture,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiagnosisKind {
+    Partial,
+    Failed,
+    Oversized,
+}
+
+impl DiagnosisKind {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Partial => "partial",
+            Self::Failed => "failed",
+            Self::Oversized => "oversized",
+        }
+    }
+
+    fn decode(value: &str) -> Result<Self, StoreError> {
+        match value {
+            "partial" => Ok(Self::Partial),
+            "failed" => Ok(Self::Failed),
+            "oversized" => Ok(Self::Oversized),
+            _ => Err(StoreError::corrupt("invalid MIME repair diagnosis kind")),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RepairPersist {
+    Diagnosed,
+    Current,
+    Recapture,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RepairDiagnosis {
+    pub kind: DiagnosisKind,
+    pub diagnosed_at: i64,
+}
+
 #[derive(Debug)]
 pub struct RepairStatus {
     pub target: u32,
@@ -77,6 +118,7 @@ pub struct RepairStatus {
     pub completed_at: Option<i64>,
     pub pieces: u32,
     pub bytes: u64,
+    pub diagnosis: Option<RepairDiagnosis>,
 }
 
 #[derive(Debug)]
@@ -142,6 +184,8 @@ pub fn begin(tx: &Transaction, id: i64, build: u32) -> Result<Option<RepairCaptu
     let acquisition = index_acquisition(tx, id)?;
     if base_current(tx, id, build)?
         || assembly(tx, id, build)?.is_some_and(|a| a.completed.is_some())
+        || (diagnosis(tx, id, build)?.is_some()
+            && acquisition.availability() == BodyAvailability::Acquired)
     {
         return Ok(None);
     }
@@ -174,6 +218,96 @@ pub fn gate(conn: &Connection, capture: &RepairCapture) -> Result<RepairGate, St
         return Ok(RepairGate::Current);
     }
     Ok(RepairGate::Open)
+}
+
+/// Preparation may skip known outcomes; publication must still compare its full plan.
+pub fn prepare_gate(conn: &Connection, capture: &RepairCapture) -> Result<RepairGate, StoreError> {
+    let source = gate(conn, capture)?;
+    if source != RepairGate::Open {
+        return Ok(source);
+    }
+    let id = capture.acquisition.acquisition_id();
+    if assembly(conn, id, capture.target)?.is_some_and(|a| a.completed.is_some())
+        || (diagnosis(conn, id, capture.target)?.is_some()
+            && capture.acquisition.availability() == BodyAvailability::Acquired)
+    {
+        return Ok(RepairGate::Current);
+    }
+    Ok(RepairGate::Open)
+}
+
+fn diagnosis(
+    conn: &Connection,
+    id: i64,
+    version: u32,
+) -> Result<Option<RepairDiagnosis>, StoreError> {
+    let acquisition = index_acquisition(conn, id)?;
+    let stored: Option<(String, i64, String, i64)> = conn
+        .query_row(
+            "SELECT source_sha256,source_bytes,kind,diagnosed_at FROM d_repair_diagnoses WHERE acquisition_id=?1 AND parser_target=?2",
+            params![id, version],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .optional()
+        .map_err(sql_error)?;
+    let Some((hash, bytes, kind, diagnosed_at)) = stored else {
+        return Ok(None);
+    };
+    if hash != acquisition.object().sha256_hex()
+        || bytes != acquisition.object().byte_length() as i64
+    {
+        return Err(StoreError::corrupt(
+            "MIME repair diagnosis identity changed",
+        ));
+    }
+    Ok(Some(RepairDiagnosis {
+        kind: DiagnosisKind::decode(&kind)?,
+        diagnosed_at,
+    }))
+}
+
+pub fn persist(
+    tx: &Transaction,
+    capture: RepairCapture,
+    kind: DiagnosisKind,
+    now: Timestamp,
+) -> Result<RepairPersist, StoreError> {
+    match gate(tx, &capture)? {
+        RepairGate::Current => return Ok(RepairPersist::Current),
+        RepairGate::Stale => return Ok(RepairPersist::Recapture),
+        RepairGate::Open => {}
+    }
+    let id = capture.acquisition.acquisition_id();
+    if assembly(tx, id, capture.target)?.is_some_and(|a| a.completed.is_some()) {
+        return Ok(RepairPersist::Current);
+    }
+    if let Some(stored) = diagnosis(tx, id, capture.target)? {
+        if stored.kind != kind {
+            return Err(StoreError::corrupt(
+                "differing immutable MIME repair diagnosis",
+            ));
+        }
+        return Ok(RepairPersist::Current);
+    }
+    let changed = tx
+        .execute(
+            "INSERT INTO d_repair_diagnoses VALUES(?1,?2,?3,?4,?5,?6)",
+            params![
+                id,
+                capture.target,
+                capture.acquisition.object().sha256_hex(),
+                capture.acquisition.object().byte_length() as i64,
+                kind.name(),
+                now.as_millis()
+            ],
+        )
+        .map_err(sql_error)?;
+    if changed != 1 {
+        return Err(StoreError::corrupt(
+            "MIME repair diagnosis was not recorded",
+        ));
+    }
+    Ok(RepairPersist::Diagnosed)
 }
 
 pub fn prepare(
@@ -451,6 +585,7 @@ pub fn status(conn: &Connection, id: i64) -> Result<RepairStatus, StoreError> {
         completed_at: stored.and_then(|a| a.completed),
         pieces,
         bytes,
+        diagnosis: diagnosis(conn, id, target)?,
     })
 }
 
