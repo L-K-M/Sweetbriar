@@ -5,6 +5,7 @@ use std::io::Read;
 use rusqlite::{Connection, OptionalExtension, Row, Transaction};
 use serde_json::Value;
 
+use crate::message_source::{MESSAGES, SUMMARY};
 use crate::schema::classify;
 use crate::{ObjectId, ObjectReader, ObjectStore, Store, StoreError, read_error_as_store_error};
 
@@ -393,9 +394,11 @@ impl Store {
 fn headers(tx: &Transaction, message: i64) -> Result<ReaderHeaders, StoreError> {
     let summary = tx
         .query_row(
-            "SELECT s.from_name, s.from_addr, s.to_json, s.cc_json, s.subject,
-         s.header_message_id, s.date_header FROM logical_messages m
-         JOIN d_message_summary s USING (acquisition_id) WHERE m.message_id = ?1",
+            &format!(
+                "SELECT s.from_name, s.from_addr, s.to_json, s.cc_json, s.subject,
+         s.header_message_id, s.date_header FROM {MESSAGES}
+         JOIN {SUMMARY} WHERE lm.message_id = ?1"
+            ),
             [message],
             |row| {
                 let mut budget = MAX_STORED_HEADER_BYTES;

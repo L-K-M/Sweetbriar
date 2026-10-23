@@ -884,6 +884,13 @@ the publisher's completed-content validation by separating preparation eligibili
 from its existing publication gate. A failed diagnosis write remains an explicit
 failure, never Diagnosed. Worker-level timers/wakes remain m4-owned.
 
+m3b0 first corrects current projection accounting through the existing Resources
+import/read operations. All five consumers share only the executed BASE source,
+projection and current image mechanics; there is no repaired arm, binding or
+unused activation mode. Preserve their distinct header and missing-row rules.
+Its actual import caller qualifies false-rejection and undercharge fixes,
+rollback/progress/generation behavior and current-source equivalence.
+
 m3b delivers actual single-message activation, all five effective-summary
 consumers and displayed-source pricing together. Its native caller uses m3a1's
 real producer. Bind-plus-all-list-mutations, whole-message deferral, stale and

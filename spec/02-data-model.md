@@ -658,6 +658,23 @@ retained diagnosis may coexist in explicit status; completion wins eligibility
 and persistence. Unchanged diagnoses rewrite neither their timestamp nor input/
 generation counters. Begin may still reconcile the existing repair-target key.
 
+Before activation, m3b0 consolidates the current BASE-source selection used by
+list projection, reader, query predicates, threading and received population.
+It has the existing summary writer and import/read callers, no binding table,
+repaired branch or candidate mode. Preserve each current consumer's distinct
+header precedence, known-empty values and row-absence behavior. Historical
+migration 3 keeps its frozen base fill source. Shared SQL fragments need no
+new schema object; point lookups must not materialize the whole corpus.
+
+Import accounting uses the deduplicated set of required displayed-row changes,
+not incoming summary field lengths multiplied by sharing count. A selected
+sender is its display name or address, not both. Count retained/replacement
+text, covering-index copies and ordinary representative-row rewrites before
+their DML. The conservative packet estimate remains a batch-builder input;
+the writer separates metadata from that list estimate and charges actual
+projection changes once. Preserve first-wins summaries, progress atomicity and
+all kept history. This current BASE proof does not qualify repaired sources.
+
 The effective relation selects one whole source per logical message. A repaired
 NULL never falls back to base; no row exists when neither base nor active
 version exists. Preserve each consumer's existing precedence, including reader

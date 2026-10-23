@@ -577,7 +577,20 @@ local drafts. No network yet.
     Own durable all-kind/source/target/no-rewrite/reopen/retry and failed saved-
     diagnosis proof. This adds attempt coordination, not postponed publisher
     qualification. Complete m3a1+m3a2 before activation or the repair worker.
-  - **M1.6m3b Single-message activation (L):** depends on m3a2. Add bindings and
+  - **M1.6m3b0 Current projection accounting (L):** depends on m3a2. Consolidate
+    the five current BASE-source consumers and their executed projection/image
+    comparison/ordinary application. Correct import pricing using deduplicated
+    required displayed-row mutations, retained/replacement text, indexes and
+    ordinary representative writes. Keep historical migration 3 and every
+    consumer's header/absence semantics. Prove the current real-parser false
+    rejection before fixing it, plus undercharge, rollback, first-wins, limits,
+    generations, checkpoints, plans and BASE equivalence. Existing Resources
+    import/read operations consume this artifact; no repaired arm or binding,
+    candidate API, epoch, witness or future-only DTO. Allocate 1250 gross:
+    shared projection 280, import 150, consumers 100, integration 80, native
+    proof 360, leaf/catalog 90, prose 90 and reserve 100. Re-estimate actual
+    reuse before m3b; neither this allocation nor estimates prove m3b fits.
+  - **M1.6m3b Single-message activation (L):** depends on m3b0. Add bindings and
     effective relation with the real atomic single-message activation operation,
     all five runtime consumers and import displayed-source pricing. Own every
     per-message precedence/NULL/missing-row, historical migration, source/version/

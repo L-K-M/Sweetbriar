@@ -164,6 +164,19 @@ test, except where the spec says "manual qualification".
   covers completed-version supersession, not a forged Resources packet. Verify
   one-row budget/catalog/STRICT/FK/older-writer refusal and preservation of v8,
   both address tables, base summaries and generation/input counters.
+- m3b0 starts with a real Resources inventory/acquisition/parse/import regression:
+  complete parsing retains an approximately 80k address hidden by a short From
+  name, the incoming packet fits, and first-summary fanout over ten held messages
+  falsely exceeds the old estimate. Observe RED before the production fix; no
+  fabricated parse outcome or mutated ImportSummary. Seed valid existing rows.
+  Prove opposite retained/header-selected undercharge, deduplicated new-row/fanout
+  overlap, unchanged zero charge, full representative payload costs and quota
+  failure before the offending DML. Verify whole-batch rollback, first-wins,
+  checkpoints/generations/notices, both unchanged import limits, actual catalog
+  copies and all five BASE precedences/known bits/row absence. Reader fallback
+  remains all-or-nothing; attachment's unversioned complete-state gate remains
+  distinct from address eligibility. Point plans and historical fill stay valid.
+  These current-source checks do not substitute for any repaired-source proof.
 - m3b uses m3a1's actual producer for every consumer's header precedence,
   repaired-NULL known absence and missing-row fallback. Own historical migration
   3 before the new view, first-wins imports with actual mixed-source pricing,

@@ -256,6 +256,156 @@ fn running_job(
     (sources, job.revision())
 }
 
+fn hold_projection_rows(
+    res: &Resources,
+    object: &sb_store::ObjectId,
+    held: i64,
+    subject: Option<String>,
+) {
+    let (hash, bytes) = (object.sha256_hex(), object.byte_length() as i64);
+    write(res, move |tx| {
+        let account: String = tx.query_row("SELECT account_id FROM accounts WHERE provider='local_archive'", [], |r| r.get(0)).unwrap();
+        tx.execute("INSERT INTO mailboxes(account_id,remote_name,kind,selectable,sync_state) VALUES(?1,'Held','folder',1,'synced')", [&account]).unwrap();
+        let mailbox = tx.last_insert_rowid();
+        tx.execute("INSERT INTO acquisitions(content_sha256,byte_length,object_state,first_acquired_at) VALUES(?1,?2,'published',0)", (hash, bytes)).unwrap();
+        let acquisition = tx.last_insert_rowid();
+        for _ in 0..held {
+            tx.execute("INSERT INTO logical_messages(account_id,acquisition_id,created_at) VALUES(?1,?2,0)", (&account, acquisition)).unwrap();
+            let logical = tx.last_insert_rowid();
+            tx.execute("INSERT INTO occurrences(account_id,mailbox_id,message_id,state,first_seen_at,last_seen_at) VALUES(?1,?2,?3,'present',0,0)", (&account, mailbox, logical)).unwrap();
+            let occurrence = tx.last_insert_rowid();
+            if let Some(subject) = &subject {
+                let raw = format!("Subject: {subject}\r\n\r\n");
+                tx.execute("INSERT INTO message_headers(message_id,raw_fields,subject,fetched_at) VALUES(?1,?2,?3,0)", (logical, raw.as_bytes(), subject)).unwrap();
+            }
+            tx.execute("INSERT INTO d_list_rows VALUES(?1,?2,NULL,?3,0,?4,NULL,?5,NULL,1,0,0,1)", (occurrence, mailbox, &account, logical, &subject)).unwrap();
+        }
+        Ok(())
+    }).unwrap();
+}
+
+#[test]
+fn a_first_summary_prices_displayed_sender_instead_of_hidden_address_fanout() {
+    const ADDRESS_BYTES: usize = 80_000;
+    const HELD_MESSAGES: i64 = 10;
+    let (scratch, res) = resources("shown-import-charge");
+    let address = format!(
+        "{}@held.test",
+        "x".repeat(ADDRESS_BYTES - "@held.test".len())
+    );
+    let raw = format!("From: S <{address}>\r\nSubject: small\r\n\r\nbody");
+    let (sources, revision) = running_job(&res, &scratch, &[("wide.eml", raw.as_bytes())]);
+    let mut source = res
+        .open_import_acquisition(&sources[0], None, SourcePosition::START)
+        .unwrap();
+    let acquired = res.acquire_import_message(&mut source).unwrap().unwrap();
+    let message = acquired.message();
+    assert_eq!(message.summary.parse_state, crate::ImportParseState::Parsed);
+    assert_eq!(message.summary.from_addr.as_deref(), Some(address.as_str()));
+    assert_eq!(message.summary.from_name.as_deref(), Some("S"));
+    assert!(message.change_budget_bytes() < MAX_IMPORT_CHANGES_BYTES);
+    hold_projection_rows(&res, &message.object, HELD_MESSAGES, None);
+    let generation = res.read(crate::list_generation).unwrap();
+    let position = acquired.next_position();
+    let mailbox = sources[0].mailbox().to_owned();
+    let now = res.now();
+    let result = write(&res, move |tx| {
+        let messages = [acquired.into_message()];
+        commit_import_job_batch(
+            tx,
+            &ImportJobBatch {
+                job_id: JOB,
+                revision,
+                ordinal: 0,
+                mailbox: &mailbox,
+                messages: &messages,
+                position,
+                flags_incomplete: 0,
+            },
+            now,
+        )
+    });
+    assert!(
+        result.is_ok(),
+        "a hidden address is not per-row displayed text: {result:?}"
+    );
+    let job = result.unwrap();
+    let totals = job.checkpoint().totals();
+    assert_eq!(
+        (totals.imported, totals.duplicates, totals.bytes_stored),
+        (1, 1, 0)
+    );
+    let stored: (i64, i64) = res.read(|tx| Ok(tx.query_row("SELECT (SELECT count(*) FROM d_list_rows WHERE sender='S' AND subject='small'), (SELECT length(CAST(from_addr AS BLOB)) FROM d_message_summary)", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap())).unwrap();
+    assert_eq!(stored, (HELD_MESSAGES + 1, ADDRESS_BYTES as i64));
+    assert_eq!(res.read(crate::list_generation).unwrap(), generation + 1);
+    res.close().unwrap();
+}
+
+#[test]
+fn header_selected_retained_payload_exhausts_quota_and_rolls_back_import() {
+    const HELD_MESSAGES: i64 = 10;
+    let (scratch, res) = resources("retained-import-charge");
+    let (sources, revision) = running_job(
+        &res,
+        &scratch,
+        &[(
+            "small.eml",
+            b"From: S <s@held.test>\r\nSubject: small\r\n\r\nbody",
+        )],
+    );
+    let mut source = res
+        .open_import_acquisition(&sources[0], None, SourcePosition::START)
+        .unwrap();
+    let acquired = res.acquire_import_message(&mut source).unwrap().unwrap();
+    assert_eq!(
+        acquired.message().summary.parse_state,
+        crate::ImportParseState::Parsed
+    );
+    assert!(acquired.message().change_budget_bytes() < MAX_IMPORT_CHANGES_BYTES);
+    hold_projection_rows(
+        &res,
+        &acquired.message().object,
+        HELD_MESSAGES,
+        Some("h".repeat(80_000)),
+    );
+    let generation = res.read(crate::list_generation).unwrap();
+    let position = acquired.next_position();
+    let mailbox = sources[0].mailbox().to_owned();
+    let now = res.now();
+    let result = write(&res, move |tx| {
+        let messages = [acquired.into_message()];
+        commit_import_job_batch(
+            tx,
+            &ImportJobBatch {
+                job_id: JOB,
+                revision,
+                ordinal: 0,
+                mailbox: &mailbox,
+                messages: &messages,
+                position,
+                flags_incomplete: 0,
+            },
+            now,
+        )
+    });
+    assert!(
+        matches!(result, Err(StoreError::InvalidInput { .. })),
+        "{result:?}"
+    );
+    let state: (i64, i64, i64) = res.read(|tx| Ok(tx.query_row("SELECT (SELECT count(*) FROM d_list_rows WHERE sender IS NULL AND snippet IS NULL), (SELECT count(*) FROM d_message_summary), (SELECT count(*) FROM occurrences)", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap())).unwrap();
+    assert_eq!(state, (HELD_MESSAGES, 0, HELD_MESSAGES));
+    assert_eq!(res.read(crate::list_generation).unwrap(), generation);
+    assert_eq!(
+        res.read(|tx| import_job(tx, JOB)).unwrap().revision(),
+        revision
+    );
+    assert_eq!(
+        res.read(|tx| import_job_source(tx, JOB, 0)).unwrap().1,
+        SourcePosition::START
+    );
+    res.close().unwrap();
+}
+
 const TWO: &[u8] =
     b"From a Sat Oct 17 12:00:00 2026\n\none\nFrom b Sat Oct 17 12:00:00 2026\n\ntwo\n";
 const ONE: &[u8] = b"From a Sat Oct 17 12:00:00 2026\n\nonly\n";

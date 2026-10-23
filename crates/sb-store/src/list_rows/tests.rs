@@ -3,6 +3,7 @@ use rusqlite::Connection;
 use sb_test_support::real_fs;
 
 use super::*;
+mod accounting;
 mod search_observer;
 use crate::schema::{MIGRATIONS, run_migrations};
 use crate::testing::fixtures::{
@@ -90,7 +91,7 @@ fn rows(conn: &Connection) -> Vec<Row> {
 fn snapshot(conn: &Connection) -> Vec<Vec<rusqlite::types::Value>> {
     let mut statement = conn
         .prepare(&format!(
-            "SELECT {COLUMNS} FROM d_list_rows ORDER BY occurrence_id"
+            "SELECT {IMAGE_COLUMNS}, representative FROM d_list_rows ORDER BY occurrence_id"
         ))
         .unwrap();
     let width = statement.column_count();
@@ -210,6 +211,14 @@ fn migration_3_fills_rows_for_existing_occurrences() {
     // No summary and no headers: the first-seen time, nothing to show.
     assert_eq!(shown(bare_row), (FIXED_NOW_MS, None, None, None, false));
     assert_eq!(generation(&conn).unwrap(), FIRST_GENERATION);
+    let historical = snapshot(&conn);
+    let tx = conn.transaction().unwrap();
+    tx.execute("DELETE FROM d_list_rows", []).unwrap();
+    let ids = [labelled, filed, header_row, bare_row]
+        .into_iter()
+        .collect();
+    assert!(refresh_priced(&tx, &ids, &mut |_| Ok(())).unwrap());
+    assert_eq!(snapshot(&tx), historical);
 }
 
 /// A generation that isn't a decimal count is `Corrupt`, and advancing

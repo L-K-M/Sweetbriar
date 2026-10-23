@@ -13,12 +13,19 @@ use crate::{StoreError, Uuid, messages, schema::classify};
 
 const ADDRESS_FN: &str = "sb_query_address";
 const MASK_FN: &str = "sb_query_complete_fields";
-const SOURCE: &str = "d_list_rows r
+fn source() -> String {
+    format!(
+        "d_list_rows r
     JOIN occurrences o ON o.occurrence_id = r.occurrence_id
-    JOIN logical_messages lm ON lm.message_id = r.message_id
+    JOIN {} ON lm.message_id = r.message_id
     LEFT JOIN acquisitions a ON a.acquisition_id = lm.acquisition_id
-    LEFT JOIN d_message_summary s ON s.acquisition_id = lm.acquisition_id
-    LEFT JOIN message_headers h ON h.message_id = lm.message_id";
+    LEFT JOIN {} LEFT JOIN {}",
+        crate::message_source::MESSAGES,
+        crate::message_source::SUMMARY,
+        crate::message_source::HEADERS
+    )
+}
+
 const MAILBOX_CHOICE: &str = "r.mailbox_id = ?1 AND r.occurrence_id =
     (SELECT min(r2.occurrence_id) FROM d_list_rows r2
      WHERE r2.message_id = r.message_id AND r2.mailbox_id = r.mailbox_id)";
@@ -155,7 +162,8 @@ fn compile(tx: &Transaction, query: &Query, scope: SearchScope) -> Result<Compil
     Ok(Compiled {
         source: format!(
             "SELECT r.message_id AS id, r.occurrence_id AS chosen_occurrence_id,
-             ({predicate}) AS v FROM {SOURCE} WHERE {scope}"
+             ({predicate}) AS v FROM {} WHERE {scope}",
+            source()
         ),
         predicate,
         scope,
