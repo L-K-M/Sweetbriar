@@ -590,7 +590,19 @@ local drafts. No network yet.
     shared projection 280, import 150, consumers 100, integration 80, native
     proof 360, leaf/catalog 90, prose 90 and reserve 100. Re-estimate actual
     reuse before m3b; neither this allocation nor estimates prove m3b fits.
-  - **M1.6m3b Single-message activation (L):** depends on m3b0. Add bindings and
+  - **M1.6m3b0a Completed publication immutability (M):** depends on m3b0.
+    Enforce the existing completed-version contract at the storage boundary,
+    consumed by the current Resources publisher, reconstructed-summary reader
+    and status operation. Add six value-conditional guards in migration 10;
+    preserve incomplete staging, matching zero-DML replay and logical no-op
+    updates. Own real-producer same-length mutation RED/GREEN, complete column/
+    owner/replacement/UPSERT controls, rollback/reopen, migration/drift/history
+    and actual trigger-plan/accounting proof. Guard completed facts; the verified
+    publisher still owns attestation of incomplete input. No activation surface
+    or proof credit. Allocate 950 gross: migration 110, DDL mirror/prose 150,
+    Store proof 230, native proof 250, corruption fixtures 65, plumbing 15 and
+    reserve 130. Actual complete diff must fit 1450; re-estimate B afterward.
+  - **M1.6m3b Single-message activation (L):** depends on m3b0a. Add bindings and
     effective relation with the real atomic single-message activation operation,
     all five runtime consumers and import displayed-source pricing. Own every
     per-message precedence/NULL/missing-row, historical migration, source/version/

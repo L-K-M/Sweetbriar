@@ -37,7 +37,7 @@ pub(crate) struct Migration {
 /// version 5 versions the search queue; version 6 adds the durable
 /// search index state and rebuild jobs; version 7 keeps received-address history;
 /// version 8 stages immutable full-summary repair versions;
-/// version 9 retains terminal repair attempts.
+/// version 9 retains terminal repair attempts; version 10 freezes completed publications.
 pub(crate) const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 1,
@@ -74,6 +74,10 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 9,
         run: migration_9,
+    },
+    Migration {
+        version: 10,
+        run: migration_10,
     },
 ];
 
@@ -600,6 +604,11 @@ fn migration_8(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
 
 fn migration_9(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
     tx.execute_batch(include_str!("schema/v9.sql")).map_err(bug)
+}
+
+fn migration_10(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
+    tx.execute_batch(include_str!("schema/v10.sql"))
+        .map_err(bug)
 }
 
 /// One version-4 UUID from the randomness seam. A seam that can't

@@ -675,6 +675,92 @@ the writer separates metadata from that list estimate and charges actual
 projection changes once. Preserve first-wins summaries, progress atomicity and
 all kept history. This current BASE proof does not qualify repaired sources.
 
+Migration 10 enforces completed-publication immutability for the current
+Resources publisher/read/status callers. Completion means non-NULL, including
+timestamp zero. Freeze every assembly and piece value; reject replacement into
+a completed destination even when the incoming marker is NULL. Use OLD and NEW
+owners for piece updates. Identical-value UPDATEs remain legal DML; matching
+publisher replay still returns Current before any write. Incomplete-to-complete
+may change only the marker. Incomplete staging retains its existing reactive
+validation: these guards freeze completed facts, not attest arbitrary raw-SQL
+fabrication while incomplete. The verified publisher still compares full output.
+Diagnoses and acquisition availability retain their existing behavior.
+
+```sql
+CREATE TRIGGER d_repair_assemblies_immutable_insert
+BEFORE INSERT ON d_repair_assemblies
+WHEN NEW.completed_at IS NOT NULL OR EXISTS (
+  SELECT 1 FROM d_repair_assemblies
+  WHERE acquisition_id=NEW.acquisition_id AND parser_target=NEW.parser_target
+    AND completed_at IS NOT NULL
+)
+BEGIN
+  SELECT RAISE(ABORT,'completed MIME repair assembly is immutable');
+END;
+CREATE TRIGGER d_repair_assemblies_immutable_update
+BEFORE UPDATE ON d_repair_assemblies
+WHEN (OLD.completed_at IS NOT NULL AND
+  (OLD.acquisition_id,OLD.parser_target,OLD.source_sha256,OLD.source_bytes,
+   OLD.date_header,OLD.has_attachments,OLD.field_lengths,OLD.completed_at) IS NOT
+  (NEW.acquisition_id,NEW.parser_target,NEW.source_sha256,NEW.source_bytes,
+   NEW.date_header,NEW.has_attachments,NEW.field_lengths,NEW.completed_at))
+  OR ((OLD.acquisition_id,OLD.parser_target) IS NOT
+      (NEW.acquisition_id,NEW.parser_target) AND EXISTS (
+    SELECT 1 FROM d_repair_assemblies
+    WHERE acquisition_id=NEW.acquisition_id AND parser_target=NEW.parser_target
+      AND completed_at IS NOT NULL
+  ))
+  OR (OLD.completed_at IS NULL AND NEW.completed_at IS NOT NULL AND
+    (OLD.acquisition_id,OLD.parser_target,OLD.source_sha256,OLD.source_bytes,
+     OLD.date_header,OLD.has_attachments,OLD.field_lengths) IS NOT
+    (NEW.acquisition_id,NEW.parser_target,NEW.source_sha256,NEW.source_bytes,
+     NEW.date_header,NEW.has_attachments,NEW.field_lengths))
+BEGIN
+  SELECT RAISE(ABORT,'completed MIME repair assembly is immutable');
+END;
+CREATE TRIGGER d_repair_assemblies_immutable_delete
+BEFORE DELETE ON d_repair_assemblies WHEN OLD.completed_at IS NOT NULL
+BEGIN
+  SELECT RAISE(ABORT,'completed MIME repair assembly is immutable');
+END;
+CREATE TRIGGER d_repair_pieces_immutable_insert
+BEFORE INSERT ON d_repair_pieces
+WHEN EXISTS (
+  SELECT 1 FROM d_repair_assemblies
+  WHERE acquisition_id=NEW.acquisition_id AND parser_target=NEW.parser_target
+    AND completed_at IS NOT NULL
+)
+BEGIN
+  SELECT RAISE(ABORT,'completed MIME repair pieces are immutable');
+END;
+CREATE TRIGGER d_repair_pieces_immutable_update
+BEFORE UPDATE ON d_repair_pieces
+WHEN (OLD.acquisition_id,OLD.parser_target,OLD.field_index,OLD.byte_offset,OLD.text)
+  IS NOT (NEW.acquisition_id,NEW.parser_target,NEW.field_index,NEW.byte_offset,NEW.text)
+  AND (EXISTS (
+    SELECT 1 FROM d_repair_assemblies
+    WHERE acquisition_id=OLD.acquisition_id AND parser_target=OLD.parser_target
+      AND completed_at IS NOT NULL
+  ) OR EXISTS (
+    SELECT 1 FROM d_repair_assemblies
+    WHERE acquisition_id=NEW.acquisition_id AND parser_target=NEW.parser_target
+      AND completed_at IS NOT NULL
+  ))
+BEGIN
+  SELECT RAISE(ABORT,'completed MIME repair pieces are immutable');
+END;
+CREATE TRIGGER d_repair_pieces_immutable_delete
+BEFORE DELETE ON d_repair_pieces
+WHEN EXISTS (
+  SELECT 1 FROM d_repair_assemblies
+  WHERE acquisition_id=OLD.acquisition_id AND parser_target=OLD.parser_target
+    AND completed_at IS NOT NULL
+)
+BEGIN
+  SELECT RAISE(ABORT,'completed MIME repair pieces are immutable');
+END;
+```
+
 The effective relation selects one whole source per logical message. A repaired
 NULL never falls back to base; no row exists when neither base nor active
 version exists. Preserve each consumer's existing precedence, including reader

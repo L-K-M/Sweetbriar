@@ -891,6 +891,12 @@ unused activation mode. Preserve their distinct header and missing-row rules.
 Its actual import caller qualifies false-rejection and undercharge fixes,
 rollback/progress/generation behavior and current-source equivalence.
 
+m3b0a protects completed publications consumed by those existing repair
+operations. Their signatures, receipts, eligibility and I/O behavior remain.
+Successful publication/read/status must retain exact completed content and time
+after refused mutations and reopen. Incomplete staging and verified replay
+retain their existing validation; no new attestation or activation API is added.
+
 m3b delivers actual single-message activation, all five effective-summary
 consumers and displayed-source pricing together. Its native caller uses m3a1's
 real producer. Bind-plus-all-list-mutations, whole-message deferral, stale and

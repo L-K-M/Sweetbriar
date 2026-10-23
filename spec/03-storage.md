@@ -225,6 +225,15 @@ publishes completeness without an oversized full-row copy. The header admission
 bound and conservative stored-text bound are not a one-row-fit proof; every
 admitted verified complete result must remain fully publishable.
 
+Completed-publication guards add only bounded primary-key reads and ABORT,
+with no index, persistent trigger DML, fanout or version rewrite. Preserve the
+single-copy payload layout and staging/marker charges. Constraint refusals keep
+the existing Internal classification; source/content validation remains Corrupt.
+Native replacement/UPSERT controls must prove destination visibility before
+implicit deletion on the pinned SQLite settings, without changing recursion,
+STRICT or FK settings. Failure retains earlier committed chunks and returns no
+successful publication receipt. Migration bookkeeping is accounted separately.
+
 Whole-message activation is priced against the FULL allowance. A fitting
 message that exceeds only a batch's remaining allowance is carried to the next
 batch, never marked deferred. Stream bounded prospective mutations and account

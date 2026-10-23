@@ -177,6 +177,22 @@ test, except where the spec says "manual qualification".
   remains all-or-nothing; attachment's unversioned complete-state gate remains
   distinct from address eligibility. Point plans and historical fill stay valid.
   These current-source checks do not substitute for any repaired-source proof.
+- m3b0a observes a real Resources producer regression before the production fix:
+  publish the rich parsed summary, attempt same-byte-length café-to-Café piece
+  replacement, and capture writer result plus subsequent summary/status before
+  asserting refusal and unchanged content. Setup failures are not semantic RED.
+  Own all assembly/piece columns, timestamp zero, empty sets, NULL/empty values,
+  OLD/NEW reparent/rekey, complete-and-mutate, no-op, replacement and UPSERT
+  controls. Prove incomplete staging and matching publication replay still work,
+  with replay Current and zero DML. Native statement ABORT and deferred-FK COMMIT
+  failures return no false success; exact content/time/status/diagnoses/history/
+  generation/input snapshots and earlier chunks survive rollback and reopen.
+  Cover additive v10 migration, v9 writer refusal, STRICT/FK/catalog/DDL drift,
+  actual trigger-program PK seeks, zero extra DML and unchanged payload copies/
+  staging allowance. Existing completed-corruption assertions remain in isolated
+  damaged-store fixtures removing only the relevant guard; normal reopen is fully
+  guarded. Acquisition availability remains legal and identity drift Corrupt.
+  This current invariant earns no repaired-activation proof credit.
 - m3b uses m3a1's actual producer for every consumer's header precedence,
   repaired-NULL known absence and missing-row fallback. Own historical migration
   3 before the new view, first-wins imports with actual mixed-source pricing,
