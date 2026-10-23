@@ -905,6 +905,31 @@ writerless effective view. Keep a deferred message wholly on its old source
 while another sharing message can activate. Generation, threading and population
 effects occur only after the actual activation COMMIT and for actual inputs.
 
+Resources owns opaque `ActivationWork`/`ActivationPrepared` and closed outcomes:
+`begin_activation(message)` eagerly submits a future of `Option<ActivationWork>`;
+`prepare_activation(work,cancelled)` returns Continue, Prepared, Current, Recapture
+or Cancelled; `commit_activation(prepared)` eagerly submits and resolves Activated,
+Deferred, Current or Recapture only after COMMIT. Anonymous facade mapping futures
+own an already-submitted leaf future, even if never polled or subsequently dropped.
+`activation_status(message)` reports bound/candidate targets and recorded evidence
+cost/time/count/cutoff, not freshly validated non-fit. No leaf/runtime aliases leak.
+Every operation verifies the current Store runtime owner, including after reopen.
+
+Check supported/reconciled build target and existing binding before quiet returns.
+NULL acquisition without a binding, current/newer BASE, binding at/above target or
+absent/incomplete candidate returns None; a dangling/invalid binding is Corrupt.
+Valid lower binding plus complete candidate is owed. Only owed work checks raw
+availability; an eligible candidate needs earliest ANY-occurrence observation,
+vanished included. Matching concurrent activation returns Current without DML;
+other relevant supersession recaptures. Cancellation persists no decision.
+Source validity precedes header/eligibility masks in every consumer. Counts and
+coverage aggregate invalid flags over their existing unfiltered scope; ID/page
+predicates use lazy CASE before the AST predicate and typed SQLITE_CORRUPT with
+no optional message. Preserve selected address known bits, nullable attachments,
+whole-reader fallback and decoded thread references. Actual list changes share
+one Search bump; otherwise changed query inputs bump Search alone. Changed thread
+and population sources each advance their own inputs once, never kept history.
+
 m3c delivers discovery/continuation/batching/catch-up operations and accurate
 status over that qualified single-message mechanism. Distinguish corpus
 exhaustion from deferred/failed repairs. Its native caller proves corpus

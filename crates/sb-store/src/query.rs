@@ -26,8 +26,7 @@ pub use format::TextFormatError;
 pub use syntax::ParseContext;
 pub use text::{TextError, TextOperand};
 
-// Complete as-written address sources share one eligibility rule.
-pub(crate) const SUMMARY_USABLE: &str = "s.parse_state = 'ok' AND s.parser_version >= 2";
+pub(crate) use counts::{Inputs, inputs};
 
 /// The shared UTF-8 byte ceiling for query inputs and free-text
 /// address/domain/literal operands (spec/06), checked before parsing.

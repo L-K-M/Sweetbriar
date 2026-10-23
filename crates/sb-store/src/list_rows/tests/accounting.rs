@@ -102,7 +102,10 @@ fn native_row_images_determine_utf8_charge_and_unchanged_rows_cost_nothing() {
     assert_eq!(payload, 2);
     assert_eq!(
         charges,
-        [ROW_FRAME + TEXT_COPIES * 2, ROW_FRAME + REP_TEXT_COPIES * 2]
+        [
+            ROW_FRAME + INTEGER_INDEX_FRAME + TEXT_COPIES * 2,
+            ROW_FRAME + REP_TEXT_COPIES * 2
+        ]
     );
     let changes = tx.total_changes();
     assert!(
@@ -120,7 +123,10 @@ fn native_row_images_determine_utf8_charge_and_unchanged_rows_cost_nothing() {
         Ok(())
     })
     .unwrap();
-    assert_eq!(charges, [ROW_FRAME + TEXT_COPIES * (2 + 6)]);
+    assert_eq!(
+        charges,
+        [ROW_FRAME + INTEGER_INDEX_FRAME + TEXT_COPIES * (2 + 6)]
+    );
     tx.execute("UPDATE occurrences SET state='vanished'", [])
         .unwrap();
     charges.clear();
@@ -129,7 +135,7 @@ fn native_row_images_determine_utf8_charge_and_unchanged_rows_cost_nothing() {
         Ok(())
     })
     .unwrap();
-    assert_eq!(charges, [ROW_FRAME + TEXT_COPIES * 6]);
+    assert_eq!(charges, [ROW_FRAME + INTEGER_INDEX_FRAME + TEXT_COPIES * 6]);
     assert!(snapshot(&tx).is_empty());
 }
 
@@ -158,7 +164,7 @@ fn native_catalog_and_point_plan_pin_projection_text_copies() {
         assert_eq!(text, 0);
     }
     let mut statement = conn
-        .prepare(&format!("EXPLAIN QUERY PLAN {}", price_sql()))
+        .prepare(&format!("EXPLAIN QUERY PLAN {}", price_sql(Source::Stored)))
         .unwrap();
     let plan: Vec<String> = statement
         .query_map([occurrence], |r| r.get(3))

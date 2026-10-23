@@ -15,7 +15,7 @@ pub const MAX_STAGE_PIECES: usize = 16;
 pub const MAX_REPAIR_BYTES: usize = 2_000_000;
 const TEXT_FIELDS: usize = 12;
 const MAX_SNIPPET_BYTES: usize = 512;
-const MAX_TEXT_BYTES: usize = MAX_STORED_HEADER_BYTES + MAX_SNIPPET_BYTES;
+pub(crate) const MAX_TEXT_BYTES: usize = MAX_STORED_HEADER_BYTES + MAX_SNIPPET_BYTES;
 const TARGET: &str = "mime_repair_target";
 // Bound both small assembly images, the target row and record framing separately
 // from piece payload. Catalog/row-oracle tests pin this against the actual DDL.
@@ -131,7 +131,7 @@ struct Assembly {
     completed: Option<i64>,
 }
 
-fn target(conn: &Connection) -> Result<u32, StoreError> {
+pub(crate) fn target(conn: &Connection) -> Result<u32, StoreError> {
     let raw: Option<String> = conn
         .query_row("SELECT value FROM store_meta WHERE key=?1", [TARGET], |r| {
             r.get(0)
@@ -143,7 +143,7 @@ fn target(conn: &Connection) -> Result<u32, StoreError> {
         .ok_or_else(|| StoreError::corrupt("invalid MIME repair target"))
 }
 
-fn supported(value: u32, build: u32) -> Result<(), StoreError> {
+pub(crate) fn supported(value: u32, build: u32) -> Result<(), StoreError> {
     if value > build {
         return Err(StoreError::unavailable(
             "MIME repair target needs a newer build",
@@ -162,12 +162,12 @@ fn base(conn: &Connection, id: i64) -> Result<Option<(u32, String)>, StoreError>
     .map_err(sql_error)
 }
 
-fn base_current(conn: &Connection, id: i64, target: u32) -> Result<bool, StoreError> {
+pub(crate) fn base_current(conn: &Connection, id: i64, target: u32) -> Result<bool, StoreError> {
     Ok(base(conn, id)?
         .is_some_and(|(version, state)| version > target || (version == target && state == "ok")))
 }
 
-pub fn begin(tx: &Transaction, id: i64, build: u32) -> Result<Option<RepairCapture>, StoreError> {
+pub(crate) fn reconcile_target(tx: &Transaction, build: u32) -> Result<(), StoreError> {
     let current = target(tx)?;
     supported(current, build)?;
     if current < build {
@@ -181,6 +181,11 @@ pub fn begin(tx: &Transaction, id: i64, build: u32) -> Result<Option<RepairCaptu
             return Err(StoreError::corrupt("missing MIME repair target"));
         }
     }
+    Ok(())
+}
+
+pub fn begin(tx: &Transaction, id: i64, build: u32) -> Result<Option<RepairCapture>, StoreError> {
+    reconcile_target(tx, build)?;
     let acquisition = index_acquisition(tx, id)?;
     if base_current(tx, id, build)?
         || assembly(tx, id, build)?.is_some_and(|a| a.completed.is_some())
@@ -377,6 +382,14 @@ fn assembly(conn: &Connection, id: i64, version: u32) -> Result<Option<Assembly>
     Ok(stored)
 }
 
+pub(crate) fn completed_at(
+    conn: &Connection,
+    id: i64,
+    version: u32,
+) -> Result<Option<i64>, StoreError> {
+    Ok(assembly(conn, id, version)?.and_then(|stored| stored.completed))
+}
+
 pub fn publish(
     tx: &Transaction,
     mut prepared: RepairPrepared,
@@ -534,6 +547,14 @@ pub fn read_version(
 ) -> Result<Option<ImportSummary>, StoreError> {
     let version = target(conn)?;
     supported(version, build)?;
+    read_version_at(conn, id, version)
+}
+
+pub(crate) fn read_version_at(
+    conn: &Connection,
+    id: i64,
+    version: u32,
+) -> Result<Option<ImportSummary>, StoreError> {
     let Some(stored) = assembly(conn, id, version)?.filter(|a| a.completed.is_some()) else {
         return Ok(None);
     };

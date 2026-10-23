@@ -608,19 +608,28 @@ local drafts. No network yet.
     per-message precedence/NULL/missing-row, historical migration, source/version/
     binding/target, whole-message budget deferral, rollback, counter/generation
     and kept-history proof. Native callers use m3a1's actual producer.
+    Pin four input-scoped runtime stamps, bounded envelope/raw/cache-owner phases,
+    live ID evidence, typed invalid-source checks and eager owned Resources calls.
+    Allocate 1440 gross: schema/DDL mirror 140, observer/lifecycle 130, effective
+    source 130, five consumers 90, projection 80, protocol/evidence/effects 270,
+    Resources 70, complete native proof 420, prose 70, reserve 40. This is an estimate;
+    actual complete additions plus deletions must fit 1450 without cutting proof.
+    **Owner waiver (2026-10-23), m3b only:** the PR size cap is waived after the
+    measured prototype exceeded it. Local SWE-2 review replaces GLM review for
+    this task. Preserve the complete activation contract, tests and CI gates.
   - **M1.6m3c Shared-corpus catch-up (L):** depends on m3b. Complete bounded
     discovery, batching, continuation, unchanged-deferral skipping and revision
     catch-up facade; no scheduler yet. Own 100k distinct messages sharing one
     legacy acquisition, native bounded convergence, old-id/captured-revision
     interleaves, reopen/replay and accurate caught-up-with-deferrals status.
     This delivers corpus functionality, not postponed m3b qualification.
-    Planning allocations for m3a1/m3a2/m3b/m3c are 1415/800/1410/1160 gross.
+    Planning allocations for m3a1/m3a2/m3c are 1415/800/1160 gross.
     m3a1 budgets Store 430, Resources 130, schema+integration 95, prose 80,
     native proof 580 and reserve 100. Re-estimated m3a2 budgets Store 160,
     Resources 100, schema/integration 50, native proof 320, prose 70 and reserve
     100. Its separate preparation eligibility preserves the qualified publisher.
-    m3b/m3c retain mechanics+facade 400/350, schema+integration 250/100, native
-    proof 600/500, prose 60 each and reserve 100/150. These are estimates,
+    m3c retains mechanics+facade 350, schema+integration 100, native proof 500,
+    prose 60 and reserve 150. These are estimates,
     not approved fit: independent ranges extend above the cap, especially for
     m3a1/m3b. Re-estimate each concrete API and all owned proof before
     implementation. If it cannot fit 1450, find another complete consumed

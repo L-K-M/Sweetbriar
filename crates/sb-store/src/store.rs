@@ -73,6 +73,7 @@ pub(crate) const CLEAN_SHUTDOWN_KEY: &str = "clean_shutdown_at";
 pub struct Store {
     readers: Readers,
     writer: Writer,
+    pub(crate) activation: crate::activation::inputs::Owner,
     objects: FileObjectStore,
     source_snapshots: ImportSourceSnapshots,
     import_reports: ImportReports,
@@ -191,6 +192,7 @@ impl Store {
         let Self {
             readers,
             writer,
+            activation,
             objects,
             source_snapshots,
             import_reports,
@@ -203,6 +205,7 @@ impl Store {
         let marker = record_clean_shutdown(&writer, clock.as_ref());
         let readers_closed = readers.close();
         let writer_closed = writer.close();
+        drop(activation);
         drop(objects);
         drop(source_snapshots);
         drop(import_reports);
@@ -329,12 +332,14 @@ pub(crate) fn open_with(
     // The readers first, from the same constructor (spec/03): if one
     // fails, the writer connection still doesn't checkpoint on close.
     let readers = Readers::open(paths.state_db(), reader_pragmas)?;
+    let activation = crate::activation::inputs::Owner::install(&conn)?;
     // The writer thread owns the connection from here (spec/01), and
     // lets it checkpoint once it runs (spec/03).
     let writer = Writer::new(conn)?;
     Ok(Store {
         readers,
         writer,
+        activation,
         objects,
         source_snapshots: ImportSourceSnapshots::new(
             Arc::clone(seams.fs_arc()),

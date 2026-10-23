@@ -203,6 +203,19 @@ test, except where the spec says "manual qualification".
   unchanged-witness skip, witness invalidation/reconsideration and bounded
   inspection including representative dependencies. Every message's rows match
   its binding, including deferred messages; status exposes incomplete deferral.
+  Cover header-masked/ineligible/matching/false/unknown corrupt bindings in counts,
+  coverage and both ID/page orders with native typed errors and PK plans. Own
+  envelope/raw/cache byte progress, cutoff/vanished tails, cache-already-candidate
+  corruption, wrong representative and foreign-owner extra cache rows. Prove new
+  integer index xinfo/max-key framing and quota-before-DML/import regressions.
+  Exercise every scoped observer mutator, no-op/replay/rollback, trust settings,
+  exhaustion/poison/own-DML latch, first-summary zero extra persistent DML and no
+  acquisition fanout. Include witness malformed framing/live shrink/reconsideration,
+  4000-row own-budget deferral plus neighbor, absent candidate/older binding/zero
+  observation gates, eager unpolled request drop, wrong Store/reopen and both close
+  paths. All native write and deferred-FK COMMIT cuts retain exact pre-state and
+  emit no false receipt. Additive v11/older-writer/STRICT/FK/DDL mirror proof keeps
+  the existing v10-only catalog test explicitly scoped to migration 10.
 - m3c's first native facade caller repairs at least 100,000 DISTINCT logical
   messages sharing one legacy acquisition through bounded corpus discovery and
   activation. Assert per-transaction message/byte bounds and row/binding

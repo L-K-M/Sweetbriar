@@ -5,7 +5,7 @@ use std::io::Read;
 use rusqlite::{Connection, OptionalExtension, Row, Transaction};
 use serde_json::Value;
 
-use crate::message_source::{MESSAGES, SUMMARY};
+use crate::message_source::{self, MESSAGES, Source};
 use crate::schema::classify;
 use crate::{ObjectId, ObjectReader, ObjectStore, Store, StoreError, read_error_as_store_error};
 
@@ -255,7 +255,7 @@ fn acquisition(
 
 /// Availability recorded in SQLite gates any object open: recorded
 /// missing/corrupt states fail explicitly, without filesystem work.
-fn check_availability(acquisition: &StoredAcquisition) -> Result<(), StoreError> {
+pub(crate) fn check_availability(acquisition: &StoredAcquisition) -> Result<(), StoreError> {
     match acquisition.availability {
         BodyAvailability::AcquisitionMissing => Err(StoreError::not_found("acquisition object")),
         BodyAvailability::AcquisitionCorrupt => {
@@ -392,38 +392,52 @@ impl Store {
 }
 
 fn headers(tx: &Transaction, message: i64) -> Result<ReaderHeaders, StoreError> {
+    let source = Source::Stored;
+    let [name, address, to, cc, subject, id, date] = source.fields([
+        "from_name",
+        "from_addr",
+        "to_json",
+        "cc_json",
+        "subject",
+        "header_message_id",
+        "date_header",
+    ]);
+    let (summary, validity, present) = (source.joins(), source.validity(), source.present());
     let summary = tx
         .query_row(
             &format!(
-                "SELECT s.from_name, s.from_addr, s.to_json, s.cc_json, s.subject,
-         s.header_message_id, s.date_header FROM {MESSAGES}
-         JOIN {SUMMARY} WHERE lm.message_id = ?1"
+                "SELECT {name},{address},{to},{cc},{subject},{id},{date},{validity},{present}
+                 FROM {MESSAGES} {summary} WHERE lm.message_id=?1"
             ),
             [message],
             |row| {
+                message_source::check(row, 7)?;
                 let mut budget = MAX_STORED_HEADER_BYTES;
-                Ok((|| {
-                    let name = header_text(row, 0, &mut budget)?;
-                    let address = header_text(row, 1, &mut budget)?;
-                    let from = if name.is_some() || address.is_some() {
-                        vec![ReaderAddress { name, address }]
-                    } else {
-                        Vec::new()
-                    };
-                    build_headers(
-                        from,
-                        header_text(row, 2, &mut budget)?,
-                        header_text(row, 3, &mut budget)?,
-                        header_text(row, 4, &mut budget)?,
-                        header_text(row, 5, &mut budget)?,
-                        row.get(6).map_err(sql_error)?,
-                    )
-                })())
+                Ok((
+                    row.get::<_, bool>(8)?,
+                    (|| {
+                        let name = header_text(row, 0, &mut budget)?;
+                        let address = header_text(row, 1, &mut budget)?;
+                        let from = if name.is_some() || address.is_some() {
+                            vec![ReaderAddress { name, address }]
+                        } else {
+                            Vec::new()
+                        };
+                        build_headers(
+                            from,
+                            header_text(row, 2, &mut budget)?,
+                            header_text(row, 3, &mut budget)?,
+                            header_text(row, 4, &mut budget)?,
+                            header_text(row, 5, &mut budget)?,
+                            row.get(6).map_err(sql_error)?,
+                        )
+                    })(),
+                ))
             },
         )
         .optional()
         .map_err(sql_error)?;
-    if let Some(summary) = summary {
+    if let Some((true, summary)) = summary {
         return summary;
     }
     tx.query_row(
@@ -450,7 +464,7 @@ fn headers(tx: &Transaction, message: i64) -> Result<ReaderHeaders, StoreError> 
     .unwrap_or_else(|| Ok(ReaderHeaders::default()))
 }
 
-fn header_text(
+pub(crate) fn header_text(
     row: &Row<'_>,
     column: usize,
     budget: &mut usize,
