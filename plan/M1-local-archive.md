@@ -614,6 +614,9 @@ local drafts. No network yet.
     source 130, five consumers 90, projection 80, protocol/evidence/effects 270,
     Resources 70, complete native proof 420, prose 70, reserve 40. This is an estimate;
     actual complete additions plus deletions must fit 1450 without cutting proof.
+    **Owner waiver (2026-10-23), m3b only:** the PR size cap is waived after the
+    measured prototype exceeded it. Local SWE-2 review replaces GLM review for
+    this task. Preserve the complete activation contract, tests and CI gates.
   - **M1.6m3c Shared-corpus catch-up (L):** depends on m3b. Complete bounded
     discovery, batching, continuation, unchanged-deferral skipping and revision
     catch-up facade; no scheduler yet. Own 100k distinct messages sharing one
