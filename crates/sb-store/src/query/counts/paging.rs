@@ -374,7 +374,7 @@ fn hits(plan: &Compiled, sort: Sort) -> String {
             format!(
                 "SELECT {},({score}) AS score FROM {} WHERE {} AND ({})=1",
                 lists::COLUMNS,
-                super::SOURCE,
+                super::source(),
                 plan.scope,
                 plan.predicate
             )

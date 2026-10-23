@@ -217,12 +217,12 @@ pub fn publish(tx: &Transaction, mut prepared: SeenPrepared) -> Result<SeenCommi
 }
 
 fn next_source(tx: &Transaction, after: i64) -> Result<Option<Source>, StoreError> {
-    let sql = format!("SELECT m.message_id,m.acquisition_id,m.account_id,
-        (SELECT first_seen_at FROM occurrences WHERE message_id=m.message_id ORDER BY first_seen_at LIMIT 1),
+    let sql = format!("SELECT lm.message_id,lm.acquisition_id,lm.account_id,
+        (SELECT first_seen_at FROM occurrences WHERE message_id=lm.message_id ORDER BY first_seen_at LIMIT 1),
         s.parser_version,s.parse_state,s.from_addr,s.from_name,s.reply_to_json,s.to_json,s.cc_json,
         coalesce(({SUMMARY_USABLE}),0)
-        FROM logical_messages m LEFT JOIN d_message_summary s ON s.acquisition_id=m.acquisition_id
-        WHERE m.message_id>?1 ORDER BY m.message_id LIMIT 1");
+        FROM {} LEFT JOIN {}
+        WHERE lm.message_id>?1 ORDER BY lm.message_id LIMIT 1", crate::message_source::MESSAGES, crate::message_source::SUMMARY);
     let mut statement = tx.prepare_cached(&sql).map_err(sql_error)?;
     let mut rows = statement.query([after]).map_err(sql_error)?;
     let Some(row) = rows.next().map_err(sql_error)? else {

@@ -8,6 +8,9 @@ use super::{
     FIND_IMPORT_SOURCE, ImportJobState, advance_import_job, canonical_array, canonical_object,
     import_job, import_job_source, invalid, sql_error,
 };
+use crate::list_rows::{
+    REP_TEXT_COPIES, ROW_FRAME as LIST_ROW_BUDGET, TEXT_COPIES as LIST_ROW_TEXT_COPIES,
+};
 use crate::{ObjectId, StoreError, Timestamp, list_rows, threads};
 
 /// Spec/09's maximum transaction batch, independent of body size.
@@ -18,11 +21,8 @@ pub const MAX_IMPORT_CHANGES_BYTES: usize = 2 * 1024 * 1024;
 const PER_MESSAGE_ROW_BUDGET: usize = 1024;
 // JSON can turn one control byte into six bytes, stored in row and index.
 const SOURCE_PATH_BUDGET_MULTIPLIER: usize = 6 * 2;
-// The list row's integers and framing in its row and two covering indexes.
-const LIST_ROW_BUDGET: usize = 512;
-// Sender, subject and snippet repeat in the list row and both its covering
-// indexes (spec/02 `d_list_rows`).
-const LIST_ROW_TEXT_COPIES: usize = 3;
+// Bound account/mailbox, counter and checkpoint framing beyond variable payload.
+const BATCH_ROW_BUDGET: usize = 4096;
 
 #[derive(Debug, Clone, Copy)]
 pub enum ImportSourceKind {
@@ -110,12 +110,15 @@ pub struct ImportMessage {
 }
 
 impl ImportMessage {
-    /// Conservative metadata budget for a batch builder. Count escaped
-    /// provenance twice (row and unique index) and the list row's text
-    /// three times; bodies never enter it.
+    /// Conservative builder estimate, including a new row and its representative
+    /// rewrite. The writer separately prices stored/header-selected images.
     pub fn change_budget_bytes(&self) -> usize {
+        self.metadata_budget_bytes()
+            .saturating_add(list_row_bytes(&self.summary))
+    }
+
+    fn metadata_budget_bytes(&self) -> usize {
         let summary = &self.summary;
-        let list_text = list_row_bytes(summary);
         [
             &summary.header_message_id,
             &summary.subject,
@@ -133,19 +136,17 @@ impl ImportMessage {
         .into_iter()
         .flatten()
         .fold(
-            PER_MESSAGE_ROW_BUDGET
-                .saturating_add(list_text)
-                .saturating_add(
-                    self.source_path
-                        .len()
-                        .saturating_mul(SOURCE_PATH_BUDGET_MULTIPLIER),
-                ),
+            PER_MESSAGE_ROW_BUDGET.saturating_add(
+                self.source_path
+                    .len()
+                    .saturating_mul(SOURCE_PATH_BUDGET_MULTIPLIER),
+            ),
             |size, text| size.saturating_add(text.len()),
         )
     }
 }
 
-/// What one list row showing `summary` costs the batch budget.
+/// The builder reserves a new row and its first representative write.
 fn list_row_bytes(summary: &ImportSummary) -> usize {
     [
         &summary.subject,
@@ -155,17 +156,12 @@ fn list_row_bytes(summary: &ImportSummary) -> usize {
     ]
     .into_iter()
     .flatten()
-    .fold(LIST_ROW_BUDGET, |size, text| {
-        size.saturating_add(text.len().saturating_mul(LIST_ROW_TEXT_COPIES))
+    .fold(LIST_ROW_BUDGET.saturating_mul(2), |size, text| {
+        size.saturating_add(
+            text.len()
+                .saturating_mul(LIST_ROW_TEXT_COPIES + REP_TEXT_COPIES),
+        )
     })
-}
-
-/// The list rows a batch must refresh, and the bytes of those beyond
-/// its messages' own estimates.
-#[derive(Default)]
-struct ListChanges {
-    occurrences: BTreeSet<i64>,
-    extra_bytes: usize,
 }
 
 pub struct ImportBatch<'a> {
@@ -206,8 +202,8 @@ pub fn commit_import_batch(
     }
     // The mailbox name is stored in both its row and its unique index.
     let change_bytes = batch.messages.iter().fold(
-        batch.mailbox_name.len().saturating_mul(2),
-        |size, message| size.saturating_add(message.change_budget_bytes()),
+        BATCH_ROW_BUDGET.saturating_add(batch.mailbox_name.len().saturating_mul(2)),
+        |size, message| size.saturating_add(message.metadata_budget_bytes()),
     );
     if change_bytes > MAX_IMPORT_CHANGES_BYTES {
         return Err(invalid(
@@ -223,18 +219,27 @@ pub fn commit_import_batch(
     import_job_source(tx, batch.job_id, batch.source_ordinal)?;
     let (account, mailbox) = local_mailbox(tx, batch.mailbox_name)?;
     let mut stats = ImportBatchStats::default();
-    let mut list = ListChanges::default();
+    let mut list = BTreeSet::new();
     for message in batch.messages {
         store_message(tx, &account, mailbox, message, now, &mut stats, &mut list)?;
     }
-    let change_bytes = change_bytes.saturating_add(list.extra_bytes);
-    if change_bytes > MAX_IMPORT_CHANGES_BYTES {
-        return Err(invalid(
-            "import list rows exceed the background-write budget",
-        ));
-    }
+    let (source_checkpoint, job_checkpoint) = progress(&stats)?;
+    let source_checkpoint = canonical_object(&source_checkpoint)?;
+    let job_checkpoint = canonical_object(&job_checkpoint)?;
+    let mut remaining = MAX_IMPORT_CHANGES_BYTES
+        .checked_sub(
+            change_bytes
+                .saturating_add(source_checkpoint.len())
+                .saturating_add(job_checkpoint.len()),
+        )
+        .ok_or_else(|| invalid("import checkpoints exceed the background-write budget"))?;
     // One generation per batch that changed what lists show (spec/02).
-    if list_rows::refresh(tx, &list.occurrences)? {
+    if list_rows::refresh_priced(tx, &list, &mut |bytes| {
+        remaining = remaining
+            .checked_sub(bytes)
+            .ok_or_else(|| invalid("import list rows exceed the background-write budget"))?;
+        Ok(())
+    })? {
         list_rows::advance_generation(tx)?;
     } else if !batch.messages.is_empty() {
         // The shared list advance already covers Search when rows changed.
@@ -244,18 +249,6 @@ pub fn commit_import_batch(
     if stats.imported > 0 {
         threads::note_new_messages(tx)?;
         crate::seen::note_inputs(tx)?;
-    }
-    let (source_checkpoint, job_checkpoint) = progress(&stats)?;
-    let source_checkpoint = canonical_object(&source_checkpoint)?;
-    let job_checkpoint = canonical_object(&job_checkpoint)?;
-    if change_bytes
-        .saturating_add(source_checkpoint.len())
-        .saturating_add(job_checkpoint.len())
-        > MAX_IMPORT_CHANGES_BYTES
-    {
-        return Err(invalid(
-            "import checkpoints exceed the background-write budget",
-        ));
     }
     source_progress(tx, batch.job_id, batch.source_ordinal, &source_checkpoint)?;
     advance_import_job(
@@ -309,7 +302,7 @@ fn store_message(
     message: &ImportMessage,
     now: Timestamp,
     stats: &mut ImportBatchStats,
-    list: &mut ListChanges,
+    list: &mut BTreeSet<i64>,
 ) -> Result<(), StoreError> {
     let hash = message.object.sha256_hex();
     let length = i64::try_from(message.object.byte_length())
@@ -435,47 +428,16 @@ fn store_message(
         ],
     )
     .map_err(sql_error)?;
-    list.occurrences.insert(tx.last_insert_rowid());
+    list.insert(tx.last_insert_rowid());
     stats.imported += 1;
     let stored = save_summary(tx, acquisition, &message.summary)?;
     if stored && !inserted {
         // A first summary for bytes already held changes the rows of
         // every message sharing them (spec/02).
         let sharing = list_rows::sharing_acquisition(tx, acquisition)?;
-        list.extra_bytes = list.extra_bytes.saturating_add(
-            sharing
-                .len()
-                .saturating_mul(list_row_bytes(&message.summary)),
-        );
-        list.occurrences.extend(sharing);
-    }
-    if !stored {
-        // The new row shows the stored summary, which an older parser
-        // may have read longer than this message's estimate.
-        let shown = stored_list_row_bytes(tx, acquisition)?;
-        list.extra_bytes = list
-            .extra_bytes
-            .saturating_add(shown.saturating_sub(list_row_bytes(&message.summary)));
+        list.extend(sharing);
     }
     Ok(())
-}
-
-/// What a list row showing `acquisition`'s stored summary costs the
-/// batch budget, as [`list_row_bytes`] counts it.
-fn stored_list_row_bytes(tx: &Transaction, acquisition: i64) -> Result<usize, StoreError> {
-    let text: i64 = tx
-        .query_row(
-            "SELECT coalesce(length(CAST(subject AS BLOB)), 0)
-                  + coalesce(length(CAST(from_addr AS BLOB)), 0)
-                  + coalesce(length(CAST(from_name AS BLOB)), 0)
-                  + coalesce(length(CAST(snippet AS BLOB)), 0)
-             FROM d_message_summary WHERE acquisition_id = ?1",
-            [acquisition],
-            |row| row.get(0),
-        )
-        .map_err(sql_error)?;
-    let text = usize::try_from(text).unwrap_or(usize::MAX);
-    Ok(LIST_ROW_BUDGET.saturating_add(text.saturating_mul(LIST_ROW_TEXT_COPIES)))
 }
 
 /// Store `acquisition`'s first summary; an existing one, even from an

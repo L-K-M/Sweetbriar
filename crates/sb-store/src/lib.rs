@@ -9,6 +9,7 @@ pub mod imports;
 pub mod index;
 mod list_rows;
 pub mod lists;
+mod message_source;
 pub mod messages;
 mod objects;
 mod paths;

@@ -2,7 +2,7 @@
 
 use rusqlite::{Transaction, params_from_iter};
 
-use super::{SOURCE, SearchScope, nonnegative_count, scoped, sql_error};
+use super::{SearchScope, nonnegative_count, scoped, source, sql_error};
 use crate::StoreError;
 use crate::index::{rebuild, search_generation, target_version};
 use rebuild::{RebuildPhase, SearchIoCode};
@@ -78,8 +78,8 @@ pub fn read_search_coverage(
          coalesce(sum(a.object_state='published' AND d.extractor_version=?{version} AND d.state='partial'),0),
          coalesce(sum(a.object_state='published' AND d.extractor_version=?{version} AND d.state='failed'),0),
          count(DISTINCT CASE WHEN q.doc_id IS NOT NULL THEN lm.acquisition_id END)
-         FROM {SOURCE} LEFT JOIN d_search_docs d ON d.doc_id=lm.acquisition_id
-         LEFT JOIN d_index_queue q ON q.doc_id=lm.acquisition_id WHERE {scope}"
+         FROM {} LEFT JOIN d_search_docs d ON d.doc_id=lm.acquisition_id
+          LEFT JOIN d_index_queue q ON q.doc_id=lm.acquisition_id WHERE {scope}", source()
     );
     let raw: [i64; 7] = tx
         .query_row(&sql, params_from_iter(&values), |row| {

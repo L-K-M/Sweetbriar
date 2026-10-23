@@ -76,18 +76,19 @@ pub fn thread_sources(
     limit: usize,
 ) -> Result<Vec<ThreadSource>, StoreError> {
     let mut statement = tx
-        .prepare_cached(
+        .prepare_cached(&format!(
             "SELECT lm.message_id, lm.account_id,
                COALESCE(h.header_message_id, s.header_message_id),
                COALESCE(h.references_json, s.references_json),
                COALESCE(h.in_reply_to, s.in_reply_to),
                COALESCE(h.subject, s.subject), r.sort_date
-             FROM logical_messages lm
-             LEFT JOIN message_headers h ON h.message_id = lm.message_id
-             LEFT JOIN d_message_summary s ON s.acquisition_id = lm.acquisition_id
+             FROM {} LEFT JOIN {} LEFT JOIN {}
              LEFT JOIN d_list_rows r ON r.message_id = lm.message_id AND r.representative = 1
              WHERE lm.message_id > ?1 ORDER BY lm.message_id LIMIT ?2",
-        )
+            crate::message_source::MESSAGES,
+            crate::message_source::HEADERS,
+            crate::message_source::SUMMARY
+        ))
         .map_err(sql_error)?;
     let rows = statement
         .query_map(params![after, limit_value(limit)], |row| {
