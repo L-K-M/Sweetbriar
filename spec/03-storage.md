@@ -243,6 +243,32 @@ that could invalidate its non-fit proof; do not load the whole sharing corpus
 or unbounded occurrence fanout to decide deferral. Earlier committed chunks
 survive later failure, including a failed final publication or activation COMMIT.
 
+m3b submits begin, commit and evidence work at Index priority. Preparation uses
+fresh short snapshots: one bounded complete envelope, then at most 200 raw IDs
+before filtering per turn, advancing the last inspected ID. Each row phase also
+has a 4,000,000 inspected-byte quantum, admitting one legal overshoot unit before
+yielding. FIT additionally completes indexed cache-owner and representative checks.
+Validate cached CURRENT before candidate comparison, including unchanged rows;
+commit point-preflights retained IDs and the full envelope before its first DML.
+Use the canonical applier with representative preservation, not a writer scan.
+
+Store-owned TEMP triggers call an honest UTF8-only notifier on the sole writer.
+Four fixed runtime scopes cover OLD/NEW message IDs (occurrences, logical_messages,
+message_headers, d_list_rows, bindings), acquisition IDs (acquisitions, BASE,
+repair assemblies/pieces), actual mailbox role/kind updates, and identity/MIME
+target keys. No persistent clock DML, fanout or unrelated generation fence.
+Active leases alone retain registry entries; callback lookup/increment cannot
+allocate, panic, reenter SQLite or fail ordinary writes. Overflow/poison latches
+activation failure. Check owner/stamps around phases and before commit DML; after
+own DML check only the failure latch. Both close paths drain before owner teardown.
+
+The integer cache-message index pays a conservative 128 old+new key/framing bytes
+on every image insert/update/delete, including non-key updates, once in builder
+reserve; rep-only writes keep their prior charge. Binding/effect framing reserves
+4096 bytes. Deferral replacement charges actual old+new capped payload and 4096
+framing, at most 135168; fit does not pay a fictitious evidence insert. No Carry
+mode exists until m3c supplies its actual batching caller.
+
 ## Object store
 
 ### Contract
