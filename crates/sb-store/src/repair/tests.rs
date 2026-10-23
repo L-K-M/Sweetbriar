@@ -3,6 +3,8 @@ use crate::schema::{MIGRATIONS, run_migrations};
 use crate::testing::{fixtures, test_seams};
 use sb_test_support::real_fs;
 
+mod immutability;
+
 #[test]
 fn migration_is_additive_strict_and_older_writers_refuse_it() {
     let mut conn = fixtures::index_connection_through(7);
@@ -88,6 +90,13 @@ fn preparation_bounds_and_storage_codec_reject_invalid_text() {
         conn.execute("INSERT INTO d_repair_pieces VALUES(1,2,12,0,'x')", [])
             .is_err()
     );
+    // Inject a damaged completed store only after proving the normal guard refuses it.
+    assert!(
+        conn.execute("INSERT INTO d_repair_pieces VALUES(1,2,1,0,'x')", [])
+            .is_err()
+    );
+    conn.execute_batch("DROP TRIGGER d_repair_pieces_immutable_insert")
+        .unwrap();
     conn.execute(
         "INSERT INTO d_repair_pieces VALUES(1,2,1,0,CAST(x'80' AS TEXT))",
         [],
@@ -229,6 +238,12 @@ fn completion_supersedes_attempts_without_bypassing_immutable_content_validation
             .unwrap(),
         1
     );
+    assert!(
+        tx.execute("UPDATE d_repair_pieces SET text='other'", [])
+            .is_err()
+    );
+    tx.execute_batch("DROP TRIGGER d_repair_pieces_immutable_update")
+        .unwrap();
     tx.execute("UPDATE d_repair_pieces SET text='other'", [])
         .unwrap();
     assert!(matches!(

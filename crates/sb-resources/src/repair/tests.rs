@@ -9,6 +9,8 @@ use sb_test_support::{FaultFs, FaultKind, FsOp, ScratchDir, block_on, real_fs};
 
 use super::*;
 
+mod immutability;
+
 const RICH: &[u8] = concat!(
     "From: Sender <User@EXAMPLE.test>\r\nTo: A <a@x.test>,b@x.test\r\n",
     "Cc: c@x.test\r\nReply-To: reply@x.test\r\nMessage-ID: <new@x.test>\r\n",
@@ -68,6 +70,13 @@ fn snapshot(resources: &Resources) -> String {
       (SELECT json_group_array(json_array(canonical,email,last_seen_at,times_received,times_sent_to)) FROM seen_addresses),
       (SELECT count(*) FROM seen_address_messages),
       (SELECT json_group_array(json_array(key,value)) FROM (SELECT key,value FROM store_meta WHERE key IN('list_generation','search_generation','index_inputs','seen_address_inputs','seen_address_swept','thread_inputs','threads_built') ORDER BY key)))", [], |r| r.get(0)).unwrap())).unwrap()
+}
+
+fn artifact_snapshot(resources: &Resources) -> String {
+    resources.read(|tx| Ok(tx.query_row("SELECT json_array(
+      (SELECT json_group_array(json_array(acquisition_id,parser_target,source_sha256,source_bytes,date_header,has_attachments,field_lengths,completed_at)) FROM (SELECT * FROM d_repair_assemblies ORDER BY acquisition_id,parser_target)),
+      (SELECT json_group_array(json_array(acquisition_id,parser_target,field_index,byte_offset,text)) FROM (SELECT * FROM d_repair_pieces ORDER BY acquisition_id,parser_target,field_index,byte_offset)),
+      (SELECT json_group_array(json_array(acquisition_id,parser_target,source_sha256,source_bytes,kind,diagnosed_at)) FROM (SELECT * FROM d_repair_diagnoses ORDER BY acquisition_id,parser_target)))", [], |r| r.get(0)).unwrap())).unwrap()
 }
 
 fn capture(resources: &Resources) -> RepairCapture {
@@ -159,6 +168,12 @@ fn rich_verified_publication_round_trips_every_field_without_rewriting_history()
     finish(&resources, prepare(&resources));
     assert_eq!(resources.repaired_summary(1).unwrap(), Some(value.clone()));
     assert!(resources.repair_status(1).unwrap().completed_at.is_some());
+    let guard: String = resources.read(|tx| Ok(tx.query_row("SELECT sql FROM sqlite_schema WHERE name='d_repair_assemblies_immutable_update'", [], |r| r.get(0)).unwrap())).unwrap();
+    // Preserve the damaged-store identity check without weakening normal publication.
+    edit(
+        &resources,
+        "DROP TRIGGER d_repair_assemblies_immutable_update",
+    );
     edit(
         &resources,
         "UPDATE d_repair_assemblies SET source_bytes=source_bytes+1",
@@ -175,6 +190,10 @@ fn rich_verified_publication_round_trips_every_field_without_rewriting_history()
         &resources,
         "UPDATE d_repair_assemblies SET source_bytes=source_bytes-1",
     );
+    write(&resources, move |tx| {
+        tx.execute_batch(&guard).unwrap();
+        Ok(())
+    });
     assert_eq!(snapshot(&resources), before);
     assert!(block_on(resources.begin_repair(1)).unwrap().is_none());
     resources.close().unwrap();
@@ -839,8 +858,9 @@ fn io_cancel_availability_and_corrupt_oversized_reads_stay_typed_and_unpublished
 #[test]
 fn native_statement_and_commit_failures_return_no_advanced_publication() {
     for commit_failure in [false, true] {
-        let (_scratch, resources, _) = native(RICH, real_fs());
+        let (scratch, resources, _) = native(RICH, real_fs());
         let before = snapshot(&resources);
+        let artifacts = artifact_snapshot(&resources);
         let pending = prepare(&resources);
         write(&resources, move |tx| {
             if commit_failure {
@@ -850,7 +870,10 @@ fn native_statement_and_commit_failures_return_no_advanced_publication() {
             }
             Ok(())
         });
-        assert!(block_on(resources.commit_repair_step(pending)).is_err());
+        assert!(matches!(
+            block_on(resources.commit_repair_step(pending)),
+            Err(StoreError::Internal { .. })
+        ));
         assert_eq!(resources.repaired_summary(1).unwrap(), None);
         assert_eq!(
             number(&resources, "SELECT count(*) FROM d_repair_assemblies"),
@@ -861,9 +884,16 @@ fn native_statement_and_commit_failures_return_no_advanced_publication() {
             0
         );
         assert_eq!(snapshot(&resources), before);
+        assert_eq!(artifact_snapshot(&resources), artifacts);
         edit(&resources, "DROP TRIGGER repair_cut");
         finish(&resources, prepare(&resources));
         assert_eq!(resources.repaired_summary(1).unwrap(), Some(expected(RICH)));
+        assert_eq!(snapshot(&resources), before);
+        let artifacts = artifact_snapshot(&resources);
+        resources.close().unwrap();
+        let resources = Resources::open(&scratch.path().join("store")).unwrap();
+        assert_eq!(resources.repaired_summary(1).unwrap(), Some(expected(RICH)));
+        assert_eq!(artifact_snapshot(&resources), artifacts);
         assert_eq!(snapshot(&resources), before);
         resources.close().unwrap();
     }
