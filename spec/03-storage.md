@@ -144,6 +144,24 @@ recreated.
   - On failure: stop remote effects, keep the store read-only, copy the
     files to `recovery/`, and tell the user. Never repair by deleting.
 
+### Import projection accounting (M1.6m3b0)
+
+Archive import retains its 250-message and 2,097,152-byte transaction limits.
+Separate the incoming packet's metadata estimate from its conservative list
+estimate. The writer prices the deduplicated required current row mutations:
+selected sender/subject/snippet, retained and replacement text, all affected
+table/index copies and ordinary representative clear/mark writes. Unchanged
+images contribute no projection charge; a new occurrence in first-summary
+sharing fanout is not charged twice. Header-selected or older stored text is
+priced where it is actually displayed, even when the incoming summary is small.
+
+Reserve checkpoint payloads and accompanying metadata/counter framing in the
+same allowance. Exhaust quota before each projection or representative DML;
+do not write an unbounded fanout and check afterward. A failure rolls back the
+whole import batch and leaves its progress, rows and generations unacknowledged.
+The actual SQL projection/comparison and ordinary applier are shared, with no
+second Rust implementation of header precedence or relaxed admission limit.
+
 ### Search writes (M1.6)
 
 The FTS5 layout, queue revisions and recovery protocol are in 06. Tables
