@@ -546,7 +546,7 @@ startup/import scheduling remains M1.6m2. Preserve sent/received history and
 derive the single legal-key charge from admitted header/decoded text and actual
 DDL copies; no admission filter or silent key truncation.
 
-### Verified repair artifacts (M1.6m3a through m3c)
+### Verified repair artifacts (M1.6m3a1 through m3c)
 
 The MIME-repair target is durable and distinct from the received key-policy
 target. Its migration seeds the parser target supported when introduced;
@@ -617,7 +617,46 @@ and at persistence: no repeated parse or diagnosis rewrite. Same immutable
 Corrupt, not permission to replace evidence; a new timestamp alone is not a new
 source fence. Changed target/new source identity permits a new attempt. Native
 callers qualify both operations separately; no automatic repair caller ships
-between them, and all original m3a behavior finishes before m3b/m4.
+between them, and both publication and persistent attempts finish before m3b/m4.
+
+Migration 9 adds one immutable terminal record per acquisition/target. Its kind
+comes only from the actual verified terminal handoff. The record has no raw
+source, diagnostic reason or path, and adds no metadata key or payload index.
+
+```sql
+CREATE TABLE d_repair_diagnoses (
+  acquisition_id INTEGER NOT NULL REFERENCES acquisitions(acquisition_id),
+  parser_target INTEGER NOT NULL CHECK (parser_target BETWEEN 1 AND 4294967295),
+  source_sha256 TEXT NOT NULL CHECK (length(source_sha256) = 64),
+  source_bytes INTEGER NOT NULL CHECK (source_bytes >= 0),
+  kind TEXT NOT NULL CHECK (kind IN ('partial','failed','oversized')),
+  diagnosed_at INTEGER NOT NULL,
+  PRIMARY KEY (acquisition_id, parser_target)
+) STRICT, WITHOUT ROWID;
+```
+
+Begin and preparation eligibility compare the stored hash/length at the current
+key; no candidate kind exists before parsing. Validate that fence even for a
+recorded unavailable source, but suppress only when availability is Acquired.
+Missing/quarantined acquisitions retain their existing typed zero-open failures.
+Preparation first checks the existing source/target gate, then completed version,
+then diagnosis. Keep this eligibility logic separate from the publisher's gate:
+publication must still compare completed immutable content with its prepared plan.
+
+Persist rechecks the original target/source/availability/base gate, then completed
+version, then the full stored hash/length/kind tuple in one writer transaction.
+Current/newer base or completed version supersedes a terminal without deleting
+evidence. Identical tuple returns Current without DML; absent row inserts once
+and returns Diagnosed only after COMMIT. Timestamp is not identity. Stale source
+availability/deletion or lowered target returns Recapture; unsupported target and
+corrupt identity retain typed errors. A failed consumed attempt is retried with
+a fresh real terminal, never a fabricated or reused token.
+
+Status reports the fenced stored diagnosis kind/time at the current metadata
+target, even if the build does not support that target. A completed version and
+retained diagnosis may coexist in explicit status; completion wins eligibility
+and persistence. Unchanged diagnoses rewrite neither their timestamp nor input/
+generation counters. Begin may still reconcile the existing repair-target key.
 
 The effective relation selects one whole source per logical message. A repaired
 NULL never falls back to base; no row exists when neither base nor active

@@ -84,6 +84,24 @@ fn prepare(resources: &Resources) -> RepairPrepared {
     }
 }
 
+fn terminal(resources: &Resources) -> RepairTerminal {
+    match resources
+        .prepare_repair(capture(resources), &|| false)
+        .unwrap()
+    {
+        RepairPreparation::Terminal(value) => value,
+        other => panic!("expected a real terminal attempt: {other:?}"),
+    }
+}
+
+fn writer_changes(resources: &Resources) -> i64 {
+    write(resources, |tx| {
+        Ok(tx
+            .query_row("SELECT total_changes()", [], |r| r.get(0))
+            .unwrap())
+    })
+}
+
 fn finish(resources: &Resources, mut prepared: RepairPrepared) -> usize {
     let mut steps = 0;
     loop {
@@ -374,7 +392,7 @@ fn complete_base_newer_partial_source_and_stale_targets_never_publish_a_downgrad
 }
 
 #[test]
-fn returned_partial_failed_and_size_attempts_preserve_base_and_never_claim_publication() {
+fn real_terminal_kinds_persist_once_suppress_io_and_survive_reopen() {
     for (bytes, kind) in [
         (
             format!(
@@ -390,7 +408,13 @@ fn returned_partial_failed_and_size_attempts_preserve_base_and_never_claim_publi
             RepairTerminalKind::Oversized,
         ),
     ] {
-        let (_scratch, resources, _) = native(&bytes, real_fs());
+        let fs = Arc::new(FaultFs::new(
+            real_fs(),
+            FsOp::Read,
+            u64::MAX,
+            FaultKind::Eio,
+        ));
+        let (scratch, resources, object) = native(&bytes, fs.clone());
         let before = snapshot(&resources);
         let outcome = resources
             .prepare_repair(capture(&resources), &|| false)
@@ -412,8 +436,319 @@ fn returned_partial_failed_and_size_attempts_preserve_base_and_never_claim_publi
         assert_eq!(snapshot(&resources), before);
         assert!(
             block_on(resources.begin_repair(1)).unwrap().is_some(),
-            "durable suppression is not shipped yet"
+            "an unpersisted attempt must remain eligible"
         );
+        let pending = capture(&resources);
+        let duplicate = terminal(&resources);
+        let io = (fs.calls(FsOp::Open), fs.calls(FsOp::Read));
+        assert_eq!(
+            block_on(resources.persist_repair_terminal(attempt)).unwrap(),
+            RepairPersist::Diagnosed
+        );
+        let diagnosis = RepairDiagnosis {
+            kind,
+            diagnosed_at: Timestamp::from_millis(1000),
+        };
+        assert_eq!(
+            resources.repair_status(1).unwrap().diagnosis,
+            Some(diagnosis)
+        );
+        let text = match kind {
+            RepairTerminalKind::Partial => "partial",
+            RepairTerminalKind::Failed => "failed",
+            RepairTerminalKind::Oversized => "oversized",
+        };
+        let stored: (i64, u32, String, i64, String, i64) = resources
+            .read(|tx| {
+                Ok(tx
+                    .query_row("SELECT * FROM d_repair_diagnoses", [], |r| {
+                        Ok((
+                            r.get(0)?,
+                            r.get(1)?,
+                            r.get(2)?,
+                            r.get(3)?,
+                            r.get(4)?,
+                            r.get(5)?,
+                        ))
+                    })
+                    .unwrap())
+            })
+            .unwrap();
+        assert_eq!(
+            stored,
+            (
+                1,
+                sb_mime::PARSER_VERSION,
+                object.sha256_hex(),
+                object.byte_length() as i64,
+                text.into(),
+                1000
+            )
+        );
+        assert!(block_on(resources.begin_repair(1)).unwrap().is_none());
+        assert!(matches!(
+            resources.prepare_repair(pending, &|| false).unwrap(),
+            RepairPreparation::Current
+        ));
+        edit(
+            &resources,
+            "CREATE TEMP TRIGGER no_diagnosis_update BEFORE UPDATE ON main.d_repair_diagnoses BEGIN SELECT RAISE(ABORT,'immutable diagnosis'); END",
+        );
+        let changes = writer_changes(&resources);
+        assert_eq!(
+            block_on(resources.persist_repair_terminal(duplicate)).unwrap(),
+            RepairPersist::Current
+        );
+        assert_eq!(writer_changes(&resources), changes);
+        assert_eq!((fs.calls(FsOp::Open), fs.calls(FsOp::Read)), io);
+        assert_eq!(snapshot(&resources), before);
+        assert_eq!(resources.repaired_summary(1).unwrap(), None);
+        resources.close().unwrap();
+        let resources = Resources::open_on(
+            &scratch.path().join("store"),
+            fs.clone(),
+            Arc::new(sb_test_support::FixedClock::new(Timestamp::from_millis(
+                2000,
+            ))),
+        )
+        .unwrap();
+        let io = (fs.calls(FsOp::Open), fs.calls(FsOp::Read));
+        assert!(block_on(resources.begin_repair(1)).unwrap().is_none());
+        assert_eq!(
+            resources.repair_status(1).unwrap().diagnosis,
+            Some(diagnosis)
+        );
+        assert_eq!((fs.calls(FsOp::Open), fs.calls(FsOp::Read)), io);
+        assert_eq!(snapshot(&resources), before);
+        resources.close().unwrap();
+    }
+}
+
+#[test]
+fn diagnosis_fences_and_kind_conflicts_fail_closed_without_replacing_evidence() {
+    for mutation in [
+        "source_sha256=printf('%064d',0)",
+        "source_bytes=source_bytes+1",
+        "kind='partial'",
+    ] {
+        let (_scratch, resources, _) = native(b"", real_fs());
+        let first = terminal(&resources);
+        let second = terminal(&resources);
+        let pending = capture(&resources);
+        assert_eq!(
+            block_on(resources.persist_repair_terminal(first)).unwrap(),
+            RepairPersist::Diagnosed
+        );
+        edit(
+            &resources,
+            &format!("UPDATE d_repair_diagnoses SET {mutation}"),
+        );
+        let before = writer_changes(&resources);
+        assert!(matches!(
+            block_on(resources.persist_repair_terminal(second)),
+            Err(StoreError::Corrupt { .. })
+        ));
+        assert_eq!(writer_changes(&resources), before);
+        if !mutation.starts_with("kind") {
+            assert!(matches!(
+                block_on(resources.begin_repair(1)),
+                Err(StoreError::Corrupt { .. })
+            ));
+            assert!(matches!(
+                resources.prepare_repair(pending, &|| false),
+                Err(StoreError::Corrupt { .. })
+            ));
+            assert!(matches!(
+                resources.repair_status(1),
+                Err(StoreError::Corrupt { .. })
+            ));
+        }
+        assert_eq!(
+            number(&resources, "SELECT count(*) FROM d_repair_diagnoses"),
+            1
+        );
+        resources.close().unwrap();
+    }
+}
+
+#[test]
+fn persistent_attempts_refence_source_target_and_newer_base_inside_the_writer() {
+    for (mutation, expected) in [
+        (
+            "UPDATE acquisitions SET object_state='missing'",
+            RepairPersist::Recapture,
+        ),
+        (
+            "UPDATE acquisitions SET object_state='quarantined'",
+            RepairPersist::Recapture,
+        ),
+        (
+            "DELETE FROM d_message_summary; DELETE FROM acquisitions",
+            RepairPersist::Recapture,
+        ),
+        (
+            "UPDATE store_meta SET value='1' WHERE key='mime_repair_target'",
+            RepairPersist::Recapture,
+        ),
+        (
+            "UPDATE d_message_summary SET parser_version=2,parse_state='ok'",
+            RepairPersist::Current,
+        ),
+        (
+            "UPDATE d_message_summary SET parser_version=3,parse_state='partial'",
+            RepairPersist::Current,
+        ),
+        (
+            "UPDATE d_message_summary SET parser_version=3,parse_state='failed'",
+            RepairPersist::Current,
+        ),
+    ] {
+        let (_scratch, resources, _) = native(b"", real_fs());
+        let attempt = terminal(&resources);
+        edit(&resources, mutation);
+        let before = snapshot(&resources);
+        assert_eq!(
+            block_on(resources.persist_repair_terminal(attempt)).unwrap(),
+            expected
+        );
+        assert_eq!(
+            number(&resources, "SELECT count(*) FROM d_repair_diagnoses"),
+            0
+        );
+        assert_eq!(snapshot(&resources), before);
+        resources.close().unwrap();
+    }
+    for mutation in [
+        "UPDATE acquisitions SET byte_length=byte_length+1",
+        "UPDATE acquisitions SET content_sha256=printf('%064d',0)",
+        "UPDATE store_meta SET value='3' WHERE key='mime_repair_target'",
+        "UPDATE store_meta SET value='0' WHERE key='mime_repair_target'",
+        "UPDATE store_meta SET value='bad' WHERE key='mime_repair_target'",
+        "DELETE FROM store_meta WHERE key='mime_repair_target'",
+    ] {
+        let (_scratch, resources, _) = native(b"", real_fs());
+        let attempt = terminal(&resources);
+        edit(&resources, mutation);
+        let error = block_on(resources.persist_repair_terminal(attempt)).unwrap_err();
+        assert!(if mutation.contains("value='3'") {
+            matches!(error, StoreError::Unavailable { io_kind: None, .. })
+        } else {
+            matches!(error, StoreError::Corrupt { .. })
+        });
+        assert_eq!(
+            number(&resources, "SELECT count(*) FROM d_repair_diagnoses"),
+            0
+        );
+        resources.close().unwrap();
+    }
+}
+
+#[test]
+fn recorded_diagnoses_do_not_hide_unavailable_sources_or_other_targets() {
+    let fs = Arc::new(FaultFs::new(
+        real_fs(),
+        FsOp::Read,
+        u64::MAX,
+        FaultKind::Eio,
+    ));
+    let (_scratch, resources, _) = native(b"", fs.clone());
+    assert_eq!(
+        block_on(resources.persist_repair_terminal(terminal(&resources))).unwrap(),
+        RepairPersist::Diagnosed
+    );
+    let before = snapshot(&resources);
+    for state in ["missing", "quarantined"] {
+        edit(
+            &resources,
+            &format!("UPDATE acquisitions SET object_state='{state}'"),
+        );
+        let io = (fs.calls(FsOp::Open), fs.calls(FsOp::Read));
+        let error = resources
+            .prepare_repair(capture(&resources), &|| false)
+            .unwrap_err();
+        assert!(if state == "missing" {
+            matches!(error, StoreError::NotFound { .. })
+        } else {
+            matches!(error, StoreError::Corrupt { .. })
+        });
+        assert_eq!((fs.calls(FsOp::Open), fs.calls(FsOp::Read)), io);
+        assert!(resources.repair_status(1).unwrap().diagnosis.is_some());
+    }
+    edit(
+        &resources,
+        "UPDATE acquisitions SET object_state='published'; UPDATE store_meta SET value='3' WHERE key='mime_repair_target'",
+    );
+    assert_eq!(resources.repair_status(1).unwrap().diagnosis, None);
+    assert!(matches!(
+        block_on(resources.begin_repair(1)),
+        Err(StoreError::Unavailable { .. })
+    ));
+    edit(
+        &resources,
+        "UPDATE store_meta SET value='2' WHERE key='mime_repair_target'; UPDATE d_repair_diagnoses SET parser_target=1",
+    );
+    assert_eq!(resources.repair_status(1).unwrap().diagnosis, None);
+    assert_eq!(
+        block_on(resources.persist_repair_terminal(terminal(&resources))).unwrap(),
+        RepairPersist::Diagnosed
+    );
+    assert_eq!(
+        number(&resources, "SELECT count(*) FROM d_repair_diagnoses"),
+        2
+    );
+    let object = resources.store.objects().publish(RICH).unwrap();
+    write(&resources, move |tx| {
+        tx.execute(
+            "INSERT INTO acquisitions VALUES(2,?1,?2,'published',0)",
+            (object.sha256_hex(), object.byte_length() as i64),
+        )
+        .unwrap();
+        Ok(())
+    });
+    let capture = block_on(resources.begin_repair(2)).unwrap().unwrap();
+    assert!(matches!(
+        resources.prepare_repair(capture, &|| false).unwrap(),
+        RepairPreparation::Prepared(_)
+    ));
+    assert_eq!(snapshot(&resources), before);
+    resources.close().unwrap();
+}
+
+#[test]
+fn failed_diagnosis_statement_and_commit_never_return_a_saved_receipt() {
+    for commit_failure in [false, true] {
+        let (_scratch, resources, _) = native(b"", real_fs());
+        let attempt = terminal(&resources);
+        let before = snapshot(&resources);
+        edit(
+            &resources,
+            if commit_failure {
+                "CREATE TEMP TABLE diagnosis_parent(id INTEGER PRIMARY KEY); CREATE TEMP TABLE diagnosis_probe(id INTEGER REFERENCES diagnosis_parent(id) DEFERRABLE INITIALLY DEFERRED); CREATE TEMP TRIGGER diagnosis_cut AFTER INSERT ON main.d_repair_diagnoses BEGIN INSERT INTO diagnosis_probe VALUES(1); END"
+            } else {
+                "CREATE TEMP TRIGGER diagnosis_cut BEFORE INSERT ON main.d_repair_diagnoses BEGIN SELECT RAISE(ABORT,'fixture'); END"
+            },
+        );
+        let error = block_on(resources.persist_repair_terminal(attempt)).unwrap_err();
+        assert!(
+            matches!(error, StoreError::Internal { ref detail } if detail.contains(if commit_failure { "commit a write transaction" } else { "MIME repair publication" })),
+            "{error:?}"
+        );
+        assert_eq!(
+            number(&resources, "SELECT count(*) FROM d_repair_diagnoses"),
+            0
+        );
+        assert!(resources.repair_status(1).unwrap().diagnosis.is_none());
+        assert_eq!(snapshot(&resources), before);
+        edit(&resources, "DROP TRIGGER diagnosis_cut");
+        assert_eq!(
+            block_on(resources.persist_repair_terminal(terminal(&resources))).unwrap(),
+            RepairPersist::Diagnosed
+        );
+        assert_eq!(
+            number(&resources, "SELECT count(*) FROM d_repair_diagnoses"),
+            1
+        );
+        assert_eq!(snapshot(&resources), before);
         resources.close().unwrap();
     }
 }
