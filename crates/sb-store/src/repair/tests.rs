@@ -261,6 +261,10 @@ fn diagnosis_is_one_bounded_immutable_row_and_new_target_is_independent() {
     );
     assert_eq!(tx.total_changes(), changes);
     assert_eq!(status(&tx, 1).unwrap().diagnosis.unwrap().diagnosed_at, 1);
+    assert!(
+        tx.execute("DELETE FROM acquisitions WHERE acquisition_id=1", [])
+            .is_err()
+    );
     let charged: i64 = tx.query_row("SELECT length(CAST(source_sha256 AS BLOB))+length(CAST(kind AS BLOB))+48 FROM d_repair_diagnoses", [], |r| r.get(0)).unwrap();
     assert!(charged + 512 < MAX_REPAIR_BYTES as i64);
     assert_eq!(status(&tx, 1).unwrap().pieces, 0);

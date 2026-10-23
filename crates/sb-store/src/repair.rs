@@ -291,7 +291,7 @@ pub fn persist(
     }
     let changed = tx
         .execute(
-            "INSERT INTO d_repair_diagnoses VALUES(?1,?2,?3,?4,?5,?6)",
+            "INSERT INTO d_repair_diagnoses(acquisition_id,parser_target,source_sha256,source_bytes,kind,diagnosed_at) VALUES(?1,?2,?3,?4,?5,?6)",
             params![
                 id,
                 capture.target,
