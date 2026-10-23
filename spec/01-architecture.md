@@ -238,7 +238,7 @@ is committed, and updates are their own PRs.
 | IMAP | `io-imap` | 0.7.1 | **Spike first** (plan M2.1): check it handles Bridge's quirks (synchronizing literals, LIST attributes, UIDPLUS receipts, raw UTF-8 resilience). Fallback: `async-imap` 0.12.0 (`runtime-tokio`, no default features) |
 | SMTP | `lettre` (tokio + rustls features, no native-tls) | 0.11.23 | Raw-message submission of `mail-builder` output. Must expose enough to detect "connection lost after DATA" (05) |
 | TLS | `rustls` / `tokio-rustls` / `rustls-platform-verifier` | 0.23.45 / 0.26.6 / 0.7.1 | Pinned-certificate verifier for Bridge; platform verifier for others (10) |
-| Async | `tokio` | 1.53.2 | |
+| Async | `tokio` | 1.53.3 | RUSTSEC-2026-0386 patch; existing feature sets unchanged |
 | FFI | `uniffi` | 0.32.2 | Proc-macro exports, no UDL. No async foreign callback traits (07) |
 | Template config maintenance | `askama_derive` backport, maintained `toml` | 0.16.1, 1.1.8 | RUSTSEC-2026-0374: reviewed immutable fork revision in Cargo replaces basic-toml without changing UniFFI/runtime APIs; see plan/maintenance/2026-10-basic-toml |
 | Secrets | `keyring-core` + `apple-native-keyring-store` (`protected`) + `zbus-secret-service-keyring-store` | 1.0.0 / 1.0.2 / 1.0.1 | Data-protection keychain on macOS (10); needs a signed app bundle to qualify (plan) |
