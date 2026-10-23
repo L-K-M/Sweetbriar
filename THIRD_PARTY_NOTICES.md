@@ -2175,7 +2175,7 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 ## MIT License (MIT)
 
 Used by:
-- `tokio 1.53.2` — <https://github.com/tokio-rs/tokio>
+- `tokio 1.53.3` — <https://github.com/tokio-rs/tokio>
 
 ```text
 MIT License
