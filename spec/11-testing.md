@@ -133,7 +133,7 @@ test, except where the spec says "manual qualification".
   drained accepted writes and owed unsubmitted work. Real FTS/thread rebuilds
   preserve both address tables and sent/received history. Process crash cuts
   remain m4-owned; m2's interruption test does not claim physical power loss.
-- m3a owns a complete native Resources caller using real verified retained bytes
+- m3a1 owns a complete native Resources caller using real verified retained bytes
   and the parser, checking every stored field and no base rewrite. Prove fully
   admitted output exceeding one transaction publishes through bounded pieces,
   exact reassembly/NULL/empty distinctions, completion-last visibility and no
@@ -142,8 +142,18 @@ test, except where the spec says "manual qualification".
   assembly/reopen/replay, source/target/newer-version fences, native write and
   failed-COMMIT rollback, additive migration/STRICT/FK/drift/older-writer refusal.
   A failed future-target attempt with no completed future version must still
-  block an older build's downgrade. Inactive versions/unchanged diagnoses alone
-  do not advance list/Search/population inputs. Diagnose without source text.
+  block an older build's downgrade. Inactive versions alone do not advance
+  list/Search/population inputs. Partial/failed/oversized-object attempts are
+  typed returned outcomes with no completed version or invented durable status.
+  Actual COMMIT failure uses a temporary deferred-FK probe on the real writer;
+  production constraints are not changed merely to make the fixture fail.
+- m3a2 uses m3a1's real producer for persisted all-kind terminal diagnoses,
+  unchanged no-rewrite plus begin/gate suppression, source/target staleness,
+  same-key differing-fence Corrupt, completed-supersedes, reopen durability and
+  retry on new identity/target. Failed diagnosis write is never Diagnosed.
+  Unchanged diagnoses advance no inputs and retain no source/header/path/reason
+  text. Add its migration, consumed status field and native proof with its code;
+  no publication/EOF/max-output/failure qualification is moved out of m3a1.
 - m3b uses m3a's actual producer for every consumer's header precedence,
   repaired-NULL known absence and missing-row fallback. Own historical migration
   3 before the new view, first-wins imports with actual mixed-source pricing,

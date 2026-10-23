@@ -572,11 +572,52 @@ row. Interruption/reopen can replay matching pieces, never publish omissions
 or overwrite differing pieces. Large admitted output takes more commits,
 not a new size refusal; oversized objects remain a separate verified outcome.
 
-m3a owns version/piece/publication/diagnostic storage and target metadata.
+m3a1 owns version/piece/publication storage and target metadata; m3a2 adds
+persistent attempts/diagnoses. m3a1 returns a typed terminal attempt, including
+resolved acquisition/hash/length/availability, captured target and kind, for its
+actual caller. m3a2 re-fences that opaque handoff inside its persist transaction;
+it never trusts an acquisition id alone or persists raw source/reason text.
 m3b owns bindings, effective relation and activation/deferral state. Each lands
 its additive schema and executable spec block with its complete implementation.
 Inactive version publication alone changes neither display nor query-source
 revisions. Existing verified-availability observations retain their own fences.
+
+Migration 8 introduces the inactive publication assembly; its executable DDL
+matches the migration through the schema-drift test. Only completed assemblies
+are versions. The manifest describes all twelve nullable text-field lengths;
+parser/state derive from target/completion, with date/attachments typed below.
+
+```sql
+CREATE TABLE d_repair_assemblies (
+  acquisition_id INTEGER NOT NULL REFERENCES acquisitions(acquisition_id),
+  parser_target INTEGER NOT NULL CHECK (parser_target BETWEEN 1 AND 4294967295),
+  source_sha256 TEXT NOT NULL CHECK (length(source_sha256) = 64),
+  source_bytes INTEGER NOT NULL CHECK (source_bytes >= 0),
+  date_header INTEGER,
+  has_attachments INTEGER NOT NULL CHECK (has_attachments IN (0,1)),
+  field_lengths TEXT NOT NULL CHECK (length(field_lengths) <= 256),
+  completed_at INTEGER,
+  PRIMARY KEY (acquisition_id, parser_target)
+) STRICT, WITHOUT ROWID;
+CREATE TABLE d_repair_pieces (
+  acquisition_id INTEGER NOT NULL,
+  parser_target INTEGER NOT NULL,
+  field_index INTEGER NOT NULL CHECK (field_index BETWEEN 0 AND 11),
+  byte_offset INTEGER NOT NULL CHECK (byte_offset >= 0),
+  text TEXT NOT NULL CHECK (length(CAST(text AS BLOB)) BETWEEN 1 AND 65536),
+  PRIMARY KEY (acquisition_id, parser_target, field_index, byte_offset),
+  FOREIGN KEY (acquisition_id, parser_target)
+    REFERENCES d_repair_assemblies(acquisition_id, parser_target)
+) STRICT, WITHOUT ROWID;
+```
+
+m3a2 suppresses an identical terminal attempt both at begin/prepare eligibility
+and at persistence: no repeated parse or diagnosis rewrite. Same immutable
+`(acquisition, target)` with differing raw hash/length or terminal kind is
+Corrupt, not permission to replace evidence; a new timestamp alone is not a new
+source fence. Changed target/new source identity permits a new attempt. Native
+callers qualify both operations separately; no automatic repair caller ships
+between them, and all original m3a behavior finishes before m3b/m4.
 
 The effective relation selects one whole source per logical message. A repaired
 NULL never falls back to base; no row exists when neither base nor active

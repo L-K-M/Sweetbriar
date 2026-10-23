@@ -57,7 +57,7 @@ pub struct ImportFlags {
     pub deleted: bool,
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum ImportParseState {
     Parsed,
     Partial,
@@ -77,7 +77,7 @@ impl ImportParseState {
 
 /// Persistence input mapped by sb-resources from the MIME leaf. Named
 /// fields are public for that mapping; no MIME type crosses leaf layers.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ImportSummary {
     pub parser_version: u32,
     pub parse_state: ImportParseState,

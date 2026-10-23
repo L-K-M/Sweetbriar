@@ -564,13 +564,20 @@ local drafts. No network yet.
     operation and actual native caller at first exposure, as m1 did. Executable
     schema lands with its implementing migration; no writerless binding view
     or proof-only successor. Preserve all original m3 behavior before m4.
-  - **M1.6m3a Verified version publication (L):** depends on m3.0. Additive
-    immutable full-version pieces/publication records, typed diagnostics and
-    monotonic MIME-repair target; verified off-writer read/parse and complete
-    Resources publication/status. Own maximum-output bounded staging, complete-
-    only visibility, all fields, replay/interruption, source/target/version
-    fences, native write/COMMIT failure, no-downgrade and migration proof.
-  - **M1.6m3b Single-message activation (L):** depends on m3a. Add bindings and
+  - **M1.6m3a1 Verified version publication (L):** depends on m3.0. Complete
+    Resources verified publisher, publication status and reconstructed summary,
+    with typed returned terminal/I/O/cancel outcomes. Add immutable full-version
+    pieces/publication marker and monotonic MIME-repair target. Own all fields,
+    maximum-output bounds, completion visibility, replay/interruption, source/
+    target/version fences, write/COMMIT rollback, no-downgrade and migration
+    proof. No diagnosis table, persist method or unused result variant yet.
+  - **M1.6m3a2 Persistent repair attempts (M):** depends on m3a1. Consume its
+    real opaque returned attempt in an additive Resources persist operation,
+    diagnostic storage/status and identical-terminal suppression at begin/gate.
+    Own durable all-kind/source/target/no-rewrite/reopen/retry and failed saved-
+    diagnosis proof. This adds attempt coordination, not postponed publisher
+    qualification. Complete m3a1+m3a2 before activation or the repair worker.
+  - **M1.6m3b Single-message activation (L):** depends on m3a2. Add bindings and
     effective relation with the real atomic single-message activation operation,
     all five runtime consumers and import displayed-source pricing. Own every
     per-message precedence/NULL/missing-row, historical migration, source/version/
@@ -582,9 +589,11 @@ local drafts. No network yet.
     legacy acquisition, native bounded convergence, old-id/captured-revision
     interleaves, reopen/replay and accurate caught-up-with-deferrals status.
     This delivers corpus functionality, not postponed m3b qualification.
-    Planning allocations for m3a/m3b/m3c are 1370/1410/1160 gross, including
-    mechanics+facade 480/400/350, schema+integration 160/250/100, native proof
-    570/600/500, prose 60 each and reserve 100/100/150. These are estimates,
+    Planning allocations for m3a1/m3a2/m3b/m3c are 1415/350/1410/1160 gross.
+    m3a1 budgets Store 430, Resources 130, schema+integration 95, prose 80,
+    native proof 580 and reserve 100; m3a2 adds its own persistence code/proof.
+    m3b/m3c retain mechanics+facade 400/350, schema+integration 250/100, native
+    proof 600/500, prose 60 each and reserve 100/150. These are estimates,
     not approved fit: independent ranges extend above the cap, especially for
     m3a/m3b. Re-estimate each concrete API and all owned proof before
     implementation. If it cannot fit 1450, find another complete consumed
