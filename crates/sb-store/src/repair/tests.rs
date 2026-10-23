@@ -66,7 +66,8 @@ fn preparation_bounds_and_storage_codec_reject_invalid_text() {
     };
     let tx = conn.transaction().unwrap();
     let oversized = ImportSummary {
-        subject: Some("x".repeat(MAX_TEXT_BYTES + 1)),
+        subject: Some("x".repeat(MAX_TEXT_BYTES)),
+        snippet: Some("x".to_owned()),
         ..summary.clone()
     };
     assert!(matches!(
