@@ -205,6 +205,15 @@ pub fn prepare(
         summary.snippet,
     ];
     let lengths: Vec<_> = fields.iter().map(|s| s.as_ref().map(String::len)).collect();
+    let total = lengths
+        .iter()
+        .flatten()
+        .try_fold(0usize, |sum, n| sum.checked_add(*n));
+    if total.is_none_or(|n| n > MAX_TEXT_BYTES) {
+        return Err(StoreError::corrupt(
+            "MIME repair fields exceed their admitted bound",
+        ));
+    }
     let lengths = serde_json::to_string(&lengths)
         .map_err(|_| StoreError::corrupt("MIME repair lengths could not be encoded"))?;
     Ok(RepairPrepared {

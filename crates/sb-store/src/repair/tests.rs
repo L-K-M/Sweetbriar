@@ -54,7 +54,7 @@ fn migration_is_additive_strict_and_older_writers_refuse_it() {
 }
 
 #[test]
-fn null_empty_and_corrupt_utf8_remain_distinct_in_the_storage_codec() {
+fn preparation_bounds_and_storage_codec_reject_invalid_text() {
     let mut conn = fixtures::index_connection();
     fixtures::acquisitions(&conn, 1);
     let summary = ImportSummary {
@@ -65,6 +65,17 @@ fn null_empty_and_corrupt_utf8_remain_distinct_in_the_storage_codec() {
         ..ImportSummary::default()
     };
     let tx = conn.transaction().unwrap();
+    let oversized = ImportSummary {
+        subject: Some("x".repeat(MAX_TEXT_BYTES + 1)),
+        ..summary.clone()
+    };
+    assert!(matches!(
+        prepare(begin(&tx, 1, 2).unwrap().unwrap(), oversized),
+        Err(StoreError::Corrupt { .. })
+    ));
+    assert_eq!(status(&tx, 1).unwrap().pieces, 0);
+    assert!(assembly(&tx, 1, 2).unwrap().is_none());
+
     let plan = prepare(begin(&tx, 1, 2).unwrap().unwrap(), summary.clone()).unwrap();
     assert!(matches!(
         publish(&tx, plan, Timestamp::from_millis(0)).unwrap(),
