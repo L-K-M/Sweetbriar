@@ -582,20 +582,22 @@ local drafts. No network yet.
     all five runtime consumers and import displayed-source pricing. Own every
     per-message precedence/NULL/missing-row, historical migration, source/version/
     binding/target, whole-message budget deferral, rollback, counter/generation
-    and kept-history proof. Native callers use m3a's actual producer.
+     and kept-history proof. Native callers use m3a1's actual producer.
   - **M1.6m3c Shared-corpus catch-up (L):** depends on m3b. Complete bounded
     discovery, batching, continuation, unchanged-deferral skipping and revision
     catch-up facade; no scheduler yet. Own 100k distinct messages sharing one
     legacy acquisition, native bounded convergence, old-id/captured-revision
     interleaves, reopen/replay and accurate caught-up-with-deferrals status.
     This delivers corpus functionality, not postponed m3b qualification.
-    Planning allocations for m3a1/m3a2/m3b/m3c are 1415/350/1410/1160 gross.
+    Planning allocations for m3a1/m3a2/m3b/m3c are 1415/800/1410/1160 gross.
     m3a1 budgets Store 430, Resources 130, schema+integration 95, prose 80,
-    native proof 580 and reserve 100; m3a2 adds its own persistence code/proof.
+    native proof 580 and reserve 100. Re-estimated m3a2 budgets Store 160,
+    Resources 100, schema/integration 50, native proof 320, prose 70 and reserve
+    100. Its separate preparation eligibility preserves the qualified publisher.
     m3b/m3c retain mechanics+facade 400/350, schema+integration 250/100, native
     proof 600/500, prose 60 each and reserve 100/150. These are estimates,
     not approved fit: independent ranges extend above the cap, especially for
-    m3a/m3b. Re-estimate each concrete API and all owned proof before
+    m3a1/m3b. Re-estimate each concrete API and all owned proof before
     implementation. If it cannot fit 1450, find another complete consumed
     boundary before coding; never golf, cut proof or reduce admission to fit.
   - **M1.6m4 Repair runtime — L:** fair repair/activation/population turns on

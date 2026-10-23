@@ -154,7 +154,17 @@ test, except where the spec says "manual qualification".
   Unchanged diagnoses advance no inputs and retain no source/header/path/reason
   text. Add its migration, consumed status field and native proof with its code;
   no publication/EOF/max-output/failure qualification is moved out of m3a1.
-- m3b uses m3a's actual producer for every consumer's header precedence,
+  Count zero object opens/reads at both suppressed entry points; prove identical
+  persist does no UPDATE with an abort oracle and survives reopen. Cover all
+  three actual returned kinds, current-target-only status, differing kind/fence,
+  availability/deletion and malformed/future/lowered target. Deletion is tested
+  before first persist; the retained row's FK forbids it afterward. Native
+  statement ABORT and deferred-FK COMMIT errors remain Internal with no row or
+  Diagnosed receipt; retry consumes a fresh actual terminal. Store-isolated proof
+  covers completed-version supersession, not a forged Resources packet. Verify
+  one-row budget/catalog/STRICT/FK/older-writer refusal and preservation of v8,
+  both address tables, base summaries and generation/input counters.
+- m3b uses m3a1's actual producer for every consumer's header precedence,
   repaired-NULL known absence and missing-row fallback. Own historical migration
   3 before the new view, first-wins imports with actual mixed-source pricing,
   multi-occurrence binding/list alignment, source/version/target/current-binding
