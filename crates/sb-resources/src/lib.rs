@@ -22,9 +22,13 @@ pub use bodies::{AttachmentLease, BodyKind, BodyLease, PublishedAttachment, Publ
 pub use sb_mime::{RenderWarning, RenderWarningCode};
 mod acquire;
 mod activation;
+mod catchup;
 pub use activation::{
     ActivationCommit, ActivationPreparation, ActivationPrepared, ActivationStatus, ActivationWork,
     RecordedActivationDeferral,
+};
+pub use catchup::{
+    CatchupBatch, CatchupCommit, CatchupPreparation, CatchupReport, CatchupStatus, CatchupSweep,
 };
 mod import;
 mod import_jobs;

@@ -5,6 +5,7 @@ use std::collections::BTreeSet;
 use super::*;
 
 mod boundaries;
+mod corpus;
 use crate::{
     ActivationCommit, ActivationPreparation, ActivationPrepared, ActivationWork, ReceivedCommit,
 };

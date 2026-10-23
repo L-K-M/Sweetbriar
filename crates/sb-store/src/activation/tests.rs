@@ -72,7 +72,7 @@ fn migration_keeps_v10_state_and_rejects_older_writer_without_rewriting_inputs()
         conn.query_row("SELECT json_array((SELECT json_group_array(json_array(key,value)) FROM store_meta WHERE key NOT IN('last_migrated_by','app_version_last_opened')),(SELECT json_group_array(json_array(message_id,account_id,acquisition_id)) FROM logical_messages),(SELECT json_group_array(json_array(canonical,email,times_received,times_sent_to)) FROM seen_addresses))", [], |row| row.get(0)).unwrap()
     };
     let before = snapshot(&conn);
-    run_migrations(&mut conn, &test_seams(real_fs()), MIGRATIONS).unwrap();
+    run_migrations(&mut conn, &test_seams(real_fs()), &MIGRATIONS[..11]).unwrap();
     assert_eq!(snapshot(&conn), before);
     for table in ["d_message_bindings", "d_activation_deferrals"] {
         assert_eq!(

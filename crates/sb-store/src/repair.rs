@@ -370,6 +370,15 @@ pub fn prepare(
 
 fn assembly(conn: &Connection, id: i64, version: u32) -> Result<Option<Assembly>, StoreError> {
     let acquisition = index_acquisition(conn, id)?;
+    assembly_for(conn, &acquisition, version)
+}
+
+fn assembly_for(
+    conn: &Connection,
+    acquisition: &StoredAcquisition,
+    version: u32,
+) -> Result<Option<Assembly>, StoreError> {
+    let id = acquisition.acquisition_id();
     let stored: Option<Assembly> = conn.query_row("SELECT source_sha256,source_bytes,date_header,has_attachments,field_lengths,completed_at FROM d_repair_assemblies WHERE acquisition_id=?1 AND parser_target=?2", params![id, version], |r| Ok(Assembly { hash: r.get(0)?, bytes: r.get(1)?, date: r.get(2)?, attachments: r.get(3)?, lengths: r.get(4)?, completed: r.get(5)? })).optional().map_err(sql_error)?;
     if stored.as_ref().is_some_and(|value| {
         value.hash != acquisition.object().sha256_hex()
@@ -388,6 +397,14 @@ pub(crate) fn completed_at(
     version: u32,
 ) -> Result<Option<i64>, StoreError> {
     Ok(assembly(conn, id, version)?.and_then(|stored| stored.completed))
+}
+
+pub(crate) fn completed_for(
+    conn: &Connection,
+    acquisition: &StoredAcquisition,
+    version: u32,
+) -> Result<Option<i64>, StoreError> {
+    Ok(assembly_for(conn, acquisition, version)?.and_then(|stored| stored.completed))
 }
 
 pub fn publish(
@@ -555,7 +572,17 @@ pub(crate) fn read_version_at(
     id: i64,
     version: u32,
 ) -> Result<Option<ImportSummary>, StoreError> {
-    let Some(stored) = assembly(conn, id, version)?.filter(|a| a.completed.is_some()) else {
+    read_version_for(conn, &index_acquisition(conn, id)?, version)
+}
+
+pub(crate) fn read_version_for(
+    conn: &Connection,
+    acquisition: &StoredAcquisition,
+    version: u32,
+) -> Result<Option<ImportSummary>, StoreError> {
+    let id = acquisition.acquisition_id();
+    let Some(stored) = assembly_for(conn, acquisition, version)?.filter(|a| a.completed.is_some())
+    else {
         return Ok(None);
     };
     let [

@@ -157,6 +157,15 @@ impl Store {
         self.writer.submit(priority, closure)
     }
 
+    // Own activation changes do not schedule another corpus pass.
+    pub(crate) fn write_activation<T, F>(&self, closure: F) -> WriteFuture<T>
+    where
+        T: Send + 'static,
+        F: FnOnce(&rusqlite::Transaction) -> Result<T, StoreError> + Send + 'static,
+    {
+        self.writer.submit_activation(closure)
+    }
+
     /// Hear of each list generation after the transaction that made it
     /// commits (spec/07 "Subscriptions"). The observer runs on the
     /// writer thread and must return at once.

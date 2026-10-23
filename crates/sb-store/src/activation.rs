@@ -1,5 +1,6 @@
 //! Bounded, atomic activation of one logical message's complete repaired source.
 
+pub mod corpus;
 pub(crate) mod inputs;
 #[cfg(test)]
 mod tests;
@@ -27,6 +28,7 @@ const MAX_EVIDENCE_BYTES: usize = MAX_WITNESS_BYTES * 2 + METADATA_FRAME;
 const CODEC_VERSION: u32 = 1;
 const WITNESS_HEADER_BYTES: usize = 16;
 const ID_BYTES: usize = 8;
+const RETAINED_ID_FRAME: usize = 64;
 
 #[derive(Debug, PartialEq, Eq)]
 struct Identity {
@@ -124,8 +126,9 @@ fn identity(conn: &Connection, message: i64) -> Result<Identity, StoreError> {
         (SELECT value FROM store_meta WHERE key='store_uuid'),(SELECT value FROM store_meta WHERE key='incarnation'),{},
         a.account_id IS NOT NULL FROM {} LEFT JOIN accounts a ON a.account_id=lm.account_id {} WHERE lm.message_id=?1",
         source.validity(), message_source::MESSAGES, source.joins());
-    let (account, acquisition, binding, root) = conn
-        .query_row(&sql, [message], |row| {
+    let mut statement = conn.prepare_cached(&sql).map_err(sql_error)?;
+    let (account, acquisition, binding, root) = statement
+        .query_row([message], |row| {
             message_source::check(row, 6)?;
             if !row.get::<_, bool>(7)? {
                 return Err(message_source::invalid());
@@ -279,42 +282,97 @@ fn values(
 }
 
 fn envelope(conn: &Connection, identity: &Identity) -> Result<Vec<Value>, StoreError> {
-    let acquisition = identity
-        .acquisition
-        .as_ref()
-        .expect("owed acquisition")
-        .acquisition_id();
-    for target in identity
-        .binding
-        .map(|b| b.0)
-        .into_iter()
-        .chain([identity.target])
-    {
-        repair::read_version_at(conn, acquisition, target)?
-            .ok_or_else(|| StoreError::corrupt("missing complete activation version"))?;
-    }
+    let acquisition = identity.acquisition.as_ref().expect("owed acquisition");
+    let read = |target| {
+        repair::read_version_for(conn, acquisition, target)?
+            .ok_or_else(|| StoreError::corrupt("missing complete activation version"))
+    };
+    let old = identity.binding.map(|b| read(b.0)).transpose()?;
+    let candidate = read(identity.target)?;
     let mut result = Vec::new();
-    for source in [Source::Stored, Source::Candidate(identity.target)] {
+    for (source, summary) in [
+        (Source::Stored, old),
+        (Source::Candidate(identity.target), Some(candidate)),
+    ] {
         let mut budget = repair::MAX_TEXT_BYTES + METADATA_FRAME;
+        let columns = if summary.is_some() {
+            source.present()
+        } else {
+            format!(
+                "{},{}",
+                source.fields(message_source::FIELDS).join(","),
+                source.present()
+            )
+        };
         let sql = format!(
-            "SELECT {},{},{} FROM {} {} WHERE lm.message_id=?1",
-            source.fields(message_source::FIELDS).join(","),
-            source.present(),
+            "SELECT {columns},{} FROM {} {} WHERE lm.message_id=?1",
             source.validity(),
             message_source::MESSAGES,
             source.joins()
         );
-        result.extend(
-            conn.query_row(&sql, [identity.message], |row| {
-                message_source::check(row, message_source::FIELDS.len() + 1)?;
-                values(row, message_source::FIELDS.len() + 1, &mut budget)
-            })
-            .map_err(sql_error)?,
-        );
+        if let Some(summary) = summary {
+            let mapped = summary_values(summary);
+            for value in &mapped {
+                let bytes = match value {
+                    Value::Text(s) => s.len(),
+                    _ => ID_BYTES,
+                };
+                budget = budget.checked_sub(bytes).ok_or_else(|| {
+                    StoreError::corrupt("activation source exceeds envelope budget")
+                })?;
+            }
+            result.extend(mapped);
+            result.push(
+                conn.prepare_cached(&sql)
+                    .map_err(sql_error)?
+                    .query_row([identity.message], |row| {
+                        message_source::check(row, 1)?;
+                        values(row, 1, &mut budget).map(|mut v| v.remove(0))
+                    })
+                    .map_err(sql_error)?,
+            );
+        } else {
+            result.extend(
+                conn.prepare_cached(&sql)
+                    .map_err(sql_error)?
+                    .query_row([identity.message], |row| {
+                        message_source::check(row, message_source::FIELDS.len() + 1)?;
+                        values(row, message_source::FIELDS.len() + 1, &mut budget)
+                    })
+                    .map_err(sql_error)?,
+            );
+        }
     }
     let mut budget = messages::MAX_STORED_HEADER_BYTES + METADATA_FRAME;
-    result.extend(conn.query_row("SELECT h.message_id,h.header_message_id,h.subject,h.from_json,h.to_json,h.cc_json,h.date_header,h.in_reply_to,h.references_json FROM logical_messages lm LEFT JOIN message_headers h ON h.message_id=lm.message_id WHERE lm.message_id=?1", [identity.message], |row| values(row, 9, &mut budget)).map_err(sql_error)?);
+    result.extend(conn.prepare_cached("SELECT h.message_id,h.header_message_id,h.subject,h.from_json,h.to_json,h.cc_json,h.date_header,h.in_reply_to,h.references_json FROM logical_messages lm LEFT JOIN message_headers h ON h.message_id=lm.message_id WHERE lm.message_id=?1").map_err(sql_error)?.query_row([identity.message], |row| values(row, 9, &mut budget)).map_err(sql_error)?);
     Ok(result)
+}
+
+fn summary_values(summary: crate::imports::ImportSummary) -> Vec<Value> {
+    let mut values: Vec<_> = [
+        summary.header_message_id,
+        summary.subject,
+        summary.from_addr,
+        summary.from_name,
+        summary.reply_to_json,
+        summary.to_json,
+        summary.cc_json,
+        summary.in_reply_to,
+        summary.references_json,
+        summary.list_id,
+        summary.delivered_to_json,
+        summary.snippet,
+    ]
+    .into_iter()
+    .map(|s| s.map_or(Value::Null, Value::Text))
+    .collect();
+    values.extend([
+        summary.date_header.map_or(Value::Null, Value::Integer),
+        Value::Integer(i64::from(summary.has_attachments)),
+        Value::Integer(i64::from(summary.parser_version)),
+        Value::Text("ok".into()),
+    ]);
+    values
 }
 
 type Inspected = (usize, usize, Option<(i64, i64)>);
@@ -555,13 +613,9 @@ fn gate(
     {
         return Ok(Some(ActivationCommit::Current));
     }
-    let acquisition = fresh
-        .acquisition
-        .as_ref()
-        .expect("owed acquisition")
-        .acquisition_id();
+    let acquisition = fresh.acquisition.as_ref().expect("owed acquisition");
     if fresh != work.identity
-        || repair::completed_at(conn, acquisition, fresh.target)? != Some(work.candidate_at)
+        || repair::completed_for(conn, acquisition, fresh.target)? != Some(work.candidate_at)
         || !work.lease.matches(owner)?
     {
         return Ok(Some(ActivationCommit::Recapture));
@@ -578,21 +632,16 @@ impl Store {
         let owner = self.activation.handle();
         self.write(WritePriority::Index, move |tx| {
             if message <= 0 {
-                return Err(StoreError::InvalidInput { message: "activation requires a positive message ID".into() });
+                return Err(StoreError::InvalidInput {
+                    message: "activation requires a positive message ID".into(),
+                });
             }
             repair::reconcile_target(tx, build)?;
-            let identity = identity(tx, message)?;
-            let Some(acquisition) = identity.acquisition.as_ref() else { return Ok(None); };
-            if identity.base_current || identity.binding.is_some_and(|binding| binding.0 >= identity.target) { return Ok(None); }
-            let Some(candidate_at) = repair::completed_at(tx, acquisition.acquisition_id(), identity.target)? else { return Ok(None); };
-            messages::check_availability(acquisition)?;
-            if identity.target >= message_source::MIN_USABLE_VERSION {
-                let observed: Option<i64> = tx.query_row("SELECT first_seen_at FROM occurrences WHERE message_id=?1 ORDER BY first_seen_at LIMIT 1", [message], |row| row.get(0)).optional().map_err(sql_error)?;
-                if observed.is_none() { return Err(StoreError::corrupt("eligible activation has no observation")); }
+            match capture(tx, owner, message)? {
+                Capture::Ready(work) => Ok(Some(*work)),
+                Capture::Unavailable(_, error) => Err(error),
+                Capture::Current | Capture::Unready(_) => Ok(None),
             }
-            let recorded = recorded(tx, message)?.filter(|record| record.owns(&identity));
-            let lease = inputs::Lease::new(owner, message, acquisition.acquisition_id())?;
-            Ok(Some(ActivationWork { identity, candidate_at, lease, envelope: Vec::new(), phase: Phase::Envelope, after: 0, ids: BTreeSet::new(), cost: METADATA_FRAME, winner: None, recorded, witness_position: 0 }))
         })
     }
 
@@ -628,8 +677,19 @@ impl Store {
         now: Timestamp,
     ) -> WriteFuture<ActivationCommit> {
         let owner = self.activation.handle();
-        self.write(WritePriority::Index, move |tx| {
-            commit(tx, prepared.0, &owner, now)
+        self.write_activation(move |tx| {
+            let mut remaining = MAX_BYTES;
+            match apply(tx, prepared.0, &owner, now, &mut remaining)? {
+                Applied::Done {
+                    receipt, changes, ..
+                } => {
+                    changes.publish(tx)?;
+                    Ok(receipt)
+                }
+                Applied::Carry(_) => Err(StoreError::internal(
+                    "standalone activation unexpectedly carried",
+                )),
+            }
         })
     }
 
@@ -660,30 +720,182 @@ impl Store {
     }
 }
 
-fn commit(
+enum Capture {
+    Ready(Box<ActivationWork>),
+    Current,
+    Unready(i64),
+    Unavailable(i64, StoreError),
+}
+
+fn capture(
+    conn: &Connection,
+    owner: Arc<inputs::State>,
+    message: i64,
+) -> Result<Capture, StoreError> {
+    if message <= 0 {
+        return Err(StoreError::InvalidInput {
+            message: "activation requires a positive message ID".into(),
+        });
+    }
+    let identity = identity(conn, message)?;
+    let Some(acquisition) = identity.acquisition.as_ref() else {
+        return Ok(Capture::Current);
+    };
+    let id = acquisition.acquisition_id();
+    if identity.base_current || identity.binding.is_some_and(|b| b.0 >= identity.target) {
+        return Ok(Capture::Current);
+    }
+    let Some(candidate_at) = repair::completed_for(conn, acquisition, identity.target)? else {
+        return Ok(Capture::Unready(id));
+    };
+    if let Err(error) = messages::check_availability(acquisition) {
+        return Ok(Capture::Unavailable(id, error));
+    }
+    if identity.target >= message_source::MIN_USABLE_VERSION {
+        let observed: Option<i64> = conn.query_row("SELECT first_seen_at FROM occurrences WHERE message_id=?1 ORDER BY first_seen_at LIMIT 1", [message], |row| row.get(0)).optional().map_err(sql_error)?;
+        if observed.is_none() {
+            return Err(StoreError::corrupt(
+                "eligible activation has no observation",
+            ));
+        }
+    }
+    let recorded = recorded(conn, message)?.filter(|r| r.owns(&identity));
+    let lease = inputs::Lease::new(owner, message, id)?;
+    Ok(Capture::Ready(Box::new(ActivationWork {
+        identity,
+        candidate_at,
+        lease,
+        envelope: Vec::new(),
+        phase: Phase::Envelope,
+        after: 0,
+        ids: BTreeSet::new(),
+        cost: METADATA_FRAME,
+        winner: None,
+        recorded,
+        witness_position: 0,
+    })))
+}
+
+fn retained(work: &ActivationWork) -> usize {
+    let strings: usize = work
+        .envelope
+        .iter()
+        .map(|v| match v {
+            Value::Text(s) => s.len(),
+            Value::Blob(b) => b.len(),
+            _ => ID_BYTES,
+        })
+        .sum();
+    METADATA_FRAME
+        + strings
+        + work.ids.len() * RETAINED_ID_FRAME
+        + work
+            .recorded
+            .as_ref()
+            .map_or(0, |r| r.payload.len() + r.ids.len() * ID_BYTES)
+}
+
+#[derive(Default)]
+struct Changes {
+    list: bool,
+    query: bool,
+    threads: bool,
+    population: bool,
+}
+
+impl Changes {
+    fn merge(&mut self, other: Self) {
+        self.list |= other.list;
+        self.query |= other.query;
+        self.threads |= other.threads;
+        self.population |= other.population;
+    }
+    fn publish(self, tx: &Transaction) -> Result<(), StoreError> {
+        if self.list {
+            list_rows::advance_generation(tx)?;
+        } else if self.query {
+            crate::index::advance_generation(tx)?;
+        }
+        if self.threads {
+            crate::threads::note_new_messages(tx)?;
+        }
+        if self.population {
+            crate::seen::note_inputs(tx)?;
+        }
+        Ok(())
+    }
+}
+
+enum Applied {
+    Done {
+        receipt: ActivationCommit,
+        charged: usize,
+        changes: Changes,
+    },
+    Carry(Box<ActivationWork>),
+}
+
+fn preflight(
     tx: &Transaction,
-    work: ActivationWork,
+    work: &ActivationWork,
     owner: &Arc<inputs::State>,
-    now: Timestamp,
-) -> Result<ActivationCommit, StoreError> {
-    if let Some(receipt) = gate(tx, &work, owner)? {
-        return Ok(receipt);
+) -> Result<Result<usize, ActivationCommit>, StoreError> {
+    if let Some(receipt) = gate(tx, work, owner)? {
+        return Ok(Err(receipt));
     }
     if envelope(tx, &work.identity)? != work.envelope {
-        return Ok(ActivationCommit::Recapture);
+        return Ok(Err(ActivationCommit::Recapture));
     }
     let mut cost = METADATA_FRAME;
     for id in &work.ids {
-        let Some((charge, _, _)) = inspect(tx, &work, *id)? else {
-            return Ok(ActivationCommit::Recapture);
+        let Some((charge, _, _)) = inspect(tx, work, *id)? else {
+            return Ok(Err(ActivationCommit::Recapture));
         };
         if charge == 0 {
-            return Ok(ActivationCommit::Recapture);
+            return Ok(Err(ActivationCommit::Recapture));
         }
         cost = cost.saturating_add(charge);
     }
     if cost != work.cost {
-        return Ok(ActivationCommit::Recapture);
+        return Ok(Err(ActivationCommit::Recapture));
+    }
+    Ok(Ok(cost))
+}
+
+fn apply(
+    tx: &Transaction,
+    work: ActivationWork,
+    owner: &Arc<inputs::State>,
+    now: Timestamp,
+    allowance: &mut usize,
+) -> Result<Applied, StoreError> {
+    let verified = preflight(tx, &work, owner)?;
+    apply_verified(tx, work, owner, now, allowance, verified)
+}
+
+fn apply_verified(
+    tx: &Transaction,
+    work: ActivationWork,
+    owner: &Arc<inputs::State>,
+    now: Timestamp,
+    allowance: &mut usize,
+    verified: Result<usize, ActivationCommit>,
+) -> Result<Applied, StoreError> {
+    let cost = match verified {
+        Ok(cost) => cost,
+        Err(receipt) => {
+            return Ok(Applied::Done {
+                receipt,
+                charged: 0,
+                changes: Changes::default(),
+            });
+        }
+    };
+    // Earlier entries only change their own message; still catch any unexpected cross-input write.
+    if !work.lease.matches(owner)? {
+        return Err(StoreError::internal(
+            "activation inputs changed after batch preflight",
+        ));
     }
     let acquisition = work
         .identity
@@ -702,7 +914,11 @@ fn commit(
         if old.as_ref().is_some_and(|record| {
             record.owns(&work.identity) && record.payload == payload && record.cost == cost
         }) {
-            return Ok(ActivationCommit::Deferred);
+            return Ok(Applied::Done {
+                receipt: ActivationCommit::Deferred,
+                charged: 0,
+                changes: Changes::default(),
+            });
         }
         if old
             .as_ref()
@@ -713,10 +929,23 @@ fn commit(
         {
             return Err(StoreError::corrupt("activation evidence exceeds allowance"));
         }
+        let charged = old.as_ref().map_or(0, |r| r.payload.len()) + payload.len() + METADATA_FRAME;
+        if charged > *allowance {
+            return Ok(Applied::Carry(Box::new(work)));
+        }
+        *allowance -= charged;
         tx.execute("INSERT INTO d_activation_deferrals VALUES(?1,?2,?3,?4,?5,?6,?7,?8) ON CONFLICT(message_id) DO UPDATE SET acquisition_id=excluded.acquisition_id,parser_target=excluded.parser_target,prior_target=excluded.prior_target,prior_bound_at=excluded.prior_bound_at,witness=excluded.witness,recorded_cost=excluded.recorded_cost,recorded_at=excluded.recorded_at", params![work.identity.message, acquisition, work.identity.target, work.identity.binding.map(|binding| binding.0), work.identity.binding.map(|binding| binding.1), payload, cost as i64, now.as_millis()]).map_err(sql_error)?;
         work.lease.healthy()?;
-        return Ok(ActivationCommit::Deferred);
+        return Ok(Applied::Done {
+            receipt: ActivationCommit::Deferred,
+            charged,
+            changes: Changes::default(),
+        });
     }
+    if cost > *allowance {
+        return Ok(Applied::Carry(Box::new(work)));
+    }
+    *allowance -= cost;
     let before = effects(tx, work.identity.message)?;
     tx.execute("INSERT INTO d_message_bindings VALUES(?1,?2,?3,?4) ON CONFLICT(message_id) DO UPDATE SET parser_target=excluded.parser_target,bound_at=excluded.bound_at", params![work.identity.message, acquisition, work.identity.target, now.as_millis()]).map_err(sql_error)?;
     let mut remaining = MAX_BYTES - METADATA_FRAME;
@@ -732,19 +961,17 @@ fn commit(
         },
     )?;
     let after = effects(tx, work.identity.message)?;
-    if changed {
-        list_rows::advance_generation(tx)?;
-    } else if before.0 != after.0 {
-        crate::index::advance_generation(tx)?;
-    }
-    if before.1 != after.1 {
-        crate::threads::note_new_messages(tx)?;
-    }
-    if before.2 != after.2 {
-        crate::seen::note_inputs(tx)?;
-    }
     work.lease.healthy()?;
-    Ok(ActivationCommit::Activated)
+    Ok(Applied::Done {
+        receipt: ActivationCommit::Activated,
+        charged: cost,
+        changes: Changes {
+            list: changed,
+            query: before.0 != after.0,
+            threads: before.1 != after.1,
+            population: before.2 != after.2,
+        },
+    })
 }
 
 type Effects = (

@@ -485,7 +485,9 @@ pub(crate) fn inputs(tx: &Transaction, message: i64) -> Result<Inputs, StoreErro
         Source::Stored.joins()
     );
     let (addresses, attachment) = tx
-        .query_row(&sql, [message], |row| {
+        .prepare_cached(&sql)
+        .map_err(sql_error)?
+        .query_row([message], |row| {
             message_source::check(row, 0)?;
             Ok((
                 (0..3)

@@ -224,3 +224,14 @@ impl Drop for Lease {
 fn sql_error(error: rusqlite::Error) -> StoreError {
     classify(error, "activation input observer")
 }
+
+pub(super) fn same_owner(left: &Arc<State>, right: &Arc<State>) -> bool {
+    Arc::ptr_eq(left, right) && !left.dead.load(Ordering::SeqCst)
+}
+
+pub(super) fn healthy(state: &State) -> Result<(), StoreError> {
+    if state.failed.load(Ordering::SeqCst) {
+        return Err(StoreError::internal("activation observer failed"));
+    }
+    Ok(())
+}

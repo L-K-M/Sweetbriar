@@ -145,7 +145,7 @@ fn diagnosis_migration_keeps_v8_versions_metadata_and_both_address_tables() {
         conn.query_row("SELECT json_group_array(json_array(key,value)) FROM (SELECT key,value FROM store_meta ORDER BY key)", [], |r| r.get(0)).unwrap()
     };
     let meta = metadata(&conn);
-    run_migrations(&mut conn, &test_seams(real_fs()), MIGRATIONS).unwrap();
+    run_migrations(&mut conn, &test_seams(real_fs()), &MIGRATIONS[..9]).unwrap();
     assert_eq!(read_version(&conn, 1, 2).unwrap(), before);
     assert_eq!(metadata(&conn), meta);
     let kept: (String, i64, i64, i64, i64) = conn.query_row("SELECT s.subject,a.last_seen_at,a.times_received,a.times_sent_to,l.message_id FROM d_message_summary s CROSS JOIN seen_addresses a CROSS JOIN seen_address_messages l", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))).unwrap();
