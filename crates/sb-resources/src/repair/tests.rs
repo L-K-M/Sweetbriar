@@ -9,6 +9,7 @@ use sb_test_support::{FaultFs, FaultKind, FsOp, ScratchDir, block_on, real_fs};
 
 use super::*;
 
+mod activation;
 mod immutability;
 
 const RICH: &[u8] = concat!(

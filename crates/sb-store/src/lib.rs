@@ -3,6 +3,7 @@
 //! only through `sb-types` seam traits.
 #![forbid(unsafe_code)]
 
+pub mod activation;
 mod error;
 mod import_reports;
 pub mod imports;

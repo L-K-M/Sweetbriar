@@ -156,12 +156,17 @@ fn list_row_bytes(summary: &ImportSummary) -> usize {
     ]
     .into_iter()
     .flatten()
-    .fold(LIST_ROW_BUDGET.saturating_mul(2), |size, text| {
-        size.saturating_add(
-            text.len()
-                .saturating_mul(LIST_ROW_TEXT_COPIES + REP_TEXT_COPIES),
-        )
-    })
+    .fold(
+        LIST_ROW_BUDGET
+            .saturating_mul(2)
+            .saturating_add(list_rows::INTEGER_INDEX_FRAME),
+        |size, text| {
+            size.saturating_add(
+                text.len()
+                    .saturating_mul(LIST_ROW_TEXT_COPIES + REP_TEXT_COPIES),
+            )
+        },
+    )
 }
 
 pub struct ImportBatch<'a> {

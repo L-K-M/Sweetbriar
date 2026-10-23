@@ -6,7 +6,7 @@ use std::sync::Arc;
 use rusqlite::{OptionalExtension, Transaction, params, types::ValueRef};
 
 use crate::messages::{MAX_STORED_HEADER_BYTES, ReaderAddress, addresses};
-use crate::query::{AddressOperand, SUMMARY_USABLE};
+use crate::query::AddressOperand;
 use crate::{StoreError, schema::classify};
 
 const TARGET: u32 = 1;
@@ -27,7 +27,7 @@ pub struct SeenRevisions {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct Source {
+pub(crate) struct Source {
     message: i64,
     acquisition: Option<i64>,
     account: String,
@@ -216,18 +216,29 @@ pub fn publish(tx: &Transaction, mut prepared: SeenPrepared) -> Result<SeenCommi
     Ok(SeenCommit::Continue(prepared.scan))
 }
 
-fn next_source(tx: &Transaction, after: i64) -> Result<Option<Source>, StoreError> {
+pub(crate) fn next_source(tx: &Transaction, after: i64) -> Result<Option<Source>, StoreError> {
+    let summary = crate::message_source::Source::Stored;
+    let [version, state, address, name, reply, to, cc] = summary.fields([
+        "parser_version",
+        "parse_state",
+        "from_addr",
+        "from_name",
+        "reply_to_json",
+        "to_json",
+        "cc_json",
+    ]);
+    let (joins, usable, validity) = (summary.joins(), summary.usable(), summary.validity());
     let sql = format!("SELECT lm.message_id,lm.acquisition_id,lm.account_id,
         (SELECT first_seen_at FROM occurrences WHERE message_id=lm.message_id ORDER BY first_seen_at LIMIT 1),
-        s.parser_version,s.parse_state,s.from_addr,s.from_name,s.reply_to_json,s.to_json,s.cc_json,
-        coalesce(({SUMMARY_USABLE}),0)
-        FROM {} LEFT JOIN {}
-        WHERE lm.message_id>?1 ORDER BY lm.message_id LIMIT 1", crate::message_source::MESSAGES, crate::message_source::SUMMARY);
+        {version},{state},{address},{name},{reply},{to},{cc},coalesce(({usable}),0),{validity}
+        FROM {} {joins}
+        WHERE lm.message_id>?1 ORDER BY lm.message_id LIMIT 1", crate::message_source::MESSAGES);
     let mut statement = tx.prepare_cached(&sql).map_err(sql_error)?;
     let mut rows = statement.query([after]).map_err(sql_error)?;
     let Some(row) = rows.next().map_err(sql_error)? else {
         return Ok(None);
     };
+    crate::message_source::check(row, 12).map_err(sql_error)?;
     let eligible: bool = row.get(11).map_err(sql_error)?;
     let mut headers = [const { None }; 5];
     if eligible {

@@ -18,7 +18,7 @@ use std::collections::BTreeSet;
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 use crate::StoreError;
-use crate::message_source::{HEADERS, MESSAGES, SUMMARY};
+use crate::message_source::{self, HEADERS, MESSAGES, Source};
 use crate::schema::classify;
 
 /// The `store_meta` key holding the generation (spec/02).
@@ -46,12 +46,28 @@ const SOURCES: &str = "occurrences o
   LEFT JOIN message_headers h ON h.message_id = o.message_id
   LEFT JOIN d_message_summary s ON s.acquisition_id = lm.acquisition_id";
 
-fn sources() -> String {
+fn sources(source: Source) -> String {
+    let summary = source.joins();
     format!(
         "occurrences o JOIN mailboxes mb ON mb.mailbox_id=o.mailbox_id
         JOIN {MESSAGES} ON lm.message_id=o.message_id
-        LEFT JOIN {HEADERS} LEFT JOIN {SUMMARY}"
+        LEFT JOIN {HEADERS} {summary}"
     )
+}
+
+fn projected(source: Source) -> String {
+    let [date, name, address, subject, snippet, attachments] = source.fields([
+        "date_header",
+        "from_name",
+        "from_addr",
+        "subject",
+        "snippet",
+        "has_attachments",
+    ]);
+    format!("o.occurrence_id,o.mailbox_id,mb.role,o.account_id,
+        coalesce(o.internal_date,h.date_header,{date},o.first_seen_at),o.message_id,
+        coalesce(nullif(json_extract(h.from_json,'$[0].name'),''),json_extract(h.from_json,'$[0].address'),nullif({name},''),{address}),
+        coalesce(h.subject,{subject}),{snippet},1-o.f_seen,o.f_flagged,coalesce({attachments},0)")
 }
 
 const IMAGE_COLUMNS: &str = "occurrence_id, mailbox_id, mailbox_role, account_id, sort_date,
@@ -59,6 +75,7 @@ const IMAGE_COLUMNS: &str = "occurrence_id, mailbox_id, mailbox_role, account_id
 
 // Table plus two text-covering indexes; representative-only changes replace two table images.
 pub(crate) const ROW_FRAME: usize = 512;
+pub(crate) const INTEGER_INDEX_FRAME: usize = 128;
 pub(crate) const TEXT_COPIES: usize = 3;
 pub(crate) const REP_TEXT_COPIES: usize = 2;
 
@@ -85,21 +102,64 @@ fn image_charge(old: i64, new: i64, copies: usize) -> Result<usize, StoreError> 
     Ok(ROW_FRAME.saturating_add(old.saturating_add(new).saturating_mul(copies)))
 }
 
-fn price_sql() -> String {
-    let sources = sources();
+fn price_sql(source: Source) -> String {
+    let sources = sources(source);
+    let projected = projected(source);
+    let validity = source.validity();
     format!(
-        "WITH p({IMAGE_COLUMNS}) AS (SELECT {PROJECTED} FROM {sources}
+        "WITH p({IMAGE_COLUMNS},validity) AS (SELECT {projected},{validity} FROM {sources}
         WHERE o.occurrence_id=?1 AND o.state='present')
-        SELECT {}, ({}) IS NOT ({}) FROM p LEFT JOIN d_list_rows r USING(occurrence_id)",
+        SELECT {}, ({}) IS NOT ({}),p.validity,{} FROM p LEFT JOIN d_list_rows r USING(occurrence_id)",
         text_bytes("p"),
         image_columns("r."),
-        image_columns("p.")
+        image_columns("p."),
+        text_bytes("r")
     )
 }
 
 /// The representative's mailbox order: folder, then label, then
 /// virtual; ties go to the lowest occurrence id (spec/02).
-const KIND_RANK: &str = "CASE mb.kind WHEN 'folder' THEN 0 WHEN 'label' THEN 1 ELSE 2 END";
+pub(crate) const KIND_RANK: &str =
+    "CASE mb.kind WHEN 'folder' THEN 0 WHEN 'label' THEN 1 ELSE 2 END";
+
+pub(crate) struct Price {
+    pub(crate) changed: bool,
+    pub(crate) charge: usize,
+    pub(crate) inspected: usize,
+}
+
+pub(crate) fn price(
+    conn: &Connection,
+    occurrence: i64,
+    source: Source,
+) -> Result<Option<Price>, StoreError> {
+    conn.prepare_cached(&price_sql(source))
+        .and_then(|mut statement| {
+            statement.query_row([occurrence], |row| {
+                message_source::check(row, 2)?;
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, bool>(1)?,
+                    row.get::<_, i64>(3)?,
+                ))
+            })
+        })
+        .optional()
+        .map_err(sql_error)?
+        .map(|(new, changed, old)| {
+            Ok(Price {
+                changed,
+                charge: if changed {
+                    INTEGER_INDEX_FRAME + image_charge(old, new, TEXT_COPIES)?
+                } else {
+                    0
+                },
+                inspected: usize::try_from(old.saturating_add(new))
+                    .map_err(|_| StoreError::corrupt("invalid inspected list size"))?,
+            })
+        })
+        .transpose()
+}
 
 /// Bring the rows of `occurrences` in line with their sources and
 /// re-elect the representative of every message they belong to, or
@@ -115,12 +175,27 @@ pub(crate) fn refresh_priced(
     occurrences: &BTreeSet<i64>,
     charge: &mut impl FnMut(usize) -> Result<(), StoreError>,
 ) -> Result<bool, StoreError> {
+    apply_priced(tx, occurrences, Representatives::Elect, charge)
+}
+
+pub(crate) enum Representatives {
+    Elect,
+    Preserve,
+}
+
+pub(crate) fn apply_priced(
+    tx: &Transaction,
+    occurrences: &BTreeSet<i64>,
+    representatives: Representatives,
+    charge: &mut impl FnMut(usize) -> Result<(), StoreError>,
+) -> Result<bool, StoreError> {
     let compared = image_columns("");
     let excluded = image_columns("excluded.");
-    let sources = sources();
+    let sources = sources(Source::Stored);
+    let projected = projected(Source::Stored);
     let upsert = format!(
         "INSERT INTO d_list_rows ({IMAGE_COLUMNS}, representative)
-         SELECT {PROJECTED}, 0 FROM {sources}
+         SELECT {projected}, 0 FROM {sources}
          WHERE o.occurrence_id = ?1 AND o.state = 'present'
          ON CONFLICT(occurrence_id) DO UPDATE SET
            mailbox_id = excluded.mailbox_id, mailbox_role = excluded.mailbox_role,
@@ -131,7 +206,6 @@ pub(crate) fn refresh_priced(
            representative = representative AND message_id IS excluded.message_id
           WHERE ({compared}) IS NOT ({excluded})"
     );
-    let price = price_sql();
     let before_sql = format!(
         "SELECT message_id,{},NOT EXISTS(SELECT 1 FROM occurrences WHERE occurrence_id=?1 AND state='present') FROM d_list_rows r WHERE occurrence_id=?1",
         text_bytes("r")
@@ -157,19 +231,8 @@ pub(crate) fn refresh_priced(
             .map_err(sql_error)?;
         messages.extend(current);
 
-        let prospective: Option<(i64, bool)> = tx
-            .prepare_cached(&price)
-            .and_then(|mut statement| {
-                statement.query_row([occurrence], |row| Ok((row.get(0)?, row.get(1)?)))
-            })
-            .optional()
-            .map_err(sql_error)?;
-        if let Some((new, true)) = prospective {
-            charge(image_charge(
-                before.as_ref().map_or(0, |row| row.1),
-                new,
-                TEXT_COPIES,
-            )?)?;
+        if let Some(prospective) = price(tx, occurrence, Source::Stored)?.filter(|p| p.changed) {
+            charge(prospective.charge)?;
             changed |= tx
                 .prepare_cached(&upsert)
                 .and_then(|mut statement| statement.execute([occurrence]))
@@ -177,7 +240,7 @@ pub(crate) fn refresh_priced(
                 > 0;
         }
         if let Some((_, old, true)) = before {
-            charge(image_charge(old, 0, TEXT_COPIES)?)?;
+            charge(INTEGER_INDEX_FRAME + image_charge(old, 0, TEXT_COPIES)?)?;
             changed |= tx
                 .execute(
                     "DELETE FROM d_list_rows WHERE occurrence_id=?1",
@@ -187,8 +250,10 @@ pub(crate) fn refresh_priced(
                 > 0;
         }
     }
-    for message in messages {
-        changed |= elect(tx, message, charge)?;
+    if matches!(representatives, Representatives::Elect) {
+        for message in messages {
+            changed |= elect(tx, message, charge)?;
+        }
     }
     Ok(changed)
 }

@@ -75,23 +75,29 @@ pub fn thread_sources(
     after: i64,
     limit: usize,
 ) -> Result<Vec<ThreadSource>, StoreError> {
+    let source = crate::message_source::Source::Stored;
+    let [id, references, reply, subject] = source.fields([
+        "header_message_id",
+        "references_json",
+        "in_reply_to",
+        "subject",
+    ]);
+    let (summary, validity) = (source.joins(), source.validity());
     let mut statement = tx
         .prepare_cached(&format!(
             "SELECT lm.message_id, lm.account_id,
-               COALESCE(h.header_message_id, s.header_message_id),
-               COALESCE(h.references_json, s.references_json),
-               COALESCE(h.in_reply_to, s.in_reply_to),
-               COALESCE(h.subject, s.subject), r.sort_date
-             FROM {} LEFT JOIN {} LEFT JOIN {}
+               COALESCE(h.header_message_id,{id}),COALESCE(h.references_json,{references}),
+               COALESCE(h.in_reply_to,{reply}),COALESCE(h.subject,{subject}),r.sort_date,{validity}
+             FROM {} LEFT JOIN {} {summary}
              LEFT JOIN d_list_rows r ON r.message_id = lm.message_id AND r.representative = 1
              WHERE lm.message_id > ?1 ORDER BY lm.message_id LIMIT ?2",
             crate::message_source::MESSAGES,
-            crate::message_source::HEADERS,
-            crate::message_source::SUMMARY
+            crate::message_source::HEADERS
         ))
         .map_err(sql_error)?;
     let rows = statement
         .query_map(params![after, limit_value(limit)], |row| {
+            crate::message_source::check(row, 7)?;
             Ok((
                 row.get::<_, i64>(0)?,
                 row.get::<_, String>(1)?,

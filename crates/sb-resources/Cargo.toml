@@ -22,4 +22,5 @@ serde_json = "=1.0.154"
 test-seams = ["sb-store/test-seams"]
 
 [dev-dependencies]
+sb-store = { version = "0.0.1", path = "../sb-store", features = ["test-seams"] }
 sb-test-support = { version = "0.0.1", path = "../sb-test-support" }

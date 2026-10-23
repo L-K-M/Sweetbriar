@@ -72,17 +72,23 @@ pub fn read_search_coverage(
     let version = values.len();
     let sql = format!(
         "SELECT count(*),
-         coalesce(sum(h.message_id IS NOT NULL OR s.parse_state IN ('ok','partial')),0),
+         coalesce(sum(h.message_id IS NOT NULL OR ({state}) IN ('ok','partial')),0),
          coalesce(sum(a.object_state='published'),0),
          coalesce(sum(a.object_state='published' AND d.extractor_version=?{version} AND d.state='indexed'),0),
          coalesce(sum(a.object_state='published' AND d.extractor_version=?{version} AND d.state='partial'),0),
          coalesce(sum(a.object_state='published' AND d.extractor_version=?{version} AND d.state='failed'),0),
-         count(DISTINCT CASE WHEN q.doc_id IS NOT NULL THEN lm.acquisition_id END)
+         count(DISTINCT CASE WHEN q.doc_id IS NOT NULL THEN lm.acquisition_id END),
+         coalesce(sum(({validity})<0),0)
          FROM {} LEFT JOIN d_search_docs d ON d.doc_id=lm.acquisition_id
-          LEFT JOIN d_index_queue q ON q.doc_id=lm.acquisition_id WHERE {scope}", source()
+          LEFT JOIN d_index_queue q ON q.doc_id=lm.acquisition_id WHERE {scope}", source(),
+          state=crate::message_source::Source::Stored.field("parse_state"),
+          validity=crate::message_source::Source::Stored.validity()
     );
     let raw: [i64; 7] = tx
         .query_row(&sql, params_from_iter(&values), |row| {
+            if row.get::<_, i64>(7)? != 0 {
+                return Err(crate::message_source::invalid());
+            }
             Ok([
                 row.get(0)?,
                 row.get(1)?,

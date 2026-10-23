@@ -806,7 +806,6 @@ CREATE TABLE d_activation_deferrals (
   FOREIGN KEY (acquisition_id,parser_target)
     REFERENCES d_repair_assemblies(acquisition_id,parser_target)
 ) STRICT;
-CREATE INDEX d_list_rows_by_message ON d_list_rows(message_id,occurrence_id);
 CREATE TRIGGER d_message_bindings_insert BEFORE INSERT ON d_message_bindings
 WHEN NOT EXISTS (
   SELECT 1 FROM logical_messages lm JOIN acquisitions a ON a.acquisition_id=lm.acquisition_id
@@ -1147,6 +1146,7 @@ CREATE INDEX d_list_rows_flagged ON d_list_rows(sort_date DESC, occurrence_id DE
 -- sharing an acquisition, whose rows its first summary updates.
 CREATE UNIQUE INDEX d_list_rows_one_representative ON d_list_rows(message_id)
   WHERE representative = 1;
+CREATE INDEX d_list_rows_by_message ON d_list_rows(message_id,occurrence_id);
 CREATE INDEX logical_messages_by_acquisition ON logical_messages(acquisition_id);
 ```
 

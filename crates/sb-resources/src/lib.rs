@@ -21,6 +21,11 @@ mod bodies;
 pub use bodies::{AttachmentLease, BodyKind, BodyLease, PublishedAttachment, PublishedBody};
 pub use sb_mime::{RenderWarning, RenderWarningCode};
 mod acquire;
+mod activation;
+pub use activation::{
+    ActivationCommit, ActivationPreparation, ActivationPrepared, ActivationStatus, ActivationWork,
+    RecordedActivationDeferral,
+};
 mod import;
 mod import_jobs;
 mod index;

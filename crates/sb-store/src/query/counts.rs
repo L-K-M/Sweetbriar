@@ -7,21 +7,22 @@ use rusqlite::types::Value;
 use rusqlite::{Statement, Transaction, params_from_iter};
 
 use super::ast::{AddressField, Field, FieldPredicate, Flag, Has, Node, SizeOp};
-use super::{AddressOperand, DateBounds, Query, SUMMARY_USABLE, TextOperand};
+use super::{AddressOperand, DateBounds, Query, TextOperand};
 use crate::index::{self, FIELDS, rebuild};
+use crate::message_source::{self, Source};
 use crate::{StoreError, Uuid, messages, schema::classify};
 
 const ADDRESS_FN: &str = "sb_query_address";
 const MASK_FN: &str = "sb_query_complete_fields";
 fn source() -> String {
+    let summary = Source::Stored.joins();
     format!(
         "d_list_rows r
     JOIN occurrences o ON o.occurrence_id = r.occurrence_id
     JOIN {} ON lm.message_id = r.message_id
     LEFT JOIN acquisitions a ON a.acquisition_id = lm.acquisition_id
-    LEFT JOIN {} LEFT JOIN {}",
+    {summary} LEFT JOIN {}",
         crate::message_source::MESSAGES,
-        crate::message_source::SUMMARY,
         crate::message_source::HEADERS
     )
 }
@@ -74,14 +75,21 @@ pub fn counts(
 ) -> Result<QueryCounts, StoreError> {
     let compiled = compile(tx, query, scope)?;
     let sql = format!(
-        "SELECT coalesce(sum(v = 1), 0), coalesce(sum(v IS NULL), 0) FROM ({})",
+        "SELECT coalesce(sum(v = 1),0),coalesce(sum(v IS NULL),0),coalesce(sum(source_validity<0),0) FROM ({})",
         compiled.source
     );
-    let (matching, unknown) = compiled.read(tx, &sql, &[], |statement, values| {
+    let (matching, unknown, invalid) = compiled.read(tx, &sql, &[], |statement, values| {
         statement.query_row(params_from_iter(values), |row| {
-            Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
         })
     })?;
+    if invalid != 0 {
+        return Err(sql_error(message_source::invalid()));
+    }
     Ok(QueryCounts {
         matching: nonnegative_count(matching)?,
         unknown: nonnegative_count(unknown)?,
@@ -158,11 +166,15 @@ fn compile(tx: &Transaction, query: &Query, scope: SearchScope) -> Result<Compil
         negated: false,
         leaves: Vec::new(),
     };
-    let predicate = compiler.node(query.root());
+    let validity = Source::Stored.validity();
+    let predicate = format!(
+        "CASE WHEN ({validity})<0 THEN sb_mime_valid(-1) ELSE ({}) END",
+        compiler.node(query.root())
+    );
     Ok(Compiled {
         source: format!(
             "SELECT r.message_id AS id, r.occurrence_id AS chosen_occurrence_id,
-             ({predicate}) AS v FROM {} WHERE {scope}",
+             ({predicate}) AS v,({validity}) AS source_validity FROM {} WHERE {scope}",
             source()
         ),
         predicate,
@@ -210,6 +222,7 @@ enum AddressMatch {
 }
 
 fn register(tx: &Transaction) -> Result<Relay, StoreError> {
+    message_source::register(tx).map_err(sql_error)?;
     let flags = FunctionFlags::SQLITE_UTF8
         | FunctionFlags::SQLITE_DETERMINISTIC
         | FunctionFlags::SQLITE_INNOCUOUS;
@@ -339,9 +352,7 @@ impl Compiler {
             Node::Has(Has::Note) => {
                 "EXISTS(SELECT 1 FROM notes n WHERE n.message_id = r.message_id)".into()
             }
-            Node::Has(Has::Attachment) => {
-                "(SELECT s.has_attachments WHERE s.parse_state = 'ok')".into()
-            }
+            Node::Has(Has::Attachment) => attachment(),
             Node::Date(date) => match date.bounds() {
                 DateBounds::Before(end) => format!("r.sort_date < {}", self.bind(end.as_millis())),
                 DateBounds::After(start) => {
@@ -418,26 +429,90 @@ impl Compiler {
     }
 
     fn address(&mut self, field: AddressField, mode: AddressMatch, key: &str) -> String {
-        let column = match field {
-            AddressField::From => "from_json",
-            AddressField::To => "to_json",
-            AddressField::Cc => "cc_json",
-        };
-        // A complete header NULL is known-empty; never fall through it.
-        let summary = if field == AddressField::From {
-            "CASE WHEN s.from_addr IS NULL AND s.from_name IS NULL THEN '[]'
-             ELSE json_array(json_object('name', s.from_name, 'address', s.from_addr)) END"
-                .into()
-        } else {
-            format!("s.{column}")
-        };
+        let (known, selected) = address_source(field);
         format!(
-            "{ADDRESS_FN}(CASE WHEN h.message_id IS NOT NULL OR ({SUMMARY_USABLE}) THEN 1 ELSE 0 END,
-             CASE WHEN h.message_id IS NOT NULL THEN h.{column}
-                  WHEN {SUMMARY_USABLE} THEN {summary} END, {}, {})",
-            self.bind(mode as i64), self.bind(key.to_owned())
+            "{ADDRESS_FN}({known},{selected},{},{})",
+            self.bind(mode as i64),
+            self.bind(key.to_owned())
         )
     }
+}
+
+fn attachment() -> String {
+    let [state, value] = Source::Stored.fields(["parse_state", "has_attachments"]);
+    format!("(SELECT {value} WHERE ({state})='ok')")
+}
+
+fn address_source(field: AddressField) -> (String, String) {
+    let source = Source::Stored;
+    let usable = source.usable();
+    let column = match field {
+        AddressField::From => "from_json",
+        AddressField::To => "to_json",
+        AddressField::Cc => "cc_json",
+    };
+    // A complete header NULL is known-empty; never fall through it.
+    let summary = if field == AddressField::From {
+        let [name, address] = source.fields(["from_name", "from_addr"]);
+        format!(
+            "CASE WHEN ({address}) IS NULL AND ({name}) IS NULL THEN '[]'
+                ELSE json_array(json_object('name',{name},'address',{address})) END"
+        )
+    } else {
+        source.field(column)
+    };
+    (
+        format!("CASE WHEN h.message_id IS NOT NULL OR ({usable}) THEN 1 ELSE 0 END"),
+        format!(
+            "CASE WHEN h.message_id IS NOT NULL THEN h.{column} WHEN {usable} THEN {summary} END"
+        ),
+    )
+}
+
+pub(crate) type Inputs = (Vec<Option<Vec<messages::ReaderAddress>>>, Option<bool>);
+
+pub(crate) fn inputs(tx: &Transaction, message: i64) -> Result<Inputs, StoreError> {
+    let columns = [AddressField::From, AddressField::To, AddressField::Cc]
+        .map(address_source)
+        .map(|(known, value)| format!("{known},{value}"))
+        .join(",");
+    let sql = format!(
+        "SELECT {},{columns},{} FROM {} LEFT JOIN {} {} WHERE lm.message_id=?1",
+        Source::Stored.validity(),
+        attachment(),
+        crate::message_source::MESSAGES,
+        crate::message_source::HEADERS,
+        Source::Stored.joins()
+    );
+    let (addresses, attachment) = tx
+        .query_row(&sql, [message], |row| {
+            message_source::check(row, 0)?;
+            Ok((
+                (0..3)
+                    .map(|i| {
+                        Ok((
+                            row.get::<_, bool>(1 + i * 2)?,
+                            row.get::<_, Option<String>>(2 + i * 2)?,
+                        ))
+                    })
+                    .collect::<rusqlite::Result<Vec<_>>>()?,
+                row.get(7)?,
+            ))
+        })
+        .map_err(sql_error)?;
+    Ok((
+        addresses
+            .into_iter()
+            .map(|(known, value)| {
+                if known {
+                    messages::addresses(value).map(Some)
+                } else {
+                    Ok(None)
+                }
+            })
+            .collect::<Result<_, _>>()?,
+        attachment,
+    ))
 }
 
 fn sql_error(error: rusqlite::Error) -> StoreError {

@@ -85,7 +85,7 @@ fn migration_preserves_v9_data_and_adds_only_guards() {
     };
     let objects = catalog(&conn);
     let changes = conn.total_changes();
-    run_migrations(&mut conn, &test_seams(real_fs()), MIGRATIONS).unwrap();
+    run_migrations(&mut conn, &test_seams(real_fs()), &MIGRATIONS[..10]).unwrap();
     // Only the runner's last-migrated/open-version metadata writes, no artifact rewrites.
     assert_eq!(conn.total_changes() - changes, 2);
     assert_eq!(snapshot(&conn), before);
