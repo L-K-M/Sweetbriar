@@ -83,6 +83,10 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 11,
         run: migration_11,
     },
+    Migration {
+        version: 12,
+        run: migration_12,
+    },
 ];
 
 /// The `store_meta` keys every migrated store holds (spec/02): a
@@ -617,6 +621,11 @@ fn migration_10(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
 
 fn migration_11(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
     tx.execute_batch(include_str!("schema/v11.sql"))
+        .map_err(bug)
+}
+
+fn migration_12(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
+    tx.execute_batch(include_str!("schema/v12.sql"))
         .map_err(bug)
 }
 

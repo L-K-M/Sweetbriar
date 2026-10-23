@@ -269,6 +269,28 @@ reserve; rep-only writes keep their prior charge. Binding/effect framing reserve
 framing, at most 135168; fit does not pay a fictitious evidence insert. No Carry
 mode exists until m3c supplies its actual batching caller.
 
+m3c batches the qualified activation operation at Index priority: at most 200
+processed logical messages and 2,000,000 conservatively charged changed bytes.
+Capture work and leases on the writer, selecting at most 200 raw IDs before
+filtering and stopping at the pass cutoff. Lookahead is read-only and bounded by
+200 handles and a 4M retained-byte quantum plus one legal overshoot handle.
+Prepared envelopes have a separate 4M-plus-one-legal-unit bound; preparation
+executes one existing bounded phase per call. No corpus-sized retained set.
+
+Preflight every ready entry before the batch's first DML. A changed entry
+recaptures the pass with no batch writes; failed statements/COMMIT roll back the
+entire batch while earlier chunks remain. Own-nonfit uses existing live evidence;
+full-fit exceeding only remaining allowance carries opaque work to the next
+batch. Give the first item the FULL allowance. If EOF acknowledgement framing
+(4096 bytes) does not fit, commit it in a subsequent metadata-only turn. Never
+reduce admission by reserving that framing from a standalone message.
+
+OR message-local effect deltas and publish list/Search/thread/population at most
+once per transaction, preserving shared Search advancement. A private writer
+activation scope suppresses only corpus input tracking, not existing scoped
+lease notifications. Ordinary input bookkeeping fits existing metadata reserves;
+its new single counter image must be covered by the native accounting proof.
+
 ## Object store
 
 ### Contract

@@ -224,6 +224,13 @@ test, except where the spec says "manual qualification".
   changed old ids during a captured-R pass, population recapture, failed later
   writes/COMMIT, restart/replay and caught-up-with-deferrals status. Run this
   synthetic proof in the normal gate, not as ignored timings or a later step.
+  Verify schema12 kept-data/older-writer/SQL mirror, actual-change tracking and
+  once-per-transaction epochs, no-op/rollback and own-write exclusions, malformed
+  counters and no fanout. Capture R with a finite cutoff; insert beyond it and
+  change an old ID after the cursor. ACK only R and prove the next pass revisits
+  both. Exercise budget Carry, EOF metadata-only turns, bounded retained evidence,
+  coalesced effects, unavailable versus corrupt source, wrong-owner/reopen/cancel
+  and eager dropped requests. No epoch, write-budget or safety exemption.
 - m4 repeats convergence through real workers, with fair failure/retry handling,
   late repair, crash cuts at staging/activation/ledger boundaries, wake/drop/
   shutdown, preserved sent/received history and failure isolation from FTS.

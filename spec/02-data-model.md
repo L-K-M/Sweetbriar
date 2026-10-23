@@ -856,6 +856,33 @@ owed discovery. Capture R, use local cursors, acknowledge only R at exhaustion
 and revisit changed old ids on the next pass. Do not borrow population's swept
 acknowledgement or dirty discovery from its own activation/diagnosis/ack writes.
 Exhausted captured work is distinct from unresolved deferrals or failed repairs.
+Migration 12 adds independent checked decimal counters in `store_meta`:
+
+```sql
+INSERT INTO store_meta(key,value) VALUES
+  ('repair_inputs','1'),('repair_swept','0'),
+  ('repair_deferred','0'),('repair_unready','0');
+```
+
+Inputs advance once per successful ordinary transaction with actual relevant
+changes, atomically before COMMIT. TEMP triggers cover messages, occurrences,
+headers, BASE, acquisitions, cached rows, bindings, mailbox role/kind, root keys
+and completed publication, without acquisition fanout. Incomplete staging,
+diagnoses, own activation/evidence and acknowledgements never dirty this clock.
+Use an infallible atomic dirty flag reset for each writer job; row-value guards
+exclude no-ops. A failed job contributes no revision. A malformed/exhausted
+counter rejects the relevant transaction rather than acknowledging uncounted work.
+Value-changing events later reversed within a successful savepoint transaction
+may conservatively schedule another pass; whole-job rollback records no input.
+
+Each pass captures R and a maximum message ID; later IDs and changed old IDs
+remain owed for a fresh pass. At exhaustion acknowledge only R, monotonically,
+with that pass's live Deferred and Unready totals, never raw evidence-table
+counts. Newer input makes these recorded totals historical. Caught-up is
+`inputs == swept`; complete also requires zero deferred/unready and a supported
+target. An unready message has an acquisition needing repair or unavailable
+source; header-only/current messages contribute neither count. Corruption fails
+loudly without acknowledgement. Diagnosis does not change unready eligibility.
 All three libraries have supported Resources operations and real native callers;
 all original m3 behavior and proof finish before m4 worker integration.
 

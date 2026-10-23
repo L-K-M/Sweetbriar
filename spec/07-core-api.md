@@ -935,3 +935,24 @@ status over that qualified single-message mechanism. Distinguish corpus
 exhaustion from deferred/failed repairs. Its native caller proves corpus
 delivery; m4 later drives these operations with fair counted worker turns,
 independent failures/wakes and lifecycle. No proof-only step or second runtime.
+
+Resources owns opaque `CatchupSweep` and `CatchupBatch`. `begin_catchup()` eagerly
+reconciles the build target, settles its input revision, captures R/cutoff and
+bounded lookahead, returning None only when inputs are swept. `prepare_catchup_step`
+returns Continue, Prepared, Recapture or Cancelled using one bounded phase.
+`commit_catchup_batch` eagerly submits a batch and returns Continue(sweep,report),
+Complete(report), or Recapture only after successful COMMIT. No continuation
+escapes a failed write. Both eager futures survive unpolled request drop.
+
+Reports carry processed/activated/deferred/unready counts, charged bytes and at
+most 200 deduplicated `repair_needed` acquisition IDs. The actual caller consumes
+these through existing repair operations; publication records new owed inputs.
+Unavailable retained input is Unready in this corpus protocol; single-message
+activation retains its existing typed availability error. Source corruption and
+global target/counter/runtime failures are explicit errors, not quiet skips.
+
+`catchup_status()` reads target, input/swept revisions and last-pass counts in one
+snapshot, distinguishing recorded counts, caught-up and complete. Old-schema
+corpus operations are Unavailable; malformed current-schema state is Corrupt.
+Tokens verify the actual Store runtime owner and are invalid across reopen.
+No worker, observer, force mode, service/FFI/UI or leaf-type alias is introduced.

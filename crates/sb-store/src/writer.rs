@@ -362,6 +362,7 @@ impl<T> fmt::Debug for WriteFuture<T> {
 /// closes the connection — the store's last, so SQLite checkpoints
 /// and removes the WAL.
 pub struct Writer {
+    tracking: Arc<crate::corpus_tracking::Tracking>,
     shared: Arc<WriterShared>,
     /// The writer thread until `close` joins it. `close` holds this
     /// lock while joining, so a concurrent second `close` returns only
@@ -412,6 +413,7 @@ impl Writer {
     /// close: only the running thread lifts that (spec/02: no
     /// checkpoint until open succeeds).
     pub(crate) fn new_with(conn: Connection, spawn: Spawn) -> Result<Self, StoreError> {
+        let tracking = crate::corpus_tracking::Tracking::install(&conn)?;
         let shared = Arc::new(WriterShared {
             state: Mutex::new(WriterState {
                 queues: [VecDeque::new(), VecDeque::new(), VecDeque::new()],
@@ -426,6 +428,7 @@ impl Writer {
         let handle = spawn(Box::new(move || serve(conn, thread_shared)))
             .map_err(|e| StoreError::unavailable(format!("cannot start the writer thread: {e}")))?;
         Ok(Self {
+            tracking,
             shared,
             handle: Mutex::new(Some(handle)),
             #[cfg(test)]
@@ -444,6 +447,38 @@ impl Writer {
         T: Send + 'static,
         F: FnOnce(&Transaction) -> Result<T, StoreError> + Send + 'static,
     {
+        self.submit_scoped(priority, crate::corpus_tracking::Scope::Observe, closure)
+    }
+
+    pub(crate) fn submit_activation<T, F>(&self, closure: F) -> WriteFuture<T>
+    where
+        T: Send + 'static,
+        F: FnOnce(&Transaction) -> Result<T, StoreError> + Send + 'static,
+    {
+        self.submit_scoped(
+            WritePriority::Index,
+            crate::corpus_tracking::Scope::Activation,
+            closure,
+        )
+    }
+
+    fn submit_scoped<T, F>(
+        &self,
+        priority: WritePriority,
+        scope: crate::corpus_tracking::Scope,
+        closure: F,
+    ) -> WriteFuture<T>
+    where
+        T: Send + 'static,
+        F: FnOnce(&Transaction) -> Result<T, StoreError> + Send + 'static,
+    {
+        let tracking = self.tracking.clone();
+        let closure = move |tx: &Transaction| {
+            tracking.begin(scope);
+            let value = closure(tx)?;
+            crate::corpus_tracking::flush(tx)?;
+            Ok(value)
+        };
         let slot = Arc::new(Slot::new());
         let future = WriteFuture {
             slot: Arc::clone(&slot),
