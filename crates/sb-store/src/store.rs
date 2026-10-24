@@ -48,6 +48,9 @@ const SQLITE_VERSION_WITHDRAWN: i32 = 3_052_000; // 3.52.0
 /// a 1-byte file as empty), so `open` refuses one first.
 const SQLITE_HEADER_LEN: u64 = 100;
 
+// Keep activation's inspection/publication hot set across interleaved maintenance.
+const PREPARED_STATEMENT_CACHE_CAPACITY: usize = 64;
+
 /// The SQLite build this release pins; `open` verifies the linked
 /// library against it (`version_number()`, `sqlite_version()` and
 /// `sqlite_source_id()`).
@@ -758,6 +761,7 @@ pub(crate) fn open_connection(
         Access::ReadOnly => OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     };
     let conn = Connection::open_with_flags(state_db, flags).map_err(sqlite_err)?;
+    conn.set_prepared_statement_cache_capacity(PREPARED_STATEMENT_CACHE_CAPACITY);
     // Closing doesn't checkpoint until the caller lifts this (`open_with`
     // on success): a failed open leaves the file as its steps left it,
     // with WAL frames a crash left behind still in the WAL (spec/02).

@@ -125,6 +125,11 @@ recreated.
     `wal_autocheckpoint=0` and `query_only=ON`, and never checkpoint on
     close. Read transactions are short: a query window is not a
     long-lived read transaction (07).
+  - Writer and pooled reader connections keep a bounded 64-entry prepared-
+    statement cache. Reuse invariant activation inspection and publication SQL
+    across messages instead of compiling it per occurrence. All source fences,
+    corruption checks and publication budgets still run. Query-local scalar
+    callbacks and their error relays retain fresh statements and lifetimes.
 - **Write discipline:**
   - Writes are submitted to the writer task as closures; user-initiated
     writes have priority over sync and index writes.
@@ -201,6 +206,12 @@ bound makes each legal key fit the accounting; do not invent a new key-admission
 filter that drops eligible recipients. Corrupt/out-of-contract stored input is
 an explicit bounded failure, not an infinite retry. A recipient-heavy message
 may span many transactions and must eventually contribute every eligible key.
+Population may capture at most 200 source records and 8 MiB of header text per
+short read, then normalize outside SQLite. Preflight the whole captured queue
+before its first DML. One publication shares the same 200-key/2,000,000-byte
+budget across messages, carrying unfinished source/key positions only after
+COMMIT. A later-message write or COMMIT failure rolls the entire batch back;
+no per-message transaction or weaker source fence is required.
 
 Repair preparation reads and EOF-verifies retained objects and parses MIME
 outside SQLite, retaining only bounded preparation. Activation handles at most

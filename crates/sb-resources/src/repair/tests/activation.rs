@@ -584,7 +584,10 @@ fn raw_paging_includes_vanished_rows_and_cancellation_has_no_durable_effects() {
     ));
     assert_eq!((state(&resources), snapshot(&resources)), before);
     let (pending, steps) = prepared(&resources, 1);
-    assert_eq!(steps, 6, "envelope + three raw pages + raw EOF + cache EOF");
+    assert_eq!(
+        steps, 5,
+        "envelope + three raw pages with observed EOF + cache EOF"
+    );
     assert_eq!(
         block_on(resources.commit_activation(pending)).unwrap(),
         ActivationCommit::Activated

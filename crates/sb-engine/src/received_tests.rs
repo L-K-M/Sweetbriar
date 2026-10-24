@@ -14,6 +14,8 @@ use crate::Engine;
 use crate::index_tests::{End, clocked, close_and_reopen, count, import, wait, write};
 use crate::received::Event;
 
+mod repair;
+
 const RAW: &[u8] = b"From: Sender <sender@EXAMPLE.test>\r\nTo: other@example.test\r\nSubject: current\r\n\r\nindexneedle\r\n";
 const BUMP: &str = "UPDATE store_meta SET value=CAST(CAST(value AS INTEGER)+1 AS TEXT) WHERE key='seen_address_inputs'";
 const LEDGER: &str = "SELECT count(*) FROM seen_address_messages";
@@ -443,14 +445,7 @@ fn native_write_and_commit_failures_roll_back_then_retry_at_bounded_deadlines() 
             engine.received().failure().unwrap().error,
             StoreError::Internal { .. }
         ));
-        assert_eq!(
-            engine
-                .received()
-                .retry_at(engine.resources())
-                .unwrap()
-                .as_millis(),
-            11_000
-        );
+        assert_eq!(engine.received().retry_at().unwrap().as_millis(), 11_000);
         assert_eq!(count(&engine, LEDGER), 0);
         assert_eq!(count(&engine, "SELECT count(*) FROM seen_addresses"), 0);
         assert_eq!(
@@ -467,14 +462,7 @@ fn native_write_and_commit_failures_roll_back_then_retry_at_bounded_deadlines() 
             engine.received().failure().is_some_and(|f| f.attempts == 2)
                 && engine.received().waiting()
         });
-        assert_eq!(
-            engine
-                .received()
-                .retry_at(engine.resources())
-                .unwrap()
-                .as_millis(),
-            13_000
-        );
+        assert_eq!(engine.received().retry_at().unwrap().as_millis(), 13_000);
         assert_eq!(count(&engine, LEDGER), 0);
         write(&engine, |tx| {
             tx.execute_batch("DROP TRIGGER received_cut").unwrap();
@@ -582,7 +570,7 @@ fn corrupt_source_and_newer_target_park_without_gating_import_or_search() {
         } else {
             matches!(failure.error, StoreError::Unavailable { io_kind: None, .. })
         });
-        assert!(engine.received().retry_at(engine.resources()).is_none());
+        assert!(engine.received().retry_at().is_none());
         assert_eq!(count(&engine, LEDGER), 0);
         clock.0.store(1_000_000, Ordering::SeqCst);
         import(

@@ -199,6 +199,7 @@ impl Detached {
 /// "Background jobs"). It counts as blocking work for its whole life, so
 /// shutdown waits for it, and it sees shutdown begin so it can pause.
 /// Fields drop in order: the store handle before the count.
+#[derive(Clone)]
 pub(crate) struct Worker {
     resources: Arc<Resources>,
     index: Arc<IndexJobs>,
