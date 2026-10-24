@@ -675,6 +675,11 @@ local drafts. No network yet.
     exact retry/quiescence/clean-pass recovery, FTS isolation, all new submit
     lifecycle points, accepted request drop, panic/reopen and process SIGKILL
     staging/activation/ledger cuts. No inherited size or review waiver.
+    **Owner waiver (2026-10-24), m4 only:** allow the complete runtime and native
+    proof above the 1450-line size limit after the measured artifact reached
+    1526 gross. Preserve all tests, independent reviews and CI; no review or
+    verification waiver. Coalesce thread dispatch at finite corpus-pass boundaries
+    so bulk activation does not repeatedly rebuild the whole corpus per batch.
   - **M1.6n Parser fuzzing — M:** `query` cargo-fuzz target, synthetic
     seeds, its isolated lockfile/policy, nightly job and reproduction docs.
     Owns the parser fuzz deliverable; bounded parse/format/JSON invariants.

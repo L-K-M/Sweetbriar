@@ -1030,8 +1030,9 @@ old IDs and crash-lost report work without an unbounded set or a durable queue.
 
 Keep the first retryable and first parked source error separately per pass.
 At successful EOF, merge consecutive attempts by class and arm the existing
-1-second doubling retry capped at 60 seconds from that fold. A clean complete
-pass alone clears both source failures, even when a changed pair owes a new pass.
+1-second doubling retry capped at 60 seconds from that fold. Successful EOF
+resolves a prior failure class only when that class is absent from the completed
+pass; a clean complete pass clears both, even when a changed pair owes a new pass.
 Global discovery/status/owner errors abort the pass and merge their own failure
 without clearing earlier errors. Known I/O or Internal retries are timed; other
 errors wait for changed relevant input/reopen. A changed pair can trigger before
@@ -1052,9 +1053,11 @@ drain its actual result before releasing counted work. Stop discards unfinished
 local cursors, leaving durable work replayable on reopen. A task panic remains
 an explicit worker failure. No request drop can strand an accepted import wake.
 
-After an actual activated>0 commit, schedule the existing coalesced thread
-rebuild worker through a private Spawn-capable Worker clone and the existing
-ThreadRebuilds registry. Preserve runtime/count ownership; shutdown may refuse a
+After an actual activated>0 commit, retain pending thread work and dispatch the
+existing coalesced rebuild worker at finite corpus-pass completion/recapture or
+before parking on a corpus error. Use a private Spawn-capable Worker clone and
+the existing ThreadRebuilds registry. Do not rescan the whole thread corpus per
+activation batch. Preserve runtime/count ownership; shutdown may refuse a
 new spawn, leaving its committed thread inputs owed for startup. Terminal,
 deferred and unavailable repairs remain incomplete in existing status; neither
 FTS Ready nor a finished eligible sweep claims complete maintenance.

@@ -253,6 +253,9 @@ test, except where the spec says "manual qualification".
   Prove changed old/new IDs during a finite captured pass, mixed retryable and
   parked failures without source starvation, terminal diagnosis suppression and
   failed diagnosis persistence, exact anchored backoff and clean-pass clearing.
+  At successful EOF a resolved retry class must disarm even if another source
+  remains parked; no stale expired timer may cause a hot replay loop. Prove thread
+  dispatch coalesces intermediate activation batches until the finite pass ends.
   Unchanged seen-address-only pokes must not retry a parked source. Exercise
   all six eager-submit stop/drain boundaries on shutdown and Drop, accepted
   confirm drop, one-worker/park handoff and task panic/reopen. Actual SIGKILL
