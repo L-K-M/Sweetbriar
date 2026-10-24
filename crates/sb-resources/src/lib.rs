@@ -45,7 +45,7 @@ mod seen;
 pub use renditions::{RenditionCache, RenditionError, RenditionFiles, RenditionProtection};
 pub use repair::{
     RepairCapture, RepairCommit, RepairDiagnosis, RepairPersist, RepairPreparation, RepairPrepared,
-    RepairStatus, RepairTerminal, RepairTerminalKind,
+    RepairSources, RepairStatus, RepairTerminal, RepairTerminalKind,
 };
 pub use search::read_search_coverage;
 pub use seen::{ReceivedCommit, ReceivedPreparation, ReceivedRevisions, ReceivedSweep};
