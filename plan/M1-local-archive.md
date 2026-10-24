@@ -639,8 +639,17 @@ local drafts. No network yet.
     m3a1/m3b. Re-estimate each concrete API and all owned proof before
     implementation. If it cannot fit 1450, find another complete consumed
     boundary before coding; never golf, cut proof or reduce admission to fit.
+  - **M1.6m4a Committed maintenance wakes (M):** depends on m3c. Connect a
+    dedicated post-COMMIT Store/Resources input observer to the existing counted
+    received worker. Observe both input revisions and both supported-target keys,
+    including changed malformed values, independently of list/Search observers.
+    Own native commit-before-reply, unchanged/rollback/failed-COMMIT, replacement,
+    observer isolation, accepted-request drop and real-worker late-old-id/target
+    recovery proof. Consume the callback immediately; no polling or new runtime.
+    This completes source-change delivery before the larger repair driver. Budget
+    750 gross: observer/facade 130, Engine 40, native proof 400, prose/reserve 180.
   - **M1.6m4 Repair runtime — L:** fair repair/activation/population turns on
-    the received-maintenance worker; depends on m3c. Own real-worker legacy/shared
+    the received-maintenance worker; depends on m4a. Own real-worker legacy/shared
     convergence, terminal/retry failures, crash cuts, wake/drop/shutdown and
     preserved kept history. Complete the original seen-address/backfill outcome
     before n; no early composer/service/FFI/Swift delivery or deferred proof.

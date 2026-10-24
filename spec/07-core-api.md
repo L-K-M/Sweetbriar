@@ -956,3 +956,27 @@ snapshot, distinguishing recorded counts, caught-up and complete. Old-schema
 corpus operations are Unavailable; malformed current-schema state is Corrupt.
 Tokens verify the actual Store runtime owner and are invalid across reopen.
 No worker, observer, force mode, service/FFI/UI or leaf-type alias is introduced.
+
+### Committed maintenance wakes (M1.6m4a)
+
+Store exposes a separate maintenance-input observer through Resources, consumed
+by Engine's existing received worker. It watches `seen_address_inputs`,
+`repair_inputs`, `seen_address_target` and `mime_repair_target`. Compare the raw
+optional metadata values: a committed malformed value or its repair is a relevant
+wake, never an invented valid revision. A missing/unreadable key must not suppress
+another key's change. No-op writes and rolled-back jobs emit no wake.
+
+Notify after COMMIT and before the accepted write future resolves. Registration
+replaces the previous callback; the callback is nonblocking and must not panic.
+Keep this observer independent of list and Search notification. It only coalesces
+the existing worker's wake: worker reads validate state and own failures. The
+callback retains no Resources/Engine owner cycle and adds no durable data or
+failure gate. Diagnostic, staging, population-ACK and unchanged work do not alter
+these keys, so they cannot create a self-wake loop. Import's counted producer
+still owns its existing post-commit wake, including request-drop delivery.
+
+Native proof covers changed/unchanged/malformed/missing values, replacement,
+independent observers, statement/deferred-FK COMMIT rollback and unpolled accepted
+writes. Real-worker tests change a previously swept old message and recover a
+future target without manual pokes or imports. Existing failure/backoff, park
+handoff, single-flight, caller-drop and shutdown/Drop tests remain binding.
