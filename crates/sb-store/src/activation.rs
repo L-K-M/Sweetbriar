@@ -182,7 +182,7 @@ fn identity(conn: &Connection, message: i64) -> Result<Identity, StoreError> {
 }
 
 fn recorded(conn: &Connection, message: i64) -> Result<Option<Recorded>, StoreError> {
-    let raw = conn.query_row("SELECT acquisition_id,parser_target,prior_target,prior_bound_at,witness,recorded_cost,recorded_at FROM d_activation_deferrals WHERE message_id=?1", [message], |row| {
+    let raw = conn.prepare_cached("SELECT acquisition_id,parser_target,prior_target,prior_bound_at,witness,recorded_cost,recorded_at FROM d_activation_deferrals WHERE message_id=?1").map_err(sql_error)?.query_row([message], |row| {
         let ValueRef::Blob(payload) = row.get_ref(4)? else { return Err(message_source::invalid()); };
         if payload.len() > MAX_WITNESS_BYTES { return Err(message_source::invalid()); }
         Ok((row.get(0)?, row.get(1)?, row.get::<_, Option<u32>>(2)?.map(|target| row.get(3).map(|at| (target, at))).transpose()?, payload.to_vec(), row.get::<_, i64>(5)?, row.get(6)?))
@@ -382,18 +382,16 @@ fn inspect(
     work: &ActivationWork,
     id: i64,
 ) -> Result<Option<Inspected>, StoreError> {
-    let raw: Option<(i64, String, i64)> = conn.query_row(&format!("SELECT o.message_id,o.state,{} FROM occurrences o LEFT JOIN mailboxes mb ON mb.mailbox_id=o.mailbox_id WHERE o.occurrence_id=?1", list_rows::KIND_RANK), [id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))).optional().map_err(sql_error)?;
+    let raw: Option<(i64, String, i64)> = conn.prepare_cached(&format!("SELECT o.message_id,o.state,{} FROM occurrences o LEFT JOIN mailboxes mb ON mb.mailbox_id=o.mailbox_id WHERE o.occurrence_id=?1", list_rows::KIND_RANK)).map_err(sql_error)?.query_row([id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))).optional().map_err(sql_error)?;
     let Some((_, state, rank)) = raw.filter(|row| row.0 == work.identity.message) else {
         return Ok(None);
     };
     let current = list_rows::price(conn, id, Source::Stored)?;
     if state != "present" {
         let cached: bool = conn
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM d_list_rows WHERE occurrence_id=?1)",
-                [id],
-                |row| row.get(0),
-            )
+            .prepare_cached("SELECT EXISTS(SELECT 1 FROM d_list_rows WHERE occurrence_id=?1)")
+            .map_err(sql_error)?
+            .query_row([id], |row| row.get(0))
             .map_err(sql_error)?;
         if cached {
             return Err(StoreError::corrupt(
@@ -555,11 +553,11 @@ fn step(
         restart(work);
     } else if work.phase == Phase::Raw && ids.is_empty() {
         let representative: Option<i64> = tx
-            .query_row(
+            .prepare_cached(
                 "SELECT occurrence_id FROM d_list_rows WHERE message_id=?1 AND representative=1",
-                [work.identity.message],
-                |row| row.get(0),
             )
+            .map_err(sql_error)?
+            .query_row([work.identity.message], |row| row.get(0))
             .optional()
             .map_err(sql_error)?;
         if representative != work.winner.map(|winner| winner.1) {
@@ -752,7 +750,7 @@ fn capture(
         return Ok(Capture::Unavailable(id, error));
     }
     if identity.target >= message_source::MIN_USABLE_VERSION {
-        let observed: Option<i64> = conn.query_row("SELECT first_seen_at FROM occurrences WHERE message_id=?1 ORDER BY first_seen_at LIMIT 1", [message], |row| row.get(0)).optional().map_err(sql_error)?;
+        let observed: Option<i64> = conn.prepare_cached("SELECT first_seen_at FROM occurrences WHERE message_id=?1 ORDER BY first_seen_at LIMIT 1").map_err(sql_error)?.query_row([message], |row| row.get(0)).optional().map_err(sql_error)?;
         if observed.is_none() {
             return Err(StoreError::corrupt(
                 "eligible activation has no observation",
@@ -934,7 +932,7 @@ fn apply_verified(
             return Ok(Applied::Carry(Box::new(work)));
         }
         *allowance -= charged;
-        tx.execute("INSERT INTO d_activation_deferrals VALUES(?1,?2,?3,?4,?5,?6,?7,?8) ON CONFLICT(message_id) DO UPDATE SET acquisition_id=excluded.acquisition_id,parser_target=excluded.parser_target,prior_target=excluded.prior_target,prior_bound_at=excluded.prior_bound_at,witness=excluded.witness,recorded_cost=excluded.recorded_cost,recorded_at=excluded.recorded_at", params![work.identity.message, acquisition, work.identity.target, work.identity.binding.map(|binding| binding.0), work.identity.binding.map(|binding| binding.1), payload, cost as i64, now.as_millis()]).map_err(sql_error)?;
+        tx.prepare_cached("INSERT INTO d_activation_deferrals VALUES(?1,?2,?3,?4,?5,?6,?7,?8) ON CONFLICT(message_id) DO UPDATE SET acquisition_id=excluded.acquisition_id,parser_target=excluded.parser_target,prior_target=excluded.prior_target,prior_bound_at=excluded.prior_bound_at,witness=excluded.witness,recorded_cost=excluded.recorded_cost,recorded_at=excluded.recorded_at").map_err(sql_error)?.execute(params![work.identity.message, acquisition, work.identity.target, work.identity.binding.map(|binding| binding.0), work.identity.binding.map(|binding| binding.1), payload, cost as i64, now.as_millis()]).map_err(sql_error)?;
         work.lease.healthy()?;
         return Ok(Applied::Done {
             receipt: ActivationCommit::Deferred,
@@ -947,7 +945,7 @@ fn apply_verified(
     }
     *allowance -= cost;
     let before = effects(tx, work.identity.message)?;
-    tx.execute("INSERT INTO d_message_bindings VALUES(?1,?2,?3,?4) ON CONFLICT(message_id) DO UPDATE SET parser_target=excluded.parser_target,bound_at=excluded.bound_at", params![work.identity.message, acquisition, work.identity.target, now.as_millis()]).map_err(sql_error)?;
+    tx.prepare_cached("INSERT INTO d_message_bindings VALUES(?1,?2,?3,?4) ON CONFLICT(message_id) DO UPDATE SET parser_target=excluded.parser_target,bound_at=excluded.bound_at").map_err(sql_error)?.execute(params![work.identity.message, acquisition, work.identity.target, now.as_millis()]).map_err(sql_error)?;
     let mut remaining = MAX_BYTES - METADATA_FRAME;
     let changed = list_rows::apply_priced(
         tx,

@@ -4,6 +4,74 @@ use crate::testing::{fixtures, test_seams};
 use sb_test_support::real_fs;
 
 #[test]
+fn a_corpus_batch_reuses_its_hot_inspection_statement() {
+    use crate::testing::{scratch_paths, writing};
+    use sb_test_support::block_on;
+
+    const COUNT: i64 = 100;
+    let (_scratch, paths) = scratch_paths("activation-statement-reuse");
+    let store = crate::store::open(&paths, &test_seams(real_fs())).unwrap();
+    writing(&store, |tx| {
+        fixtures::acquisitions(tx, 1);
+        let account = fixtures::archive_account(tx);
+        fixtures::mailbox(tx, &account, "corpus", "folder", None);
+        tx.execute("WITH RECURSIVE n(id) AS (VALUES(1) UNION ALL SELECT id+1 FROM n WHERE id<?1) INSERT INTO logical_messages(message_id,account_id,acquisition_id,created_at) SELECT id,account_id,1,0 FROM n CROSS JOIN accounts WHERE provider='local_archive'", [COUNT]).unwrap();
+        tx.execute_batch("INSERT INTO occurrences(occurrence_id,account_id,mailbox_id,message_id,state,first_seen_at,last_seen_at) SELECT message_id,account_id,1,message_id,'present',10,10 FROM logical_messages;
+            INSERT INTO d_message_summary(acquisition_id,parser_version,parse_state,subject,has_attachments) VALUES(1,1,'ok','old',0);
+            INSERT INTO d_repair_assemblies SELECT acquisition_id,2,content_sha256,byte_length,NULL,0,'[null,3,null,null,null,null,null,null,null,null,null,null]',NULL FROM acquisitions;
+            INSERT INTO d_repair_pieces VALUES(1,2,1,0,'new');
+            UPDATE d_repair_assemblies SET completed_at=0").unwrap();
+        crate::list_rows::refresh(tx, &(1..=COUNT).collect()).unwrap();
+        tx.flush_prepared_statement_cache();
+        Ok(())
+    });
+    let started = std::time::Instant::now();
+    let mut scan = block_on(store.begin_catchup(2)).unwrap().unwrap();
+    loop {
+        scan = match store.prepare_catchup_step(scan, &|| false).unwrap() {
+            CatchupPreparation::Continue(next) => next,
+            CatchupPreparation::Prepared(batch) => {
+                match block_on(store.commit_catchup_batch(batch, 2, Timestamp::from_millis(10)))
+                    .unwrap()
+                {
+                    CatchupCommit::Continue(next, _) => next,
+                    CatchupCommit::Complete(_) => break,
+                    other => panic!("stable corpus recaptured: {other:?}"),
+                }
+            }
+            other => panic!("unexpected corpus preparation: {other:?}"),
+        };
+    }
+    let executions = |tx: &Transaction<'_>| {
+        let sql = format!(
+            "SELECT o.message_id,o.state,{} FROM occurrences o LEFT JOIN mailboxes mb ON mb.mailbox_id=o.mailbox_id WHERE o.occurrence_id=?1",
+            list_rows::KIND_RANK
+        );
+        let statement = tx.prepare_cached(&sql).unwrap();
+        Ok(statement.get_status(rusqlite::StatementStatus::Run))
+    };
+    let writer_runs = writing(&store, executions);
+    let reader_runs = store.read(executions).unwrap();
+    let activated: i64 = store.read(|tx| {
+        Ok(tx.query_row("SELECT count(*) FROM d_message_bindings b JOIN d_list_rows r USING(message_id) WHERE r.subject='new'", [], |row| row.get(0)).unwrap())
+    }).unwrap();
+    assert_eq!(activated, COUNT);
+    let status = store.catchup_status(2).unwrap();
+    assert_eq!(status.inputs, status.swept);
+    store.close().unwrap();
+    eprintln!(
+        "inspection statement ran {writer_runs} writer/{reader_runs} reader times; batch took {:?}",
+        started.elapsed()
+    );
+    for runs in [writer_runs, reader_runs] {
+        assert!(
+            runs >= COUNT as i32,
+            "the hot inspection statement was repeatedly compiled"
+        );
+    }
+}
+
+#[test]
 fn migration_preserves_v11_rows_and_old_schema_operations_are_unavailable() {
     let mut conn = fixtures::index_connection_through(11);
     assert!(matches!(
