@@ -1,0 +1,1 @@
+NOT (is:read OR -subject:spam) ()

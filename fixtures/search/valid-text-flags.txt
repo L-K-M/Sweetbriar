@@ -1,0 +1,1 @@
+is:read is:unread is:flagged OR is:answered AND is:draft

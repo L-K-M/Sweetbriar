@@ -1,0 +1,1 @@
+before:2026-10-24@UTC after:2026-01-01@America/New_York on:2026-06-30 within:7@UTC@1792800000000 within:30 size.lt:1024 size.eq:0 size.gt:9223372036854775807

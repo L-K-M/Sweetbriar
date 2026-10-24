@@ -1,0 +1,1 @@
+{"v":1,"q":{"and":[{"field":"from","op":"is","value":"alice@example.test"},{"not":{"flag":"seen"}},{"date":{"within_days":7,"tz":"UTC","clock":1792800000000}}]}}

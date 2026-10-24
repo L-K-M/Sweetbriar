@@ -42,6 +42,43 @@ fn bad(input: &str, marker: &str, code: P) {
 }
 
 #[test]
+fn fuzz_seeds_exercise_valid_text_json_and_rejected_inputs() {
+    let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/search");
+    let context = ParseContext::new("UTC", Timestamp::from_millis(1_767_225_600_000));
+    let (mut valid, mut invalid) = ([0; 2], 0);
+    for entry in std::fs::read_dir(directory).unwrap() {
+        let path = entry.unwrap().path();
+        let name = path.file_name().unwrap().to_str().unwrap();
+        let input = std::fs::read_to_string(&path).unwrap();
+        let is_json = match path.extension().and_then(|extension| extension.to_str()) {
+            Some("json") => true,
+            Some("txt") => false,
+            other => panic!("unexpected query seed extension: {other:?}"),
+        };
+        let result = if is_json {
+            Query::parse_json(&input)
+        } else {
+            Query::parse_text(&input, &context)
+        };
+        if name.starts_with("valid-") {
+            assert!(result.is_ok(), "{name}: {result:?}");
+            valid[usize::from(is_json)] += 1;
+        } else {
+            assert!(
+                name.starts_with("invalid-"),
+                "unclassified query seed: {name}"
+            );
+            assert!(
+                matches!(&result, Err(QueryError::Parse(_))),
+                "{name}: {result:?}"
+            );
+            invalid += 1;
+        }
+    }
+    assert!(valid.into_iter().all(|count| count > 0) && invalid > 0);
+}
+
+#[test]
 fn precedence_unary_implicit_and_and_explicit_groups_roundtrip() {
     for (input, node) in [
         ("", r#"{"and":[]}"#),
