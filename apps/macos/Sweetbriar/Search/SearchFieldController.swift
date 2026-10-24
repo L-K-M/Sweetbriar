@@ -8,8 +8,7 @@ import SweetbriarBridge
 @MainActor
 final class SearchFieldController: NSViewController {
     private let model: SearchFieldModel
-    /// Resolved late (the sidebar may still be loading): re-read on
-    /// every model change and on menu open.
+    /// Sidebar names can arrive after the strip.
     private let scopes: @MainActor () -> [(label: String, scope: SearchScope)]
 
     private let field = NSSearchField()
@@ -23,13 +22,12 @@ final class SearchFieldController: NSViewController {
     private var chipHeight: NSLayoutConstraint!
     private var statusTopSpace: NSLayoutConstraint!
     private var statusHeight: NSLayoutConstraint!
-    /// While model text is pushed into the field, its textDidChange
-    /// is display sync, not user input.
+    /// Display sync must not become user input.
     private var applyingModelText = false
-    /// The last field editor and the span it underlined, for safe
-    /// removal of the temporary error marking.
+    /// Retain ownership of the temporary error marking across editor changes.
     private weak var lastEditor: NSTextView?
     private var underlinedRange: NSRange?
+    private var scopeMenuTracking = false
 
     init(
         model: SearchFieldModel,
@@ -38,8 +36,6 @@ final class SearchFieldController: NSViewController {
         self.model = model
         self.scopes = scopes
         super.init(nibName: nil, bundle: nil)
-        // The model gates before the debounce and after every await;
-        // it reads composition state off the live field editor.
         model.hasMarkedText = { [weak self] in
             (self?.field.currentEditor() as? NSTextView)?.hasMarkedText() ?? false
         }
@@ -167,8 +163,7 @@ final class SearchFieldController: NSViewController {
 
     private func applyModel() {
         updateChipEnablement()
-        // While a composition is live: never rebuild chips, rewrite
-        // text, alter the editor's selection or mark its text.
+        // Native composition owns its text and presentation until commit.
         guard !model.isComposing else { return }
         syncText()
         refreshScopeMenu()
@@ -208,6 +203,7 @@ final class SearchFieldController: NSViewController {
 
     /// Missing display names must not silently broaden a chosen scope.
     private func refreshScopeMenu() {
+        guard !scopeMenuTracking else { return }
         guard let menu = scopePopup.menu else { return }
         let entries = scopes()
         menu.removeAllItems()
@@ -243,7 +239,8 @@ final class SearchFieldController: NSViewController {
 
     @objc
     private func scopeChosen(_ sender: NSMenuItem) {
-        model.chooseScope((sender.representedObject as? SearchScope) ?? .all)
+        guard let scope = sender.representedObject as? SearchScope else { return }
+        model.chooseScope(scope)
     }
 
     @objc
@@ -275,8 +272,7 @@ final class SearchFieldController: NSViewController {
         chipHeight.constant = hasChips ? 24 : 0
     }
 
-    /// Actions carry the clause's expiring UUID, never a stored
-    /// numeric position.
+    /// Expiring UUIDs prevent a stale menu action from editing another clause.
     private func clauseMenu(for clause: SearchClause) -> NSMenu {
         let menu = NSMenu(title: clause.label)
         for (title, action) in [
@@ -342,9 +338,7 @@ final class SearchFieldController: NSViewController {
         statusHeight.isActive = text.isEmpty
     }
 
-    /// The model's UTF-16 span becomes a temporary red underline on
-    /// the live field editor; a zero-length (EOF) span has nothing to
-    /// mark; the status line keeps the error visible. No caret moves.
+    /// EOF errors stay visible in the label; ordinary errors do not move the caret.
     private func refreshErrorMarking() {
         let editor = field.currentEditor() as? NSTextView
         if let applied = underlinedRange,
@@ -423,11 +417,19 @@ extension SearchFieldController: NSMenuDelegate {
     func menuNeedsUpdate(_ menu: NSMenu) {
         if menu === scopePopup.menu { refreshScopeMenu() }
     }
+
+    func menuWillOpen(_ menu: NSMenu) {
+        if menu === scopePopup.menu { scopeMenuTracking = true }
+    }
+
+    func menuDidClose(_ menu: NSMenu) {
+        guard menu === scopePopup.menu else { return }
+        scopeMenuTracking = false
+        refreshScopeMenu()
+    }
 }
 
-/// A clause chip: clicking edits; a right-click offers the clause
-/// menu (Edit, Remove, Move earlier/later) via the standard context
-/// machinery, keeping the actions keyboard- and VoiceOver-visible.
+/// Native context menus expose clause actions to keyboard and VoiceOver users.
 @MainActor
 private final class ClauseChipButton: NSButton {
     var clauseID: UUID?

@@ -1,11 +1,5 @@
-// The search strip under test (plan M1.6o): real windows and field
-// editors drive the native seams: marked text is never parsed, a
-// committed edit submits, the scope/sort popups reach the model
-// without folding into `in:` chips, a chip edit selects its
-// canonical span without rewriting it, live input is never
-// rewritten after a parse, and errors land as UTF-16 underlines
-// beside the retained last-valid label. Semantic parser coverage
-// lives in the bridge suite; a stub parser feeds the model here.
+// Real AppKit editors exercise composition, chips and controls (M1.6o).
+// Core-backed semantic and error-code proof lives in the bridge suite.
 
 #if canImport(Sweetbriar)
 @testable import Sweetbriar
@@ -13,16 +7,14 @@
 #if canImport(AppKit)
 import AppKit
 import Testing
-import SweetbriarBridge
+@testable import SweetbriarBridge
 
 private let flagJSON = #"{"v":1,"q":{"flag":"seen"}}"#
 private let clauseJSON = #"{"v":1,"q":{"and":[{"mailbox":9},{"text":"hello"}]}}"#
 
-/// A `SearchParsing` fake: controlled values plus call observation.
-/// `parse` may suspend (a gate) so mid-parse compositions are testable.
+/// Controlled parser values and suspension for native editor tests.
 private actor ParserStub: SearchParsing {
     private(set) var parsed: [String] = []
-    private(set) var finishedParses = 0
     private let parseBody: @Sendable (String) async throws -> String
     private let formatBody: @Sendable (String) async throws -> String
 
@@ -36,7 +28,6 @@ private actor ParserStub: SearchParsing {
 
     func parseSearch(text: String, context: ParseContext) async throws -> String {
         parsed.append(text)
-        defer { finishedParses += 1 }
         return try await parseBody(text)
     }
 
@@ -62,8 +53,7 @@ private actor Gate {
     }
 }
 
-/// Clause renders that literally appear in the whole, as the model
-/// requires to locate each clause's range in the canonical field.
+/// Match the core's id-based canonical syntax, independently of chip labels.
 private func renderClause(_ json: String) throws -> String {
     if json.contains(#""and""#) { return #"(in:9 "hello")"# }
     if json.contains(#""mailbox""#) { return "in:9" }
@@ -96,7 +86,7 @@ struct SearchFieldTests {
 
     private func findAll(in view: NSView, prefix: String) -> [NSView] {
         var found: [NSView] = []
-        if view.accessibilityIdentifier()?.hasPrefix(prefix) == true { found.append(view) }
+        if view.accessibilityIdentifier().hasPrefix(prefix) { found.append(view) }
         for subview in view.subviews { found += findAll(in: subview, prefix: prefix) }
         return found
     }
@@ -157,15 +147,43 @@ struct SearchFieldTests {
 
         editor.insertText("a", replacementRange: NSRange(location: 0, length: 0))
         #expect(await until(.seconds(2)) { await parser.parsed == ["a"] })
+        let pending = try #require(model.pending)
         editor.setMarkedText(
             "に", selectedRange: NSRange(location: 0, length: 1),
             replacementRange: NSRange(location: 1, length: 0)
         )
         await gate.release()
-        #expect(await until(.seconds(2)) { await parser.finishedParses == 1 })
+        await pending.value
         #expect(model.queryJSON == nil)
         #expect(model.failure == nil)
         #expect(editor.string == "aに")
+    }
+
+    @Test("an open scope menu retains its items until tracking ends")
+    func scopeMenuTracking() async throws {
+        let parser = ParserStub(parse: { _ in flagJSON }, format: { _ in "is:read" })
+        let model = SearchFieldModel(parser: parser)
+        var entries: [(label: String, scope: SearchScope)] = [("Archive", .mailbox(9))]
+        let controller = SearchFieldController(model: model, scopes: { entries })
+        let window = hostedWindow(controller)
+        defer { model.close(); window.close() }
+        let popup = try #require(find(in: controller.view, identifier: "search.scope") as? NSPopUpButton)
+        let sort = try #require(find(in: controller.view, identifier: "search.sort") as? NSPopUpButton)
+        let menu = try #require(popup.menu)
+        let delegate = try #require(menu.delegate)
+        let archive = try #require(menu.item(at: 1))
+        delegate.menuWillOpen?(menu)
+        entries.append(("Work", .account("00000000-0000-0000-0000-000000000001")))
+        model.chooseSort(.date)
+        #expect(await until(.seconds(2)) { sort.indexOfSelectedItem == 1 })
+        #expect(menu.numberOfItems == 2 && menu.item(at: 1) === archive)
+        delegate.menuDidClose?(menu)
+        #expect(menu.numberOfItems == 3 && menu.item(at: 2)?.title == "Work")
+        let invalid = NSMenuItem()
+        invalid.representedObject = "invalid scope"
+        model.chooseScope(.mailbox(9))
+        #expect(NSApp.sendAction(try #require(archive.action), to: archive.target, from: invalid))
+        #expect(model.scope == .mailbox(9))
     }
 
     @Test("scope and sort controls reach the model, apart from membership chips")
