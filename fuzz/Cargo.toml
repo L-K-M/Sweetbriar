@@ -16,6 +16,7 @@ resolver = "3"
 [dependencies]
 libfuzzer-sys = "=0.4.13"
 sb-mime = { version = "0.0.1", path = "../crates/sb-mime" }
+sb-store = { version = "0.0.1", path = "../crates/sb-store" }
 
 # The isolated fuzz graph must exercise the same parser repair as the app.
 [patch.crates-io]
@@ -31,6 +32,13 @@ bench = false
 [[bin]]
 name = "mbox"
 path = "fuzz_targets/mbox.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "query"
+path = "fuzz_targets/query.rs"
 test = false
 doc = false
 bench = false

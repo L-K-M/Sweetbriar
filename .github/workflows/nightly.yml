@@ -13,8 +13,12 @@ on:
       - 'apps/macos/project.yml'
       - 'apps/macos/Tests/SweetbriarUITests/**'
       - 'crates/sb-mime/**'
+      - 'crates/sb-store/Cargo.toml'
+      - 'crates/sb-store/src/query.rs'
+      - 'crates/sb-store/src/query/**'
       - 'fixtures/eml/**'
       - 'fixtures/import/**'
+      - 'fixtures/search/**'
       - 'fuzz/**'
 
 permissions:
@@ -56,6 +60,8 @@ jobs:
             seeds: ../fixtures/eml
           - target: mbox
             seeds: ../fixtures/import
+          - target: query
+            seeds: ../fixtures/search
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
