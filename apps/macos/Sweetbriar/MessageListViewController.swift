@@ -11,6 +11,8 @@ import SweetbriarBridge
 @MainActor
 final class MessageListViewController: NSViewController {
     private let bridge: CoreBridge
+    private let searchModel: SearchFieldModel
+    private let search: SearchFieldController
     private let formatter = MessageRowFormatter()
     private var clock: DisplayLinkClock?
     private(set) var model: ListWindowModel?
@@ -38,9 +40,36 @@ final class MessageListViewController: NSViewController {
     private(set) var choiceSerial = 0
     var failureForBenchmark: (any Error)? { openError ?? model?.lastError }
 
-    init(bridge: CoreBridge) {
+    init(bridge: CoreBridge, sidebar: SidebarModel) {
         self.bridge = bridge
+        let model = SearchFieldModel(parser: bridge, label: { reference in
+            switch reference {
+            case .account(let id): return sidebar.sections.first { $0.id == id }?.title
+            case .mailbox(let id):
+                return sidebar.sections.flatMap(\.entries).first {
+                    $0.target == .window(.mailbox(id))
+                }?.title
+            case .tag: return nil
+            }
+        })
+        searchModel = model
+        search = SearchFieldController(model: model, scopes: {
+            var values: [(label: String, scope: SearchScope)] = [("All accounts", .all)]
+            for section in sidebar.sections where section.id != SidebarModel.unifiedSectionID {
+                values.append((section.title, .account(section.id)))
+                for entry in section.entries {
+                    if case .window(.mailbox(let id)) = entry.target {
+                        values.append(("\(section.title): \(entry.title)", .mailbox(id)))
+                    }
+                }
+            }
+            return values
+        })
         super.init(nibName: nil, bundle: nil)
+        model.onPresent = { [weak self, weak model] spec, ticket in
+            guard model?.isCurrent(ticket) == true else { return }
+            self?.show(spec)
+        }
     }
 
     required init?(coder: NSCoder) {
@@ -49,12 +78,18 @@ final class MessageListViewController: NSViewController {
 
     override func loadView() {
         let content = NSView()
+        addChild(search)
+        search.view.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(search.view)
         statusLabel.alignment = .center
         statusLabel.textColor = .secondaryLabelColor
         statusLabel.isHidden = true
         statusLabel.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(statusLabel)
         NSLayoutConstraint.activate([
+            search.view.topAnchor.constraint(equalTo: content.topAnchor),
+            search.view.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            search.view.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             statusLabel.centerXAnchor.constraint(equalTo: content.centerXAnchor),
             statusLabel.centerYAnchor.constraint(equalTo: content.centerYAnchor),
             statusLabel.widthAnchor.constraint(
@@ -66,12 +101,21 @@ final class MessageListViewController: NSViewController {
 
     /// List `spec`: close the current model, then open a fresh one in
     /// a fresh list.
-    func show(_ spec: WindowSpec) async {
+    func show(_ spec: WindowSpec) {
+        search.navigated(to: spec)
         let ticket = tickets.next()
         shownSpec = spec
         choiceSerial += 1
         opening = true
         updateStatus()
+        // Take the ticket at the user/field choice, before scheduling can reorder it.
+        Task { @MainActor [weak self] in
+            await self?.install(spec, ticket: ticket)
+        }
+    }
+
+    private func install(_ spec: WindowSpec, ticket: Int) async {
+        guard tickets.isCurrent(ticket) else { return }
         await teardown()
         guard tickets.isCurrent(ticket) else { return }
 
@@ -91,9 +135,14 @@ final class MessageListViewController: NSViewController {
         list.onSelectionChange = { [weak self] ids in
             self?.onSelectionChange?(ids)
         }
-        list.frame = view.bounds
-        list.autoresizingMask = [.width, .height]
+        list.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(list, positioned: .below, relativeTo: statusLabel)
+        NSLayoutConstraint.activate([
+            list.topAnchor.constraint(equalTo: search.view.bottomAnchor),
+            list.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            list.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            list.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+        ])
         self.model = model
         self.list = list
         onSelectionChange?([])
@@ -112,6 +161,7 @@ final class MessageListViewController: NSViewController {
 
     /// Close the list's model; the window is going away.
     func close() async {
+        searchModel.close()
         tickets.close()
         await teardown()
     }
