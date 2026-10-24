@@ -104,7 +104,31 @@ pub struct RepairStatus {
     pub diagnosis: Option<RepairDiagnosis>,
 }
 
+/// A conservative seek page, not a verified repair plan or sweep acknowledgement.
+#[derive(Debug)]
+pub struct RepairSources {
+    pub acquisition_ids: Vec<i64>,
+    pub through: i64,
+    pub cutoff: i64,
+    pub inputs: u64,
+}
+
 impl Resources {
+    /// Scan at most 200 raw acquisition IDs before filtering, in one short read.
+    pub fn repair_sources(
+        &self,
+        after: i64,
+        cutoff: Option<i64>,
+    ) -> Result<RepairSources, StoreError> {
+        self.read(|tx| repair::sources(tx, after, cutoff, PARSER_VERSION))
+            .map(|page| RepairSources {
+                acquisition_ids: page.acquisition_ids,
+                through: page.through,
+                cutoff: page.cutoff,
+                inputs: page.inputs,
+            })
+    }
+
     pub fn begin_repair(&self, acquisition: i64) -> WriteFuture<Option<RepairCapture>> {
         self.write(WritePriority::Index, move |tx| {
             repair::begin(tx, acquisition, PARSER_VERSION)

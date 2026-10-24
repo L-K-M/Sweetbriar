@@ -11,6 +11,7 @@ use super::*;
 
 mod activation;
 mod immutability;
+mod sources;
 
 const RICH: &[u8] = concat!(
     "From: Sender <User@EXAMPLE.test>\r\nTo: A <a@x.test>,b@x.test\r\n",

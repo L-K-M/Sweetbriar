@@ -3,7 +3,7 @@
 use crate::{StoreError, schema::classify};
 
 pub(crate) const SCHEMA_VERSION: u32 = 12;
-use rusqlite::{Connection, Transaction, functions::FunctionFlags};
+use rusqlite::{Connection, OptionalExtension, Transaction, functions::FunctionFlags};
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
@@ -102,13 +102,19 @@ impl Tracking {
 }
 
 pub(crate) fn counter(conn: &Connection, key: &str) -> Result<u64, StoreError> {
-    let text: String = conn
+    let value = conn
         .query_row("SELECT value FROM store_meta WHERE key=?1", [key], |row| {
-            row.get(0)
+            // Decode metadata as data corruption, not a retryable query failure.
+            Ok(row
+                .get_ref(0)?
+                .as_str()
+                .ok()
+                .and_then(|text| text.parse::<u64>().ok()))
         })
-        .map_err(sql_error)?;
-    text.parse::<u64>()
-        .ok()
+        .optional()
+        .map_err(sql_error)?
+        .flatten();
+    value
         .filter(|value| *value <= i64::MAX as u64)
         .ok_or_else(|| StoreError::corrupt("invalid repair catch-up counter"))
 }

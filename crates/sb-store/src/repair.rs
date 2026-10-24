@@ -10,6 +10,9 @@ use crate::messages::{
 };
 use crate::{StoreError, Timestamp, schema::classify};
 
+mod sources;
+pub use sources::{RepairSources, sources};
+
 pub const MAX_PIECE_BYTES: usize = 64 * 1024;
 pub const MAX_STAGE_PIECES: usize = 16;
 pub const MAX_REPAIR_BYTES: usize = 2_000_000;
