@@ -271,6 +271,8 @@ test, except where the spec says "manual qualification".
   statement with SQLite's execution counter, not a wall-clock threshold, while
   every distinct message still receives its own validated binding/projection.
   Both full 100k suites and existing CI execution limits remain unchanged.
+  A refused-open CLI snapshot must first await both the owner's address and
+  corpus startup acknowledgements, then retain its full path/size comparison.
   Unchanged seen-address-only pokes must not retry a parked source. Exercise
   all six eager-submit stop/drain boundaries on shutdown and Drop, accepted
   confirm drop, one-worker/park handoff and task panic/reopen. Actual SIGKILL
