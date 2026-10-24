@@ -940,6 +940,10 @@ Resources owns opaque `CatchupSweep` and `CatchupBatch`. `begin_catchup()` eager
 reconciles the build target, settles its input revision, captures R/cutoff and
 bounded lookahead, returning None only when inputs are swept. `prepare_catchup_step`
 returns Continue, Prepared, Recapture or Cancelled using one bounded phase.
+A fully consumed raw/cache page shorter than 200 rows proves that phase's EOF
+in its current snapshot; do not require a second empty-page read. An exactly
+full page or an inspection-byte cutoff still yields conservatively. Keep all
+source/lease/representative validation and existing row/byte bounds.
 `commit_catchup_batch` eagerly submits a batch and returns Continue(sweep,report),
 Complete(report), or Recapture only after successful COMMIT. No continuation
 escapes a failed write. Both eager futures survive unpolled request drop.

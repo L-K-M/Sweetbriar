@@ -270,6 +270,9 @@ test, except where the spec says "manual qualification".
   Prove real bounded corpus activation reuses its per-occurrence inspection
   statement with SQLite's execution counter, not a wall-clock threshold, while
   every distinct message still receives its own validated binding/projection.
+  The 100-message single-occurrence fixture needs at most 300 preparation
+  calls for envelope/raw/cache phases: reuse observed short-page EOF, while
+  full-page and byte-cutoff boundary proofs keep their conservative yields.
   Both full 100k suites and existing CI execution limits remain unchanged.
   A refused-open CLI snapshot must first await both the owner's address and
   corpus startup acknowledgements, then retain its full path/size comparison.
