@@ -256,6 +256,9 @@ test, except where the spec says "manual qualification".
   At successful EOF a resolved retry class must disarm even if another source
   remains parked; no stale expired timer may cause a hot replay loop. Prove thread
   dispatch coalesces intermediate activation batches until the finite pass ends.
+  Advance the injected clock during an actual failed corpus write and assert its
+  first recorded deadline. Repeated publication failure must double through a
+  successful begin and replayed prefix rather than restart at one second.
   Unchanged seen-address-only pokes must not retry a parked source. Exercise
   all six eager-submit stop/drain boundaries on shutdown and Drop, accepted
   confirm drop, one-worker/park handoff and task panic/reopen. Actual SIGKILL

@@ -1044,7 +1044,11 @@ Population/corpus retain their existing commit-only continuation and recapture
 semantics. After EOF, begin again to consume newer revisions; idle only after a
 fresh begin proves no owed work. Their failures and deadlines remain independent
 of source errors. Read the earliest armed lane deadline when parking; do not
-recompute a deadline from the observing clock. Never poll successful idle work.
+recompute a deadline from the observing clock. Anchor population/corpus failure
+backoff after the failed call returns, not before the round starts. A corpus
+begin with owed work or a successful prefix batch cannot reset unresolved
+publication backoff; clear it at successful pass completion or a fresh no-work
+begin. Never poll successful idle work.
 
 Check stop before every preparation and after it, and before all six eager
 submissions: commit_received_step, begin_catchup, commit_catchup_batch,
