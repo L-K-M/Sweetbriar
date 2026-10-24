@@ -201,6 +201,12 @@ bound makes each legal key fit the accounting; do not invent a new key-admission
 filter that drops eligible recipients. Corrupt/out-of-contract stored input is
 an explicit bounded failure, not an infinite retry. A recipient-heavy message
 may span many transactions and must eventually contribute every eligible key.
+Population may capture at most 200 source records and 8 MiB of header text per
+short read, then normalize outside SQLite. Preflight the whole captured queue
+before its first DML. One publication shares the same 200-key/2,000,000-byte
+budget across messages, carrying unfinished source/key positions only after
+COMMIT. A later-message write or COMMIT failure rolls the entire batch back;
+no per-message transaction or weaker source fence is required.
 
 Repair preparation reads and EOF-verifies retained objects and parses MIME
 outside SQLite, retaining only bounded preparation. Activation handles at most

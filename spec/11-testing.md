@@ -263,6 +263,10 @@ test, except where the spec says "manual qualification".
   consumed deadline must not hot-poll the parked error. Repair invalid status to
   the same numeric pair and prove recovery. A native UPDATE-abort oracle must
   accept unchanged received-key replay without rewriting the kept history row.
+  A 1000-message single-key corpus must publish in bounded population batches,
+  not 1000 per-message transactions, while each COMMIT still stays within the
+  shared limits. Fault the second message with statement and deferred-FK COMMIT
+  errors and observe zero escaped earlier-message keys/counts before retry.
   Unchanged seen-address-only pokes must not retry a parked source. Exercise
   all six eager-submit stop/drain boundaries on shutdown and Drop, accepted
   confirm drop, one-worker/park handoff and task panic/reopen. Actual SIGKILL

@@ -1059,6 +1059,12 @@ begin. Never poll successful idle work.
 Replayed received ledger membership whose count and metadata winner are unchanged
 must not rewrite its kept address row. New membership and a genuine argmax winner
 still update atomically with the same budget, count and sent-history guarantees.
+The existing opaque population preparation may retain bounded normalized sources
+and publish across messages under one shared key/byte budget. Keep its off-writer
+normalization and preflight every retained source before any write. Corpus turns
+may perform at most 200 bounded preparation steps before yielding or submitting
+one bounded batch; check stop at each step. This balances batched population
+without replacing fair turns with an unbounded drain.
 
 Check stop before every preparation and after it, and before all six eager
 submissions: commit_received_step, begin_catchup, commit_catchup_batch,
