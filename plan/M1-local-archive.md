@@ -648,8 +648,19 @@ local drafts. No network yet.
     recovery proof. Consume the callback immediately; no polling or new runtime.
     This completes source-change delivery before the larger repair driver. Budget
     750 gross: observer/facade 130, Engine 40, native proof 400, prose/reserve 180.
+  - **M1.6m4b Bounded repair rediscovery (M):** depends on m4a. A complete
+    Store/Resources seek read returns bounded referenced acquisition candidates,
+    finite cutoff, raw scanned-through ID and same-snapshot repair input revision.
+    Its native facade caller drives the qualified repair operations on real
+    retained MIME. Own raw-before-filter/200-ID bounds, current/unknown BASE,
+    late old/new IDs, range validation, snapshot, typed failures, point plans and
+    zero-write/history proof. This recovers work after a corpus ACK loses an
+    in-memory report; no queue, new epoch, scheduler or schema. Budget 550 gross:
+    Store 90, facade 40, native proof 260, prose 60, reserve 100. Independent
+    review estimated the combined library/driver/proof at 1640 gross; the next
+    driver still owns all original runtime/crash/scale proof in its own PR.
   - **M1.6m4 Repair runtime — L:** fair repair/activation/population turns on
-    the received-maintenance worker; depends on m4a. Own real-worker legacy/shared
+    the received-maintenance worker; depends on m4b. Own real-worker legacy/shared
     convergence, terminal/retry failures, crash cuts, wake/drop/shutdown and
     preserved kept history. Complete the original seen-address/backfill outcome
     before n; no early composer/service/FFI/Swift delivery or deferred proof.

@@ -237,6 +237,12 @@ test, except where the spec says "manual qualification".
   and unpolled accepted writes. Real workers revisit swept old IDs and recover
   changed targets without manual wakes. No synthetic callback result replaces
   the worker's actual revisions, ledger or retained failure.
+- m4b's native Resources caller consumes bounded rediscovery IDs through the real
+  retained-MIME repair operations. Prove 200 raw IDs before filtering, referenced
+  only/shared-source dedup, known-current omission and corrupted BASE retention,
+  finite cutoff/late old and new IDs, invalid ranges, same-snapshot revision,
+  unsupported/corrupt state before empty results, zero persistent writes and
+  unchanged base/kept history. Verify PK and referenced-source point plans.
 - m4 repeats convergence through real workers, with fair failure/retry handling,
   late repair, crash cuts at staging/activation/ledger boundaries, wake/drop/
   shutdown, preserved sent/received history and failure isolation from FTS.

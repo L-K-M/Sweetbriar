@@ -980,3 +980,32 @@ independent observers, statement/deferred-FK COMMIT rollback and unpolled accept
 writes. Real-worker tests change a previously swept old message and recover a
 future target without manual pokes or imports. Existing failure/backoff, park
 handoff, single-flight, caller-drop and shutdown/Drop tests remain binding.
+
+### Bounded repair rediscovery (M1.6m4b)
+
+Resources exposes the read-only `repair_sources(after, cutoff)` library operation,
+returning its owned acquisition IDs, `through`, `cutoff` and `inputs` revision.
+Reject negative or reversed numeric ranges as InvalidInput. Omitted cutoff
+captures the greatest acquisition ID in the same short snapshot as the page and
+repair-input revision. Validate schema 12, supported build target and that input
+counter before quiet empty output. No write or target reconciliation is needed.
+
+Read at most 200 raw acquisition IDs in PK order before filtering. Advance through
+the last raw ID, even when no candidate remains. With no raw IDs, through stays
+at after; through at cutoff also exhausts the range. A cutoff beyond the current
+maximum is legal. New IDs beyond the captured cutoff wait for a fresh pass.
+
+Only referenced acquisitions are candidates, using the existing acquisition
+index on logical_messages. Omit a BASE only when its native decode proves
+`base_current` at this build. Unknown/corrupt BASE remains a candidate for
+begin_repair's typed validation. Do not filter on completed publication or
+diagnosis existence and hide their identity checks. These are conservative IDs,
+not verified repair plans; existing capture/prepare/publish/persist gates still
+validate current source/target/availability. Numeric ranges authorize no writes,
+incarnation capability or sweep acknowledgement.
+
+The caller retains the first page's revision through the finite pass. A newer
+page revision cannot acknowledge a changed old ID behind its cursor. Startup or
+retry can rediscover from retained authority after EOF/report loss. Scheduling,
+repass/deadline decisions and error aggregation belong to m4, not this library.
+No public API above Resources, queue, force mode, schema or new epoch is added.
