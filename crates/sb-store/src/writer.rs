@@ -17,10 +17,10 @@ use std::sync::Mutex;
 use std::task::{Poll, Waker};
 use std::thread::JoinHandle;
 
-use rusqlite::Connection;
 use rusqlite::Transaction;
 use rusqlite::TransactionBehavior;
 use rusqlite::config::DbConfig;
+use rusqlite::{Connection, OptionalExtension};
 
 use crate::StoreError;
 use crate::list_rows;
@@ -61,6 +61,7 @@ struct WriterShared {
     /// committed (spec/07 "Subscriptions").
     observer: Mutex<Option<ListObserver>>,
     search_observer: Mutex<Option<SearchObserver>>,
+    maintenance_observer: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
 }
 
 /// What hears of each committed list generation. Called on the writer
@@ -408,6 +409,10 @@ impl Writer {
         *lock(&self.shared.search_observer) = Some(observer);
     }
 
+    pub(crate) fn observe_maintenance_inputs(&self, observer: Arc<dyn Fn() + Send + Sync>) {
+        *lock(&self.shared.maintenance_observer) = Some(observer);
+    }
+
     /// [`Writer::new`] with the thread spawner as a parameter. If it
     /// refuses, `conn` is dropped here, still not checkpointing on
     /// close: only the running thread lifts that (spec/02: no
@@ -423,6 +428,7 @@ impl Writer {
             ready: Condvar::new(),
             observer: Mutex::new(None),
             search_observer: Mutex::new(None),
+            maintenance_observer: Mutex::new(None),
         });
         let thread_shared = Arc::clone(&shared);
         let handle = spawn(Box::new(move || serve(conn, thread_shared)))
@@ -597,6 +603,8 @@ fn writer_loop(conn: &mut Connection, shared: &Arc<WriterShared>) {
     let mut announced = Announced {
         list: list_rows::generation(conn).ok(),
         search: observed_search_generation(conn),
+        maintenance: MAINTENANCE_KEYS
+            .map(|key| observed_maintenance_input(conn, key).ok().flatten()),
     };
     loop {
         match shared.next() {
@@ -622,6 +630,44 @@ fn writer_loop(conn: &mut Connection, shared: &Arc<WriterShared>) {
 struct Announced {
     list: Option<u64>,
     search: Option<u64>,
+    maintenance: [Option<Vec<u8>>; MAINTENANCE_KEYS.len()],
+}
+
+const MAINTENANCE_KEYS: [&str; 4] = [
+    "seen_address_inputs",
+    "repair_inputs",
+    "seen_address_target",
+    "mime_repair_target",
+];
+
+fn observed_maintenance_input(conn: &Connection, key: &str) -> rusqlite::Result<Option<Vec<u8>>> {
+    conn.prepare_cached("SELECT value FROM store_meta WHERE key=?1")?
+        .query_row([key], |row| match row.get_ref(0)? {
+            rusqlite::types::ValueRef::Text(bytes) => Ok(bytes.to_vec()),
+            other => Err(rusqlite::Error::InvalidColumnType(
+                0,
+                "value".into(),
+                other.data_type(),
+            )),
+        })
+        .optional()
+}
+
+fn maintenance_changed(
+    conn: &Connection,
+    previous: &mut [Option<Vec<u8>>; MAINTENANCE_KEYS.len()],
+) -> bool {
+    let mut changed = false;
+    for (key, last) in MAINTENANCE_KEYS.into_iter().zip(previous) {
+        // A failed observation is unknown, not an observed deletion.
+        if let Ok(current) = observed_maintenance_input(conn, key)
+            && *last != current
+        {
+            *last = current;
+            changed = true;
+        }
+    }
+    changed
 }
 
 fn observed_search_generation(conn: &Connection) -> Option<u64> {
@@ -640,6 +686,13 @@ fn announce(conn: &Connection, shared: &WriterShared, announced: &mut Announced)
         &shared.search_observer,
         &mut announced.search,
     );
+    // Raw key changes also wake a worker parked on malformed or future metadata.
+    if maintenance_changed(conn, &mut announced.maintenance) {
+        let observer = lock(&shared.maintenance_observer).clone();
+        if let Some(observer) = observer {
+            observer();
+        }
+    }
 }
 
 fn announce_one(

@@ -231,6 +231,12 @@ test, except where the spec says "manual qualification".
   both. Exercise budget Carry, EOF metadata-only turns, bounded retained evidence,
   coalesced effects, unavailable versus corrupt source, wrong-owner/reopen/cancel
   and eager dropped requests. No epoch, write-budget or safety exemption.
+- m4a qualifies the consumed Store/Resources maintenance observer: after-COMMIT,
+  before-reply delivery, changed/no-op/malformed/missing keys, independent
+  list/Search observers, callback replacement, statement/deferred-FK rollback
+  and unpolled accepted writes. Real workers revisit swept old IDs and recover
+  changed targets without manual wakes. No synthetic callback result replaces
+  the worker's actual revisions, ledger or retained failure.
 - m4 repeats convergence through real workers, with fair failure/retry handling,
   late repair, crash cuts at staging/activation/ledger boundaries, wake/drop/
   shutdown, preserved sent/received history and failure isolation from FTS.
