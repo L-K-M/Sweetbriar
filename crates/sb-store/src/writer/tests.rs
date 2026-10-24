@@ -18,6 +18,8 @@ use crate::schema::{bug, run_migrations};
 use crate::store::{Access, WRITER_PRAGMAS, open_connection};
 use crate::testing::{crash_write, reading, scratch_paths, test_seams, writing};
 
+mod maintenance;
+
 /// A store over a fresh scratch root, with a one-row probe table for
 /// the counter tests.
 fn store_with_probe(label: &str) -> (ScratchDir, Store) {

@@ -52,7 +52,6 @@ fn held(engine: &Engine) {
         );
         Ok(())
     });
-    engine.received().wake();
     wait(|| engine.received().failure().is_some() && engine.received().waiting());
 }
 
@@ -68,7 +67,6 @@ fn release(engine: &Engine) {
         );
         Ok(())
     });
-    engine.received().wake();
 }
 
 fn history(resources: &Resources) -> String {
@@ -297,6 +295,72 @@ fn a_park_handoff_wake_and_many_schedules_keep_one_worker() {
         1
     );
     block_on(engine.shutdown()).unwrap();
+}
+
+#[test]
+fn committed_old_message_inputs_wake_the_worker_without_an_import_or_manual_poke() {
+    let scratch = ScratchDir::new("received-committed-wake");
+    let (engine, _) = clocked(&scratch.path().join("store"), real_fs(), 10_000);
+    import(&engine, &scratch.path().join("one.eml"), RAW);
+    settled(&engine);
+    let (completed, completion) = mpsc::channel();
+    hook(&engine, move |event| {
+        if event == Event::Complete {
+            let _ = completed.send(());
+        }
+    });
+
+    change(
+        &engine,
+        "UPDATE d_message_summary SET from_name='Updated after sweep'",
+    );
+    let observed = completion.recv_timeout(Duration::from_secs(30));
+    let changed = count(
+        &engine,
+        "SELECT count(*) FROM seen_addresses WHERE canonical='sender@example.test' AND display_name='Updated after sweep' AND times_received=1",
+    );
+    block_on(engine.shutdown()).unwrap();
+    assert!(
+        observed.is_ok(),
+        "committed input did not wake the parked worker"
+    );
+    assert_eq!(changed, 1);
+}
+
+#[test]
+fn committed_target_repair_recovers_parked_failure_without_a_manual_poke() {
+    for target in [Some("2"), Some("malformed"), None] {
+        let scratch = ScratchDir::new("received-target-wake");
+        let (engine, _) = clocked(&scratch.path().join("store"), real_fs(), 10_000);
+        settled(&engine);
+        write(&engine, move |tx| {
+            if let Some(value) = target {
+                tx.execute(
+                    "UPDATE store_meta SET value=?1 WHERE key='seen_address_target'",
+                    [value],
+                )
+                .unwrap();
+            } else {
+                tx.execute("DELETE FROM store_meta WHERE key='seen_address_target'", [])
+                    .unwrap();
+            }
+            Ok(())
+        });
+        wait(|| engine.received().failure().is_some() && engine.received().waiting());
+        let error = engine.received().failure().unwrap().error;
+        assert!(if target == Some("2") {
+            matches!(error, StoreError::Unavailable { io_kind: None, .. })
+        } else {
+            matches!(error, StoreError::Corrupt { .. })
+        });
+        write(&engine, |tx| {
+            tx.execute("INSERT INTO store_meta(key,value) VALUES('seen_address_target','1') ON CONFLICT(key) DO UPDATE SET value=excluded.value", []).unwrap();
+            Ok(())
+        });
+        settled(&engine);
+        assert_eq!(engine.received().starts(), 1);
+        block_on(engine.shutdown()).unwrap();
+    }
 }
 
 #[test]
@@ -536,7 +600,6 @@ fn corrupt_source_and_newer_target_park_without_gating_import_or_search() {
             &engine,
             "UPDATE d_message_summary SET to_json=NULL; UPDATE store_meta SET value='1' WHERE key='seen_address_target'",
         );
-        engine.received().wake();
         settled(&engine);
         assert_eq!(count(&engine, LEDGER), 2);
         assert_eq!(
@@ -613,18 +676,22 @@ fn shutdown_and_drop_discard_preparation_but_drain_submitted_writes_and_release_
                 wait(|| engine.received().waiting());
                 close_and_reopen(engine, &root, end)
             } else {
-                write(&engine, |tx| {
-                    tx.execute(
-                        "UPDATE store_meta SET value='1' WHERE key='seen_address_target'",
-                        [],
-                    )
-                    .unwrap();
-                    Ok(())
-                });
                 let (ready, reached) = mpsc::channel();
                 let (release, released) = mpsc::channel();
                 let released = Mutex::new(released);
+                let (prepared, preparing) = mpsc::channel();
+                let (submit, submitting) = mpsc::channel();
+                let submitting = Mutex::new(submitting);
                 hook(&engine, move |event| {
+                    // Hold the writer before accepting the write whose drain is tested.
+                    if at == StopAt::Submitted && event == Event::Prepared {
+                        prepared.send(()).unwrap();
+                        submitting
+                            .lock()
+                            .unwrap()
+                            .recv_timeout(Duration::from_secs(300))
+                            .unwrap();
+                    }
                     if (at == StopAt::Prepared && event == Event::Prepared)
                         || (at == StopAt::Submitted && event == Event::Submitted)
                     {
@@ -636,8 +703,21 @@ fn shutdown_and_drop_discard_preparation_but_drain_submitted_writes_and_release_
                             .unwrap();
                     }
                 });
-                let writer = (at == StopAt::Submitted).then(|| hold_writer(&engine));
-                engine.received().wake();
+                // The target's COMMIT now wakes the already-armed gate.
+                write(&engine, |tx| {
+                    tx.execute(
+                        "UPDATE store_meta SET value='1' WHERE key='seen_address_target'",
+                        [],
+                    )
+                    .unwrap();
+                    Ok(())
+                });
+                let writer = (at == StopAt::Submitted).then(|| {
+                    preparing.recv_timeout(Duration::from_secs(300)).unwrap();
+                    let held = hold_writer(&engine);
+                    submit.send(()).unwrap();
+                    held
+                });
                 reached.recv_timeout(Duration::from_secs(300)).unwrap();
                 let registry = engine.received().clone();
                 let owned = root.clone();

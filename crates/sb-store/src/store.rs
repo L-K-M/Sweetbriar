@@ -179,6 +179,12 @@ impl Store {
         self.writer.observe_search_generation(observer);
     }
 
+    /// Hear committed maintenance-input changes before the write resolves.
+    /// Runs on the writer thread; return immediately and never panic.
+    pub fn observe_maintenance_inputs(&self, observer: Arc<dyn Fn() + Send + Sync>) {
+        self.writer.observe_maintenance_inputs(observer);
+    }
+
     /// Run one read through the reader pool (spec/03): a short
     /// transaction on a free read-only connection, waiting for one
     /// when all are busy.

@@ -202,6 +202,12 @@ impl Resources {
         self.store.observe_search_generation(observer);
     }
 
+    /// Wake maintenance after source commits, independently of list and Search.
+    /// Runs on the writer thread; return immediately and never panic.
+    pub fn observe_maintenance_inputs(&self, observer: Arc<dyn Fn() + Send + Sync>) {
+        self.store.observe_maintenance_inputs(observer);
+    }
+
     /// Run one read through the store's reader pool (spec/03): a short
     /// transaction on a read-only connection, waiting for a free
     /// reader when all are busy. Blocking, so callers off the hot path

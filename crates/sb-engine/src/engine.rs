@@ -442,6 +442,13 @@ impl Engine {
                             }
                         })
                     })?);
+                    let received: Arc<ReceivedJobs> = Arc::default();
+                    let maintenance = Arc::downgrade(&received);
+                    resources.observe_maintenance_inputs(Arc::new(move || {
+                        if let Some(worker) = maintenance.upgrade() {
+                            worker.wake();
+                        }
+                    }));
                     Ok(Self {
                         resources: Some(Arc::new(resources)),
                         blocking: Arc::default(),
@@ -449,7 +456,7 @@ impl Engine {
                         windows,
                         imports: Arc::default(),
                         index: Arc::default(),
-                        received: Arc::default(),
+                        received,
                         leases: Arc::default(),
                         #[cfg(test)]
                         accepted_commands: std::sync::atomic::AtomicUsize::new(0),
