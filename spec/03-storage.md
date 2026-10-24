@@ -125,6 +125,11 @@ recreated.
     `wal_autocheckpoint=0` and `query_only=ON`, and never checkpoint on
     close. Read transactions are short: a query window is not a
     long-lived read transaction (07).
+  - Writer and pooled reader connections keep a bounded 64-entry prepared-
+    statement cache. Reuse invariant activation inspection and publication SQL
+    across messages instead of compiling it per occurrence. All source fences,
+    corruption checks and publication budgets still run. Query-local scalar
+    callbacks and their error relays retain fresh statements and lifetimes.
 - **Write discipline:**
   - Writes are submitted to the writer task as closures; user-initiated
     writes have priority over sync and index writes.

@@ -267,6 +267,10 @@ test, except where the spec says "manual qualification".
   not 1000 per-message transactions, while each COMMIT still stays within the
   shared limits. Fault the second message with statement and deferred-FK COMMIT
   errors and observe zero escaped earlier-message keys/counts before retry.
+  Prove real bounded corpus activation reuses its per-occurrence inspection
+  statement with SQLite's execution counter, not a wall-clock threshold, while
+  every distinct message still receives its own validated binding/projection.
+  Both full 100k suites and existing CI execution limits remain unchanged.
   Unchanged seen-address-only pokes must not retry a parked source. Exercise
   all six eager-submit stop/drain boundaries on shutdown and Drop, accepted
   confirm drop, one-worker/park handoff and task panic/reopen. Actual SIGKILL
