@@ -136,9 +136,9 @@ struct Assembly {
 
 pub(crate) fn target(conn: &Connection) -> Result<u32, StoreError> {
     let raw: Option<String> = conn
-        .query_row("SELECT value FROM store_meta WHERE key=?1", [TARGET], |r| {
-            r.get(0)
-        })
+        .prepare_cached("SELECT value FROM store_meta WHERE key=?1")
+        .map_err(sql_error)?
+        .query_row([TARGET], |r| r.get(0))
         .optional()
         .map_err(sql_error)?;
     raw.and_then(|s| s.parse::<u32>().ok())
@@ -156,11 +156,11 @@ pub(crate) fn supported(value: u32, build: u32) -> Result<(), StoreError> {
 }
 
 fn base(conn: &Connection, id: i64) -> Result<Option<(u32, String)>, StoreError> {
-    conn.query_row(
+    conn.prepare_cached(
         "SELECT parser_version,parse_state FROM d_message_summary WHERE acquisition_id=?1",
-        [id],
-        |r| Ok((r.get(0)?, r.get(1)?)),
     )
+    .map_err(sql_error)?
+    .query_row([id], |r| Ok((r.get(0)?, r.get(1)?)))
     .optional()
     .map_err(sql_error)
 }
@@ -382,7 +382,7 @@ fn assembly_for(
     version: u32,
 ) -> Result<Option<Assembly>, StoreError> {
     let id = acquisition.acquisition_id();
-    let stored: Option<Assembly> = conn.query_row("SELECT source_sha256,source_bytes,date_header,has_attachments,field_lengths,completed_at FROM d_repair_assemblies WHERE acquisition_id=?1 AND parser_target=?2", params![id, version], |r| Ok(Assembly { hash: r.get(0)?, bytes: r.get(1)?, date: r.get(2)?, attachments: r.get(3)?, lengths: r.get(4)?, completed: r.get(5)? })).optional().map_err(sql_error)?;
+    let stored: Option<Assembly> = conn.prepare_cached("SELECT source_sha256,source_bytes,date_header,has_attachments,field_lengths,completed_at FROM d_repair_assemblies WHERE acquisition_id=?1 AND parser_target=?2").map_err(sql_error)?.query_row(params![id, version], |r| Ok(Assembly { hash: r.get(0)?, bytes: r.get(1)?, date: r.get(2)?, attachments: r.get(3)?, lengths: r.get(4)?, completed: r.get(5)? })).optional().map_err(sql_error)?;
     if stored.as_ref().is_some_and(|value| {
         value.hash != acquisition.object().sha256_hex()
             || value.bytes != acquisition.object().byte_length() as i64

@@ -48,6 +48,8 @@ pub(crate) struct ThreadRebuilds {
 struct RebuildState {
     running: bool,
     again: bool,
+    #[cfg(test)]
+    requests: usize,
 }
 
 impl ThreadRebuilds {
@@ -60,6 +62,10 @@ impl ThreadRebuilds {
     /// Take the worker's slot, or ask the running worker to go again.
     fn claim(&self) -> bool {
         let mut state = self.lock();
+        #[cfg(test)]
+        {
+            state.requests += 1;
+        }
         if state.running {
             state.again = true;
             return false;
@@ -81,6 +87,11 @@ impl ThreadRebuilds {
 
     fn release(&self) {
         self.lock().running = false;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn requests(&self) -> usize {
+        self.lock().requests
     }
 }
 

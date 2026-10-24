@@ -246,6 +246,41 @@ test, except where the spec says "manual qualification".
 - m4 repeats convergence through real workers, with fair failure/retry handling,
   late repair, crash cuts at staging/activation/ledger boundaries, wake/drop/
   shutdown, preserved sent/received history and failure isolation from FTS.
+  Own a real 100k-distinct/shared retained-MIME source through actual worker
+  publication, activation and ledger, with every committed corpus bound and
+  row/binding/history assertion intact. Private hooks only coordinate phases
+  and expose actual pass/begin/report events, never supply native results.
+  Prove changed old/new IDs during a finite captured pass, mixed retryable and
+  parked failures without source starvation, terminal diagnosis suppression and
+  failed diagnosis persistence, exact anchored backoff and clean-pass clearing.
+  At successful EOF a resolved retry class must disarm even if another source
+  remains parked; no stale expired timer may cause a hot replay loop. Prove thread
+  dispatch coalesces intermediate activation batches until the finite pass ends.
+  Advance the injected clock during an actual failed corpus write and assert its
+  first recorded deadline. Repeated publication failure must double through a
+  successful begin and replayed prefix rather than restart at one second.
+  Expire a real source retry, then introduce a global unsupported target: the
+  consumed deadline must not hot-poll the parked error. Repair invalid status to
+  the same numeric pair and prove recovery. A native UPDATE-abort oracle must
+  accept unchanged received-key replay without rewriting the kept history row.
+  A 1000-message single-key corpus must publish in bounded population batches,
+  not 1000 per-message transactions, while each COMMIT still stays within the
+  shared limits. Fault the second message with statement and deferred-FK COMMIT
+  errors and observe zero escaped earlier-message keys/counts before retry.
+  Prove real bounded corpus activation reuses its per-occurrence inspection
+  statement with SQLite's execution counter, not a wall-clock threshold, while
+  every distinct message still receives its own validated binding/projection.
+  The 100-message single-occurrence fixture needs at most 300 preparation
+  calls for envelope/raw/cache phases: reuse observed short-page EOF, while
+  full-page and byte-cutoff boundary proofs keep their conservative yields.
+  Both full 100k suites and existing CI execution limits remain unchanged.
+  A refused-open CLI snapshot must first await both the owner's address and
+  corpus startup acknowledgements, then retain its full path/size comparison.
+  Unchanged seen-address-only pokes must not retry a parked source. Exercise
+  all six eager-submit stop/drain boundaries on shutdown and Drop, accepted
+  confirm drop, one-worker/park handoff and task panic/reopen. Actual SIGKILL
+  cuts before/after staging pieces, activation and ledger commits must replay
+  without false receipts, mixed projections, recounting or lost kept history.
   Every outcome carries its proof under the hard review budget; no test-only
   deferred qualification, simulated native results or relaxed existing checks.
 

@@ -1,6 +1,6 @@
 //! Kept received-address history, in fenced byte-bounded publication chunks.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
 
 use rusqlite::{OptionalExtension, Transaction, params, types::ValueRef};
@@ -58,20 +58,20 @@ pub struct SeenScan {
     revisions: SeenRevisions,
     after: i64,
     pending: Option<Arc<PreparedSource>>,
+    queued: VecDeque<Arc<PreparedSource>>,
     position: usize,
 }
 
 /// One short-read capture; decoding is deliberately a separate pure operation.
 pub struct SeenCapture {
     scan: SeenScan,
-    source: Option<Source>,
+    sources: Vec<Source>,
 }
 
 /// Private construction prevents unchecked addresses or cursor advancement.
 #[derive(Debug)]
 pub struct SeenPrepared {
     scan: SeenScan,
-    end: Option<usize>,
 }
 
 /// Returned by the writer only after its transaction commits.
@@ -118,49 +118,50 @@ fn restart(revisions: SeenRevisions) -> SeenScan {
         revisions,
         after: 0,
         pending: None,
+        queued: VecDeque::new(),
         position: 0,
     }
 }
 
 pub fn capture(tx: &Transaction, scan: SeenScan) -> Result<SeenCapture, StoreError> {
-    let source = if scan.pending.is_none() {
-        next_source(tx, scan.after)?
-    } else {
-        None
-    };
-    Ok(SeenCapture { scan, source })
+    let mut sources = Vec::new();
+    if scan.pending.is_none() && scan.queued.is_empty() {
+        let (mut after, mut text) = (scan.after, 0usize);
+        while sources.len() < MAX_RECEIVED_KEYS {
+            let Some(source) = next_source(tx, after)? else {
+                break;
+            };
+            let bytes: usize = source.headers.iter().flatten().map(String::len).sum();
+            if !sources.is_empty() && text.saturating_add(bytes) > MAX_STORED_HEADER_BYTES {
+                break;
+            }
+            text += bytes;
+            after = source.message;
+            sources.push(source);
+        }
+    }
+    Ok(SeenCapture { scan, sources })
 }
 
 /// Normalize outside SQLite. A large message's set lives only in its scan chain.
 pub fn prepare(mut capture: SeenCapture) -> Result<SeenPrepared, StoreError> {
-    if let Some(source) = capture.source {
-        capture.scan.pending = Some(Arc::new(normalize(source)?));
-    }
-    let Some(pending) = &capture.scan.pending else {
-        return Ok(SeenPrepared {
-            scan: capture.scan,
-            end: None,
-        });
-    };
-    let mut end = capture.scan.position;
-    let mut bytes = 0usize;
-    while end < pending.keys.len() && end - capture.scan.position < MAX_RECEIVED_KEYS {
-        let cost = pending.keys[end].bytes;
-        if cost > MAX_RECEIVED_BYTES {
+    for source in capture.sources {
+        let pending = normalize(source)?;
+        if pending
+            .keys
+            .iter()
+            .any(|key| key.bytes > MAX_RECEIVED_BYTES)
+        {
             return Err(StoreError::corrupt(
                 "received source exceeds admitted key accounting",
             ));
         }
-        if bytes.saturating_add(cost) > MAX_RECEIVED_BYTES {
-            break;
-        }
-        bytes += cost;
-        end += 1;
+        capture.scan.queued.push_back(Arc::new(pending));
     }
-    Ok(SeenPrepared {
-        scan: capture.scan,
-        end: Some(end),
-    })
+    if capture.scan.pending.is_none() {
+        capture.scan.pending = capture.scan.queued.pop_front();
+    }
+    Ok(SeenPrepared { scan: capture.scan })
 }
 
 pub fn publish(tx: &Transaction, mut prepared: SeenPrepared) -> Result<SeenCommit, StoreError> {
@@ -169,7 +170,7 @@ pub fn publish(tx: &Transaction, mut prepared: SeenPrepared) -> Result<SeenCommi
     if current.target != prepared.scan.revisions.target {
         return Ok(SeenCommit::Recapture(restart(current)));
     }
-    let Some(end) = prepared.end else {
+    if prepared.scan.pending.is_none() {
         let read = prepared.scan.revisions.inputs;
         if read > current.inputs {
             return Err(StoreError::corrupt(
@@ -180,38 +181,41 @@ pub fn publish(tx: &Transaction, mut prepared: SeenPrepared) -> Result<SeenCommi
             set_counter(tx, SWEPT, read)?;
         }
         return Ok(SeenCommit::Complete);
-    };
-    let pending = prepared
+    }
+    // Preflight every captured source before the batch's first persistent mutation.
+    for pending in prepared
         .scan
         .pending
-        .as_ref()
-        .expect("a key step has a prepared source");
-    if next_source(tx, pending.source.message - 1)?.as_ref() != Some(&pending.source) {
-        return Ok(SeenCommit::Recapture(restart(current)));
-    }
-    let mut committed = prepared.scan.position;
-    let mut bytes = 0usize;
-    for key in &pending.keys[prepared.scan.position..end] {
-        // A retained winner's text is rewritten too; preparation cannot price it safely.
-        let cost = retained_cost(tx, key)?;
-        if cost > MAX_RECEIVED_BYTES {
-            return Err(StoreError::corrupt(
-                "received history exceeds admitted key accounting",
-            ));
+        .iter()
+        .chain(prepared.scan.queued.iter())
+    {
+        if next_source(tx, pending.source.message - 1)?.as_ref() != Some(&pending.source) {
+            return Ok(SeenCommit::Recapture(restart(current)));
         }
-        if bytes.saturating_add(cost) > MAX_RECEIVED_BYTES {
-            break;
-        }
-        observe(tx, &pending.source, key)?;
-        bytes += cost;
-        committed += 1;
     }
-    if committed == pending.keys.len() {
+    let (mut keys, mut bytes) = (0usize, 0usize);
+    while let Some(pending) = prepared.scan.pending.clone() {
+        for key in &pending.keys[prepared.scan.position..] {
+            if keys == MAX_RECEIVED_KEYS {
+                return Ok(SeenCommit::Continue(prepared.scan));
+            }
+            let cost = retained_cost(tx, key)?;
+            if cost > MAX_RECEIVED_BYTES {
+                return Err(StoreError::corrupt(
+                    "received history exceeds admitted key accounting",
+                ));
+            }
+            if bytes.saturating_add(cost) > MAX_RECEIVED_BYTES {
+                return Ok(SeenCommit::Continue(prepared.scan));
+            }
+            observe(tx, &pending.source, key)?;
+            bytes += cost;
+            keys += 1;
+            prepared.scan.position += 1;
+        }
         prepared.scan.after = pending.source.message;
-        prepared.scan.pending = None;
+        prepared.scan.pending = prepared.scan.queued.pop_front();
         prepared.scan.position = 0;
-    } else {
-        prepared.scan.position = committed;
     }
     Ok(SeenCommit::Continue(prepared.scan))
 }
@@ -380,7 +384,8 @@ fn observe(tx: &Transaction, source: &Source, key: &Key) -> Result<(), StoreErro
         email=CASE WHEN {winner} THEN excluded.email ELSE seen_addresses.email END,
         display_name=CASE WHEN {winner} THEN excluded.display_name ELSE seen_addresses.display_name END,
         last_seen_at=CASE WHEN {winner} THEN excluded.last_seen_at ELSE seen_addresses.last_seen_at END,
-        last_account_id=CASE WHEN {winner} THEN excluded.last_account_id ELSE seen_addresses.last_account_id END");
+         last_account_id=CASE WHEN {winner} THEN excluded.last_account_id ELSE seen_addresses.last_account_id END
+         WHERE seen_addresses.times_received IS NOT excluded.times_received OR {winner}");
     tx.prepare_cached(&sql)
         .map_err(sql_error)?
         .execute(params![

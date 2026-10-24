@@ -940,6 +940,10 @@ Resources owns opaque `CatchupSweep` and `CatchupBatch`. `begin_catchup()` eager
 reconciles the build target, settles its input revision, captures R/cutoff and
 bounded lookahead, returning None only when inputs are swept. `prepare_catchup_step`
 returns Continue, Prepared, Recapture or Cancelled using one bounded phase.
+A fully consumed raw/cache page shorter than 200 rows proves that phase's EOF
+in its current snapshot; do not require a second empty-page read. An exactly
+full page or an inspection-byte cutoff still yields conservatively. Keep all
+source/lease/representative validation and existing row/byte bounds.
 `commit_catchup_batch` eagerly submits a batch and returns Continue(sweep,report),
 Complete(report), or Recapture only after successful COMMIT. No continuation
 escapes a failed write. Both eager futures survive unpolled request drop.
@@ -1009,3 +1013,75 @@ page revision cannot acknowledge a changed old ID behind its cursor. Startup or
 retry can rediscover from retained authority after EOF/report loss. Scheduling,
 repass/deadline decisions and error aggregation belong to m4, not this library.
 No public API above Resources, queue, force mode, schema or new epoch is added.
+
+### Fair repair runtime (M1.6m4)
+
+Extend the one counted received worker with population, corpus activation and
+source-repair lanes. Each round gives each runnable lane one bounded phase;
+source publication yields between its bounded pieces. Each lane keeps its own
+continuation, idle/due state and typed failure. Successful unrelated work never
+clears an unresolved error. Source failures do not prevent later acquisition IDs
+in the same finite pass. No Search hold/readability gate or second runtime.
+
+Startup starts a finite acquisition pass through repair_sources. Keep at most
+200 pending IDs, one active capture/preparation and the first page's inputs and
+cutoff. Later page revisions do not replace that baseline. Coalesced wake reads
+catchup_status; source work is due on a changed (inputs,target) pair, startup or
+its armed retry, never merely a bare wake or another repeated repair_needed hint.
+Compare pairs with !=, retaining changes during an active pass. At EOF read
+current status, fold failures, then rescan if the pair differs. This rediscovers
+old IDs and crash-lost report work without an unbounded set or a durable queue.
+
+Keep the first retryable and first parked source error separately per pass.
+At successful EOF, merge consecutive attempts by class and arm the existing
+1-second doubling retry capped at 60 seconds from that fold. Successful EOF
+resolves a prior failure class only when that class is absent from the completed
+pass; a clean complete pass clears both, even when a changed pair owes a new pass.
+Global discovery/status/owner errors abort the pass and merge their own failure
+without clearing earlier errors. Known I/O or Internal retries are timed; other
+errors wait for changed relevant input/reopen. A changed pair can trigger before
+an old deadline. A corrupt source may be revisited once per triggered pass when
+a retryable sibling causes that pass; unchanged persisted terminal diagnoses
+still suppress object I/O through the qualified begin gate.
+
+Retain the last attempted pair on abort so unchanged wakes cannot restart that
+attempt. Consume an armed source deadline when its retry starts, retaining the
+error and attempt history; a later global parked error must not retain an expired
+timer and hot-poll. A previously parked unreadable-status error may resume when
+status becomes readable again, including repaired metadata with the same numeric
+pair. This actual status recovery is distinct from a bare wake after a page abort.
+
+Population/corpus retain their existing commit-only continuation and recapture
+semantics. After EOF, begin again to consume newer revisions; idle only after a
+fresh begin proves no owed work. Their failures and deadlines remain independent
+of source errors. Read the earliest armed lane deadline when parking; do not
+recompute a deadline from the observing clock. Anchor population/corpus failure
+backoff after the failed call returns, not before the round starts. A corpus
+begin with owed work or a successful prefix batch cannot reset unresolved
+publication backoff; clear it at successful pass completion or a fresh no-work
+begin. Never poll successful idle work.
+Replayed received ledger membership whose count and metadata winner are unchanged
+must not rewrite its kept address row. New membership and a genuine argmax winner
+still update atomically with the same budget, count and sent-history guarantees.
+The existing opaque population preparation may retain bounded normalized sources
+and publish across messages under one shared key/byte budget. Keep its off-writer
+normalization and preflight every retained source before any write. Corpus turns
+may perform at most 200 bounded preparation steps before yielding or submitting
+one bounded batch; check stop at each step. This balances batched population
+without replacing fair turns with an unbounded drain.
+
+Check stop before every preparation and after it, and before all six eager
+submissions: commit_received_step, begin_catchup, commit_catchup_batch,
+begin_repair, commit_repair_step and persist_repair_terminal. Once submitted,
+drain its actual result before releasing counted work. Stop discards unfinished
+local cursors, leaving durable work replayable on reopen. A task panic remains
+an explicit worker failure. No request drop can strand an accepted import wake.
+
+After an actual activated>0 commit, retain pending thread work and dispatch the
+existing coalesced rebuild worker at finite corpus-pass completion/recapture or
+before parking on a corpus error. Use a private Spawn-capable Worker clone and
+the existing ThreadRebuilds registry. Do not rescan the whole thread corpus per
+activation batch. Preserve runtime/count ownership; shutdown may refuse a
+new spawn, leaving its committed thread inputs owed for startup. Terminal,
+deferred and unavailable repairs remain incomplete in existing status; neither
+FTS Ready nor a finished eligible sweep claims complete maintenance.

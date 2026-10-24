@@ -177,8 +177,8 @@ fn large_envelope_inspection_yields_after_one_legal_row_and_completes() {
     });
     let (pending, steps) = prepared(&resources, 1);
     assert_eq!(
-        steps, 7,
-        "envelope, three single-row quanta, raw EOF, cache page, cache EOF"
+        steps, 6,
+        "envelope, three single-row quanta, raw EOF, short cache page with observed EOF"
     );
     assert_eq!(
         block_on(resources.commit_activation(pending)).unwrap(),
@@ -423,8 +423,8 @@ fn cache_owner_phase_yields_on_inspected_bytes_even_when_no_rows_need_updates() 
     let before = generations(&resources);
     let (pending, steps) = prepared(&resources, 1);
     assert_eq!(
-        steps, 12,
-        "envelope + eight raw turns + three bounded cache turns"
+        steps, 10,
+        "envelope + seven bounded raw turns + two bounded cache turns"
     );
     assert_eq!(
         block_on(resources.commit_activation(pending)).unwrap(),
@@ -434,6 +434,36 @@ fn cache_owner_phase_yields_on_inspected_bytes_even_when_no_rows_need_updates() 
         generations(&resources)[0],
         before[0],
         "identical displayed images cost no row mutation"
+    );
+    resources.close().unwrap();
+}
+
+#[test]
+fn full_cache_page_does_not_hide_a_foreign_owner_beyond_its_limit() {
+    let (_scratch, resources) = published(RICH, 200);
+    seed(&resources, 2, 1);
+    edit(
+        &resources,
+        "UPDATE d_list_rows SET message_id=1,representative=0 WHERE occurrence_id=201",
+    );
+    let before = (state(&resources), snapshot(&resources));
+    let mut work = begin(&resources, 1);
+    let mut rejected = false;
+    for _ in 0..10 {
+        work = match resources.prepare_activation(work, &|| false) {
+            Ok(ActivationPreparation::Continue(next)) => next,
+            Err(StoreError::Corrupt { .. }) => {
+                rejected = true;
+                break;
+            }
+            other => panic!("full cache page hid its later foreign owner: {other:?}"),
+        };
+    }
+    assert!(rejected, "foreign cache owner was not inspected");
+    assert_eq!((state(&resources), snapshot(&resources)), before);
+    assert_eq!(
+        number(&resources, "SELECT count(*) FROM d_message_bindings"),
+        0
     );
     resources.close().unwrap();
 }
