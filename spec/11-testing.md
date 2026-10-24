@@ -259,6 +259,10 @@ test, except where the spec says "manual qualification".
   Advance the injected clock during an actual failed corpus write and assert its
   first recorded deadline. Repeated publication failure must double through a
   successful begin and replayed prefix rather than restart at one second.
+  Expire a real source retry, then introduce a global unsupported target: the
+  consumed deadline must not hot-poll the parked error. Repair invalid status to
+  the same numeric pair and prove recovery. A native UPDATE-abort oracle must
+  accept unchanged received-key replay without rewriting the kept history row.
   Unchanged seen-address-only pokes must not retry a parked source. Exercise
   all six eager-submit stop/drain boundaries on shutdown and Drop, accepted
   confirm drop, one-worker/park handoff and task panic/reopen. Actual SIGKILL

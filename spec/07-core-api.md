@@ -1040,6 +1040,13 @@ an old deadline. A corrupt source may be revisited once per triggered pass when
 a retryable sibling causes that pass; unchanged persisted terminal diagnoses
 still suppress object I/O through the qualified begin gate.
 
+Retain the last attempted pair on abort so unchanged wakes cannot restart that
+attempt. Consume an armed source deadline when its retry starts, retaining the
+error and attempt history; a later global parked error must not retain an expired
+timer and hot-poll. A previously parked unreadable-status error may resume when
+status becomes readable again, including repaired metadata with the same numeric
+pair. This actual status recovery is distinct from a bare wake after a page abort.
+
 Population/corpus retain their existing commit-only continuation and recapture
 semantics. After EOF, begin again to consume newer revisions; idle only after a
 fresh begin proves no owed work. Their failures and deadlines remain independent
@@ -1049,6 +1056,9 @@ backoff after the failed call returns, not before the round starts. A corpus
 begin with owed work or a successful prefix batch cannot reset unresolved
 publication backoff; clear it at successful pass completion or a fresh no-work
 begin. Never poll successful idle work.
+Replayed received ledger membership whose count and metadata winner are unchanged
+must not rewrite its kept address row. New membership and a genuine argmax winner
+still update atomically with the same budget, count and sent-history guarantees.
 
 Check stop before every preparation and after it, and before all six eager
 submissions: commit_received_step, begin_catchup, commit_catchup_batch,
