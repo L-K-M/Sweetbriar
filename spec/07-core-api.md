@@ -1009,3 +1009,52 @@ page revision cannot acknowledge a changed old ID behind its cursor. Startup or
 retry can rediscover from retained authority after EOF/report loss. Scheduling,
 repass/deadline decisions and error aggregation belong to m4, not this library.
 No public API above Resources, queue, force mode, schema or new epoch is added.
+
+### Fair repair runtime (M1.6m4)
+
+Extend the one counted received worker with population, corpus activation and
+source-repair lanes. Each round gives each runnable lane one bounded phase;
+source publication yields between its bounded pieces. Each lane keeps its own
+continuation, idle/due state and typed failure. Successful unrelated work never
+clears an unresolved error. Source failures do not prevent later acquisition IDs
+in the same finite pass. No Search hold/readability gate or second runtime.
+
+Startup starts a finite acquisition pass through repair_sources. Keep at most
+200 pending IDs, one active capture/preparation and the first page's inputs and
+cutoff. Later page revisions do not replace that baseline. Coalesced wake reads
+catchup_status; source work is due on a changed (inputs,target) pair, startup or
+its armed retry, never merely a bare wake or another repeated repair_needed hint.
+Compare pairs with !=, retaining changes during an active pass. At EOF read
+current status, fold failures, then rescan if the pair differs. This rediscovers
+old IDs and crash-lost report work without an unbounded set or a durable queue.
+
+Keep the first retryable and first parked source error separately per pass.
+At successful EOF, merge consecutive attempts by class and arm the existing
+1-second doubling retry capped at 60 seconds from that fold. A clean complete
+pass alone clears both source failures, even when a changed pair owes a new pass.
+Global discovery/status/owner errors abort the pass and merge their own failure
+without clearing earlier errors. Known I/O or Internal retries are timed; other
+errors wait for changed relevant input/reopen. A changed pair can trigger before
+an old deadline. A corrupt source may be revisited once per triggered pass when
+a retryable sibling causes that pass; unchanged persisted terminal diagnoses
+still suppress object I/O through the qualified begin gate.
+
+Population/corpus retain their existing commit-only continuation and recapture
+semantics. After EOF, begin again to consume newer revisions; idle only after a
+fresh begin proves no owed work. Their failures and deadlines remain independent
+of source errors. Read the earliest armed lane deadline when parking; do not
+recompute a deadline from the observing clock. Never poll successful idle work.
+
+Check stop before every preparation and after it, and before all six eager
+submissions: commit_received_step, begin_catchup, commit_catchup_batch,
+begin_repair, commit_repair_step and persist_repair_terminal. Once submitted,
+drain its actual result before releasing counted work. Stop discards unfinished
+local cursors, leaving durable work replayable on reopen. A task panic remains
+an explicit worker failure. No request drop can strand an accepted import wake.
+
+After an actual activated>0 commit, schedule the existing coalesced thread
+rebuild worker through a private Spawn-capable Worker clone and the existing
+ThreadRebuilds registry. Preserve runtime/count ownership; shutdown may refuse a
+new spawn, leaving its committed thread inputs owed for startup. Terminal,
+deferred and unavailable repairs remain incomplete in existing status; neither
+FTS Ready nor a finished eligible sweep claims complete maintenance.

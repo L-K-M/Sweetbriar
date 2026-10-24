@@ -664,6 +664,17 @@ local drafts. No network yet.
     convergence, terminal/retry failures, crash cuts, wake/drop/shutdown and
     preserved kept history. Complete the original seen-address/backfill outcome
     before n; no early composer/service/FFI/Swift delivery or deferred proof.
+    Pin one bounded phase per lane/round, independent typed failures and armed
+    deadlines, revision-driven finite acquisition passes and all six eager-submit
+    stop/drain boundaries before code. Retain first-page source revision; no raw
+    repair-hint queue or unbounded source set. Schedule the existing counted
+    thread worker after actual activation. Budget 1445 gross: controller 380,
+    wiring 25, prose 60, native proof 920, reserve 60. Native ownership: full100k
+    real-worker publication/activation/ledger and per-commit bounds/history;
+    captured old/new IDs, mixed failures, terminal suppression/failed persistence,
+    exact retry/quiescence/clean-pass recovery, FTS isolation, all new submit
+    lifecycle points, accepted request drop, panic/reopen and process SIGKILL
+    staging/activation/ledger cuts. No inherited size or review waiver.
   - **M1.6n Parser fuzzing — M:** `query` cargo-fuzz target, synthetic
     seeds, its isolated lockfile/policy, nightly job and reproduction docs.
     Owns the parser fuzz deliverable; bounded parse/format/JSON invariants.

@@ -246,6 +246,18 @@ test, except where the spec says "manual qualification".
 - m4 repeats convergence through real workers, with fair failure/retry handling,
   late repair, crash cuts at staging/activation/ledger boundaries, wake/drop/
   shutdown, preserved sent/received history and failure isolation from FTS.
+  Own a real 100k-distinct/shared retained-MIME source through actual worker
+  publication, activation and ledger, with every committed corpus bound and
+  row/binding/history assertion intact. Private hooks only coordinate phases
+  and expose actual pass/begin/report events, never supply native results.
+  Prove changed old/new IDs during a finite captured pass, mixed retryable and
+  parked failures without source starvation, terminal diagnosis suppression and
+  failed diagnosis persistence, exact anchored backoff and clean-pass clearing.
+  Unchanged seen-address-only pokes must not retry a parked source. Exercise
+  all six eager-submit stop/drain boundaries on shutdown and Drop, accepted
+  confirm drop, one-worker/park handoff and task panic/reopen. Actual SIGKILL
+  cuts before/after staging pieces, activation and ledger commits must replay
+  without false receipts, mixed projections, recounting or lost kept history.
   Every outcome carries its proof under the hard review budget; no test-only
   deferred qualification, simulated native results or relaxed existing checks.
 
