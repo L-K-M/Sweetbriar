@@ -451,7 +451,7 @@ fn step(
                 MAX_SCAN_ROWS as i64
             ])
             .map_err(sql_error)?;
-        let mut progressed = false;
+        let mut inspected = 0;
         while let Some(row) = rows.next().map_err(sql_error)? {
             if cancelled() {
                 return Ok(Step::Cancelled);
@@ -471,12 +471,12 @@ fn step(
             bytes = bytes
                 .saturating_add(text)
                 .saturating_add(list_rows::ROW_FRAME);
-            progressed = true;
+            inspected += 1;
             if bytes >= MAX_INSPECT_BYTES {
-                break;
+                return Ok(Step::Continue);
             }
         }
-        return Ok(if progressed {
+        return Ok(if inspected == MAX_SCAN_ROWS {
             Step::Continue
         } else {
             Step::Prepared
@@ -551,7 +551,7 @@ fn step(
             return Ok(Step::Prepared);
         }
         restart(work);
-    } else if work.phase == Phase::Raw && ids.is_empty() {
+    } else if work.phase == Phase::Raw && ids.len() < MAX_SCAN_ROWS {
         let representative: Option<i64> = tx
             .prepare_cached(
                 "SELECT occurrence_id FROM d_list_rows WHERE message_id=?1 AND representative=1",

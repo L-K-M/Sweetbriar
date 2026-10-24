@@ -27,7 +27,9 @@ fn a_corpus_batch_reuses_its_hot_inspection_statement() {
     });
     let started = std::time::Instant::now();
     let mut scan = block_on(store.begin_catchup(2)).unwrap().unwrap();
+    let mut preparations = 0;
     loop {
+        preparations += 1;
         scan = match store.prepare_catchup_step(scan, &|| false).unwrap() {
             CatchupPreparation::Continue(next) => next,
             CatchupPreparation::Prepared(batch) => {
@@ -69,6 +71,10 @@ fn a_corpus_batch_reuses_its_hot_inspection_statement() {
             "the hot inspection statement was repeatedly compiled"
         );
     }
+    assert!(
+        preparations <= COUNT * 3,
+        "short pages took {preparations} preparations despite observed EOF"
+    );
 }
 
 #[test]
