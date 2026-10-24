@@ -6,11 +6,17 @@
 #endif
 #if canImport(AppKit)
 import AppKit
+import Observation
 import Testing
 @testable import SweetbriarBridge
 
 private let flagJSON = #"{"v":1,"q":{"flag":"seen"}}"#
 private let clauseJSON = #"{"v":1,"q":{"and":[{"mailbox":9},{"text":"hello"}]}}"#
+
+@MainActor @Observable private final class ScopeChoices {
+    var values: [(label: String, scope: SearchScope)]
+    init(_ values: [(label: String, scope: SearchScope)]) { self.values = values }
+}
 
 /// Controlled parser values and suspension for native editor tests.
 private actor ParserStub: SearchParsing {
@@ -163,8 +169,8 @@ struct SearchFieldTests {
     func scopeMenuTracking() async throws {
         let parser = ParserStub(parse: { _ in flagJSON }, format: { _ in "is:read" })
         let model = SearchFieldModel(parser: parser)
-        var entries: [(label: String, scope: SearchScope)] = [("Archive", .mailbox(9))]
-        let controller = SearchFieldController(model: model, scopes: { entries })
+        let entries = ScopeChoices([("Archive", .mailbox(9))])
+        let controller = SearchFieldController(model: model, scopes: { entries.values })
         let window = hostedWindow(controller)
         defer { model.close(); window.close() }
         let popup = try #require(find(in: controller.view, identifier: "search.scope") as? NSPopUpButton)
@@ -173,7 +179,7 @@ struct SearchFieldTests {
         let delegate = try #require(menu.delegate)
         let archive = try #require(menu.item(at: 1))
         delegate.menuWillOpen?(menu)
-        entries.append(("Work", .account("00000000-0000-0000-0000-000000000001")))
+        entries.values.append(("Work", .account("00000000-0000-0000-0000-000000000001")))
         model.chooseSort(.date)
         #expect(await until(.seconds(2)) { sort.indexOfSelectedItem == 1 })
         #expect(menu.numberOfItems == 2 && menu.item(at: 1) === archive)
@@ -189,11 +195,11 @@ struct SearchFieldTests {
     @Test("scope and sort controls reach the model, apart from membership chips")
     func scopeSortAndDistinct() async throws {
         let parser = ParserStub(parse: { _ in clauseJSON }, format: renderClause)
-        var scopeEntries: [(label: String, scope: SearchScope)] = [
+        let scopeEntries = ScopeChoices([
             ("Archive", .mailbox(9)), ("Work", .account("work")),
-        ]
+        ])
         let model = SearchFieldModel(parser: parser, label: { $0 == .mailbox(9) ? "in:Archive" : nil })
-        let controller = SearchFieldController(model: model, scopes: { scopeEntries })
+        let controller = SearchFieldController(model: model, scopes: { scopeEntries.values })
         let window = hostedWindow(controller)
         defer { model.close(); window.close() }
         let field = try #require(find(in: controller.view, identifier: "search.field") as? NSSearchField)
@@ -223,7 +229,7 @@ struct SearchFieldTests {
         #expect(model.sort == .date)
 
         // Late sidebar loads refresh the options on the next open.
-        scopeEntries.append(("Other", .account("other")))
+        scopeEntries.values.append(("Other", .account("other")))
         scopePopup.menu?.update()
         model.chooseSort(.relevance) // any tracked change repaints too
         #expect(await until(.seconds(2)) {
@@ -231,7 +237,7 @@ struct SearchFieldTests {
         })
 
         // A missing name retains the chosen filter; only an explicit reset broadens it.
-        scopeEntries.removeAll { $0.scope == .mailbox(9) }
+        scopeEntries.values.removeAll { $0.scope == .mailbox(9) }
         scopePopup.menu?.update()
         model.chooseSort(.date)
         #expect(await until(.seconds(2)) { scopePopup.selectedItem?.title == "Mailbox 9" })

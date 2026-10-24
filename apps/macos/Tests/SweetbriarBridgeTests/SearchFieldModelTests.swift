@@ -59,9 +59,9 @@ struct SearchFieldModelTests {
     @Test(.timeLimit(.minutes(1)))
     func constraintsReuseFrozenQueryAndClearingRestoresPrecedingList() async throws {
         try await withFieldCore { bridge in
-            var clock: Int64 = 172_800_000
+            let clock = FieldClock()
             let model = SearchFieldModel(parser: bridge, debounce: .zero,
-                                         context: { .init(tz: "UTC", clock: clock) })
+                                         context: { .init(tz: "UTC", clock: clock.now) })
             defer { model.close() }
             var shown: [(WindowSpec, UInt64)] = []
             model.onPresent = { shown.append(($0, $1)) }
@@ -69,7 +69,7 @@ struct SearchFieldModelTests {
             model.updateText("within:1 in:7")
             try await settled(model)
             let json = try #require(model.queryJSON)
-            clock += 86_400_000
+            clock.now += 86_400_000
             model.chooseScope(.account("00000000-0000-0000-0000-000000000001"))
             model.chooseSort(.date)
             #expect(shown.count == 3)
@@ -206,6 +206,10 @@ struct SearchFieldModelTests {
 }
 
 private enum FieldParserPause: CaseIterable, Sendable { case parse, format }
+
+@MainActor private final class FieldClock {
+    var now: Int64 = 172_800_000
+}
 
 /// Deliberately returns a late success despite cancellation, as a racing native
 /// completion can. Tests join the old task before checking for stale effects.
