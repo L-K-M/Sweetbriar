@@ -45,10 +45,8 @@ final class SearchFlowTests: XCTestCase {
         let summary = window.staticTexts["search.coverage.summary"]
 
         // The launch's own list, the empty unified inbox, settles first:
-        // showing it resets the field. A first click on a window that
-        // isn't key only activates it.
+        // showing it resets the field.
         XCTAssertTrue(window.staticTexts["No messages"].waitForExistence(timeout: Self.timeout))
-        field.click()
 
         // An empty archive: no hits, and coverage of an empty scope.
         search(field, for: "bulk")
