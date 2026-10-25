@@ -75,7 +75,8 @@ func aSearchShowsFiftyRowsBeforeItsIndexThenReadsPageZeroInFull() async throws {
     #expect(model.row(at: 50) == nil)
     try #require(await settle(clock) { model.row(at: 199) != nil })
     let centre = pageCentre(0, n)
-    #expect(await fake.reads.filter { $0.anchor == .around(centre) }.map(\.limit) == [200])
+    let full = UInt32(ListWindowModel.pageSize)
+    #expect(await fake.reads.filter { $0.anchor == .around(centre) }.map(\.limit) == [full])
     #expect(await fake.indexReads.count == 1)
 
     await model.close()

@@ -12,8 +12,8 @@ final class SearchFlowTests: XCTestCase {
     private static let mailbox = "SearchFlow"
     /// More hits than Search's 50-row first page.
     private static let bulk = 60
-    /// The bulk notes, the lighthouse note and the oversized one.
-    private static let messages = bulk + 2
+    /// The bulk notes, one note per single-hit query and the oversized one.
+    private static let messages = bulk + 4
     /// The oversized body stays partly indexed, its tail unknown.
     private static let settled = "1 message not yet searchable · 1 message couldn't be checked"
 
@@ -73,26 +73,31 @@ final class SearchFlowTests: XCTestCase {
         waitUntil(rows, "count == %d", Self.messages)
         XCTAssertFalse(summary.exists)
 
+        // Each single-hit query finds a different note, so a stale list
+        // can't satisfy the next wait.
         search(field, for: "marmalade")
+        waitUntil(firstRow(rows, shows: "Ledger note"), "count > 0")
         waitUntil(rows, "count == 1")
         rows.element(boundBy: 0).click()
         let body = window.textViews["readerBody"]
         XCTAssertTrue(body.waitForExistence(timeout: Self.timeout))
         waitUntil(body, "value CONTAINS %@", "The ledger mentions marmalade.")
         search(field, for: "lighthouse")
-        waitUntil(rows, "count == 1")
         waitUntil(firstRow(rows, shows: "Lighthouse report"), "count > 0")
+        waitUntil(rows, "count == 1")
         search(field, for: "from:ada.unique@example.test")
+        waitUntil(firstRow(rows, shows: "Address card"), "count > 0")
         waitUntil(rows, "count == 1")
-        waitUntil(firstRow(rows, shows: "Lighthouse report"), "count > 0")
 
         // Relevance puts the note saying "bulk" most often first; Date
         // the newest. A mailbox scope keeps every hit.
         search(field, for: "bulk")
         waitUntil(rows, "count == %d", Self.bulk)
         waitUntil(firstRow(rows, shows: "Bulk note 00"), "count > 0")
-        window.popUpButtons["search.scope"].click()
+        let scope = window.popUpButtons["search.scope"]
+        scope.click()
         app.menuItems["Local Archive: \(Self.mailbox)"].click()
+        waitUntil(scope, "value == %@", "Local Archive: \(Self.mailbox)")
         waitUntil(rows, "count == %d", Self.bulk)
         window.popUpButtons["search.sort"].click()
         app.menuItems["Date"].click()
@@ -139,9 +144,9 @@ final class SearchFlowTests: XCTestCase {
         wait(for: [met], timeout: Self.timeout)
     }
 
-    /// The bulk notes, oldest first, the first saying "bulk" most;
-    /// the lighthouse note from a unique address with a body phrase;
-    /// an oversized body that indexes only in part.
+    /// The bulk notes, oldest first, the first saying "bulk" most; a
+    /// body phrase, a subject and a unique address, each in its own
+    /// note; an oversized body that indexes only in part.
     private static func mbox() -> String {
         var messages: [String] = []
         for n in 0 ..< bulk {
@@ -152,11 +157,19 @@ final class SearchFlowTests: XCTestCase {
             ))
         }
         messages.append(message(
-            bulk, from: "Ada Unique <ada.unique@example.test>",
-            subject: "Lighthouse report", body: "The ledger mentions marmalade."
+            bulk, from: "Desk <desk@example.test>",
+            subject: "Ledger note", body: "The ledger mentions marmalade."
         ))
         messages.append(message(
-            bulk + 1, from: "Archive <archive@example.test>",
+            bulk + 1, from: "Keeper <keeper@example.test>",
+            subject: "Lighthouse report", body: "Routine content."
+        ))
+        messages.append(message(
+            bulk + 2, from: "Ada Unique <ada.unique@example.test>",
+            subject: "Address card", body: "Routine content."
+        ))
+        messages.append(message(
+            bulk + 3, from: "Archive <archive@example.test>",
             subject: "Oversized archive", body: String(repeating: "beta ", count: 220_000)
         ))
         return messages.joined()

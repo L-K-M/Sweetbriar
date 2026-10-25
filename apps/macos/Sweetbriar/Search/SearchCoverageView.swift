@@ -8,13 +8,15 @@ import SweetbriarBridge
 
 @MainActor
 final class SearchCoverageView: NSView {
+    /// The strip's padding on each side.
+    private static let inset: CGFloat = 8
+
     private let summary = NSTextField(labelWithString: "")
     private let disclosure = NSButton()
     private let details = NSTextField(wrappingLabelWithString: "")
 
     override init(frame: NSRect) {
         super.init(frame: frame)
-        setAccessibilityIdentifier("search.coverage")
 
         for label in [summary, details] {
             label.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
@@ -42,7 +44,7 @@ final class SearchCoverageView: NSView {
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 4
-        stack.edgeInsets = NSEdgeInsets(top: 6, left: 8, bottom: 6, right: 8)
+        stack.edgeInsets = NSEdgeInsets(top: 6, left: Self.inset, bottom: 6, right: Self.inset)
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)
         NSLayoutConstraint.activate([
@@ -51,8 +53,8 @@ final class SearchCoverageView: NSView {
             stack.trailingAnchor.constraint(equalTo: trailingAnchor),
             stack.bottomAnchor.constraint(equalTo: bottomAnchor),
             // Long lines wrap or truncate inside the strip, never past it.
-            header.widthAnchor.constraint(lessThanOrEqualTo: stack.widthAnchor, constant: -16),
-            details.widthAnchor.constraint(lessThanOrEqualTo: stack.widthAnchor, constant: -16),
+            header.widthAnchor.constraint(lessThanOrEqualTo: stack.widthAnchor, constant: -2 * Self.inset),
+            details.widthAnchor.constraint(lessThanOrEqualTo: stack.widthAnchor, constant: -2 * Self.inset),
         ])
     }
 

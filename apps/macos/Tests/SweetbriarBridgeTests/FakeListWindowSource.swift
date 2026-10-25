@@ -172,6 +172,7 @@ actor FakeListWindowSource: ListWindowSource {
 
     /// Attach a Search status with these counts to every later page.
     func setCoverage(indexed: UInt64, total: UInt64) {
+        precondition(indexed <= total, "a scope can't index more messages than it holds")
         coverage = (indexed, total)
     }
 
