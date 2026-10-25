@@ -342,10 +342,9 @@ fn normalize(source: Source) -> Result<PreparedSource, StoreError> {
 }
 
 fn retained_cost(tx: &Transaction, key: &Key) -> Result<usize, StoreError> {
-    let text: Option<i64> = tx.query_row(
+    let text: Option<i64> = tx.prepare_cached(
         "SELECT length(CAST(email AS BLOB))+coalesce(length(CAST(display_name AS BLOB)),0)+coalesce(length(CAST(last_account_id AS BLOB)),0) FROM seen_addresses WHERE canonical=?1",
-        [&key.canonical], |row| row.get(0),
-    ).optional().map_err(sql_error)?;
+    ).map_err(sql_error)?.query_row([&key.canonical], |row| row.get(0)).optional().map_err(sql_error)?;
     let retained = usize::try_from(text.unwrap_or(0))
         .map_err(|_| StoreError::corrupt("invalid received history size"))?;
     Ok(key.bytes.max(
@@ -358,14 +357,12 @@ fn retained_cost(tx: &Transaction, key: &Key) -> Result<usize, StoreError> {
 }
 
 fn observe(tx: &Transaction, source: &Source, key: &Key) -> Result<(), StoreError> {
-    let exists: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM seen_address_messages WHERE message_id=?1 AND canonical=?2)",
-        params![source.message, key.canonical], |row| row.get(0)).map_err(sql_error)?;
+    let exists: bool = tx.prepare_cached("SELECT EXISTS(SELECT 1 FROM seen_address_messages WHERE message_id=?1 AND canonical=?2)").map_err(sql_error)?
+        .query_row(params![source.message, key.canonical], |row| row.get(0)).map_err(sql_error)?;
     let count: Option<i64> = tx
-        .query_row(
-            "SELECT times_received FROM seen_addresses WHERE canonical=?1",
-            [&key.canonical],
-            |row| row.get(0),
-        )
+        .prepare_cached("SELECT times_received FROM seen_addresses WHERE canonical=?1")
+        .map_err(sql_error)?
+        .query_row([&key.canonical], |row| row.get(0))
         .optional()
         .map_err(sql_error)?;
     if exists && count.is_none() {
@@ -397,8 +394,8 @@ fn observe(tx: &Transaction, source: &Source, key: &Key) -> Result<(), StoreErro
             source.account
         ])
         .map_err(sql_error)?;
-    let inserted = tx.execute("INSERT INTO seen_address_messages(message_id,canonical) VALUES(?1,?2) ON CONFLICT(message_id,canonical) DO NOTHING",
-        params![source.message, key.canonical]).map_err(sql_error)?;
+    let inserted = tx.prepare_cached("INSERT INTO seen_address_messages(message_id,canonical) VALUES(?1,?2) ON CONFLICT(message_id,canonical) DO NOTHING").map_err(sql_error)?
+        .execute(params![source.message, key.canonical]).map_err(sql_error)?;
     if (inserted != 0) != !exists {
         return Err(StoreError::corrupt(
             "received ledger changed within its transaction",
