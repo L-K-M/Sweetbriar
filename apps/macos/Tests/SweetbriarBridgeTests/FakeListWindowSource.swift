@@ -4,8 +4,8 @@
 // the real debug source) or a list of ids a test chose. It records
 // every read, counts what is in flight, can park reads on a gate,
 // sees cancellation, answers `resetRequired` once `fill` has bumped
-// the generation, and hands each window a subscription the test
-// feeds.
+// the generation, hands each window a subscription the test feeds,
+// and can attach a Search status to every page.
 
 import Foundation
 @testable import SweetbriarBridge
@@ -35,6 +35,8 @@ actor FakeListWindowSource: ListWindowSource {
 
     /// Every `readWindow` call, in order — including ones that fail.
     private(set) var reads: [ReadCall] = []
+    /// The limit of every `openWindow` call, in order.
+    private(set) var openLimits: [UInt32] = []
     /// The window id of every `windowIDs` call.
     private(set) var indexReads: [UInt64] = []
     /// `windowIDs` calls running now, and the most at once.
@@ -71,6 +73,21 @@ actor FakeListWindowSource: ListWindowSource {
     /// ids don't match the index — the model's exact-page check
     /// should refuse them and rebuild.
     private var corruptRead = false
+
+    /// Like `corruptRead`, for the next `openWindow`.
+    private var corruptOpen = false
+
+    /// Reads `Around` these ids also wait on their gate — one page
+    /// held while others land.
+    private var aroundGates: [Int64: ThrowingGate] = [:]
+
+    /// When set, every read waits on it without seeing cancellation:
+    /// a cancelled read that keeps its slot until it unwinds.
+    private var parkGate: Gate?
+
+    /// When set, every page carries a Search status of these counts
+    /// at its own generation, as Search pages do.
+    private var coverage: (indexed: UInt64, total: UInt64)?
 
     /// `debug_fill_synthetic`: replace the rows and bump the
     /// generation, so open windows answer `resetRequired`.
@@ -138,6 +155,26 @@ actor FakeListWindowSource: ListWindowSource {
         corruptRead = true
     }
 
+    /// Make the next open answer rows whose ids don't match the index.
+    func corruptNextOpen() {
+        corruptOpen = true
+    }
+
+    /// Hold reads `Around(id)` on `gate` until it opens.
+    func gateReads(around id: Int64, on gate: ThrowingGate) {
+        aroundGates[id] = gate
+    }
+
+    /// Park every read on `gate`, deaf to cancellation, until it opens.
+    func parkReads(on gate: Gate?) {
+        parkGate = gate
+    }
+
+    /// Attach a Search status with these counts to every later page.
+    func setCoverage(indexed: UInt64, total: UInt64) {
+        coverage = (indexed, total)
+    }
+
     /// The reads asking for `anchor`, for "this page was read once,
     /// with this anchor and this limit" checks.
     func readCount(anchor: Anchor) -> Int {
@@ -151,12 +188,22 @@ actor FakeListWindowSource: ListWindowSource {
         anchor: Anchor,
         limit: UInt32
     ) async throws -> ListWindow {
+        openLimits.append(limit)
         try checkLimit(limit)
         let range = try resolve(anchor, limit: limit, in: rowCount)
         let windowId = nextWindowId
         nextWindowId += 1
         open.insert(windowId)
-        return page(windowId, range, count: rowCount, generation: generation)
+        var result = page(windowId, range, count: rowCount, generation: generation, coverage: coverage)
+        if corruptOpen {
+            corruptOpen = false
+            result.rows = result.rows.map { row in
+                var copy = row
+                copy.occurrenceId += 1
+                return copy
+            }
+        }
+        return result
     }
 
     /// `read_window` (spec/07): the page at the caller's generation.
@@ -181,12 +228,19 @@ actor FakeListWindowSource: ListWindowSource {
             throw CoreFailure.resetRequired(generation: self.generation)
         }
         let count = rowCount
+        let coverage = self.coverage
         inFlight += 1
         maxInFlight = max(maxInFlight, inFlight)
         defer { inFlight -= 1 }
+        if let parkGate {
+            await parkGate.wait()
+        }
         do {
             if let readGate {
                 try await readGate.wait()
+            }
+            if case .around(let id) = anchor, let gate = aroundGates[id] {
+                try await gate.wait()
             }
             try Task.checkCancellation()
         } catch {
@@ -196,7 +250,7 @@ actor FakeListWindowSource: ListWindowSource {
             throw error
         }
         let range = try resolve(anchor, limit: limit, in: count)
-        var result = page(id, range, count: count, generation: generation)
+        var result = page(id, range, count: count, generation: generation, coverage: coverage)
         if corruptRead {
             corruptRead = false
             result.rows = result.rows.map { row in
@@ -345,9 +399,24 @@ actor FakeListWindowSource: ListWindowSource {
         _ windowId: UInt64,
         _ range: Range<Int>,
         count: Int,
-        generation: UInt64
+        generation: UInt64,
+        coverage: (indexed: UInt64, total: UInt64)?
     ) -> ListWindow {
-        ListWindow(
+        let status = coverage.map { counts in
+            SearchStatus(
+                coverage: SearchCoverage(
+                    generation: generation, extractorVersion: 1,
+                    totalMessages: counts.total, headersSynced: counts.total,
+                    bodiesAcquired: counts.total, indexed: counts.indexed,
+                    partial: 0, failed: 0, pending: counts.total - counts.indexed,
+                    queueLength: counts.total - counts.indexed,
+                    indexState: counts.indexed < counts.total ? .running : .ready,
+                    rebuild: nil, limitations: [.cjkUnsegmented, .attachmentTextUnavailable]
+                ),
+                excludedUnknown: 0
+            )
+        }
+        return ListWindow(
             windowId: windowId,
             generation: generation,
             rows: range.map { row(at: $0, count: count) },
@@ -356,7 +425,7 @@ actor FakeListWindowSource: ListWindowSource {
             hasMoreAfter: range.upperBound < count,
             hasMoreBefore: range.lowerBound > 0,
             total: .exact(n: UInt64(count)),
-            search: nil
+            search: status
         )
     }
 

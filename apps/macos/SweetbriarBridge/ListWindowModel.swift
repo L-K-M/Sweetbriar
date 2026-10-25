@@ -6,8 +6,9 @@
 // two reads at a time; and delivers every page through the frame
 // batcher, at most once per frame. It shows the opening page before
 // the index arrives, follows the window's subscription, and holds the
-// selection by id. Free of AppKit so the bridge's Linux tests exercise
-// it directly.
+// selection by id. A Search window also carries the status of the
+// rows it shows (spec/08 "Search"). Free of AppKit so the bridge's
+// Linux tests exercise it directly.
 //
 //   open ──► first page (provisional prefix) ──► window_ids (exact)
 //     │
@@ -75,6 +76,9 @@ public protocol WindowEventSource: Sendable {
 public final class ListWindowModel {
     /// Rows per page (spec/08: fixed 200-row pages).
     public static let pageSize = 200
+    /// Search's first page: 50 rows, then the index and 200-row pages
+    /// (spec/08 "Search").
+    static let searchOpeningLimit = 50
     /// The cache cap (spec/08: at most three pages).
     static let cachedPageLimit = 3
     /// The concurrency cap (spec/08: at most two reads in flight).
@@ -108,6 +112,12 @@ public final class ListWindowModel {
     /// A failed page is retried on the next visibility change; a
     /// `resetRequired` rebuilds instead of landing here.
     public private(set) var lastError: (any Error)?
+
+    /// A Search window's coverage and unknown exclusions, from the
+    /// snapshot of the rows it shows (spec/08 "Search"): the oldest
+    /// visible page's, so newer counts never sit beside older rows;
+    /// with no visible rows, the newest known. Nil for other windows.
+    public private(set) var searchStatus: SearchStatus?
 
     /// Called once per frame batch with the numbers of the pages that
     /// landed in it — the AppKit adapter reloads just those rows.
@@ -192,6 +202,17 @@ public final class ListWindowModel {
     /// stay shown meanwhile when the new index still puts them there.
     @ObservationIgnored
     private var rowsGeneration: [Int: UInt64] = [:]
+
+    /// Loaded pages holding only a prefix of their rows: a Search
+    /// opening page of 50 (spec/08). Re-read in full once the exact
+    /// index is in; rows past the prefix show placeholders meanwhile.
+    @ObservationIgnored
+    private var partialPages: Set<Int> = []
+
+    /// Each Search status received, by the generation its page was
+    /// read at — kept for the generations loaded pages still show.
+    @ObservationIgnored
+    private var statuses: [UInt64: SearchStatus] = [:]
 
     /// The pull loop over the window's subscription; cancelled by
     /// `close`.
@@ -295,6 +316,12 @@ public final class ListWindowModel {
         }
     }
 
+    /// The opening page's row limit: one page, or Search's 50.
+    private var openingLimit: Int {
+        guard case .search = spec else { return Self.pageSize }
+        return Self.searchOpeningLimit
+    }
+
     /// How many pages the id index makes.
     private var pageCount: Int {
         (ids.count + Self.pageSize - 1) / Self.pageSize
@@ -306,12 +333,13 @@ public final class ListWindowModel {
     }
 
     /// Open the window and load its id index (spec/08): `openWindow`
-    /// at `top` with a one-page limit, shown at once as a provisional
-    /// prefix, then `windowIDs`. The index keeps the prefix's rows
-    /// when it shares their generation; a change landing between the
-    /// two moves it, and the pages are read again at the index's. The
-    /// subscription starts with the window, so no change is missed.
-    /// No other page is read here: `setVisible` drives fetching.
+    /// at `top` with a one-page limit — 50 rows for Search — shown at
+    /// once as a provisional prefix, then `windowIDs`. The index keeps
+    /// the prefix's rows when it shares their generation; a change
+    /// landing between the two moves it, and the pages are read again
+    /// at the index's. The subscription starts with the window, so no
+    /// change is missed. No other page is read here: `setVisible`
+    /// drives fetching.
     public func open() async throws {
         guard !closed, !opening, windowId == nil else { return }
         opening = true
@@ -325,7 +353,7 @@ public final class ListWindowModel {
         let window = try await source.openWindow(
             spec: spec,
             anchor: .top,
-            limit: UInt32(Self.pageSize)
+            limit: UInt32(openingLimit)
         )
         if closed {
             await source.closeWindow(id: window.windowId)
@@ -359,6 +387,7 @@ public final class ListWindowModel {
         }
         onIndexChanged()
         await reconcileSelection(window.windowId)
+        await refreshEmptyStatus(window.windowId)
         applyVisibility()
     }
 
@@ -369,7 +398,11 @@ public final class ListWindowModel {
         generation = window.generation
         ids = window.rows.map(\.occurrenceId)
         reverseIndex = nil
+        if let status = window.search {
+            statuses[window.generation] = status
+        }
         seedFirstPage(from: window)
+        publishStatus()
         onIndexChanged()
     }
 
@@ -519,6 +552,7 @@ public final class ListWindowModel {
         }
         onIndexChanged()
         await reconcileSelection(wid)
+        await refreshEmptyStatus(wid)
         holdingReads = false
         applyVisibility()
     }
@@ -646,36 +680,93 @@ public final class ListWindowModel {
         onSelectionChanged(next)
     }
 
+    /// A Search window with no rows has no page to carry its status
+    /// — a zero-hit search still shows coverage, which a
+    /// coverage-only change moves (spec/08). After an index at a
+    /// generation without one, a single `Top` read fetches it. Like
+    /// the selection's lookups it holds page reads and lets those
+    /// still unwinding finish first, so at most two reads run.
+    private func refreshEmptyStatus(_ wid: UInt64) async {
+        guard case .search = spec, ids.isEmpty, statuses[generation] == nil else { return }
+        let gen = generation
+        let held = holdingReads
+        holdingReads = true
+        defer { holdingReads = held }
+        for entry in inFlight.values {
+            await entry.task.value
+        }
+        guard !closed, gen == generation else { return }
+        let window: ListWindow
+        do {
+            window = try await source.readWindow(id: wid, generation: gen, anchor: .top, limit: 1)
+        } catch let failure as CoreFailure {
+            guard !closed, gen == generation else { return }
+            // A newer generation has its own fetch coming.
+            if case .resetRequired = failure { return }
+            lastError = failure
+            return
+        } catch {
+            return
+        }
+        guard !closed, gen == generation, let status = window.search else { return }
+        statuses[gen] = status
+        publishStatus()
+    }
+
+    /// Publish the status of the rows on screen: the oldest
+    /// generation any visible page was read at, so a refresh landing
+    /// page by page never pairs newer counts with older rows (spec/08:
+    /// counts come from the page's status). With no visible rows — a
+    /// zero-hit search, placeholders — the newest status stands.
+    /// Statuses no loaded page shows any more are let go.
+    private func publishStatus() {
+        let shown = (visiblePages.map(Array.init) ?? []).compactMap { rowsGeneration[$0] }
+        let newest = statuses.keys.max()
+        let next = (shown.min() ?? newest).flatMap { statuses[$0] }
+        let kept = Set(rowsGeneration.values).union(newest.map { [$0] } ?? [])
+        statuses = statuses.filter { kept.contains($0.key) }
+        if next != searchStatus {
+            searchStatus = next
+        }
+    }
+
     /// Clear every page's rows; the `Page` objects stay.
     private func dropAllRows() {
         for page in pages.values where page.rows != nil {
             page.rows = nil
         }
         rowsGeneration = [:]
+        partialPages = []
     }
 
     /// Keep a page's rows only while the new index puts exactly those
-    /// rows there; the rest become placeholders. Kept rows read at an
-    /// older generation are re-read (`needsRead`).
+    /// rows there — a partial page, its prefix; the rest become
+    /// placeholders. Kept rows read at an older generation, or only a
+    /// prefix, are re-read (`needsRead`).
     private func retainMatchingRows() {
         for (k, page) in pages {
             guard let rows = page.rows else { continue }
             let s = k * Self.pageSize
             let L = min(Self.pageSize, ids.count - s)
+            let held = partialPages.contains(k) ? min(rows.count, L) : L
             let matches = L > 0
-                && rows.count == L
-                && rows.map(\.occurrenceId).elementsEqual(ids[s ..< s + L])
+                && rows.count == held
+                && rows.map(\.occurrenceId).elementsEqual(ids[s ..< s + held])
             if !matches {
                 page.rows = nil
                 rowsGeneration[k] = nil
+                partialPages.remove(k)
             }
         }
     }
 
-    /// Whether page `k` needs a read: no rows, or rows from an older
-    /// generation.
+    /// Whether page `k` needs a read: no rows, rows from an older
+    /// generation, or only a prefix once the exact index can place
+    /// the rest — before it, the prefix is the whole provisional
+    /// window.
     private func needsRead(_ k: Int) -> Bool {
         guard pages[k]?.rows != nil else { return true }
+        if partialPages.contains(k), hasExactIndex { return true }
         return rowsGeneration[k] != generation
     }
 
@@ -713,24 +804,18 @@ public final class ListWindowModel {
     private func applyVisibility() {
         var newWanted: Set<Int> = []
         var order: [Int] = []
-        let lo = max(0, min(visible.lowerBound, ids.count))
-        let shown = lo ..< max(lo, min(visible.upperBound, ids.count))
-        if !shown.isEmpty {
-            let first = shown.lowerBound / Self.pageSize
-            let last = min((shown.upperBound - 1) / Self.pageSize, pageCount - 1)
-            if first <= last {
-                for k in first ... last {
-                    newWanted.insert(k)
-                    order.append(k)
-                }
-                // The prefetch fills the third cache slot: it exists
-                // only while the pinned pages leave room.
-                let neighbour = direction == .forward ? last + 1 : first - 1
-                if newWanted.count < Self.cachedPageLimit,
-                   neighbour >= 0, neighbour < pageCount {
-                    newWanted.insert(neighbour)
-                    order.append(neighbour)
-                }
+        if let shown = visiblePages {
+            for k in shown {
+                newWanted.insert(k)
+                order.append(k)
+            }
+            // The prefetch fills the third cache slot: it exists
+            // only while the pinned pages leave room.
+            let neighbour = direction == .forward ? shown.upperBound + 1 : shown.lowerBound - 1
+            if newWanted.count < Self.cachedPageLimit,
+               neighbour >= 0, neighbour < pageCount {
+                newWanted.insert(neighbour)
+                order.append(neighbour)
             }
         }
         wanted = newWanted
@@ -744,7 +829,19 @@ public final class ListWindowModel {
         }
         failedPages = []
         evictOverflow()
+        publishStatus()
         pump()
+    }
+
+    /// The pages covering the visible rows, clamped to the index; nil
+    /// when no row shows.
+    private var visiblePages: ClosedRange<Int>? {
+        let lo = max(0, min(visible.lowerBound, ids.count))
+        let shown = lo ..< max(lo, min(visible.upperBound, ids.count))
+        guard !shown.isEmpty else { return nil }
+        let first = shown.lowerBound / Self.pageSize
+        let last = min((shown.upperBound - 1) / Self.pageSize, pageCount - 1)
+        return first <= last ? first ... last : nil
     }
 
     /// Start reads for wanted pages that need one, visible pages
@@ -830,6 +927,7 @@ public final class ListWindowModel {
                 page: k,
                 serial: serial,
                 generation: gen,
+                origin: .read,
                 result: result
             ))
         }
@@ -851,8 +949,9 @@ public final class ListWindowModel {
     /// `open_window`'s own page — `Top` with the page limit — is page
     /// 0 exactly (ranks 0..<min(200, N)), so it lands like a read of
     /// page 0 would, when taken at the installed generation: the first
-    /// rows cost no second round trip. Not wanted by then, it's
-    /// dropped like any late read.
+    /// rows cost no second round trip. Search's 50-row page lands as
+    /// page 0's prefix instead. Not wanted by then, it's dropped like
+    /// any late read.
     private func seedFirstPage(from window: ListWindow) {
         guard window.generation == generation, !window.rows.isEmpty else {
             return
@@ -863,6 +962,7 @@ public final class ListWindowModel {
             page: 0,
             serial: nextSerial,
             generation: generation,
+            origin: .opening,
             result: .success(window)
         ))
     }
@@ -871,7 +971,8 @@ public final class ListWindowModel {
     /// land at most once per frame). A completion from an older
     /// generation, a superseded request, or a page no longer wanted
     /// is dropped. A landed page whose ids aren't exactly
-    /// `ids[s..<s+L]`, and any `resetRequired`, rebuilds the model.
+    /// `ids[s..<s+L]` — or, for a short opening page, their prefix —
+    /// and any `resetRequired`, rebuilds the model.
     private func deliver(_ batch: [PageCompletion]) {
         // Signpost "apply" (plan M0.10): the frame's delivery handling —
         // landing rows plus the lists' reload work below.
@@ -892,12 +993,18 @@ public final class ListWindowModel {
             case .success(let window):
                 let s = completion.page * Self.pageSize
                 let L = min(Self.pageSize, ids.count - s)
+                // An opening page cut short by its limit holds page
+                // 0's prefix; whichever lands first, it or the index.
+                let partial = completion.origin == .opening
+                    && window.hasMoreAfter
+                    && window.rows.count < Self.pageSize
+                let held = partial ? min(window.rows.count, L) : L
                 guard s >= 0,
                       L > 0,
                       s + L <= ids.count,
-                      window.rows.count == L,
+                      window.rows.count == held,
                       window.rows.map(\.occurrenceId)
-                          .elementsEqual(ids[s ..< s + L])
+                          .elementsEqual(ids[s ..< s + held])
                 else {
                     reset = true
                     continue
@@ -906,6 +1013,14 @@ public final class ListWindowModel {
                 pages[completion.page] = page
                 page.rows = window.rows
                 rowsGeneration[completion.page] = completion.generation
+                if partial {
+                    partialPages.insert(completion.page)
+                } else {
+                    partialPages.remove(completion.page)
+                }
+                if let status = window.search {
+                    statuses[completion.generation] = status
+                }
                 stamp &+= 1
                 lruStamp[completion.page] = stamp
                 landed.append(completion.page)
@@ -934,6 +1049,7 @@ public final class ListWindowModel {
             scheduleFetch(.rebuild)
         }
         evictOverflow()
+        publishStatus()
         pump()
     }
 
@@ -952,6 +1068,7 @@ public final class ListWindowModel {
             guard excess > 0 else { return }
             pages[k]?.rows = nil
             rowsGeneration[k] = nil
+            partialPages.remove(k)
             lruStamp[k] = nil
             excess -= 1
         }
@@ -986,7 +1103,16 @@ public final class ListWindowModel {
         var page: Int
         var serial: UInt64
         var generation: UInt64
+        var origin: Origin
         var result: Result<ListWindow, any Error>
+
+        /// Which request a completion answers.
+        enum Origin {
+            /// `open_window`'s first page, at the spec's opening limit.
+            case opening
+            /// A spec/08 page read.
+            case read
+        }
     }
 }
 

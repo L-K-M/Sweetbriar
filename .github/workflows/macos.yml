@@ -127,6 +127,20 @@ jobs:
             CODE_SIGN_IDENTITY=- \
             test
 
+      # M1.6p: a Search follows an import's invalidations, then
+      # queries, scope, sort, the coverage note and the reader.
+      - name: XCUITest search flow
+        timeout-minutes: 10
+        run: |
+          xcodebuild -project apps/macos/Sweetbriar.xcodeproj \
+            -scheme SweetbriarSmoke \
+            -destination 'platform=macOS,arch=arm64' \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            -resultBundlePath "$RUNNER_TEMP/Sweetbriar-search.xcresult" \
+            -only-testing:SweetbriarUITests/SearchFlowTests \
+            CODE_SIGN_IDENTITY=- \
+            test
+
       # M1.5p: measure real TCP accepts while imported HTML is displayed.
       - name: XCUITest reader zero connections
         timeout-minutes: 8
@@ -148,6 +162,7 @@ jobs:
           path: |
             ${{ runner.temp }}/Sweetbriar.xcresult
             ${{ runner.temp }}/Sweetbriar-import.xcresult
+            ${{ runner.temp }}/Sweetbriar-search.xcresult
             ${{ runner.temp }}/Sweetbriar-reader.xcresult
           if-no-files-found: ignore
 
