@@ -82,6 +82,9 @@ fn seed_at(
             INSERT INTO seen_addresses(canonical,email,last_seen_at,times_received,times_sent_to) VALUES('kept@x.test','kept@x.test',-1,11,7)").unwrap();
         Ok(())
     });
+    // That write woke the received worker; let its pass park before callers
+    // install hooks.
+    wait(|| engine.received().waiting());
     (engine, clock)
 }
 
@@ -101,6 +104,17 @@ fn complete(engine: &Engine) {
             && engine.received().waiting()
     });
     assert!(engine.received().failure().is_none());
+}
+
+/// Tests install hooks right after seeding. The seed's own writes wake the
+/// received worker; a hook installed while that pass is mid-commit sees
+/// `WriteSubmitted` without its `BeforeWrite` and waits for a release that
+/// never comes (a CI hang). Seeding therefore returns with the worker parked.
+#[test]
+fn seeding_returns_with_the_received_worker_parked() {
+    let (_scratch, engine, _) = seed(1, SIMPLE);
+    assert!(engine.received().waiting());
+    block_on(engine.shutdown()).unwrap();
 }
 
 #[test]
