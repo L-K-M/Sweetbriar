@@ -50,7 +50,15 @@ fn a_corpus_batch_reuses_its_hot_inspection_statement() {
             list_rows::KIND_RANK
         );
         let statement = tx.prepare_cached(&sql).unwrap();
-        Ok(statement.get_status(rusqlite::StatementStatus::Run))
+        let inspection = statement.get_status(rusqlite::StatementStatus::Run);
+        let acquisition = tx
+            .prepare_cached(
+                "SELECT acquisition_id, content_sha256, byte_length, object_state
+         FROM acquisitions WHERE acquisition_id = ?1",
+            )
+            .unwrap()
+            .get_status(rusqlite::StatementStatus::Run);
+        Ok((inspection, acquisition))
     };
     let writer_runs = writing(&store, executions);
     let reader_runs = store.read(executions).unwrap();
@@ -62,13 +70,17 @@ fn a_corpus_batch_reuses_its_hot_inspection_statement() {
     assert_eq!(status.inputs, status.swept);
     store.close().unwrap();
     eprintln!(
-        "inspection statement ran {writer_runs} writer/{reader_runs} reader times; batch took {:?}",
+        "inspection/acquisition statements ran {writer_runs:?} writer/{reader_runs:?} reader times; batch took {:?}",
         started.elapsed()
     );
-    for runs in [writer_runs, reader_runs] {
+    for (runs, acquisitions) in [writer_runs, reader_runs] {
         assert!(
             runs >= COUNT as i32,
             "the hot inspection statement was repeatedly compiled"
+        );
+        assert!(
+            acquisitions >= COUNT as i32,
+            "the acquisition lookup was repeatedly compiled"
         );
     }
     assert!(
