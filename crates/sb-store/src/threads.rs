@@ -69,12 +69,7 @@ pub fn thread_revisions(tx: &Transaction) -> Result<ThreadRevisions, StoreError>
     })
 }
 
-/// Up to `limit` messages after `after`, by message id.
-pub fn thread_sources(
-    tx: &Transaction,
-    after: i64,
-    limit: usize,
-) -> Result<Vec<ThreadSource>, StoreError> {
+fn source_sql() -> String {
     let source = crate::message_source::Source::Stored;
     let [id, references, reply, subject] = source.fields([
         "header_message_id",
@@ -83,18 +78,26 @@ pub fn thread_sources(
         "subject",
     ]);
     let (summary, validity) = (source.joins(), source.validity());
-    let mut statement = tx
-        .prepare_cached(&format!(
-            "SELECT lm.message_id, lm.account_id,
+    // A bare LIMIT parameter makes the pinned SQLite recompile on every binding.
+    format!(
+        "SELECT lm.message_id, lm.account_id,
                COALESCE(h.header_message_id,{id}),COALESCE(h.references_json,{references}),
                COALESCE(h.in_reply_to,{reply}),COALESCE(h.subject,{subject}),r.sort_date,{validity}
              FROM {} LEFT JOIN {} {summary}
              LEFT JOIN d_list_rows r ON r.message_id = lm.message_id AND r.representative = 1
-             WHERE lm.message_id > ?1 ORDER BY lm.message_id LIMIT ?2",
-            crate::message_source::MESSAGES,
-            crate::message_source::HEADERS
-        ))
-        .map_err(sql_error)?;
+             WHERE lm.message_id > ?1 ORDER BY lm.message_id LIMIT CAST(?2 AS INTEGER)",
+        crate::message_source::MESSAGES,
+        crate::message_source::HEADERS
+    )
+}
+
+/// Up to `limit` messages after `after`, by message id.
+pub fn thread_sources(
+    tx: &Transaction,
+    after: i64,
+    limit: usize,
+) -> Result<Vec<ThreadSource>, StoreError> {
+    let mut statement = tx.prepare_cached(&source_sql()).map_err(sql_error)?;
     let rows = statement
         .query_map(params![after, limit_value(limit)], |row| {
             crate::message_source::check(row, 7)?;
