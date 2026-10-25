@@ -699,13 +699,13 @@ public final class ListWindowModel {
         let window: ListWindow
         do {
             window = try await source.readWindow(id: wid, generation: gen, anchor: .top, limit: 1)
-        } catch let failure as CoreFailure {
-            guard !closed, gen == generation else { return }
-            // A newer generation has its own fetch coming.
-            if case .resetRequired = failure { return }
-            lastError = failure
+        } catch is CancellationError {
             return
         } catch {
+            guard !closed, gen == generation else { return }
+            // A newer generation has its own fetch coming.
+            if let failure = error as? CoreFailure, case .resetRequired = failure { return }
+            lastError = error
             return
         }
         guard !closed, gen == generation, let status = window.search else { return }

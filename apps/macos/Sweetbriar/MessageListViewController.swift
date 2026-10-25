@@ -189,6 +189,8 @@ final class MessageListViewController: NSViewController {
         openError = nil
         list?.removeFromSuperview()
         list = nil
+        // The old results' note goes with them.
+        updateCoverage()
         await old?.close()
     }
 

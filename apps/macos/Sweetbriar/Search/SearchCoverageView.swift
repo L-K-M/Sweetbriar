@@ -50,6 +50,9 @@ final class SearchCoverageView: NSView {
             stack.leadingAnchor.constraint(equalTo: leadingAnchor),
             stack.trailingAnchor.constraint(equalTo: trailingAnchor),
             stack.bottomAnchor.constraint(equalTo: bottomAnchor),
+            // Long lines wrap or truncate inside the strip, never past it.
+            header.widthAnchor.constraint(lessThanOrEqualTo: stack.widthAnchor, constant: -16),
+            details.widthAnchor.constraint(lessThanOrEqualTo: stack.widthAnchor, constant: -16),
         ])
     }
 
