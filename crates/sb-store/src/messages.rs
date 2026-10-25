@@ -204,17 +204,17 @@ pub fn best_acquisition(
 /// producer creates one, so absence is an invariant failure, not a
 /// transient file read.
 pub fn index_acquisition(conn: &Connection, doc_id: i64) -> Result<StoredAcquisition, StoreError> {
-    conn.query_row(
+    conn.prepare_cached(
         "SELECT acquisition_id, content_sha256, byte_length, object_state
          FROM acquisitions WHERE acquisition_id = ?1",
-        [doc_id],
-        |row| {
-            let hash: String = row.get(1)?;
-            let length: i64 = row.get(2)?;
-            let state: String = row.get(3)?;
-            Ok(acquisition(row.get(0)?, &hash, length, &state))
-        },
     )
+    .map_err(sql_error)?
+    .query_row([doc_id], |row| {
+        let hash: String = row.get(1)?;
+        let length: i64 = row.get(2)?;
+        let state: String = row.get(3)?;
+        Ok(acquisition(row.get(0)?, &hash, length, &state))
+    })
     .optional()
     .map_err(sql_error)?
     .ok_or_else(|| StoreError::not_found(format!("index acquisition {doc_id}")))?
