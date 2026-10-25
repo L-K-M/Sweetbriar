@@ -150,7 +150,7 @@ struct SearchFieldModelTests {
             let model = SearchFieldModel(parser: parser, debounce: .zero)
             defer { model.close() }
             var shown: [WindowSpec] = []
-            model.onPresent = { shown.append($0) }
+            model.onPresent = { value, _ in shown.append(value) }
             model.updateText("old")
             try #require(await eventually { await parser.isWaiting("old") })
             let old = try #require(model.pending)
@@ -174,7 +174,7 @@ struct SearchFieldModelTests {
             let parser = HeldFieldParser(phase: .parse)
             let model = SearchFieldModel(parser: parser, debounce: .zero)
             var shown: [WindowSpec] = []
-            model.onPresent = { shown.append($0) }
+            model.onPresent = { value, _ in shown.append(value) }
             model.updateText("old")
             try #require(await eventually { await parser.isWaiting("old") })
             let old = try #require(model.pending)
