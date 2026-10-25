@@ -101,14 +101,11 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         guard let window else { return }
         let sidebarModel = SidebarModel(source: bridge)
         let sidebar = SidebarViewController(model: sidebarModel)
-        let messageList = MessageListViewController(bridge: bridge)
+        let messageList = MessageListViewController(bridge: bridge, sidebar: sidebarModel)
         let reader = ReaderViewController(model: ReaderModel(source: bridge, preferred: .sanitizedHtml))
         self.reader = reader
         sidebar.onChoose = { [weak messageList] spec in
-            guard let messageList else { return }
-            Task { @MainActor in
-                await messageList.show(spec)
-            }
+            messageList?.show(spec)
         }
         messageList.onGeneration = { [weak self] generation in
             self?.listSaw(generation)
