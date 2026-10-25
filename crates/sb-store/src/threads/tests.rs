@@ -166,6 +166,60 @@ fn sources_page_by_message_with_headers_first() {
     assert!(rest[0].references.is_empty());
 }
 
+#[test]
+fn source_pages_reuse_their_query_plan() {
+    const MESSAGES: i64 = 128;
+    let (mut conn, account) = store();
+    for id in 1..=MESSAGES {
+        message(&mut conn, &account, "Plan", "[]", id);
+    }
+    let tx = conn.transaction().unwrap();
+    let sql = source_sql();
+    let after = MESSAGES / 2;
+    let plan = tx
+        .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
+        .unwrap()
+        .query_map(params![after, 1], |row| row.get::<_, String>(3))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    let result = thread_sources(&tx, after, 1).unwrap();
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].message_id, after + 1);
+    let cases = [
+        (0, 0, vec![]),
+        (MESSAGES, 1, vec![]),
+        (MESSAGES - 2, usize::MAX, vec![MESSAGES - 1, MESSAGES]),
+        (MESSAGES - 1, 2, vec![MESSAGES]),
+    ];
+    for (after, limit, expected) in &cases {
+        let ids: Vec<_> = thread_sources(&tx, *after, *limit)
+            .unwrap()
+            .into_iter()
+            .map(|source| source.message_id)
+            .collect();
+        assert_eq!(&ids, expected);
+    }
+    let statement = tx.prepare_cached(&sql).unwrap();
+    assert_eq!(
+        statement.get_status(rusqlite::StatementStatus::Run),
+        1 + cases.len() as i32,
+        "probe did not inspect the actual source statement"
+    );
+    let scans = statement.get_status(rusqlite::StatementStatus::FullscanStep);
+    let sorts = statement.get_status(rusqlite::StatementStatus::Sort);
+    assert_eq!(
+        (scans, sorts),
+        (0, 0),
+        "source pages scanned or sorted: {plan:?}"
+    );
+    assert_eq!(
+        statement.get_status(rusqlite::StatementStatus::RePrepare),
+        0,
+        "rebinding a source page should reuse the prepared query plan"
+    );
+}
+
 /// The cleanup removes threads without members, as a crash between
 /// creating a thread and filling it leaves, and keeps the rest.
 #[test]
