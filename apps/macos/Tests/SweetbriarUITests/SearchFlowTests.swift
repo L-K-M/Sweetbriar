@@ -36,12 +36,19 @@ final class SearchFlowTests: XCTestCase {
         ]
         app.launch()
         defer { app.terminate() }
+        app.activate()
         let window = app.windows["Sweetbriar"]
         let sidebar = window.outlines["sidebar"]
         XCTAssertTrue(sidebar.staticTexts["Local Archive"].waitForExistence(timeout: Self.timeout))
         let field = window.searchFields["search.field"]
         let rows = window.tables["messageList"].tableRows
         let summary = window.staticTexts["search.coverage.summary"]
+
+        // The launch's own list, the empty unified inbox, settles first:
+        // showing it resets the field. A first click on a window that
+        // isn't key only activates it.
+        XCTAssertTrue(window.staticTexts["No messages"].waitForExistence(timeout: Self.timeout))
+        field.click()
 
         // An empty archive: no hits, and coverage of an empty scope.
         search(field, for: "bulk")
