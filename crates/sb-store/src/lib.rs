@@ -4,6 +4,7 @@
 #![forbid(unsafe_code)]
 
 pub mod activation;
+mod address_keys;
 mod corpus_tracking;
 mod error;
 mod import_reports;

@@ -498,12 +498,13 @@ pub fn publish(
             ));
         }
         tx.execute("UPDATE d_repair_assemblies SET completed_at=?3 WHERE acquisition_id=?1 AND parser_target=?2", params![id, version, now.as_millis()]).map_err(sql_error)?;
+        crate::address_keys::write_assembly(tx, id, version, &plan.fields)?;
         return Ok(RepairCommit::Published);
     }
     Ok(RepairCommit::Continue(prepared))
 }
 
-fn read_fields(
+pub(crate) fn read_fields(
     conn: &Connection,
     id: i64,
     version: u32,

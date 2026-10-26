@@ -38,7 +38,8 @@ pub(crate) struct Migration {
 /// search index state and rebuild jobs; version 7 keeps received-address history;
 /// version 8 stages immutable full-summary repair versions;
 /// version 9 retains terminal repair attempts; version 10 freezes completed publications;
-/// version 13 indexes what driven Search reads enumerate.
+/// version 13 indexes what driven Search reads enumerate; version 14 keys
+/// exact addresses per source and indexes what address drivers enumerate.
 pub(crate) const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 1,
@@ -91,6 +92,10 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 13,
         run: migration_13,
+    },
+    Migration {
+        version: 14,
+        run: migration_14,
     },
 ];
 
@@ -638,6 +643,14 @@ fn migration_12(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
 fn migration_13(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
     tx.execute_batch(include_str!("schema/v13.sql"))
         .map_err(bug)
+}
+
+/// Adds the address-key tables and the indexes address drivers enumerate
+/// through, and derives keys for existing sources (spec/02).
+fn migration_14(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
+    tx.execute_batch(include_str!("schema/v14.sql"))
+        .map_err(bug)?;
+    crate::address_keys::backfill(tx)
 }
 
 /// One version-4 UUID from the randomness seam. A seam that can't
