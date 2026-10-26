@@ -95,6 +95,12 @@ with `SB_SEARCH_TIMINGS_OUT=<file>` for the report and
   import's invalidations, then body, subject and address queries, the
   reader, scope and sort, a zero-hit coverage note with its details,
   and clearing back to the mailbox;
+- the index controls XCUITest (M1.6p2, `SweetbriarUITests/
+  IndexControlFlowTests`): over a generated 5,001-message archive, a
+  rebuild shows standalone progress while Search can't open, Cancel
+  pauses it, a relaunch keeps it paused, Resume completes it; then an
+  unreadable object store pauses the index phase on I/O, the retries
+  move the note on an open Search, and Retry Now finishes it;
 - the M0.10 list benchmark: the Release app launches with
   `-runListBenchmark <report.json>` after the Release zip step; the
   step passes when all four runs happened without a generation abort

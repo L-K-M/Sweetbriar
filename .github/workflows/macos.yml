@@ -141,6 +141,20 @@ jobs:
             CODE_SIGN_IDENTITY=- \
             test
 
+      # M1.6p2: rebuild, cancel, relaunch paused, resume, and an I/O
+      # pause retried, through the coverage details' controls.
+      - name: XCUITest index controls flow
+        timeout-minutes: 25
+        run: |
+          xcodebuild -project apps/macos/Sweetbriar.xcodeproj \
+            -scheme SweetbriarSmoke \
+            -destination 'platform=macOS,arch=arm64' \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            -resultBundlePath "$RUNNER_TEMP/Sweetbriar-index.xcresult" \
+            -only-testing:SweetbriarUITests/IndexControlFlowTests \
+            CODE_SIGN_IDENTITY=- \
+            test
+
       # M1.5p: measure real TCP accepts while imported HTML is displayed.
       - name: XCUITest reader zero connections
         timeout-minutes: 8
@@ -163,6 +177,7 @@ jobs:
             ${{ runner.temp }}/Sweetbriar.xcresult
             ${{ runner.temp }}/Sweetbriar-import.xcresult
             ${{ runner.temp }}/Sweetbriar-search.xcresult
+            ${{ runner.temp }}/Sweetbriar-index.xcresult
             ${{ runner.temp }}/Sweetbriar-reader.xcresult
           if-no-files-found: ignore
 
