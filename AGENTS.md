@@ -56,7 +56,13 @@ compiler must be on `PATH`. Its compile options come from
 On pushes to main, CI's `window-timings` job also records the M1.3
 list window timings over 100k rows; they are never asserted. Run them
 locally with `cargo test -p sb-engine --release --lib
-list_window_timings -- --ignored --nocapture`.
+list_window_timings -- --ignored --nocapture`. The `search-timings`
+workflow records M1.6q's Search timings over a 100k synthetic archive as
+the `search-timings` JSON artifact (hours; one run at a time), also
+never asserted: `cargo test -p
+sb-engine --release --lib search_timings -- --ignored --nocapture`,
+with `SB_SEARCH_TIMINGS_OUT=<file>` for the report and
+`SB_SEARCH_TIMINGS_ROWS=<n>` for a smaller local archive.
 
 **Only in macOS CI (`.github/workflows/macos.yml`):**
 
