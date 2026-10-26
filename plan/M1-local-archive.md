@@ -700,9 +700,14 @@ local drafts. No network yet.
     Verify coverage-only updates with no queue change and controls while
     Search is unavailable. No window-close cancellation of durable jobs.
   - **M1.6q Latency recording — M:** reproducible 100k synthetic workload
-    and machine-readable search timings (11); owns latency acceptance.
+    and machine-readable search timings (11); owns core latency acceptance.
     Depends on p2. Linux CI records without timing assertions; owner records
     Mac results against 06's budgets and verifies known-message searches for M1.Q.
+  - **M1.6q2 Search keystroke benchmark — M:** the app's last-keystroke to
+    first rows timing, debounce included, over a seeded 100k store, recorded
+    on the owner's Mac against 08 (11: core timing alone does not qualify the
+    UI). Depends on q; split from q, whose runner and app benchmark together
+    exceeded one step.
 
 - **Goal:** FTS5 search with the query AST v1, the text syntax, chips and
   coverage.
@@ -744,6 +749,7 @@ local drafts. No network yet.
   - **M1.6g:** `is` or `domain` on `subject`, `body` or `attachment` is a parse
     error;
   - **M1.6q:** 100k-message search latency is recorded.
+  - **M1.6q2:** last-keystroke to first rows is recorded on the owner's Mac.
 
 ### M1.7 Export — S, linux
 
