@@ -401,10 +401,10 @@ fn hits(plan: &Compiled, sort: Sort) -> String {
     }
 }
 
-/// The relevance hits relation, for plan-shape tests.
+/// The date and relevance hits relations, for plan-shape tests.
 #[cfg(test)]
-pub(super) fn relevance_hits(plan: &Compiled) -> String {
-    hits(plan, Sort::Relevance)
+pub(super) fn hit_sources(plan: &Compiled) -> [String; 2] {
+    [hits(plan, Sort::Date), hits(plan, Sort::Relevance)]
 }
 
 fn seek(
