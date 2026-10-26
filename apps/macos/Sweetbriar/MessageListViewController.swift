@@ -13,6 +13,7 @@
 
 import AppKit
 import Observation
+import QuartzCore
 import SweetbriarBridge
 
 @MainActor
@@ -49,6 +50,9 @@ final class MessageListViewController: NSViewController {
     /// fails again neither churns nor wedges on a quiet archive.
     private var lastReopen: (generation: UInt64, at: ContinuousClock.Instant)?
     private static let reopenRetry: Duration = .seconds(5)
+    /// Replaced lists' handles, closing while the new list opens;
+    /// `close()` waits for them.
+    private var closing: [UUID: Task<Void, Never>] = [:]
 
     /// The list's generation after each new index: the sidebar
     /// re-reads its counts when it is newer than what it shows.
@@ -63,6 +67,11 @@ final class MessageListViewController: NSViewController {
     private(set) var shownSpec: WindowSpec?
     private(set) var choiceSerial = 0
     var failureForBenchmark: (any Error)? { openError ?? model?.lastError }
+    /// When the latest choice was shown and its list's open returned, in
+    /// the `CACurrentMediaTime` timebase the benchmark stamps input with
+    /// (plan M1.6r2e stage timings).
+    private(set) var shownAtForBenchmark: Double?
+    private(set) var openedAtForBenchmark: Double?
     /// Search's field and model, for the keystroke benchmark (plan M1.6q2).
     var searchFieldForBenchmark: NSSearchField { search.fieldForBenchmark }
     var searchModelForBenchmark: SearchFieldModel { searchModel }
@@ -164,6 +173,8 @@ final class MessageListViewController: NSViewController {
         let ticket = tickets.next()
         shownSpec = spec
         choiceSerial += 1
+        shownAtForBenchmark = CACurrentMediaTime()
+        openedAtForBenchmark = nil
         opening = true
         updateStatus()
         updateCoverage()
@@ -175,8 +186,8 @@ final class MessageListViewController: NSViewController {
 
     private func install(_ spec: WindowSpec, ticket: Int) async {
         guard tickets.isCurrent(ticket) else { return }
-        await teardown()
-        guard tickets.isCurrent(ticket) else { return }
+        // spec/08 closes the replaced handle; M1.6r2e overlaps that with this open.
+        detach()
 
         let clock = self.clock ?? DisplayLinkClock(view: view)
         self.clock = clock
@@ -217,6 +228,7 @@ final class MessageListViewController: NSViewController {
             openError = error
         }
         guard tickets.isCurrent(ticket) else { return }
+        openedAtForBenchmark = CACurrentMediaTime()
         opening = false
         if Self.isUnavailable(openError) {
             enterStandalone()
@@ -230,10 +242,14 @@ final class MessageListViewController: NSViewController {
         indexControls.stopPolling()
         searchModel.close()
         tickets.close()
-        await teardown()
+        detach()
+        for task in Array(closing.values) {
+            await task.value
+        }
     }
 
-    private func teardown() async {
+    /// Take the list down now and close its handle in the background.
+    private func detach() {
         let old = model
         model = nil
         openError = nil
@@ -241,7 +257,14 @@ final class MessageListViewController: NSViewController {
         list = nil
         // The old results' note goes with them.
         updateCoverage()
-        await old?.close()
+        guard let old else { return }
+        // Its late deliveries must not reach the benchmark's recorder.
+        old.onPagesDeliveredForBenchmark = nil
+        let id = UUID()
+        closing[id] = Task { @MainActor [weak self] in
+            await old.close()
+            self?.closing[id] = nil
+        }
     }
 
     /// Show the model's read failures and Search status as they

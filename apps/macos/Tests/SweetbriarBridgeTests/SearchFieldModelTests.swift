@@ -161,11 +161,43 @@ struct SearchFieldModelTests {
             }
             try await settled(model)
             let current = model.queryJSON
+            let clauses = model.clauses
             await parser.release("old")
             await old.value
-            #expect(model.queryJSON == current && model.text == "new" && shown.count == 1)
+            // A parsed query shows before its chips format (M1.6r2e), so a
+            // held format has already shown "old"; nothing late replaces "new".
+            #expect(model.queryJSON == current && model.text == "new")
+            #expect(model.clauses == clauses && clauses.map(\.text) == ["is:draft"])
+            #expect(shown.count == (phase == .parse ? 1 : 2))
+            guard case .search(let last)? = shown.last else {
+                Issue.record("no search was shown")
+                return
+            }
+            #expect(last.queryJSON == current)
             #expect(await eventually { await parser.cancellations.contains("old") })
         }
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func aParsedQueryShowsBeforeItsChipsFormat() async throws {
+        let parser = HeldFieldParser(phase: .format)
+        let model = SearchFieldModel(parser: parser, debounce: .zero)
+        defer { model.close() }
+        var shown: [WindowSpec] = []
+        model.onPresent = { value, _ in shown.append(value) }
+        model.updateText("old")
+        try #require(await eventually { await parser.isWaiting("old") })
+        // Plan M1.6r2e: the results open while the chips still format,
+        // and clause edits wait for them.
+        #expect(shown.count == 1 && model.lastValidText == "old")
+        #expect(model.isParsing && !model.canEditClauses && model.clauses.isEmpty)
+        await parser.release("old")
+        // The single clause formats on its own, held the same way.
+        try #require(await eventually { await parser.isWaiting("old") })
+        await parser.release("old")
+        try await settled(model)
+        #expect(model.clauses.map(\.text) == ["is:read"] && model.canEditClauses)
+        #expect(shown.count == 1)
     }
 
     @Test(.timeLimit(.minutes(1)))

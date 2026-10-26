@@ -222,9 +222,25 @@ public final class SearchFieldModel {
                     json = try await self.parser.parseSearch(text: source, context: self.context())
                 }
                 try self.check(ticket)
+                let parts = try SearchQuery(json)
+                // Plan M1.6r2e: results open as soon as the query parses;
+                // its canonical text and chips follow off the keystroke's path,
+                // and clause edits wait for them (`isParsing`).
+                // Do not rewrite live input after a successful text parse.
+                self.text = source
+                self.acceptedText = source
+                self.lastValidText = source
+                self.queryJSON = json
+                self.parts = parts
+                // No other query's chips beside these results.
+                self.canonicalText = ""
+                self.clauses = []
+                self.failure = nil
+                self.errorRange = nil
+                self.present(json, ticket: ticket)
+
                 let whole = try await self.parser.formatSearch(queryJSON: json)
                 try self.check(ticket)
-                let parts = try SearchQuery(json)
                 var clauses: [SearchClause] = []
                 var remaining = whole.startIndex..<whole.endIndex
                 for node in parts.nodes {
@@ -239,17 +255,8 @@ public final class SearchFieldModel {
                     ))
                 }
                 try self.check(ticket)
-                // Do not rewrite live input after a successful text parse.
-                self.text = source
-                self.acceptedText = source
-                self.lastValidText = source
                 self.canonicalText = whole
-                self.queryJSON = json
-                self.parts = parts
                 self.clauses = clauses
-                self.failure = nil
-                self.errorRange = nil
-                self.present(json, ticket: ticket)
             } catch is CancellationError {
                 // A newer field/list choice owns presentation.
             } catch {

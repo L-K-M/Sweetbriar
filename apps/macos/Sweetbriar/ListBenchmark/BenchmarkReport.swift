@@ -58,8 +58,19 @@ struct ListBenchmarkReport: Codable, Equatable {
                     + "budget \(Int(search.budget.limitMilliseconds)) ms met: "
                     + (search.budget.met.map(String.init) ?? "—")
             )
+            if let stages = search.stages {
+                lines.append(
+                    "  stages p95: query shown \(format(Self.p95(stages.presented))) ms, "
+                        + "list opened \(format(Self.p95(stages.opened))) ms"
+                )
+            }
         }
         return lines.joined(separator: "\n")
+    }
+
+    /// A statistic's p95, or none for an empty one.
+    private static func p95(_ statistics: SampleStatistics) -> Double? {
+        statistics.count > 0 ? statistics.p95 : nil
     }
 
     private func format(_ value: Double?) -> String {
@@ -166,6 +177,14 @@ struct SearchBenchmarkResult: Codable, Equatable {
     var debounceMilliseconds: Int
     var storeMessages: UInt64
     var budget: StoreBenchmarkBudget
+    /// Last keystroke to the field showing its query and to the list's
+    /// open returning (plan M1.6r2e); first rows are `lastKeystroke`.
+    var stages: SearchBenchmarkStages?
+}
+
+struct SearchBenchmarkStages: Codable, Equatable {
+    var presented: SampleStatistics
+    var opened: SampleStatistics
 }
 
 /// One query in the field's own text syntax (synthetic words only).
@@ -181,6 +200,8 @@ struct SearchBenchmarkSample: Codable, Equatable {
     var query: String
     var round: Int
     var milliseconds: Double?
+    var presentedMilliseconds: Double? = nil
+    var openedMilliseconds: Double? = nil
 }
 
 /// Foundation-only choices shared by the runner and its tests.
@@ -228,6 +249,10 @@ enum SearchBenchmarkPlan {
                 name: "search.lastKeystroke", p95Milliseconds: p95,
                 limitMilliseconds: limitMilliseconds,
                 met: runOK && covered ? p95.map { $0 < limitMilliseconds } : nil
+            ),
+            stages: SearchBenchmarkStages(
+                presented: BenchmarkStatistics.summarize(samples.compactMap(\.presentedMilliseconds)),
+                opened: BenchmarkStatistics.summarize(samples.compactMap(\.openedMilliseconds))
             )
         )
     }
