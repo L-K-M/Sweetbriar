@@ -98,7 +98,9 @@ private let offers: [(SearchIndexState, SearchRebuildPhase?, IndexControls)] = [
     (.running, nil, .rebuild),
     (.running, .reset, .cancel),
     (.running, .index, .cancel),
+    (.pausedByUser, .reset, .resume),
     (.pausedByUser, .enqueue, .resume),
+    (.pausedByUser, .index, .resume),
     (.pausedByUser, nil, .rebuild),
     (ioPause, .index, [.cancel, .retryNow]),
     (ioPause, nil, [.rebuild, .retryNow]),
@@ -203,8 +205,8 @@ func pollingReadsOneAtATimeAndNeverCancelsTheJob() async throws {
     let model = IndexControlModel(source: fake, pollInterval: .milliseconds(1))
     model.startPolling(scope: .account("a"))
     #expect(model.isPolling)
-    #expect(await eventually { await fake.readCount >= 3 })
-    #expect(model.coverage?.generation == 6)
+    // A read counts on entry; its answer lands a hop later.
+    #expect(await eventually { await model.coverage?.generation == 6 })
 
     let gate = Gate()
     await fake.holdReads(on: gate)
@@ -245,9 +247,20 @@ func theModelDrivesARealRebuildToCompletion() async throws {
     let (dir, config) = tempConfig()
     defer { try? FileManager.default.removeItem(at: dir) }
     let bridge = try await CoreBridge.open(config: config, snapshots: sinkBatcher(clock: ManualFrameClock()))
+    do {
+        try await driveRebuild(bridge, dir: dir)
+    } catch {
+        await bridge.shutdown()
+        throw error
+    }
+    await bridge.shutdown()
+}
+
+@MainActor
+private func driveRebuild(_ bridge: CoreBridge, dir: URL) async throws {
     let path = dir.appendingPathComponent("Controls.mbox")
     try Data("From a@example.test Sat Oct 17 12:00:00 2026\nSubject: control\nMessage-ID: <model-control@test>\n\nneedle\n".utf8).write(to: path)
-    #expect(try await importAndFinish(bridge, paths: [path.path]).state == .completed)
+    try #require(try await importAndFinish(bridge, paths: [path.path]).state == .completed)
     let model = IndexControlModel(source: bridge)
     func settled() async throws -> SearchCoverage {
         let deadline = ContinuousClock.now + .seconds(50)
@@ -276,5 +289,4 @@ func theModelDrivesARealRebuildToCompletion() async throws {
     let done = try await settled()
     #expect(done.rebuild?.phase == .complete)
     #expect(IndexControls(coverage: done) == .rebuild)
-    await bridge.shutdown()
 }

@@ -19,6 +19,10 @@ final class SearchCoverageView: NSView {
     private let controls = NSStackView()
     private let detailStack = NSStackView()
     private var buttons: [(control: IndexControls, command: IndexControlModel.Command, button: NSButton)] = []
+    /// What the last `show` offered, and whether a command was pending:
+    /// a key equivalent can reach a hidden or disabled button.
+    private var offered: IndexControls = []
+    private var busy = false
 
     /// A control was clicked.
     var onCommand: ((IndexControlModel.Command) -> Void)?
@@ -106,6 +110,8 @@ final class SearchCoverageView: NSView {
     /// while a command is `busy` — and the last control failure. The
     /// disclosure keeps its state.
     func show(_ note: SearchCoverageNote, offered: IndexControls, busy: Bool, failure message: String?) {
+        self.offered = offered
+        self.busy = busy
         summary.stringValue = note.summary
         details.stringValue = note.details.joined(separator: "\n")
         for entry in buttons {
@@ -130,7 +136,9 @@ final class SearchCoverageView: NSView {
 
     @objc
     private func commandClicked(_ sender: NSButton) {
-        guard let entry = buttons.first(where: { $0.button === sender }) else { return }
+        guard let entry = buttons.first(where: { $0.button === sender }),
+              offered.contains(entry.control), !busy, !detailStack.isHidden
+        else { return }
         onCommand?(entry.command)
     }
 }

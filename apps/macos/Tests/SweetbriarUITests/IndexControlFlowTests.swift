@@ -154,8 +154,10 @@ final class IndexControlFlowTests: XCTestCase {
     @MainActor
     private func reveal(_ window: XCUIElement, _ identifier: String) -> XCUIElement {
         let button = window.buttons[identifier]
-        if !window.staticTexts["search.coverage.details"].exists {
+        let details = window.staticTexts["search.coverage.details"]
+        if !details.exists {
             window.descendants(matching: .any)["search.coverage.disclosure"].click()
+            waitUntil(details, "exists == true")
         }
         waitUntil(button, "exists == true AND enabled == true")
         return button

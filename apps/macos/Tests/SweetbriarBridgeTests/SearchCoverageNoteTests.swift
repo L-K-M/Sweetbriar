@@ -77,6 +77,14 @@ func anEmptyScopeShowsZeroWithoutAPercentage() {
     #expect(!note.summary.contains("%") && !note.details.contains { $0.contains("%") })
 }
 
+/// An error without its own full stop still reads as two sentences.
+@Test
+func anIoPauseMessageEndsBeforeTheRetryTime() {
+    let state = SearchIndexState.pausedIo(code: .otherIo, message: "Disk full", retryAt: 0)
+    let note = SearchCoverageNote(status: status(state: state), locale: english, timeZone: utc)
+    #expect(note.summary.contains("Indexing paused: Disk full. Next retry at "))
+}
+
 @Test(arguments: [
     (SearchIndexState.pausedByUser, "Indexing paused"),
     (.blockedNewerExtractor, "Search needs a newer version of Sweetbriar. Update the app to search this archive."),
@@ -105,7 +113,9 @@ func anIoPauseShowsItsErrorAndNextRetry() {
     (SearchIndexState.running, SearchRebuildPhase.reset, "Rebuilding the index: resetting", "resetting"),
     (.running, .enqueue, "Rebuilding the index: queueing messages", "queueing messages"),
     (.running, .index, "Rebuilding the index: indexing", "indexing"),
+    (.pausedByUser, .reset, "Rebuild paused while resetting; Resume to continue", "resetting"),
     (.pausedByUser, .enqueue, "Rebuild paused while queueing messages; Resume to continue", "queueing messages"),
+    (.pausedByUser, .index, "Rebuild paused while indexing; Resume to continue", "indexing"),
 ])
 func aRebuildShowsItsPhaseAndGlobalProgress(
     _ state: SearchIndexState, _ phase: SearchRebuildPhase, _ summary: String, _ named: String
