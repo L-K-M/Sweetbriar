@@ -14,8 +14,19 @@ later.
   against.
 - [plan/](plan/README.md): the step-by-step implementation plan.
 
+## Licence
+
 Sweetbriar's own code is available under the [Unlicense](LICENSE)
 (public domain) or [0BSD](LICENSE-0BSD), your choice. 0BSD covers places
-where a public-domain dedication may not be recognised. Third-party
-components keep their own licences. The project doesn't accept contributions;
-you're free to fork it.
+where a public-domain dedication may not be recognised. The project
+doesn't accept contributions; you're free to fork it.
+
+The macOS app bundles third-party Rust crates, SQLite (public domain)
+and the Rust standard library, which keep their own licences. Some of
+the crates, among them UniFFI, `cssparser` and `selectors`, are under
+the MPL-2.0; [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) names each
+crate's version and source. The notices ship in
+`Sweetbriar.app/Contents/Resources` and at the DMG root as
+`THIRD_PARTY_NOTICES.md`, which cargo-about generates from `Cargo.lock`
+and CI checks for drift, and `Rust-Licenses.html`, the Rust standard
+library's notices from the pinned toolchain.
