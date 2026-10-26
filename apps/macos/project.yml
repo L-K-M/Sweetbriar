@@ -58,6 +58,30 @@ targets:
     dependencies:
       - target: SweetbriarBridge
         embed: true
+    # The licence notices go inside the bundle, before Xcode signs it,
+    # so the installed app and every zip of it carry them (spec/01
+    # licence policy). The script reads the Rust toolchain's standard
+    # library notices outside the project, so it runs unsandboxed.
+    postBuildScripts:
+      - name: Bundle licence notices
+        shell: /bin/bash
+        script: bash "$SRCROOT/../../scripts/bundle-notices.sh"
+        basedOnDependencyAnalysis: false
+        showEnvVars: false
+        inputFiles:
+          - $(SRCROOT)/../../scripts/bundle-notices.sh
+          - $(SRCROOT)/../../THIRD_PARTY_NOTICES.md
+          - $(SRCROOT)/../../LICENSE
+          - $(SRCROOT)/../../LICENSE-0BSD
+          - $(SRCROOT)/../../rust-toolchain.toml
+        outputFiles:
+          - $(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/THIRD_PARTY_NOTICES.md
+          - $(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/LICENSE
+          - $(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/LICENSE-0BSD
+          - $(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Rust-Licenses.html
+    settings:
+      base:
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
     info:
       path: Sweetbriar/Info.plist
       properties:

@@ -145,6 +145,20 @@ and quits — even a run that can't start writes `ok: false`.
 - No owner data in the repository; fixtures are synthetic or freely
   licensed.
 - Keep PRs reviewable and inside the spec/01 module layout.
+
+## Licensing
+
+- Sweetbriar's own code is `Unlicense OR 0BSD` (`LICENSE`,
+  `LICENSE-0BSD`). Keep the Cargo `license` fields and the README's
+  Licence section consistent with it.
+- New dependencies must pass the spec/01 licence policy (`deny.toml`);
+  regenerate `THIRD_PARTY_NOTICES.md` with `cargo xtask notices`.
+- `scripts/bundle-notices.sh`, a build phase of the app target, copies
+  `THIRD_PARTY_NOTICES.md`, both licences and the pinned toolchain's
+  Rust standard library notices (`Rust-Licenses.html`) into
+  `Sweetbriar.app/Contents/Resources` and fails if one is missing.
+  macOS CI and the release DMG step check them with `test -s`; keep
+  those checks passing.
 <!-- shared-rules:start -->
 
 ## Working practices

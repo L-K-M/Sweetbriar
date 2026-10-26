@@ -68,11 +68,33 @@ runs:
           -derivedDataPath "$RUNNER_TEMP/DerivedData" -configuration Release \
           MARKETING_VERSION="$VERSION" CODE_SIGN_IDENTITY=- build
         APP="$RUNNER_TEMP/DerivedData/Build/Products/Release/Sweetbriar.app"
+        # The installed app leaves the DMG behind, so the licence notices
+        # must be inside it (spec/01 licence policy).
+        NOTICES=(THIRD_PARTY_NOTICES.md Rust-Licenses.html LICENSE LICENSE-0BSD)
+        for notice in "${NOTICES[@]}"; do
+          test -s "$APP/Contents/Resources/$notice" \
+            || { echo "::error::$notice missing from Sweetbriar.app"; exit 1; }
+        done
+        cmp THIRD_PARTY_NOTICES.md "$APP/Contents/Resources/THIRD_PARTY_NOTICES.md"
+        grep -q 'The Rust Standard Library' "$APP/Contents/Resources/Rust-Licenses.html"
         codesign --verify --deep --strict "$APP"
         mkdir "$RUNNER_TEMP/dmg"
         ditto "$APP" "$RUNNER_TEMP/dmg/Sweetbriar.app"
         ln -s /Applications "$RUNNER_TEMP/dmg/Applications"
-        cp LICENSE LICENSE-0BSD THIRD_PARTY_NOTICES.md "$RUNNER_TEMP/dmg/"
+        # The same notices at the volume root, for reading before install.
+        for notice in "${NOTICES[@]}"; do
+          cp "$APP/Contents/Resources/$notice" "$RUNNER_TEMP/dmg/"
+        done
         DMG="$RUNNER_TEMP/Sweetbriar-$VERSION-arm64.dmg"
         hdiutil create -volname Sweetbriar -srcfolder "$RUNNER_TEMP/dmg" -format UDZO "$DMG"
         hdiutil verify "$DMG"
+        # Check what users download: the notices in the app and beside it.
+        MOUNT="$RUNNER_TEMP/dmg-check"
+        hdiutil attach -readonly -nobrowse -mountpoint "$MOUNT" "$DMG"
+        for notice in "${NOTICES[@]}"; do
+          test -s "$MOUNT/Sweetbriar.app/Contents/Resources/$notice" \
+            || { echo "::error::$notice missing from the DMG's app"; exit 1; }
+          test -s "$MOUNT/$notice" \
+            || { echo "::error::$notice missing from the DMG root"; exit 1; }
+        done
+        hdiutil detach "$MOUNT"
