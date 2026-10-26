@@ -5,7 +5,14 @@ Sweetbriar's own code is offered under the Unlicense OR 0BSD (see
 [cargo-about](https://github.com/EmbarkStudios/cargo-about) from the
 committed `Cargo.lock`, lists the third-party components Sweetbriar
 links and the licences that cover them. Regenerate it with
-`cargo xtask notices` whenever the dependency graph changes.
+`cargo xtask notices` whenever the dependency graph changes. A crate
+built from a patched source, such as a git fork, names that source
+after its repository.
+
+The Rust standard library is statically linked into the app but isn't
+in `Cargo.lock`. Its notices ship next to this file, in
+`Sweetbriar.app/Contents/Resources` and at the DMG root, as
+`Rust-Licenses.html`, copied from the pinned Rust toolchain.
 
 ## Apache License 2.0 (Apache-2.0)
 
@@ -1266,8 +1273,8 @@ DEALINGS IN THE SOFTWARE.
 ## MIT License (MIT)
 
 Used by:
-- `askama_derive 0.16.1` — <https://github.com/askama-rs/askama>
-- `askama_parser 0.16.1` — <https://github.com/askama-rs/askama>
+- `askama_derive 0.16.1` — <https://github.com/askama-rs/askama>, built from `git+https://github.com/BigBoyDevBox/askama?rev=da7f1d08c1690c576e3a7fd0a0f3436bc64e0440#da7f1d08c1690c576e3a7fd0a0f3436bc64e0440`
+- `askama_parser 0.16.1` — <https://github.com/askama-rs/askama>, built from `git+https://github.com/BigBoyDevBox/askama?rev=da7f1d08c1690c576e3a7fd0a0f3436bc64e0440#da7f1d08c1690c576e3a7fd0a0f3436bc64e0440`
 - `askama 0.16.1` — <https://github.com/askama-rs/askama>
 - `askama_macros 0.16.1` — <https://github.com/askama-rs/askama>
 
@@ -2293,7 +2300,7 @@ DEALINGS IN THE SOFTWARE.
 ## MIT License (MIT)
 
 Used by:
-- `mail-parser 0.11.9` — <https://github.com/stalwartlabs/mail-parser>
+- `mail-parser 0.11.9` — <https://github.com/stalwartlabs/mail-parser>, built from `git+https://github.com/BigBoyDevBox/mail-parser?rev=41cbc85ce90b52ec33c7c7285f714fcdbcbc2928#41cbc85ce90b52ec33c7c7285f714fcdbcbc2928`
 - `anyhow 1.0.104` — <https://github.com/dtolnay/anyhow>
 - `camino 1.2.6` — <https://github.com/camino-rs/camino>
 - `displaydoc 0.2.7` — <https://github.com/yaahc/displaydoc>
