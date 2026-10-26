@@ -989,6 +989,23 @@ No partial parser/formatter, new dependency, compiler, service or UI ships here.
   candidate. Driven and full reads of one snapshot return identical hits,
   unknown counts, scores and order, and differ in errors only as stated
   above.
+- Address drivers (M1.6r2d): an `is` or `domain` leaf on From, To or Cc
+  reached from the root through AND only also drives, through 02's address
+  keys. Every message with a header row is kept and evaluated: header rows
+  have no keys until header sync records them. Otherwise its hits can only
+  be messages whose binding's assembly, at the binding's
+  `(acquisition_id, parser_target)`, holds the leaf's key in that field
+  (`address_key` for `is`, `domain_key` for `domain`), and unbound
+  messages whose summary holds it. Its unknowns add
+  messages on a source with an unidentified entry in that field, messages
+  without an acquisition, unbound messages whose summary is not `ok` or
+  below parser 2, and messages bound to an assembly below parser 2. Keys come from
+  the reader's address decoder and the strict received-address keys, so a
+  stored key matches exactly when the leaf does; an undecodable list is
+  unidentified, so its messages are evaluated and still fail as `Corrupt`.
+  An invalid binding is no class here: the per-read binding check reports it.
+  Coverage also counts scoped messages with an acquisition but no header
+  row, binding or summary; a nonzero count stops address leaves driving.
 - Search scope (07) selects candidates first. All/Account choose the
   ordinary representative. Mailbox chooses the lowest-id present
   occurrence of each message in that mailbox. An AST `mailbox` node tests
