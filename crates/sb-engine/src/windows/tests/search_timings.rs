@@ -283,8 +283,8 @@ fn save(report: &Value) {
 }
 
 /// The query set (spec/11): an exact identifier and an exact address,
-/// a phrase, a scoped filter and a negative body query, by relevance
-/// and by date.
+/// a phrase, a scoped filter, a negative body query and a common term,
+/// by relevance and by date.
 fn probes(rows: usize, projects: i64) -> Vec<Probe> {
     let reference = rows / 100 / 2;
     let classes = [
@@ -308,6 +308,9 @@ fn probes(rows: usize, projects: i64) -> Vec<Probe> {
             r#"{"and":[{"text":"budget"},{"not":{"field":"body","op":"contains","value":"review"}}]}"#.to_owned(),
             SearchScope::All,
         ),
+        // A quarter of all senders: a driver whose kept set is large
+        // (spec/11 M1.6r2).
+        ("common-term", "common term", r#"{"text":"beta"}"#.to_owned(), SearchScope::All),
     ];
     let mut probes = Vec::new();
     for (name, class, query, scope) in classes {

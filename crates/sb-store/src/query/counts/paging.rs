@@ -4,7 +4,7 @@ use rusqlite::types::{Type, Value};
 use rusqlite::{OptionalExtension, Transaction, params_from_iter};
 use serde_json::{Value as Json, json};
 
-use super::{Compiled, SearchScope, compile, nonnegative_count};
+use super::{Compiled, CoverageCounts, SearchScope, compile_driven, nonnegative_count};
 use crate::lists::{self, ListKey, PageRead, StoredListRow};
 use crate::query::{MAX_QUERY_INPUT_BYTES, Query};
 use crate::{StoreError, Uuid};
@@ -140,8 +140,11 @@ struct Hit {
 /// What a caller kept from earlier reads of the same store (spec/07); the
 /// default keeps nothing, so the page reads everything itself.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct Kept {
+pub struct Kept<'a> {
     pub unknown: UnknownCount,
+    /// Coverage's scope counts from this snapshot, which let the page skip
+    /// candidates a driver proves false (spec/06, M1.6r2).
+    pub coverage: Option<&'a CoverageCounts>,
 }
 
 /// A page's exact final-unknown count: counted, or reused from an earlier
@@ -171,7 +174,7 @@ pub fn read_search_date_page(
     anchor: SearchAnchor,
     limit: usize,
     at: Option<u64>,
-    kept: Kept,
+    kept: Kept<'_>,
 ) -> Result<PageRead<SearchPage>, StoreError> {
     read_page(tx, query, scope, anchor, limit, at, kept, Sort::Date)
 }
@@ -184,7 +187,7 @@ pub fn read_search_relevance_page(
     anchor: SearchAnchor,
     limit: usize,
     at: Option<u64>,
-    kept: Kept,
+    kept: Kept<'_>,
 ) -> Result<PageRead<SearchPage>, StoreError> {
     read_page(tx, query, scope, anchor, limit, at, kept, Sort::Relevance)
 }
@@ -197,7 +200,7 @@ fn read_page(
     anchor: SearchAnchor,
     limit: usize,
     at: Option<u64>,
-    kept: Kept,
+    kept: Kept<'_>,
     sort: Sort,
 ) -> Result<PageRead<SearchPage>, StoreError> {
     if !(1..=lists::MAX_PAGE_ROWS).contains(&limit) {
@@ -205,7 +208,7 @@ fn read_page(
             message: format!("a search page needs 1 to {} rows", lists::MAX_PAGE_ROWS),
         });
     }
-    let plan = compile(tx, query, scope.clone())?;
+    let plan = compile_driven(tx, query, scope.clone(), kept.coverage)?;
     let binding = Binding::read(tx, query, &scope, generation(plan.generation)?, sort)?;
     let cursor = match &anchor {
         SearchAnchor::After(value) | SearchAnchor::Before(value) => Some(binding.decode(value)?),
@@ -220,6 +223,7 @@ fn read_page(
             generation: binding.generation,
         });
     }
+    plan.check_skipped_bindings(tx)?;
     let source = hits(&plan, sort);
     let (hits, before, after) = match anchor {
         SearchAnchor::Top => {
@@ -339,8 +343,9 @@ pub fn search_date_ids(
     query: &Query,
     scope: SearchScope,
     at: Option<u64>,
+    coverage: Option<&CoverageCounts>,
 ) -> Result<PageRead<(u64, Vec<i64>)>, StoreError> {
-    search_ids(tx, query, scope, at, Sort::Date)
+    search_ids(tx, query, scope, at, coverage, Sort::Date)
 }
 
 /// Every chosen matching occurrence in relevance order, bound to its generation.
@@ -349,8 +354,9 @@ pub fn search_relevance_ids(
     query: &Query,
     scope: SearchScope,
     at: Option<u64>,
+    coverage: Option<&CoverageCounts>,
 ) -> Result<PageRead<(u64, Vec<i64>)>, StoreError> {
-    search_ids(tx, query, scope, at, Sort::Relevance)
+    search_ids(tx, query, scope, at, coverage, Sort::Relevance)
 }
 
 fn search_ids(
@@ -358,13 +364,15 @@ fn search_ids(
     query: &Query,
     scope: SearchScope,
     at: Option<u64>,
+    coverage: Option<&CoverageCounts>,
     sort: Sort,
 ) -> Result<PageRead<(u64, Vec<i64>)>, StoreError> {
-    let plan = compile(tx, query, scope)?;
+    let plan = compile_driven(tx, query, scope, coverage)?;
     let generation = generation(plan.generation)?;
     if at.is_some_and(|at| at != generation) {
         return Ok(PageRead::Stale { generation });
     }
+    plan.check_skipped_bindings(tx)?;
     let order = sort.seek_terms(Side::After).2;
     let sql = format!(
         "SELECT occurrence_id FROM ({}) ORDER BY {order}",
@@ -384,7 +392,7 @@ fn hits(plan: &Compiled, sort: Sort) -> String {
             "SELECT {} FROM ({}) h JOIN d_list_rows r
              ON r.occurrence_id=h.chosen_occurrence_id WHERE h.v=1",
             lists::COLUMNS,
-            plan.source
+            plan.hit_source
         ),
         Sort::Relevance => {
             // One FTS pass per distinct positive leaf scores its documents once.
@@ -427,7 +435,7 @@ fn hits(plan: &Compiled, sort: Sort) -> String {
                 "{with}SELECT {},({score}) AS score FROM {} WHERE {} AND ({})=1",
                 lists::COLUMNS,
                 super::source(),
-                plan.scope,
+                plan.hit_scope,
                 plan.predicate
             )
         }

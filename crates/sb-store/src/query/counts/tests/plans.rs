@@ -84,3 +84,81 @@ fn fts_leaves_match_once_per_statement_not_per_candidate() {
         }
     }
 }
+
+/// spec/06 (M1.6r2): a driven read enumerates its kept messages and seeks
+/// their scope rows by message, in counts, pages and id indexes, for every
+/// scope. Only FTS, JSON, the queue and the two partial indexes (each an
+/// unusable class) are read whole.
+#[test]
+fn driven_reads_seek_kept_messages_and_scan_no_table() {
+    use crate::testing::fixtures::{archive_account, mailbox};
+    let conn = fixture(40);
+    for id in 1..=40 {
+        let subject = if id == 1 { "alpha" } else { "plain" };
+        doc(&conn, id, "indexed", "[]", &[("subject", subject)]);
+    }
+    let account = archive_account(&conn);
+    let archive = mailbox(&conn, &account, "Archive", "folder", None);
+    let tx = conn.unchecked_transaction().unwrap();
+    for id in 1..=40 {
+        occurrence(&tx, archive, id);
+    }
+    register(&tx).unwrap();
+    let query = query(json!({"and":[{"text":"alpha"},{"flag":"seen"}]}));
+    let scopes = [
+        SearchScope::All,
+        SearchScope::Account(account.parse().unwrap()),
+        SearchScope::Mailbox(archive),
+    ];
+    for scope in scopes {
+        let coverage = crate::query::read_search_coverage_reusing(&tx, scope.clone(), None)
+            .unwrap()
+            .1;
+        let plan = compile_driven(&tx, &query, scope.clone(), Some(&coverage)).unwrap();
+        assert_ne!(
+            plan.source,
+            compile(&tx, &query, scope.clone()).unwrap().source
+        );
+        let mut statements = vec![format!(
+            "SELECT coalesce(sum(v IS NULL),0) FROM ({})",
+            plan.source
+        )];
+        for hits in super::super::paging::hit_sources(&plan) {
+            statements.push(format!(
+                "SELECT * FROM ({hits}) ORDER BY occurrence_id DESC LIMIT 51"
+            ));
+        }
+        for sql in statements {
+            let nodes = plan_of(&tx, &sql, &plan.values);
+            for node in &nodes {
+                let whole = node.detail.starts_with("SCAN")
+                    && ![
+                        "d_search_fts",
+                        "json_each",
+                        "d_index_queue",
+                        "INDEX acquisitions_unpublished",
+                        "INDEX d_search_docs_unusable",
+                        "CONSTANT ROW",
+                    ]
+                    .iter()
+                    .any(|allowed| node.detail.contains(allowed));
+                assert!(!whole, "{scope:?} scans {}", node.detail);
+            }
+            let candidates: Vec<_> = nodes
+                .iter()
+                .filter(|node| node.detail.starts_with("SEARCH r USING"))
+                .collect();
+            assert!(
+                !candidates.is_empty(),
+                "{scope:?}: no candidate seek in {sql}"
+            );
+            for node in candidates {
+                assert!(
+                    node.detail.contains("message_id=?") || node.detail.contains("rowid=?"),
+                    "{scope:?} walks the scope: {}",
+                    node.detail
+                );
+            }
+        }
+    }
+}

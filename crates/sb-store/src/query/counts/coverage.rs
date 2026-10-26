@@ -65,6 +65,10 @@ pub struct CoverageCounts {
     generation: u64,
     extractor_version: u32,
     counts: [u64; 7],
+    /// Scoped candidates in classes no index enumerates (spec/06): a dangling
+    /// acquisition reference, or a published object with neither a document
+    /// nor a queue row. Internal guard state for driven reads.
+    forbidden: u64,
 }
 
 impl CoverageCounts {
@@ -74,6 +78,18 @@ impl CoverageCounts {
 
     pub fn generation(&self) -> u64 {
         self.generation
+    }
+
+    pub(super) fn extractor_version(&self) -> u32 {
+        self.extractor_version
+    }
+
+    pub(super) fn total_messages(&self) -> u64 {
+        self.counts[0]
+    }
+
+    pub(super) fn forbidden(&self) -> u64 {
+        self.forbidden
     }
 }
 
@@ -110,12 +126,16 @@ pub fn read_search_coverage_reusing(
         {
             kept.clone()
         }
-        _ => CoverageCounts {
-            counts: scan(tx, filter, values, extractor_version)?,
-            scope,
-            generation,
-            extractor_version,
-        },
+        _ => {
+            let (counts, forbidden) = scan(tx, filter, values, extractor_version)?;
+            CoverageCounts {
+                scope,
+                generation,
+                extractor_version,
+                counts,
+                forbidden,
+            }
+        }
     };
     let counts = scanned.counts;
     let [
@@ -193,13 +213,13 @@ pub fn read_search_coverage_reusing(
 }
 
 /// Total, headers synced, bodies acquired, indexed, partial, failed and
-/// queued acquisitions over the scope.
+/// queued acquisitions over the scope, and its forbidden-class candidates.
 fn scan(
     tx: &Transaction,
     filter: &str,
     mut values: Vec<Value>,
     extractor_version: u32,
-) -> Result<[u64; 7], StoreError> {
+) -> Result<([u64; 7], u64), StoreError> {
     // Queued acquisitions in scope, driven from the queue: usually few.
     let queued = format!(
         "SELECT count(DISTINCT lm.acquisition_id) FROM d_index_queue q
@@ -225,32 +245,43 @@ fn scan(
          coalesce(sum(a.object_state='published'),0),
          coalesce(sum(a.object_state='published' AND d.extractor_version=?{version} AND d.state='indexed'),0),
          coalesce(sum(a.object_state='published' AND d.extractor_version=?{version} AND d.state='partial'),0),
-         coalesce(sum(a.object_state='published' AND d.extractor_version=?{version} AND d.state='failed'),0)
+         coalesce(sum(a.object_state='published' AND d.extractor_version=?{version} AND d.state='failed'),0),
+         coalesce(sum(lm.acquisition_id IS NOT NULL AND a.acquisition_id IS NULL),0)
+         + coalesce(sum(CASE WHEN a.object_state='published' AND d.doc_id IS NULL
+           THEN NOT EXISTS(SELECT 1 FROM d_index_queue q WHERE q.doc_id=lm.acquisition_id)
+           ELSE 0 END),0)
          FROM {} LEFT JOIN d_search_docs d ON d.doc_id=lm.acquisition_id WHERE {filter}",
         candidates("LEFT JOIN d_message_summary s ON s.acquisition_id=lm.acquisition_id")
     );
-    let raw: [i64; 6] = tx
+    let (raw, forbidden): ([i64; 6], i64) = tx
         .query_row(&sql, params_from_iter(&values), |row| {
-            Ok([
-                row.get(0)?,
-                row.get(1)?,
-                row.get(2)?,
-                row.get(3)?,
-                row.get(4)?,
-                row.get(5)?,
-            ])
+            Ok((
+                [
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                ],
+                row.get(6)?,
+            ))
         })
         .map_err(sql_error)?;
     let mut counts = [0; 7];
     for (count, raw) in counts.iter_mut().zip(raw.into_iter().chain([queued])) {
         *count = nonnegative_count(raw)?;
     }
-    Ok(counts)
+    Ok((counts, nonnegative_count(forbidden)?))
 }
 
 /// Fail with `Corrupt` when a scoped binding is invalid (02), at a cost per
 /// binding rather than per message.
-fn check_bindings(tx: &Transaction, filter: &str, values: &[Value]) -> Result<(), StoreError> {
+pub(super) fn check_bindings(
+    tx: &Transaction,
+    filter: &str,
+    values: &[Value],
+) -> Result<(), StoreError> {
     let sql = format!(
         "SELECT EXISTS(SELECT 1 FROM {}
          CROSS JOIN d_list_rows r ON r.message_id=lm.message_id

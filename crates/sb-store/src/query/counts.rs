@@ -32,9 +32,19 @@ fn candidates(summary: &str) -> String {
     )
 }
 
-const MAILBOX_CHOICE: &str = "r.mailbox_id = ?1 AND r.occurrence_id =
+macro_rules! lowest_in_mailbox {
+    () => {
+        "r.occurrence_id =
     (SELECT min(r2.occurrence_id) FROM d_list_rows r2
-     WHERE r2.message_id = r.message_id AND r2.mailbox_id = r.mailbox_id)";
+     WHERE r2.message_id = r.message_id AND r2.mailbox_id = r.mailbox_id)"
+    };
+}
+
+const MAILBOX_CHOICE: &str = concat!("r.mailbox_id = ?1 AND ", lowest_in_mailbox!());
+
+/// `MAILBOX_CHOICE` for driven reads: the unary plus keeps SQLite from
+/// walking the whole mailbox's index, so kept messages are sought by message.
+const MAILBOX_SEEK: &str = concat!("+r.mailbox_id = ?1 AND ", lowest_in_mailbox!());
 
 /// Candidate scope, independent of mailbox predicates inside the tree.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -109,9 +119,17 @@ fn nonnegative_count(value: i64) -> Result<u64, StoreError> {
 }
 
 struct Compiled {
+    /// Every candidate an exact unknown count evaluates: the scope, or only
+    /// the drivers' kept messages in it (spec/06, M1.6r2).
     source: String,
+    /// The candidates that may be hits: `source`, or only drivers' matches.
+    hit_source: String,
     predicate: String,
-    scope: &'static str,
+    /// `hit_source`'s scope filter.
+    hit_scope: String,
+    /// For a driven read, the scope filter and its leading values, whose
+    /// bindings the read checks itself (see `check_skipped_bindings`).
+    skipped: Option<(&'static str, usize)>,
     leaves: Vec<ScoreLeaf>,
     values: Vec<Value>,
     generation: i64,
@@ -150,10 +168,33 @@ impl Compiled {
         }
         result.map_err(sql_error)
     }
+
+    /// A driven read skips candidates, never their bindings (06): check
+    /// every scoped binding, at a cost per binding. Reads call it once
+    /// staleness and cursors are settled, so errors keep a full read's order.
+    fn check_skipped_bindings(&self, tx: &Transaction) -> Result<(), StoreError> {
+        let Some((filter, values)) = self.skipped else {
+            return Ok(());
+        };
+        coverage::check_bindings(tx, filter, &self.values[..values])
+    }
 }
 
 fn compile(tx: &Transaction, query: &Query, scope: SearchScope) -> Result<Compiled, StoreError> {
+    compile_driven(tx, query, scope, None)
+}
+
+/// `compile`, restricted to the drivers' kept messages when `coverage`
+/// proves a driven read exact for this snapshot (spec/06, M1.6r2).
+fn compile_driven(
+    tx: &Transaction,
+    query: &Query,
+    scope: SearchScope,
+    coverage: Option<&CoverageCounts>,
+) -> Result<Compiled, StoreError> {
+    let outer = scope.clone();
     let (scope, values) = scoped(tx, scope)?;
+    let outer_values = values.len();
     if rebuild::latest_rebuild(tx)?.is_some_and(|job| {
         matches!(
             job.phase(),
@@ -169,21 +210,51 @@ fn compile(tx: &Transaction, query: &Query, scope: SearchScope) -> Result<Compil
         target: index::target_version(tx)?,
         values,
         negated: false,
+        conjunct: true,
         leaves: Vec::new(),
+        drivers: Vec::new(),
     };
     let validity = Source::Stored.validity();
     let predicate = format!(
         "CASE WHEN ({validity})<0 THEN sb_mime_valid(-1) ELSE ({}) END",
         compiler.node(query.root())
     );
-    Ok(Compiled {
-        source: format!(
+    let proof = coverage.map(|coverage| drive::Proof {
+        coverage,
+        scope: &outer,
+        generation,
+        target: compiler.target,
+    });
+    let restriction = drive::restrict(tx, &compiler.drivers, proof)?;
+    let skipped = restriction.as_ref().map(|_| (scope, outer_values));
+    let (all, hits) = match restriction {
+        Some(kept) => {
+            let scope = if scope == MAILBOX_CHOICE {
+                MAILBOX_SEEK
+            } else {
+                scope
+            };
+            (
+                format!("{scope} AND r.message_id IN ({})", kept.all),
+                format!("{scope} AND r.message_id IN ({})", kept.hits),
+            )
+        }
+        None => (scope.to_owned(), scope.to_owned()),
+    };
+    let select = |filter: &str| {
+        format!(
             "SELECT r.message_id AS id, r.occurrence_id AS chosen_occurrence_id,
-             ({predicate}) AS v,({validity}) AS source_validity FROM {} WHERE {scope}",
+             ({predicate}) AS v,({validity}) AS source_validity FROM {} WHERE {filter}",
             source()
-        ),
+        )
+    };
+    let (source, hit_source) = (select(&all), select(&hits));
+    Ok(Compiled {
+        source,
+        hit_source,
         predicate,
-        scope,
+        hit_scope: hits,
+        skipped,
         leaves: compiler.leaves,
         values: compiler.values,
         generation,
@@ -311,7 +382,11 @@ struct Compiler {
     target: u32,
     values: Vec<Value>,
     negated: bool,
+    /// Whether the node is the root or reached from it through AND only.
+    conjunct: bool,
     leaves: Vec<ScoreLeaf>,
+    /// Distinct FTS leaves that can drive a read (spec/06, M1.6r2).
+    drivers: Vec<drive::Driver>,
 }
 
 impl Compiler {
@@ -391,11 +466,18 @@ impl Compiler {
             ),
             Node::And(children) if children.is_empty() => "1".into(),
             Node::And(children) => self.join(children, " AND "),
-            Node::Or(children) => self.join(children, " OR "),
+            Node::Or(children) => {
+                let conjunct = std::mem::replace(&mut self.conjunct, false);
+                let joined = self.join(children, " OR ");
+                self.conjunct = conjunct;
+                joined
+            }
             Node::Not(child) => {
+                let conjunct = std::mem::replace(&mut self.conjunct, false);
                 self.negated = !self.negated;
                 let inner = self.node(child);
                 self.negated = !self.negated;
+                self.conjunct = conjunct;
                 format!("NOT ({inner})")
             }
         }
@@ -425,6 +507,12 @@ impl Compiler {
              THEN lm.acquisition_id IN (SELECT rowid FROM d_search_fts WHERE d_search_fts MATCH {phrase})
                 ELSE NULL END"
         );
+        if self.conjunct && !self.drivers.iter().any(|driver| driver.literal == literal) {
+            self.drivers.push(drive::Driver {
+                literal: literal.clone(),
+                phrase: phrase.clone(),
+            });
+        }
         if !self.negated && !self.leaves.iter().any(|leaf| leaf.literal == literal) {
             self.leaves.push(ScoreLeaf {
                 literal,
@@ -529,6 +617,7 @@ fn sql_error(error: rusqlite::Error) -> StoreError {
 }
 
 mod coverage;
+mod drive;
 pub use coverage::{
     CoverageCounts, SearchIndexState, SearchLimitation, SearchRebuildProgress,
     StoredSearchCoverage, read_search_coverage, read_search_coverage_reusing,

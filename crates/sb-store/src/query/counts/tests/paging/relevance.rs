@@ -37,7 +37,7 @@ fn ids_result(
     at: Option<u64>,
 ) -> Result<PageRead<(u64, Vec<i64>)>, StoreError> {
     let tx = conn.unchecked_transaction().unwrap();
-    let result = search_relevance_ids(&tx, &query(node), scope, at);
+    let result = search_relevance_ids(&tx, &query(node), scope, at, None);
     tx.commit().unwrap();
     result
 }
@@ -603,7 +603,8 @@ fn relevance_cursor_classes_bind_before_staleness_and_keep_date_compatibility() 
             &tx,
             &query(node.clone()),
             SearchScope::All,
-            Some(first.generation() + 1)
+            Some(first.generation() + 1),
+            None
         )
         .unwrap(),
         PageRead::Stale {
@@ -782,7 +783,14 @@ fn native_rebuild_and_out_of_scope_wal_writes_preserve_snapshot_scores() {
     ));
     assert_eq!(same, before);
     assert_eq!(
-        search_relevance_ids(&held, &checked, scope.clone(), Some(before.generation())).unwrap(),
+        search_relevance_ids(
+            &held,
+            &checked,
+            scope.clone(),
+            Some(before.generation()),
+            None
+        )
+        .unwrap(),
         PageRead::Ready((before.generation(), vec![1]))
     );
     held.commit().unwrap();

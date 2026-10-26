@@ -289,6 +289,13 @@ CREATE TABLE d_index_queue (              -- work for the index job; durable wat
 ) STRICT;
 
 CREATE INDEX d_index_queue_oldest ON d_index_queue(enqueued_at, doc_id);
+
+-- Driven reads (M1.6r2) enumerate unusable documents and probe versions.
+CREATE INDEX acquisitions_unpublished ON acquisitions(acquisition_id)
+  WHERE object_state <> 'published';
+CREATE INDEX d_search_docs_unusable ON d_search_docs(doc_id)
+  WHERE state <> 'indexed' OR truncated_fields <> '[]';
+CREATE INDEX d_search_docs_by_version ON d_search_docs(extractor_version);
 ```
 
 - **Driven-read indexes (M1.6r2):** an additive migration indexes

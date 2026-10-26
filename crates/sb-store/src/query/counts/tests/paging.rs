@@ -68,7 +68,7 @@ fn date_ids(
     at: Option<u64>,
 ) -> Result<PageRead<(u64, Vec<i64>)>, StoreError> {
     let tx = conn.unchecked_transaction().unwrap();
-    let result = search_date_ids(&tx, &query(node), scope, at);
+    let result = search_date_ids(&tx, &query(node), scope, at, None);
     tx.commit().unwrap();
     result
 }
@@ -791,7 +791,14 @@ fn a_wal_writer_cannot_move_page_rows_ids_unknowns_or_generation() {
     ));
     assert_eq!(held, before);
     assert_eq!(
-        search_date_ids(&tx, &node, SearchScope::All, Some(before.generation())).unwrap(),
+        search_date_ids(
+            &tx,
+            &node,
+            SearchScope::All,
+            Some(before.generation()),
+            None
+        )
+        .unwrap(),
         PageRead::Ready((before.generation(), vec![4, 3]))
     );
     tx.commit().unwrap();
@@ -832,7 +839,10 @@ fn later_pages_reuse_an_unknown_count_only_at_its_generation() {
             SearchAnchor::After(cursor(&first, 0)),
             1,
             Some(generation),
-            Kept { unknown },
+            Kept {
+                unknown,
+                ..Kept::default()
+            },
         ));
         tx.commit().unwrap();
         next.excluded_unknown()
