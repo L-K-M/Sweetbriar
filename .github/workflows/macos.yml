@@ -239,6 +239,55 @@ jobs:
           path: ${{ runner.temp }}/list-benchmark.json
           if-no-files-found: warn
 
+      # M1.6q2: Search's last keystroke to first rows, end to end in the
+      # Release app, over a small archive M1.6q's runner seeds (the
+      # owner's 100k run on their Mac is the one judged against
+      # spec/08). The gate: a functional run with every sample rendered.
+      - name: Seed the search benchmark archive
+        run: |
+          cargo test -p sb-engine --lib --target aarch64-apple-darwin \
+            search_timings -- --ignored --nocapture
+        env:
+          SB_SEARCH_TIMINGS_ROWS: "2000"
+          SB_SEARCH_TIMINGS_SEED_ONLY: "1"
+          SB_SEARCH_TIMINGS_ROOT: ${{ runner.temp }}/search-archive
+          SB_SEARCH_TIMINGS_OUT: ${{ runner.temp }}/search-archive.json
+
+      - name: Run the search benchmark
+        timeout-minutes: 15
+        run: |
+          LOG="$RUNNER_TEMP/search-benchmark.log"
+          open -W -n -a \
+            "$RUNNER_TEMP/DerivedData/Build/Products/Release/Sweetbriar.app" \
+            --stdout "$LOG" --stderr "$LOG" \
+            --args -runSearchBenchmark "$RUNNER_TEMP/search-benchmark.json" \
+            -dataRoot "$RUNNER_TEMP/search-archive/store" \
+            -cacheRoot "$RUNNER_TEMP/search-archive/cache"
+
+      - name: Print the search benchmark log and report
+        if: always()
+        run: |
+          echo "--- search benchmark log ---"
+          cat "$RUNNER_TEMP/search-benchmark.log" || true
+          echo "--- search benchmark report ---"
+          cat "$RUNNER_TEMP/search-benchmark.json" || true
+
+      - name: Check the search benchmark
+        if: always()
+        run: |
+          jq -e '
+            .ok and .mode == "search"
+            and .search.lastKeystroke.count == .search.expectedSamples
+          ' "$RUNNER_TEMP/search-benchmark.json"
+
+      - name: Upload the search benchmark report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: search-benchmark
+          path: ${{ runner.temp }}/search-benchmark.json
+          if-no-files-found: warn
+
   # Aggregate merge gate: always runs so the check exists on every PR;
   # succeeds when the build job succeeded or was skipped by the filter.
   macos:

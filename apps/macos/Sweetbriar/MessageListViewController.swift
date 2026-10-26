@@ -44,6 +44,9 @@ final class MessageListViewController: NSViewController {
     private(set) var shownSpec: WindowSpec?
     private(set) var choiceSerial = 0
     var failureForBenchmark: (any Error)? { openError ?? model?.lastError }
+    /// Search's field and model, for the keystroke benchmark (plan M1.6q2).
+    var searchFieldForBenchmark: NSSearchField { search.fieldForBenchmark }
+    var searchModelForBenchmark: SearchFieldModel { searchModel }
 
     init(bridge: CoreBridge, sidebar: SidebarModel) {
         self.bridge = bridge

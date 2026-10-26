@@ -45,6 +45,9 @@ final class SearchFieldController: NSViewController {
         fatalError("SearchFieldController is built in code")
     }
 
+    /// The native field the keystroke benchmark types into (plan M1.6q2).
+    var fieldForBenchmark: NSSearchField { field }
+
     override func loadView() {
         let strip = NSView()
         field.placeholderString = "Search mail"

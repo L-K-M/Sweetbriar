@@ -103,6 +103,13 @@ with `SB_SEARCH_TIMINGS_OUT=<file>` for the report and
   inherits SwiftUI's footprint on CI), and
   the report uploads as the `list-benchmark` artifact — its numbers
   are diagnostic (the owner's Mac decides between the two lists);
+- the M1.6q2 search benchmark: the `search_timings` runner seeds a
+  2,000-message archive (`SB_SEARCH_TIMINGS_ROOT=<dir>`,
+  `SB_SEARCH_TIMINGS_SEED_ONLY=1`), then the Release app launches with
+  `-runSearchBenchmark <report.json>` over `<dir>/store`; the step
+  passes when the run was functional and every last keystroke
+  rendered, and the report uploads as the `search-benchmark` artifact
+  (the owner's 100k run is judged against spec/08's budget);
 - anything touching `apps/` or generated bindings.
 
 Agents can't run these locally — make the YAML correct by inspection.

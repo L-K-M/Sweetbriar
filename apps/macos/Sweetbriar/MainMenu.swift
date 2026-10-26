@@ -63,6 +63,7 @@ final class MainMenuBuilder: NSObject {
     private let onImplementationChanged: @MainActor (PrototypeImplementation) -> Void
     private let onRunBenchmark: @MainActor () -> Void
     private let onRunStoreBenchmark: @MainActor () -> Void
+    private let onRunSearchBenchmark: @MainActor () -> Void
     private let isBenchmarkEnabled: @MainActor () -> Bool
     private let onShowComposerProbe: @MainActor () -> Void
     private let onImport: @MainActor () -> Void
@@ -89,6 +90,8 @@ final class MainMenuBuilder: NSObject {
     ///     implementation — the builder stores the choice, the app
     ///     swaps any open window's list.
     ///   - onRunBenchmark: run part B2b's list benchmark.
+    ///   - onRunSearchBenchmark: time Search's last keystroke to first
+    ///     rows over the open archive (plan M1.6q2).
     ///   - isBenchmarkEnabled: whether Run List Benchmark is live —
     ///     false while a run is in flight.
     ///   - onShowComposerProbe: open the Composer Probe window or
@@ -100,6 +103,7 @@ final class MainMenuBuilder: NSObject {
         onImplementationChanged: @escaping @MainActor (PrototypeImplementation) -> Void,
         onRunBenchmark: @escaping @MainActor () -> Void,
         onRunStoreBenchmark: @escaping @MainActor () -> Void,
+        onRunSearchBenchmark: @escaping @MainActor () -> Void,
         isBenchmarkEnabled: @escaping @MainActor () -> Bool,
         onShowComposerProbe: @escaping @MainActor () -> Void,
         onImport: @escaping @MainActor () -> Void
@@ -109,6 +113,7 @@ final class MainMenuBuilder: NSObject {
         self.onImplementationChanged = onImplementationChanged
         self.onRunBenchmark = onRunBenchmark
         self.onRunStoreBenchmark = onRunStoreBenchmark
+        self.onRunSearchBenchmark = onRunSearchBenchmark
         self.isBenchmarkEnabled = isBenchmarkEnabled
         self.onShowComposerProbe = onShowComposerProbe
         self.onImport = onImport
@@ -276,6 +281,15 @@ final class MainMenuBuilder: NSObject {
         storeBenchmark.toolTip =
             "Run the list benchmark over the imported mailboxes and show the report"
         menu.addItem(storeBenchmark)
+        let searchBenchmark = Self.item(
+            "Run Search Benchmark",
+            action: #selector(runSearchBenchmark(_:)),
+            target: self
+        )
+        searchBenchmark.identifier = ItemID.benchmark
+        searchBenchmark.toolTip =
+            "Time Search from the last keystroke to the first rows and show the report"
+        menu.addItem(searchBenchmark)
         menu.addItem(.separator())
         menu.addItem(Self.item(
             "Composer Probe",
@@ -360,6 +374,11 @@ final class MainMenuBuilder: NSObject {
     @objc
     private func runStoreBenchmark(_ sender: NSMenuItem) {
         onRunStoreBenchmark()
+    }
+
+    @objc
+    private func runSearchBenchmark(_ sender: NSMenuItem) {
+        onRunSearchBenchmark()
     }
 
     /// Debug → Composer Probe (spec/08, plan M0.11).

@@ -121,34 +121,41 @@ private final class MenuProbe {
     var enabled = true
     var syntheticRuns = 0
     var storeRuns = 0
+    var searchRuns = 0
 }
 
 @Suite("benchmark menu availability", .serialized)
 @MainActor
 struct BenchmarkMenuTests {
-    @Test("both benchmark commands share the in-flight gate and dispatch their own action")
+    @Test("the benchmark commands share the in-flight gate and dispatch their own action")
     func benchmarkCommands() throws {
         let probe = MenuProbe()
         let builder = MainMenuBuilder(
             onFillSynthetic: {}, onShowPrototype: {}, onImplementationChanged: { _ in },
             onRunBenchmark: { probe.syntheticRuns += 1 },
             onRunStoreBenchmark: { probe.storeRuns += 1 },
+            onRunSearchBenchmark: { probe.searchRuns += 1 },
             isBenchmarkEnabled: { probe.enabled }, onShowComposerProbe: {}, onImport: {}
         )
         let menu = builder.makeMainMenu()
         let debug = try #require(menu.items.compactMap(\.submenu).first { $0.title == "Debug" })
         let synthetic = try #require(debug.items.first { $0.title == "Run List Benchmark" })
         let store = try #require(debug.items.first { $0.title == "Run Store Benchmark" })
-        #expect(builder.validateMenuItem(synthetic))
-        #expect(builder.validateMenuItem(store))
+        let search = try #require(debug.items.first { $0.title == "Run Search Benchmark" })
+        for item in [synthetic, store, search] {
+            #expect(builder.validateMenuItem(item))
+        }
         probe.enabled = false
-        #expect(!builder.validateMenuItem(synthetic))
-        #expect(!builder.validateMenuItem(store))
+        for item in [synthetic, store, search] {
+            #expect(!builder.validateMenuItem(item))
+        }
         probe.enabled = true
-        #expect(NSApp.sendAction(try #require(synthetic.action), to: builder, from: synthetic))
-        #expect(NSApp.sendAction(try #require(store.action), to: builder, from: store))
+        for item in [synthetic, store, search] {
+            #expect(NSApp.sendAction(try #require(item.action), to: builder, from: item))
+        }
         #expect(probe.syntheticRuns == 1)
         #expect(probe.storeRuns == 1)
+        #expect(probe.searchRuns == 1)
     }
 }
 #endif

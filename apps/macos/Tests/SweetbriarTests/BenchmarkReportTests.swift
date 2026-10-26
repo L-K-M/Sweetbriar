@@ -394,3 +394,74 @@ struct StoreCoverageTests {
         #expect(incomplete.budgets.allSatisfy { $0.met == nil })
     }
 }
+
+@Suite("search benchmark planning and reporting")
+struct SearchBenchmarkTests {
+    /// Every round's samples, all at `milliseconds`.
+    private static func samples(_ milliseconds: Double?) -> [SearchBenchmarkSample] {
+        (0 ..< SearchBenchmarkPlan.rounds).flatMap { round in
+            SearchBenchmarkPlan.queries.map {
+                SearchBenchmarkSample(query: $0.id, round: round, milliseconds: milliseconds)
+            }
+        }
+    }
+
+    @Test("the queries are typable in two steps and only the scoped filter is scoped")
+    func queries() {
+        let queries = SearchBenchmarkPlan.queries
+        #expect(Set(queries.map(\.id)).count == queries.count)
+        #expect(queries.allSatisfy { $0.text.count >= 2 })
+        #expect(queries.filter(\.projectsScope).map(\.id) == ["scoped-filter"])
+        #expect(SearchBenchmarkPlan.debounceMilliseconds == 30)
+        #expect(SearchBenchmarkPlan.limitMilliseconds == 100)
+    }
+
+    @Test("a valid, fully covered run gets a verdict; anything less gets none")
+    func verdicts() {
+        let fast = SearchBenchmarkPlan.evaluate(samples: Self.samples(40), runOK: true, storeMessages: 7)
+        #expect(fast.expectedSamples == SearchBenchmarkPlan.queries.count * SearchBenchmarkPlan.rounds)
+        #expect(fast.lastKeystroke.count == fast.expectedSamples)
+        #expect(fast.budget.p95Milliseconds == 40)
+        #expect(fast.budget.met == true)
+        #expect(fast.perQuery.keys.sorted() == SearchBenchmarkPlan.queries.map(\.id).sorted())
+        #expect(fast.perQuery["phrase"]?.count == SearchBenchmarkPlan.rounds)
+        #expect(fast.storeMessages == 7)
+
+        let slow = SearchBenchmarkPlan.evaluate(samples: Self.samples(100), runOK: true, storeMessages: 7)
+        #expect(slow.budget.met == false)
+
+        var missing = Self.samples(40)
+        missing[3].milliseconds = nil
+        let partial = SearchBenchmarkPlan.evaluate(samples: missing, runOK: true, storeMessages: 7)
+        #expect(partial.lastKeystroke.count == partial.expectedSamples - 1)
+        #expect(partial.budget.p95Milliseconds == 40)
+        #expect(partial.budget.met == nil)
+
+        let invalid = SearchBenchmarkPlan.evaluate(samples: Self.samples(40), runOK: false, storeMessages: 7)
+        #expect(invalid.budget.met == nil)
+
+        let none = SearchBenchmarkPlan.evaluate(samples: [], runOK: true, storeMessages: 0)
+        #expect(none.budget.p95Milliseconds == nil)
+        #expect(none.budget.met == nil)
+    }
+
+    @Test("search schema round-trips and the summary names the mode")
+    func searchJSON() throws {
+        let report = ListBenchmarkReport(
+            ok: true, failures: [],
+            environment: BenchmarkEnvironment(
+                hwModel: "MacTest", cpuBrand: "CPU", virtualized: false,
+                osVersion: "26.0", xcodeVersion: "2600", xcodeBuild: "17A",
+                refreshRateHertz: 120, nominalIntervalMilliseconds: 1_000 / 120,
+                rowCount: 2_000, rowPitchPoints: 56, windowSize: "1100x700",
+                baselineFootprintBytes: 100
+            ), runs: [], comparison: nil, mode: .search,
+            search: SearchBenchmarkPlan.evaluate(samples: Self.samples(40), runOK: true, storeMessages: 2_000)
+        )
+        let decoded = try JSONDecoder().decode(ListBenchmarkReport.self, from: report.encoded())
+        #expect(decoded == report)
+        #expect(decoded.mode == .search)
+        #expect(decoded.stdoutSummary.hasPrefix("search-benchmark: ok=true"))
+        #expect(decoded.stdoutSummary.contains("budget 100 ms met: true"))
+    }
+}

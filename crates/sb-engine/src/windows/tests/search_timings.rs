@@ -13,6 +13,10 @@
 //! Run with `--release --ignored --nocapture`. `SB_SEARCH_TIMINGS_OUT`
 //! names the report file; `SB_SEARCH_TIMINGS_ROWS` shrinks the archive
 //! for a quick local run (the report records it).
+//! `SB_SEARCH_TIMINGS_ROOT=<dir>` builds the archive there and keeps it:
+//! the app opens `<dir>/store` for M1.6q2's keystroke benchmark. With
+//! `SB_SEARCH_TIMINGS_SEED_ONLY=1` the run stops once the archive is
+//! built and checked.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -95,11 +99,17 @@ fn search_timings() {
         .and_then(|value| value.parse().ok())
         .unwrap_or(ROWS);
     let scratch = ScratchDir::new("search-timings");
-    let root = scratch.path().join("store");
+    let base = match std::env::var_os("SB_SEARCH_TIMINGS_ROOT") {
+        Some(dir) => PathBuf::from(dir),
+        None => scratch.path().to_path_buf(),
+    };
+    let root = base.join("store");
+    assert!(!root.exists(), "{} already holds a store", root.display());
+    fs::create_dir_all(&base).unwrap();
     let mut engine = block_on(Engine::open(&root)).unwrap();
 
     let built = Instant::now();
-    let (archive, projects) = write_corpus(scratch.path(), rows);
+    let (archive, projects) = write_corpus(&base, rows);
     let job = start(&engine, vec![archive, projects]);
     finish(&engine, &job);
     settle(&engine);
@@ -146,6 +156,14 @@ fn search_timings() {
         "complete": false,
     });
     save(&report);
+    if std::env::var_os("SB_SEARCH_TIMINGS_SEED_ONLY").is_some() {
+        report["seed_only"] = json!(true);
+        report["data_root"] = json!(root.display().to_string());
+        report["complete"] = json!(true);
+        save(&report);
+        block_on(engine.shutdown()).unwrap();
+        return;
+    }
     let mut lap = Instant::now();
     let mut mark = |report: &mut Value, name: &str| {
         report["phase_ms"][name] = json!(ms(lap.elapsed()));
@@ -172,12 +190,12 @@ fn search_timings() {
     mark(&mut report, "idle");
 
     // Background: real imports and their index writes run throughout.
-    let (busy_cold, reopened) = cold(engine, &root, &probes, Background::Imports(scratch.path()));
+    let (busy_cold, reopened) = cold(engine, &root, &probes, Background::Imports(&base));
     engine = reopened;
     let stop = AtomicBool::new(false);
     let imported = AtomicU64::new(0);
     let busy_warm = std::thread::scope(|scope| {
-        scope.spawn(|| background(&engine, scratch.path(), &stop, &imported));
+        scope.spawn(|| background(&engine, &base, &stop, &imported));
         let warm = warm(&engine, &probes);
         stop.store(true, Ordering::SeqCst);
         warm
@@ -199,12 +217,12 @@ fn search_timings() {
     );
     mark(&mut report, "background-import");
 
-    let idle_freshness = freshness(&engine, scratch.path(), "idle");
+    let idle_freshness = freshness(&engine, &base, "idle");
     let stop = AtomicBool::new(false);
     let imported = AtomicU64::new(0);
     let mut busy_freshness = std::thread::scope(|scope| {
-        scope.spawn(|| background(&engine, scratch.path(), &stop, &imported));
-        let samples = freshness(&engine, scratch.path(), "busy");
+        scope.spawn(|| background(&engine, &base, &stop, &imported));
+        let samples = freshness(&engine, &base, "busy");
         stop.store(true, Ordering::SeqCst);
         samples
     });
