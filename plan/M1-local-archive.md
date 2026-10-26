@@ -716,11 +716,32 @@ local drafts. No network yet.
     per candidate: membership and relevance read single passes over its
     matches (06), with identical hits, unknown counts and score bits.
     Plan-shape test: every FTS scan runs once per statement.
-  - **M1.6r2 Sublinear first pages — L:** depends on r1; designed from q's
-    100k artifact after r1. Candidates restricted to what can still be true
-    or unknown (conjunctions with a positive FTS leaf), indexed exact address
-    keys, and the counts cache 07 allows, with the spec amendments they need
-    first; until the owner's Mac run meets 06's cached-search budget.
+  - **M1.6r2 Sublinear first pages:** designed from q's 100k artifact after
+    r1. At 100k on Linux the first page took 406–617 ms at p95 idle and
+    720–903 ms under imports; coverage (~110 ms) and exact counts
+    (170–340 ms) both scan the scope. Split; each step reruns q's runner,
+    and the owner's Mac run against 06 and 08 closes M1.6r:
+  - **M1.6r2a Contracts — S:** this split and the driven-read, count and
+    coverage rules in 06, 07 and 11. Documentation only.
+  - **M1.6r2b Search status reuse — M:** coverage per scope and generation
+    shared by every search read; counts per canonical query, scope and
+    generation for later pages (07). Coverage checks binding validity per
+    binding (06) and joins only what it reads. The runner
+    records coverage time and cache-cold and cache-hit samples.
+  - **M1.6r2c FTS drivers — L:** driven reads (06) with their additive
+    index migration, coverage's forbidden-class counts, guards and
+    full-read fallbacks, and 11's equivalence and plan-shape proof. The
+    runner adds a common-term class. A tree without a driver (no positive
+    FTS conjunct) still scans the whole scope. If its estimate passes the
+    cap, split the migration, enumeration and guards from the driven reads.
+  - **M1.6r2d Exact address keys — L:** a maintained address-key table and
+    unknown marker make exact address/domain leaves drivers, with their 02
+    and 06 amendments first. Proof: a precedence equivalence matrix and a
+    drift test on every writer path. If its estimate passes the cap, split
+    the table and its maintenance from the driver wiring.
+  - **M1.6r2e Search keystroke path — M:** stage timings in q2's
+    benchmark; present on parse, batched clause formats, overlapped close
+    and open (08).
 
 - **Goal:** FTS5 search with the query AST v1, the text syntax, chips and
   coverage.
@@ -765,6 +786,15 @@ local drafts. No network yet.
   - **M1.6q2:** last-keystroke to first rows is recorded on the owner's Mac.
   - **M1.6r1:** FTS leaves give the same hits, unknown counts and score bits
     with no MATCH run per candidate.
+  - **M1.6r2b:** search reads at one generation share coverage and later
+    pages reuse counts, both equal to fresh reads.
+  - **M1.6r2c:** driven reads equal full reads over 11's matrix; each guard
+    falls back to the full read.
+  - **M1.6r2d:** key-driven address leaves equal the precedence-based leaf
+    over an address matrix (11, amended by r2d) after every writer path.
+  - **M1.6r2e:** q2's benchmark records each stage of the keystroke path.
+  - **M1.6r:** the owner's Mac run meets 06's cached-search and 08's search
+    budgets.
 
 ### M1.7 Export — S, linux
 

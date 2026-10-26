@@ -291,6 +291,11 @@ CREATE TABLE d_index_queue (              -- work for the index job; durable wat
 CREATE INDEX d_index_queue_oldest ON d_index_queue(enqueued_at, doc_id);
 ```
 
+- **Driven-read indexes (M1.6r2):** an additive migration indexes
+  unpublished acquisitions and documents not indexed or with a mask other
+  than `[]` (partial indexes), and `d_search_docs(extractor_version)`.
+  `logical_messages_by_acquisition` already finds messages without an
+  acquisition, and the queue is keyed by acquisition.
 - **Placement (pilot):** FTS5 lives in the same database file as derived
   tables. Index writes go through the writer task at low priority, in
   batches of at most 200 documents. Moving FTS5 to a separate derived
@@ -930,6 +935,53 @@ No partial parser/formatter, new dependency, compiler, service or UI ships here.
   once per statement where it is used, and relevance reads each distinct
   positive leaf's BM25 from one materialized pass over its matches
   (M1.6r1). Hits, unknowns and score bits equal the per-candidate form's.
+- Driven reads (M1.6r2) may skip scoped candidates a driver proves false.
+  A driver is a positive FTS leaf that is the root or is reached from it
+  through AND nodes only. Its non-false candidates are the messages of its
+  matching acquisitions plus those of its unusable classes (below); every
+  other candidate makes that conjunct, hence the tree, false, so it is
+  neither a hit nor unknown. With several drivers, keep the intersection of
+  their non-false sets. A leaf under OR or NOT drives nothing; a tree with
+  no driver scans the whole scope (a limitation M1.6r2c records, not a
+  coverage limitation).
+- A leaf's unusable classes are exactly the cases its FTS read treats as
+  unknown: no acquisition, an unpublished object, no document at the target
+  version (none yet, failed or another version) or a partial document
+  truncating a column the leaf needs. Each acquisition fans out to every
+  message on it; a queued same-version re-extraction leaves a usable
+  document usable. Enumerate messages without an acquisition, unpublished
+  acquisitions, every queued acquisition (`d_index_queue` is keyed by it)
+  and every document whose state is not `indexed` or whose stored mask is
+  not `[]`. Enumeration never calls the mask callback; the callback runs
+  only inside the evaluated predicate, under its existing preconditions.
+  So each malformed mask a full read rejects still fails the read.
+- Hits need only the drivers' matches; unknown counts also need the unusable
+  classes. Enumerate the kept messages and seek their scope rows, never
+  probe every scoped candidate. The restriction is a membership filter in
+  the scope relation every read builds (counts, pages, ids and the row and
+  anchor lookups inside them), never a join that multiplies candidates.
+  Each read still checks every scoped binding's validity (02), at a cost
+  proportional to bindings.
+- A full read evaluates each candidate's leaves only until Kleene AND/OR
+  settle its value, in an order SQLite chooses, so it may already skip a
+  leaf's decoder. A driven read does not evaluate a candidate a driver
+  proves false at all: decoder corruption confined to it, such as a
+  malformed address another leaf would decode, never fails the read. Its
+  value cannot depend on that data; other reads of it still report the
+  corruption.
+- Two unknown classes no index enumerates cannot arise at a readable
+  snapshot: a dangling acquisition reference (a foreign key) and a published
+  object with neither a document nor a queue row (enqueue shares the
+  inserting transaction; reset/enqueue are unreadable). Coverage counts both
+  classes over the read's scope and snapshot, outside reset/enqueue, as
+  internal guard state that 07's coverage does not expose. A nonzero count
+  of either class, any unqueued document in the store at a non-target
+  extractor version (probed through `d_search_docs(extractor_version)`; a
+  queued one is kept), or a kept set whose store-wide count is not smaller
+  than coverage's count of the scope makes the read evaluate every scoped
+  candidate. Driven and full reads of one snapshot return identical hits,
+  unknown counts, scores and order, and differ in errors only as stated
+  above.
 - Search scope (07) selects candidates first. All/Account choose the
   ordinary representative. Mailbox chooses the lowest-id present
   occurrence of each message in that mailbox. An AST `mailbox` node tests
@@ -963,7 +1015,8 @@ Use the existing Store::read transaction boundary, not a public SQL/plan API.
   present occurrence per message. AST membership never changes that choice.
   Compile all twelve node forms into bound SQL before LIMIT; metadata uses
   the chosen occurrence and authoritative tables, without multiplying rows.
-  Aggregate true and final-unknown over every scoped candidate, never a page.
+  Aggregate true and final-unknown over every scoped candidate, never a page;
+  a candidate a driver proves false counts as neither (M1.6r2).
 - Validate the outer scope, then read phase, target, generation and counts in
   one snapshot. Reset/enqueue return `Unavailable`, even for an empty scope or
   filter-only query. Standalone coverage and runtime newer-extractor capability
@@ -1015,6 +1068,12 @@ The core exposes, per account and per mailbox:
 
 The search UI shows coverage whenever it is below 100% for the current
 scope.
+
+Coverage's scope counts depend only on scope, search generation and
+extractor target, so a reader may reuse them for every read of that scope
+at that generation (07, M1.6r2). Every read still checks the scope's
+binding validity, at a cost proportional to bindings, and reads the global
+index state afresh.
 
 ## Acceptance targets (pilot)
 
