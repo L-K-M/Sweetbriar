@@ -523,7 +523,7 @@ final class ListBenchmarkRunner {
             ok: false, failures: [], environment: environment,
             runs: [], comparison: nil, mode: .search
         )
-        guard let controller, let window = controller.window, let content = window.contentView else {
+        guard let controller, let window = controller.window else {
             report.failures = ["the main window is unavailable"]
             return report
         }
@@ -556,13 +556,21 @@ final class ListBenchmarkRunner {
                 report.failures = ["the store isn't M1.6q's seeded archive (no Archive and Projects mailboxes)"]
                 return report
             }
+            // The launch's own first choice must land before ours, or it could
+            // replace the Archive list under the first sample.
             let entryReady = await checkWithin(Self.openTimeout) {
-                sidebarModel.entry(id: archiveEntry) != nil || sidebarModel.lastError != nil
+                (sidebarModel.entry(id: archiveEntry) != nil && pane.shownSpec != nil)
+                    || sidebarModel.lastError != nil
             }
             guard entryReady, sidebarModel.lastError == nil,
                   let entry = sidebarModel.entry(id: archiveEntry),
                   case .window(let archiveSpec) = entry.target else {
                 report.failures = ["the sidebar could not load the Archive mailbox"]
+                return report
+            }
+            // Installing the production panes replaces the window's content view.
+            guard let content = window.contentView else {
+                report.failures = ["the main window has no content view"]
                 return report
             }
 
@@ -649,6 +657,8 @@ final class ListBenchmarkRunner {
 
             var samples: [SearchBenchmarkSample] = []
             context.phase = "search"
+            // A failed sample voids the verdict, so it ends the run rather
+            // than spend the remaining samples' waits.
             rounds: for round in 0 ..< SearchBenchmarkPlan.rounds {
                 for query in SearchBenchmarkPlan.queries {
                     guard !context.stopped else { break rounds }
@@ -657,7 +667,7 @@ final class ListBenchmarkRunner {
                     guard await reset(scope: query.projectsScope ? .mailbox(projects) : .all),
                           let editor = field.currentEditor() as? NSTextView else {
                         failures.append("\(query.id) round \(round): the search field couldn't be prepared")
-                        continue
+                        break rounds
                     }
                     let prefixSerial = pane.choiceSerial
                     let prefixBefore = pane.model
@@ -665,7 +675,7 @@ final class ListBenchmarkRunner {
                     guard await settle(after: prefixSerial, replacing: prefixBefore),
                           field.currentEditor() === editor else {
                         failures.append("\(query.id) round \(round): the typed prefix never settled")
-                        continue
+                        break rounds
                     }
 
                     let serial = pane.choiceSerial
@@ -676,17 +686,17 @@ final class ListBenchmarkRunner {
                     let event = context.record(
                         phase: "search", detail: "\(query.id) round \(round)", postedAt: postedAt
                     ) {
-                        model.lastValidText == query.text && pane.shownSpec?.isSearch == true
-                            && shown(after: serial, replacing: before)
+                        guard case .search? = pane.shownSpec else { return false }
+                        return model.lastValidText == query.text && shown(after: serial, replacing: before)
                     }
                     await awaitRenderReady(event, context: context, within: Self.openTimeout)
                     guard let tick = context.events[event].renderReadyTick else {
                         failures.append("\(query.id) round \(round): the results never rendered")
-                        continue
+                        break rounds
                     }
                     if (pane.model?.count ?? 0) == 0 {
                         failures.append("\(query.id) round \(round): no messages matched")
-                        continue
+                        break rounds
                     }
                     sample.milliseconds = (context.sampler.ticks[tick].firedAt - postedAt) * 1_000
                 }

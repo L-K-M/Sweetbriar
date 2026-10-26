@@ -195,10 +195,9 @@ fn search_timings() {
     let stop = AtomicBool::new(false);
     let imported = AtomicU64::new(0);
     let busy_warm = std::thread::scope(|scope| {
+        let _stop = StopOnDrop(&stop);
         scope.spawn(|| background(&engine, &base, &stop, &imported));
-        let warm = warm(&engine, &probes);
-        stop.store(true, Ordering::SeqCst);
-        warm
+        warm(&engine, &probes)
     });
     settle(&engine);
     push_workload(
@@ -221,10 +220,9 @@ fn search_timings() {
     let stop = AtomicBool::new(false);
     let imported = AtomicU64::new(0);
     let mut busy_freshness = std::thread::scope(|scope| {
+        let _stop = StopOnDrop(&stop);
         scope.spawn(|| background(&engine, &base, &stop, &imported));
-        let samples = freshness(&engine, &base, "busy");
-        stop.store(true, Ordering::SeqCst);
-        samples
+        freshness(&engine, &base, "busy")
     });
     busy_freshness["messages_imported_alongside"] = json!(imported.load(Ordering::SeqCst));
     settle(&engine);
@@ -245,12 +243,26 @@ fn search_timings() {
     }
     println!("{text}");
     // Checked only once the report is saved.
+    if let Some(error) = report["rebuild"]["error"].as_str() {
+        panic!("the rebuild failed to start: {error}");
+    }
     assert_eq!(
         report["rebuild"]["reference_hits_after"],
         json!(1),
         "the rebuild lost the exact reference"
     );
     block_on(engine.shutdown()).unwrap();
+}
+
+/// Stops the background importer when dropped, also while a timed phase
+/// unwinds: the scope joins the importer first, and it only stops on
+/// this flag.
+struct StopOnDrop<'a>(&'a AtomicBool);
+
+impl Drop for StopOnDrop<'_> {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
 }
 
 fn push_workload(report: &mut Value, workload: Value) {
@@ -564,8 +576,9 @@ fn rebuild(engine: &Engine, probe: &Probe) -> Value {
     let elapsed = ms(started.elapsed());
     let found = match block_on(engine.open_window(probe.spec(), Anchor::Top, FIRST_PAGE)) {
         Ok(window) => {
+            let hits = window.rows().len();
             block_on(engine.close_window(window.window_id()));
-            json!(window.rows().len())
+            json!(hits)
         }
         Err(error) => json!(format!("{error:?}")),
     };
