@@ -20,7 +20,11 @@ final class BenchmarkReportWindowController: NSWindowController {
             backing: .buffered,
             defer: false
         )
-        window.title = report.mode == .store ? "Store Benchmark" : "List Benchmark"
+        window.title = switch report.mode {
+        case .synthetic: "List Benchmark"
+        case .store: "Store Benchmark"
+        case .search: "Search Benchmark"
+        }
         window.minSize = NSSize(width: 480, height: 320)
         let content = NSView(
             frame: NSRect(x: 0, y: 0, width: 720, height: 640)

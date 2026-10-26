@@ -205,6 +205,18 @@ final class ListBenchmarkRunner {
     private static let runBudget: Duration = .seconds(300)
     private static let openTimeout: Duration = .seconds(30)
 
+    /// The search run's budget: two searches per sample (the prefix's
+    /// and the timed one), each up to `openTimeout` on a slow archive.
+    private static let searchBudget: Duration = .seconds(1_800)
+    /// The quiet spell after the typed prefix settles, before the
+    /// timed keystroke, so the prefix's work doesn't overlap it.
+    private static let searchQuiet: Duration = .milliseconds(300)
+    /// The seeded archive's mailboxes (M1.6q's runner).
+    private static let seededArchive = "Archive"
+    private static let seededProjects = "Projects"
+    /// Insert at the selection, as a typed character does.
+    private static let caret = NSRange(location: NSNotFound, length: 0)
+
     private let session: CoreSession
     private let clock = ContinuousClock()
     /// When the benchmark started, for the progress lines.
@@ -488,6 +500,221 @@ final class ListBenchmarkRunner {
             )
         } catch {
             report.failures = ["the store benchmark couldn't start: \(error.localizedDescription)"]
+        }
+        return report
+    }
+
+    /// Search mode (plan M1.6q2): each query typed into the main
+    /// window's search field over the archive already open, its last
+    /// keystroke timed to the first frame showing the new rows.
+    ///
+    ///     clear → scope → type all but the last character → settle
+    ///       → last character (posted) → debounce → parse → new list
+    ///       → visible rows populated → commit → next tick (sample)
+    ///
+    /// The keystroke enters as the field editor's `insertText`, the
+    /// call a typed key ends in: key routing and the keyboard layout's
+    /// translation stay out, so the run types the same text on any
+    /// layout.
+    func runSearch(controller: MainWindowController?) async -> ListBenchmarkReport {
+        var environment = BenchmarkEnvironment.collect()
+        environment.baselineFootprintBytes = SystemProbes.physicalFootprint()
+        var report = ListBenchmarkReport(
+            ok: false, failures: [], environment: environment,
+            runs: [], comparison: nil, mode: .search
+        )
+        guard let controller, let window = controller.window else {
+            report.failures = ["the main window is unavailable"]
+            return report
+        }
+        do {
+            let bridge = try await session.bridge()
+            let ready = await checkWithin(Self.openTimeout) {
+                controller.sidebarModel != nil && controller.messageList != nil
+            }
+            guard ready, let sidebarModel = controller.sidebarModel,
+                  let sidebar = controller.sidebar, let pane = controller.messageList else {
+                report.failures = ["the production sidebar and list did not open"]
+                return report
+            }
+
+            // The seeded archive's two mailboxes, by the names M1.6q's runner gives them.
+            var archiveEntry: String?
+            var projects: Int64?
+            var storeMessages: UInt64 = 0
+            for account in try await bridge.accounts() {
+                for mailbox in try await bridge.mailboxes(accountId: account.accountId).mailboxes {
+                    storeMessages += mailbox.total
+                    switch mailbox.name {
+                    case Self.seededArchive: archiveEntry = "\(account.accountId)/\(mailbox.mailboxId)"
+                    case Self.seededProjects: projects = mailbox.mailboxId
+                    default: break
+                    }
+                }
+            }
+            guard let archiveEntry, let projects else {
+                report.failures = ["the store isn't M1.6q's seeded archive (no Archive and Projects mailboxes)"]
+                return report
+            }
+            // The launch's own first choice must land before ours, or it could
+            // replace the Archive list under the first sample.
+            let entryReady = await checkWithin(Self.openTimeout) {
+                (sidebarModel.entry(id: archiveEntry) != nil && pane.shownSpec != nil)
+                    || sidebarModel.lastError != nil
+            }
+            guard entryReady, sidebarModel.lastError == nil,
+                  let entry = sidebarModel.entry(id: archiveEntry),
+                  case .window(let archiveSpec) = entry.target else {
+                report.failures = ["the sidebar could not load the Archive mailbox"]
+                return report
+            }
+            // Installing the production panes replaces the window's content view.
+            guard let content = window.contentView else {
+                report.failures = ["the main window has no content view"]
+                return report
+            }
+
+            NSApp.activate()
+            controller.showWindow(nil)
+            window.makeKeyAndOrderFront(nil)
+            var failures: [String] = []
+            if !(await awaitSteadyForeground(window)) {
+                failures.append("the window wasn't key and the app active")
+            }
+            let fps = Double(window.screen?.maximumFramesPerSecond ?? 0)
+            if fps <= 0 { failures.append("the run window has no display refresh rate") }
+            report.environment.refreshRateHertz = fps
+            report.environment.nominalIntervalMilliseconds = fps > 0 ? 1_000 / fps : 0
+            report.environment.windowSize =
+                "\(Int(content.bounds.width))x\(Int(content.bounds.height))"
+            report.environment.rowCount = Int(storeMessages)
+
+            let context = RunContext(deadline: clock.now + Self.searchBudget, window: window)
+            context.sampler.extras = { [weak window] in
+                var extras = BenchmarkTickSampler.Extras()
+                extras.windowKey = window?.isKeyWindow == true
+                extras.appActive = NSApp.isActive
+                return extras
+            }
+            context.sampler.onTick = { [weak context] in context?.tickDidFire($0) }
+            context.sampler.onCommitPoint = { [weak context] in context?.commitPointPassed() }
+            context.sampler.start(on: content)
+
+            let model = pane.searchModelForBenchmark
+            let field = pane.searchFieldForBenchmark
+
+            /// The list `pane` shows since `serial` is a fresh one with
+            /// its first rows on screen (or its exact empty index).
+            @MainActor
+            func shown(after serial: Int, replacing before: ListWindowModel?) -> Bool {
+                guard pane.choiceSerial > serial, pane.failureForBenchmark == nil,
+                      let list = pane.list, let current = pane.model, current !== before else { return false }
+                return current.count > 0
+                    ? Self.allVisibleRowsPopulated(list: list, model: current)
+                    : current.hasExactIndex
+            }
+
+            /// Back to the Archive list with an empty field and `scope`:
+            /// the next query starts from the same state.
+            @MainActor
+            func reset(scope: SearchScope) async -> Bool {
+                let serial = pane.choiceSerial
+                let before = pane.model
+                // Clearing a shown search returns to the list it replaced.
+                model.clear()
+                if pane.shownSpec != archiveSpec { sidebar.choose(entryID: archiveEntry) }
+                if pane.choiceSerial != serial {
+                    let back = await checkWithin(Self.openTimeout, context: context) {
+                        shown(after: serial, replacing: before)
+                    }
+                    guard back else { return false }
+                }
+                // The cleared text reaches the field on the model's next observation
+                // pass; ending an edit before then would submit the stale text.
+                let emptied = await checkWithin(Self.openTimeout, context: context) {
+                    field.stringValue.isEmpty
+                }
+                guard emptied else { return false }
+                model.chooseScope(scope)
+                return window.makeFirstResponder(field) && field.currentEditor() is NSTextView
+            }
+
+            /// Wait until the field's work is done and any list it
+            /// presented is on screen, then for a quiet spell.
+            @MainActor
+            func settle(after serial: Int, replacing before: ListWindowModel?) async -> Bool {
+                let parsed = await checkWithin(Self.openTimeout, context: context) { !model.isParsing }
+                guard parsed else { return false }
+                if pane.choiceSerial != serial {
+                    let presented = await checkWithin(Self.openTimeout, context: context) {
+                        shown(after: serial, replacing: before)
+                    }
+                    guard presented else { return false }
+                }
+                try? await Task.sleep(for: Self.searchQuiet)
+                return !context.stopped
+            }
+
+            var samples: [SearchBenchmarkSample] = []
+            context.phase = "search"
+            // A failed sample voids the verdict, so it ends the run rather
+            // than spend the remaining samples' waits.
+            rounds: for round in 0 ..< SearchBenchmarkPlan.rounds {
+                for query in SearchBenchmarkPlan.queries {
+                    guard !context.stopped else { break rounds }
+                    var sample = SearchBenchmarkSample(query: query.id, round: round, milliseconds: nil)
+                    defer { samples.append(sample) }
+                    guard await reset(scope: query.projectsScope ? .mailbox(projects) : .all),
+                          let editor = field.currentEditor() as? NSTextView else {
+                        failures.append("\(query.id) round \(round): the search field couldn't be prepared")
+                        break rounds
+                    }
+                    let prefixSerial = pane.choiceSerial
+                    let prefixBefore = pane.model
+                    editor.insertText(String(query.text.dropLast()), replacementRange: Self.caret)
+                    guard await settle(after: prefixSerial, replacing: prefixBefore),
+                          field.currentEditor() === editor else {
+                        failures.append("\(query.id) round \(round): the typed prefix never settled")
+                        break rounds
+                    }
+
+                    let serial = pane.choiceSerial
+                    let before = pane.model
+                    let postedAt = postInput {
+                        editor.insertText(String(query.text.suffix(1)), replacementRange: Self.caret)
+                    }
+                    let event = context.record(
+                        phase: "search", detail: "\(query.id) round \(round)", postedAt: postedAt
+                    ) {
+                        guard case .search? = pane.shownSpec else { return false }
+                        return model.lastValidText == query.text && shown(after: serial, replacing: before)
+                    }
+                    await awaitRenderReady(event, context: context, within: Self.openTimeout)
+                    guard let tick = context.events[event].renderReadyTick else {
+                        failures.append("\(query.id) round \(round): the results never rendered")
+                        break rounds
+                    }
+                    if (pane.model?.count ?? 0) == 0 {
+                        failures.append("\(query.id) round \(round): no messages matched")
+                        break rounds
+                    }
+                    sample.milliseconds = (context.sampler.ticks[tick].firedAt - postedAt) * 1_000
+                }
+                log("search round \(round + 1) of \(SearchBenchmarkPlan.rounds)")
+            }
+            if context.overBudget { failures.append("the search run exceeded its time budget") }
+
+            _ = await reset(scope: .all)
+            context.stopSampling()
+            if !context.foregroundLosses.isEmpty { failures.append("the run lost the foreground") }
+            if context.displayChanged { failures.append("the window moved to another display") }
+            report.failures = failures
+            report.ok = failures.isEmpty
+            report.search = SearchBenchmarkPlan.evaluate(
+                samples: samples, runOK: report.ok, storeMessages: storeMessages
+            )
+        } catch {
+            report.failures = ["the search benchmark couldn't start: \(error.localizedDescription)"]
         }
         return report
     }

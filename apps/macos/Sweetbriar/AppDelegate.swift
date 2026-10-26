@@ -64,6 +64,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // to the path and the app quits — macOS CI drives it.
         if let reportPath = UserDefaults.standard.string(forKey: "runStoreBenchmark") {
             startBenchmark(mode: .store, reportPath: reportPath)
+        } else if let reportPath = UserDefaults.standard.string(forKey: "runSearchBenchmark") {
+            startBenchmark(mode: .search, reportPath: reportPath)
         } else if let reportPath = UserDefaults.standard.string(
             forKey: "runListBenchmark"
         ) {
@@ -89,6 +91,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             },
             onRunStoreBenchmark: { [weak self] in
                 self?.startBenchmark(mode: .store)
+            },
+            onRunSearchBenchmark: { [weak self] in
+                self?.startBenchmark(mode: .search)
             },
             isBenchmarkEnabled: { [weak self] in
                 self?.benchmarkRunner == nil
@@ -195,6 +200,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 report = await runner.run()
             case .store:
                 report = await runner.runStore(controller: self?.mainWindow)
+            case .search:
+                report = await runner.runSearch(controller: self?.mainWindow)
             }
             guard let self else { return }
             benchmarkRunner = nil

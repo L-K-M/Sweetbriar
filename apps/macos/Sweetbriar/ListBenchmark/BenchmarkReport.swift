@@ -5,7 +5,7 @@
 import Foundation
 
 /// The whole report: `ok` covers functional checks across every run;
-/// budget verdicts live separately in `comparison` or `store`.
+/// budget verdicts live separately in `comparison`, `store` or `search`.
 struct ListBenchmarkReport: Codable, Equatable {
     var ok: Bool
     var failures: [String]
@@ -14,6 +14,7 @@ struct ListBenchmarkReport: Codable, Equatable {
     var comparison: BenchmarkComparison?
     var mode: BenchmarkMode = .synthetic
     var store: StoreBenchmarkResult?
+    var search: SearchBenchmarkResult?
 
     /// Pretty-printed, sorted-keys JSON (plan M0.10).
     func encoded() throws -> Data {
@@ -25,7 +26,11 @@ struct ListBenchmarkReport: Codable, Equatable {
     /// The short stdout summary the launch-argument run prints before
     /// quitting (spec/08 "Debug menu").
     var stdoutSummary: String {
-        let name = mode == .store ? "store-benchmark" : "list-benchmark"
+        let name = switch mode {
+        case .synthetic: "list-benchmark"
+        case .store: "store-benchmark"
+        case .search: "search-benchmark"
+        }
         var lines = ["\(name): ok=\(ok)"]
         for failure in failures {
             lines.append("  failed: \(failure)")
@@ -44,6 +49,14 @@ struct ListBenchmarkReport: Codable, Equatable {
         if let comparison {
             lines.append(
                 "  comparison meets all bars: \(comparison.meetsAllBars)"
+            )
+        }
+        if let search {
+            lines.append(
+                "  last keystroke to first rows: p95 \(format(search.budget.p95Milliseconds)) ms "
+                    + "over \(search.lastKeystroke.count) of \(search.expectedSamples) samples, "
+                    + "budget \(Int(search.budget.limitMilliseconds)) ms met: "
+                    + (search.budget.met.map(String.init) ?? "—")
             )
         }
         return lines.joined(separator: "\n")
@@ -136,6 +149,88 @@ struct BenchmarkDisplay: Codable, Equatable {
 enum BenchmarkMode: String, Codable {
     case synthetic
     case store
+    /// Last keystroke to first rows in Search (plan M1.6q2).
+    case search
+}
+
+/// Search mode (plan M1.6q2, spec/08's "Search results after the last
+/// keystroke" budget): each query typed into the search field, its last
+/// keystroke timed to the first display frame showing the new rows,
+/// over the seeded archive M1.6q's runner keeps.
+struct SearchBenchmarkResult: Codable, Equatable {
+    var queries: [SearchBenchmarkQuery]
+    var samples: [SearchBenchmarkSample]
+    var expectedSamples: Int
+    var lastKeystroke: SampleStatistics
+    var perQuery: [String: SampleStatistics]
+    var debounceMilliseconds: Int
+    var storeMessages: UInt64
+    var budget: StoreBenchmarkBudget
+}
+
+/// One query in the field's own text syntax (synthetic words only).
+struct SearchBenchmarkQuery: Codable, Equatable {
+    var id: String
+    var text: String
+    /// Whether it runs scoped to the archive's Projects mailbox.
+    var projectsScope: Bool
+}
+
+/// One timed last keystroke; nil when its rows never rendered.
+struct SearchBenchmarkSample: Codable, Equatable {
+    var query: String
+    var round: Int
+    var milliseconds: Double?
+}
+
+/// Foundation-only choices shared by the runner and its tests.
+enum SearchBenchmarkPlan {
+    /// Rounds through the query set.
+    static let rounds = 10
+    /// spec/08: Search debounces committed text by 30 ms; the timing
+    /// includes it.
+    static let debounceMilliseconds = 30
+    /// spec/08's budget, as a p95.
+    static let limitMilliseconds = 100.0
+
+    /// The query classes M1.6q times in the core, written as typed;
+    /// each parses to the core runner's query (the reference word
+    /// aside: `ref1` exists in any archive of over 100 messages).
+    static let queries = [
+        SearchBenchmarkQuery(id: "exact-reference", text: "ref1", projectsScope: false),
+        SearchBenchmarkQuery(id: "exact-address", text: "from.is:sender17@beta.example", projectsScope: false),
+        SearchBenchmarkQuery(id: "phrase", text: "\"quarterly budget review\"", projectsScope: false),
+        SearchBenchmarkQuery(id: "scoped-filter", text: "from.domain:beta.example after:2024-03-01@UTC", projectsScope: true),
+        SearchBenchmarkQuery(id: "negative-body", text: "budget -body:review", projectsScope: false),
+    ]
+
+    /// Reduce the samples. The budget is judged only on a functionally
+    /// valid run with every sample measured.
+    static func evaluate(
+        samples: [SearchBenchmarkSample], runOK: Bool, storeMessages: UInt64
+    ) -> SearchBenchmarkResult {
+        let measured = samples.compactMap(\.milliseconds)
+        let all = BenchmarkStatistics.summarize(measured)
+        var perQuery: [String: SampleStatistics] = [:]
+        for query in queries {
+            perQuery[query.id] = BenchmarkStatistics.summarize(
+                samples.filter { $0.query == query.id }.compactMap(\.milliseconds)
+            )
+        }
+        let expected = queries.count * rounds
+        let covered = measured.count == expected
+        let p95 = all.count > 0 ? all.p95 : nil
+        return SearchBenchmarkResult(
+            queries: queries, samples: samples, expectedSamples: expected,
+            lastKeystroke: all, perQuery: perQuery,
+            debounceMilliseconds: debounceMilliseconds, storeMessages: storeMessages,
+            budget: StoreBenchmarkBudget(
+                name: "search.lastKeystroke", p95Milliseconds: p95,
+                limitMilliseconds: limitMilliseconds,
+                met: runOK && covered ? p95.map { $0 < limitMilliseconds } : nil
+            )
+        )
+    }
 }
 
 /// Store-mode coverage and budgets are separate from functional `ok`.
@@ -383,7 +478,8 @@ extension ListBenchmarkReport {
             runs: try values.decode([BenchmarkRun].self, forKey: .runs),
             comparison: try values.decodeIfPresent(BenchmarkComparison.self, forKey: .comparison),
             mode: try values.decodeIfPresent(BenchmarkMode.self, forKey: .mode) ?? .synthetic,
-            store: try values.decodeIfPresent(StoreBenchmarkResult.self, forKey: .store)
+            store: try values.decodeIfPresent(StoreBenchmarkResult.self, forKey: .store),
+            search: try values.decodeIfPresent(SearchBenchmarkResult.self, forKey: .search)
         )
     }
 }
