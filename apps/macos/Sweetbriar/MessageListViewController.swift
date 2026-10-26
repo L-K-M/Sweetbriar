@@ -259,7 +259,7 @@ final class MessageListViewController: NSViewController {
         updateCoverage()
         guard let old else { return }
         // Its late deliveries must not reach the benchmark's recorder.
-        old.onPagesDeliveredForBenchmark = nil
+        old.onPagesDeliveredForBenchmark = { _ in }
         let id = UUID()
         closing[id] = Task { @MainActor [weak self] in
             await old.close()
