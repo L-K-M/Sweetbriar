@@ -731,8 +731,9 @@ local drafts. No network yet.
   - **M1.6r2c FTS drivers — L:** driven reads (06) with their additive
     index migration, coverage's forbidden-class counts, guards and
     full-read fallbacks, and 11's equivalence and plan-shape proof. The
-    runner adds a common-term class. If its estimate passes the cap, split
-    the migration, enumeration and guards from the driven reads.
+    runner adds a common-term class. A tree without a driver (no positive
+    FTS conjunct) still scans the whole scope. If its estimate passes the
+    cap, split the migration, enumeration and guards from the driven reads.
   - **M1.6r2d Exact address keys — L:** a maintained address-key table and
     unknown marker make exact address/domain leaves drivers, with their 02
     and 06 amendments first. Proof: a precedence equivalence matrix and a

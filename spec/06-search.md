@@ -942,7 +942,7 @@ No partial parser/formatter, new dependency, compiler, service or UI ships here.
   other candidate makes that conjunct, hence the tree, false, so it is
   neither a hit nor unknown. With several drivers, keep the intersection of
   their non-false sets. A leaf under OR or NOT drives nothing; a tree with
-  no driver scans the whole scope (a limitation M1.6r's plan records, not a
+  no driver scans the whole scope (a limitation M1.6r2c records, not a
   coverage limitation).
 - A leaf's unusable classes are exactly the cases its FTS read treats as
   unknown: no acquisition, an unpublished object, no document at the target
@@ -951,10 +951,10 @@ No partial parser/formatter, new dependency, compiler, service or UI ships here.
   message on it; a queued same-version re-extraction leaves a usable
   document usable. Enumerate messages without an acquisition, unpublished
   acquisitions, every queued acquisition (`d_index_queue` is keyed by it)
-  and every document that is not indexed or whose stored mask is not `[]`.
-  Enumeration never calls the mask callback; it runs only inside the
-  evaluated predicate, under its existing preconditions. So each malformed
-  mask a full read rejects still fails the read.
+  and every document whose state is not `indexed` or whose stored mask is
+  not `[]`. Enumeration never calls the mask callback; the callback runs
+  only inside the evaluated predicate, under its existing preconditions.
+  So each malformed mask a full read rejects still fails the read.
 - Hits need only the drivers' matches; unknown counts also need the unusable
   classes. Enumerate the kept messages and seek their scope rows, never
   probe every scoped candidate. The restriction is a membership filter in
@@ -962,21 +962,23 @@ No partial parser/formatter, new dependency, compiler, service or UI ships here.
   anchor lookups inside them), never a join that multiplies candidates.
   Each read still checks every scoped binding's validity (02), at a cost
   proportional to bindings.
-- SQLite evaluates every leaf of a value expression, so a full read decodes
-  each leaf's inputs for every scoped candidate. A driven read does not
-  evaluate a candidate a driver proves false: decoder corruption confined to
-  it, such as a malformed address another leaf would decode, no longer fails
-  the read. Its value cannot depend on that data; other reads of it still
-  report the corruption.
+- A full read evaluates each candidate's leaves only until Kleene AND/OR
+  settle its value, in an order SQLite chooses, so it may already skip a
+  leaf's decoder. A driven read does not evaluate a candidate a driver
+  proves false at all: decoder corruption confined to it, such as a
+  malformed address another leaf would decode, never fails the read. Its
+  value cannot depend on that data; other reads of it still report the
+  corruption.
 - Two unknown classes no index enumerates cannot arise at a readable
   snapshot: a dangling acquisition reference (a foreign key) and a published
   object with neither a document nor a queue row (enqueue shares the
   inserting transaction; reset/enqueue are unreadable). Coverage counts both
-  over the read's scope and snapshot, outside reset/enqueue, as internal
-  guard state that 07's coverage does not expose. A nonzero count, any
-  document in the store at a non-target extractor version (probed through
-  `d_search_docs(extractor_version)`), or a kept set, counted store-wide,
-  not smaller than the scope makes the read evaluate every scoped
+  classes over the read's scope and snapshot, outside reset/enqueue, as
+  internal guard state that 07's coverage does not expose. A nonzero count
+  of either class, any unqueued document in the store at a non-target
+  extractor version (probed through `d_search_docs(extractor_version)`; a
+  queued one is kept), or a kept set whose store-wide count is not smaller
+  than coverage's count of the scope makes the read evaluate every scoped
   candidate. Driven and full reads of one snapshot return identical hits,
   unknown counts, scores and order, and differ in errors only as stated
   above.
