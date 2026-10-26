@@ -397,11 +397,16 @@ struct StoreCoverageTests {
 
 @Suite("search benchmark planning and reporting")
 struct SearchBenchmarkTests {
-    /// Every round's samples, all at `milliseconds`.
+    /// Every round's samples, all at `milliseconds`, with the query shown
+    /// and the list opened at fixed fractions of it.
     private static func samples(_ milliseconds: Double?) -> [SearchBenchmarkSample] {
         (0 ..< SearchBenchmarkPlan.rounds).flatMap { round in
             SearchBenchmarkPlan.queries.map {
-                SearchBenchmarkSample(query: $0.id, round: round, milliseconds: milliseconds)
+                SearchBenchmarkSample(
+                    query: $0.id, round: round, milliseconds: milliseconds,
+                    presentedMilliseconds: milliseconds.map { $0 / 4 },
+                    openedMilliseconds: milliseconds.map { $0 / 2 }
+                )
             }
         }
     }
@@ -426,6 +431,8 @@ struct SearchBenchmarkTests {
         #expect(fast.perQuery.keys.sorted() == SearchBenchmarkPlan.queries.map(\.id).sorted())
         #expect(fast.perQuery["phrase"]?.count == SearchBenchmarkPlan.rounds)
         #expect(fast.storeMessages == 7)
+        #expect(fast.stages?.presented.p95 == 10 && fast.stages?.opened.p95 == 20)
+        #expect(fast.stages?.opened.count == fast.expectedSamples)
 
         let slow = SearchBenchmarkPlan.evaluate(samples: Self.samples(100), runOK: true, storeMessages: 7)
         #expect(slow.budget.met == false)
@@ -463,5 +470,35 @@ struct SearchBenchmarkTests {
         #expect(decoded.mode == .search)
         #expect(decoded.stdoutSummary.hasPrefix("search-benchmark: ok=true"))
         #expect(decoded.stdoutSummary.contains("budget 100 ms met: true"))
+        #expect(decoded.stdoutSummary.contains("stages p95: query shown 10.00 ms, list opened 20.00 ms"))
+    }
+
+    @Test("a run without stage samples prints no stage numbers")
+    func emptyStages() {
+        let report = ListBenchmarkReport(
+            ok: false, failures: ["x"],
+            environment: BenchmarkEnvironment(
+                hwModel: "MacTest", cpuBrand: "CPU", virtualized: false,
+                osVersion: "26.0", xcodeVersion: "2600", xcodeBuild: "17A",
+                refreshRateHertz: 120, nominalIntervalMilliseconds: 1_000 / 120,
+                rowCount: 2_000, rowPitchPoints: 56, windowSize: "1100x700",
+                baselineFootprintBytes: 100
+            ), runs: [], comparison: nil, mode: .search,
+            search: SearchBenchmarkPlan.evaluate(samples: [], runOK: false, storeMessages: 2_000)
+        )
+        #expect(report.stdoutSummary.contains("stages p95: query shown — ms, list opened — ms"))
+    }
+
+    @Test("a report written before stage timings still decodes")
+    func stagelessJSON() throws {
+        var result = SearchBenchmarkPlan.evaluate(samples: Self.samples(40), runOK: true, storeMessages: 7)
+        result.stages = nil
+        let decoded = try JSONDecoder().decode(
+            SearchBenchmarkResult.self, from: JSONEncoder().encode(result)
+        )
+        #expect(decoded == result)
+        let old = #"{"query":"phrase","round":0,"milliseconds":40}"#
+        let sample = try JSONDecoder().decode(SearchBenchmarkSample.self, from: Data(old.utf8))
+        #expect(sample.presentedMilliseconds == nil && sample.openedMilliseconds == nil)
     }
 }

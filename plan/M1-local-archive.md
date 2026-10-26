@@ -740,8 +740,9 @@ local drafts. No network yet.
     drift test on every writer path. If its estimate passes the cap, split
     the table and its maintenance from the driver wiring.
   - **M1.6r2e Search keystroke path — M:** stage timings in q2's
-    benchmark; present on parse, batched clause formats, overlapped close
-    and open (08).
+    benchmark; present on parse, with the canonical text and chips formatted
+    after it, which takes the per-clause formats off the keystroke's path;
+    overlapped close and open (08).
 
 - **Goal:** FTS5 search with the query AST v1, the text syntax, chips and
   coverage.

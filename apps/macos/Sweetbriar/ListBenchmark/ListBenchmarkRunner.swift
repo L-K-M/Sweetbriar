@@ -699,6 +699,16 @@ final class ListBenchmarkRunner {
                         break rounds
                     }
                     sample.milliseconds = (context.sampler.ticks[tick].firedAt - postedAt) * 1_000
+                    sample.presentedMilliseconds = pane.shownAtForBenchmark.map { ($0 - postedAt) * 1_000 }
+                    // The open returns after the id index, often past the first rows.
+                    let opened = await checkWithin(Self.openTimeout, context: context) {
+                        pane.openedAtForBenchmark != nil
+                    }
+                    guard opened, let openedAt = pane.openedAtForBenchmark else {
+                        failures.append("\(query.id) round \(round): the list's open never returned")
+                        break rounds
+                    }
+                    sample.openedMilliseconds = (openedAt - postedAt) * 1_000
                 }
                 log("search round \(round + 1) of \(SearchBenchmarkPlan.rounds)")
             }
