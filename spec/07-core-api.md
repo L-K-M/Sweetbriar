@@ -274,12 +274,15 @@ steps; they do not add placeholder modes to this boundary.
   changes the chosen occurrence (06). This distinguishes `in:42 OR in:43`
   from an outer Mailbox(42) scope. Every scope still has one hit per message.
 - `open_window` honours its explicit limit; shells request 50 Search rows
-  first and 200 thereafter. Around/id-index behavior is unchanged. Exact
-  unknown counts deliberately require evaluating all scoped candidates;
-  the first-page timing includes this cost. Counts/status may be cached by
-  canonical query, scope and search generation for later pages, never
-  reused across generations. M1.6q records count time separately; 06/08's
-  budgets still apply to the complete response. Search `total` follows
+  first and 200 thereafter. Around/id-index behavior is unchanged. Unknown
+  counts stay exact over all scoped candidates: a read may skip only those
+  a driver proves false, and evaluates every candidate when it cannot prove
+  that (06, M1.6r2). The first-page timing includes this cost. Counts may
+  be cached by canonical query, scope and search generation for later pages
+  and the id index; coverage, which depends only on scope and generation,
+  may be shared across windows and queries. Neither is reused across
+  generations. M1.6q records count time separately; 06/08's budgets still
+  apply to the complete response. Search `total` follows
   the existing Exact/AtLeast rule for true hits; unknowns are separate,
   exact and not limited to the page.
 - `store_meta.search_generation` starts at 1. It advances once per committed

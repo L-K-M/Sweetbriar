@@ -291,6 +291,10 @@ CREATE TABLE d_index_queue (              -- work for the index job; durable wat
 CREATE INDEX d_index_queue_oldest ON d_index_queue(enqueued_at, doc_id);
 ```
 
+- **Driven-read indexes (M1.6r2):** an additive migration indexes
+  messages without an acquisition, unpublished acquisitions, documents
+  not indexed or with a mask other than `[]` (partial indexes), and
+  `d_search_docs(extractor_version)`.
 - **Placement (pilot):** FTS5 lives in the same database file as derived
   tables. Index writes go through the writer task at low priority, in
   batches of at most 200 documents. Moving FTS5 to a separate derived
@@ -930,6 +934,37 @@ No partial parser/formatter, new dependency, compiler, service or UI ships here.
   once per statement where it is used, and relevance reads each distinct
   positive leaf's BM25 from one materialized pass over its matches
   (M1.6r1). Hits, unknowns and score bits equal the per-candidate form's.
+- Driven reads (M1.6r2) may skip scoped candidates a driver proves false.
+  A driver is a positive FTS leaf that is the root or is reached from it
+  through AND nodes only. Its non-false candidates are the messages of its
+  matching acquisitions plus those of its unusable documents (below); every
+  other candidate makes that conjunct, hence the tree, false, so it is
+  neither a hit nor unknown. Several drivers may intersect. A leaf under OR
+  or NOT drives nothing: OR/NOT roots and trees without FTS leaves scan the
+  whole scope, a recorded limitation.
+- A leaf's unusable documents are exactly those its FTS read treats as
+  unknown: no acquisition, an unpublished object, no document at the target
+  version (none yet, failed or another version) or a partial document
+  truncating a column the leaf needs. Each acquisition fans out to every
+  message on it. Enumerate failed documents by state and call the mask
+  callback only where the full read would; a queued same-version
+  re-extraction leaves a usable document usable. The enumeration also
+  visits every document whose mask is not `[]`, so each malformed mask a
+  full read rejects still fails the read.
+- Hits need only the drivers' matches; unknown counts also need unusable
+  documents. Restrict with per-candidate membership filters in the scope
+  relation of every read (counts, both page orders, id index, row, anchor),
+  never joins that multiply candidates. Each read still checks every scoped
+  binding's validity (02), at a cost proportional to bindings. Other decoder
+  corruption fails a read only on candidates it evaluates, as Kleene AND's
+  short-circuit already allows.
+- The schema forbids two unknown classes no index enumerates: a dangling
+  acquisition reference and a published object with neither a document nor
+  a queue row. Coverage counts both in the read's snapshot outside
+  reset/enqueue. A nonzero count, any document at a non-target extractor
+  version, or a restricted set not smaller than the scope makes the read
+  evaluate every scoped candidate. Driven and full reads of one snapshot
+  return identical hits, unknown counts, scores and order.
 - Search scope (07) selects candidates first. All/Account choose the
   ordinary representative. Mailbox chooses the lowest-id present
   occurrence of each message in that mailbox. An AST `mailbox` node tests
@@ -963,7 +998,8 @@ Use the existing Store::read transaction boundary, not a public SQL/plan API.
   present occurrence per message. AST membership never changes that choice.
   Compile all twelve node forms into bound SQL before LIMIT; metadata uses
   the chosen occurrence and authoritative tables, without multiplying rows.
-  Aggregate true and final-unknown over every scoped candidate, never a page.
+  Aggregate true and final-unknown over every scoped candidate, never a page;
+  a candidate a driver proves false counts as neither (M1.6r2).
 - Validate the outer scope, then read phase, target, generation and counts in
   one snapshot. Reset/enqueue return `Unavailable`, even for an empty scope or
   filter-only query. Standalone coverage and runtime newer-extractor capability
@@ -1015,6 +1051,11 @@ The core exposes, per account and per mailbox:
 
 The search UI shows coverage whenever it is below 100% for the current
 scope.
+
+Coverage depends only on scope and search generation, so a reader may
+reuse one result for every read of that scope at that generation (07,
+M1.6r2). It checks scoped binding validity at a cost proportional to
+bindings, not messages.
 
 ## Acceptance targets (pilot)
 

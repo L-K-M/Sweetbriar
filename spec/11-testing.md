@@ -104,6 +104,13 @@ test, except where the spec says "manual qualification".
   last-keystroke to first rows (including debounce) against 08; core
   timing alone does not qualify the UI. Missing an owner budget is a finding to resolve, not a
   weakened threshold. No Tantivy/trigram spike in M1.6.
+- M1.6r2 proves driven reads equal full reads (hits, both orders, scores,
+  exact unknown counts, ids, rows, anchors) over every leaf and Kleene
+  composition, nested ANDs, OR/NOT roots, every unusable class and needed
+  mask, shared acquisitions, all three scopes and malformed masks, plus
+  each guard's fallback. Plan-shape tests show every read source carries
+  the restriction. The runner adds a common-term class and records
+  coverage time, cache-cold and cache-hit samples separately.
 
 ### Received-address proof ownership (M1.6m0–m4)
 
