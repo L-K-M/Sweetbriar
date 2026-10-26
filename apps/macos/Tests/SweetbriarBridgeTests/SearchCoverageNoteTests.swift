@@ -83,6 +83,9 @@ func anIoPauseMessageEndsBeforeTheRetryTime() {
     let state = SearchIndexState.pausedIo(code: .otherIo, message: "Disk full", retryAt: 0)
     let note = SearchCoverageNote(status: status(state: state), locale: english, timeZone: utc)
     #expect(note.summary.contains("Indexing paused: Disk full. Next retry at "))
+    let urgent = SearchIndexState.pausedIo(code: .otherIo, message: "Disk full!", retryAt: 0)
+    let exclaimed = SearchCoverageNote(status: status(state: urgent), locale: english, timeZone: utc)
+    #expect(exclaimed.summary.contains("Indexing paused: Disk full! Next retry at "))
 }
 
 @Test(arguments: [

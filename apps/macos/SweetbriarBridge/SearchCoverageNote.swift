@@ -102,7 +102,8 @@ public struct SearchCoverageNote: Sendable, Equatable {
             return job.map { "Rebuild paused while \(phase($0.phase)); Resume to continue" }
                 ?? "Indexing paused"
         case .pausedIo(_, let message, let retryAt):
-            let sentence = message.hasSuffix(".") ? message : message + "."
+            let ended = message.last.map { ".!?".contains($0) } ?? false
+            let sentence = ended ? message : message + "."
             return "Indexing paused: \(sentence) Next retry at \(time(retryAt))."
         case .blockedNewerExtractor:
             return "Search needs a newer version of Sweetbriar. Update the app to search this archive."

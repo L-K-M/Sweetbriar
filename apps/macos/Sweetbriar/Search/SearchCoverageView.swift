@@ -136,8 +136,10 @@ final class SearchCoverageView: NSView {
 
     @objc
     private func commandClicked(_ sender: NSButton) {
+        // A key equivalent reaches buttons out of sight too: act only for a
+        // control on screen, offered and idle.
         guard let entry = buttons.first(where: { $0.button === sender }),
-              offered.contains(entry.control), !busy, !detailStack.isHidden
+              offered.contains(entry.control), !busy, !sender.isHiddenOrHasHiddenAncestor
         else { return }
         onCommand?(entry.command)
     }
