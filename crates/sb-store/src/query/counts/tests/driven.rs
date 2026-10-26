@@ -383,3 +383,260 @@ fn malformed_masks_fail_both_reads_and_skipped_decoder_corruption_fails_only_the
     ));
     assert!(page(&tx, &node, &scope, Order::Date, SearchAnchor::Top, proven).is_ok());
 }
+
+/// One message's stored summary and its address keys, as an import writes
+/// them (02).
+fn summarize(
+    conn: &Connection,
+    id: i64,
+    state: &str,
+    version: i64,
+    from: Option<&str>,
+    to: Option<&str>,
+) {
+    conn.execute(
+        "INSERT INTO d_message_summary (acquisition_id, parse_state, parser_version, from_addr,
+         to_json, has_attachments) VALUES (?1, ?2, ?3, ?4, ?5, 0)",
+        params![id, state, version, from, to],
+    )
+    .unwrap();
+    committed(conn, |tx| {
+        let columns = crate::address_keys::Columns {
+            from_addr: from,
+            from_name: None,
+            to_json: to,
+            cc_json: None,
+        };
+        crate::address_keys::write(tx, id, crate::address_keys::SUMMARY_TARGET, &columns)
+    });
+}
+
+/// Bind `message` to a completed parser-2 assembly of its acquisition.
+fn bind(conn: &Connection, message: i64, from: &str, cc: Option<&str>) {
+    bind_at(conn, message, 2, from, cc);
+}
+
+/// Bind `message` to a completed assembly of its acquisition at `target`.
+fn bind_at(conn: &Connection, message: i64, target: u32, from: &str, cc: Option<&str>) {
+    committed(conn, |tx| {
+        let acquisition: i64 = tx
+            .query_row(
+                "SELECT acquisition_id FROM logical_messages WHERE message_id=?1",
+                [message],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let repaired = crate::imports::ImportSummary {
+            parser_version: target,
+            parse_state: crate::imports::ImportParseState::Parsed,
+            from_addr: Some(from.into()),
+            cc_json: cc.map(str::to_owned),
+            ..crate::imports::ImportSummary::default()
+        };
+        let capture = crate::repair::begin(tx, acquisition, target)?.unwrap();
+        let prepared = crate::repair::prepare(capture, repaired)?;
+        crate::repair::publish(tx, prepared, crate::Timestamp::from_millis(1))?;
+        tx.execute(
+            "INSERT INTO d_message_bindings VALUES (?1, ?2, ?3, 1)",
+            params![message, acquisition, target],
+        )
+        .unwrap();
+        Ok(())
+    });
+}
+
+/// Every address source shape (spec/06 Predicate reads), then filler; the
+/// Archive holds 1, 3, 7, 8, 10, the sharer and the filler.
+fn addressed() -> (Connection, SearchScope) {
+    let conn = fixture(FILLER as usize);
+    let ada = Some("ada@example.test");
+    let to = |list: &str| Some(list.to_owned());
+    summarize(
+        &conn,
+        1,
+        "ok",
+        2,
+        ada,
+        to(r#"[{"address":"bob@other.test","name":null}]"#).as_deref(),
+    );
+    summarize(
+        &conn,
+        2,
+        "ok",
+        2,
+        Some("carol@example.test"),
+        to(r#"[{"address":"ada@example.test","name":null},{"name":"Name only","address":null}]"#)
+            .as_deref(),
+    );
+    summarize(&conn, 3, "partial", 2, ada, None);
+    summarize(&conn, 4, "ok", 1, ada, None);
+    summarize(&conn, 5, "failed", 2, None, None);
+    summarize(&conn, 6, "ok", 2, Some("dan@example.test"), None);
+    summarize(&conn, 8, "ok", 2, Some("zed@else.test"), None);
+    summarize(&conn, 9, "ok", 2, ada, None);
+    // Legacy summaries that repairs bind to parser-2 assemblies below.
+    summarize(&conn, 10, "ok", 1, Some("zed@else.test"), None);
+    summarize(&conn, 11, "ok", 1, ada, None);
+    for id in 12..=FILLER {
+        summarize(
+            &conn,
+            id,
+            "ok",
+            2,
+            Some(&format!("filler{id}@filler.test")),
+            None,
+        );
+    }
+    edit(
+        &conn,
+        r#"UPDATE occurrences SET f_seen=1 WHERE message_id IN (1,2,8,10);
+           UPDATE logical_messages SET acquisition_id=NULL WHERE message_id=7;
+           INSERT INTO message_headers (message_id, raw_fields, from_json, fetched_at) VALUES
+             (8, x'01', '[{"address":"ada@example.test","name":null}]', 1),
+             (9, x'01', '[]', 1)"#,
+    );
+    bind(&conn, 10, "ada@example.test", None);
+    bind(
+        &conn,
+        11,
+        "zed@else.test",
+        Some(r#"[{"name":"Name only","address":null}]"#),
+    );
+    let account = archive_account(&conn);
+    let archive = mailbox(&conn, &account, "Archive", "folder", None);
+    committed(&conn, |tx| {
+        let shared = message(tx, &account, Some(1));
+        for id in [1, 3, 7, 8, 10, shared].into_iter().chain(12..=FILLER) {
+            occurrence(tx, archive, id);
+        }
+        Ok(())
+    });
+    (conn, SearchScope::Mailbox(archive))
+}
+
+#[test]
+fn address_driven_reads_equal_full_reads_over_every_source() {
+    let (conn, archive) = addressed();
+    let is = |field, value| super::field(field, "is", value);
+    let domain = |field, value| json!({"field":field,"op":"domain","value":value});
+    let cases = [
+        is("from", "ada@example.test"),
+        is("from", "Ada@example.test"),
+        domain("from", "example.test"),
+        domain("from", "EXAMPLE.test"),
+        is("to", "ada@example.test"),
+        domain("to", "other.test"),
+        is("cc", "ada@example.test"),
+        is("from", "nobody@nowhere.test"),
+        json!({"and":[is("from", "ada@example.test"), {"flag":"seen"}]}),
+        json!({"and":[is("from", "ada@example.test"), domain("to", "other.test")]}),
+        json!({"and":[{"and":[domain("from", "example.test")]}, {"not":is("to", "bob@other.test")}]}),
+        // No message here has a document, so FTS leaves cannot drive; the
+        // address leaf beside one still does.
+        json!({"and":[{"text":"anything"}, is("from", "ada@example.test")]}),
+    ];
+    let undriven = [
+        json!({"or":[is("from", "ada@example.test"), {"flag":"seen"}]}),
+        json!({"not":is("from", "ada@example.test")}),
+    ];
+    let tx = conn.unchecked_transaction().unwrap();
+    for scope in [SearchScope::All, archive] {
+        let coverage = counted(&tx, &scope);
+        assert_eq!(coverage.summaryless(), 0, "{scope:?}");
+        for node in &cases {
+            assert!(driven(&tx, node, &scope, &coverage), "{node} {scope:?}");
+            same(&tx, node, &scope, &coverage);
+        }
+        for node in &undriven {
+            assert!(!driven(&tx, node, &scope, &coverage), "{node} {scope:?}");
+            same(&tx, node, &scope, &coverage);
+        }
+    }
+}
+
+#[test]
+fn a_message_without_any_address_source_stops_address_leaves_driving() {
+    let (conn, _) = addressed();
+    let ada = super::field("from", "is", "ada@example.test");
+    conn.execute("DELETE FROM d_message_summary WHERE acquisition_id=6", [])
+        .unwrap();
+    let tx = conn.unchecked_transaction().unwrap();
+    let all = counted(&tx, &SearchScope::All);
+    assert_eq!(all.summaryless(), 1);
+    assert!(!driven(&tx, &ada, &SearchScope::All, &all));
+    same(&tx, &ada, &SearchScope::All, &all);
+}
+
+/// Indexed documents and usable summaries for every message, so FTS and
+/// address leaves can drive together: 1–5 say "alpha", 1 and 2 are from
+/// Ada, 3 copies cc@example.test, and 12 has no summary but a binding to
+/// a parser-1 assembly.
+fn both() -> Connection {
+    let conn = fixture(FILLER as usize);
+    for id in 1..=FILLER {
+        let subject = if id <= 5 { "alpha" } else { "plain" };
+        doc(&conn, id, "indexed", "[]", &[("subject", subject)]);
+        if id == 12 {
+            continue;
+        }
+        let from = if id <= 2 {
+            "ada@example.test".to_owned()
+        } else {
+            format!("filler{id}@filler.test")
+        };
+        summarize(&conn, id, "ok", 2, Some(&from), None);
+    }
+    edit(
+        &conn,
+        r#"UPDATE d_message_summary SET cc_json='[{"address":"cc@example.test","name":null}]'
+           WHERE acquisition_id=3;
+           INSERT INTO d_address_keys VALUES ('cc','cc@example.test',3,0,'example.test')"#,
+    );
+    // A store whose repair target was once parser 1 kept such bindings.
+    edit(
+        &conn,
+        "UPDATE store_meta SET value='1' WHERE key='mime_repair_target'",
+    );
+    bind_at(&conn, 12, 1, "old@example.test", None);
+    edit(
+        &conn,
+        "UPDATE store_meta SET value='2' WHERE key='mime_repair_target'",
+    );
+    conn
+}
+
+#[test]
+fn fts_and_address_drivers_intersect_and_each_keeps_its_own_guard() {
+    let conn = both();
+    let is = |field, value| super::field(field, "is", value);
+    let domain = |field, value| json!({"field":field,"op":"domain","value":value});
+    let cases = [
+        json!({"and":[{"text":"alpha"}, is("from", "ada@example.test")]}),
+        json!({"and":[{"text":"alpha"}, domain("cc", "example.test")]}),
+        domain("cc", "example.test"),
+        is("cc", "cc@example.test"),
+        // 12's parser-1 assembly leaves its leaf unknown.
+        is("from", "old@example.test"),
+        domain("from", "example.test"),
+    ];
+    let tx = conn.unchecked_transaction().unwrap();
+    let all = counted(&tx, &SearchScope::All);
+    assert_eq!((all.forbidden(), all.summaryless()), (0, 0));
+    for node in &cases {
+        assert!(driven(&tx, node, &SearchScope::All, &all), "{node}");
+        same(&tx, node, &SearchScope::All, &all);
+    }
+    tx.commit().unwrap();
+
+    // Without any address source for one message, only the FTS leaf drives.
+    conn.execute("DELETE FROM d_message_summary WHERE acquisition_id=20", [])
+        .unwrap();
+    let tx = conn.unchecked_transaction().unwrap();
+    let all = counted(&tx, &SearchScope::All);
+    assert_eq!(all.summaryless(), 1);
+    let mixed = &cases[0];
+    assert!(driven(&tx, mixed, &SearchScope::All, &all));
+    same(&tx, mixed, &SearchScope::All, &all);
+    let address = is("from", "ada@example.test");
+    assert!(!driven(&tx, &address, &SearchScope::All, &all));
+}

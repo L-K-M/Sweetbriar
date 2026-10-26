@@ -88,7 +88,7 @@ fn fts_leaves_match_once_per_statement_not_per_candidate() {
 /// spec/06 (M1.6r2): a driven read enumerates its kept messages and seeks
 /// their scope rows by message, in counts, pages and id indexes, for every
 /// scope. Only FTS, JSON, the queue and the two partial indexes (each an
-/// unusable class) are read whole.
+/// unusable class) are read whole, besides the kept sets themselves.
 #[test]
 fn driven_reads_seek_kept_messages_and_scan_no_table() {
     use crate::testing::fixtures::{archive_account, mailbox};
@@ -96,6 +96,17 @@ fn driven_reads_seek_kept_messages_and_scan_no_table() {
     for id in 1..=40 {
         let subject = if id == 1 { "alpha" } else { "plain" };
         doc(&conn, id, "indexed", "[]", &[("subject", subject)]);
+        let from = format!("sender{id}@example.test");
+        summary(&conn, id, "ok", 2, Summary::sender(&from));
+        let tx = conn.unchecked_transaction().unwrap();
+        let columns = crate::address_keys::Columns {
+            from_addr: Some(&from),
+            from_name: None,
+            to_json: None,
+            cc_json: None,
+        };
+        crate::address_keys::write(&tx, id, crate::address_keys::SUMMARY_TARGET, &columns).unwrap();
+        tx.commit().unwrap();
     }
     let account = archive_account(&conn);
     let archive = mailbox(&conn, &account, "Archive", "folder", None);
@@ -104,20 +115,31 @@ fn driven_reads_seek_kept_messages_and_scan_no_table() {
         occurrence(&tx, archive, id);
     }
     register(&tx).unwrap();
-    let query = query(json!({"and":[{"text":"alpha"},{"flag":"seen"}]}));
+    let queries = [
+        query(json!({"and":[{"text":"alpha"},{"flag":"seen"}]})),
+        query(
+            json!({"and":[{"field":"from","op":"is","value":"sender3@example.test"},{"flag":"seen"}]}),
+        ),
+        query(
+            json!({"and":[{"field":"from","op":"domain","value":"example.test"},{"text":"alpha"}]}),
+        ),
+    ];
     let scopes = [
         SearchScope::All,
         SearchScope::Account(account.parse().unwrap()),
         SearchScope::Mailbox(archive),
     ];
-    for scope in scopes {
+    for (scope, query) in scopes
+        .iter()
+        .flat_map(|scope| queries.iter().map(move |query| (scope.clone(), query)))
+    {
         let coverage = crate::query::read_search_coverage_reusing(&tx, scope.clone(), None)
             .unwrap()
             .1;
-        let plan = compile_driven(&tx, &query, scope.clone(), Some(&coverage)).unwrap();
+        let plan = compile_driven(&tx, query, scope.clone(), Some(&coverage)).unwrap();
         assert_ne!(
             plan.source,
-            compile(&tx, &query, scope.clone()).unwrap().source
+            compile(&tx, query, scope.clone()).unwrap().source
         );
         let mut statements = vec![format!(
             "SELECT coalesce(sum(v IS NULL),0) FROM ({})",
@@ -139,6 +161,10 @@ fn driven_reads_seek_kept_messages_and_scan_no_table() {
                         "INDEX acquisitions_unpublished",
                         "INDEX d_search_docs_unusable",
                         "CONSTANT ROW",
+                        "(subquery-",
+                        "SCAN kh",
+                        "INDEX d_message_summary_unusable",
+                        "INDEX d_message_bindings_old_target",
                     ]
                     .iter()
                     .any(|allowed| node.detail.contains(allowed));

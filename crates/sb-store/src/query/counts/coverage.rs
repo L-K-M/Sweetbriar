@@ -69,6 +69,9 @@ pub struct CoverageCounts {
     /// acquisition reference, or a published object with neither a document
     /// nor a queue row. Internal guard state for driven reads.
     forbidden: u64,
+    /// Scoped messages with an acquisition but no header row, binding or
+    /// summary, which address drivers cannot enumerate (06, M1.6r2d).
+    summaryless: u64,
 }
 
 impl CoverageCounts {
@@ -90,6 +93,10 @@ impl CoverageCounts {
 
     pub(super) fn forbidden(&self) -> u64 {
         self.forbidden
+    }
+
+    pub(super) fn summaryless(&self) -> u64 {
+        self.summaryless
     }
 }
 
@@ -127,13 +134,18 @@ pub fn read_search_coverage_reusing(
             kept.clone()
         }
         _ => {
-            let (counts, forbidden) = scan(tx, filter, values, extractor_version)?;
+            let Scan {
+                counts,
+                forbidden,
+                summaryless,
+            } = scan(tx, filter, values, extractor_version)?;
             CoverageCounts {
                 scope,
                 generation,
                 extractor_version,
                 counts,
                 forbidden,
+                summaryless,
             }
         }
     };
@@ -213,13 +225,19 @@ pub fn read_search_coverage_reusing(
 }
 
 /// Total, headers synced, bodies acquired, indexed, partial, failed and
-/// queued acquisitions over the scope, and its forbidden-class candidates.
+/// queued acquisitions over the scope, and its driven-read guard counts.
+struct Scan {
+    counts: [u64; 7],
+    forbidden: u64,
+    summaryless: u64,
+}
+
 fn scan(
     tx: &Transaction,
     filter: &str,
     mut values: Vec<Value>,
     extractor_version: u32,
-) -> Result<([u64; 7], u64), StoreError> {
+) -> Result<Scan, StoreError> {
     // Queued acquisitions in scope, driven from the queue: usually few.
     let queued = format!(
         "SELECT count(DISTINCT lm.acquisition_id) FROM d_index_queue q
@@ -249,11 +267,13 @@ fn scan(
          coalesce(sum(lm.acquisition_id IS NOT NULL AND a.acquisition_id IS NULL),0)
          + coalesce(sum(CASE WHEN a.object_state='published' AND d.doc_id IS NULL
            THEN NOT EXISTS(SELECT 1 FROM d_index_queue q WHERE q.doc_id=lm.acquisition_id)
-           ELSE 0 END),0)
+           ELSE 0 END),0),
+         coalesce(sum(CASE WHEN lm.acquisition_id IS NOT NULL AND h.message_id IS NULL
+           AND s.acquisition_id IS NULL THEN NOT {STORED_BOUND} ELSE 0 END),0)
          FROM {} LEFT JOIN d_search_docs d ON d.doc_id=lm.acquisition_id WHERE {filter}",
         candidates("LEFT JOIN d_message_summary s ON s.acquisition_id=lm.acquisition_id")
     );
-    let (raw, forbidden): ([i64; 6], i64) = tx
+    let (raw, forbidden, summaryless): ([i64; 6], i64, i64) = tx
         .query_row(&sql, params_from_iter(&values), |row| {
             Ok((
                 [
@@ -265,6 +285,7 @@ fn scan(
                     row.get(5)?,
                 ],
                 row.get(6)?,
+                row.get(7)?,
             ))
         })
         .map_err(sql_error)?;
@@ -272,7 +293,11 @@ fn scan(
     for (count, raw) in counts.iter_mut().zip(raw.into_iter().chain([queued])) {
         *count = nonnegative_count(raw)?;
     }
-    Ok((counts, nonnegative_count(forbidden)?))
+    Ok(Scan {
+        counts,
+        forbidden: nonnegative_count(forbidden)?,
+        summaryless: nonnegative_count(summaryless)?,
+    })
 }
 
 /// Fail with `Corrupt` when a scoped binding is invalid (02), at a cost per
