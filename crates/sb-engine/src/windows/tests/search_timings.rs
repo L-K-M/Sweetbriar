@@ -80,8 +80,9 @@ impl Probe {
 
     fn store_scope(&self) -> StoreScope {
         match self.scope {
+            SearchScope::All => StoreScope::All,
             SearchScope::Mailbox(id) => StoreScope::Mailbox(id),
-            _ => StoreScope::All,
+            SearchScope::Account(_) => unreachable!("the query set has no account scope"),
         }
     }
 }
@@ -113,78 +114,12 @@ fn search_timings() {
     for probe in &probes {
         Query::parse_json(&probe.json).unwrap_or_else(|e| panic!("{}: {e:?}", probe.id));
     }
-    let coverage = coverage_json(&engine);
     check_corpus(&engine, &probes, rows, failed);
     eprintln!("search timings: {rows} messages imported in {imported_ms:.0} ms");
 
-    let mut workloads = Vec::new();
-    let mut phases = serde_json::Map::new();
-    let mut lap = Instant::now();
-    let mut mark = |name: &str| {
-        phases.insert(name.to_owned(), json!(ms(lap.elapsed())));
-        lap = Instant::now();
-    };
-    // Idle: nothing else writes.
-    let (idle_cold, reopened) = cold(engine, &root, &probes, Background::Off);
-    engine = reopened;
-    let idle_warm = warm(&engine, &probes);
-    workloads.push(json!({
-        "name": "idle",
-        "active_workload": "none",
-        "cold": idle_cold,
-        "warm": idle_warm,
-        "counts": counts_json(&engine, &probes),
-        "coverage_ms": coverage_timings(&engine, &probes),
-        "ids_and_deep_page": ids_and_deep(&engine, &probes),
-        "coverage": coverage_json(&engine),
-    }));
-    mark("idle");
-
-    // Background: real imports and their index writes run throughout.
-    let (busy_cold, reopened) = cold(engine, &root, &probes, Background::Imports(scratch.path()));
-    engine = reopened;
-    let stop = AtomicBool::new(false);
-    let imported = AtomicU64::new(0);
-    let busy_warm = std::thread::scope(|scope| {
-        scope.spawn(|| background(&engine, scratch.path(), &stop, &imported));
-        let warm = warm(&engine, &probes);
-        stop.store(true, Ordering::SeqCst);
-        warm
-    });
-    settle(&engine);
-    workloads.push(json!({
-        "name": "background-import",
-        "active_workload": format!(
-            "a new {BACKGROUND_BATCH}-message mbox imported every {} s; {} messages imported during the warm sample; each cold sample's reopen starts one",
-            BACKGROUND_PAUSE.as_secs(),
-            imported.load(Ordering::SeqCst)
-        ),
-        "cold": busy_cold,
-        "warm": busy_warm,
-        "coverage": coverage_json(&engine),
-    }));
-    mark("background-import");
-
-    let idle_freshness = freshness(&engine, scratch.path(), "idle");
-    let stop = AtomicBool::new(false);
-    let imported = AtomicU64::new(0);
-    let busy_freshness = std::thread::scope(|scope| {
-        scope.spawn(|| background(&engine, scratch.path(), &stop, &imported));
-        let samples = freshness(&engine, scratch.path(), "busy");
-        stop.store(true, Ordering::SeqCst);
-        samples
-    });
-    settle(&engine);
-    let freshness = json!({
-        "idle": idle_freshness,
-        "background-import": busy_freshness,
-        "definition": "first search hit (core clock) minus the acquisition's committed first_acquired_at",
-    });
-
-    mark("freshness");
-    let rebuild = rebuild(&engine, &probes[0]);
-    mark("rebuild");
-    let report = json!({
+    // Written after every phase: hours of measurement survive a later
+    // failure or a CI timeout.
+    let mut report = json!({
         "version": 1,
         "dataset": {
             "messages": rows,
@@ -205,19 +140,115 @@ fn search_timings() {
             "id": p.id, "class": p.class, "query": p.json,
             "scope": format!("{:?}", p.scope), "sort": format!("{:?}", p.sort),
         })).collect::<Vec<_>>(),
-        "phase_ms": phases,
-        "coverage_after_corpus": coverage,
-        "workloads": workloads,
-        "freshness": freshness,
-        "rebuild": rebuild,
+        "coverage_after_corpus": coverage_json(&engine),
+        "phase_ms": {},
+        "workloads": [],
+        "complete": false,
     });
+    save(&report);
+    let mut lap = Instant::now();
+    let mut mark = |report: &mut Value, name: &str| {
+        report["phase_ms"][name] = json!(ms(lap.elapsed()));
+        lap = Instant::now();
+        save(report);
+    };
+    // Idle: nothing else writes.
+    let (idle_cold, reopened) = cold(engine, &root, &probes, Background::Off);
+    engine = reopened;
+    let idle_warm = warm(&engine, &probes);
+    push_workload(
+        &mut report,
+        json!({
+            "name": "idle",
+            "active_workload": "none",
+            "cold": idle_cold,
+            "warm": idle_warm,
+            "counts": counts_json(&engine, &probes),
+            "coverage_ms": coverage_timings(&engine, &probes),
+            "ids_and_deep_page": ids_and_deep(&engine, &probes),
+            "coverage": coverage_json(&engine),
+        }),
+    );
+    mark(&mut report, "idle");
+
+    // Background: real imports and their index writes run throughout.
+    let (busy_cold, reopened) = cold(engine, &root, &probes, Background::Imports(scratch.path()));
+    engine = reopened;
+    let stop = AtomicBool::new(false);
+    let imported = AtomicU64::new(0);
+    let busy_warm = std::thread::scope(|scope| {
+        scope.spawn(|| background(&engine, scratch.path(), &stop, &imported));
+        let warm = warm(&engine, &probes);
+        stop.store(true, Ordering::SeqCst);
+        warm
+    });
+    settle(&engine);
+    push_workload(
+        &mut report,
+        json!({
+            "name": "background-import",
+            "active_workload": format!(
+                "a new {BACKGROUND_BATCH}-message mbox imported every {} s, each into a new mailbox, its job status polled every 10 ms; {} messages imported during the warm sample; each cold sample's reopen starts one",
+                BACKGROUND_PAUSE.as_secs(),
+                imported.load(Ordering::SeqCst)
+            ),
+            "cold": busy_cold,
+            "warm": busy_warm,
+            "coverage": coverage_json(&engine),
+        }),
+    );
+    mark(&mut report, "background-import");
+
+    let idle_freshness = freshness(&engine, scratch.path(), "idle");
+    let stop = AtomicBool::new(false);
+    let imported = AtomicU64::new(0);
+    let mut busy_freshness = std::thread::scope(|scope| {
+        scope.spawn(|| background(&engine, scratch.path(), &stop, &imported));
+        let samples = freshness(&engine, scratch.path(), "busy");
+        stop.store(true, Ordering::SeqCst);
+        samples
+    });
+    busy_freshness["messages_imported_alongside"] = json!(imported.load(Ordering::SeqCst));
+    settle(&engine);
+    report["freshness"] = json!({
+        "idle": idle_freshness,
+        "background-import": busy_freshness,
+        "definition": "first search hit (core clock, stamped when the read returns) minus the acquisition's committed first_acquired_at",
+    });
+
+    mark(&mut report, "freshness");
+    report["rebuild"] = rebuild(&engine, &probes[0]);
+    mark(&mut report, "rebuild");
+    report["complete"] = json!(true);
+    save(&report);
     let text = serde_json::to_string_pretty(&report).unwrap();
-    match std::env::var_os("SB_SEARCH_TIMINGS_OUT") {
-        Some(path) => fs::write(&path, &text).unwrap(),
-        None => println!("SEARCH_TIMINGS_JSON {text}"),
+    if std::env::var_os("SB_SEARCH_TIMINGS_OUT").is_none() {
+        println!("SEARCH_TIMINGS_JSON {text}");
     }
     println!("{text}");
+    // Checked only once the report is saved.
+    assert_eq!(
+        report["rebuild"]["reference_hits_after"],
+        json!(1),
+        "the rebuild lost the exact reference"
+    );
     block_on(engine.shutdown()).unwrap();
+}
+
+fn push_workload(report: &mut Value, workload: Value) {
+    report["workloads"].as_array_mut().unwrap().push(workload);
+}
+
+/// Write the report so far to `SB_SEARCH_TIMINGS_OUT`, whole: a
+/// temporary file renamed over the last one.
+fn save(report: &Value) {
+    let Some(path) = std::env::var_os("SB_SEARCH_TIMINGS_OUT") else {
+        return;
+    };
+    let path = PathBuf::from(path);
+    let partial = path.with_extension("partial");
+    fs::write(&partial, serde_json::to_string_pretty(report).unwrap()).unwrap();
+    fs::rename(&partial, &path).unwrap();
 }
 
 /// The query set (spec/11): an exact identifier and an exact address,
@@ -237,7 +268,7 @@ fn probes(rows: usize, projects: i64) -> Vec<Probe> {
         (
             "scoped-filter",
             "scoped filter",
-            r#"{"and":[{"field":"from","op":"domain","value":"beta.example"},{"date":{"after":"2025-01-01","tz":"UTC"}}]}"#.to_owned(),
+            r#"{"and":[{"field":"from","op":"domain","value":"beta.example"},{"date":{"after":"2024-03-01","tz":"UTC"}}]}"#.to_owned(),
             SearchScope::Mailbox(projects),
         ),
         (
@@ -314,6 +345,7 @@ fn cold(
     let mut value = json!({"queries": per_query, "core_open_ms": stats(&opens)});
     if let Background::Imports(_) = background {
         value["import_still_running_when_timed"] = json!(overlapped);
+        value["messages_imported"] = json!(COLD_ROUNDS * probes.len() * BACKGROUND_BATCH);
     }
     (value, engine)
 }
@@ -466,10 +498,10 @@ fn freshness(engine: &Engine, dir: &Path, label: &str) -> Value {
         let deadline = Instant::now() + FRESHNESS_DEADLINE;
         let sample = loop {
             if let Ok(window) = block_on(engine.open_window(spec.clone(), Anchor::Top, 1)) {
+                let hit = engine.resources().now().as_millis();
                 let found = !window.rows().is_empty();
                 block_on(engine.close_window(window.window_id()));
                 if found {
-                    let hit = engine.resources().now().as_millis();
                     let subject = format!("Freshness {word}");
                     let committed: i64 = engine
                         .resources()
@@ -495,7 +527,10 @@ fn freshness(engine: &Engine, dir: &Path, label: &str) -> Value {
         samples.push(sample);
         finish(engine, &job);
     }
-    json!({"ms": summary(&samples), "poll_interval_ms": 2})
+    json!({
+        "ms": summary(&samples),
+        "poll": "a one-row search each round, then a 2 ms sleep; a round costs a first page",
+    })
 }
 
 /// A full rebuild of the archive, last: reset and enqueue make Search
@@ -504,14 +539,23 @@ fn freshness(engine: &Engine, dir: &Path, label: &str) -> Value {
 fn rebuild(engine: &Engine, probe: &Probe) -> Value {
     let started = Instant::now();
     // Start commits the new job in reset, so "complete" means this one.
-    block_on(engine.start_search_rebuild(&engine.new_idempotency_key())).unwrap();
+    if let Err(error) = block_on(engine.start_search_rebuild(&engine.new_idempotency_key())) {
+        return json!({"error": format!("{error:?}")});
+    }
     settle(engine);
     let elapsed = ms(started.elapsed());
-    let window = block_on(engine.open_window(probe.spec(), Anchor::Top, FIRST_PAGE)).unwrap();
-    let found = window.rows().len();
-    block_on(engine.close_window(window.window_id()));
-    assert_eq!(found, 1, "the rebuild lost the exact reference");
-    json!({"ms": elapsed, "documents": value(engine, "SELECT count(*) FROM d_search_docs")})
+    let found = match block_on(engine.open_window(probe.spec(), Anchor::Top, FIRST_PAGE)) {
+        Ok(window) => {
+            block_on(engine.close_window(window.window_id()));
+            json!(window.rows().len())
+        }
+        Err(error) => json!(format!("{error:?}")),
+    };
+    json!({
+        "ms": elapsed,
+        "documents": value(engine, "SELECT count(*) FROM d_search_docs"),
+        "reference_hits_after": found,
+    })
 }
 
 /// Import a batch of new messages every `BACKGROUND_PAUSE` until
@@ -551,12 +595,17 @@ fn write_corpus(dir: &Path, rows: usize) -> (PathBuf, PathBuf) {
         if rng.below(20) == 0 {
             body.push_str(" The quarterly budget review is attached.");
         }
+        // "budget" without "review": hits for the negative body query.
+        if rng.below(30) == 0 {
+            body.push_str(" The budget draft is pending.");
+        }
         if n % 100 == 0 {
             subject.push_str(&format!(" ref{}", n / 100));
             body.push_str(&format!(" Reference ref{} follows.", n / 100));
         }
-        // Ten minutes apart, three to a timestamp: date pages cross ties.
-        let date = 1_704_067_200 + (n as i64 / 3) * 600;
+        // Three to a timestamp, so date pages cross ties, spread over
+        // the same 240 days from 2024-01-01 whatever the archive's size.
+        let date = 1_704_067_200 + (n as i64 / 3) * (DATE_SPAN_SECONDS * 3 / rows as i64);
         let text = message(
             &format!("<timing-{n}@example.test>"),
             &format!("sender{sender}@{domain}.example"),
@@ -632,6 +681,8 @@ fn format_date(seconds: i64) -> String {
 }
 
 const VOCABULARY: usize = 1_200;
+/// The archive's dates span 240 days.
+const DATE_SPAN_SECONDS: i64 = 240 * 86_400;
 
 /// A pronounceable synthetic word for `n` (two or three syllables).
 fn word(n: usize) -> String {
@@ -699,6 +750,14 @@ fn check_corpus(engine: &Engine, probes: &[Probe], rows: usize, failed: i64) {
         window
     };
     assert_eq!(first(&probes[0]).rows().len(), 1, "one exact reference");
+    // Every query class finds something, so pages carry rows.
+    for probe in probes.iter().step_by(2) {
+        assert!(
+            !first(probe).rows().is_empty(),
+            "{} finds nothing",
+            probe.id
+        );
+    }
     match first(&probes[4]).total() {
         Count::Exact(n) | Count::AtLeast(n) => assert!(n >= FIRST_PAGE as u64, "a common phrase"),
         Count::Unknown => panic!("the phrase count is unknown"),

@@ -699,7 +699,7 @@ local drafts. No network yet.
     verify still paused, resume to completion, inject I/O failure and retry.
     Verify coverage-only updates with no queue change and controls while
     Search is unavailable. No window-close cancellation of durable jobs.
-  - **M1.6q Latency recording — M:** reproducible 100k synthetic workload
+  - **M1.6q Latency recording — L:** reproducible 100k synthetic workload
     and machine-readable search timings (11); owns core latency acceptance.
     Depends on p2. Linux CI records without timing assertions; owner records
     Mac results against 06's budgets and verifies known-message searches for M1.Q.

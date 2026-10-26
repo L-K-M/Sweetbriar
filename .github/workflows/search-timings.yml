@@ -14,6 +14,8 @@ on:
       - 'Cargo.lock'
       - 'Cargo.toml'
       - 'rust-toolchain.toml'
+      # LIBSQLITE3_FLAGS: how the bundled SQLite is built.
+      - '.cargo/config.toml'
       - '.github/workflows/search-timings.yml'
   workflow_dispatch:
 
@@ -41,6 +43,9 @@ jobs:
           rustc -Vv
           echo "Runner image: ${ImageOS:-unknown} ${ImageVersion:-unknown}"
       - name: Record Search timings
+        # Leaves time for the upload, which keeps the report written
+        # after each phase even if this step runs out.
+        timeout-minutes: 315
         run: |
           export SB_RUSTC_VERSION="$(rustc -V)"
           cargo test -p sb-engine --release --lib search_timings \
