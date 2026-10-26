@@ -2,7 +2,8 @@
 // list over a `ListWindowModel` for the window the sidebar chose.
 // Showing another window closes the old model first, and a later
 // choice wins over one still opening. A status line covers the list
-// while it opens, when it is empty, and when it failed.
+// while it opens, when it is empty, and when it failed; Search results
+// carry a coverage strip below them.
 
 import AppKit
 import Observation
@@ -25,6 +26,10 @@ final class MessageListViewController: NSViewController {
     private var tickets = InstallTickets()
 
     private let statusLabel = NSTextField(labelWithString: "")
+
+    /// Search coverage, collapsed while no Search status shows.
+    private let coverage = SearchCoverageView()
+    private lazy var coverageCollapsed = coverage.heightAnchor.constraint(equalToConstant: 0)
 
     /// The list's generation after each new index: the sidebar
     /// re-reads its counts when it is newer than what it shows.
@@ -86,8 +91,17 @@ final class MessageListViewController: NSViewController {
         statusLabel.isHidden = true
         statusLabel.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(statusLabel)
+        coverage.isHidden = true
+        coverage.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(coverage)
         NSLayoutConstraint.activate([
-            search.view.topAnchor.constraint(equalTo: content.topAnchor),
+            coverage.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            coverage.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            coverage.bottomAnchor.constraint(equalTo: content.bottomAnchor),
+            coverageCollapsed,
+            // The window's content runs under the title bar; the field
+            // must sit below it to take clicks.
+            search.view.topAnchor.constraint(equalTo: content.safeAreaLayoutGuide.topAnchor),
             search.view.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             search.view.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             statusLabel.centerXAnchor.constraint(equalTo: content.centerXAnchor),
@@ -108,6 +122,7 @@ final class MessageListViewController: NSViewController {
         choiceSerial += 1
         opening = true
         updateStatus()
+        updateCoverage()
         // Take the ticket at the user/field choice, before scheduling can reorder it.
         Task { @MainActor [weak self] in
             await self?.install(spec, ticket: ticket)
@@ -128,7 +143,10 @@ final class MessageListViewController: NSViewController {
         let list = AppKitPrototypeList(
             model: model,
             formatter: formatter,
-            accountMarker: .hidden
+            accountMarker: .hidden,
+            // spec/08: reopen at Top once the selected message is no
+            // longer a hit.
+            selectionLoss: spec.isSearch ? .reopenAtTop : .keepPosition
         ) { [weak self] in
             self?.indexDidChange()
         }
@@ -141,13 +159,13 @@ final class MessageListViewController: NSViewController {
             list.topAnchor.constraint(equalTo: search.view.bottomAnchor),
             list.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             list.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            list.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            list.bottomAnchor.constraint(equalTo: coverage.topAnchor),
         ])
         self.model = model
         self.list = list
         onSelectionChange?([])
 
-        observeFailures(of: model)
+        observe(model)
         do {
             try await model.open()
         } catch {
@@ -157,6 +175,7 @@ final class MessageListViewController: NSViewController {
         guard tickets.isCurrent(ticket) else { return }
         opening = false
         updateStatus()
+        updateCoverage()
     }
 
     /// Close the list's model; the window is going away.
@@ -172,19 +191,24 @@ final class MessageListViewController: NSViewController {
         openError = nil
         list?.removeFromSuperview()
         list = nil
+        // The old results' note goes with them.
+        updateCoverage()
         await old?.close()
     }
 
-    /// Show the model's read failures as they happen: a page read or
-    /// the subscription can fail after the list opened.
-    private func observeFailures(of model: ListWindowModel) {
+    /// Show the model's read failures and Search status as they
+    /// happen: a page read or the subscription can fail after the list
+    /// opened, and each landing snapshot brings its own status.
+    private func observe(_ model: ListWindowModel) {
         withObservationTracking {
             _ = model.lastError
+            _ = model.searchStatus
         } onChange: { [weak self, weak model] in
             Task { @MainActor [weak self, weak model] in
                 guard let self, let model, self.model === model else { return }
                 self.updateStatus()
-                self.observeFailures(of: model)
+                self.updateCoverage()
+                self.observe(model)
             }
         }
     }
@@ -207,11 +231,29 @@ final class MessageListViewController: NSViewController {
         } else if opening, (model?.count ?? 0) == 0 {
             text = "Opening…"
         } else if let model, model.hasExactIndex, model.count == 0 {
-            text = "No messages"
+            text = shownSpec?.isSearch == true ? "No matching messages" : "No messages"
         } else {
             text = nil
         }
         statusLabel.stringValue = text ?? ""
         statusLabel.isHidden = text == nil
+    }
+
+    /// The coverage strip shows while Search results carry a status,
+    /// zero hits included (spec/08), and collapses otherwise.
+    private func updateCoverage() {
+        let status = shownSpec?.isSearch == true ? model?.searchStatus : nil
+        if let status {
+            coverage.show(SearchCoverageNote(status: status))
+        }
+        coverage.isHidden = status == nil
+        coverageCollapsed.isActive = status == nil
+    }
+}
+
+private extension WindowSpec {
+    var isSearch: Bool {
+        if case .search = self { return true }
+        return false
     }
 }

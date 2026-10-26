@@ -235,6 +235,11 @@ func ownedSearchOpenPreservesErrorsAndTaskCancellationThenShutdown() async throw
         try await settleSearch(bridge, rows: [])
         let healthy = try await bridge.openWindow(spec: .search(spec), anchor: .top, limit: 50)
         #expect(healthy.rows.isEmpty && healthy.search != nil)
+        // A zero-hit window's read still carries its status (spec/08).
+        let reread = try await bridge.readWindow(
+            id: healthy.windowId, generation: healthy.generation, anchor: .top, limit: 1
+        )
+        #expect(reread.rows.isEmpty && reread.search == healthy.search)
         let events = try await bridge.subscribe(windowId: healthy.windowId)
         await bridge.shutdown()
         let unavailable = try await coreFailure { _ = try await events.next() }

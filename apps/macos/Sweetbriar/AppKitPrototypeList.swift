@@ -35,12 +35,22 @@ final class AppKitPrototypeList: NSView {
         case hidden
     }
 
+    /// Where the list goes when a new index drops the whole
+    /// selection.
+    enum SelectionLoss {
+        case keepPosition
+        /// Back to the first row: Search does this once the selected
+        /// message is no longer a hit (spec/08).
+        case reopenAtTop
+    }
+
     /// The table's accessibility identifier, for UI tests.
     static let accessibilityID = "messageList"
 
     private let model: ListWindowModel
     private let formatter: MessageRowFormatter
     private let accountMarker: AccountMarker
+    private let selectionLoss: SelectionLoss
     private let scrollView = NSScrollView()
     private let tableView = NSTableView()
 
@@ -61,11 +71,13 @@ final class AppKitPrototypeList: NSView {
         model: ListWindowModel,
         formatter: MessageRowFormatter,
         accountMarker: AccountMarker = .shown,
+        selectionLoss: SelectionLoss = .keepPosition,
         onIndexChange: (@MainActor () -> Void)? = nil
     ) {
         self.model = model
         self.formatter = formatter
         self.accountMarker = accountMarker
+        self.selectionLoss = selectionLoss
         super.init(frame: .zero)
         buildTable()
         observeClipView()
@@ -82,8 +94,12 @@ final class AppKitPrototypeList: NSView {
         // A new index followed or dropped selected ids (spec/08).
         model.onSelectionChanged = { [weak self] ids in
             guard let self else { return }
+            let lost = ids.isEmpty && !selectedOccurrenceIDs.isEmpty
             selectedOccurrenceIDs = ids
             restoreSelection()
+            if lost, selectionLoss == .reopenAtTop {
+                scrollToRank(0)
+            }
             onSelectionChange?(ids)
         }
     }

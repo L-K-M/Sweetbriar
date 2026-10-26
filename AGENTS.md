@@ -84,6 +84,11 @@ list_window_timings -- --ignored --nocapture`.
   on the `SweetbriarSmoke` scheme): a bundled `.mbox` through File →
   Import… into fresh roots (`-dataRoot`, `-cacheRoot`, `-importPath`),
   the inventory, the report window, then the mailbox's two rows;
+- the search flow XCUITest (M1.6p, `SweetbriarUITests/SearchFlowTests`
+  on the same scheme): a Search typed into an empty archive follows an
+  import's invalidations, then body, subject and address queries, the
+  reader, scope and sort, a zero-hit coverage note with its details,
+  and clearing back to the mailbox;
 - the M0.10 list benchmark: the Release app launches with
   `-runListBenchmark <report.json>` after the Release zip step; the
   step passes when all four runs happened without a generation abort

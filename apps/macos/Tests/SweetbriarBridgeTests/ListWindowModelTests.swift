@@ -869,6 +869,7 @@ func theOpeningPageShowsBeforeTheIndex() async throws {
 
     let opening = Task { try await model.open() }
     try #require(await eventually { await fake.indexReads.count == 1 })
+    #expect(await fake.openLimits == [UInt32(ListWindowModel.pageSize)])
     #expect(model.count == ListWindowModel.pageSize)
     #expect(!model.hasExactIndex)
     model.setVisible(0 ..< 50)
