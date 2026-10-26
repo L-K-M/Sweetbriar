@@ -511,3 +511,75 @@ fn account_mailbox_copy_aliases_empty_scopes_and_oversized_packets_keep_boundari
     ));
     block_on(engine.shutdown()).unwrap();
 }
+
+#[test]
+fn reads_at_one_generation_share_coverage_and_later_pages_reuse_unknowns() {
+    let (scratch, engine) = indexed("search-memo", 4);
+    let pause = |state| {
+        block_on(
+            engine
+                .resources()
+                .write(sb_resources::WritePriority::User, move |tx| {
+                    sb_resources::set_user_pause(tx, state)
+                }),
+        )
+        .unwrap();
+        engine.indexer().wake();
+    };
+    pause(sb_resources::UserPause::Pause);
+    import(
+        &engine,
+        mbox(scratch.path(), "Pending.mbox", &[("alpha pending", None)]),
+    );
+    let memo = Arc::clone(engine.search_memo());
+    let scans = memo.coverage_scans();
+    let alpha = spec(r#"{"text":"alpha"}"#, SearchSort::Date);
+    let window = block_on(engine.open_window(alpha, Anchor::Top, 2)).unwrap();
+    let status = window.search().unwrap().clone();
+    assert_eq!(status.excluded_unknown(), 1);
+    assert_eq!(memo.coverage_scans(), scans + 1);
+
+    // Every other read at this generation reuses its scope counts and equals
+    // a fresh read.
+    let fresh = engine
+        .resources()
+        .read(|tx| sb_resources::read_search_coverage(tx, sb_resources::SearchScope::All))
+        .unwrap();
+    assert_eq!(status.coverage(), &fresh);
+    assert_eq!(block_on(engine.coverage(SearchScope::All)).unwrap(), fresh);
+    block_on(engine.window_ids(window.window_id())).unwrap();
+    let reuses = memo.unknown_reuses();
+    let after = Anchor::After(window.after().unwrap().clone());
+    let next =
+        block_on(engine.read_window(window.window_id(), window.generation(), after, 2)).unwrap();
+    assert_eq!(next.search(), Some(&status));
+    assert_eq!(memo.coverage_scans(), scans + 1);
+    assert_eq!(memo.unknown_reuses(), reuses + 1);
+
+    // Another window of the query pages with the same count; first pages,
+    // whether opened or re-read at Top, count again (spec/07).
+    let relevance = spec(r#"{"text":"alpha"}"#, SearchSort::Relevance);
+    let other = block_on(engine.open_window(relevance, Anchor::Top, 2)).unwrap();
+    let top = block_on(engine.read_window(other.window_id(), other.generation(), Anchor::Top, 2))
+        .unwrap();
+    assert_eq!(memo.unknown_reuses(), reuses + 1);
+    let after = Anchor::After(top.after().unwrap().clone());
+    let later =
+        block_on(engine.read_window(other.window_id(), other.generation(), after, 2)).unwrap();
+    assert_eq!(later.search().unwrap().excluded_unknown(), 1);
+    assert_eq!(memo.unknown_reuses(), reuses + 2);
+    assert_eq!(memo.coverage_scans(), scans + 1);
+
+    // Indexing the pending message moves the generation: both are read again.
+    pause(sb_resources::UserPause::Resume);
+    settled(&engine);
+    let current = block_on(engine.coverage(SearchScope::All)).unwrap();
+    assert_eq!(memo.coverage_scans(), scans + 2);
+    assert_eq!(current.pending, 0);
+    let reopened =
+        block_on(engine.read_window(window.window_id(), current.generation, Anchor::Top, 2))
+            .unwrap();
+    assert_eq!(reopened.search().unwrap().coverage(), &current);
+    assert_eq!(reopened.search().unwrap().excluded_unknown(), 0);
+    block_on(engine.shutdown()).unwrap();
+}

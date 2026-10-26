@@ -25,6 +25,7 @@ use std::time::{Duration, Instant};
 
 use sb_resources::{
     ImportJobState, Query, RebuildPhase, SearchScope as StoreScope, counts, latest_rebuild,
+    read_search_coverage,
 };
 use sb_test_support::{ScratchDir, block_on};
 use serde_json::{Value, json};
@@ -380,16 +381,28 @@ fn cold(
     (value, engine)
 }
 
-/// The warm sample: `WARM_SAMPLE` first-50 opens cycling the query set.
+/// The warm sample: `WARM_SAMPLE` first-50 opens cycling the query set,
+/// also split by whether the open scanned coverage's scope or reused its
+/// counts from the same generation (spec/07).
 fn warm(engine: &Engine, probes: &[Probe]) -> Value {
     let mut samples: Vec<Vec<Result<f64, String>>> = probes.iter().map(|_| Vec::new()).collect();
+    let (mut scanned, mut reused) = (Vec::new(), Vec::new());
     for n in 0..WARM_SAMPLE {
         let index = n % probes.len();
-        samples[index].push(first_page(engine, &probes[index]));
+        let scans = engine.search_memo().coverage_scans();
+        let sample = first_page(engine, &probes[index]);
+        if engine.search_memo().coverage_scans() > scans {
+            scanned.push(sample.clone());
+        } else {
+            reused.push(sample.clone());
+        }
+        samples[index].push(sample);
     }
     let all: Vec<Result<f64, String>> = samples.iter().flatten().cloned().collect();
     json!({
         "all": summary(&all),
+        "coverage_scanned": summary(&scanned),
+        "coverage_reused": summary(&reused),
         "queries": probes.iter().zip(&samples).map(|(probe, samples)| json!({
             "id": probe.id, "first50": summary(samples),
         })).collect::<Vec<_>>(),
@@ -442,7 +455,9 @@ fn counts_json(engine: &Engine, probes: &[Probe]) -> Vec<Value> {
         .collect()
 }
 
-/// Standalone scoped coverage, which every Search page also reads.
+/// Scoped coverage, which every Search read also takes: `ms` scans the
+/// scope each time; `reused_ms` is the engine's read at an unchanged
+/// generation, which reuses the scope counts.
 fn coverage_timings(engine: &Engine, probes: &[Probe]) -> Value {
     let mut scopes: Vec<SearchScope> = Vec::new();
     for probe in probes {
@@ -453,14 +468,28 @@ fn coverage_timings(engine: &Engine, probes: &[Probe]) -> Value {
     scopes
         .into_iter()
         .map(|scope| {
-            let times: Vec<f64> = (0..DETAIL_ROUNDS)
+            let stored = scope.stored().unwrap();
+            let scans: Vec<f64> = (0..DETAIL_ROUNDS)
+                .map(|_| {
+                    let stored = stored.clone();
+                    let started = Instant::now();
+                    engine
+                        .resources()
+                        .read(move |tx| read_search_coverage(tx, stored))
+                        .unwrap();
+                    ms(started.elapsed())
+                })
+                .collect();
+            // Prime the memo, so every timed read below reuses the counts.
+            block_on(engine.coverage(scope.clone())).unwrap();
+            let reused: Vec<f64> = (0..DETAIL_ROUNDS)
                 .map(|_| {
                     let started = Instant::now();
                     block_on(engine.coverage(scope.clone())).unwrap();
                     ms(started.elapsed())
                 })
                 .collect();
-            json!({"scope": format!("{scope:?}"), "ms": stats(&times)})
+            json!({"scope": format!("{scope:?}"), "ms": stats(&scans), "reused_ms": stats(&reused)})
         })
         .collect()
 }

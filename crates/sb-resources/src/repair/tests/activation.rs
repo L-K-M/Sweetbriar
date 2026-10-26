@@ -478,9 +478,18 @@ fn corrupt_bound_source_is_typed_even_under_masked_false_unknown_and_ineligible_
         } else {
             assert_eq!(activate(&resources, 1), ActivationCommit::Activated);
         }
+        // Scope counts kept before the damage stay current (the raw edit
+        // moves no generation), yet reusing them still checks bindings.
+        let (coverage, kept) = resources
+            .read(|tx| crate::read_search_coverage_reusing(tx, crate::SearchScope::All, None))
+            .unwrap();
         edit(
             &resources,
             "UPDATE acquisitions SET byte_length=byte_length+1 WHERE acquisition_id=1",
+        );
+        assert_eq!(
+            resources.read(|tx| crate::search_generation(tx)).unwrap() as u64,
+            coverage.generation
         );
         assert!(matches!(
             block_on(resources.begin_activation(1)),
@@ -521,6 +530,14 @@ fn corrupt_bound_source_is_typed_even_under_masked_false_unknown_and_ineligible_
                 resources.read(|tx| crate::read_search_coverage(tx, scope.clone())),
                 Err(StoreError::Corrupt { .. })
             ));
+            assert!(matches!(
+                resources.read(|tx| crate::read_search_coverage_reusing(
+                    tx,
+                    scope.clone(),
+                    Some(&kept)
+                )),
+                Err(StoreError::Corrupt { .. })
+            ));
             assert!(
                 matches!(
                     resources.read(|tx| crate::search_date_ids(tx, &query, scope.clone(), None)),
@@ -547,7 +564,8 @@ fn corrupt_bound_source_is_typed_even_under_masked_false_unknown_and_ineligible_
                     scope.clone(),
                     crate::SearchAnchor::Top,
                     10,
-                    None
+                    None,
+                    crate::Kept::default()
                 )),
                 Err(StoreError::Corrupt { .. })
             ));
@@ -558,7 +576,8 @@ fn corrupt_bound_source_is_typed_even_under_masked_false_unknown_and_ineligible_
                     scope,
                     crate::SearchAnchor::Top,
                     10,
-                    None
+                    None,
+                    crate::Kept::default()
                 )),
                 Err(StoreError::Corrupt { .. })
             ));

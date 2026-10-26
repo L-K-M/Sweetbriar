@@ -137,6 +137,26 @@ struct Hit {
     key: Key,
 }
 
+/// What a caller kept from earlier reads of the same store (spec/07); the
+/// default keeps nothing, so the page reads everything itself.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Kept {
+    pub unknown: UnknownCount,
+}
+
+/// A page's exact final-unknown count: counted, or reused from an earlier
+/// read of the same query and scope at `generation`. A count from another
+/// generation is never reused; the page counts again.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum UnknownCount {
+    #[default]
+    Count,
+    Reuse {
+        generation: u64,
+        excluded_unknown: u64,
+    },
+}
+
 #[derive(Clone, Copy)]
 enum Side {
     Before,
@@ -151,8 +171,9 @@ pub fn read_search_date_page(
     anchor: SearchAnchor,
     limit: usize,
     at: Option<u64>,
+    kept: Kept,
 ) -> Result<PageRead<SearchPage>, StoreError> {
-    read_page(tx, query, scope, anchor, limit, at, Sort::Date)
+    read_page(tx, query, scope, anchor, limit, at, kept, Sort::Date)
 }
 
 /// Read a native weighted-BM25 page, with every result from the supplied tx.
@@ -163,10 +184,12 @@ pub fn read_search_relevance_page(
     anchor: SearchAnchor,
     limit: usize,
     at: Option<u64>,
+    kept: Kept,
 ) -> Result<PageRead<SearchPage>, StoreError> {
-    read_page(tx, query, scope, anchor, limit, at, Sort::Relevance)
+    read_page(tx, query, scope, anchor, limit, at, kept, Sort::Relevance)
 }
 
+#[allow(clippy::too_many_arguments)] // both public sorts' parameters plus the sort
 fn read_page(
     tx: &Transaction,
     query: &Query,
@@ -174,6 +197,7 @@ fn read_page(
     anchor: SearchAnchor,
     limit: usize,
     at: Option<u64>,
+    kept: Kept,
     sort: Sort,
 ) -> Result<PageRead<SearchPage>, StoreError> {
     if !(1..=lists::MAX_PAGE_ROWS).contains(&limit) {
@@ -287,16 +311,25 @@ fn read_page(
             row,
         })
         .collect();
-    let sql = format!("SELECT coalesce(sum(v IS NULL),0) FROM ({})", plan.source);
-    let raw = plan.read(tx, &sql, &[], |statement, values| {
-        statement.query_row(params_from_iter(values), |row| row.get(0))
-    })?;
+    let excluded_unknown = match kept.unknown {
+        UnknownCount::Reuse {
+            generation,
+            excluded_unknown,
+        } if generation == binding.generation => excluded_unknown,
+        _ => {
+            let sql = format!("SELECT coalesce(sum(v IS NULL),0) FROM ({})", plan.source);
+            let raw = plan.read(tx, &sql, &[], |statement, values| {
+                statement.query_row(params_from_iter(values), |row| row.get(0))
+            })?;
+            nonnegative_count(raw)?
+        }
+    };
     Ok(PageRead::Ready(SearchPage {
         generation: binding.generation,
         rows,
         has_more_before: before,
         has_more_after: after,
-        excluded_unknown: nonnegative_count(raw)?,
+        excluded_unknown,
     }))
 }
 

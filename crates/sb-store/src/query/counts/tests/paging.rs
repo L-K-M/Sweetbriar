@@ -13,7 +13,8 @@ fn read(
     at: Option<u64>,
 ) -> Result<PageRead<SearchPage>, StoreError> {
     let tx = conn.unchecked_transaction().unwrap();
-    let result = read_search_date_page(&tx, &query(node), scope, anchor, limit, at);
+    let result =
+        read_search_date_page(&tx, &query(node), scope, anchor, limit, at, Kept::default());
     tx.commit().unwrap();
     result
 }
@@ -760,6 +761,7 @@ fn a_wal_writer_cannot_move_page_rows_ids_unknowns_or_generation() {
         SearchAnchor::Top,
         2,
         None,
+        Kept::default(),
     ));
     assert_eq!(row_ids(&before), [4, 3]);
     assert_eq!(before.excluded_unknown(), 2);
@@ -785,6 +787,7 @@ fn a_wal_writer_cannot_move_page_rows_ids_unknowns_or_generation() {
         SearchAnchor::Top,
         2,
         Some(before.generation()),
+        Kept::default(),
     ));
     assert_eq!(held, before);
     assert_eq!(
@@ -794,7 +797,7 @@ fn a_wal_writer_cannot_move_page_rows_ids_unknowns_or_generation() {
     tx.commit().unwrap();
     let tx = reader.unchecked_transaction().unwrap();
     assert!(
-        matches!(read_search_date_page(&tx,&node,SearchScope::All,SearchAnchor::After(cursor(&before,0)),2,None),
+        matches!(read_search_date_page(&tx,&node,SearchScope::All,SearchAnchor::After(cursor(&before,0)),2,None, Kept::default()),
         Ok(PageRead::Stale{generation}) if generation==before.generation()+1)
     );
     let fresh = ready(read_search_date_page(
@@ -804,9 +807,44 @@ fn a_wal_writer_cannot_move_page_rows_ids_unknowns_or_generation() {
         SearchAnchor::Top,
         2,
         None,
+        Kept::default(),
     ));
     assert_eq!(fresh.generation(), before.generation() + 1);
     assert_eq!(row_ids(&fresh), [1, 4]);
     assert_eq!(fresh.excluded_unknown(), 1);
     tx.commit().unwrap();
+}
+
+#[test]
+fn later_pages_reuse_an_unknown_count_only_at_its_generation() {
+    let conn = fixture(3);
+    edit(&conn, "UPDATE occurrences SET f_seen=(message_id>=2)");
+    let node = json!({"or":[{"flag":"seen"},{"text":"unindexed"}]});
+    let first = page(&conn, node.clone(), SearchAnchor::Top, 1);
+    assert_eq!(first.excluded_unknown(), 1);
+    let generation = first.generation();
+    let after = |unknown| {
+        let tx = conn.unchecked_transaction().unwrap();
+        let next = ready(read_search_date_page(
+            &tx,
+            &query(node.clone()),
+            SearchScope::All,
+            SearchAnchor::After(cursor(&first, 0)),
+            1,
+            Some(generation),
+            Kept { unknown },
+        ));
+        tx.commit().unwrap();
+        next.excluded_unknown()
+    };
+
+    // A kept count is trusted at its own generation and recounted otherwise.
+    let kept = |generation| UnknownCount::Reuse {
+        generation,
+        excluded_unknown: 7,
+    };
+    assert_eq!(after(kept(generation)), 7);
+    assert_eq!(after(kept(generation - 1)), 1);
+    assert_eq!(after(kept(generation + 1)), 1);
+    assert_eq!(after(UnknownCount::Count), 1);
 }

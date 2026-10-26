@@ -405,3 +405,44 @@ fn wal_reader_cannot_mix_counts_version_pause_or_generation() {
         }
     );
 }
+
+#[test]
+fn kept_scope_counts_are_reused_only_for_their_scope_generation_and_target() {
+    let conn = fixture(3);
+    let reading = |scope, kept: Option<&CoverageCounts>| {
+        let tx = conn.unchecked_transaction().unwrap();
+        let read = read_search_coverage_reusing(&tx, scope, kept).unwrap();
+        tx.commit().unwrap();
+        read
+    };
+    let (first, kept) = reading(SearchScope::All, None);
+    assert_eq!(first.indexed, 0);
+
+    // A raw write moves no generation, so reuse shows the kept counts while
+    // a scan, or another scope, sees the document.
+    let generation = index::search_generation(&conn).unwrap();
+    doc(&conn, 1, "indexed", "[]", &[("subject", "alpha")]);
+    assert_eq!(index::search_generation(&conn).unwrap(), generation);
+    let (reused, again) = reading(SearchScope::All, Some(&kept));
+    assert_eq!((reused.indexed, &again), (0, &kept));
+    assert_eq!(reading(SearchScope::All, None).0.indexed, 1);
+    let (mailbox, counts) = reading(SearchScope::Mailbox(1), Some(&kept));
+    assert_eq!(
+        (mailbox.indexed, counts.scope()),
+        (1, &SearchScope::Mailbox(1))
+    );
+
+    // A new generation or target makes the kept counts stale.
+    edit(
+        &conn,
+        "UPDATE store_meta SET value=value+1 WHERE key='search_generation'",
+    );
+    let (fresh, kept) = reading(SearchScope::All, Some(&kept));
+    assert_eq!(fresh.indexed, 1);
+    edit(
+        &conn,
+        "UPDATE store_meta SET value='2' WHERE key='search_extractor_version'",
+    );
+    let (retargeted, _) = reading(SearchScope::All, Some(&kept));
+    assert_eq!((retargeted.extractor_version, retargeted.indexed), (2, 0));
+}

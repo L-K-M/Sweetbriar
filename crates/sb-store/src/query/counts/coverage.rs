@@ -1,10 +1,11 @@
 //! Query-independent coverage facts, captured in the caller's read snapshot.
 
-use rusqlite::{Transaction, params_from_iter};
+use rusqlite::{Transaction, params_from_iter, types::Value};
 
-use super::{SearchScope, nonnegative_count, scoped, source, sql_error};
+use super::{SearchScope, candidates, nonnegative_count, scoped, sql_error};
 use crate::StoreError;
 use crate::index::{rebuild, search_generation, target_version};
+use crate::message_source::{self, MESSAGES, STORED_BOUND, Source};
 use rebuild::{RebuildPhase, SearchIoCode};
 
 /// Owned coverage values; fields are public for the facade/engine's mapping.
@@ -55,12 +56,45 @@ pub enum SearchLimitation {
     AttachmentTextUnavailable,
 }
 
+/// The scope scan behind coverage's message counts, valid only for the store
+/// it was read from and its scope, search generation and extractor target
+/// (spec/07: the generation advances with every input the scan reads).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CoverageCounts {
+    scope: SearchScope,
+    generation: u64,
+    extractor_version: u32,
+    counts: [u64; 7],
+}
+
+impl CoverageCounts {
+    pub fn scope(&self) -> &SearchScope {
+        &self.scope
+    }
+
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+}
+
 /// Scoped message facts plus global operational metadata, without query gates.
 pub fn read_search_coverage(
     tx: &Transaction,
     scope: SearchScope,
 ) -> Result<StoredSearchCoverage, StoreError> {
-    let (scope, mut values) = scoped(tx, scope)?;
+    read_search_coverage_reusing(tx, scope, None).map(|(coverage, _)| coverage)
+}
+
+/// Coverage that reuses `kept` scope counts when they match this snapshot's
+/// scope, generation and target, else scans; it always checks the scope's
+/// bindings and reads the global state afresh. Returns the counts used.
+pub fn read_search_coverage_reusing(
+    tx: &Transaction,
+    scope: SearchScope,
+    kept: Option<&CoverageCounts>,
+) -> Result<(StoredSearchCoverage, CoverageCounts), StoreError> {
+    let (filter, values) = scoped(tx, scope.clone())?;
+    check_bindings(tx, filter, &values)?;
     let generation = nonnegative_count(search_generation(tx)?)?;
     let extractor_version = target_version(tx)?;
     let status = rebuild::search_index_status(tx)?;
@@ -68,42 +102,22 @@ pub fn read_search_coverage(
     let resetting = job
         .as_ref()
         .is_some_and(|job| matches!(job.phase(), RebuildPhase::Reset | RebuildPhase::Enqueue));
-    values.push(extractor_version.into());
-    let version = values.len();
-    let sql = format!(
-        "SELECT count(*),
-         coalesce(sum(h.message_id IS NOT NULL OR ({state}) IN ('ok','partial')),0),
-         coalesce(sum(a.object_state='published'),0),
-         coalesce(sum(a.object_state='published' AND d.extractor_version=?{version} AND d.state='indexed'),0),
-         coalesce(sum(a.object_state='published' AND d.extractor_version=?{version} AND d.state='partial'),0),
-         coalesce(sum(a.object_state='published' AND d.extractor_version=?{version} AND d.state='failed'),0),
-         count(DISTINCT CASE WHEN q.doc_id IS NOT NULL THEN lm.acquisition_id END),
-         coalesce(sum(({validity})<0),0)
-         FROM {} LEFT JOIN d_search_docs d ON d.doc_id=lm.acquisition_id
-          LEFT JOIN d_index_queue q ON q.doc_id=lm.acquisition_id WHERE {scope}", source(),
-          state=crate::message_source::Source::Stored.field("parse_state"),
-          validity=crate::message_source::Source::Stored.validity()
-    );
-    let raw: [i64; 7] = tx
-        .query_row(&sql, params_from_iter(&values), |row| {
-            if row.get::<_, i64>(7)? != 0 {
-                return Err(crate::message_source::invalid());
-            }
-            Ok([
-                row.get(0)?,
-                row.get(1)?,
-                row.get(2)?,
-                row.get(3)?,
-                row.get(4)?,
-                row.get(5)?,
-                row.get(6)?,
-            ])
-        })
-        .map_err(sql_error)?;
-    let mut counts = [0; 7];
-    for (count, raw) in counts.iter_mut().zip(raw) {
-        *count = nonnegative_count(raw)?;
-    }
+    let scanned = match kept {
+        Some(kept)
+            if kept.scope == scope
+                && kept.generation == generation
+                && kept.extractor_version == extractor_version =>
+        {
+            kept.clone()
+        }
+        _ => CoverageCounts {
+            counts: scan(tx, filter, values, extractor_version)?,
+            scope,
+            generation,
+            extractor_version,
+        },
+    };
+    let counts = scanned.counts;
     let [
         total_messages,
         headers_synced,
@@ -157,7 +171,7 @@ pub fn read_search_coverage(
             })
         })
         .transpose()?;
-    Ok(StoredSearchCoverage {
+    let coverage = StoredSearchCoverage {
         generation,
         extractor_version,
         total_messages,
@@ -174,5 +188,81 @@ pub fn read_search_coverage(
             SearchLimitation::CjkUnsegmented,
             SearchLimitation::AttachmentTextUnavailable,
         ],
-    })
+    };
+    Ok((coverage, scanned))
+}
+
+/// Total, headers synced, bodies acquired, indexed, partial, failed and
+/// queued acquisitions over the scope.
+fn scan(
+    tx: &Transaction,
+    filter: &str,
+    mut values: Vec<Value>,
+    extractor_version: u32,
+) -> Result<[u64; 7], StoreError> {
+    // Queued acquisitions in scope, driven from the queue: usually few.
+    let queued = format!(
+        "SELECT count(DISTINCT lm.acquisition_id) FROM d_index_queue q
+         CROSS JOIN {MESSAGES} ON lm.acquisition_id=q.doc_id
+         CROSS JOIN d_list_rows r ON r.message_id=lm.message_id WHERE {filter}"
+    );
+    let queued: i64 = tx
+        .query_row(&queued, params_from_iter(&values), |row| row.get(0))
+        .map_err(sql_error)?;
+
+    // One pass over the scope. Headers count as synced from a header row or
+    // an ok/partial parse; a bound message parses as ok (02), so its binding
+    // is looked up only when neither holds. SQLite keeps unused LEFT JOINs in
+    // aggregates, so the scan joins only what it reads. Dropping the others
+    // keeps every count because each joined on a unique key (one binding per
+    // message, one assembly per binding, one acquisition per message).
+    values.push(extractor_version.into());
+    let version = values.len();
+    let sql = format!(
+        "SELECT count(*),
+         coalesce(sum(CASE WHEN h.message_id IS NOT NULL OR s.parse_state IN ('ok','partial') THEN 1
+           WHEN {STORED_BOUND} THEN 1 ELSE 0 END),0),
+         coalesce(sum(a.object_state='published'),0),
+         coalesce(sum(a.object_state='published' AND d.extractor_version=?{version} AND d.state='indexed'),0),
+         coalesce(sum(a.object_state='published' AND d.extractor_version=?{version} AND d.state='partial'),0),
+         coalesce(sum(a.object_state='published' AND d.extractor_version=?{version} AND d.state='failed'),0)
+         FROM {} LEFT JOIN d_search_docs d ON d.doc_id=lm.acquisition_id WHERE {filter}",
+        candidates("LEFT JOIN d_message_summary s ON s.acquisition_id=lm.acquisition_id")
+    );
+    let raw: [i64; 6] = tx
+        .query_row(&sql, params_from_iter(&values), |row| {
+            Ok([
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+            ])
+        })
+        .map_err(sql_error)?;
+    let mut counts = [0; 7];
+    for (count, raw) in counts.iter_mut().zip(raw.into_iter().chain([queued])) {
+        *count = nonnegative_count(raw)?;
+    }
+    Ok(counts)
+}
+
+/// Fail with `Corrupt` when a scoped binding is invalid (02), at a cost per
+/// binding rather than per message.
+fn check_bindings(tx: &Transaction, filter: &str, values: &[Value]) -> Result<(), StoreError> {
+    let sql = format!(
+        "SELECT EXISTS(SELECT 1 FROM {}
+         CROSS JOIN d_list_rows r ON r.message_id=lm.message_id
+         WHERE {filter} AND ({})<0)",
+        message_source::bindings(),
+        Source::Stored.validity()
+    );
+    let invalid: bool = tx
+        .query_row(&sql, params_from_iter(values), |row| row.get(0))
+        .map_err(sql_error)?;
+    if invalid {
+        return Err(sql_error(message_source::invalid()));
+    }
+    Ok(())
 }

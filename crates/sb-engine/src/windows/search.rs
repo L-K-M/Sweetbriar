@@ -1,10 +1,11 @@
-//! Checked Search specs and same-snapshot page/status reads, without count caches.
+//! Checked Search specs and same-snapshot page/status reads; coverage and
+//! later pages' unknown counts come from the per-generation Search memo.
 
 use super::*;
 use crate::{Coverage, SearchIndexState, SearchScope};
 use sb_resources::{
-    Query, SearchAnchor, SearchPage, SearchScope as StoreScope, StoreError, Transaction,
-    read_search_coverage, read_search_date_page, read_search_relevance_page, search_date_ids,
+    Kept, PageRead, Query, SearchAnchor, SearchPage, SearchScope as StoreScope, StoreError,
+    Transaction, UnknownCount, read_search_date_page, read_search_relevance_page, search_date_ids,
     search_relevance_ids,
 };
 
@@ -177,16 +178,43 @@ impl Engine {
             Anchor::After(cursor) => SearchAnchor::After(cursor.0),
             Anchor::Before(cursor) => SearchAnchor::Before(cursor.0),
         };
+        // spec/07: only later pages reuse a count; a first page counts.
+        let memo = Arc::clone(self.search_memo());
+        let later = at.is_some() && !matches!(native, SearchAnchor::Top);
+        let unknown = if later {
+            memo.unknown(query.canonical_json(), &scope)
+        } else {
+            UnknownCount::Count
+        };
+        let kept = Kept { unknown };
+        let page_query = Arc::clone(&query);
+        let page_scope = scope.clone();
         let (coverage, read) = self
-            .search_snapshot(scope.clone(), move |tx| match spec.sort {
-                SearchSort::Date => {
-                    read_search_date_page(tx, &query, scope, native, limit as usize, at)
-                }
-                SearchSort::Relevance => {
-                    read_search_relevance_page(tx, &query, scope, native, limit as usize, at)
+            .search_snapshot(scope.clone(), move |tx| {
+                let (query, scope, limit) = (&page_query, page_scope, limit as usize);
+                match spec.sort {
+                    SearchSort::Date => {
+                        read_search_date_page(tx, query, scope, native, limit, at, kept)
+                    }
+                    SearchSort::Relevance => {
+                        read_search_relevance_page(tx, query, scope, native, limit, at, kept)
+                    }
                 }
             })
             .await?;
+        if let PageRead::Ready(page) = &read {
+            #[cfg(test)]
+            if matches!(unknown, UnknownCount::Reuse { generation, .. } if generation == page.generation())
+            {
+                memo.reused_unknown();
+            }
+            memo.keep_unknown(
+                query.canonical_json(),
+                scope,
+                page.generation(),
+                page.excluded_unknown(),
+            );
+        }
         Ok(SearchRead {
             coverage,
             page: store_outcome(read, &outcome_anchor)?,
@@ -209,7 +237,7 @@ impl Engine {
         Ok(WindowIds { generation, ids })
     }
 
-    /// Page/ids and capability share one snapshot; failure state is never cached.
+    /// Page/ids and capability share one snapshot; failure state is never kept.
     async fn search_snapshot<T, F>(
         &self,
         scope: StoreScope,
@@ -220,10 +248,11 @@ impl Engine {
         F: FnOnce(&Transaction) -> Result<T, StoreError> + Send + 'static,
     {
         let index = Arc::clone(self.indexer());
+        let memo = Arc::clone(self.search_memo());
         self.read_through(move |resources| {
             index.readable()?;
             let result = resources.read(|tx| {
-                let coverage = read_search_coverage(tx, scope)?;
+                let coverage = memo.coverage(tx, scope)?;
                 if coverage.index_state == SearchIndexState::BlockedNewerExtractor {
                     return Err(StoreError::Unavailable {
                         reason: "Search needs a newer app for this index. Update Sweetbriar."
