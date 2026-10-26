@@ -410,13 +410,15 @@ impl Compiler {
         let phrase = self.bind(literal.clone());
         let needed = self.bind(columns.join(","));
         let target = self.bind(self.target);
+        // The MATCH runs once per statement (06): an uncorrelated rowid
+        // list probed per candidate, not an FTS query per candidate.
         let check = format!(
             "CASE WHEN (SELECT {MASK_FN}(d.state, d.truncated_fields, {needed})
                 FROM d_search_docs d WHERE d.doc_id = lm.acquisition_id
                 AND d.state IN ('indexed','partial') AND d.extractor_version = {target}
                 AND a.object_state = 'published')
-             THEN EXISTS(SELECT 1 FROM d_search_fts WHERE d_search_fts MATCH {phrase}
-                AND rowid = lm.acquisition_id) ELSE NULL END"
+             THEN lm.acquisition_id IN (SELECT rowid FROM d_search_fts WHERE d_search_fts MATCH {phrase})
+                ELSE NULL END"
         );
         if !self.negated && !self.leaves.iter().any(|leaf| leaf.literal == literal) {
             self.leaves.push(ScoreLeaf {
