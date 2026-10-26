@@ -9,6 +9,7 @@ use crate::testing::FIXED_NOW_MS;
 use crate::testing::fixtures::{acquisitions, archive_account, index_connection, mailbox, message};
 
 mod coverage;
+mod driven;
 mod paging;
 mod plans;
 

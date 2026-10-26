@@ -4,9 +4,9 @@
 use super::*;
 use crate::{Coverage, SearchIndexState, SearchScope};
 use sb_resources::{
-    Kept, PageRead, Query, SearchAnchor, SearchPage, SearchScope as StoreScope, StoreError,
-    Transaction, UnknownCount, read_search_date_page, read_search_relevance_page, search_date_ids,
-    search_relevance_ids,
+    CoverageCounts, Kept, PageRead, Query, SearchAnchor, SearchPage, SearchScope as StoreScope,
+    StoreError, Transaction, UnknownCount, read_search_date_page, read_search_relevance_page,
+    search_date_ids, search_relevance_ids,
 };
 
 /// Both complete Store sorts (spec/06); lower native BM25 scores rank first.
@@ -186,12 +186,15 @@ impl Engine {
         } else {
             UnknownCount::Count
         };
-        let kept = Kept { unknown };
         let page_query = Arc::clone(&query);
         let page_scope = scope.clone();
         let (coverage, read) = self
-            .search_snapshot(scope.clone(), move |tx| {
+            .search_snapshot(scope.clone(), move |tx, counts| {
                 let (query, scope, limit) = (&page_query, page_scope, limit as usize);
+                let kept = Kept {
+                    unknown,
+                    coverage: Some(counts),
+                };
                 match spec.sort {
                     SearchSort::Date => {
                         read_search_date_page(tx, query, scope, native, limit, at, kept)
@@ -228,16 +231,19 @@ impl Engine {
         let query = spec.query()?;
         let scope = spec.scope.stored()?;
         let (_, read) = self
-            .search_snapshot(scope.clone(), move |tx| match spec.sort {
-                SearchSort::Date => search_date_ids(tx, &query, scope, None),
-                SearchSort::Relevance => search_relevance_ids(tx, &query, scope, None),
+            .search_snapshot(scope.clone(), move |tx, counts| match spec.sort {
+                SearchSort::Date => search_date_ids(tx, &query, scope, None, Some(counts)),
+                SearchSort::Relevance => {
+                    search_relevance_ids(tx, &query, scope, None, Some(counts))
+                }
             })
             .await?;
         let (generation, ids) = store_outcome(read, &Anchor::Top)?;
         Ok(WindowIds { generation, ids })
     }
 
-    /// Page/ids and capability share one snapshot; failure state is never kept.
+    /// Page/ids and capability share one snapshot; failure state is never
+    /// kept. The body gets coverage's scope counts, its driven-read proof.
     async fn search_snapshot<T, F>(
         &self,
         scope: StoreScope,
@@ -245,14 +251,14 @@ impl Engine {
     ) -> Result<(Coverage, T), EngineError>
     where
         T: Send + 'static,
-        F: FnOnce(&Transaction) -> Result<T, StoreError> + Send + 'static,
+        F: FnOnce(&Transaction, &CoverageCounts) -> Result<T, StoreError> + Send + 'static,
     {
         let index = Arc::clone(self.indexer());
         let memo = Arc::clone(self.search_memo());
         self.read_through(move |resources| {
             index.readable()?;
             let result = resources.read(|tx| {
-                let coverage = memo.coverage(tx, scope)?;
+                let (coverage, counts) = memo.coverage(tx, scope)?;
                 if coverage.index_state == SearchIndexState::BlockedNewerExtractor {
                     return Err(StoreError::Unavailable {
                         reason: "Search needs a newer app for this index. Update Sweetbriar."
@@ -262,7 +268,7 @@ impl Engine {
                 }
                 #[cfg(test)]
                 index.event(crate::index::Event::SearchReadCaptured);
-                Ok((coverage, body(tx)?))
+                Ok((coverage, body(tx, &counts)?))
             });
             index.readable()?;
             result

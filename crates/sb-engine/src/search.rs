@@ -41,19 +41,19 @@ struct KeptUnknown {
 
 impl SearchMemo {
     /// Coverage at the snapshot's generation, scanning the scope once per
-    /// generation.
+    /// generation, with the scope counts that prove driven reads (spec/06).
     pub(crate) fn coverage(
         &self,
         tx: &Transaction,
         scope: StoreScope,
-    ) -> Result<Coverage, StoreError> {
+    ) -> Result<(Coverage, CoverageCounts), StoreError> {
         let kept = lock(&self.coverage)
             .iter()
             .find(|kept| kept.scope() == &scope)
             .cloned();
         let (coverage, counts) = read_search_coverage_reusing(tx, scope, kept.as_ref())?;
         if kept.as_ref() == Some(&counts) {
-            return Ok(coverage);
+            return Ok((coverage, counts));
         }
 
         #[cfg(test)]
@@ -63,14 +63,14 @@ impl SearchMemo {
         if kept.iter().any(|other| {
             other.scope() == counts.scope() && other.generation() > counts.generation()
         }) {
-            return Ok(coverage);
+            return Ok((coverage, counts));
         }
         kept.retain(|other| other.scope() != counts.scope());
-        kept.push(counts);
+        kept.push(counts.clone());
         if kept.len() > MEMO_ENTRIES {
             kept.remove(0);
         }
-        Ok(coverage)
+        Ok((coverage, counts))
     }
 
     /// The count kept for this query and scope; a page reuses it only at its
@@ -193,7 +193,8 @@ impl Engine {
         let memo = Arc::clone(self.search_memo());
         self.read_through(move |resources| {
             index.readable()?;
-            let result = resources.read(|tx| memo.coverage(tx, scope));
+            let result =
+                resources.read(|tx| memo.coverage(tx, scope).map(|(coverage, _)| coverage));
             index.readable()?;
             result
         })

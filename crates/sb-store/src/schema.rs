@@ -37,7 +37,8 @@ pub(crate) struct Migration {
 /// version 5 versions the search queue; version 6 adds the durable
 /// search index state and rebuild jobs; version 7 keeps received-address history;
 /// version 8 stages immutable full-summary repair versions;
-/// version 9 retains terminal repair attempts; version 10 freezes completed publications.
+/// version 9 retains terminal repair attempts; version 10 freezes completed publications;
+/// version 13 indexes what driven Search reads enumerate.
 pub(crate) const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 1,
@@ -86,6 +87,10 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 12,
         run: migration_12,
+    },
+    Migration {
+        version: 13,
+        run: migration_13,
     },
 ];
 
@@ -626,6 +631,12 @@ fn migration_11(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
 
 fn migration_12(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
     tx.execute_batch(include_str!("schema/v12.sql"))
+        .map_err(bug)
+}
+
+/// Indexes the unusable classes driven Search reads enumerate (spec/06).
+fn migration_13(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
+    tx.execute_batch(include_str!("schema/v13.sql"))
         .map_err(bug)
 }
 

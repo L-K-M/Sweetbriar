@@ -478,6 +478,14 @@ fn corrupt_bound_source_is_typed_even_under_masked_false_unknown_and_ineligible_
         } else {
             assert_eq!(activate(&resources, 1), ActivationCommit::Activated);
         }
+        // An indexed document that matches nothing keeps message 1 out of
+        // every driven read's kept set.
+        edit(
+            &resources,
+            "DELETE FROM d_index_queue WHERE doc_id=1;
+             INSERT OR REPLACE INTO d_search_docs(doc_id,extractor_version,state,truncated_fields)
+             SELECT 1,value,'indexed','[]' FROM store_meta WHERE key='search_extractor_version'",
+        );
         // Scope counts kept before the damage stay current (the raw edit
         // moves no generation), yet reusing them still checks bindings.
         let (coverage, kept) = resources
@@ -540,7 +548,13 @@ fn corrupt_bound_source_is_typed_even_under_masked_false_unknown_and_ineligible_
             ));
             assert!(
                 matches!(
-                    resources.read(|tx| crate::search_date_ids(tx, &query, scope.clone(), None)),
+                    resources.read(|tx| crate::search_date_ids(
+                        tx,
+                        &query,
+                        scope.clone(),
+                        None,
+                        None
+                    )),
                     Err(StoreError::Corrupt { .. })
                 ),
                 "date: {node}"
@@ -551,6 +565,7 @@ fn corrupt_bound_source_is_typed_even_under_masked_false_unknown_and_ineligible_
                         tx,
                         &query,
                         scope.clone(),
+                        None,
                         None
                     )),
                     Err(StoreError::Corrupt { .. })
@@ -581,6 +596,42 @@ fn corrupt_bound_source_is_typed_even_under_masked_false_unknown_and_ineligible_
                 )),
                 Err(StoreError::Corrupt { .. })
             ));
+            // A driven read skips message 1 yet still checks its binding.
+            let proven = crate::Kept {
+                coverage: Some(&kept),
+                ..crate::Kept::default()
+            };
+            assert!(
+                matches!(
+                    resources.read(|tx| crate::read_search_date_page(
+                        tx,
+                        &query,
+                        crate::SearchScope::All,
+                        crate::SearchAnchor::Top,
+                        10,
+                        None,
+                        proven
+                    )),
+                    Err(StoreError::Corrupt { .. })
+                ),
+                "driven: {node}"
+            );
+            // A stale read reports staleness first, as a full read does.
+            assert!(
+                matches!(
+                    resources.read(|tx| crate::read_search_date_page(
+                        tx,
+                        &query,
+                        crate::SearchScope::All,
+                        crate::SearchAnchor::Top,
+                        10,
+                        Some(coverage.generation + 1),
+                        proven
+                    )),
+                    Ok(crate::PageRead::Stale { .. })
+                ),
+                "stale: {node}"
+            );
         }
         resources.close().unwrap();
     }
