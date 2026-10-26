@@ -81,7 +81,10 @@ runs:
         mkdir "$RUNNER_TEMP/dmg"
         ditto "$APP" "$RUNNER_TEMP/dmg/Sweetbriar.app"
         ln -s /Applications "$RUNNER_TEMP/dmg/Applications"
-        cp LICENSE LICENSE-0BSD THIRD_PARTY_NOTICES.md "$RUNNER_TEMP/dmg/"
+        # The same notices at the volume root, for reading before install.
+        for notice in "${NOTICES[@]}"; do
+          cp "$APP/Contents/Resources/$notice" "$RUNNER_TEMP/dmg/"
+        done
         DMG="$RUNNER_TEMP/Sweetbriar-$VERSION-arm64.dmg"
         hdiutil create -volname Sweetbriar -srcfolder "$RUNNER_TEMP/dmg" -format UDZO "$DMG"
         hdiutil verify "$DMG"
