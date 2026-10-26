@@ -726,7 +726,7 @@ local drafts. No network yet.
   - **M1.6r2b Search status reuse — M:** coverage per scope and generation
     shared by every search read; counts per canonical query, scope and
     generation for later pages (07). Coverage checks binding validity per
-    binding (06) and reads a summary only without a header row. The runner
+    binding (06) and joins only what it reads. The runner
     records coverage time and cache-cold and cache-hit samples.
   - **M1.6r2c FTS drivers — L:** driven reads (06) with their additive
     index migration, coverage's forbidden-class counts, guards and
@@ -736,7 +736,8 @@ local drafts. No network yet.
   - **M1.6r2d Exact address keys — L:** a maintained address-key table and
     unknown marker make exact address/domain leaves drivers, with their 02
     and 06 amendments first. Proof: a precedence equivalence matrix and a
-    drift test on every writer path.
+    drift test on every writer path. If its estimate passes the cap, split
+    the table and its maintenance from the driver wiring.
   - **M1.6r2e Search keystroke path — M:** stage timings in q2's
     benchmark; present on parse, batched clause formats, overlapped close
     and open (08).
@@ -789,7 +790,7 @@ local drafts. No network yet.
   - **M1.6r2c:** driven reads equal full reads over 11's matrix; each guard
     falls back to the full read.
   - **M1.6r2d:** key-driven address leaves equal the precedence-based leaf
-    over 11's matrix after every writer path.
+    over an address matrix (11, amended by r2d) after every writer path.
   - **M1.6r2e:** q2's benchmark records each stage of the keystroke path.
   - **M1.6r:** the owner's Mac run meets 06's cached-search and 08's search
     budgets.

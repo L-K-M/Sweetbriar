@@ -279,10 +279,11 @@ steps; they do not add placeholder modes to this boundary.
   a driver proves false, and evaluates every candidate when it cannot prove
   that (06, M1.6r2). The first-page timing includes this cost. Counts may
   be cached by canonical query, scope and search generation for later
-  pages; coverage, which depends only on scope and generation,
-  may be shared across windows and queries. Neither is reused across
-  generations. M1.6q records count time separately; 06/08's budgets still
-  apply to the complete response. Search `total` follows
+  pages of any window, while a first page counts; coverage's scope counts,
+  which depend only on scope and generation, may be shared across windows
+  and queries. Neither is reused across generations. M1.6q records count
+  time separately; 06/08's budgets still apply to the complete response.
+  Search `total` follows
   the existing Exact/AtLeast rule for true hits; unknowns are separate,
   exact and not limited to the page.
 - `store_meta.search_generation` starts at 1. It advances once per committed

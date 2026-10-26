@@ -292,9 +292,10 @@ CREATE INDEX d_index_queue_oldest ON d_index_queue(enqueued_at, doc_id);
 ```
 
 - **Driven-read indexes (M1.6r2):** an additive migration indexes
-  messages without an acquisition, unpublished acquisitions, documents
-  not indexed or with a mask other than `[]` (partial indexes), and
-  `d_search_docs(extractor_version)`.
+  unpublished acquisitions and documents not indexed or with a mask other
+  than `[]` (partial indexes), and `d_search_docs(extractor_version)`.
+  `logical_messages_by_acquisition` already finds messages without an
+  acquisition, and the queue is keyed by acquisition.
 - **Placement (pilot):** FTS5 lives in the same database file as derived
   tables. Index writes go through the writer task at low priority, in
   batches of at most 200 documents. Moving FTS5 to a separate derived
@@ -941,17 +942,19 @@ No partial parser/formatter, new dependency, compiler, service or UI ships here.
   other candidate makes that conjunct, hence the tree, false, so it is
   neither a hit nor unknown. With several drivers, keep the intersection of
   their non-false sets. A leaf under OR or NOT drives nothing; a tree with
-  no driver scans the whole scope, a recorded limitation.
+  no driver scans the whole scope (a limitation M1.6r's plan records, not a
+  coverage limitation).
 - A leaf's unusable classes are exactly the cases its FTS read treats as
   unknown: no acquisition, an unpublished object, no document at the target
   version (none yet, failed or another version) or a partial document
   truncating a column the leaf needs. Each acquisition fans out to every
   message on it; a queued same-version re-extraction leaves a usable
-  document usable. Enumeration never calls the mask callback: it keeps every
-  candidate on a document that is not indexed or whose stored mask is not
-  `[]`, and the callback runs only inside the evaluated predicate, under its
-  existing preconditions. So each malformed mask a full read rejects still
-  fails the read.
+  document usable. Enumerate messages without an acquisition, unpublished
+  acquisitions, every queued acquisition (`d_index_queue` is keyed by it)
+  and every document that is not indexed or whose stored mask is not `[]`.
+  Enumeration never calls the mask callback; it runs only inside the
+  evaluated predicate, under its existing preconditions. So each malformed
+  mask a full read rejects still fails the read.
 - Hits need only the drivers' matches; unknown counts also need the unusable
   classes. Enumerate the kept messages and seek their scope rows, never
   probe every scoped candidate. The restriction is a membership filter in
@@ -965,14 +968,18 @@ No partial parser/formatter, new dependency, compiler, service or UI ships here.
   it, such as a malformed address another leaf would decode, no longer fails
   the read. Its value cannot depend on that data; other reads of it still
   report the corruption.
-- The schema forbids two unknown classes no index enumerates: a dangling
-  acquisition reference and a published object with neither a document nor
-  a queue row. Coverage counts both over the read's scope and snapshot,
-  outside reset/enqueue. A nonzero count, any stored document at a
-  non-target extractor version, or a kept set not smaller than the scope
-  makes the read evaluate every scoped candidate. Driven and full reads of
-  one snapshot return identical hits, unknown counts, scores and order,
-  and differ in errors only as stated above.
+- Two unknown classes no index enumerates cannot arise at a readable
+  snapshot: a dangling acquisition reference (a foreign key) and a published
+  object with neither a document nor a queue row (enqueue shares the
+  inserting transaction; reset/enqueue are unreadable). Coverage counts both
+  over the read's scope and snapshot, outside reset/enqueue, as internal
+  guard state that 07's coverage does not expose. A nonzero count, any
+  document in the store at a non-target extractor version (probed through
+  `d_search_docs(extractor_version)`), or a kept set, counted store-wide,
+  not smaller than the scope makes the read evaluate every scoped
+  candidate. Driven and full reads of one snapshot return identical hits,
+  unknown counts, scores and order, and differ in errors only as stated
+  above.
 - Search scope (07) selects candidates first. All/Account choose the
   ordinary representative. Mailbox chooses the lowest-id present
   occurrence of each message in that mailbox. An AST `mailbox` node tests
@@ -1060,10 +1067,11 @@ The core exposes, per account and per mailbox:
 The search UI shows coverage whenever it is below 100% for the current
 scope.
 
-Coverage depends only on scope and search generation, so a reader may
-reuse one result for every read of that scope at that generation (07,
-M1.6r2). It checks scoped binding validity at a cost proportional to
-bindings, not messages.
+Coverage's scope counts depend only on scope, search generation and
+extractor target, so a reader may reuse them for every read of that scope
+at that generation (07, M1.6r2). Every read still checks the scope's
+binding validity, at a cost proportional to bindings, and reads the global
+index state afresh.
 
 ## Acceptance targets (pilot)
 

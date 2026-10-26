@@ -108,7 +108,8 @@ test, except where the spec says "manual qualification".
   exact unknown counts, ids, rows, anchors) over every leaf and Kleene
   composition, nested ANDs, OR/NOT roots, every unusable class and needed
   mask, shared acquisitions, all three scopes and malformed masks, plus
-  each guard's fallback. Plan-shape tests show every read source carries
+  each guard's fallback and the stated error difference: decoder corruption
+  confined to a skipped candidate fails only the full read. Plan-shape tests show every read source carries
   the restriction. The runner adds a common-term class and records
   coverage time, cache-cold and cache-hit samples separately.
 
