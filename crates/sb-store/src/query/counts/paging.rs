@@ -354,14 +354,33 @@ fn hits(plan: &Compiled, sort: Sort) -> String {
             plan.source
         ),
         Sort::Relevance => {
+            // One FTS pass per distinct positive leaf scores its documents once.
+            let scores: Vec<_> = plan
+                .leaves
+                .iter()
+                .enumerate()
+                .map(|(i, leaf)| {
+                    format!(
+                        "s{i} AS MATERIALIZED (SELECT rowid AS doc,{BM25} AS score FROM d_search_fts
+                 WHERE d_search_fts MATCH {})",
+                        leaf.phrase
+                    )
+                })
+                .collect();
+            let with = if scores.is_empty() {
+                String::new()
+            } else {
+                format!("WITH {} ", scores.join(","))
+            };
             let contributions: Vec<_> = plan
                 .leaves
                 .iter()
-                .map(|leaf| {
+                .enumerate()
+                .map(|(i, leaf)| {
                     format!(
-                        "CASE WHEN ({})=1 THEN coalesce((SELECT {BM25} FROM d_search_fts
-                 WHERE d_search_fts MATCH {} AND rowid=lm.acquisition_id),0.0) ELSE 0.0 END",
-                        leaf.check, leaf.phrase
+                        "CASE WHEN ({})=1 THEN coalesce((SELECT score FROM s{i}
+                 WHERE doc=lm.acquisition_id),0.0) ELSE 0.0 END",
+                        leaf.check
                     )
                 })
                 .collect();
@@ -372,7 +391,7 @@ fn hits(plan: &Compiled, sort: Sort) -> String {
                 contributions.join(" + ")
             };
             format!(
-                "SELECT {},({score}) AS score FROM {} WHERE {} AND ({})=1",
+                "{with}SELECT {},({score}) AS score FROM {} WHERE {} AND ({})=1",
                 lists::COLUMNS,
                 super::source(),
                 plan.scope,
@@ -380,6 +399,12 @@ fn hits(plan: &Compiled, sort: Sort) -> String {
             )
         }
     }
+}
+
+/// The date and relevance hits relations, for plan-shape tests.
+#[cfg(test)]
+pub(super) fn hit_sources(plan: &Compiled) -> [String; 2] {
+    [hits(plan, Sort::Date), hits(plan, Sort::Relevance)]
 }
 
 fn seek(

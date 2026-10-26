@@ -10,6 +10,7 @@ use crate::testing::fixtures::{acquisitions, archive_account, index_connection, 
 
 mod coverage;
 mod paging;
+mod plans;
 
 const ABSENT: &str = "ffffffff-ffff-ffff-ffff-ffffffffffff";
 const OTHER_ACCOUNT: &str = "00000000-0000-0000-0000-000000000000";

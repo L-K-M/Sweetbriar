@@ -925,6 +925,11 @@ No partial parser/formatter, new dependency, compiler, service or UI ships here.
   filters rather than multiplying hits through joins. Well-formed AST
   account/mailbox/tag ids with no stored entity yield false; they are not
   syntax errors or unknown data. Unknown outer scope ids are errors (07).
+- Never run an FTS leaf's MATCH once per candidate. Membership tests the
+  candidate's acquisition against the leaf's matching rowids, a list built
+  once per statement where it is used, and relevance reads each distinct
+  positive leaf's BM25 from one materialized pass over its matches
+  (M1.6r1). Hits, unknowns and score bits equal the per-candidate form's.
 - Search scope (07) selects candidates first. All/Account choose the
   ordinary representative. Mailbox chooses the lowest-id present
   occurrence of each message in that mailbox. An AST `mailbox` node tests

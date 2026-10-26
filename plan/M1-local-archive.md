@@ -708,6 +708,19 @@ local drafts. No network yet.
     on the owner's Mac against 08 (11: core timing alone does not qualify the
     UI). Depends on q; split from q, whose runner and app benchmark together
     exceeded one step.
+  - **M1.6r Search first-page cost — L:** q's runner found the first page's
+    cost linear in the archive and far over 06's 100 ms at 100k (10k: exact
+    reference 260 ms, phrase 1.1 s, dominated by one FTS query per scoped
+    candidate). A finding to resolve, split:
+  - **M1.6r1 Single-pass FTS leaves — S:** no FTS leaf's MATCH runs once
+    per candidate: membership and relevance read single passes over its
+    matches (06), with identical hits, unknown counts and score bits.
+    Plan-shape test: every FTS scan runs once per statement.
+  - **M1.6r2 Sublinear first pages — L:** depends on r1; designed from q's
+    100k artifact after r1. Candidates restricted to what can still be true
+    or unknown (conjunctions with a positive FTS leaf), indexed exact address
+    keys, and the counts cache 07 allows, with the spec amendments they need
+    first; until the owner's Mac run meets 06's cached-search budget.
 
 - **Goal:** FTS5 search with the query AST v1, the text syntax, chips and
   coverage.
@@ -750,6 +763,8 @@ local drafts. No network yet.
     error;
   - **M1.6q:** 100k-message search latency is recorded.
   - **M1.6q2:** last-keystroke to first rows is recorded on the owner's Mac.
+  - **M1.6r1:** FTS leaves give the same hits, unknown counts and score bits
+    with no MATCH run per candidate.
 
 ### M1.7 Export — S, linux
 
