@@ -75,6 +75,7 @@ pub struct Engine {
     index: Arc<IndexJobs>,
     received: Arc<ReceivedJobs>,
     leases: Arc<crate::bodies::Leases>,
+    search_memo: Arc<crate::search::SearchMemo>,
     #[cfg(test)]
     accepted_commands: std::sync::atomic::AtomicUsize,
     /// The worker reserved at open that closes the store if the engine
@@ -459,6 +460,7 @@ impl Engine {
                         index: Arc::default(),
                         received,
                         leases: Arc::default(),
+                        search_memo: Arc::default(),
                         #[cfg(test)]
                         accepted_commands: std::sync::atomic::AtomicUsize::new(0),
                         cleanup: start_cleanup_worker()?,
@@ -514,6 +516,10 @@ impl Engine {
 
     pub(crate) fn received(&self) -> &Arc<ReceivedJobs> {
         &self.received
+    }
+
+    pub(crate) fn search_memo(&self) -> &Arc<crate::search::SearchMemo> {
+        &self.search_memo
     }
 
     /// Observe command acceptance, after any preliminary asynchronous validation.

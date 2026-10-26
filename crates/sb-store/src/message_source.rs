@@ -5,6 +5,24 @@ use rusqlite::{Connection, Row, functions::FunctionFlags};
 pub(crate) const MESSAGES: &str = "logical_messages lm";
 pub(crate) const HEADERS: &str = "message_headers h ON h.message_id = lm.message_id";
 pub(crate) const MIN_USABLE_VERSION: u32 = 2;
+const STORED_ASSEMBLY: &str =
+    "v.acquisition_id=b.acquisition_id AND v.parser_target=b.parser_target";
+const SOURCE_ACQUISITION: &str =
+    "LEFT JOIN acquisitions ms_acq ON ms_acq.acquisition_id=lm.acquisition_id";
+
+/// Whether a stored message is bound, as a lookup rather than `joins`' join,
+/// for aggregates that need it only for a few messages.
+pub(crate) const STORED_BOUND: &str =
+    "EXISTS(SELECT 1 FROM d_message_bindings b2 WHERE b2.message_id=lm.message_id)";
+
+/// Stored bindings with what `validity` reads, driven from the bindings so a
+/// check costs per binding rather than per message.
+pub(crate) fn bindings() -> String {
+    format!(
+        "d_message_bindings b CROSS JOIN {MESSAGES} ON lm.message_id=b.message_id
+        LEFT JOIN d_repair_assemblies v ON {STORED_ASSEMBLY} {SOURCE_ACQUISITION}"
+    )
+}
 
 pub(crate) const FIELDS: [&str; 16] = [
     "header_message_id",
@@ -34,9 +52,7 @@ pub(crate) enum Source {
 impl Source {
     pub(crate) fn joins(self) -> String {
         let key = match self {
-            Self::Stored => {
-                "v.acquisition_id=b.acquisition_id AND v.parser_target=b.parser_target".into()
-            }
+            Self::Stored => STORED_ASSEMBLY.into(),
             Self::Candidate(target) => {
                 format!("v.acquisition_id=lm.acquisition_id AND v.parser_target={target}")
             }
@@ -45,7 +61,7 @@ impl Source {
             "LEFT JOIN d_message_summary s ON s.acquisition_id=lm.acquisition_id
             LEFT JOIN d_message_bindings b ON b.message_id=lm.message_id
             LEFT JOIN d_repair_assemblies v ON {key}
-            LEFT JOIN acquisitions ms_acq ON ms_acq.acquisition_id=lm.acquisition_id"
+            {SOURCE_ACQUISITION}"
         )
     }
 

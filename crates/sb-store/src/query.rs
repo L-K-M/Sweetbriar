@@ -16,10 +16,10 @@ pub use ast::{
     SearchParseError, SizeOp,
 };
 pub use counts::{
-    QueryCounts, SearchAnchor, SearchIndexState, SearchLimitation, SearchPage,
-    SearchRebuildProgress, SearchScope, StoredSearchCoverage, StoredSearchRow, counts,
-    read_search_coverage, read_search_date_page, read_search_relevance_page, search_date_ids,
-    search_relevance_ids,
+    CoverageCounts, Kept, QueryCounts, SearchAnchor, SearchIndexState, SearchLimitation,
+    SearchPage, SearchRebuildProgress, SearchScope, StoredSearchCoverage, StoredSearchRow,
+    UnknownCount, counts, read_search_coverage, read_search_coverage_reusing,
+    read_search_date_page, read_search_relevance_page, search_date_ids, search_relevance_ids,
 };
 pub use dates::{DateBounds, DateError, DatePredicate, DateValue};
 pub use format::TextFormatError;

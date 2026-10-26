@@ -4,13 +4,24 @@ use sb_store::{StoreError, Transaction};
 
 use crate::{Coverage, SEARCH_EXTRACTOR_VERSION, SearchIndexState, SearchScope};
 
+pub use sb_store::query::CoverageCounts;
+
 /// Capture coverage in the supplied transaction; a newer target is observable.
 pub fn read_search_coverage(tx: &Transaction, scope: SearchScope) -> Result<Coverage, StoreError> {
-    let mut coverage = sb_store::query::read_search_coverage(tx, scope)?;
+    read_search_coverage_reusing(tx, scope, None).map(|(coverage, _)| coverage)
+}
+
+/// `read_search_coverage`, reusing scope counts kept from the same generation.
+pub fn read_search_coverage_reusing(
+    tx: &Transaction,
+    scope: SearchScope,
+    kept: Option<&CoverageCounts>,
+) -> Result<(Coverage, CoverageCounts), StoreError> {
+    let (mut coverage, counts) = sb_store::query::read_search_coverage_reusing(tx, scope, kept)?;
     if coverage.extractor_version > SEARCH_EXTRACTOR_VERSION {
         coverage.index_state = SearchIndexState::BlockedNewerExtractor;
     }
-    Ok(coverage)
+    Ok((coverage, counts))
 }
 
 #[cfg(test)]

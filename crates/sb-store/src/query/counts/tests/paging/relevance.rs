@@ -13,7 +13,8 @@ fn read(
     at: Option<u64>,
 ) -> Result<PageRead<SearchPage>, StoreError> {
     let tx = conn.unchecked_transaction().unwrap();
-    let result = read_search_relevance_page(&tx, &query(node), scope, anchor, limit, at);
+    let result =
+        read_search_relevance_page(&tx, &query(node), scope, anchor, limit, at, Kept::default());
     tx.commit().unwrap();
     result
 }
@@ -715,6 +716,7 @@ fn native_rebuild_and_out_of_scope_wal_writes_preserve_snapshot_scores() {
         SearchAnchor::After(cursor(&before, 0)),
         2,
         Some(before.generation()),
+        Kept::default(),
     ));
     assert!(reopened.rows().is_empty());
     let write = writer.transaction().unwrap();
@@ -776,6 +778,7 @@ fn native_rebuild_and_out_of_scope_wal_writes_preserve_snapshot_scores() {
         SearchAnchor::Top,
         50,
         Some(before.generation()),
+        Kept::default(),
     ));
     assert_eq!(same, before);
     assert_eq!(

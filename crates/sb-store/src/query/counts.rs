@@ -15,7 +15,12 @@ use crate::{StoreError, Uuid, messages, schema::classify};
 const ADDRESS_FN: &str = "sb_query_address";
 const MASK_FN: &str = "sb_query_complete_fields";
 fn source() -> String {
-    let summary = Source::Stored.joins();
+    candidates(&Source::Stored.joins())
+}
+
+/// Scoped candidates with their message, acquisition and header row, plus
+/// `summary` joins; coverage's scan passes none and reads summaries itself.
+fn candidates(summary: &str) -> String {
     format!(
         "d_list_rows r
     JOIN occurrences o ON o.occurrence_id = r.occurrence_id
@@ -525,13 +530,13 @@ fn sql_error(error: rusqlite::Error) -> StoreError {
 
 mod coverage;
 pub use coverage::{
-    SearchIndexState, SearchLimitation, SearchRebuildProgress, StoredSearchCoverage,
-    read_search_coverage,
+    CoverageCounts, SearchIndexState, SearchLimitation, SearchRebuildProgress,
+    StoredSearchCoverage, read_search_coverage, read_search_coverage_reusing,
 };
 mod paging;
 pub use paging::{
-    SearchAnchor, SearchPage, StoredSearchRow, read_search_date_page, read_search_relevance_page,
-    search_date_ids, search_relevance_ids,
+    Kept, SearchAnchor, SearchPage, StoredSearchRow, UnknownCount, read_search_date_page,
+    read_search_relevance_page, search_date_ids, search_relevance_ids,
 };
 
 #[cfg(test)]
