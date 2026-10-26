@@ -937,34 +937,42 @@ No partial parser/formatter, new dependency, compiler, service or UI ships here.
 - Driven reads (M1.6r2) may skip scoped candidates a driver proves false.
   A driver is a positive FTS leaf that is the root or is reached from it
   through AND nodes only. Its non-false candidates are the messages of its
-  matching acquisitions plus those of its unusable documents (below); every
+  matching acquisitions plus those of its unusable classes (below); every
   other candidate makes that conjunct, hence the tree, false, so it is
-  neither a hit nor unknown. Several drivers may intersect. A leaf under OR
-  or NOT drives nothing: OR/NOT roots and trees without FTS leaves scan the
-  whole scope, a recorded limitation.
-- A leaf's unusable documents are exactly those its FTS read treats as
+  neither a hit nor unknown. With several drivers, keep the intersection of
+  their non-false sets. A leaf under OR or NOT drives nothing; a tree with
+  no driver scans the whole scope, a recorded limitation.
+- A leaf's unusable classes are exactly the cases its FTS read treats as
   unknown: no acquisition, an unpublished object, no document at the target
   version (none yet, failed or another version) or a partial document
   truncating a column the leaf needs. Each acquisition fans out to every
-  message on it. Enumerate failed documents by state and call the mask
-  callback only where the full read would; a queued same-version
-  re-extraction leaves a usable document usable. The enumeration also
-  visits every document whose mask is not `[]`, so each malformed mask a
-  full read rejects still fails the read.
-- Hits need only the drivers' matches; unknown counts also need unusable
-  documents. Restrict with per-candidate membership filters in the scope
-  relation of every read (counts, both page orders, id index, row, anchor),
-  never joins that multiply candidates. Each read still checks every scoped
-  binding's validity (02), at a cost proportional to bindings. Other decoder
-  corruption fails a read only on candidates it evaluates, as Kleene AND's
-  short-circuit already allows.
+  message on it; a queued same-version re-extraction leaves a usable
+  document usable. Enumeration never calls the mask callback: it keeps every
+  candidate on a document that is not indexed or whose stored mask is not
+  `[]`, and the callback runs only inside the evaluated predicate, under its
+  existing preconditions. So each malformed mask a full read rejects still
+  fails the read.
+- Hits need only the drivers' matches; unknown counts also need the unusable
+  classes. Enumerate the kept messages and seek their scope rows, never
+  probe every scoped candidate. The restriction is a membership filter in
+  the scope relation every read builds (counts, pages, ids and the row and
+  anchor lookups inside them), never a join that multiplies candidates.
+  Each read still checks every scoped binding's validity (02), at a cost
+  proportional to bindings.
+- SQLite evaluates every leaf of a value expression, so a full read decodes
+  each leaf's inputs for every scoped candidate. A driven read does not
+  evaluate a candidate a driver proves false: decoder corruption confined to
+  it, such as a malformed address another leaf would decode, no longer fails
+  the read. Its value cannot depend on that data; other reads of it still
+  report the corruption.
 - The schema forbids two unknown classes no index enumerates: a dangling
   acquisition reference and a published object with neither a document nor
-  a queue row. Coverage counts both in the read's snapshot outside
-  reset/enqueue. A nonzero count, any document at a non-target extractor
-  version, or a restricted set not smaller than the scope makes the read
-  evaluate every scoped candidate. Driven and full reads of one snapshot
-  return identical hits, unknown counts, scores and order.
+  a queue row. Coverage counts both over the read's scope and snapshot,
+  outside reset/enqueue. A nonzero count, any stored document at a
+  non-target extractor version, or a kept set not smaller than the scope
+  makes the read evaluate every scoped candidate. Driven and full reads of
+  one snapshot return identical hits, unknown counts, scores and order,
+  and differ in errors only as stated above.
 - Search scope (07) selects candidates first. All/Account choose the
   ordinary representative. Mailbox chooses the lowest-id present
   occurrence of each message in that mailbox. An AST `mailbox` node tests

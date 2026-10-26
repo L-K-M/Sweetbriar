@@ -725,13 +725,14 @@ local drafts. No network yet.
     coverage rules in 06, 07 and 11. Documentation only.
   - **M1.6r2b Search status reuse — M:** coverage per scope and generation
     shared by every search read; counts per canonical query, scope and
-    generation for later pages and the id index (07). Coverage checks
-    binding validity per binding, drops joins it does not need and counts
-    the forbidden unknown classes (06). The runner records coverage time
-    and cache-cold and cache-hit samples.
+    generation for later pages (07). Coverage checks binding validity per
+    binding (06) and reads a summary only without a header row. The runner
+    records coverage time and cache-cold and cache-hit samples.
   - **M1.6r2c FTS drivers — L:** driven reads (06) with their additive
-    index migration, guards and full-read fallbacks, and 11's equivalence
-    and plan-shape proof. The runner adds a common-term class.
+    index migration, coverage's forbidden-class counts, guards and
+    full-read fallbacks, and 11's equivalence and plan-shape proof. The
+    runner adds a common-term class. If its estimate passes the cap, split
+    the migration, enumeration and guards from the driven reads.
   - **M1.6r2d Exact address keys — L:** a maintained address-key table and
     unknown marker make exact address/domain leaves drivers, with their 02
     and 06 amendments first. Proof: a precedence equivalence matrix and a
