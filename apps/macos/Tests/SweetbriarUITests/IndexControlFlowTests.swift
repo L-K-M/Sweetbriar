@@ -26,33 +26,25 @@ final class IndexControlFlowTests: XCTestCase {
     /// The app writes counts in the machine's locale, as this does.
     private static let settled = "\(messages.formatted()) messages indexed"
 
-    private var roots: URL!
-    private var running: XCUIApplication?
-
-    override func tearDownWithError() throws {
-        running?.terminate()
-        guard let roots else { return }
-        // An unreadable store directory would stop the cleanup.
-        try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: sha256.path)
-        try? FileManager.default.removeItem(at: roots)
-    }
-
-    /// The object store's hash tree: reading a body needs it, opening
-    /// the store only stats it.
-    private var sha256: URL {
-        roots.appendingPathComponent("data/objects/sha256")
-    }
-
     @MainActor
     func testRebuildCancelRelaunchResumeAndRetryAnIoPause() throws {
         continueAfterFailure = false
-        roots = FileManager.default.temporaryDirectory
+        let roots = FileManager.default.temporaryDirectory
             .appendingPathComponent("sweetbriar-index-controls-\(UUID().uuidString)")
+        // The object store's hash tree: reading a body needs it, opening
+        // the store only stats it.
+        let sha256 = roots.appendingPathComponent("data/objects/sha256")
         try FileManager.default.createDirectory(at: roots, withIntermediateDirectories: true)
+        defer {
+            // An unreadable store directory would stop the cleanup.
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: sha256.path)
+            try? FileManager.default.removeItem(at: roots)
+        }
         let fixture = roots.appendingPathComponent("\(Self.mailbox).mbox")
         try Data(Self.mbox().utf8).write(to: fixture)
 
-        var app = launch(importing: fixture)
+        var app = launch(roots, importing: fixture)
+        defer { app.terminate() }
         var window = app.windows["Sweetbriar"]
         app.menuBars.menuBarItems["File"].click()
         app.menuBars.menuItems["Import…"].click()
@@ -81,7 +73,7 @@ final class IndexControlFlowTests: XCTestCase {
 
         // 2. Still paused after a relaunch; Resume completes it.
         app.terminate()
-        app = launch()
+        app = launch(roots)
         window = app.windows["Sweetbriar"]
         search(window, for: "kestrel")
         waitUntil(summary(window), "value CONTAINS %@", "Rebuild paused while")
@@ -92,7 +84,7 @@ final class IndexControlFlowTests: XCTestCase {
         // 3. An unreadable object store pauses the index phase on I/O.
         app.terminate()
         try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: sha256.path)
-        app = launch()
+        app = launch(roots)
         window = app.windows["Sweetbriar"]
         search(window, for: "kestrel")
         waitUntil(summary(window), "value == %@", Self.settled)
@@ -114,12 +106,11 @@ final class IndexControlFlowTests: XCTestCase {
         reveal(window, "search.coverage.retry").click()
         waitUntil(summary(window), "value == %@", Self.settled)
         waitUntil(rows(window), "count == 1")
-        app.terminate()
     }
 
-    /// Launch over the test's roots, importing `fixture` when given.
+    /// Launch over `roots`, importing `fixture` when given.
     @MainActor
-    private func launch(importing fixture: URL? = nil) -> XCUIApplication {
+    private func launch(_ roots: URL, importing fixture: URL? = nil) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = [
             "-dataRoot", roots.appendingPathComponent("data").path,
@@ -128,7 +119,6 @@ final class IndexControlFlowTests: XCTestCase {
         ] + (fixture.map { ["-importPath", $0.path] } ?? [])
         app.launch()
         app.activate()
-        running = app
         let window = app.windows["Sweetbriar"]
         XCTAssertTrue(window.outlines["sidebar"].staticTexts["Local Archive"].waitForExistence(timeout: Self.timeout))
         // The launch's own list settles first: showing it resets the field.
@@ -136,10 +126,12 @@ final class IndexControlFlowTests: XCTestCase {
         return app
     }
 
+    @MainActor
     private func rows(_ window: XCUIElement) -> XCUIElementQuery {
         window.tables["messageList"].tableRows
     }
 
+    @MainActor
     private func summary(_ window: XCUIElement) -> XCUIElement {
         window.staticTexts["search.coverage.summary"]
     }
