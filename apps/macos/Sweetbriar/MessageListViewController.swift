@@ -341,7 +341,7 @@ final class MessageListViewController: NSViewController {
     private func updateStatus() {
         let text: String?
         if standalone {
-            text = Self.unavailableText(indexControls.coverage)
+            text = Self.unavailableText(indexControls.coverage, failure: indexControls.readError)
         } else if let openError {
             text = "Couldn't open this list: \(openError.localizedDescription)"
         } else if let lastError = model?.lastError {
@@ -357,9 +357,12 @@ final class MessageListViewController: NSViewController {
         statusLabel.isHidden = text == nil
     }
 
-    /// Why Search can't open, from the index's own state (spec/08).
-    private static func unavailableText(_ coverage: SearchCoverage?) -> String {
-        guard let coverage else { return "Search is unavailable" }
+    /// Why Search can't open, from the index's own state (spec/08), or
+    /// why its coverage can't be read either.
+    private static func unavailableText(_ coverage: SearchCoverage?, failure: (any Error)?) -> String {
+        guard let coverage else {
+            return failure.map { "Search is unavailable: \($0.localizedDescription)" } ?? "Search is unavailable"
+        }
         if case .blockedNewerExtractor = coverage.indexState {
             return "Search needs a newer version of Sweetbriar. Update the app to search this archive."
         }

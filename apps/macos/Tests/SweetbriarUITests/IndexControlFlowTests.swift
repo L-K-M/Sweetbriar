@@ -103,7 +103,11 @@ final class IndexControlFlowTests: XCTestCase {
         waitUntil(summary(window), "value != %@ AND value CONTAINS %@", retried, "Next retry at")
 
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: sha256.path)
-        reveal(window, "search.coverage.retry").click()
+        // The automatic retry may get there first; then Retry Now is gone.
+        let retry = window.buttons["search.coverage.retry"]
+        if retry.exists {
+            retry.click()
+        }
         waitUntil(summary(window), "value == %@", Self.settled)
         waitUntil(rows(window), "count == 1")
     }
