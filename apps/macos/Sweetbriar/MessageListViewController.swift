@@ -3,7 +3,13 @@
 // Showing another window closes the old model first, and a later
 // choice wins over one still opening. A status line covers the list
 // while it opens, when it is empty, and when it failed; Search results
-// carry a coverage strip below them.
+// carry a coverage strip below them with the index controls. While a
+// rebuild's reset or enqueue keeps Search from opening, the strip shows
+// polled standalone coverage, and Search reopens once it can (spec/08).
+//
+//   Search ──open/read: unavailable──► standalone: poll coverage
+//     ▲                                     │
+//     └──── coverage says Search can open ──┘  (once per generation)
 
 import AppKit
 import Observation
@@ -30,6 +36,17 @@ final class MessageListViewController: NSViewController {
     /// Search coverage, collapsed while no Search status shows.
     private let coverage = SearchCoverageView()
     private lazy var coverageCollapsed = coverage.heightAnchor.constraint(equalToConstant: 0)
+
+    /// The index controls, and standalone coverage while Search can't
+    /// open (spec/08).
+    private let indexControls: IndexControlModel
+    /// Search couldn't open, or stopped reading, for an unavailable
+    /// index: the strip shows standalone coverage until it says Search
+    /// can open again.
+    private var standalone = false
+    /// The coverage generation a reopen was last tried at: one try per
+    /// change, so a reopen that fails again waits for the next one.
+    private var reopenedAt: UInt64?
 
     /// The list's generation after each new index: the sidebar
     /// re-reads its counts when it is newer than what it shows.
@@ -58,6 +75,7 @@ final class MessageListViewController: NSViewController {
             }
         })
         searchModel = model
+        indexControls = IndexControlModel(source: bridge)
         search = SearchFieldController(model: model, scopes: {
             var values: [(label: String, scope: SearchScope)] = [("All accounts", .all)]
             for section in sidebar.sections where section.id != SidebarModel.unifiedSectionID {
@@ -71,6 +89,10 @@ final class MessageListViewController: NSViewController {
             return values
         })
         super.init(nibName: nil, bundle: nil)
+        coverage.onCommand = { [weak self] command in
+            self?.perform(command)
+        }
+        observeControls()
         model.onPresent = { [weak self, weak model] spec, ticket in
             guard model?.isCurrent(ticket) == true else { return }
             self?.show(spec)
@@ -113,10 +135,27 @@ final class MessageListViewController: NSViewController {
         view = content
     }
 
+    /// Poll standalone coverage only while the list shows.
+    override func viewDidAppear() {
+        super.viewDidAppear()
+        if standalone, let spec = searchSpec {
+            indexControls.startPolling(scope: spec.scope)
+        }
+    }
+
+    /// Polling stops with the window; the durable job never does
+    /// (spec/08).
+    override func viewWillDisappear() {
+        super.viewWillDisappear()
+        indexControls.stopPolling()
+    }
+
     /// List `spec`: close the current model, then open a fresh one in
     /// a fresh list.
     func show(_ spec: WindowSpec) {
         search.navigated(to: spec)
+        standalone = false
+        indexControls.stopPolling()
         let ticket = tickets.next()
         shownSpec = spec
         choiceSerial += 1
@@ -174,12 +213,16 @@ final class MessageListViewController: NSViewController {
         }
         guard tickets.isCurrent(ticket) else { return }
         opening = false
+        if Self.isUnavailable(openError) {
+            enterStandalone()
+        }
         updateStatus()
         updateCoverage()
     }
 
     /// Close the list's model; the window is going away.
     func close() async {
+        indexControls.stopPolling()
         searchModel.close()
         tickets.close()
         await teardown()
@@ -206,11 +249,78 @@ final class MessageListViewController: NSViewController {
         } onChange: { [weak self, weak model] in
             Task { @MainActor [weak self, weak model] in
                 guard let self, let model, self.model === model else { return }
+                // A rebuild's reset makes an open Search's reads fail.
+                if Self.isUnavailable(model.lastError) {
+                    self.enterStandalone()
+                }
                 self.updateStatus()
                 self.updateCoverage()
                 self.observe(model)
             }
         }
+    }
+
+    /// Follow the controls' commands and standalone coverage.
+    private func observeControls() {
+        withObservationTracking {
+            _ = indexControls.coverage
+            _ = indexControls.pending
+            _ = indexControls.commandError
+            _ = indexControls.readError
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.controlsDidChange()
+                self.observeControls()
+            }
+        }
+    }
+
+    /// Redraw, and reopen Search once standalone coverage says it can
+    /// open — once per coverage change.
+    private func controlsDidChange() {
+        updateStatus()
+        updateCoverage()
+        guard standalone, let spec = shownSpec, let polled = indexControls.coverage,
+              polled.searchCanOpen, reopenedAt != polled.generation
+        else { return }
+        reopenedAt = polled.generation
+        show(spec)
+    }
+
+    /// Search can't open or read: show standalone coverage, polled while
+    /// the list shows, with the controls in view.
+    private func enterStandalone() {
+        guard let spec = searchSpec, !standalone else { return }
+        standalone = true
+        // Rows read before the reset are gone from the index.
+        list?.isHidden = true
+        coverage.disclose()
+        if view.window != nil {
+            indexControls.startPolling(scope: spec.scope)
+        }
+    }
+
+    /// Run a control on the coverage it was offered on: standalone
+    /// coverage while Search can't open, else the newer of the
+    /// window's status and the last standalone read.
+    private func perform(_ command: IndexControlModel.Command) {
+        guard let spec = searchSpec else { return }
+        let window = standalone ? nil : model?.searchStatus?.coverage
+        guard let shown = indexControls.shown(with: window) else { return }
+        Task {
+            await indexControls.perform(command, on: shown, scope: spec.scope)
+        }
+    }
+
+    private var searchSpec: SearchSpec? {
+        guard case .search(let spec) = shownSpec else { return nil }
+        return spec
+    }
+
+    private static func isUnavailable(_ error: (any Error)?) -> Bool {
+        guard let failure = error as? CoreFailure, case .unavailable = failure else { return false }
+        return true
     }
 
     private func indexDidChange() {
@@ -224,7 +334,9 @@ final class MessageListViewController: NSViewController {
     /// opening, or that it is empty; hidden while rows show.
     private func updateStatus() {
         let text: String?
-        if let openError {
+        if standalone {
+            text = Self.unavailableText(indexControls.coverage)
+        } else if let openError {
             text = "Couldn't open this list: \(openError.localizedDescription)"
         } else if let lastError = model?.lastError {
             text = "Couldn't read this list: \(lastError.localizedDescription)"
@@ -239,15 +351,45 @@ final class MessageListViewController: NSViewController {
         statusLabel.isHidden = text == nil
     }
 
-    /// The coverage strip shows while Search results carry a status,
-    /// zero hits included (spec/08), and collapses otherwise.
-    private func updateCoverage() {
-        let status = shownSpec?.isSearch == true ? model?.searchStatus : nil
-        if let status {
-            coverage.show(SearchCoverageNote(status: status))
+    /// Why Search can't open, from the index's own state (spec/08).
+    private static func unavailableText(_ coverage: SearchCoverage?) -> String {
+        guard let coverage else { return "Search is unavailable" }
+        if case .blockedNewerExtractor = coverage.indexState {
+            return "Search needs a newer version of Sweetbriar. Update the app to search this archive."
         }
-        coverage.isHidden = status == nil
-        coverageCollapsed.isActive = status == nil
+        if case .pausedByUser = coverage.indexState, coverage.activeRebuild != nil {
+            return "Search is unavailable while the rebuild is paused"
+        }
+        return "Search is unavailable while the index is rebuilt"
+    }
+
+    /// The coverage strip shows while Search results carry a status,
+    /// zero hits included, or standalone coverage while Search can't
+    /// open (spec/08), and collapses otherwise. The note keeps the
+    /// rows' snapshot; the controls follow the newest coverage.
+    private func updateCoverage() {
+        var note: SearchCoverageNote?
+        var shown: SearchCoverage?
+        if shownSpec?.isSearch == true {
+            if standalone {
+                shown = indexControls.coverage
+                note = shown.map { SearchCoverageNote(coverage: $0, excludedUnknown: 0) }
+            } else if let status = model?.searchStatus {
+                note = SearchCoverageNote(status: status)
+                shown = indexControls.shown(with: status.coverage)
+            }
+        }
+        if let note, let shown {
+            let error = indexControls.commandError ?? (standalone ? indexControls.readError : nil)
+            coverage.show(
+                note,
+                offered: IndexControls(coverage: shown),
+                busy: indexControls.pending != nil,
+                failure: error.map { "Couldn't update the index: \($0.localizedDescription)" }
+            )
+        }
+        coverage.isHidden = note == nil
+        coverageCollapsed.isActive = note == nil
     }
 }
 
