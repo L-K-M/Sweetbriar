@@ -192,9 +192,17 @@ jobs:
             -configuration Release \
             CODE_SIGN_IDENTITY=- \
             build
+          APP="$RUNNER_TEMP/DerivedData/Build/Products/Release/Sweetbriar.app"
+          # The zip carries only the app, so the licence notices must be
+          # inside it (spec/01 licence policy).
+          for notice in THIRD_PARTY_NOTICES.md Rust-Licenses.html LICENSE LICENSE-0BSD; do
+            test -s "$APP/Contents/Resources/$notice" \
+              || { echo "::error::$notice missing from Sweetbriar.app"; exit 1; }
+          done
+          cmp THIRD_PARTY_NOTICES.md "$APP/Contents/Resources/THIRD_PARTY_NOTICES.md"
+          grep -q 'The Rust Standard Library' "$APP/Contents/Resources/Rust-Licenses.html"
           ditto -c -k --sequesterRsrc --keepParent \
-            "$RUNNER_TEMP/DerivedData/Build/Products/Release/Sweetbriar.app" \
-            "$RUNNER_TEMP/Sweetbriar-macos-arm64.zip"
+            "$APP" "$RUNNER_TEMP/Sweetbriar-macos-arm64.zip"
 
       - name: Upload the app
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
