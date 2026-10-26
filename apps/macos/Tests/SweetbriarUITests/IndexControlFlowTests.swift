@@ -23,7 +23,8 @@ final class IndexControlFlowTests: XCTestCase {
     private static let notes = 5_000
     /// The notes plus the one that says "kestrel".
     private static let messages = notes + 1
-    private static let settled = "5,001 messages indexed"
+    /// The app writes counts in the machine's locale, as this does.
+    private static let settled = "\(messages.formatted()) messages indexed"
 
     private var roots: URL!
     private var running: XCUIApplication?

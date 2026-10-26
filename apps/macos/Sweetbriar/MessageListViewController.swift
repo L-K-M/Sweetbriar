@@ -44,9 +44,11 @@ final class MessageListViewController: NSViewController {
     /// index: the strip shows standalone coverage until it says Search
     /// can open again.
     private var standalone = false
-    /// The coverage generation a reopen was last tried at: one try per
-    /// change, so a reopen that fails again waits for the next one.
-    private var reopenedAt: UInt64?
+    /// When and at which coverage generation a reopen was last tried:
+    /// once per change, or again after `reopenRetry`, so a reopen that
+    /// fails again neither churns nor wedges on a quiet archive.
+    private var lastReopen: (generation: UInt64, at: ContinuousClock.Instant)?
+    private static let reopenRetry: Duration = .seconds(5)
 
     /// The list's generation after each new index: the sidebar
     /// re-reads its counts when it is newer than what it shows.
@@ -282,9 +284,13 @@ final class MessageListViewController: NSViewController {
         updateStatus()
         updateCoverage()
         guard standalone, let spec = shownSpec, let polled = indexControls.coverage,
-              polled.searchCanOpen, reopenedAt != polled.generation
+              polled.searchCanOpen
         else { return }
-        reopenedAt = polled.generation
+        let now = ContinuousClock.now
+        if let last = lastReopen, last.generation == polled.generation, now - last.at < Self.reopenRetry {
+            return
+        }
+        lastReopen = (polled.generation, now)
         show(spec)
     }
 
@@ -357,7 +363,8 @@ final class MessageListViewController: NSViewController {
         if case .blockedNewerExtractor = coverage.indexState {
             return "Search needs a newer version of Sweetbriar. Update the app to search this archive."
         }
-        if case .pausedByUser = coverage.indexState, coverage.activeRebuild != nil {
+        guard !coverage.searchCanOpen else { return "Search is unavailable" }
+        if case .pausedByUser = coverage.indexState {
             return "Search is unavailable while the rebuild is paused"
         }
         return "Search is unavailable while the index is rebuilt"
@@ -380,12 +387,17 @@ final class MessageListViewController: NSViewController {
             }
         }
         if let note, let shown {
-            let error = indexControls.commandError ?? (standalone ? indexControls.readError : nil)
+            var failure = indexControls.commandError.map {
+                "Couldn't update the index: \($0.localizedDescription)"
+            }
+            if failure == nil, standalone, let read = indexControls.readError {
+                failure = "Couldn't read the index's coverage: \(read.localizedDescription)"
+            }
             coverage.show(
                 note,
                 offered: IndexControls(coverage: shown),
                 busy: indexControls.pending != nil,
-                failure: error.map { "Couldn't update the index: \($0.localizedDescription)" }
+                failure: failure
             )
         }
         coverage.isHidden = note == nil
