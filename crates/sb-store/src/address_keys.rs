@@ -184,7 +184,10 @@ fn each_source(
         .map_err(sql_error)?;
     let mut rows = summaries.query([]).map_err(sql_error)?;
     while let Some(row) = rows.next().map_err(sql_error)? {
-        let acquisition = row.get(0).map_err(sql_error)?;
+        // STRICT and CHECK keep ids readable; a damaged one names no source.
+        let Ok(acquisition) = row.get::<_, i64>(0) else {
+            continue;
+        };
         // A column that is not text, or not UTF-8, cannot be decoded.
         let text = |index| {
             row.get_ref(index)
@@ -213,8 +216,11 @@ fn each_source(
         .map_err(sql_error)?;
     let mut rows = assemblies.query([]).map_err(sql_error)?;
     while let Some(row) = rows.next().map_err(sql_error)? {
-        let acquisition: i64 = row.get(0).map_err(sql_error)?;
-        let target: u32 = row.get(1).map_err(sql_error)?;
+        // A damaged id names no assembly a binding can reach: a binding's
+        // validity check fails on it instead (02).
+        let (Ok(acquisition), Ok(target)) = (row.get::<_, i64>(0), row.get::<_, u32>(1)) else {
+            continue;
+        };
         let lengths = row.get_ref(2).ok().and_then(|value| value.as_str().ok());
         let read = match lengths {
             Some(lengths) => repair::read_fields(conn, acquisition, target, lengths),
