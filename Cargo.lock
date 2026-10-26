@@ -1218,6 +1218,7 @@ version = "0.0.1"
 dependencies = [
  "sb-resources",
  "sb-test-support",
+ "serde_json",
  "tokio",
 ]
 

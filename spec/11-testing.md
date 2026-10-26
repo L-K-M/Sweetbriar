@@ -100,9 +100,9 @@ test, except where the spec says "manual qualification".
 - Linux push-to-main CI records that runner's machine-readable artifact,
   like M1.3's window timings, with no timing assertions. M1.6q records a
   dated owner's-Mac run in qualification against 06's cached-search,
-  freshness and rebuild budgets. Also record end-to-end last-keystroke to
-  first rows (including debounce) against 08; core timing alone does not
-  qualify the UI. Missing an owner budget is a finding to resolve, not a
+  freshness and rebuild budgets. M1.6q2 also records end-to-end
+  last-keystroke to first rows (including debounce) against 08; core
+  timing alone does not qualify the UI. Missing an owner budget is a finding to resolve, not a
   weakened threshold. No Tantivy/trigram spike in M1.6.
 
 ### Received-address proof ownership (M1.6m0–m4)

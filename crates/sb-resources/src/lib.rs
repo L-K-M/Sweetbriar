@@ -94,9 +94,9 @@ pub use sb_store::messages::{
     get_message, message_for_occurrence,
 };
 pub use sb_store::query::{
-    MAX_QUERY_INPUT_BYTES, ParseCode, ParseContext, Query, QueryError, SearchAnchor,
+    MAX_QUERY_INPUT_BYTES, ParseCode, ParseContext, Query, QueryCounts, QueryError, SearchAnchor,
     SearchIndexState, SearchLimitation, SearchPage, SearchRebuildProgress, SearchScope,
-    StoredSearchCoverage as Coverage, TextFormatError, read_search_date_page,
+    StoredSearchCoverage as Coverage, TextFormatError, counts, read_search_date_page,
     read_search_relevance_page, search_date_ids, search_relevance_ids,
 };
 pub use sb_store::settings::{StoredSetting, read_all, upsert};

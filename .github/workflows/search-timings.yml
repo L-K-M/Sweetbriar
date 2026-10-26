@@ -1,0 +1,61 @@
+name: search-timings
+
+# Plan M1.6q: Search timings over a 100k synthetic archive (spec/11),
+# recorded as the `search-timings` artifact for pushes to main that
+# change the core, and never asserted; the owner's Mac run is checked
+# against spec/06's budgets in qualification. Its own workflow: at 100k
+# the 1,000-query warm samples take hours, which must not hold up ci's
+# merge gate or a release that reuses ci.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'crates/**'
+      - 'Cargo.lock'
+      - 'Cargo.toml'
+      - 'rust-toolchain.toml'
+      # LIBSQLITE3_FLAGS: how the bundled SQLite is built.
+      - '.cargo/config.toml'
+      - '.github/workflows/search-timings.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One run at a time; the newest push waits rather than cancelling it.
+concurrency:
+  group: search-timings
+  cancel-in-progress: false
+
+jobs:
+  search-timings:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 330
+    env:
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+      - name: Log toolchain and image
+        run: |
+          rustup show
+          rustc -Vv
+          echo "Runner image: ${ImageOS:-unknown} ${ImageVersion:-unknown}"
+      - name: Record Search timings
+        # Leaves time for the upload, which keeps the report written
+        # after each phase even if this step runs out.
+        timeout-minutes: 315
+        run: |
+          export SB_RUSTC_VERSION="$(rustc -V)"
+          cargo test -p sb-engine --release --lib search_timings \
+            -- --ignored --nocapture
+        env:
+          SB_SEARCH_TIMINGS_OUT: ${{ runner.temp }}/search-timings.json
+      - name: Upload the Search timings
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: search-timings
+          path: ${{ runner.temp }}/search-timings.json
+          if-no-files-found: warn
