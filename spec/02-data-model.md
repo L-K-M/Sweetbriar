@@ -1207,6 +1207,12 @@ CREATE INDEX d_message_bindings_by_assembly ON d_message_bindings(acquisition_id
   `d_message_summary.date_header` (imports), else `first_seen_at`. It is derived, but kept transactionally
   current, because the list must reflect a flag change instantly.
   Unified views ("all inboxes") page over `d_list_rows_unified` by role.
+  - Search walks (M1.6r3c–d, 06) add two additive indexes with their
+    steps, and the SQL block above gains each with its migration:
+    migration 15's `d_list_rows_by_date` on
+    `(sort_date DESC, occurrence_id DESC) WHERE representative = 1`, and
+    migration 16's `d_list_rows_mailbox_order` on
+    `(mailbox_id, occurrence_id DESC)`.
   - Rows exist for exactly the `present` occurrences.
   - `subject` and `sender` come from `message_headers` when it holds
     them, else from `d_message_summary`. `sender` is the first From

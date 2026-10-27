@@ -748,6 +748,27 @@ local drafts. No network yet.
     benchmark; present on parse, with the canonical text and chips formatted
     after it, which takes the per-clause formats off the keystroke's path;
     overlapped close and open (08).
+  - **M1.6r3 Ordered first pages:** r2d2's 100k run still missed 06's
+    100 ms warm p95 in four classes (common term 234–269 ms, scoped filter
+    205–207, negative body 117–126, phrase 87–97, both sorts). A per-pass
+    probe over a seeded 20k store found the exact unknown count and the
+    page's seek each evaluating every kept or scoped candidate, about
+    7 µs each, against 0.4 µs to walk a scoped row in date order and 4 ms
+    to rank 5k FTS matches. Split; each step reruns q's runner, and the
+    owner's Mac run against 06 and 08 still closes M1.6r:
+  - **M1.6r3a Contracts — S:** this split and the unknown-class and walk
+    rules in 02, 06, 07 and 11. Documentation only.
+  - **M1.6r3b Unknown classes — M:** the exact unknown count evaluates only
+    scoped candidates in a leaf's unknown classes (06), under coverage's
+    guards, with 11's equivalence and error proof.
+  - **M1.6r3c Date walks — M:** migration 15's representative date index;
+    date pages walk the scope in date order and stop once the page fills
+    (06): full reads always, driven reads when the kept set holds at least
+    a sixteenth of the scope.
+  - **M1.6r3d Relevance walks — M:** migration 16's mailbox occurrence
+    index; relevance pages stream a sole driving score leaf's matches in
+    FTS5 rank order, and walk occurrence order when no leaf scores (06),
+    stopping once the page fills.
 
 - **Goal:** FTS5 search with the query AST v1, the text syntax, chips and
   coverage.
@@ -801,6 +822,12 @@ local drafts. No network yet.
   - **M1.6r2d2:** key-driven address leaves equal the precedence-based leaf
     over 11's address matrix.
   - **M1.6r2e:** q2's benchmark records each stage of the keystroke path.
+  - **M1.6r3b:** unknown counts over the unknown classes equal full counts
+    and fail on the same corruption.
+  - **M1.6r3c:** date walks equal sorted reads over 11's matrix, without a
+    sort.
+  - **M1.6r3d:** relevance walks equal sorted reads, ties and score bits
+    included, without a sort.
   - **M1.6r:** the owner's Mac run meets 06's cached-search and 08's search
     budgets.
 

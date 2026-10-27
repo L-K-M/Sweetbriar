@@ -1008,6 +1008,46 @@ No partial parser/formatter, new dependency, compiler, service or UI ships here.
   An invalid binding is no class here: the per-read binding check reports it.
   Coverage also counts scoped messages with an acquisition but no header
   row, binding or summary; a nonzero count stops address leaves driving.
+- Unknown classes (M1.6r3b): a candidate is unknown only if one of its
+  leaves is, and each leaf kind is unknown only in its own classes. An FTS
+  leaf's are its unusable classes (above). An address leaf's are its
+  driver unknowns (above) plus every message with a header row.
+  `has:attachment` shares the address classes except unidentified entries.
+  `size` is unknown only without an acquisition (acquisition references
+  are foreign keys and `byte_length` is NOT NULL). Flag, tag, note,
+  account, mailbox and date leaves are never unknown. The exact unknown
+  count evaluates only scoped candidates in the union of its leaves'
+  classes, intersected with the kept set when the read is driven, and
+  seeks them by message. A class counts only under the proof its driver
+  kind needs: FTS classes under the FTS guards, address and attachment
+  classes with no summaryless message (above). Without that proof, or
+  without this snapshot's coverage, the count evaluates every scoped, or
+  kept, candidate. Each candidate whose evaluation can fail as `Corrupt`
+  lies in these classes (an undecodable list is unidentified, a malformed
+  mask is not `[]`, header rows are included) or is a binding the
+  per-read check covers, so the restriction changes no count and no error.
+- Ordered walks (M1.6r3c–d): a page needs its first limit + 1 hits in
+  page order, not every hit. A date page walks the scope's rows in date
+  order (`d_list_rows_window` for a mailbox, `d_list_rows_by_date`
+  otherwise, 02), evaluates each until the page fills and never sorts. A
+  full read always walks. A driven read walks, testing kept membership
+  before it evaluates a row, when its kept set's store-wide count (the
+  count the half-scope fallback above reads) is at least a sixteenth of
+  coverage's count of the scope: a walked row costs about a sixteenth of
+  an evaluated one (seeded 20k archive, M1.6r3), so even a walk through
+  the whole scope adds at most what evaluating every kept candidate costs. Otherwise it seeks its kept candidates
+  and sorts them. A relevance page whose only score leaf is reached from
+  the root through AND only streams that leaf's matches in FTS5 rank
+  order (`rank` set to the BM25 weights above, which gives identical score
+  bits), evaluates each until the page fills, then reads on through the
+  last hit's score so ties keep their `occurrence_id` order. A relevance
+  page with no score leaf orders by `occurrence_id` alone and walks like a
+  date page (by rowid, or `d_list_rows_mailbox_order` for a mailbox).
+  Other relevance pages sort every hit. Walks change no hit, order, score,
+  cursor or count. A walk evaluates fewer candidates than a sort, so
+  corruption past the page fails a first page through its unknown count,
+  which evaluates every candidate that can fail and that the read does not
+  skip (above); id reads still evaluate every candidate.
 - Search scope (07) selects candidates first. All/Account choose the
   ordinary representative. Mailbox chooses the lowest-id present
   occurrence of each message in that mailbox. An AST `mailbox` node tests
