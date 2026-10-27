@@ -119,15 +119,19 @@ fn nonnegative_count(value: i64) -> Result<u64, StoreError> {
 }
 
 struct Compiled {
-    /// Every candidate an exact unknown count evaluates: the scope, or only
-    /// the drivers' kept messages in it (spec/06, M1.6r2).
+    /// Every candidate that may be true or unknown: the scope, or only the
+    /// drivers' kept messages in it (spec/06, M1.6r2).
     source: String,
+    /// Every candidate an exact unknown count evaluates: `source`, or only
+    /// those in a leaf's unknown classes when they are proven (M1.6r3b).
+    unknown_source: String,
     /// The candidates that may be hits: `source`, or only drivers' matches.
     hit_source: String,
     predicate: String,
     /// `hit_source`'s scope filter.
     hit_scope: String,
-    /// For a driven read, the scope filter and its leading values, whose
+    /// For a read that skips candidates (driven, or counting unknown
+    /// classes only), the scope filter and its leading values, whose
     /// bindings the read checks itself (see `check_skipped_bindings`).
     skipped: Option<(&'static str, usize)>,
     leaves: Vec<ScoreLeaf>,
@@ -169,7 +173,7 @@ impl Compiled {
         result.map_err(sql_error)
     }
 
-    /// A driven read skips candidates, never their bindings (06): check
+    /// A read that skips candidates never skips their bindings (06): check
     /// every scoped binding, at a cost per binding. Reads call it once
     /// staleness and cursors are settled, so errors keep a full read's order.
     fn check_skipped_bindings(&self, tx: &Transaction) -> Result<(), StoreError> {
@@ -213,6 +217,7 @@ fn compile_driven(
         conjunct: true,
         leaves: Vec::new(),
         drivers: Vec::new(),
+        classes: Vec::new(),
     };
     let validity = Source::Stored.validity();
     let predicate = format!(
@@ -225,21 +230,33 @@ fn compile_driven(
         generation,
         target: compiler.target,
     });
-    let restriction = drive::restrict(tx, &compiler.drivers, proof)?;
-    let skipped = restriction.as_ref().map(|_| (scope, outer_values));
-    let (all, hits) = match restriction {
+    let fts_leaves = compiler.classes.contains(&drive::Class::Fts);
+    let guards = drive::guards(tx, fts_leaves, proof)?;
+    let restriction = drive::restrict(tx, &compiler.drivers, guards)?;
+    let unknowns = drive::unknowns(&compiler.classes, guards);
+    let skipped = (restriction.is_some() || unknowns.is_some()).then_some((scope, outer_values));
+
+    // Skipped candidates are sought by message, never walked to.
+    let sought = if skipped.is_some() && scope == MAILBOX_CHOICE {
+        MAILBOX_SEEK
+    } else {
+        scope
+    };
+    // `counted` is `all`, sought by message even without a kept set.
+    let (all, hits, counted) = match restriction {
         Some(kept) => {
-            let scope = if scope == MAILBOX_CHOICE {
-                MAILBOX_SEEK
-            } else {
-                scope
-            };
-            (
-                format!("{scope} AND r.message_id IN ({})", kept.all),
-                format!("{scope} AND r.message_id IN ({})", kept.hits),
-            )
+            let all = format!("{sought} AND r.message_id IN ({})", kept.all);
+            let hits = format!("{sought} AND r.message_id IN ({})", kept.hits);
+            (all.clone(), hits, all)
         }
-        None => (scope.to_owned(), scope.to_owned()),
+        None => (scope.to_owned(), scope.to_owned(), sought.to_owned()),
+    };
+
+    // Only a leaf in one of its unknown classes makes a candidate unknown.
+    let unknown = match unknowns {
+        Some(drive::Unknowns::Never) => format!("{counted} AND 0"),
+        Some(drive::Unknowns::In(set)) => format!("{counted} AND r.message_id IN ({set})"),
+        None => all.clone(),
     };
     let select = |filter: &str| {
         format!(
@@ -248,9 +265,10 @@ fn compile_driven(
             source()
         )
     };
-    let (source, hit_source) = (select(&all), select(&hits));
+    let (source, unknown_source, hit_source) = (select(&all), select(&unknown), select(&hits));
     Ok(Compiled {
         source,
+        unknown_source,
         hit_source,
         predicate,
         hit_scope: hits,
@@ -387,6 +405,8 @@ struct Compiler {
     leaves: Vec<ScoreLeaf>,
     /// Distinct FTS and exact address leaves that can drive a read (06).
     drivers: Vec<drive::Driver>,
+    /// Distinct kinds of leaf in the tree that can be unknown (M1.6r3b).
+    classes: Vec<drive::Class>,
 }
 
 impl Compiler {
@@ -432,7 +452,10 @@ impl Compiler {
             Node::Has(Has::Note) => {
                 "EXISTS(SELECT 1 FROM notes n WHERE n.message_id = r.message_id)".into()
             }
-            Node::Has(Has::Attachment) => attachment(),
+            Node::Has(Has::Attachment) => {
+                self.unknown(drive::Class::Attachment);
+                attachment()
+            }
             Node::Date(date) => match date.bounds() {
                 DateBounds::Before(end) => format!("r.sort_date < {}", self.bind(end.as_millis())),
                 DateBounds::After(start) => {
@@ -449,15 +472,18 @@ impl Compiler {
                     self.bind(end.as_millis())
                 ),
             },
-            Node::Size { op, bytes } => format!(
-                "coalesce(a.byte_length, o.rfc822_size) {} {}",
-                match op {
-                    SizeOp::Lt => "<",
-                    SizeOp::Eq => "=",
-                    SizeOp::Gt => ">",
-                },
-                self.bind(*bytes)
-            ),
+            Node::Size { op, bytes } => {
+                self.unknown(drive::Class::Size);
+                format!(
+                    "coalesce(a.byte_length, o.rfc822_size) {} {}",
+                    match op {
+                        SizeOp::Lt => "<",
+                        SizeOp::Eq => "=",
+                        SizeOp::Gt => ">",
+                    },
+                    self.bind(*bytes)
+                )
+            }
             Node::Account(id) => format!("lm.account_id = {}", self.bind(id.to_string())),
             Node::Mailbox(id) => format!(
                 "EXISTS(SELECT 1 FROM occurrences om WHERE om.message_id = r.message_id
@@ -494,6 +520,7 @@ impl Compiler {
             columns.join(" "),
             value.tokens().join(" ").replace('"', "\"\"")
         );
+        self.unknown(drive::Class::Fts);
         let phrase = self.bind(literal.clone());
         let needed = self.bind(columns.join(","));
         let target = self.bind(self.target);
@@ -527,13 +554,15 @@ impl Compiler {
         let (known, selected) = address_source(field);
         let mode_value = self.bind(mode as i64);
         let placeholder = self.bind(key.to_owned());
+        let name = match field {
+            AddressField::From => "from",
+            AddressField::To => "to",
+            AddressField::Cc => "cc",
+        };
+        self.unknown(drive::Class::Address(name));
         if self.conjunct {
             self.drive(drive::Driver::Address {
-                field: match field {
-                    AddressField::From => "from",
-                    AddressField::To => "to",
-                    AddressField::Cc => "cc",
-                },
+                field: name,
                 column: match mode {
                     AddressMatch::Exact => "address_key",
                     AddressMatch::Domain => "domain_key",
@@ -543,6 +572,13 @@ impl Compiler {
             });
         }
         format!("{ADDRESS_FN}({known},{selected},{mode_value},{placeholder})")
+    }
+
+    /// Note a leaf kind that can be unknown, once.
+    fn unknown(&mut self, class: drive::Class) {
+        if !self.classes.contains(&class) {
+            self.classes.push(class);
+        }
     }
 
     /// Keep a driver unless the same leaf already drives.

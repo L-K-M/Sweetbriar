@@ -8,6 +8,7 @@
 //!   (matches ∪ unusable classes) ∩ … per driver ─────► unknown-count restriction
 //!   no driver, no proof, a class the drivers cannot enumerate,
 //!   or a kept set of half the scope or more ─────────► full read
+//!   ∪ unknown classes of the tree's leaves (M1.6r3b) ─► unknown-count restriction
 //! ```
 
 use rusqlite::{OptionalExtension, Transaction, params_from_iter, types::Value};
@@ -96,18 +97,44 @@ impl Driver {
     fn unusable(&self) -> String {
         match self {
             Self::Fts { .. } => FTS_UNUSABLE.to_owned(),
-            Self::Address { field, .. } => format!(
-                "SELECT kb.message_id FROM d_address_unidentified ku
-                   CROSS JOIN d_message_bindings kb
-                   ON kb.acquisition_id = ku.acquisition_id AND kb.parser_target = ku.parser_target
-                   WHERE ku.field = '{field}' AND ku.parser_target > 0
-                 UNION SELECT kl.message_id FROM d_address_unidentified ku
-                   CROSS JOIN logical_messages kl ON kl.acquisition_id = ku.acquisition_id
-                   WHERE ku.field = '{field}' AND ku.parser_target = 0
-                 UNION {ADDRESS_UNUSABLE}"
-            ),
+            Self::Address { field, .. } => {
+                format!("{} UNION {ADDRESS_UNUSABLE}", unidentified(field))
+            }
         }
     }
+}
+
+/// A leaf kind that can be unknown, so its candidates are ones the exact
+/// unknown count must evaluate (spec/06, M1.6r3b). Flag, tag, note,
+/// account, mailbox and date leaves are never unknown.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Class {
+    Fts,
+    /// An exact address leaf on this field.
+    Address(&'static str),
+    Attachment,
+    Size,
+}
+
+/// The candidates an exact unknown count must evaluate.
+pub(super) enum Unknowns {
+    /// No leaf of the tree can be unknown.
+    Never,
+    /// Only messages in this one-column set can be.
+    In(String),
+}
+
+/// What this snapshot's coverage proves enumerable: FTS classes, address
+/// and attachment classes, the size class, and the scope's size for the
+/// half-scope rule.
+#[derive(Clone, Copy)]
+pub(super) struct Guards {
+    fts: bool,
+    address: bool,
+    /// No dangling acquisition reference, which only the forbidden count
+    /// reveals (06).
+    references: bool,
+    scope_messages: u64,
 }
 
 /// What a driven read rests on: coverage's scope counts, which must be this
@@ -141,6 +168,26 @@ const FTS_UNUSABLE: &str =
       CROSS JOIN logical_messages kl ON kl.acquisition_id = kd.doc_id
       WHERE kd.state <> 'indexed' OR kd.truncated_fields <> '[]'";
 
+/// Messages on a source with an unidentified entry in `field` (06).
+fn unidentified(field: &str) -> String {
+    format!(
+        "SELECT kb.message_id FROM d_address_unidentified ku
+           CROSS JOIN d_message_bindings kb
+           ON kb.acquisition_id = ku.acquisition_id AND kb.parser_target = ku.parser_target
+           WHERE ku.field = '{field}' AND ku.parser_target > 0
+         UNION SELECT kl.message_id FROM d_address_unidentified ku
+           CROSS JOIN logical_messages kl ON kl.acquisition_id = ku.acquisition_id
+           WHERE ku.field = '{field}' AND ku.parser_target = 0"
+    )
+}
+
+/// Messages whose header row an address leaf reads instead of keys.
+const HEADER_ROWS: &str = "SELECT kh.message_id FROM message_headers kh";
+
+/// Messages without an acquisition, the only ones whose size is unknown.
+const WITHOUT_ACQUISITION: &str =
+    "SELECT kl.message_id FROM logical_messages kl WHERE kl.acquisition_id IS NULL";
+
 /// Every message an exact address leaf reads as unknown whatever its field
 /// and key (spec/06): without an acquisition, unbound on a summary that is
 /// not `ok` or below parser 2, or bound to an assembly below parser 2.
@@ -152,17 +199,91 @@ const ADDRESS_UNUSABLE: &str =
     UNION SELECT kb.message_id FROM d_message_bindings kb INDEXED BY d_message_bindings_old_target
       WHERE kb.parser_target < 2";
 
+/// The guards `proof` establishes: none unless it is this snapshot's
+/// coverage; FTS classes only without a forbidden class or an unqueued
+/// document at another version (a queued one is kept with the queue),
+/// probed only when the tree has an FTS leaf; address and attachment
+/// classes only without a message that has an acquisition but no header
+/// row, binding or summary; the size class only without a forbidden class.
+pub(super) fn guards(
+    tx: &Transaction,
+    fts_leaves: bool,
+    proof: Option<Proof<'_>>,
+) -> Result<Option<Guards>, StoreError> {
+    let Some(proof) = proof else {
+        return Ok(None);
+    };
+    let coverage = proof.coverage;
+    let current = coverage.scope() == proof.scope
+        && i64::try_from(coverage.generation()).is_ok_and(|kept| kept == proof.generation)
+        && coverage.extractor_version() == proof.target;
+    if !current {
+        return Ok(None);
+    }
+    Ok(Some(Guards {
+        fts: fts_leaves && coverage.forbidden() == 0 && !other_version(tx, proof.target)?,
+        address: coverage.summaryless() == 0,
+        references: coverage.forbidden() == 0,
+        scope_messages: coverage.total_messages(),
+    }))
+}
+
+/// The unknown classes of `classes` united, or `None` when `guards` cannot
+/// prove one of them enumerable and the count evaluates every candidate.
+/// A tree without such classes needs no proof.
+pub(super) fn unknowns(classes: &[Class], guards: Option<Guards>) -> Option<Unknowns> {
+    if classes.is_empty() {
+        return Some(Unknowns::Never);
+    }
+    let guards = guards?;
+    let mut sets: Vec<String> = Vec::new();
+    for class in classes {
+        let (proven, class_sets) = match class {
+            Class::Fts => (guards.fts, vec![FTS_UNUSABLE.to_owned()]),
+            Class::Address(field) => (
+                guards.address,
+                vec![
+                    unidentified(field),
+                    ADDRESS_UNUSABLE.to_owned(),
+                    HEADER_ROWS.to_owned(),
+                ],
+            ),
+            Class::Attachment => (
+                guards.address,
+                vec![ADDRESS_UNUSABLE.to_owned(), HEADER_ROWS.to_owned()],
+            ),
+            Class::Size => (guards.references, vec![WITHOUT_ACQUISITION.to_owned()]),
+        };
+        if !proven {
+            return None;
+        }
+        for set in class_sets {
+            if !sets.contains(&set) {
+                sets.push(set);
+            }
+        }
+    }
+    Some(Unknowns::In(sets.join(" UNION ")))
+}
+
 /// The restriction for `drivers`, or `None` when the read must evaluate
 /// every scoped candidate.
 pub(super) fn restrict(
     tx: &Transaction,
     drivers: &[Driver],
-    proof: Option<Proof<'_>>,
+    guards: Option<Guards>,
 ) -> Result<Option<Restriction>, StoreError> {
-    let Some(proof) = proof else {
+    let Some(guards) = guards else {
         return Ok(None);
     };
-    let drivers = proven(tx, drivers, proof)?;
+    // Intersecting fewer drivers stays exact.
+    let drivers: Vec<&Driver> = drivers
+        .iter()
+        .filter(|driver| match driver {
+            Driver::Fts { .. } => guards.fts,
+            Driver::Address { .. } => guards.address,
+        })
+        .collect();
     if drivers.is_empty() {
         return Ok(None);
     }
@@ -171,7 +292,7 @@ pub(super) fn restrict(
     // a full read is no more work.
     let numbered: Vec<String> = (1..=drivers.len()).map(|n| format!("?{n}")).collect();
     let counted = kept(&drivers, &numbered);
-    let limit = proof.coverage.total_messages().div_ceil(DRIVEN_COST);
+    let limit = guards.scope_messages.div_ceil(DRIVEN_COST);
     let mut values: Vec<Value> = drivers.iter().map(|driver| driver.operand()).collect();
     values.push(i64::try_from(limit).unwrap_or(i64::MAX).into());
     let sql = format!(
@@ -191,37 +312,6 @@ pub(super) fn restrict(
         .map(|driver| driver.placeholder().to_owned())
         .collect();
     Ok(Some(kept(&drivers, &placeholders)))
-}
-
-/// The drivers `proof` lets drive: none unless it is this snapshot's
-/// coverage; FTS leaves only without a forbidden class or an unqueued
-/// document at another version (a queued one is kept with the queue);
-/// address leaves only without a message that has an acquisition but no
-/// header row, binding or summary. Intersecting fewer drivers stays exact.
-fn proven<'a>(
-    tx: &Transaction,
-    drivers: &'a [Driver],
-    proof: Proof<'_>,
-) -> Result<Vec<&'a Driver>, StoreError> {
-    let coverage = proof.coverage;
-    let current = coverage.scope() == proof.scope
-        && i64::try_from(coverage.generation()).is_ok_and(|kept| kept == proof.generation)
-        && coverage.extractor_version() == proof.target;
-    if !current {
-        return Ok(Vec::new());
-    }
-    let has_fts = drivers
-        .iter()
-        .any(|driver| matches!(driver, Driver::Fts { .. }));
-    let fts = has_fts && coverage.forbidden() == 0 && !other_version(tx, proof.target)?;
-    let address = coverage.summaryless() == 0;
-    Ok(drivers
-        .iter()
-        .filter(|driver| match driver {
-            Driver::Fts { .. } => fts,
-            Driver::Address { .. } => address,
-        })
-        .collect())
 }
 
 /// Whether any document is at another extractor version with no queue row.

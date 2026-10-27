@@ -321,7 +321,10 @@ fn read_page(
             excluded_unknown,
         } if generation == binding.generation => excluded_unknown,
         _ => {
-            let sql = format!("SELECT coalesce(sum(v IS NULL),0) FROM ({})", plan.source);
+            let sql = format!(
+                "SELECT coalesce(sum(v IS NULL),0) FROM ({})",
+                plan.unknown_source
+            );
             let raw = plan.read(tx, &sql, &[], |statement, values| {
                 statement.query_row(params_from_iter(values), |row| row.get(0))
             })?;
