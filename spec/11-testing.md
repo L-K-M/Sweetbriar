@@ -123,15 +123,18 @@ test, except where the spec says "manual qualification".
   summaries, messages without an acquisition and shared acquisitions.
 - M1.6r3b proves class-restricted unknown counts equal evaluating counts
   over r2's matrix, extended to `has:attachment` and `size` leaves and
-  header rows, for driven and full reads, with each guard's fallback; and
-  that every corruption class (undecodable list, malformed mask, invalid
-  binding) fails both alike. Plan-shape tests show the count's source
-  carries the class filter. M1.6r3c–d prove walked pages equal sorted
-  pages (rows, order, score bits, cursors, `has_more` flags, Top, After,
-  Before and Around anchors) over that matrix plus score ties, shared
-  acquisitions, kept sets on both sides of the walk threshold and all
-  three scopes; plan-shape tests show walked reads use no temporary
-  B-tree for their order. Each step's runner rerun records the effect.
+  header rows, for driven and full reads, with each guard's fallback,
+  mixed guards (one kind proven, another not) included; and that every
+  corruption class (undecodable list, malformed mask, invalid binding)
+  fails both alike, the count itself failing for the first two. Plan-shape
+  tests show the count seeks its class messages. M1.6r3c–d prove walked
+  pages equal sorted pages (rows, order, score bits, cursors, `has_more`
+  flags, Top, After, Before and Around anchors) over that matrix plus
+  score ties across a page boundary, shared acquisitions, kept sets on
+  both sides of the walk threshold, a second driver beside a score leaf
+  and all three scopes; plan-shape tests show no temporary B-tree orders
+  a walked read's hits (tie completion orders only the last score's
+  ties). Each step's runner rerun records the effect.
 
 ### Received-address proof ownership (M1.6m0–m4)
 

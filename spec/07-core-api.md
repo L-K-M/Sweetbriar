@@ -277,9 +277,10 @@ steps; they do not add placeholder modes to this boundary.
   first and 200 thereafter. Around/id-index behavior is unchanged. Unknown
   counts stay exact over all scoped candidates: a read may skip only those
   a driver proves false or no leaf can make unknown, and evaluates every
-  candidate when it cannot prove that (06, M1.6r2–r3). Pages stop
-  evaluating once they fill, in page order (06). The first-page timing
-  includes this cost. Counts may
+  candidate when it cannot prove that (06, M1.6r2–r3). Search pages,
+  Around included, stop evaluating once they fill, in page order; id
+  reads evaluate every candidate (06). The first-page timing includes
+  this cost. Counts may
   be cached by canonical query, scope and search generation: a first page
   always counts, and later pages of any window may reuse it. Coverage's
   scope counts, which depend only on scope and generation, may be shared

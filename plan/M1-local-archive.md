@@ -761,14 +761,15 @@ local drafts. No network yet.
   - **M1.6r3b Unknown classes — M:** the exact unknown count evaluates only
     scoped candidates in a leaf's unknown classes (06), under coverage's
     guards, with 11's equivalence and error proof.
-  - **M1.6r3c Date walks — M:** migration 15's representative date index;
-    date pages walk the scope in date order and stop once the page fills
-    (06): full reads always, driven reads when the kept set holds at least
-    a sixteenth of the scope.
-  - **M1.6r3d Relevance walks — M:** migration 16's mailbox occurrence
-    index; relevance pages stream a sole driving score leaf's matches in
-    FTS5 rank order, and walk occurrence order when no leaf scores (06),
-    stopping once the page fills.
+  - **M1.6r3c Date walks — M:** migration 15's representative date
+    indexes; date pages walk the scope in date order and stop once the
+    page fills (06): full reads always, driven reads when the kept set
+    holds at least a sixteenth of the scope.
+  - **M1.6r3d Relevance walks — M:** migration 16's occurrence-order
+    indexes; relevance pages stream a sole AND-reached score leaf's
+    matches in FTS5 rank order when no other leaf drives, and walk
+    occurrence order when no leaf scores (06), stopping once the page
+    fills.
 
 - **Goal:** FTS5 search with the query AST v1, the text syntax, chips and
   coverage.
