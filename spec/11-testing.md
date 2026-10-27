@@ -121,6 +121,20 @@ test, except where the spec says "manual qualification".
   `domain` leaves on every field over the source precedence: header rows,
   usable and old-target bindings, usable, partial, legacy, failed and absent
   summaries, messages without an acquisition and shared acquisitions.
+- M1.6r3b proves class-restricted unknown counts equal evaluating counts
+  over r2's matrix, extended to `has:attachment` and `size` leaves and
+  header rows, for driven and full reads, with each guard's fallback,
+  mixed guards (one kind proven, another not) included; and that every
+  corruption class (undecodable list, malformed mask, invalid binding)
+  fails both alike, the count itself failing for the first two. Plan-shape
+  tests show the count seeks its class messages. M1.6r3c–d prove walked
+  pages equal sorted pages (rows, order, score bits, cursors, `has_more`
+  flags, Top, After, Before and Around anchors) over that matrix plus
+  score ties across a page boundary, shared acquisitions, kept sets on
+  both sides of the walk threshold, a second driver beside a score leaf
+  and all three scopes; plan-shape tests show no temporary B-tree orders
+  a walked read's hits (tie completion orders only the last score's
+  ties). Each step's runner rerun records the effect.
 
 ### Received-address proof ownership (M1.6m0–m4)
 
