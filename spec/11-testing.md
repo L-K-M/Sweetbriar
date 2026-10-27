@@ -114,6 +114,13 @@ test, except where the spec says "manual qualification".
   that leaf first does. Plan-shape tests show every read source carries
   the restriction. The runner adds a common-term class and records
   coverage time, cache-cold and cache-hit samples separately.
+- M1.6r2d1 proves every writer path (first summary, assembly completion,
+  migration 14) leaves address keys equal to keys derived afresh from the
+  stored sources, including unidentified, undecodable, empty, name-only and
+  duplicate entries. M1.6r2d2 extends the equivalence matrix to `is` and
+  `domain` leaves on every field over the source precedence: header rows,
+  usable and old-target bindings, usable, partial, legacy, failed and absent
+  summaries, messages without an acquisition and shared acquisitions.
 
 ### Received-address proof ownership (M1.6m0–m4)
 

@@ -734,11 +734,16 @@ local drafts. No network yet.
     runner adds a common-term class. A tree without a driver (no positive
     FTS conjunct) still scans the whole scope. If its estimate passes the
     cap, split the migration, enumeration and guards from the driven reads.
-  - **M1.6r2d Exact address keys — L:** a maintained address-key table and
-    unknown marker make exact address/domain leaves drivers, with their 02
-    and 06 amendments first. Proof: a precedence equivalence matrix and a
-    drift test on every writer path. If its estimate passes the cap, split
-    the table and its maintenance from the driver wiring.
+  - **M1.6r2d Exact address keys:** split as its contingency allowed, since
+    keys, writers, backfill and driver exceed one step:
+  - **M1.6r2d1 Address keys — M:** 02's address-key tables, written with
+    each first summary and completed repair assembly and derived for
+    existing stores by migration 14, with r2d's 02, 06 and 11 amendments
+    first. Proof: 11's drift tests on every writer path.
+  - **M1.6r2d2 Address drivers — M:** exact address/domain leaves drive
+    reads through the keys (06), with coverage's summary guard and 11's
+    address equivalence matrix. The runner's exact-address and scoped
+    filter classes show the effect.
   - **M1.6r2e Search keystroke path — M:** stage timings in q2's
     benchmark; present on parse, with the canonical text and chips formatted
     after it, which takes the per-clause formats off the keystroke's path;
@@ -791,8 +796,10 @@ local drafts. No network yet.
     pages reuse counts, both equal to fresh reads.
   - **M1.6r2c:** driven reads equal full reads over 11's matrix; each guard
     falls back to the full read.
-  - **M1.6r2d:** key-driven address leaves equal the precedence-based leaf
-    over an address matrix (11, amended by r2d) after every writer path.
+  - **M1.6r2d1:** stored address keys equal keys derived afresh after every
+    writer path and the migration.
+  - **M1.6r2d2:** key-driven address leaves equal the precedence-based leaf
+    over 11's address matrix.
   - **M1.6r2e:** q2's benchmark records each stage of the keystroke path.
   - **M1.6r:** the owner's Mac run meets 06's cached-search and 08's search
     budgets.

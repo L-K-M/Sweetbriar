@@ -460,7 +460,8 @@ fn save_summary(
         &summary.delivered_to_json,
     ]
     .map(canonical_array);
-    tx.execute(
+    let (to, cc) = (to?, cc?);
+    let stored = tx.execute(
         "INSERT INTO d_message_summary (acquisition_id, parser_version, parse_state,
          header_message_id, subject, from_addr, from_name, reply_to_json, to_json, cc_json,
          date_header, in_reply_to, references_json, list_id, delivered_to_json, has_attachments, snippet)
@@ -468,7 +469,23 @@ fn save_summary(
          ON CONFLICT(acquisition_id) DO NOTHING",
         params![acquisition, summary.parser_version, summary.parse_state.name(),
             summary.header_message_id, summary.subject, summary.from_addr, summary.from_name,
-            reply_to?, to?, cc?, summary.date_header, summary.in_reply_to, references?,
+            reply_to?, to, cc, summary.date_header, summary.in_reply_to, references?,
             summary.list_id, delivered_to?, summary.has_attachments, summary.snippet],
-    ).map(|changed| changed > 0).map_err(sql_error)
+    ).map(|changed| changed > 0).map_err(sql_error)?;
+    if stored {
+        // A first summary carries its address keys in the same transaction (02).
+        let columns = crate::address_keys::Columns {
+            from_addr: summary.from_addr.as_deref(),
+            from_name: summary.from_name.as_deref(),
+            to_json: to.as_deref(),
+            cc_json: cc.as_deref(),
+        };
+        crate::address_keys::write(
+            tx,
+            acquisition,
+            crate::address_keys::SUMMARY_TARGET,
+            &columns,
+        )?;
+    }
+    Ok(stored)
 }

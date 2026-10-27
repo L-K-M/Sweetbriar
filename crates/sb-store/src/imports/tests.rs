@@ -725,6 +725,38 @@ fn a_newer_parser_never_replaces_a_stored_summary() {
     store.close().unwrap();
 }
 
+#[test]
+fn a_first_summary_stores_its_address_keys_and_a_later_one_changes_none() {
+    let (_scratch, _paths, store, revision) = setup();
+    let mut first = message(&store, "/synthetic/Inbox.mbox", 0, ORIGINAL);
+    first.summary.from_addr = Some("sender@example.test".to_owned());
+    // An array the reader cannot decode leaves its field unidentified.
+    first.summary.cc_json = Some(r#"[{"address":5}]"#.to_owned());
+    commit(&store, revision, "Inbox", vec![first]).unwrap();
+    let keys = || count(&store, "d_address_keys");
+    assert_eq!(keys(), 2);
+    assert_eq!(
+        count(&store, "d_address_unidentified WHERE field = 'cc'"),
+        1
+    );
+    reading(&store, |tx| {
+        crate::address_keys::assert_current(tx);
+        Ok(())
+    });
+
+    // The stored summary stays (spec/02), and so do its keys.
+    let mut newer = message(&store, "/synthetic/Archive.mbox", 0, ORIGINAL);
+    newer.summary.parser_version = 2;
+    newer.summary.from_addr = Some("other@example.test".to_owned());
+    commit(&store, revision + 1, "Archive", vec![newer]).unwrap();
+    assert_eq!(keys(), 2);
+    reading(&store, |tx| {
+        crate::address_keys::assert_current(tx);
+        Ok(())
+    });
+    store.close().unwrap();
+}
+
 /// `held` messages sharing `bytes`' acquisition, which has no summary
 /// yet, each with a listed occurrence in a local folder.
 fn hold_without_summary(store: &Store, bytes: &'static [u8], held: usize) {

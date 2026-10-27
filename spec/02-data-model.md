@@ -1175,6 +1175,30 @@ CREATE UNIQUE INDEX d_list_rows_one_representative ON d_list_rows(message_id)
   WHERE representative = 1;
 CREATE INDEX d_list_rows_by_message ON d_list_rows(message_id,occurrence_id);
 CREATE INDEX logical_messages_by_acquisition ON logical_messages(acquisition_id);
+
+-- Migration 14 (M1.6r2d): exact address keys of each summary (parser_target 0)
+-- and completed repair assembly, for driven address searches (06), with the
+-- indexes their unknown classes and bindings are enumerated through.
+CREATE TABLE d_address_keys (
+  field          TEXT NOT NULL CHECK (field IN ('from','to','cc')),
+  address_key    TEXT NOT NULL,
+  acquisition_id INTEGER NOT NULL REFERENCES acquisitions(acquisition_id),
+  parser_target  INTEGER NOT NULL CHECK (parser_target BETWEEN 0 AND 4294967295),
+  domain_key     TEXT NOT NULL,
+  PRIMARY KEY (field, address_key, acquisition_id, parser_target)
+) STRICT, WITHOUT ROWID;
+CREATE INDEX d_address_keys_domain ON d_address_keys(field, domain_key);
+CREATE TABLE d_address_unidentified (
+  field          TEXT NOT NULL CHECK (field IN ('from','to','cc')),
+  acquisition_id INTEGER NOT NULL REFERENCES acquisitions(acquisition_id),
+  parser_target  INTEGER NOT NULL CHECK (parser_target BETWEEN 0 AND 4294967295),
+  PRIMARY KEY (field, acquisition_id, parser_target)
+) STRICT, WITHOUT ROWID;
+CREATE INDEX d_message_summary_unusable ON d_message_summary(acquisition_id)
+  WHERE NOT (parse_state = 'ok' AND parser_version >= 2);
+CREATE INDEX d_message_bindings_old_target ON d_message_bindings(message_id)
+  WHERE parser_target < 2;
+CREATE INDEX d_message_bindings_by_assembly ON d_message_bindings(acquisition_id, parser_target);
 ```
 
 - **`d_list_rows`** is the covering index for keyset-paginated mailbox
@@ -1202,6 +1226,15 @@ CREATE INDEX logical_messages_by_acquisition ON logical_messages(acquisition_id)
   - `store_meta.list_generation` gains one in each transaction that
     inserts, changes or removes list rows or thread memberships, and
     in no other. Windows bind to it (07).
+- **Address keys (M1.6r2d)** index exact address leaves (06). A summary's
+  rows use `parser_target` 0; a completed repair assembly's use its target.
+  Per field (From is the first mailbox only) a source has one row per
+  distinct received-address key with its domain key, and one
+  `d_address_unidentified` row when any entry has no address or fails the
+  strict received-address grammar, or the list cannot be decoded. The
+  transaction that stores a first summary or completes an assembly writes
+  its keys; both sources are immutable afterwards. Migration 14 derives
+  them for existing sources.
 - **`d_message_summary` JSON columns** are canonical JSON arrays.
   Address lists (`reply_to_json`, `to_json`, `cc_json`) hold
   `{"address", "name"}` objects, with `null` for a missing part;
