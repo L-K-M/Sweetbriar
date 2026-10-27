@@ -1022,22 +1022,28 @@ No partial parser/formatter, new dependency, compiler, service or UI ships here.
   leaves are never unknown. The exact unknown count evaluates only scoped
   candidates in the union of its leaves' classes, intersected for a
   driven read with its non-false kept set (matches plus unusable classes,
-  above), and seeks them by message. Each class needs a proof: FTS
-  classes the FTS guards, address and attachment classes no summaryless
-  message (above), `size` a zero forbidden count, all from this
-  snapshot's coverage. If any class of the tree lacks its proof, the count
-  evaluates every scoped, or kept, candidate; a tree no leaf of which can
-  be unknown counts none and needs no proof. Each candidate whose
-  evaluation can fail as `Corrupt` lies in these classes (an undecodable
+  above), and seeks them by message; matching counts and hits still read
+  every candidate that may be true. Each class needs a proof from this
+  snapshot: FTS classes the FTS guards (coverage's counts and the version
+  probe), address and attachment classes no summaryless message (above),
+  `size` a zero forbidden count. If any class of the tree lacks its proof,
+  the count evaluates every scoped, or kept, candidate; a tree no leaf of
+  which can be unknown counts none and needs no proof. The restriction
+  changes no count. Each candidate whose evaluation can fail as `Corrupt`
+  through a decoder the classes anticipate lies in them (an undecodable
   list is unidentified, a malformed mask is not `[]`, header rows are
-  included) or is a binding the read's own check covers (above), so the
-  restriction changes no count and no error.
+  included), and invalid bindings fail the read's own check (above).
+  Corruption neither covers, such as a completed assembly missing pieces
+  its lengths declare, fails only reads that evaluate that candidate, as
+  for candidates a driver proves false (above).
 - Ordered walks (M1.6r3c–d): a page needs its first limit + 1 hits in
   page order, not every hit. A date page walks the scope's rows in date
-  order, from its anchor's key for After, Before and Around, through an
-  index of exactly the scope's rows (`d_list_rows_window` for a mailbox,
-  `d_list_rows_account_by_date` for an account, `d_list_rows_by_date`
-  otherwise, 02), evaluates each until the page fills and never sorts. A
+  order, from its anchor's key for After, Before and Around (each side of
+  Around up to its own limit), through an index in that order
+  (`d_list_rows_window` for a mailbox, whose rows each still pass the
+  lowest-occurrence choice; `d_list_rows_account_by_date` for an account;
+  `d_list_rows_by_date` otherwise, 02), evaluates each until the page
+  fills and never sorts. A
   full read always walks. A driven read walks, testing each row against
   the drivers' matches before it evaluates it, when its kept set's
   store-wide count (the count the half-scope fallback above reads) is at
@@ -1045,18 +1051,21 @@ No partial parser/formatter, new dependency, compiler, service or UI ships here.
   about a sixteenth of an evaluated one (seeded 20k archive, M1.6r3), so
   even a walk through the whole scope adds at most what evaluating every
   kept candidate costs. Otherwise it seeks its kept candidates and sorts
-  them. A relevance page whose only score leaf is reached from the root
-  through AND only, and which no other leaf drives, streams that leaf's
+  them. A relevance page whose tree has one score leaf (one positive FTS
+  leaf), reached from the root through AND only, and no other driving
+  leaf streams that leaf's
   matches in FTS5 rank order (`rank MATCH 'bm25(…)'` per statement with
   the weights above, which gives identical score bits), filtered by its
   anchor's key, evaluates each until the page fills, then reads on
   through the last hit's score so ties keep their `occurrence_id` order;
-  rows read past the page are dropped, and a later page re-enters their
-  tie group from its cursor. A relevance page with no score leaf orders
-  by `occurrence_id` descending alone and walks like a date page (rowid
-  descending for All, `d_list_rows_account_order` for an account,
-  `d_list_rows_mailbox_order` for a mailbox). Other relevance pages sort
-  every hit. Walks change no hit, order, score, cursor or count. A walk
+  rows read past the page are dropped, and a later page re-ranks the
+  matches and skips to its cursor, re-entering their tie group. A
+  relevance page with no score leaf orders by `occurrence_id` descending
+  alone and walks under the date page's rules, threshold included
+  (`occurrence_id` is `d_list_rows`'s rowid: rowid descending, each row
+  passing `representative = 1`, for All; `d_list_rows_account_order` for
+  an account; `d_list_rows_mailbox_order` for a mailbox). Other relevance
+  pages sort every hit. Walks change no hit, order, score, cursor or count. A walk
   evaluates fewer candidates than a sort, so corruption past the page
   fails a first page through its unknown count, which evaluates every
   candidate that can fail and that the read does not skip (above); a
