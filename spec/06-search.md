@@ -982,13 +982,15 @@ No partial parser/formatter, new dependency, compiler, service or UI ships here.
   inserting transaction; reset/enqueue are unreadable). Coverage counts both
   classes over the read's scope and snapshot, outside reset/enqueue, as
   internal guard state that 07's coverage does not expose. A nonzero count
-  of either class, any unqueued document in the store at a non-target
+  of either class, or any unqueued document in the store at a non-target
   extractor version (probed through `d_search_docs(extractor_version)`; a
-  queued one is kept), or a kept set whose store-wide count is not smaller
-  than coverage's count of the scope makes the read evaluate every scoped
-  candidate. Driven and full reads of one snapshot return identical hits,
-  unknown counts, scores and order, and differ in errors only as stated
-  above.
+  queued one is kept), stops FTS leaves driving; other drivers still may,
+  since intersecting fewer drivers stays exact. A read whose kept set has a
+  store-wide count of at least half coverage's count of the scope
+  evaluates every scoped candidate: a kept candidate, sought by message,
+  costs about twice a scanned one (M1.6r2d, seeded 100k archive). Driven
+  and full reads of one snapshot return identical hits, unknown counts,
+  scores and order, and differ in errors only as stated above.
 - Address drivers (M1.6r2d): an `is` or `domain` leaf on From, To or Cc
   reached from the root through AND only also drives, through 02's address
   keys. Every message with a header row is kept and evaluated: header rows

@@ -385,7 +385,7 @@ struct Compiler {
     /// Whether the node is the root or reached from it through AND only.
     conjunct: bool,
     leaves: Vec<ScoreLeaf>,
-    /// Distinct FTS leaves that can drive a read (spec/06, M1.6r2).
+    /// Distinct FTS and exact address leaves that can drive a read (06).
     drivers: Vec<drive::Driver>,
 }
 
@@ -507,8 +507,8 @@ impl Compiler {
              THEN lm.acquisition_id IN (SELECT rowid FROM d_search_fts WHERE d_search_fts MATCH {phrase})
                 ELSE NULL END"
         );
-        if self.conjunct && !self.drivers.iter().any(|driver| driver.literal == literal) {
-            self.drivers.push(drive::Driver {
+        if self.conjunct {
+            self.drive(drive::Driver::Fts {
                 literal: literal.clone(),
                 phrase: phrase.clone(),
             });
@@ -525,11 +525,31 @@ impl Compiler {
 
     fn address(&mut self, field: AddressField, mode: AddressMatch, key: &str) -> String {
         let (known, selected) = address_source(field);
-        format!(
-            "{ADDRESS_FN}({known},{selected},{},{})",
-            self.bind(mode as i64),
-            self.bind(key.to_owned())
-        )
+        let mode_value = self.bind(mode as i64);
+        let placeholder = self.bind(key.to_owned());
+        if self.conjunct {
+            self.drive(drive::Driver::Address {
+                field: match field {
+                    AddressField::From => "from",
+                    AddressField::To => "to",
+                    AddressField::Cc => "cc",
+                },
+                column: match mode {
+                    AddressMatch::Exact => "address_key",
+                    AddressMatch::Domain => "domain_key",
+                },
+                key: key.to_owned(),
+                placeholder: placeholder.clone(),
+            });
+        }
+        format!("{ADDRESS_FN}({known},{selected},{mode_value},{placeholder})")
+    }
+
+    /// Keep a driver unless the same leaf already drives.
+    fn drive(&mut self, driver: drive::Driver) {
+        if !self.drivers.iter().any(|kept| kept.same(&driver)) {
+            self.drivers.push(driver);
+        }
     }
 }
 
