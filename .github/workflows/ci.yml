@@ -20,7 +20,8 @@ jobs:
   # this workflow in M2.
   rust:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    # The test step alone takes 8 to 14 minutes on a hosted runner.
+    timeout-minutes: 30
     env:
       RUSTC_WRAPPER: sccache
       SCCACHE_GHA_ENABLED: "true"
