@@ -157,10 +157,10 @@ struct Compiled {
     /// Whether a relevance page streams its one score leaf's matches in
     /// rank order: no other leaf scores or drives (M1.6r3d).
     rank_stream: bool,
-    /// For a read that skips candidates (driven, or counting unknown
-    /// classes only), the scope filter and its leading values, whose
-    /// bindings the read checks itself (see `check_skipped_bindings`).
-    skipped: Option<(&'static str, usize)>,
+    /// The scope filter and its leading values, whose bindings every read
+    /// checks itself (see `check_bindings`): no read is sure to evaluate
+    /// every candidate, since pages walk and counts skip (spec/06).
+    bindings: (&'static str, usize),
     leaves: Vec<ScoreLeaf>,
     values: Vec<Value>,
     generation: i64,
@@ -233,10 +233,8 @@ impl Compiled {
     /// A read that skips candidates never skips their bindings (06): check
     /// every scoped binding, at a cost per binding. Reads call it once
     /// staleness and cursors are settled, so errors keep a full read's order.
-    fn check_skipped_bindings(&self, tx: &Transaction) -> Result<(), StoreError> {
-        let Some((filter, values)) = self.skipped else {
-            return Ok(());
-        };
+    fn check_bindings(&self, tx: &Transaction) -> Result<(), StoreError> {
+        let (filter, values) = self.bindings;
         coverage::check_bindings(tx, filter, &self.values[..values])
     }
 }
@@ -291,10 +289,10 @@ fn compile_driven(
     let guards = drive::guards(tx, fts_leaves, proof)?;
     let restriction = drive::restrict(tx, &compiler.drivers, guards)?;
     let unknowns = drive::unknowns(&compiler.classes, guards);
-    let skipped = (restriction.is_some() || unknowns.is_some()).then_some((scope, outer_values));
 
     // Skipped candidates are sought by message, never walked to.
-    let sought = if skipped.is_some() && scope == MAILBOX_CHOICE {
+    let skips = restriction.is_some() || unknowns.is_some();
+    let sought = if skips && scope == MAILBOX_CHOICE {
         MAILBOX_SEEK
     } else {
         scope
@@ -365,7 +363,7 @@ fn compile_driven(
         date_walk,
         occurrence_walk,
         rank_stream,
-        skipped,
+        bindings: (scope, outer_values),
         leaves: compiler.leaves,
         values: compiler.values,
         generation,

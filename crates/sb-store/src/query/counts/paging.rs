@@ -234,7 +234,7 @@ fn read_page(
             generation: binding.generation,
         });
     }
-    plan.check_skipped_bindings(tx)?;
+    plan.check_bindings(tx)?;
     // Pages read in page order, walking or streaming where they can;
     // lookups by row read the plain relation.
     let source = hits(&plan, sort);
@@ -389,7 +389,7 @@ fn search_ids(
     if at.is_some_and(|at| at != generation) {
         return Ok(PageRead::Stale { generation });
     }
-    plan.check_skipped_bindings(tx)?;
+    plan.check_bindings(tx)?;
     let order = sort.seek_terms(Side::After).2;
     let sql = format!(
         "SELECT occurrence_id FROM ({}) ORDER BY {order}",
@@ -615,20 +615,25 @@ pub(super) fn hit_sources(plan: &Compiled) -> [String; 2] {
     [hits(plan, Sort::Date), hits(plan, Sort::Relevance)]
 }
 
-/// A date page's first seek over the walked relation, for plan-shape
-/// tests: Top, then After a key.
+/// A date page's seeks over the walked relation, for plan-shape tests:
+/// Top, After a key and Before it.
 #[cfg(test)]
-pub(super) fn date_walk_seeks(plan: &Compiled) -> Option<[String; 2]> {
+pub(super) fn date_walk_seeks(plan: &Compiled) -> Option<[String; 3]> {
     plan.date_walk.as_ref()?;
     let Reader::Seek(walked) = reader(plan, Sort::Date, "") else {
         unreachable!("date pages seek")
     };
-    let (column, compare, order) = Sort::Date.seek_terms(Side::After);
+    let (column, after, newest) = Sort::Date.seek_terms(Side::After);
+    let (_, before, oldest) = Sort::Date.seek_terms(Side::Before);
     Some([
-        format!("SELECT * FROM ({walked}) ORDER BY {order} LIMIT 51"),
+        format!("SELECT * FROM ({walked}) ORDER BY {newest} LIMIT 51"),
         format!(
-            "SELECT * FROM ({walked}) WHERE {column} {compare} 0 OR({column}=0 AND occurrence_id < 0)
-             ORDER BY {order} LIMIT 51"
+            "SELECT * FROM ({walked}) WHERE ({column}, occurrence_id) {after} (0, 0)
+             ORDER BY {newest} LIMIT 51"
+        ),
+        format!(
+            "SELECT * FROM ({walked}) WHERE ({column}, occurrence_id) {before} (0, 0)
+             ORDER BY {oldest} LIMIT 51"
         ),
     ])
 }
@@ -669,11 +674,18 @@ fn seek(
         Side::Before => ">",
     };
     let mut values = Vec::new();
-    let filter = if let Some(key) = key {
-        values.extend([key.scalar(), key.scalar(), key.occurrence_id().into()]);
-        format!("WHERE {column} {compare} ? OR({column}=? AND occurrence_id {tie} ?)")
-    } else {
-        String::new()
+    // Dates order both columns one way, so a row value bounds the walk's
+    // index range; a score and its ties order opposite ways.
+    let filter = match (key, sort) {
+        (None, _) => String::new(),
+        (Some(key), Sort::Date) => {
+            values.extend([key.scalar(), key.occurrence_id().into()]);
+            format!("WHERE ({column}, occurrence_id) {compare} (?, ?)")
+        }
+        (Some(key), Sort::Relevance) => {
+            values.extend([key.scalar(), key.scalar(), key.occurrence_id().into()]);
+            format!("WHERE {column} {compare} ? OR({column}=? AND occurrence_id {tie} ?)")
+        }
     };
     values.push((limit as i64).into());
     let sql = format!("SELECT * FROM ({source}) {filter} ORDER BY {order} LIMIT ?");
