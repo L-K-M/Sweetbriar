@@ -12,7 +12,7 @@ fn by_class(tx: &Transaction, node: &Json, scope: &SearchScope, coverage: &Cover
     let full = compile(tx, &query(node.clone()), scope.clone()).unwrap();
     let plan = compile_driven(tx, &query(node.clone()), scope.clone(), Some(coverage)).unwrap();
     assert_eq!(plan.hit_source, full.hit_source, "{node} is driven");
-    plan.skipped.is_some()
+    plan.unknown_source.as_ref() != Some(&plan.source)
 }
 
 fn is(field: &str, value: &str) -> Json {
@@ -147,7 +147,7 @@ fn another_snapshots_coverage_counts_every_candidate_unless_none_can_be_unknown(
     // No leaf of a flag tree can be unknown, so it needs no proof at all.
     assert!(by_class(&tx, &seen, &SearchScope::All, &coverage));
     let plan = compile(&tx, &query(seen.clone()), SearchScope::All).unwrap();
-    assert!(plan.skipped.is_some() && plan.unknown_source.is_none());
+    assert!(plan.unknown_source.is_none());
     same(&tx, &seen, &SearchScope::All, &coverage);
 
     // An unqueued document at another extractor version: the FTS classes
@@ -215,7 +215,7 @@ fn both_fail(conn: &Connection, damage: &str, node: &Json, reporter: Reporter) {
             })
         })
     });
-    let checked = plan.check_skipped_bindings(&tx);
+    let checked = plan.check_bindings(&tx);
     match reporter {
         Reporter::Count => {
             assert!(matches!(count, Err(StoreError::Corrupt { .. })), "{node}");

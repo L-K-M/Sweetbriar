@@ -114,12 +114,41 @@ fn walked_date_pages_equal_the_sorted_order_for_every_anchor_and_scope() {
     let SearchScope::Mailbox(id) = archive else {
         unreachable!()
     };
-    occurrence(&tx, id, 1);
-    for scope in [SearchScope::All, account, archive] {
+    let copy = occurrence(&tx, id, 1);
+    for scope in [SearchScope::All, account, archive.clone()] {
         let coverage = counted(&tx, &scope);
         for node in &cases {
             walks_like_sorting(&tx, node, &scope, &coverage);
         }
+    }
+
+    // Around the other copy centres on the chosen one.
+    let chosen: i64 = tx
+        .query_row(
+            "SELECT min(occurrence_id) FROM occurrences WHERE message_id=1 AND mailbox_id=?1",
+            [id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_ne!(chosen, copy);
+    let coverage = counted(&tx, &archive);
+    let alpha = json!({"text":"alpha"});
+    let proven = Kept {
+        coverage: Some(&coverage),
+        ..Kept::default()
+    };
+    for kept in [Kept::default(), proven] {
+        let around = |at| {
+            page(
+                &tx,
+                &alpha,
+                &archive,
+                Order::Date,
+                SearchAnchor::Around(at),
+                kept,
+            )
+        };
+        assert_eq!(around(copy).unwrap(), around(chosen).unwrap());
     }
     drop(tx);
 
@@ -141,8 +170,9 @@ fn walked_date_pages_equal_the_sorted_order_for_every_anchor_and_scope() {
     }
 }
 
-/// `rare` matches one message in `FILLER`, `common` every fourth, `tied`
-/// every one; every even message shares one date.
+/// `rare` matches one message in `FILLER`, `trio` three, `quad` four (a
+/// sixteenth), `common` every fourth and `tied` every one; every even
+/// message shares one early date, every odd one the fixture's.
 const FILLER: i64 = 64;
 
 fn dated() -> Connection {
@@ -150,14 +180,17 @@ fn dated() -> Connection {
     for id in 1..=FILLER {
         let subject = match id {
             1 => "rare common tied",
+            16 | 32 | 48 => "trio quad common tied",
+            64 => "quad common tied",
             _ if id % 4 == 0 => "common tied",
             _ => "tied",
         };
         doc(&conn, id, "indexed", "[]", &[("subject", subject)]);
     }
+    // `sort_date` derives from the occurrence's date.
     edit(
         &conn,
-        "UPDATE d_list_rows SET sort_date = 1000 WHERE message_id % 2 = 0",
+        "UPDATE occurrences SET internal_date = 1000 WHERE message_id % 2 = 0",
     );
     conn
 }
@@ -175,29 +208,28 @@ fn a_driven_read_walks_only_when_its_kept_set_is_a_sixteenth_of_the_scope() {
     let conn = dated();
     let tx = conn.unchecked_transaction().unwrap();
     let all = counted(&tx, &SearchScope::All);
+    let walks = |node: Json| walks(&tx, &node, &SearchScope::All, &all);
     // A full read always walks.
-    assert!(walks(&tx, &json!({"flag":"seen"}), &SearchScope::All, &all));
-    // 1 of 64 sorts its one kept candidate; 16 of 64 walks.
-    assert!(!walks(
-        &tx,
-        &json!({"text":"rare"}),
-        &SearchScope::All,
-        &all
-    ));
-    assert!(walks(
-        &tx,
-        &json!({"text":"common"}),
-        &SearchScope::All,
-        &all
-    ));
+    assert!(walks(json!({"flag":"seen"})));
+    // 1 and 3 of 64 sort their kept candidates; 4, a sixteenth, walks.
+    assert!(!walks(json!({"text":"rare"})));
+    assert!(!walks(json!({"text":"trio"})));
+    assert!(walks(json!({"text":"quad"})));
+    assert!(walks(json!({"text":"common"})));
     // Without the proof the read is full, so it walks.
     let plan = compile(&tx, &query(json!({"text":"rare"})), SearchScope::All).unwrap();
     assert!(plan.date_walk.is_some());
+    let early = json!({"date":{"before":"2000-01-01","tz":"UTC"}});
     for node in [
         json!({"text":"rare"}),
+        json!({"text":"trio"}),
+        json!({"text":"quad"}),
         json!({"text":"common"}),
         json!({"text":"tied"}),
         json!({"and":[{"text":"tied"},{"not":{"text":"common"}}]}),
+        early.clone(),
+        json!({"not":early.clone()}),
+        json!({"and":[{"text":"common"}, early]}),
     ] {
         walks_like_sorting(&tx, &node, &SearchScope::All, &all);
     }
@@ -228,7 +260,7 @@ fn walked_reads_read_their_scopes_date_index_without_a_sort() {
                 compile_driven(&tx, &query(node.clone()), scope.clone(), Some(&coverage)).unwrap();
             let seeks = super::super::paging::date_walk_seeks(&plan)
                 .unwrap_or_else(|| panic!("{node} {scope:?} does not walk"));
-            for sql in seeks {
+            for (keyed, sql) in seeks.into_iter().enumerate() {
                 let detail: Vec<String> = tx
                     .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
                     .unwrap()
@@ -242,6 +274,14 @@ fn walked_reads_read_their_scopes_date_index_without_a_sort() {
                     !detail.contains("TEMP B-TREE FOR ORDER BY"),
                     "{node} {scope:?}: {detail}"
                 );
+                // A key bounds the index range rather than filtering a scan.
+                if keyed > 0 {
+                    assert!(
+                        detail.contains(&format!("SEARCH r USING INDEX {index}"))
+                            || detail.contains(&format!("SEARCH r USING COVERING INDEX {index}")),
+                        "{node} {scope:?}: {detail}"
+                    );
+                }
             }
         }
     }

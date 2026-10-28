@@ -234,7 +234,11 @@ fn class_restricted_counts_seek_unknown_classes_and_scan_no_table() {
         let plan = |node: &Json| {
             let plan =
                 compile_driven(&tx, &query(node.clone()), scope.clone(), Some(&coverage)).unwrap();
-            assert!(plan.skipped.is_some(), "{node} {scope:?}");
+            assert_ne!(
+                plan.unknown_source.as_ref(),
+                Some(&plan.source),
+                "{node} {scope:?}"
+            );
             plan
         };
         for node in &classes {
