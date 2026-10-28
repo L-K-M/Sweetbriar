@@ -1059,7 +1059,13 @@ No partial parser/formatter, new dependency, compiler, service or UI ships here.
   anchor's key, evaluates each until the page fills, then reads on
   through the last hit's score so ties keep their `occurrence_id` order;
   rows read past the page are dropped, and a later page re-ranks the
-  matches and skips to its cursor, re-entering their tie group. A
+  matches and skips to its cursor, re-entering their tie group. A tie run
+  longer than the page (a seeded archive's uniform documents share one
+  score by the thousand) is completed in `occurrence_id` order instead:
+  the page keeps its hits above that score, then walks the scope's
+  occurrence order (the score-less walk's index, below) among that
+  score's matches, from the key when it holds that score, evaluating
+  until the page fills. A
   relevance page with no score leaf orders by `occurrence_id` descending
   alone and walks under the date page's rules, threshold included
   (`occurrence_id` is `d_list_rows`'s rowid: rowid descending, each row
