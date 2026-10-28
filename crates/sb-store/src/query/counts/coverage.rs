@@ -271,7 +271,7 @@ fn scan(
          coalesce(sum(CASE WHEN lm.acquisition_id IS NOT NULL AND h.message_id IS NULL
            AND s.acquisition_id IS NULL THEN NOT {STORED_BOUND} ELSE 0 END),0)
          FROM {} LEFT JOIN d_search_docs d ON d.doc_id=lm.acquisition_id WHERE {filter}",
-        candidates("LEFT JOIN d_message_summary s ON s.acquisition_id=lm.acquisition_id")
+        candidates("d_list_rows r", "LEFT JOIN d_message_summary s ON s.acquisition_id=lm.acquisition_id")
     );
     let (raw, forbidden, summaryless): ([i64; 6], i64, i64) = tx
         .query_row(&sql, params_from_iter(&values), |row| {

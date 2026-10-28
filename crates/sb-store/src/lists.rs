@@ -99,6 +99,21 @@ impl ListScope {
         }
     }
 
+    /// `source` for reads in window order. `Flagged` and `Thread` name
+    /// their index there: Search's representative date index (M1.6r3c)
+    /// serves their order too, but walks every representative.
+    fn ordered_source(self) -> &'static str {
+        match self {
+            Self::Thread(_) => {
+                "d_thread_members m
+                 JOIN d_list_rows r INDEXED BY d_list_rows_one_representative
+                 ON r.message_id = m.message_id AND r.representative = 1"
+            }
+            Self::Flagged => "d_list_rows r INDEXED BY d_list_rows_flagged",
+            _ => self.source(),
+        }
+    }
+
     /// The scope's predicate. `Flagged` spells its literals so the
     /// partial `d_list_rows_flagged` index applies at prepare time.
     fn predicate(self) -> &'static str {
@@ -424,7 +439,7 @@ fn ids_sql(scope: ListScope) -> String {
     format!(
         "SELECT r.occurrence_id FROM {} WHERE {}
          ORDER BY r.sort_date DESC, r.occurrence_id DESC",
-        scope.source(),
+        scope.ordered_source(),
         scope.predicate()
     )
 }
@@ -447,7 +462,7 @@ fn page_sql(scope: ListScope, seek: Seek, direction: Direction) -> String {
     format!(
         "SELECT {COLUMNS} FROM {} WHERE {} {seek}
          ORDER BY r.sort_date {order}, r.occurrence_id {order} LIMIT :count",
-        scope.source(),
+        scope.ordered_source(),
         scope.predicate()
     )
 }

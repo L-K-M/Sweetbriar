@@ -223,11 +223,14 @@ fn read_page(
             generation: binding.generation,
         });
     }
-    plan.check_skipped_bindings(tx)?;
+    plan.check_bindings(tx)?;
+    // Pages seek in page order, walking where they can; lookups by row
+    // read the plain relation.
     let source = hits(&plan, sort);
+    let ordered = walk(&plan, sort).unwrap_or_else(|| source.clone());
     let (hits, before, after) = match anchor {
         SearchAnchor::Top => {
-            let mut rows = seek(tx, &plan, &source, sort, Side::After, None, limit + 1)?;
+            let mut rows = seek(tx, &plan, &ordered, sort, Side::After, None, limit + 1)?;
             let more = rows.len() > limit;
             rows.truncate(limit);
             (rows, false, more)
@@ -249,7 +252,7 @@ fn read_page(
                 SearchAnchor::Before(_) => Side::Before,
                 _ => Side::After,
             };
-            let mut rows = seek(tx, &plan, &source, sort, side, Some(key), limit + 1)?;
+            let mut rows = seek(tx, &plan, &ordered, sort, side, Some(key), limit + 1)?;
             let more = rows.len() > limit;
             rows.truncate(limit);
             match side {
@@ -279,7 +282,7 @@ fn read_page(
             let newer = seek(
                 tx,
                 &plan,
-                &source,
+                &ordered,
                 sort,
                 Side::Before,
                 Some(target.key),
@@ -288,7 +291,7 @@ fn read_page(
             let older = seek(
                 tx,
                 &plan,
-                &source,
+                &ordered,
                 sort,
                 Side::After,
                 Some(target.key),
@@ -375,7 +378,7 @@ fn search_ids(
     if at.is_some_and(|at| at != generation) {
         return Ok(PageRead::Stale { generation });
     }
-    plan.check_skipped_bindings(tx)?;
+    plan.check_bindings(tx)?;
     let order = sort.seek_terms(Side::After).2;
     let sql = format!(
         "SELECT occurrence_id FROM ({}) ORDER BY {order}",
@@ -387,6 +390,23 @@ fn search_ids(
             .collect()
     })?;
     Ok(PageRead::Ready((generation, ids)))
+}
+
+/// The hits relation walked in page order, when the plan walks this sort:
+/// the scope's rows through an index of that order, each evaluated, so a
+/// page's limit stops the read (spec/06, M1.6r3c).
+fn walk(plan: &Compiled, sort: Sort) -> Option<String> {
+    let walk = match sort {
+        Sort::Date => plan.date_walk.as_ref()?,
+        Sort::Relevance => return None,
+    };
+    Some(format!(
+        "SELECT {} FROM {} WHERE {} AND ({})=1",
+        lists::COLUMNS,
+        walk.source,
+        walk.filter,
+        plan.predicate
+    ))
 }
 
 fn hits(plan: &Compiled, sort: Sort) -> String {
@@ -451,6 +471,26 @@ pub(super) fn hit_sources(plan: &Compiled) -> [String; 2] {
     [hits(plan, Sort::Date), hits(plan, Sort::Relevance)]
 }
 
+/// A date page's seeks over the walked relation, for plan-shape tests:
+/// Top, After a key and Before it.
+#[cfg(test)]
+pub(super) fn date_walk_seeks(plan: &Compiled) -> Option<[String; 3]> {
+    let walked = walk(plan, Sort::Date)?;
+    let (column, after, newest) = Sort::Date.seek_terms(Side::After);
+    let (_, before, oldest) = Sort::Date.seek_terms(Side::Before);
+    Some([
+        format!("SELECT * FROM ({walked}) ORDER BY {newest} LIMIT 51"),
+        format!(
+            "SELECT * FROM ({walked}) WHERE ({column}, occurrence_id) {after} (0, 0)
+             ORDER BY {newest} LIMIT 51"
+        ),
+        format!(
+            "SELECT * FROM ({walked}) WHERE ({column}, occurrence_id) {before} (0, 0)
+             ORDER BY {oldest} LIMIT 51"
+        ),
+    ])
+}
+
 fn seek(
     tx: &Transaction,
     plan: &Compiled,
@@ -466,11 +506,18 @@ fn seek(
         Side::Before => ">",
     };
     let mut values = Vec::new();
-    let filter = if let Some(key) = key {
-        values.extend([key.scalar(), key.scalar(), key.occurrence_id().into()]);
-        format!("WHERE {column} {compare} ? OR({column}=? AND occurrence_id {tie} ?)")
-    } else {
-        String::new()
+    // Dates order both columns one way, so a row value bounds the walk's
+    // index range; a score and its ties order opposite ways.
+    let filter = match (key, sort) {
+        (None, _) => String::new(),
+        (Some(key), Sort::Date) => {
+            values.extend([key.scalar(), key.occurrence_id().into()]);
+            format!("WHERE ({column}, occurrence_id) {compare} (?, ?)")
+        }
+        (Some(key), Sort::Relevance) => {
+            values.extend([key.scalar(), key.scalar(), key.occurrence_id().into()]);
+            format!("WHERE {column} {compare} ? OR({column}=? AND occurrence_id {tie} ?)")
+        }
     };
     values.push((limit as i64).into());
     let sql = format!("SELECT * FROM ({source}) {filter} ORDER BY {order} LIMIT ?");

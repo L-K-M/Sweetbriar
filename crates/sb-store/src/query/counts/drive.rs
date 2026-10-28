@@ -21,6 +21,12 @@ use crate::StoreError;
 /// set of at least half the scope reads no faster than the full read.
 const DRIVEN_COST: u64 = 2;
 
+/// An evaluated candidate costs about sixteen rows walked in date order
+/// past a membership test (seeded 20k archive, M1.6r3). A kept set of at
+/// least a sixteenth of the scope walks: even a walk through the whole
+/// scope then adds at most what evaluating every kept candidate costs.
+const WALK_COST: u64 = 16;
+
 /// A leaf whose false value proves the whole tree false.
 pub(super) enum Driver {
     /// A positive FTS leaf: its MATCH phrase and the phrase's placeholder.
@@ -151,6 +157,9 @@ pub(super) struct Proof<'a> {
 pub(super) struct Restriction {
     pub(super) hits: String,
     pub(super) all: String,
+    /// Whether a date page walks the scope rather than sorting the kept
+    /// candidates (06, M1.6r3c).
+    pub(super) walks: bool,
 }
 
 /// Every message an FTS leaf reads as unknown whatever its phrase, plus
@@ -291,27 +300,30 @@ pub(super) fn restrict(
     // Count the kept set, store-wide, with its own placeholders; stop where
     // a full read is no more work.
     let numbered: Vec<String> = (1..=drivers.len()).map(|n| format!("?{n}")).collect();
-    let counted = kept(&drivers, &numbered);
+    let (_, counted) = kept(&drivers, &numbered);
     let limit = guards.scope_messages.div_ceil(DRIVEN_COST);
     let mut values: Vec<Value> = drivers.iter().map(|driver| driver.operand()).collect();
     values.push(i64::try_from(limit).unwrap_or(i64::MAX).into());
     let sql = format!(
         "SELECT count(*) FROM (SELECT 1 FROM ({}) LIMIT ?{})",
-        counted.all,
+        counted,
         values.len()
     );
     let size: i64 = tx
         .query_row(&sql, params_from_iter(&values), |row| row.get(0))
         .map_err(sql_error)?;
-    if u64::try_from(size).unwrap_or(u64::MAX) >= limit {
+    let size = u64::try_from(size).unwrap_or(u64::MAX);
+    if size >= limit {
         return Ok(None);
     }
+    let walks = size.saturating_mul(WALK_COST) >= guards.scope_messages;
 
     let placeholders: Vec<String> = drivers
         .iter()
         .map(|driver| driver.placeholder().to_owned())
         .collect();
-    Ok(Some(kept(&drivers, &placeholders)))
+    let (hits, all) = kept(&drivers, &placeholders);
+    Ok(Some(Restriction { hits, all, walks }))
 }
 
 /// Whether any document is at another extractor version with no queue row.
@@ -334,8 +346,8 @@ fn other_version(tx: &Transaction, target: u32) -> Result<bool, StoreError> {
 }
 
 /// Each driver's matches, and its matches with its unusable classes, as
-/// one-column sets intersected across drivers.
-fn kept(drivers: &[&Driver], operands: &[String]) -> Restriction {
+/// one-column sets intersected across drivers: `(hits, all)`.
+fn kept(drivers: &[&Driver], operands: &[String]) -> (String, String) {
     let intersect = |sets: Vec<String>| {
         sets.iter()
             .map(|set| format!("SELECT message_id FROM ({set})"))
@@ -358,5 +370,5 @@ fn kept(drivers: &[&Driver], operands: &[String]) -> Restriction {
             })
             .collect(),
     );
-    Restriction { hits, all }
+    (hits, all)
 }
