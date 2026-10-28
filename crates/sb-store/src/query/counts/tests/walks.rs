@@ -159,18 +159,12 @@ fn walked_date_pages_equal_the_sorted_order_for_every_anchor_and_scope() {
         coverage: Some(&coverage),
         ..Kept::default()
     };
-    for kept in [Kept::default(), proven] {
-        let around = |at| {
-            page(
-                &tx,
-                &alpha,
-                &archive,
-                Order::Date,
-                SearchAnchor::Around(at),
-                kept,
-            )
-        };
-        assert_eq!(around(copy).unwrap(), around(chosen).unwrap());
+    for (kept, order) in [Kept::default(), proven]
+        .into_iter()
+        .flat_map(|kept| [(kept, Order::Date), (kept, Order::Relevance)])
+    {
+        let around = |at| page(&tx, &alpha, &archive, order, SearchAnchor::Around(at), kept);
+        assert_eq!(around(copy).unwrap(), around(chosen).unwrap(), "{order:?}");
     }
     drop(tx);
 

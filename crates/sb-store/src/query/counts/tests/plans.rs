@@ -269,3 +269,37 @@ fn class_restricted_counts_seek_unknown_classes_and_scan_no_table() {
         );
     }
 }
+
+/// spec/06: the per-read binding check costs per binding, in every scope:
+/// each binding seeks its message's rows rather than walking the scope.
+#[test]
+fn binding_checks_seek_each_bindings_rows_by_message() {
+    let conn = fixture(4);
+    let tx = conn.unchecked_transaction().unwrap();
+    register(&tx).unwrap();
+    for (filter, values) in [
+        (ALL_CHOICE, vec![]),
+        (ACCOUNT_CHOICE, vec![Value::Text("a".into())]),
+        (MAILBOX_CHOICE, vec![Value::Integer(1)]),
+    ] {
+        let nodes = plan_of(
+            &tx,
+            &super::super::coverage::bindings_check(filter),
+            &values,
+        );
+        lowest_copies_by_message(&nodes, filter);
+        let rows: Vec<_> = nodes
+            .iter()
+            .filter(|node| node.detail.contains(" r USING"))
+            .collect();
+        assert!(!rows.is_empty(), "{filter}");
+        for node in rows {
+            assert!(
+                node.detail
+                    .contains("d_list_rows_by_message (message_id=?)"),
+                "{filter} reads rows by {}",
+                node.detail
+            );
+        }
+    }
+}
