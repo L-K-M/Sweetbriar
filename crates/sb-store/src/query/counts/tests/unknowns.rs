@@ -4,7 +4,7 @@
 
 use super::driven::{Order, addressed, both, counted, page, same, store};
 use super::*;
-use crate::query::{CoverageCounts, Kept, SearchAnchor};
+use crate::query::{CoverageCounts, Kept, SearchAnchor, search_date_ids, search_relevance_ids};
 
 /// Whether a read of `node` with `coverage` as proof counts unknowns over
 /// classes only. For trees without a driver: a driven read also skips.
@@ -147,8 +147,41 @@ fn another_snapshots_coverage_counts_every_candidate_unless_none_can_be_unknown(
     // No leaf of a flag tree can be unknown, so it needs no proof at all.
     assert!(by_class(&tx, &seen, &SearchScope::All, &coverage));
     let plan = compile(&tx, &query(seen.clone()), SearchScope::All).unwrap();
-    assert!(plan.skipped.is_some() && plan.unknown_source.ends_with(" AND 0"));
+    assert!(plan.skipped.is_some() && plan.unknown_source.is_none());
     same(&tx, &seen, &SearchScope::All, &coverage);
+
+    // An unqueued document at another extractor version: the FTS classes
+    // cannot hold it, so the count evaluates every candidate.
+    tx.execute(
+        "UPDATE d_search_docs SET extractor_version=2 WHERE doc_id=11",
+        [],
+    )
+    .unwrap();
+    let coverage = counted(&tx, &SearchScope::All);
+    assert_eq!(coverage.forbidden(), 0);
+    assert!(!by_class(&tx, &text, &SearchScope::All, &coverage));
+    same(&tx, &text, &SearchScope::All, &coverage);
+}
+
+#[test]
+fn a_header_row_without_a_summary_leaves_attachments_unknown() {
+    // 8's header row stays; without its summary nothing says whether it has
+    // attachments, and only the header-row class holds it.
+    let (conn, archive) = addressed();
+    conn.execute("DELETE FROM d_message_summary WHERE acquisition_id=8", [])
+        .unwrap();
+    let tx = conn.unchecked_transaction().unwrap();
+    for scope in [SearchScope::All, archive] {
+        let coverage = counted(&tx, &scope);
+        assert_eq!(coverage.summaryless(), 0, "{scope:?}");
+        for node in [
+            json!({"has":"attachment"}),
+            json!({"not":{"has":"attachment"}}),
+        ] {
+            assert!(by_class(&tx, &node, &scope, &coverage), "{node} {scope:?}");
+            same(&tx, &node, &scope, &coverage);
+        }
+    }
 }
 
 /// Which part of a class-restricted read reports the corruption.
@@ -174,13 +207,12 @@ fn both_fail(conn: &Connection, damage: &str, node: &Json, reporter: Reporter) {
     // Pages also evaluate hits, so check the count statement on its own.
     let plan =
         compile_driven(&tx, &query(node.clone()), SearchScope::All, Some(&coverage)).unwrap();
-    let sql = format!(
-        "SELECT coalesce(sum(v IS NULL),0) FROM ({})",
-        plan.unknown_source
-    );
-    let count = plan.read(&tx, &sql, &[], |statement, values| {
-        statement.query_row(rusqlite::params_from_iter(values), |row| {
-            row.get::<_, i64>(0)
+    let count = plan.unknown_source.as_deref().map_or(Ok(0), |source| {
+        let sql = format!("SELECT coalesce(sum(v IS NULL),0) FROM ({source})");
+        plan.read(&tx, &sql, &[], |statement, values| {
+            statement.query_row(rusqlite::params_from_iter(values), |row| {
+                row.get::<_, i64>(0)
+            })
         })
     });
     let checked = plan.check_skipped_bindings(&tx);
@@ -209,6 +241,12 @@ fn both_fail(conn: &Connection, damage: &str, node: &Json, reporter: Reporter) {
             kept,
         );
         assert!(matches!(read, Err(StoreError::Corrupt { .. })), "{node}");
+    }
+    for coverage in [None, Some(&coverage)] {
+        for read in [search_date_ids, search_relevance_ids] {
+            let ids = read(&tx, &query(node.clone()), SearchScope::All, None, coverage);
+            assert!(matches!(ids, Err(StoreError::Corrupt { .. })), "{node}");
+        }
     }
 }
 

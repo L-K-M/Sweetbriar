@@ -143,7 +143,7 @@ fn driven_reads_seek_kept_messages_and_scan_no_table() {
         );
         let mut statements = vec![format!(
             "SELECT coalesce(sum(v IS NULL),0) FROM ({})",
-            plan.unknown_source
+            plan.unknown_source.as_deref().expect("a count to run")
         )];
         for hits in super::super::paging::hit_sources(&plan) {
             statements.push(format!(
@@ -239,17 +239,14 @@ fn class_restricted_counts_seek_unknown_classes_and_scan_no_table() {
         };
         for node in &classes {
             let plan = plan(node);
-            let sql = format!(
-                "SELECT coalesce(sum(v IS NULL),0) FROM ({})",
-                plan.unknown_source
-            );
+            let source = plan.unknown_source.as_deref().expect("a count to run");
+            let sql = format!("SELECT coalesce(sum(v IS NULL),0) FROM ({source})");
             seeks_by_message(&tx, &sql, &plan.values, &format!("{node} {scope:?}"));
         }
-        let flag = plan(&json!({"flag":"seen"}));
+        // No leaf of a flag tree can be unknown: there is no count to run.
         assert!(
-            flag.unknown_source.ends_with(" AND 0"),
-            "{scope:?}: {}",
-            flag.unknown_source
+            plan(&json!({"flag":"seen"})).unknown_source.is_none(),
+            "{scope:?}"
         );
     }
 }

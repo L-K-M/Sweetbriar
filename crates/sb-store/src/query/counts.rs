@@ -123,8 +123,9 @@ struct Compiled {
     /// drivers' kept messages in it (spec/06, M1.6r2).
     source: String,
     /// Every candidate an exact unknown count evaluates: `source`, or only
-    /// those in a leaf's unknown classes when they are proven (M1.6r3b).
-    unknown_source: String,
+    /// those in a leaf's unknown classes when they are proven (M1.6r3b);
+    /// `None` when no leaf of the tree can be unknown.
+    unknown_source: Option<String>,
     /// The candidates that may be hits: `source`, or only drivers' matches.
     hit_source: String,
     predicate: String,
@@ -254,9 +255,9 @@ fn compile_driven(
 
     // Only a leaf in one of its unknown classes makes a candidate unknown.
     let unknown = match unknowns {
-        Some(drive::Unknowns::Never) => format!("{counted} AND 0"),
-        Some(drive::Unknowns::In(set)) => format!("{counted} AND r.message_id IN ({set})"),
-        None => all.clone(),
+        Some(drive::Unknowns::Never) => None,
+        Some(drive::Unknowns::In(set)) => Some(format!("{counted} AND r.message_id IN ({set})")),
+        None => Some(all.clone()),
     };
     let select = |filter: &str| {
         format!(
@@ -265,7 +266,8 @@ fn compile_driven(
             source()
         )
     };
-    let (source, unknown_source, hit_source) = (select(&all), select(&unknown), select(&hits));
+    let (source, hit_source) = (select(&all), select(&hits));
+    let unknown_source = unknown.as_deref().map(select);
     Ok(Compiled {
         source,
         unknown_source,
