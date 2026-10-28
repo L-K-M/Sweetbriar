@@ -45,6 +45,9 @@ jobs:
               - 'rust-toolchain.toml'
               - 'layers.toml'
               - '.github/workflows/macos.yml'
+              # The local app build and its install test.
+              - 'scripts/build.sh'
+              - 'scripts/test-build-install.sh'
               # The licence notices the app bundles.
               - 'scripts/bundle-notices.sh'
               - 'THIRD_PARTY_NOTICES.md'
@@ -73,6 +76,11 @@ jobs:
           rustc -Vv
           xcodebuild -version
           echo "Runner image: ${ImageOS:-unknown} ${ImageVersion:-unknown}"
+
+      # scripts/build.sh runs on the owner's Mac under the system bash
+      # 3.2; its install test runs there too, against fakes.
+      - name: build.sh --install (bash 3.2)
+        run: /bin/bash scripts/test-build-install.sh
 
       # check-layers (and its integration tests under `cargo test`)
       # sees the macOS-cfg surface here (spec/01); it needs rustdoc's

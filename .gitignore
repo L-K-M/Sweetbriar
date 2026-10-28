@@ -16,3 +16,7 @@ DerivedData/
 *.xcresult
 
 .DS_Store
+
+# scripts/build.sh: Xcode's derived data, and the built app it stages.
+/build/
+/dist/

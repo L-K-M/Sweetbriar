@@ -14,6 +14,22 @@ later.
   against.
 - [plan/](plan/README.md): the step-by-step implementation plan.
 
+## Build and install
+
+On an Apple silicon Mac with Xcode, [rustup](https://rustup.rs) and
+XcodeGen (`brew install xcodegen`):
+
+```sh
+scripts/build.sh            # build Sweetbriar.app into dist/
+scripts/build.sh --install  # also install it into /Applications
+```
+
+`--install` quits a running Sweetbriar first and reopens it afterwards.
+The first time, macOS asks whether your terminal may control Sweetbriar
+so it can ask it to quit. `SWEETBRIAR_APPLICATIONS_DIR=~/Applications`
+installs there instead. `scripts/build.sh --help` lists the other
+options. Builds are signed ad hoc, not notarized.
+
 ## Licence
 
 Sweetbriar's own code is available under the [Unlicense](LICENSE)

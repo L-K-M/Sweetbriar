@@ -1,0 +1,316 @@
+#!/usr/bin/env bash
+#
+# Build the Sweetbriar macOS app and print one clear summary. The single
+# local entry point; macOS CI builds the same app in
+# .github/workflows/macos.yml.
+#
+#   app - Sweetbriar.app from apps/macos/ (needs macOS, cargo, Xcode and
+#         XcodeGen); the Rust core is built into it by `cargo xtask ffi`
+#
+# Usage:
+#   scripts/build.sh              # the app, if this host can build it
+#   scripts/build.sh app          # the same, but a host that cannot build
+#                                 # it is an error, not a skip
+#   scripts/build.sh --debug      # a Debug build instead of Release
+#   scripts/build.sh --clean      # wipe build output first
+#   scripts/build.sh --check      # print the plan; build nothing
+#   scripts/build.sh --install    # also install the app this run built
+#
+# --install replaces /Applications/Sweetbriar.app with the app this run
+# built. A running Sweetbriar is asked to quit first, so it closes its
+# store the way a Quit from the menu does, and is reopened afterwards.
+# An app that has not quit after SWEETBRIAR_QUIT_SECONDS (default 30)
+# fails the install and is left running. SWEETBRIAR_APPLICATIONS_DIR
+# installs elsewhere, e.g. ~/Applications.
+#
+# The built app is copied into dist/ at the repo root, and on macOS dist/
+# is opened in the Finder when anything landed there.
+#
+# Builds target Apple silicon and sign ad hoc (CODE_SIGN_IDENTITY=-), as
+# CI does; Developer ID signing and notarization are not used.
+#
+# Exit status is non-zero if the requested build or install fails. A host
+# that cannot build the app reports it as skipped, and fails the run only
+# when `app` was named.
+set -uo pipefail
+
+# Absolute path to this script: usage() must find it after the cd
+# below, even when invoked via a relative path from a subdirectory.
+SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT" || exit 1
+
+PROFILE="release"
+CLEAN=false
+CHECK=false
+INSTALL=false
+declare -a REQUESTED=()
+EXPLICIT=0
+
+usage() {
+  # Print the leading comment block (the file header), minus the shebang.
+  awk 'NR==1 && /^#!/ {next} /^#/ {sub(/^# ?/,""); print; next} {exit}' "$SELF"
+  exit "${1:-0}"
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help) usage 0 ;;
+    --debug) PROFILE="debug"; shift ;;
+    --clean) CLEAN=true; shift ;;
+    --check) CHECK=true; shift ;;
+    --install) INSTALL=true; shift ;;
+    app|all) REQUESTED=(app); EXPLICIT=1; shift ;;
+    *) echo "unknown argument: $1" >&2; usage 1 ;;
+  esac
+done
+
+if [[ ${#REQUESTED[@]} -eq 0 ]]; then
+  REQUESTED=(app)
+fi
+
+case "$(uname -s)" in
+  Darwin) HOST="macos" ;;
+  Linux) HOST="linux" ;;
+  *) HOST="unknown" ;;
+esac
+
+# The committed workspace version, the one the release stub bumps.
+VERSION=""
+if [[ -f Cargo.toml ]]; then
+  VERSION="$(sed -nE '/^\[workspace\.package\]/,/^\[/ s/^[[:space:]]*version[[:space:]]*=[[:space:]]*"([^"]*)".*/\1/p' Cargo.toml | head -n 1)"
+fi
+[[ -n "$VERSION" ]] || VERSION="unknown"
+
+APPLICATIONS_DIR="${SWEETBRIAR_APPLICATIONS_DIR:-/Applications}"
+# Drop trailing slashes: macOS reports the running app as
+# ~/Applications/Sweetbriar.app, which ~/Applications//Sweetbriar.app misses.
+APPLICATIONS_DIR="${APPLICATIONS_DIR%"${APPLICATIONS_DIR##*[!/]}"}"
+QUIT_SECONDS="${SWEETBRIAR_QUIT_SECONDS:-30}"
+
+echo "Sweetbriar build"
+echo "  host:    $HOST ($(uname -s))"
+echo "  profile: $PROFILE"
+echo "  version: $VERSION"
+echo "  targets: ${REQUESTED[*]}"
+echo
+
+have() { command -v "$1" >/dev/null 2>&1; }
+
+declare -a RESULTS=()
+record() { RESULTS+=("$1"); }
+
+DIST="$ROOT/dist"
+STAGED=0
+# Targets this run built, in order; --install acts on these only.
+declare -a BUILT=()
+stage() {
+  local src="$1"
+  local name="${2:-$(basename "$1")}"
+  mkdir -p "$DIST" || return 1
+  rm -rf "${DIST:?}/$name" || return 1
+  cp -R "$src" "$DIST/$name" || return 1
+  STAGED=$((STAGED + 1))
+  echo "-- staged dist/$name"
+}
+
+# Skip a target: a soft skip on a default run, a hard error when named.
+skip_or_fail() {
+  local target="$1" reason="$2"
+  if [[ $EXPLICIT -eq 1 ]]; then
+    echo "!! $target: cannot build on this host - $reason" >&2
+    record "$target: FAILED ($reason)"
+    return 1
+  fi
+  echo ".. $target: skipped - $reason"
+  record "$target: skipped ($reason)"
+  return 0
+}
+
+# ---------------------------------------------------------------------------
+build_app() {
+  echo "==> app (macOS)"
+
+  local config="Release"
+  if [[ "$PROFILE" == "debug" ]]; then
+    config="Debug"
+  fi
+  # Under build/, which .gitignore covers, and shared by every app build
+  # on this host so SwiftPM and xcodebuild reuse their caches.
+  local derived="$ROOT/build/DerivedData"
+
+  # --check answers "what would this run do", so it reports the plan
+  # even on a host that could not carry it out.
+  if $CHECK; then
+    echo "-- would run: cargo xtask ffi"
+    echo "-- would run: xcodegen generate --spec apps/macos/project.yml"
+    echo "-- would run: xcodebuild -project apps/macos/Sweetbriar.xcodeproj -scheme Sweetbriar -configuration $config -derivedDataPath $derived CODE_SIGN_IDENTITY=- build"
+    echo "-- would stage: dist/Sweetbriar.app"
+    if $INSTALL; then echo "-- would install: $APPLICATIONS_DIR/Sweetbriar.app"; fi
+    record "app: checked (would build $config)"
+    return 0
+  fi
+
+  if [[ "$HOST" != "macos" ]]; then
+    skip_or_fail app "macOS is required (Xcode, AppKit, the UniFFI XCFramework)"; return
+  fi
+  if ! have cargo; then skip_or_fail app "cargo not found (see https://rustup.rs)"; return; fi
+  if ! have xcodebuild; then skip_or_fail app "Xcode (xcodebuild) not found"; return; fi
+  if ! have xcodegen; then
+    skip_or_fail app "XcodeGen not found - install it with: brew install xcodegen"; return
+  fi
+
+  if $CLEAN; then
+    echo "-- removing $derived and apps/macos/Sweetbriar.xcodeproj"
+    rm -rf "$derived" apps/macos/Sweetbriar.xcodeproj
+  fi
+
+  # The XCFramework must exist before xcodebuild resolves the
+  # SweetbriarCore package.
+  echo "-- cargo xtask ffi"
+  if ! cargo xtask ffi; then
+    echo "!! app: cargo xtask ffi failed" >&2
+    record "app: FAILED (xtask ffi)"; return 1
+  fi
+
+  # The .xcodeproj is generated and gitignored; regenerate it here so a
+  # fresh clone builds without a manual step.
+  echo "-- xcodegen generate --spec apps/macos/project.yml"
+  if ! xcodegen generate --spec apps/macos/project.yml; then
+    echo "!! app: xcodegen failed" >&2
+    record "app: FAILED (xcodegen)"; return 1
+  fi
+
+  echo "-- xcodebuild ($config)"
+  if ! xcodebuild -project apps/macos/Sweetbriar.xcodeproj \
+       -scheme Sweetbriar -configuration "$config" \
+       -destination 'platform=macOS,arch=arm64' \
+       -derivedDataPath "$derived" \
+       CODE_SIGN_IDENTITY=- build; then
+    echo "!! app: xcodebuild failed" >&2
+    record "app: FAILED (xcodebuild)"; return 1
+  fi
+
+  local built="$derived/Build/Products/$config/Sweetbriar.app"
+  if [[ ! -d "$built" ]]; then
+    echo "!! app: built Sweetbriar.app not found under $derived" >&2
+    record "app: FAILED (product not found)"; return 1
+  fi
+
+  if ! stage "$built" "Sweetbriar.app"; then
+    echo "!! app: failed to stage $built as dist/Sweetbriar.app" >&2
+    record "app: FAILED (staging)"; return 1
+  fi
+  BUILT+=(app)
+  record "app: built ($config) -> dist/Sweetbriar.app"
+}
+
+# ---------------------------------------------------------------------------
+# Escape $1 for use as a literal inside an extended regular expression.
+ere_literal() { printf '%s' "$1" | sed 's/[][\.^$*+?(){}|]/\\&/g'; }
+
+# Wait for this user's processes matching $1 to exit; non-zero on timeout.
+wait_for_exit() {
+  local pattern="$1" waited=0
+  while pgrep -U "$UID" -f "$pattern" >/dev/null; do
+    if [[ $waited -ge $QUIT_SECONDS ]]; then return 1; fi
+    sleep 1
+    waited=$((waited + 1))
+  done
+}
+
+# Replace the installed app with dist/Sweetbriar.app. The copy lands next
+# to the destination first, so the swap is two renames on one volume and
+# a failed copy leaves the installed app untouched.
+install_app() {
+  local dest="$APPLICATIONS_DIR/Sweetbriar.app"
+  local incoming="$APPLICATIONS_DIR/.Sweetbriar.app.incoming"
+  local outgoing="$APPLICATIONS_DIR/.Sweetbriar.app.outgoing"
+  # This user's copy of the installed app only, e.g.
+  # ^/Applications/Sweetbriar\.app/Contents/MacOS/Sweetbriar( |$)
+  local running
+  running="^$(ere_literal "$dest/Contents/MacOS/Sweetbriar")( |\$)"
+  echo "==> install app"
+
+  # A run killed between the two renames below leaves the previous app
+  # only in $outgoing: put it back before anything is deleted.
+  if [[ ! -e "$dest" && -e "$outgoing" ]] && ! mv "$outgoing" "$dest"; then
+    record "install app: FAILED (the previous app is stranded at $outgoing)"
+    return 1
+  fi
+
+  echo "-- copying dist/Sweetbriar.app next to $dest"
+  if ! rm -rf "$incoming" "$outgoing" || ! ditto "$DIST/Sweetbriar.app" "$incoming"; then
+    rm -rf "$incoming"
+    echo "!! install app: cannot write $APPLICATIONS_DIR" >&2
+    record "install app: FAILED (cannot write $APPLICATIONS_DIR; SWEETBRIAR_APPLICATIONS_DIR=~/Applications installs there)"
+    return 1
+  fi
+
+  # A Quit through Apple Events runs the app's own termination, which
+  # closes the core and its store first (spec/07 "Lifecycle"); a signal
+  # would skip it.
+  local reopen=false
+  if pgrep -U "$UID" -f "$running" >/dev/null; then
+    echo "-- asking Sweetbriar to quit"
+    reopen=true
+    if ! osascript -e "tell application \"$dest\" to quit" >/dev/null \
+       || ! wait_for_exit "$running"; then
+      rm -rf "$incoming"
+      echo "!! install app: Sweetbriar did not quit within ${QUIT_SECONDS}s" >&2
+      record "install app: FAILED (Sweetbriar did not quit; quit it and rerun)"
+      return 1
+    fi
+  fi
+
+  if [[ -e "$dest" ]] && ! mv "$dest" "$outgoing"; then
+    rm -rf "$incoming"
+    record "install app: FAILED (cannot move the installed app aside)"
+    return 1
+  fi
+  if ! mv "$incoming" "$dest"; then
+    rm -rf "$incoming"
+    if [[ -e "$outgoing" ]] && ! mv "$outgoing" "$dest"; then
+      record "install app: FAILED (cannot move the new app into place; the previous app is at $outgoing)"
+      return 1
+    fi
+    record "install app: FAILED (cannot move the new app into place)"
+    return 1
+  fi
+  rm -rf "$outgoing"
+  echo "-- installed $dest"
+
+  local note=""
+  if $reopen; then
+    echo "-- reopening Sweetbriar"
+    if ! open "$dest"; then
+      echo "!! install app: Sweetbriar did not reopen" >&2
+      note=", but Sweetbriar did not reopen"
+    fi
+  fi
+  record "install app: ok ($dest)$note"
+}
+
+# ---------------------------------------------------------------------------
+FAILED=0
+build_app || FAILED=1
+echo
+
+if $INSTALL; then
+  for target in ${BUILT[@]+"${BUILT[@]}"}; do
+    case "$target" in
+      app) install_app || FAILED=1 ;;
+    esac
+    echo
+  done
+fi
+
+echo "Summary"
+for line in "${RESULTS[@]}"; do echo "  $line"; done
+
+if [[ "$STAGED" -gt 0 ]]; then
+  echo "  artifacts: $DIST"
+  if [[ "$(uname -s)" == "Darwin" ]]; then open "$DIST"; fi
+fi
+
+exit "$FAILED"

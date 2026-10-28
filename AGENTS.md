@@ -12,7 +12,18 @@ cargo xtask notices   # regenerate THIRD_PARTY_NOTICES.md
 cargo xtask check-layers  # the spec/01 layer-boundary checker
 cargo xtask ffi --bindings-only  # regenerate the committed Swift bindings
 cargo xtask check-ffi     # bindings drift and import check + the async-callback lint
+scripts/build.sh          # macOS: build Sweetbriar.app into dist/ (--help for options)
+scripts/build.sh --install  # also replace /Applications/Sweetbriar.app
+bash scripts/test-build-install.sh  # test --install against a fake macOS toolchain
 ```
+
+`scripts/build.sh` runs `cargo xtask ffi`, XcodeGen and `xcodebuild` the
+way macOS CI does, needs Xcode and `brew install xcodegen`, and skips
+the app on Linux. `--install` asks a running Sweetbriar to quit through
+Apple Events (its own termination closes the store), swaps the bundle
+in with two renames and reopens it. Change the script and its test
+together, and keep it shellcheck-clean and bash 3.2-portable: CI checks
+all three.
 
 After changing `sb-ffi`'s exports, run `cargo xtask ffi --bindings-only`
 and commit the regenerated files under `apps/macos/SweetbriarCore/`.
