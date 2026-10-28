@@ -320,6 +320,18 @@ fn relevance_cases() -> Vec<(Json, Reads)> {
             Reads::Rank,
         ),
         (json!({"text":"nomatch"}), Reads::Rank),
+        (
+            json!({"field":"body","op":"contains","value":"gamma"}),
+            Reads::Rank,
+        ),
+        (
+            json!({"and":[{"text":"alpha"},{"text":"alpha"}]}),
+            Reads::Rank,
+        ),
+        (
+            json!({"and":[{"text":"alpha"},{"or":[{"text":"alpha"},{"flag":"seen"}]}]}),
+            Reads::Rank,
+        ),
         (json!({"flag":"seen"}), Reads::Occurrence),
         (json!({"and":[]}), Reads::Occurrence),
         (json!({"not":{"text":"alpha"}}), Reads::Occurrence),
@@ -452,6 +464,22 @@ fn walked_and_streamed_relevance_reads_need_no_sort() {
                     !detail.contains("TEMP B-TREE FOR ORDER BY"),
                     "{node} {scope:?}: {detail}"
                 );
+                // Each streamed match finds its messages and scope row by key.
+                if expected == "VIRTUAL TABLE" {
+                    assert!(
+                        detail.contains(
+                            "SEARCH lmx USING COVERING INDEX logical_messages_by_acquisition"
+                        ),
+                        "{node} {scope:?}: {detail}"
+                    );
+                    assert!(
+                        nodes
+                            .iter()
+                            .any(|node| node.detail.starts_with("SEARCH r USING")
+                                && node.detail.contains("message_id=?")),
+                        "{node} {scope:?}: {detail}"
+                    );
+                }
             }
         }
     }

@@ -409,8 +409,8 @@ enum Reader {
     Seek(String),
     /// Seek walked hits by `occurrence_id` alone, every score being zero.
     Occurrence(String),
-    /// Stream the score leaf's matches in rank order, then complete the
-    /// last score's ties.
+    /// Stream the score leaf's matches in scope in rank order, then
+    /// complete the last score's ties; `stream` adds the key and predicate.
     Rank(String),
 }
 
@@ -441,12 +441,11 @@ fn reader(plan: &Compiled, sort: Sort, sorted: &str) -> Reader {
                     "SELECT {},f.rank AS score FROM d_search_fts f
                      CROSS JOIN logical_messages lmx ON lmx.acquisition_id = f.rowid
                      CROSS JOIN {} WHERE f.d_search_fts MATCH {} AND f.rank MATCH {RANK}
-                     AND r.message_id = lmx.message_id AND {} AND ({})=1",
+                     AND r.message_id = lmx.message_id AND {}",
                     lists::COLUMNS,
                     super::source(),
                     leaf.phrase,
-                    plan.scope,
-                    plan.predicate
+                    plan.scope
                 )),
                 _ => Reader::Seek(sorted.to_owned()),
             }
@@ -519,13 +518,31 @@ fn stream(
         Side::Before => ("<", ">", "DESC"),
     };
     let mut values = Vec::new();
+    // Numbered past the plan's own, since the predicate's follow the key.
     let filter = if let Some(key) = key {
-        values.extend([key.scalar(), key.scalar(), key.occurrence_id().into()]);
-        format!(" AND (f.rank {compare} ? OR (f.rank = ? AND r.occurrence_id {tie} ?))")
+        values.extend([key.scalar(), key.occurrence_id().into()]);
+        let (score, occurrence) = (plan.values.len() + 1, plan.values.len() + 2);
+        format!(
+            " AND (f.rank {compare} ?{score} OR (f.rank = ?{score} AND r.occurrence_id {tie} ?{occurrence}))"
+        )
     } else {
         String::new()
     };
-    let sql = format!("{source}{filter} ORDER BY f.rank {order}");
+    // The key discards rows before it unevaluated.
+    let sql = format!(
+        "{source}{filter} AND ({})=1 ORDER BY f.rank {order}",
+        plan.predicate
+    );
+    let in_page_order = |(a, x): &(f64, Hit), (b, y): &(f64, Hit)| {
+        let (score, occurrence) = (
+            a.partial_cmp(b).expect("finite scores"),
+            x.key.occurrence_id().cmp(&y.key.occurrence_id()),
+        );
+        match side {
+            Side::After => score.then(occurrence.reverse()),
+            Side::Before => score.reverse().then(occurrence),
+        }
+    };
     let mut hits = plan.read(tx, &sql, &values, |statement, values| {
         let mut rows = statement.query(params_from_iter(values))?;
         let mut hits: Vec<(f64, Hit)> = Vec::new();
@@ -536,19 +553,16 @@ fn stream(
                 break;
             }
             hits.push((score, hit));
+            // A long tie keeps only its best `limit`: the `limit`th hit
+            // still holds the tie's score.
+            if hits.len() >= 2 * limit {
+                hits.sort_by(in_page_order);
+                hits.truncate(limit);
+            }
         }
         Ok(hits)
     })?;
-    hits.sort_by(|(a, x), (b, y)| {
-        let (score, occurrence) = (
-            a.partial_cmp(b).expect("finite scores"),
-            x.key.occurrence_id().cmp(&y.key.occurrence_id()),
-        );
-        match side {
-            Side::After => score.then(occurrence.reverse()),
-            Side::Before => score.reverse().then(occurrence),
-        }
-    });
+    hits.sort_by(in_page_order);
     hits.truncate(limit);
     Ok(hits.into_iter().map(|(_, hit)| hit).collect())
 }
@@ -653,15 +667,20 @@ pub(super) fn relevance_reads(plan: &Compiled) -> Option<[String; 3]> {
                 "SELECT * FROM ({walked}) WHERE occurrence_id > 0 ORDER BY occurrence_id ASC LIMIT 51"
             ),
         ]),
-        Reader::Rank(source) => Some([
-            format!("{source} ORDER BY f.rank ASC"),
-            format!(
-                "{source} AND (f.rank > 0 OR (f.rank = 0 AND r.occurrence_id < 0)) ORDER BY f.rank ASC"
-            ),
-            format!(
-                "{source} AND (f.rank < 0 OR (f.rank = 0 AND r.occurrence_id > 0)) ORDER BY f.rank DESC"
-            ),
-        ]),
+        Reader::Rank(source) => {
+            let predicate = &plan.predicate;
+            Some([
+                format!("{source} AND ({predicate})=1 ORDER BY f.rank ASC"),
+                format!(
+                    "{source} AND (f.rank > 0 OR (f.rank = 0 AND r.occurrence_id < 0))
+                     AND ({predicate})=1 ORDER BY f.rank ASC"
+                ),
+                format!(
+                    "{source} AND (f.rank < 0 OR (f.rank = 0 AND r.occurrence_id > 0))
+                     AND ({predicate})=1 ORDER BY f.rank DESC"
+                ),
+            ])
+        }
     }
 }
 
