@@ -300,6 +300,19 @@ fn scan(
     })
 }
 
+/// Whether any binding in `filter`'s scope is invalid: each binding seeks
+/// its message's rows, never the scope's (a mailbox's index would scan the
+/// mailbox per binding).
+pub(super) fn bindings_check(filter: &str) -> String {
+    format!(
+        "SELECT EXISTS(SELECT 1 FROM {}
+         CROSS JOIN d_list_rows r INDEXED BY d_list_rows_by_message ON r.message_id=lm.message_id
+         WHERE {filter} AND ({})<0)",
+        message_source::bindings(),
+        Source::Stored.validity()
+    )
+}
+
 /// Fail with `Corrupt` when a scoped binding is invalid (02), at a cost per
 /// binding rather than per message.
 pub(super) fn check_bindings(
@@ -307,15 +320,10 @@ pub(super) fn check_bindings(
     filter: &str,
     values: &[Value],
 ) -> Result<(), StoreError> {
-    let sql = format!(
-        "SELECT EXISTS(SELECT 1 FROM {}
-         CROSS JOIN d_list_rows r ON r.message_id=lm.message_id
-         WHERE {filter} AND ({})<0)",
-        message_source::bindings(),
-        Source::Stored.validity()
-    );
     let invalid: bool = tx
-        .query_row(&sql, params_from_iter(values), |row| row.get(0))
+        .query_row(&bindings_check(filter), params_from_iter(values), |row| {
+            row.get(0)
+        })
         .map_err(sql_error)?;
     if invalid {
         return Err(sql_error(message_source::invalid()));

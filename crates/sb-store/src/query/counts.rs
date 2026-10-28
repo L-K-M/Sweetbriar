@@ -18,12 +18,10 @@ fn source() -> String {
     candidates("d_list_rows r", &Source::Stored.joins())
 }
 
-/// `source`, reading the list rows through `index` in its order.
-fn walked(index: &str) -> String {
-    candidates(
-        &format!("d_list_rows r INDEXED BY {index}"),
-        &Source::Stored.joins(),
-    )
+/// `source`, reading the list rows as `hint` says (`INDEXED BY` an index,
+/// or `NOT INDEXED` for rowid order).
+fn walked(hint: &str) -> String {
+    candidates(&format!("d_list_rows r {hint}"), &Source::Stored.joins())
 }
 
 /// Scoped candidates from `rows` with their message, acquisition and header
@@ -41,10 +39,13 @@ fn candidates(rows: &str, summary: &str) -> String {
     )
 }
 
+/// The row's message's lowest copy in its mailbox. The probe names its
+/// index: a message has a copy or two, but `d_list_rows_mailbox_order`
+/// (M1.6r3d) would scan the mailbox's rows for it.
 macro_rules! lowest_in_mailbox {
     () => {
         "r.occurrence_id =
-    (SELECT min(r2.occurrence_id) FROM d_list_rows r2
+    (SELECT min(r2.occurrence_id) FROM d_list_rows r2 INDEXED BY d_list_rows_by_message
      WHERE r2.message_id = r.message_id AND r2.mailbox_id = r.mailbox_id)"
     };
 }
@@ -52,6 +53,10 @@ macro_rules! lowest_in_mailbox {
 const ALL_CHOICE: &str = "r.representative = 1";
 
 const ACCOUNT_CHOICE: &str = "r.representative = 1 AND lm.account_id = ?1";
+
+/// `ACCOUNT_CHOICE` on the row's own account, which the account indexes
+/// serve: a row's account is its message's (an occurrence foreign key).
+const ACCOUNT_WALK: &str = "r.representative = 1 AND r.account_id = ?1";
 
 const MAILBOX_CHOICE: &str = concat!("r.mailbox_id = ?1 AND ", lowest_in_mailbox!());
 
@@ -144,9 +149,20 @@ struct Compiled {
     predicate: String,
     /// `hit_source`'s scope filter.
     hit_scope: String,
+    /// The scope filter alone, seeking a mailbox's rows by message.
+    scope: &'static str,
     /// How a date page walks the scope in page order, or `None` when it
     /// sorts its kept candidates (spec/06, M1.6r3c).
     date_walk: Option<Walk>,
+    /// How a relevance page without a score leaf walks the scope in
+    /// `occurrence_id` order, or `None` (M1.6r3d).
+    occurrence_walk: Option<Walk>,
+    /// Whether a relevance page streams its one score leaf's matches in
+    /// rank order: no other leaf scores or drives (M1.6r3d).
+    rank_stream: bool,
+    /// The scope in `occurrence_id` order, which completes a streamed
+    /// page's long tie run (M1.6r3d).
+    tie_walk: Option<Walk>,
     /// The scope filter and its leading values, whose bindings every read
     /// checks itself (see `check_bindings`): no read is sure to evaluate
     /// every candidate, since pages walk and counts skip (spec/06).
@@ -163,18 +179,25 @@ struct Walk {
     filter: String,
 }
 
-/// The date-ordered index for a scope filter, and that filter in a form
-/// the index serves. A row's account is its message's (an occurrence's
-/// foreign key), so the account index applies; a mailbox's index holds
-/// every copy, so each row still passes the lowest-occurrence choice.
+/// The read hint for a scope filter's date-ordered index, and that filter
+/// in a form the index serves. A mailbox's index holds every copy, so each
+/// row still passes the lowest-occurrence choice.
 fn date_index(scope: &str) -> (&'static str, &'static str) {
     match scope {
-        ALL_CHOICE => ("d_list_rows_by_date", ALL_CHOICE),
-        ACCOUNT_CHOICE => (
-            "d_list_rows_account_by_date",
-            "r.representative = 1 AND r.account_id = ?1",
-        ),
-        MAILBOX_CHOICE => ("d_list_rows_window", MAILBOX_CHOICE),
+        ALL_CHOICE => ("INDEXED BY d_list_rows_by_date", ALL_CHOICE),
+        ACCOUNT_CHOICE => ("INDEXED BY d_list_rows_account_by_date", ACCOUNT_WALK),
+        MAILBOX_CHOICE => ("INDEXED BY d_list_rows_window", MAILBOX_CHOICE),
+        _ => unreachable!("`scoped` returns one of the three scope filters"),
+    }
+}
+
+/// `date_index` for `occurrence_id` order: All reads the table itself,
+/// whose rowid `occurrence_id` is (spec/06, M1.6r3d).
+fn occurrence_index(scope: &str) -> (&'static str, &'static str) {
+    match scope {
+        ALL_CHOICE => ("NOT INDEXED", ALL_CHOICE),
+        ACCOUNT_CHOICE => ("INDEXED BY d_list_rows_account_order", ACCOUNT_WALK),
+        MAILBOX_CHOICE => ("INDEXED BY d_list_rows_mailbox_order", MAILBOX_CHOICE),
         _ => unreachable!("`scoped` returns one of the three scope filters"),
     }
 }
@@ -281,17 +304,37 @@ fn compile_driven(
         scope
     };
     // A full read always walks; a driven one when its kept set is dense.
-    let (index, walk_scope) = date_index(scope);
-    let date_walk = match &restriction {
-        None => Some(walk_scope.to_owned()),
-        Some(kept) if kept.walks => {
-            Some(format!("{walk_scope} AND +r.message_id IN ({})", kept.hits))
+    let walk = |(hint, walk_scope): (&str, &str)| {
+        let filter = match &restriction {
+            None => walk_scope.to_owned(),
+            Some(kept) if kept.walks => {
+                format!("{walk_scope} AND +r.message_id IN ({})", kept.hits)
+            }
+            Some(_) => return None,
+        };
+        Some(Walk {
+            source: walked(hint),
+            filter,
+        })
+    };
+    let date_walk = walk(date_index(scope));
+    // Relevance without a score leaf is `occurrence_id` order.
+    let occurrence_walk = if compiler.leaves.is_empty() {
+        walk(occurrence_index(scope))
+    } else {
+        None
+    };
+    // One score leaf that alone drives streams its matches in rank order.
+    let rank_stream = match (compiler.leaves.as_slice(), compiler.drivers.as_slice()) {
+        ([leaf], [drive::Driver::Fts { literal, .. }]) => leaf.literal == *literal,
+        _ => false,
+    };
+    let tie_walk = rank_stream.then(|| {
+        let (hint, filter) = occurrence_index(scope);
+        Walk {
+            source: walked(hint),
+            filter: filter.to_owned(),
         }
-        Some(_) => None,
-    }
-    .map(|filter| Walk {
-        source: walked(index),
-        filter,
     });
 
     // `counted` is `all`, sought by message even without a kept set.
@@ -325,7 +368,15 @@ fn compile_driven(
         hit_source,
         predicate,
         hit_scope: hits,
+        scope: if scope == MAILBOX_CHOICE {
+            MAILBOX_SEEK
+        } else {
+            scope
+        },
         date_walk,
+        occurrence_walk,
+        rank_stream,
+        tie_walk,
         bindings: (scope, outer_values),
         leaves: compiler.leaves,
         values: compiler.values,

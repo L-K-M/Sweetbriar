@@ -11,7 +11,18 @@ use crate::{StoreError, Uuid};
 
 const CURSOR_VERSION: u64 = 1;
 const CURSOR_BYTES: usize = MAX_QUERY_INPUT_BYTES + 1024;
-const BM25: &str = "bm25(d_search_fts,4.0,2.0,1.0,1.0,1.0,0.25,0.1,0.75)";
+/// spec/06's BM25 column weights.
+macro_rules! weights {
+    () => {
+        "4.0,2.0,1.0,1.0,1.0,0.25,0.1,0.75"
+    };
+}
+
+pub(super) const BM25: &str = concat!("bm25(d_search_fts,", weights!(), ")");
+
+/// FTS5's `rank` set to `BM25` for one statement: the same function, so
+/// the same score bits (spec/06, M1.6r3d).
+pub(super) const RANK: &str = concat!("'bm25(", weights!(), ")'");
 const CURSOR_FIELDS: [&str; 7] = [
     "v",
     "store",
@@ -224,13 +235,13 @@ fn read_page(
         });
     }
     plan.check_bindings(tx)?;
-    // Pages seek in page order, walking where they can; lookups by row
-    // read the plain relation.
+    // Pages read in page order, walking or streaming where they can;
+    // lookups by row read the plain relation.
     let source = hits(&plan, sort);
-    let ordered = walk(&plan, sort).unwrap_or_else(|| source.clone());
+    let ordered = reader(&plan, sort, &source);
     let (hits, before, after) = match anchor {
         SearchAnchor::Top => {
-            let mut rows = seek(tx, &plan, &ordered, sort, Side::After, None, limit + 1)?;
+            let mut rows = fetch(tx, &plan, &ordered, sort, Side::After, None, limit + 1)?;
             let more = rows.len() > limit;
             rows.truncate(limit);
             (rows, false, more)
@@ -252,7 +263,7 @@ fn read_page(
                 SearchAnchor::Before(_) => Side::Before,
                 _ => Side::After,
             };
-            let mut rows = seek(tx, &plan, &ordered, sort, side, Some(key), limit + 1)?;
+            let mut rows = fetch(tx, &plan, &ordered, sort, side, Some(key), limit + 1)?;
             let more = rows.len() > limit;
             rows.truncate(limit);
             match side {
@@ -279,7 +290,7 @@ fn read_page(
             let Some(target) = target else {
                 return Ok(PageRead::NotInWindow);
             };
-            let newer = seek(
+            let newer = fetch(
                 tx,
                 &plan,
                 &ordered,
@@ -288,7 +299,7 @@ fn read_page(
                 Some(target.key),
                 limit,
             )?;
-            let older = seek(
+            let older = fetch(
                 tx,
                 &plan,
                 &ordered,
@@ -392,21 +403,251 @@ fn search_ids(
     Ok(PageRead::Ready((generation, ids)))
 }
 
-/// The hits relation walked in page order, when the plan walks this sort:
-/// the scope's rows through an index of that order, each evaluated, so a
-/// page's limit stops the read (spec/06, M1.6r3c).
-fn walk(plan: &Compiled, sort: Sort) -> Option<String> {
-    let walk = match sort {
-        Sort::Date => plan.date_walk.as_ref()?,
-        Sort::Relevance => return None,
+/// How a page reads its hits in page order (spec/06, M1.6r3c–d).
+enum Reader {
+    /// Seek a relation of hits in page order: walked, or sorted.
+    Seek(String),
+    /// Seek walked hits by `occurrence_id` alone, every score being zero.
+    Occurrence(String),
+    /// Stream the score leaf's matches in scope in rank order, then
+    /// complete the last score's ties; `stream` adds the key and predicate.
+    /// `phrase` is the leaf's MATCH placeholder, for the tie walk.
+    Rank { source: String, phrase: String },
+}
+
+/// The reader for `sort`: a walk, the rank stream, or `sorted`, the plain
+/// hits relation.
+fn reader(plan: &Compiled, sort: Sort, sorted: &str) -> Reader {
+    // Walked rows, each evaluated, so a page's limit stops the read.
+    let walked = |walk: &super::Walk, score: &str| {
+        format!(
+            "SELECT {}{score} FROM {} WHERE {} AND ({})=1",
+            lists::COLUMNS,
+            walk.source,
+            walk.filter,
+            plan.predicate
+        )
     };
-    Some(format!(
-        "SELECT {} FROM {} WHERE {} AND ({})=1",
+    match sort {
+        Sort::Date => match &plan.date_walk {
+            Some(walk) => Reader::Seek(walked(walk, "")),
+            None => Reader::Seek(sorted.to_owned()),
+        },
+        Sort::Relevance => {
+            if let Some(walk) = &plan.occurrence_walk {
+                return Reader::Occurrence(walked(walk, ",0.0 AS score"));
+            }
+            match plan.leaves.as_slice() {
+                [leaf] if plan.rank_stream => Reader::Rank {
+                    source: format!(
+                        "SELECT {},f.rank AS score FROM d_search_fts f
+                         CROSS JOIN logical_messages lmx ON lmx.acquisition_id = f.rowid
+                         CROSS JOIN {} WHERE f.d_search_fts MATCH {} AND f.rank MATCH {RANK}
+                         AND r.message_id = lmx.message_id AND {}",
+                        lists::COLUMNS,
+                        super::source(),
+                        leaf.phrase,
+                        plan.scope
+                    ),
+                    phrase: leaf.phrase.clone(),
+                },
+                _ => Reader::Seek(sorted.to_owned()),
+            }
+        }
+    }
+}
+
+/// Up to `limit` hits on `side` of `key` in page order, through `reader`.
+fn fetch(
+    tx: &Transaction,
+    plan: &Compiled,
+    reader: &Reader,
+    sort: Sort,
+    side: Side,
+    key: Option<Key>,
+    limit: usize,
+) -> Result<Vec<Hit>, StoreError> {
+    match reader {
+        Reader::Seek(source) => seek(tx, plan, source, sort, side, key, limit),
+        Reader::Occurrence(source) => by_occurrence(tx, plan, source, side, key, limit),
+        Reader::Rank { source, phrase } => stream(tx, plan, source, phrase, side, key, limit),
+    }
+}
+
+/// `seek` where every score is zero: `occurrence_id` alone orders the hits
+/// and the walk's index serves it.
+fn by_occurrence(
+    tx: &Transaction,
+    plan: &Compiled,
+    source: &str,
+    side: Side,
+    key: Option<Key>,
+    limit: usize,
+) -> Result<Vec<Hit>, StoreError> {
+    let (tie, order) = match side {
+        Side::After => ("<", "DESC"),
+        Side::Before => (">", "ASC"),
+    };
+    let mut values = Vec::new();
+    let filter = if let Some(key) = key {
+        values.push(key.occurrence_id().into());
+        format!("WHERE occurrence_id {tie} ?")
+    } else {
+        String::new()
+    };
+    values.push((limit as i64).into());
+    let sql = format!("SELECT * FROM ({source}) {filter} ORDER BY occurrence_id {order} LIMIT ?");
+    plan.read(tx, &sql, &values, |statement, values| {
+        statement
+            .query_map(params_from_iter(values), |row| {
+                Sort::Relevance.read_hit(row)
+            })?
+            .collect()
+    })
+}
+
+/// What reading the rank stream found.
+enum Streamed {
+    /// Every hit the page needs, in stream order.
+    Read(Vec<(f64, Hit)>),
+    /// The hits above `score`, whose tie run outlasted the page.
+    LongTie(Vec<(f64, Hit)>, f64),
+}
+
+/// Up to `limit` hits in relevance order from the rank stream `source`.
+/// FTS5 orders by rank alone, so reading continues past the `limit`th hit
+/// through its score's ties; a tie run longer than the page is completed
+/// in occurrence order by `tie_walk` (spec/06, M1.6r3d).
+fn stream(
+    tx: &Transaction,
+    plan: &Compiled,
+    source: &str,
+    phrase: &str,
+    side: Side,
+    key: Option<Key>,
+    limit: usize,
+) -> Result<Vec<Hit>, StoreError> {
+    let (compare, tie, order) = match side {
+        Side::After => (">", "<", "ASC"),
+        Side::Before => ("<", ">", "DESC"),
+    };
+    let mut values = Vec::new();
+    // Numbered past the plan's own, since the predicate's follow the key.
+    let filter = if let Some(key) = key {
+        values.extend([key.scalar(), key.occurrence_id().into()]);
+        let (score, occurrence) = (plan.values.len() + 1, plan.values.len() + 2);
+        format!(
+            " AND (f.rank {compare} ?{score} OR (f.rank = ?{score} AND r.occurrence_id {tie} ?{occurrence}))"
+        )
+    } else {
+        String::new()
+    };
+    // The key discards rows before it unevaluated.
+    let sql = format!(
+        "{source}{filter} AND ({})=1 ORDER BY f.rank {order}",
+        plan.predicate
+    );
+    let in_page_order = |(a, x): &(f64, Hit), (b, y): &(f64, Hit)| {
+        let (score, occurrence) = (
+            a.partial_cmp(b).expect("finite scores"),
+            x.key.occurrence_id().cmp(&y.key.occurrence_id()),
+        );
+        match side {
+            Side::After => score.then(occurrence.reverse()),
+            Side::Before => score.reverse().then(occurrence),
+        }
+    };
+    let streamed = plan.read(tx, &sql, &values, |statement, values| {
+        let mut rows = statement.query(params_from_iter(values))?;
+        let mut hits: Vec<(f64, Hit)> = Vec::new();
+        let mut run = 0;
+        while let Some(row) = rows.next()? {
+            let hit = Sort::Relevance.read_hit(row)?;
+            let score: f64 = row.get("score")?;
+            if hits.len() >= limit {
+                let last = hits[limit - 1].0;
+                if last != score {
+                    break;
+                }
+                run += 1;
+                if run > limit {
+                    hits.retain(|(kept, _)| *kept != last);
+                    return Ok(Streamed::LongTie(hits, last));
+                }
+            }
+            hits.push((score, hit));
+        }
+        Ok(Streamed::Read(hits))
+    })?;
+    let mut hits = match streamed {
+        Streamed::Read(hits) => hits,
+        Streamed::LongTie(mut hits, score) => {
+            let wanted = limit - hits.len();
+            let from = key.filter(|key| key.scalar() == Value::Real(score));
+            hits.extend(
+                tie_walk(tx, plan, phrase, score, side, from, wanted)?
+                    .into_iter()
+                    .map(|hit| (score, hit)),
+            );
+            hits
+        }
+    };
+    hits.sort_by(in_page_order);
+    hits.truncate(limit);
+    Ok(hits.into_iter().map(|(_, hit)| hit).collect())
+}
+
+/// Up to `limit` hits scoring `score` in occurrence order on `side`, past
+/// `key` when it holds that score: the scope's occurrence walk among the
+/// matches with that rank, each evaluated, so the page's limit stops it.
+fn tie_walk(
+    tx: &Transaction,
+    plan: &Compiled,
+    phrase: &str,
+    score: f64,
+    side: Side,
+    key: Option<Key>,
+    limit: usize,
+) -> Result<Vec<Hit>, StoreError> {
+    let walk = plan
+        .tie_walk
+        .as_ref()
+        .expect("a streamed plan has a tie walk");
+    let (tie, order) = match side {
+        Side::After => ("<", "DESC"),
+        Side::Before => (">", "ASC"),
+    };
+    let next = |n: usize| plan.values.len() + n;
+    let mut values = vec![Value::Real(score)];
+    let from = match key {
+        Some(key) => {
+            values.push(key.occurrence_id().into());
+            format!(" AND r.occurrence_id {tie} ?{}", next(2))
+        }
+        None => String::new(),
+    };
+    values.push((limit as i64).into());
+    // A bare `rank = ?` would name FTS5's rank function, hence the `+`.
+    let sql = format!(
+        "SELECT {},?{s} AS score FROM {} WHERE {} AND r.message_id IN
+           (SELECT lmx.message_id FROM d_search_fts f
+            CROSS JOIN logical_messages lmx ON lmx.acquisition_id = f.rowid
+            WHERE f.d_search_fts MATCH {phrase} AND f.rank MATCH {RANK} AND +f.rank = ?{s})
+         {from} AND ({})=1 ORDER BY r.occurrence_id {order} LIMIT ?{l}",
         lists::COLUMNS,
         walk.source,
         walk.filter,
-        plan.predicate
-    ))
+        plan.predicate,
+        s = next(1),
+        l = next(values.len()),
+    );
+    plan.read(tx, &sql, &values, |statement, values| {
+        statement
+            .query_map(params_from_iter(values), |row| {
+                Sort::Relevance.read_hit(row)
+            })?
+            .collect()
+    })
 }
 
 fn hits(plan: &Compiled, sort: Sort) -> String {
@@ -475,7 +716,10 @@ pub(super) fn hit_sources(plan: &Compiled) -> [String; 2] {
 /// Top, After a key and Before it.
 #[cfg(test)]
 pub(super) fn date_walk_seeks(plan: &Compiled) -> Option<[String; 3]> {
-    let walked = walk(plan, Sort::Date)?;
+    plan.date_walk.as_ref()?;
+    let Reader::Seek(walked) = reader(plan, Sort::Date, "") else {
+        unreachable!("date pages seek")
+    };
     let (column, after, newest) = Sort::Date.seek_terms(Side::After);
     let (_, before, oldest) = Sort::Date.seek_terms(Side::Before);
     Some([
@@ -489,6 +733,62 @@ pub(super) fn date_walk_seeks(plan: &Compiled) -> Option<[String; 3]> {
              ORDER BY {oldest} LIMIT 51"
         ),
     ])
+}
+
+/// A relevance page's statements when it walks or streams, for plan-shape
+/// tests: Top, After a key and Before it; `None` when it sorts.
+#[cfg(test)]
+pub(super) fn relevance_reads(plan: &Compiled) -> Option<[String; 3]> {
+    match reader(plan, Sort::Relevance, "") {
+        Reader::Seek(_) => None,
+        Reader::Occurrence(walked) => Some([
+            format!("SELECT * FROM ({walked}) ORDER BY occurrence_id DESC LIMIT 51"),
+            format!(
+                "SELECT * FROM ({walked}) WHERE occurrence_id < 0 ORDER BY occurrence_id DESC LIMIT 51"
+            ),
+            format!(
+                "SELECT * FROM ({walked}) WHERE occurrence_id > 0 ORDER BY occurrence_id ASC LIMIT 51"
+            ),
+        ]),
+        Reader::Rank { source, .. } => {
+            let predicate = &plan.predicate;
+            Some([
+                format!("{source} AND ({predicate})=1 ORDER BY f.rank ASC"),
+                format!(
+                    "{source} AND (f.rank > 0 OR (f.rank = 0 AND r.occurrence_id < 0))
+                     AND ({predicate})=1 ORDER BY f.rank ASC"
+                ),
+                format!(
+                    "{source} AND (f.rank < 0 OR (f.rank = 0 AND r.occurrence_id > 0))
+                     AND ({predicate})=1 ORDER BY f.rank DESC"
+                ),
+            ])
+        }
+    }
+}
+
+/// A streamed page's tie walks, newest then oldest first, for plan-shape
+/// tests; `None` unless the page streams.
+#[cfg(test)]
+pub(super) fn tie_walk_reads(plan: &Compiled) -> Option<[String; 2]> {
+    let walk = plan.tie_walk.as_ref()?;
+    let Reader::Rank { phrase, .. } = reader(plan, Sort::Relevance, "") else {
+        return None;
+    };
+    let statement = |tie: &str, order: &str| {
+        format!(
+            "SELECT {},0.0 AS score FROM {} WHERE {} AND r.message_id IN
+               (SELECT lmx.message_id FROM d_search_fts f
+                CROSS JOIN logical_messages lmx ON lmx.acquisition_id = f.rowid
+                WHERE f.d_search_fts MATCH {phrase} AND f.rank MATCH {RANK} AND +f.rank = 0)
+             AND r.occurrence_id {tie} 0 AND ({})=1 ORDER BY r.occurrence_id {order} LIMIT 51",
+            lists::COLUMNS,
+            walk.source,
+            walk.filter,
+            plan.predicate
+        )
+    };
+    Some([statement("<", "DESC"), statement(">", "ASC")])
 }
 
 fn seek(

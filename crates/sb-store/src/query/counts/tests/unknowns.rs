@@ -283,3 +283,29 @@ fn corruption_fails_class_restricted_counts_as_it_fails_evaluating_counts() {
         Reporter::Bindings,
     );
 }
+
+#[test]
+fn an_assemblys_unidentified_entry_leaves_its_field_unknown() {
+    // 11 is bound to a parser-2 assembly with a name-only Cc entry. With
+    // its summary raised to parser 2, only the class's bindings arm holds
+    // it: no summary arm or old binding does.
+    let (conn, archive) = addressed();
+    conn.execute(
+        "UPDATE d_message_summary SET parser_version=2 WHERE acquisition_id=11",
+        [],
+    )
+    .unwrap();
+    let tx = conn.unchecked_transaction().unwrap();
+    let seen = json!({"flag":"seen"});
+    for scope in [SearchScope::All, archive] {
+        let coverage = counted(&tx, &scope);
+        for node in [
+            json!({"or":[is("cc", "x@y.test"), seen.clone()]}),
+            json!({"or":[{"field":"cc","op":"domain","value":"example.test"}, seen.clone()]}),
+            json!({"not":{"field":"from","op":"domain","value":"example.test"}}),
+        ] {
+            assert!(by_class(&tx, &node, &scope, &coverage), "{node} {scope:?}");
+            same(&tx, &node, &scope, &coverage);
+        }
+    }
+}
