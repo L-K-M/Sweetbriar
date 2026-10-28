@@ -23,6 +23,7 @@ jobs:
       pull-requests: read
     outputs:
       rust: ${{ steps.filter.outputs.rust }}
+      scripts: ${{ steps.filter.outputs.scripts }}
     steps:
       - name: Log image
         run: |
@@ -50,6 +51,11 @@ jobs:
               - 'THIRD_PARTY_NOTICES.md'
               - 'LICENSE'
               - 'LICENSE-0BSD'
+            # The local app build and its install test.
+            scripts:
+              - 'scripts/build.sh'
+              - 'scripts/test-build-install.sh'
+              - '.github/workflows/macos.yml'
 
   # Rust tests and check-layers (M0.1), the UniFFI bindings and the
   # XCFramework (M0.8); M0.9 adds the XcodeGen-generated project, an
@@ -73,6 +79,7 @@ jobs:
           rustc -Vv
           xcodebuild -version
           echo "Runner image: ${ImageOS:-unknown} ${ImageVersion:-unknown}"
+
 
       # check-layers (and its integration tests under `cargo test`)
       # sees the macOS-cfg surface here (spec/01); it needs rustdoc's
@@ -318,9 +325,26 @@ jobs:
 
   # Aggregate merge gate: always runs so the check exists on every PR;
   # succeeds when the build job succeeded or was skipped by the filter.
+  # scripts/build.sh runs on the owner's Mac under the system bash 3.2,
+  # so its install test runs there too, against fakes: a short job of
+  # its own, not the build's hour.
+  scripts:
+    needs: changes
+    if: needs.changes.outputs.scripts == 'true'
+    runs-on: macos-26
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Log image
+        run: |
+          echo "Runner image: ${ImageOS:-unknown} ${ImageVersion:-unknown}"
+          /bin/bash --version | head -n 1
+      - name: build.sh --install (bash 3.2)
+        run: /bin/bash scripts/test-build-install.sh
+
   macos:
     if: always()
-    needs: [changes, build]
+    needs: [changes, build, scripts]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:

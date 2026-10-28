@@ -119,11 +119,27 @@ jobs:
             exit 1
           fi
 
+  # The local build script: shellcheck, and `--install` against a fake
+  # macOS toolchain (the macOS job reruns it under the system bash 3.2).
+  scripts:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Log image
+        run: |
+          echo "Runner image: ${ImageOS:-unknown} ${ImageVersion:-unknown}"
+          shellcheck --version
+      - name: shellcheck
+        run: shellcheck scripts/build.sh scripts/test-build-install.sh
+      - name: build.sh --install
+        run: bash scripts/test-build-install.sh
+
   # Aggregate merge gate: always runs so the check exists even when a
   # needed job fails; succeeds only when every other job succeeded.
   ci:
     if: always()
-    needs: [rust, deny, notices]
+    needs: [rust, deny, notices, scripts]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
