@@ -30,7 +30,10 @@ printf '[workspace.package]\nversion = "9.9.9"\n' > "$repo/Cargo.toml"
 #   interrupted-swap  the old app sits in .Sweetbriar.app.outgoing, as a
 #                     run killed mid-swap leaves it
 #   mv-into-fails     moving the new copy into place fails
-#   ditto-fails, open-fails, xcodebuild-fails, app-ignores-quit
+#   mv-aside-fails    moving the installed app aside fails
+#   linux             uname reports Linux
+#   ditto-fails, open-fails, xcodebuild-fails, app-ignores-quit,
+#   osascript-fails
 fakes="$work/bin"
 log="$work/calls.log"
 state="$work/state"
@@ -40,7 +43,7 @@ fake() {
   printf '#!/usr/bin/env bash\nlog=%q; state=%q\n%s\n' "$log" "$state" "$2" > "$fakes/$1"
   chmod +x "$fakes/$1"
 }
-fake uname 'echo Darwin'
+fake uname 'if [[ -e "$state/linux" ]]; then echo Linux; else echo Darwin; fi'
 fake cargo 'echo "cargo $*" >> "$log"'
 fake xcodegen 'echo "xcodegen $*" >> "$log"'
 fake xcodebuild '
@@ -48,6 +51,7 @@ echo "xcodebuild $*" >> "$log"
 [[ -e "$state/xcodebuild-fails" ]] && exit 1
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    -destination) [[ "$2" == "platform=macOS,arch=arm64" ]] || exit 3; shift ;;
     -configuration) config="$2"; shift ;;
     -derivedDataPath) derived="$2"; shift ;;
   esac
@@ -56,16 +60,27 @@ done
 app="$derived/Build/Products/$config/Sweetbriar.app/Contents/MacOS"
 mkdir -p "$app" && echo new > "$app/Sweetbriar"'
 fake ditto '[[ -e "$state/ditto-fails" ]] && exit 1; cp -R "$1" "$2"'
-fake mv '[[ -e "$state/mv-into-fails" && "$1" == *.incoming ]] && exit 1; exec /bin/mv "$@"'
+fake mv '
+[[ -e "$state/mv-into-fails" && "$1" == *.incoming ]] && exit 1
+[[ -e "$state/mv-aside-fails" && "$2" == *.outgoing ]] && exit 1
+exec /bin/mv "$@"'
 # Refuses to run unscoped to this user, then matches like the real tool.
 fake pgrep '
 echo "pgrep $*" >> "$log"
 [[ "$1 $2" == "-U $(id -u)" ]] || exit 2
 [[ -e "$state/app-running" ]] && grep -Eq -- "${!#}" "$state/app-running"'
-# `osascript -e "tell application \"<app>\" to quit"` quits that app.
+# `osascript -e "tell application \"<app>\" to quit"` quits that app,
+# whose name is an AppleScript string: \" and \\ stand for " and \.
 fake osascript '
 echo "osascript $*" >> "$log"
-target="${2#tell application \"}"; target="${target%%\"*}"
+[[ -e "$state/osascript-fails" ]] && exit 1
+quoted="${2#tell application \"}"; quoted="${quoted% to quit}"; quoted="${quoted%\"}"
+target=""
+while [[ -n "$quoted" ]]; do
+  c="${quoted:0:1}"; quoted="${quoted:1}"
+  if [[ "$c" == "\\" ]]; then c="${quoted:0:1}"; quoted="${quoted:1}"; fi
+  target+="$c"
+done
 [[ -e "$state/app-running" && ! -e "$state/app-ignores-quit" ]] || exit 0
 running="$(cat "$state/app-running")"
 [[ "$running" == "$target/Contents/MacOS/Sweetbriar" ]] && rm -f "$state/app-running"
@@ -73,13 +88,16 @@ exit 0'
 fake sleep ':'
 fake open 'echo "open $*" >> "$log"; [[ ! -e "$state/open-fails" ]]'
 
-# Regex metacharacters and a space: the process pattern must quote them.
-apps="$work/My Apps (test)"
+# Regex metacharacters, a space, a quote and a backslash: the process
+# pattern and the AppleScript string must both escape them.
+apps="$work/My \"Apps\" (test) \\ x"
+quoted_apps="${apps//\\/\\\\}"; quoted_apps="${quoted_apps//\"/\\\"}"
 installed="$apps/Sweetbriar.app/Contents/MacOS/Sweetbriar"
 
 # run NAME [STATE...] -- ARGS: reset the fakes, preinstall an old app,
 # run build.sh, and keep its output in $out and exit status in $status.
-# applications_dir=... before run passes another SWEETBRIAR_APPLICATIONS_DIR.
+# applications_dir=... or quit_seconds=... before run passes another
+# SWEETBRIAR_APPLICATIONS_DIR or SWEETBRIAR_QUIT_SECONDS.
 run() {
   name="$1"; shift
   rm -rf "$state" "$apps" "$repo/dist" "$repo/build" "$log"
@@ -99,7 +117,7 @@ run() {
   echo "== $name"
   status=0
   out="$(PATH="$fakes:$PATH" SWEETBRIAR_APPLICATIONS_DIR="${applications_dir:-$apps}" \
-    SWEETBRIAR_QUIT_SECONDS=2 "$BASH" "$repo/scripts/build.sh" "$@" 2>&1)" || status=$?
+    SWEETBRIAR_QUIT_SECONDS="${quit_seconds:-2}" "$BASH" "$repo/scripts/build.sh" "$@" 2>&1)" || status=$?
   touch "$log"
 }
 
@@ -119,7 +137,7 @@ run "builds the app through xtask, XcodeGen and xcodebuild" -- app
 expect_status 0
 expect_call "cargo xtask ffi"
 expect_call "xcodegen generate --spec apps/macos/project.yml"
-expect_call "-scheme Sweetbriar -configuration Release"
+expect_call "-scheme Sweetbriar -configuration Release -destination platform=macOS,arch=arm64"
 expect_out "app: built (Release) -> dist/Sweetbriar.app"
 [[ -d "$repo/dist/Sweetbriar.app" ]] || fail "$name: dist/Sweetbriar.app missing"
 expect_installed old
@@ -132,7 +150,7 @@ run "replaces a running app, asking it to quit, and reopens it" app-running -- a
 expect_status 0
 expect_installed new
 expect_out "install app: ok ($apps/Sweetbriar.app)"
-expect_call "osascript -e tell application \"$apps/Sweetbriar.app\" to quit"
+expect_call "osascript -e tell application \"$quoted_apps/Sweetbriar.app\" to quit"
 [[ ! -e "$state/app-running" ]] || fail "$name: the running app was not quit"
 expect_call "open $apps/Sweetbriar.app"
 expect_no_staging
@@ -159,6 +177,32 @@ expect_status 1
 expect_installed old
 expect_out "install app: FAILED (Sweetbriar did not quit; quit it and rerun)"
 [[ ! -e "$apps/.Sweetbriar.app.incoming" ]] || fail "$name: incoming copy left behind"
+
+run "keeps the old app when it cannot ask Sweetbriar to quit" app-running osascript-fails -- app --install
+expect_status 1
+expect_installed old
+expect_out "install app: FAILED (could not ask Sweetbriar to quit"
+[[ ! -e "$apps/.Sweetbriar.app.incoming" ]] || fail "$name: incoming copy left behind"
+
+run "keeps the old app when it cannot move it aside" mv-aside-fails -- app --install
+expect_status 1
+expect_installed old
+expect_out "install app: FAILED (cannot move the installed app aside)"
+expect_no_staging
+
+run "fails an install on a host that cannot build the app" linux -- --install
+expect_status 1
+expect_installed old
+expect_out "app: FAILED (macOS is required"
+
+quit_seconds=08 run "reads a zero-padded quit timeout as decimal" app-running -- app --install
+expect_status 0
+expect_installed new
+
+quit_seconds=soon run "rejects a quit timeout that is not a number" -- app --install
+expect_status 1
+expect_installed old
+expect_out "SWEETBRIAR_QUIT_SECONDS must be a whole number of seconds"
 
 run "keeps the old app when the copy fails" ditto-fails -- app --install
 expect_status 1

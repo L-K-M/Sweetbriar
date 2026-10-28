@@ -15,13 +15,16 @@
 #   scripts/build.sh --clean      # wipe build output first
 #   scripts/build.sh --check      # print the plan; build nothing
 #   scripts/build.sh --install    # also install the app this run built
+#                                 # (it names the app: a host that cannot
+#                                 # build it fails the run)
 #
 # --install replaces /Applications/Sweetbriar.app with the app this run
 # built. A running Sweetbriar is asked to quit first, so it closes its
 # store the way a Quit from the menu does, and is reopened afterwards.
 # An app that has not quit after SWEETBRIAR_QUIT_SECONDS (default 30)
 # fails the install and is left running. SWEETBRIAR_APPLICATIONS_DIR
-# installs elsewhere, e.g. ~/Applications.
+# installs elsewhere, e.g. ~/Applications. Run it as yourself, not with
+# sudo: it quits and reopens your copy of the app.
 #
 # The built app is copied into dist/ at the repo root, and on macOS dist/
 # is opened in the Finder when anything landed there.
@@ -59,7 +62,7 @@ while [[ $# -gt 0 ]]; do
     --debug) PROFILE="debug"; shift ;;
     --clean) CLEAN=true; shift ;;
     --check) CHECK=true; shift ;;
-    --install) INSTALL=true; shift ;;
+    --install) INSTALL=true; EXPLICIT=1; shift ;;
     app|all) REQUESTED=(app); EXPLICIT=1; shift ;;
     *) echo "unknown argument: $1" >&2; usage 1 ;;
   esac
@@ -87,6 +90,16 @@ APPLICATIONS_DIR="${SWEETBRIAR_APPLICATIONS_DIR:-/Applications}"
 # ~/Applications/Sweetbriar.app, which ~/Applications//Sweetbriar.app misses.
 APPLICATIONS_DIR="${APPLICATIONS_DIR%"${APPLICATIONS_DIR##*[!/]}"}"
 QUIT_SECONDS="${SWEETBRIAR_QUIT_SECONDS:-30}"
+if [[ ! "$QUIT_SECONDS" =~ ^[0-9]+$ ]]; then
+  echo "SWEETBRIAR_QUIT_SECONDS must be a whole number of seconds, not '$QUIT_SECONDS'" >&2
+  exit 1
+fi
+QUIT_SECONDS=$((10#$QUIT_SECONDS))
+# Root sees no user's running app, so it would swap the bundle under one.
+if $INSTALL && ! $CHECK && [[ "$(id -u)" -eq 0 ]]; then
+  echo "--install runs as the user whose Sweetbriar it replaces, not as root" >&2
+  exit 1
+fi
 
 echo "Sweetbriar build"
 echo "  host:    $HOST ($(uname -s))"
@@ -207,7 +220,13 @@ build_app() {
 
 # ---------------------------------------------------------------------------
 # Escape $1 for use as a literal inside an extended regular expression.
-ere_literal() { printf '%s' "$1" | sed 's/[][\.^$*+?(){}|]/\\&/g'; }
+ere_literal() { printf '%s' "$1" | sed 's/[][\\.^$*+?(){}|]/\\&/g'; }
+
+# Escape $1 for use inside a double-quoted AppleScript string.
+applescript_literal() {
+  local escaped="${1//\\/\\\\}"
+  printf '%s' "${escaped//\"/\\\"}"
+}
 
 # Wait for this user's processes matching $1 to exit; non-zero on timeout.
 wait_for_exit() {
@@ -240,7 +259,12 @@ install_app() {
   fi
 
   echo "-- copying dist/Sweetbriar.app next to $dest"
-  if ! rm -rf "$incoming" "$outgoing" || ! ditto "$DIST/Sweetbriar.app" "$incoming"; then
+  if ! rm -rf "$incoming" "$outgoing"; then
+    echo "!! install app: cannot remove a leftover $incoming or $outgoing" >&2
+    record "install app: FAILED (cannot remove a leftover $incoming or $outgoing)"
+    return 1
+  fi
+  if ! ditto "$DIST/Sweetbriar.app" "$incoming"; then
     rm -rf "$incoming"
     echo "!! install app: cannot write $APPLICATIONS_DIR" >&2
     record "install app: FAILED (cannot write $APPLICATIONS_DIR; SWEETBRIAR_APPLICATIONS_DIR=~/Applications installs there)"
@@ -254,8 +278,13 @@ install_app() {
   if pgrep -U "$UID" -f "$running" >/dev/null; then
     echo "-- asking Sweetbriar to quit"
     reopen=true
-    if ! osascript -e "tell application \"$dest\" to quit" >/dev/null \
-       || ! wait_for_exit "$running"; then
+    if ! osascript -e "tell application \"$(applescript_literal "$dest")\" to quit" >/dev/null; then
+      rm -rf "$incoming"
+      echo "!! install app: could not ask Sweetbriar to quit" >&2
+      record "install app: FAILED (could not ask Sweetbriar to quit; allow your terminal to control it, or quit it, and rerun)"
+      return 1
+    fi
+    if ! wait_for_exit "$running"; then
       rm -rf "$incoming"
       echo "!! install app: Sweetbriar did not quit within ${QUIT_SECONDS}s" >&2
       record "install app: FAILED (Sweetbriar did not quit; quit it and rerun)"
@@ -296,7 +325,7 @@ FAILED=0
 build_app || FAILED=1
 echo
 
-if $INSTALL; then
+if $INSTALL && ! $CHECK; then
   for target in ${BUILT[@]+"${BUILT[@]}"}; do
     case "$target" in
       app) install_app || FAILED=1 ;;
@@ -306,7 +335,7 @@ if $INSTALL; then
 fi
 
 echo "Summary"
-for line in "${RESULTS[@]}"; do echo "  $line"; done
+for line in ${RESULTS[@]+"${RESULTS[@]}"}; do echo "  $line"; done
 
 if [[ "$STAGED" -gt 0 ]]; then
   echo "  artifacts: $DIST"
