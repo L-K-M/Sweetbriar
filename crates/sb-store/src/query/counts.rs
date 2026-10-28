@@ -160,6 +160,9 @@ struct Compiled {
     /// Whether a relevance page streams its one score leaf's matches in
     /// rank order: no other leaf scores or drives (M1.6r3d).
     rank_stream: bool,
+    /// The scope in `occurrence_id` order, which completes a streamed
+    /// page's long tie run (M1.6r3d).
+    tie_walk: Option<Walk>,
     /// The scope filter and its leading values, whose bindings every read
     /// checks itself (see `check_bindings`): no read is sure to evaluate
     /// every candidate, since pages walk and counts skip (spec/06).
@@ -326,6 +329,13 @@ fn compile_driven(
         ([leaf], [drive::Driver::Fts { literal, .. }]) => leaf.literal == *literal,
         _ => false,
     };
+    let tie_walk = rank_stream.then(|| {
+        let (hint, filter) = occurrence_index(scope);
+        Walk {
+            source: walked(hint),
+            filter: filter.to_owned(),
+        }
+    });
 
     // `counted` is `all`, sought by message even without a kept set.
     let (all, hits, counted) = match restriction {
@@ -366,6 +376,7 @@ fn compile_driven(
         date_walk,
         occurrence_walk,
         rank_stream,
+        tie_walk,
         bindings: (scope, outer_values),
         leaves: compiler.leaves,
         values: compiler.values,

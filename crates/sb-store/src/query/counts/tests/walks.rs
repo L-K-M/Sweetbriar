@@ -466,6 +466,22 @@ fn walked_and_streamed_relevance_reads_need_no_sort() {
                 );
                 // Each streamed match finds its messages and scope row by key.
                 if expected == "VIRTUAL TABLE" {
+                    let ties = super::super::paging::tie_walk_reads(&plan).expect("a tie walk");
+                    for sql in ties {
+                        let nodes = plan_of(&tx, &sql, &plan.values);
+                        lowest_copies_by_message(&nodes, &format!("{node} {scope:?} ties"));
+                        let detail: Vec<&str> =
+                            nodes.iter().map(|node| node.detail.as_str()).collect();
+                        let detail = detail.join("\n");
+                        assert!(
+                            index.split('|').any(|marker| detail.contains(marker)),
+                            "{node} {scope:?} ties: {detail}"
+                        );
+                        assert!(
+                            !detail.contains("TEMP B-TREE FOR ORDER BY"),
+                            "{node} {scope:?} ties: {detail}"
+                        );
+                    }
                     assert!(
                         detail.contains(
                             "SEARCH lmx USING COVERING INDEX logical_messages_by_acquisition"
