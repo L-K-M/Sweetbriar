@@ -323,16 +323,16 @@ fn read_page(
             generation,
             excluded_unknown,
         } if generation == binding.generation => excluded_unknown,
-        _ => {
-            let sql = format!(
-                "SELECT coalesce(sum(v IS NULL),0) FROM ({})",
-                plan.unknown_source
-            );
-            let raw = plan.read(tx, &sql, &[], |statement, values| {
-                statement.query_row(params_from_iter(values), |row| row.get(0))
-            })?;
-            nonnegative_count(raw)?
-        }
+        _ => match &plan.unknown_source {
+            None => 0,
+            Some(source) => {
+                let sql = format!("SELECT coalesce(sum(v IS NULL),0) FROM ({source})");
+                let raw = plan.read(tx, &sql, &[], |statement, values| {
+                    statement.query_row(params_from_iter(values), |row| row.get(0))
+                })?;
+                nonnegative_count(raw)?
+            }
+        },
     };
     Ok(PageRead::Ready(SearchPage {
         generation: binding.generation,
