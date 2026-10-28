@@ -400,6 +400,35 @@ fn streamed_and_walked_relevance_pages_equal_the_sorted_order() {
 }
 
 #[test]
+fn long_rank_ties_complete_in_every_scope() {
+    use crate::testing::fixtures::mailbox;
+    // Every message, and a second copy of each tenth, in one mailbox: the
+    // long "tied" run completes through each scope's occurrence order.
+    let conn = dated();
+    let account = archive_account(&conn);
+    let archive = mailbox(&conn, &account, "Archive", "folder", None);
+    let tx = conn.unchecked_transaction().unwrap();
+    for id in 1..=FILLER {
+        occurrence(&tx, archive, id);
+        if id % 10 == 0 {
+            occurrence(&tx, archive, id);
+        }
+    }
+    for scope in [
+        SearchScope::Account(account.parse().unwrap()),
+        SearchScope::Mailbox(archive),
+    ] {
+        let coverage = counted(&tx, &scope);
+        for node in [
+            json!({"text":"tied"}),
+            json!({"and":[{"text":"tied"},{"not":{"text":"common"}}]}),
+        ] {
+            reads_like_sorting(&tx, &node, &scope, &coverage, Order::Relevance);
+        }
+    }
+}
+
+#[test]
 fn rank_ties_complete_across_page_boundaries() {
     // Every message says "tied" in a one-word subject or with "common":
     // two scores, so occurrence order alone breaks each tie, page after page.
