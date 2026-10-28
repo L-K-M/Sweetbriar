@@ -18,11 +18,11 @@ macro_rules! weights {
     };
 }
 
-const BM25: &str = concat!("bm25(d_search_fts,", weights!(), ")");
+pub(super) const BM25: &str = concat!("bm25(d_search_fts,", weights!(), ")");
 
 /// FTS5's `rank` set to `BM25` for one statement: the same function, so
 /// the same score bits (spec/06, M1.6r3d).
-const RANK: &str = concat!("'bm25(", weights!(), ")'");
+pub(super) const RANK: &str = concat!("'bm25(", weights!(), ")'");
 const CURSOR_FIELDS: [&str; 7] = [
     "v",
     "store",
@@ -639,9 +639,9 @@ pub(super) fn date_walk_seeks(plan: &Compiled) -> Option<[String; 3]> {
 }
 
 /// A relevance page's statements when it walks or streams, for plan-shape
-/// tests: Top, then After a key; `None` when it sorts.
+/// tests: Top, After a key and Before it; `None` when it sorts.
 #[cfg(test)]
-pub(super) fn relevance_reads(plan: &Compiled) -> Option<[String; 2]> {
+pub(super) fn relevance_reads(plan: &Compiled) -> Option<[String; 3]> {
     match reader(plan, Sort::Relevance, "") {
         Reader::Seek(_) => None,
         Reader::Occurrence(walked) => Some([
@@ -649,11 +649,17 @@ pub(super) fn relevance_reads(plan: &Compiled) -> Option<[String; 2]> {
             format!(
                 "SELECT * FROM ({walked}) WHERE occurrence_id < 0 ORDER BY occurrence_id DESC LIMIT 51"
             ),
+            format!(
+                "SELECT * FROM ({walked}) WHERE occurrence_id > 0 ORDER BY occurrence_id ASC LIMIT 51"
+            ),
         ]),
         Reader::Rank(source) => Some([
             format!("{source} ORDER BY f.rank ASC"),
             format!(
                 "{source} AND (f.rank > 0 OR (f.rank = 0 AND r.occurrence_id < 0)) ORDER BY f.rank ASC"
+            ),
+            format!(
+                "{source} AND (f.rank < 0 OR (f.rank = 0 AND r.occurrence_id > 0)) ORDER BY f.rank DESC"
             ),
         ]),
     }

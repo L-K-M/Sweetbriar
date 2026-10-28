@@ -3,6 +3,7 @@
 //! kept set is dense, and walked reads use their index without a sort.
 
 use super::driven::{Order, addressed, both, counted, page, store};
+use super::plans::{lowest_copies_by_message, plan_of};
 use super::*;
 use crate::lists::{self, PageRead};
 use crate::query::{
@@ -282,13 +283,9 @@ fn walked_reads_read_their_scopes_date_index_without_a_sort() {
             let seeks = super::super::paging::date_walk_seeks(&plan)
                 .unwrap_or_else(|| panic!("{node} {scope:?} does not walk"));
             for (keyed, sql) in seeks.into_iter().enumerate() {
-                let detail: Vec<String> = tx
-                    .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
-                    .unwrap()
-                    .query_map(rusqlite::params_from_iter(&plan.values), |row| row.get(3))
-                    .unwrap()
-                    .collect::<Result<_, _>>()
-                    .unwrap();
+                let nodes = plan_of(&tx, &sql, &plan.values);
+                lowest_copies_by_message(&nodes, &format!("{node} {scope:?}"));
+                let detail: Vec<&str> = nodes.iter().map(|node| node.detail.as_str()).collect();
                 let detail = detail.join("\n");
                 assert!(detail.contains(index), "{node} {scope:?}: {detail}");
                 assert!(
@@ -443,13 +440,9 @@ fn walked_and_streamed_relevance_reads_need_no_sort() {
             let reads = super::super::paging::relevance_reads(&plan)
                 .unwrap_or_else(|| panic!("{node} {scope:?} sorts"));
             for sql in reads {
-                let detail: Vec<String> = tx
-                    .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
-                    .unwrap()
-                    .query_map(rusqlite::params_from_iter(&plan.values), |row| row.get(3))
-                    .unwrap()
-                    .collect::<Result<_, _>>()
-                    .unwrap();
+                let nodes = plan_of(&tx, &sql, &plan.values);
+                lowest_copies_by_message(&nodes, &format!("{node} {scope:?}"));
+                let detail: Vec<&str> = nodes.iter().map(|node| node.detail.as_str()).collect();
                 let detail = detail.join("\n");
                 assert!(
                     expected.split('|').any(|marker| detail.contains(marker)),
@@ -461,5 +454,26 @@ fn walked_and_streamed_relevance_reads_need_no_sort() {
                 );
             }
         }
+    }
+}
+
+#[test]
+fn the_rank_column_scores_exactly_as_the_relevance_bm25() {
+    let conn = dated();
+    for term in ["tied", "common", "rare"] {
+        let differing: i64 = conn
+            .query_row(
+                &format!(
+                    "SELECT count(*) FROM d_search_fts f
+                     WHERE f.d_search_fts MATCH ?1 AND f.rank MATCH {}
+                     AND f.rank IS NOT {}",
+                    super::super::paging::RANK,
+                    super::super::paging::BM25
+                ),
+                [format!("{{subject}} : \"{term}\"")],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(differing, 0, "{term}");
     }
 }

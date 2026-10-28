@@ -1,13 +1,13 @@
 use super::*;
 
 /// One `EXPLAIN QUERY PLAN` row: its id, its parent's id and its text.
-struct PlanNode {
+pub(super) struct PlanNode {
     id: i64,
     parent: i64,
-    detail: String,
+    pub(super) detail: String,
 }
 
-fn plan_of(tx: &Transaction, sql: &str, values: &[Value]) -> Vec<PlanNode> {
+pub(super) fn plan_of(tx: &Transaction, sql: &str, values: &[Value]) -> Vec<PlanNode> {
     tx.prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
         .unwrap()
         .query_map(rusqlite::params_from_iter(values), |row| {
@@ -163,6 +163,7 @@ fn driven_reads_seek_kept_messages_and_scan_no_table() {
 #[track_caller]
 fn seeks_by_message(tx: &Transaction, sql: &str, values: &[Value], context: &str) {
     let nodes = plan_of(tx, sql, values);
+    lowest_copies_by_message(&nodes, context);
     for node in &nodes {
         let whole = node.detail.starts_with("SCAN")
             && ![
@@ -193,6 +194,20 @@ fn seeks_by_message(tx: &Transaction, sql: &str, values: &[Value], context: &str
         assert!(
             node.detail.contains("message_id=?") || node.detail.contains("rowid=?"),
             "{context} walks the scope: {}",
+            node.detail
+        );
+    }
+}
+
+/// Assert that a mailbox's lowest-copy probe seeks its message's copies,
+/// never the mailbox's rows.
+#[track_caller]
+pub(super) fn lowest_copies_by_message(nodes: &[PlanNode], context: &str) {
+    for node in nodes.iter().filter(|node| node.detail.contains(" r2 ")) {
+        assert!(
+            node.detail
+                .contains("d_list_rows_by_message (message_id=?)"),
+            "{context} probes copies by {}",
             node.detail
         );
     }

@@ -39,10 +39,13 @@ fn candidates(rows: &str, summary: &str) -> String {
     )
 }
 
+/// The row's message's lowest copy in its mailbox. The probe names its
+/// index: a message has a copy or two, but `d_list_rows_mailbox_order`
+/// (M1.6r3d) would scan the mailbox's rows for it.
 macro_rules! lowest_in_mailbox {
     () => {
         "r.occurrence_id =
-    (SELECT min(r2.occurrence_id) FROM d_list_rows r2
+    (SELECT min(r2.occurrence_id) FROM d_list_rows r2 INDEXED BY d_list_rows_by_message
      WHERE r2.message_id = r.message_id AND r2.mailbox_id = r.mailbox_id)"
     };
 }
