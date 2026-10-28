@@ -40,7 +40,8 @@ pub(crate) struct Migration {
 /// version 9 retains terminal repair attempts; version 10 freezes completed publications;
 /// version 13 indexes what driven Search reads enumerate; version 14 keys
 /// exact addresses per source and indexes what address drivers enumerate;
-/// version 15 indexes representatives by date for Search walks.
+/// version 15 indexes representatives by date for Search walks; version 16
+/// indexes accounts' and mailboxes' rows by occurrence for them.
 pub(crate) const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 1,
@@ -101,6 +102,10 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 15,
         run: migration_15,
+    },
+    Migration {
+        version: 16,
+        run: migration_16,
     },
 ];
 
@@ -662,6 +667,13 @@ fn migration_14(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
 /// Search date pages walk (spec/06).
 fn migration_15(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
     tx.execute_batch(include_str!("schema/v15.sql"))
+        .map_err(bug)
+}
+
+/// Indexes each account's representatives and each mailbox's rows by
+/// occurrence, which score-less Search relevance pages walk (spec/06).
+fn migration_16(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
+    tx.execute_batch(include_str!("schema/v16.sql"))
         .map_err(bug)
 }
 
