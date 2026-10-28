@@ -89,12 +89,17 @@ impl ListScope {
 
     /// The rows the scope reads, as `r`. A thread joins its members to
     /// their representatives: the one list read that joins (spec/02).
+    /// `Flagged` and `Thread` name their index: Search's representative
+    /// date index (M1.6r3c) serves their order too, but walks every
+    /// representative.
     fn source(self) -> &'static str {
         match self {
             Self::Thread(_) => {
                 "d_thread_members m
-                 JOIN d_list_rows r ON r.message_id = m.message_id AND r.representative = 1"
+                 JOIN d_list_rows r INDEXED BY d_list_rows_one_representative
+                 ON r.message_id = m.message_id AND r.representative = 1"
             }
+            Self::Flagged => "d_list_rows r INDEXED BY d_list_rows_flagged",
             _ => "d_list_rows r",
         }
     }

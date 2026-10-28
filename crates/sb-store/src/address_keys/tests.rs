@@ -127,10 +127,13 @@ fn completing_an_assembly_writes_its_keys() {
     assert_eq!((from, cc), (1, 1));
 }
 
+/// The migrations a store had before migration 14.
+const BEFORE_14: usize = 13;
+
 #[test]
 fn migration_14_derives_keys_for_existing_summaries_and_assemblies() {
     let seams = test_seams(real_fs());
-    let mut conn = fixtures::index_connection_through(MIGRATIONS.len() - 1);
+    let mut conn = fixtures::index_connection_through(BEFORE_14);
     fixtures::acquisitions(&conn, 3);
     conn.execute_batch(
         r#"INSERT INTO d_message_summary (acquisition_id, parser_version, parse_state, from_addr,
@@ -170,7 +173,7 @@ fn migration_14_derives_keys_for_existing_summaries_and_assemblies() {
 #[test]
 fn a_summary_that_no_longer_decodes_is_unidentified_and_the_migration_succeeds() {
     let seams = test_seams(real_fs());
-    let mut conn = fixtures::index_connection_through(MIGRATIONS.len() - 1);
+    let mut conn = fixtures::index_connection_through(BEFORE_14);
     fixtures::acquisitions(&conn, 1);
     conn.execute_batch(
         "INSERT INTO d_message_summary (acquisition_id, parser_version, parse_state, from_addr,

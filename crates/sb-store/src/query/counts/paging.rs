@@ -224,10 +224,13 @@ fn read_page(
         });
     }
     plan.check_skipped_bindings(tx)?;
+    // Pages seek in page order, walking where they can; lookups by row
+    // read the plain relation.
     let source = hits(&plan, sort);
+    let ordered = walk(&plan, sort).unwrap_or_else(|| source.clone());
     let (hits, before, after) = match anchor {
         SearchAnchor::Top => {
-            let mut rows = seek(tx, &plan, &source, sort, Side::After, None, limit + 1)?;
+            let mut rows = seek(tx, &plan, &ordered, sort, Side::After, None, limit + 1)?;
             let more = rows.len() > limit;
             rows.truncate(limit);
             (rows, false, more)
@@ -249,7 +252,7 @@ fn read_page(
                 SearchAnchor::Before(_) => Side::Before,
                 _ => Side::After,
             };
-            let mut rows = seek(tx, &plan, &source, sort, side, Some(key), limit + 1)?;
+            let mut rows = seek(tx, &plan, &ordered, sort, side, Some(key), limit + 1)?;
             let more = rows.len() > limit;
             rows.truncate(limit);
             match side {
@@ -279,7 +282,7 @@ fn read_page(
             let newer = seek(
                 tx,
                 &plan,
-                &source,
+                &ordered,
                 sort,
                 Side::Before,
                 Some(target.key),
@@ -288,7 +291,7 @@ fn read_page(
             let older = seek(
                 tx,
                 &plan,
-                &source,
+                &ordered,
                 sort,
                 Side::After,
                 Some(target.key),
@@ -389,6 +392,23 @@ fn search_ids(
     Ok(PageRead::Ready((generation, ids)))
 }
 
+/// The hits relation walked in page order, when the plan walks this sort:
+/// the scope's rows through an index of that order, each evaluated, so a
+/// page's limit stops the read (spec/06, M1.6r3c).
+fn walk(plan: &Compiled, sort: Sort) -> Option<String> {
+    let walk = match sort {
+        Sort::Date => plan.date_walk.as_ref()?,
+        Sort::Relevance => return None,
+    };
+    Some(format!(
+        "SELECT {} FROM {} WHERE {} AND ({})=1",
+        lists::COLUMNS,
+        walk.source,
+        walk.filter,
+        plan.predicate
+    ))
+}
+
 fn hits(plan: &Compiled, sort: Sort) -> String {
     match sort {
         Sort::Date => format!(
@@ -449,6 +469,21 @@ fn hits(plan: &Compiled, sort: Sort) -> String {
 #[cfg(test)]
 pub(super) fn hit_sources(plan: &Compiled) -> [String; 2] {
     [hits(plan, Sort::Date), hits(plan, Sort::Relevance)]
+}
+
+/// A date page's first seek over the walked relation, for plan-shape
+/// tests: Top, then After a key.
+#[cfg(test)]
+pub(super) fn date_walk_seeks(plan: &Compiled) -> Option<[String; 2]> {
+    let walked = walk(plan, Sort::Date)?;
+    let (column, compare, order) = Sort::Date.seek_terms(Side::After);
+    Some([
+        format!("SELECT * FROM ({walked}) ORDER BY {order} LIMIT 51"),
+        format!(
+            "SELECT * FROM ({walked}) WHERE {column} {compare} 0 OR({column}=0 AND occurrence_id < 0)
+             ORDER BY {order} LIMIT 51"
+        ),
+    ])
 }
 
 fn seek(

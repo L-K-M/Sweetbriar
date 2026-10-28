@@ -15,14 +15,23 @@ use crate::{StoreError, Uuid, messages, schema::classify};
 const ADDRESS_FN: &str = "sb_query_address";
 const MASK_FN: &str = "sb_query_complete_fields";
 fn source() -> String {
-    candidates(&Source::Stored.joins())
+    candidates("d_list_rows r", &Source::Stored.joins())
 }
 
-/// Scoped candidates with their message, acquisition and header row, plus
-/// `summary` joins; coverage's scan passes none and reads summaries itself.
-fn candidates(summary: &str) -> String {
+/// `source`, reading the list rows through `index` in its order.
+fn walked(index: &str) -> String {
+    candidates(
+        &format!("d_list_rows r INDEXED BY {index}"),
+        &Source::Stored.joins(),
+    )
+}
+
+/// Scoped candidates from `rows` with their message, acquisition and header
+/// row, plus `summary` joins; coverage's scan passes none and reads
+/// summaries itself.
+fn candidates(rows: &str, summary: &str) -> String {
     format!(
-        "d_list_rows r
+        "{rows}
     JOIN occurrences o ON o.occurrence_id = r.occurrence_id
     JOIN {} ON lm.message_id = r.message_id
     LEFT JOIN acquisitions a ON a.acquisition_id = lm.acquisition_id
@@ -39,6 +48,10 @@ macro_rules! lowest_in_mailbox {
      WHERE r2.message_id = r.message_id AND r2.mailbox_id = r.mailbox_id)"
     };
 }
+
+const ALL_CHOICE: &str = "r.representative = 1";
+
+const ACCOUNT_CHOICE: &str = "r.representative = 1 AND lm.account_id = ?1";
 
 const MAILBOX_CHOICE: &str = concat!("r.mailbox_id = ?1 AND ", lowest_in_mailbox!());
 
@@ -130,6 +143,9 @@ struct Compiled {
     predicate: String,
     /// `hit_source`'s scope filter.
     hit_scope: String,
+    /// How a date page walks the scope in page order, or `None` when it
+    /// sorts its kept candidates (spec/06, M1.6r3c).
+    date_walk: Option<Walk>,
     /// For a read that skips candidates (driven, or counting unknown
     /// classes only), the scope filter and its leading values, whose
     /// bindings the read checks itself (see `check_skipped_bindings`).
@@ -137,6 +153,29 @@ struct Compiled {
     leaves: Vec<ScoreLeaf>,
     values: Vec<Value>,
     generation: i64,
+}
+
+/// Scoped rows in page order: the candidates through an index of that
+/// order, and the filter each row passes before it is evaluated.
+struct Walk {
+    source: String,
+    filter: String,
+}
+
+/// The date-ordered index for a scope filter, and that filter in a form
+/// the index serves. A row's account is its message's (an occurrence's
+/// foreign key), so the account index applies; a mailbox's index holds
+/// every copy, so each row still passes the lowest-occurrence choice.
+fn date_index(scope: &str) -> (&'static str, &'static str) {
+    match scope {
+        ALL_CHOICE => ("d_list_rows_by_date", ALL_CHOICE),
+        ACCOUNT_CHOICE => (
+            "d_list_rows_account_by_date",
+            "r.representative = 1 AND r.account_id = ?1",
+        ),
+        MAILBOX_CHOICE => ("d_list_rows_window", MAILBOX_CHOICE),
+        _ => unreachable!("`scoped` returns one of the three scope filters"),
+    }
 }
 
 // Reuse the bound predicate and MATCH phrase for each distinct positive leaf.
@@ -242,6 +281,20 @@ fn compile_driven(
     } else {
         scope
     };
+    // A full read always walks; a driven one when its kept set is dense.
+    let (index, walk_scope) = date_index(scope);
+    let date_walk = match &restriction {
+        None => Some(walk_scope.to_owned()),
+        Some(kept) if kept.walks => {
+            Some(format!("{walk_scope} AND +r.message_id IN ({})", kept.hits))
+        }
+        Some(_) => None,
+    }
+    .map(|filter| Walk {
+        source: walked(index),
+        filter,
+    });
+
     // `counted` is `all`, sought by message even without a kept set.
     let (all, hits, counted) = match restriction {
         Some(kept) => {
@@ -272,6 +325,7 @@ fn compile_driven(
         hit_source,
         predicate,
         hit_scope: hits,
+        date_walk,
         skipped,
         leaves: compiler.leaves,
         values: compiler.values,
@@ -281,11 +335,11 @@ fn compile_driven(
 
 fn scoped(tx: &Transaction, scope: SearchScope) -> Result<(&'static str, Vec<Value>), StoreError> {
     let (exists, id, filter) = match scope {
-        SearchScope::All => return Ok(("r.representative = 1", Vec::new())),
+        SearchScope::All => return Ok((ALL_CHOICE, Vec::new())),
         SearchScope::Account(id) => (
             "SELECT EXISTS(SELECT 1 FROM accounts WHERE account_id = ?1)",
             Value::Text(id.to_string()),
-            "r.representative = 1 AND lm.account_id = ?1",
+            ACCOUNT_CHOICE,
         ),
         SearchScope::Mailbox(id) => {
             if id <= 0 {

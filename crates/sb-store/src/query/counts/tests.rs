@@ -13,6 +13,7 @@ mod driven;
 mod paging;
 mod plans;
 mod unknowns;
+mod walks;
 
 const ABSENT: &str = "ffffffff-ffff-ffff-ffff-ffffffffffff";
 const OTHER_ACCOUNT: &str = "00000000-0000-0000-0000-000000000000";

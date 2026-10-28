@@ -1173,6 +1173,12 @@ CREATE INDEX d_list_rows_flagged ON d_list_rows(sort_date DESC, occurrence_id DE
 -- sharing an acquisition, whose rows its first summary updates.
 CREATE UNIQUE INDEX d_list_rows_one_representative ON d_list_rows(message_id)
   WHERE representative = 1;
+-- Migration 15 (M1.6r3c): Search date pages walk representatives in page
+-- order, every account's or one account's (06).
+CREATE INDEX d_list_rows_by_date ON d_list_rows(sort_date DESC, occurrence_id DESC)
+  WHERE representative = 1;
+CREATE INDEX d_list_rows_account_by_date ON d_list_rows(account_id, sort_date DESC, occurrence_id DESC)
+  WHERE representative = 1;
 CREATE INDEX d_list_rows_by_message ON d_list_rows(message_id,occurrence_id);
 CREATE INDEX logical_messages_by_acquisition ON logical_messages(acquisition_id);
 
@@ -1207,15 +1213,11 @@ CREATE INDEX d_message_bindings_by_assembly ON d_message_bindings(acquisition_id
   `d_message_summary.date_header` (imports), else `first_seen_at`. It is derived, but kept transactionally
   current, because the list must reflect a flag change instantly.
   Unified views ("all inboxes") page over `d_list_rows_unified` by role.
-  - Search walks (M1.6r3c–d, 06) add additive indexes with their steps,
-    and the SQL block above gains each with its migration. Migration 15:
-    `d_list_rows_by_date` on `(sort_date DESC, occurrence_id DESC)` and
-    `d_list_rows_account_by_date` on
-    `(account_id, sort_date DESC, occurrence_id DESC)`, both
-    `WHERE representative = 1`. Migration 16:
+  - Search walks (M1.6r3c–d, 06) add additive indexes: migration 15's
+    date indexes are in the SQL block above; migration 16 (M1.6r3d) adds
     `d_list_rows_account_order` on `(account_id, occurrence_id DESC)
     WHERE representative = 1` and `d_list_rows_mailbox_order` on
-    `(mailbox_id, occurrence_id DESC)`.
+    `(mailbox_id, occurrence_id DESC)` there with its step.
   - Rows exist for exactly the `present` occurrences.
   - `subject` and `sender` come from `message_headers` when it holds
     them, else from `d_message_summary`. `sender` is the first From
