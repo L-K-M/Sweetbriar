@@ -16,7 +16,7 @@ const FILLER: i64 = 30;
 /// Messages 1–9 cover every FTS state, 10 onwards are filler and one more
 /// message shares acquisition 1. The Archive holds 1, 3, 6, the sharer and
 /// the filler.
-fn store() -> (Connection, SearchScope) {
+pub(super) fn store() -> (Connection, SearchScope) {
     let conn = fixture(FILLER as usize);
     doc(
         &conn,
@@ -108,7 +108,7 @@ fn committed<T>(conn: &Connection, body: impl FnOnce(&Transaction) -> Result<T, 
     result
 }
 
-fn counted(tx: &Transaction, scope: &SearchScope) -> CoverageCounts {
+pub(super) fn counted(tx: &Transaction, scope: &SearchScope) -> CoverageCounts {
     read_search_coverage_reusing(tx, scope.clone(), None)
         .unwrap()
         .1
@@ -118,16 +118,16 @@ fn counted(tx: &Transaction, scope: &SearchScope) -> CoverageCounts {
 fn driven(tx: &Transaction, node: &Json, scope: &SearchScope, coverage: &CoverageCounts) -> bool {
     let full = compile(tx, &query(node.clone()), scope.clone()).unwrap();
     let plan = compile_driven(tx, &query(node.clone()), scope.clone(), Some(coverage)).unwrap();
-    plan.source != full.source
+    plan.hit_source != full.hit_source
 }
 
 #[derive(Clone, Copy, Debug)]
-enum Order {
+pub(super) enum Order {
     Date,
     Relevance,
 }
 
-fn page(
+pub(super) fn page(
     tx: &Transaction,
     node: &Json,
     scope: &SearchScope,
@@ -158,7 +158,7 @@ fn ids(
 
 /// Every read of `node` gives the same result with and without the proof.
 #[track_caller]
-fn same(tx: &Transaction, node: &Json, scope: &SearchScope, coverage: &CoverageCounts) {
+pub(super) fn same(tx: &Transaction, node: &Json, scope: &SearchScope, coverage: &CoverageCounts) {
     let proven = Kept {
         coverage: Some(coverage),
         ..Kept::default()
@@ -447,7 +447,7 @@ fn bind_at(conn: &Connection, message: i64, target: u32, from: &str, cc: Option<
 
 /// Every address source shape (spec/06 Predicate reads), then filler; the
 /// Archive holds 1, 3, 7, 8, 10, the sharer and the filler.
-fn addressed() -> (Connection, SearchScope) {
+pub(super) fn addressed() -> (Connection, SearchScope) {
     let conn = fixture(FILLER as usize);
     let ada = Some("ada@example.test");
     let to = |list: &str| Some(list.to_owned());
@@ -571,7 +571,7 @@ fn a_message_without_any_address_source_stops_address_leaves_driving() {
 /// address leaves can drive together: 1–5 say "alpha", 1 and 2 are from
 /// Ada, 3 copies cc@example.test, and 12 has no summary but a binding to
 /// a parser-1 assembly.
-fn both() -> Connection {
+pub(super) fn both() -> Connection {
     let conn = fixture(FILLER as usize);
     for id in 1..=FILLER {
         let subject = if id <= 5 { "alpha" } else { "plain" };

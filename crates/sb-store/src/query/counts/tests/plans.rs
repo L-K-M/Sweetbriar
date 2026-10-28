@@ -143,7 +143,7 @@ fn driven_reads_seek_kept_messages_and_scan_no_table() {
         );
         let mut statements = vec![format!(
             "SELECT coalesce(sum(v IS NULL),0) FROM ({})",
-            plan.source
+            plan.unknown_source.as_deref().expect("a count to run")
         )];
         for hits in super::super::paging::hit_sources(&plan) {
             statements.push(format!(
@@ -151,40 +151,102 @@ fn driven_reads_seek_kept_messages_and_scan_no_table() {
             ));
         }
         for sql in statements {
-            let nodes = plan_of(&tx, &sql, &plan.values);
-            for node in &nodes {
-                let whole = node.detail.starts_with("SCAN")
-                    && ![
-                        "d_search_fts",
-                        "json_each",
-                        "d_index_queue",
-                        "INDEX acquisitions_unpublished",
-                        "INDEX d_search_docs_unusable",
-                        "CONSTANT ROW",
-                        "(subquery-",
-                        "SCAN kh",
-                        "INDEX d_message_summary_unusable",
-                        "INDEX d_message_bindings_old_target",
-                    ]
-                    .iter()
-                    .any(|allowed| node.detail.contains(allowed));
-                assert!(!whole, "{scope:?} scans {}", node.detail);
-            }
-            let candidates: Vec<_> = nodes
-                .iter()
-                .filter(|node| node.detail.starts_with("SEARCH r USING"))
-                .collect();
-            assert!(
-                !candidates.is_empty(),
-                "{scope:?}: no candidate seek in {sql}"
-            );
-            for node in candidates {
-                assert!(
-                    node.detail.contains("message_id=?") || node.detail.contains("rowid=?"),
-                    "{scope:?} walks the scope: {}",
-                    node.detail
-                );
-            }
+            seeks_by_message(&tx, &sql, &plan.values, &format!("{scope:?}"));
         }
+    }
+}
+
+/// Assert that `sql` reads no table whole and seeks every scope row it
+/// reads by message. Only FTS, JSON, the queue, header rows and the
+/// partial indexes (each an unusable class) are read whole, besides the
+/// kept and class sets themselves.
+#[track_caller]
+fn seeks_by_message(tx: &Transaction, sql: &str, values: &[Value], context: &str) {
+    let nodes = plan_of(tx, sql, values);
+    for node in &nodes {
+        let whole = node.detail.starts_with("SCAN")
+            && ![
+                "d_search_fts",
+                "json_each",
+                "d_index_queue",
+                "INDEX acquisitions_unpublished",
+                "INDEX d_search_docs_unusable",
+                "CONSTANT ROW",
+                "(subquery-",
+                "SCAN kh",
+                "INDEX d_message_summary_unusable",
+                "INDEX d_message_bindings_old_target",
+            ]
+            .iter()
+            .any(|allowed| node.detail.contains(allowed));
+        assert!(!whole, "{context} scans {}", node.detail);
+    }
+    let candidates: Vec<_> = nodes
+        .iter()
+        .filter(|node| node.detail.starts_with("SEARCH r USING"))
+        .collect();
+    assert!(
+        !candidates.is_empty(),
+        "{context}: no candidate seek in {sql}"
+    );
+    for node in candidates {
+        assert!(
+            node.detail.contains("message_id=?") || node.detail.contains("rowid=?"),
+            "{context} walks the scope: {}",
+            node.detail
+        );
+    }
+}
+
+/// spec/06 (M1.6r3b): an undriven read whose leaves' unknown classes are
+/// proven counts unknowns by seeking those classes' messages, in every
+/// scope, and one with no leaf that can be unknown counts none.
+#[test]
+fn class_restricted_counts_seek_unknown_classes_and_scan_no_table() {
+    use crate::testing::fixtures::{archive_account, mailbox};
+    let conn = fixture(40);
+    for id in 1..=40 {
+        doc(&conn, id, "indexed", "[]", &[("subject", "plain")]);
+        summary(&conn, id, "ok", 2, Summary::sender("sender@example.test"));
+    }
+    let account = archive_account(&conn);
+    let archive = mailbox(&conn, &account, "Archive", "folder", None);
+    let tx = conn.unchecked_transaction().unwrap();
+    for id in 1..=40 {
+        occurrence(&tx, archive, id);
+    }
+    register(&tx).unwrap();
+    let classes = [
+        json!({"or":[{"text":"alpha"},{"flag":"seen"}]}),
+        json!({"or":[{"field":"from","op":"is","value":"a@example.test"},{"flag":"seen"}]}),
+        json!({"not":{"has":"attachment"}}),
+        json!({"size":{"op":"gt","bytes":0}}),
+    ];
+    let scopes = [
+        SearchScope::All,
+        SearchScope::Account(account.parse().unwrap()),
+        SearchScope::Mailbox(archive),
+    ];
+    for scope in scopes {
+        let coverage = crate::query::read_search_coverage_reusing(&tx, scope.clone(), None)
+            .unwrap()
+            .1;
+        let plan = |node: &Json| {
+            let plan =
+                compile_driven(&tx, &query(node.clone()), scope.clone(), Some(&coverage)).unwrap();
+            assert!(plan.skipped.is_some(), "{node} {scope:?}");
+            plan
+        };
+        for node in &classes {
+            let plan = plan(node);
+            let source = plan.unknown_source.as_deref().expect("a count to run");
+            let sql = format!("SELECT coalesce(sum(v IS NULL),0) FROM ({source})");
+            seeks_by_message(&tx, &sql, &plan.values, &format!("{node} {scope:?}"));
+        }
+        // No leaf of a flag tree can be unknown: there is no count to run.
+        assert!(
+            plan(&json!({"flag":"seen"})).unknown_source.is_none(),
+            "{scope:?}"
+        );
     }
 }
