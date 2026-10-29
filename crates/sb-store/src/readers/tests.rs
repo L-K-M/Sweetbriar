@@ -179,7 +179,8 @@ fn readers_keep_a_64_mib_page_cache() {
 /// warm (spec/03). Each read tags its connection through
 /// `busy_timeout`, a per-connection setting a query-only reader may
 /// change: an inner read nested in an outer one returns first, so the
-/// next read gets the outer's reader.
+/// next read gets the outer's reader. The tag holds only because the
+/// pool doesn't reconfigure a reader it lends.
 #[test]
 fn the_pool_lends_the_most_recently_returned_reader() {
     let (_scratch, pool) = pool("readers-recent");

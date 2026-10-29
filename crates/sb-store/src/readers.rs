@@ -6,6 +6,8 @@
 //! checkpoint on close, so they can't checkpoint or write anything.
 //! Each keeps its own page cache, so the pool lends the most recently
 //! returned reader: consecutive reads find a warm cache (M1.6r4c).
+//! A commit between two reads empties it: WAL readers drop their cache
+//! when the database changed.
 
 use std::path::Path;
 use std::sync::Condvar;
