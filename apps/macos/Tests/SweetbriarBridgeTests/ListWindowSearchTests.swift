@@ -110,36 +110,32 @@ func anIndexBeforeTheFirstFiftyRowsLandsThemAsAPrefix() async throws {
     await model.close()
 }
 
-/// Short opening rows that aren't the index's prefix are refused:
-/// landing after the index they rebuild the model; landing before it,
-/// the index drops them and page 0 is read again.
+/// Short opening rows that aren't the index's prefix are refused.
+/// They land at once (spec/07), before the index, which drops them, and
+/// page 0 is read again. Rows landing after the index can't be ordered
+/// so any more; a mismatched page then rebuilds like any read's
+/// (`aPageWhoseIdsDontMatchTheIndexTriggersARebuild`).
 @MainActor
-@Test(.timeLimit(.minutes(1)), arguments: [true, false])
-func openingRowsThatArentThePrefixAreRefused(_ indexFirst: Bool) async throws {
+@Test(.timeLimit(.minutes(1)))
+func openingRowsThatArentThePrefixAreRefused() async throws {
     let n = 1_000
     let fake = FakeListWindowSource()
     _ = await fake.fill(n)
     await fake.corruptNextOpen()
     let gate = ThrowingGate()
-    if !indexFirst {
-        await fake.gateNextIndexRead(gate)
-    }
+    await fake.gateNextIndexRead(gate)
     let clock = ManualFrameClock()
     let model = ListWindowModel(source: fake, spec: everything, clock: clock)
     let opening = Task { try await model.open() }
-    if indexFirst {
-        try await opening.value
-    } else {
-        try #require(await eventually { await fake.indexReads.count == 1 })
-    }
+    try #require(await eventually { await fake.indexReads.count == 1 })
     model.setVisible(0 ..< 30)
     try #require(await settle(clock) { model.row(at: 0) != nil })
-    #expect(model.row(at: 0)?.occurrenceId == syntheticId(0, n) + (indexFirst ? 0 : 1))
+    #expect(model.row(at: 0)?.occurrenceId == syntheticId(0, n) + 1)
 
     await gate.open()
     try await opening.value
     try #require(await settle(clock) { model.row(at: 0)?.occurrenceId == syntheticId(0, n) })
-    #expect(await fake.indexReads.count == (indexFirst ? 2 : 1))
+    #expect(await fake.indexReads.count == 1)
 
     await model.close()
 }

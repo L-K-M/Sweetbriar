@@ -700,6 +700,8 @@ final class ListBenchmarkRunner {
                     }
                     sample.milliseconds = (context.sampler.ticks[tick].firedAt - postedAt) * 1_000
                     sample.presentedMilliseconds = pane.shownAtForBenchmark.map { ($0 - postedAt) * 1_000 }
+                    sample.firstPageMilliseconds = pane.firstPageAtForBenchmark.map { ($0 - postedAt) * 1_000 }
+                    sample.landedMilliseconds = pane.landedAtForBenchmark.map { ($0 - postedAt) * 1_000 }
                     // The open returns after the id index, often past the first rows.
                     let opened = await checkWithin(Self.openTimeout, context: context) {
                         pane.openedAtForBenchmark != nil

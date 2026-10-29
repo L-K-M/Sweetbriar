@@ -61,6 +61,8 @@ struct ListBenchmarkReport: Codable, Equatable {
             if let stages = search.stages {
                 lines.append(
                     "  stages p95: query shown \(format(Self.p95(stages.presented))) ms, "
+                        + "first page \(format(stages.firstPage.flatMap(Self.p95))) ms, "
+                        + "rows landed \(format(stages.landed.flatMap(Self.p95))) ms, "
                         + "list opened \(format(Self.p95(stages.opened))) ms"
                 )
             }
@@ -177,13 +179,22 @@ struct SearchBenchmarkResult: Codable, Equatable {
     var debounceMilliseconds: Int
     var storeMessages: UInt64
     var budget: StoreBenchmarkBudget
-    /// Last keystroke to the field showing its query and to the list's
-    /// open returning (plan M1.6r2e); first rows are `lastKeystroke`.
+    /// Last keystroke to each stage of the path (plan M1.6r2e, r4b);
+    /// first rows are `lastKeystroke`.
     var stages: SearchBenchmarkStages?
 }
 
+/// In path order: `presented`, `firstPage`, `landed`, then the first
+/// rows on screen; `opened` waits for the id index, often past them.
+/// The r4b stages are optional so earlier reports still decode.
 struct SearchBenchmarkStages: Codable, Equatable {
+    /// The field shows the query and the list starts opening.
     var presented: SampleStatistics
+    /// The core's opening page returned to the list model.
+    var firstPage: SampleStatistics?
+    /// The list model's first page delivery landed.
+    var landed: SampleStatistics?
+    /// The list's open returned, id index included.
     var opened: SampleStatistics
 }
 
@@ -201,6 +212,8 @@ struct SearchBenchmarkSample: Codable, Equatable {
     var round: Int
     var milliseconds: Double?
     var presentedMilliseconds: Double? = nil
+    var firstPageMilliseconds: Double? = nil
+    var landedMilliseconds: Double? = nil
     var openedMilliseconds: Double? = nil
 }
 
@@ -252,6 +265,8 @@ enum SearchBenchmarkPlan {
             ),
             stages: SearchBenchmarkStages(
                 presented: BenchmarkStatistics.summarize(samples.compactMap(\.presentedMilliseconds)),
+                firstPage: BenchmarkStatistics.summarize(samples.compactMap(\.firstPageMilliseconds)),
+                landed: BenchmarkStatistics.summarize(samples.compactMap(\.landedMilliseconds)),
                 opened: BenchmarkStatistics.summarize(samples.compactMap(\.openedMilliseconds))
             )
         )
