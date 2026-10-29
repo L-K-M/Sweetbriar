@@ -15,6 +15,7 @@ cargo xtask check-ffi     # bindings drift and import check + the async-callback
 scripts/build.sh          # macOS: build Sweetbriar.app into dist/ (--help for options)
 scripts/build.sh --install  # also replace /Applications/Sweetbriar.app
 bash scripts/test-build-install.sh  # test --install against a fake macOS toolchain
+uv run --with pillow==13.0.0 python -I scripts/app-icon.py  # regenerate the app icon
 ```
 
 `scripts/build.sh` runs `cargo xtask ffi`, XcodeGen and `xcodebuild` the
@@ -29,6 +30,11 @@ After changing `sb-ffi`'s exports, run `cargo xtask ffi --bindings-only`
 and commit the regenerated files under `apps/macos/SweetbriarCore/`.
 `cargo xtask ffi` without the flag also builds the XCFramework, which
 needs macOS.
+
+`media-sources/icon.png` is the app icon's master. `scripts/app-icon.py`
+derives `apps/macos/Sweetbriar/Assets.xcassets/AppIcon.appiconset` from
+it; commit the master and the regenerated set together, and never edit
+the derived PNGs by hand.
 
 `check-layers` reads rustdoc's unstable JSON output, so it needs the
 pinned nightly toolchain:
