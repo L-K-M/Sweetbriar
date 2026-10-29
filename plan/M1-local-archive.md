@@ -794,8 +794,9 @@ local drafts. No network yet.
     source for each of the ~2,000 failed documents, ~19 µs each:
     exact-reference's first page took 42 ms counting and 4 ms with the
     count reused. A 64 MiB reader cache cut it to 12 ms and phrase from
-    80 to 40 ms; the count still cost 10–20 ms. Split; the owner's Mac
-    run against 06 and 08 still closes M1.6r:
+    80 to 40 ms, but the count was still most of exact-reference's
+    12 ms and 10–20 ms of the other body queries' pages. Split; the
+    owner's Mac run against 06 and 08 still closes M1.6r.
   - **M1.6r4c1 Contracts — S:** this split, 03's reader cache, 06's
     certain unknowns and 11's proofs. Documentation only.
   - **M1.6r4c2 Reader page cache — S:** readers set and read back

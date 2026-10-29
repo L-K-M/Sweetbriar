@@ -1037,14 +1037,16 @@ No partial parser/formatter, new dependency, compiler, service or UI ships here.
   its lengths declare, fails only reads that evaluate that candidate, as
   for candidates a driver proves false (above).
 - Certain unknowns (M1.6r4c): when every leaf of the tree is an FTS leaf
-  and no AND is empty (always true), a candidate on which every leaf is
-  unknown whatever its phrase and mask is unknown, since Kleene AND, OR
-  and NOT keep unknown. These are the
+  and no AND is empty (an empty AND is always true; an empty OR is
+  invalid input), a candidate on which every leaf is unknown whatever
+  its phrase and mask is unknown, since Kleene AND, OR and NOT keep
+  unknown. These are the
   messages without an acquisition, on an unpublished object, or whose
   document's state is neither `indexed` nor `partial`. Under the FTS
   guards, the exact unknown count counts these scoped candidates without
-  evaluating them and evaluates only the rest of its classes (queued
-  documents, partial documents and other stored masks). Every driver
+  evaluating them and evaluates only its other candidates (queued
+  documents, partial documents and other stored masks); a candidate in
+  both counts once. Every driver
   keeps them, so their count needs no kept set. Skipping them changes no
   error: an FTS leaf calls no decoder on them, and the read's binding
   check covers their bindings. Any other tree counts as above.

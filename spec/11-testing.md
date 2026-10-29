@@ -136,7 +136,7 @@ test, except where the spec says "manual qualification".
   a walked read's hits (tie completion orders only the last score's
   ties). Each step's runner rerun records the effect.
 - M1.6r4c2 proves each reader reads back its cache size, as the other
-  settings. M1.6r4c3 proves certain-unknown counts equal evaluating
+  settings, and that the pool lends the most recently returned reader. M1.6r4c3 proves certain-unknown counts equal evaluating
   counts over r3b's matrix: FTS-only trees under AND, OR and NOT with
   each certain class (no acquisition, unpublished, failed, a failed
   document still queued) beside queued, partial and indexed documents,
@@ -144,7 +144,7 @@ test, except where the spec says "manual qualification".
   empty AND counts as before; an invalid binding on a certain unknown
   fails the read alike.
   Plan-shape tests show the certain count reads neither the FTS table nor
-  any source table beyond the scope rows. Each step's runner rerun
+  a message-source join. Each step's runner rerun
   records the effect.
 
 ### Received-address proof ownership (M1.6m0–m4)
