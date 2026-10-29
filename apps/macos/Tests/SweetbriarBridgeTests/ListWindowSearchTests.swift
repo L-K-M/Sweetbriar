@@ -277,3 +277,30 @@ func anEmptyingChangeReadsItsStatusWithinTwoReads() async throws {
 
     await model.close()
 }
+
+/// A Search's generation is the search generation, which index-only
+/// writes advance past the list generation (spec/07): handing it to
+/// the sidebar would recount every mailbox after each search. The
+/// synthetic list's fill counter is no list generation either.
+@MainActor
+@Test(.timeLimit(.minutes(1)))
+func aSearchShowsNoListGeneration() async throws {
+    let fake = FakeListWindowSource()
+    _ = await fake.fill(10)
+    for spec in [everything, .debugSynthetic] {
+        let model = ListWindowModel(source: fake, spec: spec, clock: ManualFrameClock())
+        try await model.open()
+        #expect(model.hasExactIndex)
+        #expect(model.listGeneration == nil)
+        await model.close()
+    }
+
+    let lists: [WindowSpec] = [.mailbox(1), .unified(.inbox), .flagged, .thread(1)]
+    for spec in lists {
+        let model = ListWindowModel(source: fake, spec: spec, clock: ManualFrameClock())
+        #expect(model.listGeneration == nil)
+        try await model.open()
+        #expect(model.listGeneration == model.generation)
+        await model.close()
+    }
+}
