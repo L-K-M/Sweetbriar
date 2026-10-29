@@ -27,6 +27,7 @@ ICONSET = CATALOG / "AppIcon.appiconset"
 # so one 32 px file serves both 16@2x and 32@1x.
 SLOTS = [(16, 1), (16, 2), (32, 1), (32, 2), (128, 1), (128, 2),
          (256, 1), (256, 2), (512, 1), (512, 2)]
+LARGEST = max(points * scale for points, scale in SLOTS)
 
 XCODE_INFO = {"author": "xcode", "version": 1}
 
@@ -43,6 +44,10 @@ def main() -> int:
     master = Image.open(MASTER).convert("RGB")
     if master.width != master.height:
         print(f"!! {MASTER} is {master.width}x{master.height}, not square", file=sys.stderr)
+        return 1
+    # Every slot must be a downscale; upscaling would blur the 1024 px icon.
+    if master.width < LARGEST:
+        print(f"!! {MASTER} is {master.width} px wide, under {LARGEST}", file=sys.stderr)
         return 1
 
     ICONSET.mkdir(parents=True, exist_ok=True)
