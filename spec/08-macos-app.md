@@ -90,7 +90,7 @@ restores its draft by `draft_id`.
     wanted is cancelled through its token, and a completion from an
     older generation or request is dropped.
   - Pages reach the list through the frame batcher (07: at most once
-    per frame). A row not yet cached shows as a placeholder of the same
+    per frame, the first after an idle frame at once). A row not yet cached shows as a placeholder of the same
     height. `ResetRequired` rebuilds the model on its existing handle:
     the id index, then the pages. The prototype has no subscriptions
     (M1.3 adds them), so after a fill the Debug menu hands the new
