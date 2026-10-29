@@ -775,10 +775,10 @@ local drafts. No network yet.
     shows the query at ~34 ms. Exact queries' first pages took 4–18 ms
     in the core, yet their rows reached the screen 17–81 ms after the
     open returned at ~70 ms, which points to the opening page waiting
-    for a paused display link's tick. Phrase, scoped filter and negative body render
-    at 117–132 ms p50 over core first pages of 16–44 ms p50 (48–95 ms
-    p95). Split; the owner's Mac run against 06 and 08 still closes
-    M1.6r:
+    for a paused display link's tick. Phrase, scoped filter and
+    negative body render at 117–129 ms p50 over core first pages of
+    16–44 ms p50 (48–95 ms p95). Split; the owner's Mac run against 06
+    and 08 still closes M1.6r:
   - **M1.6r4a Contracts — S:** this split and 07's first-batch rule.
     Documentation only.
   - **M1.6r4b Opening delivery — M:** the frame batcher lands a batch
