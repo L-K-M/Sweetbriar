@@ -149,6 +149,62 @@ fn reads_beyond_the_pool_wait_for_a_free_reader() {
     assert_eq!(pool.idle_count(), READER_COUNT);
 }
 
+/// Each reader keeps a 64 MiB page cache (set-and-read-back, spec/03).
+/// The reads nest, so each holds a different reader.
+#[test]
+fn readers_keep_a_64_mib_page_cache() {
+    fn caches(pool: &Readers, left: usize, seen: &mut Vec<i64>) -> Result<(), StoreError> {
+        if left == 0 {
+            return Ok(());
+        }
+        pool.read(|tx| {
+            seen.push(
+                tx.query_row("PRAGMA cache_size", [], |row| row.get(0))
+                    .map_err(bug)?,
+            );
+            caches(pool, left - 1, seen)
+        })
+    }
+
+    let (_scratch, pool) = pool("readers-cache");
+    let mut seen = Vec::new();
+    caches(&pool, READER_COUNT, &mut seen).unwrap();
+    assert_eq!(
+        seen, [-65536; READER_COUNT],
+        "a reader's page cache isn't 64 MiB"
+    );
+}
+
+/// The pool lends the most recently returned reader, whose cache is
+/// warm (spec/03). Each read tags its connection through
+/// `busy_timeout`, a per-connection setting a query-only reader may
+/// change: an inner read nested in an outer one returns first, so the
+/// next read gets the outer's reader.
+#[test]
+fn the_pool_lends_the_most_recently_returned_reader() {
+    let (_scratch, pool) = pool("readers-recent");
+    let tag = |tx: &rusqlite::Transaction, ms: i64| -> Result<(), StoreError> {
+        tx.query_row(&format!("PRAGMA busy_timeout = {ms}"), [], |_| Ok(()))
+            .map_err(bug)
+    };
+    pool.read(|outer| {
+        tag(outer, 1111)?;
+        pool.read(|inner| tag(inner, 2222))
+    })
+    .unwrap();
+
+    let next: i64 = pool
+        .read(|tx| {
+            tx.query_row("PRAGMA busy_timeout", [], |row| row.get(0))
+                .map_err(bug)
+        })
+        .unwrap();
+    assert_eq!(
+        next, 1111,
+        "the next read didn't get the last returned reader"
+    );
+}
+
 /// The pool is exactly `READER_COUNT` deep (spec/01: default 4).
 #[test]
 fn reader_count_is_four() {
