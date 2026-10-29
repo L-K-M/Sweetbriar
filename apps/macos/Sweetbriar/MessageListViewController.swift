@@ -197,13 +197,14 @@ final class MessageListViewController: NSViewController {
         let clock = self.clock ?? DisplayLinkClock(view: view)
         self.clock = clock
         let model = ListWindowModel(source: bridge, spec: spec, clock: clock)
-        model.onOpeningPageForBenchmark = { [weak self] in
-            self?.firstPageAtForBenchmark = CACurrentMediaTime()
+        // Only this choice's model stamps its stages: the replaced one
+        // may still answer or deliver until `detach` silences it.
+        model.onOpeningPageForBenchmark = { [weak self, weak model] in
+            guard let self, let model, self.model === model else { return }
+            firstPageAtForBenchmark = CACurrentMediaTime()
         }
         model.onPagesDeliveredForBenchmark = { [weak self, weak model] pages in
             guard let self else { return }
-            // Only this choice's model stamps it: the replaced one may
-            // still deliver until `detach` silences it.
             if landedAtForBenchmark == nil, let model, self.model === model {
                 landedAtForBenchmark = CACurrentMediaTime()
             }

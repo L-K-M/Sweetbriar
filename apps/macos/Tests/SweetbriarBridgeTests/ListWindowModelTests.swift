@@ -28,7 +28,12 @@ private func settle(
     }
 }
 
-/// A model opened over `fake`, ready for `setVisible`.
+/// A model opened over `fake`, ready for `setVisible`, with its
+/// opening page delivered — landed, or dropped at a moved generation.
+/// It's delivered at once (spec/07), but on a main-actor turn that may
+/// come after `open` returns, so a test's hooks set afterwards would
+/// otherwise race it. The batcher then parks on the clock until the
+/// next frame: nothing else has posted yet, so that marks it.
 @MainActor
 private func openModel(
     over fake: FakeListWindowSource,
@@ -36,6 +41,9 @@ private func openModel(
 ) async throws -> ListWindowModel {
     let model = ListWindowModel(source: fake, spec: .debugSynthetic, clock: clock)
     try await model.open()
+    if model.count > 0 {
+        try #require(await eventually { await clock.waiterCount == 1 })
+    }
     return model
 }
 
@@ -700,10 +708,13 @@ func aLateCompletionLeavesANewerRequestPending() async throws {
     let clock = ManualFrameClock()
     let model = try await openModel(over: fake, clock: clock)
 
-    // The last page alone: no neighbour to prefetch.
+    // The last page alone: no neighbour to prefetch. The opening
+    // page landed at once (spec/07), so the batcher stays busy until
+    // the next frame and the read's completion waits on it.
     model.setVisible(4_800 ..< 4_820)
     try #require(await eventually { await clock.waiterCount == 1 })
     #expect(await fake.reads.count == 1)
+    #expect(model.row(at: 4_800) == nil)
 
     // The rebuild's read parks on the gate.
     let gate = ThrowingGate()
@@ -819,8 +830,10 @@ func theBenchmarkHookRunsBeforeTheListsHook() async throws {
     model.onPagesDelivered = { _ in calls.append("list") }
     model.onPagesDeliveredForBenchmark = { _ in calls.append("benchmark") }
 
+    // Page 0 landed with the open, before the hooks were set; page 1's
+    // prefetch lands after them.
     model.setVisible(0 ..< 50)
-    try #require(await settle(clock) { model.row(at: 0) != nil })
+    try #require(await settle(clock) { model.row(at: 200) != nil })
     #expect(calls.prefix(2) == ["benchmark", "list"])
 
     await model.close()
