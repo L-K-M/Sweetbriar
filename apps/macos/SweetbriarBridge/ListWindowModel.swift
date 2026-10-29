@@ -102,11 +102,16 @@ public final class ListWindowModel {
 
     /// The list generation this window's whole index shows, for the
     /// sidebar's counts (spec/08 "Sidebar"); `nil` before the index,
-    /// and for a Search, whose generation is the search generation
-    /// (spec/07).
+    /// and for the two specs with their own generations (spec/07): a
+    /// Search's is the search generation, the synthetic list's its
+    /// fill counter.
     public var listGeneration: UInt64? {
-        if case .search = spec { return nil }
-        return hasExactIndex ? generation : nil
+        switch spec {
+        case .search, .debugSynthetic:
+            return nil
+        case .mailbox, .unified, .flagged, .thread:
+            return hasExactIndex ? generation : nil
+        }
     }
 
     /// The selected rows, by occurrence id (spec/08). After each new
