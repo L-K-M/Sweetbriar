@@ -213,6 +213,11 @@ jobs:
           done
           cmp THIRD_PARTY_NOTICES.md "$APP/Contents/Resources/THIRD_PARTY_NOTICES.md"
           grep -q 'The Rust Standard Library' "$APP/Contents/Resources/Rust-Licenses.html"
+          # The icon compiles into the asset catalog and Info.plist names it.
+          test -s "$APP/Contents/Resources/Assets.car" \
+            || { echo "::error::Assets.car missing from Sweetbriar.app"; exit 1; }
+          test "$(plutil -extract CFBundleIconName raw "$APP/Contents/Info.plist")" = AppIcon \
+            || { echo "::error::Sweetbriar.app does not name AppIcon as its icon"; exit 1; }
           ditto -c -k --sequesterRsrc --keepParent \
             "$APP" "$RUNNER_TEMP/Sweetbriar-macos-arm64.zip"
 
