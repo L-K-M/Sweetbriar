@@ -470,7 +470,7 @@ func closeCancelsReadsAndClosesTheWindow() async throws {
         await Task.yield()
     }
     #expect(await fake.reads.count == 1)
-    #expect(model.row(at: 0) == nil)
+    #expect(model.row(at: 400) == nil)
 
     await model.close() // a second close is harmless
     #expect(await fake.closedWindows == [windowId])
@@ -499,7 +499,8 @@ func theIdIndexDrivesSelectionAndPlaceholders() async throws {
     #expect(model.index(of: 4_096) == nil)
 
     // A row whose page is out is a placeholder: nil, and no fetch.
-    #expect(model.row(at: 5) == nil)
+    // (Page 0 came with the open.)
+    #expect(model.row(at: 250) == nil)
     try #require(await eventually { await fake.reads.isEmpty })
 
     // The observable page object is a stable identity per page —
@@ -751,6 +752,24 @@ func theOpeningPageLandsAsPageZero() async throws {
     #expect(model.row(at: 0)?.occurrenceId == syntheticId(0, n))
     #expect(await fake.readCount(anchor: .around(syntheticId(100, n))) == 0)
     #expect(await fake.readCount(anchor: .around(syntheticId(300, n))) == 1)
+
+    await model.close()
+}
+
+/// An idle list's opening page lands without waiting for a frame
+/// (spec/07), before the list reports what it shows (plan M1.6r4b).
+@MainActor
+@Test(.timeLimit(.minutes(1)))
+func theOpeningPageLandsWithoutAFrame() async throws {
+    let n = 1_000
+    let fake = FakeListWindowSource()
+    _ = await fake.fill(n)
+    let clock = ManualFrameClock()
+    let model = try await openModel(over: fake, clock: clock)
+
+    try #require(await eventually { await model.row(at: 199) != nil })
+    #expect(model.row(at: 0)?.occurrenceId == syntheticId(0, n))
+    #expect(await fake.reads.isEmpty)
 
     await model.close()
 }

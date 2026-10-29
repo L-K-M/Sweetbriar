@@ -67,10 +67,13 @@ final class MessageListViewController: NSViewController {
     private(set) var shownSpec: WindowSpec?
     private(set) var choiceSerial = 0
     var failureForBenchmark: (any Error)? { openError ?? model?.lastError }
-    /// When the latest choice was shown and its list's open returned, in
+    /// When the latest choice was shown, its opening page returned from
+    /// the core, its first pages landed and its list's open returned, in
     /// the `CACurrentMediaTime` timebase the benchmark stamps input with
-    /// (plan M1.6r2e stage timings).
+    /// (plan M1.6r2e, r4b stage timings).
     private(set) var shownAtForBenchmark: Double?
+    private(set) var firstPageAtForBenchmark: Double?
+    private(set) var landedAtForBenchmark: Double?
     private(set) var openedAtForBenchmark: Double?
     /// Search's field and model, for the keystroke benchmark (plan M1.6q2).
     var searchFieldForBenchmark: NSSearchField { search.fieldForBenchmark }
@@ -174,6 +177,8 @@ final class MessageListViewController: NSViewController {
         shownSpec = spec
         choiceSerial += 1
         shownAtForBenchmark = CACurrentMediaTime()
+        firstPageAtForBenchmark = nil
+        landedAtForBenchmark = nil
         openedAtForBenchmark = nil
         opening = true
         updateStatus()
@@ -192,8 +197,17 @@ final class MessageListViewController: NSViewController {
         let clock = self.clock ?? DisplayLinkClock(view: view)
         self.clock = clock
         let model = ListWindowModel(source: bridge, spec: spec, clock: clock)
-        model.onPagesDeliveredForBenchmark = { [weak self] pages in
-            self?.onPagesDeliveredForBenchmark?(pages)
+        model.onOpeningPageForBenchmark = { [weak self] in
+            self?.firstPageAtForBenchmark = CACurrentMediaTime()
+        }
+        model.onPagesDeliveredForBenchmark = { [weak self, weak model] pages in
+            guard let self else { return }
+            // Only this choice's model stamps it: the replaced one may
+            // still deliver until `detach` silences it.
+            if landedAtForBenchmark == nil, let model, self.model === model {
+                landedAtForBenchmark = CACurrentMediaTime()
+            }
+            onPagesDeliveredForBenchmark?(pages)
         }
         let list = AppKitPrototypeList(
             model: model,
@@ -260,6 +274,7 @@ final class MessageListViewController: NSViewController {
         guard let old else { return }
         // Its late deliveries must not reach the benchmark's recorder.
         old.onPagesDeliveredForBenchmark = { _ in }
+        old.onOpeningPageForBenchmark = {}
         let id = UUID()
         closing[id] = Task { @MainActor [weak self] in
             await old.close()

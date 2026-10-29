@@ -131,6 +131,12 @@ public final class ListWindowModel {
     @ObservationIgnored
     public var onPagesDeliveredForBenchmark: @MainActor ([Int]) -> Void = { _ in }
 
+    /// Called on the main actor as `open`'s opening page returns from
+    /// the core, before it is queued — the Search benchmark's
+    /// first-page stage (plan M1.6r4b).
+    @ObservationIgnored
+    public var onOpeningPageForBenchmark: @MainActor () -> Void = {}
+
     /// Called on the main actor when the id index is replaced —
     /// `open`, `rebuild` and a `resetRequired` rebuild each swap every
     /// row at once, so a list reloads fully rather than patching
@@ -152,8 +158,8 @@ public final class ListWindowModel {
     // so a page landing invalidates only its own rows' views — not
     // every row that once looked its page up (spec/08).
 
-    /// Deliveries queue here and land on the next frame. Created on
-    /// first use: the deliver closure needs `self`, so it can't be
+    /// Deliveries queue here and land at most once per frame. Created
+    /// on first use: the deliver closure needs `self`, so it can't be
     /// built while `init` is still running.
     @ObservationIgnored
     private var batcher: FrameBatcher<PageCompletion>?
@@ -355,6 +361,7 @@ public final class ListWindowModel {
             anchor: .top,
             limit: UInt32(openingLimit)
         )
+        onOpeningPageForBenchmark()
         if closed {
             await source.closeWindow(id: window.windowId)
             throw CancellationError()
@@ -392,8 +399,9 @@ public final class ListWindowModel {
     }
 
     /// The opening page as the window's provisional prefix: its ids
-    /// stand in for the index and its rows land as page 0 on the next
-    /// frame (spec/08 "Opening a store window").
+    /// stand in for the index and its rows land as page 0 through the
+    /// frame batcher — at once when the list was idle (spec/07, spec/08
+    /// "Opening a store window").
     private func showProvisional(_ window: ListWindow) {
         generation = window.generation
         ids = window.rows.map(\.occurrenceId)
@@ -911,7 +919,7 @@ public final class ListWindowModel {
 
     /// A read task finished: free its slot (only if the entry is
     /// still this read's — a rebuild may have replaced it), queue the
-    /// completion for the next frame, and see whether another page
+    /// completion for the frame batcher, and see whether another page
     /// can start.
     private func readFinished(
         page k: Int,
@@ -935,7 +943,8 @@ public final class ListWindowModel {
     }
 
     /// Mark a completion's page pending under its serial and hand it
-    /// to the frame batcher, which lands it on the next frame.
+    /// to the frame batcher, which lands it at once after an idle
+    /// frame, else on the next frame.
     private func queue(_ completion: PageCompletion) {
         pendingDelivery[completion.page] = completion.serial
         if batcher == nil {
@@ -950,8 +959,8 @@ public final class ListWindowModel {
     /// 0 exactly (ranks 0..<min(200, N)), so it lands like a read of
     /// page 0 would, when taken at the installed generation: the first
     /// rows cost no second round trip. Search's 50-row page lands as
-    /// page 0's prefix instead. Not wanted by then, it's dropped like
-    /// any late read.
+    /// page 0's prefix instead. Once the list shows other rows, it's
+    /// dropped like any late read.
     private func seedFirstPage(from window: ListWindow) {
         guard window.generation == generation, !window.rows.isEmpty else {
             return
@@ -987,7 +996,7 @@ public final class ListWindowModel {
             if closed || reset { continue }
             guard completion.generation == generation,
                   serials[completion.page] == completion.serial,
-                  wanted.contains(completion.page)
+                  wanted.contains(completion.page) || landsUnasked(completion)
             else { continue }
             switch completion.result {
             case .success(let window):
@@ -1051,6 +1060,13 @@ public final class ListWindowModel {
         evictOverflow()
         publishStatus()
         pump()
+    }
+
+    /// The opening page lands while the list shows no rows yet: the
+    /// batcher can land it at once (spec/07), before the list's first
+    /// layout reports what it shows and so before any page is wanted.
+    private func landsUnasked(_ completion: PageCompletion) -> Bool {
+        completion.origin == .opening && visiblePages == nil
     }
 
     /// Pages holding rows beyond the cap go least recently used

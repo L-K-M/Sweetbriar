@@ -397,14 +397,16 @@ struct StoreCoverageTests {
 
 @Suite("search benchmark planning and reporting")
 struct SearchBenchmarkTests {
-    /// Every round's samples, all at `milliseconds`, with the query shown
-    /// and the list opened at fixed fractions of it.
+    /// Every round's samples, all at `milliseconds`, with each stage at
+    /// a fixed fraction of it.
     private static func samples(_ milliseconds: Double?) -> [SearchBenchmarkSample] {
         (0 ..< SearchBenchmarkPlan.rounds).flatMap { round in
             SearchBenchmarkPlan.queries.map {
                 SearchBenchmarkSample(
                     query: $0.id, round: round, milliseconds: milliseconds,
                     presentedMilliseconds: milliseconds.map { $0 / 4 },
+                    firstPageMilliseconds: milliseconds.map { $0 * 3 / 10 },
+                    landedMilliseconds: milliseconds.map { $0 * 7 / 20 },
                     openedMilliseconds: milliseconds.map { $0 / 2 }
                 )
             }
@@ -432,6 +434,7 @@ struct SearchBenchmarkTests {
         #expect(fast.perQuery["phrase"]?.count == SearchBenchmarkPlan.rounds)
         #expect(fast.storeMessages == 7)
         #expect(fast.stages?.presented.p95 == 10 && fast.stages?.opened.p95 == 20)
+        #expect(fast.stages?.firstPage?.p95 == 12 && fast.stages?.landed?.p95 == 14)
         #expect(fast.stages?.opened.count == fast.expectedSamples)
 
         let slow = SearchBenchmarkPlan.evaluate(samples: Self.samples(100), runOK: true, storeMessages: 7)
@@ -470,7 +473,9 @@ struct SearchBenchmarkTests {
         #expect(decoded.mode == .search)
         #expect(decoded.stdoutSummary.hasPrefix("search-benchmark: ok=true"))
         #expect(decoded.stdoutSummary.contains("budget 100 ms met: true"))
-        #expect(decoded.stdoutSummary.contains("stages p95: query shown 10.00 ms, list opened 20.00 ms"))
+        #expect(decoded.stdoutSummary.contains(
+            "stages p95: query shown 10.00 ms, first page 12.00 ms, rows landed 14.00 ms, list opened 20.00 ms"
+        ))
     }
 
     @Test("a run without stage samples prints no stage numbers")
@@ -486,7 +491,9 @@ struct SearchBenchmarkTests {
             ), runs: [], comparison: nil, mode: .search,
             search: SearchBenchmarkPlan.evaluate(samples: [], runOK: false, storeMessages: 2_000)
         )
-        #expect(report.stdoutSummary.contains("stages p95: query shown — ms, list opened — ms"))
+        #expect(report.stdoutSummary.contains(
+            "stages p95: query shown — ms, first page — ms, rows landed — ms, list opened — ms"
+        ))
     }
 
     @Test("a report written before stage timings still decodes")
@@ -500,5 +507,17 @@ struct SearchBenchmarkTests {
         let old = #"{"query":"phrase","round":0,"milliseconds":40}"#
         let sample = try JSONDecoder().decode(SearchBenchmarkSample.self, from: Data(old.utf8))
         #expect(sample.presentedMilliseconds == nil && sample.openedMilliseconds == nil)
+        #expect(sample.firstPageMilliseconds == nil && sample.landedMilliseconds == nil)
+
+        // M1.6r2e's stages, written before r4b added the first page and
+        // the landing: nil optionals encode as absent keys.
+        var r2e = try #require(
+            SearchBenchmarkPlan.evaluate(samples: Self.samples(40), runOK: true, storeMessages: 7).stages
+        )
+        r2e.firstPage = nil
+        r2e.landed = nil
+        let encoded = try JSONEncoder().encode(r2e)
+        #expect(!String(decoding: encoded, as: UTF8.self).contains("firstPage"))
+        #expect(try JSONDecoder().decode(SearchBenchmarkStages.self, from: encoded) == r2e)
     }
 }
