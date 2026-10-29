@@ -122,9 +122,16 @@ recreated.
     `wal_checkpoint(TRUNCATE)` when its queue drains (a busy result,
     readers still active, isn't an error).
   - **Reader connections** (a small pool) open read-only, set
-    `wal_autocheckpoint=0` and `query_only=ON`, and never checkpoint on
-    close. Read transactions are short: a query window is not a
-    long-lived read transaction (07).
+    `wal_autocheckpoint=0`, `query_only=ON` and `cache_size=-65536`,
+    and never checkpoint on close. Read transactions are short: a query
+    window is not a long-lived read transaction (07).
+  - Each reader keeps up to 64 MiB of page cache, filled only as reads
+    touch pages. With SQLite's 2 MB default, nearly every row lookup on
+    a Search first page was an OS read over a 100k store of 415 MB
+    (M1.6r4c). The pool lends the most recently returned reader, so
+    consecutive reads find a warm cache. Readers don't memory-map the
+    database: an I/O error under a map arrives as a signal (`SIGBUS`),
+    not as an `Io` error.
   - Writer and pooled reader connections keep a bounded 64-entry prepared-
     statement cache. Reuse invariant activation inspection and publication SQL
     across messages instead of compiling it per occurrence. All source fences,

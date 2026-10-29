@@ -135,6 +135,17 @@ test, except where the spec says "manual qualification".
   and all three scopes; plan-shape tests show no temporary B-tree orders
   a walked read's hits (tie completion orders only the last score's
   ties). Each step's runner rerun records the effect.
+- M1.6r4c2 proves each reader reads back its cache size, as the other
+  settings. M1.6r4c3 proves certain-unknown counts equal evaluating
+  counts over r3b's matrix: FTS-only trees under AND, OR and NOT with
+  each certain class (no acquisition, unpublished, failed, a failed
+  document still queued) beside queued, partial and indexed documents,
+  driven and full, in all three scopes; a tree with one other leaf or an
+  empty AND counts as before; an invalid binding on a certain unknown
+  fails the read alike.
+  Plan-shape tests show the certain count reads neither the FTS table nor
+  any source table beyond the scope rows. Each step's runner rerun
+  records the effect.
 
 ### Received-address proof ownership (M1.6m0–m4)
 

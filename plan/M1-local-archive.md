@@ -785,9 +785,26 @@ local drafts. No network yet.
     posted after an idle frame at once (07), so the opening page skips
     the display link's wake-up; q2's benchmark adds the stages at which
     the opening page returns from the core and lands in the list.
-  - **M1.6r4c Broad first pages — M:** designed from r4b's owner run:
-    the first page of the query classes still over 08's budget, within
-    06's driven reads and walks.
+  - **M1.6r4c Broad first pages:** r4b's owner run missed 08 at p95
+    126 ms (p50 105): the core's first page took 17–63 ms p50 after the
+    query showed, then 50-row lists took at least 20 ms more to render.
+    Seeded runs here found two core costs on body queries. Readers keep
+    SQLite's 2 MB default page cache over a 415 MB 100k store, so each
+    row lookup is an OS read. The exact unknown count joins the full
+    source for each of the ~2,000 failed documents, ~19 µs each:
+    exact-reference's first page took 42 ms counting and 4 ms with the
+    count reused. A 64 MiB reader cache cut it to 12 ms and phrase from
+    80 to 40 ms; the count still cost 10–20 ms. Split; the owner's Mac
+    run against 06 and 08 still closes M1.6r:
+  - **M1.6r4c1 Contracts — S:** this split, 03's reader cache, 06's
+    certain unknowns and 11's proofs. Documentation only.
+  - **M1.6r4c2 Reader page cache — S:** readers set and read back
+    `cache_size=-65536` (03).
+  - **M1.6r4c3 Certain unknowns — M:** an FTS-only tree's exact unknown
+    count counts its certain unknowns without evaluating them (06).
+  - **M1.6r4c4 Rows on screen — M:** designed from the owner's Time
+    Profiler run: the main-thread cost between the first page and its
+    rows on screen (08).
 
 - **Goal:** FTS5 search with the query AST v1, the text syntax, chips and
   coverage.
