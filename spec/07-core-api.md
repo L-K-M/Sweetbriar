@@ -696,7 +696,10 @@ fn release_lease(lease_id: LeaseId);
     still return their receipt.
   - Their idempotency key makes a retry safe.
 - **Main-actor delivery:** the adapter delivers results to `@MainActor`
-  observers in batches, at most one per frame.
+  observers in batches, at most one per frame. A batch posted when
+  none has landed since the last frame lands at once, without waiting
+  for the next one; anything posted after it waits for the next frame.
+  So an idle list's opening page costs no display-link wake-up.
 - **No synchronous FFI call** does I/O. Synchronous getters are allowed
   only for in-memory values (the appearance cache, for example), and
   for `platform_default_config()`: the default roots (03) from the
