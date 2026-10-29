@@ -100,6 +100,12 @@ public final class ListWindowModel {
     /// it (spec/08).
     public private(set) var hasExactIndex = false
 
+    /// The list generation this window's whole index shows, for the
+    /// sidebar's counts (spec/08 "Sidebar"); `nil` before the index.
+    public var listGeneration: UInt64? {
+        hasExactIndex ? generation : nil
+    }
+
     /// The selected rows, by occurrence id (spec/08). After each new
     /// index an id it lacks is dropped — or, in a window of logical
     /// messages, followed to its message's row (spec/07).

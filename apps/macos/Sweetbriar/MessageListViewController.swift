@@ -374,8 +374,8 @@ final class MessageListViewController: NSViewController {
     private func indexDidChange() {
         updateStatus()
         if let model { onIndexChangedForBenchmark?(model.generation) }
-        guard let model, model.hasExactIndex else { return }
-        onGeneration?(model.generation)
+        guard let generation = model?.listGeneration else { return }
+        onGeneration?(generation)
     }
 
     /// What the status line shows: why the list failed, that it is
