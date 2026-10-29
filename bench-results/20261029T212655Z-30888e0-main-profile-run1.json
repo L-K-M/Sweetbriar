@@ -1,0 +1,751 @@
+{
+  "environment" : {
+    "baselineFootprintBytes" : 23136704,
+    "cpuBrand" : "Apple M1",
+    "hwModel" : "Macmini9,1",
+    "nominalIntervalMilliseconds" : 16.666666666666668,
+    "osVersion" : "Version 26.5.2 (Build 25F84)",
+    "refreshRateHertz" : 60,
+    "rowCount" : 100000,
+    "rowPitchPoints" : 56,
+    "virtualized" : false,
+    "windowSize" : "1100x700",
+    "xcodeBuild" : "17F113",
+    "xcodeVersion" : "2660"
+  },
+  "failures" : [
+    "exact-reference round 8: the results never rendered"
+  ],
+  "mode" : "search",
+  "ok" : false,
+  "runs" : [
+
+  ],
+  "search" : {
+    "budget" : {
+      "limitMilliseconds" : 100,
+      "name" : "search.lastKeystroke",
+      "p95Milliseconds" : 1668.3087078854442
+    },
+    "debounceMilliseconds" : 30,
+    "expectedSamples" : 50,
+    "lastKeystroke" : {
+      "count" : 40,
+      "max" : 2743.8855413347483,
+      "p50" : 1304.1825415566564,
+      "p95" : 1668.3087078854442,
+      "samples" : [
+        1580.7876661419868,
+        415.10991752147675,
+        1641.752458177507,
+        555.0428749993443,
+        2743.8855413347483,
+        1449.2984162643552,
+        387.2268330305815,
+        1668.3087078854442,
+        533.6325000971556,
+        1648.7122494727373,
+        1304.1825415566564,
+        226.35183297097683,
+        1873.4358325600624,
+        884.0815415605903,
+        1489.003541879356,
+        1381.9307079538703,
+        257.7410414814949,
+        1391.8811669573188,
+        447.54020869731903,
+        1436.3880828022957,
+        1348.261791281402,
+        240.74679147452116,
+        1391.0385835915804,
+        607.1664998307824,
+        1356.873583048582,
+        1276.1093331500888,
+        386.5129994228482,
+        1643.1509163230658,
+        406.49620816111565,
+        1615.8930836245418,
+        1241.0957086831331,
+        291.24433267861605,
+        1399.8529585078359,
+        434.56212524324656,
+        1456.8487918004394,
+        1229.9357913434505,
+        366.6176665574312,
+        1402.3292493075132,
+        586.0829576849937,
+        1418.393375352025
+      ]
+    },
+    "perQuery" : {
+      "exact-address" : {
+        "count" : 8,
+        "max" : 415.10991752147675,
+        "p50" : 291.24433267861605,
+        "p95" : 415.10991752147675,
+        "samples" : [
+          415.10991752147675,
+          387.2268330305815,
+          226.35183297097683,
+          257.7410414814949,
+          240.74679147452116,
+          386.5129994228482,
+          291.24433267861605,
+          366.6176665574312
+        ]
+      },
+      "exact-reference" : {
+        "count" : 8,
+        "max" : 1580.7876661419868,
+        "p50" : 1304.1825415566564,
+        "p95" : 1580.7876661419868,
+        "samples" : [
+          1580.7876661419868,
+          1449.2984162643552,
+          1304.1825415566564,
+          1381.9307079538703,
+          1348.261791281402,
+          1276.1093331500888,
+          1241.0957086831331,
+          1229.9357913434505
+        ]
+      },
+      "negative-body" : {
+        "count" : 8,
+        "max" : 2743.8855413347483,
+        "p50" : 1456.8487918004394,
+        "p95" : 2743.8855413347483,
+        "samples" : [
+          2743.8855413347483,
+          1648.7122494727373,
+          1489.003541879356,
+          1436.3880828022957,
+          1356.873583048582,
+          1615.8930836245418,
+          1456.8487918004394,
+          1418.393375352025
+        ]
+      },
+      "phrase" : {
+        "count" : 8,
+        "max" : 1873.4358325600624,
+        "p50" : 1402.3292493075132,
+        "p95" : 1873.4358325600624,
+        "samples" : [
+          1641.752458177507,
+          1668.3087078854442,
+          1873.4358325600624,
+          1391.8811669573188,
+          1391.0385835915804,
+          1643.1509163230658,
+          1399.8529585078359,
+          1402.3292493075132
+        ]
+      },
+      "scoped-filter" : {
+        "count" : 8,
+        "max" : 884.0815415605903,
+        "p50" : 533.6325000971556,
+        "p95" : 884.0815415605903,
+        "samples" : [
+          555.0428749993443,
+          533.6325000971556,
+          884.0815415605903,
+          447.54020869731903,
+          607.1664998307824,
+          406.49620816111565,
+          434.56212524324656,
+          586.0829576849937
+        ]
+      }
+    },
+    "queries" : [
+      {
+        "id" : "exact-reference",
+        "projectsScope" : false,
+        "text" : "ref1"
+      },
+      {
+        "id" : "exact-address",
+        "projectsScope" : false,
+        "text" : "from.is:sender17@beta.example"
+      },
+      {
+        "id" : "phrase",
+        "projectsScope" : false,
+        "text" : "\"quarterly budget review\""
+      },
+      {
+        "id" : "scoped-filter",
+        "projectsScope" : true,
+        "text" : "from.domain:beta.example after:2024-03-01@UTC"
+      },
+      {
+        "id" : "negative-body",
+        "projectsScope" : false,
+        "text" : "budget -body:review"
+      }
+    ],
+    "samples" : [
+      {
+        "firstPageMilliseconds" : 1507.5958743691444,
+        "landedMilliseconds" : 1549.2400415241718,
+        "milliseconds" : 1580.7876661419868,
+        "openedMilliseconds" : 1597.6158333942294,
+        "presentedMilliseconds" : 103.27066667377949,
+        "query" : "exact-reference",
+        "round" : 0
+      },
+      {
+        "firstPageMilliseconds" : 406.484542414546,
+        "landedMilliseconds" : 408.18037558346987,
+        "milliseconds" : 415.10991752147675,
+        "openedMilliseconds" : 480.81325087696314,
+        "presentedMilliseconds" : 153.44545897096395,
+        "query" : "exact-address",
+        "round" : 0
+      },
+      {
+        "firstPageMilliseconds" : 1573.7724164500833,
+        "landedMilliseconds" : 1620.148791000247,
+        "milliseconds" : 1641.752458177507,
+        "openedMilliseconds" : 2689.5386250689626,
+        "presentedMilliseconds" : 151.83237474411726,
+        "query" : "phrase",
+        "round" : 0
+      },
+      {
+        "firstPageMilliseconds" : 543.9144168049097,
+        "landedMilliseconds" : 545.5747088417411,
+        "milliseconds" : 555.0428749993443,
+        "openedMilliseconds" : 2303.5382498055696,
+        "presentedMilliseconds" : 105.54004181176424,
+        "query" : "scoped-filter",
+        "round" : 0
+      },
+      {
+        "firstPageMilliseconds" : 2714.150708168745,
+        "landedMilliseconds" : 2728.066041134298,
+        "milliseconds" : 2743.8855413347483,
+        "openedMilliseconds" : 4693.204208277166,
+        "presentedMilliseconds" : 85.82987450063229,
+        "query" : "negative-body",
+        "round" : 0
+      },
+      {
+        "firstPageMilliseconds" : 1434.5144582912326,
+        "landedMilliseconds" : 1437.2416660189629,
+        "milliseconds" : 1449.2984162643552,
+        "openedMilliseconds" : 1581.8848749622703,
+        "presentedMilliseconds" : 57.446165941655636,
+        "query" : "exact-reference",
+        "round" : 1
+      },
+      {
+        "firstPageMilliseconds" : 383.96179117262363,
+        "landedMilliseconds" : 384.8417913541198,
+        "milliseconds" : 387.2268330305815,
+        "openedMilliseconds" : 478.9105411618948,
+        "presentedMilliseconds" : 93.56208331882954,
+        "query" : "exact-address",
+        "round" : 1
+      },
+      {
+        "firstPageMilliseconds" : 1657.804916612804,
+        "landedMilliseconds" : 1661.908958107233,
+        "milliseconds" : 1668.3087078854442,
+        "openedMilliseconds" : 2719.7934994474053,
+        "presentedMilliseconds" : 62.38912511616945,
+        "query" : "phrase",
+        "round" : 1
+      },
+      {
+        "firstPageMilliseconds" : 530.2474172785878,
+        "landedMilliseconds" : 531.2782917171717,
+        "milliseconds" : 533.6325000971556,
+        "openedMilliseconds" : 2252.780791372061,
+        "presentedMilliseconds" : 39.9167500436306,
+        "query" : "scoped-filter",
+        "round" : 1
+      },
+      {
+        "firstPageMilliseconds" : 1636.1548332497478,
+        "landedMilliseconds" : 1640.7509995624423,
+        "milliseconds" : 1648.7122494727373,
+        "openedMilliseconds" : 2881.131749600172,
+        "presentedMilliseconds" : 56.84366635978222,
+        "query" : "negative-body",
+        "round" : 1
+      },
+      {
+        "firstPageMilliseconds" : 1289.0674164518714,
+        "landedMilliseconds" : 1293.7897499650717,
+        "milliseconds" : 1304.1825415566564,
+        "openedMilliseconds" : 1369.7930416092277,
+        "presentedMilliseconds" : 69.07408311963081,
+        "query" : "exact-reference",
+        "round" : 2
+      },
+      {
+        "firstPageMilliseconds" : 218.15091650933027,
+        "landedMilliseconds" : 218.6163328588009,
+        "milliseconds" : 226.35183297097683,
+        "openedMilliseconds" : 263.71933333575726,
+        "presentedMilliseconds" : 41.915916837751865,
+        "query" : "exact-address",
+        "round" : 2
+      },
+      {
+        "firstPageMilliseconds" : 1866.9726243242621,
+        "landedMilliseconds" : 1870.4294161871076,
+        "milliseconds" : 1873.4358325600624,
+        "openedMilliseconds" : 2977.3732917383313,
+        "presentedMilliseconds" : 40.7488327473402,
+        "query" : "phrase",
+        "round" : 2
+      },
+      {
+        "firstPageMilliseconds" : 749.9341666698456,
+        "landedMilliseconds" : 858.9284587651491,
+        "milliseconds" : 884.0815415605903,
+        "openedMilliseconds" : 2716.5466248989105,
+        "presentedMilliseconds" : 36.485083401203156,
+        "query" : "scoped-filter",
+        "round" : 2
+      },
+      {
+        "firstPageMilliseconds" : 1482.1643754839897,
+        "landedMilliseconds" : 1484.215334057808,
+        "milliseconds" : 1489.003541879356,
+        "openedMilliseconds" : 2624.248250387609,
+        "presentedMilliseconds" : 60.32970827072859,
+        "query" : "negative-body",
+        "round" : 2
+      },
+      {
+        "firstPageMilliseconds" : 1330.7992909103632,
+        "landedMilliseconds" : 1357.7597495168447,
+        "milliseconds" : 1381.9307079538703,
+        "openedMilliseconds" : 1404.7024995088577,
+        "presentedMilliseconds" : 59.935291297733784,
+        "query" : "exact-reference",
+        "round" : 3
+      },
+      {
+        "firstPageMilliseconds" : 255.21654170006514,
+        "landedMilliseconds" : 255.79295866191387,
+        "milliseconds" : 257.7410414814949,
+        "openedMilliseconds" : 310.50383392721415,
+        "presentedMilliseconds" : 52.57374979555607,
+        "query" : "exact-address",
+        "round" : 3
+      },
+      {
+        "firstPageMilliseconds" : 1385.5286668986082,
+        "landedMilliseconds" : 1389.8671250790358,
+        "milliseconds" : 1391.8811669573188,
+        "openedMilliseconds" : 2443.9530419185758,
+        "presentedMilliseconds" : 38.4790413081646,
+        "query" : "phrase",
+        "round" : 3
+      },
+      {
+        "firstPageMilliseconds" : 442.11762491613626,
+        "landedMilliseconds" : 443.5115000233054,
+        "milliseconds" : 447.54020869731903,
+        "openedMilliseconds" : 1986.7806248366833,
+        "presentedMilliseconds" : 34.8709998652339,
+        "query" : "scoped-filter",
+        "round" : 3
+      },
+      {
+        "firstPageMilliseconds" : 1424.2593748494983,
+        "landedMilliseconds" : 1426.7550827935338,
+        "milliseconds" : 1436.3880828022957,
+        "openedMilliseconds" : 2559.396708384156,
+        "presentedMilliseconds" : 73.84637463837862,
+        "query" : "negative-body",
+        "round" : 3
+      },
+      {
+        "firstPageMilliseconds" : 1335.6167916208506,
+        "landedMilliseconds" : 1341.0205412656069,
+        "milliseconds" : 1348.261791281402,
+        "openedMilliseconds" : 1407.4127087369561,
+        "presentedMilliseconds" : 54.82745822519064,
+        "query" : "exact-reference",
+        "round" : 4
+      },
+      {
+        "firstPageMilliseconds" : 237.21829149872065,
+        "landedMilliseconds" : 239.01083320379257,
+        "milliseconds" : 240.74679147452116,
+        "openedMilliseconds" : 341.3540832698345,
+        "presentedMilliseconds" : 39.711167104542255,
+        "query" : "exact-address",
+        "round" : 4
+      },
+      {
+        "firstPageMilliseconds" : 1375.3858339041471,
+        "landedMilliseconds" : 1378.4645004197955,
+        "milliseconds" : 1391.0385835915804,
+        "openedMilliseconds" : 2548.923708498478,
+        "presentedMilliseconds" : 40.64775072038174,
+        "query" : "phrase",
+        "round" : 4
+      },
+      {
+        "firstPageMilliseconds" : 600.95433332026,
+        "landedMilliseconds" : 601.5530005097389,
+        "milliseconds" : 607.1664998307824,
+        "openedMilliseconds" : 2240.4517084360123,
+        "presentedMilliseconds" : 44.04299985617399,
+        "query" : "scoped-filter",
+        "round" : 4
+      },
+      {
+        "firstPageMilliseconds" : 1344.1335409879684,
+        "landedMilliseconds" : 1346.6529166325927,
+        "milliseconds" : 1356.873583048582,
+        "openedMilliseconds" : 2384.3362079933286,
+        "presentedMilliseconds" : 59.9196245893836,
+        "query" : "negative-body",
+        "round" : 4
+      },
+      {
+        "firstPageMilliseconds" : 1264.6652916446328,
+        "landedMilliseconds" : 1267.235666513443,
+        "milliseconds" : 1276.1093331500888,
+        "openedMilliseconds" : 1324.812250211835,
+        "presentedMilliseconds" : 73.29554203897715,
+        "query" : "exact-reference",
+        "round" : 5
+      },
+      {
+        "firstPageMilliseconds" : 378.3332910388708,
+        "landedMilliseconds" : 378.84466629475355,
+        "milliseconds" : 386.5129994228482,
+        "openedMilliseconds" : 471.9272078946233,
+        "presentedMilliseconds" : 86.83791663497686,
+        "query" : "exact-address",
+        "round" : 5
+      },
+      {
+        "firstPageMilliseconds" : 1635.108707472682,
+        "landedMilliseconds" : 1639.2650827765465,
+        "milliseconds" : 1643.1509163230658,
+        "openedMilliseconds" : 2732.8487494960427,
+        "presentedMilliseconds" : 41.86712484806776,
+        "query" : "phrase",
+        "round" : 5
+      },
+      {
+        "firstPageMilliseconds" : 397.41095807403326,
+        "landedMilliseconds" : 398.11204187572,
+        "milliseconds" : 406.49620816111565,
+        "openedMilliseconds" : 2176.1179165914655,
+        "presentedMilliseconds" : 41.25695861876011,
+        "query" : "scoped-filter",
+        "round" : 5
+      },
+      {
+        "firstPageMilliseconds" : 1609.4524590298533,
+        "landedMilliseconds" : 1612.1308337897062,
+        "milliseconds" : 1615.8930836245418,
+        "openedMilliseconds" : 2827.953416854143,
+        "presentedMilliseconds" : 97.24145848304033,
+        "query" : "negative-body",
+        "round" : 5
+      },
+      {
+        "firstPageMilliseconds" : 1232.212333008647,
+        "landedMilliseconds" : 1235.7447501271963,
+        "milliseconds" : 1241.0957086831331,
+        "openedMilliseconds" : 1291.1679167300463,
+        "presentedMilliseconds" : 68.873499520123,
+        "query" : "exact-reference",
+        "round" : 6
+      },
+      {
+        "firstPageMilliseconds" : 279.05474975705147,
+        "landedMilliseconds" : 279.86920811235905,
+        "milliseconds" : 291.24433267861605,
+        "openedMilliseconds" : 369.64358296245337,
+        "presentedMilliseconds" : 41.768332943320274,
+        "query" : "exact-address",
+        "round" : 6
+      },
+      {
+        "firstPageMilliseconds" : 1384.4565832987428,
+        "landedMilliseconds" : 1386.6711668670177,
+        "milliseconds" : 1399.8529585078359,
+        "openedMilliseconds" : 2618.77950001508,
+        "presentedMilliseconds" : 37.3438335955143,
+        "query" : "phrase",
+        "round" : 6
+      },
+      {
+        "firstPageMilliseconds" : 428.1089585274458,
+        "landedMilliseconds" : 428.66200022399426,
+        "milliseconds" : 434.56212524324656,
+        "openedMilliseconds" : 1983.0348333343863,
+        "presentedMilliseconds" : 38.93708344548941,
+        "query" : "scoped-filter",
+        "round" : 6
+      },
+      {
+        "firstPageMilliseconds" : 1389.5834581926465,
+        "landedMilliseconds" : 1429.8389162868261,
+        "milliseconds" : 1456.8487918004394,
+        "openedMilliseconds" : 2519.632208161056,
+        "presentedMilliseconds" : 57.595208287239075,
+        "query" : "negative-body",
+        "round" : 6
+      },
+      {
+        "firstPageMilliseconds" : 1225.8557081222534,
+        "landedMilliseconds" : 1228.2735835760832,
+        "milliseconds" : 1229.9357913434505,
+        "openedMilliseconds" : 1290.52837472409,
+        "presentedMilliseconds" : 67.85020790994167,
+        "query" : "exact-reference",
+        "round" : 7
+      },
+      {
+        "firstPageMilliseconds" : 357.2015417739749,
+        "landedMilliseconds" : 358.93333330750465,
+        "milliseconds" : 366.6176665574312,
+        "openedMilliseconds" : 472.1039580181241,
+        "presentedMilliseconds" : 47.30916675180197,
+        "query" : "exact-address",
+        "round" : 7
+      },
+      {
+        "firstPageMilliseconds" : 1389.1217494383454,
+        "landedMilliseconds" : 1391.1021249368787,
+        "milliseconds" : 1402.3292493075132,
+        "openedMilliseconds" : 2418.858624994755,
+        "presentedMilliseconds" : 39.81362469494343,
+        "query" : "phrase",
+        "round" : 7
+      },
+      {
+        "firstPageMilliseconds" : 570.0944159179926,
+        "landedMilliseconds" : 571.5988744050264,
+        "milliseconds" : 586.0829576849937,
+        "openedMilliseconds" : 2423.974249511957,
+        "presentedMilliseconds" : 47.485499642789364,
+        "query" : "scoped-filter",
+        "round" : 7
+      },
+      {
+        "firstPageMilliseconds" : 1403.0611254274845,
+        "landedMilliseconds" : 1408.943833783269,
+        "milliseconds" : 1418.393375352025,
+        "openedMilliseconds" : 2722.191333770752,
+        "presentedMilliseconds" : 54.90787513554096,
+        "query" : "negative-body",
+        "round" : 7
+      },
+      {
+        "query" : "exact-reference",
+        "round" : 8
+      }
+    ],
+    "stages" : {
+      "firstPage" : {
+        "count" : 40,
+        "max" : 2714.150708168745,
+        "p50" : 1289.0674164518714,
+        "p95" : 1657.804916612804,
+        "samples" : [
+          1507.5958743691444,
+          406.484542414546,
+          1573.7724164500833,
+          543.9144168049097,
+          2714.150708168745,
+          1434.5144582912326,
+          383.96179117262363,
+          1657.804916612804,
+          530.2474172785878,
+          1636.1548332497478,
+          1289.0674164518714,
+          218.15091650933027,
+          1866.9726243242621,
+          749.9341666698456,
+          1482.1643754839897,
+          1330.7992909103632,
+          255.21654170006514,
+          1385.5286668986082,
+          442.11762491613626,
+          1424.2593748494983,
+          1335.6167916208506,
+          237.21829149872065,
+          1375.3858339041471,
+          600.95433332026,
+          1344.1335409879684,
+          1264.6652916446328,
+          378.3332910388708,
+          1635.108707472682,
+          397.41095807403326,
+          1609.4524590298533,
+          1232.212333008647,
+          279.05474975705147,
+          1384.4565832987428,
+          428.1089585274458,
+          1389.5834581926465,
+          1225.8557081222534,
+          357.2015417739749,
+          1389.1217494383454,
+          570.0944159179926,
+          1403.0611254274845
+        ]
+      },
+      "landed" : {
+        "count" : 40,
+        "max" : 2728.066041134298,
+        "p50" : 1293.7897499650717,
+        "p95" : 1661.908958107233,
+        "samples" : [
+          1549.2400415241718,
+          408.18037558346987,
+          1620.148791000247,
+          545.5747088417411,
+          2728.066041134298,
+          1437.2416660189629,
+          384.8417913541198,
+          1661.908958107233,
+          531.2782917171717,
+          1640.7509995624423,
+          1293.7897499650717,
+          218.6163328588009,
+          1870.4294161871076,
+          858.9284587651491,
+          1484.215334057808,
+          1357.7597495168447,
+          255.79295866191387,
+          1389.8671250790358,
+          443.5115000233054,
+          1426.7550827935338,
+          1341.0205412656069,
+          239.01083320379257,
+          1378.4645004197955,
+          601.5530005097389,
+          1346.6529166325927,
+          1267.235666513443,
+          378.84466629475355,
+          1639.2650827765465,
+          398.11204187572,
+          1612.1308337897062,
+          1235.7447501271963,
+          279.86920811235905,
+          1386.6711668670177,
+          428.66200022399426,
+          1429.8389162868261,
+          1228.2735835760832,
+          358.93333330750465,
+          1391.1021249368787,
+          571.5988744050264,
+          1408.943833783269
+        ]
+      },
+      "opened" : {
+        "count" : 40,
+        "max" : 4693.204208277166,
+        "p50" : 2240.4517084360123,
+        "p95" : 2881.131749600172,
+        "samples" : [
+          1597.6158333942294,
+          480.81325087696314,
+          2689.5386250689626,
+          2303.5382498055696,
+          4693.204208277166,
+          1581.8848749622703,
+          478.9105411618948,
+          2719.7934994474053,
+          2252.780791372061,
+          2881.131749600172,
+          1369.7930416092277,
+          263.71933333575726,
+          2977.3732917383313,
+          2716.5466248989105,
+          2624.248250387609,
+          1404.7024995088577,
+          310.50383392721415,
+          2443.9530419185758,
+          1986.7806248366833,
+          2559.396708384156,
+          1407.4127087369561,
+          341.3540832698345,
+          2548.923708498478,
+          2240.4517084360123,
+          2384.3362079933286,
+          1324.812250211835,
+          471.9272078946233,
+          2732.8487494960427,
+          2176.1179165914655,
+          2827.953416854143,
+          1291.1679167300463,
+          369.64358296245337,
+          2618.77950001508,
+          1983.0348333343863,
+          2519.632208161056,
+          1290.52837472409,
+          472.1039580181241,
+          2418.858624994755,
+          2423.974249511957,
+          2722.191333770752
+        ]
+      },
+      "presented" : {
+        "count" : 40,
+        "max" : 153.44545897096395,
+        "p50" : 54.90787513554096,
+        "p95" : 105.54004181176424,
+        "samples" : [
+          103.27066667377949,
+          153.44545897096395,
+          151.83237474411726,
+          105.54004181176424,
+          85.82987450063229,
+          57.446165941655636,
+          93.56208331882954,
+          62.38912511616945,
+          39.9167500436306,
+          56.84366635978222,
+          69.07408311963081,
+          41.915916837751865,
+          40.7488327473402,
+          36.485083401203156,
+          60.32970827072859,
+          59.935291297733784,
+          52.57374979555607,
+          38.4790413081646,
+          34.8709998652339,
+          73.84637463837862,
+          54.82745822519064,
+          39.711167104542255,
+          40.64775072038174,
+          44.04299985617399,
+          59.9196245893836,
+          73.29554203897715,
+          86.83791663497686,
+          41.86712484806776,
+          41.25695861876011,
+          97.24145848304033,
+          68.873499520123,
+          41.768332943320274,
+          37.3438335955143,
+          38.93708344548941,
+          57.595208287239075,
+          67.85020790994167,
+          47.30916675180197,
+          39.81362469494343,
+          47.485499642789364,
+          54.90787513554096
+        ]
+      }
+    },
+    "storeMessages" : 100000
+  }
+}
