@@ -101,9 +101,12 @@ public final class ListWindowModel {
     public private(set) var hasExactIndex = false
 
     /// The list generation this window's whole index shows, for the
-    /// sidebar's counts (spec/08 "Sidebar"); `nil` before the index.
+    /// sidebar's counts (spec/08 "Sidebar"); `nil` before the index,
+    /// and for a Search, whose generation is the search generation
+    /// (spec/07).
     public var listGeneration: UInt64? {
-        hasExactIndex ? generation : nil
+        if case .search = spec { return nil }
+        return hasExactIndex ? generation : nil
     }
 
     /// The selected rows, by occurrence id (spec/08). After each new
