@@ -1036,6 +1036,20 @@ No partial parser/formatter, new dependency, compiler, service or UI ships here.
   Corruption neither covers, such as a completed assembly missing pieces
   its lengths declare, fails only reads that evaluate that candidate, as
   for candidates a driver proves false (above).
+- Certain unknowns (M1.6r4c): when every leaf of the tree is an FTS leaf
+  and no AND is empty (an empty AND is always true; an empty OR is
+  invalid input), a candidate on which every leaf is unknown whatever
+  its phrase and mask is unknown, since Kleene AND, OR and NOT keep
+  unknown. These are the
+  messages without an acquisition, on an unpublished object, or whose
+  document's state is neither `indexed` nor `partial`. Under the FTS
+  guards, the exact unknown count counts these scoped candidates without
+  evaluating them and evaluates only its other candidates (queued
+  documents, partial documents and other stored masks); a candidate in
+  both counts once. Every driver
+  keeps them, so their count needs no kept set. Skipping them changes no
+  error: an FTS leaf calls no decoder on them, and the read's binding
+  check covers their bindings. Any other tree counts as above.
 - Ordered walks (M1.6r3c–d): a page needs its first limit + 1 hits in
   page order, not every hit. A date page walks the scope's rows in date
   order, from its anchor's key for After, Before and Around (each side of
@@ -1112,7 +1126,8 @@ Use the existing Store::read transaction boundary, not a public SQL/plan API.
   the chosen occurrence and authoritative tables, without multiplying rows.
   Aggregate true and final-unknown over every scoped candidate, never a page;
   a candidate a driver proves false counts as neither (M1.6r2), and one no
-  leaf can make unknown is not evaluated for the unknown count (M1.6r3b).
+  leaf can make unknown is not evaluated for the unknown count (M1.6r3b),
+  nor is a certain unknown, which it counts (M1.6r4c).
 - Validate the outer scope, then read phase, target, generation and counts in
   one snapshot. Reset/enqueue return `Unavailable`, even for an empty scope or
   filter-only query. Standalone coverage and runtime newer-extractor capability
