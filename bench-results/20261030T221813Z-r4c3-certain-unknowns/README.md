@@ -45,7 +45,7 @@ Stages (p50 / p95 ms, keystroke to stage):
 Both builds were run minutes apart under the same memory state.
 
 - **Overall:** p95 drops by 28 to 55% and p50 by about 17%. The list's
-  open returns much sooner:  p50 drops from about 950 ms to
+  open returns much sooner: `opened` p50 drops from about 950 ms to
   330 to 440 ms.
 - **By query:** exact-reference and negative-body improve in both runs
   (p95 449 to 765 ms, against 995 to 1,518).
