@@ -4,6 +4,10 @@
 //! query window is never a long-lived read transaction (spec/07).
 //! Readers set `wal_autocheckpoint=0` and `query_only=ON`, and never
 //! checkpoint on close, so they can't checkpoint or write anything.
+//! Each keeps its own page cache, so the pool lends the most recently
+//! returned reader: consecutive reads find a warm cache (M1.6r4c).
+//! A commit between two reads empties it: WAL readers drop their cache
+//! when the database changed.
 
 use std::path::Path;
 use std::sync::Condvar;
@@ -27,7 +31,8 @@ pub(crate) const READER_COUNT: usize = 4;
 /// until a reader is free, so callers can't exhaust it — they queue.
 pub(crate) struct Readers {
     /// The idle readers, ready to serve. Held in a mutex with
-    /// [`Readers::free`]: pop to lend, push to return.
+    /// [`Readers::free`]: pop to lend, push to return, so the reader
+    /// lent is the warmest.
     idle: Mutex<Vec<Connection>>,
     free: Condvar,
 }
