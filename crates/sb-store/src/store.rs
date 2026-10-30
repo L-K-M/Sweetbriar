@@ -1086,7 +1086,11 @@ pub(crate) const WRITER_PRAGMAS: &[PragmaSpec] = &[
 /// The reader connections' settings (spec/03 "Connections"): the
 /// writer's rows, except readers never checkpoint on their own
 /// (`wal_autocheckpoint = 0`; only the writer checkpoints), plus
-/// `query_only`, so a read can't write even by accident. The
+/// `query_only`, so a read can't write even by accident, and a 64 MiB
+/// page cache (`cache_size` in negative KiB). SQLite's 2 MB default
+/// made nearly every row lookup of a 100k Search first page an OS
+/// read (M1.6r4c); the cache fills only as reads touch pages, up to
+/// 256 MiB over the pool's four readers. The
 /// constructor sets and reads back each one; `NO_CKPT_ON_CLOSE`
 /// stays on for readers, so closing one never checkpoints either.
 pub(crate) const READER_PRAGMAS: &[PragmaSpec] = &[
@@ -1124,6 +1128,11 @@ pub(crate) const READER_PRAGMAS: &[PragmaSpec] = &[
         name: "query_only",
         set: "ON",
         expect: Expect::Int(1),
+    },
+    PragmaSpec {
+        name: "cache_size",
+        set: "-65536",
+        expect: Expect::Int(-65536),
     },
     #[cfg(target_os = "macos")]
     PragmaSpec {
