@@ -22,7 +22,7 @@ serde = { version = "=1.0.229", default-features = false, features = ["std"] }
 # spec/01 crate table: validated explicit IANA date operands (spec/06
 # "Zoned date operands", M1.6f0). Only the bundled database is used; no
 # system timezone, host zoneinfo or global clock feature is enabled.
-jiff = { version = "=0.2.37", default-features = false, features = [
+jiff = { version = "=0.2.38", default-features = false, features = [
     "std",
     "tzdb-bundle-always",
 ] }
