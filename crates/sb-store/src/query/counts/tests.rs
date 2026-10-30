@@ -8,6 +8,7 @@ use crate::query::{MAX_QUERY_DEPTH, MAX_QUERY_INPUT_BYTES, MAX_QUERY_NODES};
 use crate::testing::FIXED_NOW_MS;
 use crate::testing::fixtures::{acquisitions, archive_account, index_connection, mailbox, message};
 
+mod certain;
 mod coverage;
 mod driven;
 mod paging;
