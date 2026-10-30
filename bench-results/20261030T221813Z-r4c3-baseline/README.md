@@ -54,7 +54,8 @@ driven by exact-reference, phrase and negative-body.
 
 The same memory pressure as on 2026-10-29: about 5.9 GiB of 8 GiB
 wired and a file cache of about 250 MiB, so the 791 MiB store can't
-stay cached. Swap use is about 400 MiB higher than yesterday.
+stay cached. Swap use is about 330 MiB higher than after the
+2026-10-29 runs (4,280 against 3,950 MiB).
 
 Full outputs:
 
