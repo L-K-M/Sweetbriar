@@ -1079,7 +1079,15 @@ local drafts. No network yet.
   - **M1.10c Application API — L:** engine/service commands and appearance
     queries consume a/b, with owned DTOs, durable receipts and committed
     invalidation. Native Core tests cover caller drop, idempotency,
-    missing accounts, malformed stored colors and lifecycle.
+    missing accounts, malformed stored colors and lifecycle. Re-size before
+    implementation, preserving those checks:
+    - **M1.10c1 Committed appearance revisions — M:** independent persisted
+      generation and after-commit observer through Resources. Native proof
+      owns no-op/replay/rollback/drop/commit-failure isolation. No Engine,
+      Service or FFI endpoints. Depends on a/b.
+    - **M1.10c2 Application API — L:** complete Engine/Service appearance
+      queries, both setter commands and subscriptions consume c1. Owned
+      DTOs, durable receipts, caller-drop and lifecycle proof land together.
   - **M1.10d1 Query FFI and bridge — L:** complete generated query SDK,
     owned bridge tokens and native/Swift endpoint, codec and cancellation
     proof at first exposure. Check binding drift and import boundaries.
