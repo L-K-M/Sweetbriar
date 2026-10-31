@@ -168,6 +168,35 @@ bounds keep one setter's old/new row and index images below 4,096 bytes.
 Malformed stored values are `Corrupt`, never defaults or silent repairs.
 All member fields remain private behind typed records and accessors.
 
+### Committed appearance revisions (M1.10c1)
+
+Migration 19 seeds the independent counter if absent, preserving and
+validating any retained value:
+
+```sql
+INSERT OR IGNORE INTO store_meta (key, value) VALUES ('appearance_generation', '0');
+```
+
+`appearance_generation` is a nonnegative decimal integer through
+9,223,372,036,854,775,807. Missing or malformed counters and advancement
+past that maximum are `Corrupt`, never defaults or silent resets.
+Each changed account/identity
+appearance write, including initialization or the first explicit inherited
+identity row, advances it inside the same transaction. Multiple changes in
+one transaction may advance it more than once. No-op setters, initialization
+replay, stale revisions and command replay advance nothing. Rollback, panic
+or commit failure leaves both data and the counter unchanged. Neither list
+nor Search generations move for appearance-only writes.
+
+Resources exposes the counter query and one replaceable generation observer.
+A successful commit announces the latest changed generation before resolving
+its write future, even if the caller dropped that future. Rollback and failed
+commits emit nothing. Observers run on the writer thread: return immediately
+and never panic. Unreadable counter metadata emits no invented generation and
+does not suppress independent list/Search announcements. Register an observer
+before reading the initial generation; registration does not invent a commit.
+Engine/Service queries, receipts and subscriptions remain M1.10c2.
+
 ## Acquisitions: immutable originals
 
 ```sql

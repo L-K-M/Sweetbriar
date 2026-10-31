@@ -25,7 +25,7 @@ fn migration_18_backfills_by_creation_and_id_without_rewriting_custom_records() 
              VALUES (?1,'imap','generic_imap',?1,'disconnected',0,?2)", (id, created),
         ).unwrap();
     }
-    run_migrations(&mut conn, &test_seams(real_fs()), MIGRATIONS).unwrap();
+    run_migrations(&mut conn, &test_seams(real_fs()), &MIGRATIONS[..=prefix]).unwrap();
     let tx = conn.transaction().unwrap();
     let kept = account_appearance(&tx, &archive).unwrap();
     assert_eq!(
@@ -40,6 +40,55 @@ fn migration_18_backfills_by_creation_and_id_without_rewriting_custom_records() 
             .unwrap(),
         18
     );
+}
+
+#[test]
+fn migration_19_preserves_retained_generation_and_rejects_damaged_counters() {
+    let prefix = MIGRATIONS
+        .iter()
+        .position(|migration| migration.version == 19)
+        .unwrap();
+    let oversized = format!("'{}'", i128::from(i64::MAX) + 1);
+    let maximum = format!("'{}'", i64::MAX);
+    for (value, expected) in [
+        ("'7'", Some(7)),
+        (maximum.as_str(), Some(i64::MAX as u64)),
+        ("'bad'", None),
+        ("CAST(x'ff' AS TEXT)", None),
+        ("'-1'", None),
+        (oversized.as_str(), None),
+    ] {
+        let mut conn = index_connection_through(prefix);
+        conn.execute_batch(&format!(
+            "INSERT INTO store_meta (key,value) VALUES ('{GENERATION_KEY}',{value})"
+        ))
+        .unwrap();
+        let result = run_migrations(&mut conn, &test_seams(real_fs()), MIGRATIONS);
+        if let Some(expected) = expected {
+            result.unwrap();
+            let tx = conn.transaction().unwrap();
+            assert_eq!(appearance_generation(&tx).unwrap(), expected);
+            continue;
+        }
+        assert!(
+            matches!(result, Err(StoreError::Corrupt { .. })),
+            "{value}: {result:?}"
+        );
+        assert_eq!(
+            conn.query_row("PRAGMA user_version", [], |row| row.get::<_, u32>(0))
+                .unwrap(),
+            18
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT count(*) FROM store_meta WHERE key = ?1",
+                [GENERATION_KEY],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+            1
+        );
+    }
 }
 
 #[test]
@@ -177,6 +226,28 @@ fn damaged_stored_colors_symbols_revisions_and_slots_are_corrupt_not_defaults() 
             "{mutation}"
         );
     }
+}
+
+#[test]
+fn identity_appearance_cannot_inherit_from_a_missing_account() {
+    let mut conn = index_connection();
+    conn.execute_batch(
+        "PRAGMA foreign_keys=OFF;
+        INSERT INTO identities (identity_id,account_id,email,display_name,is_default,sendable)
+        VALUES ('orphan','missing','synthetic@example.test','Synthetic',0,'validated');
+        PRAGMA foreign_keys=ON;",
+    )
+    .unwrap();
+    let tx = conn.transaction().unwrap();
+    assert!(matches!(
+        identity_appearance(&tx, "orphan"),
+        Err(StoreError::Corrupt { .. })
+    ));
+    assert!(matches!(
+        set_identity_appearance(&tx, "orphan", None, Some("#112233"), None),
+        Err(StoreError::Corrupt { .. })
+    ));
+    assert_eq!(appearance_generation(&tx).unwrap(), 0);
 }
 
 #[test]

@@ -103,6 +103,7 @@ fn a_fresh_store_reaches_the_latest_version_with_its_meta() {
     assert_v4_uuid(store_uuid);
     assert_v4_uuid(incarnation);
     assert_eq!(meta.get("list_generation").unwrap(), "1");
+    assert_eq!(meta.get("appearance_generation").unwrap(), "0");
     assert_eq!(meta.get("thread_inputs").unwrap(), "0");
     assert_eq!(meta.get("threads_built").unwrap(), "0");
     assert_eq!(meta.get("index_inputs").unwrap(), "0");
@@ -116,7 +117,7 @@ fn a_fresh_store_reaches_the_latest_version_with_its_meta() {
     for key in ["repair_swept", "repair_deferred", "repair_unready"] {
         assert_eq!(meta.get(key).unwrap(), "0");
     }
-    assert_eq!(meta.len(), 19, "unexpected extra store_meta keys: {meta:?}");
+    assert_eq!(meta.len(), 20, "unexpected extra store_meta keys: {meta:?}");
 }
 
 /// 2. Reopening runs no migration: `created_at` and both UUIDs
