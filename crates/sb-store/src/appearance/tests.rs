@@ -49,12 +49,14 @@ fn migration_19_preserves_retained_generation_and_rejects_damaged_counters() {
         .position(|migration| migration.version == 19)
         .unwrap();
     let oversized = format!("'{}'", i128::from(i64::MAX) + 1);
-    for value in [
-        "'7'",
-        "'bad'",
-        "CAST(x'ff' AS TEXT)",
-        "'-1'",
-        oversized.as_str(),
+    let maximum = format!("'{}'", i64::MAX);
+    for (value, expected) in [
+        ("'7'", Some(7)),
+        (maximum.as_str(), Some(i64::MAX as u64)),
+        ("'bad'", None),
+        ("CAST(x'ff' AS TEXT)", None),
+        ("'-1'", None),
+        (oversized.as_str(), None),
     ] {
         let mut conn = index_connection_through(prefix);
         conn.execute_batch(&format!(
@@ -62,10 +64,10 @@ fn migration_19_preserves_retained_generation_and_rejects_damaged_counters() {
         ))
         .unwrap();
         let result = run_migrations(&mut conn, &test_seams(real_fs()), MIGRATIONS);
-        if value == "'7'" {
+        if let Some(expected) = expected {
             result.unwrap();
             let tx = conn.transaction().unwrap();
-            assert_eq!(appearance_generation(&tx).unwrap(), 7);
+            assert_eq!(appearance_generation(&tx).unwrap(), expected);
             continue;
         }
         assert!(

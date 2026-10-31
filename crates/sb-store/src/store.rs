@@ -195,14 +195,14 @@ impl Store {
         self.writer.observe_search_generation(observer);
     }
 
-    /// Hear committed maintenance-input changes before the write resolves.
-    /// Runs on the writer thread; return immediately and never panic.
     /// Observe committed appearance revisions before write futures resolve.
     /// Runs on the writer thread; return immediately and never panic.
     pub fn observe_appearance_generation(&self, observer: AppearanceObserver) {
         self.writer.observe_appearance_generation(observer);
     }
 
+    /// Hear committed maintenance-input changes before the write resolves.
+    /// Runs on the writer thread; return immediately and never panic.
     pub fn observe_maintenance_inputs(&self, observer: Arc<dyn Fn() + Send + Sync>) {
         self.writer.observe_maintenance_inputs(observer);
     }
