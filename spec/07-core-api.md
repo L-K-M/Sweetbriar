@@ -143,6 +143,7 @@ struct SelectionSnapshot { selection_id: SelectionId, window_id: WindowId, gener
   fixed byte or selection-count cap. Empty selections are valid.
 - Successful registration freezes the selected occurrence IDs and order.
   Later source changes or source-window close do not alter the snapshot.
+  Selection queries never advance the source window's observed-generation mark.
   IDs are opaque, never reused and valid only in the issuing Core instance;
   foreign, unknown or closed IDs are `NotFound`.
 - Paging accepts limits 1 through 1,000. `from_ordinal == count` returns an
