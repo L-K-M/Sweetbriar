@@ -4,7 +4,7 @@ use crate::{Cursor, ListRow, SearchScope, SearchSort, SearchSpec};
 use sb_test_support::block_on;
 use std::time::{Duration, Instant};
 
-fn spec(query: &str, sort: SearchSort) -> WindowSpec {
+pub(super) fn spec(query: &str, sort: SearchSort) -> WindowSpec {
     WindowSpec::Search(SearchSpec::new(
         format!(r#"{{"v":1,"q":{query}}}"#),
         SearchScope::All,
@@ -12,7 +12,7 @@ fn spec(query: &str, sort: SearchSort) -> WindowSpec {
     ))
 }
 
-fn indexed(label: &str, count: usize) -> (ScratchDir, Engine) {
+pub(super) fn indexed(label: &str, count: usize) -> (ScratchDir, Engine) {
     let scratch = ScratchDir::new(label);
     let engine = block_on(Engine::open(scratch.path().join("store"))).unwrap();
     let subjects: Vec<_> = (0..count)

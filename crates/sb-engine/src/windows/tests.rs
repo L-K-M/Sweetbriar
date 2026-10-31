@@ -809,6 +809,7 @@ fn a_dropped_finished_open_cleans_up_off_the_dropping_thread() {
     }
 }
 
+mod closed_ids;
 mod qualification;
 mod search;
 mod search_timings;

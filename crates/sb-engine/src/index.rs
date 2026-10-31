@@ -66,6 +66,7 @@ pub(crate) type Hook = Arc<dyn Fn(Event) + Send + Sync>;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Event {
     SearchReadCaptured,
+    IdsReadCaptured,
     SearchRegistered { window_id: u64 },
     Captured,
     Prepared { documents: usize, bytes: usize },

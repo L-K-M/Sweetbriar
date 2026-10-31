@@ -463,6 +463,10 @@ pub(crate) fn classify(e: rusqlite::Error, what: &str) -> StoreError {
             format!("{what} could not write the store: {e}"),
             sqlite_io_kind(err.code),
         ),
+        // Keep interruption distinct from unrelated read failures.
+        ErrorCode::OperationInterrupted => {
+            StoreError::interrupted(format!("{what} was interrupted: {e}"))
+        }
         _ => StoreError::internal(format!("{what} failed: {e}")),
     }
 }
