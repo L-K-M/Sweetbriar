@@ -20,16 +20,17 @@ mod batches;
 pub(crate) use batches::count_accepted;
 pub use batches::{complete_rebuild, rebuild_enqueue_batch, rebuild_reset_batch};
 
-/// The durable kind a job id names: its table (spec/07). Migration 6's
-/// cross-kind triggers make one id unable to live in both.
+/// The durable kind a job id names (spec/07). Cross-kind triggers
+/// prevent an id from naming more than one kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JobKind {
     Import,
     SearchRebuild,
+    Export,
 }
 
-/// Which kind `id` is, for `cancel_job`-style dispatch. An id in neither
-/// table is `NotFound`.
+/// Which kind `id` is, for `cancel_job`-style dispatch. An id in no
+/// job table is `NotFound`.
 pub fn job_kind(conn: &Connection, id: &str) -> Result<JobKind, StoreError> {
     let exists = |table: &str| -> Result<bool, StoreError> {
         conn.query_row(
@@ -44,6 +45,9 @@ pub fn job_kind(conn: &Connection, id: &str) -> Result<JobKind, StoreError> {
     }
     if exists("search_rebuild_jobs")? {
         return Ok(JobKind::SearchRebuild);
+    }
+    if exists("export_jobs")? {
+        return Ok(JobKind::Export);
     }
     Err(StoreError::not_found("job"))
 }
@@ -273,8 +277,8 @@ fn query_job(
     .transpose()
 }
 
-/// A rebuild job by id. An id naming an import job is `InvalidInput`;
-/// an id in neither table is `NotFound` (spec/07 kind dispatch).
+/// A rebuild job by id. Another job kind is `InvalidInput`;
+/// an unknown id is `NotFound` (spec/07 kind dispatch).
 pub fn rebuild_job(conn: &Connection, id: &str) -> Result<RebuildJob, StoreError> {
     match job_kind(conn, id)? {
         JobKind::SearchRebuild => query_job(
@@ -283,7 +287,7 @@ pub fn rebuild_job(conn: &Connection, id: &str) -> Result<RebuildJob, StoreError
             [id],
         )?
         .ok_or_else(|| StoreError::corrupt("search rebuild job vanished")),
-        JobKind::Import => Err(invalid("job id names an import job, not a search rebuild")),
+        JobKind::Import | JobKind::Export => Err(invalid("job id does not name a search rebuild")),
     }
 }
 
