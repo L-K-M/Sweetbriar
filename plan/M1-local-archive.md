@@ -890,6 +890,29 @@ local drafts. No network yet.
 
 ### M1.8 Backup, restore and GC — L, linux + macos-ci
 
+- **PR split (2026-10-31):** retain every deliverable and acceptance below.
+  Each PR must fit 1,450 gross changed lines, including its native proof.
+  - **M1.8a1 Reserved publications (L):** publish an opaque identity/reservation
+    value, consumed by the real import acquisition and referencing commit.
+    Reserve before installation, release only that publication's token in the
+    referencing commit (including replay), and expire abandoned tokens at
+    startup after 24 h. Cover SQL failure, rollback, idempotent publication,
+    writer refusal/drain and existing file durability cuts. Production
+    publication cannot bypass reservations; keep fields private. This artifact
+    does not enable GC. It depends only on merged M0.5/M0.6 code and may proceed
+    while earlier owner qualification remains open.
+  - **M1.8a2 GC removal core (L):** consume a1 through the real import path.
+    Deliver the grace clock, all reference/pin/backup/breaker/integrity gates,
+    serialized final re-check/unlink and durable removal. The same PR proves
+    both republish orderings with an expired orphan, queued reservation versus
+    unlink, abort/expiry and random reference histories. GC cannot be enabled
+    before this proof. Clarify the writer-task/transaction boundary first.
+  - **Later artifacts:** backup snapshot/pins, verified copy and manifest
+    publication, retention/recovery, quarantined restore staging, durable
+    swap/startup recovery, engine quiescence, scheduled GC/verification/
+    integrity checks, service/CLI and Backups UI. Split each before coding;
+    keep a native public-API consumer and all original acceptance assigned.
+
 - **Goal:** backup generations, quarantined restore and safe GC.
 - **Spec:** 03 (Garbage collection, Backup generations, Restore).
 - **Depends on:** M0.5, M0.6.

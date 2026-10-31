@@ -320,10 +320,17 @@ see paths:
 /// An object's identity: the SHA-256 and the length of its bytes.
 pub struct ObjectId { sha256: [u8; 32], byte_length: u64 }
 
+/// One durable publication; only publish constructs it.
+pub struct PublishedObject { id: ObjectId, reservation: [u8; 16] }
+
+impl PublishedObject {
+    pub fn id(&self) -> &ObjectId { &self.id }
+}
+
 pub trait ObjectStore {
-    /// Write bytes durably; returns their id. Idempotent: the same bytes
-    /// produce the same id and no second copy.
-    fn publish(&self, bytes: impl Read) -> Result<ObjectId, StoreError>;
+    /// Write and reserve bytes durably. The same bytes produce the same
+    /// ObjectId and no second copy, with a distinct reservation per call.
+    fn publish(&self, bytes: impl Read) -> Result<PublishedObject, StoreError>;
     /// Open for reading; checks the length, then the hash while streaming.
     fn open(&self, id: &ObjectId) -> Result<ObjectReader, StoreError>;
     fn exists(&self, id: &ObjectId) -> Result<bool, StoreError>;
@@ -340,6 +347,8 @@ pub trait ObjectStore {
 - **The publication fault harness runs against the trait,** so a BLOB
   implementation can replace files if the file protocol fails
   qualification (research D1 switch condition).
+- Publication waits for the writer. Reject a call from that store's writer
+  thread before file I/O, rather than waiting on its own queue.
 
 ### Publication protocol
 
@@ -374,14 +383,20 @@ when the bytes are already stored. That object could be an expired
 orphan GC is about to remove. So:
 - `publish` inserts `object_pins(reservation, <token>)` through the
   writer **before step 3**, where it tests whether the final file
-  exists;
+  exists. It waits for the reservation's commit before continuing;
 - GC's final re-check and its unlink run as one writer task. A
   reservation therefore commits either before it (GC skips the object)
   or after it (the file is gone, and step 3 installs the new copy);
-- the transaction that references the object deletes that reservation in
-  the same commit;
+- `PublishedObject` keeps its identity and token private; only its identity
+  has a public accessor. Import passes that value intact into its referencing
+  commit. There is no production constructor or mode without reservations;
+  the isolated file-protocol fault harness may use a test-only pin sink;
+- the transaction that references the object, or confirms its existing
+  reference on replay, deletes only that publication's reservation token in
+  the same commit. Failure or rollback preserves the reservation;
 - if the caller aborts, the reservation is deleted, or expires after 24 h
-  (startup cleanup).
+  (bounded startup cleanup). Dropping the value queues no work; its reservation
+  remains until that cleanup. A failed publication may leave the same safe pin;
 - GC honours reservations like any non-grace pin.
 
 ### Reads and verification
