@@ -158,6 +158,14 @@ struct SelectionSnapshot { selection_id: SelectionId, window_id: WindowId, gener
   explicit close. Shutdown releases every snapshot. These are query handles,
   with no idempotency key, receipt or restart persistence.
 
+**Native export lease (M1.7b2b2):** `selection_for_export(SelectionId)`
+returns an owned native lease of that handle's frozen IDs and canonical
+window/generation provenance. Lookup uses the issuing Engine registry, never
+caller-supplied snapshot metadata. Close/foreign/unknown is `NotFound`;
+source-window close does not invalidate a delivered lease. The mutex protects
+only lookup/Arc cloning, not hashing or capture. This is a native query, not
+a receipt or file-export command; Service/FFI exposure remains M1.7e/f.
+
 **Window semantics**
 
 - **Grain:** `Mailbox` and `Unified` windows list occurrences. `Flagged`,
