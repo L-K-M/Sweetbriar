@@ -142,6 +142,32 @@ CREATE TABLE identity_appearance (
   - The From list offers `validated` and `provisional` identities, with
     provisional ones marked (15-account-colors).
 
+### Appearance storage (M1.10b)
+
+Migration 18 rejects malformed retained appearance records as `Corrupt`.
+It fills missing account appearances in creation-time/account-ID order. It uses palette
+v1's fixed seven-color order, with slots 0 through 6. Each new assignment
+picks the least-used color, breaking ties by that order. Count every retained account,
+including disconnected accounts and custom colors equal to a preset.
+Never change an existing assignment during initialization.
+
+New account writers call `initialize_account_appearance` in the creation
+transaction, using the same least-used/color-order rule and counts. Queries never manufacture missing account records. Identity
+appearance rows remain optional: absence inherits both account values.
+An explicit row with null overrides also inherits, but keeps its revision.
+
+Setters require the observed revision; absence is a distinct expected
+state for identity records. A stale revision is `Conflict`, even if its
+values happen to match. An unchanged update at the current revision writes
+nothing. Durable command replay belongs to M1.10c's receipts.
+
+Validate canonical lowercase `#rrggbb`, known palette-v1 slots and their
+matching colors. Custom colors need not match a preset. Symbols are null
+or 1–128 UTF-8 bytes; account/identity keys are 1–128 UTF-8 bytes. These
+bounds keep one setter's old/new row and index images below 4,096 bytes.
+Malformed stored values are `Corrupt`, never defaults or silent repairs.
+All member fields remain private behind typed records and accessors.
+
 ## Acquisitions: immutable originals
 
 ```sql
