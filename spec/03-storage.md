@@ -394,9 +394,14 @@ orphan GC is about to remove. So:
 - the transaction that references the object, or confirms its existing
   reference on replay, deletes only that publication's reservation token in
   the same commit. Failure or rollback preserves the reservation;
+- a new reference requires that live pin in the same store. Missing or spent
+  authority is `Conflict` and rolls back the transaction; genuine replay of
+  an existing reference remains idempotent;
 - if the caller aborts, the reservation is deleted, or expires after 24 h
   (bounded startup cleanup). Dropping the value queues no work; its reservation
   remains until that cleanup. A failed publication may leave the same safe pin;
+- referencing and expiry transactions charge pin row/index images and framing.
+  Startup keeps malformed/oversized pins rather than exceeding its byte budget;
 - GC honours reservations like any non-grace pin.
 
 ### Reads and verification
