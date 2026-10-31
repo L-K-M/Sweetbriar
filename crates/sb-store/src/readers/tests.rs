@@ -1,13 +1,14 @@
 //! Acceptance tests for the reader pool (plan M0.6): the reader
 //! pragmas, the refusal of writes, and waiting past the pool's size.
 
-use std::sync::{Mutex, mpsc};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
 
 use sb_test_support::{ScratchDir, real_fs};
 
-use super::{READER_COUNT, Readers};
+use super::{READER_COUNT, ReadStop, Readers, Scoped};
 use crate::StoreError;
 use crate::schema::bug;
 use crate::store::READER_PRAGMAS;
@@ -210,4 +211,144 @@ fn the_pool_lends_the_most_recently_returned_reader() {
 #[test]
 fn reader_count_is_four() {
     assert_eq!(READER_COUNT, 4);
+}
+
+const HEAVY_ROWS: i64 = 200_000;
+const HEAVY_SUM: i64 = HEAVY_ROWS * (HEAVY_ROWS + 1) / 2;
+
+/// Run enough VM instructions to interrupt before the aggregate returns a row.
+fn heavy(tx: &rusqlite::Transaction) -> Result<i64, StoreError> {
+    tx.query_row(
+        "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c LIMIT ?1) \
+         SELECT sum(x) FROM c",
+        [HEAVY_ROWS],
+        |row| row.get(0),
+    )
+    .map_err(bug)
+}
+
+/// A scoped read's stop lands inside its SQL work: `f` raises the
+/// signal, its statement is interrupted before producing its one row,
+/// and `f` itself observes the failure — the `Stopped` answer comes
+/// from the mid-statement interrupt, not from a check after `f`
+/// returns.
+#[test]
+fn a_scoped_read_is_interrupted_mid_statement() {
+    let (_scratch, pool) = pool("readers-stopped");
+    let stop = ReadStop::default();
+    let f_saw_error = Arc::new(AtomicBool::new(false));
+    let (watch, err) = (stop.clone(), Arc::clone(&f_saw_error));
+    let outcome = pool.read_scoped(&stop, move |tx| {
+        watch.stop();
+        let result = heavy(tx);
+        err.store(result.is_err(), Ordering::SeqCst);
+        result
+    });
+    assert!(matches!(outcome, Ok(Scoped::Stopped)), "{outcome:?}");
+    assert!(
+        f_saw_error.load(Ordering::SeqCst),
+        "the read's statement was never interrupted"
+    );
+    assert_eq!(pool.idle_count(), READER_COUNT);
+}
+
+/// A signal raised before a read is admitted answers `Stopped`
+/// without borrowing a reader or running `f`.
+#[test]
+fn a_stop_raised_before_admission_never_runs() {
+    let (_scratch, pool) = pool("readers-pre-stopped");
+    let stop = ReadStop::default();
+    stop.stop();
+    let ran = AtomicBool::new(false);
+    let outcome = pool.read_scoped(&stop, |_| {
+        ran.store(true, Ordering::SeqCst);
+        Ok(())
+    });
+    assert!(matches!(outcome, Ok(Scoped::Stopped)), "{outcome:?}");
+    assert!(!ran.load(Ordering::SeqCst), "a stopped read ran its body");
+}
+
+/// A failure the signal didn't cause keeps its typed error: `f`
+/// raises the stop, then a statement fails to prepare — no progress
+/// tick means no interrupt — and the real error comes back instead of
+/// `Stopped`.
+#[test]
+fn a_real_failure_is_not_read_as_a_stop() {
+    let (_scratch, pool) = pool("readers-typed-error");
+    let stop = ReadStop::default();
+    let watch = stop.clone();
+    let outcome: Result<Scoped<()>, StoreError> = pool.read_scoped(&stop, move |tx| {
+        watch.stop();
+        tx.execute_batch("SELECT missing FROM nowhere").map_err(bug)
+    });
+    assert!(
+        matches!(outcome, Err(StoreError::Internal { .. })),
+        "{outcome:?}"
+    );
+}
+
+/// A read body can inspect an interrupted statement and still report a
+/// different typed failure. A fired callback alone cannot erase it.
+#[test]
+fn a_fired_stop_does_not_erase_a_typed_corruption_error() {
+    let (_scratch, pool) = pool("readers-stop-and-corruption");
+    let stop = ReadStop::default();
+    let watch = stop.clone();
+    let outcome: Result<Scoped<()>, StoreError> = pool.read_scoped(&stop, move |tx| {
+        watch.stop();
+        assert!(
+            heavy(tx).is_err(),
+            "the native statement must be interrupted"
+        );
+        Err(StoreError::corrupt("independent decoded-source failure"))
+    });
+    assert!(
+        matches!(outcome, Err(StoreError::Corrupt { .. })),
+        "an interrupt must not hide the body's typed error: {outcome:?}"
+    );
+    assert_eq!(pool.read(heavy).unwrap(), HEAVY_SUM);
+    assert_eq!(pool.idle_count(), READER_COUNT);
+}
+
+/// A stopped read removes its handler before the reader goes back:
+/// the pool lends the most recently returned reader, so a leftover
+/// handler carrying a raised stop would interrupt this read — it
+/// doesn't — and a fresh scoped read on a never-raised signal
+/// completes too.
+#[test]
+fn a_stopped_read_leaves_its_reader_clean() {
+    let (_scratch, pool) = pool("readers-reuse");
+    let stop = ReadStop::default();
+    let watch = stop.clone();
+    let outcome = pool.read_scoped(&stop, move |tx| {
+        watch.stop();
+        heavy(tx)
+    });
+    assert!(matches!(outcome, Ok(Scoped::Stopped)), "{outcome:?}");
+    assert_eq!(pool.read(heavy).unwrap(), HEAVY_SUM);
+    let live = ReadStop::default();
+    let scoped = pool.read_scoped(&live, heavy);
+    assert!(matches!(scoped, Ok(Scoped::Done(HEAVY_SUM))), "{scoped:?}");
+    assert_eq!(pool.idle_count(), READER_COUNT);
+}
+
+/// A panic inside `f` still removes the handler and returns the
+/// reader: a leftover one carrying the raised stop would interrupt
+/// the next long read on the same connection.
+#[test]
+fn a_panicking_scoped_read_returns_a_clean_reader() {
+    let (_scratch, pool) = pool("readers-scoped-panic");
+    let stop = ReadStop::default();
+    let watch = stop.clone();
+    let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        pool.read_scoped(&stop, move |tx| -> Result<(), StoreError> {
+            watch.stop();
+            let _ = tx;
+            panic!("injected read panic")
+        })
+    }))
+    .is_err();
+    assert!(panicked, "the injected read panic did not propagate");
+    assert_eq!(pool.read(heavy).unwrap(), HEAVY_SUM);
+    assert_eq!(pool.idle_count(), READER_COUNT);
 }

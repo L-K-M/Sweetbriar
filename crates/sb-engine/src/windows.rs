@@ -20,8 +20,8 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use tokio::sync::watch;
 
 use sb_resources::{
-    ListAnchor, ListKey, ListPage, ListScope, MailboxRole, PageRead, StoredListRow,
-    list_generation, list_ids, read_list_page,
+    ListAnchor, ListKey, ListPage, ListScope, MailboxRole, PageRead, ReadStop, Scoped,
+    StoredListRow, list_generation, list_ids, read_list_page,
 };
 
 use crate::engine::Detached;
@@ -474,6 +474,8 @@ struct Versions {
 struct OpenWindow {
     spec: WindowSpec,
     seen: Arc<AtomicU64>,
+    /// Close also stops this window's admitted ID reads (spec/07).
+    stop: ReadStop,
 }
 
 impl OpenWindow {
@@ -481,6 +483,7 @@ impl OpenWindow {
         Self {
             spec,
             seen: Arc::new(AtomicU64::new(seen)),
+            stop: ReadStop::default(),
         }
     }
 
@@ -661,8 +664,10 @@ impl Windows {
     /// `close_window` (spec/07): release the handle. Closing twice, or
     /// an id never opened, is harmless.
     fn close(&self, window_id: WindowId) {
-        let removed = self.lock().open.remove(&window_id).is_some();
-        if removed {
+        let removed = self.lock().open.remove(&window_id);
+        if let Some(open) = removed {
+            // End any `window_ids` SQL work admitted for this window.
+            open.stop.stop();
             // A `next` waiting on this window ends with `NotFound`.
             self.versions.send_modify(|versions| versions.closes += 1);
         }
@@ -1118,7 +1123,14 @@ impl Engine {
         let open = self.compute(move || lookup.window(window_id)).await?;
         let scope = match open.spec.source() {
             WindowSource::Search(spec) => {
-                let ids = self.search_window_ids(spec.clone()).await?;
+                let ids = self
+                    .search_window_ids(spec.clone(), open.stop.clone())
+                    .await?;
+                let Scoped::Done(ids) = ids else {
+                    return Err(EngineError::NotFound {
+                        what: format!("window {}", window_id.get()),
+                    });
+                };
                 open.delivered(ids.generation);
                 return Ok(ids);
             }
@@ -1129,9 +1141,23 @@ impl Engine {
             }
             WindowSource::List(scope) => scope,
         };
+        let stop = open.stop.clone();
+        #[cfg(test)]
+        let index = Arc::clone(self.indexer());
         let read = self
-            .read_through(move |resources| resources.read(|tx| list_ids(tx, scope, None)))
+            .read_through(move |resources| {
+                resources.read_scoped(&stop, |tx| {
+                    #[cfg(test)]
+                    index.event(crate::index::Event::IdsReadCaptured);
+                    list_ids(tx, scope, None)
+                })
+            })
             .await?;
+        let Scoped::Done(read) = read else {
+            return Err(EngineError::NotFound {
+                what: format!("window {}", window_id.get()),
+            });
+        };
         let (generation, ids) = store_outcome(read, &Anchor::Top)?;
         open.delivered(generation);
         Ok(WindowIds { generation, ids })

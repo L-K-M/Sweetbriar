@@ -22,7 +22,7 @@ use crate::StoreError;
 use crate::StorePaths;
 use crate::import_reports::ImportReports;
 use crate::objects::FileObjectStore;
-use crate::readers::Readers;
+use crate::readers::{ReadStop, Readers, Scoped};
 use crate::schema::{
     MIGRATIONS, Migration, check_existing, check_existing_read_only, read_user_version, require_ok,
     run_migrations,
@@ -196,6 +196,17 @@ impl Store {
         f: impl FnOnce(&rusqlite::Transaction) -> Result<T, StoreError>,
     ) -> Result<T, StoreError> {
         self.readers.read(f)
+    }
+
+    /// Interrupt this read when `stop` is raised, including before its first
+    /// row. Return `Scoped::Stopped`, never partial data; preserve other typed
+    /// errors and clear the handler before returning the reader (spec/03).
+    pub fn read_scoped<T>(
+        &self,
+        stop: &ReadStop,
+        f: impl FnOnce(&rusqlite::Transaction) -> Result<T, StoreError>,
+    ) -> Result<Scoped<T>, StoreError> {
+        self.readers.read_scoped(stop, f)
     }
 
     /// Close the store (spec/03 "Integrity"): record the

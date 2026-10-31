@@ -86,6 +86,8 @@ impl From<StoreError> for EngineError {
             StoreError::InvalidInput { message } => Self::invalid_input("data_root", message),
             StoreError::Conflict { detail } => Self::Conflict { detail },
             StoreError::Internal { detail } => Self::Internal { detail },
+            // Scoped reads consume expected interruptions.
+            StoreError::Interrupted { detail } => Self::Internal { detail },
         }
     }
 }

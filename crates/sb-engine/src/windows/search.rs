@@ -4,9 +4,9 @@
 use super::*;
 use crate::{Coverage, SearchIndexState, SearchScope};
 use sb_resources::{
-    CoverageCounts, Kept, PageRead, Query, SearchAnchor, SearchPage, SearchScope as StoreScope,
-    StoreError, Transaction, UnknownCount, read_search_date_page, read_search_relevance_page,
-    search_date_ids, search_relevance_ids,
+    CoverageCounts, Kept, PageRead, Query, ReadStop, Scoped, SearchAnchor, SearchPage,
+    SearchScope as StoreScope, StoreError, Transaction, UnknownCount, read_search_date_page,
+    read_search_relevance_page, search_date_ids, search_relevance_ids,
 };
 
 /// Both complete Store sorts (spec/06); lower native BM25 scores rank first.
@@ -188,8 +188,8 @@ impl Engine {
         };
         let page_query = Arc::clone(&query);
         let page_scope = scope.clone();
-        let (coverage, read) = self
-            .search_snapshot(scope.clone(), move |tx, counts| {
+        let Scoped::Done((coverage, read)) = self
+            .search_snapshot(scope.clone(), None, move |tx, counts| {
                 let (query, scope, limit) = (&page_query, page_scope, limit as usize);
                 let kept = Kept {
                     unknown,
@@ -204,7 +204,11 @@ impl Engine {
                     }
                 }
             })
-            .await?;
+            .await?
+        else {
+            // Page reads are never scoped to a window's stop; ids are.
+            return Err(EngineError::internal("a Search page read was stopped"));
+        };
         if let PageRead::Ready(page) = &read {
             #[cfg(test)]
             if matches!(unknown, UnknownCount::Reuse { generation, .. } if generation == page.generation())
@@ -227,28 +231,37 @@ impl Engine {
     pub(super) async fn search_window_ids(
         &self,
         spec: SearchSpec,
-    ) -> Result<WindowIds, EngineError> {
+        stop: ReadStop,
+    ) -> Result<Scoped<WindowIds>, EngineError> {
         let query = spec.query()?;
         let scope = spec.scope.stored()?;
-        let (_, read) = self
-            .search_snapshot(scope.clone(), move |tx, counts| match spec.sort {
-                SearchSort::Date => search_date_ids(tx, &query, scope, None, Some(counts)),
-                SearchSort::Relevance => {
-                    search_relevance_ids(tx, &query, scope, None, Some(counts))
+        let read = self
+            .search_snapshot(scope.clone(), Some(stop), move |tx, counts| {
+                match spec.sort {
+                    SearchSort::Date => search_date_ids(tx, &query, scope, None, Some(counts)),
+                    SearchSort::Relevance => {
+                        search_relevance_ids(tx, &query, scope, None, Some(counts))
+                    }
                 }
             })
             .await?;
+        let Scoped::Done((_, read)) = read else {
+            return Ok(Scoped::Stopped);
+        };
         let (generation, ids) = store_outcome(read, &Anchor::Top)?;
-        Ok(WindowIds { generation, ids })
+        Ok(Scoped::Done(WindowIds { generation, ids }))
     }
 
     /// Page/ids and capability share one snapshot; failure state is never
     /// kept. The body gets coverage's scope counts, its driven-read proof.
+    /// `stop`, when given, scopes the read's SQLite work to the owning
+    /// window's lifetime — ids reads only; a page read passes none.
     async fn search_snapshot<T, F>(
         &self,
         scope: StoreScope,
+        stop: Option<ReadStop>,
         body: F,
-    ) -> Result<(Coverage, T), EngineError>
+    ) -> Result<Scoped<(Coverage, T)>, EngineError>
     where
         T: Send + 'static,
         F: FnOnce(&Transaction, &CoverageCounts) -> Result<T, StoreError> + Send + 'static,
@@ -257,7 +270,7 @@ impl Engine {
         let memo = Arc::clone(self.search_memo());
         self.read_through(move |resources| {
             index.readable()?;
-            let result = resources.read(|tx| {
+            let run = |tx: &Transaction| -> Result<(Coverage, T), StoreError> {
                 let (coverage, counts) = memo.coverage(tx, scope)?;
                 if coverage.index_state == SearchIndexState::BlockedNewerExtractor {
                     return Err(StoreError::Unavailable {
@@ -269,7 +282,15 @@ impl Engine {
                 #[cfg(test)]
                 index.event(crate::index::Event::SearchReadCaptured);
                 Ok((coverage, body(tx, &counts)?))
-            });
+            };
+            let result = match &stop {
+                Some(stop) => resources.read_scoped(stop, run),
+                None => resources.read(run).map(Scoped::Done),
+            };
+            // A stopped read has no index result left to fence.
+            if matches!(&result, Ok(Scoped::Stopped)) {
+                return result;
+            }
             index.readable()?;
             result
         })

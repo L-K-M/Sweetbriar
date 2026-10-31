@@ -110,8 +110,9 @@ pub use sb_store::threads::{
     remove_thread, stored_threads, thread_memberships, thread_revisions, thread_sources,
 };
 pub use sb_store::{
-    ImportSourceSnapshot, ListObserver, Receipt, SearchObserver, StoreError, Timestamp,
-    Transaction, Uuid, WriteFuture, WritePriority, encode_job_receipt, receipt_job_id, run_once,
+    ImportSourceSnapshot, ListObserver, ReadStop, Receipt, Scoped, SearchObserver, StoreError,
+    Timestamp, Transaction, Uuid, WriteFuture, WritePriority, encode_job_receipt, receipt_job_id,
+    run_once,
 };
 
 #[cfg(feature = "test-seams")]
@@ -217,6 +218,16 @@ impl Resources {
         f: impl FnOnce(&Transaction) -> Result<T, StoreError>,
     ) -> Result<T, StoreError> {
         self.store.read(f)
+    }
+
+    /// Run a read-scoped interruptible transaction (spec/03).
+    /// Blocking; use a blocking thread. Other readers/writers are unaffected.
+    pub fn read_scoped<T>(
+        &self,
+        stop: &ReadStop,
+        f: impl FnOnce(&Transaction) -> Result<T, StoreError>,
+    ) -> Result<Scoped<T>, StoreError> {
+        self.store.read_scoped(stop, f)
     }
 
     /// Read exact acquisition bytes after EOF verifies integrity, under the

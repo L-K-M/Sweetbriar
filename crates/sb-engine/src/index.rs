@@ -20,6 +20,9 @@ use sb_resources::{
 use crate::Engine;
 use crate::engine::Spawn;
 
+#[cfg(test)]
+mod stop_tests;
+
 #[derive(Default)]
 pub(crate) struct IndexJobs {
     state: Mutex<State>,
@@ -66,6 +69,7 @@ pub(crate) type Hook = Arc<dyn Fn(Event) + Send + Sync>;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Event {
     SearchReadCaptured,
+    IdsReadCaptured,
     SearchRegistered { window_id: u64 },
     Captured,
     Prepared { documents: usize, bytes: usize },

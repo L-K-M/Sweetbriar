@@ -10,9 +10,10 @@ rust-version.workspace = true
 sb-types = { version = "0.0.1", path = "../sb-types" }
 # spec/01 crate table: `bundled` links SQLite 3.53.2 via libsqlite3-sys
 # 0.38.2 (>= 3.51.3, never the withdrawn 3.52.0); `backup` and `limits`
-# per spec/03 for later steps. Compile options come from
-# LIBSQLITE3_FLAGS in .cargo/config.toml.
-rusqlite = { version = "=0.40.2", features = ["bundled", "backup", "functions", "limits"] }
+# per spec/03 for later steps, `hooks` for spec/03's read-scoped
+# progress handler. Compile options come from LIBSQLITE3_FLAGS in
+# .cargo/config.toml.
+rusqlite = { version = "=0.40.2", features = ["bundled", "backup", "functions", "hooks", "limits"] }
 # spec/01 crate table: SHA-256 object ids (spec/03), no default
 # features — the core hashing needs no `std` extras.
 sha2 = { version = "=0.11.1", default-features = false }
