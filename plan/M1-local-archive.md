@@ -1010,6 +1010,37 @@ local drafts. No network yet.
 
 ### M1.10 Account appearance core — M, linux + macos-ci
 
+- **PR split (2026-10-31):** keep every original deliverable and
+  acceptance check; implement complete artifacts under 1,450 gross lines
+  per PR and re-size each before coding.
+  - **M1.10a Appearance tokens — L:** the seven-color palette, canonical
+    sRGB input, OKLCH role derivation and quantized contrast guarantees
+    in the core. A native public-API consumer verifies presets, custom
+    extremes, invalid input, hue/gamut behavior and independent WCAG
+    ratios. This artifact has no persistence or shell effects.
+  - **M1.10b Appearance storage — L:** initialization/backfill, stable
+    least-used palette assignment and versioned account/identity records
+    through Resources. Native facade tests own canonical validation,
+    no recoloring, preserved disconnected accounts, revisions, replay
+    and transaction failures.
+  - **M1.10c Application API — L:** engine/service commands and appearance
+    queries consume a/b, with owned DTOs, durable receipts and committed
+    invalidation. Native Core tests cover caller drop, idempotency,
+    missing accounts, malformed stored colors and lifecycle.
+  - **M1.10d1 Query FFI and bridge — L:** complete generated query SDK,
+    owned bridge tokens and native/Swift endpoint, codec and cancellation
+    proof at first exposure. Check binding drift and import boundaries.
+  - **M1.10d2 Command FFI and bridge — L:** setter SDK and bridge consume
+    c/d1, with receipts, typed errors, replay/drop/lifecycle proof and
+    regenerated bindings.
+  - **M1.10e App appearance — L:** sidebar monograms, mixed-account row
+    rails and Settings swatches/Custom through the bridge. Tests cover
+    duplicate initials, actual light/dark/selected surfaces, accessibility
+    and updates across open windows. Color never replaces native selection.
+  - **M1.10f Qualification — M:** colors survive the real M1.8 backup and
+    restore APIs, and the owner's rendered contrast/accessibility checks
+    are recorded. Pure token tests do not substitute for these checks.
+
 - **Goal:** account colors exist in the core and show in the sidebar and
   list rails.
 - **Spec:** research 15; 02 (`account_appearance`,

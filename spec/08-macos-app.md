@@ -281,6 +281,11 @@ Implements [15-account-colors](../research/15-account-colors.md):
   - opaque restrained fill and saturated monogram;
   - foreground chosen per surface for ≥ 4.5:1 contrast;
   - separate light, dark and high-contrast variants.
+  The core's light/dark bundles contain an opaque strip, marker,
+  foreground and high-contrast outline. On the final 8-bit sRGB values,
+  foreground reaches 4.5:1 and marker/outline 3:1 against the bundle's
+  strip. The shell must also verify contrast on its actual surfaces,
+  including selected rows; a strip ratio alone does not qualify the UI.
 - **The From control** is an `NSPopUpButton`: a swatch in each item's
   image and full addresses in titles. Provisional identities are marked.
 - **Switching From:**

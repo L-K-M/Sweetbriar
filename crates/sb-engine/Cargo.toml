@@ -8,6 +8,10 @@ rust-version.workspace = true
 
 [dependencies]
 sb-resources = { version = "0.0.1", path = "../sb-resources" }
+# spec/01 crate table: OKLCH conversion and gamut math for the account
+# appearance tokens (research 15 "Derived tokens"). Color math only:
+# `libm` without the defaults — no named colors, serde, rand or std.
+palette = { version = "=0.7.7", default-features = false, features = ["libm"] }
 # spec/01 crate table: the one async runtime, owned by the engine
 # (spec/01 "Process model"). Only the multi-thread scheduler: no I/O
 # driver, no timers, no macros — the core's futures are runtime-neutral

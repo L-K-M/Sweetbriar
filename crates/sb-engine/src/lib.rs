@@ -9,6 +9,10 @@
 //! one query (`settings()`), end to end.
 #![forbid(unsafe_code)]
 
+mod appearance;
+pub use appearance::{
+    AppearanceTokens, AppearanceVariant, PaletteColor, SrgbColor, SrgbColorError,
+};
 mod bodies;
 pub use bodies::{
     AttachmentLease, BodyKind, BodyLease, LeaseReleaser, RenderWarning, RenderWarningCode,
