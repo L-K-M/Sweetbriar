@@ -63,8 +63,10 @@ fn a_later_chunk_sql_failure_rolls_back_the_whole_writer_turn() {
 
 #[test]
 fn migration_17_preserves_existing_jobs_and_mail() {
-    let previous = MIGRATIONS.len() - 1;
-    assert_eq!(MIGRATIONS[previous].version, 17);
+    let previous = MIGRATIONS
+        .iter()
+        .position(|migration| migration.version == 17)
+        .unwrap();
     let mut conn = index_connection_through(previous);
     crate::testing::fixtures::acquisitions(&conn, 2);
     let tx = conn.transaction().unwrap();

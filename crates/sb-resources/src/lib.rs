@@ -68,6 +68,12 @@ pub use import_jobs::{
 pub use sb_mime::SEARCH_EXTRACTOR_VERSION;
 pub use sb_mime::{MboxQuoting, MboxVariant};
 pub use sb_platform::{default_cache_root, default_data_root};
+pub use sb_store::ACCOUNT_PALETTE_V1;
+pub use sb_store::appearance::{
+    AccountColor, AppearanceAssignment, StoredAccountAppearance, StoredIdentityAppearance,
+    account_appearance, identity_appearance, initialize_account_appearance, set_account_appearance,
+    set_identity_appearance,
+};
 pub use sb_store::exports::{
     ExportChunkWriter, ExportJob, ExportJobState, MAX_EXPORT_CHANGED_BYTES, MAX_EXPORT_CHUNK_BYTES,
     MAX_EXPORT_CHUNKS, MAX_EXPORT_JSON_BYTES, advance_export_job, append_export_chunks,
