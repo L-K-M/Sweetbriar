@@ -1,0 +1,161 @@
+{
+  "environment" : {
+    "baselineFootprintBytes" : 74500672,
+    "cpuBrand" : "Apple M1",
+    "hwModel" : "Macmini9,1",
+    "nominalIntervalMilliseconds" : 16.666666666666668,
+    "osVersion" : "Version 26.5.2 (Build 25F84)",
+    "refreshRateHertz" : 60,
+    "rowCount" : 100000,
+    "rowPitchPoints" : 56,
+    "virtualized" : false,
+    "windowSize" : "1100x700",
+    "xcodeBuild" : "17F113",
+    "xcodeVersion" : "2660"
+  },
+  "failures" : [
+    "the window wasn't key and the app active",
+    "exact-reference round 0: the typed prefix never settled"
+  ],
+  "mode" : "search",
+  "ok" : false,
+  "runs" : [
+
+  ],
+  "search" : {
+    "budget" : {
+      "limitMilliseconds" : 100,
+      "name" : "search.lastKeystroke"
+    },
+    "debounceMilliseconds" : 30,
+    "expectedSamples" : 50,
+    "lastKeystroke" : {
+      "count" : 0,
+      "max" : 0,
+      "p50" : 0,
+      "p95" : 0,
+      "samples" : [
+
+      ]
+    },
+    "perQuery" : {
+      "exact-address" : {
+        "count" : 0,
+        "max" : 0,
+        "p50" : 0,
+        "p95" : 0,
+        "samples" : [
+
+        ]
+      },
+      "exact-reference" : {
+        "count" : 0,
+        "max" : 0,
+        "p50" : 0,
+        "p95" : 0,
+        "samples" : [
+
+        ]
+      },
+      "negative-body" : {
+        "count" : 0,
+        "max" : 0,
+        "p50" : 0,
+        "p95" : 0,
+        "samples" : [
+
+        ]
+      },
+      "phrase" : {
+        "count" : 0,
+        "max" : 0,
+        "p50" : 0,
+        "p95" : 0,
+        "samples" : [
+
+        ]
+      },
+      "scoped-filter" : {
+        "count" : 0,
+        "max" : 0,
+        "p50" : 0,
+        "p95" : 0,
+        "samples" : [
+
+        ]
+      }
+    },
+    "queries" : [
+      {
+        "id" : "exact-reference",
+        "projectsScope" : false,
+        "text" : "ref1"
+      },
+      {
+        "id" : "exact-address",
+        "projectsScope" : false,
+        "text" : "from.is:sender17@beta.example"
+      },
+      {
+        "id" : "phrase",
+        "projectsScope" : false,
+        "text" : "\"quarterly budget review\""
+      },
+      {
+        "id" : "scoped-filter",
+        "projectsScope" : true,
+        "text" : "from.domain:beta.example after:2024-03-01@UTC"
+      },
+      {
+        "id" : "negative-body",
+        "projectsScope" : false,
+        "text" : "budget -body:review"
+      }
+    ],
+    "samples" : [
+      {
+        "query" : "exact-reference",
+        "round" : 0
+      }
+    ],
+    "stages" : {
+      "firstPage" : {
+        "count" : 0,
+        "max" : 0,
+        "p50" : 0,
+        "p95" : 0,
+        "samples" : [
+
+        ]
+      },
+      "landed" : {
+        "count" : 0,
+        "max" : 0,
+        "p50" : 0,
+        "p95" : 0,
+        "samples" : [
+
+        ]
+      },
+      "opened" : {
+        "count" : 0,
+        "max" : 0,
+        "p50" : 0,
+        "p95" : 0,
+        "samples" : [
+
+        ]
+      },
+      "presented" : {
+        "count" : 0,
+        "max" : 0,
+        "p50" : 0,
+        "p95" : 0,
+        "samples" : [
+
+        ]
+      }
+    },
+    "storeMessages" : 100000
+  }
+}
