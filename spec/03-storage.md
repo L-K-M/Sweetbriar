@@ -160,6 +160,16 @@ recreated.
   - On failure: stop remote effects, keep the store read-only, copy the
     files to `recovery/`, and tell the user. Never repair by deleting.
 
+### Export capture accounting (M1.7b2a)
+
+An append changes at most 30 immutable chunks and one job row. Reserve
+32,768 bytes for both job images (bounded request/checkpoint text, keys,
+indexes and framing). Charge each chunk's actual payload, two UTF-8 job
+ID copies and 1,024 bytes for row/index keys and framing. Even 30 maximum
+chunks and maximum IDs fit the 2,097,152-byte transaction allowance.
+Replays write nothing. State/checkpoint-only writes fit the job reserve.
+No file I/O occurs in these transactions.
+
 ### Import projection accounting (M1.6m3b0)
 
 Archive import retains its 250-message and 2,097,152-byte transaction limits.

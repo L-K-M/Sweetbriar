@@ -92,7 +92,6 @@ struct ExportTag {
 /// The occurrence row's decoded, validated facts.
 struct StoredOccurrence {
     message_id: i64,
-    acquisition_id: Option<i64>,
     account: ExportAccount,
     mailbox: ExportMailbox,
     state: OccurrenceState,
@@ -106,11 +105,6 @@ struct StoredOccurrence {
 pub fn export_occurrence_metadata(tx: &Transaction, id: i64) -> Result<ExportMetadata, StoreError> {
     let stored = stored_occurrence(tx, id)?;
     let acquisition = messages::best_acquisition(tx, stored.message_id)?;
-    if acquisition.as_ref().map(|a| a.acquisition_id()) != stored.acquisition_id {
-        return Err(StoreError::corrupt(
-            "the message's acquisition reference is broken",
-        ));
-    }
     let body_availability = match acquisition
         .as_ref()
         .map_or(BodyAvailability::NotAcquired, |a| a.availability())
@@ -147,7 +141,7 @@ fn stored_occurrence(tx: &Transaction, id: i64) -> Result<StoredOccurrence, Stor
     tx.query_row(
         "SELECT m.message_id, o.account_id, o.mailbox_id, o.state,
          o.f_seen, o.f_flagged, o.f_answered, o.f_draft, o.f_deleted, o.keywords,
-         a.display_name, b.remote_name, m.acquisition_id
+         a.display_name, b.remote_name
          FROM occurrences o
          LEFT JOIN accounts a ON a.account_id = o.account_id
          LEFT JOIN mailboxes b ON b.mailbox_id = o.mailbox_id AND b.account_id = o.account_id
@@ -168,7 +162,6 @@ fn occurrence_row(row: &Row<'_>) -> Result<StoredOccurrence, StoreError> {
     let mailbox_name: Option<String> = row.get(11).map_err(sql_error)?;
     Ok(StoredOccurrence {
         message_id: row.get(0).map_err(sql_error)?,
-        acquisition_id: row.get(12).map_err(sql_error)?,
         account: ExportAccount {
             id: row.get(1).map_err(sql_error)?,
             name: account_name

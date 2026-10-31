@@ -922,7 +922,7 @@ local drafts. No network yet.
       - **M1.7b2b1 Metadata projection (L):** one retained occurrence's
         immutable metadata snapshot and streaming version-1 serialization,
         through Resources with native proof. No scope API, job or file I/O.
-        Depends only on M1.5e; may run alongside b2a.
+        Depends on M1.5e and b2a, which its native consumer exercises.
       - **M1.7b2b2 Complete capture (L):** b2a/b2b1 plus all four scopes,
         the real selection-handle adapter and its proof in the same PR.
         Qualify generation fences, bounded writes, replay and cancellation

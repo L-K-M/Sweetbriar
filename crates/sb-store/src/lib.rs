@@ -8,6 +8,7 @@ mod address_keys;
 mod corpus_tracking;
 mod error;
 mod export_metadata;
+pub mod exports;
 mod import_reports;
 pub mod imports;
 pub mod index;

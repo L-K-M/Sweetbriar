@@ -221,6 +221,39 @@ them into other mailboxes.
 This query introduces no scope, command, receipt or durable job. Complete
 four-scope capture, including real selection handles and their proof,
 remains M1.7b2b2; its ledger must be sealed before a scope is acknowledged.
+### Durable capture ledger (M1.7b2a)
+
+Scope capture and file output are separate. Before output, an export keeps
+its request and immutable metadata in the database. The capture payload is
+an ordered byte stream, split into chunks of at most 65,536 bytes, so a
+large note or selection need not fit one writer transaction. The complete
+scope adapter defines the payload grammar; the ledger exposes no scope API.
+
+- `export_jobs` keeps a version-1 request object, state, revision,
+  captured chunk count, version-1 checkpoint object and timestamps.
+  Requests and checkpoints are each at most 4,096 UTF-8 bytes; large
+  membership and metadata belong in chunks, not these objects.
+- States are `capturing`, `ready`, `running`, `completed`, `cancelled`
+  and `failed`. Only `capturing` admits payload writes. Sealing moves to
+  `ready`; execution moves to `running`, then `completed`. Cancellation
+  or failure may end any unfinished state. Terminal jobs are immutable.
+  Sealing does not claim any output file or manifest exists.
+- Chunk ordinals start at zero and are contiguous. A new append requires
+  the job's current revision and next ordinal. Replaying an already
+  committed range succeeds only when every byte matches, without changing
+  its revision, checkpoint or metadata. A changed or partial-overlap replay
+  is `Conflict`. An empty append or an ordinal gap is `InvalidInput`.
+- Each append has at most 30 chunks and conservatively charges at most
+  2,097,152 changed row/index/framing bytes, including old/new job images.
+  A rejected append writes nothing. Checkpoint advancement uses the same
+  revision fence and stores no more than its admitted JSON byte bound.
+- Reads page at most 30 chunks, only through the captured end. Job IDs
+  are nonempty and at most 128 UTF-8 bytes. The same ID cannot name an
+  import, Search rebuild and export, including SQL key updates.
+- Repeating creation with an identical canonical request returns the kept
+  job; another request or kind is `Conflict`. Payloads survive reopen.
+  The later scope adapter must finish capture before acknowledging a
+  durable export scope; an interrupted partial capture is not output-ready.
 
 - **Formats:** EML (one file per message) and mboxrd (one file per
   mailbox), from any scope: account, mailbox, search or selection.

@@ -352,9 +352,10 @@ impl Engine {
 
     /// `cancel_job(id)` (spec/07, 09): dispatches on the durable job
     /// kind — an unfinished import is `cancelled` once this returns, an
-    /// active rebuild takes the durable user hold. A live worker stops
-    /// at its next message; committed batches stay imported. A finished
-    /// import is `Conflict`; a completed rebuild is a no-op.
+    /// active rebuild takes the durable user hold. An unfinished export
+    /// capture is cancelled durably. A live import stops at its next
+    /// message; committed batches stay imported. Finished imports and
+    /// exports are `Conflict`; a completed rebuild is a no-op.
     pub async fn cancel_job(
         &self,
         idempotency_key: &str,
@@ -398,6 +399,8 @@ impl Engine {
                         .await;
                 }
                 JobKind::SearchRebuild => worker.indexer().wake(),
+                // Capture storage has no worker until M1.7e.
+                JobKind::Export => {}
             }
             Ok(receipt)
         })
@@ -537,8 +540,9 @@ fn confirm_in(
 
 /// The cancel's write, run only for a fresh key: the durable job kind
 /// decides the behavior (spec/07). An unfinished import becomes
-/// `cancelled`; an active rebuild takes the durable user hold; a
-/// completed rebuild is a no-op; an unknown id is `NotFound` and a
+/// `cancelled`; an active rebuild takes the durable user hold; an unfinished
+/// export becomes `cancelled`. A completed rebuild is a no-op;
+/// an unknown id is `NotFound` and a
 /// different command's key stays `Conflict` in `run_once`.
 fn cancel_in(
     tx: &sb_resources::Transaction,
@@ -559,6 +563,18 @@ fn cancel_in(
                 job.revision(),
                 ImportJobState::Cancelled,
                 job.checkpoint(),
+                now,
+            )?;
+            Ok(encode_job_receipt(id, Some("cancelled")))
+        }
+        JobKind::Export => {
+            let job = sb_resources::export_job(tx, id)?;
+            sb_resources::advance_export_job(
+                tx,
+                id,
+                job.revision(),
+                sb_resources::ExportJobState::Cancelled,
+                job.checkpoint_json(),
                 now,
             )?;
             Ok(encode_job_receipt(id, Some("cancelled")))

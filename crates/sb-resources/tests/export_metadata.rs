@@ -3,7 +3,9 @@
 use std::io::{self, Write};
 
 use sb_resources::{
-    ExportMetadata, Resources, StoreError, Transaction, WritePriority, export_occurrence_metadata,
+    ExportMetadata, MAX_EXPORT_CHUNK_BYTES, MAX_EXPORT_CHUNKS, Resources, StoreError, Transaction,
+    WritePriority, append_export_chunks, create_export_job, export_chunks,
+    export_occurrence_metadata,
 };
 use sb_test_support::{ScratchDir, block_on};
 use serde_json::{Value, json};
@@ -254,6 +256,40 @@ fn a_multimegabyte_note_streams_without_clipping_or_normalizing_text() {
         value["note"].as_str().unwrap(),
         "Large note ✓ ".repeat(200_000)
     );
+
+    // Ledger chunks are bytes, even when a boundary splits valid JSON UTF-8.
+    const JOB: &str = "metadata-projection";
+    let bytes = serde_json::to_vec(&large).unwrap();
+    assert!(std::str::from_utf8(&bytes).is_ok());
+    assert!(
+        bytes
+            .chunks(MAX_EXPORT_CHUNK_BYTES)
+            .any(|part| std::str::from_utf8(part).is_err())
+    );
+    let now = res.now();
+    let mut job = write(&res, move |tx| create_export_job(tx, JOB, "{\"v\":1}", now));
+    let chunks: Vec<Vec<u8>> = bytes
+        .chunks(MAX_EXPORT_CHUNK_BYTES)
+        .map(<[u8]>::to_vec)
+        .collect();
+    assert!(chunks.len() > MAX_EXPORT_CHUNKS);
+    for batch in chunks.chunks(MAX_EXPORT_CHUNKS) {
+        let batch = batch.to_vec();
+        let (revision, from) = (job.revision(), job.captured_chunks());
+        job = write(&res, move |tx| {
+            append_export_chunks(tx, JOB, revision, from, &batch, now)
+        });
+    }
+    let mut recovered = Vec::new();
+    for from in (0..job.captured_chunks()).step_by(MAX_EXPORT_CHUNKS) {
+        recovered.extend(
+            res.read(|tx| export_chunks(tx, JOB, from, MAX_EXPORT_CHUNKS as u32))
+                .unwrap()
+                .into_iter()
+                .flatten(),
+        );
+    }
+    assert_eq!(recovered, bytes);
     let note = "quote: \"; slash: \\; line\nnull\0end";
     write(&res, move |tx| {
         tx.execute("UPDATE notes SET body_source=?1 WHERE message_id=1", [note])
@@ -284,6 +320,8 @@ fn unknown_ids_and_malformed_stored_fields_fail_typed() {
         "UPDATE occurrences SET keywords='[\"a\",\"a\"]' WHERE occurrence_id=1",
         "UPDATE occurrences SET keywords=CAST(x'ff' AS TEXT) WHERE occurrence_id=1",
         "UPDATE acquisitions SET content_sha256='broken' WHERE acquisition_id=1",
+        "UPDATE acquisitions SET content_sha256=CAST(x'ff' AS TEXT) WHERE acquisition_id=1",
+        "UPDATE acquisitions SET object_state=CAST(x'ff' AS TEXT) WHERE acquisition_id=1",
         "UPDATE acquisitions SET byte_length=-1 WHERE acquisition_id=1",
         "UPDATE tags SET color_srgb='#ABCDEF' WHERE tag_id='a'",
     ] {
