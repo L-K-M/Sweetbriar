@@ -171,6 +171,56 @@ point and resumes with identical final counts.
 
 ## Export
 
+### Frozen metadata projection (M1.7b2b1)
+
+`export_occurrence_metadata` reads one retained occurrence in one short
+transaction. It returns an immutable, owned snapshot of its message,
+account/mailbox names, all five flags, keywords, tags, note and selected
+acquisition identity/availability. It reads no bodies, headers, rendition
+files or other occurrences. Unknown IDs are `NotFound`; malformed stored
+flags, states, keywords or acquisition identities are `Corrupt`.
+
+The snapshot serializes deterministically through a streaming JSON writer,
+retaining at most one target's metadata, without constructing a serialized
+whole-corpus buffer. Notes and tag collections are never clipped. Field
+order is fixed for this capture version; tags sort by name then ID.
+Keywords remain the stored sorted, duplicate-free string array. Values
+remain frozen if source rows change after the snapshot.
+
+Capture format 1 has this shape (synthetic values):
+
+```json
+{
+  "v": 1,
+  "occurrence_id": 1,
+  "message_id": 1,
+  "account": {"id": "00000000-0000-4000-8000-000000000001", "name": "Archive"},
+  "mailbox": {"id": 1, "name": "Inbox"},
+  "occurrence_state": "present",
+  "flags": {"seen": true, "flagged": false, "answered": false, "draft": false, "deleted": false},
+  "keywords": [],
+  "acquisition": {
+    "id": 1,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "bytes": 0
+  },
+  "body_availability": "acquired",
+  "tags": [],
+  "note": null
+}
+```
+
+Tags contain `id`, `name` and nullable `color_srgb`. Acquisition is null
+with `not_acquired` availability when no body is recorded; other recorded
+availability values are `acquired`, `missing` and `quarantined`. These are
+database facts, not a claim that object bytes have been verified. File
+output verifies the frozen hash and length in M1.7c. Retained vanished,
+epoch-stale and superseded occurrences can be projected without expanding
+them into other mailboxes.
+
+This query introduces no scope, command, receipt or durable job. Complete
+four-scope capture, including real selection handles and their proof,
+remains M1.7b2b2; its ledger must be sealed before a scope is acknowledged.
 ### Durable capture ledger (M1.7b2a)
 
 Scope capture and file output are separate. Before output, an export keeps

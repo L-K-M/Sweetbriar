@@ -180,19 +180,11 @@ pub fn best_acquisition(
     message: i64,
 ) -> Result<Option<StoredAcquisition>, StoreError> {
     tx.query_row(
-        "SELECT a.acquisition_id, a.content_sha256, a.byte_length, a.object_state
+        "SELECT m.acquisition_id, a.content_sha256, a.byte_length, a.object_state
          FROM logical_messages m LEFT JOIN acquisitions a USING (acquisition_id)
          WHERE m.message_id = ?1",
         [message],
-        |row| {
-            let Some(acquisition_id) = row.get::<_, Option<i64>>(0)? else {
-                return Ok(Ok(None));
-            };
-            let hash: String = row.get(1)?;
-            let length: i64 = row.get(2)?;
-            let state: String = row.get(3)?;
-            Ok(acquisition(acquisition_id, &hash, length, &state).map(Some))
-        },
+        |row| Ok(acquisition_row(row)),
     )
     .optional()
     .map_err(sql_error)?
@@ -210,14 +202,40 @@ pub fn index_acquisition(conn: &Connection, doc_id: i64) -> Result<StoredAcquisi
     )
     .map_err(sql_error)?
     .query_row([doc_id], |row| {
-        let hash: String = row.get(1)?;
-        let length: i64 = row.get(2)?;
-        let state: String = row.get(3)?;
-        Ok(acquisition(row.get(0)?, &hash, length, &state))
+        Ok(acquisition_row(row).and_then(|acquisition| {
+            acquisition.ok_or_else(|| StoreError::corrupt("acquisition id is null"))
+        }))
     })
     .optional()
     .map_err(sql_error)?
     .ok_or_else(|| StoreError::not_found(format!("index acquisition {doc_id}")))?
+}
+
+// Keep malformed acquisition columns inside the typed data-error result,
+// rather than flattening them into a query-programming error.
+fn acquisition_row(row: &Row<'_>) -> Result<Option<StoredAcquisition>, StoreError> {
+    let Some(id) = acquisition_column::<Option<i64>>(row, 0)? else {
+        return Ok(None);
+    };
+    let hash: String = acquisition_column(row, 1)?;
+    let length: i64 = acquisition_column(row, 2)?;
+    let state: String = acquisition_column(row, 3)?;
+    acquisition(id, &hash, length, &state).map(Some)
+}
+
+fn acquisition_column<T: rusqlite::types::FromSql>(
+    row: &Row<'_>,
+    column: usize,
+) -> Result<T, StoreError> {
+    row.get(column).map_err(|error| match error {
+        rusqlite::Error::InvalidColumnType(..)
+        | rusqlite::Error::IntegralValueOutOfRange(..)
+        | rusqlite::Error::FromSqlConversionFailure(..)
+        | rusqlite::Error::Utf8Error(..) => {
+            StoreError::corrupt(format!("invalid stored acquisition column: {error}"))
+        }
+        error => sql_error(error),
+    })
 }
 
 fn acquisition(
