@@ -77,6 +77,10 @@ async fn Core::shutdown(self);   // flush writer, release the lease
   that names a query window and its generation.
   The native selection query below materializes exact membership for later
   command adapters; it introduces no export command or durable receipt.
+- **Export capture ledger (M1.7b2a):** `cancel_job` dispatches kept export
+  IDs separately from imports and Search rebuilds. Cancellation durably
+  marks an unfinished capture `cancelled`; a terminal export is `Conflict`.
+  No export worker or start/query endpoint is exposed by the ledger step.
 - **Local archive:** filing commands act locally, with no intent.
   `delete_to_trash` moves to the account's local Trash mailbox, created
   on first use; nothing is deleted. `add_label` doesn't apply.
