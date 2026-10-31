@@ -213,6 +213,22 @@ CREATE TABLE import_job_sources (
   local archive account if none exists, preserving an existing archive
   and all v1 rows. It rewrites or drops no existing data.
 
+## Export capture (schema v17, M1.7b2a)
+
+`export_jobs` keeps `job_id`, `state`, immutable `request_json`,
+`checkpoint_json`, `revision`, `captured_chunks` and creation/update
+millisecond timestamps. `export_job_chunks(job_id, ordinal, payload)`
+uses a composite primary key and a foreign key to its job. Payloads are
+nonempty blobs of at most 65,536 bytes. Job IDs are 1–128 UTF-8 bytes;
+version-1 request/checkpoint objects are at most 4,096 UTF-8 bytes each.
+
+Schema guards retain jobs and chunks, forbid chunk replacement, append
+only contiguous ordinals while capturing, freeze request/identity fields
+and prevent terminal-job mutation. Cross-kind insert/update guards keep
+export, import and Search rebuild IDs disjoint. Migration 17 is additive;
+it does not rewrite existing mail or jobs. State transitions, replay and
+writer accounting follow [09](09-import-export.md#durable-capture-ledger-m17b2a).
+
 ## Mailboxes, occurrences and logical messages
 
 ```sql
