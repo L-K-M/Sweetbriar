@@ -6,6 +6,9 @@ use serde_json::Value;
 
 use crate::{StoreError, Timestamp};
 
+mod stream;
+pub use stream::ExportChunkWriter;
+
 pub const MAX_EXPORT_CHUNK_BYTES: usize = 65_536;
 pub const MAX_EXPORT_CHUNKS: usize = 30;
 pub const MAX_EXPORT_JSON_BYTES: usize = 4_096;
