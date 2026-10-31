@@ -24,6 +24,18 @@ const SOURCE_HASH: &str = "4a4e94e39a4c23bdaeb5df6092bc4ad83bec3e915c16562740edd
 const DAY_MS: i64 = 24 * 60 * 60 * 1000;
 
 #[test]
+fn publication_debug_exposes_identity_without_its_private_token() {
+    let (_scratch, paths) = scratch_paths("publication-debug");
+    let store = crate::open(&paths, &test_seams(real_fs())).unwrap();
+    let publication = store.objects().publish(PAYLOAD).unwrap();
+    let debug = format!("{publication:?}");
+    assert!(debug.contains(&format!("{:?}", publication.id())));
+    assert!(!debug.contains(&format!("{:?}", publication.reservation)));
+    assert!(!debug.contains("reservation"));
+    store.close().unwrap();
+}
+
+#[test]
 fn each_publication_keeps_its_reservation_until_a_reference_commits() {
     let (_scratch, paths) = scratch_paths("publication-reservations");
     let store = crate::open(&paths, &test_seams(real_fs())).unwrap();

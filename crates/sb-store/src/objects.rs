@@ -100,7 +100,6 @@ impl ObjectId {
 
 /// Durable identity and private one-shot reservation (spec/03).
 /// Dropping it leaves the pin for startup expiry; only `publish` constructs it.
-#[derive(Debug)]
 pub struct PublishedObject {
     id: ObjectId,
     reservation: [u8; 16],
@@ -110,6 +109,14 @@ impl PublishedObject {
     /// The published object's identity.
     pub fn id(&self) -> &ObjectId {
         &self.id
+    }
+}
+
+impl std::fmt::Debug for PublishedObject {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PublishedObject")
+            .field("id", &self.id)
+            .finish_non_exhaustive()
     }
 }
 
