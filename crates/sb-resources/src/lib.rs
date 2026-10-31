@@ -75,7 +75,8 @@ pub use sb_store::appearance::{
     set_identity_appearance,
 };
 pub use sb_store::exports::{
-    ExportChunkWriter, ExportJob, ExportJobState, MAX_EXPORT_CHANGED_BYTES, MAX_EXPORT_CHUNK_BYTES,
+    ExportCaptureRequest, ExportChunkWriter, ExportFormat, ExportJob, ExportJobState, ExportScope,
+    ExportSearchSort, ExportSelection, MAX_EXPORT_CHANGED_BYTES, MAX_EXPORT_CHUNK_BYTES,
     MAX_EXPORT_CHUNKS, MAX_EXPORT_JSON_BYTES, advance_export_job, append_export_chunks,
     create_export_job, export_chunks, export_job,
 };
@@ -217,6 +218,17 @@ impl Resources {
         job: &ExportJob,
     ) -> Result<ExportChunkWriter<'_>, StoreError> {
         self.store.export_chunk_writer(job)
+    }
+
+    /// Blocking four-scope capture, with no file output. Break stops before
+    /// acknowledgement; a completed capture is immutable and replayable.
+    pub fn capture_export(
+        &self,
+        id: &str,
+        request: &ExportCaptureRequest,
+        progress: impl FnMut(u64) -> ControlFlow<()>,
+    ) -> Result<Scoped<ExportJob>, StoreError> {
+        self.store.capture_export(id, request, progress)
     }
 
     /// Hear of each list generation once its transaction commits

@@ -104,6 +104,22 @@ impl Store {
         crate::exports::ExportChunkWriter::new(&self.writer, self.clock.as_ref(), job)
     }
 
+    /// Freeze all supported scopes before any file output. Blocking; progress
+    /// runs outside transactions and Break leaves no output-ready scope.
+    pub fn capture_export(
+        &self,
+        id: &str,
+        request: &crate::exports::ExportCaptureRequest,
+        progress: impl FnMut(u64) -> std::ops::ControlFlow<()>,
+    ) -> Result<crate::Scoped<crate::exports::ExportJob>, StoreError> {
+        if self.writer.is_writer_thread() {
+            return Err(StoreError::internal(
+                "the writer thread cannot capture through its own queue",
+            ));
+        }
+        crate::exports::capture_export_in(self, id, request, self.clock.as_ref(), progress)
+    }
+
     /// Capture stable import input before inventory or a referencing
     /// transaction. Blocking file I/O; progress may cancel the copy.
     /// Async callers must use a blocking thread for the full source copy.

@@ -39,7 +39,7 @@ mod windows;
 // needs, re-exported by item through this layer (spec/01 rule 3;
 // `sb-service` itself re-exports nothing).
 pub use sb_resources::{
-    AccountKind, AccountState, ImportJobCheckpoint, ImportJobState, ImportProblem,
+    AccountKind, AccountState, ExportSelection, ImportJobCheckpoint, ImportJobState, ImportProblem,
     ImportProblemKind, ImportTotals, MailboxKind, MailboxList, MailboxRole, MboxQuoting,
     MboxVariant, Receipt, SourceInventory, SourceKind, SourcePosition, StoredAccount,
     StoredMailbox, Timestamp, default_cache_root, default_data_root,

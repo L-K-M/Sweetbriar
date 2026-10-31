@@ -13,6 +13,39 @@ fn now() -> Timestamp {
 }
 
 #[test]
+fn capture_uses_the_injected_clock_for_ledger_timestamps() {
+    let (_scratch, paths) = scratch_paths("export-capture-clock");
+    let store = open(&paths, &test_seams(real_fs())).unwrap();
+    let request = ExportCaptureRequest::new(
+        ExportFormat::Eml,
+        "/synthetic/export".into(),
+        ExportScope::Selection(
+            ExportSelection::new("empty".into(), 1, 1, std::sync::Arc::from([])).unwrap(),
+        ),
+    )
+    .unwrap();
+    store
+        .capture_export(JOB, &request, |_| std::ops::ControlFlow::Continue(()))
+        .unwrap();
+    let timestamps = store
+        .read(|tx| {
+            Ok(tx
+                .query_row(
+                    "SELECT created_at, updated_at FROM export_jobs WHERE job_id = ?1",
+                    [JOB],
+                    |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+                )
+                .unwrap())
+        })
+        .unwrap();
+    assert_eq!(
+        timestamps,
+        (crate::testing::FIXED_NOW_MS, crate::testing::FIXED_NOW_MS)
+    );
+    store.close().unwrap();
+}
+
+#[test]
 fn sql_requires_a_version_even_when_the_json_path_is_absent() {
     let conn = index_connection();
     for json in ["{}", "{\"other\":1}", "{\"v\":null}", "{\"v\":true}"] {
