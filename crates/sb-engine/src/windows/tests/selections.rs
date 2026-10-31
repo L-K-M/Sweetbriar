@@ -6,8 +6,8 @@
 //! the public `window_ids` index, never from selection internals.
 
 use std::pin::pin;
-use std::sync::Arc;
-use std::task::{Context, Poll, Waker};
+use std::sync::{Arc, mpsc};
+use std::task::{Context, Wake, Waker};
 use std::time::{Duration, Instant};
 
 use sb_test_support::block_on;
@@ -528,29 +528,38 @@ fn dropped_selection_opens_leave_no_handle() {
     let _ = block_on(opening); // the abort ran its course
     assert_eq!(live(&engine), 0, "a dropped read registered a handle");
 
-    // After registration: the open's work finishes but is never
-    // claimed. Each poll steps it past one blocking dispatch; once the
-    // table shows the registration the deliverable output is parked
-    // in the future, still unclaimed.
-    let mut cx = Context::from_waker(Waker::noop());
+    // Advance each dispatch only after its completion wake. Hold the
+    // read and registration so no poll can claim the final result.
+    struct Signal(mpsc::Sender<()>);
+    impl Wake for Signal {
+        fn wake(self: Arc<Self>) {
+            let _ = self.0.send(());
+        }
+    }
+    let (wake, wakes) = mpsc::channel();
+    let waker = Waker::from(Arc::new(Signal(wake)));
+    let mut cx = Context::from_waker(&waker);
+    let (paused, release) = hold_on(&engine, Event::IdsReadCaptured);
     let mut open =
         Box::pin(engine.open_selection(window_id, generation, SelectionInput::Ids(vec![])));
     assert!(with_table_held(&engine, || open
         .as_mut()
         .poll(&mut cx)
         .is_pending()));
-    let deadline = Instant::now() + PATIENCE;
-    loop {
-        if live(&engine) > 0 {
-            break;
-        }
-        match open.as_mut().poll(&mut cx) {
-            Poll::Pending => {}
-            Poll::Ready(result) => panic!("the open ended unregistered: {result:?}"),
-        }
-        assert!(Instant::now() < deadline, "the open never registered");
-        std::thread::sleep(Duration::from_millis(5));
-    }
+    wakes.recv_timeout(PATIENCE).unwrap(); // window lookup completed
+    assert!(open.as_mut().poll(&mut cx).is_pending());
+    paused.recv_timeout(PATIENCE).unwrap();
+    let table = engine.windows().lock();
+    release.send(()).unwrap();
+    wakes.recv_timeout(PATIENCE).unwrap(); // index read completed
+    assert!(open.as_mut().poll(&mut cx).is_pending());
+    drop(table); // registration can now finish; never poll its output
+    wakes.recv_timeout(PATIENCE).unwrap();
+    assert_eq!(
+        live(&engine),
+        1,
+        "the unclaimed snapshot must be registered"
+    );
     // Drop it while the table is held: the release runs off-thread.
     let table = engine.windows().lock();
     let prompt = std::thread::scope(|scope| {
