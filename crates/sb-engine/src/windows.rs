@@ -504,9 +504,22 @@ struct WindowsInner {
     next_id: u64,
     /// The open windows.
     open: HashMap<WindowId, OpenWindow>,
+    /// The open selection snapshots: frozen occurrence ids keyed by an
+    /// engine-bound handle. They live in this table so registration is
+    /// atomic against the source window's close; once registered, a
+    /// close or a source change moves nothing (spec/07 "Selection
+    /// snapshots").
+    selections: HashMap<SelectionId, OpenSelection>,
     /// The one debug source (spec/07 "Debug source"): its generation —
     /// 0 before the first fill — and its row count.
     synthetic: SyntheticSource,
+}
+
+/// A registered selection: the occurrence ids materialized in window
+/// order at open, immutable from then on.
+#[derive(Debug)]
+struct OpenSelection {
+    ids: Vec<i64>,
 }
 
 /// The debug source's replaceable state: `(count, generation)` always
@@ -697,6 +710,64 @@ impl Windows {
     /// a subscription's starting mark. An in-memory getter (spec/07).
     fn seen(&self, window_id: WindowId) -> Option<u64> {
         self.lock().open.get(&window_id).map(OpenWindow::seen)
+    }
+
+    /// `open_selection`'s registration (spec/07 "Selection snapshots"):
+    /// insert the frozen ids only while their source window is still
+    /// open — a close that won the race is `NotFound`, a later one
+    /// leaves the snapshot alone.
+    fn register_selection(
+        &self,
+        window_id: WindowId,
+        selection_id: SelectionId,
+        ids: Vec<i64>,
+    ) -> Result<(), EngineError> {
+        let mut inner = self.lock();
+        if !inner.open.contains_key(&window_id) {
+            return Err(EngineError::NotFound {
+                what: format!("window {}", window_id.get()),
+            });
+        }
+        inner.selections.insert(selection_id, OpenSelection { ids });
+        Ok(())
+    }
+
+    /// `selection_ids`: a page of the frozen ids, or why it failed
+    /// (spec/07). `from_ordinal == count` is an empty page; past it,
+    /// `InvalidInput`; a foreign, unknown or closed id, `NotFound`.
+    fn selection_page(
+        &self,
+        id: &SelectionId,
+        from_ordinal: u64,
+        limit: u32,
+    ) -> Result<Vec<i64>, EngineError> {
+        let inner = self.lock();
+        let Some(selection) = inner.selections.get(id) else {
+            return Err(EngineError::NotFound {
+                what: format!("selection {}", id.as_str()),
+            });
+        };
+        let count = selection.ids.len() as u64;
+        if from_ordinal > count {
+            return Err(EngineError::invalid_input(
+                "from_ordinal",
+                "the ordinal is past the selection's end",
+            ));
+        }
+        let start = from_ordinal as usize;
+        let end = (from_ordinal + u64::from(limit)).min(count) as usize;
+        Ok(selection.ids[start..end].to_vec())
+    }
+
+    /// `close_selection`: release a snapshot. A repeat, a foreign or
+    /// an unknown id is harmless.
+    fn close_selection(&self, id: &SelectionId) {
+        self.lock().selections.remove(id);
+    }
+
+    /// After work drains, release IDs even if a subscription retains this table.
+    pub(crate) fn release_selections(&self) {
+        self.lock().selections.clear();
     }
 }
 
@@ -1124,7 +1195,7 @@ impl Engine {
         let scope = match open.spec.source() {
             WindowSource::Search(spec) => {
                 let ids = self
-                    .search_window_ids(spec.clone(), open.stop.clone())
+                    .search_window_ids(spec.clone(), open.stop.clone(), None)
                     .await?;
                 let Scoped::Done(ids) = ids else {
                     return Err(EngineError::NotFound {
@@ -1141,7 +1212,26 @@ impl Engine {
             }
             WindowSource::List(scope) => scope,
         };
-        let stop = open.stop.clone();
+        let (generation, ids) = self
+            .store_index(window_id, open.stop.clone(), scope, None)
+            .await?;
+        open.delivered(generation);
+        Ok(WindowIds { generation, ids })
+    }
+
+    /// The store-window id-index read `window_ids` and `open_selection`
+    /// share: one scoped read at `at` — the current generation when
+    /// `at` is `None` — stopped to `NotFound` if the window closes
+    /// under it. It never marks a delivered generation: `window_ids`
+    /// marks its own, and a selection query must not mark at all
+    /// (spec/07 "Selection snapshots").
+    async fn store_index(
+        &self,
+        window_id: WindowId,
+        stop: ReadStop,
+        scope: ListScope,
+        at: Option<u64>,
+    ) -> Result<(u64, Vec<i64>), EngineError> {
         #[cfg(test)]
         let index = Arc::clone(self.indexer());
         let read = self
@@ -1149,7 +1239,7 @@ impl Engine {
                 resources.read_scoped(&stop, |tx| {
                     #[cfg(test)]
                     index.event(crate::index::Event::IdsReadCaptured);
-                    list_ids(tx, scope, None)
+                    list_ids(tx, scope, at)
                 })
             })
             .await?;
@@ -1158,9 +1248,7 @@ impl Engine {
                 what: format!("window {}", window_id.get()),
             });
         };
-        let (generation, ids) = store_outcome(read, &Anchor::Top)?;
-        open.delivered(generation);
-        Ok(WindowIds { generation, ids })
+        store_outcome(read, &Anchor::Top)
     }
 
     /// `close_window` (spec/07): release the handle. Closing twice is
@@ -1211,8 +1299,10 @@ impl Drop for Opened {
 }
 
 mod search;
+mod selections;
 mod subscribe;
 pub use search::{SearchSort, SearchSpec, SearchStatus};
+pub use selections::{SelectionId, SelectionInput, SelectionSnapshot};
 
 pub use subscribe::{Subscription, WindowEvent};
 

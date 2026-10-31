@@ -228,19 +228,22 @@ impl Engine {
         })
     }
 
+    /// The window's id index at `at` — the current generation when
+    /// `at` is `None` — `Stopped` if the window closed under it.
     pub(super) async fn search_window_ids(
         &self,
         spec: SearchSpec,
         stop: ReadStop,
+        at: Option<u64>,
     ) -> Result<Scoped<WindowIds>, EngineError> {
         let query = spec.query()?;
         let scope = spec.scope.stored()?;
         let read = self
             .search_snapshot(scope.clone(), Some(stop), move |tx, counts| {
                 match spec.sort {
-                    SearchSort::Date => search_date_ids(tx, &query, scope, None, Some(counts)),
+                    SearchSort::Date => search_date_ids(tx, &query, scope, at, Some(counts)),
                     SearchSort::Relevance => {
-                        search_relevance_ids(tx, &query, scope, None, Some(counts))
+                        search_relevance_ids(tx, &query, scope, at, Some(counts))
                     }
                 }
             })

@@ -47,12 +47,12 @@ fn spawn_open_thread(body: OpenBody) -> std::io::Result<()> {
         .map(drop)
 }
 
-/// What a dropped engine hands its cleanup worker: the store's last
-/// handle and the count of blocking tasks still using it.
+/// Owners released by the cleanup worker after counted work drains.
 type Cleanup = (
     Arc<Resources>,
     Arc<BlockingWork>,
     Arc<crate::bodies::Leases>,
+    Arc<Windows>,
 );
 
 /// The engine: one multi-threaded runtime and the store's one handle
@@ -575,8 +575,10 @@ impl Engine {
             .expect("the store handle lives until shutdown");
         let blocking = Arc::clone(&self.blocking);
         let leases = self.leases.clone();
+        let windows = Arc::clone(&self.windows);
         let closing = self.runtime.handle().spawn_blocking(move || {
             blocking.close_and_wait();
+            windows.release_selections();
             leases.close();
             close_resources(resources)
         });
@@ -682,8 +684,9 @@ fn start_cleanup_worker() -> Result<std::sync::mpsc::Sender<Cleanup>, EngineErro
         .name(CLOSE_THREAD_NAME.to_owned())
         .spawn(move || {
             // A closed channel means the engine shut down normally.
-            if let Ok((resources, blocking, leases)) = handed.recv() {
+            if let Ok((resources, blocking, leases, windows)) = handed.recv() {
                 blocking.close_and_wait();
+                windows.release_selections();
                 leases.close();
                 let _ = close_resources(resources);
             }
@@ -717,9 +720,12 @@ impl Drop for Engine {
         let Some(resources) = self.resources.take() else {
             return;
         };
-        let _ = self
-            .cleanup
-            .send((resources, Arc::clone(&self.blocking), self.leases.clone()));
+        let _ = self.cleanup.send((
+            resources,
+            Arc::clone(&self.blocking),
+            self.leases.clone(),
+            Arc::clone(&self.windows),
+        ));
     }
 }
 
