@@ -75,9 +75,9 @@ pub use sb_store::appearance::{
     set_account_appearance, set_identity_appearance,
 };
 pub use sb_store::exports::{
-    ExportJob, ExportJobState, MAX_EXPORT_CHANGED_BYTES, MAX_EXPORT_CHUNK_BYTES, MAX_EXPORT_CHUNKS,
-    MAX_EXPORT_JSON_BYTES, advance_export_job, append_export_chunks, create_export_job,
-    export_chunks, export_job,
+    ExportChunkWriter, ExportJob, ExportJobState, MAX_EXPORT_CHANGED_BYTES, MAX_EXPORT_CHUNK_BYTES,
+    MAX_EXPORT_CHUNKS, MAX_EXPORT_JSON_BYTES, advance_export_job, append_export_chunks,
+    create_export_job, export_chunks, export_job,
 };
 pub use sb_store::imports::{
     ImportJobState, ImportMessage, ImportParseState, ImportSummary, MAX_IMPORT_BATCH,
@@ -199,6 +199,24 @@ impl Resources {
         F: FnOnce(&Transaction) -> Result<T, StoreError> + Send + 'static,
     {
         self.store.write(priority, closure)
+    }
+
+    /// Blocking capture sink. Replay the full stream and finish explicitly;
+    /// it borrows this store and does not seal a scope.
+    ///
+    /// The ownership lease cannot close while the sink is live:
+    /// ```compile_fail
+    /// fn cannot_close(res: sb_resources::Resources, job: &sb_resources::ExportJob) {
+    ///     let sink = res.export_chunk_writer(job).unwrap();
+    ///     res.close().unwrap();
+    ///     sink.finish().unwrap();
+    /// }
+    /// ```
+    pub fn export_chunk_writer(
+        &self,
+        job: &ExportJob,
+    ) -> Result<ExportChunkWriter<'_>, StoreError> {
+        self.store.export_chunk_writer(job)
     }
 
     /// Hear of each list generation once its transaction commits
