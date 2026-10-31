@@ -46,8 +46,9 @@ Stages (p50 / p95 ms, keystroke to stage):
 Both builds were run minutes apart under the same memory state.
 
 - **Overall:** p95 drops by 19 to 25% and p50 by 16 to 24%.
-- **By query:** exact-reference, scoped-filter and phrase are faster at
-  p95 in both runs except phrase in run 2 (944 against 760 ms).
+- **By query:** only exact-reference is faster at p95 in both runs (334
+  and 403 against 592 and 590 ms). Scoped-filter, phrase and
+  exact-address are each faster in one run and slower in the other.
 - **Negative-body:** no faster (1,007 and 1,691 against 742 and 1,542
   ms).
 - **The `opened` stage's p95:** about 2.5 s in both builds, unchanged.
