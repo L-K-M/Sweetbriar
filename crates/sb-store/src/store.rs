@@ -95,6 +95,15 @@ impl Store {
         &self.objects
     }
 
+    /// Stream a full capture through bounded writer turns. Blocking;
+    /// finish explicitly and release read transactions before writing.
+    pub fn export_chunk_writer(
+        &self,
+        job: &crate::exports::ExportJob,
+    ) -> Result<crate::exports::ExportChunkWriter<'_>, StoreError> {
+        crate::exports::ExportChunkWriter::new(&self.writer, self.clock.as_ref(), job)
+    }
+
     /// Capture stable import input before inventory or a referencing
     /// transaction. Blocking file I/O; progress may cancel the copy.
     /// Async callers must use a blocking thread for the full source copy.
