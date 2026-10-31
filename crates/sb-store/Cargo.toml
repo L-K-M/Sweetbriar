@@ -19,7 +19,7 @@ rusqlite = { version = "=0.40.2", features = ["bundled", "backup", "functions", 
 sha2 = { version = "=0.11.1", default-features = false }
 # Canonical storage JSON and strict borrowed query values (spec/02, 06).
 serde_json = { version = "=1.0.154", features = ["raw_value"] }
-serde = { version = "=1.0.229", default-features = false, features = ["std"] }
+serde = { version = "=1.0.229", default-features = false, features = ["std", "derive"] }
 # spec/01 crate table: validated explicit IANA date operands (spec/06
 # "Zoned date operands", M1.6f0). Only the bundled database is used; no
 # system timezone, host zoneinfo or global clock feature is enabled.

@@ -7,6 +7,7 @@ pub mod activation;
 mod address_keys;
 mod corpus_tracking;
 mod error;
+mod export_metadata;
 mod import_reports;
 pub mod imports;
 pub mod index;
@@ -45,6 +46,7 @@ pub use sb_types::time::{Clock, Timestamp};
 pub use rusqlite::Transaction;
 
 pub use error::StoreError;
+pub use export_metadata::{ExportMetadata, export_occurrence_metadata};
 pub use objects::{
     FileObjectStore, ObjectId, ObjectIter, ObjectReader, ObjectStore, PublishedObject,
     read_error_as_store_error,

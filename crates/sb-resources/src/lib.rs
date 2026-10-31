@@ -110,9 +110,9 @@ pub use sb_store::threads::{
     remove_thread, stored_threads, thread_memberships, thread_revisions, thread_sources,
 };
 pub use sb_store::{
-    ImportSourceSnapshot, ListObserver, ReadStop, Receipt, Scoped, SearchObserver, StoreError,
-    Timestamp, Transaction, Uuid, WriteFuture, WritePriority, encode_job_receipt, receipt_job_id,
-    run_once,
+    ExportMetadata, ImportSourceSnapshot, ListObserver, ReadStop, Receipt, Scoped, SearchObserver,
+    StoreError, Timestamp, Transaction, Uuid, WriteFuture, WritePriority, encode_job_receipt,
+    export_occurrence_metadata, receipt_job_id, run_once,
 };
 
 #[cfg(feature = "test-seams")]
