@@ -287,6 +287,10 @@ impl Engine {
                 Some(stop) => resources.read_scoped(stop, run),
                 None => resources.read(run).map(Scoped::Done),
             };
+            // A stopped read has no index result left to fence.
+            if matches!(&result, Ok(Scoped::Stopped)) {
+                return result;
+            }
             index.readable()?;
             result
         })

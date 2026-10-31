@@ -20,6 +20,9 @@ use sb_resources::{
 use crate::Engine;
 use crate::engine::Spawn;
 
+#[cfg(test)]
+mod stop_tests;
+
 #[derive(Default)]
 pub(crate) struct IndexJobs {
     state: Mutex<State>,
