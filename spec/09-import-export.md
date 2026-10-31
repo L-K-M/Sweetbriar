@@ -175,6 +175,22 @@ point and resumes with identical final counts.
   mailbox), from any scope: account, mailbox, search or selection.
 - **Bytes:** exported bytes are the original acquisition bytes, never a
   re-serialization.
+  - mboxrd quotes every line beginning with zero or more `>` followed by
+    `From ` by adding one `>`. Preserve all other bytes, including line
+    endings. Each record starts with the fixed envelope `From -\n`.
+  - A nonempty acquisition without a final LF needs one framing LF so
+    the next envelope starts on a new line. Append exactly one, even
+    for the last record, and record the original byte length and added
+    framing byte in the manifest. Empty acquisitions need no padding.
+  - A manifest-aware import must validate record boundaries, framing,
+    original byte length and SHA-256 before publishing the original
+    acquisition bytes. Only the declared framing LF may be removed.
+    A plain mbox import without the manifest retains that physical LF;
+    its original presence cannot be inferred. EML needs no framing.
+  - The transport encoder streams with bounded buffers, including long
+    lines and runs of `>`. It reports original and encoded byte counts
+    and framing only after successful output. File durability and
+    publication belong to the export job.
 - **Metadata:** a `sweetbriar-metadata.json` manifest is written
   alongside, holding per message the acquisition SHA-256, account,
   mailbox, flags, tags and notes, so private metadata survives leaving

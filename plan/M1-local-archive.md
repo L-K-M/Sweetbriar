@@ -873,6 +873,39 @@ local drafts. No network yet.
 
 ### M1.7 Export — S, linux
 
+- **PR split (2026-10-31):** the original S estimate omitted durable
+  jobs, scope capture and lossless mbox framing. Implement these complete
+  artifacts in order; retain all original deliverables and acceptance.
+  Each PR must fit 1,450 gross changed lines; re-size before coding.
+  - **M1.7a Mboxrd transport — M:** a bounded streaming encoder and its
+    framing descriptor, qualified by a native public-API consumer using
+    the existing decoder. Cover arbitrary bytes, chunk boundaries, long
+    lines/quote runs, empty and unterminated messages, multiplicity and
+    read/write failures. This is a codec artifact, not the export job.
+  - **M1.7b Export state and scope capture — L:** durable job/checkpoint
+    and immutable target metadata through Resources, with a native
+    facade consumer. All four scopes, including large selection tokens,
+    retain their specified semantics. Search uses its chosen occurrences,
+    never expands into other mailboxes. Qualify capture, bounded writes,
+    replay, generation fences and job-kind guards at first exposure.
+  - **M1.7c Export files and manifest — L:** the Resources writer consumes
+    b for both formats, byte-verified acquisition streaming, destination
+    ownership, file-boundary checkpoints and the version-1 metadata
+    manifest. Its native consumer qualifies exact output, metadata,
+    unavailable bodies, errors, cancellation and durability cuts.
+  - **M1.7d Manifest-aware import — L:** capture and verify the sidecar
+    with the source, validate mboxrd framing/length/hash before ingest,
+    and include the framing identity in replay. Native imports of c's
+    bundles preserve unterminated acquisitions and multiplicity; malformed
+    framing never silently trims bytes or falls back to changed originals.
+  - **M1.7e Export engine — L:** counted background jobs, start/query,
+    cancel, shutdown and reopen over b/c. Own real-worker lifecycle,
+    crash/resume and all original round-trip acceptance checks using d.
+  - **M1.7f Export service, CLI and format documentation — L:** owned
+    service DTOs, `sb-cli export`, `docs/export-format.md` and native
+    endpoint/CLI proof. No receipt or terminal state claims a manifest
+    before it is durably published.
+
 - **Goal:** EML and mboxrd export with the metadata manifest.
 - **Spec:** 09 (Export).
 - **Depends on:** M1.2.
