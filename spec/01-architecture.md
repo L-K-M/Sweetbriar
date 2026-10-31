@@ -24,7 +24,7 @@ crates/
   sb-imap/                 L5  generic IMAP transport; knows no provider dialects
   sb-smtp/                 L5  SMTP submission
   sb-platform/             L5  secret store, clock, filesystem seams, paths, platform facts
-  sb-types/                L6  shared vocabulary only: ids, timestamps, email addresses, byte ranges, and seam traits (Fs, Clock, Random); no implementations, no dependencies on other sb-* crates
+  sb-types/                L6  shared vocabulary only: ids, timestamps, email addresses, byte ranges, palette-v1 RGB values, and seam traits (Fs, Clock, Random); no implementations, no dependencies on other sb-* crates
   sb-test-support/         dev-only: fake IMAP/SMTP server, fixtures loader, crash-cut harness
   sb-bindgen/              tool: uniffi-bindgen-swift pinned to the workspace uniffi version
 xtask/                     cargo xtask: ci, check-layers, ffi, check-ffi, dist (later)
