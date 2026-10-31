@@ -813,5 +813,6 @@ mod closed_ids;
 mod qualification;
 mod search;
 mod search_timings;
+mod selections;
 mod store;
 mod subscribe;

@@ -28,7 +28,7 @@ fn hook(engine: &Engine, body: impl Fn(Event) + Send + Sync + 'static) {
 
 /// Pause the first `event` inside its read transaction: `paused` says
 /// the read is admitted and waiting, `release` lets it finish.
-fn hold_on(engine: &Engine, event: Event) -> (mpsc::Receiver<()>, mpsc::SyncSender<()>) {
+pub(super) fn hold_on(engine: &Engine, event: Event) -> (mpsc::Receiver<()>, mpsc::SyncSender<()>) {
     let (captured, paused) = mpsc::channel();
     let (release, released) = mpsc::sync_channel(0);
     let released = Mutex::new(released);
@@ -43,7 +43,7 @@ fn hold_on(engine: &Engine, event: Event) -> (mpsc::Receiver<()>, mpsc::SyncSend
 }
 
 /// An engine over an imported `n`-message mbox; answers the Inbox's id.
-fn mailboxed(label: &str, n: usize) -> (ScratchDir, Engine, i64) {
+pub(super) fn mailboxed(label: &str, n: usize) -> (ScratchDir, Engine, i64) {
     let scratch = ScratchDir::new(label);
     let engine = block_on(Engine::open(scratch.path().join("store"))).unwrap();
     let subjects: Vec<String> = (0..n).map(|i| format!("subject {i}")).collect();

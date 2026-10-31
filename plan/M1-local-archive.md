@@ -894,14 +894,23 @@ local drafts. No network yet.
     the existing decoder. Cover arbitrary bytes, chunk boundaries, long
     lines/quote runs, empty and unterminated messages, multiplicity and
     read/write failures. This is a codec artifact, not the export job.
-  - **M1.7b Export state and scope capture — L:** durable job/checkpoint
+  - **M1.7b1 Exact selection snapshots (L):** a native Engine query handle
+    over one real window's ID index and generation. Small ID sets and exact
+    rank bitmaps preserve arbitrary discontiguous subsets without uploading
+    large ID lists. Bounded paging consumes the immutable snapshot. Qualify
+    stale/closed/foreign handles, malformed membership, source-window close,
+    dropped opens and shutdown through the real public API. No durable job,
+    receipt, migration or export API belongs to this artifact.
+  - **M1.7b2 Export state and scope capture (L):** durable job/checkpoint
     and immutable target metadata through Resources, with a native
     facade consumer. All four scopes, including large selection tokens,
     retain their specified semantics. Search uses its chosen occurrences,
     never expands into other mailboxes. Qualify capture, bounded writes,
-    replay, generation fences and job-kind guards at first exposure.
+    replay, generation fences and job-kind guards at first exposure. Re-size
+    the complete capture before coding; expose no export-scope API until all
+    four scopes and immutable target metadata are supported.
   - **M1.7c Export files and manifest — L:** the Resources writer consumes
-    b for both formats, byte-verified acquisition streaming, destination
+    b2 for both formats, byte-verified acquisition streaming, destination
     ownership, file-boundary checkpoints and the version-1 metadata
     manifest. Its native consumer qualifies exact output, metadata,
     unavailable bodies, errors, cancellation and durability cuts.
@@ -911,7 +920,7 @@ local drafts. No network yet.
     bundles preserve unterminated acquisitions and multiplicity; malformed
     framing never silently trims bytes or falls back to changed originals.
   - **M1.7e Export engine — L:** counted background jobs, start/query,
-    cancel, shutdown and reopen over b/c. Own real-worker lifecycle,
+    cancel, shutdown and reopen over b2/c. Own real-worker lifecycle,
     crash/resume and all original round-trip acceptance checks using d.
   - **M1.7f Export service, CLI and format documentation — L:** owned
     service DTOs, `sb-cli export`, `docs/export-format.md` and native

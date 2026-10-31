@@ -75,6 +75,8 @@ async fn Core::shutdown(self);   // flush writer, release the lease
 - **Selections:** large selections never serialize 100k ids. A selection
   is either a list of up to 1,000 occurrence ids or a `SelectionToken`
   that names a query window and its generation.
+  The native selection query below materializes exact membership for later
+  command adapters; it introduces no export command or durable receipt.
 - **Local archive:** filing commands act locally, with no intent.
   `delete_to_trash` moves to the account's local Trash mailbox, created
   on first use; nothing is deleted. `add_label` doesn't apply.
@@ -115,6 +117,44 @@ struct ListRow {
     unread: bool, flagged: bool, has_attachments: bool, tags: Vec<String>,
 }
 ```
+
+**Selection snapshots (M1.7b1)**
+
+```rust
+enum SelectionInput { Ids(Vec<i64>), RankBitmap(Vec<u8>) }
+async fn open_selection(window_id: WindowId, generation: u64, input: SelectionInput)
+    -> Result<SelectionSnapshot, CoreError>;
+async fn selection_ids(id: SelectionId, from_ordinal: u64, limit: u32)
+    -> Result<Vec<i64>, CoreError>;
+async fn close_selection(id: SelectionId);
+struct SelectionSnapshot { selection_id: SelectionId, window_id: WindowId, generation: u64, count: u64 }
+```
+
+- The source is an open store-backed window; `DebugSynthetic` is
+  `InvalidInput`. Resolve its ID index in one short read. The returned
+  generation must equal the supplied generation, else `ResetRequired`
+  naming the current one. If the source window closes before registration,
+  `open_selection` fails with `NotFound`.
+- `Ids` contains at most 1,000 distinct members of that index, in any order.
+  A non-member or duplicate is `InvalidInput`. The result keeps window order.
+- `RankBitmap` has exactly `ceil(index_length / 8)` bytes. Rank `r` is bit
+  `r % 8` of byte `r / 8` (least-significant bit first). Unused final bits
+  must be zero. Wrong length or padding is `InvalidInput`, never an
+  approximation. Its bound derives from the existing index, with no new
+  fixed byte or selection-count cap. Empty selections are valid.
+- Successful registration freezes the selected occurrence IDs and order.
+  Later source changes or source-window close do not alter the snapshot.
+  Selection queries never advance the source window's observed-generation mark.
+  IDs are opaque, never reused and valid only in the issuing Core instance;
+  foreign, unknown or closed IDs are `NotFound`.
+- Paging accepts limits 1 through 1,000. `from_ordinal == count` returns an
+  empty page; an ordinal past the count or an invalid limit is `InvalidInput`.
+- Closing twice is harmless. A cancelled open releases an unclaimed handle
+  on the blocking pool, as window opens do. A delivered handle requires
+  explicit close. Shutdown releases every snapshot. These are query handles,
+  with no idempotency key, receipt or restart persistence.
+
+**Window semantics**
 
 - **Grain:** `Mailbox` and `Unified` windows list occurrences. `Flagged`,
   `Search`, `View` and `Thread` list logical messages, one row each,
