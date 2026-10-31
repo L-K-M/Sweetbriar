@@ -28,7 +28,9 @@ use crate::schema::{
     run_migrations,
 };
 use crate::source_snapshots::ImportSourceSnapshots;
-use crate::writer::{ListObserver, SearchObserver, WriteFuture, WritePriority, Writer};
+use crate::writer::{
+    AppearanceObserver, ListObserver, SearchObserver, WriteFuture, WritePriority, Writer,
+};
 
 /// The SQLite build spec/01's crate table pins (rusqlite 0.40.2 →
 /// libsqlite3-sys 0.38.2 → SQLite 3.53.2); `open` refuses any other.
@@ -186,6 +188,12 @@ impl Store {
 
     /// Hear committed maintenance-input changes before the write resolves.
     /// Runs on the writer thread; return immediately and never panic.
+    /// Observe committed appearance revisions before write futures resolve.
+    /// Runs on the writer thread; return immediately and never panic.
+    pub fn observe_appearance_generation(&self, observer: AppearanceObserver) {
+        self.writer.observe_appearance_generation(observer);
+    }
+
     pub fn observe_maintenance_inputs(&self, observer: Arc<dyn Fn() + Send + Sync>) {
         self.writer.observe_maintenance_inputs(observer);
     }
