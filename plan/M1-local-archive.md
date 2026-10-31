@@ -914,6 +914,12 @@ local drafts. No network yet.
       durable job state and revision-fenced checkpoints through Resources.
       A native facade consumer proves exact replay, rollback, reopen and
       cross-kind isolation. No scope API or file writer.
+    - **M1.7b2a2 Streaming ledger writer (M):** a blocking native byte
+      sink over a's bounded appends, with streamed JSON, exact full replay,
+      short-replay refusal, typed failures and writer-thread refusal.
+      No scope API, worker or file output. Depends only on b2a; may run
+      alongside metadata projection. Keep all four scopes and the real
+      selection-handle proof together in complete capture.
     - **M1.7b2b Complete scope capture (L):** resolve all four scopes,
       including real Engine selection handles, and freeze per-occurrence
       manifest metadata into a's ledger. Prove chosen Search occurrences,

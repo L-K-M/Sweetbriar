@@ -205,6 +205,35 @@ scope adapter defines the payload grammar; the ledger exposes no scope API.
   The later scope adapter must finish capture before acknowledging a
   durable export scope; an interrupted partial capture is not output-ready.
 
+### Streaming capture writer (M1.7b2a2)
+
+`export_chunk_writer` is a blocking native `std::io::Write` sink, through
+Resources. Construct it from a capturing job snapshot; it borrows the
+open store, so it cannot outlive the store's ownership lease. It retains
+at most 30 chunks (1,966,080 payload bytes), never a whole encoded record
+or scope. It splits bytes at 65,536 bytes, including inside UTF-8, and queues
+bounded Index-priority appends. Callers release read transactions before
+writing; the sink holds none. Construction, writes, flush and finish
+refuse the writer's own thread.
+
+Each new sink replays from ordinal zero at the snapshot's revision fence.
+Callers reproduce the same bytes and flush boundaries; changed bytes or
+concurrent mutations are `Conflict`. A batch crossing the kept end verifies
+its prefix before appending its suffix. A short replay cannot finish.
+
+`flush` commits buffered bytes, including a partial final chunk. `finish`
+consumes the sink, flushes and verifies the complete stream, then returns
+its job snapshot. Neither operation seals the scope or marks it ready.
+An empty new stream writes nothing. Drop never flushes or claims success.
+
+An I/O wrapper retains the original `StoreError`, including environmental
+kinds; JSON serialization must not flatten it into `Internal`. The sink
+remembers its first failure and refuses reuse with that failure. Partial
+commits remain immutable and pre-acknowledgement until complete capture
+seals them. This artifact introduces no scope API, scheduler or file I/O.
+
+### Export formats and scopes
+
 - **Formats:** EML (one file per message) and mboxrd (one file per
   mailbox), from any scope: account, mailbox, search or selection.
 - **Bytes:** exported bytes are the original acquisition bytes, never a
