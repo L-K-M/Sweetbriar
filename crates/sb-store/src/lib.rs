@@ -5,6 +5,7 @@
 
 pub mod activation;
 mod address_keys;
+pub mod appearance;
 mod corpus_tracking;
 mod error;
 mod import_reports;
@@ -34,6 +35,7 @@ mod writer;
 // The seam vocabulary sb-types owns (spec/01 rules 2 and 3), re-exported
 // by item so the layer above — which cannot name sb-types directly —
 // reaches it through this crate, one layer at a time.
+pub use sb_types::appearance::ACCOUNT_PALETTE_V1;
 pub use sb_types::fs::{FileKind, Fs, ReadFile};
 pub use sb_types::id::Uuid;
 pub use sb_types::random::Random;

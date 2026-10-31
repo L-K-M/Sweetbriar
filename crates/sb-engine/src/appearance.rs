@@ -347,15 +347,8 @@ impl PaletteColor {
 
     /// The stored sRGB color.
     pub const fn color(self) -> SrgbColor {
-        match self {
-            Self::Blue => SrgbColor::new(0x00, 0x72, 0xb2),
-            Self::Orange => SrgbColor::new(0xe6, 0x9f, 0x00),
-            Self::BluishGreen => SrgbColor::new(0x00, 0x9e, 0x73),
-            Self::ReddishPurple => SrgbColor::new(0xcc, 0x79, 0xa7),
-            Self::SkyBlue => SrgbColor::new(0x56, 0xb4, 0xe9),
-            Self::Vermilion => SrgbColor::new(0xd5, 0x5e, 0x00),
-            Self::Yellow => SrgbColor::new(0xf0, 0xe4, 0x42),
-        }
+        let [red, green, blue] = sb_resources::ACCOUNT_PALETTE_V1[self as usize];
+        SrgbColor::new(red, green, blue)
     }
 }
 
