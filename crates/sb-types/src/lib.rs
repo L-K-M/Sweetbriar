@@ -4,6 +4,7 @@
 //! crates, so it can't become a catch-all.
 #![forbid(unsafe_code)]
 
+pub mod appearance;
 pub mod fs;
 pub mod id;
 pub mod random;
