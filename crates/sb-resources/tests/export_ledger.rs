@@ -13,7 +13,6 @@ const JOB: &str = "00000000-0000-4000-8000-0000000007b2";
 const IMPORT_ID: &str = "00000000-0000-4000-8000-0000000007b1";
 const SEARCH_ID: &str = "00000000-0000-4000-8000-0000000007b3";
 const REQUEST: &str = "{\"v\":1,\"format\":\"eml\",\"scope\":\"selection\"}";
-/// Key order and whitespace differ from `CANONICAL` on purpose.
 const REQUEST_PRETTY: &str = "{ \"scope\": \"selection\", \"format\": \"eml\", \"v\": 1 }";
 const CANONICAL: &str = "{\"format\":\"eml\",\"scope\":\"selection\",\"v\":1}";
 const IMPORT_ROW: &str = "INSERT INTO import_jobs (job_id, state, request_json, checkpoint_json, \
@@ -32,7 +31,6 @@ fn resources(label: &str) -> (ScratchDir, Resources) {
     (scratch, resources)
 }
 
-/// One facade write on the writer's own transaction.
 fn write<T: Send + 'static>(
     res: &Resources,
     f: impl FnOnce(&Transaction) -> Result<T, StoreError> + Send + 'static,
@@ -74,8 +72,6 @@ fn append(
     })
 }
 
-/// Run raw SQL in a facade write; a refused statement reports `Internal`
-/// so the whole transaction rolls back (spec/02's triggers).
 fn sql(res: &Resources, statement: String) -> Result<(), StoreError> {
     write(res, move |tx| {
         tx.execute(&statement, ())
@@ -84,7 +80,6 @@ fn sql(res: &Resources, statement: String) -> Result<(), StoreError> {
     })
 }
 
-/// `result` must refuse, with the named error kind.
 macro_rules! rejected {
     ($result:expr, $kind:expr, $label:expr $(, $arg:expr)* $(,)?) => {{
         let label = format!($label $(, $arg)*);
@@ -145,7 +140,6 @@ fn creation_is_canonical_replays_or_conflicts_and_refuses_bad_shapes() {
     assert_eq!(job.request_json(), CANONICAL);
     assert_eq!(job.checkpoint_json(), "{\"v\":1}");
 
-    // A canonical replay keeps the job: whitespace and key order vary.
     let job = create(
         &res,
         JOB,
@@ -158,7 +152,6 @@ fn creation_is_canonical_replays_or_conflicts_and_refuses_bad_shapes() {
     );
     assert_eq!(job.request_json(), CANONICAL);
 
-    // Another request for the same id conflicts and keeps nothing of it.
     rejected!(
         create(&res, JOB, "{\"v\":1,\"format\":\"mboxrd\"}"),
         conflict,
@@ -169,8 +162,6 @@ fn creation_is_canonical_replays_or_conflicts_and_refuses_bad_shapes() {
         CANONICAL
     );
 
-    // Requests must be version-1 objects within 4,096 bytes; exactly
-    // 4,096 fits.
     let mut bad = vec!["[]".to_owned(), "{}".to_owned(), "{\"v\":2}".to_owned()];
     bad.push(format!(
         "{{\"v\":1,\"pad\":\"{}\"}}",
@@ -186,7 +177,6 @@ fn creation_is_canonical_replays_or_conflicts_and_refuses_bad_shapes() {
     assert_eq!(exact.len(), MAX_EXPORT_JSON_BYTES);
     write(&res, move |tx| create_export_job(tx, "edge", &exact, at(1))).unwrap();
 
-    // Ids are 1 through 128 UTF-8 bytes.
     for id in [String::new(), "e".repeat(129)] {
         let bytes = id.len();
         rejected!(
@@ -202,7 +192,6 @@ fn creation_is_canonical_replays_or_conflicts_and_refuses_bad_shapes() {
     })
     .unwrap();
 
-    // Unknown ids never resolve through any entry point.
     let absent = "00000000-0000-4000-8000-0000000007ff";
     rejected!(
         res.read(|tx| export_job(tx, absent)),
@@ -253,8 +242,6 @@ fn appends_replay_exactly_and_reject_every_shortcut() {
     assert_eq!((job.revision(), job.captured_chunks()), (2, 2));
     let before = res.read(|tx| export_job(tx, JOB)).unwrap();
 
-    // An exact replay with the original, now stale, revision changes
-    // nothing: not the revision, not the checkpoint.
     let job = append(&res, JOB, 1, 0, vec![a.clone(), b.clone()]).unwrap();
     assert_eq!((job.revision(), job.captured_chunks()), (2, 2));
     assert_eq!(
@@ -264,8 +251,6 @@ fn appends_replay_exactly_and_reject_every_shortcut() {
         before.checkpoint_json()
     );
 
-    // A changed replay, and one reaching past the committed range, are
-    // conflicts that write nothing.
     rejected!(
         append(&res, JOB, 1, 0, vec![a.clone(), c.clone()]),
         conflict,
@@ -277,8 +262,6 @@ fn appends_replay_exactly_and_reject_every_shortcut() {
         "a partial-overlap replay"
     );
 
-    // An ordinal gap is invalid input; a stale revision on a fresh range
-    // is a conflict.
     rejected!(
         append(&res, JOB, 2, 5, vec![c.clone()]),
         invalid,
@@ -290,14 +273,11 @@ fn appends_replay_exactly_and_reject_every_shortcut() {
         "a stale fresh append"
     );
 
-    // A fresh append at the fence commits; the first batch still replays.
     let job = append(&res, JOB, 2, 2, vec![c.clone()]).unwrap();
     assert_eq!((job.revision(), job.captured_chunks()), (3, 3));
     let job = append(&res, JOB, 1, 0, vec![a.clone(), b.clone()]).unwrap();
     assert_eq!(job.revision(), 3);
 
-    // Empty batches, over-long batches, empty chunks and oversized
-    // chunks are invalid input, all without partial effects.
     for (label, batch) in [
         ("an empty batch", Vec::new()),
         ("31 chunks", vec![b"x".to_vec(); MAX_EXPORT_CHUNKS + 1]),
@@ -331,8 +311,6 @@ fn a_bounded_capture_keeps_exact_bytes_and_survives_reopen() {
     let chunks = chunks_of(&payload);
     assert_eq!((chunks.len(), chunks[33].len()), (34, 1_234));
 
-    // Several bounded writes: a maximum append of maximum chunks, then
-    // two more, ending past 2 MiB of captured bytes.
     let first = chunks[..MAX_EXPORT_CHUNKS].to_vec();
     let job = append(&res, JOB, 1, 0, first.clone()).unwrap();
     assert_eq!((job.revision(), job.captured_chunks()), (2, 30));
@@ -342,8 +320,6 @@ fn a_bounded_capture_keeps_exact_bytes_and_survives_reopen() {
     let job = append(&res, JOB, 3, 33, last).unwrap();
     assert_eq!(job.captured_chunks(), 34);
 
-    // Paged reads return the exact bytes: binary and unicode, across
-    // boundaries the chunks split mid-sequence. The final page is empty.
     let mut read_back = Vec::with_capacity(total);
     for (from, limit) in [(0u64, 30u32), (30, 3), (33, 1), (34, 30)] {
         for chunk in res.read(|tx| export_chunks(tx, JOB, from, limit)).unwrap() {
@@ -352,8 +328,6 @@ fn a_bounded_capture_keeps_exact_bytes_and_survives_reopen() {
     }
     assert_eq!(read_back, payload);
 
-    // Paging bounds: past the captured end is invalid, and so are limits
-    // outside 1 through 30.
     rejected!(
         res.read(|tx| export_chunks(tx, JOB, 35, 1)),
         invalid,
@@ -367,8 +341,6 @@ fn a_bounded_capture_keeps_exact_bytes_and_survives_reopen() {
         );
     }
 
-    // The first batch still replays exactly after later appends; the
-    // sealed ledger then survives close and reopen, bytes and all.
     let job = append(&res, JOB, 1, 0, first).unwrap();
     assert_eq!(job.revision(), 4);
     let job = advance(
@@ -392,8 +364,6 @@ fn a_bounded_capture_keeps_exact_bytes_and_survives_reopen() {
         res.read(|tx| export_chunks(tx, JOB, 30, 4)).unwrap(),
         chunks[30..]
     );
-    // Repeating creation with the same canonical request still returns
-    // the kept job, sealed progress included.
     let job = create(
         &res,
         JOB,
@@ -408,15 +378,12 @@ fn transitions_follow_the_chain_and_terminal_jobs_are_immutable() {
     let (_scratch, res) = resources("transitions");
     create(&res, JOB, REQUEST).unwrap();
 
-    // The revision fence: a stale revision never advances.
     rejected!(
         advance(&res, JOB, 99, ExportJobState::Ready, "{\"v\":1}"),
         conflict,
         "a stale revision advanced"
     );
 
-    // Capture may record progress; sealing, execution and completion
-    // follow in order.
     let job = advance(
         &res,
         JOB,
@@ -455,7 +422,6 @@ fn transitions_follow_the_chain_and_terminal_jobs_are_immutable() {
     .unwrap();
     assert_eq!(job.state(), ExportJobState::Completed);
 
-    // Terminal jobs are immutable: no transition, no payload write.
     for next in [
         ExportJobState::Capturing,
         ExportJobState::Ready,
@@ -476,8 +442,6 @@ fn transitions_follow_the_chain_and_terminal_jobs_are_immutable() {
         "terminal append"
     );
 
-    // No skipping: capture cannot jump to running or completed, and a
-    // sealed job cannot jump straight to completed.
     create(&res, "skip", REQUEST).unwrap();
     for next in [ExportJobState::Running, ExportJobState::Completed] {
         rejected!(
@@ -493,7 +457,6 @@ fn transitions_follow_the_chain_and_terminal_jobs_are_immutable() {
         "sealed straight to completed"
     );
 
-    // Ready seals the payload: appending conflicts and writes nothing.
     rejected!(
         append(
             &res,
@@ -512,7 +475,6 @@ fn transitions_follow_the_chain_and_terminal_jobs_are_immutable() {
         0
     );
 
-    // Cancellation and failure end any unfinished state, then hold.
     let job = advance(&res, "skip", 2, ExportJobState::Cancelled, "{\"v\":1}").unwrap();
     assert_eq!(job.state(), ExportJobState::Cancelled);
     rejected!(
@@ -531,7 +493,6 @@ fn transitions_follow_the_chain_and_terminal_jobs_are_immutable() {
     .unwrap();
     assert_eq!(job.state(), ExportJobState::Failed);
 
-    // An oversized checkpoint is invalid input; running cannot step back.
     create(&res, "late", REQUEST).unwrap();
     let huge = format!(
         "{{\"v\":1,\"pad\":\"{}\"}}",
@@ -607,13 +568,10 @@ fn job_kinds_and_capture_identity_are_guarded_in_sql() {
         "an unknown kind"
     );
 
-    // The API refuses to make an import or search id an export.
     for id in [IMPORT_ID, SEARCH_ID] {
         rejected!(create(&res, id, REQUEST), conflict, "{id} became an export");
     }
 
-    // The triggers refuse the same id from the other tables, on insert
-    // and on key updates, in every direction.
     for (statement, reason) in [
         (IMPORT_ROW.replace("{id}", JOB), "job id names an export"),
         (SEARCH_ROW.replace("{id}", JOB), "job id names an export"),

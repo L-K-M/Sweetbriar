@@ -215,19 +215,57 @@ CREATE TABLE import_job_sources (
 
 ## Export capture (schema v17, M1.7b2a)
 
-`export_jobs` keeps `job_id`, `state`, immutable `request_json`,
-`checkpoint_json`, `revision`, `captured_chunks` and creation/update
-millisecond timestamps. `export_job_chunks(job_id, ordinal, payload)`
-uses a composite primary key and a foreign key to its job. Payloads are
-nonempty blobs of at most 65,536 bytes. Job IDs are 1–128 UTF-8 bytes;
-version-1 request/checkpoint objects are at most 4,096 UTF-8 bytes each.
+```sql
+CREATE TABLE export_jobs (
+  job_id TEXT PRIMARY KEY CHECK (length(CAST(job_id AS BLOB)) BETWEEN 1 AND 128),
+  state TEXT NOT NULL CHECK (state IN ('capturing','ready','running','completed','cancelled','failed')),
+  request_json TEXT NOT NULL CHECK (
+    length(CAST(request_json AS BLOB)) <= 4096 AND json_valid(request_json)
+    AND json_type(request_json) = 'object' AND json_type(request_json, '$.v') IS 'integer'
+    AND json_extract(request_json, '$.v') IS 1),
+  checkpoint_json TEXT NOT NULL CHECK (
+    length(CAST(checkpoint_json AS BLOB)) <= 4096 AND json_valid(checkpoint_json)
+    AND json_type(checkpoint_json) = 'object' AND json_type(checkpoint_json, '$.v') IS 'integer'
+    AND json_extract(checkpoint_json, '$.v') IS 1),
+  revision INTEGER NOT NULL DEFAULT 1 CHECK (revision >= 1),
+  captured_chunks INTEGER NOT NULL DEFAULT 0 CHECK (captured_chunks >= 0),
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+) STRICT;
 
-Schema guards retain jobs and chunks, forbid chunk replacement, append
-only contiguous ordinals while capturing, freeze request/identity fields
-and prevent terminal-job mutation. Cross-kind insert/update guards keep
-export, import and Search rebuild IDs disjoint. Migration 17 is additive;
-it does not rewrite existing mail or jobs. State transitions, replay and
-writer accounting follow [09](09-import-export.md#durable-capture-ledger-m17b2a).
+CREATE TABLE export_job_chunks (
+  job_id TEXT NOT NULL REFERENCES export_jobs(job_id),
+  ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
+  payload BLOB NOT NULL CHECK (length(payload) BETWEEN 1 AND 65536),
+  PRIMARY KEY (job_id, ordinal)
+) STRICT;
+
+CREATE TRIGGER export_jobs_identity BEFORE UPDATE OF job_id, request_json, created_at ON export_jobs
+  WHEN NEW.job_id <> OLD.job_id OR NEW.request_json <> OLD.request_json
+    OR NEW.created_at <> OLD.created_at
+BEGIN SELECT RAISE(ABORT, 'export identity is immutable'); END;
+CREATE TRIGGER export_jobs_terminal BEFORE UPDATE ON export_jobs
+  WHEN OLD.state IN ('completed','cancelled','failed')
+BEGIN SELECT RAISE(ABORT, 'export job has finished'); END;
+CREATE TRIGGER export_jobs_kept BEFORE DELETE ON export_jobs
+BEGIN SELECT RAISE(ABORT, 'export history is retained'); END;
+
+-- Check the indexed tail, never count the whole capture on every append.
+CREATE TRIGGER export_chunks_append BEFORE INSERT ON export_job_chunks
+  WHEN (SELECT state FROM export_jobs WHERE job_id = NEW.job_id) <> 'capturing'
+    OR NEW.ordinal <> (SELECT coalesce(max(ordinal) + 1, 0) FROM export_job_chunks
+                       WHERE job_id = NEW.job_id)
+BEGIN SELECT RAISE(ABORT, 'export chunk is sealed or noncontiguous'); END;
+CREATE TRIGGER export_chunks_immutable BEFORE UPDATE ON export_job_chunks
+BEGIN SELECT RAISE(ABORT, 'export payload is immutable'); END;
+CREATE TRIGGER export_chunks_kept BEFORE DELETE ON export_job_chunks
+BEGIN SELECT RAISE(ABORT, 'export payload is retained'); END;
+```
+
+Migration 17 adds this ledger without rewriting existing mail or jobs.
+Timestamps are UTC milliseconds. Cross-kind insert/update guards in 06
+keep import, Search rebuild and export IDs disjoint. State transitions,
+replay and accounting follow [09](09-import-export.md#durable-capture-ledger-m17b2a).
 
 ## Mailboxes, occurrences and logical messages
 

@@ -498,6 +498,24 @@ BEGIN SELECT RAISE(ABORT, 'job id already names a search rebuild job'); END;
 CREATE TRIGGER search_rebuild_jobs_import_id_update BEFORE UPDATE OF job_id ON search_rebuild_jobs
   WHEN EXISTS(SELECT 1 FROM import_jobs WHERE job_id = NEW.job_id)
 BEGIN SELECT RAISE(ABORT, 'job id already names an import job'); END;
+
+-- Export capture IDs share this namespace (M1.7b2a).
+CREATE TRIGGER export_jobs_foreign_id BEFORE INSERT ON export_jobs
+  WHEN EXISTS(SELECT 1 FROM import_jobs WHERE job_id = NEW.job_id)
+    OR EXISTS(SELECT 1 FROM search_rebuild_jobs WHERE job_id = NEW.job_id)
+BEGIN SELECT RAISE(ABORT, 'job id names another kind'); END;
+CREATE TRIGGER import_jobs_export_id BEFORE INSERT ON import_jobs
+  WHEN EXISTS(SELECT 1 FROM export_jobs WHERE job_id = NEW.job_id)
+BEGIN SELECT RAISE(ABORT, 'job id names an export'); END;
+CREATE TRIGGER search_rebuild_jobs_export_id BEFORE INSERT ON search_rebuild_jobs
+  WHEN EXISTS(SELECT 1 FROM export_jobs WHERE job_id = NEW.job_id)
+BEGIN SELECT RAISE(ABORT, 'job id names an export'); END;
+CREATE TRIGGER import_jobs_export_id_update BEFORE UPDATE OF job_id ON import_jobs
+  WHEN EXISTS(SELECT 1 FROM export_jobs WHERE job_id = NEW.job_id)
+BEGIN SELECT RAISE(ABORT, 'job id names an export'); END;
+CREATE TRIGGER search_rebuild_jobs_export_id_update BEFORE UPDATE OF job_id ON search_rebuild_jobs
+  WHEN EXISTS(SELECT 1 FROM export_jobs WHERE job_id = NEW.job_id)
+BEGIN SELECT RAISE(ABORT, 'job id names an export'); END;
 ```
 
 ## Query AST v1
