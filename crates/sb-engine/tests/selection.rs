@@ -37,7 +37,8 @@ fn mbox(dir: &std::path::Path, name: &str, n: usize) -> PathBuf {
 
 /// Wait until the job reports `state`; a job ending elsewhere fails.
 fn settle(engine: &Engine, id: &str, state: ImportJobState) {
-    let deadline = Instant::now() + PATIENCE;
+    let mut deadline = Instant::now() + PATIENCE;
+    let mut processed = 0;
     loop {
         let job = block_on(engine.import_job(id)).unwrap();
         if job.state() == state {
@@ -52,9 +53,17 @@ fn settle(engine: &Engine, id: &str, state: ImportJobState) {
             job.state(),
             job.checkpoint().failure()
         );
+        // Bound stalls while real object publication keeps making durable progress.
+        let current = job.checkpoint().totals().processed;
+        if current > processed {
+            processed = current;
+            deadline = Instant::now() + PATIENCE;
+        }
         assert!(
             Instant::now() < deadline,
-            "job {id} never reached {state:?}"
+            "job {id} stopped progressing towards {state:?}: {:?}, {:?}",
+            job.state(),
+            job.checkpoint()
         );
         std::thread::sleep(Duration::from_millis(10));
     }

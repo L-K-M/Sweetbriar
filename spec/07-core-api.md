@@ -133,7 +133,8 @@ struct SelectionSnapshot { selection_id: SelectionId, window_id: WindowId, gener
 - The source is an open store-backed window; `DebugSynthetic` is
   `InvalidInput`. Resolve its ID index in one short read. The returned
   generation must equal the supplied generation, else `ResetRequired`
-  naming the current one. A close before registration is `NotFound`.
+  naming the current one. If the source window closes before registration,
+  `open_selection` fails with `NotFound`.
 - `Ids` contains at most 1,000 distinct members of that index, in any order.
   A non-member or duplicate is `InvalidInput`. The result keeps window order.
 - `RankBitmap` has exactly `ceil(index_length / 8)` bytes. Rank `r` is bit
