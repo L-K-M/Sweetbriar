@@ -371,6 +371,62 @@ fn creation_and_setting_failures_roll_back_without_assignment_leaks() {
 }
 
 #[test]
+fn invalid_utf8_in_stored_appearance_remains_corrupt() {
+    enum Record {
+        Account,
+        Identity,
+    }
+
+    for (mutation, record) in [
+        (
+            "UPDATE account_appearance SET color_srgb=CAST(x'ff' AS TEXT)",
+            Record::Account,
+        ),
+        (
+            "UPDATE account_appearance SET symbol=CAST(x'ff' AS TEXT)",
+            Record::Account,
+        ),
+        (
+            "UPDATE account_appearance SET assignment=CAST(x'ff' AS TEXT)",
+            Record::Account,
+        ),
+        (
+            "UPDATE identity_appearance SET color_override_srgb=CAST(x'ff' AS TEXT)",
+            Record::Identity,
+        ),
+        (
+            "UPDATE identity_appearance SET symbol_override=CAST(x'ff' AS TEXT)",
+            Record::Identity,
+        ),
+    ] {
+        let (_scratch, res) = resources("appearance-utf8");
+        let account = archive(&res);
+        add_identity(&res, &account);
+        write(&res, |tx| {
+            set_identity_appearance(tx, IDENTITY, None, None, None)
+        })
+        .unwrap();
+        write(&res, move |tx| {
+            tx.execute_batch("PRAGMA ignore_check_constraints=ON")
+                .unwrap();
+            tx.execute(mutation, []).unwrap();
+            tx.execute_batch("PRAGMA ignore_check_constraints=OFF")
+                .unwrap();
+            Ok(())
+        })
+        .unwrap();
+        let result = match record {
+            Record::Account => res.read(|tx| account_appearance(tx, &account)).map(|_| ()),
+            Record::Identity => res.read(|tx| identity_appearance(tx, IDENTITY)).map(|_| ()),
+        };
+        assert!(
+            matches!(result, Err(StoreError::Corrupt { .. })),
+            "{mutation}: {result:?}"
+        );
+    }
+}
+
+#[test]
 fn records_survive_reopen_and_corrupt_assignments_never_become_defaults() {
     let (scratch, res) = resources("appearance-reopen");
     let account = archive(&res);

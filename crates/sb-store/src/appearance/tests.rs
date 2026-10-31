@@ -180,6 +180,22 @@ fn damaged_stored_colors_symbols_revisions_and_slots_are_corrupt_not_defaults() 
 }
 
 #[test]
+fn sql_environment_failures_are_not_relabelled_as_corruption() {
+    for code in [
+        rusqlite::ffi::SQLITE_BUSY,
+        rusqlite::ffi::SQLITE_IOERR,
+        rusqlite::ffi::SQLITE_INTERRUPT,
+    ] {
+        let error = || rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(code), None);
+        let expected = crate::schema::classify(error(), "appearance storage");
+        assert_eq!(
+            std::mem::discriminant(&sql_error(error())),
+            std::mem::discriminant(&expected)
+        );
+    }
+}
+
+#[test]
 fn a_suppressed_sql_update_is_not_acknowledged_and_revision_overflow_is_explicit() {
     let mut conn = index_connection();
     let archive = archive_account(&conn);

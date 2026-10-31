@@ -430,7 +430,15 @@ fn invalid(message: impl Into<String>) -> StoreError {
     }
 }
 fn sql_error(error: rusqlite::Error) -> StoreError {
-    crate::schema::classify(error, "appearance storage")
+    match error {
+        rusqlite::Error::InvalidColumnType(..)
+        | rusqlite::Error::IntegralValueOutOfRange(..)
+        | rusqlite::Error::FromSqlConversionFailure(..)
+        | rusqlite::Error::Utf8Error(..) => {
+            StoreError::corrupt(format!("invalid stored appearance column: {error}"))
+        }
+        error => crate::schema::classify(error, "appearance storage"),
+    }
 }
 
 #[cfg(test)]

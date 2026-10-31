@@ -144,15 +144,15 @@ CREATE TABLE identity_appearance (
 
 ### Appearance storage (M1.10b)
 
-Migration 18 validates retained appearance records, then fills missing
-account appearances in creation-time/account-ID order. It uses palette
+Migration 18 rejects malformed retained appearance records as `Corrupt`.
+It fills missing account appearances in creation-time/account-ID order. It uses palette
 v1's fixed seven-color order, with slots 0 through 6. Each new assignment
 picks the least-used color, breaking ties by that order. Count every retained account,
 including disconnected accounts and custom colors equal to a preset.
 Never change an existing assignment during initialization.
 
 New account writers call `initialize_account_appearance` in the creation
-transaction. Queries never manufacture missing account records. Identity
+transaction, using the same least-used/color-order rule and counts. Queries never manufacture missing account records. Identity
 appearance rows remain optional: absence inherits both account values.
 An explicit row with null overrides also inherits, but keeps its revision.
 
