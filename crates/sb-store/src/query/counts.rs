@@ -58,6 +58,10 @@ const ACCOUNT_CHOICE: &str = "r.representative = 1 AND lm.account_id = ?1";
 /// serve: a row's account is its message's (an occurrence foreign key).
 const ACCOUNT_WALK: &str = "r.representative = 1 AND r.account_id = ?1";
 
+/// The bare-row account filter when class messages, not the account's
+/// rows, must drive the read. As with `MAILBOX_SEEK`, avoid its scope index.
+const ACCOUNT_SEEK: &str = "r.representative = 1 AND +r.account_id = ?1";
+
 const MAILBOX_CHOICE: &str = concat!("r.mailbox_id = ?1 AND ", lowest_in_mailbox!());
 
 /// `MAILBOX_CHOICE` for driven reads: the unary plus keeps SQLite from
@@ -142,6 +146,7 @@ struct Compiled {
     source: String,
     /// Every candidate an exact unknown count evaluates: `source`, or only
     /// those in a leaf's unknown classes when they are proven (M1.6r3b);
+    /// certain unknowns contribute NULL without evaluation (M1.6r4c3).
     /// `None` when no leaf of the tree can be unknown.
     unknown_source: Option<String>,
     /// The candidates that may be hits: `source`, or only drivers' matches.
@@ -361,7 +366,23 @@ fn compile_driven(
         )
     };
     let (source, hit_source) = (select(&all), select(&hits));
-    let unknown_source = unknown.as_deref().map(select);
+    let unknown_source = unknown.as_deref().map(|filter| {
+        let Some(certain) = drive::certain_unknowns(query.root(), guards) else {
+            return select(filter);
+        };
+        // Every driver keeps certain unknowns. Count them without the kept
+        // set or source joins; the read's own check validates their bindings.
+        let evaluated = select(&format!("{filter} AND r.message_id NOT IN ({certain})"));
+        let certain_scope = if scope == ACCOUNT_CHOICE {
+            ACCOUNT_SEEK
+        } else {
+            sought
+        };
+        format!(
+            "{evaluated} UNION ALL SELECT r.message_id,r.occurrence_id,NULL,0
+             FROM d_list_rows r WHERE {certain_scope} AND r.message_id IN ({certain})"
+        )
+    });
     Ok(Compiled {
         source,
         unknown_source,

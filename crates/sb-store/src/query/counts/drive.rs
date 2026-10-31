@@ -13,7 +13,7 @@
 
 use rusqlite::{OptionalExtension, Transaction, params_from_iter, types::Value};
 
-use super::{CoverageCounts, SearchScope, sql_error};
+use super::{CoverageCounts, FieldPredicate, Node, SearchScope, sql_error};
 use crate::StoreError;
 
 /// A kept candidate costs about twice a scanned one: it is sought by
@@ -176,6 +176,34 @@ const FTS_UNUSABLE: &str =
     UNION SELECT kl.message_id FROM d_search_docs kd INDEXED BY d_search_docs_unusable
       CROSS JOIN logical_messages kl ON kl.acquisition_id = kd.doc_id
       WHERE kd.state <> 'indexed' OR kd.truncated_fields <> '[]'";
+
+/// Every FTS leaf is unknown on these messages without calling a decoder.
+/// UNION counts shared/overlapping classes once; the queue adds no class.
+const FTS_CERTAIN: &str =
+    "SELECT kl.message_id FROM logical_messages kl WHERE kl.acquisition_id IS NULL
+    UNION SELECT kl.message_id FROM acquisitions ka INDEXED BY acquisitions_unpublished
+      CROSS JOIN logical_messages kl ON kl.acquisition_id = ka.acquisition_id
+      WHERE ka.object_state <> 'published'
+    UNION SELECT kl.message_id FROM d_search_docs kd INDEXED BY d_search_docs_unusable
+      CROSS JOIN logical_messages kl ON kl.acquisition_id = kd.doc_id
+      WHERE kd.state <> 'indexed' AND kd.state <> 'partial'";
+
+/// Kleene operators preserve all-unknown leaves. Require an FTS-only tree
+/// with no empty AND, as spec/06 defines (M1.6r4c3).
+fn fts_only(node: &Node) -> bool {
+    match node {
+        Node::Text(_) | Node::Field(FieldPredicate::Contains { .. }) => true,
+        Node::And(children) | Node::Or(children) => {
+            !children.is_empty() && children.iter().all(fts_only)
+        }
+        Node::Not(child) => fts_only(child),
+        _ => false,
+    }
+}
+
+pub(super) fn certain_unknowns(node: &Node, guards: Option<Guards>) -> Option<&'static str> {
+    (guards?.fts && fts_only(node)).then_some(FTS_CERTAIN)
+}
 
 /// Messages on a source with an unidentified entry in `field` (06).
 fn unidentified(field: &str) -> String {

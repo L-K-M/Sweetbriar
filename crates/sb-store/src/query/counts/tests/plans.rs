@@ -270,6 +270,64 @@ fn class_restricted_counts_seek_unknown_classes_and_scan_no_table() {
     }
 }
 
+/// M1.6r4c3: the certain-unknown arm counts scoped messages without
+/// joining their summaries/bindings or evaluating an FTS predicate.
+#[test]
+fn certain_unknowns_are_counted_without_source_or_fts_joins() {
+    let (conn, archive) = super::driven::store();
+    let account = archive_account(&conn).parse().unwrap();
+    let tx = conn.unchecked_transaction().unwrap();
+    register(&tx).unwrap();
+    for scope in [SearchScope::All, SearchScope::Account(account), archive] {
+        let coverage = super::driven::counted(&tx, &scope);
+        let plan = compile_driven(
+            &tx,
+            &query(json!({"not":{"text":"alpha"}})),
+            scope.clone(),
+            Some(&coverage),
+        )
+        .unwrap();
+        let sql = format!(
+            "SELECT coalesce(sum(v IS NULL),0) FROM ({})",
+            plan.unknown_source.as_deref().unwrap()
+        );
+        seeks_by_message(&tx, &sql, &plan.values, &format!("{scope:?}"));
+        let nodes = plan_of(&tx, &sql, &plan.values);
+        let compound = nodes
+            .iter()
+            .find(|node| node.detail == "COMPOUND QUERY")
+            .expect("separate evaluating and certain counts");
+        let certain = nodes
+            .iter()
+            .find(|node| node.parent == compound.id && node.detail == "UNION ALL")
+            .expect("certain unknowns are counted separately");
+        let in_certain = |node: &&PlanNode| {
+            let mut parent = node.parent;
+            while let Some(up) = nodes.iter().find(|candidate| candidate.id == parent) {
+                if up.id == certain.id {
+                    return true;
+                }
+                parent = up.parent;
+            }
+            false
+        };
+        let arm: Vec<_> = nodes.iter().filter(in_certain).collect();
+        assert!(!arm.is_empty(), "{scope:?}");
+        for node in arm {
+            assert!(!node.detail.contains("d_search_fts"), "{}", node.detail);
+            let mut words = node.detail.split_whitespace();
+            if matches!(words.next(), Some("SCAN" | "SEARCH")) {
+                let alias = words.next().unwrap();
+                assert!(
+                    ["r", "r2", "kl", "ka", "kd"].contains(&alias),
+                    "{scope:?} joins a message source: {}",
+                    node.detail
+                );
+            }
+        }
+    }
+}
+
 /// spec/06: the per-read binding check costs per binding, in every scope:
 /// each binding seeks its message's rows rather than walking the scope.
 #[test]
