@@ -352,6 +352,8 @@ pub(crate) fn open_with(
     check_sqlite_version(&conn, pinned)?;
     startup_quick_check(&conn)?;
     run_migrations(&mut conn, seams, migrations)?;
+    // Finish startup writes before the writer's asynchronous idle checkpoint.
+    crate::objects::expire_reservations(&mut conn, seams.clock().now())?;
     // The readers first, from the same constructor (spec/03): if one
     // fails, the writer connection still doesn't checkpoint on close.
     let readers = Readers::open(paths.state_db(), reader_pragmas)?;
@@ -370,9 +372,6 @@ pub(crate) fn open_with(
         Arc::clone(&writer),
         Arc::clone(seams.clock_arc()),
     );
-    // Expire under the exclusive lease, after validation/migrations and before
-    // any live publisher (spec/03).
-    objects.expire_reservations()?;
     Ok(Store {
         readers,
         writer,

@@ -9,15 +9,15 @@ use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use rusqlite::{Transaction, params};
+use rusqlite::{Connection, Transaction, TransactionBehavior, params};
 use sb_types::fs::{FileKind, Fs, ReadFile};
 use sb_types::random::Random;
 use sb_types::time::Clock;
 use sha2::{Digest, Sha256};
 
-use crate::StoreError;
 use crate::schema::classify;
 use crate::writer::{WritePriority, Writer};
+use crate::{StoreError, Timestamp};
 
 /// How many bytes `publish` streams per write: large enough that few
 /// writes cover a body, small enough to bound memory.
@@ -310,16 +310,6 @@ impl Reservations {
             Self::Sink(sink) => sink(id, token),
         }
     }
-
-    /// Startup expiry of abandoned reservations (spec/03); the pin
-    /// sink holds nothing to expire.
-    fn expire(&self) -> Result<(), StoreError> {
-        match self {
-            Self::Writer(writer) => writer.expire_reservations(),
-            #[cfg(test)]
-            Self::Sink(_) => Ok(()),
-        }
-    }
 }
 
 impl WriterReservations {
@@ -341,44 +331,38 @@ impl WriterReservations {
         });
         crate::store::await_write(future)
     }
+}
 
-    /// Delete expired reservations in bounded batches (spec/03):
-    /// stamps at or before the cutoff go; recent and future stamps,
-    /// malformed or oversized rows and every other pin kind stay.
-    fn expire_reservations(&self) -> Result<(), StoreError> {
-        // checked_sub: below i64::MIN + LIFETIME no representable
-        // reservation is old enough, so nothing expires (spec/03).
-        let Some(cutoff) = self
-            .clock
-            .now()
-            .as_millis()
-            .checked_sub(RESERVATION_LIFETIME_MS)
-        else {
+/// Startup-only cleanup, before the writer can schedule an idle checkpoint.
+pub(crate) fn expire_reservations(conn: &mut Connection, now: Timestamp) -> Result<(), StoreError> {
+    let Some(cutoff) = now.as_millis().checked_sub(RESERVATION_LIFETIME_MS) else {
+        return Ok(());
+    };
+    loop {
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|e| classify(e, "begin reservation expiry"))?;
+        let deleted = tx
+            .execute(
+                "DELETE FROM object_pins WHERE rowid IN (
+                    SELECT rowid FROM object_pins
+                    WHERE pin_kind = ?5 AND created_at <= ?1
+                      AND length(CAST(object_sha256 AS BLOB)) = ?3
+                      AND length(CAST(pin_ref AS BLOB)) <= ?4
+                    LIMIT ?2)",
+                params![
+                    cutoff,
+                    RESERVATION_EXPIRY_BATCH,
+                    SHA256_HEX_BYTES,
+                    RESERVATION_PIN_REF_BYTES,
+                    RESERVATION_KIND,
+                ],
+            )
+            .map_err(|e| classify(e, "expire abandoned reservations"))?;
+        tx.commit()
+            .map_err(|e| classify(e, "commit reservation expiry"))?;
+        if deleted == 0 {
             return Ok(());
-        };
-        loop {
-            let deleted =
-                crate::store::await_write(self.writer.submit(WritePriority::Index, move |tx| {
-                    tx.execute(
-                        "DELETE FROM object_pins WHERE rowid IN (
-                           SELECT rowid FROM object_pins
-                            WHERE pin_kind = ?5 AND created_at <= ?1
-                             AND length(CAST(object_sha256 AS BLOB)) = ?3
-                             AND length(CAST(pin_ref AS BLOB)) <= ?4
-                           LIMIT ?2)",
-                        params![
-                            cutoff,
-                            RESERVATION_EXPIRY_BATCH,
-                            SHA256_HEX_BYTES,
-                            RESERVATION_PIN_REF_BYTES,
-                            RESERVATION_KIND,
-                        ],
-                    )
-                    .map_err(|e| classify(e, "expire abandoned reservations"))
-                }))?;
-            if deleted == 0 {
-                return Ok(());
-            }
         }
     }
 }
@@ -602,12 +586,6 @@ impl FileObjectStore {
             durable_chains: Mutex::new(HashSet::new()),
             reservations: Reservations::Sink(pins),
         }
-    }
-
-    /// Startup expiry of abandoned reservations (spec/03), run after
-    /// the open checks and migrations, before any live publisher.
-    pub(crate) fn expire_reservations(&self) -> Result<(), StoreError> {
-        self.reservations.expire()
     }
 
     /// `objects/sha256/ab/cd` for a hash's first two bytes.
