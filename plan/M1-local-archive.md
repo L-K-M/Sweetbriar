@@ -803,9 +803,21 @@ local drafts. No network yet.
     `cache_size=-65536` (03).
   - **M1.6r4c3 Certain unknowns — M:** an FTS-only tree's exact unknown
     count counts its certain unknowns without evaluating them (06).
-  - **M1.6r4c4 Rows on screen — M:** designed from the owner's Time
-    Profiler run: the main-thread cost between the first page and its
-    rows on screen (08).
+  - **M1.6r4c4 Closed-window ID reads — L:** the 8086cb5 Mac profile
+    puts 7% of search-phase CPU on the main thread, with landing-to-screen
+    within one display interval; whole ID scans use about half of worker
+    CPU. Replacement closes their windows but leaves those scans running.
+    Prioritize stopping that obsolete work over view reuse. A window owns
+    its ID-read stop signal, checked inside SQLite work before its first
+    result as well as while enumerating. Closing returns `NotFound`,
+    never partial IDs; scoped reader state is cleared on every exit.
+    Native tests cover ordinary/Search IDs, both sorts, mid-statement
+    close, reader reuse, other-window isolation, unchanged results/errors
+    when live, dropped opens, marks and shutdown. The paired Mac rerun
+    records the effect without changing benchmark pacing or budgets.
+    May run alongside r4c3 qualification: its code dependencies are the
+    merged ordinary and Search window implementations. The owner run
+    against 06 and 08 still closes M1.6r.
 
 - **Goal:** FTS5 search with the query AST v1, the text syntax, chips and
   coverage.
@@ -1032,6 +1044,37 @@ local drafts. No network yet.
   - **owner:** write, quit, relaunch, and the draft is intact.
 
 ### M1.10 Account appearance core — M, linux + macos-ci
+
+- **PR split (2026-10-31):** keep every original deliverable and
+  acceptance check; implement complete artifacts under 1,450 gross lines
+  per PR and re-size each before coding.
+  - **M1.10a Appearance tokens — L:** the seven-color palette, canonical
+    sRGB input, OKLCH role derivation and quantized contrast guarantees
+    in the core. A native public-API consumer verifies presets, custom
+    extremes, invalid input, hue/gamut behavior and independent WCAG
+    ratios. This artifact has no persistence or shell effects.
+  - **M1.10b Appearance storage — L:** initialization/backfill, stable
+    least-used palette assignment and versioned account/identity records
+    through Resources. Native facade tests own canonical validation,
+    no recoloring, preserved disconnected accounts, revisions, replay
+    and transaction failures.
+  - **M1.10c Application API — L:** engine/service commands and appearance
+    queries consume a/b, with owned DTOs, durable receipts and committed
+    invalidation. Native Core tests cover caller drop, idempotency,
+    missing accounts, malformed stored colors and lifecycle.
+  - **M1.10d1 Query FFI and bridge — L:** complete generated query SDK,
+    owned bridge tokens and native/Swift endpoint, codec and cancellation
+    proof at first exposure. Check binding drift and import boundaries.
+  - **M1.10d2 Command FFI and bridge — L:** setter SDK and bridge consume
+    c/d1, with receipts, typed errors, replay/drop/lifecycle proof and
+    regenerated bindings.
+  - **M1.10e App appearance — L:** sidebar monograms, mixed-account row
+    rails and Settings swatches/Custom through the bridge. Tests cover
+    duplicate initials, actual light/dark/selected surfaces, accessibility
+    and updates across open windows. Color never replaces native selection.
+  - **M1.10f Qualification — M:** colors survive the real M1.8 backup and
+    restore APIs, and the owner's rendered contrast/accessibility checks
+    are recorded. Pure token tests do not substitute for these checks.
 
 - **Goal:** account colors exist in the core and show in the sidebar and
   list rails.

@@ -10,8 +10,8 @@
 //! when the database changed.
 
 use std::path::Path;
-use std::sync::Condvar;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
 
 use rusqlite::Connection;
 use rusqlite::Transaction;
@@ -26,6 +26,32 @@ use crate::store::open_connection;
 /// of reader connections (default 4)"). One per concurrent query; more
 /// callers wait rather than fail.
 pub(crate) const READER_COUNT: usize = 4;
+
+/// Check inside sorts without an atomic load on every VM instruction.
+const STOP_CHECK_OPS: std::ffi::c_int = 100;
+
+/// One-shot signal shared by a window and its admitted ID reads (spec/07).
+#[derive(Debug, Clone, Default)]
+pub struct ReadStop(Arc<AtomicBool>);
+
+impl ReadStop {
+    /// Raise the signal.
+    pub fn stop(&self) {
+        self.0.store(true, Ordering::Release);
+    }
+
+    /// Whether the signal is raised.
+    fn is_stopped(&self) -> bool {
+        self.0.load(Ordering::Acquire)
+    }
+}
+
+/// A scoped read's complete result or cancellation, never partial data.
+#[derive(Debug)]
+pub enum Scoped<T> {
+    Done(T),
+    Stopped,
+}
 
 /// A pool of `READER_COUNT` read-only connections. Taking one blocks
 /// until a reader is free, so callers can't exhaust it — they queue.
@@ -106,6 +132,29 @@ impl Readers {
         }
     }
 
+    /// Interrupt this read when `stop` is raised, including before a sort's
+    /// first row. Clear the handler before transaction/pool return on every
+    /// exit. Other reads and writers are unaffected (spec/03).
+    pub(crate) fn read_scoped<T>(
+        &self,
+        stop: &ReadStop,
+        f: impl FnOnce(&Transaction) -> Result<T, StoreError>,
+    ) -> Result<Scoped<T>, StoreError> {
+        // A signal already raised answers without borrowing a reader.
+        if stop.is_stopped() {
+            return Ok(Scoped::Stopped);
+        }
+        let mut conn = self.acquire();
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            read_once_scoped(&mut conn, stop, f)
+        }));
+        self.release(conn);
+        match outcome {
+            Ok(result) => result,
+            Err(panic) => std::panic::resume_unwind(panic),
+        }
+    }
+
     /// Close every reader. Each was opened by the constructor with
     /// `NO_CKPT_ON_CLOSE` set and nobody lifted it, so closing one
     /// never checkpoints (spec/03).
@@ -134,6 +183,48 @@ fn read_once<T>(
     tx.commit()
         .map_err(|e| classify(e, "end a read transaction"))?;
     Ok(value)
+}
+
+/// Preserve typed interruption so a raised stop cannot hide another failure.
+fn read_once_scoped<T>(
+    conn: &mut Connection,
+    stop: &ReadStop,
+    f: impl FnOnce(&Transaction) -> Result<T, StoreError>,
+) -> Result<Scoped<T>, StoreError> {
+    let tx = conn
+        .transaction()
+        .map_err(|e| classify(e, "begin a read transaction"))?;
+    let mark = {
+        let flag = Arc::clone(&stop.0);
+        move || flag.load(Ordering::Acquire)
+    };
+    tx.progress_handler(STOP_CHECK_OPS, Some(mark))
+        .map_err(|e| classify(e, "scope a read's stop signal"))?;
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(&tx)));
+    // Clear the handler before commit/rollback, including during unwinding.
+    let uninstalled = tx
+        .progress_handler(0, None::<fn() -> bool>)
+        .map_err(|e| classify(e, "unscope a read's stop signal"));
+    match outcome {
+        Err(panic) => std::panic::resume_unwind(panic),
+        Ok(Err(error)) => {
+            uninstalled?;
+            match error {
+                StoreError::Interrupted { .. } => Ok(Scoped::Stopped),
+                error => Err(error),
+            }
+        }
+        Ok(Ok(value)) => {
+            uninstalled?;
+            tx.commit()
+                .map_err(|e| classify(e, "end a read transaction"))?;
+            // A close after the last VM check still discards the result.
+            if stop.is_stopped() {
+                return Ok(Scoped::Stopped);
+            }
+            Ok(Scoped::Done(value))
+        }
+    }
 }
 
 #[cfg(test)]

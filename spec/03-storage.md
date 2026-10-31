@@ -125,6 +125,10 @@ recreated.
     `wal_autocheckpoint=0`, `query_only=ON` and `cache_size=-65536`,
     and never checkpoint on close. Read transactions are short: a query
     window is not a long-lived read transaction (07).
+    Closed-window ID scans use a read-scoped SQLite progress handler;
+    row-only checks cannot stop a sort before its first result. Remove
+    temporary handler state before commit/rollback and pool return on
+    success, interruption, error or unwind. Writers are not interrupted.
   - Each reader keeps up to 64 MiB of page cache, filled only as reads
     touch pages. With SQLite's 2 MB default, nearly every row lookup on
     a Search first page was an OS read over a 100k store of 415 MB

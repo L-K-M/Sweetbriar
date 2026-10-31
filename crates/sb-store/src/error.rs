@@ -42,6 +42,9 @@ pub enum StoreError {
     /// An internal invariant broke, e.g. the linked SQLite isn't the
     /// pinned build (`CoreError::Internal`).
     Internal { detail: String },
+    /// Native `SQLITE_INTERRUPT`, consumed by scoped reads (spec/03).
+    /// An unexpected interruption maps to `CoreError::Internal`.
+    Interrupted { detail: String },
 }
 
 impl StoreError {
@@ -95,6 +98,13 @@ impl StoreError {
             detail: detail.into(),
         }
     }
+
+    /// Preserve the native interruption until the scoped read handles it.
+    pub(crate) fn interrupted(detail: impl Into<String>) -> Self {
+        Self::Interrupted {
+            detail: detail.into(),
+        }
+    }
 }
 
 impl fmt::Display for StoreError {
@@ -113,6 +123,7 @@ impl fmt::Display for StoreError {
             Self::InvalidInput { message } => write!(f, "invalid input: {message}"),
             Self::Conflict { detail } => write!(f, "conflict: {detail}"),
             Self::Internal { detail } => write!(f, "internal error: {detail}"),
+            Self::Interrupted { detail } => write!(f, "interrupted: {detail}"),
         }
     }
 }
