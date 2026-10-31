@@ -285,7 +285,7 @@ fn stored_acquisition(store: &Store) -> StoredAcquisition {
 fn shared_acquisition_keeps_each_accounts_identity_and_exact_bytes() {
     let (_scratch, paths) = scratch_paths("reader-shared");
     let store = crate::open(&paths, &test_seams(real_fs())).unwrap();
-    let object = store.objects().publish(ORIGINAL).unwrap();
+    let object = *store.objects().publish(ORIGINAL).unwrap().id();
     writing(&store, move |tx| {
         seed(tx);
         attach(tx, &object);
@@ -323,11 +323,12 @@ fn shared_acquisition_keeps_each_accounts_identity_and_exact_bytes() {
 fn each_message_reads_its_own_acquisition() {
     let (_scratch, paths) = scratch_paths("reader-selected");
     let store = crate::open(&paths, &test_seams(real_fs())).unwrap();
-    let older = store.objects().publish(ORIGINAL).unwrap();
-    let newer = store
+    let older = *store.objects().publish(ORIGINAL).unwrap().id();
+    let newer = *store
         .objects()
         .publish(&b"Subject: Newer\r\n\r\nOther body"[..])
-        .unwrap();
+        .unwrap()
+        .id();
     writing(&store, move |tx| {
         seed(tx);
         for (id, object, acquired_at) in [(50, &older, 1), (51, &newer, 2)] {
@@ -368,7 +369,7 @@ fn missing_and_same_length_corrupt_objects_never_return_bytes() {
     for corrupt in [false, true] {
         let (_scratch, paths) = scratch_paths("reader-damage");
         let store = crate::open(&paths, &test_seams(real_fs())).unwrap();
-        let object = store.objects().publish(ORIGINAL).unwrap();
+        let object = *store.objects().publish(ORIGINAL).unwrap().id();
         writing(&store, move |tx| {
             seed(tx);
             attach(tx, &object);
@@ -479,10 +480,11 @@ fn acquisition_metadata_is_validated() {
 fn exact_message_limit_is_admitted_and_verified() {
     let (_scratch, paths) = scratch_paths("reader-limit");
     let store = crate::open(&paths, &test_seams(real_fs())).unwrap();
-    let object = store
+    let object = *store
         .objects()
         .publish(std::io::repeat(b'x').take(MAX_READER_MESSAGE_BYTES))
-        .unwrap();
+        .unwrap()
+        .id();
     writing(&store, move |tx| {
         seed(tx);
         attach(tx, &object);
@@ -502,7 +504,7 @@ fn store_with_acquisition(
 ) -> (ScratchDir, StorePaths, Store, StoredAcquisition) {
     let (scratch, paths) = scratch_paths(label);
     let store = crate::open(&paths, &test_seams(fs)).unwrap();
-    let object = store.objects().publish(ORIGINAL).unwrap();
+    let object = *store.objects().publish(ORIGINAL).unwrap().id();
     writing(&store, move |tx| {
         seed(tx);
         attach(tx, &object);
@@ -651,7 +653,7 @@ fn bounded_read_verifies_to_eof_retaining_only_within_the_limit() {
             .unwrap(),
         AcquisitionRead::Oversized
     );
-    let empty = store.objects().publish(&b""[..]).unwrap();
+    let empty = *store.objects().publish(&b""[..]).unwrap().id();
     writing(&store, move |tx| {
         tx.execute(
             "INSERT INTO acquisitions (acquisition_id, content_sha256, byte_length,
@@ -716,7 +718,11 @@ fn bounded_read_cancels_before_io_and_between_chunks() {
         "cancellation must precede I/O"
     );
     // A multi-chunk object stops at a boundary and stays intact.
-    let big = store.objects().publish(&vec![b'y'; 130_000][..]).unwrap();
+    let big = *store
+        .objects()
+        .publish(&vec![b'y'; 130_000][..])
+        .unwrap()
+        .id();
     writing(&store, move |tx| {
         tx.execute(
             "INSERT INTO acquisitions (acquisition_id, content_sha256, byte_length,

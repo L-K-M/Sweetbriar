@@ -304,7 +304,7 @@ fn a_first_summary_prices_displayed_sender_instead_of_hidden_address_fanout() {
     assert_eq!(message.summary.from_addr.as_deref(), Some(address.as_str()));
     assert_eq!(message.summary.from_name.as_deref(), Some("S"));
     assert!(message.change_budget_bytes() < MAX_IMPORT_CHANGES_BYTES);
-    hold_projection_rows(&res, &message.object, HELD_MESSAGES, None);
+    hold_projection_rows(&res, message.object.id(), HELD_MESSAGES, None);
     let generation = res.read(crate::list_generation).unwrap();
     let position = acquired.next_position();
     let mailbox = sources[0].mailbox().to_owned();
@@ -364,7 +364,7 @@ fn header_selected_retained_payload_exhausts_quota_and_rolls_back_import() {
     assert!(acquired.message().change_budget_bytes() < MAX_IMPORT_CHANGES_BYTES);
     hold_projection_rows(
         &res,
-        &acquired.message().object,
+        acquired.message().object.id(),
         HELD_MESSAGES,
         Some("h".repeat(80_000)),
     );

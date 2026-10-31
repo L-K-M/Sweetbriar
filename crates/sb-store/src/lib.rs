@@ -46,7 +46,8 @@ pub use rusqlite::Transaction;
 
 pub use error::StoreError;
 pub use objects::{
-    FileObjectStore, ObjectId, ObjectIter, ObjectReader, ObjectStore, read_error_as_store_error,
+    FileObjectStore, ObjectId, ObjectIter, ObjectReader, ObjectStore, PublishedObject,
+    read_error_as_store_error,
 };
 pub use paths::StorePaths;
 pub use receipts::{Receipt, encode_job_receipt, receipt_job_id, run_once};

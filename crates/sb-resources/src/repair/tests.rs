@@ -41,7 +41,7 @@ fn native(bytes: &[u8], fs: Arc<dyn Fs>) -> (ScratchDir, Resources, ObjectId) {
         ))),
     )
     .unwrap();
-    let object = resources.store.objects().publish(bytes).unwrap();
+    let object = *resources.store.objects().publish(bytes).unwrap().id();
     let (hash, length) = (object.sha256_hex(), object.byte_length() as i64);
     write(&resources, move |tx| {
         tx.execute("INSERT INTO acquisitions(acquisition_id,content_sha256,byte_length,object_state,first_acquired_at) VALUES(1,?1,?2,'published',0)", (hash, length)).unwrap();
@@ -717,7 +717,7 @@ fn recorded_diagnoses_do_not_hide_unavailable_sources_or_other_targets() {
         number(&resources, "SELECT count(*) FROM d_repair_diagnoses"),
         2
     );
-    let object = resources.store.objects().publish(RICH).unwrap();
+    let object = *resources.store.objects().publish(RICH).unwrap().id();
     write(&resources, move |tx| {
         tx.execute(
             "INSERT INTO acquisitions VALUES(2,?1,?2,'published',0)",

@@ -72,12 +72,14 @@ pub(crate) const CLEAN_SHUTDOWN_KEY: &str = "clean_shutdown_at";
 /// the readers close first, the writer is the last connection to
 /// close — SQLite then checkpoints and removes the WAL (M0.4 lifted
 /// `NO_CKPT_ON_CLOSE` for the writer) — and the lease releases last,
-/// after SQLite is done with the files.
+/// after SQLite is done with the files. `objects` shares the writer and must
+/// drop before `activation`: the last writer Arc drains queued jobs, which
+/// still need a live activation owner.
 pub struct Store {
     readers: Readers,
-    writer: Writer,
-    pub(crate) activation: crate::activation::inputs::Owner,
+    writer: Arc<Writer>,
     objects: FileObjectStore,
+    pub(crate) activation: crate::activation::inputs::Owner,
     source_snapshots: ImportSourceSnapshots,
     import_reports: ImportReports,
     lease: Box<dyn Lease>,
@@ -334,14 +336,6 @@ pub(crate) fn open_with(
     let lease = take_lease(fs, paths.lock_file())?;
     // From here on an early return drops `lease`, releasing the lock.
     ensure_layout(fs, paths)?;
-    // The layout exists: the object store can publish into it. Built
-    // from the seams, so tests and the engine share one construction.
-    let objects = FileObjectStore::new(
-        Arc::clone(seams.fs_arc()),
-        Arc::clone(seams.random_arc()),
-        paths.objects().to_path_buf(),
-        paths.recovery().to_path_buf(),
-    );
     examine_existing(fs, paths, pinned, migrations)?;
     let mut conn = open_connection(paths.state_db(), Access::ReadWrite, writer_pragmas)?;
     check_sqlite_version(&conn, pinned)?;
@@ -353,7 +347,21 @@ pub(crate) fn open_with(
     let activation = crate::activation::inputs::Owner::install(&conn)?;
     // The writer thread owns the connection from here (spec/01), and
     // lets it checkpoint once it runs (spec/03).
-    let writer = Writer::new(conn)?;
+    let writer = Arc::new(Writer::new(conn)?);
+    // The layout exists: the object store can publish into it. Built
+    // only now, so every publication reserves through the writer and
+    // no earlier open step could publish unreserved (spec/03).
+    let objects = FileObjectStore::new(
+        Arc::clone(seams.fs_arc()),
+        Arc::clone(seams.random_arc()),
+        paths.objects().to_path_buf(),
+        paths.recovery().to_path_buf(),
+        Arc::clone(&writer),
+        Arc::clone(seams.clock_arc()),
+    );
+    // Expire under the exclusive lease, after validation/migrations and before
+    // any live publisher (spec/03).
+    objects.expire_reservations()?;
     Ok(Store {
         readers,
         writer,
@@ -422,8 +430,9 @@ fn record_clean_shutdown(writer: &Writer, clock: &dyn Clock) -> Result<(), Store
 /// Drive one [`WriteFuture`] to completion on the calling thread: a
 /// thread-park waker, as in tests, since `close` is synchronous and
 /// the future works under any executor (a wake from the writer thread
-/// unparks this one; a park before the wake keeps its permit).
-fn await_write<T>(future: WriteFuture<T>) -> Result<T, StoreError> {
+/// unparks this one; a park before the wake keeps its permit). A
+/// publication waits on its reservation commit the same way.
+pub(crate) fn await_write<T>(future: WriteFuture<T>) -> Result<T, StoreError> {
     use std::task::{Context, Poll, Wake, Waker};
 
     /// Wakes by unparking the blocked closing thread.

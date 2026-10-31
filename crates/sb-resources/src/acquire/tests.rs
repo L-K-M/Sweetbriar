@@ -99,7 +99,7 @@ fn published(res: &Resources, message: &AcquiredMessage) -> Vec<u8> {
     let mut bytes = Vec::new();
     res.store
         .objects()
-        .open(&message.message().object)
+        .open(message.message().object.id())
         .unwrap()
         .read_to_end(&mut bytes)
         .unwrap();
@@ -132,7 +132,7 @@ fn fixture_variants_publish_their_expected_bytes() {
             fs::read(fixtures().join(expected)).unwrap()
         );
         let import = message.message();
-        assert_eq!(import.object.sha256_hex(), sha256);
+        assert_eq!(import.object.id().sha256_hex(), sha256);
         assert_eq!(import.offset, 0);
         assert_eq!(import.source_path, quoting.path().to_str().unwrap());
         assert_eq!(import.source_sha256, quoting.snapshot().sha256_hex());
@@ -159,7 +159,7 @@ fn identical_messages_share_an_object_but_keep_their_offsets() {
     let [first, second] = messages.as_slice() else {
         panic!("two messages expected: {messages:?}");
     };
-    assert_eq!(first.message().object, second.message().object);
+    assert_eq!(first.message().object.id(), second.message().object.id());
     assert_eq!(first.message().offset, 0);
     assert_eq!(second.message().offset, first.next_position().offset());
     assert!(second.message().offset > 0);
@@ -377,7 +377,7 @@ fn oversized_messages_keep_exact_bytes_and_parse_partially() {
         .unwrap()
         .unwrap();
     assert_eq!(published(&res, &message), bytes);
-    assert_eq!(message.message().object.byte_length(), 4096);
+    assert_eq!(message.message().object.id().byte_length(), 4096);
     assert!(matches!(
         message.message().summary.parse_state,
         ImportParseState::Partial
@@ -394,7 +394,7 @@ fn unparseable_messages_are_still_published() {
     let [message] = messages.as_slice() else {
         panic!("one message expected: {messages:?}");
     };
-    assert_eq!(message.message().object.byte_length(), 0);
+    assert_eq!(message.message().object.id().byte_length(), 0);
     assert!(matches!(
         message.message().summary.parse_state,
         ImportParseState::Failed
@@ -417,8 +417,13 @@ fn resumed_sources_continue_at_their_recorded_position() {
     ));
 
     let resumed = acquire_from(&res, &mbox, None, all[0].next_position());
-    let identity =
-        |m: &AcquiredMessage| (m.message().object, m.message().offset, m.next_position());
+    let identity = |m: &AcquiredMessage| {
+        (
+            *m.message().object.id(),
+            m.message().offset,
+            m.next_position(),
+        )
+    };
     assert_eq!(
         resumed.iter().map(identity).collect::<Vec<_>>(),
         all[1..].iter().map(identity).collect::<Vec<_>>()
