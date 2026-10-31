@@ -141,6 +141,11 @@ struct ListRow {
     index, then its pages.
   - `close_window` releases it; the shell closes every window it
     opens. A read of a closed or unknown window is `NotFound`.
+    Closing also stops its admitted `window_ids` SQL work, including work
+    before SQLite produces the first ID. A stopped read returns `NotFound`,
+    never partial IDs, and moves no observed-generation mark. Its stop
+    signal cannot interrupt another window or a later borrower of its
+    pooled reader. Uninterrupted reads retain their results and typed errors.
 - **Paging** is by keyset cursor, never `OFFSET`. Cursors are opaque and
   sort-specific: `(sort_date, occurrence_id)` for date order, `(score,
   occurrence_id)` for relevance order (ascending score, descending id).

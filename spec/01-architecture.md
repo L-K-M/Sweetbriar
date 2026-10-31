@@ -223,7 +223,7 @@ is committed, and updates are their own PRs.
 
 | Purpose | Crate | Version | Notes |
 |---|---|---|---|
-| SQLite | `rusqlite` (`bundled`, `backup`, `limits`, `functions`) | 0.40.2 | Bundles **SQLite 3.53.2** via `libsqlite3-sys` 0.38.2: ≥ 3.51.3 and not 3.52.0. FTS5 is compiled in. `functions` keeps Unicode address comparisons and typed metadata validation inside SQL before LIMIT (M1.6h); safe private callbacks only. `LIBSQLITE3_FLAGS` per 03 |
+| SQLite | `rusqlite` (`bundled`, `backup`, `limits`, `functions`, `hooks`) | 0.40.2 | Bundles **SQLite 3.53.2** via `libsqlite3-sys` 0.38.2: ≥ 3.51.3 and not 3.52.0. FTS5 is compiled in. `functions` keeps Unicode address comparisons and typed metadata validation inside SQL before LIMIT (M1.6h); safe private callbacks only. `hooks` scopes closed-window ID cancellation to reader work (M1.6r4c4). `LIBSQLITE3_FLAGS` per 03 |
 | Migrations | owned runner in `sb-store` | — | Decided in M0.4: 02 runs each migration as a Rust function with its checks and `last_migrated_by` inside its transaction; `rusqlite_migration` 2.6.0 is built around SQL strings and down migrations |
 | Hashing | `sha2` (no default features) | 0.11.1 | SHA-256 object ids (03) |
 | MIME parsing | `mail-parser` (`full_encoding`) | 0.11.9 | Includes an mbox iterator (09), wrapped with Sweetbriar's accounting and offset tracking. Bounded per 10; immutable source-fidelity backport per plan/maintenance/2026-10-address-fidelity.md, with complete patch/provenance review |

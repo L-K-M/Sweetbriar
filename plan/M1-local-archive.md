@@ -803,9 +803,21 @@ local drafts. No network yet.
     `cache_size=-65536` (03).
   - **M1.6r4c3 Certain unknowns — M:** an FTS-only tree's exact unknown
     count counts its certain unknowns without evaluating them (06).
-  - **M1.6r4c4 Rows on screen — M:** designed from the owner's Time
-    Profiler run: the main-thread cost between the first page and its
-    rows on screen (08).
+  - **M1.6r4c4 Closed-window ID reads — L:** the 8086cb5 Mac profile
+    puts 7% of search-phase CPU on the main thread, with landing-to-screen
+    within one display interval; whole ID scans use about half of worker
+    CPU. Replacement closes their windows but leaves those scans running.
+    Prioritize stopping that obsolete work over view reuse. A window owns
+    its ID-read stop signal, checked inside SQLite work before its first
+    result as well as while enumerating. Closing returns `NotFound`,
+    never partial IDs; scoped reader state is cleared on every exit.
+    Native tests cover ordinary/Search IDs, both sorts, mid-statement
+    close, reader reuse, other-window isolation, unchanged results/errors
+    when live, dropped opens, marks and shutdown. The paired Mac rerun
+    records the effect without changing benchmark pacing or budgets.
+    May run alongside r4c3 qualification: its code dependencies are the
+    merged ordinary and Search window implementations. The owner run
+    against 06 and 08 still closes M1.6r.
 
 - **Goal:** FTS5 search with the query AST v1, the text syntax, chips and
   coverage.
