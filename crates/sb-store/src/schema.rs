@@ -108,6 +108,10 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         run: migration_16,
     },
     Migration {
+        version: 17,
+        run: migration_17,
+    },
+    Migration {
         version: 18,
         run: migration_18,
     },
@@ -682,6 +686,12 @@ fn migration_15(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
 /// occurrence, which score-less Search relevance pages walk (spec/06).
 fn migration_16(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
     tx.execute_batch(include_str!("schema/v16.sql"))
+        .map_err(bug)
+}
+
+/// Adds the immutable export capture ledger without rewriting earlier rows.
+fn migration_17(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
+    tx.execute_batch(include_str!("schema/v17.sql"))
         .map_err(bug)
 }
 

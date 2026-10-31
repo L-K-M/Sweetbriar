@@ -74,6 +74,11 @@ pub use sb_store::appearance::{
     account_appearance, identity_appearance, initialize_account_appearance, set_account_appearance,
     set_identity_appearance,
 };
+pub use sb_store::exports::{
+    ExportJob, ExportJobState, MAX_EXPORT_CHANGED_BYTES, MAX_EXPORT_CHUNK_BYTES, MAX_EXPORT_CHUNKS,
+    MAX_EXPORT_JSON_BYTES, advance_export_job, append_export_chunks, create_export_job,
+    export_chunks, export_job,
+};
 pub use sb_store::imports::{
     ImportJobState, ImportMessage, ImportParseState, ImportSummary, MAX_IMPORT_BATCH,
     MAX_IMPORT_CHANGES_BYTES,
