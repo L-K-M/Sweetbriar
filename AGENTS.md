@@ -135,7 +135,9 @@ with `SB_SEARCH_TIMINGS_OUT=<file>` for the report and
   (the owner's 100k run is judged against spec/08's budget);
 - anything touching `apps/` or generated bindings.
 
-Agents can't run these locally — make the YAML correct by inspection.
+Linux agents can't run these locally. Use macOS CI or a Mac helper:
+push commit-pinned requests to `bench/requests` and reports to
+`bench/results` (plan/README.md). Required CI checks still gate merges.
 
 M0.12 adds `nightly.yml` (daily/manual): Swift unit tests, the
 `SweetbriarSmoke` XCUITest launch and an ad-hoc signed DMG. `xcode-27`
@@ -153,7 +155,8 @@ and quits — even a run that can't start writes `ok: false`.
 
 ## Rules for agents (summary of plan/README.md)
 
-- One plan step per PR; all of that step's acceptance checks green.
+- One plan step per PR; automated checks green. Record pending owner
+  qualification under plan/README.md's sequencing rule.
 - The spec wins; never silently deviate or weaken a check to pass.
 - Never weaken safety rules to make a test pass.
 - Tests come with the code; bug fixes start with a failing test.

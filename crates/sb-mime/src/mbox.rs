@@ -2,7 +2,7 @@
 //! offsets, not bodies; each body streams through the chosen unquoter.
 
 use std::fmt;
-use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Take};
+use std::io::{self, BufRead, BufReader, BufWriter, Read, Seek, SeekFrom, Take, Write};
 use std::ops::Range;
 
 const FROM_PREFIX: &[u8] = b"From ";
@@ -417,6 +417,257 @@ fn source_chunk<R: Read>(reader: &mut BufReader<Take<R>>) -> io::Result<&[u8]> {
         ));
     }
     Ok(chunk)
+}
+
+/// Record metadata returned after a successful `write_mboxrd_record`.
+/// Fields are private; use the getters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MboxrdRecordInfo {
+    original_bytes: u64,
+    encoded_bytes: u64,
+    framing_lf_added: bool,
+}
+
+impl MboxrdRecordInfo {
+    /// Bytes consumed from the input (the original acquisition size).
+    pub fn original_bytes(&self) -> u64 {
+        self.original_bytes
+    }
+
+    /// Total output bytes: envelope, added `>` quotes and framing LF included.
+    pub fn encoded_bytes(&self) -> u64 {
+        self.encoded_bytes
+    }
+
+    /// True when exactly one LF was appended because the input did not
+    /// end with LF. Empty input never sets this.
+    pub fn framing_lf_added(&self) -> bool {
+        self.framing_lf_added
+    }
+}
+
+/// Fixed I/O buffers keep memory independent of message and line length.
+const ENCODE_READ_CAP: usize = 8192;
+
+/// Bounded write buffer for the mboxrd encoder.
+const ENCODE_WRITE_CAP: usize = 8192;
+const QUOTE_BLOCK: [u8; ENCODE_WRITE_CAP] = [b'>'; ENCODE_WRITE_CAP];
+
+/// Encode one mboxrd record with a conventional fixed envelope, quoting
+/// any input line that starts with
+/// zero or more `>` followed by `From ` by prepending one `>`.
+///
+/// On success, returns [`MboxrdRecordInfo`] with the byte counts.
+/// On I/O error, propagates the error without returning info.
+/// Read interruption ends the record so a cancelled acquisition stream
+/// cannot be retried indefinitely. The caller owns sync and publication.
+pub fn write_mboxrd_record(input: impl Read, output: impl Write) -> io::Result<MboxrdRecordInfo> {
+    const ENVELOPE: &[u8] = b"From MAILER-DAEMON Thu Jan  1 00:00:00 1970\n";
+
+    let mut buf_in = BufReader::with_capacity(ENCODE_READ_CAP, input);
+    let mut buf_out = BufWriter::with_capacity(ENCODE_WRITE_CAP, output);
+
+    buf_out.write_all(ENVELOPE)?;
+
+    let mut original_bytes: u64 = 0;
+    let mut encoded_bytes: u64 = ENVELOPE.len() as u64;
+    let mut framing_lf_added = false;
+    let mut input_empty = true;
+    let mut at_line_start = true;
+
+    loop {
+        if at_line_start {
+            // At line start: count leading `>` and check for `From ` prefix.
+            // The scanner consumes the prefix bytes from the buffer; we emit
+            // them here (with an extra `>` if needed) so the main loop doesn't
+            // re-read them.
+            let (quote_count, prefix_buf, prefix_len, need_quote, hit_newline) =
+                scan_line_prefix(&mut buf_in)?;
+
+            // If we need to quote, emit one extra `>` before the original `>`s.
+            if need_quote {
+                buf_out.write_all(b">")?;
+                encoded_bytes = encoded_bytes
+                    .checked_add(1)
+                    .ok_or_else(|| io::Error::other("encoded byte count overflow"))?;
+            }
+
+            // Emit the `>` bytes we counted (these were consumed from input).
+            if quote_count > 0 {
+                let mut remaining = quote_count;
+                while remaining > 0 {
+                    let to_write = remaining.min(QUOTE_BLOCK.len() as u64) as usize;
+                    let n = buf_out.write(&QUOTE_BLOCK[..to_write])?;
+                    if n == 0 {
+                        return Err(io::Error::new(
+                            io::ErrorKind::WriteZero,
+                            "failed to write quote bytes",
+                        ));
+                    }
+                    encoded_bytes = encoded_bytes
+                        .checked_add(n as u64)
+                        .ok_or_else(|| io::Error::other("encoded byte count overflow"))?;
+                    remaining -= n as u64;
+                }
+                original_bytes = original_bytes
+                    .checked_add(quote_count)
+                    .ok_or_else(|| io::Error::other("original byte count overflow"))?;
+            }
+
+            // Emit any prefix bytes we buffered (these were consumed from input).
+            if prefix_len > 0 {
+                let mut off = 0;
+                while off < prefix_len {
+                    let n = buf_out.write(&prefix_buf[off..prefix_len])?;
+                    if n == 0 {
+                        return Err(io::Error::new(
+                            io::ErrorKind::WriteZero,
+                            "failed to write prefix bytes",
+                        ));
+                    }
+                    encoded_bytes = encoded_bytes
+                        .checked_add(n as u64)
+                        .ok_or_else(|| io::Error::other("encoded byte count overflow"))?;
+                    off += n;
+                }
+                original_bytes = original_bytes
+                    .checked_add(prefix_len as u64)
+                    .ok_or_else(|| io::Error::other("original byte count overflow"))?;
+            }
+
+            // If we consumed nothing and didn't see a newline, we're at EOF.
+            if quote_count == 0 && prefix_len == 0 && !hit_newline {
+                break;
+            }
+
+            if quote_count > 0 || prefix_len > 0 {
+                input_empty = false;
+                at_line_start = false;
+            }
+        }
+
+        // Main streaming: copy bytes until the next `\n` (inclusive).
+        let chunk = buf_in.fill_buf()?;
+        if chunk.is_empty() {
+            break;
+        }
+
+        let newline_pos = chunk.iter().position(|&b| b == b'\n');
+        let to_consume = newline_pos.map_or(chunk.len(), |pos| pos + 1);
+
+        let mut off = 0;
+        while off < to_consume {
+            let n = buf_out.write(&chunk[off..to_consume])?;
+            if n == 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::WriteZero,
+                    "failed to write body bytes",
+                ));
+            }
+            off += n;
+        }
+        let consumed = to_consume;
+        buf_in.consume(consumed);
+        original_bytes = original_bytes
+            .checked_add(consumed as u64)
+            .ok_or_else(|| io::Error::other("original byte count overflow"))?;
+        encoded_bytes = encoded_bytes
+            .checked_add(consumed as u64)
+            .ok_or_else(|| io::Error::other("encoded byte count overflow"))?;
+        input_empty = false;
+
+        if newline_pos.is_some() {
+            at_line_start = true;
+        }
+    }
+
+    // If input was non-empty and didn't end with `\n`, append one framing LF.
+    if !input_empty && !at_line_start {
+        buf_out.write_all(b"\n")?;
+        encoded_bytes = encoded_bytes
+            .checked_add(1)
+            .ok_or_else(|| io::Error::other("encoded byte count overflow"))?;
+        framing_lf_added = true;
+    }
+
+    buf_out.flush()?;
+
+    Ok(MboxrdRecordInfo {
+        original_bytes,
+        encoded_bytes,
+        framing_lf_added,
+    })
+}
+
+/// At the start of a line, count leading `>` and peek at the next
+/// `FROM_PREFIX.len()` bytes to decide whether this line needs quoting.
+/// Consumes the scanned bytes from the reader.
+/// Returns `(quote_count, prefix_bytes, prefix_len, needs_quote, hit_newline)`.
+///
+/// If the first non-`>` byte is `\n`, the `>` bytes are consumed but the
+/// `\n` is left for the main streaming loop, which will emit it and then
+/// call this function again for the following line. `hit_newline` signals
+/// that a `\n` is available but not consumed.
+fn scan_line_prefix<R: BufRead>(
+    reader: &mut R,
+) -> io::Result<(u64, [u8; FROM_PREFIX.len()], usize, bool, bool)> {
+    let mut quote_count = 0u64;
+    let mut prefix_buf = [0u8; FROM_PREFIX.len()];
+    let mut prefix_len = 0;
+
+    loop {
+        let chunk = reader.fill_buf()?;
+        if chunk.is_empty() {
+            return Ok((quote_count, prefix_buf, prefix_len, false, false));
+        }
+
+        let mut i = 0;
+        // Once a non-quote prefix began, later `>` bytes belong to it.
+        // Counting them as leading quotes would reorder chunked input.
+        while prefix_len == 0 && i < chunk.len() && chunk[i] == b'>' {
+            quote_count = quote_count.checked_add(1).ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidData, "mboxrd quote count exceeds u64")
+            })?;
+            i += 1;
+        }
+        if i == chunk.len() {
+            reader.consume(i);
+            continue;
+        }
+
+        // The first non-`>` byte.
+        if chunk[i] == b'\n' {
+            // Keep LF for the copy loop, without dropping a prefix from
+            // an earlier chunk (for example `Fro` followed by LF).
+            reader.consume(i);
+            return Ok((quote_count, prefix_buf, prefix_len, false, true));
+        }
+
+        // Stop at `\n` or `FROM_PREFIX.len()` bytes, whichever comes first.
+        // Compute everything we need from `chunk` before consuming.
+        let nl_pos = chunk[i..].iter().position(|&b| b == b'\n');
+        let available = nl_pos.unwrap_or(chunk.len() - i);
+        let limit = available.min(FROM_PREFIX.len() - prefix_len);
+        let hit_nl = nl_pos.is_some() && nl_pos.unwrap() < chunk.len() - i;
+
+        if limit > 0 {
+            prefix_buf[prefix_len..prefix_len + limit].copy_from_slice(&chunk[i..i + limit]);
+            prefix_len += limit;
+            reader.consume(i + limit);
+        } else {
+            reader.consume(i);
+        }
+
+        if prefix_len == FROM_PREFIX.len() {
+            let needs_quote = prefix_buf == FROM_PREFIX;
+            return Ok((quote_count, prefix_buf, prefix_len, needs_quote, false));
+        }
+        // If we stopped at a newline, signal it so the main loop handles `\n`.
+        if hit_nl {
+            return Ok((quote_count, prefix_buf, prefix_len, false, true));
+        }
+        // Not enough bytes yet — continue reading across chunk boundaries.
+    }
 }
 
 #[cfg(test)]

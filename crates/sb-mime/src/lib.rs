@@ -31,7 +31,7 @@ pub use limits::{
 };
 pub use mbox::{
     MboxError, MboxInventory, MboxQuoting, MboxReader, MboxRecord, MboxScanner, MboxVariant,
-    inventory_mbox,
+    MboxrdRecordInfo, inventory_mbox, write_mboxrd_record,
 };
 pub use outcome::{ParseFailure, ParseOutcome, ParseWarning};
 pub use reader::{
