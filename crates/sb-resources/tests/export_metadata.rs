@@ -324,6 +324,10 @@ fn unknown_ids_and_malformed_stored_fields_fail_typed() {
         "UPDATE acquisitions SET object_state=CAST(x'ff' AS TEXT) WHERE acquisition_id=1",
         "UPDATE acquisitions SET byte_length=-1 WHERE acquisition_id=1",
         "UPDATE tags SET color_srgb='#ABCDEF' WHERE tag_id='a'",
+        "UPDATE accounts SET display_name=CAST(x'ff' AS TEXT)",
+        "UPDATE mailboxes SET remote_name=CAST(x'ff' AS TEXT) WHERE mailbox_id=1",
+        "UPDATE notes SET body_source=CAST(x'ff' AS TEXT) WHERE message_id=1",
+        "UPDATE tags SET name=CAST(x'ff' AS TEXT) WHERE tag_id='a'",
     ] {
         let (_scratch, res, _) = fixture("export-metadata-corrupt");
         write(&res, move |tx| {
