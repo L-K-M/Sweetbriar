@@ -519,7 +519,9 @@ struct WindowsInner {
 /// order at open, immutable from then on.
 #[derive(Debug)]
 struct OpenSelection {
-    ids: Vec<i64>,
+    ids: Arc<[i64]>,
+    window_id: WindowId,
+    generation: u64,
 }
 
 /// The debug source's replaceable state: `(count, generation)` always
@@ -720,16 +722,48 @@ impl Windows {
         &self,
         window_id: WindowId,
         selection_id: SelectionId,
+        generation: u64,
         ids: Vec<i64>,
     ) -> Result<(), EngineError> {
+        let ids: Arc<[i64]> = ids.into();
         let mut inner = self.lock();
         if !inner.open.contains_key(&window_id) {
             return Err(EngineError::NotFound {
                 what: format!("window {}", window_id.get()),
             });
         }
-        inner.selections.insert(selection_id, OpenSelection { ids });
+        inner.selections.insert(
+            selection_id,
+            OpenSelection {
+                ids,
+                window_id,
+                generation,
+            },
+        );
         Ok(())
+    }
+
+    fn selection_for_export(
+        &self,
+        id: &SelectionId,
+    ) -> Result<crate::ExportSelection, EngineError> {
+        let (ids, window_id, generation) = {
+            let inner = self.lock();
+            let selection = inner
+                .selections
+                .get(id)
+                .ok_or_else(|| EngineError::NotFound {
+                    what: format!("selection {}", id.as_str()),
+                })?;
+            (
+                Arc::clone(&selection.ids),
+                selection.window_id,
+                selection.generation,
+            )
+        };
+        // Validation/hashing must not keep the window table locked.
+        crate::ExportSelection::new(id.as_str().to_owned(), window_id.get(), generation, ids)
+            .map_err(EngineError::from)
     }
 
     /// `selection_ids`: a page of the frozen ids, or why it failed

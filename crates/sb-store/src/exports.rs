@@ -6,7 +6,12 @@ use serde_json::Value;
 
 use crate::{StoreError, Timestamp};
 
+mod capture;
 mod stream;
+pub(crate) use capture::capture as capture_export_in;
+pub use capture::{
+    ExportCaptureRequest, ExportFormat, ExportScope, ExportSearchSort, ExportSelection,
+};
 pub use stream::ExportChunkWriter;
 
 pub const MAX_EXPORT_CHUNK_BYTES: usize = 65_536;

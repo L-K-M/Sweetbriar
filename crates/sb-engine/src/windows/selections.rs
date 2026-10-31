@@ -230,7 +230,12 @@ impl Engine {
             .compute(move || {
                 let selected = materialize(&input, &index)?;
                 let count = selected.len() as u64;
-                windows.register_selection(window_id, selection_id.clone(), selected)?;
+                windows.register_selection(
+                    window_id,
+                    selection_id.clone(),
+                    generation,
+                    selected,
+                )?;
                 Ok(OpenedSelection {
                     snapshot: Some(SelectionSnapshot {
                         selection_id,
@@ -265,6 +270,17 @@ impl Engine {
         }
         let windows = Arc::clone(self.windows());
         self.compute(move || windows.selection_page(&id, from_ordinal, limit))
+            .await
+    }
+
+    /// Lease the actual handle's immutable membership for native export.
+    /// Foreign/closed IDs fail; later source-window close changes nothing.
+    pub async fn selection_for_export(
+        &self,
+        id: SelectionId,
+    ) -> Result<crate::ExportSelection, EngineError> {
+        let windows = Arc::clone(self.windows());
+        self.compute(move || windows.selection_for_export(&id))
             .await
     }
 

@@ -282,6 +282,63 @@ remembers its first failure and refuses reuse with that failure. Partial
 commits remain immutable and pre-acknowledgement until complete capture
 seals them. This artifact introduces no scope API, scheduler or file I/O.
 
+### Complete scope capture (M1.7b2b2)
+
+`capture_export` is a blocking native Resources operation. Its request owns
+EML/mboxrd format, an absolute UTF-8 destination path (identity only, no file
+I/O), and exactly one scope: account, mailbox, Search or frozen selection.
+All four work at first exposure. Job IDs retain the ledger's bounds.
+
+Account and mailbox membership use one list-generation-fenced short read.
+Account order is mailbox ID ascending, then each mailbox's date order;
+every present occurrence appears once, preserving message/acquisition copies.
+Unknown account/mailbox IDs are `NotFound`. Search uses the checked Query,
+its candidate scope and date/relevance order at the requested Search
+generation, keeping exactly its chosen occurrences, never other copies.
+A stale membership generation is `Conflict`, never an output-ready capture.
+
+Selections lease the real Engine handle's immutable ordered IDs and canonical
+window/generation provenance. Foreign, unknown or closed handles are
+`NotFound`; closing the source window later changes nothing. The native
+lease owns an Arc, not a large shell-uploaded ID array. Empty selections are
+valid, duplicate supplied native membership is rejected, and no new fixed
+member-count cap is imposed. Retained vanished/stale members are captured.
+
+Metadata is read for one occurrence at a time, in separate short reads, then
+serialized after releasing the transaction. Membership is fixed at its source
+generation; each entry freezes its facts when read. This is a capture interval,
+not a whole-archive point-in-time promise. Notes/tags remain unclipped; no
+headers, bodies, files or unrelated occurrences are read.
+
+Capture format 1 is NDJSON: one header, then exactly one frozen metadata
+record per ordered member. The header is:
+`{"v":1,"kind":"capture","intent":{...},"generation":0,"entries":0,"ids_sha256":"..."}`.
+Intent owns `v:1`, format (`eml`/`mboxrd`), destination and a scope descriptor.
+Descriptors use `kind`, account/mailbox `id` and `generation`; Search also
+owns the canonical query, candidate scope and sort. Selection owns its opaque
+handle ID, window, generation, count and ordered-ID hash, not all IDs.
+
+The ordered-ID hash is SHA-256 of each signed occurrence ID's eight-byte
+big-endian representation, in order. The bounded job request is
+`{"v":1,"capture":1,"sha256":"..."}`, hashing deterministic JSON intent
+bytes with SHA-256. Stream both hashing and payload encoding; no whole encoded
+scope buffer. Do not flush between records; append one LF after each record.
+
+The progress callback receives completed-entry count outside transactions;
+`Break` returns `Scoped::Stopped`, never Ready. It runs before the first entry
+and after each one, including before finishing. A stop/error may retain an
+immutable capturing prefix. Retry must reproduce identical bytes and flush
+boundaries from ordinal zero; changed/short replay conflicts. No failed or
+stopped capture is acknowledged as a durable scope.
+
+After complete stream finish, a fenced write seals Ready with checkpoint
+`{"v":1,"capture":1,"entries":0,"chunks":1}` using actual counts. A matching
+Ready/Running/Completed job replays without source reads or progress callbacks;
+Cancelled/Failed is `Conflict`. A different request is `Conflict`. Sealing
+claims no output file. Receipts, worker lifecycle and orphan policy remain
+M1.7e; file ownership/output remain M1.7c. The writer thread refuses capture
+before it can wait on its own queue.
+
 ### Export formats and scopes
 
 - **Formats:** EML (one file per message) and mboxrd (one file per

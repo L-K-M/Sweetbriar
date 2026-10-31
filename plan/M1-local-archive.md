@@ -929,7 +929,7 @@ local drafts. No network yet.
         immutable metadata snapshot and streaming version-1 serialization,
         through Resources with native proof. No scope API, job or file I/O.
         Depends on M1.5e and b2a, which its native consumer exercises.
-      - **M1.7b2b2 Complete capture (L):** b2a/b2b1 plus all four scopes,
+      - **M1.7b2b2 Complete capture (L):** b2a/b2a2/b2b1 plus all four scopes,
         the real selection-handle adapter and its proof in the same PR.
         Qualify generation fences, bounded writes, replay and cancellation
         before exposing any scope API.
