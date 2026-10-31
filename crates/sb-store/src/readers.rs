@@ -41,7 +41,7 @@ impl ReadStop {
     }
 
     /// Whether the signal is raised.
-    pub fn is_stopped(&self) -> bool {
+    fn is_stopped(&self) -> bool {
         self.0.load(Ordering::Acquire)
     }
 }
