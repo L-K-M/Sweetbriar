@@ -14,8 +14,9 @@ use std::io;
 use std::sync::Arc;
 use std::sync::Condvar;
 use std::sync::Mutex;
+use std::sync::OnceLock;
 use std::task::{Poll, Waker};
-use std::thread::JoinHandle;
+use std::thread::{JoinHandle, ThreadId};
 
 use rusqlite::Transaction;
 use rusqlite::TransactionBehavior;
@@ -57,6 +58,8 @@ const PRIORITY_QUEUES: usize = 3;
 struct WriterShared {
     state: Mutex<WriterState>,
     ready: Condvar,
+    /// Refuse publication on this thread without touching the join-handle lock.
+    thread: OnceLock<ThreadId>,
     /// Told each new `list_generation` after the job that made it
     /// committed (spec/07 "Subscriptions").
     observer: Mutex<Option<ListObserver>>,
@@ -426,6 +429,7 @@ impl Writer {
                 closed: false,
             }),
             ready: Condvar::new(),
+            thread: OnceLock::new(),
             observer: Mutex::new(None),
             search_observer: Mutex::new(None),
             maintenance_observer: Mutex::new(None),
@@ -524,6 +528,11 @@ impl Writer {
             )),
         }
     }
+
+    /// Publication cannot wait for its own writer (spec/03).
+    pub(crate) fn is_writer_thread(&self) -> bool {
+        self.shared.thread.get() == Some(&std::thread::current().id())
+    }
 }
 
 #[cfg(test)]
@@ -570,6 +579,9 @@ impl fmt::Debug for Writer {
 /// closure panic reaches it) still closes the connection, stops
 /// accepting jobs and abandons the queue, so no future hangs.
 fn serve(mut conn: Connection, shared: Arc<WriterShared>) -> Result<(), StoreError> {
+    // Record the writer thread's id before any job can run: a publish
+    // submitted from this thread would wait on its own queue.
+    let _ = shared.thread.set(std::thread::current().id());
     // The thread runs, so open succeeded: from now on the writer owns
     // checkpoints (spec/03), on close too.
     if let Err(e) = conn.set_db_config(DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, false) {

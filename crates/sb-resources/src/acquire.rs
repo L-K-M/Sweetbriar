@@ -18,7 +18,7 @@ use sb_mime::{
 use sb_store::imports::{
     ImportFlags, ImportMessage, ImportParseState, ImportReadState, ImportSourceKind, ImportSummary,
 };
-use sb_store::{ObjectId, ObjectStore, ReadFile, Store, StoreError};
+use sb_store::{ObjectStore, PublishedObject, ReadFile, Store, StoreError};
 
 use crate::{MboxQuoting, SourceInventory, SourceKind};
 
@@ -222,11 +222,11 @@ pub(crate) fn next(
         Err(Failure::Read(e)) => return Err(unreadable(&source.path, offset, e)),
         Err(Failure::Store(e)) => return Err(e),
     };
-    if record.is_none() && object.byte_length() != source.length {
+    if record.is_none() && object.id().byte_length() != source.length {
         return Err(corrupt(format!(
             "{} published {} of its {} bytes",
             source.path,
-            object.byte_length(),
+            object.id().byte_length(),
             source.length
         )));
     }
@@ -293,7 +293,11 @@ enum Failure {
 
 /// Stream `bytes` into the object store, keeping the first `keep` bytes
 /// for bounded parsing. A read failure is told apart from the store's.
-fn publish(store: &Store, bytes: impl Read, keep: usize) -> Result<(ObjectId, Vec<u8>), Failure> {
+fn publish(
+    store: &Store,
+    bytes: impl Read,
+    keep: usize,
+) -> Result<(PublishedObject, Vec<u8>), Failure> {
     let mut tee = Tee {
         inner: bytes,
         prefix: Vec::new(),
@@ -402,3 +406,6 @@ fn invalid(message: impl Into<String>) -> StoreError {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod reservation_tests;
