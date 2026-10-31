@@ -877,7 +877,7 @@ local drafts. No network yet.
   jobs, scope capture and lossless mbox framing. Implement these complete
   artifacts in order; retain all original deliverables and acceptance.
   Each PR must fit 1,450 gross changed lines; re-size before coding.
-  - **M1.7a Mboxrd transport — M:** a bounded streaming encoder and its
+  - **M1.7a Mboxrd transport — L:** a bounded streaming encoder and its
     framing descriptor, qualified by a native public-API consumer using
     the existing decoder. Cover arbitrary bytes, chunk boundaries, long
     lines/quote runs, empty and unterminated messages, multiplicity and

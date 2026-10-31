@@ -177,7 +177,9 @@ point and resumes with identical final counts.
   re-serialization.
   - mboxrd quotes every line beginning with zero or more `>` followed by
     `From ` by adding one `>`. Preserve all other bytes, including line
-    endings. Each record starts with the fixed envelope `From -\n`.
+    endings. Each record starts with the conventional fixed envelope
+    `From MAILER-DAEMON Thu Jan  1 00:00:00 1970\n`. Its timestamp is
+    transport framing, not message metadata.
   - A nonempty acquisition without a final LF needs one framing LF so
     the next envelope starts on a new line. Append exactly one, even
     for the last record, and record the original byte length and added
