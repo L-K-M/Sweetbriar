@@ -23,7 +23,7 @@ cssparser = "=0.38.0"
 url = "=2.5.8"
 # spec/10 "Rendering": the streaming first pass that rewrites `cid:`
 # URLs and inventories remote resources before sanitizing.
-lol_html = "=3.0.1"
+lol_html = "=3.0.2"
 # spec/10 "Rendering": the final allow-list sanitizer. 4.2.4 carries
 # the fix for RUSTSEC-2026-0373 (case-varied CSS `URL()`).
 ammonia = "=4.2.4"
