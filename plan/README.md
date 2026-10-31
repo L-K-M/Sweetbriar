@@ -32,6 +32,22 @@ order (local durability → read-only sync → reversible effects →
 submission), adapted to Bridge. Flags, the first reversible effect,
 come first; send comes before filing because daily use needs it more.
 
+**Owner decision, 2026-10-31:** code implementation may continue while
+owner qualification remains pending, including owner-run performance
+findings. Later work must have its required code and contracts merged;
+independent later steps may proceed while earlier qualification is open.
+Keep every acceptance check, safety rule and performance budget. Record
+code implementation and qualification separately: a merged implementation
+does not make a step or milestone qualified. The definition of done below
+is unchanged.
+
+A second model on a Mac can run automated checks. Push commit-pinned
+requests under `bench-requests/` on `bench/requests`, and push dated reports
+under `bench-results/` on `bench/results`. Reports identify the tested
+commit, environment, commands and results. Required CI checks still gate
+merges; owner-data, real-account and manual qualification need their own
+evidence.
+
 ## Step format
 
 Every step has:
