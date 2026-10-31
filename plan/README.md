@@ -42,11 +42,14 @@ does not make a step or milestone qualified. The definition of done below
 is unchanged.
 
 A second model on a Mac can run automated checks. Push commit-pinned
-requests under `bench-requests/` on `bench/requests`, and push dated reports
-under `bench-results/` on `bench/results`. Reports identify the tested
-commit, environment, commands and results. Required CI checks still gate
-merges; owner-data, real-account and manual qualification need their own
-evidence.
+requests on `bench/requests`: benchmarks under `bench-requests/`, general
+tests under `test-requests/`. Benchmark requests require `REF`, `LABEL`,
+`RUNS=1-5` and `PROFILE=yes|no`; that worker ignores prose and runs only
+benchmarks. Assign general tests to a worker that supports the test queue.
+Push dated reports under `bench-results/` on `bench/results`, identifying
+the tested commit, environment, commands and results. Required CI checks
+still gate merges; owner-data, real-account and manual qualification need
+their own evidence.
 
 ## Step format
 
