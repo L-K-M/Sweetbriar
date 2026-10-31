@@ -12,7 +12,7 @@ sb-resources = { version = "0.0.1", path = "../sb-resources" }
 # (spec/01 "Process model"). Only the multi-thread scheduler: no I/O
 # driver, no timers, no macros — the core's futures are runtime-neutral
 # otherwise.
-tokio = { version = "=1.53.3", default-features = false, features = ["rt-multi-thread", "sync"] }
+tokio = { version = "=1.54.1", default-features = false, features = ["rt-multi-thread", "sync"] }
 
 [dev-dependencies]
 sb-test-support = { version = "0.0.1", path = "../sb-test-support" }
