@@ -228,7 +228,7 @@ is committed, and updates are their own PRs.
 | Hashing | `sha2` (no default features) | 0.11.1 | SHA-256 object ids (03) |
 | MIME parsing | `mail-parser` (`full_encoding`) | 0.11.9 | Includes an mbox iterator (09), wrapped with Sweetbriar's accounting and offset tracking. Bounded per 10; immutable source-fidelity backport per plan/maintenance/2026-10-address-fidelity.md, with complete patch/provenance review |
 | MIME composing | `mail-builder` | 1.0.0 | |
-| Color math | `palette` | pin at first use (M1.10) | Contrast and derived tints for account colors |
+| Color math | `palette` (`libm`, no default features) | 0.7.7 | OKLCH gamut mapping and quantized account appearance tokens (M1.10a); MIT OR Apache-2.0 |
 | Markdown | `pulldown-cmark` | pin at first use | Raw HTML disabled (05) |
 | HTML sanitizing | `ammonia`, `lol_html`, `markup5ever` | 4.2.4, 3.0.1, 0.40.0 | Per 10; `markup5ever` (already ammonia's) for its HTML5 character-reference table |
 | HTML search extraction | `html5ever` | 0.40.1 | Already ammonia's parser; direct text-node traversal with a private tree sink, without sanitizing or serializing (06) |
