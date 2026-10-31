@@ -64,6 +64,7 @@ struct WriterShared {
     /// committed (spec/07 "Subscriptions").
     observer: Mutex<Option<ListObserver>>,
     search_observer: Mutex<Option<SearchObserver>>,
+    appearance_observer: Mutex<Option<AppearanceObserver>>,
     maintenance_observer: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
 }
 
@@ -74,6 +75,9 @@ pub type ListObserver = Arc<dyn Fn(u64) + Send + Sync>;
 
 /// The same post-commit callback contract, for the independent Search counter.
 pub type SearchObserver = ListObserver;
+
+/// The independent appearance counter, under the same post-commit contract.
+pub type AppearanceObserver = ListObserver;
 
 struct WriterState {
     /// One FIFO queue per priority, indexed by [`WritePriority::queue`].
@@ -412,6 +416,10 @@ impl Writer {
         *lock(&self.shared.search_observer) = Some(observer);
     }
 
+    pub(crate) fn observe_appearance_generation(&self, observer: AppearanceObserver) {
+        *lock(&self.shared.appearance_observer) = Some(observer);
+    }
+
     pub(crate) fn observe_maintenance_inputs(&self, observer: Arc<dyn Fn() + Send + Sync>) {
         *lock(&self.shared.maintenance_observer) = Some(observer);
     }
@@ -432,6 +440,7 @@ impl Writer {
             thread: OnceLock::new(),
             observer: Mutex::new(None),
             search_observer: Mutex::new(None),
+            appearance_observer: Mutex::new(None),
             maintenance_observer: Mutex::new(None),
         });
         let thread_shared = Arc::clone(&shared);
@@ -615,6 +624,7 @@ fn writer_loop(conn: &mut Connection, shared: &Arc<WriterShared>) {
     let mut announced = Announced {
         list: list_rows::generation(conn).ok(),
         search: observed_search_generation(conn),
+        appearance: crate::appearance::generation(conn).ok(),
         maintenance: MAINTENANCE_KEYS
             .map(|key| observed_maintenance_input(conn, key).ok().flatten()),
     };
@@ -642,6 +652,7 @@ fn writer_loop(conn: &mut Connection, shared: &Arc<WriterShared>) {
 struct Announced {
     list: Option<u64>,
     search: Option<u64>,
+    appearance: Option<u64>,
     maintenance: [Option<Vec<u8>>; MAINTENANCE_KEYS.len()],
 }
 
@@ -697,6 +708,11 @@ fn announce(conn: &Connection, shared: &WriterShared, announced: &mut Announced)
         observed_search_generation(conn),
         &shared.search_observer,
         &mut announced.search,
+    );
+    announce_one(
+        crate::appearance::generation(conn).ok(),
+        &shared.appearance_observer,
+        &mut announced.appearance,
     );
     // Raw key changes also wake a worker parked on malformed or future metadata.
     if maintenance_changed(conn, &mut announced.maintenance) {

@@ -115,6 +115,10 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 18,
         run: migration_18,
     },
+    Migration {
+        version: 19,
+        run: migration_19,
+    },
 ];
 
 /// The `store_meta` keys every migrated store holds (spec/02): a
@@ -698,6 +702,12 @@ fn migration_17(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
 /// Initialize missing account colors without rewriting retained appearances.
 fn migration_18(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
     crate::appearance::backfill(tx)
+}
+
+fn migration_19(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
+    tx.execute_batch(include_str!("schema/v19.sql"))
+        .map_err(bug)?;
+    crate::appearance::appearance_generation(tx).map(|_| ())
 }
 
 /// One version-4 UUID from the randomness seam. A seam that can't

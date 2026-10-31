@@ -1,7 +1,7 @@
 //! Versioned appearance records. Setters run inside the writer transaction;
 //! new-account writers initialize appearance in that same transaction.
 
-use rusqlite::{OptionalExtension, Transaction, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 use crate::{ACCOUNT_PALETTE_V1, StoreError};
 
@@ -10,6 +10,7 @@ const MAX_SYMBOL_BYTES: usize = 128;
 const COLOR_BYTES: usize = 7;
 const PALETTE_PREFIX: &str = "palette:v1:";
 const CUSTOM_ASSIGNMENT: &str = "custom";
+const GENERATION_KEY: &str = "appearance_generation";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AccountColor {
@@ -78,6 +79,49 @@ impl StoredIdentityAppearance {
     }
 }
 
+/// The independent committed appearance revision (spec/02).
+pub fn appearance_generation(tx: &Transaction) -> Result<u64, StoreError> {
+    generation(tx)
+}
+
+pub(crate) fn generation(conn: &Connection) -> Result<u64, StoreError> {
+    let value = conn
+        .query_row(
+            "SELECT value FROM store_meta WHERE key = ?1",
+            [GENERATION_KEY],
+            |row| {
+                Ok(row
+                    .get_ref(0)?
+                    .as_str()
+                    .ok()
+                    .and_then(|text| text.parse::<u64>().ok()))
+            },
+        )
+        .optional()
+        .map_err(sql_error)?
+        .flatten();
+    value
+        .filter(|value| *value <= i64::MAX as u64)
+        .ok_or_else(|| StoreError::corrupt("appearance generation is missing or malformed"))
+}
+
+fn next_generation(tx: &Transaction) -> Result<u64, StoreError> {
+    generation(tx)?
+        .checked_add(1)
+        .filter(|next| *next <= i64::MAX as u64)
+        .ok_or_else(|| StoreError::corrupt("appearance generation is exhausted"))
+}
+
+fn set_generation(tx: &Transaction, value: u64) -> Result<(), StoreError> {
+    let changed = tx
+        .execute(
+            "UPDATE store_meta SET value = ?2 WHERE key = ?1",
+            (GENERATION_KEY, value.to_string()),
+        )
+        .map_err(sql_error)?;
+    require_changed(changed)
+}
+
 pub fn account_appearance(
     tx: &Transaction,
     id: &str,
@@ -98,7 +142,9 @@ pub fn initialize_account_appearance(
         return Ok(record);
     }
     let counts = palette_counts(tx)?;
+    let generation = next_generation(tx)?;
     insert_assignment(tx, id, least_used(&counts))?;
+    set_generation(tx, generation)?;
     account_appearance(tx, id)
 }
 
@@ -126,12 +172,14 @@ pub fn set_account_appearance(
         return Ok(current);
     }
     let revision = increment(current.revision)?;
+    let generation = next_generation(tx)?;
     let changed = tx.execute(
         "UPDATE account_appearance SET color_srgb = ?2, symbol = ?3, assignment = ?4, revision = ?5
          WHERE account_id = ?1 AND revision = ?6",
         params![id, color_srgb, symbol, assignment, revision, expected_revision],
     ).map_err(sql_error)?;
     require_changed(changed)?;
+    set_generation(tx, generation)?;
     account_appearance(tx, id)
 }
 
@@ -161,6 +209,12 @@ pub fn identity_appearance(
     let (account_id, color_override_srgb, symbol_override, revision) =
         row.ok_or_else(|| StoreError::not_found("identity"))?;
     stored(valid_key(&account_id))?;
+    require_account(tx, &account_id).map_err(|error| match error {
+        StoreError::NotFound { .. } => {
+            StoreError::corrupt("identity appearance references a missing account")
+        }
+        error => error,
+    })?;
     if let Some(color) = &color_override_srgb {
         stored_color(color)?;
     }
@@ -204,6 +258,7 @@ pub fn set_identity_appearance(
         Some(revision) => increment(revision)?,
         None => 1,
     };
+    let generation = next_generation(tx)?;
     let changed = tx.execute(
         "INSERT INTO identity_appearance (identity_id, color_override_srgb, symbol_override, revision)
          VALUES (?1, ?2, ?3, ?4) ON CONFLICT(identity_id) DO UPDATE SET
@@ -212,6 +267,7 @@ pub fn set_identity_appearance(
         params![id, color, symbol_override, revision],
     ).map_err(sql_error)?;
     require_changed(changed)?;
+    set_generation(tx, generation)?;
     identity_appearance(tx, id)
 }
 

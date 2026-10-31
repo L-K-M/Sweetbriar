@@ -71,8 +71,8 @@ pub use sb_platform::{default_cache_root, default_data_root};
 pub use sb_store::ACCOUNT_PALETTE_V1;
 pub use sb_store::appearance::{
     AccountColor, AppearanceAssignment, StoredAccountAppearance, StoredIdentityAppearance,
-    account_appearance, identity_appearance, initialize_account_appearance, set_account_appearance,
-    set_identity_appearance,
+    account_appearance, appearance_generation, identity_appearance, initialize_account_appearance,
+    set_account_appearance, set_identity_appearance,
 };
 pub use sb_store::exports::{
     ExportCaptureRequest, ExportChunkWriter, ExportFormat, ExportJob, ExportJobState, ExportScope,
@@ -122,9 +122,9 @@ pub use sb_store::threads::{
     remove_thread, stored_threads, thread_memberships, thread_revisions, thread_sources,
 };
 pub use sb_store::{
-    ExportMetadata, ImportSourceSnapshot, ListObserver, ReadStop, Receipt, Scoped, SearchObserver,
-    StoreError, Timestamp, Transaction, Uuid, WriteFuture, WritePriority, encode_job_receipt,
-    export_occurrence_metadata, receipt_job_id, run_once,
+    AppearanceObserver, ExportMetadata, ImportSourceSnapshot, ListObserver, ReadStop, Receipt,
+    Scoped, SearchObserver, StoreError, Timestamp, Transaction, Uuid, WriteFuture, WritePriority,
+    encode_job_receipt, export_occurrence_metadata, receipt_job_id, run_once,
 };
 
 #[cfg(feature = "test-seams")]
@@ -242,6 +242,12 @@ impl Resources {
     /// Runs on the writer thread; return immediately and never panic.
     pub fn observe_search_generation(&self, observer: SearchObserver) {
         self.store.observe_search_generation(observer);
+    }
+
+    /// Observe committed appearance revisions, including dropped callers.
+    /// Runs on the writer thread; return immediately and never panic.
+    pub fn observe_appearance_generation(&self, observer: AppearanceObserver) {
+        self.store.observe_appearance_generation(observer);
     }
 
     /// Wake maintenance after source commits, independently of list and Search.

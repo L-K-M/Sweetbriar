@@ -101,10 +101,19 @@ fn migration_preserves_v11_rows_and_old_schema_operations_are_unavailable() {
     fixtures::message(&conn, &account, Some(1));
     conn.execute_batch("INSERT INTO seen_addresses(canonical,email,last_seen_at,times_received,times_sent_to) VALUES('kept@x.test','kept@x.test',0,11,7)").unwrap();
     let snapshot = |conn: &Connection| -> String {
-        conn.query_row("SELECT json_array((SELECT json_group_array(json_array(key,value)) FROM store_meta WHERE key NOT LIKE 'repair_%' AND key NOT IN('last_migrated_by','app_version_last_opened')),(SELECT json_group_array(json_array(message_id,account_id,acquisition_id)) FROM logical_messages),(SELECT json_group_array(json_array(canonical,email,times_received,times_sent_to)) FROM seen_addresses))", [], |row| row.get(0)).unwrap()
+        conn.query_row("SELECT json_array((SELECT json_group_array(json_array(key,value)) FROM store_meta WHERE key NOT LIKE 'repair_%' AND key NOT IN('last_migrated_by','app_version_last_opened','appearance_generation')),(SELECT json_group_array(json_array(message_id,account_id,acquisition_id)) FROM logical_messages),(SELECT json_group_array(json_array(canonical,email,times_received,times_sent_to)) FROM seen_addresses))", [], |row| row.get(0)).unwrap()
     };
     let before = snapshot(&conn);
     run_migrations(&mut conn, &test_seams(real_fs()), MIGRATIONS).unwrap();
+    assert_eq!(
+        conn.query_row(
+            "SELECT value FROM store_meta WHERE key='appearance_generation'",
+            [],
+            |row| row.get::<_, String>(0)
+        )
+        .unwrap(),
+        "0"
+    );
     assert_eq!(snapshot(&conn), before);
     let value = status(&conn, 2).unwrap();
     assert_eq!(
