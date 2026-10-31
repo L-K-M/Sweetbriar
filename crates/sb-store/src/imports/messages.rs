@@ -11,7 +11,10 @@ use super::{
 use crate::list_rows::{
     REP_TEXT_COPIES, ROW_FRAME as LIST_ROW_BUDGET, TEXT_COPIES as LIST_ROW_TEXT_COPIES,
 };
-use crate::{ObjectId, StoreError, Timestamp, list_rows, threads};
+use crate::objects::{
+    PublishedObject, RESERVATION_PIN_IMAGE, ReservationRelease, release_reservation,
+};
+use crate::{StoreError, Timestamp, list_rows, threads};
 
 /// Spec/09's maximum transaction batch, independent of body size.
 pub const MAX_IMPORT_BATCH: usize = 250;
@@ -97,10 +100,10 @@ pub struct ImportSummary {
     pub snippet: Option<String>,
 }
 
-/// The object comes from publish, never from a re-serialization.
+/// Publish supplies the original bytes and reservation; this commit releases it.
 #[derive(Debug)]
 pub struct ImportMessage {
-    pub object: ObjectId,
+    pub object: PublishedObject,
     pub source_kind: ImportSourceKind,
     pub source_path: String,
     pub source_sha256: String,
@@ -136,11 +139,16 @@ impl ImportMessage {
         .into_iter()
         .flatten()
         .fold(
-            PER_MESSAGE_ROW_BUDGET.saturating_add(
-                self.source_path
-                    .len()
-                    .saturating_mul(SOURCE_PATH_BUDGET_MULTIPLIER),
-            ),
+            // Every committed message also releases its publication's
+            // reservation in this transaction: charge the deleted pin
+            // row and its primary-key image (spec/03).
+            PER_MESSAGE_ROW_BUDGET
+                .saturating_add(RESERVATION_PIN_IMAGE)
+                .saturating_add(
+                    self.source_path
+                        .len()
+                        .saturating_mul(SOURCE_PATH_BUDGET_MULTIPLIER),
+                ),
             |size, text| size.saturating_add(text.len()),
         )
     }
@@ -309,8 +317,8 @@ fn store_message(
     stats: &mut ImportBatchStats,
     list: &mut BTreeSet<i64>,
 ) -> Result<(), StoreError> {
-    let hash = message.object.sha256_hex();
-    let length = i64::try_from(message.object.byte_length())
+    let hash = message.object.id().sha256_hex();
+    let length = i64::try_from(message.object.id().byte_length())
         .map_err(|_| invalid("message size exceeds SQLite's range"))?;
     if message.source_path.is_empty()
         || message.source_path.contains('\0')
@@ -390,10 +398,12 @@ fn store_message(
     if inserted {
         stats.bytes_stored = stats
             .bytes_stored
-            .checked_add(message.object.byte_length())
+            .checked_add(message.object.id().byte_length())
             .ok_or_else(|| invalid("import byte count overflow"))?;
     }
     if previous.is_some() {
+        // The existing reference protects replay after its token was spent.
+        release_reservation(tx, &message.object, ReservationRelease::Tolerated)?;
         return Ok(());
     }
     tx.execute(
@@ -442,6 +452,8 @@ fn store_message(
         let sharing = list_rows::sharing_acquisition(tx, acquisition)?;
         list.extend(sharing);
     }
+    // A missing local pin rolls back the new reference; sibling tokens survive.
+    release_reservation(tx, &message.object, ReservationRelease::Required)?;
     Ok(())
 }
 

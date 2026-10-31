@@ -88,7 +88,7 @@ fn write<T: Send + 'static>(
 /// Publish `bytes` as an object and record it as published acquisition
 /// `id`; returns the object so tests can damage its file.
 fn acquire(store: &Store, id: i64, bytes: &[u8]) -> ObjectId {
-    let object = store.objects().publish(bytes).unwrap();
+    let object = *store.objects().publish(bytes).unwrap().id();
     write(store, move |tx| {
         tx.execute_batch(&format!(
             "INSERT INTO acquisitions (acquisition_id, content_sha256, byte_length,

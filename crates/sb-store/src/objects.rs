@@ -9,11 +9,15 @@ use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 
+use rusqlite::{Connection, Transaction, TransactionBehavior, params};
 use sb_types::fs::{FileKind, Fs, ReadFile};
 use sb_types::random::Random;
+use sb_types::time::Clock;
 use sha2::{Digest, Sha256};
 
-use crate::StoreError;
+use crate::schema::classify;
+use crate::writer::{WritePriority, Writer};
+use crate::{StoreError, Timestamp};
 
 /// How many bytes `publish` streams per write: large enough that few
 /// writes cover a body, small enough to bound memory.
@@ -27,6 +31,39 @@ const QUARANTINE_NAME_ATTEMPTS: usize = 8;
 /// The 16 hex digits, lowercase: object file names are always lowercase
 /// so the same hash always spells the same path.
 const HEX_DIGITS: &[u8; 16] = b"0123456789abcdef";
+
+/// How long an unreferenced reservation lives before startup expiry
+/// (spec/03), in `Timestamp` milliseconds: 24 h.
+const RESERVATION_LIFETIME_MS: i64 = 24 * 60 * 60 * 1000;
+
+/// The most expired reservations one startup batch deletes (spec/03's
+/// bounded cleanup); the sweep loops until none remain.
+const RESERVATION_EXPIRY_BATCH: i64 = 512;
+const RESERVATION_KIND: &str = "reservation";
+
+/// The 64 lowercase hex digits one reservation row's `object_sha256`
+/// must carry; any other length is malformed and kept, never swept.
+const SHA256_HEX_BYTES: i64 = 64;
+
+/// `pin_ref` text longer than this is oversized or malformed and kept,
+/// never swept: our tokens are 32 hex digits, so a kilobyte is
+/// generous headroom (spec/03).
+const RESERVATION_PIN_REF_BYTES: i64 = 1024;
+
+/// Integers, record headers, varints and cell framing for row plus PK image.
+const RESERVATION_PIN_FRAMING: usize = 128;
+
+/// Bound both deleted text copies and their fixed framing (spec/03).
+pub(crate) const RESERVATION_PIN_IMAGE: usize = 2
+    * (SHA256_HEX_BYTES as usize + RESERVATION_KIND.len() + RESERVATION_PIN_REF_BYTES as usize)
+    + RESERVATION_PIN_FRAMING;
+
+// A full expiry batch stays under the import write cap: 512 validated
+// rows times the charged pin-and-key image.
+const _: () = assert!(
+    RESERVATION_EXPIRY_BATCH as usize * RESERVATION_PIN_IMAGE
+        <= crate::imports::MAX_IMPORT_CHANGES_BYTES
+);
 
 /// An object's identity: the SHA-256 and the length of its bytes
 /// (spec/03). The length lets `open` judge a file before hashing it.
@@ -61,12 +98,35 @@ impl ObjectId {
     }
 }
 
+/// Durable identity and private one-shot reservation (spec/03).
+/// Dropping it leaves the pin for startup expiry; only `publish` constructs it.
+pub struct PublishedObject {
+    id: ObjectId,
+    reservation: [u8; 16],
+}
+
+impl PublishedObject {
+    /// The published object's identity.
+    pub fn id(&self) -> &ObjectId {
+        &self.id
+    }
+}
+
+impl std::fmt::Debug for PublishedObject {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PublishedObject")
+            .field("id", &self.id)
+            .finish_non_exhaustive()
+    }
+}
+
 /// The object store contract (spec/03). Publishing is durable and
 /// idempotent; reading verifies; only GC removes.
 pub trait ObjectStore {
-    /// Write bytes durably; returns their id. Idempotent: the same
-    /// bytes produce the same id and no second copy.
-    fn publish(&self, bytes: impl Read) -> Result<ObjectId, StoreError>;
+    /// Write and reserve bytes durably (spec/03): the same bytes
+    /// produce the same id and no second copy, with a distinct
+    /// reservation committed before the object installs.
+    fn publish(&self, bytes: impl Read) -> Result<PublishedObject, StoreError>;
     /// Open for reading; checks the length, then the hash while
     /// streaming.
     fn open(&self, id: &ObjectId) -> Result<ObjectReader, StoreError>;
@@ -205,6 +265,137 @@ pub struct FileObjectStore {
     objects_sha256: PathBuf,
     durable_chains: Mutex<HashSet<[u8; 2]>>,
     shelf: Arc<Shelf>,
+    reservations: Reservations,
+}
+
+/// Production commits through the writer; isolated file tests use a pin sink.
+enum Reservations {
+    /// Through the store's writer, which also knows its own thread.
+    Writer(WriterReservations),
+    /// The fault harness's stand-in; a `cfg(test)`-only bypass.
+    #[cfg(test)]
+    Sink(PinSink),
+}
+
+/// Shared writer and clock for reservation commits and startup expiry.
+struct WriterReservations {
+    writer: Arc<Writer>,
+    clock: Arc<dyn Clock>,
+}
+
+/// The file-protocol harness's reservation stand-in (spec/03): an
+/// in-memory pin sink behind `cfg(test)`, so no reservation bypass
+/// reaches production.
+#[cfg(test)]
+pub(crate) type PinSink = Box<dyn Fn(&ObjectId, [u8; 16]) -> Result<(), StoreError> + Send + Sync>;
+
+impl Reservations {
+    /// Refuse the writer's own thread before any file I/O: a publish
+    /// from it would wait on its own queue (spec/03).
+    fn refuse_own_thread(&self) -> Result<(), StoreError> {
+        match self {
+            Self::Writer(writer) if writer.writer.is_writer_thread() => Err(StoreError::internal(
+                "the writer thread cannot publish through its own queue",
+            )),
+            _ => Ok(()),
+        }
+    }
+
+    /// Commit `id`'s `object_pins` reservation `token`, returning only
+    /// once the commit landed.
+    fn commit(&self, id: &ObjectId, token: [u8; 16]) -> Result<(), StoreError> {
+        match self {
+            Self::Writer(writer) => writer.commit_reservation(id, token),
+            #[cfg(test)]
+            Self::Sink(sink) => sink(id, token),
+        }
+    }
+}
+
+impl WriterReservations {
+    /// Insert one `object_pins(reservation, <token>)` row for `id`
+    /// through the writer at the current import priority and wait for
+    /// its commit (spec/03).
+    fn commit_reservation(&self, id: &ObjectId, token: [u8; 16]) -> Result<(), StoreError> {
+        let sha256 = id.sha256_hex();
+        let pin_ref = hex(&token);
+        let created_at = self.clock.now().as_millis();
+        let future = self.writer.submit(WritePriority::Index, move |tx| {
+            tx.execute(
+                "INSERT INTO object_pins (object_sha256, pin_kind, pin_ref, created_at)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![sha256, RESERVATION_KIND, pin_ref, created_at],
+            )
+            .map_err(|e| classify(e, "reserve the published object"))?;
+            Ok(())
+        });
+        crate::store::await_write(future)
+    }
+}
+
+/// Startup-only cleanup, before the writer can schedule an idle checkpoint.
+pub(crate) fn expire_reservations(conn: &mut Connection, now: Timestamp) -> Result<(), StoreError> {
+    let Some(cutoff) = now.as_millis().checked_sub(RESERVATION_LIFETIME_MS) else {
+        return Ok(());
+    };
+    loop {
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|e| classify(e, "begin reservation expiry"))?;
+        let deleted = tx
+            .execute(
+                "DELETE FROM object_pins WHERE rowid IN (
+                    SELECT rowid FROM object_pins
+                    WHERE pin_kind = ?5 AND created_at <= ?1
+                      AND length(CAST(object_sha256 AS BLOB)) = ?3
+                      AND length(CAST(pin_ref AS BLOB)) <= ?4
+                    LIMIT ?2)",
+                params![
+                    cutoff,
+                    RESERVATION_EXPIRY_BATCH,
+                    SHA256_HEX_BYTES,
+                    RESERVATION_PIN_REF_BYTES,
+                    RESERVATION_KIND,
+                ],
+            )
+            .map_err(|e| classify(e, "expire abandoned reservations"))?;
+        tx.commit()
+            .map_err(|e| classify(e, "commit reservation expiry"))?;
+        if deleted == 0 {
+            return Ok(());
+        }
+    }
+}
+
+/// New references require a live local pin; genuine replay tolerates a spent pin.
+pub(crate) enum ReservationRelease {
+    Required,
+    Tolerated,
+}
+
+/// Release only this publication's pin in the referencing transaction (spec/03).
+pub(crate) fn release_reservation(
+    tx: &Transaction,
+    object: &PublishedObject,
+    release: ReservationRelease,
+) -> Result<(), StoreError> {
+    let deleted = tx
+        .execute(
+            "DELETE FROM object_pins
+             WHERE object_sha256 = ?1 AND pin_kind = ?2 AND pin_ref = ?3",
+            params![
+                object.id.sha256_hex(),
+                RESERVATION_KIND,
+                hex(&object.reservation)
+            ],
+        )
+        .map_err(|e| classify(e, "release the publication's reservation"))?;
+    if deleted == 0 && matches!(release, ReservationRelease::Required) {
+        return Err(StoreError::conflict(
+            "the publication's reservation is not live in this store",
+        ));
+    }
+    Ok(())
 }
 
 /// Puts objects at their paths and takes them away, one move at a
@@ -341,11 +532,16 @@ fn file_exists(fs: &dyn Fs, path: &Path) -> io::Result<bool> {
 impl FileObjectStore {
     /// Over an existing store layout: the seams, `objects/` and
     /// `recovery/` (their `tmp/` and `sha256/` children are derived).
+    /// Publications reserve through the shared `writer` (an `Arc`:
+    /// `close` is `&self`, and the store still drops its own handle
+    /// last) and stamp reservations off `clock`.
     pub(crate) fn new(
         fs: Arc<dyn Fs>,
         random: Arc<dyn Random>,
         objects: PathBuf,
         recovery: PathBuf,
+        writer: Arc<Writer>,
+        clock: Arc<dyn Clock>,
     ) -> Self {
         Self {
             objects_tmp: objects.join("tmp"),
@@ -360,6 +556,35 @@ impl FileObjectStore {
             fs,
             random,
             durable_chains: Mutex::new(HashSet::new()),
+            reservations: Reservations::Writer(WriterReservations { writer, clock }),
+        }
+    }
+
+    /// The file-protocol fault harness's stand-in (spec/03): same
+    /// store, but reservation commits go to an in-memory pin sink.
+    /// `cfg(test)` keeps any reservation bypass out of production.
+    #[cfg(test)]
+    pub(crate) fn new_for_test(
+        fs: Arc<dyn Fs>,
+        random: Arc<dyn Random>,
+        objects: PathBuf,
+        recovery: PathBuf,
+        pins: PinSink,
+    ) -> Self {
+        Self {
+            objects_tmp: objects.join("tmp"),
+            objects_sha256: objects.join("sha256"),
+            objects,
+            shelf: Arc::new(Shelf {
+                fs: Arc::clone(&fs),
+                random: Arc::clone(&random),
+                recovery,
+                removals: Mutex::new(HashMap::new()),
+            }),
+            fs,
+            random,
+            durable_chains: Mutex::new(HashSet::new()),
+            reservations: Reservations::Sink(pins),
         }
     }
 
@@ -467,18 +692,35 @@ impl FileObjectStore {
 }
 
 impl ObjectStore for FileObjectStore {
-    fn publish(&self, bytes: impl Read) -> Result<ObjectId, StoreError> {
+    fn publish(&self, bytes: impl Read) -> Result<PublishedObject, StoreError> {
         let mut bytes = bytes;
-        // Step 1: the temp file, its name from the randomness seam.
+        // The writer thread can't wait on its own queue; refuse before
+        // any file I/O (spec/03).
+        self.reservations.refuse_own_thread()?;
+        // Step 1: the temp file, its name from the randomness seam. A
+        // second draw is this call's reservation token, so a same-hash
+        // publication gets a distinct lifetime.
         let mut name = [0u8; 16];
         self.random.fill(&mut name).map_err(|e| {
             StoreError::unavailable_io(format!("cannot name the temp object: {e}"), e.kind())
+        })?;
+        let mut reservation = [0u8; 16];
+        self.random.fill(&mut reservation).map_err(|e| {
+            StoreError::unavailable_io(format!("cannot name the reservation: {e}"), e.kind())
         })?;
         let tmp = self.objects_tmp.join(hex(&name));
         // Later errors try to remove the temp file; that best-effort
         // cleanup never hides the real one.
         let id = self.write_temp(&tmp, &mut bytes)?;
         if let Err(e) = self.ensure_chain_durable(&id.sha256) {
+            let _ = self.fs.remove(&tmp);
+            return Err(e);
+        }
+        // The reservation must commit before the install step's
+        // existence check: only then can a failed commit report no
+        // publication and install nothing (spec/03). A committed pin
+        // an abandoned publication leaves behind expires at startup.
+        if let Err(e) = self.reservations.commit(&id, reservation) {
             let _ = self.fs.remove(&tmp);
             return Err(e);
         }
@@ -504,7 +746,7 @@ impl ObjectStore for FileObjectStore {
                 e.kind(),
             ));
         }
-        Ok(id)
+        Ok(PublishedObject { id, reservation })
     }
 
     fn open(&self, id: &ObjectId) -> Result<ObjectReader, StoreError> {
@@ -660,3 +902,6 @@ fn hex(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod reservation_tests;

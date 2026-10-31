@@ -24,13 +24,16 @@ use crate::testing::scratch_paths;
 use sha2::{Digest, Sha256};
 
 /// An object store over `fs` and a layout at `paths`, with
-/// deterministic randomness.
+/// deterministic randomness. The isolated file-protocol harness
+/// commits reservations to a no-op pin sink (spec/03); the real
+/// writer path is covered by the store-level reservation tests.
 fn object_store(fs: Arc<dyn Fs>, paths: &StorePaths, seed: u64) -> FileObjectStore {
-    FileObjectStore::new(
+    FileObjectStore::new_for_test(
         fs,
         Arc::new(SeededRandom::new(seed)),
         paths.objects().to_path_buf(),
         paths.recovery().to_path_buf(),
+        Box::new(|_, _| Ok(())),
     )
 }
 
@@ -52,9 +55,9 @@ fn sim_layout(label: &str) -> (ScratchDir, StorePaths, Arc<SimFs>) {
 
 /// Publish through the trait (spec/03: the publication fault harness
 /// runs against the `ObjectStore` trait, so a BLOB implementation
-/// could replace files).
+/// could replace files), keeping only the identity.
 fn publish<S: ObjectStore + ?Sized>(store: &S, payload: &[u8]) -> Result<ObjectId, StoreError> {
-    ObjectStore::publish(store, payload)
+    ObjectStore::publish(store, payload).map(|published| *published.id())
 }
 
 /// Where the layout puts an object: `objects/sha256/ab/cd/<64 hex>`.
@@ -100,7 +103,7 @@ fn publish_open_round_trips_over_real_and_sim_fs() {
         let store = object_store(fs, paths, 5);
         let payloads: [&[u8]; 2] = [b"the bytes that round trip", b""];
         for payload in payloads {
-            let id = store.publish(payload).unwrap();
+            let id = publish(&store, payload).unwrap();
             assert_eq!(id.sha256(), sha256_of(payload));
             assert_eq!(id.byte_length(), payload.len() as u64);
             let hex = id.sha256_hex();
@@ -412,11 +415,12 @@ fn publish_cut_child() {
     let paths = StorePaths::new(&root).expect("an absolute data root");
     create_layout(real_fs().as_ref(), &paths).expect("the layout");
     let fs = Arc::new(CutFs::new(real_fs(), n));
-    let store = FileObjectStore::new(
+    let store = FileObjectStore::new_for_test(
         fs,
         Arc::new(SeededRandom::new(7)),
         paths.objects().to_path_buf(),
         paths.recovery().to_path_buf(),
+        Box::new(|_, _| Ok(())),
     );
     store
         .publish(Cursor::new(cut_payload()))
@@ -517,9 +521,11 @@ fn concurrent_publications_into_one_new_chain_survive_a_power_cut() {
     let ids = thread::scope(|scope| {
         let payloads = [first.clone(), second.clone()];
         let handles = payloads.map(|payload| {
-            scope.spawn(|| {
+            let store = &store;
+            let barrier = &barrier;
+            scope.spawn(move || {
                 barrier.wait();
-                ObjectStore::publish(&store, Cursor::new(payload))
+                publish(store, &payload)
             })
         });
         let ids = handles.map(|handle| {
@@ -569,7 +575,7 @@ fn an_open_stores_objects_publish_into_its_objects_dir() {
     let store = crate::open(&paths, &seams).unwrap();
 
     let payload: &[u8] = b"through the store";
-    let id = store.objects().publish(payload).unwrap();
+    let id = *store.objects().publish(payload).unwrap().id();
     let hex = id.sha256_hex();
     let expected = paths
         .objects()
@@ -967,7 +973,9 @@ impl Fs for RecordFs {
 }
 
 /// `PUBLISH_OPERATIONS` is what a publish really does, so the crash
-/// sweep's cut count can be held to it.
+/// sweep's cut count can be held to it. The pin sink's "reserve" must
+/// sit between the chain flush and the install's existence check — the
+/// reservation commits before the file installs (spec/03).
 #[test]
 fn a_publish_performs_exactly_the_listed_operations() {
     let (_scratch, paths) = real_layout("objects-op-sequence");
@@ -976,9 +984,22 @@ fn a_publish_performs_exactly_the_listed_operations() {
         inner: real_fs(),
         log: Arc::clone(&log),
     });
-    let store = object_store(fs, &paths, 7);
+    let pins = Arc::clone(&log);
+    let store = FileObjectStore::new_for_test(
+        fs,
+        Arc::new(SeededRandom::new(7)),
+        paths.objects().to_path_buf(),
+        paths.recovery().to_path_buf(),
+        Box::new(move |_, _| {
+            pins.lock().unwrap().push("reserve");
+            Ok(())
+        }),
+    );
     store.publish(Cursor::new(cut_payload())).unwrap();
-    assert_eq!(*log.lock().unwrap(), PUBLISH_OPERATIONS);
+    let mut expected = PUBLISH_OPERATIONS.to_vec();
+    // The install step's first op is its existence `metadata`.
+    expected.insert(PUBLISH_OPERATIONS.len() - 3, "reserve");
+    assert_eq!(*log.lock().unwrap(), expected);
 }
 
 /// The `StoreError` a failed `ObjectReader` read carries.
@@ -1124,7 +1145,7 @@ impl Fs for VanishFs {
 fn an_object_vanishing_during_open_is_not_found() {
     let (_scratch, paths) = real_layout("objects-vanish");
     let payload: &[u8] = b"here, then gone";
-    let id = object_store(real_fs(), &paths, 5).publish(payload).unwrap();
+    let id = publish(&object_store(real_fs(), &paths, 5), payload).unwrap();
     let fs = Arc::new(VanishFs {
         inner: real_fs(),
         vanishing: object_at(&paths, &id),
@@ -1187,11 +1208,12 @@ impl sb_types::random::Random for RepeatingRandom {
 #[test]
 fn a_taken_temp_name_fails_without_removing_its_file() {
     let (_scratch, paths) = real_layout("objects-taken-temp");
-    let store = FileObjectStore::new(
+    let store = FileObjectStore::new_for_test(
         real_fs(),
         Arc::new(RepeatingRandom),
         paths.objects().to_path_buf(),
         paths.recovery().to_path_buf(),
+        Box::new(|_, _| Ok(())),
     );
     let mut name = [0u8; 16];
     RepeatingRandom.fill(&mut name).unwrap();

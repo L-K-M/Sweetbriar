@@ -135,7 +135,7 @@ fn identical_bytes_keep_distinct_occurrences_but_replay_keeps_counts() {
     let (_scratch, paths, store, revision) = setup();
     let first = message(&store, "/synthetic/Inbox.mbox", 0, ORIGINAL);
     let second = message(&store, "/synthetic/Inbox.mbox", 128, ORIGINAL);
-    let object = first.object;
+    let object = *first.object.id();
     let stats = commit(&store, revision, "Inbox", vec![first, second]).unwrap();
     assert_eq!(
         (
@@ -509,7 +509,7 @@ fn migration_preserves_a_v1_archive_and_its_originals() {
         &crate::schema::MIGRATIONS[..1],
     )
     .unwrap();
-    let object = store.objects().publish(ORIGINAL).unwrap();
+    let object = *store.objects().publish(ORIGINAL).unwrap().id();
     writing(&store, move |tx| {
         tx.execute("INSERT INTO accounts (account_id,kind,provider,display_name,state,sort_order,created_at) VALUES ('kept','local','local_archive','Kept name','paused',7,123)", []).unwrap();
         tx.execute("INSERT INTO acquisitions (content_sha256,byte_length,object_state,first_acquired_at) VALUES (?1,?2,'published',123)", params![object.sha256_hex(), object.byte_length() as i64]).unwrap();
@@ -760,7 +760,7 @@ fn a_first_summary_stores_its_address_keys_and_a_later_one_changes_none() {
 /// `held` messages sharing `bytes`' acquisition, which has no summary
 /// yet, each with a listed occurrence in a local folder.
 fn hold_without_summary(store: &Store, bytes: &'static [u8], held: usize) {
-    let object = store.objects().publish(bytes).unwrap();
+    let object = *store.objects().publish(bytes).unwrap().id();
     writing(store, move |tx| {
         let account: String = tx
             .query_row(
