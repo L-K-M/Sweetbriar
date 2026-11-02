@@ -23,6 +23,7 @@ pub use sb_mime::{RenderWarning, RenderWarningCode};
 mod acquire;
 mod activation;
 mod catchup;
+mod drafts;
 pub use activation::{
     ActivationCommit, ActivationPreparation, ActivationPrepared, ActivationStatus, ActivationWork,
     RecordedActivationDeferral,
@@ -74,6 +75,11 @@ pub use sb_store::appearance::{
     account_appearance, appearance_generation, identity_appearance, initialize_account_appearance,
     set_account_appearance, set_identity_appearance,
 };
+pub use sb_store::drafts::{
+    AttachmentRef, AttemptState, ComposeFormat, DraftAttachment, DraftRecipient, DraftSource,
+    DraftState, DraftSummary, LiveAttempt, RevisionInput, StoredDraft, StoredRevision,
+    create_draft, discard_draft, draft, drafts, save_draft,
+};
 pub use sb_store::exports::{
     ExportCaptureRequest, ExportChunkWriter, ExportFormat, ExportJob, ExportJobState, ExportScope,
     ExportSearchSort, ExportSelection, MAX_EXPORT_CHANGED_BYTES, MAX_EXPORT_CHUNK_BYTES,
@@ -122,9 +128,10 @@ pub use sb_store::threads::{
     remove_thread, stored_threads, thread_memberships, thread_revisions, thread_sources,
 };
 pub use sb_store::{
-    AppearanceObserver, ExportMetadata, ImportSourceSnapshot, ListObserver, ReadStop, Receipt,
-    Scoped, SearchObserver, StoreError, Timestamp, Transaction, Uuid, WriteFuture, WritePriority,
-    encode_job_receipt, export_occurrence_metadata, receipt_job_id, run_once,
+    AppearanceObserver, ExportMetadata, ImportSourceSnapshot, ListObserver, PublishedObject,
+    ReadStop, Receipt, Scoped, SearchObserver, StoreError, Timestamp, Transaction, Uuid,
+    WriteFuture, WritePriority, encode_job_receipt, export_occurrence_metadata, receipt_job_id,
+    run_once,
 };
 
 #[cfg(feature = "test-seams")]

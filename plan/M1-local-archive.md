@@ -1054,6 +1054,46 @@ local drafts. No network yet.
 
 ### M1.9 Local drafts and the composer — L, linux + macos-ci
 
+- **PR split (2026-11-01):** retain every deliverable and acceptance
+  below. Each PR must fit 1,450 gross changed lines, including its
+  native proof.
+  - **M1.9a Drafts core (L):** the spec/02 draft schema (already in
+    migration 1 — document, don't re-add) and the Store/Resources/Engine
+    for `create_draft`, `save_draft` (a base-revision mismatch gets
+    `Conflict`), `discard_draft`, `drafts()` and `draft()`, with
+    attachments published to the object store before the revision that
+    references them. A native public-API consumer proves the crash cuts,
+    the same-base `Conflict`, the publication ordering, the NULL-route
+    draft and the live-attempt refusal wiring (no attempts exist yet).
+    No service, FFI or window. Re-sized 2026-11-01: the complete core
+    measures 2,085 gross changed lines, over the limit. Split below
+    with every deliverable and acceptance check assigned; no migration
+    is needed (the `drafts` and `draft_revisions` tables are migration
+    1's, matching spec/02's Drafts block).
+    - **M1.9a1 Draft store and publication core (L):** the migration-1
+      schema note, `sb-store::drafts` (`create_draft`, `save_draft`
+      with the route snapshot and reservation spending,
+      `discard_draft`, `drafts()`, `draft()`) and the Resources
+      attachment publication path. A native Resources facade consumer
+      proves the same-base `Conflict`, the publication ordering, the
+      NULL-route draft, the live-attempt refusal wiring and the
+      draft-context resolution. No Engine, receipts or FFI.
+    - **M1.9a2 Draft engine commands (L):** the Engine commands and
+      queries consuming a1, durable command receipts (create/discard:
+      `{"draft_id": ...}`, save: `{"revision_id": ...}`) with
+      idempotent replay, and the engine-level native consumer
+      re-proving the acceptance checks above including the crash cuts
+      (an acknowledged save is its receipt). Depends on M1.9a1.
+  - **M1.9b Drafts service and FFI (L):** owned Service DTOs, FFI
+    exports, regenerated bindings and the SweetbriarBridge model over a,
+    with receipts and lifecycle proof.
+  - **M1.9c Compose window (L):** the macOS compose window — token
+    fields, subject, a plain or Markdown editor on the M0.11 probe's
+    TextKit 2 view, autosave after 1.5 s, "Saved" only after the
+    receipt — the sidebar's Drafts (local) list, the keep-both
+    conflict UI, and Send unavailable without a sending account. The
+    owner's write-quit-relaunch check stays with this artifact.
+
 - **Goal:** compose and save drafts locally, durably, with revisions and
   attachments. No sending yet.
 - **Spec:** 02 (Drafts), 05 (Composing: formats; MIME built in M4), 08
