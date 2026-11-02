@@ -465,6 +465,22 @@ fileprivate final class UniffiHandleMap<T>: @unchecked Sendable {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterUInt8: FfiConverterPrimitive {
+    typealias FfiType = UInt8
+    typealias SwiftType = UInt8
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> UInt8 {
+        return try lift(readInt(&buf))
+    }
+
+    public static func write(_ value: UInt8, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterUInt32: FfiConverterPrimitive {
     typealias FfiType = UInt32
     typealias SwiftType = UInt32
@@ -579,6 +595,152 @@ fileprivate struct FfiConverterString: FfiConverter {
         writeBytes(&buf, value.utf8)
     }
 }
+
+
+
+
+/**
+ * The appearance stream (spec/07 "Subscriptions"): one in-flight
+ * `next` at a time, in-memory only.
+ */
+public protocol AppearanceSubscriptionProtocol: AnyObject, Sendable {
+    
+    /**
+     * The next event: at once when the source already moved past the
+     * mark, else when it does. One call at a time — a second
+     * concurrent call is `InvalidInput`. A cancelled call answers
+     * `Cancelled` and moves no mark, so the next call still sees
+     * what it missed.
+     */
+    func next(token: CancelToken) async throws  -> AppearanceEvent
+    
+}
+/**
+ * The appearance stream (spec/07 "Subscriptions"): one in-flight
+ * `next` at a time, in-memory only.
+ */
+open class AppearanceSubscription: AppearanceSubscriptionProtocol, @unchecked Sendable {
+    fileprivate let handle: UInt64
+
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoHandle {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noHandle: NoHandle) {
+        self.handle = 0
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_sb_ffi_fn_clone_appearancesubscription(self.handle, $0) }
+    }
+    // No primary constructor declared for this class.
+
+    deinit {
+        if handle == 0 {
+            // Mock objects have handle=0 don't try to free them
+            return
+        }
+
+        try! rustCall { uniffi_sb_ffi_fn_free_appearancesubscription(handle, $0) }
+    }
+
+    
+
+    
+    /**
+     * The next event: at once when the source already moved past the
+     * mark, else when it does. One call at a time — a second
+     * concurrent call is `InvalidInput`. A cancelled call answers
+     * `Cancelled` and moves no mark, so the next call still sees
+     * what it missed.
+     */
+open func next(token: CancelToken)async throws  -> AppearanceEvent  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_appearancesubscription_next(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeAppearanceEvent_lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+
+    
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeAppearanceSubscription: FfiConverter {
+    typealias FfiType = UInt64
+    typealias SwiftType = AppearanceSubscription
+
+    public static func lift(_ handle: UInt64) throws -> AppearanceSubscription {
+        return AppearanceSubscription(unsafeFromHandle: handle)
+    }
+
+    public static func lower(_ value: AppearanceSubscription) -> UInt64 {
+        return value.uniffiCloneHandle()
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> AppearanceSubscription {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+    public static func write(_ value: AppearanceSubscription, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAppearanceSubscription_lift(_ handle: UInt64) throws -> AppearanceSubscription {
+    return try FfiConverterTypeAppearanceSubscription.lift(handle)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAppearanceSubscription_lower(_ value: AppearanceSubscription) -> UInt64 {
+    return FfiConverterTypeAppearanceSubscription.lower(value)
+}
+
+
 
 
 
@@ -783,6 +945,23 @@ public protocol CoreProtocol: AnyObject, Sendable {
      * is the safety net (spec/03 "Integrity").
      */
     func shutdown() async 
+    
+    /**
+     * `appearance()` (spec/07 "Other queries"): resolved colors and
+     * monograms at the answer's committed appearance generation —
+     * the mark `subscribe_appearance` takes. A stored record that is
+     * missing or malformed is `Corrupt`, never defaulted (spec/02).
+     * A query: the token races every wait.
+     */
+    func appearance(token: CancelToken) async throws  -> Appearance
+    
+    /**
+     * `subscribe_appearance` (spec/07 "Subscriptions"): committed
+     * appearance generations from `generation` — what the caller's
+     * last `appearance()` answer reported. A query like `subscribe`:
+     * the token races the core's lock.
+     */
+    func subscribeAppearance(token: CancelToken, generation: UInt64) async throws  -> AppearanceSubscription
     
     /**
      * Cancel an import or durably pause Search index work; committed work stays.
@@ -1066,6 +1245,51 @@ open func shutdown()async   {
             liftFunc: { $0 },
             errorHandler: nil
             
+        )
+}
+    
+    /**
+     * `appearance()` (spec/07 "Other queries"): resolved colors and
+     * monograms at the answer's committed appearance generation —
+     * the mark `subscribe_appearance` takes. A stored record that is
+     * missing or malformed is `Corrupt`, never defaulted (spec/02).
+     * A query: the token races every wait.
+     */
+open func appearance(token: CancelToken)async throws  -> Appearance  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_appearance(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeAppearance_lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * `subscribe_appearance` (spec/07 "Subscriptions"): committed
+     * appearance generations from `generation` — what the caller's
+     * last `appearance()` answer reported. A query like `subscribe`:
+     * the token races the core's lock.
+     */
+open func subscribeAppearance(token: CancelToken, generation: UInt64)async throws  -> AppearanceSubscription  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_subscribe_appearance(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterUInt64.lower(generation)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_u64,
+            completeFunc: ffi_sb_ffi_rust_future_complete_u64,
+            freeFunc: ffi_sb_ffi_rust_future_free_u64,
+            liftFunc: FfiConverterTypeAppearanceSubscription_lift,
+            errorHandler: FfiConverterTypeCoreError_lift
         )
 }
     
@@ -1817,6 +2041,372 @@ public func FfiConverterTypeAccount_lower(_ value: Account) -> RustBuffer {
 }
 
 
+/**
+ * An account's resolved appearance (spec/07): the color, monogram
+ * and rendering tokens the shell draws, the collision flag, where
+ * the color came from, and the revision the setter expects.
+ */
+public struct AccountAppearance: Equatable, Hashable {
+    public var accountId: String
+    /**
+     * The resolved color, `#rrggbb`.
+     */
+    public var colorSrgb: String
+    /**
+     * The tokens the shell draws over the row (spec/02).
+     */
+    public var tokens: AppearanceTokens
+    /**
+     * The stored symbol; `None` derives `monogram` from the name.
+     */
+    public var symbol: String?
+    /**
+     * What the account displays: `symbol` or the name's first letter.
+     */
+    public var monogram: String
+    /**
+     * Another account shows the same monogram — label this row.
+     */
+    public var collides: Bool
+    /**
+     * Where the color came from (spec/02): a preset or a custom pick.
+     */
+    public var assignment: AppearanceAssignment
+    /**
+     * The record's revision; `set_account_appearance` requires it.
+     */
+    public var revision: Int64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(accountId: String, 
+        /**
+         * The resolved color, `#rrggbb`.
+         */colorSrgb: String, 
+        /**
+         * The tokens the shell draws over the row (spec/02).
+         */tokens: AppearanceTokens, 
+        /**
+         * The stored symbol; `None` derives `monogram` from the name.
+         */symbol: String?, 
+        /**
+         * What the account displays: `symbol` or the name's first letter.
+         */monogram: String, 
+        /**
+         * Another account shows the same monogram — label this row.
+         */collides: Bool, 
+        /**
+         * Where the color came from (spec/02): a preset or a custom pick.
+         */assignment: AppearanceAssignment, 
+        /**
+         * The record's revision; `set_account_appearance` requires it.
+         */revision: Int64) {
+        self.accountId = accountId
+        self.colorSrgb = colorSrgb
+        self.tokens = tokens
+        self.symbol = symbol
+        self.monogram = monogram
+        self.collides = collides
+        self.assignment = assignment
+        self.revision = revision
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension AccountAppearance: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeAccountAppearance: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> AccountAppearance {
+        return
+            try AccountAppearance(
+                accountId: FfiConverterString.read(from: &buf), 
+                colorSrgb: FfiConverterString.read(from: &buf), 
+                tokens: FfiConverterTypeAppearanceTokens.read(from: &buf), 
+                symbol: FfiConverterOptionString.read(from: &buf), 
+                monogram: FfiConverterString.read(from: &buf), 
+                collides: FfiConverterBool.read(from: &buf), 
+                assignment: FfiConverterTypeAppearanceAssignment.read(from: &buf), 
+                revision: FfiConverterInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: AccountAppearance, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.accountId, into: &buf)
+        FfiConverterString.write(value.colorSrgb, into: &buf)
+        FfiConverterTypeAppearanceTokens.write(value.tokens, into: &buf)
+        FfiConverterOptionString.write(value.symbol, into: &buf)
+        FfiConverterString.write(value.monogram, into: &buf)
+        FfiConverterBool.write(value.collides, into: &buf)
+        FfiConverterTypeAppearanceAssignment.write(value.assignment, into: &buf)
+        FfiConverterInt64.write(value.revision, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAccountAppearance_lift(_ buf: RustBuffer) throws -> AccountAppearance {
+    return try FfiConverterTypeAccountAppearance.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAccountAppearance_lower(_ value: AccountAppearance) -> RustBuffer {
+    return FfiConverterTypeAccountAppearance.lower(value)
+}
+
+
+/**
+ * `appearance()`'s answer (spec/07): every account and identity at
+ * one committed appearance generation — `subscribe_appearance`'s
+ * starting mark.
+ */
+public struct Appearance: Equatable, Hashable {
+    /**
+     * The committed appearance generation this answers for.
+     */
+    public var generation: UInt64
+    /**
+     * Every account, in sidebar order.
+     */
+    public var accounts: [AccountAppearance]
+    /**
+     * Every identity, ordered by account then id.
+     */
+    public var identities: [IdentityAppearance]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * The committed appearance generation this answers for.
+         */generation: UInt64, 
+        /**
+         * Every account, in sidebar order.
+         */accounts: [AccountAppearance], 
+        /**
+         * Every identity, ordered by account then id.
+         */identities: [IdentityAppearance]) {
+        self.generation = generation
+        self.accounts = accounts
+        self.identities = identities
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension Appearance: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeAppearance: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Appearance {
+        return
+            try Appearance(
+                generation: FfiConverterUInt64.read(from: &buf), 
+                accounts: FfiConverterSequenceTypeAccountAppearance.read(from: &buf), 
+                identities: FfiConverterSequenceTypeIdentityAppearance.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: Appearance, into buf: inout [UInt8]) {
+        FfiConverterUInt64.write(value.generation, into: &buf)
+        FfiConverterSequenceTypeAccountAppearance.write(value.accounts, into: &buf)
+        FfiConverterSequenceTypeIdentityAppearance.write(value.identities, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAppearance_lift(_ buf: RustBuffer) throws -> Appearance {
+    return try FfiConverterTypeAppearance.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAppearance_lower(_ value: Appearance) -> RustBuffer {
+    return FfiConverterTypeAppearance.lower(value)
+}
+
+
+/**
+ * The rendering tokens derived from one stored color (spec/02
+ * "Rendering tokens"), for both appearances.
+ */
+public struct AppearanceTokens: Equatable, Hashable {
+    /**
+     * The light appearance's tokens.
+     */
+    public var light: AppearanceVariant
+    /**
+     * The dark appearance's tokens.
+     */
+    public var dark: AppearanceVariant
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * The light appearance's tokens.
+         */light: AppearanceVariant, 
+        /**
+         * The dark appearance's tokens.
+         */dark: AppearanceVariant) {
+        self.light = light
+        self.dark = dark
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension AppearanceTokens: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeAppearanceTokens: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> AppearanceTokens {
+        return
+            try AppearanceTokens(
+                light: FfiConverterTypeAppearanceVariant.read(from: &buf), 
+                dark: FfiConverterTypeAppearanceVariant.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: AppearanceTokens, into buf: inout [UInt8]) {
+        FfiConverterTypeAppearanceVariant.write(value.light, into: &buf)
+        FfiConverterTypeAppearanceVariant.write(value.dark, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAppearanceTokens_lift(_ buf: RustBuffer) throws -> AppearanceTokens {
+    return try FfiConverterTypeAppearanceTokens.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAppearanceTokens_lower(_ value: AppearanceTokens) -> RustBuffer {
+    return FfiConverterTypeAppearanceTokens.lower(value)
+}
+
+
+/**
+ * One appearance's tokens: the accent, its strip fill, text ink and
+ * edge, each `#rrggbb`.
+ */
+public struct AppearanceVariant: Equatable, Hashable {
+    /**
+     * The saturated accent: the list rail and monograms.
+     */
+    public var markerSrgb: String
+    /**
+     * The identity strip's opaque fill.
+     */
+    public var stripSrgb: String
+    /**
+     * The strip's text and content ink.
+     */
+    public var foregroundSrgb: String
+    /**
+     * The Increase-Contrast edge and separator.
+     */
+    public var outlineSrgb: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * The saturated accent: the list rail and monograms.
+         */markerSrgb: String, 
+        /**
+         * The identity strip's opaque fill.
+         */stripSrgb: String, 
+        /**
+         * The strip's text and content ink.
+         */foregroundSrgb: String, 
+        /**
+         * The Increase-Contrast edge and separator.
+         */outlineSrgb: String) {
+        self.markerSrgb = markerSrgb
+        self.stripSrgb = stripSrgb
+        self.foregroundSrgb = foregroundSrgb
+        self.outlineSrgb = outlineSrgb
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension AppearanceVariant: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeAppearanceVariant: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> AppearanceVariant {
+        return
+            try AppearanceVariant(
+                markerSrgb: FfiConverterString.read(from: &buf), 
+                stripSrgb: FfiConverterString.read(from: &buf), 
+                foregroundSrgb: FfiConverterString.read(from: &buf), 
+                outlineSrgb: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: AppearanceVariant, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.markerSrgb, into: &buf)
+        FfiConverterString.write(value.stripSrgb, into: &buf)
+        FfiConverterString.write(value.foregroundSrgb, into: &buf)
+        FfiConverterString.write(value.outlineSrgb, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAppearanceVariant_lift(_ buf: RustBuffer) throws -> AppearanceVariant {
+    return try FfiConverterTypeAppearanceVariant.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAppearanceVariant_lower(_ value: AppearanceVariant) -> RustBuffer {
+    return FfiConverterTypeAppearanceVariant.lower(value)
+}
+
+
 public struct AttachmentLease: Equatable, Hashable {
     public var leaseId: String
     public var filePath: String
@@ -2119,6 +2709,130 @@ public func FfiConverterTypeCoverage_lift(_ buf: RustBuffer) throws -> Coverage 
 #endif
 public func FfiConverterTypeCoverage_lower(_ value: Coverage) -> RustBuffer {
     return FfiConverterTypeCoverage.lower(value)
+}
+
+
+/**
+ * An identity's resolved appearance (spec/07): the effective color
+ * and monogram — its overrides where set, its account's where
+ * inherited — the overrides themselves, and the record revision the
+ * setter expects (`None` when no record exists).
+ */
+public struct IdentityAppearance: Equatable, Hashable {
+    public var identityId: String
+    public var accountId: String
+    /**
+     * The color the identity displays, `#rrggbb`.
+     */
+    public var colorSrgb: String
+    /**
+     * The stored override; `None` displays the account's color.
+     */
+    public var colorOverrideSrgb: String?
+    /**
+     * The tokens over the effective `color_srgb` (spec/02).
+     */
+    public var tokens: AppearanceTokens
+    /**
+     * The stored override; `None` inherits the account's symbol, or
+     * derives a mark from this identity's name when the account has none.
+     */
+    public var symbolOverride: String?
+    /**
+     * What the identity displays: `symbol_override`, else its
+     * account's symbol, else a mark derived from this identity's name.
+     */
+    public var monogram: String
+    /**
+     * The record's revision; `None` means no record exists.
+     */
+    public var revision: Int64?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(identityId: String, accountId: String, 
+        /**
+         * The color the identity displays, `#rrggbb`.
+         */colorSrgb: String, 
+        /**
+         * The stored override; `None` displays the account's color.
+         */colorOverrideSrgb: String?, 
+        /**
+         * The tokens over the effective `color_srgb` (spec/02).
+         */tokens: AppearanceTokens, 
+        /**
+         * The stored override; `None` inherits the account's symbol, or
+         * derives a mark from this identity's name when the account has none.
+         */symbolOverride: String?, 
+        /**
+         * What the identity displays: `symbol_override`, else its
+         * account's symbol, else a mark derived from this identity's name.
+         */monogram: String, 
+        /**
+         * The record's revision; `None` means no record exists.
+         */revision: Int64?) {
+        self.identityId = identityId
+        self.accountId = accountId
+        self.colorSrgb = colorSrgb
+        self.colorOverrideSrgb = colorOverrideSrgb
+        self.tokens = tokens
+        self.symbolOverride = symbolOverride
+        self.monogram = monogram
+        self.revision = revision
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension IdentityAppearance: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeIdentityAppearance: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> IdentityAppearance {
+        return
+            try IdentityAppearance(
+                identityId: FfiConverterString.read(from: &buf), 
+                accountId: FfiConverterString.read(from: &buf), 
+                colorSrgb: FfiConverterString.read(from: &buf), 
+                colorOverrideSrgb: FfiConverterOptionString.read(from: &buf), 
+                tokens: FfiConverterTypeAppearanceTokens.read(from: &buf), 
+                symbolOverride: FfiConverterOptionString.read(from: &buf), 
+                monogram: FfiConverterString.read(from: &buf), 
+                revision: FfiConverterOptionInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: IdentityAppearance, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.identityId, into: &buf)
+        FfiConverterString.write(value.accountId, into: &buf)
+        FfiConverterString.write(value.colorSrgb, into: &buf)
+        FfiConverterOptionString.write(value.colorOverrideSrgb, into: &buf)
+        FfiConverterTypeAppearanceTokens.write(value.tokens, into: &buf)
+        FfiConverterOptionString.write(value.symbolOverride, into: &buf)
+        FfiConverterString.write(value.monogram, into: &buf)
+        FfiConverterOptionInt64.write(value.revision, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeIdentityAppearance_lift(_ buf: RustBuffer) throws -> IdentityAppearance {
+    return try FfiConverterTypeIdentityAppearance.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeIdentityAppearance_lower(_ value: IdentityAppearance) -> RustBuffer {
+    return FfiConverterTypeIdentityAppearance.lower(value)
 }
 
 
@@ -2815,6 +3529,87 @@ public func FfiConverterTypeMailboxes_lift(_ buf: RustBuffer) throws -> Mailboxe
 #endif
 public func FfiConverterTypeMailboxes_lower(_ value: Mailboxes) -> RustBuffer {
     return FfiConverterTypeMailboxes.lower(value)
+}
+
+
+/**
+ * One v1 palette preset (spec/02 "The palette"): its slot — what a
+ * palette pick carries — the picker's display name and `#rrggbb`
+ * color.
+ */
+public struct PaletteColor: Equatable, Hashable {
+    /**
+     * The preset's index in `palette()`.
+     */
+    public var slot: UInt8
+    /**
+     * The picker's display name.
+     */
+    public var name: String
+    /**
+     * The preset's `#rrggbb` color.
+     */
+    public var colorSrgb: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * The preset's index in `palette()`.
+         */slot: UInt8, 
+        /**
+         * The picker's display name.
+         */name: String, 
+        /**
+         * The preset's `#rrggbb` color.
+         */colorSrgb: String) {
+        self.slot = slot
+        self.name = name
+        self.colorSrgb = colorSrgb
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension PaletteColor: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypePaletteColor: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> PaletteColor {
+        return
+            try PaletteColor(
+                slot: FfiConverterUInt8.read(from: &buf), 
+                name: FfiConverterString.read(from: &buf), 
+                colorSrgb: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: PaletteColor, into buf: inout [UInt8]) {
+        FfiConverterUInt8.write(value.slot, into: &buf)
+        FfiConverterString.write(value.name, into: &buf)
+        FfiConverterString.write(value.colorSrgb, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypePaletteColor_lift(_ buf: RustBuffer) throws -> PaletteColor {
+    return try FfiConverterTypePaletteColor.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypePaletteColor_lower(_ value: PaletteColor) -> RustBuffer {
+    return FfiConverterTypePaletteColor.lower(value)
 }
 
 
@@ -4097,6 +4892,164 @@ public func FfiConverterTypeAnchor_lift(_ buf: RustBuffer) throws -> Anchor {
 #endif
 public func FfiConverterTypeAnchor_lower(_ value: Anchor) -> RustBuffer {
     return FfiConverterTypeAnchor.lower(value)
+}
+
+
+
+/**
+ * Where an account's color came from (spec/02 `assignment`): a
+ * palette-v1 slot or an explicit custom pick.
+ */
+
+public enum AppearanceAssignment: Equatable, Hashable {
+    
+    /**
+     * The v1 preset at this slot — `palette()`'s index.
+     */
+    case paletteV1(slot: UInt8
+    )
+    /**
+     * A color the owner picked, whatever preset it may equal.
+     */
+    case custom
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension AppearanceAssignment: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeAppearanceAssignment: FfiConverterRustBuffer {
+    typealias SwiftType = AppearanceAssignment
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> AppearanceAssignment {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .paletteV1(slot: try FfiConverterUInt8.read(from: &buf)
+        )
+        
+        case 2: return .custom
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: AppearanceAssignment, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case let .paletteV1(slot):
+            writeInt(&buf, Int32(1))
+            FfiConverterUInt8.write(slot, into: &buf)
+            
+        
+        case .custom:
+            writeInt(&buf, Int32(2))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAppearanceAssignment_lift(_ buf: RustBuffer) throws -> AppearanceAssignment {
+    return try FfiConverterTypeAppearanceAssignment.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAppearanceAssignment_lower(_ value: AppearanceAssignment) -> RustBuffer {
+    return FfiConverterTypeAppearanceAssignment.lower(value)
+}
+
+
+
+/**
+ * What an appearance subscription reports (spec/07).
+ */
+
+public enum AppearanceEvent: Equatable, Hashable {
+    
+    /**
+     * Committed appearance changed; re-read `appearance()`.
+     */
+    case invalidated(generation: UInt64
+    )
+    /**
+     * Fallen too far behind: re-read `appearance()` and subscribe
+     * again at its generation.
+     */
+    case resetRequired
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension AppearanceEvent: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeAppearanceEvent: FfiConverterRustBuffer {
+    typealias SwiftType = AppearanceEvent
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> AppearanceEvent {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .invalidated(generation: try FfiConverterUInt64.read(from: &buf)
+        )
+        
+        case 2: return .resetRequired
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: AppearanceEvent, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case let .invalidated(generation):
+            writeInt(&buf, Int32(1))
+            FfiConverterUInt64.write(generation, into: &buf)
+            
+        
+        case .resetRequired:
+            writeInt(&buf, Int32(2))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAppearanceEvent_lift(_ buf: RustBuffer) throws -> AppearanceEvent {
+    return try FfiConverterTypeAppearanceEvent.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAppearanceEvent_lower(_ value: AppearanceEvent) -> RustBuffer {
+    return FfiConverterTypeAppearanceEvent.lower(value)
 }
 
 
@@ -6239,6 +7192,56 @@ fileprivate struct FfiConverterSequenceTypeAccount: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeAccountAppearance: FfiConverterRustBuffer {
+    typealias SwiftType = [AccountAppearance]
+
+    public static func write(_ value: [AccountAppearance], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeAccountAppearance.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [AccountAppearance] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [AccountAppearance]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeAccountAppearance.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeIdentityAppearance: FfiConverterRustBuffer {
+    typealias SwiftType = [IdentityAppearance]
+
+    public static func write(_ value: [IdentityAppearance], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeIdentityAppearance.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [IdentityAppearance] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [IdentityAppearance]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeIdentityAppearance.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeImportProblem: FfiConverterRustBuffer {
     typealias SwiftType = [ImportProblem]
 
@@ -6331,6 +7334,31 @@ fileprivate struct FfiConverterSequenceTypeMailbox: FfiConverterRustBuffer {
         seq.reserveCapacity(Int(len))
         for _ in 0 ..< len {
             seq.append(try FfiConverterTypeMailbox.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypePaletteColor: FfiConverterRustBuffer {
+    typealias SwiftType = [PaletteColor]
+
+    public static func write(_ value: [PaletteColor], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypePaletteColor.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [PaletteColor] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [PaletteColor]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypePaletteColor.read(from: &buf))
         }
         return seq
     }
@@ -6592,6 +7620,18 @@ public func platformDefaultConfig()throws  -> CoreConfig  {
     )
 })
 }
+/**
+ * The v1 account palette (spec/02): every preset in slot order. A
+ * constant — the in-memory value spec/07's one synchronous getter
+ * kind allows ("the appearance cache, for example").
+ */
+public func palette() -> [PaletteColor]  {
+    return try!  FfiConverterSequenceTypePaletteColor.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_sb_ffi_fn_func_palette(uniffiCallStatus
+    )
+})
+}
 
 private enum InitializationResult {
     case ok
@@ -6614,6 +7654,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_sb_ffi_checksum_func_platform_default_config() != 9969) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_sb_ffi_checksum_func_palette() != 26715) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_sb_ffi_checksum_method_core_set_setting() != 25429) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -6621,6 +7664,12 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_core_shutdown() != 9052) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_appearance() != 24354) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_subscribe_appearance() != 19997) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_core_cancel_job() != 65113) {
@@ -6693,6 +7742,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_core_window_ids() != 27649) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_appearancesubscription_next() != 28873) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_canceltoken_cancel() != 7688) {

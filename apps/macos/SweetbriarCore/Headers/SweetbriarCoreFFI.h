@@ -268,6 +268,16 @@ uint64_t uniffi_sb_ffi_fn_method_core_settings(uint64_t ptr, uint64_t token
 uint64_t uniffi_sb_ffi_fn_method_core_shutdown(uint64_t ptr
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_APPEARANCE
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_APPEARANCE
+uint64_t uniffi_sb_ffi_fn_method_core_appearance(uint64_t ptr, uint64_t token
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_SUBSCRIBE_APPEARANCE
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_SUBSCRIBE_APPEARANCE
+uint64_t uniffi_sb_ffi_fn_method_core_subscribe_appearance(uint64_t ptr, uint64_t token, uint64_t generation
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_CANCEL_JOB
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_CANCEL_JOB
 uint64_t uniffi_sb_ffi_fn_method_core_cancel_job(uint64_t ptr, uint64_t token, RustBuffer idempotency_key, RustBuffer job_id
@@ -388,6 +398,21 @@ uint64_t uniffi_sb_ffi_fn_method_core_read_window(uint64_t ptr, uint64_t token, 
 uint64_t uniffi_sb_ffi_fn_method_core_window_ids(uint64_t ptr, uint64_t token, uint64_t window_id
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_CLONE_APPEARANCESUBSCRIPTION
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_CLONE_APPEARANCESUBSCRIPTION
+uint64_t uniffi_sb_ffi_fn_clone_appearancesubscription(uint64_t handle, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_FREE_APPEARANCESUBSCRIPTION
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_FREE_APPEARANCESUBSCRIPTION
+void uniffi_sb_ffi_fn_free_appearancesubscription(uint64_t handle, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_APPEARANCESUBSCRIPTION_NEXT
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_APPEARANCESUBSCRIPTION_NEXT
+uint64_t uniffi_sb_ffi_fn_method_appearancesubscription_next(uint64_t ptr, uint64_t token
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_CLONE_CANCELTOKEN
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_CLONE_CANCELTOKEN
 uint64_t uniffi_sb_ffi_fn_clone_canceltoken(uint64_t handle, RustCallStatus *_Nonnull out_status
@@ -437,6 +462,12 @@ uint64_t uniffi_sb_ffi_fn_func_open_core(uint64_t token, RustBuffer config
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_FUNC_PLATFORM_DEFAULT_CONFIG
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_FUNC_PLATFORM_DEFAULT_CONFIG
 RustBuffer uniffi_sb_ffi_fn_func_platform_default_config(RustCallStatus *_Nonnull out_status
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_FUNC_PALETTE
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_FUNC_PALETTE
+RustBuffer uniffi_sb_ffi_fn_func_palette(RustCallStatus *_Nonnull out_status
     
 );
 #endif
@@ -712,6 +743,12 @@ uint16_t uniffi_sb_ffi_checksum_func_platform_default_config(void
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_FUNC_PALETTE
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_FUNC_PALETTE
+uint16_t uniffi_sb_ffi_checksum_func_palette(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_SET_SETTING
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_SET_SETTING
 uint16_t uniffi_sb_ffi_checksum_method_core_set_setting(void
@@ -727,6 +764,18 @@ uint16_t uniffi_sb_ffi_checksum_method_core_settings(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_SHUTDOWN
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_SHUTDOWN
 uint16_t uniffi_sb_ffi_checksum_method_core_shutdown(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_APPEARANCE
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_APPEARANCE
+uint16_t uniffi_sb_ffi_checksum_method_core_appearance(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_SUBSCRIBE_APPEARANCE
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_SUBSCRIBE_APPEARANCE
+uint16_t uniffi_sb_ffi_checksum_method_core_subscribe_appearance(void
     
 );
 #endif
@@ -871,6 +920,12 @@ uint16_t uniffi_sb_ffi_checksum_method_core_read_window(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_WINDOW_IDS
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_WINDOW_IDS
 uint16_t uniffi_sb_ffi_checksum_method_core_window_ids(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_APPEARANCESUBSCRIPTION_NEXT
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_APPEARANCESUBSCRIPTION_NEXT
+uint16_t uniffi_sb_ffi_checksum_method_appearancesubscription_next(void
     
 );
 #endif
