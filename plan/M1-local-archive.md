@@ -1100,9 +1100,15 @@ local drafts. No network yet.
       generation and after-commit observer through Resources. Native proof
       owns no-op/replay/rollback/drop/commit-failure isolation. No Engine,
       Service or FFI endpoints. Depends on a/b.
-    - **M1.10c2 Application API — L:** complete Engine/Service appearance
-      queries, both setter commands and subscriptions consume c1. Owned
-      DTOs, durable receipts, caller-drop and lifecycle proof land together.
+    - **M1.10c2a Engine appearance API — L:** complete Engine appearance
+      queries, both setter commands and the appearance subscription
+      consume c1. Engine-owned DTOs, durable receipts, committed
+      invalidation, caller-drop and lifecycle proof land in native
+      engine tests. Split from c2 for the 1,450-line budget.
+    - **M1.10c2b Service appearance API — L:** Service-owned DTOs and
+      explicit Engine mapping, the `Core` methods and the subscription
+      wrapper consume c2a; Service proof covers DTO crossing, receipts
+      and lifecycle.
   - **M1.10d1 Query FFI and bridge — L:** complete generated query SDK,
     owned bridge tokens and native/Swift endpoint, codec and cancellation
     proof at first exposure. Check binding drift and import boundaries.
