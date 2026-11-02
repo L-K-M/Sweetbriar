@@ -15,7 +15,7 @@ fn malformed_or_missing_mailbox_parents_are_corrupt() {
         )
         .unwrap();
         let tx = conn.transaction().unwrap();
-        let result = scoped_ids(
+        let result = scoped_membership(
             &tx,
             &ExportScope::Mailbox {
                 mailbox_id: id,
