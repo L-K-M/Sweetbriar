@@ -30,6 +30,7 @@ pub use activation::{
 pub use catchup::{
     CatchupBatch, CatchupCommit, CatchupPreparation, CatchupReport, CatchupStatus, CatchupSweep,
 };
+mod export_files;
 mod import;
 mod import_jobs;
 mod index;
@@ -229,6 +230,30 @@ impl Resources {
         progress: impl FnMut(u64) -> ControlFlow<()>,
     ) -> Result<Scoped<ExportJob>, StoreError> {
         self.store.capture_export(id, request, progress)
+    }
+
+    /// Blocking file writer for a sealed export capture (spec/09
+    /// "Export file output"): claims the destination, streams verified
+    /// acquisitions per message (EML; mboxrd lands in M1.7c2), then
+    /// publishes the version-1 manifest; `Break` stops before the next
+    /// commit.
+    pub fn export_files(
+        &self,
+        id: &str,
+        progress: impl FnMut(u64) -> ControlFlow<()>,
+    ) -> Result<Scoped<ExportJob>, StoreError> {
+        if self.store.is_writer_thread() {
+            return Err(StoreError::internal(
+                "the writer thread cannot export files through its own queue",
+            ));
+        }
+        export_files::run(
+            &self.store,
+            self.fs.as_ref(),
+            self.clock.as_ref(),
+            id,
+            progress,
+        )
     }
 
     /// Hear of each list generation once its transaction commits

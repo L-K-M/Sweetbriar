@@ -83,6 +83,29 @@ impl ObjectId {
         }
     }
 
+    /// From the 64 lowercase hex digits a durable record carries
+    /// (spec/09 acquisition entries); malformed digits are `Corrupt`.
+    pub fn from_hex(sha256: &str, byte_length: u64) -> Result<Self, StoreError> {
+        let corrupt = || StoreError::corrupt("invalid acquisition SHA-256");
+        let digits = sha256.as_bytes();
+        let digit = |b: u8| match b {
+            b'0'..=b'9' => Some(b - b'0'),
+            b'a'..=b'f' => Some(b - b'a' + 10),
+            _ => None,
+        };
+        if digits.len() != 64 {
+            return Err(corrupt());
+        }
+        let mut bytes = [0u8; 32];
+        for (byte, pair) in bytes.iter_mut().zip(digits.as_chunks::<2>().0) {
+            *byte = digit(pair[0])
+                .zip(digit(pair[1]))
+                .map(|(hi, lo)| hi << 4 | lo)
+                .ok_or_else(corrupt)?;
+        }
+        Ok(Self::from_parts(bytes, byte_length))
+    }
+
     pub fn sha256(&self) -> [u8; 32] {
         self.sha256
     }

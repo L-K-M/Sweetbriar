@@ -1,0 +1,943 @@
+//! `export_files` through Resources (spec/09 "Export file output"):
+//! exact bytes, the version-1 manifest, unavailable bodies, refusals,
+//! cancellation, resume and durability cuts.
+
+use std::collections::BTreeSet;
+use std::ops::ControlFlow;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Barrier};
+use std::thread;
+
+use sb_resources::{
+    ExportCaptureRequest, ExportFormat, ExportJob, ExportJobState, ExportScope, ExportSelection,
+    Resources, Scoped, StoreError, Transaction, WritePriority, advance_export_job,
+    append_export_chunks, create_export_job, export_job, list_generation,
+};
+use sb_test_support::{ScratchDir, block_on};
+use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
+
+const BODY_A: &[u8] = b"From: a@example.test\nSubject: Alpha\n\nalpha body\n";
+const BODY_B: &[u8] = b"From: b@example.test\nSubject: Beta\n\n>From inside\nFrom edge";
+const BODY_C: &[u8] = b"";
+const MISSING_SHA: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const QUARANTINED_SHA: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+const EMPTY_HASH: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+const CLAIM: &str = "sweetbriar-export.claim";
+const MANIFEST: &str = "sweetbriar-metadata.json";
+
+fn write<T: Send + 'static>(
+    res: &Resources,
+    f: impl FnOnce(&Transaction) -> Result<T, StoreError> + Send + 'static,
+) -> T {
+    block_on(res.write(WritePriority::User, f)).unwrap()
+}
+
+fn sha_hex(bytes: &[u8]) -> String {
+    let digest: [u8; 32] = Sha256::digest(bytes).into();
+    digest.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn object_path(root: &Path, bytes: &[u8]) -> PathBuf {
+    let hex = sha_hex(bytes);
+    root.join("objects/sha256")
+        .join(&hex[..2])
+        .join(&hex[2..4])
+        .join(&hex)
+}
+
+/// Drop `bytes` at the content-addressed path a publication would own
+/// (spec/03): the fixture stands in for an earlier acquire.
+fn place_object(root: &Path, bytes: &[u8]) -> String {
+    let path = object_path(root, bytes);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, bytes).unwrap();
+    sha_hex(bytes)
+}
+
+/// Two mailboxes, seven messages and every availability state:
+/// acquired bodies A/B/C (C empty), recorded `missing` and
+/// `quarantined` acquisitions, a never-acquired message, and two
+/// occurrences sharing one acquisition. Crash-cut children re-seed,
+/// so the whole fixture is idempotent.
+fn seed(res: &Resources, root: &Path) {
+    let (seeded, account): (bool, String) = res
+        .read(|tx| {
+            Ok(tx
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM occurrences), (SELECT account_id FROM accounts WHERE provider='local_archive')",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .unwrap())
+        })
+        .unwrap();
+    if seeded {
+        return;
+    }
+    let a = place_object(root, BODY_A);
+    let b = place_object(root, BODY_B);
+    let c = place_object(root, BODY_C);
+    let (la, lb) = (BODY_A.len(), BODY_B.len());
+    write(res, move |tx| {
+        tx.execute_batch(&format!(
+            r#"INSERT INTO mailboxes (mailbox_id,account_id,remote_name,kind,selectable,sync_state) VALUES (1,'{account}','Inbox','folder',1,'synced'),(2,'{account}','Archive Box','folder',1,'synced');
+INSERT INTO acquisitions (acquisition_id,content_sha256,byte_length,object_state,first_acquired_at) VALUES (1,'{a}',{la},'published',1),(2,'{b}',{lb},'published',1),(3,'{c}',0,'published',1),(4,'{MISSING_SHA}',9,'missing',1),(5,'{QUARANTINED_SHA}',11,'quarantined',1);
+INSERT INTO logical_messages (message_id,account_id,acquisition_id,created_at) VALUES (1,'{account}',1,1),(2,'{account}',2,1),(3,'{account}',3,1),(4,'{account}',4,1),(5,'{account}',5,1),(6,'{account}',NULL,1),(7,'{account}',1,1);
+INSERT INTO occurrences (occurrence_id,account_id,mailbox_id,message_id,internal_date,keywords,state,first_seen_at,last_seen_at) VALUES (1,'{account}',1,1,40,'[]','present',1,1),(2,'{account}',1,2,30,'[]','present',1,1),(3,'{account}',1,3,20,'[]','present',1,1),(4,'{account}',1,4,10,'[]','present',1,1),(5,'{account}',1,5,5,'[]','present',1,1),(6,'{account}',1,6,1,'[]','present',1,1),(7,'{account}',2,1,60,'[]','present',1,1),(8,'{account}',2,7,50,'[]','present',1,1);
+UPDATE occurrences SET f_flagged=1 WHERE occurrence_id=1; UPDATE occurrences SET keywords='["$Forwarded","alpha"]' WHERE occurrence_id=2; INSERT INTO tags (tag_id,name,color_srgb) VALUES ('t','keep','#0a1b2c'); INSERT INTO message_tags (message_id,tag_id,added_at) VALUES (1,'t',1); INSERT INTO notes (note_id,message_id,body_source,created_at,updated_at) VALUES ('n',1,'frozen note',1,1);"#
+        ))
+        .unwrap();
+        sb_store::refresh_list_rows(tx, &(1..=8).collect::<BTreeSet<_>>()).unwrap();
+        Ok(())
+    });
+}
+
+fn fixture() -> (ScratchDir, Resources, PathBuf) {
+    let scratch = ScratchDir::new("export-files");
+    let root = scratch.path().join("store");
+    let res = Resources::open(&root).unwrap();
+    seed(&res, &root);
+    (scratch, res, root)
+}
+
+fn mailbox_scope(res: &Resources, mailbox: i64) -> ExportScope {
+    ExportScope::Mailbox {
+        mailbox_id: mailbox,
+        expected_generation: res.read(list_generation).unwrap(),
+    }
+}
+
+fn selection_scope(res: &Resources, ids: &[i64]) -> ExportScope {
+    let generation = res.read(list_generation).unwrap();
+    ExportScope::Selection(
+        ExportSelection::new("sel".into(), 1, generation, Arc::from(ids)).unwrap(),
+    )
+}
+
+fn capture(res: &Resources, id: &str, format: ExportFormat, dest: &Path, scope: ExportScope) {
+    let request = ExportCaptureRequest::new(format, dest.display().to_string(), scope).unwrap();
+    match res.capture_export(id, &request, |_| ControlFlow::Continue(())) {
+        Ok(Scoped::Done(_)) => {}
+        other => panic!("capture failed: {other:?}"),
+    }
+}
+
+fn export(res: &Resources, id: &str) -> Vec<u64> {
+    let mut progress = Vec::new();
+    let done = res.export_files(id, |files| {
+        progress.push(files);
+        ControlFlow::Continue(())
+    });
+    assert!(
+        matches!(done, Ok(Scoped::Done(_))),
+        "export failed: {done:?}"
+    );
+    progress
+}
+
+fn stop_at(
+    res: &Resources,
+    id: &str,
+    mut stop: impl FnMut(u64) -> bool,
+) -> Result<Scoped<ExportJob>, StoreError> {
+    res.export_files(id, |files| {
+        if stop(files) {
+            ControlFlow::Break(())
+        } else {
+            ControlFlow::Continue(())
+        }
+    })
+}
+
+fn export_err(res: &Resources, id: &str) -> StoreError {
+    match res.export_files(id, |_| ControlFlow::Continue(())) {
+        Err(error) => error,
+        Ok(done) => panic!("export unexpectedly succeeded: {done:?}"),
+    }
+}
+
+fn assert_err(res: &Resources, id: &str, pred: impl Fn(&StoreError) -> bool) {
+    let error = export_err(res, id);
+    assert!(pred(&error), "{id}: {error:?}");
+}
+
+fn assert_stopped(result: Result<Scoped<ExportJob>, StoreError>) {
+    assert!(matches!(result, Ok(Scoped::Stopped)), "{result:?}");
+}
+
+fn manifest(dest: &Path) -> Value {
+    serde_json::from_str(&std::fs::read_to_string(dest.join(MANIFEST)).unwrap()).unwrap()
+}
+
+fn job_state(res: &Resources, id: &str) -> ExportJobState {
+    res.read(|tx| Ok(export_job(tx, id)?.state())).unwrap()
+}
+
+fn checkpoint(res: &Resources, id: &str) -> Value {
+    res.read(|tx| Ok(serde_json::from_str(export_job(tx, id)?.checkpoint_json()).unwrap()))
+        .unwrap()
+}
+
+fn ids_of(messages: &[Value]) -> Vec<i64> {
+    messages
+        .iter()
+        .map(|m| m["occurrence_id"].as_i64().unwrap())
+        .collect()
+}
+
+#[test]
+fn eml_output_is_byte_exact_and_the_manifest_lists_every_occurrence() {
+    let (scratch, res, _root) = fixture();
+    let dest = scratch.path().join("eml-out");
+    capture(
+        &res,
+        "eml",
+        ExportFormat::Eml,
+        &dest,
+        mailbox_scope(&res, 1),
+    );
+    let progress = export(&res, "eml");
+
+    for (occurrence, body) in [(1, BODY_A), (2, BODY_B), (3, BODY_C)] {
+        assert_eq!(
+            std::fs::read(dest.join(format!("{occurrence}.eml"))).unwrap(),
+            body
+        );
+    }
+    for unavailable in [4, 5, 6] {
+        assert!(
+            !dest.join(format!("{unavailable}.eml")).exists(),
+            "{unavailable}"
+        );
+    }
+    assert_eq!(std::fs::read(dest.join(CLAIM)).unwrap(), b"eml");
+    assert_eq!(job_state(&res, "eml"), ExportJobState::Completed);
+    let checkpoint = checkpoint(&res, "eml");
+    assert_eq!(checkpoint["files"], 3);
+    assert_eq!(
+        checkpoint["manifest_bytes"].as_u64().unwrap(),
+        std::fs::metadata(dest.join(MANIFEST)).unwrap().len()
+    );
+
+    let manifest = manifest(&dest);
+    for (key, want) in [
+        ("v", json!(1)),
+        ("kind", json!("export-manifest")),
+        ("job", json!("eml")),
+        ("format", json!("eml")),
+        ("destination", json!(dest.display().to_string())),
+        ("entries", json!(6)),
+    ] {
+        assert_eq!(manifest[key], want, "{key}");
+    }
+    assert_eq!(
+        manifest["scope"],
+        json!({"kind":"mailbox","id":1,"generation":manifest["scope"]["generation"]})
+    );
+    assert_eq!(
+        manifest["files"],
+        json!([
+            {"name":"1.eml","bytes":BODY_A.len(),"records":1},
+            {"name":"2.eml","bytes":BODY_B.len(),"records":1},
+            {"name":"3.eml","bytes":0,"records":1},
+        ])
+    );
+
+    let messages = manifest["messages"].as_array().unwrap();
+    assert_eq!(ids_of(messages), [1, 2, 3, 4, 5, 6]);
+    for (i, (file, availability)) in [
+        (Some("1.eml"), "acquired"),
+        (Some("2.eml"), "acquired"),
+        (Some("3.eml"), "acquired"),
+        (None, "missing"),
+        (None, "quarantined"),
+        (None, "not_acquired"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        assert_eq!(
+            messages[i]["file"],
+            file.map_or(Value::Null, Value::from),
+            "{i}"
+        );
+        assert_eq!(messages[i]["body_availability"], availability, "{i}");
+        // The record-span fields belong to mboxrd (M1.7c2) entries only.
+        assert_eq!(messages[i].get("record_offset"), None, "{i}");
+    }
+    assert_eq!(messages[0]["flags"]["flagged"], true);
+    assert_eq!(messages[0]["note"], "frozen note");
+    assert_eq!(
+        messages[0]["tags"][0],
+        json!({"id":"t","name":"keep","color_srgb":"#0a1b2c"})
+    );
+    assert_eq!(messages[1]["keywords"], json!(["$Forwarded", "alpha"]));
+    assert_eq!(messages[0]["acquisition"]["sha256"], sha_hex(BODY_A));
+    assert_eq!(progress.last(), Some(&3));
+}
+
+/// A sealed mboxrd capture is valid, but this artifact writes EML
+/// only: the writer refuses naming M1.7c2, before touching the
+/// destination or the job state (spec/09 "Export file output").
+#[test]
+fn mboxrd_jobs_are_refused_until_m1_7c2() {
+    let (scratch, res, _root) = fixture();
+    let dest = scratch.path().join("mbox-refused-out");
+    capture(
+        &res,
+        "mbox-refused",
+        ExportFormat::Mboxrd,
+        &dest,
+        selection_scope(&res, &[1, 2, 7]),
+    );
+    match export_err(&res, "mbox-refused") {
+        StoreError::InvalidInput { message } => {
+            assert!(message.contains("M1.7c2"), "{message}")
+        }
+        other => panic!("an mboxrd job was not refused: {other:?}"),
+    }
+    assert_eq!(job_state(&res, "mbox-refused"), ExportJobState::Ready);
+    assert!(!dest.exists());
+}
+
+#[test]
+fn wrong_states_and_foreign_destinations_are_refused() {
+    let (scratch, res, _root) = fixture();
+    assert!(matches!(
+        export_err(&res, "missing-job"),
+        StoreError::NotFound { .. }
+    ));
+
+    // A still-capturing job cannot produce output; ended states refuse.
+    let dest = scratch.path().join("refused-out");
+    let request = ExportCaptureRequest::new(
+        ExportFormat::Eml,
+        dest.display().to_string(),
+        mailbox_scope(&res, 1),
+    )
+    .unwrap();
+    for (id, end) in [
+        ("stopped", ExportJobState::Cancelled),
+        ("failed", ExportJobState::Failed),
+    ] {
+        assert_stopped(res.capture_export(id, &request, |_| ControlFlow::Break(())));
+        assert_err(&res, id, |e| matches!(e, StoreError::Conflict { .. }));
+        let job = res.read(|tx| export_job(tx, id)).unwrap();
+        let now = res.now();
+        write(&res, move |tx| {
+            advance_export_job(tx, id, job.revision(), end, "{\"v\":1}", now)
+        });
+        assert_err(&res, id, |e| matches!(e, StoreError::Conflict { .. }));
+    }
+
+    // A completed replay touches no output, even with the destination gone.
+    let done_dest = scratch.path().join("done-out");
+    capture(
+        &res,
+        "done",
+        ExportFormat::Eml,
+        &done_dest,
+        mailbox_scope(&res, 1),
+    );
+    export(&res, "done");
+    std::fs::remove_dir_all(&done_dest).unwrap();
+    assert!(matches!(
+        res.export_files("done", |_| ControlFlow::Continue(())),
+        Ok(Scoped::Done(_))
+    ));
+    assert!(!done_dest.exists());
+
+    // Claim violations refuse rather than overwrite foreign files.
+    type DestSetup = fn(&Path);
+    let cases: [(&str, DestSetup); 3] = [
+        ("foreign", |d| {
+            std::fs::create_dir(d).unwrap();
+            std::fs::write(d.join("theirs"), b"x").unwrap();
+        }),
+        ("claimed", |d| {
+            std::fs::create_dir(d).unwrap();
+            std::fs::write(d.join(CLAIM), b"other-job").unwrap();
+        }),
+        ("file-dest", |d| std::fs::write(d, b"x").unwrap()),
+    ];
+    for (name, setup) in cases {
+        let dest = scratch.path().join(format!("{name}-out"));
+        setup(&dest);
+        capture(&res, name, ExportFormat::Eml, &dest, mailbox_scope(&res, 1));
+        assert_err(&res, name, |e| matches!(e, StoreError::InvalidInput { .. }));
+        assert_eq!(job_state(&res, name), ExportJobState::Ready, "{name}");
+    }
+    assert_eq!(
+        std::fs::read(scratch.path().join("foreign-out/theirs")).unwrap(),
+        b"x"
+    );
+    assert_eq!(
+        std::fs::read(scratch.path().join("claimed-out").join(CLAIM)).unwrap(),
+        b"other-job"
+    );
+
+    let lost_dest = scratch.path().join("lost-claim-out");
+    capture(
+        &res,
+        "lost",
+        ExportFormat::Eml,
+        &lost_dest,
+        mailbox_scope(&res, 1),
+    );
+    assert_stopped(stop_at(&res, "lost", |files| files == 0));
+    std::fs::remove_file(lost_dest.join(CLAIM)).unwrap();
+    assert_err(&res, "lost", |e| {
+        matches!(e, StoreError::Unavailable { .. })
+    });
+    assert!(!lost_dest.join("1.eml").exists());
+
+    // The writer thread refuses before it can wait on its own queue.
+    let thread_dest = scratch.path().join("thread-out");
+    capture(
+        &res,
+        "threaded",
+        ExportFormat::Eml,
+        &thread_dest,
+        mailbox_scope(&res, 1),
+    );
+    let res = Arc::new(res);
+    let inside = Arc::clone(&res);
+    write(&res, move |_tx| {
+        assert!(matches!(
+            inside.export_files("threaded", |_| ControlFlow::Continue(())),
+            Err(StoreError::Internal { .. })
+        ));
+        Ok(())
+    });
+}
+
+#[test]
+fn missing_and_corrupt_objects_fail_before_any_manifest() {
+    let (scratch, res, root) = fixture();
+    let dest = scratch.path().join("broken-out");
+    capture(
+        &res,
+        "broken",
+        ExportFormat::Eml,
+        &dest,
+        selection_scope(&res, &[1, 2]),
+    );
+    std::fs::remove_file(object_path(&root, BODY_A)).unwrap();
+    assert_err(&res, "broken", |e| matches!(e, StoreError::NotFound { .. }));
+    assert_eq!(job_state(&res, "broken"), ExportJobState::Running);
+    assert!(!dest.join(MANIFEST).exists());
+
+    // Damaged bytes fail their verification pass and get quarantined.
+    let corrupt_dest = scratch.path().join("corrupt-out");
+    capture(
+        &res,
+        "corrupt",
+        ExportFormat::Eml,
+        &corrupt_dest,
+        selection_scope(&res, &[2]),
+    );
+    let damaged = object_path(&root, BODY_B);
+    std::fs::write(&damaged, b"corrupted!").unwrap();
+    assert_err(&res, "corrupt", |e| matches!(e, StoreError::Corrupt { .. }));
+    assert!(!damaged.exists());
+    assert_eq!(job_state(&res, "corrupt"), ExportJobState::Running);
+    assert!(!corrupt_dest.join("2.eml").exists());
+    assert!(!corrupt_dest.join("2.eml.partial").exists());
+}
+
+#[test]
+fn a_changed_capture_is_corrupt_and_never_rescoped() {
+    let (scratch, res, _root) = fixture();
+    let dest = scratch.path().join("tampered-out");
+    let now = res.now();
+    write(&res, move |tx| {
+        let request = format!(r#"{{"v":1,"capture":1,"sha256":"{EMPTY_HASH}"}}"#);
+        let job = create_export_job(tx, "tamper", &request, now)?;
+        let mut stream = json!({
+            "v": 1,
+            "kind": "capture",
+            "intent": {"v": 1, "format": "eml", "destination": "/elsewhere/out", "scope": {"kind": "mailbox", "id": 1, "generation": 0}},
+            "generation": 0,
+            "entries": 0,
+            "ids_sha256": EMPTY_HASH,
+        })
+        .to_string()
+        .into_bytes();
+        stream.push(b'\n');
+        let job = append_export_chunks(tx, "tamper", job.revision(), 0, &[stream], now)?;
+        advance_export_job(
+            tx,
+            "tamper",
+            job.revision(),
+            ExportJobState::Ready,
+            "{\"v\":1,\"capture\":1,\"entries\":0,\"chunks\":1}",
+            now,
+        )?;
+        Ok(())
+    });
+    match export_err(&res, "tamper") {
+        StoreError::Corrupt { detail } => assert!(detail.contains("changed"), "{detail}"),
+        other => panic!("a changed capture was not corrupt: {other:?}"),
+    }
+    assert!(!dest.exists());
+    assert_eq!(job_state(&res, "tamper"), ExportJobState::Ready);
+}
+
+#[test]
+fn cancellation_and_resume_reproduce_the_same_output() {
+    let (scratch, res, _root) = fixture();
+    let dest = scratch.path().join("resume-out");
+    capture(
+        &res,
+        "resume",
+        ExportFormat::Eml,
+        &dest,
+        mailbox_scope(&res, 1),
+    );
+
+    assert_stopped(stop_at(&res, "resume", |files| files == 0));
+    assert_eq!(std::fs::read(dest.join(CLAIM)).unwrap(), b"resume");
+    assert!(!dest.join("1.eml").exists());
+    assert_eq!(job_state(&res, "resume"), ExportJobState::Running);
+    assert_eq!(checkpoint(&res, "resume")["files"], 0);
+
+    assert_stopped(stop_at(&res, "resume", |files| files == 1));
+    assert_eq!(std::fs::read(dest.join("1.eml")).unwrap(), BODY_A);
+    assert!(!dest.join("2.eml").exists());
+    assert_eq!(checkpoint(&res, "resume")["files"], 1);
+
+    // Stop mid-file (on resume, the third report is inside file two):
+    let mut calls = 0u32;
+    assert_stopped(stop_at(&res, "resume", |_| {
+        calls += 1;
+        calls == 3
+    }));
+    assert!(!dest.join("2.eml").exists());
+    assert!(!dest.join("2.eml.partial").exists());
+    assert_eq!(checkpoint(&res, "resume")["files"], 1);
+
+    std::fs::write(dest.join("1.eml"), b"different").unwrap();
+    let progress = export(&res, "resume");
+    for (occurrence, body) in [(1, BODY_A), (2, BODY_B), (3, BODY_C)] {
+        assert_eq!(
+            std::fs::read(dest.join(format!("{occurrence}.eml"))).unwrap(),
+            body
+        );
+    }
+    assert_eq!(manifest(&dest)["messages"].as_array().unwrap().len(), 6);
+    assert_eq!(progress.last(), Some(&3));
+    assert_eq!(job_state(&res, "resume"), ExportJobState::Completed);
+}
+
+/// A second call for the same running job cannot enter the
+/// destination: the lease rides on a lock file publication never
+/// replaces, so the claim marker's own publish-rename cannot strand
+/// the held lock on an unlinked inode (spec/09 ownership).
+#[test]
+fn overlap_with_the_running_job_is_refused() {
+    let (scratch, res, _root) = fixture();
+    let dest = scratch.path().join("overlap-out");
+    capture(
+        &res,
+        "overlap",
+        ExportFormat::Eml,
+        &dest,
+        mailbox_scope(&res, 1),
+    );
+
+    // Park the first writer inside its first progress report: the
+    // claim is published and the lease is held while a second call
+    // for the same job tries to enter.
+    let res = Arc::new(res);
+    let entered = Arc::new(Barrier::new(2));
+    let release = Arc::new(Barrier::new(2));
+    let first = thread::spawn({
+        let res = res.clone();
+        let (entered, release) = (entered.clone(), release.clone());
+        move || {
+            let mut parked = false;
+            res.export_files("overlap", |_| {
+                if !std::mem::replace(&mut parked, true) {
+                    entered.wait();
+                    release.wait();
+                }
+                ControlFlow::Continue(())
+            })
+        }
+    });
+    entered.wait();
+    let second = res.export_files("overlap", |_| ControlFlow::Continue(()));
+    // The published claim itself reads held for the write's whole
+    // duration on a real filesystem.
+    let relock = sb_test_support::real_fs().lock_exclusive(&dest.join(CLAIM));
+    release.wait();
+    let first = first.join().unwrap();
+    assert!(
+        matches!(relock, Err(sb_platform::LockError::Held)),
+        "the published claim relocked mid-write"
+    );
+
+    match second {
+        Err(StoreError::Unavailable { reason, .. }) => {
+            assert!(reason.contains("held"), "{reason}")
+        }
+        other => panic!("the overlapping call entered: {other:?}"),
+    }
+    assert!(matches!(first, Ok(Scoped::Done(_))), "first: {first:?}");
+    assert_eq!(std::fs::read(dest.join("1.eml")).unwrap(), BODY_A);
+    assert_eq!(manifest(&dest)["entries"], 6);
+}
+
+/// Destination claiming under the injected filesystem (spec/09): the
+/// exclusive lease serializes first claims so exactly one job owns the
+/// destination, and a retried claim repeats every durability barrier.
+#[cfg(feature = "test-seams")]
+mod ownership {
+    use std::io;
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::sync::{Barrier, Condvar, Mutex};
+    use std::thread;
+
+    use sb_platform::{Fs, Lease, Location, LockError, Metadata, ReadFile, WriteFile};
+    use sb_test_support::{SimFs, real_fs};
+
+    use super::*;
+
+    /// Routes the store to the real fs and the destination subtree
+    /// (`parent` and everything under it) to a `SimFs`, so power cuts
+    /// and injected faults land on export output only.
+    struct SimDestFs {
+        real: Arc<dyn Fs>,
+        sim: Arc<SimFs>,
+        parent: PathBuf,
+        /// Fail the next `sync_dir` of `parent` exactly once.
+        fail_parent: AtomicBool,
+        race: Option<Arc<ClaimRace>>,
+    }
+
+    impl SimDestFs {
+        fn at(&self, path: &Path) -> &dyn Fs {
+            if path.starts_with(&self.parent) {
+                self.sim.as_ref()
+            } else {
+                self.real.as_ref()
+            }
+        }
+    }
+
+    impl Fs for SimDestFs {
+        fn create(&self, p: &Path) -> io::Result<Box<dyn WriteFile>> {
+            self.at(p).create(p)
+        }
+        fn open(&self, p: &Path) -> io::Result<Box<dyn ReadFile>> {
+            self.at(p).open(p)
+        }
+        fn open_regular(&self, p: &Path) -> io::Result<(Box<dyn ReadFile>, Metadata)> {
+            self.at(p).open_regular(p)
+        }
+        fn metadata(&self, p: &Path) -> io::Result<Option<Metadata>> {
+            self.at(p).metadata(p)
+        }
+        fn read_dir(&self, p: &Path) -> io::Result<Vec<PathBuf>> {
+            let result = self.at(p).read_dir(p);
+            if let Some(race) = &self.race {
+                race.observe(p == self.parent.join("out"));
+            }
+            result
+        }
+        fn create_dir(&self, p: &Path) -> io::Result<()> {
+            self.at(p).create_dir(p)
+        }
+        fn create_private_dir(&self, p: &Path) -> io::Result<()> {
+            self.at(p).create_private_dir(p)
+        }
+        fn restrict_dir(&self, p: &Path) -> io::Result<()> {
+            self.at(p).restrict_dir(p)
+        }
+        fn remove_dir_all(&self, p: &Path) -> io::Result<()> {
+            self.at(p).remove_dir_all(p)
+        }
+        fn quarantine(&self, p: &Path) -> io::Result<()> {
+            self.at(p).quarantine(p)
+        }
+        fn sync_dir(&self, p: &Path) -> io::Result<()> {
+            if p == self.parent && self.fail_parent.swap(false, Ordering::SeqCst) {
+                return Err(io::Error::from_raw_os_error(5)); // EIO
+            }
+            self.at(p).sync_dir(p)
+        }
+        fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
+            self.at(from).rename(from, to)
+        }
+        fn remove(&self, p: &Path) -> io::Result<()> {
+            self.at(p).remove(p)
+        }
+        fn canonicalize(&self, p: &Path) -> io::Result<PathBuf> {
+            self.at(p).canonicalize(p)
+        }
+        fn lock_exclusive(&self, p: &Path) -> Result<Box<dyn Lease>, LockError> {
+            self.at(p).lock_exclusive(p)
+        }
+        fn location(&self, p: &Path) -> io::Result<Location> {
+            self.at(p).location(p)
+        }
+    }
+
+    /// A two-party barrier at the two claiming jobs' first listing of
+    /// the destination: both observe the pre-claim state, then the
+    /// second thread waits for the first export to finish before its
+    /// stale result returns. That is the check-then-publish race that
+    /// decides which single claim may stand.
+    struct ClaimRace {
+        checked_empty: Barrier,
+        first_done: (Mutex<bool>, Condvar),
+        listings: AtomicU64,
+    }
+
+    impl ClaimRace {
+        fn new() -> Self {
+            Self {
+                checked_empty: Barrier::new(2),
+                first_done: (Mutex::new(false), Condvar::new()),
+                listings: AtomicU64::new(0),
+            }
+        }
+
+        fn finish_first(&self) {
+            *self.first_done.0.lock().unwrap() = true;
+            self.first_done.1.notify_all();
+        }
+
+        fn observe(&self, destination_listing: bool) {
+            if !destination_listing {
+                return;
+            }
+            // Only each job's probe listing joins the barrier; the
+            // under-lease re-listing must not block on a spent one.
+            if self.listings.fetch_add(1, Ordering::SeqCst) >= 2 {
+                return;
+            }
+            self.checked_empty.wait();
+            if thread::current().name() == Some("second-export") {
+                let mut done = self.first_done.0.lock().unwrap();
+                while !*done {
+                    done = self.first_done.1.wait(done).unwrap();
+                }
+            }
+        }
+    }
+
+    /// A retry after a failed destination-parent sync must re-run the
+    /// claim's durability barriers: completing without them loses the
+    /// whole destination in a power cut.
+    #[test]
+    fn claim_retry_repeats_the_durability_barriers() {
+        let scratch = ScratchDir::new("export-claim-durability");
+        let root = scratch.path().join("store");
+        let parent = scratch.path().join("sim-export-parent");
+        let sim = Arc::new(SimFs::new());
+        sim.create_dir_all(&parent).unwrap();
+        let fs = Arc::new(SimDestFs {
+            real: real_fs(),
+            sim: sim.clone(),
+            parent: parent.clone(),
+            fail_parent: AtomicBool::new(true),
+            race: None,
+        });
+        let res = Resources::open_with_fs(&root, fs).unwrap();
+        seed(&res, &root);
+        let dest = parent.join("out");
+        capture(
+            &res,
+            "durable",
+            ExportFormat::Eml,
+            &dest,
+            selection_scope(&res, &[1]),
+        );
+        let first = export_err(&res, "durable");
+        assert!(matches!(first, StoreError::Unavailable { .. }), "{first:?}");
+        assert_eq!(job_state(&res, "durable"), ExportJobState::Ready);
+        export(&res, "durable");
+        assert_eq!(job_state(&res, "durable"), ExportJobState::Completed);
+        assert!(sim.metadata(&dest.join(MANIFEST)).unwrap().is_some());
+        sim.power_cut();
+        assert!(
+            sim.metadata(&dest.join(MANIFEST)).unwrap().is_some(),
+            "a completed job lost its destination: the retried claim never flushed the parent"
+        );
+    }
+
+    /// Two exports racing one empty destination admit exactly one
+    /// claim: the loser is refused and the winner's output stands.
+    #[test]
+    fn concurrent_first_claims_admit_exactly_one_job() {
+        let scratch = ScratchDir::new("export-claim-race");
+        let root = scratch.path().join("store");
+        let parent = scratch.path().join("sim-export-parent");
+        let dest = parent.join("out");
+        let sim = Arc::new(SimFs::new());
+        sim.create_dir_all(&dest).unwrap();
+        let race = Arc::new(ClaimRace::new());
+        let fs = Arc::new(SimDestFs {
+            real: real_fs(),
+            sim: sim.clone(),
+            parent,
+            fail_parent: AtomicBool::new(false),
+            race: Some(race.clone()),
+        });
+        let res = Arc::new(Resources::open_with_fs(&root, fs).unwrap());
+        seed(&res, &root);
+        capture(
+            &res,
+            "first-job",
+            ExportFormat::Eml,
+            &dest,
+            selection_scope(&res, &[1]),
+        );
+        // The second capture freezes different acquisition bytes for
+        // the same occurrence, so a stolen destination is observable.
+        write(&res, |tx| {
+            tx.execute(
+                "UPDATE logical_messages SET acquisition_id=2 WHERE message_id=1",
+                [],
+            )
+            .unwrap();
+            Ok(())
+        });
+        capture(
+            &res,
+            "second-job",
+            ExportFormat::Eml,
+            &dest,
+            selection_scope(&res, &[1]),
+        );
+        let first_res = res.clone();
+        let first_race = race.clone();
+        let first = thread::Builder::new()
+            .name("first-export".into())
+            .spawn(move || {
+                let result = first_res.export_files("first-job", |_| ControlFlow::Continue(()));
+                first_race.finish_first();
+                result
+            })
+            .unwrap();
+        let second_res = res.clone();
+        let second = thread::Builder::new()
+            .name("second-export".into())
+            .spawn(move || second_res.export_files("second-job", |_| ControlFlow::Continue(())))
+            .unwrap();
+        let first = first.join().unwrap();
+        let second = second.join().unwrap();
+        assert!(matches!(first, Ok(Scoped::Done(_))), "first: {first:?}");
+        assert!(second.is_err(), "both claims stood: {second:?}");
+        let mut output = Vec::new();
+        io::Read::read_to_end(&mut *sim.open(&dest.join("1.eml")).unwrap(), &mut output).unwrap();
+        assert_eq!(
+            output, BODY_A,
+            "the loser's claim replaced the winner's output"
+        );
+    }
+}
+
+#[cfg(feature = "test-seams")]
+mod crash_cuts {
+    use std::env;
+
+    use super::*;
+    use sb_resources::Fs;
+    use sb_test_support::{CutFs, real_fs, run_crash_cut_points};
+
+    const CUT_N_ENV: &str = "SB_EXPORT_FILES_CUT_N";
+    const CUT_ROOT_ENV: &str = "SB_EXPORT_FILES_CUT_ROOT";
+    const CUT_POINTS: usize = 50;
+
+    fn drive(root: &Path, fs: Arc<dyn Fs>) -> ExportJob {
+        let res = Resources::open_with_fs(root, fs).unwrap();
+        seed(&res, root);
+        capture(
+            &res,
+            "cut",
+            ExportFormat::Eml,
+            &root.join("out"),
+            selection_scope(&res, &[4, 1, 2, 6, 3, 5, 8, 7]),
+        );
+        match res.export_files("cut", |_| ControlFlow::Continue(())) {
+            Ok(Scoped::Done(job)) => job,
+            other => panic!("the cut run failed: {other:?}"),
+        }
+    }
+
+    /// Not a test: the harness re-runs this as a child killed at the Nth fs op.
+    #[test]
+    #[ignore = "spawned by export_crash_cuts_resume_to_identical_output"]
+    fn export_cut_child() {
+        let n: u64 = env::var(CUT_N_ENV).unwrap().parse().unwrap();
+        let root = PathBuf::from(env::var(CUT_ROOT_ENV).unwrap());
+        drive(&root, Arc::new(CutFs::new(real_fs(), n)));
+    }
+
+    fn normalized(dest: &Path) -> (Vec<(String, Vec<u8>)>, Value) {
+        let mut files: Vec<(String, Vec<u8>)> = std::fs::read_dir(dest)
+            .unwrap()
+            .map(|entry| {
+                let path = entry.unwrap().path();
+                let name = path.file_name().unwrap().to_string_lossy().into_owned();
+                (name, std::fs::read(&path).unwrap())
+            })
+            .filter(|(name, _)| name != MANIFEST)
+            .collect();
+        files.sort();
+        let mut manifest = manifest(dest);
+        manifest["destination"] = Value::Null;
+        for message in manifest["messages"].as_array_mut().unwrap() {
+            message["account"]["id"] = Value::Null;
+        }
+        (files, manifest)
+    }
+
+    /// Every sampled cut lands; each killed run resumes to identical output.
+    #[test]
+    fn export_crash_cuts_resume_to_identical_output() {
+        let scratch = ScratchDir::new("export-files-crash-cuts");
+        let reference_root = scratch.path().join("reference");
+        std::fs::create_dir_all(&reference_root).unwrap();
+        let uncut = Arc::new(CutFs::new(real_fs(), u64::MAX));
+        drive(&reference_root, uncut.clone());
+        let expected = normalized(&reference_root.join("out"));
+        let last = uncut.operations();
+        // Evenly spaced, deterministic cut points across the whole run.
+        let step = (last / CUT_POINTS as u64).max(1) as usize;
+        let points: Vec<u64> = (1..=last).step_by(step).take(CUT_POINTS).collect();
+
+        let cuts = run_crash_cut_points(
+            CUT_N_ENV,
+            CUT_ROOT_ENV,
+            "crash_cuts::export_cut_child",
+            &points,
+            &mut |n| {
+                let root = scratch.path().join(format!("cut-{n}"));
+                std::fs::create_dir_all(&root).unwrap();
+                root
+            },
+            &mut |root| {
+                // A killed run never completed without its manifest.
+                let job = drive(root, real_fs());
+                assert_eq!(job.state(), ExportJobState::Completed);
+                for entry in std::fs::read_dir(root.join("out")).unwrap().flatten() {
+                    assert!(
+                        !entry.file_name().to_string_lossy().ends_with(".partial"),
+                        "a completed export left a partial: {entry:?}"
+                    );
+                }
+                assert_eq!(normalized(&root.join("out")), expected);
+            },
+        );
+        assert!(
+            cuts.survived.is_empty(),
+            "children outlived cut points {:?}",
+            cuts.survived
+        );
+        assert_eq!(cuts.killed, points);
+    }
+}

@@ -1320,6 +1320,7 @@ dependencies = [
  "sb-store",
  "sb-test-support",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]

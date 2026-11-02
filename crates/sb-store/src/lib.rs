@@ -59,7 +59,7 @@ pub use readers::{ReadStop, Scoped};
 pub use receipts::{Receipt, encode_job_receipt, receipt_job_id, run_once};
 pub use settings::{StoredSetting, read_all, upsert};
 pub use source_snapshots::{ImportSourceCapture, ImportSourceSnapshot};
-pub use store::{ReadOnlyStore, Seams, Store, open, open_read_only};
+pub use store::{ReadOnlyStore, Seams, Store, await_write, open, open_read_only};
 
 #[cfg(feature = "test-seams")]
 pub use list_rows::refresh_list_rows;

@@ -189,6 +189,12 @@ impl Store {
         self.writer.submit(priority, closure)
     }
 
+    /// Whether the caller runs on the writer thread, where blocking
+    /// calls like [`await_write`] would self-deadlock.
+    pub fn is_writer_thread(&self) -> bool {
+        self.writer.is_writer_thread()
+    }
+
     // Own activation changes do not schedule another corpus pass.
     pub(crate) fn write_activation<T, F>(&self, closure: F) -> WriteFuture<T>
     where
@@ -475,7 +481,9 @@ fn record_clean_shutdown(writer: &Writer, clock: &dyn Clock) -> Result<(), Store
 /// the future works under any executor (a wake from the writer thread
 /// unparks this one; a park before the wake keeps its permit). A
 /// publication waits on its reservation commit the same way.
-pub(crate) fn await_write<T>(future: WriteFuture<T>) -> Result<T, StoreError> {
+/// Blocking; refuse it on the writer thread first (see
+/// [`Store::is_writer_thread`]), or the write queues behind itself.
+pub fn await_write<T>(future: WriteFuture<T>) -> Result<T, StoreError> {
     use std::task::{Context, Poll, Wake, Waker};
 
     /// Wakes by unparking the blocked closing thread.
