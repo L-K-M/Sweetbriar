@@ -18,8 +18,8 @@ use crate::index::IndexJobs;
 use crate::received::ReceivedJobs;
 use crate::windows::Windows;
 use sb_resources::{
-    Resources, SEARCH_EXTRACTOR_VERSION, WritePriority, list_generation, reconcile_search_target,
-    search_generation, target_version,
+    Resources, SEARCH_EXTRACTOR_VERSION, WritePriority, appearance_generation, list_generation,
+    reconcile_search_target, search_generation, target_version,
 };
 
 /// The name of the worker a dropped engine closes its store on.
@@ -444,6 +444,15 @@ impl Engine {
                             }
                         })
                     })?);
+                    // Appearance subscriptions hear every committed
+                    // appearance generation (spec/02); the observer
+                    // registers before the initial read so no commit
+                    // lands between them.
+                    let announced = Arc::clone(&windows);
+                    resources.observe_appearance_generation(Arc::new(move |generation| {
+                        announced.appearance_moved(generation);
+                    }));
+                    windows.appearance_moved(resources.read(appearance_generation)?);
                     let received: Arc<ReceivedJobs> = Arc::default();
                     let maintenance = Arc::downgrade(&received);
                     resources.observe_maintenance_inputs(Arc::new(move || {

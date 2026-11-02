@@ -72,8 +72,8 @@ pub use sb_platform::{default_cache_root, default_data_root};
 pub use sb_store::ACCOUNT_PALETTE_V1;
 pub use sb_store::appearance::{
     AccountColor, AppearanceAssignment, StoredAccountAppearance, StoredIdentityAppearance,
-    account_appearance, appearance_generation, identity_appearance, initialize_account_appearance,
-    set_account_appearance, set_identity_appearance,
+    account_appearance, appearance_generation, identity_appearance, identity_appearances,
+    initialize_account_appearance, set_account_appearance, set_identity_appearance,
 };
 pub use sb_store::drafts::{
     AttachmentRef, AttemptState, ComposeFormat, DraftAttachment, DraftRecipient, DraftSource,

@@ -498,3 +498,12 @@ fn min_l_at_luminance(hue: OklabHue<f32>, chroma: f32, bound: f64) -> f32 {
     }
     high
 }
+
+mod api;
+pub use api::{
+    AccountAppearance, AccountAppearanceChange, Appearance, IdentityAppearance,
+    IdentityAppearanceChange,
+};
+
+#[cfg(test)]
+mod tests;

@@ -59,8 +59,8 @@ async fn Core::shutdown(self);   // flush writer, release the lease
 
 | Area | Commands |
 |---|---|
-| Accounts | `add_bridge_account(params)`, `update_account(id, params)`, `pause_account(id)`, `resume_account(id)`, `disconnect_account(id)`, `set_account_appearance(id, appearance)` |
-| Identities | `upsert_identity(params)`, `set_default_identity(id)` |
+| Accounts | `add_bridge_account(params)`, `update_account(id, params)`, `pause_account(id)`, `resume_account(id)`, `disconnect_account(id)`, `set_account_appearance(id, expected_revision, appearance)` |
+| Identities | `upsert_identity(params)`, `set_default_identity(id)`, `set_identity_appearance(id, expected_revision, appearance)` |
 | Import/export | `start_import(paths, target)` → job id, `confirm_import(job_id, variants)` (09), `cancel_job(id)`, `start_export(scope, format, destination)` |
 | Search index | `start_search_rebuild()` → job id, `resume_search_rebuild(job_id)`, `retry_search_index()`; `cancel_job(id)` also routes to rebuild jobs |
 | Messages | `set_flags(selection, add, remove)`, `move_messages(selection, to_mailbox)`, `delete_to_trash(selection)`, `add_label(selection, label_mailbox)` (server label, 04), `add_tag(selection, tag)` and `remove_tag(selection, tag)` (local only), `set_note(message_id, text)` (one note per message; empty text removes it), `undo(token)` |
@@ -252,7 +252,15 @@ a receipt or file-export command; Service/FFI exposure remains M1.7e/f.
     the unread ones among them, read in one short transaction and tagged
     with the `list_generation` it shows. An unknown account is
     `NotFound`; empty mailboxes are listed;
-  - `appearance()` → resolved colors and monograms;
+  - `appearance()` → every account and identity with its resolved
+    color, monogram and rendering tokens at one committed
+    `appearance_generation`: an account carries its stored color,
+    symbol, palette/custom assignment, collision flag and revision;
+    an identity carries its stored overrides, the effective values —
+    its overrides where set, its account's where absent — and a
+    revision that is absent only when no record exists. A missing
+    stored record or malformed value is `Corrupt`, never defaulted
+    (02);
   - `coverage(scope)`, `health()`;
   - `out_box()`;
   - `drafts()` → local drafts with state, route, subject, recipients,
@@ -620,6 +628,12 @@ impl Subscription {
     async fn next(&self) -> Result<WindowEvent, CoreError>;
 }
 enum WindowEvent { Invalidated { generation: u64 }, ResetRequired }
+
+fn subscribe_appearance(generation: u64) -> AppearanceSubscription;
+impl AppearanceSubscription {
+    async fn next(&self) -> Result<AppearanceEvent, CoreError>;
+}
+enum AppearanceEvent { Invalidated { generation: u64 }, ResetRequired }
 ```
 
 - **Pull, not push.** The shell asks for the next event, then re-reads
@@ -651,6 +665,15 @@ enum WindowEvent { Invalidated { generation: u64 }, ResetRequired }
     the other valid source. List changes advance both counters; index-only
     changes leave list observers untouched. Preserve imports' single advance.
     M1.6j3a owns all native source/observer proof; j3b adds live subscriptions.
+- **Appearance:** `subscribe_appearance` reports the committed
+  `appearance_generation` (02), the independent counter the appearance
+  setters advance. It follows the window contract above, except its
+  mark is the `generation` argument — what the caller's last
+  `appearance()` answer reported — so no window exists to close and a
+  mark out of range simply waits or resets. Announcement follows the
+  same rule as the window sources: only after the commit (02
+  "Committed appearance revisions"), so no-op setters, replay,
+  rollback and failed commits invalidate nothing. In-memory only.
 - **Snapshot isolation:** a window is not a held read transaction. Each
   read is a short transaction, and `generation` ties the rows to one
   committed state.

@@ -116,6 +116,65 @@ impl Subscription {
     }
 }
 
+/// The appearance source's stream of events (spec/07): the same pull
+/// contract as a window's [`Subscription`], except the caller supplies
+/// the mark — there is no window to read it from.
+pub struct AppearanceSubscription {
+    windows: Arc<Windows>,
+    mark: Mutex<u64>,
+    waiting: AtomicBool,
+}
+
+impl Engine {
+    /// `subscribe_appearance` (spec/07): appearance changes, pulled
+    /// with `next`, marked at `generation` — what the caller's last
+    /// `appearance()` answer reported. In-memory only.
+    pub fn subscribe_appearance(&self, generation: u64) -> AppearanceSubscription {
+        AppearanceSubscription {
+            windows: Arc::clone(self.windows()),
+            mark: Mutex::new(generation),
+            waiting: AtomicBool::new(false),
+        }
+    }
+}
+
+impl AppearanceSubscription {
+    /// Wait until the appearance source moved past the mark, then name
+    /// the latest generation — or `ResetRequired` past 32, after which
+    /// the caller re-reads `appearance()` anyway. One call at a time;
+    /// a cancelled call moves nothing; shutdown ends a wait with
+    /// `Unavailable`.
+    pub async fn next(&self) -> Result<WindowEvent, EngineError> {
+        let _waiting = Waiting::claim(&self.waiting)?;
+        let mut versions = self.windows.versions.subscribe();
+        loop {
+            let seen = *versions.borrow_and_update();
+            if seen.shut {
+                return Err(shut_down());
+            }
+            let current = seen.appearance;
+            let mark = *self.lock_mark();
+            if current > mark {
+                *self.lock_mark() = current;
+                return Ok(if current - mark > MAX_UNSEEN_GENERATIONS {
+                    WindowEvent::ResetRequired
+                } else {
+                    WindowEvent::Invalidated {
+                        generation: current,
+                    }
+                });
+            }
+            versions.changed().await.map_err(|_| shut_down())?;
+        }
+    }
+
+    fn lock_mark(&self) -> std::sync::MutexGuard<'_, u64> {
+        self.mark
+            .lock()
+            .expect("a panicking thread held an appearance subscription's mark")
+    }
+}
+
 /// The generation of the source `spec` lists.
 fn source_generation(spec: &WindowSpec, versions: Versions) -> u64 {
     match spec {
