@@ -16,8 +16,8 @@ concurrency:
 
 jobs:
   # fmt, clippy, tests and docs in one leg — the same order `cargo xtask
-  # ci` runs them locally. The Dovecot protocol suite (spec/11) joins
-  # this workflow in M2.
+  # ci` runs them locally. The Dovecot protocol suite (spec/11) is the
+  # `dovecot` job below.
   rust:
     runs-on: ubuntu-24.04
     # The test step alone takes 8 to 14 minutes on a hosted runner.
@@ -120,6 +120,28 @@ jobs:
             exit 1
           fi
 
+  # The spec/11 protocol suite against a real Dovecot: `cargo xtask
+  # dovecot` runs the pinned image and points the committed
+  # spike_operations test at it; it fails rather than skipping when
+  # the container can't be reached.
+  dovecot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+      - name: Log toolchain and image
+        run: |
+          rustup show
+          rustc -Vv
+          docker --version
+          echo "Runner image: ${ImageOS:-unknown} ${ImageVersion:-unknown}"
+      - name: Dovecot protocol suite
+        run: cargo xtask dovecot
+
   # The local build script: shellcheck, and `--install` against a fake
   # macOS toolchain (the macOS job reruns it under the system bash 3.2).
   scripts:
@@ -140,7 +162,7 @@ jobs:
   # needed job fails; succeeds only when every other job succeeded.
   ci:
     if: always()
-    needs: [rust, deny, notices, scripts]
+    needs: [rust, deny, notices, scripts, dovecot]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:

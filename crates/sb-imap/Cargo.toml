@@ -8,3 +8,15 @@ rust-version.workspace = true
 
 [dependencies]
 sb-types = { version = "0.0.1", path = "../sb-types" }
+
+[dev-dependencies]
+# M2.1's chosen IMAP client (spec/01's Crates table). `client` is the
+# std-blocking pump the committed spike test drives.
+io-imap = { version = "=0.7.1", default-features = false, features = ["client"] }
+# `nom`'s alloc feature is what imap-codec alpha.9 forgets to ask
+# for, so a direct pin supplies it by unification.
+nom = { version = "=7.1.3", features = ["alloc"] }
+# The workspace's TLS crate (spec/01); 0.23.46 carries the
+# RUSTSEC-2026-0346..0349 fixes.
+rustls = { version = "=0.23.46", default-features = false, features = ["ring", "std", "logging", "tls12"] }
+sb-test-support = { version = "0.0.1", path = "../sb-test-support" }
