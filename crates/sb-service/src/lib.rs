@@ -4,7 +4,13 @@
 //! it — L1 sees service DTOs only (spec/01 rules 1 and 3).
 #![forbid(unsafe_code)]
 
+mod appearance;
 mod bodies;
+pub use appearance::{
+    AccountAppearance, AccountAppearanceChange, AccountColor, Appearance, AppearanceAssignment,
+    AppearanceEvent, AppearanceSubscription, AppearanceTokens, AppearanceVariant,
+    IdentityAppearance, IdentityAppearanceChange, PaletteColor, palette,
+};
 pub use bodies::{
     AttachmentLease, BodyKind, BodyLease, LeaseReleaser, RenderWarning, RenderWarningCode,
 };
