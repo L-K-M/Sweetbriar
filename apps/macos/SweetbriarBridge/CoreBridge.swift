@@ -294,6 +294,34 @@ public final class CoreBridge: Sendable {
         )
     }
 
+    /// `appearance()` (spec/07 "Other queries"): every account's and
+    /// identity's resolved color, monogram and rendering tokens at one
+    /// committed appearance generation — `subscribeAppearance`'s mark.
+    public func appearance() async throws -> Appearance {
+        let token = SweetbriarCore.CancelToken()
+        let value = try await Self.withCancellation(token: token) {
+            try await self.core.appearance(token: token)
+        }
+        return Appearance(value)
+    }
+
+    /// `subscribe_appearance` (spec/07 "Subscriptions"): committed
+    /// appearance generations from `generation` — what the caller's
+    /// last `appearance()` answer reported.
+    public func subscribeAppearance(generation: UInt64) async throws -> AppearanceSubscription {
+        let token = SweetbriarCore.CancelToken()
+        let subscription = try await Self.withCancellation(token: token) {
+            try await self.core.subscribeAppearance(token: token, generation: generation)
+        }
+        return AppearanceSubscription(subscription)
+    }
+
+    /// The v1 account palette (spec/02), a constant — the in-memory
+    /// value spec/07's one synchronous getter kind allows.
+    public func palette() -> [PaletteColor] {
+        SweetbriarCore.palette().map(PaletteColor.init)
+    }
+
     /// `open_window` (spec/07): register a window over `spec` and
     /// return its first page at the source's current generation.
     public func openWindow(
@@ -434,6 +462,35 @@ public final class WindowSubscription: Sendable {
         }
     }
 }
+
+/// The appearance stream (spec/07): one in-flight `next` at a time,
+/// in-memory only. Cancelling the calling task cancels the call, and
+/// a pending call ends with `unavailable` once the core shuts down.
+public final class AppearanceSubscription: Sendable {
+    private let subscription: SweetbriarCore.AppearanceSubscription
+
+    fileprivate init(_ subscription: SweetbriarCore.AppearanceSubscription) {
+        self.subscription = subscription
+    }
+
+    /// The next event: at once when the source already moved past the
+    /// mark, else when it does. A second concurrent call is
+    /// `invalidInput`.
+    public func next() async throws -> AppearanceEvent {
+        let token = SweetbriarCore.CancelToken()
+        let event = try await CoreBridge.withCancellation(token: token) {
+            try await self.subscription.next(token: token)
+        }
+        switch event {
+        case .invalidated(let generation):
+            return .invalidated(generation: generation)
+        case .resetRequired:
+            return .resetRequired
+        }
+    }
+}
+
+extension AppearanceSubscription: AppearanceEventSource {}
 
 /// What `withCancellation` cancels when the calling task is
 /// cancelled: the core's `CancelToken`, or a test's stand-in.

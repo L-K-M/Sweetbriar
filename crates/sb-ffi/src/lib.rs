@@ -19,6 +19,7 @@
 //! contains no hand-written `unsafe`.
 
 mod api;
+mod appearance;
 mod cancel;
 mod error;
 mod imports;
@@ -29,6 +30,10 @@ mod subscribe;
 mod windows;
 
 pub use api::{Core, CoreConfig, Receipt, Setting, open_core, platform_default_config};
+pub use appearance::{
+    AccountAppearance, Appearance, AppearanceAssignment, AppearanceEvent, AppearanceSubscription,
+    AppearanceTokens, AppearanceVariant, IdentityAppearance, PaletteColor, palette,
+};
 pub use cancel::CancelToken;
 pub use error::{CoreError, SearchParseCode};
 pub use imports::{
