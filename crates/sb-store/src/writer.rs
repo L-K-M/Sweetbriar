@@ -611,8 +611,7 @@ impl Writer {
         lock(&self.shared.state).closed
     }
 
-    /// The jobs waiting in `priority`'s queue, for the queued-commit
-    /// proof (a parked writer task can't pop them).
+    /// Pending jobs in `priority`'s queue (a parked task can't pop them).
     pub(crate) fn queued(&self, priority: WritePriority) -> usize {
         lock(&self.shared.state).queues[priority.queue()].len()
     }

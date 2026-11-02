@@ -96,6 +96,15 @@ fn exists(store: &Store, id: &ObjectId) -> bool {
     store.objects().exists(id).unwrap()
 }
 
+/// Park until `n` Index jobs sit queued (a parked writer can't pop them).
+fn wait_queued(store: &Store, n: usize) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    while store.writer.queued(WritePriority::Index) < n {
+        assert!(std::time::Instant::now() < deadline, "never queued");
+        std::thread::yield_now();
+    }
+}
+
 /// Free the publication's reservation through the real commit path.
 fn abandon(store: &Store, publication: PublishedObject) {
     writing(store, move |tx| {
@@ -362,9 +371,7 @@ fn a_reference_deletes_the_grace_clock() {
     store.close().unwrap();
 }
 
-/// An aborted reservation leaves a plain orphan and dropping the
-/// value queues no work; a live one holds past grace until startup
-/// expiry spends it (spec/03).
+/// Aborted or startup-expired reservations let the orphan fall (spec/03).
 #[test]
 fn an_aborted_reservation_and_an_expired_one_let_the_orphan_fall() {
     let (_scratch, paths) = scratch_paths("gc-reservation-lapse");
@@ -447,8 +454,7 @@ fn a_non_grace_pin_blocks_removal() {
     store.close().unwrap();
 }
 
-/// Every whole-pass freeze gate holds and reports (spec/03); a
-/// `kept` breaker event does not freeze.
+/// Every freeze gate holds and reports; a `kept` event doesn't (spec/03).
 #[test]
 fn every_whole_pass_gate_freezes_the_pass() {
     let (_scratch, store, clock) = open("gc-gates");
@@ -486,8 +492,7 @@ fn the_writer_thread_cannot_run_gc_on_its_own_queue() {
     Arc::into_inner(store).unwrap().close().unwrap();
 }
 
-/// A failed unlink is never a removal: the re-check already deleted
-/// the grace pins, so the next pass restarts the clock (spec/03).
+/// A failed unlink deletes the grace pins: the clock restarts (spec/03).
 #[test]
 fn a_failed_unlink_starts_the_clock_over() {
     let (_scratch, paths) = scratch_paths("gc-unlink-fail");
@@ -497,6 +502,11 @@ fn a_failed_unlink_starts_the_clock_over() {
     let (id, sha) = expired_orphan(&store, &clock, PAYLOAD);
     let failed = store.collect_garbage(GC_GRACE_PERIOD).unwrap();
     assert_eq!((failed.failed, failed.removed), (1, 0), "{failed:?}");
+    assert_eq!(failed.failure_details.len(), 1, "{failed:?}");
+    assert!(
+        failed.failure_details[0].contains("cannot remove"),
+        "{failed:?}"
+    );
     assert!(exists(&store, &id));
     assert_eq!(pins(&store, &sha, ""), 0);
 
@@ -513,8 +523,7 @@ fn a_failed_unlink_starts_the_clock_over() {
 
 // --- the republish race (acceptance: both orderings) ---
 
-/// The scaffold both orderings share: one expired orphan and a
-/// running import job for the referencing commit.
+/// The scaffold both orderings share: an expired orphan, a live job.
 fn race_store(label: &str) -> (ScratchDir, Arc<Store>, Arc<TestClock>, ObjectId, i64) {
     let (scratch, store, clock) = open(label);
     let store = Arc::new(store);
@@ -523,10 +532,9 @@ fn race_store(label: &str) -> (ScratchDir, Arc<Store>, Arc<TestClock>, ObjectId,
     (scratch, store, clock, id, revision)
 }
 
-/// Ordering A: the reservation commits first. The publication parks
-/// before submitting its reservation and the writer stays blocked, so
-/// the commit only queues. The scan queues a removal task behind it;
-/// the task's re-check sees the landed pin and skips.
+/// Ordering A: the reservation commits first. The publish's commit
+/// only queues behind the blocked writer; the removal task queued
+/// behind it sees the landed pin and skips.
 #[test]
 fn a_reservation_committed_first_is_honoured_at_the_final_recheck() {
     let (_scratch, store, clock, id, revision) = race_store("gc-race-reservation-first");
@@ -549,10 +557,12 @@ fn a_reservation_committed_first_is_honoured_at_the_final_recheck() {
     let on_thread = Arc::clone(&store);
     let parked = std::thread::spawn(move || on_thread.objects().publish(PAYLOAD));
     reservation_gate.wait(); // the publish parked before its commit
-    std::thread::sleep(Duration::from_millis(100));
+    // The released commit must queue before the pass scans; the
+    // removal task queues behind it (both Index; pending only).
+    wait_queued(&store, 1);
     let on_thread = Arc::clone(&store);
     let pass = std::thread::spawn(move || on_thread.collect_garbage(GC_GRACE_PERIOD));
-    std::thread::sleep(Duration::from_millis(100));
+    wait_queued(&store, 2);
     writer_gate.wait(); // release: the reservation commit, then the task
     let report = pass.join().unwrap().unwrap();
     parked.join().unwrap().unwrap();
@@ -573,9 +583,8 @@ fn a_reservation_committed_first_is_honoured_at_the_final_recheck() {
 }
 
 /// Ordering B: the unlink lands first. The removal task parks after
-/// its re-check commit (the grace pins already deleted); the publish
-/// parks before its reservation, whose commit then provably queues
-/// behind the parked task. Released, the install step installs anew.
+/// its re-check commit; the publish's commit provably queues behind
+/// the parked task, then step 3 installs anew.
 #[test]
 fn an_unlink_first_lets_the_republished_reservation_install_anew() {
     let (_scratch, store, clock, id, revision) = race_store("gc-race-unlink-first");
@@ -593,13 +602,8 @@ fn an_unlink_first_lets_the_republished_reservation_install_anew() {
     let on_thread = Arc::clone(&store);
     let parked = std::thread::spawn(move || on_thread.objects().publish(PAYLOAD));
     reservation_gate.wait(); // the publish parked before its commit
-    // Released, the commit must queue behind the parked task: wait on
-    // the real enqueue, then prove it can neither land nor finish.
-    let deadline = std::time::Instant::now() + Duration::from_secs(30);
-    while store.writer.queued(WritePriority::Index) == 0 {
-        assert!(std::time::Instant::now() < deadline, "never queued");
-        std::thread::yield_now();
-    }
+    // Released, the commit must queue behind the parked task.
+    wait_queued(&store, 1);
     assert_eq!(pins(&store, &sha, "reservation"), 0, "not committed");
     assert!(!parked.is_finished(), "the publish still awaits");
     unlink_gate.wait(); // release the unlink; the queued commit runs
@@ -838,7 +842,7 @@ fn apply(store: &Store, clock: &Arc<TestClock>, world: &mut World, op: Op) {
             world.slots[i].pins += 1;
         }
         Op::Unpin(i) => {
-            let Some(sha) = world.slots.get(i).map(|s| s.sha.clone()) else {
+            let Some(sha) = slot_sha(world, i) else {
                 return;
             };
             unpin(store, &sha, "quarantine");
@@ -852,7 +856,7 @@ fn apply(store: &Store, clock: &Arc<TestClock>, world: &mut World, op: Op) {
             breaker(store, open);
             world.breaker_open = open;
         }
-        Op::Doubt(doubted) => {
+        Op::Doubt(doubted) if world.doubt != doubted => {
             doubt(store, doubted);
             world.doubt = doubted;
         }
@@ -865,8 +869,7 @@ fn apply(store: &Store, clock: &Arc<TestClock>, world: &mut World, op: Op) {
     }
 }
 
-/// One pass, asserted against the model: the report is exact and
-/// nothing protected is unlinked.
+/// One pass asserted against the model: exact report, protected stand.
 fn run_gc(store: &Store, world: &mut World, days: u8) {
     let cutoff = world.now.saturating_sub(i64::from(days) * DAY_MS);
     let (mut scanned, mut started, mut cleared, mut removals) = (0, 0, 0, Vec::new());
@@ -944,8 +947,7 @@ proptest! {
             apply(&store, &clock, &mut world, op);
         }
         // A generated history may never reach removal; prove it every
-        // case. Per-kind-protected objects must outlive a bare orphan
-        // once its grace clock runs out.
+        // case: protected objects outlive a bare expired orphan.
         let base = world.slots.len();
         for op in [
             Op::Backup(false), Op::Breaker(false), Op::Doubt(false),

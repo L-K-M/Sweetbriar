@@ -1,9 +1,8 @@
 //! Garbage collection (spec/03 "Garbage collection"): the `gc_grace`
-//! pin is the grace clock. One pass pins first-sight orphans, clears
-//! the pins a reference re-covers, and removes expired orphans one
-//! writer task each, re-check and unlink serialized. The re-check
-//! deletes the grace pins, so a crash before the unlink leaves no
-//! stale pin and the next pass restarts the clock.
+//! pin is the grace clock. A pass pins first-sight orphans, clears
+//! them a reference re-covers, and removes expired orphans one writer
+//! task each; the re-check deletes the pins, so a crash before the
+//! unlink leaves no stale pin and the next pass restarts the clock.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -40,8 +39,8 @@ pub enum GcGate {
     IntegrityDoubt,
 }
 
-/// What one GC pass did (spec/03). All counts are objects.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+/// What one GC pass did (spec/03). The counts are objects.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct GcReport {
     /// The whole-pass gate that froze the run; `None` when it ran.
     pub blocked: Option<GcGate>,
@@ -55,9 +54,10 @@ pub struct GcReport {
     pub kept: u64,
     /// Removal candidates the final re-check re-protected mid-pass.
     pub skipped: u64,
-    /// Objects whose unlink failed; their grace pins are gone, so the
-    /// next pass starts their clocks over.
+    /// Objects whose unlink failed; the next pass restarts their clocks.
     pub failed: u64,
+    /// Each failed object's error, in the order the removals ran.
+    pub failure_details: Vec<String>,
     /// Objects removed this pass.
     pub removed: u64,
 }
@@ -95,9 +95,9 @@ enum Outcome {
     Removed,
     /// The re-check refused the removal.
     Skipped,
-    /// The task failed; the re-check's commit already deleted the
-    /// grace pins, so the next pass restarts the clock.
-    Failed,
+    /// The task failed, its error kept for the report; the grace pins
+    /// are gone, so the next pass restarts the clock.
+    Failed(StoreError),
 }
 
 /// The three whole-pass freezes, checked in order (spec/03).
@@ -146,8 +146,7 @@ fn object_seen(tx: &Transaction, sha: &str) -> Result<Seen, StoreError> {
     })
 }
 
-/// What one object earns this pass. `None` cutoff is the epoch
-/// floor: nothing expires.
+/// What one object earns this pass; a `None` cutoff expires nothing.
 fn decide(seen: &Seen, cutoff: Option<i64>) -> Action {
     if seen.referenced {
         return match seen.grace_oldest {
@@ -162,8 +161,7 @@ fn decide(seen: &Seen, cutoff: Option<i64>) -> Action {
     }
 }
 
-/// The removal task's whole re-check: the global freezes first, then
-/// the object's own gates (spec/03). `true` refuses the unlink.
+/// The removal task's re-check (spec/03); `true` refuses the unlink.
 fn removal_blocked(tx: &Transaction, sha: &str, cutoff: Option<i64>) -> Result<bool, StoreError> {
     if gate_blocked(tx)?.is_some() {
         return Ok(true);
@@ -205,9 +203,8 @@ fn apply_pin_edits(store: &Store, edits: &[PinEdit], now: i64) -> Result<(), Sto
     Ok(())
 }
 
-/// One object, one writer task (spec/03): the final re-check, the
-/// grace-pin delete and the unlink stay serialized, so a reservation
-/// commit lands before the task or after it, never inside.
+/// One object, one writer task (spec/03): re-check, grace-pin delete
+/// and unlink stay serialized — a reservation lands before or after.
 fn remove_object(store: &Store, id: &ObjectId, cutoff: Option<i64>) -> Outcome {
     let sha = id.sha256_hex();
     let shelf = Arc::clone(&store.objects().shelf);
@@ -233,7 +230,7 @@ fn remove_object(store: &Store, id: &ObjectId, cutoff: Option<i64>) -> Outcome {
             tx.commit()
                 .map_err(|e| classify(e, "commit the GC re-check"))?;
             // The republish-race proof parks here (spec/03): committed,
-            // not yet unlinked, the writer still occupied.
+            // not yet unlinked. Two waits on one barrier: park, release.
             #[cfg(test)]
             {
                 shelf.pause(|p| &p.before_unlink);
@@ -245,24 +242,21 @@ fn remove_object(store: &Store, id: &ObjectId, cutoff: Option<i64>) -> Outcome {
     );
     match crate::store::await_write(future) {
         Ok(outcome) => outcome,
-        Err(_) => Outcome::Failed,
+        Err(err) => Outcome::Failed(err),
     }
 }
 
-/// One bounded GC pass (spec/03): enumerate the store, hold one read
-/// transaction for the gates and every object's state, write the
-/// grace pins, then one serialized removal task per expired orphan.
+/// One bounded GC pass (spec/03): enumerate, read the gates and every
+/// object in one transaction, write pins, then one task per removal.
 pub(crate) fn collect_garbage(store: &Store, grace: Duration) -> Result<GcReport, StoreError> {
-    // The pass awaits writer jobs; on the writer thread that is its
-    // own queue.
+    // The pass awaits writer jobs; the writer thread can't await its own.
     if store.writer.is_writer_thread() {
         return Err(StoreError::internal(
             "the writer thread cannot run GC on its own queue",
         ));
     }
     let now = store.clock.now().as_millis();
-    // Strictly older than the grace period: `checked_sub` keeps the
-    // epoch floor from expiring anything.
+    // Strictly older than grace; `checked_sub` keeps the epoch floor.
     let cutoff = now.checked_sub(i64::try_from(grace.as_millis()).unwrap_or(i64::MAX));
 
     let objects = store.objects();
@@ -273,11 +267,15 @@ pub(crate) fn collect_garbage(store: &Store, grace: Duration) -> Result<GcReport
     };
 
     let (blocked, seen) = store.read(|tx| {
+        // A frozen pass runs no per-object queries.
+        if let Some(gate) = gate_blocked(tx)? {
+            return Ok((Some(gate), Vec::new()));
+        }
         let seen = ids
             .iter()
             .map(|id| object_seen(tx, &id.sha256_hex()))
             .collect::<Result<Vec<_>, _>>()?;
-        Ok((gate_blocked(tx)?, seen))
+        Ok((None, seen))
     })?;
     if let Some(gate) = blocked {
         report.blocked = Some(gate);
@@ -306,7 +304,10 @@ pub(crate) fn collect_garbage(store: &Store, grace: Duration) -> Result<GcReport
         match remove_object(store, id, cutoff) {
             Outcome::Removed => report.removed += 1,
             Outcome::Skipped => report.skipped += 1,
-            Outcome::Failed => report.failed += 1,
+            Outcome::Failed(err) => {
+                report.failed += 1;
+                report.failure_details.push(err.to_string());
+            }
         }
     }
     Ok(report)
