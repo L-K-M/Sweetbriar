@@ -203,23 +203,35 @@ fn a_dropped_open_stops_its_admitted_ids_read() {
         }
         _ => {}
     });
-    let request = Arc::clone(&engine);
-    let opening = engine.runtime_handle().spawn(async move {
-        request
-            .open_window(
-                spec(r#"{"text":"alpha"}"#, SearchSort::Date),
-                Anchor::Top,
-                10,
-            )
-            .await
-    });
-    let window_id = WindowId::from(got_id.recv_timeout(PATIENCE).unwrap());
+    // The open is driven by hand until its registration is held: the
+    // future is then provably suspended on it, so dropping it cancels
+    // the open for good. Aborting a spawned task instead can land while
+    // its poll is still in flight; once the held registration is
+    // released that poll runs to completion and the abort is lost.
+    let mut opening = Box::pin(engine.open_window(
+        spec(r#"{"text":"alpha"}"#, SearchSort::Date),
+        Anchor::Top,
+        10,
+    ));
+    let mut cx = Context::from_waker(Waker::noop());
+    let deadline = Instant::now() + PATIENCE;
+    let window_id = loop {
+        assert!(opening.as_mut().poll(&mut cx).is_pending());
+        if let Ok(id) = got_id.try_recv() {
+            break WindowId::from(id);
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the open never reached registration"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    };
     // The window is registered while its open is still held: an ids
     // read admits itself against it.
     let request = Arc::clone(&engine);
     let read = std::thread::spawn(move || block_on(request.window_ids(window_id)));
     paused.recv_timeout(PATIENCE).unwrap();
-    opening.abort();
+    drop(opening); // the dropped open dies with its held registration
     release_registered.send(()).unwrap();
     let deadline = Instant::now() + PATIENCE;
     while engine.windows().lock().open.contains_key(&window_id) {

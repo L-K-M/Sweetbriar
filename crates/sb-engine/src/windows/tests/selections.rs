@@ -5,7 +5,8 @@
 //! lives in `tests/selection.rs`; the expected sets always come from
 //! the public `window_ids` index, never from selection internals.
 
-use std::pin::pin;
+use std::future::Future;
+use std::pin::{Pin, pin};
 use std::sync::{Arc, mpsc};
 use std::task::{Context, Wake, Waker};
 use std::time::{Duration, Instant};
@@ -68,6 +69,28 @@ fn paged(engine: &Engine, id: &SelectionId) -> Vec<i64> {
 
 fn live(engine: &Engine) -> usize {
     engine.windows().lock().selections.len()
+}
+
+/// Poll `open` until `paused` says its index read is admitted and held:
+/// the future is then provably suspended on that read, so dropping it
+/// cancels the open for good. Aborting a spawned task instead can land
+/// while its poll is still in flight; once the held read is released
+/// that poll runs to completion and the abort is lost.
+fn poll_until_read_held<F: Future>(open: Pin<Box<F>>, paused: &mpsc::Receiver<()>) -> Pin<Box<F>> {
+    let mut open = open;
+    let mut cx = Context::from_waker(Waker::noop());
+    let deadline = Instant::now() + PATIENCE;
+    loop {
+        assert!(open.as_mut().poll(&mut cx).is_pending());
+        if paused.try_recv().is_ok() {
+            return open;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the index read never reached its transaction"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
 }
 
 /// Explicit ids in arbitrary order and the equivalent rank bitmap
@@ -417,9 +440,11 @@ fn selection_paging_bounds_are_exact() {
 }
 
 /// Selection queries never advance the source window's
-/// observed-generation mark: a successful, a failed and a cancelled
-/// selection each leave the origin's subscription invalidation
-/// visible (spec/07).
+/// observed-generation mark (spec/07): a successful, a failed and a
+/// cancelled selection each leave the retained window's mark at its
+/// first page and the pending invalidation visible to a subscription —
+/// whose mark is its own copy, taken at subscribe, so only the
+/// window's own `seen` shows a selection's mark moving.
 #[test]
 fn selection_queries_never_move_the_source_windows_mark() {
     let (_scratch, engine, mailbox) = mailboxed("selection-marks", 12);
@@ -427,6 +452,9 @@ fn selection_queries_never_move_the_source_windows_mark() {
     let origin =
         block_on(engine.open_window(WindowSpec::Mailbox(mailbox), Anchor::Top, 10)).unwrap();
     let origin_id = origin.window_id();
+    let retained = engine.windows().window(origin_id).unwrap();
+    let mark = retained.seen();
+    assert_eq!(mark, origin.generation());
     let subscription = engine.subscribe(origin_id);
     let probe =
         block_on(engine.open_window(WindowSpec::Mailbox(mailbox), Anchor::Top, 10)).unwrap();
@@ -450,9 +478,14 @@ fn selection_queries_never_move_the_source_windows_mark() {
     .unwrap();
     assert_eq!(snapshot.generation(), g1);
     assert_eq!(
+        retained.seen(),
+        mark,
+        "a successful selection moved the mark"
+    );
+    assert_eq!(
         finish(pin!(subscription.next())).unwrap(),
         WindowEvent::Invalidated { generation: g1 },
-        "a successful selection moved the mark"
+        "a successful selection hid the invalidation"
     );
     block_on(engine.close_selection(snapshot.selection_id().clone()));
 
@@ -467,14 +500,16 @@ fn selection_queries_never_move_the_source_windows_mark() {
         Err(EngineError::ResetRequired { generation }) => assert_eq!(generation, g2),
         other => panic!("expected ResetRequired, got {other:?}"),
     }
+    assert_eq!(retained.seen(), mark, "a failed selection moved the mark");
     assert_eq!(
         finish(pin!(subscription.next())).unwrap(),
         WindowEvent::Invalidated { generation: g2 },
-        "a failed selection moved the mark"
+        "a failed selection hid the invalidation"
     );
 
     // And a cancelled one: its index read is paused mid-transaction,
-    // then the future is aborted before registration.
+    // then the open is dropped while suspended on it, before
+    // registration.
     rewrite(&engine, |tx| {
         tx.execute("UPDATE occurrences SET f_flagged = 1 - f_flagged", [])
             .map(|_| ())
@@ -482,23 +517,27 @@ fn selection_queries_never_move_the_source_windows_mark() {
     });
     let g3 = block_on(engine.window_ids(probe_id)).unwrap().generation();
     let (paused, release) = hold_on(&engine, Event::IdsReadCaptured);
-    let request = Arc::clone(&engine);
-    let opening = engine.runtime_handle().spawn(async move {
-        request
-            .open_selection(origin_id, g3, SelectionInput::Ids(vec![]))
-            .await
-    });
-    paused.recv_timeout(PATIENCE).unwrap();
-    opening.abort();
+    let open = poll_until_read_held(
+        Box::pin(engine.open_selection(origin_id, g3, SelectionInput::Ids(vec![]))),
+        &paused,
+    );
+    drop(open); // the cancelled open dies with its held read
     release.send(()).unwrap();
-    let _ = block_on(opening); // the abort ran its course
+    assert_eq!(
+        retained.seen(),
+        mark,
+        "a cancelled selection moved the mark"
+    );
     assert_eq!(
         finish(pin!(subscription.next())).unwrap(),
         WindowEvent::Invalidated { generation: g3 },
-        "a cancelled selection moved the mark"
+        "a cancelled selection hid the invalidation"
     );
     assert_eq!(live(&engine), 0);
+    // The released read still finishes on the blocking pool; shutdown
+    // waits for it, so the mark must be unmoved after it drains too.
     block_on(Arc::try_unwrap(engine).unwrap().shutdown()).unwrap();
+    assert_eq!(retained.seen(), mark, "the drained read moved the mark");
 }
 
 /// A dropped open leaves no handle: before registration the read's
@@ -514,18 +553,15 @@ fn dropped_selection_opens_leave_no_handle() {
     let window_id = window.window_id();
     let generation = block_on(engine.window_ids(window_id)).unwrap().generation();
 
-    // Before registration: the index read is paused mid-transaction.
+    // Before registration: the index read is paused mid-transaction,
+    // the open is polled to pending on it, then dropped.
     let (paused, release) = hold_on(&engine, Event::IdsReadCaptured);
-    let request = Arc::clone(&engine);
-    let opening = engine.runtime_handle().spawn(async move {
-        request
-            .open_selection(window_id, generation, SelectionInput::Ids(vec![]))
-            .await
-    });
-    paused.recv_timeout(PATIENCE).unwrap();
-    opening.abort();
+    let open = poll_until_read_held(
+        Box::pin(engine.open_selection(window_id, generation, SelectionInput::Ids(vec![]))),
+        &paused,
+    );
+    drop(open);
     release.send(()).unwrap();
-    let _ = block_on(opening); // the abort ran its course
     assert_eq!(live(&engine), 0, "a dropped read registered a handle");
 
     // Advance each dispatch only after its completion wake. Hold the
