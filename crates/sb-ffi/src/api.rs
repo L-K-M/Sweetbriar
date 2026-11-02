@@ -417,11 +417,10 @@ mod tests {
 
     /// A command the core has begun ignores the token and returns its
     /// receipt (spec/07). The first poll holds the read side and waits
-    /// on the writer thread: submitting to an OS thread resolves
-    /// asynchronously — the store's transaction can't have committed
-    /// in the instructions between submit and this poll, so `Pending`
-    /// is required, not hoped for. Cancel then drive to the end: the
-    /// receipt still arrives and the value is set.
+    /// on the writer thread, which another connection's writer lock
+    /// stalls before the commit — `Pending` is required, not hoped
+    /// for. Cancel then drive to the end: the receipt still arrives
+    /// and the value is set.
     #[test]
     fn a_begun_command_returns_its_receipt_despite_a_cancel() {
         let scratch = ScratchDir::new("ffi-command-begun");
@@ -436,12 +435,13 @@ mod tests {
             "strong".to_owned(),
         ));
         let mut cx = Context::from_waker(Waker::noop());
-        assert!(
-            command.as_mut().poll(&mut cx).is_pending(),
-            "the command finished before its first poll"
-        );
-
-        token.cancel();
+        sb_test_support::with_sqlite_write_lock(&scratch.path().join("store/state.sqlite"), || {
+            assert!(
+                command.as_mut().poll(&mut cx).is_pending(),
+                "the command finished before its first poll"
+            );
+            token.cancel();
+        });
         let receipt = sb_test_support::block_on(command.as_mut())
             .expect("a begun command runs to completion");
         assert_eq!(receipt.command, "set_setting");

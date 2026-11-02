@@ -18,6 +18,12 @@ palette = { version = "=0.7.7", default-features = false, features = ["libm"] }
 # otherwise.
 tokio = { version = "=1.54.1", default-features = false, features = ["rt-multi-thread", "sync"] }
 
+[features]
+# Test-only writes for the layers above: a downstream first-poll test
+# holds the lease table to pin an open `Pending` (spec/11). Never
+# enabled outside dev-dependencies.
+test-seams = []
+
 [dev-dependencies]
 sb-test-support = { version = "0.0.1", path = "../sb-test-support" }
 # The import crash-cut suite opens the engine on `CutFs` (spec/11).

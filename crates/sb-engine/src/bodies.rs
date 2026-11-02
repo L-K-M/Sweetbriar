@@ -156,6 +156,18 @@ impl Engine {
     pub fn release_lease(&self, lease_id: &str) {
         self.lease_releaser().release_lease(lease_id);
     }
+
+    /// Hold the lease table for `body` (the `test-seams` feature): an
+    /// open's publication ends on the registry insert, which waits
+    /// while the table is held, so a downstream test's first
+    /// `open_body`/`open_attachment` poll stays `Pending` however fast
+    /// the blocking pool runs.
+    #[cfg(feature = "test-seams")]
+    pub fn with_lease_table_held<R>(&self, body: impl FnOnce() -> R) -> R {
+        // Held for the closure: the insert a publication ends on waits.
+        let _table = self.leases().state.lock().expect("lease lock poisoned");
+        body()
+    }
 }
 
 #[cfg(test)]
