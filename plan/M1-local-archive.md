@@ -938,6 +938,18 @@ local drafts. No network yet.
     ownership, file-boundary checkpoints and the version-1 metadata
     manifest. Its native consumer qualifies exact output, metadata,
     unavailable bodies, errors, cancellation and durability cuts.
+    Split at the format boundary (2026-11-02): both formats plus the
+    ownership fixes exceeded the line budget.
+    - **M1.7c1 EML and manifest (L):** destination ownership and the
+      lease, byte-verified streaming, file-boundary checkpoints, resume
+      verification, the version-1 manifest and completion for EML. A
+      requested mboxrd job is refused with a clear error naming M1.7c2.
+      Its native consumer qualifies exact output, metadata, unavailable
+      bodies, errors, cancellation and durability cuts.
+    - **M1.7c2 mboxrd (L):** the mboxrd writer, `recover_mbox`, framing
+      hashes, the mboxrd manifest fields, the `sb-mime`
+      `MBOXRD_ENVELOPE` constant and their tests; same qualifications
+      for the mboxrd format.
   - **M1.7d Manifest-aware import — L:** capture and verify the sidecar
     with the source, validate mboxrd framing/length/hash before ingest,
     and include the framing identity in replay. Native imports of c's
