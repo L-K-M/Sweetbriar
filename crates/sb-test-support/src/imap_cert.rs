@@ -60,9 +60,18 @@ pub(crate) fn client_config() -> Arc<ClientConfig> {
 /// verified against the certificate (IP SAN `127.0.0.1`); a stalled
 /// or closed peer fails instead of spinning. Caller's timeout is kept.
 pub fn client_stream(stream: TcpStream, server: &str) -> io::Result<TlsIo<ClientConnection>> {
+    client_stream_with(stream, server, client_config())
+}
+
+/// [`client_stream`] over a caller-built config — the verifier seam.
+pub fn client_stream_with(
+    stream: TcpStream,
+    server: &str,
+    config: Arc<ClientConfig>,
+) -> io::Result<TlsIo<ClientConnection>> {
     let name = ServerName::try_from(server.to_string())
         .map_err(|e| io::Error::other(format!("bad server name {server}: {e}")))?;
-    let mut conn = ClientConnection::new(client_config(), name).map_err(io::Error::other)?;
+    let mut conn = ClientConnection::new(config, name).map_err(io::Error::other)?;
     let caller_timeout = stream.read_timeout()?;
     stream.set_read_timeout(Some(HANDSHAKE_DEADLINE))?;
     let outcome = loop {

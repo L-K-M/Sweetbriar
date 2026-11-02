@@ -8,6 +8,8 @@ this file is the short operational summary.
 
 ```sh
 cargo xtask ci        # the full local gate; must be green before a PR
+cargo xtask ci --docker  # the same plus the Dovecot protocol suite (needs Docker)
+cargo xtask dovecot   # the Dovecot suite alone: starts the pinned container
 cargo xtask notices   # regenerate THIRD_PARTY_NOTICES.md
 cargo xtask check-layers  # the spec/01 layer-boundary checker
 cargo xtask ffi --bindings-only  # regenerate the committed Swift bindings
@@ -68,7 +70,8 @@ compiler must be on `PATH`. Its compile options come from
 - `cargo deny check` (licences, advisories, bans, sources);
 - the notices drift check;
 - the hostile rendering corpus (`cargo test -p sb-mime --test hostile`);
-- the Dovecot protocol suite once M2 lands (`cargo xtask ci --docker`).
+- the Dovecot protocol suite (`cargo xtask ci --docker`, or
+  `cargo xtask dovecot` alone); CI's `dovecot` job runs it on every PR.
 
 On pushes to main, CI's `window-timings` job also records the M1.3
 list window timings over 100k rows; they are never asserted. Run them
