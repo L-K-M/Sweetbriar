@@ -334,6 +334,30 @@ impl Drop for Running {
     }
 }
 
+/// An idempotency key's byte bound (spec/07 "Commands"): generous
+/// for a UUID (`UUID().uuidString` is 36 ASCII bytes); the format is
+/// not a validation rule.
+pub(crate) const MAX_IDEMPOTENCY_KEY_BYTES: usize = 128;
+
+/// Reject an empty or overlong idempotency key before a command
+/// submits anything (spec/07 "Commands"): two calls with `""` would
+/// share one receipt slot and replay each other's effect.
+pub(crate) fn validate_idempotency_key(key: &str) -> Result<(), EngineError> {
+    if key.is_empty() {
+        return Err(EngineError::invalid_input(
+            "idempotency_key",
+            "an idempotency key is required",
+        ));
+    }
+    if key.len() > MAX_IDEMPOTENCY_KEY_BYTES {
+        return Err(EngineError::invalid_input(
+            "idempotency_key",
+            format!("an idempotency key is at most {MAX_IDEMPOTENCY_KEY_BYTES} UTF-8 bytes"),
+        ));
+    }
+    Ok(())
+}
+
 impl Engine {
     /// Start the runtime, then open the store at `data_root` on a
     /// thread of its own whose result comes back over a oneshot

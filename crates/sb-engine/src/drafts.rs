@@ -17,6 +17,7 @@ use sb_resources::{
     run_once, save_draft,
 };
 
+use crate::engine::validate_idempotency_key;
 use crate::{Engine, EngineError};
 
 /// The commands' names in `command_receipts` (spec/07).
@@ -132,6 +133,7 @@ impl Engine {
         idempotency_key: &str,
         context: DraftSource,
     ) -> Result<DraftCreated, EngineError> {
+        validate_idempotency_key(idempotency_key)?;
         let draft_id = self.resources().new_uuid_string();
         let now = self.resources().now();
         let key = idempotency_key.to_owned();
@@ -184,6 +186,7 @@ impl Engine {
         base_revision_id: Option<&str>,
         content: DraftContent,
     ) -> Result<DraftSaved, EngineError> {
+        validate_idempotency_key(idempotency_key)?;
         validate_draft(draft_id, base_revision_id, &content)?;
         let revision_id = self.resources().new_uuid_string();
         let now = self.resources().now();
@@ -254,6 +257,7 @@ impl Engine {
         idempotency_key: &str,
         draft_id: &str,
     ) -> Result<Receipt, EngineError> {
+        validate_idempotency_key(idempotency_key)?;
         if draft_id.is_empty() {
             return Err(EngineError::invalid_input(
                 "draft_id",

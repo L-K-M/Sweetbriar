@@ -27,7 +27,7 @@ use sb_resources::{
     run_once, set_user_pause,
 };
 
-use crate::engine::{Spawn, Worker};
+use crate::engine::{Spawn, Worker, validate_idempotency_key};
 use crate::threads::{ThreadRebuilds, schedule_threads};
 use crate::{Engine, EngineError};
 
@@ -275,6 +275,7 @@ impl Engine {
         idempotency_key: &str,
         paths: Vec<PathBuf>,
     ) -> Result<ImportStarted, EngineError> {
+        validate_idempotency_key(idempotency_key)?;
         if paths.is_empty() {
             return Err(EngineError::invalid_input(
                 "paths",
@@ -317,6 +318,7 @@ impl Engine {
         job_id: &str,
         variants: Vec<(u64, MboxVariant)>,
     ) -> Result<Receipt, EngineError> {
+        validate_idempotency_key(idempotency_key)?;
         // Validate a waiting job's inventory first, so a bad choice names
         // its field. The write accepts only that revision; anything else
         // is decided there, where a repeated key still finds its receipt.
@@ -361,6 +363,7 @@ impl Engine {
         idempotency_key: &str,
         job_id: &str,
     ) -> Result<Receipt, EngineError> {
+        validate_idempotency_key(idempotency_key)?;
         let now = self.resources().now();
         let (key, id) = (idempotency_key.to_owned(), job_id.to_owned());
         let imports = Arc::clone(self.imports());
