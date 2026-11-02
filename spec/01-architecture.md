@@ -238,7 +238,7 @@ is committed, and updates are their own PRs.
 | CSS and URL parsing | `cssparser`, `url` | 0.38.0, 2.5.8 | The renderer's resource and link policy (10) |
 | IMAP | `io-imap` | 0.7.1 | **Spike first** (plan M2.1): check it handles Bridge's quirks (synchronizing literals, LIST attributes, UIDPLUS receipts, raw UTF-8 resilience). Fallback: `async-imap` 0.12.0 (`runtime-tokio`, no default features) |
 | SMTP | `lettre` (tokio + rustls features, no native-tls) | 0.11.23 | Raw-message submission of `mail-builder` output. Must expose enough to detect "connection lost after DATA" (05) |
-| TLS | `rustls` / `tokio-rustls` / `rustls-platform-verifier` | 0.23.45 / 0.26.6 / 0.7.1 | Pinned-certificate verifier for Bridge; platform verifier for others (10) |
+| TLS | `rustls` / `tokio-rustls` / `rustls-platform-verifier` | 0.23.46 / 0.26.6 / 0.7.1 | Pinned-certificate verifier for Bridge; platform verifier for others (10). `rustls` 0.23.46 for the RUSTSEC-2026-0346 to 0349 fixes (M2.1a) |
 | Async | `tokio` | 1.54.1 | Maintenance update, including the RUSTSEC-2026-0386 fix; existing feature sets unchanged |
 | FFI | `uniffi` | 0.32.2 | Proc-macro exports, no UDL. No async foreign callback traits (07) |
 | Template config maintenance | `askama_derive` backport, maintained `toml` | 0.16.1, 1.1.8 | RUSTSEC-2026-0374: reviewed immutable fork revision in Cargo replaces basic-toml without changing UniFFI/runtime APIs; see plan/maintenance/2026-10-basic-toml |
