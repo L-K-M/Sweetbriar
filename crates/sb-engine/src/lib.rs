@@ -18,6 +18,7 @@ mod bodies;
 pub use bodies::{
     AttachmentLease, BodyKind, BodyLease, LeaseReleaser, RenderWarning, RenderWarningCode,
 };
+mod drafts;
 mod engine;
 mod error;
 mod import;
@@ -47,6 +48,7 @@ pub use sb_resources::{
     default_data_root,
 };
 
+pub use drafts::{DraftContent, DraftCreated, DraftSaved};
 pub use engine::Engine;
 pub use error::EngineError;
 pub use import::{ImportJobStatus, ImportReport, ImportSourceStatus, ImportStarted};
@@ -64,6 +66,10 @@ pub use windows::{
     WindowIds, WindowSpec,
 };
 
+pub use sb_resources::{
+    AttachmentRef, AttemptState, ComposeFormat, DraftAttachment, DraftRecipient, DraftSource,
+    DraftState, DraftSummary, LiveAttempt, PublishedObject, StoredDraft, StoredRevision,
+};
 pub use sb_resources::{
     BodyAvailability, ReaderAddress, ReaderHeaders, ReaderMessage, ReaderOccurrence, ReaderTag,
 };

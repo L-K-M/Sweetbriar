@@ -73,13 +73,14 @@ fn a_spent_or_missing_attachment_reservation_conflicts() {
         create_draft(tx, "d1", &DraftSource::New, now)
     });
 
-    // An object published elsewhere (a reservation this store never
-    // made) cannot be referenced (spec/03).
+    // Spent: this store's own reservation, already released, cannot
+    // pin a new reference (spec/03). Releasing it the way the
+    // referencing commit would leaves the pin exactly as a spent
+    // publication leaves it.
     let published = store
         .objects()
-        .publish(std::io::Cursor::new(b"elsewhere".as_slice()))
+        .publish(std::io::Cursor::new(b"spent".as_slice()))
         .unwrap();
-    // Spend the reservation first so the save finds it missing.
     let published = writing(&store, move |tx| {
         release_reservation(tx, &published, ReservationRelease::Required)?;
         Ok(published)
@@ -95,12 +96,37 @@ fn a_spent_or_missing_attachment_reservation_conflicts() {
     }))
     .unwrap_err();
     assert!(matches!(error, StoreError::Conflict { .. }), "{error:?}");
+
+    // Missing: a `PublishedObject` minted by another store carries a
+    // reservation this store never made — even with the same bytes
+    // published and pinned here, the foreign pin cannot be referenced.
+    let (_foreign_scratch, _foreign_paths, foreign) = scratch();
+    let foreign_object = foreign
+        .objects()
+        .publish(std::io::Cursor::new(b"missing".as_slice()))
+        .unwrap();
+    let _local = store
+        .objects()
+        .publish(std::io::Cursor::new(b"missing".as_slice()))
+        .unwrap();
+    let mut with_foreign = input("r2");
+    with_foreign.attachments = vec![DraftAttachment {
+        object: foreign_object,
+        filename: "two.txt".to_owned(),
+        media_type: "text/plain".to_owned(),
+    }];
+    let error = block_on(store.write(WritePriority::User, move |tx| {
+        save_draft(tx, "d1", None, with_foreign, now)
+    }))
+    .unwrap_err();
+    assert!(matches!(error, StoreError::Conflict { .. }), "{error:?}");
     assert!(
         reading(&store, |tx| draft(tx, "d1"))
             .unwrap()
             .revision
             .is_none()
     );
+    foreign.close().unwrap();
     store.close().unwrap();
 }
 
