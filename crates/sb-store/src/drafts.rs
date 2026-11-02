@@ -719,7 +719,10 @@ fn parse_recipients(json: &str) -> Result<Vec<DraftRecipient>, StoreError> {
     Ok(recipients)
 }
 
-fn parse_attachments(json: &str) -> Result<Vec<AttachmentRef>, StoreError> {
+/// A stored `attachments_json` back into references; anything but a
+/// list of complete entries is damage the writer didn't make. The
+/// backup snapshot's reference read parses through this same shape.
+pub(crate) fn parse_attachments(json: &str) -> Result<Vec<AttachmentRef>, StoreError> {
     let parsed: serde_json::Value = serde_json::from_str(json)
         .map_err(|_| corrupt("a draft revision's attachments are not JSON"))?;
     let list = parsed
