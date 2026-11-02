@@ -462,6 +462,9 @@ struct Versions {
     store: u64,
     search: u64,
     synthetic: u64,
+    /// The committed appearance revision (spec/02), independent of
+    /// the list and Search sources.
+    appearance: u64,
     closes: u64,
     shut: bool,
 }
@@ -564,6 +567,16 @@ impl Windows {
         self.versions.send_if_modified(|versions| {
             let moved = generation > versions.search;
             versions.search = versions.search.max(generation);
+            moved
+        });
+    }
+
+    /// The store committed an appearance generation (spec/02, spec/07):
+    /// wake appearance subscriptions; the newest announcement wins.
+    pub(crate) fn appearance_moved(&self, generation: u64) {
+        self.versions.send_if_modified(|versions| {
+            let moved = generation > versions.appearance;
+            versions.appearance = versions.appearance.max(generation);
             moved
         });
     }
@@ -1338,7 +1351,7 @@ mod subscribe;
 pub use search::{SearchSort, SearchSpec, SearchStatus};
 pub use selections::{SelectionId, SelectionInput, SelectionSnapshot};
 
-pub use subscribe::{Subscription, WindowEvent};
+pub use subscribe::{AppearanceSubscription, Subscription, WindowEvent};
 
 #[cfg(test)]
 mod tests;

@@ -11,7 +11,8 @@
 
 mod appearance;
 pub use appearance::{
-    AppearanceTokens, AppearanceVariant, PaletteColor, SrgbColor, SrgbColorError,
+    AccountAppearance, AccountAppearanceChange, Appearance, AppearanceTokens, AppearanceVariant,
+    IdentityAppearance, IdentityAppearanceChange, PaletteColor, SrgbColor, SrgbColorError,
 };
 mod bodies;
 pub use bodies::{
@@ -39,10 +40,11 @@ mod windows;
 // needs, re-exported by item through this layer (spec/01 rule 3;
 // `sb-service` itself re-exports nothing).
 pub use sb_resources::{
-    AccountKind, AccountState, ExportSelection, ImportJobCheckpoint, ImportJobState, ImportProblem,
-    ImportProblemKind, ImportTotals, MailboxKind, MailboxList, MailboxRole, MboxQuoting,
-    MboxVariant, Receipt, SourceInventory, SourceKind, SourcePosition, StoredAccount,
-    StoredMailbox, Timestamp, default_cache_root, default_data_root,
+    AccountColor, AccountKind, AccountState, AppearanceAssignment, ExportSelection,
+    ImportJobCheckpoint, ImportJobState, ImportProblem, ImportProblemKind, ImportTotals,
+    MailboxKind, MailboxList, MailboxRole, MboxQuoting, MboxVariant, Receipt, SourceInventory,
+    SourceKind, SourcePosition, StoredAccount, StoredMailbox, Timestamp, default_cache_root,
+    default_data_root,
 };
 
 pub use engine::Engine;
@@ -57,9 +59,9 @@ pub use sb_resources::{
 pub use search::SearchScope;
 pub use settings::Setting;
 pub use windows::{
-    Anchor, Count, Cursor, ListRow, SearchSort, SearchSpec, SearchStatus, SelectionId,
-    SelectionInput, SelectionSnapshot, Subscription, Window, WindowEvent, WindowId, WindowIds,
-    WindowSpec,
+    Anchor, AppearanceSubscription, Count, Cursor, ListRow, SearchSort, SearchSpec, SearchStatus,
+    SelectionId, SelectionInput, SelectionSnapshot, Subscription, Window, WindowEvent, WindowId,
+    WindowIds, WindowSpec,
 };
 
 pub use sb_resources::{

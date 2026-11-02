@@ -55,6 +55,9 @@ impl StoredAccountAppearance {
 pub struct StoredIdentityAppearance {
     identity_id: String,
     account_id: String,
+    /// The identity's own name, carried so a derived monogram uses it
+    /// rather than the account's.
+    display_name: String,
     color_override_srgb: Option<String>,
     symbol_override: Option<String>,
     revision: Option<i64>,
@@ -66,6 +69,9 @@ impl StoredIdentityAppearance {
     }
     pub fn account_id(&self) -> &str {
         &self.account_id
+    }
+    pub fn display_name(&self) -> &str {
+        &self.display_name
     }
     pub fn color_override_srgb(&self) -> Option<&str> {
         self.color_override_srgb.as_deref()
@@ -191,23 +197,90 @@ pub fn identity_appearance(
     valid_key(id)?;
     let row = tx
         .query_row(
-            "SELECT i.account_id, a.color_override_srgb, a.symbol_override, a.revision
+            "SELECT i.account_id, i.display_name, a.color_override_srgb, a.symbol_override, a.revision
          FROM identities i LEFT JOIN identity_appearance a USING (identity_id)
          WHERE i.identity_id = ?1",
             [id],
-            |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, Option<String>>(1)?,
-                    row.get::<_, Option<String>>(2)?,
-                    row.get::<_, Option<i64>>(3)?,
-                ))
-            },
+            identity_row,
         )
         .optional()
         .map_err(sql_error)?;
-    let (account_id, color_override_srgb, symbol_override, revision) =
+    let (account_id, display_name, color_override_srgb, symbol_override, revision) =
         row.ok_or_else(|| StoreError::not_found("identity"))?;
+    stored_identity(
+        tx,
+        id,
+        account_id,
+        display_name,
+        color_override_srgb,
+        symbol_override,
+        revision,
+    )
+}
+
+/// Every identity's stored overrides, by account then identity, for the
+/// whole-snapshot `appearance()` read (spec/02, spec/07). Each row is
+/// validated like `identity_appearance`: a missing referenced account or
+/// a malformed retained value is `Corrupt`, never skipped or defaulted.
+pub fn identity_appearances(tx: &Transaction) -> Result<Vec<StoredIdentityAppearance>, StoreError> {
+    let mut statement = tx
+        .prepare(
+            "SELECT i.account_id, i.display_name, a.color_override_srgb,
+                    a.symbol_override, a.revision, i.identity_id
+         FROM identities i LEFT JOIN identity_appearance a USING (identity_id)
+         ORDER BY i.account_id, i.identity_id",
+        )
+        .map_err(sql_error)?;
+    let rows = statement
+        .query_map([], |row| Ok((identity_row(row)?, row.get::<_, String>(5)?)))
+        .map_err(sql_error)?;
+    let mut identities = Vec::new();
+    for row in rows {
+        let (
+            (account_id, display_name, color_override_srgb, symbol_override, revision),
+            identity_id,
+        ) = row.map_err(sql_error)?;
+        identities.push(stored_identity(
+            tx,
+            &identity_id,
+            account_id,
+            display_name,
+            color_override_srgb,
+            symbol_override,
+            revision,
+        )?);
+    }
+    Ok(identities)
+}
+
+/// The `(account_id, display_name, overrides, revision)` columns
+/// `identity_appearance` and `identity_appearances` share, leading in
+/// both queries.
+type IdentityColumns = (String, String, Option<String>, Option<String>, Option<i64>);
+
+fn identity_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<IdentityColumns> {
+    Ok((
+        row.get::<_, String>(0)?,
+        row.get::<_, String>(1)?,
+        row.get::<_, Option<String>>(2)?,
+        row.get::<_, Option<String>>(3)?,
+        row.get::<_, Option<i64>>(4)?,
+    ))
+}
+
+/// The one identity record's validation, shared by the point and
+/// snapshot reads: every retained field is checked, an identity whose
+/// account is gone is `Corrupt`, and a versioned row inherits like an
+/// absent one while keeping its revision.
+fn stored_identity(
+    tx: &Transaction,
+    identity_id: &str,
+    account_id: String,
+    display_name: String,
+    color_override_srgb: Option<String>,
+    symbol_override: Option<String>,
+    revision: Option<i64>,
+) -> Result<StoredIdentityAppearance, StoreError> {
     stored(valid_key(&account_id))?;
     require_account(tx, &account_id).map_err(|error| match error {
         StoreError::NotFound { .. } => {
@@ -223,8 +296,9 @@ pub fn identity_appearance(
         stored(valid_revision(revision))?;
     }
     Ok(StoredIdentityAppearance {
-        identity_id: id.to_owned(),
+        identity_id: identity_id.to_owned(),
         account_id,
+        display_name,
         color_override_srgb,
         symbol_override,
         revision,
