@@ -997,11 +997,79 @@ local drafts. No network yet.
     both republish orderings with an expired orphan, queued reservation versus
     unlink, abort/expiry and random reference histories. GC cannot be enabled
     before this proof. Clarify the writer-task/transaction boundary first.
-  - **Later artifacts:** backup snapshot/pins, verified copy and manifest
-    publication, retention/recovery, quarantined restore staging, durable
-    swap/startup recovery, engine quiescence, scheduled GC/verification/
-    integrity checks, service/CLI and Backups UI. Split each before coding;
-    keep a native public-API consumer and all original acceptance assigned.
+  - **M1.8b Backup snapshot and pins (L):** spec/03's procedure steps 1–3:
+    the `in_progress` generation row with its location (reusing a2's
+    whole-pass gate, proved against the real GC path), the online-API
+    `state.sqlite` snapshot into `backups/<generation-id>/` under a chosen
+    destination (default inside the data root) without holding the writer
+    for the copy, and `object_pins(backup_in_progress)` keyed by generation
+    for every object the snapshot references, in bounded transactions.
+    Acceptance: the snapshot is a consistent point-in-time copy while
+    writes continue (rows committed after the snapshot point absent, rows
+    before present); exactly the referenced objects are pinned; GC removes
+    nothing while a generation is `in_progress`; crash cuts leave no
+    `complete` generation, only `in_progress` rows for d to mark `failed`;
+    a dropped flush or failed snapshot write is an error, never a silent
+    partial.
+  - **M1.8c Verified copy and manifest publication (L):** steps 4–6: copy
+    or `clonefile` each pinned object verifying its hash, flush every
+    copied object, the snapshot and the new directories, write
+    `manifest.json` last with its fsync chain, then mark the generation
+    `complete`, remove its pins and resume GC. Acceptance: every flush
+    before the manifest (a dropped flush leaves the generation
+    incomplete); an interrupted backup is never `complete` (crash cuts);
+    a power cut after the completion receipt keeps the generation
+    discoverable and verifiable; GC never removes an in-backup object.
+  - **M1.8d Retention and interrupted-generation recovery (L):** the
+    24 hourly / 7 daily / 4 weekly retention deletes generations oldest
+    first, and the next run marks any leftover `in_progress` generation
+    `failed`, deletes its pins and removes its directory. Acceptance: the
+    interrupted generation's marking and removal; on restart after a cut
+    no inherited unfinished job blocks GC.
+  - **M1.8e Quarantined restore staging (L):** verify the chosen
+    generation against its manifest (`state.sqlite` hash, every object
+    hash), stage the copy into `<data root>.restoring-<inc>` with the
+    publication flushes, and run the staging quarantine transaction: new
+    incarnation, all accounts `paused`, unfinished import jobs `failed`
+    with requests/checkpoints intact, intents `quarantined`, attempts in
+    `held`/`queued`/`submitting` become `outcome_unknown`, copied-source
+    locations rewritten (never to absent originals) and the inherited
+    backup rows fixed — then flush staging. Acceptance: every
+    after-restore row state; no original-path substitution; crash cuts
+    during staging leave the live store untouched and stage nothing
+    unquarantined.
+  - **M1.8f Durable swap and startup recovery (L):** the restore-pending
+    marker (new incarnation, generation id and path), both renames with
+    their flushes, the startup handling of all three marker states, the
+    preserved-root rename (`<data root>.preserved-<old incarnation>`,
+    never a delete) and reopening the restored store. Acceptance: a
+    restored store's identical row counts and object hashes; one
+    generation inside the data root and one external both resolving
+    afterwards; the power cuts around the completion receipt and the
+    first rename; crash cuts at marker/rename/startup leave the old store
+    or the quarantined restored store, never an unquarantined one; a
+    second process can't open the store during the swap (the lock is
+    outside the data root); back up G, restore G, restart and back up
+    again: G stays `complete`, intact and restorable.
+  - **M1.8g Engine quiescence (L):** the pre-swap quiesce — refuse new
+    commands, let in-flight submissions finish, stop account workers, the
+    outbox and maintenance jobs, drain the writer, checkpoint and close
+    every connection, `ResetRequired` to open windows — and the
+    post-restore reconcile path on resume (discard IMAP cursors,
+    reconcile occurrences, release quarantined intents). Acceptance: a
+    pending write and a running engine job both stop before the swap and
+    no connection stays open on the replaced root.
+  - **M1.8h Scheduled GC, verification and integrity checks (L):** the
+    hourly-generation-while-there-were-changes and GC schedules, the
+    weekly object-verification job (the rotating 1/52 sample plus all
+    backup-referenced objects, `missing`/`quarantined` accounting) and
+    the weekly `integrity_check`, all emitting recovery-point evidence.
+  - **M1.8i Backup/restore Service and CLI (L):** owned Service DTOs for
+    generations, `start_backup`, `list_backups`, `start_restore` and
+    `sb-cli backup|restore`, each with its native endpoint or CLI proof.
+  - **M1.8j The Backups UI (L):** Settings → Backups: list generations,
+    back up now, restore and the preserved data roots, on the Service
+    API.
 
 - **Goal:** backup generations, quarantined restore and safe GC.
 - **Spec:** 03 (Garbage collection, Backup generations, Restore).
