@@ -352,7 +352,12 @@ fn idle_round(client: &mut ImapClientStd) -> usize {
                         if e.kind() == io::ErrorKind::WouldBlock
                             || e.kind() == io::ErrorKind::TimedOut =>
                     {
-                        done.store(true, Ordering::Relaxed);
+                        // The first quiet period ends IDLE; a second one
+                        // means the server never answered DONE.
+                        assert!(
+                            !done.swap(true, Ordering::Relaxed),
+                            "the server never answered IDLE's DONE"
+                        );
                     }
                     Err(e) => panic!("IDLE read: {e}"),
                 }
@@ -794,7 +799,9 @@ fn malformed_response_closes_before_later_data() {
     assert_eq!(
         applied.len(),
         2,
-        "the item after the fault reached the application"
+        "io-imap 0.7.1 skips the undecodable line and applies the next \
+         item; if this fails, upstream changed that behaviour and the \
+         strict gate's rationale (spec/01) needs revisiting"
     );
     drop(client);
 
@@ -868,12 +875,20 @@ fn run_dovecot_suite(host: &str, port: u16, user: &str, password: &str) {
     let names: Vec<String> = caps.iter().map(|cap| cap.to_string()).collect();
     let has = |want: &str| names.iter().any(|n| n.eq_ignore_ascii_case(want));
     assert!(has("IMAP4rev1") || has("IMAP4rev2"), "IMAP4: {names:?}");
-    assert!(has("UIDPLUS"), "UIDPLUS is advertised: {names:?}");
 
     client
         .login(user, password, ImapLoginOptions::default())
         .expect("LOGIN against the container's static passdb");
-    client.capability().expect("post-login CAPABILITY");
+    // Dovecot advertises its extensions only once authenticated, so
+    // UIDPLUS is checked on the post-login refresh (spec/04 re-reads
+    // capabilities after login for this reason).
+    let caps = client.capability().expect("post-login CAPABILITY");
+    let names: Vec<String> = caps.iter().map(|cap| cap.to_string()).collect();
+    let has = |want: &str| names.iter().any(|n| n.eq_ignore_ascii_case(want));
+    assert!(
+        has("UIDPLUS"),
+        "UIDPLUS is advertised after login: {names:?}"
+    );
 
     client
         .id(ImapServerIdOptions { parameters: None })

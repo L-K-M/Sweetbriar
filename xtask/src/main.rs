@@ -331,7 +331,7 @@ fn step_dovecot(root: &Path) -> bool {
                 .map(|port| (host.to_string(), port))
         }) {
             Some((host, port)) => {
-                if std::net::TcpStream::connect((host.as_str(), port)).is_ok() {
+                if dovecot_greets(&host, port) {
                     up = true;
                     break;
                 }
@@ -367,6 +367,21 @@ fn step_dovecot(root: &Path) -> bool {
         .env("SB_IMAP_DOVECOT_USER", "spike")
         .env("SB_IMAP_DOVECOT_PASSWORD", DOVECOT_PASSWORD);
     run(&mut suite)
+}
+
+/// Docker's port proxy accepts a connection before the container's
+/// listener exists, so readiness is an IMAP greeting, not a connect.
+fn dovecot_greets(host: &str, port: u16) -> bool {
+    use std::io::Read;
+
+    let Ok(mut stream) = std::net::TcpStream::connect((host, port)) else {
+        return false;
+    };
+    if stream.set_read_timeout(Some(DOVECOT_READY_POLL)).is_err() {
+        return false;
+    }
+    let mut greeting = [0u8; 4];
+    stream.read_exact(&mut greeting).is_ok() && &greeting == b"* OK"
 }
 
 /// Regenerates the notices into a temp file and diffs it against the
