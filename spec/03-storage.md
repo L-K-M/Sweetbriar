@@ -146,6 +146,13 @@ recreated.
     writes have priority over sync and index writes.
   - **No network or file I/O inside a write transaction.** Objects are
     published before the transaction that references them.
+  - **A writer task is not a transaction.** One queued task occupies
+    the writer thread until it finishes; inside it a task may commit an
+    immediate transaction and then run work no transaction may hold
+    (file I/O) before the next queued task starts. That span is what
+    GC's unlink is serialized by (below): a reservation commit is one
+    whole queued write, so it lands either before the removal task's
+    re-check commits or after its unlink, never between.
   - Sync batches are bounded: at most 250 occurrence rows or 2 MB of
     changes per transaction.
 - **Integrity:**
@@ -447,9 +454,15 @@ transaction plus a final re-check, and the unlink, in one writer task:
   grace period (default 7 days). Any other pin kind blocks removal;
 - no backup generation `in_progress` exists.
 
+The removal task's re-check transaction deletes the `gc_grace` pins as
+it commits, so a crash between the commit and the unlink leaves no
+stale pin; the next pass starts the object's grace clock over.
+
 GC never runs while **any** account has an `open` breaker event (04),
-or while integrity is in doubt. A `kept` event doesn't stop GC: its
-occurrences stay `vanish_pending`, so their objects stay referenced.
+or while integrity is in doubt: any `acquisitions` row not
+`published` means an object is already proved absent or damaged. A
+`kept` event doesn't stop GC: its occurrences stay `vanish_pending`,
+so their objects stay referenced.
 
 ## Backup generations
 

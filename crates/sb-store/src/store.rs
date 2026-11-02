@@ -9,6 +9,7 @@
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 use rusqlite::config::DbConfig;
 use rusqlite::ffi::ErrorCode;
@@ -79,7 +80,7 @@ pub(crate) const CLEAN_SHUTDOWN_KEY: &str = "clean_shutdown_at";
 /// still need a live activation owner.
 pub struct Store {
     readers: Readers,
-    writer: Arc<Writer>,
+    pub(crate) writer: Arc<Writer>,
     objects: FileObjectStore,
     pub(crate) activation: crate::activation::inputs::Owner,
     source_snapshots: ImportSourceSnapshots,
@@ -87,7 +88,7 @@ pub struct Store {
     lease: Box<dyn Lease>,
     /// The clock [`Store::close`] stamps the clean-shutdown marker
     /// with, held from the seams the store opened with.
-    clock: Arc<dyn Clock>,
+    pub(crate) clock: Arc<dyn Clock>,
 }
 
 impl Store {
@@ -95,6 +96,15 @@ impl Store {
     /// it lands them under this store's `objects/`.
     pub fn objects(&self) -> &FileObjectStore {
         &self.objects
+    }
+
+    /// One bounded GC pass over the object store (spec/03 "Garbage
+    /// collection"): pin first-sight orphans on the `gc_grace` clock,
+    /// clear clocks a reference re-covers, and remove expired orphans
+    /// through one serialized writer task each. Blocking (it awaits
+    /// the writer), so never call it on the writer thread.
+    pub fn collect_garbage(&self, grace: Duration) -> Result<crate::gc::GcReport, StoreError> {
+        crate::gc::collect_garbage(self, grace)
     }
 
     /// Stream a full capture through bounded writer turns. Blocking;

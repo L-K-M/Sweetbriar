@@ -223,6 +223,39 @@ where
     }
 }
 
+/// The type-erased job for one [`Writer::submit_task`] closure.
+struct Task<T, F> {
+    closure: F,
+    slot: Arc<Slot<T>>,
+}
+
+impl<T, F> QueuedWrite for Task<T, F>
+where
+    T: Send + 'static,
+    F: FnOnce(&mut Connection) -> Result<T, StoreError> + Send + 'static,
+{
+    /// The task owns its whole span on the writer thread: whatever it
+    /// commits and then does finishes before the next job runs.
+    fn run(self: Box<Self>, conn: &mut Connection, committed: &mut dyn FnMut(&Connection)) {
+        let Task { closure, slot } = *self;
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| closure(conn))) {
+            Err(panic) => slot.resolve(Err(StoreError::internal(format!(
+                "a writer task panicked: {}",
+                panic_message(panic.as_ref())
+            )))),
+            Ok(Ok(value)) => {
+                committed(conn);
+                slot.resolve(Ok(value));
+            }
+            Ok(Err(err)) => slot.resolve(Err(err)),
+        }
+    }
+
+    fn abandon(self: Box<Self>, err: StoreError) {
+        self.slot.resolve(Err(err));
+    }
+}
+
 /// Execute one write closure exactly as spec/03 requires: one `BEGIN
 /// IMMEDIATE` transaction, committed when the closure returns `Ok`,
 /// rolled back when it returns `Err` or panics — the panic is caught,
@@ -513,6 +546,32 @@ impl Writer {
         future
     }
 
+    /// Queue one writer task (spec/03 "Write discipline": a task is
+    /// not a transaction). Unlike [`Writer::submit`], the closure gets
+    /// the writer's connection and manages its own transactions, so it
+    /// may commit and then run serialized file I/O (GC's unlink)
+    /// before the next job. No corpus tracking wraps it: only jobs
+    /// that never touch tracked tables may use it.
+    pub(crate) fn submit_task<T, F>(&self, priority: WritePriority, task: F) -> WriteFuture<T>
+    where
+        T: Send + 'static,
+        F: FnOnce(&mut Connection) -> Result<T, StoreError> + Send + 'static,
+    {
+        let slot = Arc::new(Slot::new());
+        let future = WriteFuture {
+            slot: Arc::clone(&slot),
+        };
+        let job = Task {
+            closure: task,
+            slot: Arc::clone(&slot),
+        };
+        match self.shared.push(priority, Box::new(job)) {
+            Ok(()) => self.shared.ready.notify_one(),
+            Err(err) => slot.resolve(Err(err)),
+        }
+        future
+    }
+
     /// Stop accepting writes, finish the queued ones, join the thread
     /// and close the connection — the store's last, so SQLite
     /// checkpoints and removes the WAL (M0.4 lifted
@@ -550,6 +609,11 @@ impl Writer {
     /// ended.
     pub(crate) fn is_closed(&self) -> bool {
         lock(&self.shared.state).closed
+    }
+
+    /// Pending jobs in `priority`'s queue (a parked task can't pop them).
+    pub(crate) fn queued(&self, priority: WritePriority) -> usize {
+        lock(&self.shared.state).queues[priority.queue()].len()
     }
 
     /// Have `close` tell `to` when it is about to join the thread.
