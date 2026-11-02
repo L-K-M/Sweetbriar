@@ -56,7 +56,7 @@ pub(crate) fn client_config() -> Arc<ClientConfig> {
 }
 
 /// Wraps a plain socket in the pinning client TLS — the other half of
-/// a script's [`crate::Send::UpgradeTls`]. `server` is the name
+/// a script's [`crate::Reply::UpgradeTls`]. `server` is the name
 /// verified against the certificate (IP SAN `127.0.0.1`); a stalled
 /// or closed peer fails instead of spinning. Caller's timeout is kept.
 pub fn client_stream(stream: TcpStream, server: &str) -> io::Result<TlsIo<ClientConnection>> {
@@ -165,7 +165,10 @@ where
 {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         let written = self.conn.writer().write(buf)?;
-        self.conn.complete_io(&mut self.sock)?;
+        // `complete_io` with nothing to send waits for the peer instead.
+        if self.conn.wants_write() {
+            self.conn.complete_io(&mut self.sock)?;
+        }
         Ok(written)
     }
 

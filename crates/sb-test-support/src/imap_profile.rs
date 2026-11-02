@@ -7,7 +7,7 @@
 //! profile (Bridge saves the Sent copy itself) arrives with the fake
 //! SMTP server.
 
-use crate::imap::{Expect, Send, Step};
+use crate::imap::{Expect, Reply, Step};
 
 /// Capability tokens Bridge advertises (spec/04): no CONDSTORE or
 /// QRESYNC, no NAMESPACE, no LITERAL+, no SPECIAL-USE.
@@ -93,16 +93,16 @@ impl Profile {
         Step::on(
             Expect::command("CAPABILITY"),
             vec![
-                Send::untagged(format!("CAPABILITY {}", self.capabilities.join(" "))),
-                Send::ok("CAPABILITY completed"),
+                Reply::untagged(format!("CAPABILITY {}", self.capabilities.join(" "))),
+                Reply::ok("CAPABILITY completed"),
             ],
         )
     }
 
     /// The `LIST "" "*"` answer: folders, labels and roles.
     pub fn list_step(&self) -> Step {
-        let mut sends: Vec<Send> = LIST_LINES.iter().copied().map(Send::untagged).collect();
-        sends.push(Send::ok("LIST completed"));
+        let mut sends: Vec<Reply> = LIST_LINES.iter().copied().map(Reply::untagged).collect();
+        sends.push(Reply::ok("LIST completed"));
         Step::on(Expect::command("LIST"), sends)
     }
 
@@ -118,38 +118,38 @@ impl Profile {
         Step::on(
             Expect::command(format!("EXAMINE {mailbox}")),
             vec![
-                Send::untagged(format!("{} EXISTS", members.len())),
-                Send::untagged(format!("OK [UIDVALIDITY {UIDVALIDITY}] UIDs valid")),
-                Send::untagged(format!("OK [UIDNEXT {uidnext}] Predicted next UID")),
-                Send::ok("[READ-ONLY] EXAMINE completed"),
+                Reply::untagged(format!("{} EXISTS", members.len())),
+                Reply::untagged(format!("OK [UIDVALIDITY {UIDVALIDITY}] UIDs valid")),
+                Reply::untagged(format!("OK [UIDNEXT {uidnext}] Predicted next UID")),
+                Reply::ok("[READ-ONLY] EXAMINE completed"),
             ],
         )
     }
 
     /// `UID FETCH … (UID FLAGS)` for the mailbox's memberships.
     pub fn fetch_flags_step(&self, mailbox: &str) -> Step {
-        let mut sends: Vec<Send> = Vec::new();
+        let mut sends: Vec<Reply> = Vec::new();
         for (seq, uid, flags) in memberships(mailbox) {
-            sends.push(Send::untagged(format!(
+            sends.push(Reply::untagged(format!(
                 "{seq} FETCH (UID {uid} FLAGS ({flags}))"
             )));
         }
-        sends.push(Send::ok("UID FETCH completed"));
+        sends.push(Reply::ok("UID FETCH completed"));
         Step::on(Expect::command("UID FETCH"), sends)
     }
 
     /// `UID FETCH … BODY[HEADER.FIELDS (…)]` for the mailbox's
     /// memberships: the same reconstructed header bytes everywhere.
     pub fn fetch_headers_step(&self, mailbox: &str) -> Step {
-        let mut sends: Vec<Send> = Vec::new();
+        let mut sends: Vec<Reply> = Vec::new();
         for (seq, uid, _) in memberships(mailbox) {
-            sends.push(Send::UntaggedLiteral {
+            sends.push(Reply::UntaggedLiteral {
                 head: format!("{seq} FETCH (UID {uid} BODY[HEADER.FIELDS ({HEADER_FIELDS})]"),
                 bytes: HEADERS.as_bytes().to_vec(),
                 tail: ")".to_string(),
             });
         }
-        sends.push(Send::ok("UID FETCH completed"));
+        sends.push(Reply::ok("UID FETCH completed"));
         Step::on(Expect::command("UID FETCH"), sends)
     }
 

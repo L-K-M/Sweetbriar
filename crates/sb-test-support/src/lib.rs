@@ -29,7 +29,7 @@ use sb_types::time::{Clock, Timestamp};
 
 pub use cut::{CutFs, CutPoints, run_crash_cut_points, run_crash_cuts};
 pub use fault::{FaultFs, FaultKind, FsOp};
-pub use imap::{Expect, FakeImapServer, ReceivedCommand, Script, Send, Step};
+pub use imap::{Expect, FakeImapServer, ReceivedCommand, Reply, Script, Step};
 pub use imap_cert::{TlsIo, cert_der, client_stream};
 pub use imap_profile::{Profile, RAW_UTF8_ENVELOPE};
 pub use sim::SimFs;

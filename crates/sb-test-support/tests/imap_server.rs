@@ -10,7 +10,8 @@ use std::time::{Duration, Instant};
 use imap_codec::ResponseCodec;
 use imap_codec::decode::Decoder;
 use sb_test_support::{
-    Expect, FakeImapServer, Profile, RAW_UTF8_ENVELOPE, Script, Send, Step, cert_der, client_stream,
+    Expect, FakeImapServer, Profile, RAW_UTF8_ENVELOPE, Reply, Script, Step, cert_der,
+    client_stream,
 };
 
 /// Half a second is generous for a loopback exchange; reads must
@@ -101,8 +102,8 @@ fn capability_step() -> Step {
     Step::on(
         Expect::command("CAPABILITY"),
         vec![
-            Send::untagged("CAPABILITY IMAP4rev1 UIDPLUS"),
-            Send::ok("CAPABILITY completed"),
+            Reply::untagged("CAPABILITY IMAP4rev1 UIDPLUS"),
+            Reply::ok("CAPABILITY completed"),
         ],
     )
 }
@@ -124,7 +125,7 @@ fn fetch_id(client: &mut RawClient<TcpStream>, tag: &str, uid: u32) -> String {
 fn script_replays_commands_and_records_the_trace() {
     let script = Script::new(vec![
         capability_step(),
-        Step::on(Expect::command("LOGIN"), vec![Send::ok("LOGIN completed")]),
+        Step::on(Expect::command("LOGIN"), vec![Reply::ok("LOGIN completed")]),
     ])
     .greeting("* OK [CAPABILITY IMAP4rev1] test ready\r\n");
 
@@ -149,21 +150,45 @@ fn script_replays_commands_and_records_the_trace() {
     assert_eq!(server.unexpected_count(), 0);
 }
 
+/// An expectation written as a client sends it, quotes and all,
+/// matches that command: `LIST "" *` and a quoted mailbox name.
+#[test]
+fn quoted_expectations_match_what_clients_send() {
+    let script = Script::new(vec![
+        Step::on(
+            Expect::command("LIST \"\" *"),
+            vec![Reply::ok("LIST completed")],
+        ),
+        Step::on(
+            Expect::command("EXAMINE \"All Mail\""),
+            vec![Reply::ok("EXAMINE completed")],
+        ),
+    ]);
+    let (server, mut client) = started(vec![script]);
+
+    assert_eq!(ask(&mut client, "a1 LIST \"\" *").1, "a1 OK LIST completed");
+    assert_eq!(
+        ask(&mut client, "a2 EXAMINE \"All Mail\"").1,
+        "a2 OK EXAMINE completed"
+    );
+    assert_eq!(server.unexpected_count(), 0);
+}
+
 #[test]
 fn literals_are_framed_in_both_directions() {
     // `{5}` is a synchronizing literal: the server must offer `+`
     // before its bytes. An untagged literal is framed with its length.
     let script = Script::new(vec![
-        Step::on(Expect::command("LOGIN"), vec![Send::ok("LOGIN completed")]),
+        Step::on(Expect::command("LOGIN"), vec![Reply::ok("LOGIN completed")]),
         Step::on(
             Expect::command("UID FETCH"),
             vec![
-                Send::UntaggedLiteral {
+                Reply::UntaggedLiteral {
                     head: "1 FETCH (UID 1 BODY[HEADER.FIELDS (SUBJECT)]".to_string(),
                     bytes: b"Subject: sample\r\n\r\n".to_vec(),
                     tail: ")".to_string(),
                 },
-                Send::ok("FETCH completed"),
+                Reply::ok("FETCH completed"),
             ],
         ),
     ]);
@@ -189,7 +214,7 @@ fn starttls_wraps_the_socket_and_keeps_serving() {
     let script = Script::new(vec![
         Step::on(
             Expect::command("STARTTLS"),
-            vec![Send::ok("Begin TLS negotiation now"), Send::UpgradeTls],
+            vec![Reply::ok("Begin TLS negotiation now"), Reply::UpgradeTls],
         ),
         capability_step(),
     ]);
@@ -211,21 +236,21 @@ fn starttls_wraps_the_socket_and_keeps_serving() {
 
 #[test]
 fn fault_knobs_fallback_no_and_drop_in_both_positions() {
-    // `Send::Drop` after the tagged OK it follows on one connection,
+    // `Reply::Drop` after the tagged OK it follows on one connection,
     // and after command two with no reply at all on the next.
     let script = Script::new(vec![
         Step::on(
             Expect::command("CLOSE"),
-            vec![Send::TaggedNo("cannot CLOSE here".to_string())],
+            vec![Reply::TaggedNo("cannot CLOSE here".to_string())],
         ),
         Step::on(
             Expect::command("LOGIN"),
-            vec![Send::ok("LOGIN completed"), Send::Drop],
+            vec![Reply::ok("LOGIN completed"), Reply::Drop],
         ),
     ]);
     let next = Script::new(vec![
         capability_step(),
-        Step::on(Expect::command("LOGIN"), vec![Send::Drop]),
+        Step::on(Expect::command("LOGIN"), vec![Reply::Drop]),
     ]);
     let (server, mut client) = started(vec![script, next]);
     let mut buf = [0u8; 16];
@@ -262,9 +287,9 @@ fn uidvalidity_changes_between_sessions() {
         Step::on(
             Expect::command("EXAMINE INBOX"),
             vec![
-                Send::untagged("0 EXISTS"),
-                Send::untagged(format!("OK [UIDVALIDITY {uidvalidity}] UIDs valid")),
-                Send::ok("EXAMINE completed"),
+                Reply::untagged("0 EXISTS"),
+                Reply::untagged(format!("OK [UIDVALIDITY {uidvalidity}] UIDs valid")),
+                Reply::ok("EXAMINE completed"),
             ],
         )
     };
@@ -296,19 +321,19 @@ fn expunge_and_move_arrive_behind_the_clients_back() {
         profile.fetch_headers_step("All Mail"),
         Step::on(
             Expect::command("IDLE"),
-            vec![Send::Continuation("idling".into())],
+            vec![Reply::Continuation("idling".into())],
         ),
         Step::on(
             Expect::command("DONE"),
             vec![
-                Send::untagged("1 EXPUNGE"),
-                Send::untagged("OK [COPYUID 4100 9 5] moved"),
-                Send::ok("IDLE terminated"),
+                Reply::untagged("1 EXPUNGE"),
+                Reply::untagged("OK [COPYUID 4100 9 5] moved"),
+                Reply::ok("IDLE terminated"),
             ],
         ),
         Step::on(
             Expect::command("EXAMINE All Mail"),
-            vec![Send::untagged("0 EXISTS"), Send::ok("EXAMINE completed")],
+            vec![Reply::untagged("0 EXISTS"), Reply::ok("EXAMINE completed")],
         ),
         profile.examine_step("Labels/Receipts"),
         profile.fetch_headers_step("Labels/Receipts"),
@@ -344,23 +369,23 @@ fn expunge_and_move_arrive_behind_the_clients_back() {
 #[test]
 fn partial_fetch_and_delay_shape_the_reply() {
     // A FETCH step may answer fewer items than the client asked for,
-    // and [`Send::Delay`] holds the rest of the answer back.
+    // and [`Reply::Delay`] holds the rest of the answer back.
     const PAUSE: Duration = Duration::from_millis(250);
     let script = Script::new(vec![
         Step::on(
             Expect::command("EXAMINE"),
             vec![
-                Send::untagged("3 EXISTS"),
-                Send::untagged("OK [UIDVALIDITY 4100] UIDs valid"),
-                Send::ok("EXAMINE completed"),
+                Reply::untagged("3 EXISTS"),
+                Reply::untagged("OK [UIDVALIDITY 4100] UIDs valid"),
+                Reply::ok("EXAMINE completed"),
             ],
         ),
         Step::on(
             Expect::command("UID FETCH"),
             vec![
-                Send::untagged("1 FETCH (UID 1 FLAGS (\\Seen))"),
-                Send::Delay(PAUSE),
-                Send::ok("UID FETCH completed"),
+                Reply::untagged("1 FETCH (UID 1 FLAGS (\\Seen))"),
+                Reply::Delay(PAUSE),
+                Reply::ok("UID FETCH completed"),
             ],
         ),
     ]);
@@ -415,11 +440,11 @@ fn the_bridge_profile_answers_a_sync_conversation() {
         profile.fetch_headers_step("Labels/Receipts"),
         Step::on(
             Expect::command("COPY"),
-            vec![Send::ok(profile.copyuid("7", "5"))],
+            vec![Reply::ok(profile.copyuid("7", "5"))],
         ),
         Step::on(
             Expect::command("APPEND"),
-            vec![Send::ok(profile.appenduid(8))],
+            vec![Reply::ok(profile.appenduid(8))],
         ),
     ]);
     let (server, mut client) = started(vec![script]);
@@ -493,8 +518,8 @@ fn the_raw_utf8_envelope_fault_is_undecodable() {
     let script = Script::new(vec![Step::on(
         Expect::command("UID FETCH"),
         vec![
-            Send::Raw(RAW_UTF8_ENVELOPE.to_vec()),
-            Send::ok("UID FETCH completed"),
+            Reply::Raw(RAW_UTF8_ENVELOPE.to_vec()),
+            Reply::ok("UID FETCH completed"),
         ],
     )]);
     let (server, mut client) = started(vec![script]);

@@ -1,11 +1,11 @@
 //! The scripted fake IMAP server (spec/11): an in-process listener on
 //! `127.0.0.1` answering client commands from a [`Script`] of
 //! [`Step`]s — expected commands and canned response bytes — plus the
-//! fault knobs spec/11 lists: [`Send::Drop`] after command N or after
+//! fault knobs spec/11 lists: [`Reply::Drop`] after command N or after
 //! a tagged OK; one script per connection for a UIDVALIDITY change
 //! between sessions; unsolicited `EXPUNGE`/`FETCH` lines moving
 //! messages behind the client's back; partial FETCH results;
-//! [`Send::Delay`]; and the profile's `with_capabilities`.
+//! [`Reply::Delay`]; and the profile's `with_capabilities`.
 //!
 //! Command framing uses `imap-codec`'s [`Fragmentizer`], the codec the
 //! client crate builds on, so the server sees exactly the boundaries
@@ -40,8 +40,10 @@ const SHUTDOWN_POLL: Duration = Duration::from_millis(10);
 pub struct Expect(String);
 
 impl Expect {
+    /// Normalized like a received command, so `LIST "" *` and
+    /// `EXAMINE "All Mail"` match as a client sends them.
     pub fn command(text: impl Into<String>) -> Self {
-        Self(text.into())
+        Self(normalize_line(text.into().as_bytes()))
     }
 
     fn matches(&self, command_tokens: &[String]) -> bool {
@@ -58,19 +60,19 @@ impl Expect {
 #[derive(Clone, Debug)]
 pub struct Step {
     pub expect: Expect,
-    pub send: Vec<Send>,
+    pub send: Vec<Reply>,
 }
 
 impl Step {
     /// `Step { expect, send }` without the struct noise.
-    pub fn on(expect: Expect, send: Vec<Send>) -> Self {
+    pub fn on(expect: Expect, send: Vec<Reply>) -> Self {
         Self { expect, send }
     }
 }
 
 /// A response or action inside a step, in wire order.
 #[derive(Clone, Debug)]
-pub enum Send {
+pub enum Reply {
     /// `* <text>\r\n`: an untagged data or status response.
     Untagged(String),
     /// `* <head> {n}\r\n<literal><tail>\r\n`: an untagged response
@@ -101,7 +103,7 @@ pub enum Send {
     Drop,
 }
 
-impl Send {
+impl Reply {
     pub fn untagged(text: impl Into<String>) -> Self {
         Self::Untagged(text.into())
     }
@@ -121,7 +123,7 @@ pub struct Script {
     /// second mailbox needn't sit behind unrelated steps.
     pub steps: Vec<Step>,
     /// Responses for a command no step matches (tagged BAD by default).
-    pub fallback: Vec<Send>,
+    pub fallback: Vec<Reply>,
 }
 
 impl Script {
@@ -130,7 +132,7 @@ impl Script {
         Self {
             greeting: "* OK Fake IMAP server ready\r\n".to_string(),
             steps,
-            fallback: vec![Send::TaggedBad(
+            fallback: vec![Reply::TaggedBad(
                 "no scripted answer for this command".to_string(),
             )],
         }
@@ -255,7 +257,7 @@ impl Drop for FakeImapServer {
     }
 }
 
-/// The connection's socket: cleartext, or TLS after [`Send::UpgradeTls`]
+/// The connection's socket: cleartext, or TLS after [`Reply::UpgradeTls`]
 /// via the crate's own [`imap_cert::TlsIo`].
 enum Wire {
     Plain(TcpStream),
@@ -316,7 +318,7 @@ impl Wire {
         self.sock().set_read_timeout(Some(SHUTDOWN_POLL))
     }
 
-    /// Closes the socket for [`Send::Drop`].
+    /// Closes the socket for [`Reply::Drop`].
     fn close(&self) {
         let _ = self.sock().shutdown(Shutdown::Both);
     }
@@ -360,7 +362,7 @@ struct Command {
 }
 
 /// The run of one connection: greeting, then command/step loops
-/// until the client leaves, a [`Send::Drop`] fires, or shutdown.
+/// until the client leaves, a [`Reply::Drop`] fires, or shutdown.
 fn run_connection(
     stream: TcpStream,
     script: Script,
@@ -411,26 +413,26 @@ fn run_connection(
         let mut pending: Vec<u8> = Vec::new();
         for send in sends {
             match send {
-                Send::Untagged(text) => pending.extend(format!("* {text}\r\n").as_bytes()),
-                Send::UntaggedLiteral { head, bytes, tail } => {
+                Reply::Untagged(text) => pending.extend(format!("* {text}\r\n").as_bytes()),
+                Reply::UntaggedLiteral { head, bytes, tail } => {
                     pending.extend(format!("* {head} {{{}}}\r\n", bytes.len()).as_bytes());
                     pending.extend(&bytes);
                     pending.extend(format!("{tail}\r\n").as_bytes());
                 }
-                Send::Continuation(text) => pending.extend(format!("+ {text}\r\n").as_bytes()),
-                Send::TaggedOk(text) => conn.tagged("OK", &text, &mut pending),
-                Send::TaggedNo(text) => conn.tagged("NO", &text, &mut pending),
-                Send::TaggedBad(text) => conn.tagged("BAD", &text, &mut pending),
-                Send::Raw(bytes) => pending.extend(&bytes),
-                Send::Delay(pause) => {
+                Reply::Continuation(text) => pending.extend(format!("+ {text}\r\n").as_bytes()),
+                Reply::TaggedOk(text) => conn.tagged("OK", &text, &mut pending),
+                Reply::TaggedNo(text) => conn.tagged("NO", &text, &mut pending),
+                Reply::TaggedBad(text) => conn.tagged("BAD", &text, &mut pending),
+                Reply::Raw(bytes) => pending.extend(&bytes),
+                Reply::Delay(pause) => {
                     flush_pending(&mut conn.wire, &mut pending)?;
                     thread::sleep(pause);
                 }
-                Send::UpgradeTls => {
+                Reply::UpgradeTls => {
                     flush_pending(&mut conn.wire, &mut pending)?;
                     conn.wire = conn.wire.upgrade_tls(&shutdown)?;
                 }
-                Send::Drop => {
+                Reply::Drop => {
                     let _ = flush_pending(&mut conn.wire, &mut pending);
                     conn.wire.close();
                     return Ok(());
