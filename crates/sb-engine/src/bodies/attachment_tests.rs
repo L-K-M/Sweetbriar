@@ -168,12 +168,16 @@ fn dropped_attachment_open_after_publication_leaves_nothing_live() {
     let (engine, ids) = imported(&scratch);
     let namespace = scratch.path().join("cache/renditions");
     let mut future = Box::pin(engine.open_attachment(ids[0], "1.2".into()));
+    // The publication's last step is the registry insert: holding the
+    // table keeps the first poll `Pending` however fast the pool is.
+    let registry = engine.leases().state.lock().unwrap();
     assert!(
         future
             .as_mut()
             .poll(&mut Context::from_waker(Waker::noop()))
             .is_pending()
     );
+    drop(registry);
     wait(|| {
         fs::read_dir(&namespace)
             .unwrap()

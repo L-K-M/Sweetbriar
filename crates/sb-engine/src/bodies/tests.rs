@@ -167,7 +167,11 @@ fn dropped_open_after_publication_removes_its_unclaimed_lease() {
     let (engine, ids) = imported(&scratch.path().join("data"), &cache);
     let mut future = Box::pin(engine.open_body(ids[2], BodyKind::SanitizedHtml));
     let mut context = Context::from_waker(Waker::noop());
+    // The publication's last step is the registry insert: holding the
+    // table keeps the first poll `Pending` however fast the pool is.
+    let registry = engine.leases().state.lock().unwrap();
     assert!(future.as_mut().poll(&mut context).is_pending());
+    drop(registry);
     // Do not poll again: the blocking worker publishes and the result waits
     // inside the join handle, at precisely the cancellation boundary.
     wait(|| {
