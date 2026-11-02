@@ -38,6 +38,10 @@ fn sha_hex(bytes: &[u8]) -> String {
     digest.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
 fn object_path(root: &Path, bytes: &[u8]) -> PathBuf {
     let hex = sha_hex(bytes);
     root.join("objects/sha256")
@@ -190,12 +194,16 @@ fn ids_of(messages: &[Value]) -> Vec<i64> {
 fn eml_output_is_byte_exact_and_the_manifest_lists_every_occurrence() {
     let (scratch, res, _root) = fixture();
     let dest = scratch.path().join("eml-out");
+    let generation = res.read(list_generation).unwrap();
     capture(
         &res,
         "eml",
         ExportFormat::Eml,
         &dest,
-        mailbox_scope(&res, 1),
+        ExportScope::Mailbox {
+            mailbox_id: 1,
+            expected_generation: generation,
+        },
     );
     let progress = export(&res, "eml");
 
@@ -228,12 +236,13 @@ fn eml_output_is_byte_exact_and_the_manifest_lists_every_occurrence() {
         ("format", json!("eml")),
         ("destination", json!(dest.display().to_string())),
         ("entries", json!(6)),
+        ("generation", json!(generation)),
     ] {
         assert_eq!(manifest[key], want, "{key}");
     }
     assert_eq!(
         manifest["scope"],
-        json!({"kind":"mailbox","id":1,"generation":manifest["scope"]["generation"]})
+        json!({"kind":"mailbox","id":1,"generation":generation})
     );
     assert_eq!(
         manifest["files"],
@@ -482,6 +491,110 @@ fn a_changed_capture_is_corrupt_and_never_rescoped() {
     }
     assert!(!dest.exists());
     assert_eq!(job_state(&res, "tamper"), ExportJobState::Ready);
+}
+
+/// A sealed ledger that names one occurrence twice would plan two
+/// `<occurrence>.eml` files whose later publish overwrites the first
+/// while the manifest lists both; the membership proof hashes repeats
+/// too, so the plan itself must refuse the duplicate (spec/09 "Export
+/// file output").
+#[test]
+fn a_repeated_occurrence_is_corrupt() {
+    let (scratch, res, _root) = fixture();
+    let dest = scratch.path().join("repeated-out");
+    let intent = json!({
+        "v": 1,
+        "format": "eml",
+        "destination": dest.display().to_string(),
+        "scope": {"kind": "mailbox", "id": 1, "generation": 0},
+    });
+    let record = json!({
+        "occurrence_id": 1,
+        "body_availability": "acquired",
+        "acquisition": {"sha256": sha_hex(BODY_A), "bytes": BODY_A.len()},
+    })
+    .to_string();
+    let mut ids = Sha256::new();
+    ids.update(1i64.to_be_bytes());
+    ids.update(1i64.to_be_bytes());
+    let header = json!({
+        "v": 1,
+        "kind": "capture",
+        "intent": intent,
+        "generation": 0,
+        "entries": 2,
+        "ids_sha256": hex(ids.finalize().as_slice()),
+    })
+    .to_string();
+    let request = format!(
+        r#"{{"v":1,"capture":1,"sha256":"{}"}}"#,
+        sha_hex(&serde_json::to_vec(&intent).unwrap())
+    );
+    let stream = format!("{header}\n{record}\n{record}\n").into_bytes();
+    let now = res.now();
+    write(&res, move |tx| {
+        let job = create_export_job(tx, "repeated", &request, now)?;
+        let job = append_export_chunks(tx, "repeated", job.revision(), 0, &[stream], now)?;
+        advance_export_job(
+            tx,
+            "repeated",
+            job.revision(),
+            ExportJobState::Ready,
+            "{\"v\":1,\"capture\":1,\"entries\":2,\"chunks\":1}",
+            now,
+        )?;
+        Ok(())
+    });
+    assert_err(
+        &res,
+        "repeated",
+        |e| matches!(e, StoreError::Corrupt { detail } if detail.contains("repeat")),
+    );
+    assert_eq!(job_state(&res, "repeated"), ExportJobState::Ready);
+    assert!(!dest.exists());
+}
+
+/// A record line that is valid JSON but not an object cannot carry a
+/// `file` field: the manifest pass reports `Corrupt`, never an indexing
+/// panic (spec/09 "Export file output"). The plan pass already proved
+/// every record an object, so only a changed sealed chunk reaches this;
+/// the test drops the append-only trigger and edits the payload after
+/// the single file commits, before the manifest re-reads it.
+#[test]
+fn a_nonobject_record_is_corrupt_not_a_panic() {
+    let (scratch, res, _root) = fixture();
+    let dest = scratch.path().join("nonobject-out");
+    capture(
+        &res,
+        "nonobject",
+        ExportFormat::Eml,
+        &dest,
+        selection_scope(&res, &[1]),
+    );
+    let result = res.export_files("nonobject", |files| {
+        if files == 1 {
+            write(&res, |tx| {
+                tx.execute_batch("DROP TRIGGER export_chunks_immutable")
+                    .unwrap();
+                tx.execute(
+                    "UPDATE export_job_chunks SET payload = ?1
+                     WHERE job_id = 'nonobject' AND ordinal = 0",
+                    (b"{}\n[]\n".as_slice(),),
+                )
+                .unwrap();
+                Ok(())
+            });
+        }
+        ControlFlow::Continue(())
+    });
+    match result {
+        Err(StoreError::Corrupt { detail }) => {
+            assert!(detail.contains("not an object"), "{detail}")
+        }
+        other => panic!("a nonobject record was not corrupt: {other:?}"),
+    }
+    assert_eq!(job_state(&res, "nonobject"), ExportJobState::Running);
+    assert!(!dest.join(MANIFEST).exists());
 }
 
 #[test]

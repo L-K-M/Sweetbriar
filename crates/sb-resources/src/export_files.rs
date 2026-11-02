@@ -3,6 +3,7 @@
 //! one checkpoint per committed file, then the version-1 manifest.
 //! EML only; mboxrd output lands in M1.7c2.
 
+use std::collections::HashSet;
 use std::io::{self, Read, Write};
 use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
@@ -243,6 +244,10 @@ impl Plan {
         let mut files: Vec<FilePlan> = Vec::new();
         let mut links = Vec::new();
         let mut digest = Sha256::new();
+        // One file plan per record names `<occurrence>.eml`: a repeated
+        // id collides on the publish path while the membership proof
+        // still hashes, so the plan itself refuses it.
+        let mut seen = HashSet::new();
         let mut count = 0u64;
         let new_file = |files: &mut Vec<FilePlan>, name: String| {
             files.push(FilePlan {
@@ -255,6 +260,9 @@ impl Plan {
         while let Some(line) = reader.line()? {
             let record = parse(&line)?;
             let occurrence = i64_field(&record, "occurrence_id")?;
+            if !seen.insert(occurrence) {
+                return Err(corrupt("an export record repeats an occurrence id"));
+            }
             digest.update(occurrence.to_be_bytes());
             let acquired = match str_field(&record, "body_availability")? {
                 "acquired" => true,
@@ -653,7 +661,14 @@ fn write_manifest(
         "files": files,
     })
     .to_string();
-    out.write_all(head.strip_suffix('}').unwrap_or(&head).as_bytes())
+    // The serialized head is an object; `messages` splices ahead of its
+    // closing brace so records stream without materializing the array.
+    let Some(head) = head.strip_suffix('}') else {
+        return Err(StoreError::internal(
+            "the export manifest head is not an object",
+        ));
+    };
+    out.write_all(head.as_bytes())
         .and_then(|()| out.write_all(b",\"messages\":["))
         .map_err(unavailable("cannot write the export manifest"))?;
 
@@ -664,13 +679,16 @@ fn write_manifest(
             .line()?
             .ok_or_else(|| corrupt("the export capture ended inside the manifest pass"))?;
         let mut record = parse(&line)?;
-        match link {
-            None => record["file"] = Value::Null,
+        let Some(record) = record.as_object_mut() else {
+            return Err(corrupt("an export record is not an object"));
+        };
+        let file = match link {
+            None => Value::Null,
             &Some((file_index, _member_index)) => {
-                let file = &plan.files[file_index];
-                record["file"] = Value::String(file.name.clone());
+                Value::String(plan.files[file_index].name.clone())
             }
-        }
+        };
+        record.insert("file".to_owned(), file);
         if ordinal > 0 {
             out.write_all(b",")
                 .map_err(unavailable("cannot write the export manifest"))?;
