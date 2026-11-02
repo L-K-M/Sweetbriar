@@ -7,6 +7,8 @@
 use std::collections::{HashMap, HashSet};
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
+#[cfg(test)]
+use std::sync::Barrier;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use rusqlite::{Connection, Transaction, TransactionBehavior, params};
@@ -264,7 +266,8 @@ pub struct FileObjectStore {
     objects_tmp: PathBuf,
     objects_sha256: PathBuf,
     durable_chains: Mutex<HashSet<[u8; 2]>>,
-    shelf: Arc<Shelf>,
+    /// The object-move authority GC's removal task unlinks through.
+    pub(crate) shelf: Arc<Shelf>,
     reservations: Reservations,
 }
 
@@ -405,11 +408,25 @@ pub(crate) fn release_reservation(
 /// often each object was moved away: a reader quarantines only if the
 /// count it saw at open is unchanged, so it never moves a copy
 /// republished since.
-struct Shelf {
+pub(crate) struct Shelf {
     fs: Arc<dyn Fs>,
     random: Arc<dyn Random>,
     recovery: PathBuf,
     removals: Mutex<HashMap<[u8; 32], u64>>,
+    /// The republish-race proof's pause points (spec/03).
+    #[cfg(test)]
+    pauses: Mutex<Pauses>,
+}
+
+/// The barriers a republish-race test may arm (spec/03): before a
+/// publication's reservation commit, and after a removal's re-check
+/// commit and before its unlink.
+#[cfg(test)]
+#[derive(Default)]
+pub(crate) struct Pauses {
+    pub(crate) before_reservation: Option<Arc<Barrier>>,
+    /// Waited on twice: park, then release to the unlink.
+    pub(crate) before_unlink: Option<Arc<Barrier>>,
 }
 
 impl Shelf {
@@ -417,6 +434,30 @@ impl Shelf {
         self.removals
             .lock()
             .expect("a panicking thread held the object-move lock")
+    }
+
+    /// Arm the republish-race pause points.
+    #[cfg(test)]
+    fn set_pauses(&self, pauses: Pauses) {
+        *self
+            .pauses
+            .lock()
+            .expect("a panicking thread held the pauses") = pauses;
+    }
+
+    /// Wait on one armed pause point, if a test set it (spec/03).
+    #[cfg(test)]
+    pub(crate) fn pause(&self, pick: fn(&Pauses) -> &Option<Arc<Barrier>>) {
+        let gate = pick(
+            &self
+                .pauses
+                .lock()
+                .expect("a panicking thread held the pauses"),
+        )
+        .clone();
+        if let Some(gate) = gate {
+            gate.wait();
+        }
     }
 
     /// How often this process moved `id` away so far.
@@ -496,7 +537,7 @@ impl Shelf {
     }
 
     /// Remove a published object (GC only), then flush its directory.
-    fn remove(&self, id: &ObjectId, path: &Path) -> Result<(), StoreError> {
+    pub(crate) fn remove(&self, id: &ObjectId, path: &Path) -> Result<(), StoreError> {
         let step = "remove the object";
         let failed =
             |e: io::Error| StoreError::unavailable_io(format!("cannot {step}: {e}"), e.kind());
@@ -552,6 +593,8 @@ impl FileObjectStore {
                 random: Arc::clone(&random),
                 recovery,
                 removals: Mutex::new(HashMap::new()),
+                #[cfg(test)]
+                pauses: Mutex::new(Pauses::default()),
             }),
             fs,
             random,
@@ -580,12 +623,19 @@ impl FileObjectStore {
                 random: Arc::clone(&random),
                 recovery,
                 removals: Mutex::new(HashMap::new()),
+                pauses: Mutex::new(Pauses::default()),
             }),
             fs,
             random,
             durable_chains: Mutex::new(HashSet::new()),
             reservations: Reservations::Sink(pins),
         }
+    }
+
+    /// Arm the republish-race pause points (spec/03).
+    #[cfg(test)]
+    pub(crate) fn set_pauses(&self, pauses: Pauses) {
+        self.shelf.set_pauses(pauses);
     }
 
     /// `objects/sha256/ab/cd` for a hash's first two bytes.
@@ -596,7 +646,7 @@ impl FileObjectStore {
     }
 
     /// The file an object lives at.
-    fn object_path(&self, id: &ObjectId) -> PathBuf {
+    pub(crate) fn object_path(&self, id: &ObjectId) -> PathBuf {
         self.chain_dir(&id.sha256).join(id.sha256_hex())
     }
 
@@ -716,6 +766,10 @@ impl ObjectStore for FileObjectStore {
             let _ = self.fs.remove(&tmp);
             return Err(e);
         }
+        // The republish-race proof parks here: durable temp and chain,
+        // reservation commit not yet submitted (spec/03).
+        #[cfg(test)]
+        self.shelf.pause(|p| &p.before_reservation);
         // The reservation must commit before the install step's
         // existence check: only then can a failed commit report no
         // publication and install nothing (spec/03). A committed pin

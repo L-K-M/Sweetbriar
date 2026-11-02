@@ -10,6 +10,7 @@ mod corpus_tracking;
 mod error;
 mod export_metadata;
 pub mod exports;
+mod gc;
 mod import_reports;
 pub mod imports;
 pub mod index;
@@ -50,6 +51,7 @@ pub use rusqlite::Transaction;
 
 pub use error::StoreError;
 pub use export_metadata::{ExportMetadata, export_occurrence_metadata};
+pub use gc::{GC_GRACE_PERIOD, GcGate, GcReport};
 pub use objects::{
     FileObjectStore, ObjectId, ObjectIter, ObjectReader, ObjectStore, PublishedObject,
     read_error_as_store_error,
