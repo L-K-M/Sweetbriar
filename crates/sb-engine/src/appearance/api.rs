@@ -145,12 +145,14 @@ impl IdentityAppearance {
         self.tokens
     }
 
-    /// The stored override; `None` displays the account's monogram.
+    /// The stored override; `None` inherits the account's symbol, or
+    /// derives a mark from this identity's name when the account has none.
     pub fn symbol_override(&self) -> Option<&str> {
         self.symbol_override.as_deref()
     }
 
-    /// What the identity displays: `symbol_override` or its account's.
+    /// What the identity displays: `symbol_override`, else its account's
+    /// symbol, else a mark derived from this identity's name.
     pub fn monogram(&self) -> &str {
         &self.monogram
     }

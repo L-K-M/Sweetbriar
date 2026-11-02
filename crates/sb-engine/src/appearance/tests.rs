@@ -134,10 +134,8 @@ fn assert_quiet<F: std::future::Future>(future: std::pin::Pin<&mut F>) {
 /// Poll `future` once while another connection holds the SQLite
 /// writer lock, then drop it: the accepted command is mid-flight on
 /// the counted worker when its caller disappears.
-fn drop_mid_write<F: std::future::Future>(
-    state_db: &std::path::Path,
-    mut future: std::pin::Pin<&mut F>,
-) {
+fn drop_mid_write<F: std::future::Future>(state_db: &std::path::Path, future: F) {
+    let mut future = Box::pin(future);
     with_sqlite_write_lock(state_db, || {
         assert!(
             future
@@ -146,6 +144,10 @@ fn drop_mid_write<F: std::future::Future>(
                 .is_pending(),
             "the command never reached the writer"
         );
+
+        // Dropped under the lock: the caller is gone before the writer
+        // can possibly finish.
+        drop(future);
     });
 }
 
@@ -655,10 +657,10 @@ fn a_dropped_caller_still_commits_and_invalidates() {
     let subscription = engine.subscribe_appearance(0);
     let key = engine.new_idempotency_key();
     let change = custom(CUSTOM);
-    {
-        let mut future = pin!(engine.set_account_appearance(&key, &archive, 1, &change));
-        drop_mid_write(&scratch.path().join("store/state.sqlite"), future.as_mut());
-    }
+    drop_mid_write(
+        &scratch.path().join("store/state.sqlite"),
+        engine.set_account_appearance(&key, &archive, 1, &change),
+    );
     let deadline = Instant::now() + PATIENCE;
     while block_on(engine.appearance()).unwrap().generation() == 0 {
         assert!(
@@ -694,10 +696,10 @@ fn shutdown_waits_for_a_dropped_callers_write() {
     let archive = archive_id(&engine);
     let key = engine.new_idempotency_key();
     let change = custom(CUSTOM);
-    {
-        let mut future = pin!(engine.set_account_appearance(&key, &archive, 1, &change));
-        drop_mid_write(&state_db, future.as_mut());
-    }
+    drop_mid_write(
+        &state_db,
+        engine.set_account_appearance(&key, &archive, 1, &change),
+    );
     // Shutdown must see the mid-flight write out.
     block_on(engine.shutdown()).unwrap();
     assert!(sb_test_support::store_meta_value(&state_db, "clean_shutdown_at").is_some());
