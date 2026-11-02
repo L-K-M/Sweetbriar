@@ -7,6 +7,7 @@ pub mod activation;
 mod address_keys;
 pub mod appearance;
 mod corpus_tracking;
+pub mod drafts;
 mod error;
 mod export_metadata;
 pub mod exports;
