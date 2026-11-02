@@ -76,6 +76,10 @@ pub struct Engine {
     received: Arc<ReceivedJobs>,
     leases: Arc<crate::bodies::Leases>,
     search_memo: Arc<crate::search::SearchMemo>,
+    /// Fires each draft-write point inside a draft command's write,
+    /// so a crash-cut child can die inside the transaction (spec/11).
+    #[cfg(test)]
+    pub(crate) drafts_hook: Mutex<Option<crate::drafts::DraftWriteHook>>,
     #[cfg(test)]
     accepted_commands: std::sync::atomic::AtomicUsize,
     /// The worker reserved at open that closes the store if the engine
@@ -470,6 +474,8 @@ impl Engine {
                         received,
                         leases: Arc::default(),
                         search_memo: Arc::default(),
+                        #[cfg(test)]
+                        drafts_hook: Mutex::new(None),
                         #[cfg(test)]
                         accepted_commands: std::sync::atomic::AtomicUsize::new(0),
                         cleanup: start_cleanup_worker()?,

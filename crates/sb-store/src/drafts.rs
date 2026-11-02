@@ -64,6 +64,14 @@ impl ComposeFormat {
             ))),
         }
     }
+
+    /// The stored word.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Plain => "plain",
+            Self::Markdown => "markdown",
+        }
+    }
 }
 
 /// A send attempt's state word (spec/02 `send_attempts`). A draft
@@ -297,10 +305,7 @@ pub fn save_draft(
             base,
             account_id,
             identity_id,
-            match revision.format {
-                ComposeFormat::Plain => "plain",
-                ComposeFormat::Markdown => "markdown",
-            },
+            revision.format.name(),
             i64::from(revision.plain_flowed),
             revision.subject,
             to,

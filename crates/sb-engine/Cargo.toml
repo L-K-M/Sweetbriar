@@ -17,6 +17,9 @@ palette = { version = "=0.7.7", default-features = false, features = ["libm"] }
 # driver, no timers, no macros — the core's futures are runtime-neutral
 # otherwise.
 tokio = { version = "=1.54.1", default-features = false, features = ["rt-multi-thread", "sync"] }
+# spec/07 command receipts are canonical JSON: caller-supplied draft ids
+# must be encoded, never pasted into a template.
+serde_json = "=1.0.154"
 
 [dev-dependencies]
 sb-test-support = { version = "0.0.1", path = "../sb-test-support" }
