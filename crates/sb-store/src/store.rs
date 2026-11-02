@@ -75,13 +75,14 @@ pub(crate) const CLEAN_SHUTDOWN_KEY: &str = "clean_shutdown_at";
 /// the readers close first, the writer is the last connection to
 /// close — SQLite then checkpoints and removes the WAL (M0.4 lifted
 /// `NO_CKPT_ON_CLOSE` for the writer) — and the lease releases last,
-/// after SQLite is done with the files. `objects` shares the writer and must
-/// drop before `activation`: the last writer Arc drains queued jobs, which
-/// still need a live activation owner.
+/// after SQLite is done with the files. `objects` and `backups` share the
+/// writer and must drop before `activation`: the last writer Arc drains
+/// queued jobs, which still need a live activation owner.
 pub struct Store {
     readers: Readers,
     pub(crate) writer: Arc<Writer>,
     objects: FileObjectStore,
+    pub(crate) backups: crate::backups::Backups,
     pub(crate) activation: crate::activation::inputs::Owner,
     source_snapshots: ImportSourceSnapshots,
     import_reports: ImportReports,
@@ -105,6 +106,25 @@ impl Store {
     /// the writer), so never call it on the writer thread.
     pub fn collect_garbage(&self, grace: Duration) -> Result<crate::gc::GcReport, StoreError> {
         crate::gc::collect_garbage(self, grace)
+    }
+
+    /// Steps 1–3 of spec/03 "Backup generations": the `in_progress`
+    /// row whose commit freezes GC, a consistent `state.sqlite`
+    /// snapshot in the generation's directory — the copy never holds
+    /// the writer — and a `backup_in_progress` pin on every object the
+    /// snapshot references. Blocking (it awaits the writer and file
+    /// I/O); never call it on the writer thread. The object copy,
+    /// `manifest.json` and `complete` are the procedure's later steps.
+    pub fn backup_snapshot(
+        &self,
+        destination: crate::backups::BackupDestination,
+    ) -> Result<crate::backups::BackupSnapshot, StoreError> {
+        if self.writer.is_writer_thread() {
+            return Err(StoreError::internal(
+                "the writer thread cannot back up through its own queue",
+            ));
+        }
+        self.backups.snapshot(destination)
     }
 
     /// Stream a full capture through bounded writer turns. Blocking;
@@ -276,6 +296,7 @@ impl Store {
             objects,
             source_snapshots,
             import_reports,
+            backups,
             lease,
             clock,
         } = self;
@@ -287,6 +308,7 @@ impl Store {
         let writer_closed = writer.close();
         drop(activation);
         drop(objects);
+        drop(backups);
         drop(source_snapshots);
         drop(import_reports);
         drop(lease);
@@ -421,6 +443,16 @@ pub(crate) fn open_with(
         Arc::clone(&writer),
         Arc::clone(seams.clock_arc()),
     );
+    // The backup coordinator snapshots through its own connection, so
+    // the copy never holds the writer (spec/03 "Backup generations").
+    let backups = crate::backups::Backups::new(
+        Arc::clone(seams.fs_arc()),
+        Arc::clone(seams.random_arc()),
+        Arc::clone(seams.clock_arc()),
+        Arc::clone(&writer),
+        paths.state_db().to_path_buf(),
+        paths.backups().to_path_buf(),
+    );
     Ok(Store {
         readers,
         writer,
@@ -436,6 +468,7 @@ pub(crate) fn open_with(
             Arc::clone(seams.random_arc()),
             paths.recovery().to_path_buf(),
         ),
+        backups,
         lease,
         clock: Arc::clone(seams.clock_arc()),
     })

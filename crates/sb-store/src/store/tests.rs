@@ -9,11 +9,14 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 
+use rusqlite::OptionalExtension;
 use sb_test_support::{ScratchDir, block_on, real_fs};
 use sb_types::fs::{Fs, Location};
 
 use super::*;
-use crate::testing::{FIXED_NOW_MS, crash_write, scratch_paths, test_seams};
+use crate::testing::{
+    FIXED_NOW_MS, crash_write, fixtures, reading, scratch_paths, test_seams, writing,
+};
 
 /// A schema version past the app's: a store "newer than the app".
 const NEWER_VERSION: u32 = crate::schema::LATEST_SCHEMA_VERSION + 1;
@@ -1432,4 +1435,63 @@ fn an_interrupted_upgrade_leaves_no_marker() {
         "the first test migration should have committed"
     );
     assert_eq!(raw_meta_value(&paths, "clean_shutdown_at"), None);
+}
+
+/// Field order is load-bearing: a commit submitted but never polled
+/// still applies when the store is dropped, because the last writer
+/// Arc drains the queue while the activation owner is still live.
+#[test]
+fn a_dropped_store_still_applies_a_queued_activation_commit() {
+    let (scratch, paths) = scratch_paths("store-drop-activation");
+    let store = open(&paths, &test_seams(real_fs())).unwrap();
+    writing(&store, |tx| {
+        fixtures::acquisitions(tx, 1);
+        let account = fixtures::archive_account(tx);
+        let mailbox = fixtures::mailbox(tx, &account, "box", "folder", None);
+        tx.execute_batch(
+            "INSERT INTO logical_messages(message_id,account_id,acquisition_id,created_at)
+             SELECT 1,account_id,1,0 FROM accounts WHERE provider='local_archive';
+             INSERT INTO d_message_summary(acquisition_id,parser_version,parse_state,subject,has_attachments)
+             VALUES(1,1,'ok','old',0);
+             INSERT INTO d_repair_assemblies
+             SELECT acquisition_id,2,content_sha256,byte_length,NULL,0,
+                  '[null,3,null,null,null,null,null,null,null,null,null,null]',NULL
+             FROM acquisitions;
+             INSERT INTO d_repair_pieces VALUES(1,2,1,0,'new');
+             UPDATE d_repair_assemblies SET completed_at=0",
+        )
+        .unwrap();
+        tx.execute(
+            "INSERT INTO occurrences(occurrence_id,account_id,mailbox_id,message_id,state,first_seen_at,last_seen_at)
+             SELECT 1,account_id,?1,1,'present',10,10 FROM logical_messages",
+            [mailbox],
+        )
+        .unwrap();
+        crate::list_rows::refresh(tx, &[1].into_iter().collect()).unwrap();
+        Ok(())
+    });
+    let mut work = block_on(store.begin_activation(1, 2)).unwrap().unwrap();
+    let prepared = loop {
+        work = match store.prepare_activation(work, &|| false).unwrap() {
+            crate::activation::ActivationPreparation::Continue(next) => next,
+            crate::activation::ActivationPreparation::Prepared(done) => break done,
+            other => panic!("unexpected activation preparation: {other:?}"),
+        };
+    };
+    drop(store.commit_activation(prepared, crate::Timestamp::from_millis(10)));
+    drop(store);
+    let store = open(&paths, &test_seams(real_fs())).unwrap();
+    let bound: Option<i64> = reading(&store, |tx| {
+        Ok(tx
+            .query_row(
+                "SELECT parser_target FROM d_message_bindings WHERE message_id=1",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .unwrap())
+    });
+    assert_eq!(bound, Some(2));
+    store.close().unwrap();
+    drop(scratch);
 }

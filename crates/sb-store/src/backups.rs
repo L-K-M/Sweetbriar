@@ -1,0 +1,502 @@
+//! Backup generations (spec/03 "Backup generations"), procedure steps
+//! 1–3: the `in_progress` row whose existence freezes GC, the
+//! consistent `state.sqlite` snapshot taken through SQLite's online
+//! backup API — bounded steps on a read-only source, so the writer
+//! never waits on the copy — and the `backup_in_progress` pins the
+//! snapshot's own references produce. The object copy, `manifest.json`
+//! and `complete` are the procedure's later steps, not this code's.
+
+use std::collections::BTreeSet;
+use std::ffi::c_int;
+use std::io;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+#[cfg(test)]
+use std::sync::Mutex;
+use std::time::Duration;
+
+use rusqlite::backup::{Backup, StepResult};
+use rusqlite::{Connection, params};
+
+use sb_types::fs::{FileKind, Fs};
+use sb_types::random::Random;
+use sb_types::time::Clock;
+
+use crate::schema::classify;
+use crate::store::{Access, READER_PRAGMAS, await_write, open_connection};
+use crate::writer::{WritePriority, Writer};
+use crate::{StoreError, Uuid};
+
+/// The `object_pins.pin_kind` a running generation owns (spec/03).
+const PIN_KIND: &str = "backup_in_progress";
+
+/// The snapshot's file name inside the generation's directory (spec/03).
+const SNAPSHOT_FILE: &str = "state.sqlite";
+
+/// Source pages one `sqlite3_backup_step` copies at most: bounded so
+/// other reader work interleaves, large enough that calls don't
+/// dominate the copy (64 pages ≈ 256 KiB at 4 KiB pages).
+const SNAPSHOT_PAGES_PER_STEP: c_int = 64;
+
+/// A `Busy`/`Locked` step result sleeps this long before the retry;
+/// they are transient results, never fatal errors.
+const SNAPSHOT_BUSY_PAUSE: Duration = Duration::from_millis(10);
+
+/// The pin rows one write transaction applies at most, as GC's pin
+/// edits are bounded (spec/03 "bounded transactions").
+const PIN_BATCH: usize = 200;
+
+/// Where a generation's directory goes (spec/03).
+pub enum BackupDestination {
+    /// The data root's `backups/` — the pilot's default.
+    DataRoot,
+    /// A user-chosen directory holding generation directories;
+    /// missing ancestors are created and flushed.
+    Directory(PathBuf),
+}
+
+/// What `Store::backup_snapshot` produced (spec/03's steps 1–3): an
+/// `in_progress` `backup_generations` row, a consistent `state.sqlite`
+/// in the generation's directory, and a `backup_in_progress` pin on
+/// every object the snapshot references — everything the object copy
+/// and manifest steps need to finish the generation.
+#[derive(Debug, Clone)]
+pub struct BackupSnapshot {
+    /// The `backup_generations.generation_id` (a UUID's text form).
+    generation_id: String,
+    /// The generation's directory: `<destination>/<generation_id>`,
+    /// canonical.
+    location: PathBuf,
+    /// Every object hash the snapshot references — the pin set, and
+    /// the copy step's work list — sorted and deduplicated.
+    referenced: Vec<String>,
+}
+
+impl BackupSnapshot {
+    /// The generation's `backup_generations.generation_id` — also the
+    /// pins' `pin_ref`.
+    pub fn generation_id(&self) -> &str {
+        &self.generation_id
+    }
+
+    /// The generation's directory, as the row's `location` records it.
+    pub fn location(&self) -> &Path {
+        &self.location
+    }
+
+    /// The consistent point-in-time copy of `state.sqlite` inside the
+    /// generation's directory.
+    pub fn state_db(&self) -> PathBuf {
+        self.location.join(SNAPSHOT_FILE)
+    }
+
+    /// Every object hash the snapshot references, sorted — the set
+    /// `object_pins(backup_in_progress)` now holds for this
+    /// generation, and the object copy's work list.
+    pub fn referenced_objects(&self) -> &[String] {
+        &self.referenced
+    }
+}
+
+/// The backup coordinator: the seams and paths the snapshot procedure
+/// needs, built at open like the import coordinators (spec/03).
+pub(crate) struct Backups {
+    fs: Arc<dyn Fs>,
+    random: Arc<dyn Random>,
+    clock: Arc<dyn Clock>,
+    writer: Arc<Writer>,
+    /// `state.sqlite`, the copy's source.
+    state_db: PathBuf,
+    /// The default destination: the layout's `backups/`.
+    backups_dir: PathBuf,
+    /// The copy-timing barriers a test may arm (spec/03).
+    #[cfg(test)]
+    pauses: Mutex<Pauses>,
+}
+
+impl Backups {
+    /// Over the store's seams: the writer carries the generation row
+    /// and the pin transactions; `state_db` is the copy's source and
+    /// `backups_dir` the default destination.
+    pub(crate) fn new(
+        fs: Arc<dyn Fs>,
+        random: Arc<dyn Random>,
+        clock: Arc<dyn Clock>,
+        writer: Arc<Writer>,
+        state_db: PathBuf,
+        backups_dir: PathBuf,
+    ) -> Self {
+        Self {
+            fs,
+            random,
+            clock,
+            writer,
+            state_db,
+            backups_dir,
+            #[cfg(test)]
+            pauses: Mutex::new(Pauses::default()),
+        }
+    }
+
+    /// Arm the copy-timing pause points (spec/03).
+    #[cfg(test)]
+    pub(crate) fn set_pauses(&self, pauses: Pauses) {
+        *self
+            .pauses
+            .lock()
+            .expect("a panicking thread held the pauses") = pauses;
+    }
+
+    /// Wait on one armed pause point, if a test set it (spec/03).
+    #[cfg(test)]
+    fn pause(&self, pick: fn(&Pauses) -> &Option<Arc<std::sync::Barrier>>) {
+        let gate = pick(
+            &self
+                .pauses
+                .lock()
+                .expect("a panicking thread held the pauses"),
+        )
+        .clone();
+        if let Some(gate) = gate {
+            gate.wait();
+        }
+    }
+
+    /// Steps 1–3 (spec/03): commit the `in_progress` row — GC freezes
+    /// from that commit — snapshot `state.sqlite` into the generation's
+    /// directory, then pin every object the snapshot references.
+    /// Nothing here marks the generation `complete`: a failure or a
+    /// crash leaves the row `in_progress` and the directory's
+    /// leftovers for the next run's recovery.
+    pub(crate) fn snapshot(
+        &self,
+        destination: BackupDestination,
+    ) -> Result<BackupSnapshot, StoreError> {
+        let generation_id = Uuid::from_random_bytes(self.draw_id()?).to_string();
+        let root = self.destination_root(&destination)?;
+        let location = root.join(&generation_id);
+        let location_text = location
+            .to_str()
+            .ok_or_else(|| StoreError::InvalidInput {
+                message: format!("the backup destination {} is not UTF-8", root.display()),
+            })?
+            .to_owned();
+
+        // Step 1: the row commits before any file work so GC is frozen
+        // for the copy's whole duration; the check-and-insert in one
+        // transaction keeps generations one-at-a-time.
+        let started_at = self.clock.now().as_millis();
+        let id = generation_id.clone();
+        await_write(self.writer.submit(WritePriority::Index, move |tx| {
+            let running: bool = tx
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM backup_generations
+                     WHERE state = 'in_progress')",
+                    [],
+                    |row| row.get(0),
+                )
+                .map_err(|e| classify(e, "check running backup generations"))?;
+            if running {
+                return Err(StoreError::conflict(
+                    "a backup generation is already in progress",
+                ));
+            }
+            tx.execute(
+                "INSERT INTO backup_generations
+                 (generation_id, started_at, state, location)
+                 VALUES (?1, ?2, 'in_progress', ?3)",
+                params![id, started_at, location_text],
+            )
+            .map_err(|e| classify(e, "insert the backup generation"))?;
+            Ok(())
+        }))?;
+
+        self.write_snapshot(&location)?;
+        let referenced = self.referenced_objects(&location)?;
+        self.pin_references(&generation_id, &referenced)?;
+        Ok(BackupSnapshot {
+            generation_id,
+            location,
+            referenced,
+        })
+    }
+
+    /// Where this generation's directory goes: the layout's `backups/`
+    /// by default, or a user-chosen destination made durable then
+    /// canonicalized so the row's `location` names one spelling.
+    fn destination_root(&self, destination: &BackupDestination) -> Result<PathBuf, StoreError> {
+        match destination {
+            BackupDestination::DataRoot => Ok(self.backups_dir.clone()),
+            BackupDestination::Directory(root) => self.ensure_destination(root),
+        }
+    }
+
+    /// A user-chosen destination must be an absolute path to a
+    /// directory; create the missing levels, flushing each into its
+    /// parent (spec/03's fsync list: every newly created ancestor).
+    fn ensure_destination(&self, root: &Path) -> Result<PathBuf, StoreError> {
+        if !root.is_absolute() {
+            return Err(StoreError::InvalidInput {
+                message: format!(
+                    "the backup destination {} is not an absolute path",
+                    root.display()
+                ),
+            });
+        }
+        let failed = |e: io::Error| {
+            StoreError::unavailable_io(
+                format!(
+                    "cannot prepare the backup destination {}: {e}",
+                    root.display()
+                ),
+                e.kind(),
+            )
+        };
+        let mut missing = Vec::new();
+        let mut level = root;
+        loop {
+            match self.fs.metadata(level).map_err(failed)? {
+                Some(md) if md.kind() == FileKind::Directory => break,
+                Some(_) => {
+                    return Err(StoreError::InvalidInput {
+                        message: format!(
+                            "the backup destination {} is not a directory",
+                            level.display()
+                        ),
+                    });
+                }
+                None => {
+                    let Some(parent) = level.parent() else {
+                        return Err(StoreError::unavailable(format!(
+                            "no level of {} exists",
+                            root.display()
+                        )));
+                    };
+                    missing.push(level);
+                    level = parent;
+                }
+            }
+        }
+        for dir in missing.iter().rev() {
+            match self.fs.create_dir(dir) {
+                Ok(()) => {}
+                // Another process got there first: fine, it's a directory.
+                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
+                Err(e) => return Err(failed(e)),
+            }
+            let parent = dir.parent().expect("a created level has a parent");
+            self.fs.sync_dir(parent).map_err(failed)?;
+        }
+        self.fs.canonicalize(root).map_err(failed)
+    }
+
+    /// Step 2: the generation's directory, the empty snapshot file —
+    /// its handle stays for the end-of-copy fsync — then the online
+    /// backup copy, the file flush and the directory flush, in the
+    /// publication protocol's order (spec/03).
+    fn write_snapshot(&self, location: &Path) -> Result<(), StoreError> {
+        let failed = |e: io::Error| {
+            StoreError::unavailable_io(format!("cannot write the backup snapshot: {e}"), e.kind())
+        };
+        let root = location
+            .parent()
+            .expect("a generation directory always has a parent");
+        self.fs.create_dir(location).map_err(failed)?;
+        // Persist the generation's entry into its parent before a file
+        // lands inside, as objects publish into their chains.
+        self.fs.sync_dir(root).map_err(failed)?;
+
+        let file = location.join(SNAPSHOT_FILE);
+        let mut handle = self.fs.create(&file).map_err(failed)?;
+        #[cfg(test)]
+        {
+            self.pause(|p| &p.after_snapshot_file);
+            self.pause(|p| &p.after_snapshot_file);
+        }
+        self.copy_database(&file)
+            .and_then(|()| handle.sync_all().map_err(failed))
+            .and_then(|()| self.fs.sync_dir(location).map_err(failed))
+    }
+
+    /// The online-backup step loop: a dedicated read-only source —
+    /// the reader settings, so it can't write or checkpoint — copies
+    /// bounded page batches into the destination. Under WAL the source
+    /// read never blocks the writer, and a source change between steps
+    /// lands in the destination: the finished copy is consistent as of
+    /// the last step.
+    fn copy_database(&self, file: &Path) -> Result<(), StoreError> {
+        let source = open_connection(&self.state_db, Access::ReadOnly, READER_PRAGMAS)?;
+        // The snapshot's own connection, deliberately not the store
+        // constructor: no WAL, no rollback journal — per-step fsyncs
+        // would only slow the copy, because the finished file's
+        // durability is the seam fsync that follows (spec/03). A copy
+        // that dies mid-way is never read; recovery removes it.
+        let mut destination =
+            Connection::open(file).map_err(|e| classify(e, "open the backup snapshot"))?;
+        destination
+            .execute_batch("PRAGMA journal_mode=OFF; PRAGMA synchronous=OFF")
+            .map_err(|e| classify(e, "configure the snapshot copy"))?;
+        let backup = Backup::new(&source, &mut destination)
+            .map_err(|e| classify(e, "begin the snapshot copy"))?;
+        #[cfg(test)]
+        let mut parked = false;
+        loop {
+            match backup
+                .step(SNAPSHOT_PAGES_PER_STEP)
+                .map_err(|e| classify(e, "copy a snapshot page batch"))?
+            {
+                StepResult::Done => return Ok(()),
+                StepResult::Busy | StepResult::Locked => std::thread::sleep(SNAPSHOT_BUSY_PAUSE),
+                StepResult::More => {}
+                _ => {}
+            }
+            // A live-copy proof parks once after the first copied
+            // batch to land a mid-copy commit (spec/03). Two waits on
+            // one barrier: park, release.
+            #[cfg(test)]
+            if !parked {
+                parked = true;
+                self.pause(|p| &p.after_first_step);
+                self.pause(|p| &p.after_first_step);
+            }
+        }
+    }
+
+    /// Step 3's read half (spec/03): the union of every reference —
+    /// `acquisitions.content_sha256`, `send_attempts.mime_sha256` and
+    /// each draft revision's attachment `object_sha256` — read from
+    /// the snapshot itself, so references committed after the snapshot
+    /// point pin nothing.
+    fn referenced_objects(&self, location: &Path) -> Result<Vec<String>, StoreError> {
+        #[cfg(test)]
+        {
+            self.pause(|p| &p.before_referenced_read);
+            self.pause(|p| &p.before_referenced_read);
+        }
+        let conn = snapshot_connection(&location.join(SNAPSHOT_FILE))?;
+        let mut shas = BTreeSet::new();
+        collect_column(&conn, "SELECT content_sha256 FROM acquisitions", &mut shas)?;
+        collect_column(&conn, "SELECT mime_sha256 FROM send_attempts", &mut shas)?;
+        collect_attachments(&conn, &mut shas)?;
+        conn.close()
+            .map_err(|(_conn, e)| classify(e, "close the snapshot"))?;
+        Ok(shas.into_iter().collect())
+    }
+
+    /// Step 3's write half: one `backup_in_progress` pin per referenced
+    /// object, keyed by this generation, in bounded transactions — as
+    /// GC writes its pin edits (spec/03). `OR IGNORE` keeps a retried
+    /// batch idempotent.
+    fn pin_references(&self, generation_id: &str, shas: &[String]) -> Result<(), StoreError> {
+        let created_at = self.clock.now().as_millis();
+        for chunk in shas.chunks(PIN_BATCH) {
+            let chunk = chunk.to_vec();
+            let generation = generation_id.to_owned();
+            let future = self.writer.submit(WritePriority::Index, move |tx| {
+                for sha in &chunk {
+                    tx.execute(
+                        "INSERT OR IGNORE INTO object_pins
+                         (object_sha256, pin_kind, pin_ref, created_at)
+                         VALUES (?1, ?2, ?3, ?4)",
+                        params![sha, PIN_KIND, generation, created_at],
+                    )
+                    .map_err(|e| classify(e, "pin a backup-referenced object"))?;
+                }
+                Ok(())
+            });
+            await_write(future)?;
+        }
+        Ok(())
+    }
+
+    /// Sixteen random bytes for the generation's version-4 UUID
+    /// (spec/02's id form): the seam all ids draw through.
+    fn draw_id(&self) -> Result<[u8; 16], StoreError> {
+        let mut bytes = [0u8; 16];
+        self.random
+            .fill(&mut bytes)
+            .map_err(|e| StoreError::unavailable(format!("cannot draw a generation id: {e}")))?;
+        Ok(bytes)
+    }
+}
+
+/// The barriers a copy-timing test may arm (spec/03): after the empty
+/// snapshot file exists and before SQLite writes it, once after the
+/// first copied batch, and before the snapshot's references are read.
+#[cfg(test)]
+#[derive(Default)]
+pub(crate) struct Pauses {
+    /// Waited on twice: park, then release to the SQLite open — a
+    /// fault test makes the write path fail in between.
+    pub(crate) after_snapshot_file: Option<Arc<std::sync::Barrier>>,
+    /// Waited on twice: park, then release to the next batch — a
+    /// live-copy test commits rows in between.
+    pub(crate) after_first_step: Option<Arc<std::sync::Barrier>>,
+    /// Waited on twice: park, then release to the snapshot read — a
+    /// test lands a live-only reference in between.
+    pub(crate) before_referenced_read: Option<Arc<std::sync::Barrier>>,
+}
+
+/// A finished snapshot opened for reads. The copy marks it WAL (it
+/// inherits the source's page 1), so a read-write open gets the WAL
+/// artifacts (`-shm`/`-wal`) a close then checkpoints and removes —
+/// the generation directory stays self-contained. Only reads run, and
+/// `trusted_schema=OFF` distrusts the file's schema as the
+/// examination does (spec/03).
+fn snapshot_connection(file: &Path) -> Result<Connection, StoreError> {
+    let conn = Connection::open(file).map_err(|e| classify(e, "open the backup snapshot"))?;
+    conn.execute_batch("PRAGMA trusted_schema=OFF")
+        .map_err(|e| classify(e, "configure the snapshot read"))?;
+    Ok(conn)
+}
+
+/// One TEXT column's values into `shas`, reading the snapshot's rows.
+fn collect_column(
+    conn: &Connection,
+    sql: &str,
+    shas: &mut BTreeSet<String>,
+) -> Result<(), StoreError> {
+    let mut stmt = conn
+        .prepare(sql)
+        .map_err(|e| classify(e, "list the snapshot's references"))?;
+    let mut rows = stmt
+        .query([])
+        .map_err(|e| classify(e, "list the snapshot's references"))?;
+    while let Some(row) = rows
+        .next()
+        .map_err(|e| classify(e, "read a snapshot reference"))?
+    {
+        let sha: String = row
+            .get(0)
+            .map_err(|e| classify(e, "read a snapshot reference"))?;
+        shas.insert(sha);
+    }
+    Ok(())
+}
+
+/// Every draft revision's attachment objects (spec/02's
+/// `attachments_json`), parsed through drafts' own shape — a malformed
+/// entry is `Corrupt`, the same verdict reads give it.
+fn collect_attachments(conn: &Connection, shas: &mut BTreeSet<String>) -> Result<(), StoreError> {
+    let mut stmt = conn
+        .prepare("SELECT attachments_json FROM draft_revisions")
+        .map_err(|e| classify(e, "list the snapshot's attachments"))?;
+    let mut rows = stmt
+        .query([])
+        .map_err(|e| classify(e, "list the snapshot's attachments"))?;
+    while let Some(row) = rows
+        .next()
+        .map_err(|e| classify(e, "read a snapshot attachment list"))?
+    {
+        let json: String = row
+            .get(0)
+            .map_err(|e| classify(e, "read a snapshot attachment list"))?;
+        for attachment in crate::drafts::parse_attachments(&json)? {
+            shas.insert(attachment.object_sha256);
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests;
