@@ -13,22 +13,30 @@ signed in, with its TLS certificate exported.
 - **Spec:** 01 (Crates: IMAP), 04 (Connections, Bridge facts).
 - **Depends on:** M1 complete.
 - **Deliverables:**
-  - in `sb-test-support`: the scripted fake IMAP server with the
+  - **M2.1a — the permanent fake server (this change):** in
+    `sb-test-support`, the scripted fake IMAP server with the
     **Bridge profile** (capabilities without CONDSTORE, NAMESPACE or
     LITERAL+; LIST with `Folders/` and `Labels/` and role attributes;
     the same message in several mailboxes with `X-Pm-Internal-Id`;
-    UIDPLUS receipts) and fault knobs (11);
-  - a throwaway spike client with each crate doing: STARTTLS with a
-    custom verifier, LOGIN, CAPABILITY, ID, LIST, EXAMINE,
+    UIDPLUS receipts) and every fault knob (11), with tests for each;
+    the raw-UTF-8 ENVELOPE fault fixture (`RAW_UTF8_ENVELOPE`), kept
+    public for M2.1b and undecodable by imap-codec;
+  - **M2.1b — the crate spike (follows):** a throwaway spike client
+    with each crate doing: STARTTLS with a custom verifier, LOGIN,
+    CAPABILITY, ID, LIST, EXAMINE,
     `UID FETCH … BODY.PEEK[HEADER.FIELDS (…)]`, `UID FETCH 1:* (FLAGS)`,
-    IDLE, and a raw UTF-8 ENVELOPE fault;
-  - a decision note in the PR, plus updates to spec/01.
+    IDLE, and a raw UTF-8 ENVELOPE fault, committed as
+    `crates/sb-imap/tests/spike_operations.rs`; the same suite against
+    Dovecot (Docker, pinned digest) through `cargo xtask ci --docker`
+    and the `dovecot` CI job; a decision note in the PR, plus updates
+    to spec/01.
 - **Acceptance:**
-  - the chosen crate passes every spike operation against the fake
-    server and Dovecot (Docker, pinned digest);
-  - a malformed response closes the connection without applying later
-    data;
-  - the decision is recorded in spec/01.
+  - **M2.1a:** every knob and the Bridge profile have tests that fail
+    if the behaviour breaks; `cargo test -p sb-test-support` passes;
+  - **M2.1b:** the chosen crate passes every spike operation against
+    the fake server and Dovecot (Docker, pinned digest); a malformed
+    response closes the connection without applying later data; and
+    the decision is recorded in spec/01.
 
 ### M2.2 IMAP transport — L, linux
 
@@ -36,7 +44,7 @@ signed in, with its TLS certificate exported.
   pinned-certificate TLS.
 - **Spec:** 04 (Structure, Connections), 10 (TLS and the Bridge
   certificate).
-- **Depends on:** M2.1.
+- **Depends on:** M2.1b.
 - **Deliverables:**
   - `sb-imap::Connection`: connect to `127.0.0.1`, STARTTLS or implicit
     TLS, a pinned-cert verifier that does full handshake verification
