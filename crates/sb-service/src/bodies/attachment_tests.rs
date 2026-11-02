@@ -172,12 +172,16 @@ fn service_dropped_attachment_open_cleans_after_publication() {
     let cache = scratch.path().join("cache");
     let (core, ids) = imported(&scratch.path().join("data"), &cache);
     let mut future = Box::pin(core.open_attachment(ids[0], "1.2".into()));
-    assert!(
-        future
-            .as_mut()
-            .poll(&mut Context::from_waker(Waker::noop()))
-            .is_pending()
-    );
+    // The publication's last step is the registry insert: holding the
+    // table keeps the first poll `Pending` however fast the pool is.
+    core.engine().with_lease_table_held(|| {
+        assert!(
+            future
+                .as_mut()
+                .poll(&mut Context::from_waker(Waker::noop()))
+                .is_pending()
+        );
+    });
     wait(|| {
         fs::read_dir(cache.join("renditions"))
             .unwrap()

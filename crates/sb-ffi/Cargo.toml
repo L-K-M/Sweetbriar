@@ -24,3 +24,5 @@ uniffi = { version = "=0.32.2", default-features = false }
 
 [dev-dependencies]
 sb-test-support = { version = "0.0.1", path = "../sb-test-support" }
+# First-poll tests hold the engine's lease table through the service.
+sb-service = { version = "0.0.1", path = "../sb-service", features = ["test-seams"] }

@@ -9,5 +9,13 @@ rust-version.workspace = true
 [dependencies]
 sb-engine = { version = "0.0.1", path = "../sb-engine" }
 
+[features]
+# Test-only writes for the layer above, as sb-engine's `test-seams`
+# offers: `Core::with_lease_table_held` for a first-poll test. Never
+# enabled outside dev-dependencies.
+test-seams = ["sb-engine/test-seams"]
+
 [dev-dependencies]
 sb-test-support = { version = "0.0.1", path = "../sb-test-support" }
+# This crate's own first-poll tests reach the engine's seam directly.
+sb-engine = { version = "0.0.1", path = "../sb-engine", features = ["test-seams"] }

@@ -135,12 +135,18 @@ fn attachment_token_cancelled_after_publication_leaves_no_lease() {
     let (core, ids) = imported(&scratch.path().join("data"), &cache);
     let token = CancelToken::new();
     let mut future = Box::pin(core.open_attachment(token.clone(), ids[0], "1.2".into()));
-    assert!(
-        future
-            .as_mut()
-            .poll(&mut Context::from_waker(Waker::noop()))
-            .is_pending()
-    );
+    // The publication's last step is the registry insert: holding the
+    // table keeps the first poll `Pending` however fast the pool is.
+    let service = block_on(core.service.read());
+    service.as_ref().unwrap().with_lease_table_held(|| {
+        assert!(
+            future
+                .as_mut()
+                .poll(&mut Context::from_waker(Waker::noop()))
+                .is_pending()
+        );
+    });
+    drop(service);
     wait(|| {
         fs::read_dir(cache.join("renditions"))
             .unwrap()
