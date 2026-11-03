@@ -27,7 +27,7 @@ const CLAIM_NAME: &str = "sweetbriar-export.claim";
 /// unlinked inode and admit a second writer.
 const LOCK_NAME: &str = "sweetbriar-export.lock";
 /// The version-1 sidecar manifest (spec/09).
-const MANIFEST_NAME: &str = "sweetbriar-metadata.json";
+pub(crate) const MANIFEST_NAME: &str = "sweetbriar-metadata.json";
 /// Uncommitted output carries this suffix; only a rename publishes.
 const PARTIAL_SUFFIX: &str = ".partial";
 /// Acquisition reads and output writes stream in bounded blocks.

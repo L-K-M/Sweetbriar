@@ -801,3 +801,123 @@ fn source_json_v2_requires_a_bundle_matching_the_source() {
     broken["bundle"].as_object_mut().unwrap().remove("manifest");
     reject(broken);
 }
+
+#[test]
+fn bundle_manifest_precedes_package_and_never_imports_plain() {
+    let (scratch, res) = resources("bundle-pending");
+    let parent = scratch.path().join("imports");
+    fs::create_dir(&parent).unwrap();
+    let package = parent.join("Export.mbox");
+    fs::create_dir(&package).unwrap();
+    fs::write(package.join("mbox"), MBOX_ONE).unwrap();
+    fs::write(package.join("sweetbriar-metadata.json"), b"{}").unwrap();
+
+    for root in [package.clone(), parent] {
+        let inventory = run(&res, &[root]);
+        assert!(inventory.sources().is_empty());
+        assert_eq!(inventory.problems().len(), 1);
+        assert!(inventory.problems()[0].detail().contains("manifest"));
+        assert!(snapshot_names(&scratch).is_empty());
+    }
+}
+
+#[test]
+fn explicitly_selected_manifest_is_refused() {
+    let (scratch, res) = resources("chosen-manifest");
+    let manifest = scratch.path().join("sweetbriar-metadata.json");
+    fs::write(&manifest, MBOX_ONE).unwrap();
+    let inventory = run(&res, &[manifest]);
+    assert!(inventory.sources().is_empty());
+    assert_eq!(inventory.problems().len(), 1);
+    assert!(inventory.problems()[0].detail().contains("directory"));
+}
+
+#[test]
+fn bundle_capture_and_parser_cancellation_remove_only_its_snapshot() {
+    let (scratch, res) = resources("bundle-cancel");
+    let other = scratch.path().join("other.eml");
+    fs::write(&other, EML).unwrap();
+    let kept = run(&res, &[other]);
+    assert_eq!(kept.sources().len(), 1);
+    let before = snapshot_names(&scratch);
+    let dir = scratch.path().join("bundle");
+    fs::create_dir(&dir).unwrap();
+    fs::write(
+        dir.join("sweetbriar-metadata.json"),
+        format!("\"{}\"", "x".repeat(100_000)),
+    )
+    .unwrap();
+
+    for cancel_capture in [true, false] {
+        let mut observed = false;
+        let mut scanned_once = false;
+        let outcome = res.inventory_import_sources(std::slice::from_ref(&dir), |event| {
+            let stop = match event {
+                ImportProgress::Capturing { bytes, .. } if cancel_capture => bytes > 0,
+                ImportProgress::Scanning { .. } if !cancel_capture => {
+                    std::mem::replace(&mut scanned_once, true)
+                }
+                _ => false,
+            };
+            if stop {
+                observed = true;
+                ControlFlow::Break(())
+            } else {
+                ControlFlow::Continue(())
+            }
+        });
+        assert!(observed);
+        assert!(matches!(outcome, ImportInventoryOutcome::Cancelled(_)));
+        assert_eq!(snapshot_names(&scratch), before);
+    }
+}
+
+#[test]
+fn invalid_manifest_is_reported_and_removed() {
+    let (scratch, res) = resources("bundle-invalid");
+    let dir = scratch.path().join("bundle");
+    fs::create_dir(&dir).unwrap();
+    fs::write(dir.join("sweetbriar-metadata.json"), b"{\"broken\":").unwrap();
+    fs::write(dir.join("mail.eml"), EML).unwrap();
+    let inventory = run(&res, &[dir]);
+    assert!(inventory.sources().is_empty());
+    assert_eq!(inventory.problems()[0].kind(), ImportProblemKind::Failed);
+    assert!(
+        inventory.problems()[0]
+            .detail()
+            .contains("invalid manifest JSON")
+    );
+    assert!(snapshot_names(&scratch).is_empty());
+}
+
+#[test]
+fn manifest_directory_does_not_make_bundle_and_direct_mbox_is_plain() {
+    let (scratch, res) = resources("not-bundle");
+    let dir = scratch.path().join("mail");
+    fs::create_dir(&dir).unwrap();
+    fs::create_dir(dir.join("sweetbriar-metadata.json")).unwrap();
+    fs::write(dir.join("one.mbox"), MBOX_ONE).unwrap();
+    assert_eq!(run(&res, std::slice::from_ref(&dir)).sources().len(), 1);
+    fs::remove_dir(dir.join("sweetbriar-metadata.json")).unwrap();
+    fs::write(dir.join("sweetbriar-metadata.json"), b"{}").unwrap();
+    assert_eq!(run(&res, &[dir.join("one.mbox")]).sources().len(), 1);
+}
+
+#[cfg(unix)]
+#[test]
+fn bundle_aliases_are_refused_once() {
+    use std::os::unix::fs::symlink;
+    let (scratch, res) = resources("bundle-aliases");
+    let dir = scratch.path().join("bundle.mbox");
+    fs::create_dir(&dir).unwrap();
+    fs::write(dir.join("mbox"), MBOX_ONE).unwrap();
+    let actual = scratch.path().join("manifest");
+    fs::write(&actual, b"{}").unwrap();
+    symlink(&actual, dir.join("sweetbriar-metadata.json")).unwrap();
+    let alias = scratch.path().join("alias");
+    symlink(&dir, &alias).unwrap();
+    let inventory = run(&res, &[alias, dir]);
+    assert!(inventory.sources().is_empty());
+    assert_eq!(inventory.problems().len(), 1);
+    assert!(snapshot_names(&scratch).is_empty());
+}

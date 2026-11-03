@@ -954,14 +954,20 @@ local drafts. No network yet.
     bundle source metadata and manifest snapshot references, verify the
     snapshot on resume, refuse unverified ingest until d2, and remove shared
     snapshots once at terminal cleanup. Plain source metadata stays unchanged.
-  - **M1.7d1b1 Bounded manifest capture — L:** recognise bundle directories,
-    capture the manifest snapshot and validate its complete version-1 shape
-    with bounded parser state and no total-manifest-size limit. Refuse an
-    explicitly chosen manifest and hold a validated bundle for b2; it never
-    degrades to a plain import. A directly chosen `.mbox` remains plain. A
-    same-named directory is not a manifest; chosen and walked `.mbox`
-    directories with a real manifest take the bundle path before Apple package
-    handling. Ordinary Apple packages remain supported.
+  - **M1.7d1b1a Bounded JSON syntax and refusal — M:** recognise bundle
+    directories before Apple packages, capture the manifest, check JSON syntax
+    with bounded state, discard the snapshot and refuse bundle import. Directly
+    chosen manifests are refused; direct `.mbox` files remain plain. Capture
+    and parser reads check cancellation; Store snapshot verification before
+    returning its handle does not yet check cancellation.
+  - **M1.7d1b1b Manifest schema validation — L:** complete M1.7d1b1 before
+    bundle inventory: validate the writer's version-1 shape, required fields,
+    types, numbers, duplicate keys and decoded names, safe file names, all
+    declared files and bounded Search nesting. Retain byte ranges and counts
+    for b2, reuse one verified snapshot handle across cancellable passes, and
+    add cancellation to snapshot verification. Prove real writer manifests,
+    hostile tokens, aliases, cleanup and all schema failures. Until b2 retains
+    a source, validated bundles still refuse import and discard their snapshot.
   - **M1.7d1b2 Bundle file agreement and inventory — L:** check every declared
     direct child's kind, byte length and record count independently before
     ingest, report missing or disagreeing files without suppressing valid
