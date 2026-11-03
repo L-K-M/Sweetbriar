@@ -1,0 +1,188 @@
+name: recvflake-soak
+
+on:
+  push:
+
+permissions:
+  contents: read
+
+jobs:
+  soak:
+    if: startsWith(github.ref, 'refs/heads/validation/recvflake-soak-')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    env:
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: 4ddd7cdb0391c446030366570455622fbd481dfc
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+
+      - name: Log tested revision and runner
+        run: |
+          test "$(git rev-parse HEAD)" = "4ddd7cdb0391c446030366570455622fbd481dfc"
+          rustup show
+          rustc -Vv
+          echo "Runner image: ${ImageOS:-unknown} ${ImageVersion:-unknown}"
+
+      - name: Build test-only fsync shim
+        run: |
+          cat > "$RUNNER_TEMP/no-fsync.c" <<'C'
+          #define _GNU_SOURCE
+          #include <dlfcn.h>
+          #include <string.h>
+          #include <unistd.h>
+
+          static int is_test_binary(void) {
+            static int state = -1;
+            if (state >= 0) return state;
+            char path[4096];
+            ssize_t n = readlink("/proc/self/exe", path, sizeof path - 1);
+            if (n <= 0) return state = 0;
+            path[n] = 0;
+            return state = strstr(path, "/debug/deps/") != 0 ||
+                           strstr(path, "/release/deps/") != 0;
+          }
+
+          #define FORWARD(name, sig, ...)                         \
+            static int (*real)sig;                                \
+            if (is_test_binary()) return 0;                        \
+            if (!real) *(void **)&real = dlsym(RTLD_NEXT, name);  \
+            return real(__VA_ARGS__)
+
+          int fsync(int fd) { FORWARD("fsync", (int), fd); }
+          int fdatasync(int fd) { FORWARD("fdatasync", (int), fd); }
+          int syncfs(int fd) { FORWARD("syncfs", (int), fd); }
+          int sync_file_range(int fd, long long off, long long n, unsigned flags) {
+            FORWARD("sync_file_range", (int, long long, long long, unsigned),
+                    fd, off, n, flags);
+          }
+          C
+          cc -shared -fPIC -O2 "$RUNNER_TEMP/no-fsync.c" \
+            -ldl -o "$RUNNER_TEMP/no-fsync.so"
+
+      - name: Build the sb-engine test binary
+        id: binary
+        run: |
+          test_binary=$(cargo test -p sb-engine --lib --no-run --message-format=json \
+            | python3 -c '
+          import json, sys
+          paths = []
+          for line in sys.stdin:
+              try:
+                  event = json.loads(line)
+              except json.JSONDecodeError:
+                  continue
+              target = event.get("target", {})
+              if (event.get("reason") == "compiler-artifact"
+                      and event.get("profile", {}).get("test")
+                      and target.get("name") == "sb_engine"
+                      and event.get("executable")):
+                  paths.append(event["executable"])
+          if len(paths) != 1:
+              raise SystemExit(f"expected one sb-engine test binary, got {paths}")
+          print(paths[0])
+          ')
+          test -x "$test_binary"
+          echo "path=$test_binary" >> "$GITHUB_OUTPUT"
+
+      - name: Run the requested command once
+        env:
+          LD_PRELOAD: ${{ runner.temp }}/no-fsync.so
+        run: |
+          set -o pipefail
+          mkdir -p "$RUNNER_TEMP/recvflake-logs"
+          cargo test -p sb-engine --lib received_tests 2>&1 \
+            | tee "$RUNNER_TEMP/recvflake-logs/requested-command.log"
+          grep -Fq \
+            "test result: ok. 37 passed; 0 failed; 1 ignored;" \
+            "$RUNNER_TEMP/recvflake-logs/requested-command.log"
+
+      - name: Run 100 loaded module passes
+        timeout-minutes: 345
+        env:
+          LD_PRELOAD: ${{ runner.temp }}/no-fsync.so
+          TEST_BINARY: ${{ steps.binary.outputs.path }}
+        run: |
+          set -euo pipefail
+          logs="$RUNNER_TEMP/recvflake-logs"
+          mkdir -p "$logs"
+          export logs
+
+          "$TEST_BINARY" received_tests --list > "$logs/received-tests.list"
+          test "$(grep -c '^received_tests::.*: test$' \
+            "$logs/received-tests.list")" -eq 38
+
+          setsid bash -c '
+            set -u
+            run=0
+            while true; do
+              run=$((run + 1))
+              if ! "$TEST_BINARY" --exact \
+                received_tests::native_write_and_commit_failures_roll_back_then_retry_at_bounded_deadlines \
+                >> "$logs/parallel-load.log" 2>&1; then
+                echo "$run" > "$logs/parallel-load.failed"
+                exit 1
+              fi
+              printf '%s\n' "$run" > "$logs/parallel-load.count.tmp"
+              mv "$logs/parallel-load.count.tmp" \
+                "$logs/parallel-load.count"
+            done
+          ' &
+          load_pid=$!
+
+          setsid nice -n 15 yes > /dev/null &
+          burner_one=$!
+          setsid nice -n 15 yes > /dev/null &
+          burner_two=$!
+
+          cleanup() {
+            trap - EXIT TERM INT
+            for group in "$load_pid" "$burner_one" "$burner_two"; do
+              kill -TERM -- "-$group" 2>/dev/null || true
+            done
+            wait "$load_pid" "$burner_one" "$burner_two" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+          trap 'exit 143' TERM
+          trap 'exit 130' INT
+
+          for run in $(seq -w 1 100); do
+            echo "received_tests pass $run/100"
+            kill -0 "$load_pid"
+            kill -0 "$burner_one"
+            kill -0 "$burner_two"
+            test ! -e "$logs/parallel-load.failed"
+            if ! "$TEST_BINARY" received_tests > "$logs/pass-$run.log" 2>&1; then
+              tail -200 "$logs/pass-$run.log"
+              exit 1
+            fi
+            grep -Fq \
+              "test result: ok. 37 passed; 0 failed; 1 ignored;" \
+              "$logs/pass-$run.log"
+          done
+
+          kill -0 "$load_pid"
+          kill -0 "$burner_one"
+          kill -0 "$burner_two"
+          test ! -e "$logs/parallel-load.failed"
+          cleanup
+
+          load_count=$(cat "$logs/parallel-load.count")
+          test "$load_count" -ge 1
+          test "$(grep -Fc \
+            "test result: ok. 1 passed; 0 failed; 0 ignored;" \
+            "$logs/parallel-load.log")" -eq "$load_count"
+          printf 'tested_ref=%s\npasses=100\nparallel_load_passes=%s\n' \
+            "4ddd7cdb0391c446030366570455622fbd481dfc" "$load_count" \
+            > "$logs/summary.txt"
+
+      - name: Upload soak logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v6.0.0
+        with:
+          name: recvflake-soak-4ddd7cd
+          path: ${{ runner.temp }}/recvflake-logs
+          if-no-files-found: error
