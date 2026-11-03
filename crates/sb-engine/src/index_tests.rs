@@ -26,10 +26,20 @@ const STALE_CHANGES: [&str; 2] = [
 mod coverage;
 mod search_windows;
 
+#[test]
+fn explicit_wait_respects_its_timeout() {
+    assert!(std::panic::catch_unwind(|| wait_for(Duration::ZERO, || false)).is_err());
+}
+
 #[track_caller]
-pub(super) fn wait(mut ready: impl FnMut() -> bool) {
+pub(super) fn wait(ready: impl FnMut() -> bool) {
     // Same observation budget as the import suite on shared CI disks.
-    let end = Instant::now() + Duration::from_secs(300);
+    wait_for(Duration::from_secs(300), ready);
+}
+
+#[track_caller]
+fn wait_for(duration: Duration, mut ready: impl FnMut() -> bool) {
+    let end = Instant::now() + duration;
     while !ready() {
         assert!(Instant::now() < end, "background work did not settle");
         // Observe completion without flooding the writer/read pool;
@@ -601,20 +611,21 @@ fn an_old_io_failure_cannot_pause_a_new_revision_or_epoch() {
         let (engine, _) = clocked(&root, fs, 10_000);
         parked(&engine);
         let db = root.join("state.sqlite");
-        let changed = AtomicUsize::new(0);
-        let (sent, idle) = mpsc::channel();
+        let changed = Arc::new(AtomicUsize::new(0));
+        let calls = changed.clone();
         hook(&engine, move |event| {
-            if matches!(event, Event::Prepared { .. })
-                && changed.fetch_add(1, Ordering::SeqCst) == 0
+            if matches!(event, Event::Prepared { .. }) && calls.fetch_add(1, Ordering::SeqCst) == 0
             {
                 external(&db, update);
             }
-            if event == Event::Parked && changed.load(Ordering::SeqCst) > 0 {
-                let _ = sent.send(());
-            }
         });
         pause(&engine, UserPause::Resume);
-        idle.recv_timeout(Duration::from_secs(30)).unwrap();
+        // Wait for the drained durable state rather than a Parked: a
+        // transient store error can park the worker with the rejected
+        // work still queued.
+        wait_for(Duration::from_secs(30), || {
+            changed.load(Ordering::SeqCst) > 0 && count(&engine, QUEUE) == 0
+        });
         assert_eq!(
             count(&engine, QUEUE),
             0,
@@ -683,7 +694,20 @@ fn reset_enqueue_drive_the_due_hold_and_a_newer_target_never_extracts() {
     let fs = Arc::new(FaultFs::new(real_fs(), FsOp::Open, 1, FaultKind::NoSpace));
     let (engine, _) = clocked(&root, fs.clone(), 10_000);
     pause(&engine, UserPause::Resume);
-    parked(&engine);
+    // Wait for the recorded pause, not the first Parked: an earlier
+    // turn's park (a held user pause, a volatile writer failure or a
+    // lost retry-begin race) may reach the hook before this record.
+    wait_for(Duration::from_secs(30), || {
+        engine
+            .indexer()
+            .status(engine.resources())
+            .is_ok_and(|state| {
+                state.io_pause().is_some_and(|pause| {
+                    pause.code() == sb_resources::SearchIoCode::StorageFull
+                        && pause.retry_at().as_millis() == 11_000
+                })
+            })
+    });
     // The due hold began its retry, reset and enqueue committed
     // without object I/O (successful work reset the history), then
     // the index phase's one failed object open recorded the native
