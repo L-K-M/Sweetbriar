@@ -208,7 +208,8 @@ impl Connection {
 
     /// Runs one standard-shape coroutine to completion over the gate.
     /// A poisoned gate fails the read with [`ImapError::Malformed`] and
-    /// closes the connection; later runs report [`ImapError::Closed`].
+    /// closes the connection; later runs report [`ImapError::Closed`]. A
+    /// completed result before poison in the same fill is returned first.
     async fn run<C, T, E>(&mut self, coroutine: C) -> Result<T, ImapError>
     where
         C: ImapCoroutine<Yield = ImapYield, Return = Result<T, E>>,

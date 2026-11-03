@@ -9,9 +9,8 @@
 use std::collections::VecDeque;
 
 use io_imap::codec::{ResponseCodec, fragmentizer::Fragmentizer};
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncRead, AsyncReadExt};
 
-use crate::connection::Wire;
 use crate::error::ImapError;
 
 /// One message's framing cap, what a real client's fragmentizer allows.
@@ -26,6 +25,8 @@ pub(crate) struct Gate {
     codec: ResponseCodec,
     /// Verified message bytes waiting for the coroutine's next read.
     released: VecDeque<u8>,
+    /// Received bytes not yet released as complete messages.
+    pending: usize,
     wire_buf: Box<[u8; READ_CHUNK]>,
     /// The peer hung up; reported once `released` drains.
     eof: bool,
@@ -39,6 +40,7 @@ impl Gate {
             fragmentizer: Fragmentizer::new(MAX_MESSAGE_SIZE),
             codec: ResponseCodec::new(),
             released: VecDeque::new(),
+            pending: 0,
             wire_buf: Box::new([0; READ_CHUNK]),
             eof: false,
             poisoned: false,
@@ -53,7 +55,10 @@ impl Gate {
 
     /// Reads the next released bytes. `Ok(empty)` is EOF; a poisoned
     /// gate fails with [`ImapError::Malformed`].
-    pub(crate) async fn read(&mut self, wire: &mut Wire) -> Result<Vec<u8>, ImapError> {
+    pub(crate) async fn read(
+        &mut self,
+        wire: &mut (impl AsyncRead + Unpin),
+    ) -> Result<Vec<u8>, ImapError> {
         loop {
             if !self.released.is_empty() {
                 let end = self.released.len().min(READ_CHUNK);
@@ -71,16 +76,18 @@ impl Gate {
 
     /// Releases each framed message's wire bytes once it decodes;
     /// pulls from the wire only when nothing framed is pending.
-    async fn fill(&mut self, wire: &mut Wire) -> Result<(), ImapError> {
+    async fn fill(&mut self, wire: &mut (impl AsyncRead + Unpin)) -> Result<(), ImapError> {
         loop {
             while let Some(_fragment) = self.fragmentizer.progress() {
                 if !self.fragmentizer.is_message_complete() {
                     continue;
                 }
                 match self.fragmentizer.decode_message(&self.codec) {
-                    Ok(_) => self
-                        .released
-                        .extend(self.fragmentizer.message_bytes().iter().copied()),
+                    Ok(_) => {
+                        let bytes = self.fragmentizer.message_bytes();
+                        self.pending -= bytes.len();
+                        self.released.extend(bytes.iter().copied());
+                    }
                     // Stop at the fault: the released messages drain
                     // first, then `read` reports the poison.
                     Err(_) => {
@@ -97,10 +104,50 @@ impl Gate {
                 .await
                 .map_err(ImapError::from_io)?;
             if read == 0 {
-                self.eof = true;
+                self.eof = self.pending == 0;
+                self.poisoned = !self.eof;
             } else {
+                self.pending += read;
                 self.fragmentizer.enqueue_bytes(&self.wire_buf[..read]);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn eof_after_partial_line_is_malformed() {
+        assert_partial(b"* OK incomplete").await;
+    }
+
+    #[tokio::test]
+    async fn eof_after_partial_literal_is_malformed() {
+        assert_partial(b"* 1 FETCH (BODY[] {5}\r\nabc").await;
+    }
+
+    async fn assert_partial(partial: &[u8]) {
+        let mut gate = Gate::new();
+        let bytes = [wire_bytes(), partial].concat();
+        let mut wire = bytes.as_slice();
+        assert_eq!(gate.read(&mut wire).await.unwrap(), wire_bytes());
+        assert!(matches!(
+            gate.read(&mut wire).await,
+            Err(ImapError::Malformed)
+        ));
+    }
+
+    #[tokio::test]
+    async fn eof_after_complete_responses_is_clean() {
+        let mut gate = Gate::new();
+        let mut wire = b"* OK first\r\n* OK second\r\n".as_slice();
+        assert_eq!(gate.read(&mut wire).await.unwrap(), wire_bytes());
+        assert!(gate.read(&mut wire).await.unwrap().is_empty());
+    }
+
+    fn wire_bytes() -> &'static [u8] {
+        b"* OK first\r\n* OK second\r\n"
     }
 }
