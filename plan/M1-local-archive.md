@@ -1166,7 +1166,34 @@ local drafts. No network yet.
       (an acknowledged save is its receipt). Depends on M1.9a1.
   - **M1.9b Drafts service and FFI (L):** owned Service DTOs, FFI
     exports, regenerated bindings and the SweetbriarBridge model over a,
-    with receipts and lifecycle proof.
+    with receipts and lifecycle proof. Re-sized 2026-11-02: the complete
+    artifact estimates well over the 1,450-line limit (the Service
+    surface alone measures ~1,000 gross changed lines including its
+    tests, and the FFI exports, bindings and bridge roughly double
+    that). Split below with every deliverable and acceptance check
+    assigned.
+    - **M1.9b1 Drafts service (L):** the Service-owned draft DTOs —
+      `DraftSource`, `ComposeFormat`, `DraftState`, `AttemptState`,
+      `DraftRecipient`, `DraftAttachmentRef`, `LiveAttempt`,
+      `DraftRevision`, `Draft`, `DraftSummary`, `DraftCreated`,
+      `DraftSaved`, and the `DraftAttachmentObject`/`DraftAttachment`/
+      `DraftContent` save inputs — with explicit Engine mapping, and
+      `Core`'s `create_draft`, `save_draft`, `discard_draft`,
+      `drafts()`, `draft()` and `publish_draft_attachment`. The Service
+      tests prove the DTO crossing, receipt replay, the same-base
+      `Conflict`, the publication ordering, the NULL route, the
+      live-attempt refusal, reopen durability and a dropped caller's
+      commit through shutdown. No FFI, bindings or bridge. Depends on
+      M1.9a2.
+    - **M1.9b2 Drafts FFI and bridge (L):** the UniFFI exports over b1 —
+      FFI-owned records and enums plus the attachment-object handle,
+      field-by-field mappings, typed errors and the existing
+      cancellation rules — the regenerated Swift bindings,
+      `cargo xtask check-ffi`, and the SweetbriarBridge owned draft
+      model with load, save over the base revision, discard and the
+      typed `Conflict` outcome M1.9c shows as keep-both, with Swift
+      Testing coverage of the codec and the conflict. Depends on
+      M1.9b1; re-size again if the artifact still exceeds the limit.
   - **M1.9c Compose window (L):** the macOS compose window — token
     fields, subject, a plain or Markdown editor on the M0.11 probe's
     TextKit 2 view, autosave after 1.5 s, "Saved" only after the
