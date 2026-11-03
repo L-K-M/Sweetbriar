@@ -158,7 +158,16 @@ fn create_save_and_discard_cross_as_service_dtos() {
 
     // The first save: seq 1 over a NULL base, every content field
     // stored and read back.
-    let saved = save(&core, &draft_id, None, content("first"));
+    let mut first = content("first");
+    first.cc = vec![DraftRecipient {
+        address: "cc@example.test".to_owned(),
+        name: Some("Cc".to_owned()),
+    }];
+    first.bcc = vec![DraftRecipient {
+        address: "bcc@example.test".to_owned(),
+        name: Some("Bcc".to_owned()),
+    }];
+    let saved = save(&core, &draft_id, None, first);
     assert_eq!(saved.receipt.command, "save_draft");
     assert_eq!(
         saved.receipt.result_json,
@@ -182,7 +191,20 @@ fn create_save_and_discard_cross_as_service_dtos() {
             name: Some("To".to_owned()),
         }]
     );
-    assert!(revision.cc.is_empty() && revision.bcc.is_empty());
+    assert_eq!(
+        revision.cc,
+        [DraftRecipient {
+            address: "cc@example.test".to_owned(),
+            name: Some("Cc".to_owned()),
+        }]
+    );
+    assert_eq!(
+        revision.bcc,
+        [DraftRecipient {
+            address: "bcc@example.test".to_owned(),
+            name: Some("Bcc".to_owned()),
+        }]
+    );
     assert_eq!(revision.body_source, "the source text");
     assert!(revision.attachments.is_empty());
     assert!(revision.created_at_ms > 0);
@@ -191,6 +213,8 @@ fn create_save_and_discard_cross_as_service_dtos() {
     let summary = &block_on(core.drafts()).unwrap()[0];
     assert_eq!(summary.subject, "first");
     assert_eq!(summary.to, revision.to);
+    assert_eq!(summary.cc, revision.cc);
+    assert_eq!(summary.bcc, revision.bcc);
 
     // The second save names the first its base: seq 2.
     let second = save(
