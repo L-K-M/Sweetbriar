@@ -124,6 +124,9 @@ pub struct Script {
     pub steps: Vec<Step>,
     /// Responses for a command no step matches (tagged BAD by default).
     pub fallback: Vec<Reply>,
+    /// Wraps the connection in TLS before the greeting (implicit TLS),
+    /// the other half of [`Reply::UpgradeTls`].
+    pub implicit_tls: bool,
 }
 
 impl Script {
@@ -135,12 +138,20 @@ impl Script {
             fallback: vec![Reply::TaggedBad(
                 "no scripted answer for this command".to_string(),
             )],
+            implicit_tls: false,
         }
     }
 
     /// Overrides the greeting line (CRLF included).
     pub fn greeting(mut self, line: impl Into<String>) -> Self {
         self.greeting = line.into();
+        self
+    }
+
+    /// Wraps the connection in TLS before the greeting, for a client
+    /// that connects with implicit TLS.
+    pub fn implicit_tls(mut self) -> Self {
+        self.implicit_tls = true;
         self
     }
 }
@@ -370,12 +381,16 @@ fn run_connection(
     shutdown: Arc<AtomicBool>,
     index: usize,
 ) -> io::Result<()> {
+    let implicit_tls = script.implicit_tls;
     let mut conn = Conn {
         wire: Wire::Plain(stream),
         fragmentizer: Fragmentizer::new(MAX_MESSAGE_SIZE),
         last_tag: None,
     };
     conn.wire.set_poll_timeout()?;
+    if implicit_tls {
+        conn.wire = conn.wire.upgrade_tls(&shutdown)?;
+    }
     conn.wire.write_all(script.greeting.as_bytes())?;
 
     let mut steps = script.steps;
