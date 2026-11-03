@@ -966,14 +966,13 @@ local drafts. No network yet.
     File and message schemas, consumed-byte ranges, names and references
     remain deferred to b1b2. Invalid nested fields, availability, spans and
     file relationships are tested there before any bundle can be retained.
-  - **M1.7d1b1b2 Manifest record validation — L:** complete M1.7d1b1 before
-    bundle inventory: validate the writer's version-1 record shape, required
-    fields, types, numbers, duplicate keys and decoded names, safe file names
-    and all declared files. Retain byte ranges and counts for b2, reusing one
-    verified snapshot handle across cancellable passes. Prove real writer
-    manifests, hostile tokens, aliases, cleanup and all schema failures. Until
-    b2 retains a source, validated bundles still refuse import and discard
-    their snapshot.
+  - **M1.7d1b1b2a Manifest file-table validation — L:** validate each file
+    entry's shape, counts and unique safe decoded name. Preserve the table's
+    byte range and count across cancellable scans of one verified snapshot.
+    Valid bundles remain unsupported and their snapshots are discarded.
+  - **M1.7d1b1b2b Manifest message validation — L:** validate message schemas,
+    references and format-specific fields using the verified file table.
+    Prove writer manifests, hostile tokens and cleanup before bundle inventory.
   - **M1.7d1b2 Bundle file agreement and inventory — L:** check every declared
     direct child's kind, byte length and record count independently before
     ingest, report missing or disagreeing files without suppressing valid
