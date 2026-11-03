@@ -8,13 +8,12 @@
 //! the revision that references them: no file I/O ever runs inside a
 //! write transaction.
 
-#[cfg(test)]
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use sb_resources::{
     ComposeFormat, DraftAttachment, DraftRecipient, DraftSource, DraftSummary, PublishedObject,
-    Receipt, RevisionInput, StoredDraft, WritePriority, create_draft, discard_draft, draft, drafts,
-    run_once, save_draft,
+    Receipt, RevisionInput, StoreError, StoredDraft, WritePriority, create_draft, discard_draft,
+    draft, drafts, run_once, save_draft,
 };
 
 use crate::engine::validate_idempotency_key;
@@ -187,7 +186,6 @@ impl Engine {
         content: DraftContent,
     ) -> Result<DraftSaved, EngineError> {
         validate_idempotency_key(idempotency_key)?;
-        validate_draft(draft_id, base_revision_id, &content)?;
         let revision_id = self.resources().new_uuid_string();
         let now = self.resources().now();
         let (key, id, base) = (
@@ -203,10 +201,16 @@ impl Engine {
             #[cfg(test)]
             let write_hook = hook.clone();
             let revision = revision_id.clone();
+            let validation = Arc::new(Mutex::new(None));
+            let write_validation = Arc::clone(&validation);
             let receipt = worker
                 .resources()
                 .write(WritePriority::User, move |tx| {
                     let receipt = run_once(tx, &key, SAVE_DRAFT, now, |tx| {
+                        record_validation(
+                            &write_validation,
+                            validate_draft(&id, base.as_deref(), &content),
+                        )?;
                         #[cfg(test)]
                         draft_write_point(&write_hook, DraftWritePoint::InsideBeforeEffect);
                         let result = encode_receipt_id("revision_id", &revision);
@@ -236,7 +240,8 @@ impl Engine {
                     draft_write_point(&write_hook, DraftWritePoint::InsideBeforeCommit);
                     Ok(receipt)
                 })
-                .await?;
+                .await;
+            let receipt = finish_validation(receipt, &validation)?;
             #[cfg(test)]
             draft_write_point(&hook, DraftWritePoint::AfterWrite);
             Ok(DraftSaved {
@@ -258,12 +263,6 @@ impl Engine {
         draft_id: &str,
     ) -> Result<Receipt, EngineError> {
         validate_idempotency_key(idempotency_key)?;
-        if draft_id.is_empty() {
-            return Err(EngineError::invalid_input(
-                "draft_id",
-                "a draft id is required",
-            ));
-        }
         let now = self.resources().now();
         let (key, id) = (idempotency_key.to_owned(), draft_id.to_owned());
         #[cfg(test)]
@@ -273,10 +272,13 @@ impl Engine {
             draft_write_point(&hook, DraftWritePoint::BeforeWrite);
             #[cfg(test)]
             let write_hook = hook.clone();
+            let validation = Arc::new(Mutex::new(None));
+            let write_validation = Arc::clone(&validation);
             let receipt = worker
                 .resources()
                 .write(WritePriority::User, move |tx| {
                     let receipt = run_once(tx, &key, DISCARD_DRAFT, now, |tx| {
+                        record_validation(&write_validation, validate_draft_id(&id))?;
                         #[cfg(test)]
                         draft_write_point(&write_hook, DraftWritePoint::InsideBeforeEffect);
                         discard_draft(tx, &id, now)?;
@@ -288,7 +290,8 @@ impl Engine {
                     draft_write_point(&write_hook, DraftWritePoint::InsideBeforeCommit);
                     Ok(receipt)
                 })
-                .await?;
+                .await;
+            let receipt = finish_validation(receipt, &validation)?;
             #[cfg(test)]
             draft_write_point(&hook, DraftWritePoint::AfterWrite);
             receipt_id(&receipt, "draft_id")?;
@@ -341,7 +344,7 @@ impl Engine {
     }
 }
 
-/// `save_draft`'s synchronous validation: the fields the store would
+/// `save_draft`'s fresh-command validation: the fields the store would
 /// otherwise report under `data_root` (its only invalid-input field),
 /// named for the caller instead.
 fn validate_draft(
@@ -349,12 +352,7 @@ fn validate_draft(
     base_revision_id: Option<&str>,
     content: &DraftContent,
 ) -> Result<(), EngineError> {
-    if draft_id.is_empty() {
-        return Err(EngineError::invalid_input(
-            "draft_id",
-            "a draft id is required",
-        ));
-    }
+    validate_draft_id(draft_id)?;
     if let Some("") = base_revision_id {
         return Err(EngineError::invalid_input(
             "base_revision_id",
@@ -390,6 +388,45 @@ fn validate_draft(
         ));
     }
     Ok(())
+}
+
+fn validate_draft_id(draft_id: &str) -> Result<(), EngineError> {
+    if draft_id.is_empty() {
+        return Err(EngineError::invalid_input(
+            "draft_id",
+            "a draft id is required",
+        ));
+    }
+    Ok(())
+}
+
+// Return a Store error to roll back, retaining the typed field for the caller.
+const VALIDATION_ROLLBACK: &str = "draft validation rejected the command";
+
+fn record_validation(
+    slot: &Mutex<Option<EngineError>>,
+    result: Result<(), EngineError>,
+) -> Result<(), StoreError> {
+    if let Err(error) = result {
+        *slot.lock().expect("draft validation lock poisoned") = Some(error);
+        return Err(StoreError::internal(VALIDATION_ROLLBACK));
+    }
+    Ok(())
+}
+
+fn finish_validation(
+    result: Result<Receipt, StoreError>,
+    slot: &Mutex<Option<EngineError>>,
+) -> Result<Receipt, EngineError> {
+    match result {
+        Err(StoreError::Internal { ref detail }) if detail == VALIDATION_ROLLBACK => {
+            match slot.lock().expect("draft validation lock poisoned").take() {
+                Some(error) => Err(error),
+                None => Err(result.unwrap_err().into()),
+            }
+        }
+        other => other.map_err(Into::into),
+    }
 }
 
 /// `{"<field>":"<id>"}`: the receipt's body (spec/07). The id is

@@ -603,7 +603,7 @@ fn unknown_and_empty_ids_fail_precisely() {
     block_on(engine.shutdown()).unwrap();
 }
 
-/// `save_draft`'s synchronous validation names the caller's field:
+/// `save_draft`'s fresh-command validation names the caller's field:
 /// the store would otherwise report them under `data_root`.
 #[test]
 fn invalid_content_names_its_field() {
@@ -635,7 +635,7 @@ fn invalid_content_names_its_field() {
     }
 
     // Attachment metadata comes from the caller; an empty filename or
-    // media type is invalid before any store contact.
+    // media type is invalid before any domain mutation.
     let object = block_on(engine.publish_draft_attachment(Cursor::new(b"x".as_slice()))).unwrap();
     let mut bad = content("x");
     bad.attachments = vec![DraftAttachment {
@@ -701,7 +701,7 @@ fn malformed_stored_data_is_corrupt() {
         "receipt-nonstring",
         "receipt-empty-id",
     ] {
-        match block_on(engine.discard_draft(key, "d-bad")) {
+        match block_on(engine.discard_draft(key, "")) {
             Err(EngineError::Corrupt { .. }) => {}
             other => panic!("a malformed stored receipt must be Corrupt: {other:?}"),
         }
@@ -968,4 +968,169 @@ fn assert_consistent_after_cut(root: &Path) -> bool {
     }
     block_on(engine.shutdown()).unwrap();
     committed == ORDER.len()
+}
+
+fn draft_counts(engine: &Engine) -> (i64, i64, i64, i64) {
+    engine
+        .resources()
+        .read(|tx| {
+            tx.query_row(
+                "SELECT (SELECT count(*) FROM drafts), (SELECT count(*) FROM draft_revisions), \
+             (SELECT count(*) FROM object_pins WHERE pin_kind = 'reservation'), \
+             (SELECT count(*) FROM command_receipts)",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .map_err(|e| StoreError::internal(e.to_string()))
+        })
+        .unwrap()
+}
+
+#[test]
+fn draft_receipts_precede_replacement_validation() {
+    let (_scratch, engine) = scratch_engine("draft-receipt-precedence");
+    let draft_id = create(&engine, DraftSource::New).draft_id().to_owned();
+    let key = engine.new_idempotency_key();
+    let saved = block_on(engine.save_draft(&key, &draft_id, None, content("original"))).unwrap();
+    for field in [
+        "draft_id",
+        "base_revision_id",
+        "identity_id",
+        "to",
+        "cc",
+        "bcc",
+        "filename",
+        "media_type",
+    ] {
+        let mut replacement = content("replacement");
+        let mut id = draft_id.as_str();
+        let mut base = None;
+        match field {
+            "draft_id" => id = "",
+            "base_revision_id" => base = Some(""),
+            "identity_id" => replacement.identity_id = Some(String::new()),
+            "to" | "cc" | "bcc" => {
+                let recipient = DraftRecipient {
+                    address: String::new(),
+                    name: None,
+                };
+                match field {
+                    "to" => replacement.to = vec![recipient],
+                    "cc" => replacement.cc.push(recipient),
+                    _ => replacement.bcc.push(recipient),
+                }
+            }
+            _ => {
+                let object =
+                    block_on(engine.publish_draft_attachment(Cursor::new(b"replay".as_slice())))
+                        .unwrap();
+                replacement.attachments.push(DraftAttachment {
+                    object,
+                    filename: if field == "filename" { "" } else { "a" }.into(),
+                    media_type: if field == "media_type" {
+                        ""
+                    } else {
+                        "text/plain"
+                    }
+                    .into(),
+                });
+            }
+        }
+        let before = draft_counts(&engine);
+        let replay = block_on(engine.save_draft(&key, id, base, replacement)).unwrap();
+        assert_eq!(replay.receipt(), saved.receipt(), "{field}");
+        assert_eq!(replay.revision_id(), saved.revision_id(), "{field}");
+        assert_eq!(draft_counts(&engine), before, "{field}");
+    }
+    assert!(matches!(
+        block_on(engine.discard_draft(&key, "")),
+        Err(EngineError::Conflict { .. })
+    ));
+    let discard_key = engine.new_idempotency_key();
+    let discarded = block_on(engine.discard_draft(&discard_key, &draft_id)).unwrap();
+    let before = draft_counts(&engine);
+    assert_eq!(
+        block_on(engine.discard_draft(&discard_key, "")).unwrap(),
+        discarded
+    );
+    assert!(matches!(
+        block_on(engine.save_draft(&discard_key, "", Some(""), content("bad"))),
+        Err(EngineError::Conflict { .. })
+    ));
+    assert_eq!(draft_counts(&engine), before);
+    block_on(engine.shutdown()).unwrap();
+}
+
+#[test]
+fn fresh_draft_validation_preserves_fields_and_retry() {
+    let (_scratch, engine) = scratch_engine("draft-fresh-validation");
+    let id = create(&engine, DraftSource::New).draft_id().to_owned();
+    let key = engine.new_idempotency_key();
+    for field in [
+        "draft_id",
+        "base_revision_id",
+        "identity_id",
+        "to",
+        "cc",
+        "bcc",
+        "filename",
+        "media_type",
+    ] {
+        let mut bad = content("bad");
+        let mut draft_id = id.as_str();
+        let mut base = None;
+        match field {
+            "draft_id" => draft_id = "",
+            "base_revision_id" => base = Some(""),
+            "identity_id" => bad.identity_id = Some(String::new()),
+            "to" | "cc" | "bcc" => {
+                let recipient = DraftRecipient {
+                    address: String::new(),
+                    name: None,
+                };
+                match field {
+                    "to" => bad.to = vec![recipient],
+                    "cc" => bad.cc.push(recipient),
+                    _ => bad.bcc.push(recipient),
+                }
+            }
+            _ => {
+                let object =
+                    block_on(engine.publish_draft_attachment(Cursor::new(b"fresh".as_slice())))
+                        .unwrap();
+                bad.attachments.push(DraftAttachment {
+                    object,
+                    filename: if field == "filename" { "" } else { "a" }.into(),
+                    media_type: if field == "media_type" {
+                        ""
+                    } else {
+                        "text/plain"
+                    }
+                    .into(),
+                });
+            }
+        }
+        let before = draft_counts(&engine);
+        match block_on(engine.save_draft(&key, draft_id, base, bad)) {
+            Err(EngineError::InvalidInput { field: actual, .. }) => assert_eq!(
+                actual,
+                if field == "filename" || field == "media_type" {
+                    "attachments"
+                } else {
+                    field
+                }
+            ),
+            other => panic!("{field}: {other:?}"),
+        }
+        assert_eq!(draft_counts(&engine), before, "{field}");
+    }
+    block_on(engine.save_draft(&key, &id, None, content("corrected"))).unwrap();
+    let discard_key = engine.new_idempotency_key();
+    let before = draft_counts(&engine);
+    assert!(
+        matches!(block_on(engine.discard_draft(&discard_key, "")), Err(EngineError::InvalidInput { field, .. }) if field == "draft_id")
+    );
+    assert_eq!(draft_counts(&engine), before);
+    block_on(engine.discard_draft(&discard_key, &id)).unwrap();
+    block_on(engine.shutdown()).unwrap();
 }
