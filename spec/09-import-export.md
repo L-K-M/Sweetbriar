@@ -362,7 +362,8 @@ claim vanished); the writer never empties or overwrites foreign files.
 
 EML writes `<occurrence_id>.eml` per acquired record; mboxrd writes
 `<mailbox_id>-<name>.mbox` per in-scope mailbox, folding non
-`[A-Za-z0-9._-]` bytes to `_`. The frozen `mailboxes` set gives an
+`[A-Za-z0-9._-]` bytes to `_` and capping the folded name at 128
+bytes. The frozen `mailboxes` set gives an
 account or mailbox scope's file even when the mailbox's records are
 all unavailable or it has no records at all; search and selection
 files follow their member records' mailboxes. Acquisition bytes
