@@ -13,6 +13,7 @@ use sb_resources::{
     start_search_rebuild,
 };
 
+use crate::engine::validate_idempotency_key;
 use crate::{Engine, EngineError};
 
 /// The commands' names in `command_receipts` (spec/07).
@@ -49,6 +50,7 @@ impl Engine {
         &self,
         idempotency_key: &str,
     ) -> Result<SearchRebuildStarted, EngineError> {
+        validate_idempotency_key(idempotency_key)?;
         let candidate = self.resources().new_uuid_string();
         let now = self.resources().now();
         let key = idempotency_key.to_owned();
@@ -81,6 +83,7 @@ impl Engine {
         idempotency_key: &str,
         job_id: &str,
     ) -> Result<Receipt, EngineError> {
+        validate_idempotency_key(idempotency_key)?;
         let now = self.resources().now();
         let (key, id) = (idempotency_key.to_owned(), job_id.to_owned());
         self.command(move |worker| async move {
@@ -104,6 +107,7 @@ impl Engine {
     /// the worker's permitted transitions move them. Without an I/O
     /// pause the request is a quiet no-op.
     pub async fn retry_search_index(&self, idempotency_key: &str) -> Result<Receipt, EngineError> {
+        validate_idempotency_key(idempotency_key)?;
         let now = self.resources().now();
         let key = idempotency_key.to_owned();
         self.command(move |worker| async move {

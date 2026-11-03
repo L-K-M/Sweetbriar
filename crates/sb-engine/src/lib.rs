@@ -21,6 +21,8 @@ pub use bodies::{
 mod drafts;
 mod engine;
 mod error;
+#[cfg(test)]
+mod idempotency_tests;
 mod import;
 mod index;
 #[cfg(test)]

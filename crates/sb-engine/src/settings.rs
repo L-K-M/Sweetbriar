@@ -6,6 +6,7 @@
 
 use sb_resources::{Receipt, WritePriority, read_all, run_once, upsert};
 
+use crate::engine::validate_idempotency_key;
 use crate::{Engine, EngineError};
 
 /// `set_setting`'s name in `command_receipts` (spec/07).
@@ -89,6 +90,7 @@ impl Engine {
         key: &str,
         value: &str,
     ) -> Result<Receipt, EngineError> {
+        validate_idempotency_key(idempotency_key)?;
         let setting = registered(key).ok_or_else(|| {
             EngineError::invalid_input("key", format!("unknown setting key '{key}'"))
         })?;
