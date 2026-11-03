@@ -17,7 +17,7 @@ use io_imap::rfc3501::login::{ImapLogin, ImapLoginOptions};
 use io_imap::rfc3501::logout::{ImapLogout, ImapLogoutError};
 use io_imap::types::response::Capability;
 use rustls::pki_types::ServerName;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
 use tokio_rustls::client::TlsStream;
@@ -248,7 +248,7 @@ impl Connection {
                 }
                 ImapCoroutineState::Yielded(ImapYield::WantsWrite(bytes)) => {
                     let wire = self.wire.as_mut().ok_or(ImapError::Closed)?;
-                    if let Err(err) = wire.write_all(&bytes).await {
+                    if let Err(err) = write_command(wire, &bytes).await {
                         self.close().await;
                         return Err(ImapError::from_io(err));
                     }
@@ -265,6 +265,11 @@ impl Connection {
             let _ = wire.shutdown().await;
         }
     }
+}
+
+async fn write_command(wire: &mut (impl AsyncWrite + Unpin), bytes: &[u8]) -> std::io::Result<()> {
+    wire.write_all(bytes).await?;
+    wire.flush().await
 }
 
 /// Whether the capability list advertises `wanted`.
@@ -287,5 +292,21 @@ async fn connect_tls(tcp: TcpStream, pin: CertificatePin, host: IpAddr) -> Resul
             }
             Err(ImapError::from_io(err))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::BufWriter;
+
+    #[tokio::test]
+    async fn command_is_flushed_before_return() {
+        let (client, _server) = tokio::io::duplex(64);
+        let mut wire = BufWriter::new(client);
+        write_command(&mut wire, b"A1 CAPABILITY\r\n")
+            .await
+            .unwrap();
+        assert!(wire.buffer().is_empty(), "command remains buffered");
     }
 }

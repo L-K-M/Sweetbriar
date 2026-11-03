@@ -71,8 +71,6 @@ fn received_commands(server: &FakeImapServer) -> Vec<String> {
         .collect()
 }
 
-/// Implicit TLS: the handshake precedes the greeting; the setup is the
-/// same afterwards.
 #[tokio::test]
 async fn implicit_tls_setup() {
     let profile = Profile::bridge();
@@ -95,8 +93,6 @@ async fn implicit_tls_setup() {
     drop(connection);
 }
 
-/// A wrong pin fails with the pin-mismatch error carrying the
-/// presented hash, and the server never receives LOGIN.
 #[tokio::test]
 async fn wrong_pin_is_rejected_before_login() {
     let profile = Profile::bridge();
@@ -125,7 +121,6 @@ async fn wrong_pin_is_rejected_before_login() {
     assert_eq!(server.unexpected_count(), 0, "no fallback answers");
 }
 
-/// A server that advertises `LOGINDISABLED` is refused before LOGIN.
 #[tokio::test]
 async fn login_disabled_is_refused() {
     let profile = Profile::bridge().with_capabilities(&["IMAP4rev1", "LOGINDISABLED", "IDLE"]);
@@ -224,19 +219,11 @@ async fn malformed_response_closes_the_connection() {
     assert_eq!(server.unexpected_count(), 0, "no fallback answers");
 }
 
-/// The log scan: the password appears in no formatted output, not the
-/// options', the connection's or any error variant's.
 #[tokio::test]
 async fn credentials_never_appear_in_formatted_output() {
     let password = "a-password-no-formatted-output-may-carry";
-    let opts = ConnectOptions {
-        host: localhost(),
-        port: 1143,
-        host_policy: HostPolicy::LoopbackOnly,
-        pin: pin(),
-        user: "owner@example.org".to_string(),
-        password: Password::new(password),
-    };
+    let mut opts = options(localhost(), 1143);
+    opts.password = Password::new(password);
 
     let mut outputs = vec![
         format!("{opts:?}"),
