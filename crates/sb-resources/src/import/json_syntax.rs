@@ -64,11 +64,102 @@ pub(super) struct FileTable {
     ids_hash: String,
 }
 
+impl FileTable {
+    pub(super) fn files(&self) -> (u64, u64) {
+        (self.start + 1, self.count)
+    }
+
+    pub(super) fn format(&self) -> BundleFormat {
+        self.format
+    }
+}
+
 struct FileName {
     start: u64,
     digest: [u8; 32],
     bytes: u64,
     records: u64,
+}
+
+/// One checked declaration, retaining an offset instead of its name.
+pub(super) struct Child {
+    name: FileName,
+    pub(super) bytes: u64,
+    pub(super) records: u64,
+}
+
+pub(super) fn child(reader: &mut (impl Read + Seek), offset: u64) -> io::Result<(Child, u64)> {
+    let (name, next) = read_entry(reader, offset)?;
+    Ok((
+        Child {
+            bytes: name.bytes,
+            records: name.records,
+            name,
+        },
+        next,
+    ))
+}
+
+impl Child {
+    pub(super) fn matches(&self, reader: &mut (impl Read + Seek), name: &str) -> io::Result<bool> {
+        reader.seek(SeekFrom::Start(self.name.start))?;
+        let mut parser = Parser {
+            reader,
+            next: None,
+            capture: None,
+            position: self.name.start,
+        };
+        let mut expected = name.chars();
+        loop {
+            let actual = parser.string_char()?;
+            if actual != expected.next() {
+                return Ok(false);
+            }
+            if actual.is_none() {
+                return Ok(true);
+            }
+        }
+    }
+
+    /// The prefix is display-only; names remain unrestricted by this bound.
+    pub(super) fn description(
+        &self,
+        reader: &mut (impl Read + Seek),
+        ordinal: u64,
+    ) -> io::Result<(String, bool, String)> {
+        const PREFIX_BYTES: usize = 256;
+        reader.seek(SeekFrom::Start(self.name.start))?;
+        let mut parser = Parser {
+            reader,
+            next: None,
+            capture: None,
+            position: self.name.start,
+        };
+        let mut prefix = String::new();
+        let mut length = 0u64;
+        let mut truncated = false;
+        while let Some(ch) = parser.string_char()? {
+            length = length
+                .checked_add(ch.len_utf8() as u64)
+                .ok_or_else(invalid)?;
+            if !truncated && prefix.len() + ch.len_utf8() <= PREFIX_BYTES {
+                prefix.push(ch);
+            } else {
+                truncated = true;
+            }
+        }
+        let digest: String = self
+            .name
+            .digest
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        let suffix = if truncated { " (truncated)" } else { "" };
+        let detail = format!(
+            "missing declared child {ordinal}: {prefix:?}{suffix}, {length} bytes, sha256 {digest}"
+        );
+        Ok((prefix, truncated, detail))
+    }
 }
 
 /// Compare decoded names exactly; hashes only avoid unnecessary comparisons.

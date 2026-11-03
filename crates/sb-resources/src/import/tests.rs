@@ -945,15 +945,20 @@ fn relationship_passes_cancel_and_preserve_other_snapshots() {
     let before = snapshot_names(&scratch);
     let dir = scratch.path().join("bundle");
     fs::create_dir(&dir).unwrap();
-    let mut manifest: serde_json::Value =
-        serde_json::from_str(&table_manifest(r#"[{"name":"a","bytes":2,"records":2}]"#)).unwrap();
+    let child = b"From sender Sat Jan  1 00:00:00 2000\n\nFrom sender Sat Jan  1 00:00:00 2000\n\n";
+    fs::write(dir.join("a.mbox"), child).unwrap();
+    let mut manifest: serde_json::Value = serde_json::from_str(&table_manifest(&format!(
+        r#"[{{"name":"a.mbox","bytes":{},"records":2}}]"#,
+        child.len()
+    )))
+    .unwrap();
     let message = |id| {
         serde_json::json!({
             "v":1, "occurrence_id":id, "message_id":1,
             "account":{"id":"a","name":"a"}, "mailbox":{"id":1,"name":"m"},
             "occurrence_state":"present", "flags":{"seen":false,"flagged":false,"answered":false,"draft":false,"deleted":false},
             "keywords":[], "acquisition":{"id":1,"sha256":"a".repeat(64),"bytes":2},
-            "body_availability":"acquired", "tags":[], "note":null, "file":"a",
+            "body_availability":"acquired", "tags":[], "note":null, "file":"a.mbox",
             "record_offset":0, "encoded_bytes":2, "original_bytes":2, "framing_lf_added":false
         })
     };
@@ -975,7 +980,9 @@ fn relationship_passes_cancel_and_preserve_other_snapshots() {
         let mut previous = 0;
         let mut seeks = 0;
         let outcome = res.inventory_import_sources(std::slice::from_ref(&dir), |event| {
-            if let ImportProgress::Scanning { bytes, .. } = event {
+            if let ImportProgress::Scanning { path, bytes } = event
+                && path == dir.join("sweetbriar-metadata.json")
+            {
                 if bytes == previous {
                     seeks += 1;
                 }
@@ -1148,9 +1155,11 @@ fn bundle_file_table_handles_large_names_and_many_entries() {
     fs::write(dir.join("sweetbriar-metadata.json"), table_manifest(&files)).unwrap();
     let inventory = run(&res, std::slice::from_ref(&dir));
     assert!(inventory.sources().is_empty());
-    assert_eq!(
-        inventory.problems()[0].kind(),
-        ImportProblemKind::Unsupported
+    assert_eq!(inventory.problems()[0].kind(), ImportProblemKind::Failed);
+    assert!(
+        inventory.problems()[0]
+            .detail()
+            .contains("missing declared child")
     );
     let duplicate = format!(
         r#"[{{"name":"{long}","bytes":0,"records":0}},{{"name":"\u0061{}","bytes":0,"records":0}}]"#,
@@ -1187,9 +1196,11 @@ fn bundle_file_table_handles_large_names_and_many_entries() {
     .unwrap();
     let inventory = run(&res, &[dir]);
     assert!(inventory.sources().is_empty());
-    assert_eq!(
-        inventory.problems()[0].kind(),
-        ImportProblemKind::Unsupported
+    assert_eq!(inventory.problems()[0].kind(), ImportProblemKind::Failed);
+    assert!(
+        inventory.problems()[0]
+            .detail()
+            .contains("missing declared child")
     );
     assert!(snapshot_names(&scratch).is_empty());
 }

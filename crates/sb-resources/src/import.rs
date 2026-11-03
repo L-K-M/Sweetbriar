@@ -492,8 +492,7 @@ impl Walker<'_> {
         }
     }
 
-    /// A recognized bundle never enters ordinary discovery. The envelope
-    /// is checked before later record validation can admit a source.
+    /// Validate a recognized bundle, then refuse it until admission exists.
     fn bundle(&mut self, dir: &Path, manifest: &Path) {
         let captured = self.store.capture_import_source(manifest, |bytes| {
             (self.progress)(ImportProgress::Capturing {
@@ -531,13 +530,19 @@ impl Walker<'_> {
                 });
                 let result = json_syntax::validate_envelope(&mut reader).and_then(|table| {
                     json_syntax::validate_file_names(&mut reader, &table)?;
-                    json_syntax::validate_messages(&mut reader, &table)
+                    json_syntax::validate_messages(&mut reader, &table)?;
+                    Ok(table)
                 });
-                if reader.get_ref().cancelled {
+                let cancelled = reader.get_ref().cancelled;
+                let mut file = reader.into_inner().inner;
+                if cancelled {
                     self.cancelled = true;
                     None
                 } else {
-                    Some(result.map_err(|error| error.to_string()))
+                    match result {
+                        Ok(table) => self.bundle_children(dir, manifest, &mut file, &table),
+                        Err(error) => Some(Err(error.to_string())),
+                    }
                 }
             }
             Err(error) => Some(Err(error.to_string())),
@@ -546,12 +551,230 @@ impl Walker<'_> {
         match result {
             None => {}
             Some(Err(error)) => self.failed(dir, error),
-            Some(Ok(())) => self.problem(
+            Some(Ok(true)) => self.problem(
                 dir,
                 ImportProblemKind::Unsupported,
                 "export bundle manifest captured; bundle import is not yet supported",
             ),
+            Some(Ok(false)) => {}
         }
+    }
+
+    /// Each lexical declaration is checked even when two names alias one file.
+    fn bundle_children(
+        &mut self,
+        dir: &Path,
+        manifest: &Path,
+        file: &mut (impl Read + Seek),
+        table: &json_syntax::FileTable,
+    ) -> Option<Result<bool, String>> {
+        let entries = match self.fs.read_dir(dir) {
+            Ok(entries) => entries,
+            Err(error) => return Some(Err(error.to_string())),
+        };
+        let mut matched = vec![false; entries.len()];
+        let (mut offset, count) = table.files();
+        let mut valid = true;
+        for ordinal in 1..=count {
+            if self.check(dir) {
+                return None;
+            }
+            let mut reader = BufReader::new(ScanReader {
+                inner: &mut *file,
+                path: manifest,
+                scanned: 0,
+                cancelled: false,
+                progress: &mut *self.progress,
+            });
+            let result = (|| -> io::Result<_> {
+                let (child, next) = json_syntax::child(&mut reader, offset)?;
+                let mut found = None;
+                for (index, path) in entries.iter().enumerate() {
+                    if let Some(name) = path.file_name().and_then(|name| name.to_str())
+                        && child.matches(&mut reader, name)?
+                    {
+                        found = Some(index);
+                        break;
+                    }
+                }
+                let description = if found.is_none() {
+                    Some(child.description(&mut reader, ordinal)?)
+                } else {
+                    None
+                };
+                Ok((next, found, description))
+            })();
+            let cancelled = reader.get_ref().cancelled;
+            drop(reader);
+            if cancelled {
+                self.cancelled = true;
+                return None;
+            }
+            let (next, found, description) = match result {
+                Ok(value) => value,
+                Err(error) => return Some(Err(error.to_string())),
+            };
+            offset = next;
+            let Some(index) = found else {
+                let (name, truncated, detail) =
+                    description.expect("missing child has a description");
+                let path = if truncated {
+                    dir.to_path_buf()
+                } else {
+                    dir.join(name)
+                };
+                self.failed(&path, detail);
+                valid = false;
+                continue;
+            };
+            matched[index] = true;
+        }
+        for (path, found) in entries.iter().zip(matched) {
+            if self.check(path) {
+                return None;
+            }
+            if path.to_str().is_none() {
+                self.problem(path, ImportProblemKind::NonUtf8, "the path is not UTF-8");
+                valid = false;
+                continue;
+            }
+            if found {
+                let mut reader = BufReader::new(ScanReader {
+                    inner: &mut *file,
+                    path: manifest,
+                    scanned: 0,
+                    cancelled: false,
+                    progress: &mut *self.progress,
+                });
+                let result = (|| -> io::Result<_> {
+                    let (mut offset, count) = table.files();
+                    let name = path
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .ok_or_else(|| io::Error::other("invalid child name"))?;
+                    for _ in 0..count {
+                        let (child, next) = json_syntax::child(&mut reader, offset)?;
+                        if child.matches(&mut reader, name)? {
+                            return Ok(child);
+                        }
+                        offset = next;
+                    }
+                    Err(io::Error::other("manifest child disappeared"))
+                })();
+                let cancelled = reader.get_ref().cancelled;
+                drop(reader);
+                if cancelled {
+                    self.cancelled = true;
+                    return None;
+                }
+                let child = match result {
+                    Ok(child) => child,
+                    Err(error) => return Some(Err(error.to_string())),
+                };
+                if !self.check_bundle_child(path, table.format(), child.bytes, child.records) {
+                    valid = false;
+                }
+                if self.cancelled {
+                    return None;
+                }
+                continue;
+            }
+            if has_extension(path, "eml") || has_extension(path, "mbox") {
+                match self.fs.metadata(path) {
+                    Ok(Some(md)) if md.kind() == FileKind::File => {
+                        self.failed(path, "bundle file is not listed in the manifest");
+                        valid = false;
+                    }
+                    Err(error) => {
+                        self.failed(path, error);
+                        valid = false;
+                    }
+                    Ok(None) => {
+                        self.failed(path, "bundle child disappeared during discovery");
+                        valid = false;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        Some(Ok(valid))
+    }
+
+    fn check_bundle_child(
+        &mut self,
+        path: &Path,
+        format: BundleFormat,
+        bytes: u64,
+        records: u64,
+    ) -> bool {
+        let extension = match format {
+            BundleFormat::Eml => "eml",
+            BundleFormat::Mboxrd => "mbox",
+        };
+        if !has_extension(path, extension) {
+            self.failed(path, "bundle child format does not match the manifest");
+            return false;
+        }
+        let capture = self.store.capture_import_source(path, |bytes| {
+            (self.progress)(ImportProgress::Capturing { path, bytes })
+        });
+        let snapshot = match capture {
+            Ok(ImportSourceCapture::Captured { snapshot, .. }) => snapshot,
+            Ok(ImportSourceCapture::Cancelled) => {
+                self.cancelled = true;
+                return false;
+            }
+            Err(error) => {
+                self.failed(path, error);
+                return false;
+            }
+        };
+        let result = if snapshot.byte_length() != bytes {
+            Err("bundle child byte length differs from the manifest".to_owned())
+        } else {
+            match self
+                .store
+                .open_import_source_cancellable(&snapshot, |bytes| {
+                    (self.progress)(ImportProgress::Scanning { path, bytes })
+                }) {
+                Ok(sb_store::Scoped::Stopped) => {
+                    self.cancelled = true;
+                    Ok(())
+                }
+                Ok(sb_store::Scoped::Done(_)) if format == BundleFormat::Eml && records == 1 => {
+                    Ok(())
+                }
+                Ok(sb_store::Scoped::Done(_)) if format == BundleFormat::Eml => {
+                    Err("bundle child record count differs from the manifest".to_owned())
+                }
+                Ok(sb_store::Scoped::Done(file)) => match scan_snapshot(
+                    path,
+                    file.take(bytes.saturating_add(1)),
+                    &mut *self.progress,
+                ) {
+                    Scan::Counted(inventory)
+                        if inventory.source_bytes() == bytes && inventory.messages() == records =>
+                    {
+                        Ok(())
+                    }
+                    Scan::Counted(_) => Err(
+                        "bundle child record count or length differs from the manifest".to_owned(),
+                    ),
+                    Scan::Cancelled => {
+                        self.cancelled = true;
+                        Ok(())
+                    }
+                    Scan::Failed(error) => Err(error.to_string()),
+                },
+                Err(error) => Err(error.to_string()),
+            }
+        };
+        self.discard(&snapshot);
+        if let Err(error) = result {
+            self.failed(path, error);
+            return false;
+        }
+        !self.cancelled
     }
 
     /// A directory contributes its sorted entries once; canonical
