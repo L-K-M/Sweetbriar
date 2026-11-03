@@ -978,12 +978,13 @@ local drafts. No network yet.
     ordered-ID digest, unique occurrence IDs, file references and EML
     agreement using bounded scans of the verified snapshot. Prove writer
     manifests, hostile tokens and cleanup before bundle inventory.
-  - **M1.7d1b2 Bundle file agreement and inventory — L:** check every declared
-    direct child's kind, byte length and record count independently before
-    ingest, report missing or disagreeing files without suppressing valid
-    siblings, and retain the shared manifest snapshot while any bundle source
-    references it. Preserve sorted canonical discovery, alias deduplication,
-    cancellation cleanup and real EML/mboxrd exporter proof.
+  - **M1.7d1b2a Bundle child agreement — L:** check each direct child's kind,
+    captured byte length and record count independently, reporting missing,
+    unlisted or disagreeing files without suppressing sibling checks. Refuse
+    bundle sources and discard temporary snapshots, including on cancellation.
+  - **M1.7d1b2b Bundle inventory — L:** admit verified bundle sources and
+    retain their shared manifest snapshot. Restore recursive nested discovery,
+    sorted canonical deduplication and version-2 inventory lifecycle.
   - **M1.7d2 Manifest-verified ingest — L:** each bundle record's
     boundary, framing, original length and SHA-256 are verified before
     its bytes publish; only the declared framing LF is removed; the
