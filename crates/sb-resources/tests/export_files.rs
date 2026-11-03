@@ -46,6 +46,41 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+fn repair_relationship_proof(manifest: &mut Value) {
+    let messages = manifest["messages"].as_array().unwrap();
+    let mut digest = Sha256::new();
+    for message in messages {
+        digest.update(message["occurrence_id"].as_i64().unwrap().to_be_bytes());
+    }
+    let entries = messages.len();
+    let references = messages
+        .iter()
+        .filter_map(|message| {
+            Some((
+                message["file"].as_str()?.to_owned(),
+                message["acquisition"]["bytes"].as_u64()?,
+            ))
+        })
+        .collect::<Vec<_>>();
+    manifest["entries"] = json!(entries);
+    manifest["ids_sha256"] = json!(hex(digest.finalize().as_slice()));
+    let eml = manifest["format"] == "eml";
+    let files = manifest["files"].as_array_mut().unwrap();
+    if eml {
+        files.retain(|file| references.iter().any(|(name, _)| file["name"] == *name));
+    }
+    for file in files {
+        let matches = references
+            .iter()
+            .filter(|(name, _)| file["name"] == *name)
+            .collect::<Vec<_>>();
+        file["records"] = json!(matches.len());
+        if eml && let Some((_, bytes)) = matches.first() {
+            file["bytes"] = json!(bytes);
+        }
+    }
+}
+
 fn object_path(root: &Path, bytes: &[u8]) -> PathBuf {
     let hex = sha_hex(bytes);
     root.join("objects/sha256")
@@ -1220,6 +1255,47 @@ fn resume_republishes_files_failing_mboxrd_verification() {
 }
 
 #[test]
+fn manifest_rejects_invalid_global_relationships() {
+    let (scratch, res, _) = fixture();
+    let mut accepted = Vec::new();
+    for (job, format) in [
+        ("relationships-eml", ExportFormat::Eml),
+        ("relationships-mbox", ExportFormat::Mboxrd),
+    ] {
+        let dest = scratch.path().join(job);
+        capture(&res, job, format, &dest, mailbox_scope(&res, 1));
+        export(&res, job);
+        let original = manifest(&dest);
+        let mut cases = Vec::new();
+
+        let mut changed = original.clone();
+        changed["entries"] = json!(original["entries"].as_u64().unwrap() + 1);
+        cases.push(("entries", changed));
+        let mut changed = original.clone();
+        changed["ids_sha256"] = json!("0".repeat(64));
+        cases.push(("digest", changed));
+        let mut changed = original.clone();
+        changed["files"][0]["records"] =
+            json!(original["files"][0]["records"].as_u64().unwrap() + 1);
+        cases.push(("records", changed));
+        let mut changed = original.clone();
+        changed["messages"][0]["file"] = json!("unresolved");
+        cases.push(("unresolved", changed));
+
+        for (label, changed) in cases {
+            std::fs::write(dest.join(MANIFEST), changed.to_string()).unwrap();
+            let outcome = res.inventory_import_sources(std::slice::from_ref(&dest), |_| {
+                ControlFlow::Continue(())
+            });
+            if outcome.inventory().problems()[0].kind() != sb_resources::ImportProblemKind::Failed {
+                accepted.push(format!("{job}: {label}"));
+            }
+        }
+    }
+    assert!(accepted.is_empty(), "accepted: {accepted:?}");
+}
+
+#[test]
 fn manifest_schema_rejects_invalid_writer_manifests() {
     let (scratch, res, _) = fixture();
     for (job, format) in [
@@ -1277,6 +1353,7 @@ fn manifest_schema_rejects_invalid_writer_manifests() {
                             0
                         };
                         let expected = if valid_pair && mask == required {
+                            repair_relationship_proof(&mut changed);
                             sb_resources::ImportProblemKind::Unsupported
                         } else {
                             sb_resources::ImportProblemKind::Failed
@@ -1330,6 +1407,7 @@ fn manifest_schema_rejects_invalid_writer_manifests() {
                 }
                 changed["messages"][0]["tags"] = json!(tags);
             }
+            repair_relationship_proof(&mut changed);
             std::fs::write(dest.join(MANIFEST), changed.to_string()).unwrap();
             let outcome = res.inventory_import_sources(std::slice::from_ref(&dest), |_| {
                 ControlFlow::Continue(())

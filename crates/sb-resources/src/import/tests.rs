@@ -874,10 +874,12 @@ fn bundle_capture_and_parser_cancellation_remove_only_its_snapshot() {
     }
 }
 
+const TABLE_MESSAGE: &str = r#"{"v":1,"occurrence_id":1,"message_id":2,"account":{"id":"a","name":"a"},"mailbox":{"id":1,"name":"m"},"occurrence_state":"present","flags":{"seen":false,"flagged":false,"answered":false,"draft":false,"deleted":false},"keywords":[],"acquisition":null,"body_availability":"not_acquired","tags":[],"note":null,"file":null}"#;
+
 fn table_manifest(files: &str) -> String {
     format!(
-        r#"{{"messages":[],"files":{files},"ids_sha256":"{}","entries":0,"generation":1,"scope":{{"generation":1,"id":1,"kind":"mailbox"}},"destination":"/destination","format":"eml","job":"j","kind":"export-manifest","v":1}}"#,
-        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        r#"{{"messages":[{TABLE_MESSAGE}],"files":{files},"ids_sha256":"{}","entries":1,"generation":1,"scope":{{"generation":1,"id":1,"kind":"mailbox"}},"destination":"/destination","format":"mboxrd","job":"j","kind":"export-manifest","v":1}}"#,
+        "cd2662154e6d76b2b2b92e70c0cac3ccf534f9b74eb5b89819ec509083d00a50"
     )
 }
 
@@ -891,8 +893,7 @@ fn message_rescans_cancel_and_preserve_other_snapshots() {
     let dir = scratch.path().join("bundle");
     fs::create_dir(&dir).unwrap();
     let message = r##"{"v":1,"occurrence_id":1,"message_id":2,"account":{"id":"a","name":"a"},"mailbox":{"id":1,"name":"m"},"occurrence_state":"present","flags":{"seen":false,"flagged":false,"answered":false,"draft":false,"deleted":false},"keywords":["a","b"],"acquisition":null,"body_availability":"not_acquired","tags":[{"id":"a","name":"a","color_srgb":null},{"id":"b","name":"b","color_srgb":"#010203"},{"id":"c","name":"c","color_srgb":null}],"note":null,"file":null}"##;
-    let manifest =
-        table_manifest("[]").replace("\"messages\":[]", &format!("\"messages\":[{message}]"));
+    let manifest = table_manifest("[]").replace(TABLE_MESSAGE, message);
     fs::write(dir.join("sweetbriar-metadata.json"), &manifest).unwrap();
     assert_eq!(
         run(&res, std::slice::from_ref(&dir)).problems()[0].kind(),
@@ -934,7 +935,119 @@ fn message_rescans_cancel_and_preserve_other_snapshots() {
 }
 
 #[test]
+fn relationship_passes_cancel_and_preserve_other_snapshots() {
+    use sha2::{Digest, Sha256};
+
+    let (scratch, res) = resources("bundle-relationship-scans");
+    let other = scratch.path().join("other.eml");
+    fs::write(&other, EML).unwrap();
+    assert_eq!(run(&res, &[other]).sources().len(), 1);
+    let before = snapshot_names(&scratch);
+    let dir = scratch.path().join("bundle");
+    fs::create_dir(&dir).unwrap();
+    let mut manifest: serde_json::Value =
+        serde_json::from_str(&table_manifest(r#"[{"name":"a","bytes":2,"records":2}]"#)).unwrap();
+    let message = |id| {
+        serde_json::json!({
+            "v":1, "occurrence_id":id, "message_id":1,
+            "account":{"id":"a","name":"a"}, "mailbox":{"id":1,"name":"m"},
+            "occurrence_state":"present", "flags":{"seen":false,"flagged":false,"answered":false,"draft":false,"deleted":false},
+            "keywords":[], "acquisition":{"id":1,"sha256":"a".repeat(64),"bytes":2},
+            "body_availability":"acquired", "tags":[], "note":null, "file":"a",
+            "record_offset":0, "encoded_bytes":2, "original_bytes":2, "framing_lf_added":false
+        })
+    };
+    manifest["messages"] = serde_json::json!([message(1), message(2)]);
+    manifest["entries"] = serde_json::json!(2);
+    let mut digest = Sha256::new();
+    digest.update(1i64.to_be_bytes());
+    digest.update(2i64.to_be_bytes());
+    manifest["ids_sha256"] = serde_json::json!(
+        digest
+            .finalize()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>()
+    );
+    fs::write(dir.join("sweetbriar-metadata.json"), manifest.to_string()).unwrap();
+
+    let scan = |stop_at: usize| {
+        let mut previous = 0;
+        let mut seeks = 0;
+        let outcome = res.inventory_import_sources(std::slice::from_ref(&dir), |event| {
+            if let ImportProgress::Scanning { bytes, .. } = event {
+                if bytes == previous {
+                    seeks += 1;
+                }
+                previous = bytes;
+                if seeks == stop_at {
+                    return ControlFlow::Break(());
+                }
+            }
+            ControlFlow::Continue(())
+        });
+        (outcome, seeks)
+    };
+    let (outcome, seeks) = scan(usize::MAX);
+    assert_eq!(
+        outcome.inventory().problems()[0].kind(),
+        ImportProblemKind::Unsupported
+    );
+    assert!(seeks > 8);
+    for stop_at in 1..=seeks {
+        assert!(
+            matches!(scan(stop_at).0, ImportInventoryOutcome::Cancelled(_)),
+            "seek {stop_at}"
+        );
+        assert_eq!(snapshot_names(&scratch), before);
+    }
+    manifest["files"][0]["records"] = serde_json::json!(1);
+    fs::write(dir.join("sweetbriar-metadata.json"), manifest.to_string()).unwrap();
+    assert_eq!(
+        run(&res, &[dir]).problems()[0].kind(),
+        ImportProblemKind::Failed
+    );
+    assert_eq!(snapshot_names(&scratch), before);
+}
+
+#[test]
 fn bundle_file_table_scans_cancel_and_preserve_other_snapshots() {
+    use sha2::{Digest, Sha256};
+
+    fn valid_records(files: &str) -> String {
+        let mut manifest: serde_json::Value = serde_json::from_str(&table_manifest(files)).unwrap();
+        let mut messages = vec![serde_json::from_str::<serde_json::Value>(TABLE_MESSAGE).unwrap()];
+        let mut digest = Sha256::new();
+        digest.update(1i64.to_be_bytes());
+        for file in manifest["files"].as_array().unwrap() {
+            for _ in 0..file["records"].as_u64().unwrap() {
+                let id = i64::try_from(messages.len() + 1).unwrap();
+                let mut message = messages[0].clone();
+                message["occurrence_id"] = serde_json::json!(id);
+                message["acquisition"] =
+                    serde_json::json!({"id":1,"sha256":"a".repeat(64),"bytes":0});
+                message["body_availability"] = serde_json::json!("acquired");
+                message["file"] = file["name"].clone();
+                message["record_offset"] = serde_json::json!(0);
+                message["encoded_bytes"] = serde_json::json!(0);
+                message["original_bytes"] = serde_json::json!(0);
+                message["framing_lf_added"] = serde_json::json!(false);
+                digest.update(id.to_be_bytes());
+                messages.push(message);
+            }
+        }
+        manifest["entries"] = serde_json::json!(messages.len());
+        manifest["ids_sha256"] = serde_json::json!(
+            digest
+                .finalize()
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>()
+        );
+        manifest["messages"] = serde_json::json!(messages);
+        manifest.to_string()
+    }
+
     let (scratch, res) = resources("bundle-file-scans");
     let other = scratch.path().join("other.eml");
     fs::write(&other, EML).unwrap();
@@ -947,7 +1060,7 @@ fn bundle_file_table_scans_cancel_and_preserve_other_snapshots() {
         r#"[{"name":"a","bytes":0,"records":0},{"name":"b","bytes":1,"records":1},{"name":"c","bytes":2,"records":2}]"#,
         r#"[{"name":"a","bytes":0,"records":0},{"name":"\u0061","bytes":0,"records":0}]"#,
     ] {
-        fs::write(dir.join("sweetbriar-metadata.json"), table_manifest(files)).unwrap();
+        fs::write(dir.join("sweetbriar-metadata.json"), valid_records(files)).unwrap();
         let mut previous = 0;
         let mut seeks = 0;
         let outcome = res.inventory_import_sources(std::slice::from_ref(&dir), |event| {

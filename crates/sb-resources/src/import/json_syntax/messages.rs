@@ -3,7 +3,13 @@
 use std::cmp::Ordering;
 use std::io::{self, Read, Seek, SeekFrom};
 
-use super::{BundleFormat, FileTable, Parser, invalid, name_chunk};
+use sha2::{Digest, Sha256};
+
+use super::{
+    BundleFormat, FileName, FileTable, Parser, invalid, name_chunk, read_entry, same_name,
+};
+
+const BATCH_SIZE: usize = 64;
 
 enum Identity {
     Account,
@@ -15,24 +21,165 @@ pub(in crate::import) fn validate_messages(
     table: &FileTable,
 ) -> io::Result<()> {
     let (start, end, count) = table.messages;
+    if count != table.entries {
+        return Err(invalid());
+    }
     reader.seek(SeekFrom::Start(start + 1))?;
     let mut p = Parser {
-        reader,
+        reader: &mut *reader,
         next: None,
         capture: None,
         position: start + 1,
     };
+    let mut digest = Sha256::new();
+    let mut references = 0u64;
     for index in 0..count {
         p.whitespace()?;
         if index != 0 {
             p.expect(b',')?;
             p.whitespace()?;
         }
-        p.message(table.format)?;
+        let (id, has_file) = p.message(table.format)?;
+        digest.update(id.to_be_bytes());
+        references = references
+            .checked_add(u64::from(has_file))
+            .ok_or_else(invalid)?;
     }
     p.whitespace()?;
     p.expect(b']')?;
-    if p.position != end {
+    let hash: String = digest
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    if p.position != end || hash != table.ids_hash {
+        return Err(invalid());
+    }
+    unique_occurrences(reader, table)?;
+    file_references(reader, table, references)
+}
+
+struct MessageRef {
+    occurrence: i64,
+    file: Option<FileName>,
+    bytes: Option<u64>,
+}
+
+// Re-read only relationship fields after the complete schema pass.
+fn read_message(reader: &mut (impl Read + Seek), offset: u64) -> io::Result<(MessageRef, u64)> {
+    reader.seek(SeekFrom::Start(offset))?;
+    let mut p = Parser {
+        reader,
+        next: None,
+        capture: None,
+        position: offset,
+    };
+    p.whitespace()?;
+    if p.peek()? == Some(b',') {
+        p.take()?;
+        p.whitespace()?;
+    }
+    let mut occurrence = None;
+    let mut file = None;
+    let mut bytes = None;
+    p.object(|p, key| {
+        match key {
+            "occurrence_id" => occurrence = Some(p.integer::<i64>()?),
+            "file" => {
+                p.nullable(|p| {
+                    file = Some(p.file_name()?);
+                    Ok(())
+                })?;
+            }
+            "acquisition" => {
+                p.nullable(|p| {
+                    bytes = Some(p.acquisition()?);
+                    Ok(())
+                })?;
+            }
+            _ => p.value(1)?,
+        }
+        Ok(())
+    })?;
+    Ok((
+        MessageRef {
+            occurrence: occurrence.ok_or_else(invalid)?,
+            file,
+            bytes,
+        },
+        p.position,
+    ))
+}
+
+fn unique_occurrences(reader: &mut (impl Read + Seek), table: &FileTable) -> io::Result<()> {
+    let (start, end, count) = table.messages;
+    let mut outer = start + 1;
+    let mut processed = 0;
+    while processed < count {
+        let mut batch = Vec::with_capacity(BATCH_SIZE);
+        while batch.len() < BATCH_SIZE && processed < count {
+            let (message, next) = read_message(reader, outer)?;
+            if batch.contains(&message.occurrence) {
+                return Err(invalid());
+            }
+            batch.push(message.occurrence);
+            outer = next;
+            processed += 1;
+        }
+        let mut inner = outer;
+        for _ in processed..count {
+            let (message, next) = read_message(reader, inner)?;
+            if batch.contains(&message.occurrence) {
+                return Err(invalid());
+            }
+            inner = next;
+        }
+    }
+    if outer > end {
+        return Err(invalid());
+    }
+    Ok(())
+}
+
+fn file_references(
+    reader: &mut (impl Read + Seek),
+    table: &FileTable,
+    references: u64,
+) -> io::Result<()> {
+    let mut outer = table.start + 1;
+    let mut processed = 0;
+    let mut matched = 0u64;
+    while processed < table.count {
+        let mut batch = Vec::with_capacity(BATCH_SIZE);
+        while batch.len() < BATCH_SIZE && processed < table.count {
+            let (entry, next) = read_entry(reader, outer)?;
+            batch.push((entry, 0u64));
+            outer = next;
+            processed += 1;
+        }
+        let mut offset = table.messages.0 + 1;
+        for _ in 0..table.messages.2 {
+            let (message, next) = read_message(reader, offset)?;
+            offset = next;
+            let Some(file) = message.file else { continue };
+            for (entry, count) in &mut batch {
+                if file.digest == entry.digest && same_name(reader, file.start, entry.start)? {
+                    *count = count.checked_add(1).ok_or_else(invalid)?;
+                    matched = matched.checked_add(1).ok_or_else(invalid)?;
+                    if table.format == BundleFormat::Eml && message.bytes != Some(entry.bytes) {
+                        return Err(invalid());
+                    }
+                    break;
+                }
+            }
+        }
+        for (entry, count) in batch {
+            if count != entry.records || (table.format == BundleFormat::Eml && count != 1) {
+                return Err(invalid());
+            }
+        }
+    }
+    if outer > table.end || matched != references {
         return Err(invalid());
     }
     Ok(())
@@ -252,7 +399,7 @@ impl<R: Read + Seek> Parser<R> {
         })
     }
 
-    fn message(&mut self, format: BundleFormat) -> io::Result<()> {
+    fn message(&mut self, format: BundleFormat) -> io::Result<(i64, bool)> {
         const FIELDS: &[&str] = &[
             "v",
             "occurrence_id",
@@ -279,6 +426,7 @@ impl<R: Read + Seek> Parser<R> {
         let mut acquisition = None;
         let mut file = false;
         let mut original = None;
+        let mut occurrence = None;
         self.object(|p, key| {
             field(key, FIELDS, &mut seen)?;
             match key {
@@ -287,7 +435,8 @@ impl<R: Read + Seek> Parser<R> {
                         return Err(invalid());
                     }
                 }
-                "occurrence_id" | "message_id" => {
+                "occurrence_id" => occurrence = Some(p.integer::<i64>()?),
+                "message_id" => {
                     p.integer::<i64>()?;
                 }
                 "account" => p.identity(Identity::Account)?,
@@ -339,6 +488,154 @@ impl<R: Read + Seek> Parser<R> {
         {
             return Err(invalid());
         }
-        Ok(())
+        Ok((occurrence.ok_or_else(invalid)?, file))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Cursor;
+
+    use serde_json::{Value, json};
+
+    use super::*;
+    use crate::import::json_syntax::{validate_envelope, validate_file_names};
+
+    fn message(id: i64, file: Option<&str>, format: BundleFormat) -> Value {
+        let mut message = json!({
+            "v": 1, "occurrence_id": id, "message_id": 9,
+            "account": {"id":"a", "name":"a"}, "mailbox": {"id":1, "name":"m"},
+            "occurrence_state":"present",
+            "flags": {"seen":false,"flagged":false,"answered":false,"draft":false,"deleted":false},
+            "keywords": [], "acquisition": {"id":3,"sha256":"a".repeat(64),"bytes":2},
+            "body_availability":"acquired", "tags":[], "note":null, "file":file,
+        });
+        if file.is_none() {
+            message["acquisition"] = Value::Null;
+            message["body_availability"] = json!("not_acquired");
+        } else if format == BundleFormat::Mboxrd {
+            message["record_offset"] = json!(0);
+            message["encoded_bytes"] = json!(2);
+            message["original_bytes"] = json!(2);
+            message["framing_lf_added"] = json!(false);
+        }
+        message
+    }
+
+    fn manifest(format: BundleFormat, files: Value, messages: Vec<Value>) -> Value {
+        let mut digest = Sha256::new();
+        for message in &messages {
+            digest.update(message["occurrence_id"].as_i64().unwrap().to_be_bytes());
+        }
+        let hash: String = digest
+            .finalize()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        json!({
+            "v":1, "kind":"export-manifest", "job":"j", "format":format.name(),
+            "destination":"/d", "scope":{"kind":"mailbox","id":1,"generation":1},
+            "generation":1, "entries":messages.len(), "ids_sha256":hash,
+            "files":files, "messages":messages,
+        })
+    }
+
+    fn check(raw: &str) -> io::Result<()> {
+        let mut reader = Cursor::new(raw.as_bytes());
+        let table = validate_envelope(&mut reader)?;
+        validate_file_names(&mut reader, &table)?;
+        validate_messages(&mut reader, &table)
+    }
+
+    #[test]
+    fn relationship_proofs_and_exact_decoded_references() {
+        for format in [BundleFormat::Eml, BundleFormat::Mboxrd] {
+            let name = format!("{}😀", "x".repeat(100_000));
+            let valid = manifest(
+                format,
+                json!([{"name":name,"bytes":2,"records":1}]),
+                vec![
+                    message(i64::MIN, Some(&name), format),
+                    message(i64::MAX, None, format),
+                ],
+            );
+            let raw = valid.to_string();
+            // One spelling differs but decodes to the declared name.
+            let escaped = raw.replacen(&name, &name.replacen('😀', r"\ud83d\ude00", 1), 1);
+            assert_ne!(raw, escaped);
+            assert!(check(&escaped).is_ok());
+
+            let mut duplicate = valid.clone();
+            duplicate["messages"][1]["occurrence_id"] = json!(i64::MIN);
+            let duplicate = manifest(
+                format,
+                duplicate["files"].clone(),
+                duplicate["messages"].as_array().unwrap().clone(),
+            );
+            assert!(check(&duplicate.to_string()).is_err());
+            let mut unresolved = valid.clone();
+            unresolved["messages"][0]["file"] = json!(format!("{name}z"));
+            assert!(check(&unresolved.to_string()).is_err());
+        }
+
+        let mut eml = manifest(
+            BundleFormat::Eml,
+            json!([{"name":"a","bytes":2,"records":1}]),
+            vec![message(1, Some("a"), BundleFormat::Eml)],
+        );
+        eml["files"][0]["bytes"] = json!(3);
+        assert!(check(&eml.to_string()).is_err());
+        eml["files"][0]["records"] = json!(0);
+        eml["messages"][0] = message(1, None, BundleFormat::Eml);
+        assert!(check(&eml.to_string()).is_err());
+        let repeated = manifest(
+            BundleFormat::Eml,
+            json!([{"name":"a","bytes":2,"records":2}]),
+            vec![
+                message(1, Some("a"), BundleFormat::Eml),
+                message(2, Some("a"), BundleFormat::Eml),
+            ],
+        );
+        assert!(check(&repeated.to_string()).is_err());
+        let empty = manifest(
+            BundleFormat::Mboxrd,
+            json!([{"name":"empty","bytes":0,"records":0}]),
+            vec![],
+        );
+        assert!(check(&empty.to_string()).is_ok());
+    }
+
+    #[test]
+    fn distant_repeats_reject_only_occurrence_ids() {
+        let format = BundleFormat::Mboxrd;
+        let messages = (0..65)
+            .map(|id| message(id, Some("a"), format))
+            .collect::<Vec<_>>();
+        let files = json!([{"name":"a","bytes":2,"records":65}]);
+        let valid = manifest(format, files.clone(), messages.clone());
+        assert!(check(&valid.to_string()).is_ok());
+        let mut duplicate = messages;
+        duplicate[64]["occurrence_id"] = json!(0);
+        let duplicate = manifest(format, files, duplicate);
+        assert!(check(&duplicate.to_string()).is_err());
+    }
+
+    #[test]
+    fn references_cross_file_batches() {
+        let format = BundleFormat::Eml;
+        let files = (0..65)
+            .map(|id| json!({"name":format!("{id}.eml"),"bytes":2,"records":1}))
+            .collect::<Vec<_>>();
+        let messages = (0..65)
+            .map(|id| message(id, Some(&format!("{id}.eml")), format))
+            .collect::<Vec<_>>();
+        let valid = manifest(format, json!(files), messages);
+        assert!(check(&valid.to_string()).is_ok());
+        let mut mismatch = valid.clone();
+        mismatch["files"][64]["records"] = json!(0);
+        assert!(check(&mismatch.to_string()).is_err());
+        let mut missing = valid;
+        missing["messages"][64]["file"] = json!("absent.eml");
+        assert!(check(&missing.to_string()).is_err());
     }
 }
