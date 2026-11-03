@@ -10,6 +10,10 @@ jobs:
   soak:
     if: startsWith(github.ref, 'refs/heads/validation/recvflake-soak-')
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
     timeout-minutes: 360
     env:
       RUSTC_WRAPPER: sccache
@@ -100,11 +104,12 @@ jobs:
             "test result: ok. 37 passed; 0 failed; 1 ignored;" \
             "$RUNNER_TEMP/recvflake-logs/requested-command.log"
 
-      - name: Run 100 loaded module passes
-        timeout-minutes: 345
+      - name: Run loaded module passes
+        timeout-minutes: 300
         env:
           LD_PRELOAD: ${{ runner.temp }}/no-fsync.so
           TEST_BINARY: ${{ steps.binary.outputs.path }}
+          SHARD: ${{ matrix.shard }}
         run: |
           set -euo pipefail
           logs="$RUNNER_TEMP/recvflake-logs"
@@ -118,7 +123,7 @@ jobs:
           setsid bash -c '
             set -u
             run=0
-            while true; do
+            while test ! -e "$logs/parallel-load.stop"; do
               run=$((run + 1))
               if ! "$TEST_BINARY" --exact \
                 received_tests::native_write_and_commit_failures_roll_back_then_retry_at_bounded_deadlines \
@@ -126,7 +131,7 @@ jobs:
                 echo "$run" > "$logs/parallel-load.failed"
                 exit 1
               fi
-              printf '%s\n' "$run" > "$logs/parallel-load.count.tmp"
+              printf "%s\n" "$run" > "$logs/parallel-load.count.tmp"
               mv "$logs/parallel-load.count.tmp" \
                 "$logs/parallel-load.count"
             done
@@ -149,7 +154,9 @@ jobs:
           trap 'exit 143' TERM
           trap 'exit 130' INT
 
-          for run in $(seq -w 1 100); do
+          first_pass=$((SHARD * 25 + 1))
+          last_pass=$((first_pass + 24))
+          for run in $(seq -f "%03g" "$first_pass" "$last_pass"); do
             echo "received_tests pass $run/100"
             kill -0 "$load_pid"
             kill -0 "$burner_one"
@@ -168,6 +175,11 @@ jobs:
           kill -0 "$burner_one"
           kill -0 "$burner_two"
           test ! -e "$logs/parallel-load.failed"
+          touch "$logs/parallel-load.stop"
+          wait "$load_pid"
+          kill -0 "$burner_one"
+          kill -0 "$burner_two"
+          test ! -e "$logs/parallel-load.failed"
           cleanup
 
           load_count=$(cat "$logs/parallel-load.count")
@@ -175,14 +187,91 @@ jobs:
           test "$(grep -Fc \
             "test result: ok. 1 passed; 0 failed; 0 ignored;" \
             "$logs/parallel-load.log")" -eq "$load_count"
-          printf 'tested_ref=%s\npasses=100\nparallel_load_passes=%s\n' \
-            "4ddd7cdb0391c446030366570455622fbd481dfc" "$load_count" \
+          printf 'tested_ref=%s\nfirst_pass=%s\nlast_pass=%s\npasses=25\nparallel_load_passes=%s\n' \
+            "4ddd7cdb0391c446030366570455622fbd481dfc" \
+            "$first_pass" "$last_pass" "$load_count" \
             > "$logs/summary.txt"
 
       - name: Upload soak logs
         if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v6.0.0
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: recvflake-soak-4ddd7cd
+          name: recvflake-soak-4ddd7cd-${{ matrix.shard }}
           path: ${{ runner.temp }}/recvflake-logs
+          if-no-files-found: error
+
+  aggregate:
+    if: always() && startsWith(github.ref, 'refs/heads/validation/recvflake-soak-')
+    needs: soak
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require every shard to succeed
+        env:
+          SOAK_RESULT: ${{ needs.soak.result }}
+        run: test "$SOAK_RESULT" = success
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: recvflake-soak-4ddd7cd-[0-3]
+          path: ${{ runner.temp }}/soak-artifacts
+
+      - name: Verify all 100 passes
+        run: |
+          set -euo pipefail
+          artifacts="$RUNNER_TEMP/soak-artifacts"
+          expected_module_result='test result: ok. 37 passed; 0 failed; 1 ignored;'
+          expected_load_result='test result: ok. 1 passed; 0 failed; 0 ignored;'
+
+          require_results() {
+            local file=$1
+            local expected=$2
+            local wanted=$3
+            test -f "$file"
+            awk -v expected="$expected" -v wanted="$wanted" '
+              /^test result:/ {
+                count++
+                if (index($0, expected) != 1) exit 1
+              }
+              END { if (count != wanted) exit 1 }
+            ' "$file"
+          }
+
+          test "$(find "$artifacts" -mindepth 1 -maxdepth 1 -type d | wc -l)" -eq 4
+          for shard in 0 1 2 3; do
+            logs="$artifacts/recvflake-soak-4ddd7cd-$shard"
+            first_pass=$((shard * 25 + 1))
+            last_pass=$((first_pass + 24))
+            summary="$logs/summary.txt"
+            test "$(wc -l < "$summary")" -eq 5
+            grep -Fxq 'tested_ref=4ddd7cdb0391c446030366570455622fbd481dfc' "$summary"
+            grep -Fxq "first_pass=$first_pass" "$summary"
+            grep -Fxq "last_pass=$last_pass" "$summary"
+            grep -Fxq 'passes=25' "$summary"
+
+            inventory="$logs/received-tests.list"
+            test "$(grep -c '^received_tests::.*: test$' "$inventory")" -eq 38
+            test "$(grep '^received_tests::.*: test$' "$inventory" | sort -u | wc -l)" -eq 38
+            require_results "$logs/requested-command.log" "$expected_module_result" 1
+
+            test ! -e "$logs/parallel-load.failed"
+            test "$(wc -l < "$logs/parallel-load.count")" -eq 1
+            load_count=$(cat "$logs/parallel-load.count")
+            [[ "$load_count" =~ ^[1-9][0-9]*$ ]]
+            grep -Fxq "parallel_load_passes=$load_count" "$summary"
+            require_results "$logs/parallel-load.log" "$expected_load_result" "$load_count"
+
+            test "$(find "$logs" -maxdepth 1 -name 'pass-*.log' | wc -l)" -eq 25
+            for run in $(seq -f "%03g" "$first_pass" "$last_pass"); do
+              require_results "$logs/pass-$run.log" "$expected_module_result" 1
+            done
+          done
+          printf 'tested_ref=4ddd7cdb0391c446030366570455622fbd481dfc\npasses=100\n' \
+            > "$RUNNER_TEMP/aggregate.txt"
+          cat "$RUNNER_TEMP/aggregate.txt"
+
+      - name: Upload aggregate
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: recvflake-soak-4ddd7cd-aggregate
+          path: ${{ runner.temp }}/aggregate.txt
           if-no-files-found: error
