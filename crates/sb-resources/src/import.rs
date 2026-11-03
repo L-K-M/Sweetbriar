@@ -12,6 +12,7 @@ use sb_store::imports::MAX_IMPORT_CHANGES_BYTES;
 use sb_store::{FileKind, Fs, ImportSourceCapture, ImportSourceSnapshot, Store, StoreError};
 
 pub(crate) mod bundle;
+mod json_syntax;
 pub use bundle::{BundleFormat, SourceBundle};
 
 /// The metadata object's format version (spec/09). A bundle source
@@ -46,7 +47,7 @@ pub enum ImportProgress<'a> {
     Checking { path: &'a Path },
     /// `bytes` of `path` have been copied into its private snapshot.
     Capturing { path: &'a Path, bytes: u64 },
-    /// `bytes` read from `path`'s snapshot for separator scanning.
+    /// `bytes` read from `path`'s snapshot for inventory scanning.
     Scanning { path: &'a Path, bytes: u64 },
 }
 
@@ -432,6 +433,20 @@ impl Walker<'_> {
         let eml = has_extension(&named, "eml");
         match self.classify(&canonical) {
             Ok(FileKind::File) => {
+                if matches!(origin, Origin::Chosen)
+                    && (named
+                        .file_name()
+                        .is_some_and(|name| name == crate::export_files::MANIFEST_NAME)
+                        || canonical
+                            .file_name()
+                            .is_some_and(|name| name == crate::export_files::MANIFEST_NAME))
+                {
+                    return self.problem(
+                        &canonical,
+                        ImportProblemKind::Unsupported,
+                        "select the export bundle directory, not its manifest",
+                    );
+                }
                 if matches!(origin, Origin::Listed) && !eml && !has_extension(&named, "mbox") {
                     return;
                 }
@@ -455,6 +470,14 @@ impl Walker<'_> {
                 if !self.seen_dirs.insert(canonical.clone()) {
                     return;
                 }
+                let manifest = canonical.join(crate::export_files::MANIFEST_NAME);
+                match self.fs.metadata(&manifest) {
+                    Ok(Some(md)) if md.kind() == FileKind::File => {
+                        return self.bundle(&canonical, &manifest);
+                    }
+                    Ok(_) => {}
+                    Err(error) => return self.problem_io(&manifest, error),
+                }
                 if has_extension(&named, "mbox") || has_extension(&canonical, "mbox") {
                     return self.package(&canonical, &named);
                 }
@@ -466,6 +489,54 @@ impl Walker<'_> {
                 "not a file or directory",
             ),
             Err(error) => self.problem_io(&canonical, error),
+        }
+    }
+
+    /// A recognized bundle never enters ordinary discovery. This first
+    /// pass checks syntax only; no manifest is retained or imported yet.
+    fn bundle(&mut self, dir: &Path, manifest: &Path) {
+        let captured = self.store.capture_import_source(manifest, |bytes| {
+            (self.progress)(ImportProgress::Capturing {
+                path: manifest,
+                bytes,
+            })
+        });
+        let snapshot = match captured {
+            Ok(ImportSourceCapture::Captured { snapshot, .. }) => snapshot,
+            Ok(ImportSourceCapture::Cancelled) => {
+                self.cancelled = true;
+                return;
+            }
+            Err(error) => return self.failed(dir, error),
+        };
+        let result = match self.store.open_import_source(&snapshot) {
+            Ok(file) => {
+                let mut reader = BufReader::new(ScanReader {
+                    inner: file,
+                    path: manifest,
+                    scanned: 0,
+                    cancelled: false,
+                    progress: &mut *self.progress,
+                });
+                let result = json_syntax::validate(&mut reader);
+                if reader.get_ref().cancelled {
+                    self.cancelled = true;
+                    None
+                } else {
+                    Some(result.map_err(|error| error.to_string()))
+                }
+            }
+            Err(error) => Some(Err(error.to_string())),
+        };
+        self.discard(&snapshot);
+        match result {
+            None => {}
+            Some(Err(error)) => self.failed(dir, error),
+            Some(Ok(())) => self.problem(
+                dir,
+                ImportProblemKind::Unsupported,
+                "export bundle manifest captured; bundle import is not yet supported",
+            ),
         }
     }
 

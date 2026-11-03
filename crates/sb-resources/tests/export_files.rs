@@ -1570,3 +1570,36 @@ mod crash_cuts {
         assert_eq!(cuts.killed, points);
     }
 }
+
+#[test]
+fn emitted_bundles_are_captured_and_refused_without_plain_import() {
+    let (scratch, res, _) = fixture();
+    for (job, format) in [
+        ("eml-import", ExportFormat::Eml),
+        ("mbox-import", ExportFormat::Mboxrd),
+    ] {
+        let dest = scratch.path().join(format!("{job}.mbox"));
+        capture(&res, job, format, &dest, mailbox_scope(&res, 1));
+        export(&res, job);
+        let mut captured = false;
+        let outcome = res.inventory_import_sources(std::slice::from_ref(&dest), |event| {
+            if matches!(event, sb_resources::ImportProgress::Capturing { .. }) {
+                captured = true;
+            }
+            ControlFlow::Continue(())
+        });
+        let inventory = outcome.inventory();
+        assert!(captured);
+        assert!(inventory.sources().is_empty());
+        assert_eq!(inventory.problems().len(), 1);
+        assert_eq!(
+            inventory.problems()[0].kind(),
+            sb_resources::ImportProblemKind::Unsupported
+        );
+        assert!(
+            inventory.problems()[0]
+                .detail()
+                .contains("not yet supported")
+        );
+    }
+}
