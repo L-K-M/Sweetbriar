@@ -424,6 +424,11 @@ fn native_write_and_commit_failures_roll_back_then_retry_at_bounded_deadlines() 
         held(&engine);
         import(&engine, &scratch.path().join("one.eml"), RAW);
         let before = engine.resources().received_address_revisions().unwrap();
+        // The import's post-commit wakes can still be unconsumed here, and a
+        // relevant wake retries an armed failure before its deadline
+        // (spec/07). Park the worker first, so the release below is the only
+        // wake this retry sees.
+        wait(|| engine.received().waiting());
         write(&engine, move |tx| {
             if commit_failure {
                 tx.execute_batch("CREATE TEMP TABLE cut_parent(id INTEGER PRIMARY KEY); CREATE TEMP TABLE cut_probe(id INTEGER REFERENCES cut_parent(id) DEFERRABLE INITIALLY DEFERRED); CREATE TEMP TRIGGER received_cut AFTER INSERT ON main.seen_address_messages BEGIN INSERT INTO cut_probe VALUES(1); END").unwrap();
@@ -485,6 +490,45 @@ fn native_write_and_commit_failures_roll_back_then_retry_at_bounded_deadlines() 
         );
         block_on(engine.shutdown()).unwrap();
     }
+}
+
+#[test]
+fn committed_input_changes_retry_an_armed_failure_before_its_deadline() {
+    let scratch = ScratchDir::new("received-armed-wake");
+    let (engine, _clock) = clocked(&scratch.path().join("store"), real_fs(), 10_000);
+    held(&engine);
+    import(&engine, &scratch.path().join("one.eml"), RAW);
+    // Park the worker first, so the import's own wakes are spent and the
+    // change below is the only one this retry sees.
+    wait(|| engine.received().waiting());
+    write(&engine, move |tx| {
+        tx.execute_batch("CREATE TEMP TRIGGER received_cut BEFORE INSERT ON main.seen_address_messages WHEN NEW.canonical='sender@example.test' BEGIN SELECT RAISE(ABORT,'fixture'); END").unwrap();
+        Ok(())
+    });
+    release(&engine);
+    wait(|| {
+        engine.received().failure().is_some_and(|f| f.attempts == 1) && engine.received().waiting()
+    });
+    assert_eq!(engine.received().retry_at().unwrap().as_millis(), 11_000);
+    // A committed input change is a relevant wake: spec/07 retries a known
+    // I/O or writer Internal failure at its 1-second doubling backoff or on
+    // a relevant wake, so the armed failure retries before its deadline
+    // and the backoff re-arms from the new attempt, clock unmoved.
+    change(&engine, "UPDATE d_message_summary SET from_name='Again'");
+    wait(|| {
+        engine.received().failure().is_some_and(|f| f.attempts == 2) && engine.received().waiting()
+    });
+    assert_eq!(engine.received().retry_at().unwrap().as_millis(), 12_000);
+    write(&engine, |tx| {
+        tx.execute_batch("DROP TRIGGER received_cut").unwrap();
+        Ok(())
+    });
+    // A wake retries without moving the clock, proving recovery from the
+    // early attempt rather than from its deadline.
+    engine.received().wake();
+    settled(&engine);
+    assert_eq!(count(&engine, LEDGER), 2);
+    block_on(engine.shutdown()).unwrap();
 }
 
 #[test]
