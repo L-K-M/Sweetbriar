@@ -11,8 +11,13 @@ use sb_mime::{MboxError, MboxInventory, MboxQuoting, inventory_mbox};
 use sb_store::imports::MAX_IMPORT_CHANGES_BYTES;
 use sb_store::{FileKind, Fs, ImportSourceCapture, ImportSourceSnapshot, Store, StoreError};
 
-/// The metadata object's format version (spec/09).
+pub(crate) mod bundle;
+pub use bundle::{BundleFormat, SourceBundle};
+
+/// The metadata object's format version (spec/09). A bundle source
+/// records version 2: the version-1 fields plus its `bundle` object.
 const FORMAT_VERSION: u64 = 1;
+const BUNDLE_FORMAT_VERSION: u64 = 2;
 const MBOX_SEPARATOR_MIN_BYTES: u64 = b"From ".len() as u64;
 
 /// What a discovered source's bytes are.
@@ -120,6 +125,7 @@ pub struct SourceInventory {
     snapshot: ImportSourceSnapshot,
     messages: u64,
     quoting: MboxQuoting,
+    bundle: Option<SourceBundle>,
 }
 
 impl SourceInventory {
@@ -152,14 +158,34 @@ impl SourceInventory {
         self.quoting
     }
 
-    /// Version-1 `import_job_sources.source_json`, with sorted keys.
+    /// For a bundle source, the manifest it verified against (spec/09
+    /// "Export bundles"); a plain source has none.
+    pub fn bundle(&self) -> Option<&SourceBundle> {
+        self.bundle.as_ref()
+    }
+
+    /// Every snapshot this source's inventory references: its own
+    /// copy, plus the shared manifest's for a bundle source. Members
+    /// of one bundle share that capture, so callers removing the
+    /// snapshots dedupe by token.
+    pub fn snapshots(&self) -> impl Iterator<Item = &ImportSourceSnapshot> + '_ {
+        std::iter::once(&self.snapshot).chain(self.bundle.iter().map(|b| b.manifest()))
+    }
+
+    /// Version-1 `import_job_sources.source_json` for a plain source,
+    /// or version 2 — the same fields plus `bundle` — for a bundle
+    /// source, with sorted keys (spec/09).
     pub fn to_json(&self) -> String {
         let quoting = match self.quoting {
             MboxQuoting::Equivalent => "equivalent",
             MboxQuoting::Ambiguous => "ambiguous",
         };
-        serde_json::json!({
-            "v": FORMAT_VERSION,
+        let mut value = serde_json::json!({
+            "v": if self.bundle.is_some() {
+                BUNDLE_FORMAT_VERSION
+            } else {
+                FORMAT_VERSION
+            },
             "path": self.path.to_str().expect("source paths are UTF-8"),
             "mailbox": self.mailbox,
             "kind": self.kind.name(),
@@ -170,12 +196,24 @@ impl SourceInventory {
             },
             "messages": self.messages,
             "quoting": quoting,
-        })
-        .to_string()
+        });
+        if let Some(bundle) = &self.bundle {
+            value["bundle"] = serde_json::json!({
+                "manifest": {
+                    "token": bundle.manifest().token(),
+                    "sha256": bundle.manifest().sha256_hex(),
+                    "byte_length": bundle.manifest().byte_length(),
+                },
+                "format": bundle.format().name(),
+            });
+        }
+        value.to_string()
     }
 
-    /// Rebuild validated v1 metadata. Oversized JSON is refused before
-    /// parsing; malformed fields and inconsistent counts are `InvalidInput`.
+    /// Rebuild validated metadata. Version 1 is a plain source; version 2
+    /// adds the required `bundle` object (spec/09 "Export bundles").
+    /// Oversized JSON is refused before parsing; malformed fields and
+    /// inconsistent counts are `InvalidInput`.
     pub fn from_json(json: &str) -> Result<Self, StoreError> {
         if json.len() > MAX_IMPORT_CHANGES_BYTES {
             return Err(invalid("import source metadata exceeds the write budget"));
@@ -185,9 +223,16 @@ impl SourceInventory {
         let object = value
             .as_object()
             .ok_or_else(|| invalid("import source metadata is not an object"))?;
-        if field(object, "v")?.as_u64() != Some(FORMAT_VERSION) {
-            return Err(invalid("import source metadata must have v: 1"));
-        }
+        let bundle = match field(object, "v")?.as_u64() {
+            Some(FORMAT_VERSION) => {
+                if object.contains_key("bundle") {
+                    return Err(invalid("a version-1 import source carries no bundle"));
+                }
+                None
+            }
+            Some(BUNDLE_FORMAT_VERSION) => Some(bundle_field(object)?),
+            _ => return Err(invalid("import source metadata must have v: 1 or 2")),
+        };
         let path = required_str(object, "path")?;
         if path.is_empty() || path.contains('\0') || !Path::new(path).is_absolute() {
             return Err(invalid(
@@ -211,17 +256,7 @@ impl SourceInventory {
             other => return Err(invalid(format!("unknown import quoting {other:?}"))),
         };
         let messages = required_u64(object, "messages")?;
-        let snapshot = object
-            .get("snapshot")
-            .and_then(serde_json::Value::as_object)
-            .ok_or_else(|| invalid("an import source snapshot must be an object"))?;
-        let sha256 = sha256_from_hex(required_str(snapshot, "sha256")?)
-            .ok_or_else(|| invalid("an import source sha256 is 64 lowercase hex digits"))?;
-        let snapshot = ImportSourceSnapshot::from_metadata(
-            required_str(snapshot, "token")?,
-            sha256,
-            required_u64(snapshot, "byte_length")?,
-        )?;
+        let snapshot = snapshot_field(object, "snapshot")?;
         match kind {
             // One file is one candidate; no `From ` unquoting applies.
             SourceKind::Eml if messages != 1 || quoting != MboxQuoting::Equivalent => {
@@ -240,6 +275,18 @@ impl SourceInventory {
             }
             _ => (),
         }
+        if let Some(bundle) = &bundle {
+            if bundle.format().source_kind() != kind {
+                return Err(invalid("a bundle source's format must match its kind"));
+            }
+            // The manifest fixes mboxrd unquoting, so a bundle source
+            // never carries a variant question (spec/09).
+            if quoting != MboxQuoting::Equivalent {
+                return Err(invalid(
+                    "a bundle source's quoting is decided by its manifest",
+                ));
+            }
+        }
         Ok(Self {
             path: PathBuf::from(path),
             kind,
@@ -247,6 +294,7 @@ impl SourceInventory {
             snapshot,
             messages,
             quoting,
+            bundle,
         })
     }
 }
@@ -541,6 +589,7 @@ impl Walker<'_> {
             snapshot,
             messages,
             quoting,
+            bundle: None,
         });
     }
 
@@ -709,6 +758,41 @@ pub(crate) fn required_u64(
             "import source {name} must be a nonnegative integer"
         ))
     })
+}
+
+/// A `{token, sha256, byte_length}` snapshot reference.
+fn snapshot_field(
+    object: &serde_json::Map<String, serde_json::Value>,
+    name: &str,
+) -> Result<ImportSourceSnapshot, StoreError> {
+    let snapshot = object
+        .get(name)
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(|| invalid(format!("an import source {name} must be an object")))?;
+    let sha256 = sha256_from_hex(required_str(snapshot, "sha256")?).ok_or_else(|| {
+        invalid(format!(
+            "an import source {name} sha256 is 64 lowercase hex digits"
+        ))
+    })?;
+    ImportSourceSnapshot::from_metadata(
+        required_str(snapshot, "token")?,
+        sha256,
+        required_u64(snapshot, "byte_length")?,
+    )
+}
+
+/// The required `bundle` object of a version-2 source: its manifest
+/// snapshot reference and declared format (spec/09 "Export bundles").
+fn bundle_field(
+    object: &serde_json::Map<String, serde_json::Value>,
+) -> Result<SourceBundle, StoreError> {
+    let bundle = field(object, "bundle")?
+        .as_object()
+        .ok_or_else(|| invalid("an import source bundle must be an object"))?;
+    let manifest = snapshot_field(bundle, "manifest")?;
+    let format = BundleFormat::from_name(required_str(bundle, "format")?)
+        .ok_or_else(|| invalid("an import source bundle's format is eml or mboxrd"))?;
+    Ok(SourceBundle::new(manifest, format))
 }
 
 fn sha256_from_hex(text: &str) -> Option<[u8; 32]> {

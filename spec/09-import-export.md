@@ -48,6 +48,24 @@ user-granted permission path.
      version and required fields. Variant choices belong to checkpoints,
      not the immutable inventory. Cancellation is checked during discovery,
      copying and scan reads, including within a long mbox line.
+   - **Export bundles.** A directory reached by the walk — a chosen root
+     or a walked subdirectory — that holds a regular file named exactly
+     `sweetbriar-metadata.json` is an export bundle; its manifest covers
+     the `.eml` and `.mbox` files directly in that directory only. The
+     manifest is captured into its own private snapshot beside the
+     sources and verified on resume like one. A bundle file must be
+     listed in the manifest's `files`, its captured length must equal
+     the listed `bytes`, its message count the listed `records`, and
+     its kind must match the manifest's `format`; a disagreement is that
+     file's problem, and a manifest-listed file absent from the
+     directory is reported too. An explicitly chosen manifest is
+     unsupported: choose the bundle's folder. A single `.mbox` chosen
+     directly from a bundle imports as plain mbox and keeps its framing
+     LF, as imports without the manifest do. A bundle source records a
+     version-2 inventory object — the version-1 fields plus its manifest
+     snapshot reference and declared format — and its quoting is decided
+     by the manifest, so the variant question is never asked for it. A
+     bundle source never degrades to a plain import.
 2. **Ingest.** For each message, in source order:
    - extract the exact bytes, undoing the variant's `From ` quoting:
      mboxrd removes one `>` from every `>+From ` line; mboxo only turns
