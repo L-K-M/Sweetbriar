@@ -848,14 +848,16 @@ fn bundle_capture_and_parser_cancellation_remove_only_its_snapshot() {
     )
     .unwrap();
 
-    for cancel_capture in [true, false] {
+    for phase in ["capture", "verify", "parse"] {
         let mut observed = false;
-        let mut scanned_once = false;
+        let mut previous_scan = 0;
         let outcome = res.inventory_import_sources(std::slice::from_ref(&dir), |event| {
             let stop = match event {
-                ImportProgress::Capturing { bytes, .. } if cancel_capture => bytes > 0,
-                ImportProgress::Scanning { .. } if !cancel_capture => {
-                    std::mem::replace(&mut scanned_once, true)
+                ImportProgress::Capturing { bytes, .. } if phase == "capture" => bytes > 0,
+                ImportProgress::Scanning { bytes, .. } => {
+                    let parsing = bytes < previous_scan;
+                    previous_scan = bytes;
+                    (phase == "verify" && bytes > 0) || (phase == "parse" && parsing)
                 }
                 _ => false,
             };
