@@ -10,9 +10,10 @@ use std::sync::{Arc, Barrier};
 use std::thread;
 
 use sb_resources::{
-    ExportCaptureRequest, ExportFormat, ExportJob, ExportJobState, ExportScope, ExportSelection,
-    Resources, Scoped, StoreError, Transaction, WritePriority, advance_export_job,
-    append_export_chunks, create_export_job, export_job, list_generation,
+    ExportCaptureRequest, ExportFormat, ExportJob, ExportJobState, ExportScope, ExportSearchSort,
+    ExportSelection, Query, Resources, Scoped, SearchScope, StoreError, Transaction, WritePriority,
+    advance_export_job, append_export_chunks, create_export_job, export_job, list_generation,
+    search_generation,
 };
 use sb_test_support::{ScratchDir, block_on};
 use serde_json::{Value, json};
@@ -1574,12 +1575,27 @@ mod crash_cuts {
 #[test]
 fn emitted_bundles_are_captured_and_refused_without_plain_import() {
     let (scratch, res, _) = fixture();
-    for (job, format) in [
-        ("eml-import", ExportFormat::Eml),
-        ("mbox-import", ExportFormat::Mboxrd),
+    for (job, format, scope) in [
+        ("eml-import", ExportFormat::Eml, mailbox_scope(&res, 1)),
+        ("mbox-import", ExportFormat::Mboxrd, account_scope(&res)),
+        (
+            "selection-import",
+            ExportFormat::Eml,
+            selection_scope(&res, &[1, 2]),
+        ),
+        (
+            "search-import",
+            ExportFormat::Eml,
+            ExportScope::Search {
+                query: Query::parse_json(r#"{"v":1,"q":{"flag":"flagged"}}"#).unwrap(),
+                scope: SearchScope::Mailbox(1),
+                sort: ExportSearchSort::Date,
+                expected_generation: res.read(|tx| search_generation(tx)).unwrap() as u64,
+            },
+        ),
     ] {
         let dest = scratch.path().join(format!("{job}.mbox"));
-        capture(&res, job, format, &dest, mailbox_scope(&res, 1));
+        capture(&res, job, format, &dest, scope);
         export(&res, job);
         let mut captured = false;
         let outcome = res.inventory_import_sources(std::slice::from_ref(&dest), |event| {
@@ -1601,5 +1617,46 @@ fn emitted_bundles_are_captured_and_refused_without_plain_import() {
                 .detail()
                 .contains("not yet supported")
         );
+    }
+}
+
+#[test]
+fn manifest_envelope_rejects_missing_scope() {
+    let (scratch, res, _) = fixture();
+    for (job, format) in [
+        ("schema-eml", ExportFormat::Eml),
+        ("schema-mbox", ExportFormat::Mboxrd),
+    ] {
+        let dest = scratch.path().join(job);
+        capture(&res, job, format, &dest, mailbox_scope(&res, 1));
+        export(&res, job);
+        let original = manifest(&dest);
+        let mut cases = Vec::new();
+
+        let mut missing = original.clone();
+        missing.as_object_mut().unwrap().remove("scope");
+        cases.push(("missing scope", missing.to_string()));
+
+        let duplicate_key = original.to_string().replace(
+            r#""kind":"export-manifest""#,
+            r#""kind":"export-manifest","\u006bind":"export-manifest""#,
+        );
+        assert_ne!(duplicate_key, original.to_string());
+        cases.push(("escaped duplicate key", duplicate_key));
+
+        for (label, document) in cases {
+            std::fs::write(dest.join(MANIFEST), document).unwrap();
+            let inventory = res.inventory_import_sources(std::slice::from_ref(&dest), |_| {
+                ControlFlow::Continue(())
+            });
+            let inventory = inventory.inventory();
+            assert!(inventory.sources().is_empty(), "{job}: {label}");
+            assert_eq!(inventory.problems().len(), 1, "{job}: {label}");
+            assert_eq!(
+                inventory.problems()[0].kind(),
+                sb_resources::ImportProblemKind::Failed,
+                "{job}: {label}"
+            );
+        }
     }
 }

@@ -492,8 +492,8 @@ impl Walker<'_> {
         }
     }
 
-    /// A recognized bundle never enters ordinary discovery. This first
-    /// pass checks syntax only; no manifest is retained or imported yet.
+    /// A recognized bundle never enters ordinary discovery. The envelope
+    /// is checked before later record validation can admit a source.
     fn bundle(&mut self, dir: &Path, manifest: &Path) {
         let captured = self.store.capture_import_source(manifest, |bytes| {
             (self.progress)(ImportProgress::Capturing {
@@ -509,8 +509,19 @@ impl Walker<'_> {
             }
             Err(error) => return self.failed(dir, error),
         };
-        let result = match self.store.open_import_source(&snapshot) {
-            Ok(file) => {
+        let result = match self
+            .store
+            .open_import_source_cancellable(&snapshot, |bytes| {
+                (self.progress)(ImportProgress::Scanning {
+                    path: manifest,
+                    bytes,
+                })
+            }) {
+            Ok(sb_store::Scoped::Stopped) => {
+                self.cancelled = true;
+                None
+            }
+            Ok(sb_store::Scoped::Done(file)) => {
                 let mut reader = BufReader::new(ScanReader {
                     inner: file,
                     path: manifest,
@@ -518,7 +529,7 @@ impl Walker<'_> {
                     cancelled: false,
                     progress: &mut *self.progress,
                 });
-                let result = json_syntax::validate(&mut reader);
+                let result = json_syntax::validate_envelope(&mut reader);
                 if reader.get_ref().cancelled {
                     self.cancelled = true;
                     None

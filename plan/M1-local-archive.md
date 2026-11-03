@@ -960,14 +960,20 @@ local drafts. No network yet.
     chosen manifests are refused; direct `.mbox` files remain plain. Capture
     and parser reads check cancellation; Store snapshot verification before
     returning its handle does not yet check cancellation.
-  - **M1.7d1b1b Manifest schema validation — L:** complete M1.7d1b1 before
-    bundle inventory: validate the writer's version-1 shape, required fields,
-    types, numbers, duplicate keys and decoded names, safe file names, all
-    declared files and bounded Search nesting. Retain byte ranges and counts
-    for b2, reuse one verified snapshot handle across cancellable passes, and
-    add cancellation to snapshot verification. Prove real writer manifests,
-    hostile tokens, aliases, cleanup and all schema failures. Until b2 retains
-    a source, validated bundles still refuse import and discard their snapshot.
+  - **M1.7d1b1b1 Manifest envelope and scope — L:** validate the version-1
+    envelope and scope through the bundle caller, with bounded parsing and
+    cancellable snapshot verification. Bundles remain refused and discarded.
+    File and message schemas, consumed-byte ranges, names and references
+    remain deferred to b1b2. Invalid nested fields, availability, spans and
+    file relationships are tested there before any bundle can be retained.
+  - **M1.7d1b1b2 Manifest record validation — L:** complete M1.7d1b1 before
+    bundle inventory: validate the writer's version-1 record shape, required
+    fields, types, numbers, duplicate keys and decoded names, safe file names
+    and all declared files. Retain byte ranges and counts for b2, reusing one
+    verified snapshot handle across cancellable passes. Prove real writer
+    manifests, hostile tokens, aliases, cleanup and all schema failures. Until
+    b2 retains a source, validated bundles still refuse import and discard
+    their snapshot.
   - **M1.7d1b2 Bundle file agreement and inventory — L:** check every declared
     direct child's kind, byte length and record count independently before
     ingest, report missing or disagreeing files without suppressing valid

@@ -173,6 +173,15 @@ impl Store {
         self.source_snapshots.open(snapshot)
     }
 
+    /// Verify and reopen a private copy, checking cancellation during hashing.
+    pub fn open_import_source_cancellable(
+        &self,
+        snapshot: &crate::ImportSourceSnapshot,
+        progress: impl FnMut(u64) -> std::ops::ControlFlow<()>,
+    ) -> Result<crate::Scoped<Box<dyn sb_types::fs::ReadFile>>, StoreError> {
+        self.source_snapshots.open_cancellable(snapshot, progress)
+    }
+
     /// Terminal-job cleanup (spec/03): remove these private copies and
     /// flush `recovery/`. Missing copies count as removed. Blocking.
     pub fn remove_import_sources(
