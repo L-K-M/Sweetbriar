@@ -954,14 +954,20 @@ local drafts. No network yet.
     bundle source metadata and manifest snapshot references, verify the
     snapshot on resume, refuse unverified ingest until d2, and remove shared
     snapshots once at terminal cleanup. Plain source metadata stays unchanged.
-  - **M1.7d1b Bundle discovery and manifest capture — L:** recognise bundle
-    directories, capture and validate bounded manifests, and check each file's
-    agreement independently before ingest. Report missing files, refuse an
-    explicitly chosen manifest, and preserve valid siblings. A directly chosen
-    `.mbox` remains plain. A same-named directory is not a manifest; chosen and walked
-    `.mbox` directories with a real manifest take the bundle path before Apple
-    package handling. Ordinary Apple packages remain supported. A bundle source
-    never degrades to a plain import.
+  - **M1.7d1b1 Bounded manifest capture — L:** recognise bundle directories,
+    capture the manifest snapshot and validate its complete version-1 shape
+    with bounded parser state and no total-manifest-size limit. Refuse an
+    explicitly chosen manifest and hold a validated bundle for b2; it never
+    degrades to a plain import. A directly chosen `.mbox` remains plain. A
+    same-named directory is not a manifest; chosen and walked `.mbox`
+    directories with a real manifest take the bundle path before Apple package
+    handling. Ordinary Apple packages remain supported.
+  - **M1.7d1b2 Bundle file agreement and inventory — L:** check every declared
+    direct child's kind, byte length and record count independently before
+    ingest, report missing or disagreeing files without suppressing valid
+    siblings, and retain the shared manifest snapshot while any bundle source
+    references it. Preserve sorted canonical discovery, alias deduplication,
+    cancellation cleanup and real EML/mboxrd exporter proof.
   - **M1.7d2 Manifest-verified ingest — L:** each bundle record's
     boundary, framing, original length and SHA-256 are verified before
     its bytes publish; only the declared framing LF is removed; the
