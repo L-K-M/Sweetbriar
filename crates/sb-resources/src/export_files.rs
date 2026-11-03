@@ -865,116 +865,6 @@ impl FramingHash {
     }
 }
 
-#[cfg(test)]
-mod framing_hash_tests {
-    use super::*;
-
-    const TEST_CHUNK: usize = 8 * 1024;
-
-    #[derive(Clone, Copy)]
-    enum FeedPattern {
-        Whole,
-        Bytewise,
-        Mixed,
-    }
-
-    fn finish_with(bytes: &[u8], original: u64, pattern: FeedPattern) -> Option<(bool, [u8; 32])> {
-        let mut digest = FramingHash {
-            hasher: Sha256::new(),
-            held: None,
-            last: 0,
-            fed: 0,
-            hash_updates: 0,
-        };
-
-        match pattern {
-            FeedPattern::Whole => digest.feed(bytes),
-            FeedPattern::Bytewise => {
-                for byte in bytes {
-                    digest.feed(&[]);
-                    digest.feed(std::slice::from_ref(byte));
-                }
-            }
-            FeedPattern::Mixed => {
-                let first = bytes.len().min(1);
-                let second = bytes.len().min(3);
-                digest.feed(&bytes[..first]);
-                digest.feed(&[]);
-                digest.feed(&bytes[first..second]);
-                digest.feed(&bytes[second..]);
-            }
-        }
-
-        digest.finish(original)
-    }
-
-    fn sha256(bytes: &[u8]) -> [u8; 32] {
-        Sha256::digest(bytes).into()
-    }
-
-    #[test]
-    fn full_chunks_use_bounded_hash_updates() {
-        let mut bytes: Vec<u8> = (0..TEST_CHUNK * 2 - 1)
-            .map(|index| (index % 251 + 1) as u8)
-            .collect();
-        bytes.push(b'\n');
-        let mut digest = FramingHash {
-            hasher: Sha256::new(),
-            held: None,
-            last: 0,
-            fed: 0,
-            hash_updates: 0,
-        };
-
-        digest.feed(&bytes[..TEST_CHUNK]);
-        digest.feed(&bytes[TEST_CHUNK..]);
-
-        assert!(
-            digest.hash_updates <= 4,
-            "two input chunks used {} hash updates",
-            digest.hash_updates
-        );
-        assert_eq!(
-            digest.finish(bytes.len() as u64),
-            Some((false, sha256(&bytes)))
-        );
-    }
-
-    #[test]
-    fn framing_semantics_are_chunk_invariant() {
-        let valid = [
-            (&b""[..], 0, false, &b""[..]),
-            (&b"\n"[..], 1, false, &b"\n"[..]),
-            (&b"x\n"[..], 1, true, &b"x"[..]),
-            (&b"x\n"[..], 2, false, &b"x\n"[..]),
-            (&b"abcd\n"[..], 4, true, &b"abcd"[..]),
-            (&b"abcd\n"[..], 5, false, &b"abcd\n"[..]),
-        ];
-        let invalid = [
-            (&b"x"[..], 1),
-            (&b"\n"[..], 0),
-            (&b"x\n\n"[..], 2),
-            (&b"x\n"[..], 3),
-        ];
-
-        for pattern in [
-            FeedPattern::Whole,
-            FeedPattern::Bytewise,
-            FeedPattern::Mixed,
-        ] {
-            for (decoded, original, framing, hashed) in valid {
-                assert_eq!(
-                    finish_with(decoded, original, pattern),
-                    Some((framing, sha256(hashed)))
-                );
-            }
-            for (decoded, original) in invalid {
-                assert_eq!(finish_with(decoded, original, pattern), None);
-            }
-        }
-    }
-}
-
 impl Write for FramingHash {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         self.feed(buf);
@@ -1180,5 +1070,115 @@ fn stream_error(message: &'static str) -> impl Fn(io::Error) -> StoreError {
         read_error_as_store_error(&error)
             .cloned()
             .unwrap_or_else(|| unavailable(message)(error))
+    }
+}
+
+#[cfg(test)]
+mod framing_hash_tests {
+    use super::*;
+
+    const TEST_CHUNK: usize = 8 * 1024;
+
+    #[derive(Clone, Copy)]
+    enum FeedPattern {
+        Whole,
+        Bytewise,
+        Mixed,
+    }
+
+    fn finish_with(bytes: &[u8], original: u64, pattern: FeedPattern) -> Option<(bool, [u8; 32])> {
+        let mut digest = FramingHash {
+            hasher: Sha256::new(),
+            held: None,
+            last: 0,
+            fed: 0,
+            hash_updates: 0,
+        };
+
+        match pattern {
+            FeedPattern::Whole => digest.feed(bytes),
+            FeedPattern::Bytewise => {
+                for byte in bytes {
+                    digest.feed(&[]);
+                    digest.feed(std::slice::from_ref(byte));
+                }
+            }
+            FeedPattern::Mixed => {
+                let first = bytes.len().min(1);
+                let second = bytes.len().min(3);
+                digest.feed(&bytes[..first]);
+                digest.feed(&[]);
+                digest.feed(&bytes[first..second]);
+                digest.feed(&bytes[second..]);
+            }
+        }
+
+        digest.finish(original)
+    }
+
+    fn sha256(bytes: &[u8]) -> [u8; 32] {
+        Sha256::digest(bytes).into()
+    }
+
+    #[test]
+    fn full_chunks_use_bounded_hash_updates() {
+        let mut bytes: Vec<u8> = (0..TEST_CHUNK * 2 - 1)
+            .map(|index| (index % 251 + 1) as u8)
+            .collect();
+        bytes.push(b'\n');
+        let mut digest = FramingHash {
+            hasher: Sha256::new(),
+            held: None,
+            last: 0,
+            fed: 0,
+            hash_updates: 0,
+        };
+
+        digest.feed(&bytes[..TEST_CHUNK]);
+        digest.feed(&bytes[TEST_CHUNK..]);
+
+        assert!(
+            digest.hash_updates <= 4,
+            "two input chunks used {} hash updates",
+            digest.hash_updates
+        );
+        assert_eq!(
+            digest.finish(bytes.len() as u64),
+            Some((false, sha256(&bytes)))
+        );
+    }
+
+    #[test]
+    fn framing_semantics_are_chunk_invariant() {
+        let valid = [
+            (&b""[..], 0, false, &b""[..]),
+            (&b"\n"[..], 1, false, &b"\n"[..]),
+            (&b"x\n"[..], 1, true, &b"x"[..]),
+            (&b"x\n"[..], 2, false, &b"x\n"[..]),
+            (&b"abcd\n"[..], 4, true, &b"abcd"[..]),
+            (&b"abcd\n"[..], 5, false, &b"abcd\n"[..]),
+        ];
+        let invalid = [
+            (&b"x"[..], 1),
+            (&b"\n"[..], 0),
+            (&b"x\n\n"[..], 2),
+            (&b"x\n"[..], 3),
+        ];
+
+        for pattern in [
+            FeedPattern::Whole,
+            FeedPattern::Bytewise,
+            FeedPattern::Mixed,
+        ] {
+            for (decoded, original, framing, hashed) in valid {
+                assert_eq!(
+                    finish_with(decoded, original, pattern),
+                    Some((framing, sha256(hashed)))
+                );
+            }
+            for (decoded, original) in invalid {
+                assert_eq!(finish_with(decoded, original, pattern), None);
+            }
+        }
     }
 }
