@@ -443,6 +443,14 @@ fn source_json_round_trips_through_v1() {
     let source = &inventory.sources()[0];
 
     let json = source.to_json();
+    let expected = serde_json::json!({
+        "v": 1, "path": source.path().to_str().unwrap(), "mailbox": "solo",
+        "kind": "eml", "messages": 1, "quoting": "equivalent",
+        "snapshot": {"token": source.snapshot().token(),
+            "sha256": source.snapshot().sha256_hex(),
+            "byte_length": source.snapshot().byte_length()},
+    });
+    assert_eq!(json, expected.to_string());
     let rebuilt = SourceInventory::from_json(&json).unwrap();
     assert_eq!(rebuilt.to_json(), json);
     assert_eq!(rebuilt.path(), source.path());
@@ -732,4 +740,64 @@ fn captures_that_never_become_sources_are_removed() {
         "{:?}",
         snapshot_names(&scratch)
     );
+}
+
+#[test]
+fn source_json_v2_requires_a_bundle_matching_the_source() {
+    use serde_json::json;
+
+    let valid = json!({
+        "v": 2, "path": "/x/y.eml", "mailbox": "y", "kind": "eml",
+        "snapshot": {"token": "0".repeat(32), "sha256": "a".repeat(64), "byte_length": 3},
+        "messages": 1, "quoting": "equivalent",
+        "bundle": {
+            "manifest": {"token": "f".repeat(32), "sha256": "b".repeat(64), "byte_length": 9},
+            "format": "eml",
+        },
+    });
+    let built = SourceInventory::from_json(&valid.to_string()).unwrap();
+    assert_eq!(built.to_json(), valid.to_string());
+    assert_eq!(built.bundle().unwrap().manifest().token(), "f".repeat(32));
+    // A valid mboxrd member too.
+    let mut mbox = valid.clone();
+    mbox["path"] = json!("/x/m.mbox");
+    mbox["mailbox"] = json!("m");
+    mbox["kind"] = json!("mbox");
+    mbox["messages"] = json!(2);
+    mbox["snapshot"]["byte_length"] = json!(20);
+    mbox["bundle"]["format"] = json!("mboxrd");
+    assert!(SourceInventory::from_json(&mbox.to_string()).is_ok());
+
+    let reject = |broken: serde_json::Value| {
+        assert!(
+            SourceInventory::from_json(&broken.to_string()).is_err(),
+            "accepted {broken}"
+        );
+    };
+    // Version 2 without `bundle`.
+    let mut broken = valid.clone();
+    broken.as_object_mut().unwrap().remove("bundle");
+    reject(broken);
+    // Version 1 must not carry one.
+    let mut broken = valid.clone();
+    broken["v"] = json!(1);
+    reject(broken);
+    // Unknown format, and a format/kind mismatch.
+    let mut broken = valid.clone();
+    broken["bundle"]["format"] = json!("zip");
+    reject(broken);
+    let mut broken = valid.clone();
+    broken["bundle"]["format"] = json!("mboxrd");
+    reject(broken);
+    // A bundle source's quoting is decided, never ambiguous.
+    let mut broken = valid.clone();
+    broken["quoting"] = json!("ambiguous");
+    reject(broken);
+    // The manifest reference validates like a snapshot's.
+    let mut broken = valid.clone();
+    broken["bundle"]["manifest"]["sha256"] = json!("A".repeat(64));
+    reject(broken);
+    let mut broken = valid.clone();
+    broken["bundle"].as_object_mut().unwrap().remove("manifest");
+    reject(broken);
 }

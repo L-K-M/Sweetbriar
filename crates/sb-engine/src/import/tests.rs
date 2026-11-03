@@ -979,3 +979,116 @@ fn a_replayed_cancel_key_cannot_rewrite_another_jobs_report() {
     );
     block_on(engine.shutdown()).unwrap();
 }
+
+/// Plant v2 sources without discovery; d1b will create these inventories.
+fn plant_bundle(engine: &Engine, dir: &Path, state: ImportJobState) -> (String, String) {
+    let paths: Vec<_> = ["one.eml", "two.eml", "manifest.eml"]
+        .iter()
+        .map(|name| dir.join(name))
+        .collect();
+    for path in &paths {
+        fs::write(path, b"Subject: synthetic\n\nbody\n").unwrap();
+    }
+    let ImportInventoryOutcome::Complete(inventory) = engine
+        .resources()
+        .inventory_import_sources(&paths, |_| ControlFlow::Continue(()))
+    else {
+        panic!("inventory cancelled");
+    };
+    assert!(inventory.problems().is_empty());
+    let sources = inventory.sources();
+    let manifest: serde_json::Value = serde_json::from_str(&sources[2].to_json()).unwrap();
+    let token = sources[2].snapshot().token().to_owned();
+    let sources: Vec<_> = sources[..2]
+        .iter()
+        .map(|source| {
+            let mut json: serde_json::Value = serde_json::from_str(&source.to_json()).unwrap();
+            json["v"] = 2.into();
+            json["bundle"] = serde_json::json!({"manifest": manifest["snapshot"], "format": "eml"});
+            SourceInventory::from_json(&json.to_string()).unwrap()
+        })
+        .collect();
+    let snapshots = all_snapshots(sources.iter());
+    assert_eq!(snapshots.len(), 3);
+    assert_eq!(snapshots.iter().filter(|s| s.token() == token).count(), 1);
+    let id = engine.resources().new_uuid_string();
+    let job = id.clone();
+    let now = engine.resources().now();
+    block_on(engine.resources().write(WritePriority::Sync, move |tx| {
+        create_import_job(tx, &job, &paths, now)?;
+        record_import_sources(tx, &job, 0, &sources)?;
+        let checkpoint = ImportJobCheckpoint::inventoried(&sources, &[]);
+        let waiting = advance_import_job(
+            tx,
+            &job,
+            1,
+            ImportJobState::AwaitingConfirmation,
+            &checkpoint,
+            now,
+        )?;
+        if state == ImportJobState::Running {
+            advance_import_job(
+                tx,
+                &job,
+                waiting.revision(),
+                state,
+                waiting.checkpoint(),
+                now,
+            )?;
+        }
+        Ok(())
+    }))
+    .unwrap();
+    (id, token)
+}
+
+#[test]
+fn bundle_resume_verifies_manifest_and_refuses_unverified_ingest() {
+    for damage in ["none", "missing", "corrupt"] {
+        let scratch = ScratchDir::new("bundle-resume");
+        let root = scratch.path().join("store");
+        let engine = open(&root);
+        let (id, token) = plant_bundle(&engine, scratch.path(), ImportJobState::Running);
+        block_on(engine.shutdown()).unwrap();
+        let manifest = root.join("recovery").join(format!("import-source-{token}"));
+        match damage {
+            "missing" => fs::remove_file(manifest).unwrap(),
+            "corrupt" => fs::write(manifest, b"corrupt").unwrap(),
+            _ => (),
+        }
+        let engine = open(&root);
+        let failed = settle(&engine, &id, ImportJobState::Failed);
+        let failure = failed.checkpoint().failure().unwrap();
+        if damage == "none" {
+            assert!(failure.contains("M1.7d2"), "{failure}");
+        } else {
+            assert!(failure.contains(&token), "{failure}");
+        }
+        assert_eq!(failed.checkpoint().totals().processed, 0);
+        assert!(
+            failed
+                .sources()
+                .iter()
+                .all(|s| s.position() == SourcePosition::START)
+        );
+        assert_eq!(count(&engine, "SELECT count(*) FROM occurrences"), 0);
+        block_on(engine.shutdown()).unwrap();
+    }
+}
+
+#[test]
+fn cancelling_bundle_removes_shared_snapshots() {
+    let scratch = ScratchDir::new("bundle-cleanup");
+    let root = scratch.path().join("store");
+    let engine = open(&root);
+    let (id, _) = plant_bundle(
+        &engine,
+        scratch.path(),
+        ImportJobState::AwaitingConfirmation,
+    );
+    assert_eq!(snapshots(&root), 3);
+    block_on(engine.cancel_job(&engine.new_idempotency_key(), &id)).unwrap();
+    assert_eq!(snapshots(&root), 0);
+    assert!(report(&engine, &id).contains("\"state\": \"cancelled\""));
+    block_on(engine.shutdown()).unwrap();
+}

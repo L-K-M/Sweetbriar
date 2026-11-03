@@ -21,6 +21,9 @@ use serde_json::Value;
 use crate::StoreError;
 
 const FORMAT_VERSION: u64 = 1;
+// Bundle member sources persist version-2 source JSON (spec/09 Export
+// bundles); job requests and checkpoints stay at version 1.
+const MAX_SOURCE_VERSION: u64 = 2;
 const INITIAL_CHECKPOINT: &str = "{\"v\":1}";
 // The literal predicate proves partial-index eligibility at prepare time;
 // a bound source_kind alone would scan all provenance for every message.
@@ -44,6 +47,18 @@ fn canonical_object(json: &str) -> Result<String, StoreError> {
         serde_json::from_str(json).map_err(|e| invalid(format!("import JSON: {e}")))?;
     if !value.is_object() || value.get("v").and_then(Value::as_u64) != Some(FORMAT_VERSION) {
         return Err(invalid("import JSON must be an object with v: 1"));
+    }
+    Ok(value.to_string())
+}
+
+fn canonical_source(json: &str) -> Result<String, StoreError> {
+    let value: Value =
+        serde_json::from_str(json).map_err(|e| invalid(format!("import JSON: {e}")))?;
+    let version = value.get("v").and_then(Value::as_u64);
+    if !value.is_object() || !matches!(version, Some(FORMAT_VERSION..=MAX_SOURCE_VERSION)) {
+        return Err(invalid(
+            "import source JSON must be an object with v: 1 or 2",
+        ));
     }
     Ok(value.to_string())
 }

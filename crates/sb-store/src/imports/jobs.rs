@@ -1,6 +1,6 @@
 use rusqlite::{OptionalExtension, Transaction, params};
 
-use super::{INITIAL_CHECKPOINT, canonical_object, invalid, sql_error};
+use super::{INITIAL_CHECKPOINT, canonical_object, canonical_source, invalid, sql_error};
 use crate::{StoreError, Timestamp};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -215,7 +215,7 @@ pub fn record_import_source(
         return Err(StoreError::conflict("inventory is already closed"));
     }
     let ordinal = source_ordinal(ordinal)?;
-    let source = canonical_object(source_json)?;
+    let source = canonical_source(source_json)?;
     tx.execute(
         "INSERT INTO import_job_sources (job_id, ordinal, source_json, checkpoint_json)
          VALUES (?1, ?2, ?3, ?4) ON CONFLICT(job_id, ordinal) DO NOTHING",

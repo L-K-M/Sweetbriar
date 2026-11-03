@@ -676,11 +676,7 @@ async fn discard_if_cancelled(worker: &Worker, claim: &Claim, inventory: ImportI
     if !matches!(state, Ok(Ok(job)) if job.state() == ImportJobState::Cancelled) {
         return;
     }
-    let snapshots: Vec<_> = inventory
-        .sources()
-        .iter()
-        .map(|source| source.snapshot().clone())
-        .collect();
+    let snapshots = all_snapshots(inventory.sources().iter());
     let _ = worker
         .blocking(move |resources| resources.remove_import_sources(&snapshots))
         .await;
@@ -716,14 +712,26 @@ fn finish(resources: &Resources, id: &str) -> Result<bool, StoreError> {
         job.state(),
         ImportJobState::Completed | ImportJobState::Cancelled
     ) {
-        let snapshots: Vec<_> = sources
-            .iter()
-            .map(|(source, _)| source.snapshot().clone())
-            .collect();
-        resources.remove_import_sources(&snapshots)?;
+        resources
+            .remove_import_sources(&all_snapshots(sources.iter().map(|(source, _)| source)))?;
     }
     resources.write_import_report(id, &import_report(&job, &sources))?;
     Ok(true)
+}
+
+/// Every snapshot the sources reference, each once: members of one
+/// export bundle share their manifest's (spec/09 "Export bundles").
+fn all_snapshots<'a>(
+    sources: impl Iterator<Item = &'a SourceInventory>,
+) -> Vec<sb_resources::ImportSourceSnapshot> {
+    let mut seen = HashSet::new();
+    let mut snapshots = Vec::new();
+    for snapshot in sources.flat_map(SourceInventory::snapshots) {
+        if seen.insert(snapshot.token().to_owned()) {
+            snapshots.push(snapshot.clone());
+        }
+    }
+    snapshots
 }
 
 /// Whether the job left this worker's hands: no longer at `revision`
