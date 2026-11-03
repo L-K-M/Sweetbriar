@@ -70,7 +70,6 @@ pub struct Connection {
     port: u16,
     wire: Option<Wire>,
     gate: Gate,
-    /// The connection-wide parser the io-imap coroutines share.
     fragmentizer: Fragmentizer,
     capabilities: Vec<Capability<'static>>,
     closed: bool,
@@ -122,7 +121,6 @@ impl Connection {
         Ok(connection)
     }
 
-    /// The setup order from spec/04 "Connections".
     async fn setup(&mut self, options: &ConnectOptions) -> Result<(), ImapError> {
         self.greeting().await?;
 
@@ -146,7 +144,6 @@ impl Connection {
         Ok(())
     }
 
-    /// Reads and checks the server greeting through the gate.
     async fn greeting(&mut self) -> Result<(), ImapError> {
         self.run(ImapGreetingGet::new(ImapGreetingGetOptions {
             ensure_capabilities: false,
@@ -155,12 +152,10 @@ impl Connection {
         Ok(())
     }
 
-    /// `CAPABILITY`.
     pub async fn capability(&mut self) -> Result<Vec<Capability<'static>>, ImapError> {
         self.run(ImapCapabilityGet::new()).await
     }
 
-    /// `LOGIN` over the pinned-TLS channel.
     async fn login(
         &mut self,
         user: &str,
@@ -171,7 +166,6 @@ impl Connection {
         self.run(coroutine).await
     }
 
-    /// `ID ("name" "Sweetbriar" "version" "<version>")`.
     async fn id(&mut self) -> Result<(), ImapError> {
         let parameters = vec![
             (
@@ -258,7 +252,6 @@ impl Connection {
         }
     }
 
-    /// Marks the connection unusable and shuts the socket down.
     async fn close(&mut self) {
         self.closed = true;
         if let Some(wire) = self.wire.as_mut() {
@@ -272,7 +265,6 @@ async fn write_command(wire: &mut (impl AsyncWrite + Unpin), bytes: &[u8]) -> st
     wire.flush().await
 }
 
-/// Whether the capability list advertises `wanted`.
 fn advertises(
     capabilities: &[Capability<'static>],
     wanted: impl Fn(&Capability<'_>) -> bool,

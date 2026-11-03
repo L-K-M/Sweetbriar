@@ -49,7 +49,6 @@ impl fmt::Debug for CertificatePin {
     }
 }
 
-/// Lowercase hex.
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
@@ -131,8 +130,6 @@ impl ServerCertVerifier for CertPinVerifier {
     }
 }
 
-/// Builds the pinning client config and the cell a mismatch records
-/// into. The caller checks the cell when the handshake fails.
 pub(crate) fn pinned_client_config(
     pin: CertificatePin,
 ) -> (Arc<ClientConfig>, Arc<Mutex<Option<String>>>) {

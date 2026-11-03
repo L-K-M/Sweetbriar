@@ -167,6 +167,7 @@ pub struct ReceivedCommand {
 struct Shared {
     received: Mutex<Vec<ReceivedCommand>>,
     unexpected: AtomicUsize,
+    disconnected: AtomicUsize,
 }
 
 /// The listening server: `serve` starts it, `Drop` joins its threads.
@@ -216,7 +217,8 @@ impl FakeImapServer {
                         .clone();
                     let (shutdown, shared) = (shutdown.clone(), shared.clone());
                     let conn = thread::spawn(move || {
-                        let _ = run_connection(stream, script, shared, shutdown, index);
+                        let _ = run_connection(stream, script, shared.clone(), shutdown, index);
+                        shared.disconnected.fetch_add(1, Ordering::Relaxed);
                     });
                     conns.lock().expect("conns").push(conn);
                     index += 1;
@@ -247,6 +249,11 @@ impl FakeImapServer {
     /// test asserts as zero.
     pub fn unexpected_count(&self) -> usize {
         self.shared.unexpected.load(Ordering::Relaxed)
+    }
+
+    /// Connections whose server-side handler has ended.
+    pub fn disconnected_count(&self) -> usize {
+        self.shared.disconnected.load(Ordering::Relaxed)
     }
 
     /// Stops accepting and drops live connections without `Drop`.

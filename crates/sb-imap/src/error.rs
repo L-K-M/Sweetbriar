@@ -35,9 +35,7 @@ pub enum ImapError {
         /// The failing operation's message.
         message: String,
     },
-    /// A command exchange failed (greeting, CAPABILITY, ID,
-    /// ...). `operation` names the command; `message` is the typed
-    /// cause's text.
+    /// A command exchange failed; `message` is the typed cause's text.
     Command {
         /// The command that failed.
         operation: &'static str,
@@ -47,7 +45,6 @@ pub enum ImapError {
 }
 
 impl ImapError {
-    /// Builds the [`Self::Command`] variant from a typed cause.
     pub(crate) fn command(operation: &'static str, message: impl fmt::Display) -> Self {
         Self::Command {
             operation,
@@ -55,7 +52,6 @@ impl ImapError {
         }
     }
 
-    /// Maps an I/O failure, preserving its native kind.
     pub(crate) fn from_io(err: io::Error) -> Self {
         Self::Io {
             kind: err.kind(),

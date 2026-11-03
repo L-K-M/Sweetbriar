@@ -8,8 +8,7 @@ use std::fmt;
 pub struct Password(String);
 
 impl Password {
-    /// Wraps a password. The caller owns the secret; nothing here
-    /// copies it into a formatted value.
+    /// Wraps a password.
     pub fn new(value: impl Into<String>) -> Self {
         Self(value.into())
     }

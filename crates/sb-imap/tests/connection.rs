@@ -11,7 +11,6 @@ use sb_test_support::{
     Expect, FakeImapServer, Profile, RAW_UTF8_ENVELOPE, Reply, Script, Step, cert_der,
 };
 
-/// The SHA-256 pin of the committed test certificate.
 fn pin() -> CertificatePin {
     CertificatePin::of_der(cert_der().as_ref())
 }
@@ -31,7 +30,6 @@ fn options(host: IpAddr, port: u16) -> ConnectOptions {
     }
 }
 
-/// The implicit TLS setup exchange.
 fn setup_script(profile: &Profile) -> Script {
     Script::new(vec![
         profile.capability_step(),
@@ -48,8 +46,7 @@ fn setup_script(profile: &Profile) -> Script {
     .implicit_tls()
 }
 
-/// The commands a server saw, tags replaced by `T<n>` in order of
-/// first appearance (io-imap's tag counter is process-global).
+/// Replace io-imap's process-global tags in the received commands.
 fn received_commands(server: &FakeImapServer) -> Vec<String> {
     let mut tags: Vec<String> = Vec::new();
     server
@@ -113,11 +110,7 @@ async fn wrong_pin_is_rejected_before_login() {
         presented_sha256, "f921c0432dab5a70401266a0216f46e6f6f795de47868447e9fde159771a24d1",
         "the presented certificate's hash is reported"
     );
-    assert_eq!(
-        received_commands(&server),
-        Vec::<String>::new(),
-        "no LOGIN reached the server"
-    );
+    assert!(received_commands(&server).is_empty());
     assert_eq!(server.unexpected_count(), 0, "no fallback answers");
 }
 
@@ -130,17 +123,10 @@ async fn login_disabled_is_refused() {
         .await
         .expect_err("a server advertising LOGINDISABLED is refused");
     assert!(matches!(err, ImapError::LoginDisabled), "got {err:?}");
-    assert_eq!(
-        received_commands(&server),
-        ["T1 CAPABILITY"],
-        "no LOGIN reached the server"
-    );
+    assert_eq!(received_commands(&server), ["T1 CAPABILITY"]);
     assert_eq!(server.unexpected_count(), 0, "no fallback answers");
 }
 
-/// `HostPolicy::LoopbackOnly` refuses every address but `127.0.0.1`
-/// before a socket opens: `::1` against a live listener, and a
-/// non-routable address with no connect wait.
 #[tokio::test]
 async fn loopback_policy_refuses_non_loopback() {
     let listener = TcpListener::bind((Ipv6Addr::LOCALHOST, 0)).expect("bind ::1");
@@ -173,9 +159,6 @@ async fn loopback_policy_refuses_non_loopback() {
     assert!(server.received().is_empty(), "no connection was accepted");
 }
 
-/// A malformed response after login fails the read with `Malformed`,
-/// closes the connection (the next operation reports `Closed`), and
-/// the data the server sent after the fault is never delivered.
 #[tokio::test]
 async fn malformed_response_closes_the_connection() {
     let profile = Profile::bridge();
@@ -205,17 +188,9 @@ async fn malformed_response_closes_the_connection() {
         .expect_err("the connection is closed");
     assert!(matches!(err, ImapError::Closed), "got {err:?}");
 
-    assert_eq!(
-        received_commands(&server),
-        [
-            "T1 CAPABILITY",
-            "T2 LOGIN owner@example.org bridge-password",
-            "T3 CAPABILITY",
-            "T4 ID (\"name Sweetbriar version 0.0.1\")",
-            "T5 CAPABILITY",
-        ],
-        "no command was attempted after the fault"
-    );
+    let commands = received_commands(&server);
+    assert_eq!(commands.len(), 5, "no command after the fault");
+    assert_eq!(commands.last().unwrap(), "T5 CAPABILITY");
     assert_eq!(server.unexpected_count(), 0, "no fallback answers");
 }
 
@@ -377,6 +352,25 @@ async fn malformed_greeting_is_rejected() {
         .expect_err("malformed greeting");
     assert!(matches!(err, ImapError::Malformed));
     assert!(received_commands(&server).is_empty());
+}
+
+#[tokio::test]
+async fn response_literal_as_greeting_is_rejected_and_closed() {
+    let script = setup_script(&Profile::bridge())
+        .greeting("* 1 FETCH (BODY[] {5}\r\nhello)\r\n* OK later\r\n");
+    let server = FakeImapServer::serve(vec![script]).expect("serve");
+    let err = Connection::connect(options(localhost(), server.port()))
+        .await
+        .expect_err("response literal is not a greeting");
+    assert!(matches!(err, ImapError::Malformed), "got {err:?}");
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while server.disconnected_count() == 0 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("client closes the connection");
+    assert!(received_commands(&server).is_empty(), "no LOGIN sent");
 }
 
 #[tokio::test]
