@@ -1,7 +1,8 @@
-//! Bounded envelope and scope validation. Records remain unsupported until the
-//! next split validates their schemas and references.
+//! Bounded manifest envelope, scope and file-table validation.
 
-use std::io::{self, Read};
+use std::io::{self, Read, Seek, SeekFrom};
+
+use sha2::{Digest, Sha256};
 
 // Search query nodes have depth 32 (spec/06). A node can add an object
 // and an operands array; the manifest and scope wrappers fit in 16 more.
@@ -20,6 +21,7 @@ fn validate(reader: impl Read) -> io::Result<()> {
         reader,
         next: None,
         capture: None,
+        position: 0,
     };
     parser.value(0)?;
     parser.whitespace()?;
@@ -31,18 +33,132 @@ fn validate(reader: impl Read) -> io::Result<()> {
 
 /// Validate the bounded envelope and scope. Records remain fail-closed until
 /// their schema and references are checked by the following step.
-pub(super) fn validate_envelope(reader: impl Read) -> io::Result<()> {
+pub(super) fn validate_envelope(reader: impl Read) -> io::Result<FileTable> {
     let mut parser = Parser {
         reader,
         next: None,
         capture: None,
+        position: 0,
     };
-    parser.envelope()?;
+    let table = parser.envelope()?;
     parser.whitespace()?;
     if parser.peek()?.is_some() {
         return Err(invalid());
     }
+    Ok(table)
+}
+
+/// The validated array's byte range and count, for later record validation.
+pub(super) struct FileTable {
+    start: u64,
+    end: u64,
+    count: u64,
+}
+
+struct FileName {
+    start: u64,
+    digest: [u8; 32],
+}
+
+/// Compare decoded names exactly; hashes only avoid unnecessary comparisons.
+pub(super) fn validate_file_names(
+    reader: &mut (impl Read + Seek),
+    table: &FileTable,
+) -> io::Result<()> {
+    // A fixed batch reduces rescans without retaining names for the corpus.
+    const BATCH_SIZE: usize = 64;
+    let mut outer = table.start + 1;
+    let mut processed = 0;
+    while processed < table.count {
+        let mut batch = Vec::with_capacity(BATCH_SIZE);
+        while batch.len() < BATCH_SIZE && processed < table.count {
+            let (name, next) = read_entry(reader, outer)?;
+            check_name(reader, &batch, &name)?;
+            batch.push(name);
+            outer = next;
+            processed += 1;
+        }
+        let mut inner = outer;
+        for _ in processed..table.count {
+            let (other, after) = read_entry(reader, inner)?;
+            check_name(reader, &batch, &other)?;
+            inner = after;
+        }
+    }
+    if outer > table.end {
+        return Err(invalid());
+    }
     Ok(())
+}
+
+fn check_name(
+    reader: &mut (impl Read + Seek),
+    batch: &[FileName],
+    name: &FileName,
+) -> io::Result<()> {
+    for previous in batch {
+        if previous.digest == name.digest && same_name(reader, previous.start, name.start)? {
+            return Err(invalid());
+        }
+    }
+    Ok(())
+}
+
+fn read_entry(reader: &mut (impl Read + Seek), offset: u64) -> io::Result<(FileName, u64)> {
+    reader.seek(SeekFrom::Start(offset))?;
+    let mut parser = Parser {
+        reader,
+        next: None,
+        capture: None,
+        position: offset,
+    };
+    parser.whitespace()?;
+    if parser.peek()? == Some(b',') {
+        parser.take()?;
+    }
+    parser.whitespace()?;
+    let name = parser.file_entry()?;
+    Ok((name, parser.position))
+}
+
+fn name_chunk(
+    reader: &mut (impl Read + Seek),
+    offset: &mut u64,
+    out: &mut [char],
+) -> io::Result<usize> {
+    reader.seek(SeekFrom::Start(*offset))?;
+    let mut parser = Parser {
+        reader,
+        next: None,
+        capture: None,
+        position: *offset,
+    };
+    let mut length = 0;
+    for slot in out {
+        let Some(character) = parser.string_char()? else {
+            break;
+        };
+        *slot = character;
+        length += 1;
+    }
+    *offset = parser.position;
+    Ok(length)
+}
+
+fn same_name(reader: &mut (impl Read + Seek), mut left: u64, mut right: u64) -> io::Result<bool> {
+    const CHUNK: usize = 256;
+    loop {
+        let mut a = ['\0'; CHUNK];
+        let mut b = ['\0'; CHUNK];
+        let a_len = name_chunk(reader, &mut left, &mut a)?;
+        let b_len = name_chunk(reader, &mut right, &mut b)?;
+        if a_len != b_len || a[..a_len] != b[..b_len] {
+            return Ok(false);
+        }
+        if a_len < CHUNK {
+            return Ok(true);
+        }
+    }
 }
 
 fn invalid() -> io::Error {
@@ -53,6 +169,7 @@ struct Parser<R> {
     reader: R,
     next: Option<u8>,
     capture: Option<Vec<u8>>,
+    position: u64,
 }
 
 impl<R: Read> Parser<R> {
@@ -69,6 +186,9 @@ impl<R: Read> Parser<R> {
     fn take(&mut self) -> io::Result<Option<u8>> {
         let byte = self.peek()?;
         self.next = None;
+        if byte.is_some() {
+            self.position = self.position.checked_add(1).ok_or_else(invalid)?;
+        }
         if let (Some(bytes), Some(byte)) = (&mut self.capture, byte) {
             if bytes.len() >= sb_store::query::MAX_QUERY_INPUT_BYTES {
                 return Err(invalid());
@@ -139,7 +259,7 @@ impl<R: Read> Parser<R> {
         Ok(hash)
     }
 
-    fn envelope(&mut self) -> io::Result<()> {
+    fn envelope(&mut self) -> io::Result<FileTable> {
         const FIELDS: &[&str] = &[
             "v",
             "kind",
@@ -158,6 +278,7 @@ impl<R: Read> Parser<R> {
         let mut entries = None;
         let mut ids_hash = None;
         let mut scope = None;
+        let mut files = None;
         self.object(|p, key| {
             let index = FIELDS
                 .iter()
@@ -196,7 +317,8 @@ impl<R: Read> Parser<R> {
                 "generation" => generation = Some(p.integer::<u64>()?),
                 "entries" => entries = Some(p.integer::<u64>()?),
                 "ids_sha256" => ids_hash = Some(p.hash()?),
-                "files" | "messages" => {
+                "files" => files = Some(p.file_table()?),
+                "messages" => {
                     if p.peek()? != Some(b'[') {
                         return Err(invalid());
                     }
@@ -218,7 +340,142 @@ impl<R: Read> Parser<R> {
         {
             return Err(invalid());
         }
-        Ok(())
+        files.ok_or_else(invalid)
+    }
+
+    fn file_table(&mut self) -> io::Result<FileTable> {
+        let start = self.position;
+        self.expect(b'[')?;
+        self.whitespace()?;
+        let mut count = 0u64;
+        if self.peek()? != Some(b']') {
+            loop {
+                self.file_entry()?;
+                count = count.checked_add(1).ok_or_else(invalid)?;
+                self.whitespace()?;
+                match self.take()? {
+                    Some(b',') => self.whitespace()?,
+                    Some(b']') => break,
+                    _ => return Err(invalid()),
+                }
+            }
+        } else {
+            self.take()?;
+        }
+        Ok(FileTable {
+            start,
+            end: self.position,
+            count,
+        })
+    }
+
+    fn file_entry(&mut self) -> io::Result<FileName> {
+        let mut seen = 0u8;
+        let mut name = None;
+        self.object(|p, key| {
+            let bit = match key {
+                "name" => 1,
+                "bytes" => 2,
+                "records" => 4,
+                _ => return Err(invalid()),
+            };
+            if seen & bit != 0 {
+                return Err(invalid());
+            }
+            seen |= bit;
+            match key {
+                "name" => name = Some(p.file_name()?),
+                "bytes" | "records" => {
+                    p.integer::<u64>()?;
+                }
+                _ => unreachable!(),
+            }
+            Ok(())
+        })?;
+        if seen != 0b111 {
+            return Err(invalid());
+        }
+        name.ok_or_else(invalid)
+    }
+
+    fn file_name(&mut self) -> io::Result<FileName> {
+        self.expect(b'"')?;
+        let start = self.position;
+        let mut hash = Sha256::new();
+        let mut length = 0u64;
+        let mut dots = true;
+        while let Some(ch) = self.string_char()? {
+            if matches!(ch, '/' | '\\' | '\0') {
+                return Err(invalid());
+            }
+            dots &= ch == '.';
+            length = length.checked_add(1).ok_or_else(invalid)?;
+            let mut bytes = [0; 4];
+            hash.update(ch.encode_utf8(&mut bytes).as_bytes());
+        }
+        if length == 0 || (dots && length <= 2) {
+            return Err(invalid());
+        }
+        Ok(FileName {
+            start,
+            digest: hash.finalize().into(),
+        })
+    }
+
+    fn string_char(&mut self) -> io::Result<Option<char>> {
+        let ch = match self.take()? {
+            Some(b'"') => return Ok(None),
+            Some(b'\\') => match self.take()? {
+                Some(b'"') => '"',
+                Some(b'\\') => '\\',
+                Some(b'/') => '/',
+                Some(b'b') => '\u{8}',
+                Some(b'f') => '\u{c}',
+                Some(b'n') => '\n',
+                Some(b'r') => '\r',
+                Some(b't') => '\t',
+                Some(b'u') => {
+                    let first = self.hex4()?;
+                    let scalar = match first {
+                        0xd800..=0xdbff => {
+                            self.expect(b'\\')?;
+                            self.expect(b'u')?;
+                            let second = self.hex4()?;
+                            if !(0xdc00..=0xdfff).contains(&second) {
+                                return Err(invalid());
+                            }
+                            0x10000 + ((u32::from(first) - 0xd800) << 10) + u32::from(second)
+                                - 0xdc00
+                        }
+                        0xdc00..=0xdfff => return Err(invalid()),
+                        _ => u32::from(first),
+                    };
+                    char::from_u32(scalar).ok_or_else(invalid)?
+                }
+                _ => return Err(invalid()),
+            },
+            Some(byte @ 0x20..=0x7f) => char::from(byte),
+            Some(first @ 0x80..=0xff) => {
+                let len = match first {
+                    0xc2..=0xdf => 2,
+                    0xe0..=0xef => 3,
+                    0xf0..=0xf4 => 4,
+                    _ => return Err(invalid()),
+                };
+                let mut bytes = [0; 4];
+                bytes[0] = first;
+                for byte in &mut bytes[1..len] {
+                    *byte = self.take()?.ok_or_else(invalid)?;
+                }
+                std::str::from_utf8(&bytes[..len])
+                    .map_err(|_| invalid())?
+                    .chars()
+                    .next()
+                    .ok_or_else(invalid)?
+            }
+            _ => return Err(invalid()),
+        };
+        Ok(Some(ch))
     }
 
     fn scope(&mut self) -> io::Result<(u64, Option<(u64, String)>)> {

@@ -1660,3 +1660,59 @@ fn manifest_envelope_rejects_missing_scope() {
         }
     }
 }
+
+#[test]
+fn manifest_file_table_rejects_invalid_writer_entries() {
+    let (scratch, res, _) = fixture();
+    for (job, format) in [
+        ("file-schema-eml", ExportFormat::Eml),
+        ("file-schema-mbox", ExportFormat::Mboxrd),
+    ] {
+        let dest = scratch.path().join(job);
+        capture(&res, job, format, &dest, mailbox_scope(&res, 1));
+        export(&res, job);
+        let original = manifest(&dest);
+        for files in [
+            r#"{}"#,
+            r#"[null]"#,
+            r#"[{"bytes":0,"records":1}]"#,
+            r#"[{"name":"a","records":1}]"#,
+            r#"[{"name":"a","bytes":0}]"#,
+            r#"[{"name":"a","bytes":0,"records":1,"extra":0}]"#,
+            r#"[{"name":"a","bytes":0,"\u0062ytes":0,"records":1}]"#,
+            r#"[{"name":1,"bytes":0,"records":1}]"#,
+            r#"[{"name":"a","bytes":"0","records":1}]"#,
+            r#"[{"name":"a","bytes":-1,"records":1}]"#,
+            r#"[{"name":"a","bytes":18446744073709551616,"records":1}]"#,
+            r#"[{"name":"a","bytes":0,"records":-1}]"#,
+            r#"[{"name":"a","bytes":0,"records":18446744073709551616}]"#,
+            r#"[{"name":"","bytes":0,"records":1}]"#,
+            r#"[{"name":".","bytes":0,"records":1}]"#,
+            r#"[{"name":"\u002e.","bytes":0,"records":1}]"#,
+            r#"[{"name":"/a","bytes":0,"records":1}]"#,
+            r#"[{"name":"a\/b","bytes":0,"records":1}]"#,
+            r#"[{"name":"a\\b","bytes":0,"records":1}]"#,
+            r#"[{"name":"a\u0000b","bytes":0,"records":1}]"#,
+            r#"[{"name":"a","bytes":0,"records":1},{"name":"\u0061","bytes":0,"records":1}]"#,
+            r#"[{"name":"😀","bytes":0,"records":1},{"name":"\ud83d\ude00","bytes":0,"records":1}]"#,
+        ] {
+            let document = original.to_string().replace(
+                &format!("\"files\":{}", original["files"]),
+                &format!("\"files\":{files}"),
+            );
+            assert_ne!(document, original.to_string());
+            std::fs::write(dest.join(MANIFEST), document).unwrap();
+            let outcome = res.inventory_import_sources(std::slice::from_ref(&dest), |_| {
+                ControlFlow::Continue(())
+            });
+            let inventory = outcome.inventory();
+            assert!(inventory.sources().is_empty(), "{job}: {files}");
+            assert_eq!(inventory.problems().len(), 1, "{job}: {files}");
+            assert_eq!(
+                inventory.problems()[0].kind(),
+                sb_resources::ImportProblemKind::Failed,
+                "{job}: {files}"
+            );
+        }
+    }
+}
