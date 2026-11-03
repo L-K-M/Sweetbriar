@@ -950,11 +950,25 @@ local drafts. No network yet.
       hashes, the mboxrd manifest fields, the `sb-mime`
       `MBOXRD_ENVELOPE` constant and their tests; same qualifications
       for the mboxrd format.
-  - **M1.7d Manifest-aware import — L:** capture and verify the sidecar
-    with the source, validate mboxrd framing/length/hash before ingest,
-    and include the framing identity in replay. Native imports of c's
-    bundles preserve unterminated acquisitions and multiplicity; malformed
-    framing never silently trims bytes or falls back to changed originals.
+  - **M1.7d1a Bundle source metadata and safe lifecycle — M:** persist
+    bundle source metadata and manifest snapshot references, verify the
+    snapshot on resume, refuse unverified ingest until d2, and remove shared
+    snapshots once at terminal cleanup. Plain source metadata stays unchanged.
+  - **M1.7d1b Bundle discovery and manifest capture — L:** recognise bundle
+    directories, capture and validate bounded manifests, and check each file's
+    agreement independently before ingest. Report missing files, refuse an
+    explicitly chosen manifest, and preserve valid siblings. A directly chosen
+    `.mbox` remains plain. A same-named directory is not a manifest; chosen and walked
+    `.mbox` directories with a real manifest take the bundle path before Apple
+    package handling. Ordinary Apple packages remain supported. A bundle source
+    never degrades to a plain import.
+  - **M1.7d2 Manifest-verified ingest — L:** each bundle record's
+    boundary, framing, original length and SHA-256 are verified before
+    its bytes publish; only the declared framing LF is removed; the
+    framing identity joins replay. Native imports of c's bundles
+    preserve unterminated acquisitions and multiplicity; malformed
+    framing never silently trims bytes or falls back to changed
+    originals.
   - **M1.7e Export engine — L:** counted background jobs, start/query,
     cancel, shutdown and reopen over b2/c. Own real-worker lifecycle,
     crash/resume and all original round-trip acceptance checks using d.
