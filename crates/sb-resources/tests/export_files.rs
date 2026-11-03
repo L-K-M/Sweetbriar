@@ -4,6 +4,7 @@
 
 use std::collections::BTreeSet;
 use std::ops::ControlFlow;
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Barrier};
 use std::thread;
@@ -20,6 +21,8 @@ use sha2::{Digest, Sha256};
 const BODY_A: &[u8] = b"From: a@example.test\nSubject: Alpha\n\nalpha body\n";
 const BODY_B: &[u8] = b"From: b@example.test\nSubject: Beta\n\n>From inside\nFrom edge";
 const BODY_C: &[u8] = b"";
+const BODY_B_MBOX: &[u8] = b"From: b@example.test\nSubject: Beta\n\n>>From inside\n>From edge\n";
+const ENVELOPE: &[u8] = b"From MAILER-DAEMON Thu Jan  1 00:00:00 1970\n";
 const MISSING_SHA: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const QUARANTINED_SHA: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const EMPTY_HASH: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
@@ -59,11 +62,12 @@ fn place_object(root: &Path, bytes: &[u8]) -> String {
     sha_hex(bytes)
 }
 
-/// Two mailboxes, seven messages and every availability state:
+/// Three mailboxes, seven messages and every availability state:
 /// acquired bodies A/B/C (C empty), recorded `missing` and
-/// `quarantined` acquisitions, a never-acquired message, and two
-/// occurrences sharing one acquisition. Crash-cut children re-seed,
-/// so the whole fixture is idempotent.
+/// `quarantined` acquisitions, a never-acquired message, message 7
+/// sharing message 1's body so mboxrd writes it twice, and mailbox 3
+/// holding no occurrence at all. Crash-cut children re-seed, so the
+/// whole fixture is idempotent.
 fn seed(res: &Resources, root: &Path) {
     let (seeded, account): (bool, String) = res
         .read(|tx| {
@@ -85,7 +89,7 @@ fn seed(res: &Resources, root: &Path) {
     let (la, lb) = (BODY_A.len(), BODY_B.len());
     write(res, move |tx| {
         tx.execute_batch(&format!(
-            r#"INSERT INTO mailboxes (mailbox_id,account_id,remote_name,kind,selectable,sync_state) VALUES (1,'{account}','Inbox','folder',1,'synced'),(2,'{account}','Archive Box','folder',1,'synced');
+            r#"INSERT INTO mailboxes (mailbox_id,account_id,remote_name,kind,selectable,sync_state) VALUES (1,'{account}','Inbox','folder',1,'synced'),(2,'{account}','Archive Böx','folder',1,'synced'),(3,'{account}','Empty','folder',1,'synced');
 INSERT INTO acquisitions (acquisition_id,content_sha256,byte_length,object_state,first_acquired_at) VALUES (1,'{a}',{la},'published',1),(2,'{b}',{lb},'published',1),(3,'{c}',0,'published',1),(4,'{MISSING_SHA}',9,'missing',1),(5,'{QUARANTINED_SHA}',11,'quarantined',1);
 INSERT INTO logical_messages (message_id,account_id,acquisition_id,created_at) VALUES (1,'{account}',1,1),(2,'{account}',2,1),(3,'{account}',3,1),(4,'{account}',4,1),(5,'{account}',5,1),(6,'{account}',NULL,1),(7,'{account}',1,1);
 INSERT INTO occurrences (occurrence_id,account_id,mailbox_id,message_id,internal_date,keywords,state,first_seen_at,last_seen_at) VALUES (1,'{account}',1,1,40,'[]','present',1,1),(2,'{account}',1,2,30,'[]','present',1,1),(3,'{account}',1,3,20,'[]','present',1,1),(4,'{account}',1,4,10,'[]','present',1,1),(5,'{account}',1,5,5,'[]','present',1,1),(6,'{account}',1,6,1,'[]','present',1,1),(7,'{account}',2,1,60,'[]','present',1,1),(8,'{account}',2,7,50,'[]','present',1,1);
@@ -108,6 +112,24 @@ fn fixture() -> (ScratchDir, Resources, PathBuf) {
 fn mailbox_scope(res: &Resources, mailbox: i64) -> ExportScope {
     ExportScope::Mailbox {
         mailbox_id: mailbox,
+        expected_generation: res.read(list_generation).unwrap(),
+    }
+}
+
+fn account_scope(res: &Resources) -> ExportScope {
+    let account: String = res
+        .read(|tx| {
+            Ok(tx
+                .query_row(
+                    "SELECT account_id FROM accounts WHERE provider='local_archive'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap())
+        })
+        .unwrap();
+    ExportScope::Account {
+        account_id: account,
         expected_generation: res.read(list_generation).unwrap(),
     }
 }
@@ -168,6 +190,17 @@ fn assert_err(res: &Resources, id: &str, pred: impl Fn(&StoreError) -> bool) {
 
 fn assert_stopped(result: Result<Scoped<ExportJob>, StoreError>) {
     assert!(matches!(result, Ok(Scoped::Stopped)), "{result:?}");
+}
+
+/// Nothing reached the destination but the claim and the lease's lock:
+/// no final file, no partial, no manifest.
+fn assert_only_claim(dest: &Path) {
+    let mut names: Vec<String> = std::fs::read_dir(dest)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    assert_eq!(names, ["sweetbriar-export.claim", "sweetbriar-export.lock"]);
 }
 
 fn manifest(dest: &Path) -> Value {
@@ -272,7 +305,7 @@ fn eml_output_is_byte_exact_and_the_manifest_lists_every_occurrence() {
             "{i}"
         );
         assert_eq!(messages[i]["body_availability"], availability, "{i}");
-        // The record-span fields belong to mboxrd (M1.7c2) entries only.
+        // The record-span fields belong to mboxrd entries only.
         assert_eq!(messages[i].get("record_offset"), None, "{i}");
     }
     assert_eq!(messages[0]["flags"]["flagged"], true);
@@ -286,28 +319,225 @@ fn eml_output_is_byte_exact_and_the_manifest_lists_every_occurrence() {
     assert_eq!(progress.last(), Some(&3));
 }
 
-/// A sealed mboxrd capture is valid, but this artifact writes EML
-/// only: the writer refuses naming M1.7c2, before touching the
-/// destination or the job state (spec/09 "Export file output").
 #[test]
-fn mboxrd_jobs_are_refused_until_m1_7c2() {
+fn mboxrd_quotes_frames_and_writes_one_file_per_mailbox() {
     let (scratch, res, _root) = fixture();
-    let dest = scratch.path().join("mbox-refused-out");
+    let dest = scratch.path().join("mbox-out");
     capture(
         &res,
-        "mbox-refused",
+        "mbox",
         ExportFormat::Mboxrd,
         &dest,
-        selection_scope(&res, &[1, 2, 7]),
+        selection_scope(&res, &[4, 1, 3, 6, 2, 5, 8, 7]),
     );
-    match export_err(&res, "mbox-refused") {
-        StoreError::InvalidInput { message } => {
-            assert!(message.contains("M1.7c2"), "{message}")
-        }
-        other => panic!("an mboxrd job was not refused: {other:?}"),
+    export(&res, "mbox");
+
+    let record_a = [ENVELOPE, BODY_A].concat();
+    let record_b = [ENVELOPE, BODY_B_MBOX].concat();
+    // The framed record lands last: its added LF ends the file.
+    let inbox = [record_a.as_slice(), ENVELOPE, record_b.as_slice()].concat();
+    let archive = [&record_a, &record_a].map(Vec::as_slice).concat();
+    assert_eq!(std::fs::read(dest.join("1-Inbox.mbox")).unwrap(), inbox);
+    // "Archive Böx" folds per byte: space and both 'ö' bytes to `_`.
+    assert_eq!(
+        std::fs::read(dest.join("2-Archive_B__x.mbox")).unwrap(),
+        archive
+    );
+
+    let sidecar = manifest(&dest);
+    assert_eq!(sidecar["entries"], 8);
+    let messages = sidecar["messages"].as_array().unwrap();
+    assert_eq!(ids_of(messages), [4, 1, 3, 6, 2, 5, 8, 7]);
+    let by_id = |id: i64| messages.iter().find(|m| m["occurrence_id"] == id).unwrap();
+    for id in [4, 5, 6] {
+        assert_eq!(by_id(id)["file"], Value::Null, "{id}");
+        assert_eq!(by_id(id).get("record_offset"), None, "{id}");
     }
-    assert_eq!(job_state(&res, "mbox-refused"), ExportJobState::Ready);
-    assert!(!dest.exists());
+    let span_a = record_a.len() as u64;
+    let span_b = record_b.len() as u64;
+    let span_c = ENVELOPE.len() as u64;
+    for (id, want) in [
+        (1, ("1-Inbox.mbox", 0, span_a, BODY_A.len() as u64, false)),
+        (3, ("1-Inbox.mbox", span_a, span_c, 0, false)),
+        (
+            2,
+            (
+                "1-Inbox.mbox",
+                span_a + span_c,
+                span_b,
+                BODY_B.len() as u64,
+                true,
+            ),
+        ),
+        (
+            8,
+            ("2-Archive_B__x.mbox", 0, span_a, BODY_A.len() as u64, false),
+        ),
+        (
+            7,
+            (
+                "2-Archive_B__x.mbox",
+                span_a,
+                span_a,
+                BODY_A.len() as u64,
+                false,
+            ),
+        ),
+    ] {
+        let m = by_id(id);
+        let got = (
+            m["file"].as_str().unwrap(),
+            m["record_offset"].as_u64().unwrap(),
+            m["encoded_bytes"].as_u64().unwrap(),
+            m["original_bytes"].as_u64().unwrap(),
+            m["framing_lf_added"].as_bool().unwrap(),
+        );
+        assert_eq!(got, want, "{id}");
+    }
+    assert_eq!(
+        sidecar["files"],
+        json!([
+            {"name":"1-Inbox.mbox","bytes":inbox.len(),"records":3},
+            {"name":"2-Archive_B__x.mbox","bytes":archive.len(),"records":2},
+        ])
+    );
+
+    // A mailbox whose records are all unavailable still gets its file.
+    let empty_dest = scratch.path().join("mbox-empty-out");
+    capture(
+        &res,
+        "mbox-empty",
+        ExportFormat::Mboxrd,
+        &empty_dest,
+        selection_scope(&res, &[4, 5, 6]),
+    );
+    export(&res, "mbox-empty");
+    assert_eq!(std::fs::read(empty_dest.join("1-Inbox.mbox")).unwrap(), b"");
+    assert_eq!(
+        manifest(&empty_dest)["files"],
+        json!([{"name":"1-Inbox.mbox","bytes":0,"records":0}])
+    );
+}
+
+/// Scope-declared mailboxes freeze their file identity with membership
+/// (spec/09): an explicitly scoped mailbox has no record to name it, so
+/// the capture's mailbox set still plans its empty file. Account and
+/// mailbox scopes declare theirs; member records land on the
+/// pre-planned files.
+#[test]
+fn mboxrd_plans_one_file_per_scoped_mailbox() {
+    let (scratch, res, _root) = fixture();
+    let empty_dest = scratch.path().join("scoped-empty-out");
+    capture(
+        &res,
+        "scoped-empty",
+        ExportFormat::Mboxrd,
+        &empty_dest,
+        mailbox_scope(&res, 3),
+    );
+    let progress = export(&res, "scoped-empty");
+    assert_eq!(std::fs::read(empty_dest.join("3-Empty.mbox")).unwrap(), b"");
+    let sidecar = manifest(&empty_dest);
+    assert_eq!(sidecar["entries"], 0);
+    assert_eq!(sidecar["messages"], json!([]));
+    assert_eq!(
+        sidecar["files"],
+        json!([{"name":"3-Empty.mbox","bytes":0,"records":0}])
+    );
+    assert_eq!(checkpoint(&res, "scoped-empty")["files"], 1);
+    assert_eq!(progress.last(), Some(&1));
+
+    // Account scope freezes every declared mailbox, including the
+    // empty one; unavailable members still produce no records.
+    let account_dest = scratch.path().join("scoped-account-out");
+    capture(
+        &res,
+        "scoped-account",
+        ExportFormat::Mboxrd,
+        &account_dest,
+        account_scope(&res),
+    );
+    export(&res, "scoped-account");
+    let record_a = [ENVELOPE, BODY_A].concat();
+    let record_b = [ENVELOPE, BODY_B_MBOX].concat();
+    // Account order is mailbox id, then each mailbox's date order:
+    // members A, framed B and empty C inside Inbox, A twice in Archive.
+    let inbox = [record_a.as_slice(), record_b.as_slice(), ENVELOPE].concat();
+    assert_eq!(
+        std::fs::read(account_dest.join("1-Inbox.mbox")).unwrap(),
+        inbox
+    );
+    assert_eq!(
+        std::fs::read(account_dest.join("2-Archive_B__x.mbox")).unwrap(),
+        [&record_a, &record_a].map(Vec::as_slice).concat()
+    );
+    assert_eq!(
+        std::fs::read(account_dest.join("3-Empty.mbox")).unwrap(),
+        b""
+    );
+    let sidecar = manifest(&account_dest);
+    assert_eq!(
+        sidecar["files"],
+        json!([
+            {"name":"1-Inbox.mbox","bytes":inbox.len(),"records":3},
+            {"name":"2-Archive_B__x.mbox","bytes":record_a.len()*2,"records":2},
+            {"name":"3-Empty.mbox","bytes":0,"records":0},
+        ])
+    );
+    assert_eq!(
+        ids_of(sidecar["messages"].as_array().unwrap()),
+        [1, 2, 3, 4, 5, 6, 7, 8]
+    );
+}
+
+/// A remote name folds per byte then truncates at the 128-byte cap
+/// (spec/09): folding yields ASCII only, so the cut cannot split a
+/// character. Uncapped, a 200-character CJK name folds to 600 `_`
+/// bytes and the publish fails NAME_MAX on every run.
+#[test]
+fn mboxrd_caps_a_long_mailbox_name() {
+    let (scratch, res, _root) = fixture();
+    let dest = scratch.path().join("long-name-out");
+    // 200 three-byte characters: 600 folded bytes before the cap.
+    let remote = "\u{4ef6}".repeat(200);
+    write(&res, move |tx| {
+        tx.execute_batch(&format!(
+            "INSERT INTO mailboxes (mailbox_id,account_id,remote_name,kind,selectable,sync_state)
+             SELECT 4, account_id, '{remote}', 'folder', 1, 'synced' FROM accounts WHERE provider='local_archive';
+             INSERT INTO logical_messages (message_id,account_id,acquisition_id,created_at)
+             SELECT 9, account_id, 1, 1 FROM accounts WHERE provider='local_archive';
+             INSERT INTO occurrences (occurrence_id,account_id,mailbox_id,message_id,internal_date,keywords,state,first_seen_at,last_seen_at)
+             SELECT 9, account_id, 4, 9, 70, '[]', 'present', 1, 1 FROM accounts WHERE provider='local_archive';"
+        ))
+        .unwrap();
+        sb_store::refresh_list_rows(tx, &BTreeSet::from([9])).unwrap();
+        Ok(())
+    });
+    capture(
+        &res,
+        "long-name",
+        ExportFormat::Mboxrd,
+        &dest,
+        mailbox_scope(&res, 4),
+    );
+    export(&res, "long-name");
+
+    let name = format!("4-{}.mbox", "_".repeat(128));
+    assert!(
+        name.len() <= "4-".len() + 128 + ".mbox".len(),
+        "{name} exceeds the folded-name budget"
+    );
+    let record_a = [ENVELOPE, BODY_A].concat();
+    assert_eq!(std::fs::read(dest.join(&name)).unwrap(), record_a);
+    let sidecar = manifest(&dest);
+    assert_eq!(
+        sidecar["files"],
+        json!([{"name": name, "bytes": record_a.len(), "records": 1}])
+    );
+    let message = &sidecar["messages"][0];
+    assert_eq!(message["file"], name);
+    assert_eq!(message["record_offset"], 0);
+    assert_eq!(message["encoded_bytes"], record_a.len() as u64);
 }
 
 #[test]
@@ -455,6 +685,54 @@ fn missing_and_corrupt_objects_fail_before_any_manifest() {
     assert!(!corrupt_dest.join("2.eml.partial").exists());
 }
 
+/// The same object failures inside an mboxrd mailbox file: the typed
+/// error stands, the partial is removed, and the committed-file
+/// checkpoint and manifest never move (spec/09).
+#[test]
+fn mboxrd_object_errors_fail_before_any_manifest() {
+    let (scratch, res, root) = fixture();
+
+    // The second member's missing object unwrites the open partial:
+    // file one's first record already streamed when A's open fails.
+    let dest = scratch.path().join("broken-mbox-out");
+    capture(
+        &res,
+        "broken-mbox",
+        ExportFormat::Mboxrd,
+        &dest,
+        selection_scope(&res, &[2, 1]),
+    );
+    std::fs::remove_file(object_path(&root, BODY_A)).unwrap();
+    assert_err(&res, "broken-mbox", |e| {
+        matches!(e, StoreError::NotFound { .. })
+    });
+    assert_eq!(job_state(&res, "broken-mbox"), ExportJobState::Running);
+    assert_eq!(
+        checkpoint(&res, "broken-mbox"),
+        json!({"v": 1, "output": 1, "files": 0})
+    );
+    assert_only_claim(&dest);
+
+    // Damaged bytes fail their verification pass and get quarantined.
+    let corrupt_dest = scratch.path().join("corrupt-mbox-out");
+    capture(
+        &res,
+        "corrupt-mbox",
+        ExportFormat::Mboxrd,
+        &corrupt_dest,
+        selection_scope(&res, &[2]),
+    );
+    let damaged = object_path(&root, BODY_B);
+    std::fs::write(&damaged, b"corrupted!").unwrap();
+    assert_err(&res, "corrupt-mbox", |e| {
+        matches!(e, StoreError::Corrupt { .. })
+    });
+    assert!(!damaged.exists());
+    assert_eq!(job_state(&res, "corrupt-mbox"), ExportJobState::Running);
+    assert_eq!(checkpoint(&res, "corrupt-mbox")["files"], 0);
+    assert_only_claim(&corrupt_dest);
+}
+
 #[test]
 fn a_changed_capture_is_corrupt_and_never_rescoped() {
     let (scratch, res, _root) = fixture();
@@ -554,6 +832,121 @@ fn a_repeated_occurrence_is_corrupt() {
     assert!(!dest.exists());
 }
 
+fn seed_out_of_scope_capture(
+    res: &Resources,
+    job_id: &str,
+    destination: &Path,
+    scope: Value,
+    mailboxes: Option<Value>,
+) {
+    let intent = json!({
+        "v": 1,
+        "format": "mboxrd",
+        "destination": destination.display().to_string(),
+        "scope": scope,
+    });
+    let record = json!({
+        "occurrence_id": 1,
+        "mailbox": {"id": 2, "name": "Archive"},
+        "body_availability": "acquired",
+        "acquisition": {"sha256": sha_hex(BODY_A), "bytes": BODY_A.len()},
+    })
+    .to_string();
+    let mut ids = Sha256::new();
+    ids.update(1i64.to_be_bytes());
+    let mut header = json!({
+        "v": 1,
+        "kind": "capture",
+        "intent": intent,
+        "generation": 0,
+        "entries": 1,
+        "ids_sha256": hex(ids.finalize().as_slice()),
+    });
+    if let Some(mailboxes) = mailboxes {
+        header["mailboxes"] = mailboxes;
+    }
+    let request = format!(
+        r#"{{"v":1,"capture":1,"sha256":"{}"}}"#,
+        sha_hex(&serde_json::to_vec(&intent).unwrap())
+    );
+    let stream = format!("{}\n{record}\n", header).into_bytes();
+    let now = res.now();
+    let job = job_id.to_owned();
+    write(res, move |tx| {
+        let created = create_export_job(tx, &job, &request, now)?;
+        let captured = append_export_chunks(tx, &job, created.revision(), 0, &[stream], now)?;
+        advance_export_job(
+            tx,
+            &job,
+            captured.revision(),
+            ExportJobState::Ready,
+            "{\"v\":1,\"capture\":1,\"entries\":1,\"chunks\":1}",
+            now,
+        )?;
+        Ok(())
+    });
+}
+
+/// A scope-declared capture bounds its file set: a member record
+/// naming a mailbox the header did not declare is `Corrupt`, never a
+/// silently grown export (spec/09).
+#[test]
+fn a_record_outside_the_declared_scope_is_corrupt() {
+    let (scratch, res, _root) = fixture();
+    let cases = [
+        (
+            "undeclared-nonempty-mailbox",
+            json!({"kind": "mailbox", "id": 1, "generation": 0}),
+            json!([{"id": 1, "name": "Inbox"}]),
+        ),
+        (
+            "undeclared-empty-account",
+            json!({"kind": "account", "id": "empty", "generation": 0}),
+            json!([]),
+        ),
+        (
+            "undeclared-empty-mailbox",
+            json!({"kind": "mailbox", "id": 1, "generation": 0}),
+            json!([]),
+        ),
+    ];
+
+    for (job_id, scope, mailboxes) in cases {
+        let dest = scratch.path().join(job_id);
+        seed_out_of_scope_capture(&res, job_id, &dest, scope, Some(mailboxes));
+        assert_err(
+            &res,
+            job_id,
+            |e| matches!(e, StoreError::Corrupt { detail } if detail.contains("declared scope")),
+        );
+        assert_eq!(job_state(&res, job_id), ExportJobState::Ready);
+        assert!(!dest.exists());
+    }
+}
+
+/// Captures sealed before `mailboxes` existed derive their files from
+/// member records. Field absence is the compatibility marker; an empty
+/// declared account or mailbox set is not equivalent (spec/09).
+#[test]
+fn a_legacy_capture_without_mailboxes_uses_record_files() {
+    let (scratch, res, _root) = fixture();
+    let dest = scratch.path().join("legacy-no-mailboxes");
+    seed_out_of_scope_capture(
+        &res,
+        "legacy-no-mailboxes",
+        &dest,
+        json!({"kind": "account", "id": "legacy", "generation": 0}),
+        None,
+    );
+
+    export(&res, "legacy-no-mailboxes");
+
+    assert_eq!(
+        std::fs::read(dest.join("2-Archive.mbox")).unwrap(),
+        [ENVELOPE, BODY_A].concat()
+    );
+}
+
 /// A record line that is valid JSON but not an object cannot carry a
 /// `file` field: the manifest pass reports `Corrupt`, never an indexing
 /// panic (spec/09 "Export file output"). The plan pass already proved
@@ -641,6 +1034,88 @@ fn cancellation_and_resume_reproduce_the_same_output() {
     assert_eq!(manifest(&dest)["messages"].as_array().unwrap().len(), 6);
     assert_eq!(progress.last(), Some(&3));
     assert_eq!(job_state(&res, "resume"), ExportJobState::Completed);
+
+    let mbox_dest = scratch.path().join("resume-mbox-out");
+    capture(
+        &res,
+        "resume-mbox",
+        ExportFormat::Mboxrd,
+        &mbox_dest,
+        selection_scope(&res, &[1, 3, 2, 7, 8]),
+    );
+    assert_stopped(stop_at(&res, "resume-mbox", |files| files == 2));
+    let record_a = [ENVELOPE, BODY_A].concat();
+    let record_b = [ENVELOPE, BODY_B_MBOX].concat();
+    let inbox = [record_a.as_slice(), ENVELOPE, record_b.as_slice()].concat();
+    let archive = [&record_a, &record_a].map(Vec::as_slice).concat();
+    // The intact committed file verifies and is kept; the missing one
+    // is republished identically.
+    let kept = mbox_dest.join("1-Inbox.mbox");
+    let alias = scratch.path().join("kept-inbox.mbox");
+    std::fs::hard_link(&kept, &alias).unwrap();
+    std::fs::remove_file(mbox_dest.join("2-Archive_B__x.mbox")).unwrap();
+    export(&res, "resume-mbox");
+    assert_eq!(
+        std::fs::metadata(&alias).unwrap().ino(),
+        std::fs::metadata(&kept).unwrap().ino(),
+        "an intact committed mboxrd file was rewritten instead of kept"
+    );
+    assert_eq!(
+        std::fs::read(mbox_dest.join("1-Inbox.mbox")).unwrap(),
+        inbox
+    );
+    assert_eq!(
+        std::fs::read(mbox_dest.join("2-Archive_B__x.mbox")).unwrap(),
+        archive
+    );
+    let sidecar = manifest(&mbox_dest);
+    assert_eq!(
+        ids_of(sidecar["messages"].as_array().unwrap()),
+        [1, 3, 2, 7, 8]
+    );
+    assert_eq!(job_state(&res, "resume-mbox"), ExportJobState::Completed);
+}
+
+/// A cancellation inside a mailbox file, not at a file boundary: the
+/// open partial is removed, the committed-file checkpoint keeps its
+/// count, and resume republishes the identical bytes (spec/09).
+#[test]
+fn mboxrd_cancellation_inside_a_file_leaves_no_output() {
+    let (scratch, res, _root) = fixture();
+    let dest = scratch.path().join("mbox-mid-stop-out");
+    capture(
+        &res,
+        "mbox-mid-stop",
+        ExportFormat::Mboxrd,
+        &dest,
+        selection_scope(&res, &[1, 3, 2, 7, 8]),
+    );
+
+    // Reports run once before output, once per encoded record inside
+    // the open file, and once per commit. The third report lands
+    // inside file one's encode, after its second record.
+    let mut calls = 0u32;
+    assert_stopped(stop_at(&res, "mbox-mid-stop", |_| {
+        calls += 1;
+        calls == 3
+    }));
+    assert_eq!(job_state(&res, "mbox-mid-stop"), ExportJobState::Running);
+    assert_eq!(
+        checkpoint(&res, "mbox-mid-stop"),
+        json!({"v": 1, "output": 1, "files": 0})
+    );
+    assert_only_claim(&dest);
+
+    export(&res, "mbox-mid-stop");
+    let record_a = [ENVELOPE, BODY_A].concat();
+    let record_b = [ENVELOPE, BODY_B_MBOX].concat();
+    let inbox = [record_a.as_slice(), ENVELOPE, record_b.as_slice()].concat();
+    assert_eq!(std::fs::read(dest.join("1-Inbox.mbox")).unwrap(), inbox);
+    assert_eq!(
+        std::fs::read(dest.join("2-Archive_B__x.mbox")).unwrap(),
+        [&record_a, &record_a].map(Vec::as_slice).concat()
+    );
+    assert_eq!(job_state(&res, "mbox-mid-stop"), ExportJobState::Completed);
 }
 
 /// A second call for the same running job cannot enter the
@@ -700,6 +1175,47 @@ fn overlap_with_the_running_job_is_refused() {
     assert!(matches!(first, Ok(Scoped::Done(_))), "first: {first:?}");
     assert_eq!(std::fs::read(dest.join("1.eml")).unwrap(), BODY_A);
     assert_eq!(manifest(&dest)["entries"], 6);
+}
+
+/// A committed file must reproduce the encoder's framing, not just
+/// its decoded bytes (spec/09): a `From ` separator whose bytes differ
+/// from the fixed envelope, drifted record bytes and a lost framing
+/// LF all mean republish identically.
+#[test]
+fn resume_republishes_files_failing_mboxrd_verification() {
+    let (scratch, res, _) = fixture();
+    type Damage = fn(&mut Vec<u8>);
+    let damages: [(&str, Damage); 4] = [
+        // MAILER-DAEMON -> XAILER-DAEMON: still splits, wrong bytes.
+        ("envelope", |bytes| bytes[5] = b'X'),
+        ("body", |bytes| bytes[ENVELOPE.len()] ^= 0xff),
+        ("truncated", |bytes| {
+            bytes.truncate(bytes.len() - 1);
+        }),
+        ("short-envelope", |bytes| bytes.truncate(10)),
+    ];
+    for (name, damage) in damages {
+        let dest = scratch.path().join(format!("{name}-out"));
+        capture(
+            &res,
+            name,
+            ExportFormat::Mboxrd,
+            &dest,
+            selection_scope(&res, &[1]),
+        );
+        assert_stopped(stop_at(&res, name, |files| files == 1));
+        let path = dest.join("1-Inbox.mbox");
+        let expected = std::fs::read(&path).unwrap();
+        let mut damaged = expected.clone();
+        damage(&mut damaged);
+        std::fs::write(&path, &damaged).unwrap();
+        export(&res, name);
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            expected,
+            "{name}: a failing verification kept damaged output"
+        );
+    }
 }
 
 /// Destination claiming under the injected filesystem (spec/09): the
@@ -971,9 +1487,9 @@ mod crash_cuts {
         capture(
             &res,
             "cut",
-            ExportFormat::Eml,
+            ExportFormat::Mboxrd,
             &root.join("out"),
-            selection_scope(&res, &[4, 1, 2, 6, 3, 5, 8, 7]),
+            selection_scope(&res, &[4, 1, 3, 6, 2, 5, 8, 7]),
         );
         match res.export_files("cut", |_| ControlFlow::Continue(())) {
             Ok(Scoped::Done(job)) => job,

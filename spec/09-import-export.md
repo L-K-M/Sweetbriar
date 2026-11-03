@@ -312,11 +312,16 @@ headers, bodies, files or unrelated occurrences are read.
 
 Capture format 1 is NDJSON: one header, then exactly one frozen metadata
 record per ordered member. The header is:
-`{"v":1,"kind":"capture","intent":{...},"generation":0,"entries":0,"ids_sha256":"..."}`.
+`{"v":1,"kind":"capture","intent":{...},"generation":0,"entries":0,"ids_sha256":"...","mailboxes":[...]}`.
 Intent owns `v:1`, format (`eml`/`mboxrd`), destination and a scope descriptor.
 Descriptors use `kind`, account/mailbox `id` and `generation`; Search also
 owns the canonical query, candidate scope and sort. Selection owns its opaque
 handle ID, window, generation, count and ordered-ID hash, not all IDs.
+`mailboxes` freezes the mailboxes the scope declares as `{id, name}`:
+every mailbox of an account scope and the one mailbox of a mailbox
+scope, in mailbox-id order. A scoped mailbox's file identity cannot
+wait for a member record that may never exist. Search and selection
+scopes write `[]`; their member records name their own mailboxes.
 
 The ordered-ID hash is SHA-256 of each signed occurrence ID's eight-byte
 big-endian representation, in order. The bounded job request is
@@ -346,9 +351,7 @@ capture: the job must be `ready` or `running` (capturing, cancelled or
 failed is `Conflict`); a completed job replays without touching the
 destination, and the writer thread refuses before it can wait on its
 own queue. The sealed ledger is re-planned deterministically on every
-call; a changed capture is `Corrupt`, never re-scoped. M1.7c1 writes
-EML only: a sealed `mboxrd` job is refused `InvalidInput` naming
-M1.7c2 and stays `ready`; every mboxrd clause below lands in M1.7c2.
+call; a changed capture is `Corrupt`, never re-scoped.
 
 The destination is claimed by `sweetbriar-export.claim` holding the job
 id, synced with its directory and parent. A missing destination is
@@ -357,23 +360,25 @@ job. A non-directory, unowned contents or a foreign claim refuse
 (`InvalidInput` on first claim, `Unavailable` when a resuming job's
 claim vanished); the writer never empties or overwrites foreign files.
 
-EML writes `<occurrence_id>.eml` per acquired record; mboxrd (M1.7c2)
-writes `<mailbox_id>-<name>.mbox` per in-scope mailbox, folding non
-`[A-Za-z0-9._-]` bytes to `_`, including mailboxes whose records are all
-unavailable. Acquisition bytes stream through the object store's
-verifying reader, so a file's bytes are proven by length and hash at
-EOF before commit; unavailable records (`not_acquired`, `missing`,
-`quarantined`) write no bytes. Publication follows spec/03: a bounded
-`<name>.partial` write, file sync, rename, directory sync; a stopped or
-failed write removes its partial, a crash leaves one for resume to
-remove.
+EML writes `<occurrence_id>.eml` per acquired record; mboxrd writes
+`<mailbox_id>-<name>.mbox` per in-scope mailbox, folding non
+`[A-Za-z0-9._-]` bytes to `_` and capping the folded name at 128
+bytes. The frozen `mailboxes` set gives an
+account or mailbox scope's file even when the mailbox's records are
+all unavailable or it has no records at all; search and selection
+files follow their member records' mailboxes. Acquisition bytes
+stream through the object store's verifying reader, so a file's bytes
+are proven by length and hash at EOF before commit; unavailable
+records (`not_acquired`, `missing`, `quarantined`) write no bytes.
+Publication follows spec/03: a bounded `<name>.partial` write, file
+sync, rename, directory sync; a stopped or failed write removes its
+partial, a crash leaves one for resume to remove.
 
 Checkpoints are file boundaries only: `{"v":1,"output":1,"files":N}`
 advances `running` after each committed file. Resume verifies every
-committed file against the plan (EML bytes hash; mboxrd (M1.7c2)
-records decode, match each member's acquisition hash and reproduce the
-encoder's framing) and republishes identical bytes for damaged or
-missing files.
+committed file against the plan (EML bytes hash; mboxrd records decode,
+match each member's acquisition hash and reproduce the encoder's
+framing) and republishes identical bytes for damaged or missing files.
 
 The version-1 manifest `sweetbriar-metadata.json` is published last:
 `{"v":1,"kind":"export-manifest","job","format","destination","scope",
@@ -381,11 +386,10 @@ The version-1 manifest `sweetbriar-metadata.json` is published last:
 "messages":[...]}`; each message entry is its frozen capture record
 plus `file` (null when unavailable), and mboxrd entries also carry
 `record_offset`, `encoded_bytes`, `original_bytes` and
-`framing_lf_added` (M1.7c2). Only then does a fenced write mark
-`completed` with `manifest_bytes`; no receipt or terminal state may
-claim a manifest before this durable publication. `Break` stops before
-the next commit, returns `Scoped::Stopped` and leaves the job
-`running`.
+`framing_lf_added`. Only then does a fenced write mark `completed` with
+`manifest_bytes`; no receipt or terminal state may claim a manifest
+before this durable publication. `Break` stops before the next commit,
+returns `Scoped::Stopped` and leaves the job `running`.
 
 ### Export formats and scopes
 

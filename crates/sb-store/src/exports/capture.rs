@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 use rusqlite::{OptionalExtension, Transaction};
 use sb_types::time::Clock;
+use serde::Serialize;
 use serde_json::{Value as Json, json};
 use sha2::{Digest, Sha256};
 
@@ -114,6 +115,14 @@ pub enum ExportScope {
         expected_generation: u64,
     },
     Selection(ExportSelection),
+}
+
+/// A scope-declared mailbox frozen with membership (spec/09): its file
+/// identity cannot wait for a member record that may never exist.
+#[derive(Debug, Serialize)]
+struct ScopedMailbox {
+    id: i64,
+    name: String,
 }
 
 /// A validated capture request: the intent binds once here, so the job
@@ -298,9 +307,13 @@ pub(crate) fn capture(
         ExportJobState::Capturing => {}
     }
     // Selection leases outlive their source windows and keep the original fence.
-    let (ids, generation) = match &request.scope {
-        ExportScope::Selection(selection) => (Arc::clone(&selection.ids), selection.generation()),
-        scope => store.read(|tx| scoped_ids(tx, scope))?,
+    let (ids, generation, mailboxes) = match &request.scope {
+        ExportScope::Selection(selection) => (
+            Arc::clone(&selection.ids),
+            selection.generation(),
+            Vec::new(),
+        ),
+        scope => store.read(|tx| scoped_membership(tx, scope))?,
     };
     if progress(0).is_break() {
         return Ok(Scoped::Stopped);
@@ -311,7 +324,7 @@ pub(crate) fn capture(
         &json!({
             "v": CAPTURE_VERSION, "kind": "capture", "intent": request.intent,
             "generation": generation, "entries": ids.len() as u64,
-            "ids_sha256": ids_digest(&ids),
+            "ids_sha256": ids_digest(&ids), "mailboxes": mailboxes,
         }),
     )?;
     let mut completed = 0u64;
@@ -348,7 +361,11 @@ pub(crate) fn capture(
     Ok(Scoped::Done(job))
 }
 
-fn scoped_ids(tx: &Transaction, scope: &ExportScope) -> Result<(Arc<[i64]>, u64), StoreError> {
+/// The fenced membership a scope resolves to: its ordered member ids,
+/// the generation they were fenced at, and the mailboxes it declares.
+type Membership = (Arc<[i64]>, u64, Vec<ScopedMailbox>);
+
+fn scoped_membership(tx: &Transaction, scope: &ExportScope) -> Result<Membership, StoreError> {
     match scope {
         ExportScope::Account {
             account_id,
@@ -359,6 +376,7 @@ fn scoped_ids(tx: &Transaction, scope: &ExportScope) -> Result<(Arc<[i64]>, u64)
             if generation != *expected_generation {
                 return Err(stale_generation());
             }
+            let mailboxes = scoped_mailboxes(tx, account_id)?;
             let mut statement = tx
                 .prepare_cached(
                     "SELECT occurrence_id FROM d_list_rows WHERE account_id = ?1
@@ -370,19 +388,19 @@ fn scoped_ids(tx: &Transaction, scope: &ExportScope) -> Result<(Arc<[i64]>, u64)
                 .map_err(sql_error)?
                 .collect::<Result<Vec<i64>, _>>()
                 .map_err(sql_error)?;
-            Ok((Arc::from(ids), generation))
+            Ok((Arc::from(ids), generation, mailboxes))
         }
         ExportScope::Mailbox {
             mailbox_id,
             expected_generation,
         } => {
-            known_mailbox(tx, *mailbox_id)?;
+            let mailbox = known_mailbox(tx, *mailbox_id)?;
             let (generation, ids) = ready(list_ids(
                 tx,
                 ListScope::Mailbox(*mailbox_id),
                 Some(*expected_generation),
             )?)?;
-            Ok((Arc::from(ids), generation))
+            Ok((Arc::from(ids), generation, vec![mailbox]))
         }
         ExportScope::Search {
             query,
@@ -401,10 +419,30 @@ fn scoped_ids(tx: &Transaction, scope: &ExportScope) -> Result<(Arc<[i64]>, u64)
                 Some(*expected_generation),
                 None,
             )?)?;
-            Ok((Arc::from(ids), generation))
+            // A search's files follow its hits: membership names each
+            // mailbox, so nothing is declared here.
+            Ok((Arc::from(ids), generation, Vec::new()))
         }
         ExportScope::Selection(_) => unreachable!("the lease carries its own membership"),
     }
+}
+
+/// Every mailbox an account scope declares, in `mailbox_id` order
+/// (spec/09).
+fn scoped_mailboxes(tx: &Transaction, account_id: &str) -> Result<Vec<ScopedMailbox>, StoreError> {
+    tx.prepare_cached(
+        "SELECT mailbox_id, remote_name FROM mailboxes WHERE account_id = ?1 ORDER BY mailbox_id",
+    )
+    .map_err(sql_error)?
+    .query_map([account_id], |row| {
+        Ok(ScopedMailbox {
+            id: row.get(0)?,
+            name: row.get(1)?,
+        })
+    })
+    .map_err(sql_error)?
+    .collect::<Result<Vec<_>, _>>()
+    .map_err(sql_error)
 }
 
 /// `Stale` is `Conflict`, never an output-ready capture (spec/09).
@@ -438,21 +476,25 @@ fn known_account(tx: &Transaction, account_id: &str) -> Result<(), StoreError> {
 
 /// An unknown mailbox is `NotFound`; a mailbox whose stored parent is
 /// missing is `Corrupt`, never a quietly absent scope.
-fn known_mailbox(tx: &Transaction, mailbox_id: i64) -> Result<(), StoreError> {
-    let account: Option<String> = tx
+fn known_mailbox(tx: &Transaction, mailbox_id: i64) -> Result<ScopedMailbox, StoreError> {
+    let mailbox: Option<(String, String)> = tx
         .query_row(
-            "SELECT account_id FROM mailboxes WHERE mailbox_id = ?1",
+            "SELECT account_id, remote_name FROM mailboxes WHERE mailbox_id = ?1",
             [mailbox_id],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .optional()
         .map_err(sql_error)?;
-    let Some(account) = account else {
+    let Some((account, name)) = mailbox else {
         return Err(StoreError::not_found(format!("mailbox {mailbox_id}")));
     };
     known_account(tx, &account).map_err(|error| match error {
         StoreError::NotFound { .. } => StoreError::corrupt("a mailbox's account row is missing"),
         other => other,
+    })?;
+    Ok(ScopedMailbox {
+        id: mailbox_id,
+        name,
     })
 }
 
