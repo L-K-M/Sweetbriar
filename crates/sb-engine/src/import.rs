@@ -61,14 +61,15 @@ pub(crate) struct ImportJobs {
     /// The thread rebuild each worker's turn may start (spec/02).
     threads: Arc<ThreadRebuilds>,
     /// A test's callback at a worker's task entry (spec/11): it may
-    /// observe or block the real worker, never supply results.
+    /// observe or block the real worker, never supply results. The
+    /// callback receives the worker's real shutdown check.
     #[cfg(test)]
     before_task: Mutex<Option<BeforeTask>>,
 }
 
 /// A test hook run once at a worker's task entry.
 #[cfg(test)]
-type BeforeTask = Arc<dyn Fn() + Send + Sync>;
+type BeforeTask = Arc<dyn Fn(&dyn Fn() -> bool) + Send + Sync>;
 
 /// What a live worker's job has been asked since it started.
 #[derive(Default)]
@@ -616,7 +617,7 @@ async fn run_job(worker: Worker, mut claim: Claim, task: Task) {
         .expect("a panicking thread held the import job registry")
         .clone()
     {
-        before();
+        before(&worker.shutdown_check());
     }
     let mut task = Some(task);
     while let Some(current) = task {
