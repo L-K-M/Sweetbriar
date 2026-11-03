@@ -63,9 +63,16 @@ user-granted permission path.
      directly from a bundle imports as plain mbox and keeps its framing
      LF, as imports without the manifest do. A bundle source records a
      version-2 inventory object — the version-1 fields plus its manifest
-     snapshot reference and declared format — and its quoting is decided
-     by the manifest, so the variant question is never asked for it. A
-     bundle source never degrades to a plain import.
+     snapshot reference, declared format and `file_ordinal`, the zero-based
+     index of its file in the captured manifest's `files` array. The ordinal
+     binds the lexical name even when the canonical source path is an alias.
+     Existing version-2 metadata without the ordinal remains readable and
+     round-trips without it; a present ordinal must be an unsigned integer.
+     Ingest requires an in-range ordinal in the verified manifest and fails
+     closed if it is absent or invalid. It never infers the entry from the
+     canonical path. The manifest decides quoting, so the variant question is
+     never asked for a bundle source. A bundle source never degrades to a
+     plain import.
 2. **Ingest.** For each message, in source order:
    - extract the exact bytes, undoing the variant's `From ` quoting:
      mboxrd removes one `>` from every `>+From ` line; mboxo only turns

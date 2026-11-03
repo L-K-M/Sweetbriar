@@ -982,13 +982,18 @@ local drafts. No network yet.
     captured byte length and record count independently, reporting missing,
     unlisted or disagreeing files without suppressing sibling checks. Refuse
     bundle sources and discard temporary snapshots, including on cancellation.
-  - **M1.7d1b2b Bundle inventory — L:** admit verified bundle sources and
-    retain their shared manifest snapshot. Restore recursive nested discovery,
-    sorted canonical deduplication and version-2 inventory lifecycle.
+  - **M1.7d1b2b1 Bundle inventory binding — M:** add a compatible optional
+    manifest file ordinal to version-2 source metadata. Legacy rows remain
+    readable; bundles remain refused and discard their snapshots.
+  - **M1.7d1b2b2 Bundle source admission — L:** admit checked child snapshots
+    with a shared manifest and file ordinal. Preserve sorted recursive
+    discovery, alias deduplication, cancellation cleanup and real EML/mboxrd
+    exporter proof.
   - **M1.7d2 Manifest-verified ingest — L:** each bundle record's
     boundary, framing, original length and SHA-256 are verified before
     its bytes publish; only the declared framing LF is removed; the
-    framing identity joins replay. Native imports of c's bundles
+    framing identity joins replay. Require a valid manifest file ordinal;
+    legacy metadata without one fails closed. Native imports of c's bundles
     preserve unterminated acquisitions and multiplicity; malformed
     framing never silently trims bytes or falls back to changed
     originals.
