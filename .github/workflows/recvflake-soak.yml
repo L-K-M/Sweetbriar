@@ -1,4 +1,4 @@
-name: recvflake-soak
+name: recvflake-soak-0fee36a
 
 on:
   push:
@@ -21,12 +21,12 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: 4ddd7cdb0391c446030366570455622fbd481dfc
+          ref: 0fee36af687d04f2510390e641fcdc6f954dc93c
       - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
 
       - name: Log tested revision and runner
         run: |
-          test "$(git rev-parse HEAD)" = "4ddd7cdb0391c446030366570455622fbd481dfc"
+          test "$(git rev-parse HEAD)" = "0fee36af687d04f2510390e641fcdc6f954dc93c"
           rustup show
           rustc -Vv
           echo "Runner image: ${ImageOS:-unknown} ${ImageVersion:-unknown}"
@@ -188,7 +188,7 @@ jobs:
             "test result: ok. 1 passed; 0 failed; 0 ignored;" \
             "$logs/parallel-load.log")" -eq "$load_count"
           printf 'tested_ref=%s\nfirst_pass=%s\nlast_pass=%s\npasses=25\nparallel_load_passes=%s\n' \
-            "4ddd7cdb0391c446030366570455622fbd481dfc" \
+            "0fee36af687d04f2510390e641fcdc6f954dc93c" \
             "$first_pass" "$last_pass" "$load_count" \
             > "$logs/summary.txt"
 
@@ -196,7 +196,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: recvflake-soak-4ddd7cd-${{ matrix.shard }}
+          name: recvflake-soak-0fee36a-${{ matrix.shard }}
           path: ${{ runner.temp }}/recvflake-logs
           if-no-files-found: error
 
@@ -212,7 +212,7 @@ jobs:
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          pattern: recvflake-soak-4ddd7cd-[0-3]
+          pattern: recvflake-soak-0fee36a-[0-3]
           path: ${{ runner.temp }}/soak-artifacts
 
       - name: Verify all 100 passes
@@ -251,12 +251,12 @@ jobs:
 
           test "$(find "$artifacts" -mindepth 1 -maxdepth 1 -type d | wc -l)" -eq 4
           for shard in 0 1 2 3; do
-            logs="$artifacts/recvflake-soak-4ddd7cd-$shard"
+            logs="$artifacts/recvflake-soak-0fee36a-$shard"
             first_pass=$((shard * 25 + 1))
             last_pass=$((first_pass + 24))
             summary="$logs/summary.txt"
             test "$(wc -l < "$summary")" -eq 5
-            grep -Fxq 'tested_ref=4ddd7cdb0391c446030366570455622fbd481dfc' "$summary"
+            grep -Fxq 'tested_ref=0fee36af687d04f2510390e641fcdc6f954dc93c' "$summary"
             grep -Fxq "first_pass=$first_pass" "$summary"
             grep -Fxq "last_pass=$last_pass" "$summary"
             grep -Fxq 'passes=25' "$summary"
@@ -278,13 +278,13 @@ jobs:
               require_module_result "$logs/pass-$run.log"
             done
           done
-          printf 'tested_ref=4ddd7cdb0391c446030366570455622fbd481dfc\npasses=100\n' \
+          printf 'tested_ref=0fee36af687d04f2510390e641fcdc6f954dc93c\npasses=100\n' \
             > "$RUNNER_TEMP/aggregate.txt"
           cat "$RUNNER_TEMP/aggregate.txt"
 
       - name: Upload aggregate
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: recvflake-soak-4ddd7cd-aggregate
+          name: recvflake-soak-0fee36a-aggregate
           path: ${{ runner.temp }}/aggregate.txt
           if-no-files-found: error
