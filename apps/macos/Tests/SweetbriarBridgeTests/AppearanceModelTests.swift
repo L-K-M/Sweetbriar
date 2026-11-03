@@ -430,6 +430,7 @@ func setterWaitsForSubscriptionToRefresh() async throws {
     await fake.set(archive(generation: 0))
     let model = AppearanceModel(source: fake)
     let follow = Task { await model.follow() }
+    defer { follow.cancel() }
     try #require(await eventually { await fake.subscriptions.count == 1 })
     let change = AccountAppearanceChange(color: .custom(colorSrgb: "#112233"), symbol: nil)
     _ = try await model.setAccountAppearance(accountId: "a1", expectedRevision: 1, change: change)
@@ -449,49 +450,54 @@ func appearanceCommandsCrossTheRealBridge() async throws {
     let bridge = try await CoreBridge.open(
         config: config, snapshots: await sinkBatcher(clock: ManualFrameClock())
     )
-    let account = try #require(try await bridge.appearance().accounts.first)
-    let change = AccountAppearanceChange(color: .custom(colorSrgb: "#112233"), symbol: "A")
-    let receipt = try await bridge.setAccountAppearance(
-        accountId: account.accountId, expectedRevision: account.revision, change: change
-    )
-    #expect(receipt.command == "set_account_appearance")
-    #expect(receipt.resultJson == "{\"revision\":2}")
-    #expect(receipt.createdAtMs > 0)
-    let updated = try #require(try await bridge.appearance().accounts.first)
-    #expect(updated.colorSrgb == "#112233")
-    #expect(updated.symbol == "A")
-    #expect(updated.revision == 2)
-
     do {
-        _ = try await bridge.setAccountAppearance(
+        let account = try #require(try await bridge.appearance().accounts.first)
+        let change = AccountAppearanceChange(color: .custom(colorSrgb: "#112233"), symbol: "A")
+        let receipt = try await bridge.setAccountAppearance(
             accountId: account.accountId, expectedRevision: account.revision, change: change
         )
-        Issue.record("Expected stale revision")
-    } catch CoreFailure.conflict {
-    }
-    do {
-        _ = try await bridge.setAccountAppearance(
-            accountId: account.accountId, expectedRevision: 2,
-            change: AccountAppearanceChange(color: .custom(colorSrgb: "red"), symbol: nil)
-        )
-        Issue.record("Expected invalid color")
-    } catch CoreFailure.invalidInput(let field, _) {
-        #expect(field == "color")
-    }
-    do {
-        _ = try await bridge.setAccountAppearance(
-            accountId: "missing", expectedRevision: 1, change: change
-        )
-        Issue.record("Expected missing account")
-    } catch CoreFailure.notFound {
-    }
-    do {
-        _ = try await bridge.setIdentityAppearance(
-            identityId: "missing", expectedRevision: nil,
-            change: IdentityAppearanceChange(colorOverrideSrgb: nil, symbolOverride: nil)
-        )
-        Issue.record("Expected missing identity")
-    } catch CoreFailure.notFound {
+        #expect(receipt.command == "set_account_appearance")
+        #expect(receipt.resultJson == "{\"revision\":2}")
+        #expect(receipt.createdAtMs > 0)
+        let updated = try #require(try await bridge.appearance().accounts.first)
+        #expect(updated.colorSrgb == "#112233")
+        #expect(updated.symbol == "A")
+        #expect(updated.revision == 2)
+
+        do {
+            _ = try await bridge.setAccountAppearance(
+                accountId: account.accountId, expectedRevision: account.revision, change: change
+            )
+            Issue.record("Expected stale revision")
+        } catch CoreFailure.conflict {
+        }
+        do {
+            _ = try await bridge.setAccountAppearance(
+                accountId: account.accountId, expectedRevision: 2,
+                change: AccountAppearanceChange(color: .custom(colorSrgb: "red"), symbol: nil)
+            )
+            Issue.record("Expected invalid color")
+        } catch CoreFailure.invalidInput(let field, _) {
+            #expect(field == "color")
+        }
+        do {
+            _ = try await bridge.setAccountAppearance(
+                accountId: "missing", expectedRevision: 1, change: change
+            )
+            Issue.record("Expected missing account")
+        } catch CoreFailure.notFound {
+        }
+        do {
+            _ = try await bridge.setIdentityAppearance(
+                identityId: "missing", expectedRevision: nil,
+                change: IdentityAppearanceChange(colorOverrideSrgb: nil, symbolOverride: nil)
+            )
+            Issue.record("Expected missing identity")
+        } catch CoreFailure.notFound {
+        }
+    } catch {
+        await bridge.shutdown()
+        throw error
     }
     await bridge.shutdown()
 }
