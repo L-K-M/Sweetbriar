@@ -236,6 +236,19 @@ jobs:
             ' "$file"
           }
 
+          require_module_result() {
+            local file=$1
+            test -f "$file"
+            # Child tests report first; the module result must be last.
+            awk -v expected="$expected_module_result" '
+              /^test result:/ {
+                last = $0
+                if (index($0, expected) == 1) matches++
+              }
+              END { if (matches != 1 || index(last, expected) != 1) exit 1 }
+            ' "$file"
+          }
+
           test "$(find "$artifacts" -mindepth 1 -maxdepth 1 -type d | wc -l)" -eq 4
           for shard in 0 1 2 3; do
             logs="$artifacts/recvflake-soak-4ddd7cd-$shard"
@@ -251,7 +264,7 @@ jobs:
             inventory="$logs/received-tests.list"
             test "$(grep -c '^received_tests::.*: test$' "$inventory")" -eq 38
             test "$(grep '^received_tests::.*: test$' "$inventory" | sort -u | wc -l)" -eq 38
-            require_results "$logs/requested-command.log" "$expected_module_result" 1
+            require_module_result "$logs/requested-command.log"
 
             test ! -e "$logs/parallel-load.failed"
             test "$(wc -l < "$logs/parallel-load.count")" -eq 1
@@ -262,7 +275,7 @@ jobs:
 
             test "$(find "$logs" -maxdepth 1 -name 'pass-*.log' | wc -l)" -eq 25
             for run in $(seq -f "%03g" "$first_pass" "$last_pass"); do
-              require_results "$logs/pass-$run.log" "$expected_module_result" 1
+              require_module_result "$logs/pass-$run.log"
             done
           done
           printf 'tested_ref=4ddd7cdb0391c446030366570455622fbd481dfc\npasses=100\n' \
