@@ -34,8 +34,14 @@ const PARTIAL_SUFFIX: &str = ".partial";
 const STREAM_CHUNK: usize = 64 * 1024;
 /// The output checkpoint family (`{"v":1,"output":1,...}`).
 const OUTPUT_VERSION: u64 = 1;
+const SCOPE_ACCOUNT: &str = "account";
+const SCOPE_MAILBOX: &str = "mailbox";
 /// A claim marker holds a job id, bounded by the ledger's own rule.
 const CLAIM_BYTES: usize = 128;
+/// A folded mailbox name is pure ASCII, so truncating at this budget
+/// cannot split a character and keeps `<mailbox_id>-<name>.mbox`
+/// publishable under NAME_MAX.
+const MAX_MAILBOX_NAME_BYTES: usize = 128;
 
 /// One sealed member of a planned output file. The span fields are
 /// filled when the file is encoded or verified, for the manifest.
@@ -260,8 +266,14 @@ impl Plan {
         // records: an explicitly scoped mailbox gets its file even when
         // no record names it. Search and selection captures declare
         // nothing; their members name each file.
+        let scope_kind = intent["scope"]["kind"].as_str();
+        // Field presence preserves legacy captures; the kind separates
+        // explicit empty scopes from search and selection's empty array.
+        let mut scope_declared = header.get("mailboxes").is_some()
+            && (scope_kind == Some(SCOPE_ACCOUNT) || scope_kind == Some(SCOPE_MAILBOX));
         if matches!(format, ExportFormat::Mboxrd) {
             for declared in declared_mailboxes(&header)? {
+                scope_declared = true;
                 let mailbox = i64_field(declared, "id")?;
                 let name = str_field(declared, "name")?;
                 mailboxes
@@ -297,6 +309,11 @@ impl Plan {
                         .ok_or_else(|| corrupt("an export record has no mailbox name"))?;
                     Some(match mailboxes.get(&mailbox) {
                         Some(&index) => index,
+                        None if scope_declared => {
+                            return Err(corrupt(
+                                "an export record names a mailbox outside its declared scope",
+                            ));
+                        }
                         None => {
                             let index = new_file(&mut files, mailbox_file_name(mailbox, name));
                             mailboxes.insert(mailbox, index);
@@ -360,12 +377,14 @@ fn declared_mailboxes(header: &Value) -> Result<&[Value], StoreError> {
 
 /// A mailbox's output file name: its id makes every name unique and
 /// the remote name readable; every byte outside `[A-Za-z0-9._-]`
-/// folds to `_`, so a multi-byte UTF-8 name folds once per byte.
+/// folds to `_`, so a multi-byte UTF-8 name folds once per byte. The
+/// folded name truncates at `MAX_MAILBOX_NAME_BYTES`.
 fn mailbox_file_name(mailbox: i64, remote: &str) -> String {
     let keep = |byte: u8| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-');
     let clean: String = remote
         .bytes()
         .map(|byte| if keep(byte) { byte as char } else { '_' })
+        .take(MAX_MAILBOX_NAME_BYTES)
         .collect();
     format!("{mailbox}-{clean}.mbox")
 }

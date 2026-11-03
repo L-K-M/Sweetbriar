@@ -427,8 +427,8 @@ fn scoped_membership(tx: &Transaction, scope: &ExportScope) -> Result<Membership
     }
 }
 
-/// Every mailbox an account scope declares, in the order membership
-/// groups them into files (spec/09).
+/// Every mailbox an account scope declares, in `mailbox_id` order
+/// (spec/09).
 fn scoped_mailboxes(tx: &Transaction, account_id: &str) -> Result<Vec<ScopedMailbox>, StoreError> {
     tx.prepare_cached(
         "SELECT mailbox_id, remote_name FROM mailboxes WHERE account_id = ?1 ORDER BY mailbox_id",

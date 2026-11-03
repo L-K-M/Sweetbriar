@@ -490,6 +490,56 @@ fn mboxrd_plans_one_file_per_scoped_mailbox() {
     );
 }
 
+/// A remote name folds per byte then truncates at the 128-byte cap
+/// (spec/09): folding yields ASCII only, so the cut cannot split a
+/// character. Uncapped, a 200-character CJK name folds to 600 `_`
+/// bytes and the publish fails NAME_MAX on every run.
+#[test]
+fn mboxrd_caps_a_long_mailbox_name() {
+    let (scratch, res, _root) = fixture();
+    let dest = scratch.path().join("long-name-out");
+    // 200 three-byte characters: 600 folded bytes before the cap.
+    let remote = "\u{4ef6}".repeat(200);
+    write(&res, move |tx| {
+        tx.execute_batch(&format!(
+            "INSERT INTO mailboxes (mailbox_id,account_id,remote_name,kind,selectable,sync_state)
+             SELECT 4, account_id, '{remote}', 'folder', 1, 'synced' FROM accounts WHERE provider='local_archive';
+             INSERT INTO logical_messages (message_id,account_id,acquisition_id,created_at)
+             SELECT 9, account_id, 1, 1 FROM accounts WHERE provider='local_archive';
+             INSERT INTO occurrences (occurrence_id,account_id,mailbox_id,message_id,internal_date,keywords,state,first_seen_at,last_seen_at)
+             SELECT 9, account_id, 4, 9, 70, '[]', 'present', 1, 1 FROM accounts WHERE provider='local_archive';"
+        ))
+        .unwrap();
+        sb_store::refresh_list_rows(tx, &BTreeSet::from([9])).unwrap();
+        Ok(())
+    });
+    capture(
+        &res,
+        "long-name",
+        ExportFormat::Mboxrd,
+        &dest,
+        mailbox_scope(&res, 4),
+    );
+    export(&res, "long-name");
+
+    let name = format!("4-{}.mbox", "_".repeat(128));
+    assert!(
+        name.len() <= "4-".len() + 128 + ".mbox".len(),
+        "{name} exceeds the folded-name budget"
+    );
+    let record_a = [ENVELOPE, BODY_A].concat();
+    assert_eq!(std::fs::read(dest.join(&name)).unwrap(), record_a);
+    let sidecar = manifest(&dest);
+    assert_eq!(
+        sidecar["files"],
+        json!([{"name": name, "bytes": record_a.len(), "records": 1}])
+    );
+    let message = &sidecar["messages"][0];
+    assert_eq!(message["file"], name);
+    assert_eq!(message["record_offset"], 0);
+    assert_eq!(message["encoded_bytes"], record_a.len() as u64);
+}
+
 #[test]
 fn wrong_states_and_foreign_destinations_are_refused() {
     let (scratch, res, _root) = fixture();
@@ -782,6 +832,121 @@ fn a_repeated_occurrence_is_corrupt() {
     assert!(!dest.exists());
 }
 
+fn seed_out_of_scope_capture(
+    res: &Resources,
+    job_id: &str,
+    destination: &Path,
+    scope: Value,
+    mailboxes: Option<Value>,
+) {
+    let intent = json!({
+        "v": 1,
+        "format": "mboxrd",
+        "destination": destination.display().to_string(),
+        "scope": scope,
+    });
+    let record = json!({
+        "occurrence_id": 1,
+        "mailbox": {"id": 2, "name": "Archive"},
+        "body_availability": "acquired",
+        "acquisition": {"sha256": sha_hex(BODY_A), "bytes": BODY_A.len()},
+    })
+    .to_string();
+    let mut ids = Sha256::new();
+    ids.update(1i64.to_be_bytes());
+    let mut header = json!({
+        "v": 1,
+        "kind": "capture",
+        "intent": intent,
+        "generation": 0,
+        "entries": 1,
+        "ids_sha256": hex(ids.finalize().as_slice()),
+    });
+    if let Some(mailboxes) = mailboxes {
+        header["mailboxes"] = mailboxes;
+    }
+    let request = format!(
+        r#"{{"v":1,"capture":1,"sha256":"{}"}}"#,
+        sha_hex(&serde_json::to_vec(&intent).unwrap())
+    );
+    let stream = format!("{}\n{record}\n", header).into_bytes();
+    let now = res.now();
+    let job = job_id.to_owned();
+    write(res, move |tx| {
+        let created = create_export_job(tx, &job, &request, now)?;
+        let captured = append_export_chunks(tx, &job, created.revision(), 0, &[stream], now)?;
+        advance_export_job(
+            tx,
+            &job,
+            captured.revision(),
+            ExportJobState::Ready,
+            "{\"v\":1,\"capture\":1,\"entries\":1,\"chunks\":1}",
+            now,
+        )?;
+        Ok(())
+    });
+}
+
+/// A scope-declared capture bounds its file set: a member record
+/// naming a mailbox the header did not declare is `Corrupt`, never a
+/// silently grown export (spec/09).
+#[test]
+fn a_record_outside_the_declared_scope_is_corrupt() {
+    let (scratch, res, _root) = fixture();
+    let cases = [
+        (
+            "undeclared-nonempty-mailbox",
+            json!({"kind": "mailbox", "id": 1, "generation": 0}),
+            json!([{"id": 1, "name": "Inbox"}]),
+        ),
+        (
+            "undeclared-empty-account",
+            json!({"kind": "account", "id": "empty", "generation": 0}),
+            json!([]),
+        ),
+        (
+            "undeclared-empty-mailbox",
+            json!({"kind": "mailbox", "id": 1, "generation": 0}),
+            json!([]),
+        ),
+    ];
+
+    for (job_id, scope, mailboxes) in cases {
+        let dest = scratch.path().join(job_id);
+        seed_out_of_scope_capture(&res, job_id, &dest, scope, Some(mailboxes));
+        assert_err(
+            &res,
+            job_id,
+            |e| matches!(e, StoreError::Corrupt { detail } if detail.contains("declared scope")),
+        );
+        assert_eq!(job_state(&res, job_id), ExportJobState::Ready);
+        assert!(!dest.exists());
+    }
+}
+
+/// Captures sealed before `mailboxes` existed derive their files from
+/// member records. Field absence is the compatibility marker; an empty
+/// declared account or mailbox set is not equivalent (spec/09).
+#[test]
+fn a_legacy_capture_without_mailboxes_uses_record_files() {
+    let (scratch, res, _root) = fixture();
+    let dest = scratch.path().join("legacy-no-mailboxes");
+    seed_out_of_scope_capture(
+        &res,
+        "legacy-no-mailboxes",
+        &dest,
+        json!({"kind": "account", "id": "legacy", "generation": 0}),
+        None,
+    );
+
+    export(&res, "legacy-no-mailboxes");
+
+    assert_eq!(
+        std::fs::read(dest.join("2-Archive.mbox")).unwrap(),
+        [ENVELOPE, BODY_A].concat()
+    );
+}
+
 /// A record line that is valid JSON but not an object cannot carry a
 /// `file` field: the manifest pass reports `Corrupt`, never an indexing
 /// panic (spec/09 "Export file output"). The plan pass already proved
@@ -893,7 +1058,7 @@ fn cancellation_and_resume_reproduce_the_same_output() {
     assert_eq!(
         std::fs::metadata(&alias).unwrap().ino(),
         std::fs::metadata(&kept).unwrap().ino(),
-        "an intact committed mboxrd file was republished"
+        "an intact committed mboxrd file was rewritten instead of kept"
     );
     assert_eq!(
         std::fs::read(mbox_dest.join("1-Inbox.mbox")).unwrap(),
