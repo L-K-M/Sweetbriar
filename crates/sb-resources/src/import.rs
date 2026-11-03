@@ -207,6 +207,9 @@ impl SourceInventory {
                 },
                 "format": bundle.format().name(),
             });
+            if let Some(ordinal) = bundle.file_ordinal() {
+                value["bundle"]["file_ordinal"] = ordinal.into();
+            }
         }
         value.to_string()
     }
@@ -1106,7 +1109,7 @@ fn snapshot_field(
 }
 
 /// The required `bundle` object of a version-2 source: its manifest
-/// snapshot reference and declared format (spec/09 "Export bundles").
+/// snapshot reference, declared format and optional legacy binding (spec/09).
 fn bundle_field(
     object: &serde_json::Map<String, serde_json::Value>,
 ) -> Result<SourceBundle, StoreError> {
@@ -1116,7 +1119,11 @@ fn bundle_field(
     let manifest = snapshot_field(bundle, "manifest")?;
     let format = BundleFormat::from_name(required_str(bundle, "format")?)
         .ok_or_else(|| invalid("an import source bundle's format is eml or mboxrd"))?;
-    Ok(SourceBundle::new(manifest, format))
+    let file_ordinal = bundle
+        .get("file_ordinal")
+        .map(|_| required_u64(bundle, "file_ordinal"))
+        .transpose()?;
+    Ok(SourceBundle::new(manifest, format, file_ordinal))
 }
 
 fn sha256_from_hex(text: &str) -> Option<[u8; 32]> {

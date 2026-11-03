@@ -803,6 +803,83 @@ fn source_json_v2_requires_a_bundle_matching_the_source() {
 }
 
 #[test]
+fn source_json_v2_preserves_optional_file_ordinal() {
+    use serde_json::{Value, json};
+
+    let legacy = json!({
+        "v": 2, "path": "/x/y.eml", "mailbox": "y", "kind": "eml",
+        "snapshot": {"token": "0".repeat(32), "sha256": "a".repeat(64), "byte_length": 3},
+        "messages": 1, "quoting": "equivalent",
+        "bundle": {
+            "manifest": {"token": "f".repeat(32), "sha256": "b".repeat(64), "byte_length": 9},
+            "format": "eml",
+        },
+    });
+    let decoded = SourceInventory::from_json(&legacy.to_string()).unwrap();
+    assert_eq!(decoded.to_json(), legacy.to_string());
+    assert_eq!(decoded.bundle().unwrap().file_ordinal(), None);
+    let mut unknown = legacy.clone();
+    unknown["bundle"]["future_field"] = json!("ignored");
+    assert_eq!(
+        SourceInventory::from_json(&unknown.to_string())
+            .unwrap()
+            .to_json(),
+        legacy.to_string()
+    );
+
+    for ordinal in [0, u64::MAX] {
+        let mut current = legacy.clone();
+        current["bundle"]["file_ordinal"] = json!(ordinal);
+        let decoded = SourceInventory::from_json(&current.to_string()).unwrap();
+        assert_eq!(decoded.to_json(), current.to_string());
+        assert!(decoded.to_json().starts_with(&format!(
+            "{{\"bundle\":{{\"file_ordinal\":{ordinal},\"format\":\"eml\",\"manifest\":"
+        )));
+        let bundle = decoded.bundle().unwrap();
+        assert_eq!(bundle.file_ordinal(), Some(ordinal));
+        assert_eq!(*bundle, bundle.clone());
+        assert_ne!(
+            *bundle,
+            *SourceInventory::from_json(&legacy.to_string())
+                .unwrap()
+                .bundle()
+                .unwrap()
+        );
+    }
+
+    for bad in [
+        json!(null),
+        json!(-1),
+        json!(1.0),
+        json!(1.5),
+        json!("1"),
+        json!(true),
+        json!({}),
+        json!([]),
+    ] {
+        let mut current = legacy.clone();
+        current["bundle"]["file_ordinal"] = bad;
+        assert!(SourceInventory::from_json(&current.to_string()).is_err());
+    }
+    let overflow = legacy.to_string().replace(
+        "\"format\":\"eml\"",
+        "\"file_ordinal\":18446744073709551616,\"format\":\"eml\"",
+    );
+    assert_ne!(overflow, legacy.to_string());
+    assert!(SourceInventory::from_json(&overflow).is_err());
+
+    let mut plain = legacy;
+    plain["v"] = json!(1);
+    plain.as_object_mut().unwrap().remove("bundle");
+    let decoded = SourceInventory::from_json(&plain.to_string()).unwrap();
+    assert_eq!(decoded.to_json(), plain.to_string());
+    assert_eq!(
+        serde_json::from_str::<Value>(&decoded.to_json()).unwrap(),
+        plain
+    );
+}
+
+#[test]
 fn bundle_manifest_precedes_package_and_never_imports_plain() {
     let (scratch, res) = resources("bundle-pending");
     let parent = scratch.path().join("imports");
