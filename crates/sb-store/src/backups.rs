@@ -15,6 +15,8 @@ mod ledger;
 // The next restore slice attaches this parser to the verification ledger.
 #[allow(dead_code)]
 mod manifest;
+#[allow(dead_code)] // The staging integration consumes this prerequisite.
+mod quarantine;
 #[allow(dead_code)] // The recorded-generation verifier consumes this seam in M1.8e1d.
 mod reconciliation;
 mod recorded;
