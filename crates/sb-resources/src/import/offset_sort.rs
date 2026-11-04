@@ -15,6 +15,7 @@ pub(super) struct SortEntry {
     pub key: u64,
     pub position: u64,
     pub extra: u64,
+    pub ordinal: u64,
     pub kind: SortKind,
 }
 
@@ -26,7 +27,13 @@ pub(super) enum SortKind {
 }
 
 fn put(writer: &mut dyn sb_store::WriteFile, value: SortEntry) -> io::Result<()> {
-    for part in [value.key, value.position, value.extra, value.kind as u64] {
+    for part in [
+        value.key,
+        value.position,
+        value.extra,
+        value.ordinal,
+        value.kind as u64,
+    ] {
         writer.write_all(&part.to_le_bytes())?;
     }
     Ok(())
@@ -34,16 +41,17 @@ fn put(writer: &mut dyn sb_store::WriteFile, value: SortEntry) -> io::Result<()>
 
 fn get(reader: &mut dyn sb_store::ReadFile, index: u64) -> io::Result<SortEntry> {
     let position = index
-        .checked_mul(32)
+        .checked_mul(40)
         .ok_or_else(|| io::Error::other("offset tape too large"))?;
     reader.seek(SeekFrom::Start(position))?;
-    let mut bytes = [0; 32];
+    let mut bytes = [0; 40];
     reader.read_exact(&mut bytes)?;
     Ok(SortEntry {
         key: u64::from_le_bytes(bytes[0..8].try_into().unwrap()),
         position: u64::from_le_bytes(bytes[8..16].try_into().unwrap()),
         extra: u64::from_le_bytes(bytes[16..24].try_into().unwrap()),
-        kind: match u64::from_le_bytes(bytes[24..32].try_into().unwrap()) {
+        ordinal: u64::from_le_bytes(bytes[24..32].try_into().unwrap()),
+        kind: match u64::from_le_bytes(bytes[32..40].try_into().unwrap()) {
             0 => SortKind::Offset,
             1 => SortKind::Declaration,
             2 => SortKind::Reference,
@@ -86,6 +94,7 @@ impl<'a, 's> OffsetSort<'a, 's> {
                 key: value,
                 position: 0,
                 extra: 0,
+                ordinal: 0,
                 kind: SortKind::Offset,
             },
             context,
@@ -300,6 +309,7 @@ mod tests {
                         key,
                         position: u64::MAX - key,
                         extra: u64::MAX,
+                        ordinal: if key == 0 { 0 } else { u64::MAX - key + 1 },
                         kind: if key % 2 == 0 {
                             SortKind::Declaration
                         } else {
@@ -317,6 +327,14 @@ mod tests {
                 assert_eq!(entry.key, expected);
                 assert_eq!(entry.position, u64::MAX - expected);
                 assert_eq!(entry.extra, u64::MAX);
+                assert_eq!(
+                    entry.ordinal,
+                    if expected == 0 {
+                        0
+                    } else {
+                        u64::MAX - expected + 1
+                    }
+                );
                 assert!(
                     entry.kind
                         == if expected % 2 == 0 {
