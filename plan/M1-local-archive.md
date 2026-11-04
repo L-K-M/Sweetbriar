@@ -989,14 +989,26 @@ local drafts. No network yet.
     with a shared manifest and file ordinal. Preserve sorted recursive
     discovery, alias deduplication, cancellation cleanup and real EML/mboxrd
     exporter proof.
-  - **M1.7d2 Manifest-verified ingest — L:** each bundle record's
-    boundary, framing, original length and SHA-256 are verified before
-    its bytes publish; only the declared framing LF is removed; the
-    framing identity joins replay. Require a valid manifest file ordinal;
-    legacy metadata without one fails closed. Native imports of c's bundles
-    preserve unterminated acquisitions and multiplicity; malformed
-    framing never silently trims bytes or falls back to changed
-    originals.
+  - **M1.7d2a Manifest cursor and ingest guard — L:** verify the shared
+    manifest snapshot, require an in-range ordinal matching kind, format, length
+    and count, and privately iterate bounded descriptors in manifest order.
+    Resume uses the filtered index and rejects inconsistent checkpoints. Test
+    aliases, interleaving, unavailable entries, empty files, corrupt and legacy
+    metadata, cancellation and linear scans. Public bundle ingest remains refused
+    with no acquisition, occurrence, object publication or checkpoint advance.
+  - **M1.7d2b EML verification — L:** validate complete EML bytes, length,
+    hash and replay framing before publication; prove durable reservation precedes
+    installation at first exposure. Preserve plain source references.
+  - **M1.7d2c mboxrd verification — L:** validate complete record boundaries,
+    framing, decoded length and hash before publication; prove reservation
+    ordering and bundle framing identity in replay without changing plain import.
+  - **M1.7d2d Bundle ingest lifecycle — L:** wire Engine cancellation, durable
+    replay and transactional reference/checkpoint commits; test crash cuts,
+    cleanup, resume and reports after snapshot cleanup. Restore bytes and
+    multiplicity into the source-derived mailbox with header-derived flags;
+    report unavailable bytes separately from private metadata not applied.
+    Exported IDs are provenance; restoring private metadata requires a separate
+    mapping, conflict and replay contract.
   - **M1.7e Export engine — L:** counted background jobs, start/query,
     cancel, shutdown and reopen over b2/c. Own real-worker lifecycle,
     crash/resume and all original round-trip acceptance checks using d.

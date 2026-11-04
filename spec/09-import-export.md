@@ -73,6 +73,17 @@ user-granted permission path.
      canonical path. The manifest decides quoting, so the variant question is
      never asked for a bundle source. A bundle source never degrades to a
      plain import.
+     Preparation scans one verified seekable manifest snapshot forward, binding
+     descriptors to the decoded file name at the ordinal, skipping unavailable
+     entries and preserving manifest order. Resume is the filtered descriptor
+     index; inconsistent checkpoints fail closed. Parsing and verification use
+     bounded memory and check cancellation, which is distinct from corruption.
+     Native import restores verified bytes and multiplicity into the normal
+     source-derived local mailbox with header-derived flags. Exported IDs are
+     provenance, not destination IDs. Accounts, mailbox identities, occurrence
+     state, flags, keywords, tags and notes are validated but not recreated;
+     reports identify private metadata not applied. Future metadata restoration
+     requires its own mapping, conflict and replay contract.
 2. **Ingest.** For each message, in source order:
    - extract the exact bytes, undoing the variant's `From ` quoting:
      mboxrd removes one `>` from every `>+From ` line; mboxo only turns
@@ -434,6 +445,11 @@ returns `Scoped::Stopped` and leaves the job `running`.
   - A manifest-aware import must validate record boundaries, framing,
     original byte length and SHA-256 before publishing the original
     acquisition bytes. Only the declared framing LF may be removed.
+    Framing identity joins bundle replay without changing plain `source_ref`.
+    Store reservation remains durable before installation. Lifecycle recovery
+    commits references and checkpoints transactionally, and cleans up on replay.
+    Reports use durable source/job metadata after snapshot cleanup and distinguish
+    unavailable bytes from intentionally unapplied private metadata.
     A plain mbox import without the manifest retains that physical LF;
     its original presence cannot be inferred. EML needs no framing.
   - The transport encoder streams with bounded buffers, including long
