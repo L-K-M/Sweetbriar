@@ -1003,7 +1003,37 @@ local drafts. No network yet.
   - **M1.7d1b2b Bundle inventory — L:** admit verified bundle sources and
     retain their shared manifest snapshot. Restore recursive nested discovery,
     sorted canonical deduplication and version-2 inventory lifecycle.
-  - **M1.7d2 Manifest-verified ingest — L:** each bundle record's
+  - **M1.7d2 split:** retain all d2 deliverables and acceptance below; each
+    artifact, including its native proof, fits 1,450 gross changed lines.
+    The Store workspace is separated from the Resources proof because the
+    latter needs simultaneous output files and two reusable sort tapes, as
+    well as native random-access, fault and scaling tests.
+  - **M1.7d2a Proof workspace — S:** extend the existing disposable Store
+    validation lease with fixed descriptor, index-spool and dense-lookup file
+    identities, distinct from the two sort tapes. Prove exclusive creation,
+    lease isolation, coexistence, reuse and cleanup. This creates no index,
+    changes no snapshot contract and enables no acquisition publication.
+  - **M1.7d2b Manifest descriptor proof — L:** in Resources, verify one
+    captured manifest once and run its bounded validation passes. Stream
+    grouped fixed-record descriptors and `(original file ordinal, start,
+    count)` rows to workspace files; reuse the released sort tapes to sort
+    those rows numerically and emit dense fixed-size lookup slots. Freeze all
+    needed framing fields and full-width source message offsets and original
+    ordinals, preserving message order within each file. Close the verified
+    manifest handle after production. A scoped native consumer must access
+    arbitrary files without manifest rescans and reject invalid identity,
+    ordinal, range or truncation; legacy missing ordinals fail safely or use
+    bounded name lookup. Prove at least 257 EML files, interleaved mbox rows,
+    shuffled access, read counts, cancellation, faults, cleanup and bounded
+    handles. This proof is scoped to one manifest and publishes nothing.
+  - **M1.7d2c Job integration and verified ingest — L:** consume those
+    proofs in the real import job without changing source order. A bounded
+    job-level registry can retain snapshot identities and disposable proof
+    references on disk, open one scoped proof at a time, and reopen its fixed
+    outputs for interleaved sources; it must bind every lookup to the
+    verified snapshot identity and avoid unbounded handles or memory. Define
+    and test the lifecycle, cancellation and failed-source evidence before
+    publication. Each bundle record's
     boundary, framing, original length and SHA-256 are verified before
     its bytes publish; only the declared framing LF is removed; the
     framing identity joins replay. Native imports of c's bundles
