@@ -2095,6 +2095,24 @@ fn startup_retries_proved_verifier_scratch() {
             "INSERT INTO verifier_scratch SELECT '{id}', '{token}', value FROM store_meta WHERE key='incarnation'"
         ),
     );
+    for chunk in (0u16..401).collect::<Vec<_>>().chunks(200) {
+        super::ledger::insert(
+            &store.backups.writer,
+            id.to_owned(),
+            chunk
+                .iter()
+                .map(|n| {
+                    let mut hash = [0; 32];
+                    hash[..2].copy_from_slice(&n.to_be_bytes());
+                    super::manifest::Entry {
+                        sha256: hash,
+                        bytes: u64::MAX,
+                    }
+                })
+                .collect(),
+        )
+        .unwrap();
+    }
     drop(scratch);
     store.close().unwrap();
     let reopened = crate::open(&paths, &test_seams(real_fs())).unwrap();
@@ -2103,7 +2121,136 @@ fn startup_retries_proved_verifier_scratch() {
             .map_err(bug)
     });
     assert_eq!(count, 0);
+    let count: i64 = reading(&reopened, |tx| {
+        tx.query_row("SELECT count(*) FROM verifier_objects", [], |r| r.get(0))
+            .map_err(bug)
+    });
+    assert_eq!(count, 0);
     assert!(!paths.recovery().join(format!("verifier-{id}")).exists());
+}
+
+#[test]
+fn verifier_ledger_batches_reconcile_and_reject_duplicates() {
+    let (_temp, paths, store) = open("verifier-ledger");
+    let id = "owner";
+    sql(
+        &store,
+        "INSERT INTO verifier_scratch VALUES ('owner','token','current')".into(),
+    );
+    let entry = |n: u16| {
+        let mut sha256 = [0; 32];
+        sha256[..2].copy_from_slice(&n.to_be_bytes());
+        super::manifest::Entry {
+            sha256,
+            bytes: u64::MAX - u64::from(n),
+        }
+    };
+    for start in [0, 200, 400] {
+        super::ledger::insert(
+            &store.backups.writer,
+            id.into(),
+            (start..(start + 200).min(401)).map(entry).collect(),
+        )
+        .unwrap();
+    }
+    assert!(
+        super::ledger::insert(&store.backups.writer, id.into(), vec![entry(500), entry(1)])
+            .is_err()
+    );
+    assert!(
+        super::ledger::insert(
+            &store.backups.writer,
+            id.into(),
+            (500..701).map(entry).collect()
+        )
+        .is_err()
+    );
+    let conn = Connection::open(paths.state_db()).unwrap();
+    assert!(
+        super::ledger::reference(
+            &store.backups.writer,
+            id.into(),
+            (0..201).map(|n| entry(n).sha256).collect()
+        )
+        .is_err()
+    );
+    assert!(
+        super::ledger::page(&conn, id, None)
+            .unwrap()
+            .iter()
+            .all(|row| !row.referenced)
+    );
+    let hash = entry(1).sha256;
+    assert!(
+        super::ledger::reference(
+            &store.backups.writer,
+            id.into(),
+            vec![hash, entry(500).sha256]
+        )
+        .is_err()
+    );
+    assert!(!super::ledger::page(&conn, id, None).unwrap()[1].referenced);
+    super::ledger::reference(&store.backups.writer, id.into(), vec![hash, hash]).unwrap();
+    let first = super::ledger::page(&conn, id, None).unwrap();
+    assert_eq!(first.len(), 200);
+    assert_eq!(first[0].entry.bytes, u64::MAX);
+    assert!(first[1].referenced);
+    let second = super::ledger::page(&conn, id, Some(first.last().unwrap().entry.sha256)).unwrap();
+    assert_eq!(second.len(), 200);
+    let third = super::ledger::page(&conn, id, Some(second.last().unwrap().entry.sha256)).unwrap();
+    assert_eq!(third.len(), 1);
+    assert_eq!(third[0].entry.sha256, entry(400).sha256);
+    super::ledger::purge(&store.backups.writer, id).unwrap();
+    assert!(super::ledger::page(&conn, id, None).unwrap().is_empty());
+}
+
+#[test]
+fn startup_ledger_purge_failure_retains_owner_for_retry() {
+    let (_temp, paths, store) = open("verifier-ledger-retry");
+    let id = "00000000-0000-4000-8000-000000000041";
+    sql(
+        &store,
+        format!(
+            "INSERT INTO verifier_scratch SELECT '{id}', '00000000-0000-4000-8000-000000000042', value FROM store_meta WHERE key='incarnation'"
+        ),
+    );
+    for start in [0u16, 200] {
+        super::ledger::insert(
+            &store.backups.writer,
+            id.into(),
+            (start..start + 200)
+                .map(|n| {
+                    let mut sha256 = [0; 32];
+                    sha256[..2].copy_from_slice(&n.to_be_bytes());
+                    super::manifest::Entry { sha256, bytes: 1 }
+                })
+                .collect(),
+        )
+        .unwrap();
+    }
+    sql(&store, "CREATE TRIGGER ledger_fault BEFORE DELETE ON verifier_objects WHEN (SELECT count(*) FROM verifier_objects) <= 200 BEGIN SELECT RAISE(ABORT, 'fault'); END;".into());
+    store.close().unwrap();
+    assert!(crate::open(&paths, &test_seams(real_fs())).is_err());
+    let conn = Connection::open(paths.state_db()).unwrap();
+    assert_eq!(
+        conn.query_row("SELECT count(*) FROM verifier_scratch", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        conn.query_row("SELECT count(*) FROM verifier_objects", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        200
+    );
+    conn.execute_batch("DROP TRIGGER ledger_fault").unwrap();
+    drop(conn);
+    let reopened = crate::open(&paths, &test_seams(real_fs())).unwrap();
+    let counts = reading(&reopened, |tx| {
+        tx.query_row("SELECT (SELECT count(*) FROM verifier_scratch), (SELECT count(*) FROM verifier_objects)", [], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))).map_err(bug)
+    });
+    assert_eq!(counts, (0, 0));
 }
 
 #[test]

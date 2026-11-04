@@ -135,6 +135,10 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 23,
         run: migration_23,
     },
+    Migration {
+        version: 24,
+        run: migration_24,
+    },
 ];
 
 /// The `store_meta` keys every migrated store holds (spec/02): a
@@ -753,6 +757,19 @@ fn migration_22(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
 
 fn migration_23(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
     tx.execute_batch("CREATE TABLE verifier_scratch (id TEXT PRIMARY KEY, token TEXT NOT NULL, incarnation TEXT NOT NULL) STRICT;").map_err(bug)
+}
+
+fn migration_24(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
+    tx.execute_batch(
+        "CREATE TABLE verifier_objects (
+        scratch_id TEXT NOT NULL REFERENCES verifier_scratch(id),
+        sha256 BLOB NOT NULL CHECK(length(sha256) = 32),
+        bytes BLOB NOT NULL CHECK(length(bytes) = 8),
+        referenced INTEGER NOT NULL DEFAULT 0 CHECK(referenced IN (0,1)),
+        PRIMARY KEY(scratch_id, sha256)
+    ) STRICT, WITHOUT ROWID;",
+    )
+    .map_err(bug)
 }
 
 /// One version-4 UUID from the randomness seam. A seam that can't

@@ -60,6 +60,7 @@ impl Backups {
                 return Ok(());
             };
             scratch::cleanup(root.as_ref(), &id, &token, None).map_err(io_error)?;
+            super::ledger::purge(&self.writer, &id)?;
             await_write(self.writer.submit(WritePriority::Index, move |tx| {
                 tx.execute("DELETE FROM verifier_scratch WHERE id=?1", [&id])
                     .map_err(|e| classify(e, "finish verifier cleanup"))?;
@@ -218,6 +219,7 @@ impl Backups {
         #[cfg(test)]
         transaction_cut("before-cleanup");
         scratch::cleanup(root_dir.as_ref(), &id, &token, retained.as_deref()).map_err(io_error)?;
+        super::ledger::purge(&self.writer, &id)?;
         #[cfg(test)]
         transaction_cut("after-cleanup");
         await_write(self.writer.submit(WritePriority::Index, move |tx| {
