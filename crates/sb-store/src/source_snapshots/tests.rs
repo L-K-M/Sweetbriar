@@ -637,3 +637,63 @@ fn cleanup_removes_copies_and_counts_missing_ones_as_removed() {
         snaps.remove(&[kept]).unwrap();
     }
 }
+
+#[test]
+fn snapshot_open_preserves_native_errors_and_retries_interruptions() {
+    let (_scratch, recovery, sources) = real_dirs("snapshot-open-errors");
+    let source = sources.join("source");
+    std::fs::write(&source, b"body").unwrap();
+    let snapshot = captured(&capturer(real_fs(), &recovery, 4), &source);
+    for (op, context) in [
+        (FsOp::Seek, "rewind"),
+        (FsOp::Metadata, "stat"),
+        (FsOp::OpenRegular, "open"),
+    ] {
+        let fs = Arc::new(FaultFs::new(
+            real_fs(),
+            op,
+            1,
+            FaultKind::Kind(io::ErrorKind::PermissionDenied),
+        ));
+        let error = open_err(&capturer(fs, &recovery, 5), &snapshot);
+        assert_eq!(
+            error.io_kind(),
+            Some(io::ErrorKind::PermissionDenied),
+            "{op:?}: {error}"
+        );
+        assert!(error.to_string().contains(context), "{op:?}: {error}");
+        let fs = Arc::new(FaultFs::new(
+            real_fs(),
+            op,
+            1,
+            FaultKind::Kind(io::ErrorKind::Interrupted),
+        ));
+        assert_eq!(
+            read_all(&capturer(fs, &recovery, 5), &snapshot),
+            b"body",
+            "{op:?}"
+        );
+    }
+}
+
+#[test]
+fn snapshot_verification_read_preserves_error_kind_and_offset() {
+    let (_scratch, recovery, sources) = real_dirs("snapshot-read-error");
+    let source = sources.join("source");
+    std::fs::write(&source, b"body").unwrap();
+    let snapshot = captured(&capturer(real_fs(), &recovery, 4), &source);
+    for (call, offset) in [(1, 0), (2, 4)] {
+        let fs = Arc::new(FaultFs::new(
+            real_fs(),
+            FsOp::Read,
+            call,
+            FaultKind::Kind(io::ErrorKind::PermissionDenied),
+        ));
+        let error = open_err(&capturer(fs, &recovery, 5), &snapshot);
+        assert_eq!(error.io_kind(), Some(io::ErrorKind::PermissionDenied));
+        assert!(
+            error.to_string().contains(&format!("byte {offset}")),
+            "{error}"
+        );
+    }
+}

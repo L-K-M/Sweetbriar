@@ -36,6 +36,12 @@ pub enum FsOp {
     Remove,
     /// `Fs::open`.
     Open,
+    /// `Fs::open_regular`.
+    OpenRegular,
+    /// `Fs::metadata`.
+    Metadata,
+    /// `seek` on a read handle.
+    Seek,
     /// `read` on a read handle the wrapper handed out.
     Read,
 }
@@ -72,6 +78,9 @@ struct Counts {
     create: u64,
     remove: u64,
     open: u64,
+    open_regular: u64,
+    metadata: u64,
+    seek: u64,
     read: u64,
 }
 
@@ -91,6 +100,9 @@ impl Counts {
             FsOp::Create => &mut self.create,
             FsOp::Remove => &mut self.remove,
             FsOp::Open => &mut self.open,
+            FsOp::OpenRegular => &mut self.open_regular,
+            FsOp::Metadata => &mut self.metadata,
+            FsOp::Seek => &mut self.seek,
             FsOp::Read => &mut self.read,
         }
     }
@@ -191,6 +203,9 @@ impl Fs for FaultFs {
     }
 
     fn open_regular(&self, path: &Path) -> io::Result<(Box<dyn sb_types::fs::ReadFile>, Metadata)> {
+        if let Some(kind) = self.plan.fire(FsOp::OpenRegular) {
+            return Err(fault_error(kind));
+        }
         let (file, metadata) = self.inner.open_regular(path)?;
         Ok((
             Box::new(FaultRead {
@@ -202,6 +217,9 @@ impl Fs for FaultFs {
     }
 
     fn metadata(&self, path: &Path) -> io::Result<Option<Metadata>> {
+        if let Some(kind) = self.plan.fire(FsOp::Metadata) {
+            return Err(fault_error(kind));
+        }
         self.inner.metadata(path)
     }
 
@@ -320,7 +338,7 @@ impl WriteFile for FaultWrite {
 }
 
 /// A read handle whose `read` counts (and can fail) like any other
-/// operation; `seek` and the rest pass through.
+/// operation; `seek` is also fault-injectable.
 struct FaultRead {
     inner: Box<dyn sb_types::fs::ReadFile>,
     plan: Arc<FaultPlan>,
@@ -337,6 +355,9 @@ impl io::Read for FaultRead {
 
 impl io::Seek for FaultRead {
     fn seek(&mut self, position: io::SeekFrom) -> io::Result<u64> {
+        if let Some(kind) = self.plan.fire(FsOp::Seek) {
+            return Err(fault_error(kind));
+        }
         self.inner.seek(position)
     }
 }

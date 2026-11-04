@@ -237,9 +237,7 @@ impl ImportSourceSnapshots {
             return Ok(crate::Scoped::Stopped);
         }
         let path = self.private_path(&snapshot.token);
-        let step = format!("open the import source snapshot {}", snapshot.token);
-        let unavailable = |e: io::Error| StoreError::unavailable(format!("cannot {step}: {e}"));
-        let open_error = |e: io::Error| match e.kind() {
+        let open_error = |operation: &str, e: io::Error| match e.kind() {
             io::ErrorKind::NotFound => {
                 StoreError::not_found(format!("import source snapshot {}", snapshot.token))
             }
@@ -247,9 +245,17 @@ impl ImportSourceSnapshots {
                 "import source snapshot {} is not a regular file",
                 snapshot.token
             )),
-            _ => unavailable(e),
+            _ => StoreError::unavailable_io(
+                format!(
+                    "cannot {operation} the import source snapshot {}: {e}",
+                    snapshot.token
+                ),
+                e.kind(),
+            ),
         };
-        let Some(md) = self.fs.metadata(&path).map_err(open_error)? else {
+        let Some(md) =
+            retry_interrupted(|| self.fs.metadata(&path)).map_err(|e| open_error("stat", e))?
+        else {
             return Err(StoreError::not_found(format!(
                 "import source snapshot {}",
                 snapshot.token
@@ -262,7 +268,7 @@ impl ImportSourceSnapshots {
             )));
         }
         let (mut file, md) =
-            retry_interrupted(|| self.fs.open_regular(&path)).map_err(open_error)?;
+            retry_interrupted(|| self.fs.open_regular(&path)).map_err(|e| open_error("open", e))?;
         if md.len() != snapshot.byte_length() {
             return Err(StoreError::corrupt(format!(
                 "import source snapshot {} is {} bytes; {} were captured",
@@ -274,7 +280,16 @@ impl ImportSourceSnapshots {
         if verify(&mut file, snapshot, &mut progress)?.is_break() {
             return Ok(crate::Scoped::Stopped);
         }
-        file.seek(SeekFrom::Start(0)).map_err(unavailable)?;
+        retry_interrupted(|| file.seek(SeekFrom::Start(0))).map_err(|e| {
+            StoreError::unavailable_io(
+                format!(
+                    "cannot rewind the import source snapshot {} after {} bytes: {e}",
+                    snapshot.token,
+                    snapshot.byte_length()
+                ),
+                e.kind(),
+            )
+        })?;
         Ok(crate::Scoped::Done(file))
     }
 
@@ -427,9 +442,10 @@ fn verify(
     while consumed < expected {
         let want = (expected - consumed).min(STREAM_CHUNK as u64) as usize;
         let n = retry_interrupted(|| file.read(&mut chunk[..want])).map_err(|e| {
-            StoreError::unavailable(format!(
-                "cannot read the import source snapshot {token}: {e}"
-            ))
+            StoreError::unavailable_io(
+                format!("cannot read the import source snapshot {token} at byte {consumed}: {e}"),
+                e.kind(),
+            )
         })?;
         if n == 0 {
             return Err(StoreError::corrupt(format!(
@@ -444,9 +460,10 @@ fn verify(
     }
     let mut detection = [0u8; 1];
     let extra = retry_interrupted(|| file.read(&mut detection)).map_err(|e| {
-        StoreError::unavailable(format!(
-            "cannot read the import source snapshot {token}: {e}"
-        ))
+        StoreError::unavailable_io(
+            format!("cannot read the import source snapshot {token} at byte {consumed}: {e}"),
+            e.kind(),
+        )
     })?;
     if extra > 0 {
         return Err(StoreError::corrupt(format!(
