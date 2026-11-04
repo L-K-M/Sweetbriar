@@ -359,6 +359,14 @@ public final class AppearanceModel {
         )
     }
 
+    /// Re-read the committed snapshot after a command or conflict.
+    /// Concurrent reads never replace a newer generation with an older one.
+    public func refresh() async {
+        do { _ = try await readOnce() }
+        catch is CancellationError { }
+        catch { lastError = error }
+    }
+
     /// Load `appearance()`, then pull its subscription until the
     /// calling task is cancelled or a read or pull fails: an
     /// `invalidated` re-reads on the same stream; `resetRequired`
@@ -391,6 +399,9 @@ public final class AppearanceModel {
     /// Read `appearance()` and publish it, clearing the last failure.
     private func readOnce() async throws -> Appearance {
         let snapshot = try await source.appearance()
+        if let current = appearance, current.generation > snapshot.generation {
+            return current
+        }
         appearance = snapshot
         lastError = nil
         return snapshot
