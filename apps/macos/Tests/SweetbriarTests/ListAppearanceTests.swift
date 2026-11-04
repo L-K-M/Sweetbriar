@@ -32,7 +32,7 @@ struct ListAppearanceTests {
             cell.appearance = NSAppearance(named: name)
             cell.layoutSubtreeIfNeeded()
             let bitmap = try render(cell)
-            let pixel = try #require(bitmap.colorAt(x: 2, y: 28)?.usingColorSpace(.sRGB))
+            let pixel = try #require(bitmap.colorAt(x: 4, y: 28)?.usingColorSpace(.sRGB))
             #expect(name == .aqua ? pixel.redComponent > 0.8 : pixel.greenComponent > 0.8)
         }
         var updated = account
@@ -40,7 +40,7 @@ struct ListAppearanceTests {
         updated.tokens.light.markerSrgb = "#0000ff"
         cell.appearance = NSAppearance(named: .aqua)
         cell.configure(content: content, account: updated, accountLabel: "New", usesAppearance: true)
-        let pixel = try #require(render(cell).colorAt(x: 2, y: 28)?.usingColorSpace(.sRGB))
+        let pixel = try #require(render(cell).colorAt(x: 4, y: 28)?.usingColorSpace(.sRGB))
         #expect(pixel.blueComponent > 0.8)
         #expect(cell.accessibilityLabel()?.contains("account New") == true)
     }
@@ -52,9 +52,109 @@ struct ListAppearanceTests {
             view.frame = NSRect(x: 0, y: 0, width: 300, height: 56)
             view.layoutSubtreeIfNeeded()
             let bitmap = try render(view)
-            let pixel = try #require(bitmap.colorAt(x: 2, y: 28)?.usingColorSpace(.sRGB))
+            let pixel = try #require(bitmap.colorAt(x: 4, y: 28)?.usingColorSpace(.sRGB))
             #expect(scheme == .light ? pixel.redComponent > 0.8 : pixel.greenComponent > 0.8)
         }
+    }
+
+    @Test func coreTokensContrastOnSelectedSurfaces() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let config = CoreConfig(dataRoot: root.appendingPathComponent("data").path,
+                                cacheRoot: root.appendingPathComponent("cache").path)
+        let batcher = FrameBatcher<[Setting]>(clock: ImmediateClock()) { _ in }
+        let bridge = try await CoreBridge.open(config: config, snapshots: batcher)
+        do {
+            var current = try #require(try await bridge.appearance().accounts.first)
+            let colors: [AccountColor] = (0..<7).map { .paletteV1(slot: UInt8($0)) }
+                + [.custom(colorSrgb: "#000000"), .custom(colorSrgb: "#ffffff")]
+            for color in colors {
+                _ = try await bridge.setAccountAppearance(
+                    accountId: current.accountId, expectedRevision: current.revision,
+                    change: AccountAppearanceChange(color: color, symbol: nil))
+                current = try #require(try await bridge.appearance().accounts.first)
+                for (name, scheme): (NSAppearance.Name, ColorScheme) in [(.aqua, .light), (.darkAqua, .dark)] {
+                    for strong in [false, true] {
+                        let base = SurfaceView(background: .selectedContentBackgroundColor)
+                        base.frame = NSRect(x: 0, y: 0, width: 300, height: 56)
+                        base.appearance = NSAppearance(named: name)
+                        let cell = MessageRowCellView(showsAccountMarker: true)
+                        cell.contrastOptions = { (strong, strong) }
+                        cell.frame = base.bounds
+                        cell.configure(content: content, account: current, accountLabel: "Work", usesAppearance: true)
+                        base.addSubview(cell)
+                        base.layoutSubtreeIfNeeded()
+                        try checkRail(render(base))
+                        let swift = NSHostingView(rootView: RenderedMessageRow(content: content, account: current,
+                            accountLabel: "Work", usesAppearance: true, contrastOverride: strong)
+                            .environment(\.colorScheme, scheme)
+                            .background(Color(nsColor: .selectedContentBackgroundColor)))
+                        swift.frame = base.bounds
+                        swift.appearance = NSAppearance(named: name)
+                        swift.layoutSubtreeIfNeeded()
+                        try checkRail(render(swift))
+                    }
+                }
+            }
+        } catch {
+            await bridge.shutdown()
+            throw error
+        }
+        await bridge.shutdown()
+    }
+
+    private func checkRail(_ bitmap: NSBitmapImageRep) throws {
+        let edge = try #require(bitmap.colorAt(x: 0, y: 28)?.usingColorSpace(.sRGB))
+        let strip = try #require(bitmap.colorAt(x: 1, y: 28)?.usingColorSpace(.sRGB))
+        let marker = try #require(bitmap.colorAt(x: 4, y: 28)?.usingColorSpace(.sRGB))
+        #expect(contrast(marker, strip) >= 3)
+        #expect(contrast(edge, strip) >= 3)
+    }
+
+    private func contrast(_ left: NSColor, _ right: NSColor) -> CGFloat {
+        func luminance(_ color: NSColor) -> CGFloat {
+            func linear(_ value: CGFloat) -> CGFloat {
+                value <= 0.04045 ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4)
+            }
+            return 0.2126 * linear(color.redComponent) + 0.7152 * linear(color.greenComponent)
+                + 0.0722 * linear(color.blueComponent)
+        }
+        let a = luminance(left)
+        let b = luminance(right)
+        return (max(a, b) + 0.05) / (min(a, b) + 0.05)
+    }
+
+    @Test func collisionLabelsAndStrongMonogramsDrawInBothBackends() throws {
+        let sections = [SidebarModel.Section(id: "a", title: "Work", entries: []),
+                        SidebarModel.Section(id: "b", title: "Work", entries: [])]
+        #expect(MessageListViewController.accountLabel("a", sections: sections).hasPrefix("1 · "))
+        #expect(MessageListViewController.accountLabel("b", sections: sections).hasPrefix("2 · "))
+        let cell = MessageRowCellView(showsAccountMarker: true)
+        cell.frame = NSRect(x: 0, y: 0, width: 300, height: 56)
+        cell.contrastOptions = { (false, false) }
+        cell.configure(content: content, account: account, accountLabel: "Work one", usesAppearance: true)
+        cell.layoutSubtreeIfNeeded()
+        let one = try #require(render(cell).tiffRepresentation)
+        #expect(cell.accessibilityLabel()?.contains("Work one") == true)
+        cell.configure(content: content, account: account, accountLabel: "Work two", usesAppearance: true)
+        let two = try #require(render(cell).tiffRepresentation)
+        #expect(one != two)
+        #expect(cell.accessibilityLabel()?.contains("Work two") == true)
+        cell.contrastOptions = { (false, true) }
+        cell.configure(content: content, account: account, accountLabel: "Work two", usesAppearance: true)
+        #expect(try render(cell).tiffRepresentation != two)
+
+        func swift(_ label: String, strong: Bool) throws -> Data {
+            let view = NSHostingView(rootView: RenderedMessageRow(content: content, account: account,
+                accountLabel: label, usesAppearance: true, contrastOverride: strong))
+            view.frame = cell.bounds
+            view.layoutSubtreeIfNeeded()
+            return try #require(render(view).tiffRepresentation)
+        }
+        let first = try swift("Work one", strong: false)
+        let second = try swift("Work two", strong: false)
+        #expect(first != second)
+        #expect(try swift("Work two", strong: true) != second)
     }
 
     @Test func accountMarkersDoNotPaintTheRowSurface() throws {
@@ -102,12 +202,12 @@ struct ListAppearanceTests {
         second.tokens.light.markerSrgb = "#0000ff"
         cell.configure(content: content, account: second, accountLabel: "West", usesAppearance: true)
         cell.layoutSubtreeIfNeeded()
-        let pixel = try #require(render(cell).colorAt(x: 2, y: 28)?.usingColorSpace(.sRGB))
+        let pixel = try #require(render(cell).colorAt(x: 4, y: 28)?.usingColorSpace(.sRGB))
         #expect(pixel.blueComponent > 0.8)
         #expect(cell.accessibilityLabel()?.contains("account West") == true)
         cell.configure(content: content, account: nil, usesAppearance: true)
         #expect(cell.accessibilityLabel()?.contains("account West") == false)
-        let missing = try #require(render(cell).colorAt(x: 2, y: 28)?.usingColorSpace(.sRGB))
+        let missing = try #require(render(cell).colorAt(x: 4, y: 28)?.usingColorSpace(.sRGB))
         #expect(missing.alphaComponent < 0.1)
     }
 
@@ -135,6 +235,8 @@ struct ListAppearanceTests {
         let rowView = try #require(table.rowView(atRow: 0, makeIfNecessary: true))
         #expect(rowView.isSelected)
         let cell = try #require(table.view(atColumn: 0, row: 0, makeIfNecessary: true) as? MessageRowCellView)
+        table.layoutSubtreeIfNeeded()
+        try checkRail(render(cell))
         #expect(cell.accessibilityLabel()?.contains("account Work") == true)
         cell.layoutSubtreeIfNeeded()
         let original = try #require(render(cell).tiffRepresentation)

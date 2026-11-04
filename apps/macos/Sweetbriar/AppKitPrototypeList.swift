@@ -396,6 +396,10 @@ extension AppKitPrototypeList: PrototypeList {
 /// in `layoutSubviews()` — no Auto Layout in cells (plan M0.10).
 /// `isFlipped` keeps the layout math top-down like the SwiftUI row's.
 final class MessageRowCellView: NSTableCellView {
+    var contrastOptions: () -> (increaseContrast: Bool, differentiate: Bool) = {
+        (NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast,
+         NSWorkspace.shared.accessibilityDisplayShouldDifferentiateWithoutColor)
+    }
     /// The trailing date's reserved width — wide enough for the short
     /// date form.
     private static let dateWidth: CGFloat = 84
@@ -405,10 +409,14 @@ final class MessageRowCellView: NSTableCellView {
     private static let tagChipCount = 3
 
     private let rail = NSView()
+    private let railMarker = NSView()
+    private let railLeftEdge = NSView()
+    private let railRightEdge = NSView()
     private let monogram = BadgeView()
     private let unreadDot = BadgeView()
     private let senderField = NSTextField(labelWithString: "")
     private let dateField = NSTextField(labelWithString: "")
+    private let accountField = NSTextField(labelWithString: "")
     private let subjectField = NSTextField(labelWithString: "")
     private let snippetField = NSTextField(labelWithString: "")
     private let flagMarker = NSImageView()
@@ -430,15 +438,23 @@ final class MessageRowCellView: NSTableCellView {
     /// Everything but the placeholder — hidden together when the row
     /// is out.
     private var contentSubviews: [NSView] {
-        [rail, monogram, unreadDot, senderField, dateField, subjectField,
+        [rail, monogram, unreadDot, senderField, dateField, accountField, subjectField,
          snippetField, flagMarker, attachmentMarker] + tagChips
     }
 
     init(showsAccountMarker: Bool) {
         self.showsAccountMarker = showsAccountMarker
         super.init(frame: .zero)
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self, selector: #selector(contrastDidChange),
+            name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil
+        )
 
         rail.wantsLayer = true
+        for view in [railMarker, railLeftEdge, railRightEdge] {
+            view.wantsLayer = true
+            rail.addSubview(view)
+        }
         addSubview(rail)
 
         monogram.titleColor = .white
@@ -448,7 +464,7 @@ final class MessageRowCellView: NSTableCellView {
         unreadDot.fillColor = .controlAccentColor
         addSubview(unreadDot)
 
-        for field in [senderField, subjectField, snippetField, dateField] {
+        for field in [senderField, subjectField, snippetField, dateField, accountField] {
             field.lineBreakMode = .byTruncatingTail
             field.maximumNumberOfLines = 1
             addSubview(field)
@@ -459,6 +475,9 @@ final class MessageRowCellView: NSTableCellView {
         dateField.font = .systemFont(ofSize: 12)
         dateField.textColor = .secondaryLabelColor
         dateField.alignment = .right
+        accountField.font = .systemFont(ofSize: 11, weight: .semibold)
+        accountField.alignment = .right
+        accountField.lineBreakMode = .byTruncatingTail
 
         // Template + tint: one code path that works for every marker,
         // no symbol-configuration version dance.
@@ -501,6 +520,8 @@ final class MessageRowCellView: NSTableCellView {
         fatalError("MessageRowCellView is built in code")
     }
 
+    @objc private func contrastDidChange() { applyLayerColors() }
+
     /// Layout math runs in `bounds`, top-first.
     override var isFlipped: Bool { true }
 
@@ -530,6 +551,8 @@ final class MessageRowCellView: NSTableCellView {
         )
         applyLayerColors()
         monogram.title = account?.monogram ?? content.monogram
+        accountField.stringValue = accountLabel ?? ""
+        accountField.isHidden = !showsAccountMarker || account?.collides != true
 
         senderField.stringValue = content.sender
         senderField.font = content.unread
@@ -570,9 +593,19 @@ final class MessageRowCellView: NSTableCellView {
             let dark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
             let variant = accountAppearance.map { dark ? $0.tokens.dark : $0.tokens.light }
             let marker = variant.map { appearanceColor($0.markerSrgb) } ?? accountColor
-            rail.layer?.backgroundColor = marker.cgColor
+            rail.layer?.backgroundColor = (variant.map { appearanceColor($0.stripSrgb) } ?? accountColor).cgColor
+            railMarker.layer?.backgroundColor = marker.cgColor
+            let outline = variant.map { appearanceColor($0.outlineSrgb) } ?? accountColor
+            railLeftEdge.layer?.backgroundColor = outline.cgColor
+            railRightEdge.layer?.backgroundColor = outline.cgColor
             monogram.fillColor = variant.map { appearanceColor($0.stripSrgb) } ?? accountColor
             monogram.titleColor = variant.map { appearanceColor($0.markerSrgb) } ?? .white
+            let name = effectiveAppearance.name
+            let options = contrastOptions()
+            let strong = name == .accessibilityHighContrastAqua || name == .accessibilityHighContrastDarkAqua
+                || options.increaseContrast || options.differentiate
+            monogram.outlineColor = strong ? outline : nil
+            monogram.font = .systemFont(ofSize: 11, weight: strong ? .bold : .semibold)
             placeholderFill.layer?.backgroundColor = NSColor.labelColor
                 .withAlphaComponent(MessageRowMetrics.placeholderFillOpacity)
                 .cgColor
@@ -604,10 +637,13 @@ final class MessageRowCellView: NSTableCellView {
 
         rail.frame = NSRect(
             x: 0, y: 0,
-            width: metrics.railWidth, height: bounds.height
+            width: metrics.railSurfaceWidth, height: bounds.height
         )
+        railMarker.frame = NSRect(x: 3, y: 0, width: metrics.railWidth, height: bounds.height)
+        railLeftEdge.frame = NSRect(x: 0, y: 0, width: 1, height: bounds.height)
+        railRightEdge.frame = NSRect(x: metrics.railSurfaceWidth - 1, y: 0, width: 1, height: bounds.height)
         monogram.frame = NSRect(
-            x: metrics.railWidth + metrics.innerGap,
+            x: metrics.railSurfaceWidth + metrics.innerGap,
             y: (bounds.height - metrics.monogramSize) / 2,
             width: metrics.monogramSize, height: metrics.monogramSize
         )
@@ -622,6 +658,11 @@ final class MessageRowCellView: NSTableCellView {
             width: Self.dateWidth, height: 16
         )
         trailing = dateField.frame.minX - metrics.markerSpacing
+        if !accountField.isHidden {
+            let labelWidth = min(100, max(0, trailing - contentX), accountField.intrinsicContentSize.width)
+            accountField.frame = NSRect(x: trailing - labelWidth, y: 7, width: labelWidth, height: 16)
+            trailing = accountField.frame.minX - metrics.markerSpacing
+        }
         // Right-to-left: the paperclip lands nearest the date, the
         // flag left of it — visually [flag] [paperclip] date.
         for marker in [attachmentMarker, flagMarker] where !marker.isHidden {
@@ -682,6 +723,7 @@ extension AppKitPrototypeList {
 /// A drawn capsule with centered text — one shape serving the unread
 /// dot (empty title), the account monogram and the tag chips.
 private final class BadgeView: NSView {
+    var outlineColor: NSColor? { didSet { needsDisplay = true } }
     var title = "" {
         didSet { needsDisplay = true }
     }
@@ -708,11 +750,17 @@ private final class BadgeView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         fillColor.setFill()
-        NSBezierPath(
+        let shape = NSBezierPath(
             roundedRect: bounds,
             xRadius: bounds.height / 2,
             yRadius: bounds.height / 2
-        ).fill()
+        )
+        shape.fill()
+        if let outlineColor {
+            outlineColor.setStroke()
+            shape.lineWidth = 2
+            shape.stroke()
+        }
         guard !title.isEmpty else { return }
         let attributes: [NSAttributedString.Key: Any] = [
             .font: font,

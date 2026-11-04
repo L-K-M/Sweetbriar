@@ -21,6 +21,9 @@ enum MessageRowMetrics {
     /// (spec/08 "Rows": a 4 pt colored rail plus monogram).
     static let railWidth: CGFloat = 4
 
+    /// Opaque token surface and one-point boundaries around the rail.
+    static let railSurfaceWidth: CGFloat = 10
+
     /// The monogram disc's diameter.
     static let monogramSize: CGFloat = 26
 

@@ -303,7 +303,10 @@ struct RenderedMessageRow: View {
     let account: AccountAppearance?
     let accountLabel: String
     let usesAppearance: Bool
+    var contrastOverride: Bool? = nil
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
+    @Environment(\.accessibilityDifferentiateWithoutColor) private var differentiate
 
     /// Same content, same order as the AppKit cell: rail + monogram,
     /// sender (bold when unread) with date trailing, subject, one-line
@@ -313,15 +316,23 @@ struct RenderedMessageRow: View {
         let accountColor = variant.map { Color(nsColor: appearanceColor($0.markerSrgb)) }
             ?? Self.accountColor(at: content.accountColorIndex)
         let showMarker = !usesAppearance || account != nil
+        let strip = variant.map { Color(nsColor: appearanceColor($0.stripSrgb)) } ?? accountColor
+        let outline = variant.map { Color(nsColor: appearanceColor($0.outlineSrgb)) } ?? accountColor
+        let strong = contrastOverride ?? (colorSchemeContrast == .increased || differentiate)
         return HStack(spacing: 0) {
             if showMarker {
-                Rectangle()
-                    .fill(accountColor)
-                    .frame(width: MessageRowMetrics.railWidth)
+                HStack(spacing: 0) {
+                    Rectangle().fill(outline).frame(width: 1)
+                    Rectangle().fill(strip).frame(width: 2)
+                    Rectangle().fill(accountColor).frame(width: MessageRowMetrics.railWidth)
+                    Rectangle().fill(strip).frame(width: 2)
+                    Rectangle().fill(outline).frame(width: 1)
+                }
                 ZStack {
-                    Circle().fill(variant.map { Color(nsColor: appearanceColor($0.stripSrgb)) } ?? accountColor)
+                    Circle().fill(strip)
+                    if strong { Circle().strokeBorder(outline, lineWidth: 2) }
                     Text(account?.monogram ?? content.monogram)
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(.system(size: 11, weight: strong ? .bold : .semibold))
                         .foregroundStyle(variant == nil ? Color.white : accountColor)
                 }
                 .frame(
@@ -347,6 +358,13 @@ struct RenderedMessageRow: View {
                         ))
                         .lineLimit(1)
                     Spacer(minLength: 4)
+                    if account?.collides == true {
+                        Text(accountLabel)
+                            .font(.system(size: 11, weight: .semibold))
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                            .frame(maxWidth: 100, alignment: .trailing)
+                    }
                     if content.flagged {
                         Image(systemName: "flag.fill")
                             .font(.system(size: 10))

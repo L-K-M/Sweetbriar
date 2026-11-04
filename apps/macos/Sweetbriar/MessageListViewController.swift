@@ -220,8 +220,8 @@ final class MessageListViewController: NSViewController {
             accountMarker: spec.showsAccountMarker ? .shown : .hidden,
             appearance: appearance,
             accountLabel: { [weak sidebar] id in
-                guard let sidebar, let section = sidebar.sections.first(where: { $0.id == id }) else { return id }
-                return SidebarViewController.accountLabel(section, among: sidebar.sections)
+                guard let sidebar else { return id }
+                return Self.accountLabel(id, sections: sidebar.sections)
             },
             observeAccountLabels: { [weak sidebar] in _ = sidebar?.sections },
             // spec/08: reopen at Top once the selected message is no
@@ -291,6 +291,13 @@ final class MessageListViewController: NSViewController {
             await old.close()
             self?.closing[id] = nil
         }
+    }
+
+    /// A short unique prefix survives truncation when two monograms collide.
+    static func accountLabel(_ id: String, sections: [SidebarModel.Section]) -> String {
+        let accounts = sections.filter { $0.id != SidebarModel.unifiedSectionID }.sorted { $0.id < $1.id }
+        guard let index = accounts.firstIndex(where: { $0.id == id }) else { return id }
+        return "\(index + 1) · \(SidebarViewController.accountLabel(accounts[index], among: sections))"
     }
 
     /// Show the model's read failures and Search status as they
