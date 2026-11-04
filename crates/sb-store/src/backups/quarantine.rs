@@ -9,6 +9,10 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
+const FIRST_LOCATION: &str =
+    "SELECT generation_id, location FROM backup_generations ORDER BY generation_id LIMIT 1";
+const NEXT_LOCATION: &str = "SELECT generation_id, location FROM backup_generations WHERE generation_id > ?1 ORDER BY generation_id LIMIT 1";
+
 #[derive(Clone, Copy)]
 pub(super) struct Quarantine<'a> {
     pub new_incarnation: &'a str,
@@ -132,9 +136,11 @@ fn apply_inner(conn: &mut Connection, input: &Quarantine<'_>) -> Result<(), Stor
     let tx = conn
         .transaction()
         .map_err(|e| classify(e, "begin restore quarantine"))?;
+    // A snapshot can define REPLACE or IGNORE conflict policies. Override
+    // them on every update so no row is silently deleted or left unchanged.
     let changed = execute(
         &tx,
-        "UPDATE store_meta SET value=?1 WHERE key='incarnation' AND value<>?1",
+        "UPDATE OR ABORT store_meta SET value=?1 WHERE key='incarnation' AND value<>?1",
         [input.new_incarnation],
     )?;
     if changed != 1 {
@@ -147,7 +153,7 @@ fn apply_inner(conn: &mut Connection, input: &Quarantine<'_>) -> Result<(), Stor
     )?;
     let changed = execute(
         &tx,
-        "UPDATE backup_generations SET state='complete', location=?2, manifest_sha256=?3, object_count=?4, total_bytes=?5, completed_at=?6 WHERE generation_id=?1 AND state='in_progress'",
+        "UPDATE OR ABORT backup_generations SET state='complete', location=?2, manifest_sha256=?3, object_count=?4, total_bytes=?5, completed_at=?6 WHERE generation_id=?1 AND state='in_progress'",
         params![
             input.generation,
             input.source_location,
@@ -170,10 +176,12 @@ fn apply_inner(conn: &mut Connection, input: &Quarantine<'_>) -> Result<(), Stor
             return Err(StoreError::unavailable("restore quarantine cancelled"));
         }
         // Finish each read before changing the table; memory stays bounded.
-        let next: Option<(String, String)> = tx.query_row(
-            "SELECT generation_id, location FROM backup_generations WHERE (?1 IS NULL OR generation_id > ?1) ORDER BY generation_id LIMIT 1",
-            [&after], |row| Ok((row.get(0)?, row.get(1)?)),
-        ).optional().map_err(|e| classify(e, "read backup location"))?;
+        let next: Option<(String, String)> = match &after {
+            None => tx.query_row(FIRST_LOCATION, [], |row| Ok((row.get(0)?, row.get(1)?))),
+            Some(id) => tx.query_row(NEXT_LOCATION, [id], |row| Ok((row.get(0)?, row.get(1)?))),
+        }
+        .optional()
+        .map_err(|e| classify(e, "read backup location"))?;
         let Some((id, location)) = next else { break };
         if !valid(Path::new(&location)) {
             return Err(StoreError::corrupt("invalid inherited backup location"));
@@ -185,18 +193,18 @@ fn apply_inner(conn: &mut Connection, input: &Quarantine<'_>) -> Result<(), Stor
                 .ok_or_else(|| StoreError::corrupt("non-UTF-8 preserved backup location"))?;
             execute(
                 &tx,
-                "UPDATE backup_generations SET location=?1 WHERE generation_id=?2",
+                "UPDATE OR ABORT backup_generations SET location=?1 WHERE generation_id=?2",
                 params![text, id],
             )?;
         }
         after = Some(id);
     }
     for sql in [
-        "UPDATE accounts SET state='paused'",
-        "UPDATE import_jobs SET state='failed' WHERE state IN ('inventory','awaiting_confirmation','running')",
-        "UPDATE intents SET state='quarantined', quarantine_reason='restore' WHERE state IN ('pending','in_flight','parked')",
-        "UPDATE send_attempts SET state='outcome_unknown' WHERE state IN ('held','queued','submitting')",
-        "UPDATE backup_generations SET state='failed' WHERE state='in_progress'",
+        "UPDATE OR ABORT accounts SET state='paused'",
+        "UPDATE OR ABORT import_jobs SET state='failed' WHERE state IN ('inventory','awaiting_confirmation','running')",
+        "UPDATE OR ABORT intents SET state='quarantined', quarantine_reason='restore' WHERE state IN ('pending','in_flight','parked')",
+        "UPDATE OR ABORT send_attempts SET state='outcome_unknown' WHERE state IN ('held','queued','submitting')",
+        "UPDATE OR ABORT backup_generations SET state='failed' WHERE state='in_progress'",
         "DELETE FROM object_pins WHERE pin_kind='backup_in_progress'",
         "DELETE FROM backup_cleanup_pending",
         "DELETE FROM verifier_objects",
@@ -474,6 +482,83 @@ mod tests {
             .query_row("SELECT location FROM hostile_reference", [], |r| r.get(0))
             .unwrap();
         assert_eq!(child, location);
+    }
+
+    fn rejects_schema_conflict_policy(policy: &str) {
+        let (_scratch, paths, store) = open("restore-conflict-policy");
+        let snapshot = store.backup_snapshot(BackupDestination::DataRoot).unwrap();
+        let stage = paths.data_root().with_extension("conflict.sqlite");
+        std::fs::copy(snapshot.state_db(), &stage).unwrap();
+        let mut conn = Connection::open(stage).unwrap();
+        conn.execute_batch(&format!("PRAGMA foreign_keys=OFF;
+                CREATE TABLE new_accounts (account_id TEXT PRIMARY KEY, kind TEXT NOT NULL, provider TEXT NOT NULL, display_name TEXT NOT NULL, state TEXT NOT NULL UNIQUE ON CONFLICT {policy}, state_reason TEXT, config_generation INTEGER NOT NULL DEFAULT 1, sort_order INTEGER NOT NULL, created_at INTEGER NOT NULL, revision INTEGER NOT NULL DEFAULT 1) STRICT;
+                INSERT INTO new_accounts SELECT * FROM accounts;
+                INSERT INTO new_accounts (account_id,kind,provider,display_name,state,sort_order,created_at) VALUES ('other','imap','generic_imap','other','paused',0,0);
+                DROP TABLE accounts; ALTER TABLE new_accounts RENAME TO accounts;")).unwrap();
+        let before: Vec<(String, String)> = conn
+            .prepare("SELECT account_id,state FROM accounts ORDER BY account_id")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(before.len(), 2);
+        let cancel = Arc::new(AtomicBool::new(false));
+        let input = Quarantine {
+            new_incarnation: "00000000-0000-4000-8000-000000000001",
+            generation: snapshot.generation_id(),
+            source_location: "/external/source",
+            current_root: paths.data_root(),
+            preserved_root: Path::new("/preserved"),
+            manifest_sha256: "digest",
+            object_count: 0,
+            total_bytes: 0,
+            completed_at: 1,
+            cancel: &cancel,
+        };
+        assert!(apply(&mut conn, &input).is_err(), "{policy} must abort");
+        let after: Vec<(String, String)> = conn
+            .prepare("SELECT account_id,state FROM accounts ORDER BY account_id")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(after, before);
+        let state: String = conn
+            .query_row(
+                "SELECT state FROM backup_generations WHERE generation_id=?1",
+                [snapshot.generation_id()],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(state, "in_progress");
+    }
+    #[test]
+    fn rejects_replace_conflict_policy() {
+        rejects_schema_conflict_policy("REPLACE");
+    }
+    #[test]
+    fn rejects_ignore_conflict_policy() {
+        rejects_schema_conflict_policy("IGNORE");
+    }
+
+    #[test]
+    fn location_paging_uses_generation_index_range() {
+        let (_scratch, _paths, store) = open("restore-location-plan");
+        let snapshot = store.backup_snapshot(BackupDestination::DataRoot).unwrap();
+        let conn = Connection::open(snapshot.state_db()).unwrap();
+        let plan: String = conn
+            .query_row(
+                &format!("EXPLAIN QUERY PLAN {NEXT_LOCATION}"),
+                ["cursor"],
+                |r| r.get(3),
+            )
+            .unwrap();
+        assert!(
+            plan.contains("SEARCH backup_generations") && plan.contains("generation_id>?"),
+            "{plan}"
+        );
     }
 
     #[test]
