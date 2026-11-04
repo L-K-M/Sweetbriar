@@ -243,14 +243,13 @@ fn the_snapshot_is_a_consistent_copy_while_writes_continue() {
     assert_eq!(snapshot.location(), expected.as_path());
     assert_eq!(snapshot.state_db(), expected.join("state.sqlite"));
     assert_eq!(snapshot.referenced_objects(), &[sha][..]);
-    // Only the ownership marker and snapshot are present: no WAL
-    // leftovers stay behind.
+    // Only the snapshot is present: no WAL leftovers stay behind.
     let mut entries: Vec<_> = std::fs::read_dir(&expected)
         .unwrap()
         .map(|entry| entry.unwrap().file_name())
         .collect();
     entries.sort();
-    assert_eq!(entries, [super::OWNER_FILE, "state.sqlite"]);
+    assert_eq!(entries, ["state.sqlite"]);
 }
 
 /// Every object the snapshot references is pinned — acquisitions,
@@ -1291,6 +1290,7 @@ fn recovery_retries_failed_cleanup_without_touching_inherited_failed_rows() {
         std::fs::create_dir(&external).unwrap();
         let (id, path) = seed_generation(&store, &external, 1, 0, "in_progress");
         std::fs::create_dir(&path).unwrap();
+        own_fixture(&store, &path);
         let (_, inherited) = seed_generation(&store, &external, 2, 0, "failed");
         std::fs::create_dir(&inherited).unwrap();
         sql(
@@ -1355,7 +1355,7 @@ fn own_fixture(store: &Store, path: &Path) {
         store,
         format!("INSERT INTO backup_ownership VALUES ('{id}','{token}')"),
     );
-    std::fs::write(path.join(super::OWNER_FILE), token).unwrap();
+    std::fs::write(super::owner_path(&path), token).unwrap();
     std::fs::write(path.join("payload"), b"generation").unwrap();
 }
 
@@ -1393,6 +1393,7 @@ fn recovery_cut_child() {
     let store = crate::open(&paths, &test_seams(real_fs())).unwrap();
     let (id, path) = seed_generation(&store, paths.backups(), 9, 0, "in_progress");
     std::fs::create_dir(&path).unwrap();
+    own_fixture(&store, &path);
     sql(
         &store,
         format!(
@@ -1411,6 +1412,9 @@ fn recovery_crash_boundaries() {
         "inside-mark",
         "marked",
         "unlinked",
+        "directory-synced",
+        "marker-unlinked",
+        "marker-synced",
         "removed",
         "unpin",
         "before-finish",
@@ -1638,6 +1642,7 @@ fn marker_creation_cuts_recover() {
     use std::os::unix::process::ExitStatusExt;
     let scratch = ScratchDir::new("backup-owner-cuts");
     for point in [
+        "owner-before-create",
         "owner-dir",
         "owner-create",
         "owner-write",
@@ -1702,9 +1707,9 @@ fn missing_or_wrong_owner_marker_preserves_nonempty_directory_and_pins() {
         std::fs::create_dir(&path).unwrap();
         own_fixture(&store, &path);
         if wrong {
-            std::fs::write(path.join(super::OWNER_FILE), b"wrong").unwrap();
+            std::fs::write(super::owner_path(&path), b"wrong").unwrap();
         } else {
-            std::fs::remove_file(path.join(super::OWNER_FILE)).unwrap();
+            std::fs::remove_file(super::owner_path(&path)).unwrap();
         }
         sql(
             &store,
@@ -1726,12 +1731,12 @@ fn partial_owner_marker_is_recoverable_only_without_other_content() {
     let (id, path) = seed_generation(&store, paths.backups(), 22, 0, "in_progress");
     std::fs::create_dir(&path).unwrap();
     own_fixture(&store, &path);
-    std::fs::write(path.join(super::OWNER_FILE), b"9f17c0aa").unwrap();
+    std::fs::write(super::owner_path(&path), b"9f17c0aa").unwrap();
     assert!(matches!(
         store.backups.recover(),
         Err(StoreError::Corrupt { .. })
     ));
-    std::fs::remove_file(path.join("payload")).unwrap();
+    std::fs::remove_dir_all(&path).unwrap();
     store.backups.recover().unwrap();
     assert!(!path.exists());
     assert_eq!(generation_row(&store, &id).unwrap().0, "failed");
@@ -1828,7 +1833,14 @@ fn retention_cut_child() {
 fn retention_crash_retry() {
     use std::os::unix::process::ExitStatusExt;
     let scratch = ScratchDir::new("backup-retention-cuts");
-    for point in ["unlinked", "retention-removed", "retention-finished"] {
+    for point in [
+        "unlinked",
+        "directory-synced",
+        "marker-unlinked",
+        "marker-synced",
+        "retention-removed",
+        "retention-finished",
+    ] {
         let root = scratch.path().join(point);
         std::fs::create_dir(&root).unwrap();
         let status = std::process::Command::new(env::current_exe().unwrap())
@@ -1924,10 +1936,92 @@ fn torn_marker_write_is_retryable() {
         )
         .map_err(bug)
     });
-    let marker = Path::new(&location).join(super::OWNER_FILE);
+    let marker = super::owner_path(Path::new(&location));
     assert_eq!(std::fs::read(&marker).unwrap().len(), 18);
     drop(backups);
     store.backups.recover().unwrap();
     assert!(!Path::new(&location).exists());
     assert_eq!(generation_row(&store, &id).unwrap().0, "failed");
+}
+
+#[test]
+fn interrupted_recursive_removal_can_be_retried() {
+    let (_scratch, paths, store) = open("backup-partial-remove");
+    let snapshot = store.backup_snapshot(BackupDestination::DataRoot).unwrap();
+    let id = snapshot.generation_id().to_owned();
+    let path = snapshot.location().to_owned();
+    std::fs::write(path.join("payload"), b"keep until retry").unwrap();
+    sql(
+        &store,
+        format!("INSERT INTO object_pins VALUES ('one','backup_in_progress','{id}',0)"),
+    );
+    drop(snapshot);
+    let fault = Arc::new(FaultFs::new(
+        real_fs(),
+        FsOp::RemoveDirAll,
+        1,
+        FaultKind::PartialRemove,
+    ));
+    let backups = faulty_backups(&store, &paths, fault);
+    assert!(matches!(
+        backups.recover(),
+        Err(StoreError::Unavailable { .. })
+    ));
+    assert!(path.join("payload").exists());
+    assert!(super::owner_path(&path).is_file());
+    assert_eq!(backup_pins(&store), ["one"]);
+    assert_eq!(generation_row(&store, &id).unwrap().0, "failed");
+    drop(backups);
+    store.backups.recover().unwrap();
+    assert!(!path.exists());
+    assert!(backup_pins(&store).is_empty());
+}
+
+#[test]
+fn retention_retries_a_partial_recursive_removal() {
+    let (_scratch, paths, store) = open("backup-retention-partial");
+    for n in 0..26 {
+        let (_, path) =
+            seed_generation(&store, paths.backups(), n, n as i64 * 3_600_000, "complete");
+        std::fs::create_dir(&path).unwrap();
+        own_fixture(&store, &path);
+        std::fs::write(path.join("state.sqlite"), b"snapshot").unwrap();
+    }
+    let fault = Arc::new(FaultFs::new(
+        real_fs(),
+        FsOp::RemoveDirAll,
+        1,
+        FaultKind::PartialRemove,
+    ));
+    let backups = faulty_backups(&store, &paths, fault);
+    assert!(matches!(
+        backups.retain(),
+        Err(StoreError::Unavailable { .. })
+    ));
+    let id = "00000000-0000-4000-8000-000000000000";
+    let path = paths.backups().join(id);
+    assert!(path.join("payload").exists());
+    assert!(!path.join("state.sqlite").exists());
+    assert!(super::owner_path(&path).is_file());
+    assert!(generation_row(&store, id).is_some());
+    store.backups.retain().unwrap();
+    assert!(!path.exists());
+    assert!(!super::owner_path(&path).exists());
+    assert!(generation_row(&store, id).is_none());
+}
+
+#[test]
+fn preexisting_directory_is_not_granted_ownership() {
+    let (_scratch, paths, store) = open("backup-existing-directory");
+    let path = paths.backups().join("00000000-0000-4000-8000-000000000001");
+    std::fs::create_dir(&path).unwrap();
+    std::fs::write(path.join("important"), b"keep").unwrap();
+    let error = store
+        .backups
+        .write_snapshot(&path, "9f17c0aa-0000-4000-8000-000000000001")
+        .err()
+        .unwrap();
+    assert!(matches!(error, StoreError::Conflict { .. }));
+    assert!(!super::owner_path(&path).exists());
+    assert!(path.join("important").exists());
 }

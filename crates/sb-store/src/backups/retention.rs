@@ -49,7 +49,7 @@ impl Backups {
             }
             // Refuse bad metadata before even changing its state.
             checked_location(&generation)?;
-            self.verify_ownership(&generation, true)?;
+            self.verify_ownership(&generation)?;
             #[cfg(test)]
             cut("before-mark");
             let id = generation.id.clone();
@@ -64,7 +64,7 @@ impl Backups {
             }))?;
             #[cfg(test)]
             cut("marked");
-            self.remove_generation(&generation, true)?;
+            self.remove_generation(&generation)?;
             #[cfg(test)]
             cut("removed");
             loop {
@@ -130,7 +130,7 @@ impl Backups {
             }
         }
         for generation in expired.into_iter().rev() {
-            self.remove_generation(&generation, false)?;
+            self.remove_generation(&generation)?;
             #[cfg(test)]
             cut("retention-removed");
             let id = generation.id;
@@ -150,14 +150,9 @@ impl Backups {
         Ok(())
     }
 
-    // The token is durable before directory creation. A partially created
-    // directory may contain no entries or only a prefix of that token.
-    // Anything else requires the complete marker, including old backups.
-    fn verify_ownership(
-        &self,
-        generation: &Generation,
-        incomplete: bool,
-    ) -> Result<(), StoreError> {
+    // The marker is outside the tree and is flushed before its creation.
+    // A truncated marker is safe to discard only before the directory exists.
+    fn verify_ownership(&self, generation: &Generation) -> Result<(), StoreError> {
         let path = checked_location(generation)?;
         let parent = path.parent().expect("checked parent");
         let failed = |e: io::Error| {
@@ -169,24 +164,24 @@ impl Backups {
         if self.fs.canonicalize(parent).map_err(failed)? != parent {
             return Err(StoreError::corrupt("backup destination parent changed"));
         }
-        let Some(metadata) = self.fs.metadata(path).map_err(failed)? else {
-            return Ok(());
+        let directory = self.fs.metadata(path).map_err(failed)?;
+        if let Some(metadata) = directory {
+            if metadata.kind() != FileKind::Directory
+                || self.fs.canonicalize(path).map_err(failed)? != path
+            {
+                return Err(StoreError::corrupt("backup generation directory changed"));
+            }
+        }
+        let marker = owner_path(path);
+        let Some(_) = self.fs.metadata(&marker).map_err(failed)? else {
+            return if directory.is_none() {
+                Ok(())
+            } else {
+                Err(StoreError::corrupt(
+                    "backup directory has no ownership marker",
+                ))
+            };
         };
-        if metadata.kind() != FileKind::Directory
-            || self.fs.canonicalize(path).map_err(failed)? != path
-        {
-            return Err(StoreError::corrupt("backup generation directory changed"));
-        }
-        let entries = self.fs.read_dir(path).map_err(failed)?;
-        if entries.is_empty() && incomplete {
-            return Ok(());
-        }
-        let marker = path.join(OWNER_FILE);
-        if !entries.contains(&marker) {
-            return Err(StoreError::corrupt(
-                "backup directory has no ownership marker",
-            ));
-        }
         let conn = open_connection(&self.state_db, Access::ReadOnly, READER_PRAGMAS)?;
         let token: Option<String> = match conn.query_row(
             "SELECT token FROM backup_ownership WHERE generation_id=?1",
@@ -209,9 +204,9 @@ impl Backups {
             .take(37)
             .read_to_end(&mut bytes)
             .map_err(failed)?;
-        let exact = bytes == token.as_bytes();
-        let partial = incomplete && entries.len() == 1 && token.as_bytes().starts_with(&bytes);
-        if !exact && !partial {
+        if bytes != token.as_bytes()
+            && !(directory.is_none() && token.as_bytes().starts_with(&bytes))
+        {
             return Err(StoreError::corrupt(
                 "backup ownership marker does not match",
             ));
@@ -219,13 +214,10 @@ impl Backups {
         Ok(())
     }
 
-    fn remove_generation(
-        &self,
-        generation: &Generation,
-        incomplete: bool,
-    ) -> Result<(), StoreError> {
-        self.verify_ownership(generation, incomplete)?;
+    fn remove_generation(&self, generation: &Generation) -> Result<(), StoreError> {
+        self.verify_ownership(generation)?;
         let path = checked_location(generation)?;
+        let parent = path.parent().expect("validated generation has parent");
         let io_error = |e: io::Error| {
             StoreError::unavailable_io(
                 format!("cannot remove backup generation {}: {e}", path.display()),
@@ -235,9 +227,20 @@ impl Backups {
         self.fs.remove_dir_all(path).map_err(io_error)?;
         #[cfg(test)]
         cut("unlinked");
-        self.fs
-            .sync_dir(path.parent().expect("validated generation has parent"))
-            .map_err(io_error)
+        self.fs.sync_dir(parent).map_err(io_error)?;
+        #[cfg(test)]
+        cut("directory-synced");
+        match self.fs.remove(&owner_path(path)) {
+            Ok(()) => {}
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => return Err(io_error(e)),
+        }
+        #[cfg(test)]
+        cut("marker-unlinked");
+        self.fs.sync_dir(parent).map_err(io_error)?;
+        #[cfg(test)]
+        cut("marker-synced");
+        Ok(())
     }
 }
 

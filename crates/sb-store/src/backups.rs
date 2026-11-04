@@ -373,10 +373,16 @@ impl Backups {
         let root = location
             .parent()
             .expect("a generation directory always has a parent");
-        self.fs.create_dir(location).map_err(failed)?;
+        // A pre-existing entry is never ours, even when its name matches
+        // the newly drawn id. Fail before creating deletion authority.
+        if self.fs.metadata(location).map_err(failed)?.is_some() {
+            return Err(StoreError::conflict(
+                "backup generation directory already exists",
+            ));
+        }
         #[cfg(test)]
-        retention::cut("owner-dir");
-        let mut owner = self.fs.create(&location.join(OWNER_FILE)).map_err(failed)?;
+        retention::cut("owner-before-create");
+        let mut owner = self.fs.create(&owner_path(location)).map_err(failed)?;
         #[cfg(test)]
         retention::cut("owner-create");
         use std::io::Write as _;
@@ -386,11 +392,12 @@ impl Backups {
         owner.sync_all().map_err(failed)?;
         #[cfg(test)]
         retention::cut("owner-sync");
-        self.fs.sync_dir(location).map_err(failed)?;
+        self.fs.sync_dir(root).map_err(failed)?;
         #[cfg(test)]
         retention::cut("owner-dir-sync");
-        // Persist the generation's entry into its parent before a file
-        // lands inside, as objects publish into their chains.
+        self.fs.create_dir(location).map_err(failed)?;
+        #[cfg(test)]
+        retention::cut("owner-dir");
         self.fs.sync_dir(root).map_err(failed)?;
 
         let file = location.join(SNAPSHOT_FILE);
@@ -525,6 +532,18 @@ pub(crate) struct Pauses {
     pub(crate) before_referenced_read: Option<Arc<std::sync::Barrier>>,
     pub(crate) during_pin_validation: Option<Arc<std::sync::Barrier>>,
     pub(crate) before_pin_release: Option<Arc<std::sync::Barrier>>,
+}
+
+// The sibling survives a partially successful recursive directory removal.
+fn owner_path(location: &Path) -> PathBuf {
+    let id = location
+        .file_name()
+        .expect("generation has a leaf")
+        .to_string_lossy();
+    location
+        .parent()
+        .expect("generation has a parent")
+        .join(format!(".{id}{OWNER_FILE}"))
 }
 
 /// A finished snapshot opened for reads. The copy marks it WAL (it

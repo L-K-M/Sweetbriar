@@ -469,8 +469,8 @@ so their objects stay referenced.
 A **generation** is a complete, self-verifying recovery point:
 
 ```
+backups/.<generation-id>.sweetbriar-owner   durable ownership marker
 backups/<generation-id>/
-  .sweetbriar-owner    durable ownership marker
   state.sqlite          consistent snapshot (SQLite online backup API)
   objects/sha256/...    every object the snapshot references
   manifest.json         written last
@@ -528,13 +528,15 @@ backups/<generation-id>/
   error stops the new run and is retryable. A generation still active in
   this process is not an interrupted generation. A fresh random ownership
   token is stored with the generation before creating its directory, then
-  written and flushed in an ownership marker before any snapshot content.
-  Recovery and retention verify this marker before removing a nonempty
-  directory. A missing directory is harmless; an empty directory, or one
-  containing only a marker that is a prefix of its stored token, may be
-  removed as an interrupted creation. Missing or mismatched ownership proof
-  on other content fails closed, including for legacy generations. Validate
-  the canonical parent and generation paths before removal.
+  written and flushed in a sibling marker, and its parent flushed, before
+  creating the generation directory. Recovery and retention verify the marker
+  before removing the directory. Keep the marker until directory removal and
+  the parent flush succeed, then remove and flush the marker before unpinning
+  or deleting the row. A missing directory and marker are safe to retry; a
+  partial token marker can be removed only while the directory is absent.
+  Missing or mismatched ownership proof on an existing directory fails
+  closed, including for legacy generations. Validate the canonical parent
+  and generation paths before removal.
 
 ## Restore
 
