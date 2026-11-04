@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use sb_types::fs::{Fs, Lease, Location, LockError, Metadata, WriteFile};
+use sb_types::fs::{ConfinedDir, Fs, Lease, Location, LockError, Metadata, ReadFile, WriteFile};
 
 /// Give up after this many cut points: a run that never survives either
 /// fails on its first operation every time or does not use the `Fs`
@@ -72,7 +72,36 @@ impl CutFs {
     }
 }
 
+struct CutConfinedDir {
+    inner: Box<dyn ConfinedDir>,
+    count: Arc<AtomicU64>,
+    nth: u64,
+}
+
+impl ConfinedDir for CutConfinedDir {
+    fn open_regular(&self, path: &Path) -> std::io::Result<(Box<dyn ReadFile>, Metadata)> {
+        let n = self.count.fetch_add(1, Ordering::SeqCst) + 1;
+        if n == self.nth {
+            // SAFETY: killing this process is the crash-cut harness contract.
+            unsafe {
+                libc::kill(libc::getpid(), libc::SIGKILL);
+            }
+            panic!("SIGKILL at cut point {n} did not kill the process");
+        }
+        self.inner.open_regular(path)
+    }
+}
+
 impl Fs for CutFs {
+    fn open_confined_dir(&self, path: &Path) -> std::io::Result<Box<dyn ConfinedDir>> {
+        self.trip();
+        Ok(Box::new(CutConfinedDir {
+            inner: self.inner.open_confined_dir(path)?,
+            count: self.count.clone(),
+            nth: self.nth,
+        }))
+    }
+
     fn create(&self, path: &Path) -> std::io::Result<Box<dyn WriteFile>> {
         self.trip();
         let inner = self.inner.create(path)?;

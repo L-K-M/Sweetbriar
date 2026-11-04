@@ -13,7 +13,9 @@ use std::io::{self, Read, Seek, SeekFrom};
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use sb_types::fs::{FileKind, Fs, Lease, Location, LockError, Metadata, WriteFile};
+use sb_types::fs::{
+    ConfinedDir, FileKind, Fs, Lease, Location, LockError, Metadata, ReadFile, WriteFile,
+};
 
 /// An in-memory filesystem whose only ground truth is what was
 /// flushed. Tests drive it exactly like a real one and then call
@@ -24,7 +26,7 @@ pub struct SimFs {
     locks: Arc<Mutex<HashSet<PathBuf>>>,
     /// Held by every operation on the tree, so each is atomic as on a
     /// real filesystem: no thread sees a rename half done.
-    ops: Mutex<()>,
+    ops: Arc<Mutex<()>>,
 }
 
 /// A directory: the entries it holds now, and the entries its last
@@ -212,7 +214,79 @@ fn relative_components(path: &Path) -> impl Iterator<Item = Box<Path>> {
         .into_iter()
 }
 
+struct SimConfinedDir {
+    dir: Arc<Mutex<SimDir>>,
+    ops: Arc<Mutex<()>>,
+}
+
+impl ConfinedDir for SimConfinedDir {
+    fn open_regular(&self, relative: &Path) -> io::Result<(Box<dyn ReadFile>, Metadata)> {
+        let _op = self
+            .ops
+            .lock()
+            .expect("a panicking thread held the sim operation lock");
+        let parts: Vec<_> = relative
+            .components()
+            .map(|part| match part {
+                Component::Normal(name) => Ok(Box::<Path>::from(Path::new(name))),
+                _ => Err(io::Error::from(io::ErrorKind::InvalidInput)),
+            })
+            .collect::<io::Result<_>>()?;
+        let (last, parents) = parts.split_last().ok_or(io::ErrorKind::InvalidInput)?;
+        let mut dir = self.dir.clone();
+        for name in parents {
+            let next = dir
+                .lock()
+                .expect("a panicking thread held the sim tree")
+                .live
+                .get(name)
+                .cloned();
+            match next {
+                Some(Child::Dir(child)) => dir = child,
+                _ => return Err(io::ErrorKind::NotFound.into()),
+            }
+        }
+        let child = dir
+            .lock()
+            .expect("a panicking thread held the sim tree")
+            .live
+            .get(last)
+            .cloned();
+        match child {
+            Some(Child::File(node)) => {
+                let len = node
+                    .lock()
+                    .expect("a panicking thread held a sim file")
+                    .live
+                    .len() as u64;
+                Ok((
+                    Box::new(SimReadFile { node, pos: 0 }),
+                    Metadata::new(FileKind::File, len),
+                ))
+            }
+            Some(Child::Dir(_)) => Err(not_regular(relative)),
+            None => Err(io::ErrorKind::NotFound.into()),
+        }
+    }
+}
+
 impl Fs for SimFs {
+    fn open_confined_dir(&self, path: &Path) -> io::Result<Box<dyn ConfinedDir>> {
+        if !path.is_absolute()
+            || path
+                .components()
+                .any(|part| matches!(part, Component::ParentDir | Component::Prefix(_)))
+        {
+            return Err(io::ErrorKind::InvalidInput.into());
+        }
+        let _op = self.op();
+        let dir = self.dir(path).ok_or(io::ErrorKind::NotFound)?;
+        Ok(Box::new(SimConfinedDir {
+            dir,
+            ops: self.ops.clone(),
+        }))
+    }
+
     fn create(&self, path: &Path) -> io::Result<Box<dyn WriteFile>> {
         let _op = self.op();
         let path = normalise(path)?;
@@ -582,6 +656,29 @@ impl Seek for SimReadFile {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn confined_directory_survives_rename_and_refuses_escape() {
+        use super::*;
+        let fs = SimFs::new();
+        fs.create_dir_all(Path::new("/root/child")).unwrap();
+        use std::io::Write as _;
+        fs.create(Path::new("/root/child/file"))
+            .unwrap()
+            .write_all(b"old")
+            .unwrap();
+        let root = fs.open_confined_dir(Path::new("/root")).unwrap();
+        assert!(root.open_regular(Path::new("../outside")).is_err());
+        fs.rename(Path::new("/root"), Path::new("/moved")).unwrap();
+        fs.create_dir(Path::new("/root")).unwrap();
+        let mut content = String::new();
+        root.open_regular(Path::new("child/file"))
+            .unwrap()
+            .0
+            .read_to_string(&mut content)
+            .unwrap();
+        assert_eq!(content, "old");
+    }
+
     use std::io::Write as _;
 
     use super::*;

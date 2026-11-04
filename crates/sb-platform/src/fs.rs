@@ -4,10 +4,14 @@
 
 use std::fs::{File, OpenOptions, TryLockError};
 use std::io;
+use std::os::fd::{AsRawFd, FromRawFd};
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
-use sb_types::fs::{FileKind, Fs, Lease, Location, LockError, Metadata, WriteFile};
+use sb_types::fs::{
+    ConfinedDir, FileKind, Fs, Lease, Location, LockError, Metadata, ReadFile, WriteFile,
+};
 
 use crate::location;
 
@@ -16,7 +20,66 @@ use crate::location;
 #[derive(Debug, Default, Clone, Copy)]
 pub struct RealFs;
 
+struct RealConfinedDir(File);
+
+// Each openat is relative to a retained directory descriptor; O_NOFOLLOW
+// applies independently to every component rather than only the final leaf.
+fn open_child(parent: &File, name: &std::ffi::OsStr, directory: bool) -> io::Result<File> {
+    let name = std::ffi::CString::new(name.as_bytes()).map_err(|_| io::ErrorKind::InvalidInput)?;
+    let mut flags =
+        libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_NOCTTY;
+    if directory {
+        flags |= libc::O_DIRECTORY;
+    }
+    // SAFETY: parent is a live descriptor and name is NUL-terminated; on
+    // success openat returns a new owned descriptor.
+    let fd = unsafe { libc::openat(parent.as_raw_fd(), name.as_ptr(), flags) };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: fd was just returned by openat and ownership transfers here.
+    Ok(unsafe { File::from_raw_fd(fd) })
+}
+
+impl ConfinedDir for RealConfinedDir {
+    fn open_regular(&self, relative: &Path) -> io::Result<(Box<dyn ReadFile>, Metadata)> {
+        let parts: Vec<_> = relative
+            .components()
+            .map(|part| match part {
+                Component::Normal(name) => Ok(name),
+                _ => Err(io::Error::from(io::ErrorKind::InvalidInput)),
+            })
+            .collect::<io::Result<_>>()?;
+        let (last, parents) = parts.split_last().ok_or(io::ErrorKind::InvalidInput)?;
+        let mut dir = self.0.try_clone()?;
+        for name in parents {
+            dir = open_child(&dir, name, true)?;
+        }
+        let file = open_child(&dir, last, false)?;
+        let md = file.metadata()?;
+        if !md.is_file() {
+            return Err(not_regular(relative));
+        }
+        Ok((Box::new(file), Metadata::new(FileKind::File, md.len())))
+    }
+}
+
 impl Fs for RealFs {
+    fn open_confined_dir(&self, path: &Path) -> io::Result<Box<dyn ConfinedDir>> {
+        if !path.is_absolute() {
+            return Err(io::ErrorKind::InvalidInput.into());
+        }
+        let mut dir = File::open("/")?;
+        for component in path.components() {
+            match component {
+                Component::RootDir => {}
+                Component::Normal(name) => dir = open_child(&dir, name, true)?,
+                _ => return Err(io::ErrorKind::InvalidInput.into()),
+            }
+        }
+        Ok(Box::new(RealConfinedDir(dir)))
+    }
+
     fn create(&self, path: &Path) -> io::Result<Box<dyn WriteFile>> {
         // create_new: fails when the file already exists.
         let file = OpenOptions::new().write(true).create_new(true).open(path)?;
@@ -350,6 +413,31 @@ mod tests {
     fn the_quarantine_record_names_its_download_time() {
         let downloaded = std::time::UNIX_EPOCH + Duration::from_secs(0x6900_0000);
         assert_eq!(quarantine_record(downloaded), "0081;69000000;Sweetbriar;");
+    }
+
+    #[test]
+    fn confined_directory_refuses_symlinks_and_keeps_open_root() {
+        use std::os::unix::fs::symlink;
+        let scratch = Scratch::new("confined");
+        let root = scratch.0.join("root");
+        std::fs::create_dir(&root).unwrap();
+        std::fs::create_dir(root.join("child")).unwrap();
+        std::fs::write(root.join("child/file"), b"original").unwrap();
+        symlink(root.join("child"), root.join("link")).unwrap();
+        symlink(root.join("child/file"), root.join("file-link")).unwrap();
+        let root = root.canonicalize().unwrap();
+        let dir = RealFs.open_confined_dir(&root).unwrap();
+        assert!(dir.open_regular(Path::new("link/file")).is_err());
+        assert!(dir.open_regular(Path::new("file-link")).is_err());
+        assert!(dir.open_regular(Path::new("../outside")).is_err());
+        let moved = scratch.0.join("moved");
+        std::fs::rename(&root, &moved).unwrap();
+        std::fs::create_dir(&root).unwrap();
+        let mut file = dir.open_regular(Path::new("child/file")).unwrap().0;
+        let mut content = String::new();
+        file.read_to_string(&mut content).unwrap();
+        assert_eq!(content, "original");
+        assert!(RealFs.open_confined_dir(&moved.join("link")).is_err());
     }
 
     #[test]
