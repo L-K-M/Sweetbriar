@@ -970,9 +970,14 @@ local drafts. No network yet.
     entry's shape, counts and unique safe decoded name. Preserve the table's
     byte range and count across cancellable scans of one verified snapshot.
     Valid bundles remain unsupported and their snapshots are discarded.
-  - **M1.7d1b1b2b Manifest message validation — L:** validate message schemas,
-    references and format-specific fields using the verified file table.
-    Prove writer manifests, hostile tokens and cleanup before bundle inventory.
+  - **M1.7d1b1b2b1 Manifest message schemas — L:** validate exact message
+    schemas, availability, spans and local keyword and tag invariants. Keep
+    bundles unsupported and discard their snapshots; global relationships
+    remain unchecked and cannot admit a source.
+  - **M1.7d1b1b2b2 Manifest message relationships — L:** validate counts,
+    ordered-ID digest, unique occurrence IDs, file references and EML
+    agreement using bounded scans of the verified snapshot. Prove writer
+    manifests, hostile tokens and cleanup before bundle inventory.
   - **M1.7d1b2 Bundle file agreement and inventory — L:** check every declared
     direct child's kind, byte length and record count independently before
     ingest, report missing or disagreeing files without suppressing valid
