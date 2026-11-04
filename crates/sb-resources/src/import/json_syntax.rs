@@ -8,7 +8,7 @@ use super::offset_sort::OffsetSort;
 use std::cmp::Ordering;
 
 mod messages;
-pub(super) use messages::validate_messages;
+pub(super) use messages::validate_messages_with_children;
 
 // Search query nodes have depth 32 (spec/06). A node can add an object
 // and an operands array; the manifest and scope wrappers fit in 16 more.
@@ -63,6 +63,49 @@ pub(super) struct FileTable {
     format: BundleFormat,
     entries: u64,
     ids_hash: String,
+}
+
+impl FileTable {
+    pub(super) fn format(&self) -> BundleFormat {
+        self.format
+    }
+}
+
+/// Compare a decoded manifest string to a directory name without retaining it.
+pub(super) fn compare_child(
+    reader: &mut (impl Read + Seek),
+    mut offset: u64,
+    name: &str,
+) -> io::Result<std::cmp::Ordering> {
+    let mut expected = name.chars();
+    loop {
+        let mut chars = ['\0'; 256];
+        let length = name_chunk(reader, &mut offset, &mut chars)?;
+        for ch in &chars[..length] {
+            match expected.next() {
+                Some(other) if *ch == other => {}
+                Some(other) => return Ok(ch.cmp(&other)),
+                None => return Ok(std::cmp::Ordering::Greater),
+            }
+        }
+        if length < chars.len() {
+            return Ok(if expected.next().is_some() {
+                std::cmp::Ordering::Less
+            } else {
+                std::cmp::Ordering::Equal
+            });
+        }
+    }
+}
+
+/// Keep diagnostics bounded even when a hostile manifest contains huge names.
+pub(super) fn child_prefix(
+    reader: &mut (impl Read + Seek),
+    mut offset: u64,
+) -> io::Result<(String, bool)> {
+    let mut chars = ['\0'; 257];
+    let length = name_chunk(reader, &mut offset, &mut chars)?;
+    Ok((chars[..length.min(256)].iter().collect(), length > 256))
 }
 
 struct FileName {
