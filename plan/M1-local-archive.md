@@ -978,6 +978,10 @@ local drafts. No network yet.
     disposable bounded scratch with two fixed tapes and explicit cleanup,
     isolated concurrent leases and writable-open cleanup. This prerequisite
     does not add a manifest cap or implement relationship validation.
+  - **M1.7d1b1b2b1b Offset sorting prerequisite — M:** sort source offsets
+    in fixed-memory runs on the two validation tapes and use exact decoded
+    file-name comparison to replace quadratic file-table uniqueness scans.
+    Message relationships remain deferred to b2.
   - **M1.7d1b1b2b2 Manifest message relationships — L:** validate counts,
     ordered-ID digest, unique occurrence IDs, file references and EML
     agreement using bounded scans of the verified snapshot. Prove writer

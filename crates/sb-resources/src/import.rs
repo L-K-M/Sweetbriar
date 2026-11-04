@@ -13,6 +13,7 @@ use sb_store::{FileKind, Fs, ImportSourceCapture, ImportSourceSnapshot, Store, S
 
 pub(crate) mod bundle;
 mod json_syntax;
+mod offset_sort;
 pub use bundle::{BundleFormat, SourceBundle};
 
 /// The metadata object's format version (spec/09). A bundle source
@@ -530,7 +531,13 @@ impl Walker<'_> {
                     progress: &mut *self.progress,
                 });
                 let result = json_syntax::validate_envelope(&mut reader).and_then(|table| {
-                    json_syntax::validate_file_names(&mut reader, &table)?;
+                    let scratch = self.store.import_validation_scratch().map_err(|e| {
+                        io::Error::new(e.io_kind().unwrap_or(io::ErrorKind::Other), e)
+                    })?;
+                    json_syntax::validate_file_names(&mut reader, &table, &scratch)?;
+                    scratch.finish().map_err(|e| {
+                        io::Error::new(e.io_kind().unwrap_or(io::ErrorKind::Other), e)
+                    })?;
                     json_syntax::validate_messages(&mut reader, &table)
                 });
                 if reader.get_ref().cancelled {
