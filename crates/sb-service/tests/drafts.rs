@@ -413,6 +413,20 @@ fn receipts_replay_the_stored_results() {
     ))
     .unwrap();
     assert_eq!(replayed, saved);
+    // Receipt replay precedes validation of a changed retained reference.
+    let mut invalid = content("invalid replay");
+    invalid
+        .attachments
+        .push(DraftAttachment::Retained(DraftAttachmentRef {
+            object_sha256: "0".repeat(64),
+            filename: String::new(),
+            media_type: String::new(),
+            size: 0,
+        }));
+    assert_eq!(
+        block_on(core.save_draft(&save_key, "", Some(""), invalid)).unwrap(),
+        saved
+    );
     assert_eq!(
         block_on(core.draft(&first.draft_id))
             .unwrap()
