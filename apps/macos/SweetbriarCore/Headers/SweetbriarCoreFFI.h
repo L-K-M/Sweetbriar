@@ -273,6 +273,16 @@ uint64_t uniffi_sb_ffi_fn_method_core_shutdown(uint64_t ptr
 uint64_t uniffi_sb_ffi_fn_method_core_appearance(uint64_t ptr, uint64_t token
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_SET_ACCOUNT_APPEARANCE
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_SET_ACCOUNT_APPEARANCE
+uint64_t uniffi_sb_ffi_fn_method_core_set_account_appearance(uint64_t ptr, uint64_t token, RustBuffer idempotency_key, RustBuffer account_id, int64_t expected_revision, RustBuffer change
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_SET_IDENTITY_APPEARANCE
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_SET_IDENTITY_APPEARANCE
+uint64_t uniffi_sb_ffi_fn_method_core_set_identity_appearance(uint64_t ptr, uint64_t token, RustBuffer idempotency_key, RustBuffer identity_id, RustBuffer expected_revision, RustBuffer change
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_SUBSCRIBE_APPEARANCE
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_SUBSCRIBE_APPEARANCE
 uint64_t uniffi_sb_ffi_fn_method_core_subscribe_appearance(uint64_t ptr, uint64_t token, uint64_t generation
@@ -770,6 +780,18 @@ uint16_t uniffi_sb_ffi_checksum_method_core_shutdown(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_APPEARANCE
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_APPEARANCE
 uint16_t uniffi_sb_ffi_checksum_method_core_appearance(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_SET_ACCOUNT_APPEARANCE
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_SET_ACCOUNT_APPEARANCE
+uint16_t uniffi_sb_ffi_checksum_method_core_set_account_appearance(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_SET_IDENTITY_APPEARANCE
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_SET_IDENTITY_APPEARANCE
+uint16_t uniffi_sb_ffi_checksum_method_core_set_identity_appearance(void
     
 );
 #endif
