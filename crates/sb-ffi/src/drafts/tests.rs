@@ -475,10 +475,21 @@ fn command_cancellation_drop_and_shutdown() {
         },
     ))
     .unwrap();
+    let before_replay = block_on(core.drafts(CancelToken::new())).unwrap();
+    assert_eq!(
+        before_replay.len(),
+        3,
+        "the dropped create committed before replay"
+    );
     let replay =
         block_on(core.create_draft(CancelToken::new(), "create-3".into(), DraftSource::New))
             .unwrap();
     assert_eq!(replay.receipt.command, "create_draft");
+    assert!(
+        before_replay
+            .iter()
+            .any(|row| row.draft_id == replay.draft_id)
+    );
     let listed = block_on(core.drafts(CancelToken::new())).unwrap();
     assert!(
         listed.iter().any(|row| row.draft_id == replay.draft_id),
