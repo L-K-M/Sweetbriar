@@ -182,8 +182,9 @@ impl Store {
         self.backups.verify_external(parent, generation, cancelled)
     }
 
-    /// Visit verified external generations with bounded memory. Corrupt and
-    /// incomplete candidates are skipped; I/O and cleanup failures propagate.
+    /// Visit verified external generations with bounded memory. Identified
+    /// invalid or incomplete source candidates are skipped. Other failures,
+    /// including errors without source provenance, propagate.
     /// The visitor can stop early. Cancellation also returns `Break`.
     pub fn discover_external_backups(
         &self,

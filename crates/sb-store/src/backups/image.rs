@@ -5,6 +5,15 @@ use sha2::{Digest, Sha256};
 use std::io::{Read, Write};
 use std::ops::ControlFlow;
 
+// Source failures are skippable only when the image connection closed and
+// all trusted cleanup succeeded; either can replace the original error.
+#[derive(Default)]
+pub(super) struct SessionStatus {
+    pub cleaned: std::cell::Cell<bool>,
+    pub source_invalid: std::cell::Cell<bool>,
+    pub closed: std::cell::Cell<bool>,
+}
+
 /// Result of inspecting the database bytes, or an explicit cancellation.
 #[derive(Debug)]
 pub enum BackupImageInspection {
@@ -110,7 +119,7 @@ impl Backups {
         &self,
         source: &dyn sb_types::fs::ConfinedDir,
         cancelled: &std::sync::atomic::AtomicBool,
-        mut progress: impl FnMut(u64) -> ControlFlow<()>,
+        progress: impl FnMut(u64) -> ControlFlow<()>,
         prepare: impl FnOnce(&dyn sb_types::fs::ConfinedDir) -> Result<([u8; 32], u64), StoreError>,
         callback: impl FnOnce(
             &Connection,
@@ -118,6 +127,30 @@ impl Backups {
             &dyn sb_types::fs::ConfinedDir,
         ) -> Result<ControlFlow<()>, StoreError>,
     ) -> Result<BackupImageInspection, StoreError> {
+        self.inspect_image_session_tracked(
+            source,
+            cancelled,
+            progress,
+            prepare,
+            callback,
+            &SessionStatus::default(),
+        )
+    }
+
+    pub(super) fn inspect_image_session_tracked(
+        &self,
+        source: &dyn sb_types::fs::ConfinedDir,
+        cancelled: &std::sync::atomic::AtomicBool,
+        mut progress: impl FnMut(u64) -> ControlFlow<()>,
+        prepare: impl FnOnce(&dyn sb_types::fs::ConfinedDir) -> Result<([u8; 32], u64), StoreError>,
+        callback: impl FnOnce(
+            &Connection,
+            &str,
+            &dyn sb_types::fs::ConfinedDir,
+        ) -> Result<ControlFlow<()>, StoreError>,
+        status: &SessionStatus,
+    ) -> Result<BackupImageInspection, StoreError> {
+        status.closed.set(true);
         if self.writer.is_writer_thread() {
             return Err(StoreError::internal("writer cannot inspect a backup"));
         }
@@ -174,9 +207,15 @@ impl Backups {
             if cancelled.load(std::sync::atomic::Ordering::Acquire) {
                 return Ok(BackupImageInspection::Cancelled);
             }
-            let (mut input, _) = source
-                .open_regular(Path::new(SNAPSHOT_FILE))
-                .map_err(io_error)?;
+            let (mut input, _) = source.open_regular(Path::new(SNAPSHOT_FILE)).map_err(|e| {
+                status.source_invalid.set(matches!(
+                    e.kind(),
+                    io::ErrorKind::NotFound
+                        | io::ErrorKind::InvalidInput
+                        | io::ErrorKind::NotADirectory
+                ));
+                io_error(e)
+            })?;
             let mut output = scratch.create(Path::new(SNAPSHOT_FILE)).map_err(io_error)?;
             let mut hash = Sha256::new();
             let mut total = 0u64;
@@ -199,6 +238,7 @@ impl Backups {
                     .checked_add(n as u64)
                     .ok_or_else(|| StoreError::corrupt("verifier length overflow"))?;
                 if total > length {
+                    status.source_invalid.set(true);
                     return Err(StoreError::corrupt("backup database length mismatch"));
                 }
                 output.write_all(&buf[..n]).map_err(io_error)?;
@@ -208,6 +248,7 @@ impl Backups {
                 }
             }
             if total != length || hash.finalize().as_slice() != expected {
+                status.source_invalid.set(true);
                 return Err(StoreError::corrupt("backup database digest mismatch"));
             }
             output.sync_all().map_err(io_error)?;
@@ -247,9 +288,12 @@ impl Backups {
             if cancelled.load(std::sync::atomic::Ordering::Relaxed) {
                 return Ok(BackupImageInspection::Cancelled);
             }
+            status.closed.set(false);
             let conn = crate::image_vfs::open(pinned)
                 .map_err(|e| classify(e, "open authenticated backup image"))?;
-            let inspected = image_inspect::inspect(&conn, cancelled).and_then(|inspected| {
+            let metadata = image_inspect::inspect(&conn, cancelled);
+            let invalid_metadata = matches!(&metadata, Err(StoreError::Corrupt { .. }));
+            let inspected = metadata.and_then(|inspected| {
                 if cancelled.load(std::sync::atomic::Ordering::Acquire) {
                     return Ok(image_inspect::Inspection::Cancelled);
                 }
@@ -263,6 +307,10 @@ impl Backups {
             });
             conn.close()
                 .map_err(|(_, e)| classify(e, "close backup image"))?;
+            status.closed.set(true);
+            if invalid_metadata {
+                status.source_invalid.set(true);
+            }
             Ok(match inspected? {
                 image_inspect::Inspection::Inspected {
                     store_uuid,
@@ -287,6 +335,7 @@ impl Backups {
             transaction_cut("delete-before-commit");
             Ok(())
         }))?;
+        status.cleaned.set(true);
         #[cfg(test)]
         transaction_cut("delete-after-commit");
         match outcome {

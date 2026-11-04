@@ -187,6 +187,21 @@ pub(crate) struct Backups {
 }
 
 impl Backups {
+    fn reserve_operation(&self) -> Result<Arc<()>, StoreError> {
+        let token = Arc::new(());
+        let mut active = self
+            .active
+            .try_lock()
+            .map_err(|_| StoreError::conflict("backup operation is already running"))?;
+        if active.as_ref().and_then(Weak::upgrade).is_some() {
+            return Err(StoreError::conflict("backup operation is already running"));
+        }
+        *active = Some(Arc::downgrade(&token));
+        Ok(token)
+    }
+}
+
+impl Backups {
     /// Over the store's seams: the writer carries the generation row
     /// and the pin transactions; `state_db` is the copy's source and
     /// `backups_dir` the default destination.

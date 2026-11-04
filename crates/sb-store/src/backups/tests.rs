@@ -2363,6 +2363,18 @@ fn external_discovery_streams_complete_generations_and_checks_objects() {
         })
         .unwrap();
     assert_eq!(count, 1);
+    std::fs::write(other_receipt.location().join("state.sqlite"), b"damaged").unwrap();
+    let mut remaining = 0;
+    assert!(
+        fresh
+            .discover_external_backups(parent, &cancel, |_| {
+                remaining += 1;
+                ControlFlow::Continue(())
+            })
+            .unwrap()
+            .is_continue()
+    );
+    assert_eq!(remaining, 0);
 }
 
 #[test]
@@ -2418,6 +2430,67 @@ fn external_restore_propagates_io_and_cleanup_errors() {
             .unwrap()
             .is_some()
     );
+}
+
+#[test]
+fn external_discovery_propagates_not_found_cleanup_failure() {
+    use std::ops::ControlFlow;
+    use std::sync::atomic::AtomicBool;
+    let (_scratch, _paths, source) = open("external-cleanup-provenance-source");
+    let receipt = source
+        .complete_backup(source.backup_snapshot(BackupDestination::DataRoot).unwrap())
+        .unwrap();
+    let (_fresh_scratch, fresh_paths, fresh) = open("external-cleanup-provenance-fresh");
+    let fs = Arc::new(FaultFs::new(
+        real_fs(),
+        FsOp::RemoveDirAll,
+        1,
+        FaultKind::Kind(std::io::ErrorKind::NotFound),
+    ));
+    let failing = faulty_backups(&fresh, &fresh_paths, fs);
+    let result = failing.discover_external(
+        receipt.location().parent().unwrap(),
+        &AtomicBool::new(false),
+        |_| ControlFlow::Continue(()),
+    );
+    assert!(result.is_err());
+}
+
+#[test]
+fn external_verification_and_discovery_conflict_with_active_backup() {
+    use std::ops::ControlFlow;
+    use std::sync::atomic::AtomicBool;
+    let (_scratch, _paths, store) = open("external-active-backup");
+    let receipt = store
+        .complete_backup(store.backup_snapshot(BackupDestination::DataRoot).unwrap())
+        .unwrap();
+    let snapshot = store.backup_snapshot(BackupDestination::DataRoot).unwrap();
+    let parent = receipt.location().parent().unwrap();
+    let cancel = AtomicBool::new(false);
+    assert!(matches!(
+        store.verify_external_backup(parent, receipt.generation_id(), &cancel),
+        Err(StoreError::Conflict { .. })
+    ));
+    assert!(matches!(
+        store.discover_external_backups(parent, &cancel, |_| ControlFlow::Continue(())),
+        Err(StoreError::Conflict { .. })
+    ));
+    drop(snapshot);
+    let mut visited = false;
+    assert!(
+        store
+            .discover_external_backups(parent, &cancel, |_| {
+                visited = true;
+                assert!(matches!(
+                    store.backup_snapshot(BackupDestination::DataRoot),
+                    Err(StoreError::Conflict { .. })
+                ));
+                ControlFlow::Break(())
+            })
+            .unwrap()
+            .is_break()
+    );
+    assert!(visited);
 }
 
 #[test]

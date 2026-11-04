@@ -21,6 +21,7 @@ pub(super) fn verify_objects(
     id: &str,
     cancel: &AtomicBool,
     mut progress: impl FnMut(),
+    mut source_error: impl FnMut(&StoreError),
 ) -> Result<ControlFlow<()>, StoreError> {
     let conn = open_connection(&backups.state_db, Access::ReadOnly, READER_PRAGMAS)?;
     let mut after = None;
@@ -37,7 +38,11 @@ pub(super) fn verify_objects(
                 .map(|b| format!("{b:02x}"))
                 .collect::<String>();
             let path = format!("objects/sha256/{}/{}/{}", &hash[..2], &hash[2..4], hash);
-            let (mut file, _) = source.open_regular(Path::new(&path)).map_err(io_error)?;
+            let (mut file, _) = source.open_regular(Path::new(&path)).map_err(|e| {
+                let e = io_error(e);
+                source_error(&e);
+                e
+            })?;
             let mut hasher = Sha256::new();
             let mut length = 0u64;
             let mut buf = [0; 65536];
@@ -45,21 +50,31 @@ pub(super) fn verify_objects(
                 if cancelled(cancel) {
                     return Ok(ControlFlow::Break(()));
                 }
-                let n = file.read(&mut buf).map_err(io_error)?;
+                let n = file.read(&mut buf).map_err(|e| {
+                    let e = io_error(e);
+                    source_error(&e);
+                    e
+                })?;
                 if n == 0 {
                     break;
                 }
-                length = length
-                    .checked_add(n as u64)
-                    .ok_or_else(|| StoreError::corrupt("object length overflow"))?;
+                length = length.checked_add(n as u64).ok_or_else(|| {
+                    let e = StoreError::corrupt("object length overflow");
+                    source_error(&e);
+                    e
+                })?;
                 if length > row.entry.bytes {
-                    return Err(StoreError::corrupt("object length mismatch"));
+                    let e = StoreError::corrupt("object length mismatch");
+                    source_error(&e);
+                    return Err(e);
                 }
                 hasher.update(&buf[..n]);
                 progress();
             }
             if length != row.entry.bytes || hasher.finalize().as_slice() != row.entry.sha256 {
-                return Err(StoreError::corrupt("object digest or length mismatch"));
+                let e = StoreError::corrupt("object digest or length mismatch");
+                source_error(&e);
+                return Err(e);
             }
         }
         if page.len() < ledger::BATCH {
@@ -126,17 +141,7 @@ impl Backups {
         if self.writer.is_writer_thread() {
             return Err(StoreError::internal("writer cannot verify a backup"));
         }
-        let token = Arc::new(());
-        {
-            let mut active = self
-                .active
-                .try_lock()
-                .map_err(|_| StoreError::conflict("backup operation is already running"))?;
-            if active.as_ref().and_then(Weak::upgrade).is_some() {
-                return Err(StoreError::conflict("backup operation is already running"));
-            }
-            *active = Some(Arc::downgrade(&token));
-        }
+        let token = self.reserve_operation()?;
         let conn = open_connection(&self.state_db, Access::ReadOnly, READER_PRAGMAS)?;
         let row: Option<(String, i64, String, String, i64, i64, i64)> = conn.query_row(
             "SELECT location, started_at, state, manifest_sha256, object_count, total_bytes, completed_at FROM backup_generations WHERE generation_id=?1", [generation],
@@ -264,9 +269,14 @@ impl Backups {
                 if input.hash.finalize().as_slice() != expected_hash {
                     return Err(StoreError::corrupt("manifest digest mismatch"));
                 }
-                if verify_objects(self, source.as_ref(), id, cancel, || {
-                    progress.borrow_mut()(StreamPhase::Object)
-                })?
+                if verify_objects(
+                    self,
+                    source.as_ref(),
+                    id,
+                    cancel,
+                    || progress.borrow_mut()(StreamPhase::Object),
+                    |_| {},
+                )?
                 .is_break()
                 {
                     return Ok(ControlFlow::Break(()));
