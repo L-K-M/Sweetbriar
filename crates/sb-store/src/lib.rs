@@ -51,7 +51,7 @@ pub use sb_types::time::{Clock, Timestamp};
 // dependency of its own.
 pub use rusqlite::Transaction;
 
-pub use backups::{BackupDestination, BackupSnapshot};
+pub use backups::{BackupDestination, BackupReceipt, BackupSnapshot};
 pub use error::StoreError;
 pub use export_metadata::{ExportMetadata, export_occurrence_metadata};
 pub use gc::{GC_GRACE_PERIOD, GcGate, GcReport};

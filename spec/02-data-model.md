@@ -1215,6 +1215,8 @@ CREATE TABLE object_pins (                        -- objects GC must keep regard
   created_at    INTEGER NOT NULL,
   PRIMARY KEY (object_sha256, pin_kind, pin_ref)
 ) STRICT;
+CREATE INDEX object_pins_by_owner ON object_pins (pin_kind, pin_ref, object_sha256)
+  WHERE pin_kind = 'backup_in_progress';
 ```
 
 ## Derived tables

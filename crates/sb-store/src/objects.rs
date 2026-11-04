@@ -450,6 +450,7 @@ pub(crate) struct Pauses {
     pub(crate) before_reservation: Option<Arc<Barrier>>,
     /// Waited on twice: park, then release to the unlink.
     pub(crate) before_unlink: Option<Arc<Barrier>>,
+    pub(crate) backup_opened: Option<Arc<Barrier>>,
 }
 
 impl Shelf {
@@ -671,6 +672,49 @@ impl FileObjectStore {
     /// The file an object lives at.
     pub(crate) fn object_path(&self, id: &ObjectId) -> PathBuf {
         self.chain_dir(&id.sha256).join(id.sha256_hex())
+    }
+
+    /// Open a snapshot reference whose content hash is known but whose
+    /// length may not be recorded (draft and send-attempt references).
+    /// The ordinary verifying reader retains its quarantine behavior.
+    pub(crate) fn open_backup_reference(&self, sha: &str) -> Result<ObjectReader, StoreError> {
+        let id = ObjectId::from_hex(sha, 0)?;
+        let path = self.object_path(&id);
+        // Capture the move epoch before opening. The metadata and handle
+        // describe one file, even if quarantine and republish race us.
+        let removals_at_open = self.shelf.removals_of(&id);
+        let (file, metadata) = match self.fs.open_regular(&path) {
+            Ok(opened) => opened,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                return Err(StoreError::not_found(format!("object {sha}")));
+            }
+            Err(e) if e.kind() == io::ErrorKind::InvalidInput => {
+                self.shelf.quarantine(&id, &path, removals_at_open)?;
+                return Err(StoreError::corrupt(format!("object {sha} is not a file")));
+            }
+            Err(e) => {
+                return Err(StoreError::unavailable_io(
+                    format!("cannot open backup source object: {e}"),
+                    e.kind(),
+                ));
+            }
+        };
+        #[cfg(test)]
+        {
+            self.shelf.pause(|p| &p.backup_opened);
+            self.shelf.pause(|p| &p.backup_opened);
+        }
+        let id = ObjectId::from_hex(sha, metadata.len())?;
+        Ok(ObjectReader {
+            file,
+            hasher: Sha256::new(),
+            seen: 0,
+            id,
+            source: path,
+            shelf: Arc::clone(&self.shelf),
+            removals_at_open,
+            judged: false,
+        })
     }
 
     /// Publication step 1: stream into `tmp` while hashing, then flush
