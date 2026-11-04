@@ -336,13 +336,15 @@ pub struct DraftAttachmentObject {
     object: sb_engine::PublishedObject,
 }
 
-/// An attachment a new revision references: the published object and
-/// its display metadata (spec/02 `attachments_json`).
+/// A newly published object, or an unchanged reference from the base revision.
 #[derive(Debug)]
-pub struct DraftAttachment {
-    pub object: DraftAttachmentObject,
-    pub filename: String,
-    pub media_type: String,
+pub enum DraftAttachment {
+    New {
+        object: DraftAttachmentObject,
+        filename: String,
+        media_type: String,
+    },
+    Retained(DraftAttachmentRef),
 }
 
 /// One save's content (spec/07 `save_draft`'s `content`): everything
@@ -393,10 +395,24 @@ impl DraftContent {
             attachments: self
                 .attachments
                 .into_iter()
-                .map(|attachment| sb_engine::DraftAttachment {
-                    object: attachment.object.object,
-                    filename: attachment.filename,
-                    media_type: attachment.media_type,
+                .map(|attachment| match attachment {
+                    DraftAttachment::New {
+                        object,
+                        filename,
+                        media_type,
+                    } => sb_engine::DraftAttachment::New {
+                        object: object.object,
+                        filename,
+                        media_type,
+                    },
+                    DraftAttachment::Retained(reference) => {
+                        sb_engine::DraftAttachment::Retained(sb_engine::AttachmentRef {
+                            object_sha256: reference.object_sha256,
+                            filename: reference.filename,
+                            media_type: reference.media_type,
+                            size: reference.size,
+                        })
+                    }
                 })
                 .collect(),
         }
@@ -429,7 +445,9 @@ impl Core {
     /// draft's current one, in the transaction that also spends each
     /// attachment's publication reservation. `base_revision_id` must
     /// name the current revision (`None` before the first save);
-    /// anything else is `Conflict`. An unknown draft or identity is
+    /// anything else is `Conflict`. Retained attachments must exactly
+    /// match references in that base revision; new attachments spend
+    /// their publication reservations. An unknown draft or identity is
     /// `NotFound`; a `sent` or `discarded` draft refuses the same way
     /// as a wrong base. The receipt answers `{"revision_id": ...}`.
     pub async fn save_draft(

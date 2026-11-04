@@ -381,7 +381,7 @@ fn an_attachment_is_published_before_the_revision_references_it() {
     let bytes = b"attachment one".as_slice();
     let object = block_on(engine.publish_draft_attachment(Cursor::new(bytes))).unwrap();
     let mut with_file = content("with file");
-    with_file.attachments = vec![DraftAttachment {
+    with_file.attachments = vec![DraftAttachment::New {
         object,
         filename: "one.txt".to_owned(),
         media_type: "text/plain".to_owned(),
@@ -411,7 +411,7 @@ fn an_attachment_is_published_before_the_revision_references_it() {
     let (_other_scratch, other) = scratch_engine("engine-draft-foreign");
     let foreign = block_on(other.publish_draft_attachment(Cursor::new(bytes))).unwrap();
     let mut bad = content("foreign");
-    bad.attachments = vec![DraftAttachment {
+    bad.attachments = vec![DraftAttachment::New {
         object: foreign,
         filename: "foreign.txt".to_owned(),
         media_type: "text/plain".to_owned(),
@@ -638,7 +638,7 @@ fn invalid_content_names_its_field() {
     // media type is invalid before any store contact.
     let object = block_on(engine.publish_draft_attachment(Cursor::new(b"x".as_slice()))).unwrap();
     let mut bad = content("x");
-    bad.attachments = vec![DraftAttachment {
+    bad.attachments = vec![DraftAttachment::New {
         object,
         filename: String::new(),
         media_type: "text/plain".to_owned(),
@@ -781,7 +781,7 @@ fn drive_cut_sequence(engine: &Engine) {
     .unwrap();
     let object = block_on(engine.publish_draft_attachment(Cursor::new(CHILD_ATTACHMENT))).unwrap();
     let mut second = content("second");
-    second.attachments = vec![DraftAttachment {
+    second.attachments = vec![DraftAttachment::New {
         object,
         filename: "note.txt".to_owned(),
         media_type: "text/plain".to_owned(),

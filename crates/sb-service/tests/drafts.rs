@@ -580,7 +580,7 @@ fn an_attachment_is_published_before_the_revision_references_it() {
     assert_eq!(std::fs::read(&object_path).unwrap(), bytes);
 
     let mut with_file = content("with a file");
-    with_file.attachments = vec![DraftAttachment {
+    with_file.attachments = vec![DraftAttachment::New {
         object,
         filename: "one.txt".to_owned(),
         media_type: "text/plain".to_owned(),
@@ -606,6 +606,91 @@ fn an_attachment_is_published_before_the_revision_references_it() {
         std::fs::read(&object_path).ok().as_deref(),
         Some(bytes),
         "{sha} is no published object under the data root"
+    );
+    block_on(core.shutdown());
+}
+
+#[test]
+fn reopened_draft_retains_only_attachments_from_its_base() {
+    let scratch = ScratchDir::new("service-retained-attachment");
+    let core = open(&scratch);
+    let draft = create(&core, DraftSource::New);
+    let object = block_on(core.publish_draft_attachment(Cursor::new(b"file"))).unwrap();
+    let mut first = content("first");
+    first.attachments.push(DraftAttachment::New {
+        object,
+        filename: "file.txt".into(),
+        media_type: "text/plain".into(),
+    });
+    let saved = save(&core, &draft.draft_id, None, first);
+    block_on(core.shutdown());
+
+    let core = open(&scratch);
+    let revision = block_on(core.draft(&draft.draft_id))
+        .unwrap()
+        .revision
+        .unwrap();
+    let reference = revision.attachments[0].clone();
+    let mut forged = reference.clone();
+    forged.filename = "forged.txt".into();
+    let other = create(&core, DraftSource::New);
+    let object = block_on(core.publish_draft_attachment(Cursor::new(b"other"))).unwrap();
+    let mut other_content = content("other");
+    other_content.attachments.push(DraftAttachment::New {
+        object,
+        filename: "other.txt".into(),
+        media_type: "text/plain".into(),
+    });
+    save(&core, &other.draft_id, None, other_content);
+    let unrelated = block_on(core.draft(&other.draft_id))
+        .unwrap()
+        .revision
+        .unwrap()
+        .attachments
+        .remove(0);
+    for invalid in [
+        forged,
+        unrelated,
+        DraftAttachmentRef {
+            object_sha256: "0".repeat(64),
+            ..reference.clone()
+        },
+    ] {
+        let mut attempted = content("invalid");
+        attempted
+            .attachments
+            .push(DraftAttachment::Retained(invalid));
+        let key = core.new_idempotency_key();
+        assert!(matches!(
+            block_on(core.save_draft(&key, &draft.draft_id, Some(&saved.revision_id), attempted)),
+            Err(CoreError::Conflict { .. })
+        ));
+    }
+    let mut next = content("next");
+    next.attachments
+        .push(DraftAttachment::Retained(reference.clone()));
+    let retained = save(&core, &draft.draft_id, Some(&saved.revision_id), next);
+    assert_eq!(
+        block_on(core.draft(&draft.draft_id))
+            .unwrap()
+            .revision
+            .unwrap()
+            .attachments,
+        vec![reference]
+    );
+    save(
+        &core,
+        &draft.draft_id,
+        Some(&retained.revision_id),
+        content("removed"),
+    );
+    assert!(
+        block_on(core.draft(&draft.draft_id))
+            .unwrap()
+            .revision
+            .unwrap()
+            .attachments
+            .is_empty()
     );
     block_on(core.shutdown());
 }
