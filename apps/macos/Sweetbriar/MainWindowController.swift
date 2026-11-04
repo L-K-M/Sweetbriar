@@ -33,7 +33,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     private var closed = false
 
 
-    init(session: CoreSession, appearance: SharedAppearance = SharedAppearance()) {
+    init(session: CoreSession, appearance: SharedAppearance) {
         self.session = session
         self.appearance = appearance
         let window = NSWindow(
