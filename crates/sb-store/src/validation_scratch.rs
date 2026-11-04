@@ -15,11 +15,25 @@ pub(crate) struct ScratchOwner {
     setup: Mutex<()>,
 }
 
-/// One of the two reusable validation tapes.
+/// One of the two reusable validation sort tapes.
 #[derive(Clone, Copy)]
 pub enum ValidationTape {
+    /// First reusable sorting tape.
     A,
+    /// Second reusable sorting tape.
     B,
+}
+
+/// Fixed proof files which can coexist with both reusable sort tapes.
+/// They are disposable workspace, not durable evidence.
+#[derive(Clone, Copy)]
+pub enum ValidationFile {
+    /// Fixed-size descriptors in grouped order.
+    Descriptors,
+    /// Unsorted file-ordinal range rows.
+    IndexSpool,
+    /// Dense file-ordinal lookup slots.
+    Lookup,
 }
 
 /// A private disposable workspace borrowed from an open store.
@@ -103,6 +117,13 @@ impl ValidationScratch<'_> {
             ValidationTape::B => "b",
         })
     }
+    fn file_path(&self, file: ValidationFile) -> PathBuf {
+        self.dir.join(match file {
+            ValidationFile::Descriptors => "descriptors",
+            ValidationFile::IndexSpool => "index-spool",
+            ValidationFile::Lookup => "lookup",
+        })
+    }
     /// Create an empty tape exclusively. The writer exposes checked writes and sync.
     pub fn create(&self, tape: ValidationTape) -> Result<Box<dyn WriteFile>, StoreError> {
         let path = self.path(tape);
@@ -121,11 +142,33 @@ impl ValidationScratch<'_> {
     }
     /// Remove a tape, treating an absent tape as already removed.
     pub fn remove(&self, tape: ValidationTape) -> Result<(), StoreError> {
-        let path = self.path(tape);
-        match self.owner.fs.remove(&path) {
+        self.remove_path(&self.path(tape))
+    }
+    /// Create a fixed proof file exclusively within this lease.
+    pub fn create_file(&self, file: ValidationFile) -> Result<Box<dyn WriteFile>, StoreError> {
+        let path = self.file_path(file);
+        self.owner
+            .fs
+            .create(&path)
+            .map_err(|e| error("create file", &path, e))
+    }
+    /// Open a fixed proof file for reading and seeking, without following links.
+    pub fn open_file(&self, file: ValidationFile) -> Result<Box<dyn ReadFile>, StoreError> {
+        let path = self.file_path(file);
+        self.owner
+            .fs
+            .open_no_follow(&path)
+            .map_err(|e| error("open file", &path, e))
+    }
+    /// Remove a proof file, treating an absent file as already removed.
+    pub fn remove_file(&self, file: ValidationFile) -> Result<(), StoreError> {
+        self.remove_path(&self.file_path(file))
+    }
+    fn remove_path(&self, path: &Path) -> Result<(), StoreError> {
+        match self.owner.fs.remove(path) {
             Ok(()) => Ok(()),
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
-            Err(e) => Err(error("remove tape", &path, e)),
+            Err(e) => Err(error("remove file", path, e)),
         }
     }
     /// Remove the workspace explicitly, reporting cleanup failure.
@@ -179,6 +222,116 @@ mod tests {
         let dir = b.dir.clone();
         drop(b);
         assert!(!dir.exists());
+    }
+
+    #[test]
+    fn proof_files_coexist_with_sort_tapes_and_are_lease_owned() {
+        let tmp = ScratchDir::new("validation-proof-files");
+        let owner = owner(tmp.path(), real_fs());
+        let lease = owner.lease().unwrap();
+        let other = owner.lease().unwrap();
+        for tape in [ValidationTape::A, ValidationTape::B] {
+            lease.create(tape).unwrap();
+        }
+        let files = [
+            ValidationFile::Descriptors,
+            ValidationFile::IndexSpool,
+            ValidationFile::Lookup,
+        ];
+        for (index, file) in files.iter().copied().enumerate() {
+            let mut writer = lease.create_file(file).unwrap();
+            writer.write_all(&[index as u8]).unwrap();
+            writer.sync_all().unwrap();
+            assert!(lease.create_file(file).is_err());
+            assert!(other.open_file(file).is_err());
+        }
+        for (index, file) in files.iter().copied().enumerate() {
+            let mut bytes = [0];
+            lease
+                .open_file(file)
+                .unwrap()
+                .read_exact(&mut bytes)
+                .unwrap();
+            assert_eq!(bytes, [index as u8]);
+        }
+        lease.remove(ValidationTape::A).unwrap();
+        lease.remove(ValidationTape::B).unwrap();
+        // Reusing the sorting tapes must not disturb either proof output.
+        lease.create(ValidationTape::A).unwrap();
+        lease.create(ValidationTape::B).unwrap();
+        for file in [ValidationFile::Descriptors, ValidationFile::Lookup] {
+            assert!(lease.open_file(file).is_ok());
+        }
+        let mut lookup = lease.open_file(ValidationFile::Lookup).unwrap();
+        lookup.seek(SeekFrom::Start(0)).unwrap();
+        let mut slot = [0];
+        lookup.read_exact(&mut slot).unwrap();
+        assert_eq!(slot, [2]);
+        drop(lookup);
+        lease.remove_file(ValidationFile::IndexSpool).unwrap();
+        lease.remove_file(ValidationFile::IndexSpool).unwrap();
+        assert!(lease.open_file(ValidationFile::IndexSpool).is_err());
+        let dir = lease.dir.clone();
+        lease.finish().unwrap();
+        assert!(!dir.exists());
+        other.finish().unwrap();
+    }
+
+    #[test]
+    fn interrupted_proof_workspace_drop_removes_every_file() {
+        let tmp = ScratchDir::new("validation-proof-drop");
+        let owner = owner(tmp.path(), real_fs());
+        let lease = owner.lease().unwrap();
+        for tape in [ValidationTape::A, ValidationTape::B] {
+            lease.create(tape).unwrap().write_all(b"partial").unwrap();
+        }
+        for file in [
+            ValidationFile::Descriptors,
+            ValidationFile::IndexSpool,
+            ValidationFile::Lookup,
+        ] {
+            lease
+                .create_file(file)
+                .unwrap()
+                .write_all(b"partial")
+                .unwrap();
+        }
+        let dir = lease.dir.clone();
+        drop(lease);
+        assert!(!dir.exists());
+    }
+
+    #[test]
+    fn proof_file_operations_propagate_faults() {
+        for op in [FsOp::Create, FsOp::Open, FsOp::Remove, FsOp::SyncFile] {
+            let tmp = ScratchDir::new("validation-proof-fault");
+            let fs = Arc::new(FaultFs::new(real_fs(), op, 1, FaultKind::Eio));
+            let owner = owner(tmp.path(), fs);
+            let lease = owner.lease().unwrap();
+            let file = ValidationFile::Descriptors;
+            match op {
+                FsOp::Create => assert!(lease.create_file(file).is_err()),
+                FsOp::Open => assert!(lease.open_file(file).is_err()),
+                FsOp::Remove => assert!(lease.remove_file(file).is_err()),
+                FsOp::SyncFile => assert!(lease.create_file(file).unwrap().sync_all().is_err()),
+                _ => unreachable!(),
+            }
+            lease.finish().unwrap();
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn proof_file_open_refuses_symlinks() {
+        let tmp = ScratchDir::new("validation-proof-symlink");
+        let owner = owner(tmp.path(), real_fs());
+        let lease = owner.lease().unwrap();
+        let target = tmp.path().join("target");
+        std::fs::write(&target, b"outside").unwrap();
+        std::os::unix::fs::symlink(&target, lease.file_path(ValidationFile::Lookup)).unwrap();
+        assert!(lease.open_file(ValidationFile::Lookup).is_err());
+        lease.finish().unwrap();
+        assert_eq!(std::fs::read(target).unwrap(), b"outside");
     }
 
     #[test]
