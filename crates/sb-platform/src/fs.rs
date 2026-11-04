@@ -6,11 +6,12 @@ use std::fs::{File, OpenOptions, TryLockError};
 use std::io;
 use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
 
 use sb_types::fs::{
-    ConfinedDir, FileKind, Fs, Lease, Location, LockError, Metadata, ReadFile, WriteFile,
+    ConfinedDir, DirectoryIdentity, FileKind, Fs, Lease, Location, LockError, Metadata, ReadFile,
+    WriteFile,
 };
 
 use crate::location;
@@ -41,7 +42,138 @@ fn open_child(parent: &File, name: &std::ffi::OsStr, directory: bool) -> io::Res
     Ok(unsafe { File::from_raw_fd(fd) })
 }
 
+fn child_name(path: &Path) -> io::Result<std::ffi::CString> {
+    let mut parts = path.components();
+    let name = match (parts.next(), parts.next()) {
+        (Some(Component::Normal(name)), None) => name,
+        _ => return Err(io::ErrorKind::InvalidInput.into()),
+    };
+    std::ffi::CString::new(name.as_bytes()).map_err(|_| io::ErrorKind::InvalidInput.into())
+}
+
+#[cfg(target_os = "macos")]
+const OWNER_ATTRIBUTE: &std::ffi::CStr = c"com.sweetbriar.verifier-owner";
+#[cfg(target_os = "linux")]
+const OWNER_ATTRIBUTE: &std::ffi::CStr = c"user.sweetbriar.verifier-owner";
+
 impl ConfinedDir for RealConfinedDir {
+    fn set_ownership(&self, bytes: &[u8]) -> io::Result<()> {
+        if bytes.is_empty() || bytes.len() > 36 {
+            return Err(io::ErrorKind::InvalidInput.into());
+        }
+        // SAFETY: the descriptor, attribute name and buffer stay live for the call.
+        #[cfg(target_os = "macos")]
+        let rc = unsafe {
+            libc::fsetxattr(
+                self.0.as_raw_fd(),
+                OWNER_ATTRIBUTE.as_ptr(),
+                bytes.as_ptr().cast(),
+                bytes.len(),
+                0,
+                libc::XATTR_CREATE,
+            )
+        };
+        #[cfg(target_os = "linux")]
+        let rc = unsafe {
+            libc::fsetxattr(
+                self.0.as_raw_fd(),
+                OWNER_ATTRIBUTE.as_ptr(),
+                bytes.as_ptr().cast(),
+                bytes.len(),
+                libc::XATTR_CREATE,
+            )
+        };
+        if rc != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+    fn ownership(&self) -> io::Result<Vec<u8>> {
+        let mut bytes = [0u8; 36];
+        // SAFETY: the descriptor, attribute name and buffer stay live for the call.
+        #[cfg(target_os = "macos")]
+        let n = unsafe {
+            libc::fgetxattr(
+                self.0.as_raw_fd(),
+                OWNER_ATTRIBUTE.as_ptr(),
+                bytes.as_mut_ptr().cast(),
+                bytes.len(),
+                0,
+                0,
+            )
+        };
+        #[cfg(target_os = "linux")]
+        let n = unsafe {
+            libc::fgetxattr(
+                self.0.as_raw_fd(),
+                OWNER_ATTRIBUTE.as_ptr(),
+                bytes.as_mut_ptr().cast(),
+                bytes.len(),
+            )
+        };
+        if n < 0 {
+            let error = io::Error::last_os_error();
+            #[cfg(target_os = "macos")]
+            let missing = error.raw_os_error() == Some(libc::ENOATTR);
+            #[cfg(target_os = "linux")]
+            let missing = error.raw_os_error() == Some(libc::ENODATA);
+            return Err(if missing {
+                io::ErrorKind::NotFound.into()
+            } else {
+                error
+            });
+        }
+        Ok(bytes[..n as usize].to_vec())
+    }
+    fn identity(&self) -> io::Result<DirectoryIdentity> {
+        let meta = self.0.metadata()?;
+        Ok(DirectoryIdentity {
+            device: meta.dev(),
+            inode: meta.ino(),
+        })
+    }
+    fn open_dir(&self, name: &Path) -> io::Result<Box<dyn ConfinedDir>> {
+        child_name(name)?;
+        Ok(Box::new(RealConfinedDir(open_child(
+            &self.0,
+            name.as_os_str(),
+            true,
+        )?)))
+    }
+    fn create_private_dir(&self, name: &Path) -> io::Result<()> {
+        let name = child_name(name)?;
+        // SAFETY: both arguments designate live objects; mkdirat retains neither.
+        if unsafe { libc::mkdirat(self.0.as_raw_fd(), name.as_ptr(), 0o700) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+    fn create(&self, name: &Path) -> io::Result<Box<dyn WriteFile>> {
+        let name = child_name(name)?;
+        // SAFETY: the live directory descriptor and C string remain valid.
+        let fd = unsafe {
+            libc::openat(
+                self.0.as_raw_fd(),
+                name.as_ptr(),
+                libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                0o600,
+            )
+        };
+        if fd < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: openat returned a fresh owned descriptor.
+        Ok(Box::new(RealWriteFile(unsafe { File::from_raw_fd(fd) })))
+    }
+    fn remove_file(&self, name: &Path) -> io::Result<()> {
+        self.unlink(name, 0)
+    }
+    fn remove_empty_dir(&self, name: &Path) -> io::Result<()> {
+        self.unlink(name, libc::AT_REMOVEDIR)
+    }
+    fn sync(&self) -> io::Result<()> {
+        flush_durably(&self.0)
+    }
     fn open_regular(&self, relative: &Path) -> io::Result<(Box<dyn ReadFile>, Metadata)> {
         let parts: Vec<_> = relative
             .components()
@@ -61,6 +193,17 @@ impl ConfinedDir for RealConfinedDir {
             return Err(not_regular(relative));
         }
         Ok((Box::new(file), Metadata::new(FileKind::File, md.len())))
+    }
+}
+
+impl RealConfinedDir {
+    fn unlink(&self, name: &Path, flags: libc::c_int) -> io::Result<()> {
+        let name = child_name(name)?;
+        // SAFETY: the directory descriptor and the NUL-terminated name are live.
+        if unsafe { libc::unlinkat(self.0.as_raw_fd(), name.as_ptr(), flags) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
     }
 }
 

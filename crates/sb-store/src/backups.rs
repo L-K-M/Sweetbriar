@@ -4,6 +4,16 @@
 //! pinned objects, flushes the generation and writes the manifest last,
 //! then releases pins and marks the generation complete.
 
+mod scratch;
+
+pub(crate) fn recover_scratch(
+    conn: &rusqlite::Connection,
+    fs: &dyn sb_types::fs::Fs,
+    root: &std::path::Path,
+) -> Result<(), crate::StoreError> {
+    scratch::recover(conn, fs, root)
+}
+
 use std::collections::BTreeSet;
 use std::ffi::c_int;
 use std::io;
