@@ -8,6 +8,53 @@ use sha2::{Digest, Sha256};
 use super::super::offset_sort::{SortEntry, SortKind};
 use super::{BundleFormat, FileTable, OffsetSort, Parser, invalid, name_chunk};
 
+pub(in crate::import) fn read_descriptor(
+    reader: &mut (impl Read + Seek),
+    offset: u64,
+) -> io::Result<super::super::proof::ManifestDescriptor> {
+    reader.seek(SeekFrom::Start(offset))?;
+    let mut p = Parser {
+        reader,
+        next: None,
+        capture: None,
+        position: offset,
+    };
+    let mut sha = None;
+    let mut bytes = None;
+    let mut record_offset = 0;
+    let mut encoded_bytes = 0;
+    let mut framing_lf_added = false;
+    p.object(|p, key| {
+        match key {
+            "acquisition" => {
+                p.object(|p, key| {
+                    match key {
+                        "sha256" => sha = super::super::sha256_from_hex(&p.hash()?),
+                        "bytes" => bytes = Some(p.integer::<u64>()?),
+                        _ => p.value(1)?,
+                    }
+                    Ok(())
+                })?;
+            }
+            "record_offset" => record_offset = p.integer()?,
+            "encoded_bytes" => encoded_bytes = p.integer()?,
+            "framing_lf_added" => {
+                framing_lf_added = p.peek()? == Some(b't');
+                p.boolean()?;
+            }
+            _ => p.value(1)?,
+        }
+        Ok(())
+    })?;
+    Ok(super::super::proof::ManifestDescriptor {
+        sha256: sha.ok_or_else(invalid)?,
+        original_bytes: bytes.ok_or_else(invalid)?,
+        record_offset,
+        encoded_bytes,
+        framing_lf_added,
+    })
+}
+
 enum Identity {
     Account,
     Mailbox,
