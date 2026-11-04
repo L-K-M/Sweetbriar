@@ -409,6 +409,9 @@ fn record_validation(
 ) -> Result<(), StoreError> {
     if let Err(error) = result {
         *slot.lock().expect("draft validation lock poisoned") = Some(error);
+        // The writer returns a closure error unchanged and never retries it.
+        // This private marker only rolls back; `finish_validation` recovers
+        // the caller-facing error from `slot` before it can escape.
         return Err(StoreError::internal(VALIDATION_ROLLBACK));
     }
     Ok(())
@@ -418,14 +421,11 @@ fn finish_validation(
     result: Result<Receipt, StoreError>,
     slot: &Mutex<Option<EngineError>>,
 ) -> Result<Receipt, EngineError> {
-    match result {
-        Err(StoreError::Internal { ref detail }) if detail == VALIDATION_ROLLBACK => {
-            match slot.lock().expect("draft validation lock poisoned").take() {
-                Some(error) => Err(error),
-                None => Err(result.unwrap_err().into()),
-            }
-        }
-        other => other.map_err(Into::into),
+    let recorded = slot.lock().expect("draft validation lock poisoned").take();
+    match (result, recorded) {
+        (Ok(receipt), None) => Ok(receipt),
+        (Err(error), None) => Err(error.into()),
+        (_, Some(error)) => Err(error),
     }
 }
 

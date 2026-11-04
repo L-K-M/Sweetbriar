@@ -701,6 +701,8 @@ fn malformed_stored_data_is_corrupt() {
         "receipt-nonstring",
         "receipt-empty-id",
     ] {
+        // The empty id is invalid, but replay precedence returns the stored
+        // receipt first, so its malformed result remains visible as Corrupt.
         match block_on(engine.discard_draft(key, "")) {
             Err(EngineError::Corrupt { .. }) => {}
             other => panic!("a malformed stored receipt must be Corrupt: {other:?}"),
