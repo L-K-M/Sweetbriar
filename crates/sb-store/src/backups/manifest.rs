@@ -64,7 +64,13 @@ pub(super) fn parse(
             2 => store = Some(p.uuid()?),
             4 => generation = Some(p.uuid()?),
             8 => p.string(|_| Ok(()))?,
-            16 => schema = Some(p.signed()?),
+            16 => {
+                let version = p.signed()?;
+                if version <= 0 {
+                    return Err(invalid());
+                }
+                schema = Some(version);
+            }
             32 => created = Some(p.signed()?),
             64 => database = Some(p.entry(true)?),
             128 => p.array(&mut sink)?,
@@ -264,6 +270,9 @@ impl<R: Read, C: FnMut() -> io::Result<()>> Parser<'_, R, C> {
         if self.fixed_string(&mut text)? != 36 {
             return Err(invalid());
         }
+        if text.iter().any(|c| c.is_ascii_uppercase()) {
+            return Err(invalid());
+        }
         let mut out = [0; 16];
         let mut pos = 0;
         for (i, slot) in out.iter_mut().enumerate() {
@@ -385,6 +394,39 @@ mod tests {
 
     fn parse_bytes(bytes: &[u8]) -> io::Result<Manifest> {
         parse(bytes, || Ok(()), |_| Ok(()))
+    }
+
+    #[test]
+    fn rejects_uppercase_uuid_in_each_field() {
+        let doc = document();
+        for field in ["store_uuid", "generation_id"] {
+            let original = format!(r#""{field}":"12345678-1234-4234-8234-123456789abc""#);
+            let uppercase = format!(r#""{field}":"12345678-1234-4234-8234-123456789aBc""#);
+            assert!(
+                parse_bytes(doc.replace(&original, &uppercase).as_bytes()).is_err(),
+                "{field}"
+            );
+        }
+    }
+
+    #[test]
+    fn schema_version_must_be_positive() {
+        let doc = document();
+        for version in ["0", "-1", "-9223372036854775808"] {
+            let changed = doc.replace(
+                r#""schema_version":1"#,
+                &format!(r#""schema_version":{version}"#),
+            );
+            assert!(parse_bytes(changed.as_bytes()).is_err(), "{version}");
+        }
+        let future = doc.replace(
+            r#""schema_version":1"#,
+            r#""schema_version":9223372036854775807"#,
+        );
+        assert_eq!(
+            parse_bytes(future.as_bytes()).unwrap().schema_version,
+            i64::MAX
+        );
     }
 
     #[test]
