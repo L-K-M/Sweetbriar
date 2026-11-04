@@ -46,6 +46,7 @@ struct ListAppearanceTests {
                                                    listSource: TwoFlaggedRows(), clock: ImmediateClock())
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 300),
                               styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
         window.contentViewController = controller
         defer { window.close() }
         controller.show(.flagged)
@@ -325,6 +326,7 @@ struct ListAppearanceTests {
                                        appearance: appearance, accountLabel: { _ in "Work" })
         list.frame = NSRect(x: 0, y: 0, width: 300, height: 100)
         let window = NSWindow(contentRect: list.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
         window.contentView = list
         defer { window.close() }
         try await model.open()
@@ -379,6 +381,7 @@ struct ListAppearanceTests {
                                         appearance: appearance, accountLabel: { _ in "Work" })
         list.frame = NSRect(x: 0, y: 0, width: 300, height: 100)
         let window = NSWindow(contentRect: list.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
         window.contentView = list
         defer { window.close() }
         try await model.open()
