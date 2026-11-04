@@ -47,6 +47,8 @@ pub enum FaultKind {
     /// space runs out mid-block. Only meaningful on [`FsOp::Write`];
     /// everywhere else it behaves like [`FaultKind::Eio`].
     ShortWrite,
+    /// A recursive removal deletes some entries, then fails with EIO.
+    PartialRemove,
     /// `ENOSPC`: the filesystem is full.
     NoSpace,
     /// `EIO`: the storage layer failed.
@@ -135,7 +137,9 @@ fn fault_error(kind: FaultKind) -> io::Error {
         FaultKind::NoSpace => io::Error::from_raw_os_error(libc::ENOSPC),
         // `ShortWrite` already wrote its half; the error that ends the
         // write is the same one a failing device would give.
-        FaultKind::Eio | FaultKind::ShortWrite => io::Error::from_raw_os_error(libc::EIO),
+        FaultKind::Eio | FaultKind::ShortWrite | FaultKind::PartialRemove => {
+            io::Error::from_raw_os_error(libc::EIO)
+        }
         FaultKind::Kind(kind) => io::Error::from(kind),
     }
 }
@@ -244,6 +248,15 @@ impl Fs for FaultFs {
 
     fn remove_dir_all(&self, path: &Path) -> io::Result<()> {
         if let Some(kind) = self.plan.fire(FsOp::RemoveDirAll) {
+            if matches!(kind, FaultKind::PartialRemove) {
+                for name in [".sweetbriar-owner", "state.sqlite"] {
+                    match self.inner.remove(&path.join(name)) {
+                        Ok(()) => {}
+                        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                        Err(e) => return Err(e),
+                    }
+                }
+            }
             return Err(fault_error(kind));
         }
         self.inner.remove_dir_all(path)
