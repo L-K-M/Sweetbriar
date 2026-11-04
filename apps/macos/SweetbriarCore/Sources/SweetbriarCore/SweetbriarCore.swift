@@ -984,6 +984,26 @@ public protocol CoreProtocol: AnyObject, Sendable {
     func subscribeAppearance(token: CancelToken, generation: UInt64) async throws  -> AppearanceSubscription
     
     /**
+     * `create_draft(context)` (spec/07 "Commands"): a new `editing`
+     * draft under an idempotency key the shell made (`UUID()` in
+     * Swift) — a repeated key returns the stored receipt and its
+     * draft id. A reply, reply-all or forward context's source
+     * occurrence must exist (`NotFound`); a forward resolves to the
+     * logical message. Like every command it honours the token only
+     * until it holds the core; once begun it runs to completion.
+     */
+    func createDraft(token: CancelToken, idempotencyKey: String, context: DraftSource) async throws  -> DraftCreated
+    
+    /**
+     * `discard_draft(id)` (spec/07 "Commands", spec/05): refuse
+     * `Conflict` while a live attempt exists or the draft already
+     * sits at a terminal state; otherwise mark it `discarded`,
+     * keeping every revision. The receipt answers
+     * `{"draft_id": ...}`.
+     */
+    func discardDraft(token: CancelToken, idempotencyKey: String, draftId: String) async throws  -> Receipt
+    
+    /**
      * Load a draft and its current revision.
      */
     func draft(token: CancelToken, draftId: String) async throws  -> Draft
@@ -1367,6 +1387,54 @@ open func subscribeAppearance(token: CancelToken, generation: UInt64)async throw
             completeFunc: ffi_sb_ffi_rust_future_complete_u64,
             freeFunc: ffi_sb_ffi_rust_future_free_u64,
             liftFunc: FfiConverterTypeAppearanceSubscription_lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * `create_draft(context)` (spec/07 "Commands"): a new `editing`
+     * draft under an idempotency key the shell made (`UUID()` in
+     * Swift) — a repeated key returns the stored receipt and its
+     * draft id. A reply, reply-all or forward context's source
+     * occurrence must exist (`NotFound`); a forward resolves to the
+     * logical message. Like every command it honours the token only
+     * until it holds the core; once begun it runs to completion.
+     */
+open func createDraft(token: CancelToken, idempotencyKey: String, context: DraftSource)async throws  -> DraftCreated  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_create_draft(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterString.lower(idempotencyKey),FfiConverterTypeDraftSource_lower(context)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeDraftCreated_lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * `discard_draft(id)` (spec/07 "Commands", spec/05): refuse
+     * `Conflict` while a live attempt exists or the draft already
+     * sits at a terminal state; otherwise mark it `discarded`,
+     * keeping every revision. The receipt answers
+     * `{"draft_id": ...}`.
+     */
+open func discardDraft(token: CancelToken, idempotencyKey: String, draftId: String)async throws  -> Receipt  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_discard_draft(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterString.lower(idempotencyKey),FfiConverterString.lower(draftId)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeReceipt_lift,
             errorHandler: FfiConverterTypeCoreError_lift
         )
 }
@@ -3034,6 +3102,64 @@ public func FfiConverterTypeDraftAttachmentRef_lift(_ buf: RustBuffer) throws ->
 #endif
 public func FfiConverterTypeDraftAttachmentRef_lower(_ value: DraftAttachmentRef) -> RustBuffer {
     return FfiConverterTypeDraftAttachmentRef.lower(value)
+}
+
+
+/**
+ * What `create_draft` answers: its receipt and the draft id the
+ * receipt names — the stored id on a replayed key.
+ */
+public struct DraftCreated: Equatable, Hashable {
+    public var receipt: Receipt
+    public var draftId: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(receipt: Receipt, draftId: String) {
+        self.receipt = receipt
+        self.draftId = draftId
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension DraftCreated: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeDraftCreated: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> DraftCreated {
+        return
+            try DraftCreated(
+                receipt: FfiConverterTypeReceipt.read(from: &buf), 
+                draftId: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: DraftCreated, into buf: inout [UInt8]) {
+        FfiConverterTypeReceipt.write(value.receipt, into: &buf)
+        FfiConverterString.write(value.draftId, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeDraftCreated_lift(_ buf: RustBuffer) throws -> DraftCreated {
+    return try FfiConverterTypeDraftCreated.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeDraftCreated_lower(_ value: DraftCreated) -> RustBuffer {
+    return FfiConverterTypeDraftCreated.lower(value)
 }
 
 
@@ -6431,6 +6557,100 @@ public func FfiConverterTypeCount_lower(_ value: Count) -> RustBuffer {
 
 
 
+/**
+ * `create_draft`'s `context` (spec/07): `New`, or the source
+ * occurrence a reply, reply-all or forward answers. The service
+ * resolves a forward to its logical message.
+ */
+
+public enum DraftSource: Equatable, Hashable {
+    
+    case new
+    case reply(occurrenceId: Int64
+    )
+    case replyAll(occurrenceId: Int64
+    )
+    case forward(occurrenceId: Int64
+    )
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension DraftSource: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeDraftSource: FfiConverterRustBuffer {
+    typealias SwiftType = DraftSource
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> DraftSource {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .new
+        
+        case 2: return .reply(occurrenceId: try FfiConverterInt64.read(from: &buf)
+        )
+        
+        case 3: return .replyAll(occurrenceId: try FfiConverterInt64.read(from: &buf)
+        )
+        
+        case 4: return .forward(occurrenceId: try FfiConverterInt64.read(from: &buf)
+        )
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: DraftSource, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .new:
+            writeInt(&buf, Int32(1))
+        
+        
+        case let .reply(occurrenceId):
+            writeInt(&buf, Int32(2))
+            FfiConverterInt64.write(occurrenceId, into: &buf)
+            
+        
+        case let .replyAll(occurrenceId):
+            writeInt(&buf, Int32(3))
+            FfiConverterInt64.write(occurrenceId, into: &buf)
+            
+        
+        case let .forward(occurrenceId):
+            writeInt(&buf, Int32(4))
+            FfiConverterInt64.write(occurrenceId, into: &buf)
+            
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeDraftSource_lift(_ buf: RustBuffer) throws -> DraftSource {
+    return try FfiConverterTypeDraftSource.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeDraftSource_lower(_ value: DraftSource) -> RustBuffer {
+    return FfiConverterTypeDraftSource.lower(value)
+}
+
+
+
 
 public enum DraftState: Equatable, Hashable {
     
@@ -8823,6 +9043,12 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_core_subscribe_appearance() != 19997) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_create_draft() != 12088) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_discard_draft() != 49406) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_core_draft() != 55256) {
