@@ -107,6 +107,102 @@ struct AppearanceSettingsTests {
         #expect(await source.calls.count == 1)
     }
 
+    @Test func failedInvalidationCanRecoverWithoutLosingLaterUpdates() async throws {
+        let source = SettingsAppearanceSource()
+        var shared: SharedAppearance? = SharedAppearance()
+        let appearance = try #require(shared?.model(source: source))
+        for _ in 0..<200 where !(await source.waiting) { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(appearance.appearance?.generation == 0)
+        await source.failReads(.unavailable(reason: "disk read failed"))
+        await source.invalidate()
+        for _ in 0..<200 where appearance.lastError == nil { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(appearance.appearance?.generation == 0)
+        #expect(appearance.lastError?.localizedDescription.contains("disk read failed") == true)
+        await source.failReads(nil)
+        await appearance.refresh()
+        for _ in 0..<200 where await source.subscriptions < 2 { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(await source.subscriptions == 2)
+        #expect(appearance.lastError == nil)
+        #expect(appearance.appearance?.generation == 1)
+        async let firstRetry: Void = appearance.refresh()
+        async let secondRetry: Void = appearance.refresh()
+        _ = await (firstRetry, secondRetry)
+        #expect(await source.subscriptions == 2)
+        for _ in 0..<200 where !(await source.waiting) { try await Task.sleep(for: .milliseconds(10)) }
+        await source.invalidate()
+        for _ in 0..<200 where appearance.appearance?.generation != 2 { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(appearance.appearance?.generation == 2)
+        for _ in 0..<200 where !(await source.waiting) { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(await source.waiting)
+        shared = nil
+        for _ in 0..<200 where await source.cancelledWaits == 0 { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(await source.cancelledWaits == 1)
+    }
+
+    @Test func subscriptionFailureRemainsVisibleUntilResubscribed() async throws {
+        let source = SettingsAppearanceSource()
+        var shared: SharedAppearance? = SharedAppearance()
+        let appearance = try #require(shared?.model(source: source))
+        for _ in 0..<200 where !(await source.waiting) { try await Task.sleep(for: .milliseconds(10)) }
+        await source.failSubscriptions(true)
+        await source.failPull()
+        for _ in 0..<200 where appearance.lastError == nil { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(appearance.appearance?.generation == 0)
+        await appearance.refresh()
+        for _ in 0..<200 where await source.subscriptions < 2 { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(appearance.lastError?.localizedDescription.contains("subscription") == true)
+        await source.failSubscriptions(false)
+        await appearance.refresh()
+        for _ in 0..<200 where await source.subscriptions < 3 { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(await source.subscriptions == 3)
+        for _ in 0..<200 where appearance.lastError != nil { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(appearance.lastError == nil)
+        shared = nil
+    }
+
+    @Test func unexpectedSubscriptionCancellationRemainsRecoverable() async throws {
+        let source = SettingsAppearanceSource()
+        var shared: SharedAppearance? = SharedAppearance()
+        let appearance = try #require(shared?.model(source: source))
+        for _ in 0..<200 where !(await source.waiting) { try await Task.sleep(for: .milliseconds(10)) }
+        await source.cancelPull()
+        for _ in 0..<200 where appearance.lastError == nil { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(appearance.lastError?.localizedDescription.contains("interrupted") == true)
+        await appearance.refresh()
+        for _ in 0..<200 where appearance.lastError != nil { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(await source.subscriptions == 2)
+        #expect(appearance.lastError == nil)
+        shared = nil
+    }
+
+    @Test func cancellingWhileFailedDoesNotStartAReplacementFollower() async throws {
+        let source = SettingsAppearanceSource()
+        let appearance = AppearanceModel(source: source)
+        let follow = Task { await appearance.follow() }
+        for _ in 0..<200 where !(await source.waiting) { try await Task.sleep(for: .milliseconds(10)) }
+        await source.failReads(.unavailable(reason: "disk"))
+        await source.invalidate()
+        for _ in 0..<200 where appearance.lastError == nil { try await Task.sleep(for: .milliseconds(10)) }
+        follow.cancel()
+        await follow.value
+        await source.failReads(nil)
+        await appearance.refresh()
+        #expect(await source.subscriptions == 1)
+    }
+
+    @Test func failedConflictRefreshReportsReadFailureAlongsideCachedSnapshot() async {
+        let source = SettingsAppearanceSource()
+        let appearance = AppearanceModel(source: source)
+        await appearance.refresh()
+        await source.setFailure(.conflict(detail: "stale"))
+        await source.failReads(.unavailable(reason: "disk read failed"))
+        let model = AppearanceSettingsModel(appearance: appearance)
+        await model.choose(.paletteV1(slot: 1), account: settingsAccount)
+        #expect(appearance.appearance?.accounts.first?.revision == 3)
+        #expect(appearance.lastError?.localizedDescription.contains("disk read failed") == true)
+        #expect(model.appearanceFailure?.contains("disk read failed") == true)
+    }
+
     @Test func failureDoesNotChangeCommittedAppearance() async {
         let source = SettingsAppearanceSource()
         await source.setFailure(.unavailable(reason: "disk"))
@@ -130,6 +226,25 @@ private actor SettingsAppearanceSource: AppearanceSource, AppearanceEventSource 
     private(set) var calls: [Call] = []
     private(set) var reads = 0
     private var failure: CoreFailure?
+    private var readFailure: CoreFailure?
+    private var subscriptionFailure = false
+    func failSubscriptions(_ value: Bool) { subscriptionFailure = value }
+    func cancelPull() {
+        continuation?.resume(throwing: CancellationError())
+        continuation = nil
+    }
+    func failPull() {
+        continuation?.resume(throwing: CoreFailure.unavailable(reason: "pull failed"))
+        continuation = nil
+    }
+    private(set) var cancelledWaits = 0
+    func failReads(_ value: CoreFailure?) { readFailure = value }
+    func invalidate() {
+        generation += 1
+        account.revision += 1
+        continuation?.resume(returning: .invalidated(generation: generation))
+        continuation = nil
+    }
     private var cancelOnCommit = false
     private var holdWrite = false
     private var writeContinuation: CheckedContinuation<Void, Never>?
@@ -144,9 +259,14 @@ private actor SettingsAppearanceSource: AppearanceSource, AppearanceEventSource 
     func cancelAfterCommit() { cancelOnCommit = true }
     func externalChange() { account.revision += 1; generation += 1 }
     func setFailure(_ value: CoreFailure) { failure = value }
-    func appearance() async throws -> Appearance { reads += 1; return .init(generation: generation, accounts: [account], identities: []) }
+    func appearance() async throws -> Appearance {
+        reads += 1
+        if let readFailure { throw readFailure }
+        return .init(generation: generation, accounts: [account], identities: [])
+    }
     func appearanceEvents(generation: UInt64) async throws -> any AppearanceEventSource {
         subscriptions += 1
+        if subscriptionFailure { throw CoreFailure.unavailable(reason: "subscription failed") }
         return self
     }
     func next() async throws -> AppearanceEvent {
@@ -155,6 +275,7 @@ private actor SettingsAppearanceSource: AppearanceSource, AppearanceEventSource 
         } onCancel: { Task { await self.cancelWait() } }
     }
     private func cancelWait() {
+        if continuation != nil { cancelledWaits += 1 }
         continuation?.resume(throwing: CancellationError())
         continuation = nil
     }

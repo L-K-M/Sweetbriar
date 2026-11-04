@@ -61,6 +61,10 @@ private struct AccountAppearanceSettings: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 Text("Accounts").font(.title2.bold())
+                if let failure = model.appearanceFailure {
+                    Text("Appearance may be out of date: \(failure)").foregroundStyle(.red)
+                    Button("Retry appearance") { Task { await model.retryAppearance() } }
+                }
                 if let loadError {
                     Text(loadError).foregroundStyle(.red)
                 } else if loadingAccounts {
@@ -96,14 +100,14 @@ private struct AccountAppearanceSettings: View {
                             }
                         }
                         .pickerStyle(.radioGroup)
-                        .disabled(model.saving)
+                        .disabled(model.saving || model.appearanceFailure != nil)
                         Button("Custom…") {
                             editingAccount = current
                             customColor = color(current.colorSrgb)
                             customError = nil
                             customOpen = true
                         }
-                        .disabled(model.saving)
+                        .disabled(model.saving || model.appearanceFailure != nil)
                         if current.assignment == .custom {
                             Text("Custom: \(current.colorSrgb)").foregroundStyle(.secondary)
                         }
@@ -114,9 +118,7 @@ private struct AccountAppearanceSettings: View {
                         Text("Stored on this device; included in export.").font(.footnote).foregroundStyle(.secondary)
                         if let error = model.error { Text(error).foregroundStyle(.red) }
                         if model.saving { ProgressView("Saving…") }
-                    } else if let error = model.appearance.lastError {
-                        Text(error.localizedDescription).foregroundStyle(.red)
-                    } else {
+                    } else if model.appearanceFailure == nil {
                         ProgressView("Loading appearance…")
                     }
                 }

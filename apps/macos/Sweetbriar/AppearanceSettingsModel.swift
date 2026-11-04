@@ -9,11 +9,17 @@ final class AppearanceSettingsModel {
     let appearance: AppearanceModel
     private(set) var saving = false
     private(set) var error: String?
+    var appearanceFailure: String? { appearance.lastError?.localizedDescription }
 
     init(appearance: AppearanceModel) { self.appearance = appearance }
 
+    func retryAppearance() async {
+        await appearance.refresh()
+        error = nil
+    }
+
     func choose(_ color: AccountColor, account: AccountAppearance) async {
-        guard !saving else { return }
+        guard !saving, appearanceFailure == nil else { return }
         guard appearance.appearance?.accounts.first(where: { $0.accountId == account.accountId })?.revision == account.revision else {
             error = "The appearance changed in another window. Choose a color again."
             return
@@ -32,9 +38,6 @@ final class AppearanceSettingsModel {
                 change: .init(color: color, symbol: account.symbol)
             )
             await appearance.refresh()
-            if let failure = appearance.lastError {
-                error = "Saved, but the current appearance could not be loaded: \(failure.localizedDescription)"
-            }
         } catch let failure as CoreFailure {
             if case .conflict = failure {
                 await appearance.refresh()
