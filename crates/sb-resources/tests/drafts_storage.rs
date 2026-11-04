@@ -306,13 +306,13 @@ fn attachments_are_published_before_the_revision_references_them() {
     let second = publish(&res, ATTACHMENT_TWO);
     let mut with_files = input("r1");
     with_files.attachments = vec![
-        DraftAttachment {
-            object: first,
+        DraftAttachment::New {
+            object: std::sync::Arc::new(first),
             filename: "one.txt".to_owned(),
             media_type: "text/plain".to_owned(),
         },
-        DraftAttachment {
-            object: second,
+        DraftAttachment::New {
+            object: std::sync::Arc::new(second),
             filename: "two.txt".to_owned(),
             media_type: "text/plain".to_owned(),
         },

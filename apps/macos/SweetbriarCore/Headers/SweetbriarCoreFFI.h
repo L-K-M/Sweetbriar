@@ -288,6 +288,26 @@ uint64_t uniffi_sb_ffi_fn_method_core_set_identity_appearance(uint64_t ptr, uint
 uint64_t uniffi_sb_ffi_fn_method_core_subscribe_appearance(uint64_t ptr, uint64_t token, uint64_t generation
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_CREATE_DRAFT
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_CREATE_DRAFT
+uint64_t uniffi_sb_ffi_fn_method_core_create_draft(uint64_t ptr, uint64_t token, RustBuffer idempotency_key, RustBuffer context
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_DISCARD_DRAFT
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_DISCARD_DRAFT
+uint64_t uniffi_sb_ffi_fn_method_core_discard_draft(uint64_t ptr, uint64_t token, RustBuffer idempotency_key, RustBuffer draft_id
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_DRAFT
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_DRAFT
+uint64_t uniffi_sb_ffi_fn_method_core_draft(uint64_t ptr, uint64_t token, RustBuffer draft_id
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_DRAFTS
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_DRAFTS
+uint64_t uniffi_sb_ffi_fn_method_core_drafts(uint64_t ptr, uint64_t token
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_CANCEL_JOB
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_CANCEL_JOB
 uint64_t uniffi_sb_ffi_fn_method_core_cancel_job(uint64_t ptr, uint64_t token, RustBuffer idempotency_key, RustBuffer job_id
@@ -798,6 +818,30 @@ uint16_t uniffi_sb_ffi_checksum_method_core_set_identity_appearance(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_SUBSCRIBE_APPEARANCE
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_SUBSCRIBE_APPEARANCE
 uint16_t uniffi_sb_ffi_checksum_method_core_subscribe_appearance(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_CREATE_DRAFT
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_CREATE_DRAFT
+uint16_t uniffi_sb_ffi_checksum_method_core_create_draft(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_DISCARD_DRAFT
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_DISCARD_DRAFT
+uint16_t uniffi_sb_ffi_checksum_method_core_discard_draft(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_DRAFT
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_DRAFT
+uint16_t uniffi_sb_ffi_checksum_method_core_draft(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_DRAFTS
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_DRAFTS
+uint16_t uniffi_sb_ffi_checksum_method_core_drafts(void
     
 );
 #endif
