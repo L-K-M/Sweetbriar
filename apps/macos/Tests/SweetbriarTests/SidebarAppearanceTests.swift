@@ -21,6 +21,69 @@ struct SidebarAppearanceTests {
         #expect(cell.accessibilityLabel() == "Account, Work · account-1")
     }
 
+    @Test func synthesizedLabelsDoNotCollideWithLiteralNames() {
+        let sections = [
+            SidebarModel.Section(id: "account-1", title: "Work", entries: []),
+            SidebarModel.Section(id: "account-2", title: "Work", entries: []),
+            SidebarModel.Section(id: "account-3", title: "Work · account-1", entries: []),
+            SidebarModel.Section(id: "account-4", title: "West", entries: []),
+        ]
+        let labels = sections.map { SidebarViewController.accountLabel($0, among: sections) }
+        #expect(Set(labels).count == sections.count)
+        #expect(labels == sections.map { SidebarViewController.accountLabel($0, among: Array(sections.reversed())) })
+        #expect(labels.last == "West")
+        let cells = labels.map { label in
+            let cell = SidebarHeaderCell(identifier: .init("test"))
+            cell.configure(title: label, account: nil, isAccount: true)
+            return cell.accessibilityLabel() ?? ""
+        }
+        #expect(Set(cells).count == sections.count)
+    }
+
+    @Test func repeatedSynthesizedCollisionsRemainUnique() {
+        var sections = [
+            SidebarModel.Section(id: "a", title: "Work", entries: []),
+            SidebarModel.Section(id: "b", title: "Work", entries: []),
+        ]
+        var title = "Work · a"
+        for index in 0..<8 {
+            sections.append(SidebarModel.Section(id: "c\(index)", title: title, entries: []))
+            title += " · a"
+        }
+        let labels = sections.map { SidebarViewController.accountLabel($0, among: sections) }
+        #expect(Set(labels).count == sections.count)
+        #expect(labels == sections.map { SidebarViewController.accountLabel($0, among: Array(sections.reversed())) })
+    }
+
+    @Test func injectedContrastDrawsOutlineInBothAppearances() throws {
+        for name: NSAppearance.Name in [.aqua, .darkAqua] {
+            let normal = try render(name, increase: false, differentiate: false)
+            let contrast = try render(name, increase: true, differentiate: false)
+            let differentiate = try render(name, increase: false, differentiate: true)
+            #expect(normal == 0)
+            #expect(contrast > 0)
+            #expect(differentiate > 0)
+        }
+    }
+
+    private func render(_ name: NSAppearance.Name, increase: Bool, differentiate: Bool) throws -> Int {
+        let view = SidebarMonogramView(frame: NSRect(x: 0, y: 0, width: 20, height: 20))
+        var account = sampleAccount
+        account.tokens.light.outlineSrgb = "#ff0000"
+        account.tokens.dark.outlineSrgb = "#ff0000"
+        view.account = account
+        view.appearance = NSAppearance(named: name)
+        view.contrastOptions = { (increase, differentiate) }
+        let bitmap = try #require(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+        view.cacheDisplay(in: view.bounds, to: bitmap)
+        return (0..<bitmap.pixelsWide).reduce(0) { count, x in
+            count + (0..<bitmap.pixelsHigh).reduce(0) { count, y in
+                guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { return count }
+                return count + (color.redComponent > 0.8 && color.greenComponent < 0.2 && color.blueComponent < 0.2 ? 1 : 0)
+            }
+        }
+    }
+
     @Test func badgesDrawInLightDarkAndHighContrast() throws {
         let view = SidebarMonogramView(frame: NSRect(x: 0, y: 0, width: 20, height: 20))
         view.account = sampleAccount

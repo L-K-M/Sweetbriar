@@ -205,10 +205,24 @@ extension SidebarViewController: NSOutlineViewDataSource, NSOutlineViewDelegate 
 
     static func accountLabel(_ section: SidebarModel.Section, among sections: [SidebarModel.Section]) -> String {
         guard section.id != SidebarModel.unifiedSectionID else { return section.title }
-        let duplicates = sections.filter {
-            $0.id != SidebarModel.unifiedSectionID && $0.title == section.title
+        let accounts = sections.filter { $0.id != SidebarModel.unifiedSectionID }.sorted { $0.id < $1.id }
+        guard let sectionIndex = accounts.firstIndex(where: { $0.id == section.id }) else { return section.title }
+        let titleCounts = Dictionary(grouping: accounts, by: \.title).mapValues(\.count)
+        var labels = accounts.map { account in
+            titleCounts[account.title, default: 0] > 1 ? "\(account.title) · \(account.id)" : account.title
         }
-        return duplicates.count > 1 ? "\(section.title) · \(section.id)" : section.title
+        // A generated label can itself be another account's literal name.
+        // Bound the retries, then use unique ordinal prefixes for every account.
+        for _ in 0..<accounts.count {
+            let counts = Dictionary(grouping: labels, by: { $0 }).mapValues(\.count)
+            if counts.values.allSatisfy({ $0 == 1 }) {
+                return labels[sectionIndex]
+            }
+            for index in accounts.indices where counts[labels[index], default: 0] > 1 {
+                labels[index] += " · \(accounts[index].id)"
+            }
+        }
+        return "\(sectionIndex + 1). \(section.title)"
     }
 }
 
@@ -252,6 +266,10 @@ final class SidebarHeaderCell: NSTableCellView {
 
 @MainActor
 final class SidebarMonogramView: NSView {
+    var contrastOptions: () -> (increaseContrast: Bool, differentiate: Bool) = {
+        (NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast,
+         NSWorkspace.shared.accessibilityDisplayShouldDifferentiateWithoutColor)
+    }
     var account: AccountAppearance? { didSet { needsDisplay = true } }
 
     override func viewDidChangeEffectiveAppearance() {
@@ -274,8 +292,8 @@ final class SidebarMonogramView: NSView {
         let appearanceName = appearance?.name ?? effectiveAppearance.name
         let highContrast = appearanceName == .accessibilityHighContrastAqua
             || appearanceName == .accessibilityHighContrastDarkAqua
-        if highContrast || NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
-            || NSWorkspace.shared.accessibilityDisplayShouldDifferentiateWithoutColor {
+        let options = contrastOptions()
+        if highContrast || options.increaseContrast || options.differentiate {
             Self.color(variant.outlineSrgb).setStroke()
             shape.lineWidth = 1.5
             shape.stroke()
