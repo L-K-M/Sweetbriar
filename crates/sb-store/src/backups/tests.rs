@@ -1258,6 +1258,57 @@ fn next_backup_recovers_an_abandoned_generation() {
     assert!(!location.exists());
 }
 
+#[test]
+fn another_store_rejects_an_active_snapshot() {
+    let (_scratch_a, _paths_a, store_a) = open("backup-token-store-a");
+    let (_scratch_b, _paths_b, store_b) = open("backup-token-store-b");
+    let a = store_a
+        .backup_snapshot(BackupDestination::DataRoot)
+        .unwrap();
+    let b = store_b
+        .backup_snapshot(BackupDestination::DataRoot)
+        .unwrap();
+
+    assert!(matches!(
+        store_b.complete_backup(a.clone()),
+        Err(StoreError::Conflict { .. })
+    ));
+    assert_eq!(
+        generation_row(&store_a, a.generation_id()).unwrap().0,
+        "in_progress"
+    );
+    assert_eq!(
+        generation_row(&store_b, b.generation_id()).unwrap().0,
+        "in_progress"
+    );
+    assert!(!a.location().join("manifest.json").exists());
+    assert!(!b.location().join("manifest.json").exists());
+    store_a.complete_backup(a).unwrap();
+    store_b.complete_backup(b).unwrap();
+}
+
+#[test]
+fn cloned_snapshot_alone_prevents_recovery_until_dropped() {
+    let (_scratch, _paths, store) = open("backup-clone-ownership");
+    let snapshot = store.backup_snapshot(BackupDestination::DataRoot).unwrap();
+    let id = snapshot.generation_id().to_owned();
+    let location = snapshot.location().to_owned();
+    let clone = snapshot.clone();
+    drop(snapshot);
+
+    assert!(matches!(
+        store.backup_snapshot(BackupDestination::DataRoot),
+        Err(StoreError::Conflict { .. })
+    ));
+    assert_eq!(generation_row(&store, &id).unwrap().0, "in_progress");
+    assert!(location.join("state.sqlite").is_file());
+    drop(clone);
+    let next = store.backup_snapshot(BackupDestination::DataRoot).unwrap();
+    assert_ne!(next.generation_id(), id);
+    assert_eq!(generation_row(&store, &id).unwrap().0, "failed");
+    assert!(!location.exists());
+}
+
 fn seed_generation(
     store: &Store,
     root: &Path,
