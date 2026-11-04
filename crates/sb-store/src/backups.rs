@@ -5,6 +5,7 @@
 //! then releases pins and marks the generation complete.
 
 mod attachments;
+mod external;
 mod image;
 mod image_inspect;
 #[allow(dead_code)] // Used by the snapshot walker and manifest parser.
@@ -18,6 +19,7 @@ mod manifest;
 mod reconciliation;
 mod recorded;
 mod references;
+pub use external::VerifiedExternalBackup;
 pub use image::BackupImageInspection;
 mod scratch;
 

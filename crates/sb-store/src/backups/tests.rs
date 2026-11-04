@@ -2217,6 +2217,210 @@ fn recorded_verification_checks_real_empty_backup() {
 }
 
 #[test]
+fn external_restore_verifies_into_a_fresh_store() {
+    use std::sync::atomic::AtomicBool;
+    let (_source_scratch, _source_paths, source) = open("external-restore-source");
+    let receipt = source
+        .complete_backup(source.backup_snapshot(BackupDestination::DataRoot).unwrap())
+        .unwrap();
+    let (_fresh_scratch, _fresh_paths, fresh) = open("external-restore-fresh");
+    let cancel = AtomicBool::new(false);
+    let selection = fresh
+        .verify_external_backup(
+            receipt.location().parent().unwrap(),
+            receipt.generation_id(),
+            &cancel,
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(selection.generation_id(), receipt.generation_id());
+    let moved = receipt.location().with_extension("moved");
+    std::fs::rename(receipt.location(), &moved).unwrap();
+    assert!(
+        selection
+            .source()
+            .open_regular(Path::new("manifest.json"))
+            .is_ok()
+    );
+    std::fs::rename(&moved, receipt.location()).unwrap();
+    let manifest = receipt.location().join("manifest.json");
+    let original = std::fs::read(&manifest).unwrap();
+    std::fs::write(&manifest, b"{}").unwrap();
+    assert!(
+        fresh
+            .verify_external_backup(
+                receipt.location().parent().unwrap(),
+                receipt.generation_id(),
+                &cancel
+            )
+            .is_err()
+    );
+    std::fs::write(&manifest, original).unwrap();
+    let saved = manifest.with_extension("saved");
+    assert!(
+        fresh
+            .backups
+            .verify_external_after_prepare(
+                receipt.location().parent().unwrap(),
+                receipt.generation_id(),
+                &cancel,
+                || {
+                    std::fs::rename(&manifest, &saved).unwrap();
+                    std::fs::write(&manifest, b"{}").unwrap();
+                }
+            )
+            .is_err()
+    );
+    std::fs::remove_file(&manifest).unwrap();
+    std::fs::rename(&saved, &manifest).unwrap();
+    assert!(
+        fresh
+            .backups
+            .verify_external_after_prepare(
+                receipt.location().parent().unwrap(),
+                receipt.generation_id(),
+                &cancel,
+                || {
+                    std::fs::write(&manifest, b"{}").unwrap();
+                }
+            )
+            .is_err()
+    );
+    assert!(
+        fresh
+            .verify_external_backup(
+                receipt.location().parent().unwrap(),
+                receipt.generation_id(),
+                &AtomicBool::new(true)
+            )
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn external_discovery_streams_complete_generations_and_checks_objects() {
+    use std::ops::ControlFlow;
+    use std::sync::atomic::AtomicBool;
+    let (_scratch, _paths, source) = open("external-discovery-source");
+    let mut hashes = Vec::new();
+    for n in 0..201 {
+        let (id, hash) = object(&source, format!("external {n}").as_bytes());
+        reference(&source, &id, "published");
+        hashes.push(hash);
+    }
+    let receipt = source
+        .complete_backup(source.backup_snapshot(BackupDestination::DataRoot).unwrap())
+        .unwrap();
+    let parent = receipt.location().parent().unwrap();
+    let (_other_scratch, _other_paths, other) = open("external-discovery-other");
+    let other_receipt = other
+        .complete_backup(
+            other
+                .backup_snapshot(BackupDestination::Directory(parent.to_path_buf()))
+                .unwrap(),
+        )
+        .unwrap();
+    let incomplete = parent.join("00000000-0000-4000-8000-000000000099");
+    std::fs::create_dir(&incomplete).unwrap();
+    let (_fresh_scratch, _fresh_paths, fresh) = open("external-discovery-fresh");
+    let cancel = AtomicBool::new(false);
+    let mut found = Vec::new();
+    assert!(
+        fresh
+            .discover_external_backups(parent, &cancel, |selection| {
+                found.push(selection.generation_id().to_owned());
+                ControlFlow::Continue(())
+            })
+            .unwrap()
+            .is_continue()
+    );
+    found.sort();
+    let mut expected = vec![
+        receipt.generation_id().to_owned(),
+        other_receipt.generation_id().to_owned(),
+    ];
+    expected.sort();
+    assert_eq!(found, expected);
+    let hash = &hashes[0];
+    let object = receipt.location().join(format!(
+        "objects/sha256/{}/{}/{}",
+        &hash[..2],
+        &hash[2..4],
+        hash
+    ));
+    std::fs::write(object, b"substituted").unwrap();
+    assert!(
+        fresh
+            .verify_external_backup(parent, receipt.generation_id(), &cancel)
+            .is_err()
+    );
+    let mut count = 0;
+    let _ = fresh
+        .discover_external_backups(parent, &cancel, |_| {
+            count += 1;
+            ControlFlow::Continue(())
+        })
+        .unwrap();
+    assert_eq!(count, 1);
+}
+
+#[test]
+fn external_restore_propagates_io_and_cleanup_errors() {
+    use std::ops::ControlFlow;
+    use std::sync::atomic::AtomicBool;
+    let (_scratch, _paths, source) = open("external-errors-source");
+    let (id, _) = object(&source, PAYLOAD);
+    reference(&source, &id, "published");
+    let receipt = source
+        .complete_backup(source.backup_snapshot(BackupDestination::DataRoot).unwrap())
+        .unwrap();
+    let (_fresh_scratch, fresh_paths, fresh) = open("external-errors-fresh");
+    let parent = receipt.location().parent().unwrap();
+    let cancel = AtomicBool::new(false);
+    for op in [FsOp::Read, FsOp::RemoveDirAll] {
+        let fs = Arc::new(FaultFs::new(real_fs(), op, 1, FaultKind::Eio));
+        let failing = faulty_backups(&fresh, &fresh_paths, fs);
+        assert!(
+            failing
+                .verify_external(parent, receipt.generation_id(), &cancel)
+                .is_err()
+        );
+        assert!(
+            fresh
+                .verify_external_backup(parent, receipt.generation_id(), &cancel)
+                .unwrap()
+                .is_some()
+        );
+    }
+    let fs = Arc::new(FaultFs::new(real_fs(), FsOp::ReadDir, 1, FaultKind::Eio));
+    let failing = faulty_backups(&fresh, &fresh_paths, fs);
+    assert!(
+        failing
+            .discover_external(parent, &cancel, |_| ControlFlow::Continue(()))
+            .is_err()
+    );
+    sql(&fresh, "CREATE TRIGGER fail_external BEFORE INSERT ON verifier_objects BEGIN SELECT RAISE(ABORT, 'injected'); END".into());
+    assert!(
+        fresh
+            .verify_external_backup(parent, receipt.generation_id(), &cancel)
+            .is_err()
+    );
+    assert!(
+        fresh
+            .discover_external_backups(parent, &cancel, |_| ControlFlow::Continue(()))
+            .is_err()
+    );
+    sql(&fresh, "DROP TRIGGER fail_external".into());
+    assert!(
+        fresh
+            .verify_external_backup(parent, receipt.generation_id(), &cancel)
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[test]
 fn recorded_verification_pages_real_objects_and_rejects_corruption() {
     use std::sync::atomic::AtomicBool;
     let (_scratch, _paths, store) = open("recorded-verification-objects");

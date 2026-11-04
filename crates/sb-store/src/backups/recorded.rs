@@ -15,6 +15,65 @@ fn cancelled(cancel: &AtomicBool) -> bool {
     cancel.load(Ordering::Acquire)
 }
 
+pub(super) fn verify_objects(
+    backups: &Backups,
+    source: &dyn sb_types::fs::ConfinedDir,
+    id: &str,
+    cancel: &AtomicBool,
+    mut progress: impl FnMut(),
+) -> Result<ControlFlow<()>, StoreError> {
+    let conn = open_connection(&backups.state_db, Access::ReadOnly, READER_PRAGMAS)?;
+    let mut after = None;
+    loop {
+        if cancelled(cancel) {
+            return Ok(ControlFlow::Break(()));
+        }
+        let page = ledger::page(&conn, id, after)?;
+        for row in &page {
+            let hash = row
+                .entry
+                .sha256
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>();
+            let path = format!("objects/sha256/{}/{}/{}", &hash[..2], &hash[2..4], hash);
+            let (mut file, _) = source.open_regular(Path::new(&path)).map_err(io_error)?;
+            let mut hasher = Sha256::new();
+            let mut length = 0u64;
+            let mut buf = [0; 65536];
+            loop {
+                if cancelled(cancel) {
+                    return Ok(ControlFlow::Break(()));
+                }
+                let n = file.read(&mut buf).map_err(io_error)?;
+                if n == 0 {
+                    break;
+                }
+                length = length
+                    .checked_add(n as u64)
+                    .ok_or_else(|| StoreError::corrupt("object length overflow"))?;
+                if length > row.entry.bytes {
+                    return Err(StoreError::corrupt("object length mismatch"));
+                }
+                hasher.update(&buf[..n]);
+                progress();
+            }
+            if length != row.entry.bytes || hasher.finalize().as_slice() != row.entry.sha256 {
+                return Err(StoreError::corrupt("object digest or length mismatch"));
+            }
+        }
+        if page.len() < ledger::BATCH {
+            break;
+        }
+        after = page.last().map(|row| row.entry.sha256);
+    }
+    Ok(if cancelled(cancel) {
+        ControlFlow::Break(())
+    } else {
+        ControlFlow::Continue(())
+    })
+}
+
 struct HashReader<R> {
     input: R,
     hash: Sha256,
@@ -205,54 +264,12 @@ impl Backups {
                 if input.hash.finalize().as_slice() != expected_hash {
                     return Err(StoreError::corrupt("manifest digest mismatch"));
                 }
-                let conn = open_connection(&self.state_db, Access::ReadOnly, READER_PRAGMAS)?;
-                let mut after = None;
-                loop {
-                    if cancelled(cancel) {
-                        return Ok(ControlFlow::Break(()));
-                    }
-                    let page = ledger::page(&conn, id, after)?;
-                    for row in &page {
-                        let hash = row
-                            .entry
-                            .sha256
-                            .iter()
-                            .map(|b| format!("{b:02x}"))
-                            .collect::<String>();
-                        let path =
-                            format!("objects/sha256/{}/{}/{}", &hash[..2], &hash[2..4], hash);
-                        let (mut file, _) =
-                            source.open_regular(Path::new(&path)).map_err(io_error)?;
-                        let mut hasher = Sha256::new();
-                        let mut length = 0u64;
-                        let mut buf = [0; 65536];
-                        loop {
-                            if cancelled(cancel) {
-                                return Ok(ControlFlow::Break(()));
-                            }
-                            let n = file.read(&mut buf).map_err(io_error)?;
-                            if n == 0 {
-                                break;
-                            }
-                            length = length
-                                .checked_add(n as u64)
-                                .ok_or_else(|| StoreError::corrupt("object length overflow"))?;
-                            if length > row.entry.bytes {
-                                return Err(StoreError::corrupt("object length mismatch"));
-                            }
-                            hasher.update(&buf[..n]);
-                            progress.borrow_mut()(StreamPhase::Object);
-                        }
-                        if length != row.entry.bytes
-                            || hasher.finalize().as_slice() != row.entry.sha256
-                        {
-                            return Err(StoreError::corrupt("object digest or length mismatch"));
-                        }
-                    }
-                    if page.len() < ledger::BATCH {
-                        break;
-                    }
-                    after = page.last().map(|row| row.entry.sha256);
+                if verify_objects(self, source.as_ref(), id, cancel, || {
+                    progress.borrow_mut()(StreamPhase::Object)
+                })?
+                .is_break()
+                {
+                    return Ok(ControlFlow::Break(()));
                 }
                 if cancelled(cancel) {
                     Ok(ControlFlow::Break(()))

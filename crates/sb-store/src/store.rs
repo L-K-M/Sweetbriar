@@ -171,6 +171,29 @@ impl Store {
         self.backups.verify_recorded(generation, cancelled)
     }
 
+    /// Verify an external generation for a point-in-time restore handoff.
+    /// Staging must verify the actual bytes it copies again. `None` means cancelled.
+    pub fn verify_external_backup(
+        &self,
+        parent: &Path,
+        generation: &str,
+        cancelled: &std::sync::atomic::AtomicBool,
+    ) -> Result<Option<crate::VerifiedExternalBackup>, StoreError> {
+        self.backups.verify_external(parent, generation, cancelled)
+    }
+
+    /// Visit verified external generations with bounded memory. Corrupt and
+    /// incomplete candidates are skipped; I/O and cleanup failures propagate.
+    /// The visitor can stop early. Cancellation also returns `Break`.
+    pub fn discover_external_backups(
+        &self,
+        parent: &Path,
+        cancelled: &std::sync::atomic::AtomicBool,
+        visitor: impl FnMut(crate::VerifiedExternalBackup) -> std::ops::ControlFlow<()>,
+    ) -> Result<std::ops::ControlFlow<()>, StoreError> {
+        self.backups.discover_external(parent, cancelled, visitor)
+    }
+
     /// Stream a full capture through bounded writer turns. Blocking;
     /// finish explicitly and release read transactions before writing.
     pub fn export_chunk_writer(
