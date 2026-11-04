@@ -28,7 +28,7 @@ fn read_marker(dir: &dyn ConfinedDir, name: &Path) -> io::Result<Vec<u8>> {
     Ok(bytes)
 }
 fn partial_marker(token: &str, bytes: &[u8]) -> bool {
-    if token.as_bytes().starts_with(bytes) {
+    if token.as_bytes() == bytes {
         return true;
     }
     let Some(rest) = bytes.strip_prefix(format!("{token}\n").as_bytes()) else {
@@ -231,7 +231,8 @@ mod tests {
         assert!(cleanup(root.as_ref(), ID, TOKEN, None).is_err());
         assert!(temp.path().join(&name).is_dir());
         std::fs::remove_dir(temp.path().join(&name)).unwrap();
-        cleanup(root.as_ref(), ID, TOKEN, None).unwrap();
+        assert!(cleanup(root.as_ref(), ID, TOKEN, None).is_err());
+        std::fs::remove_file(temp.path().join(&marker)).unwrap();
         let held = prepare(root.as_ref(), ID, TOKEN).unwrap();
         let mut image = held.create(Path::new(IMAGE)).unwrap();
         image.write_all(b"owned").unwrap();
@@ -312,6 +313,78 @@ mod tests {
             .query_row("SELECT count(*) FROM verifier_scratch", [], |r| r.get(0))
             .unwrap();
         assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn collision_recovery_preserves_unproved_markers_and_rows() {
+        use sb_test_support::SimFs;
+        use sb_types::fs::Fs;
+        for bytes in [&b""[..], &TOKEN.as_bytes()[..8]] {
+            let fs = SimFs::new();
+            fs.create_dir_all(Path::new("/root")).unwrap();
+            let root = fs.open_confined_dir(Path::new("/root")).unwrap();
+            let (_, marker) = names(ID, TOKEN).unwrap();
+            let mut file = root.create(&marker).unwrap();
+            file.write_all(bytes).unwrap();
+            drop(file);
+            assert_eq!(
+                prepare(root.as_ref(), ID, TOKEN).err().unwrap().kind(),
+                io::ErrorKind::AlreadyExists
+            );
+            let conn = rusqlite::Connection::open_in_memory().unwrap();
+            conn.execute_batch("CREATE TABLE store_meta(key TEXT, value TEXT); INSERT INTO store_meta VALUES('incarnation', 'current'); CREATE TABLE verifier_scratch(id TEXT PRIMARY KEY, token TEXT, incarnation TEXT);").unwrap();
+            conn.execute(
+                "INSERT INTO verifier_scratch VALUES (?1,?2,'current')",
+                [ID, TOKEN],
+            )
+            .unwrap();
+            assert!(recover(&conn, &fs, Path::new("/root")).is_err());
+            assert_eq!(read_marker(root.as_ref(), &marker).unwrap(), bytes);
+            assert_eq!(
+                conn.query_row("SELECT count(*) FROM verifier_scratch", [], |r| r
+                    .get::<_, i64>(0))
+                    .unwrap(),
+                1
+            );
+        }
+    }
+
+    #[test]
+    fn recovery_preserves_regular_file_at_directory_name() {
+        use sb_test_support::SimFs;
+        use sb_types::fs::Fs;
+        let fs = SimFs::new();
+        fs.create_dir_all(Path::new("/root")).unwrap();
+        let root = fs.open_confined_dir(Path::new("/root")).unwrap();
+        let (dir, marker) = names(ID, TOKEN).unwrap();
+        root.create(&dir).unwrap().write_all(b"foreign").unwrap();
+        root.create(&marker)
+            .unwrap()
+            .write_all(TOKEN.as_bytes())
+            .unwrap();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE store_meta(key TEXT, value TEXT); INSERT INTO store_meta VALUES('incarnation', 'current'); CREATE TABLE verifier_scratch(id TEXT PRIMARY KEY, token TEXT, incarnation TEXT);").unwrap();
+        conn.execute(
+            "INSERT INTO verifier_scratch VALUES (?1,?2,'current')",
+            [ID, TOKEN],
+        )
+        .unwrap();
+        assert_eq!(
+            root.open_dir(&dir).err().unwrap().kind(),
+            io::ErrorKind::NotADirectory
+        );
+        assert!(recover(&conn, &fs, Path::new("/root")).is_err());
+        assert_eq!(read_marker(root.as_ref(), &dir).unwrap(), b"foreign");
+        assert_eq!(
+            read_marker(root.as_ref(), &marker).unwrap(),
+            TOKEN.as_bytes()
+        );
+        assert_eq!(
+            conn.query_row("SELECT count(*) FROM verifier_scratch", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
     }
 
     #[test]

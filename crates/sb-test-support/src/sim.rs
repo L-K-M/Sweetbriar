@@ -292,7 +292,8 @@ impl ConfinedDir for SimConfinedDir {
                 dir,
                 ops: self.ops.clone(),
             })),
-            _ => Err(io::ErrorKind::NotFound.into()),
+            Some(Child::File(_)) => Err(io::ErrorKind::NotADirectory.into()),
+            None => Err(io::ErrorKind::NotFound.into()),
         }
     }
     fn create_private_dir(&self, name: &Path) -> io::Result<()> {
