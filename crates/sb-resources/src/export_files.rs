@@ -1,20 +1,20 @@
 //! File output for a sealed export capture (spec/09 "Export file
 //! output"): original acquisition bytes only, an owned destination,
 //! one checkpoint per committed file, then the version-1 manifest.
-//! EML only; mboxrd output lands in M1.7c2.
 
-use std::collections::HashSet;
-use std::io::{self, Read, Write};
+use std::collections::{BTreeMap, HashSet};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 
+use sb_mime::{MBOXRD_ENVELOPE, MboxError, MboxScanner, MboxVariant, write_mboxrd_record};
 use sb_platform::{Lease, LockError};
 use sb_store::exports::{
     ExportFormat, ExportJob, ExportJobState, MAX_EXPORT_CHUNKS, advance_export_job, export_chunks,
     export_job,
 };
 use sb_store::{
-    Clock, FileKind, Fs, ObjectId, ObjectStore, Scoped, Store, StoreError, WritePriority,
+    Clock, FileKind, Fs, ObjectId, ObjectStore, ReadFile, Scoped, Store, StoreError, WritePriority,
     await_write, read_error_as_store_error,
 };
 use serde_json::{Value, json};
@@ -27,19 +27,29 @@ const CLAIM_NAME: &str = "sweetbriar-export.claim";
 /// unlinked inode and admit a second writer.
 const LOCK_NAME: &str = "sweetbriar-export.lock";
 /// The version-1 sidecar manifest (spec/09).
-const MANIFEST_NAME: &str = "sweetbriar-metadata.json";
+pub(crate) const MANIFEST_NAME: &str = "sweetbriar-metadata.json";
 /// Uncommitted output carries this suffix; only a rename publishes.
 const PARTIAL_SUFFIX: &str = ".partial";
 /// Acquisition reads and output writes stream in bounded blocks.
 const STREAM_CHUNK: usize = 64 * 1024;
 /// The output checkpoint family (`{"v":1,"output":1,...}`).
 const OUTPUT_VERSION: u64 = 1;
+const SCOPE_ACCOUNT: &str = "account";
+const SCOPE_MAILBOX: &str = "mailbox";
 /// A claim marker holds a job id, bounded by the ledger's own rule.
 const CLAIM_BYTES: usize = 128;
+/// A folded mailbox name is pure ASCII, so truncating at this budget
+/// cannot split a character and keeps `<mailbox_id>-<name>.mbox`
+/// publishable under NAME_MAX.
+const MAX_MAILBOX_NAME_BYTES: usize = 128;
 
-/// One sealed member of a planned output file.
+/// One sealed member of a planned output file. The span fields are
+/// filled when the file is encoded or verified, for the manifest.
 struct Member {
     object: ObjectId,
+    offset: u64,
+    encoded: u64,
+    framing_lf_added: bool,
 }
 
 /// One deterministic output file inside the destination.
@@ -167,10 +177,10 @@ pub(crate) fn run(
         let committed = index < done;
         // A committed file is re-read, not trusted: damaged or missing
         // means rewritten with identical bytes.
-        if !committed || !recover_file(fs, &plan.destination, file)? {
+        if !committed || !recover_file(fs, &plan.destination, file, plan.format)? {
             let name = file.name.clone();
             let published = publish(fs, &plan.destination, &name, |out| {
-                encode_file(store, out, file, &mut || progress(files_done))
+                encode_file(store, out, file, plan.format, &mut || progress(files_done))
             })?;
             let Scoped::Done(total) = published else {
                 return Ok(Scoped::Stopped);
@@ -226,13 +236,7 @@ impl Plan {
         }
         let format = match str_field(intent, "format")? {
             "eml" => ExportFormat::Eml,
-            // A sealed mboxrd capture is valid; its writer lands in
-            // M1.7c2, so the job stays `ready` for that artifact.
-            "mboxrd" => {
-                return Err(StoreError::InvalidInput {
-                    message: "mboxrd export files land in M1.7c2".into(),
-                });
-            }
+            "mboxrd" => ExportFormat::Mboxrd,
             _ => return Err(corrupt("the export capture holds an unknown format")),
         };
         let destination = str_field(intent, "destination")?;
@@ -242,6 +246,7 @@ impl Plan {
         let destination = PathBuf::from(destination);
 
         let mut files: Vec<FilePlan> = Vec::new();
+        let mut mailboxes: BTreeMap<i64, usize> = BTreeMap::new();
         let mut links = Vec::new();
         let mut digest = Sha256::new();
         // One file plan per record names `<occurrence>.eml`: a repeated
@@ -257,6 +262,25 @@ impl Plan {
             });
             files.len() - 1
         };
+        // Scope-declared mailboxes freeze file identity ahead of member
+        // records: an explicitly scoped mailbox gets its file even when
+        // no record names it. Search and selection captures declare
+        // nothing; their members name each file.
+        let scope_kind = intent["scope"]["kind"].as_str();
+        // Field presence preserves legacy captures; the kind separates
+        // explicit empty scopes from search and selection's empty array.
+        let mut scope_declared = header.get("mailboxes").is_some()
+            && (scope_kind == Some(SCOPE_ACCOUNT) || scope_kind == Some(SCOPE_MAILBOX));
+        if matches!(format, ExportFormat::Mboxrd) {
+            for declared in declared_mailboxes(&header)? {
+                scope_declared = true;
+                let mailbox = i64_field(declared, "id")?;
+                let name = str_field(declared, "name")?;
+                mailboxes
+                    .entry(mailbox)
+                    .or_insert_with(|| new_file(&mut files, mailbox_file_name(mailbox, name)));
+            }
+        }
         while let Some(line) = reader.line()? {
             let record = parse(&line)?;
             let occurrence = i64_field(&record, "occurrence_id")?;
@@ -269,10 +293,34 @@ impl Plan {
                 "not_acquired" | "missing" | "quarantined" => false,
                 _ => return Err(corrupt("an export record holds unknown availability")),
             };
-            let file_index = if acquired {
-                Some(new_file(&mut files, format!("{occurrence}.eml")))
-            } else {
-                None
+            // Every in-scope mailbox gets a file, even when all its
+            // records are unavailable.
+            let file_index = match format {
+                ExportFormat::Eml if acquired => {
+                    Some(new_file(&mut files, format!("{occurrence}.eml")))
+                }
+                ExportFormat::Eml => None,
+                ExportFormat::Mboxrd => {
+                    let mailbox = record["mailbox"]["id"]
+                        .as_i64()
+                        .ok_or_else(|| corrupt("an export record has no mailbox"))?;
+                    let name = record["mailbox"]["name"]
+                        .as_str()
+                        .ok_or_else(|| corrupt("an export record has no mailbox name"))?;
+                    Some(match mailboxes.get(&mailbox) {
+                        Some(&index) => index,
+                        None if scope_declared => {
+                            return Err(corrupt(
+                                "an export record names a mailbox outside its declared scope",
+                            ));
+                        }
+                        None => {
+                            let index = new_file(&mut files, mailbox_file_name(mailbox, name));
+                            mailboxes.insert(mailbox, index);
+                            index
+                        }
+                    })
+                }
             };
             if !acquired {
                 links.push(None);
@@ -288,6 +336,9 @@ impl Plan {
             let member = files[file_index].members.len();
             files[file_index].members.push(Member {
                 object: ObjectId::from_hex(sha256, bytes)?,
+                offset: 0,
+                encoded: 0,
+                framing_lf_added: false,
             });
             links.push(Some((file_index, member)));
             count += 1;
@@ -309,6 +360,33 @@ impl Plan {
             links,
         })
     }
+}
+
+/// The header's frozen scope-declared mailboxes (spec/09), or none:
+/// captures written before the field existed and non-enumerating
+/// scopes leave file identity to member records.
+fn declared_mailboxes(header: &Value) -> Result<&[Value], StoreError> {
+    match header.get("mailboxes") {
+        None => Ok(&[]),
+        Some(value) => value
+            .as_array()
+            .map(Vec::as_slice)
+            .ok_or_else(|| corrupt("the export capture holds a malformed mailbox set")),
+    }
+}
+
+/// A mailbox's output file name: its id makes every name unique and
+/// the remote name readable; every byte outside `[A-Za-z0-9._-]`
+/// folds to `_`, so a multi-byte UTF-8 name folds once per byte. The
+/// folded name truncates at `MAX_MAILBOX_NAME_BYTES`.
+fn mailbox_file_name(mailbox: i64, remote: &str) -> String {
+    let keep = |byte: u8| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-');
+    let clean: String = remote
+        .bytes()
+        .map(|byte| if keep(byte) { byte as char } else { '_' })
+        .take(MAX_MAILBOX_NAME_BYTES)
+        .collect();
+    format!("{mailbox}-{clean}.mbox")
 }
 
 /// What the claim marker holds for the asking job.
@@ -566,27 +644,46 @@ fn publish<T>(
     Ok(Scoped::Done(done))
 }
 
-/// Stream each member's verified object bytes into `out`: EML copies
-/// raw acquisition bytes. `report` runs after each record; a stop
-/// leaves the file uncommitted.
+/// Stream each member's verified object bytes into `out`. EML copies
+/// raw; mboxrd goes through the spec/09 encoder, which quotes, frames
+/// and reports counts only after successful output. `report` runs
+/// after each record; a stop leaves the file uncommitted.
 fn encode_file(
     store: &Store,
     out: &mut dyn Write,
     file: &mut FilePlan,
+    format: ExportFormat,
     report: &mut dyn FnMut() -> ControlFlow<()>,
 ) -> Result<Scoped<u64>, StoreError> {
     let mut total = 0u64;
     for member in &mut file.members {
         let mut object = store.objects().open(&member.object)?;
-        let written = io::copy(&mut object, &mut *out).map_err(stream_error(
-            "cannot copy an acquisition into an export file",
-        ))?;
-        if written != member.object.byte_length() {
+        member.offset = total;
+        let (original, encoded, framing) = match format {
+            ExportFormat::Eml => {
+                let written = io::copy(&mut object, &mut *out).map_err(stream_error(
+                    "cannot copy an acquisition into an export file",
+                ))?;
+                (written, written, false)
+            }
+            ExportFormat::Mboxrd => {
+                let info = write_mboxrd_record(&mut object, &mut *out)
+                    .map_err(stream_error("cannot write an mboxrd record"))?;
+                (
+                    info.original_bytes(),
+                    info.encoded_bytes(),
+                    info.framing_lf_added(),
+                )
+            }
+        };
+        if original != member.object.byte_length() {
             return Err(corrupt(
                 "an acquisition's length differs from its frozen metadata",
             ));
         }
-        total += written;
+        member.encoded = encoded;
+        member.framing_lf_added = framing;
+        total += encoded;
         if report().is_break() {
             return Ok(Scoped::Stopped);
         }
@@ -595,38 +692,188 @@ fn encode_file(
 }
 
 /// A committed file must still be exactly what the plan produces:
-/// matching bytes. `false` means republish; only real I/O failures
-/// are errors.
-fn recover_file(fs: &dyn Fs, dir: &Path, file: &mut FilePlan) -> Result<bool, StoreError> {
-    let (mut handle, _meta) = match fs.open_regular(&dir.join(&file.name)) {
+/// matching bytes (EML) or matching decoded records (mboxrd). `false`
+/// means republish; only real I/O failures are errors.
+fn recover_file(
+    fs: &dyn Fs,
+    dir: &Path,
+    file: &mut FilePlan,
+    format: ExportFormat,
+) -> Result<bool, StoreError> {
+    let (mut handle, meta) = match fs.open_regular(&dir.join(&file.name)) {
         Ok(opened) => opened,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
         Err(error) => {
             return Err(unavailable("cannot open a committed export file")(error));
         }
     };
-    let [member] = file.members.as_slice() else {
-        return Ok(false);
-    };
-    let mut hasher = Sha256::new();
-    let mut buf = [0; STREAM_CHUNK];
-    let mut seen = 0u64;
-    loop {
-        let read = handle
-            .read(&mut buf)
-            .map_err(unavailable("cannot read a committed export file"))?;
-        if read == 0 {
-            break;
+    match format {
+        ExportFormat::Eml => {
+            let [member] = file.members.as_slice() else {
+                return Ok(false);
+            };
+            let mut hasher = Sha256::new();
+            let mut buf = [0; STREAM_CHUNK];
+            let mut seen = 0u64;
+            loop {
+                let read = handle
+                    .read(&mut buf)
+                    .map_err(unavailable("cannot read a committed export file"))?;
+                if read == 0 {
+                    break;
+                }
+                hasher.update(&buf[..read]);
+                seen += read as u64;
+            }
+            let digest: [u8; 32] = hasher.finalize().into();
+            if seen != member.object.byte_length() || digest[..] != member.object.sha256() {
+                return Ok(false);
+            }
+            file.bytes = seen;
+            Ok(true)
         }
-        hasher.update(&buf[..read]);
-        seen += read as u64;
+        ExportFormat::Mboxrd => recover_mbox(handle, meta.len(), file),
     }
-    let digest: [u8; 32] = hasher.finalize().into();
-    if seen != member.object.byte_length() || digest[..] != member.object.sha256() {
+}
+
+/// Check every record's fixed envelope bytes, decode it and withhold
+/// its last byte before hashing: a framing LF is transport, never
+/// acquisition bytes. The separator, the encoded span and the framing
+/// decision must reproduce the encoder's own output.
+fn recover_mbox(
+    mut handle: Box<dyn ReadFile>,
+    len: u64,
+    file: &mut FilePlan,
+) -> Result<bool, StoreError> {
+    let mut scanner = MboxScanner::new(io::BufReader::new(&mut handle));
+    let mut records = Vec::with_capacity(file.members.len());
+    for record in &mut scanner {
+        match record {
+            Ok(record) => records.push(record),
+            // Format damage means republish; a real read failure is an
+            // error, as in the EML check above.
+            Err(MboxError::Io { source, .. }) => {
+                return Err(unavailable("cannot read a committed export file")(source));
+            }
+            Err(_) => return Ok(false),
+        }
+        if records.len() > file.members.len() {
+            return Ok(false);
+        }
+    }
+    if records.len() != file.members.len()
+        || records.last().map_or(0, |record| record.byte_range().end) != len
+    {
         return Ok(false);
     }
-    file.bytes = seen;
+    for (record, member) in records.iter().zip(file.members.iter_mut()) {
+        // The separator is framing too: only the fixed envelope bytes
+        // prove a recovered record, not any `From ` line.
+        handle
+            .seek(SeekFrom::Start(record.separator_offset()))
+            .map_err(unavailable("cannot read a committed export file"))?;
+        let mut envelope = [0u8; MBOXRD_ENVELOPE.len()];
+        match handle.read_exact(&mut envelope) {
+            // A separator truncated at EOF is damage, not a failure.
+            Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => {
+                return Ok(false);
+            }
+            result => result.map_err(unavailable("cannot read a committed export file"))?,
+        }
+        if envelope.as_slice() != MBOXRD_ENVELOPE {
+            return Ok(false);
+        }
+        let mut decoded = record
+            .reader(&mut handle, MboxVariant::Mboxrd)
+            .map_err(unavailable("cannot reopen a committed export file"))?;
+        let mut digest = FramingHash {
+            hasher: Sha256::new(),
+            held: None,
+            last: 0,
+            fed: 0,
+            #[cfg(test)]
+            hash_updates: 0,
+        };
+        io::copy(&mut decoded, &mut digest)
+            .map_err(unavailable("cannot read a committed export file"))?;
+        let Some((framing, hash)) = digest.finish(member.object.byte_length()) else {
+            return Ok(false);
+        };
+        if hash[..] != member.object.sha256() {
+            return Ok(false);
+        }
+        member.offset = record.separator_offset();
+        member.encoded = record.byte_range().end - record.separator_offset();
+        member.framing_lf_added = framing;
+    }
+    file.bytes = len;
     Ok(true)
+}
+
+/// Hashes a decoded mbox record while withholding its last byte: the
+/// encoder's added LF must be excluded, and an LF-terminated original
+/// must not masquerade as framed.
+struct FramingHash {
+    hasher: Sha256,
+    held: Option<u8>,
+    last: u8,
+    fed: u64,
+    #[cfg(test)]
+    hash_updates: usize,
+}
+
+impl FramingHash {
+    fn feed(&mut self, bytes: &[u8]) {
+        let Some((&final_byte, prefix)) = bytes.split_last() else {
+            return;
+        };
+
+        if let Some(previous) = self.held.replace(final_byte) {
+            self.hasher.update([previous]);
+            #[cfg(test)]
+            {
+                self.hash_updates += 1;
+            }
+            self.last = previous;
+            self.fed += 1;
+        }
+
+        if !prefix.is_empty() {
+            self.hasher.update(prefix);
+            #[cfg(test)]
+            {
+                self.hash_updates += 1;
+            }
+            self.last = *prefix.last().expect("non-empty prefix");
+            self.fed += prefix.len() as u64;
+        }
+    }
+
+    fn finish(mut self, original: u64) -> Option<(bool, [u8; 32])> {
+        let total = self.fed + u64::from(self.held.is_some());
+        let framing = match total.checked_sub(original)? {
+            // The original itself, which must end in LF unless empty.
+            0 if original == 0 || self.held == Some(b'\n') => false,
+            // One framing LF past an unterminated original.
+            1 if original > 0 && self.held == Some(b'\n') && self.last != b'\n' => true,
+            _ => return None,
+        };
+        if !framing && let Some(byte) = self.held {
+            self.hasher.update([byte]);
+        }
+        Some((framing, self.hasher.finalize().into()))
+    }
+}
+
+impl Write for FramingHash {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.feed(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
 }
 
 /// The version-1 sidecar, streamed one record at a time: the frozen
@@ -684,8 +931,22 @@ fn write_manifest(
         };
         let file = match link {
             None => Value::Null,
-            &Some((file_index, _member_index)) => {
-                Value::String(plan.files[file_index].name.clone())
+            &Some((file_index, member_index)) => {
+                let file = &plan.files[file_index];
+                if matches!(plan.format, ExportFormat::Mboxrd) {
+                    let member = &file.members[member_index];
+                    record.insert("record_offset".to_owned(), member.offset.into());
+                    record.insert("encoded_bytes".to_owned(), member.encoded.into());
+                    record.insert(
+                        "original_bytes".to_owned(),
+                        member.object.byte_length().into(),
+                    );
+                    record.insert(
+                        "framing_lf_added".to_owned(),
+                        member.framing_lf_added.into(),
+                    );
+                }
+                Value::String(file.name.clone())
             }
         };
         record.insert("file".to_owned(), file);
@@ -809,5 +1070,115 @@ fn stream_error(message: &'static str) -> impl Fn(io::Error) -> StoreError {
         read_error_as_store_error(&error)
             .cloned()
             .unwrap_or_else(|| unavailable(message)(error))
+    }
+}
+
+#[cfg(test)]
+mod framing_hash_tests {
+    use super::*;
+
+    const TEST_CHUNK: usize = 8 * 1024;
+
+    #[derive(Clone, Copy)]
+    enum FeedPattern {
+        Whole,
+        Bytewise,
+        Mixed,
+    }
+
+    fn finish_with(bytes: &[u8], original: u64, pattern: FeedPattern) -> Option<(bool, [u8; 32])> {
+        let mut digest = FramingHash {
+            hasher: Sha256::new(),
+            held: None,
+            last: 0,
+            fed: 0,
+            hash_updates: 0,
+        };
+
+        match pattern {
+            FeedPattern::Whole => digest.feed(bytes),
+            FeedPattern::Bytewise => {
+                for byte in bytes {
+                    digest.feed(&[]);
+                    digest.feed(std::slice::from_ref(byte));
+                }
+            }
+            FeedPattern::Mixed => {
+                let first = bytes.len().min(1);
+                let second = bytes.len().min(3);
+                digest.feed(&bytes[..first]);
+                digest.feed(&[]);
+                digest.feed(&bytes[first..second]);
+                digest.feed(&bytes[second..]);
+            }
+        }
+
+        digest.finish(original)
+    }
+
+    fn sha256(bytes: &[u8]) -> [u8; 32] {
+        Sha256::digest(bytes).into()
+    }
+
+    #[test]
+    fn full_chunks_use_bounded_hash_updates() {
+        let mut bytes: Vec<u8> = (0..TEST_CHUNK * 2 - 1)
+            .map(|index| (index % 251 + 1) as u8)
+            .collect();
+        bytes.push(b'\n');
+        let mut digest = FramingHash {
+            hasher: Sha256::new(),
+            held: None,
+            last: 0,
+            fed: 0,
+            hash_updates: 0,
+        };
+
+        digest.feed(&bytes[..TEST_CHUNK]);
+        digest.feed(&bytes[TEST_CHUNK..]);
+
+        assert!(
+            digest.hash_updates <= 4,
+            "two input chunks used {} hash updates",
+            digest.hash_updates
+        );
+        assert_eq!(
+            digest.finish(bytes.len() as u64),
+            Some((false, sha256(&bytes)))
+        );
+    }
+
+    #[test]
+    fn framing_semantics_are_chunk_invariant() {
+        let valid = [
+            (&b""[..], 0, false, &b""[..]),
+            (&b"\n"[..], 1, false, &b"\n"[..]),
+            (&b"x\n"[..], 1, true, &b"x"[..]),
+            (&b"x\n"[..], 2, false, &b"x\n"[..]),
+            (&b"abcd\n"[..], 4, true, &b"abcd"[..]),
+            (&b"abcd\n"[..], 5, false, &b"abcd\n"[..]),
+        ];
+        let invalid = [
+            (&b"x"[..], 1),
+            (&b"\n"[..], 0),
+            (&b"x\n\n"[..], 2),
+            (&b"x\n"[..], 3),
+        ];
+
+        for pattern in [
+            FeedPattern::Whole,
+            FeedPattern::Bytewise,
+            FeedPattern::Mixed,
+        ] {
+            for (decoded, original, framing, hashed) in valid {
+                assert_eq!(
+                    finish_with(decoded, original, pattern),
+                    Some((framing, sha256(hashed)))
+                );
+            }
+            for (decoded, original) in invalid {
+                assert_eq!(finish_with(decoded, original, pattern), None);
+            }
+        }
     }
 }

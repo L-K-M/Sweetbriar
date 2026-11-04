@@ -443,6 +443,14 @@ fn source_json_round_trips_through_v1() {
     let source = &inventory.sources()[0];
 
     let json = source.to_json();
+    let expected = serde_json::json!({
+        "v": 1, "path": source.path().to_str().unwrap(), "mailbox": "solo",
+        "kind": "eml", "messages": 1, "quoting": "equivalent",
+        "snapshot": {"token": source.snapshot().token(),
+            "sha256": source.snapshot().sha256_hex(),
+            "byte_length": source.snapshot().byte_length()},
+    });
+    assert_eq!(json, expected.to_string());
     let rebuilt = SourceInventory::from_json(&json).unwrap();
     assert_eq!(rebuilt.to_json(), json);
     assert_eq!(rebuilt.path(), source.path());
@@ -732,4 +740,393 @@ fn captures_that_never_become_sources_are_removed() {
         "{:?}",
         snapshot_names(&scratch)
     );
+}
+
+#[test]
+fn source_json_v2_requires_a_bundle_matching_the_source() {
+    use serde_json::json;
+
+    let valid = json!({
+        "v": 2, "path": "/x/y.eml", "mailbox": "y", "kind": "eml",
+        "snapshot": {"token": "0".repeat(32), "sha256": "a".repeat(64), "byte_length": 3},
+        "messages": 1, "quoting": "equivalent",
+        "bundle": {
+            "manifest": {"token": "f".repeat(32), "sha256": "b".repeat(64), "byte_length": 9},
+            "format": "eml",
+        },
+    });
+    let built = SourceInventory::from_json(&valid.to_string()).unwrap();
+    assert_eq!(built.to_json(), valid.to_string());
+    assert_eq!(built.bundle().unwrap().manifest().token(), "f".repeat(32));
+    // A valid mboxrd member too.
+    let mut mbox = valid.clone();
+    mbox["path"] = json!("/x/m.mbox");
+    mbox["mailbox"] = json!("m");
+    mbox["kind"] = json!("mbox");
+    mbox["messages"] = json!(2);
+    mbox["snapshot"]["byte_length"] = json!(20);
+    mbox["bundle"]["format"] = json!("mboxrd");
+    assert!(SourceInventory::from_json(&mbox.to_string()).is_ok());
+
+    let reject = |broken: serde_json::Value| {
+        assert!(
+            SourceInventory::from_json(&broken.to_string()).is_err(),
+            "accepted {broken}"
+        );
+    };
+    // Version 2 without `bundle`.
+    let mut broken = valid.clone();
+    broken.as_object_mut().unwrap().remove("bundle");
+    reject(broken);
+    // Version 1 must not carry one.
+    let mut broken = valid.clone();
+    broken["v"] = json!(1);
+    reject(broken);
+    // Unknown format, and a format/kind mismatch.
+    let mut broken = valid.clone();
+    broken["bundle"]["format"] = json!("zip");
+    reject(broken);
+    let mut broken = valid.clone();
+    broken["bundle"]["format"] = json!("mboxrd");
+    reject(broken);
+    // A bundle source's quoting is decided, never ambiguous.
+    let mut broken = valid.clone();
+    broken["quoting"] = json!("ambiguous");
+    reject(broken);
+    // The manifest reference validates like a snapshot's.
+    let mut broken = valid.clone();
+    broken["bundle"]["manifest"]["sha256"] = json!("A".repeat(64));
+    reject(broken);
+    let mut broken = valid.clone();
+    broken["bundle"].as_object_mut().unwrap().remove("manifest");
+    reject(broken);
+}
+
+#[test]
+fn bundle_manifest_precedes_package_and_never_imports_plain() {
+    let (scratch, res) = resources("bundle-pending");
+    let parent = scratch.path().join("imports");
+    fs::create_dir(&parent).unwrap();
+    let package = parent.join("Export.mbox");
+    fs::create_dir(&package).unwrap();
+    fs::write(package.join("mbox"), MBOX_ONE).unwrap();
+    fs::write(package.join("sweetbriar-metadata.json"), b"{}").unwrap();
+
+    for root in [package.clone(), parent] {
+        let inventory = run(&res, &[root]);
+        assert!(inventory.sources().is_empty());
+        assert_eq!(inventory.problems().len(), 1);
+        assert!(inventory.problems()[0].detail().contains("manifest"));
+        assert!(snapshot_names(&scratch).is_empty());
+    }
+}
+
+#[test]
+fn explicitly_selected_manifest_is_refused() {
+    let (scratch, res) = resources("chosen-manifest");
+    let manifest = scratch.path().join("sweetbriar-metadata.json");
+    fs::write(&manifest, MBOX_ONE).unwrap();
+    let inventory = run(&res, &[manifest]);
+    assert!(inventory.sources().is_empty());
+    assert_eq!(inventory.problems().len(), 1);
+    assert!(inventory.problems()[0].detail().contains("directory"));
+}
+
+#[test]
+fn bundle_capture_and_parser_cancellation_remove_only_its_snapshot() {
+    let (scratch, res) = resources("bundle-cancel");
+    let other = scratch.path().join("other.eml");
+    fs::write(&other, EML).unwrap();
+    let kept = run(&res, &[other]);
+    assert_eq!(kept.sources().len(), 1);
+    let before = snapshot_names(&scratch);
+    let dir = scratch.path().join("bundle");
+    fs::create_dir(&dir).unwrap();
+    fs::write(
+        dir.join("sweetbriar-metadata.json"),
+        format!("\"{}\"", "x".repeat(100_000)),
+    )
+    .unwrap();
+
+    for phase in ["capture", "verify", "parse"] {
+        let mut observed = false;
+        let mut previous_scan = 0;
+        let outcome = res.inventory_import_sources(std::slice::from_ref(&dir), |event| {
+            let stop = match event {
+                ImportProgress::Capturing { bytes, .. } if phase == "capture" => bytes > 0,
+                ImportProgress::Scanning { bytes, .. } => {
+                    let parsing = bytes < previous_scan;
+                    previous_scan = bytes;
+                    (phase == "verify" && bytes > 0) || (phase == "parse" && parsing)
+                }
+                _ => false,
+            };
+            if stop {
+                observed = true;
+                ControlFlow::Break(())
+            } else {
+                ControlFlow::Continue(())
+            }
+        });
+        assert!(observed);
+        assert!(matches!(outcome, ImportInventoryOutcome::Cancelled(_)));
+        assert_eq!(snapshot_names(&scratch), before);
+    }
+}
+
+fn table_manifest(files: &str) -> String {
+    format!(
+        r#"{{"messages":[],"files":{files},"ids_sha256":"{}","entries":0,"generation":1,"scope":{{"generation":1,"id":1,"kind":"mailbox"}},"destination":"/destination","format":"eml","job":"j","kind":"export-manifest","v":1}}"#,
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    )
+}
+
+#[test]
+fn message_rescans_cancel_and_preserve_other_snapshots() {
+    let (scratch, res) = resources("bundle-message-scans");
+    let other = scratch.path().join("other.eml");
+    fs::write(&other, EML).unwrap();
+    assert_eq!(run(&res, &[other]).sources().len(), 1);
+    let before = snapshot_names(&scratch);
+    let dir = scratch.path().join("bundle");
+    fs::create_dir(&dir).unwrap();
+    let message = r##"{"v":1,"occurrence_id":1,"message_id":2,"account":{"id":"a","name":"a"},"mailbox":{"id":1,"name":"m"},"occurrence_state":"present","flags":{"seen":false,"flagged":false,"answered":false,"draft":false,"deleted":false},"keywords":["a","b"],"acquisition":null,"body_availability":"not_acquired","tags":[{"id":"a","name":"a","color_srgb":null},{"id":"b","name":"b","color_srgb":"#010203"},{"id":"c","name":"c","color_srgb":null}],"note":null,"file":null}"##;
+    let manifest =
+        table_manifest("[]").replace("\"messages\":[]", &format!("\"messages\":[{message}]"));
+    fs::write(dir.join("sweetbriar-metadata.json"), &manifest).unwrap();
+    assert_eq!(
+        run(&res, std::slice::from_ref(&dir)).problems()[0].kind(),
+        ImportProblemKind::Unsupported
+    );
+    assert_eq!(snapshot_names(&scratch), before);
+
+    let mut previous = 0;
+    let mut seeks = 0;
+    let outcome = res.inventory_import_sources(std::slice::from_ref(&dir), |event| {
+        if let ImportProgress::Scanning { bytes, .. } = event {
+            if bytes == previous {
+                seeks += 1;
+            }
+            previous = bytes;
+            if seeks == 6 {
+                return ControlFlow::Break(());
+            }
+        }
+        ControlFlow::Continue(())
+    });
+    assert_eq!(seeks, 6);
+    assert!(matches!(outcome, ImportInventoryOutcome::Cancelled(_)));
+    assert_eq!(snapshot_names(&scratch), before);
+
+    fs::write(
+        dir.join("sweetbriar-metadata.json"),
+        manifest.replace(
+            "\"occurrence_state\":\"present\"",
+            "\"occurrence_state\":\"bad\"",
+        ),
+    )
+    .unwrap();
+    assert_eq!(
+        run(&res, &[dir]).problems()[0].kind(),
+        ImportProblemKind::Failed
+    );
+    assert_eq!(snapshot_names(&scratch), before);
+}
+
+#[test]
+fn bundle_file_table_scans_cancel_and_preserve_other_snapshots() {
+    let (scratch, res) = resources("bundle-file-scans");
+    let other = scratch.path().join("other.eml");
+    fs::write(&other, EML).unwrap();
+    assert_eq!(run(&res, &[other]).sources().len(), 1);
+    let before = snapshot_names(&scratch);
+    let dir = scratch.path().join("bundle");
+    fs::create_dir(&dir).unwrap();
+
+    for files in [
+        r#"[{"name":"a","bytes":0,"records":0},{"name":"b","bytes":1,"records":1},{"name":"c","bytes":2,"records":2}]"#,
+        r#"[{"name":"a","bytes":0,"records":0},{"name":"\u0061","bytes":0,"records":0}]"#,
+    ] {
+        fs::write(dir.join("sweetbriar-metadata.json"), table_manifest(files)).unwrap();
+        let mut previous = 0;
+        let mut seeks = 0;
+        let outcome = res.inventory_import_sources(std::slice::from_ref(&dir), |event| {
+            if let ImportProgress::Scanning { bytes, .. } = event {
+                if bytes == previous {
+                    seeks += 1;
+                }
+                previous = bytes;
+            }
+            ControlFlow::Continue(())
+        });
+        assert!(matches!(outcome, ImportInventoryOutcome::Complete(_)));
+        assert!(seeks >= 3);
+        assert_eq!(snapshot_names(&scratch), before);
+
+        for stop_at in 1..=seeks {
+            let mut previous = 0;
+            let mut observed = 0;
+            let outcome = res.inventory_import_sources(std::slice::from_ref(&dir), |event| {
+                if let ImportProgress::Scanning { bytes, .. } = event {
+                    if bytes == previous {
+                        observed += 1;
+                    }
+                    previous = bytes;
+                    if observed == stop_at {
+                        return ControlFlow::Break(());
+                    }
+                }
+                ControlFlow::Continue(())
+            });
+            assert!(
+                matches!(outcome, ImportInventoryOutcome::Cancelled(_)),
+                "seek {stop_at}"
+            );
+            assert_eq!(snapshot_names(&scratch), before);
+        }
+    }
+    let files = (0..65)
+        .map(|n| format!(r#"{{"name":"{n}","bytes":0,"records":0}}"#))
+        .collect::<Vec<_>>()
+        .join(",");
+    fs::write(
+        dir.join("sweetbriar-metadata.json"),
+        table_manifest(&format!("[{files}]")),
+    )
+    .unwrap();
+    for stop_at in [64, 65, 66] {
+        let mut previous = 0;
+        let mut seeks = 0;
+        let outcome = res.inventory_import_sources(std::slice::from_ref(&dir), |event| {
+            if let ImportProgress::Scanning { bytes, .. } = event {
+                if bytes == previous {
+                    seeks += 1;
+                }
+                previous = bytes;
+                if seeks == stop_at {
+                    return ControlFlow::Break(());
+                }
+            }
+            ControlFlow::Continue(())
+        });
+        assert!(
+            matches!(outcome, ImportInventoryOutcome::Cancelled(_)),
+            "seek {stop_at}"
+        );
+        assert_eq!(snapshot_names(&scratch), before);
+    }
+    fs::write(dir.join("sweetbriar-metadata.json"), b"{\"files\":[").unwrap();
+    assert_eq!(
+        run(&res, &[dir]).problems()[0].kind(),
+        ImportProblemKind::Failed
+    );
+    assert_eq!(snapshot_names(&scratch), before);
+}
+
+#[test]
+fn bundle_file_table_handles_large_names_and_many_entries() {
+    let (scratch, res) = resources("bundle-large-table");
+    let dir = scratch.path().join("bundle");
+    fs::create_dir(&dir).unwrap();
+    let long = "a".repeat(100_000);
+    let files = format!(
+        r#"[{{"name":"{long}","bytes":18446744073709551615,"records":0}},{{"name":"b","bytes":0,"records":0}}]"#
+    );
+    fs::write(dir.join("sweetbriar-metadata.json"), table_manifest(&files)).unwrap();
+    let inventory = run(&res, std::slice::from_ref(&dir));
+    assert!(inventory.sources().is_empty());
+    assert_eq!(
+        inventory.problems()[0].kind(),
+        ImportProblemKind::Unsupported
+    );
+    let duplicate = format!(
+        r#"[{{"name":"{long}","bytes":0,"records":0}},{{"name":"\u0061{}","bytes":0,"records":0}}]"#,
+        &long[1..]
+    );
+    fs::write(
+        dir.join("sweetbriar-metadata.json"),
+        table_manifest(&duplicate),
+    )
+    .unwrap();
+    let inventory = run(&res, std::slice::from_ref(&dir));
+    assert_eq!(inventory.problems()[0].kind(), ImportProblemKind::Failed);
+    let mut entries = (0..64)
+        .map(|n| format!(r#"{{"name":"{n}","bytes":0,"records":0}}"#))
+        .collect::<Vec<_>>();
+    entries.push(r#"{"name":"\u0030","bytes":0,"records":0}"#.to_owned());
+    fs::write(
+        dir.join("sweetbriar-metadata.json"),
+        table_manifest(&format!("[{}]", entries.join(","))),
+    )
+    .unwrap();
+    assert_eq!(
+        run(&res, std::slice::from_ref(&dir)).problems()[0].kind(),
+        ImportProblemKind::Failed
+    );
+    let files = (0..2_000)
+        .map(|n| format!(r#"{{"name":"{n}","bytes":0,"records":0}}"#))
+        .collect::<Vec<_>>()
+        .join(",");
+    fs::write(
+        dir.join("sweetbriar-metadata.json"),
+        table_manifest(&format!("[{files}]")),
+    )
+    .unwrap();
+    let inventory = run(&res, &[dir]);
+    assert!(inventory.sources().is_empty());
+    assert_eq!(
+        inventory.problems()[0].kind(),
+        ImportProblemKind::Unsupported
+    );
+    assert!(snapshot_names(&scratch).is_empty());
+}
+
+#[test]
+fn invalid_manifest_is_reported_and_removed() {
+    let (scratch, res) = resources("bundle-invalid");
+    let dir = scratch.path().join("bundle");
+    fs::create_dir(&dir).unwrap();
+    fs::write(dir.join("sweetbriar-metadata.json"), b"{\"broken\":").unwrap();
+    fs::write(dir.join("mail.eml"), EML).unwrap();
+    let inventory = run(&res, &[dir]);
+    assert!(inventory.sources().is_empty());
+    assert_eq!(inventory.problems()[0].kind(), ImportProblemKind::Failed);
+    assert!(
+        inventory.problems()[0]
+            .detail()
+            .contains("invalid manifest JSON")
+    );
+    assert!(snapshot_names(&scratch).is_empty());
+}
+
+#[test]
+fn manifest_directory_does_not_make_bundle_and_direct_mbox_is_plain() {
+    let (scratch, res) = resources("not-bundle");
+    let dir = scratch.path().join("mail");
+    fs::create_dir(&dir).unwrap();
+    fs::create_dir(dir.join("sweetbriar-metadata.json")).unwrap();
+    fs::write(dir.join("one.mbox"), MBOX_ONE).unwrap();
+    assert_eq!(run(&res, std::slice::from_ref(&dir)).sources().len(), 1);
+    fs::remove_dir(dir.join("sweetbriar-metadata.json")).unwrap();
+    fs::write(dir.join("sweetbriar-metadata.json"), b"{}").unwrap();
+    assert_eq!(run(&res, &[dir.join("one.mbox")]).sources().len(), 1);
+}
+
+#[cfg(unix)]
+#[test]
+fn bundle_aliases_are_refused_once() {
+    use std::os::unix::fs::symlink;
+    let (scratch, res) = resources("bundle-aliases");
+    let dir = scratch.path().join("bundle.mbox");
+    fs::create_dir(&dir).unwrap();
+    fs::write(dir.join("mbox"), MBOX_ONE).unwrap();
+    let actual = scratch.path().join("manifest");
+    fs::write(&actual, b"{}").unwrap();
+    symlink(&actual, dir.join("sweetbriar-metadata.json")).unwrap();
+    let alias = scratch.path().join("alias");
+    symlink(&dir, &alias).unwrap();
+    let inventory = run(&res, &[alias, dir]);
+    assert!(inventory.sources().is_empty());
+    assert_eq!(inventory.problems().len(), 1);
+    assert!(snapshot_names(&scratch).is_empty());
 }

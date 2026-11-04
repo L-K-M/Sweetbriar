@@ -235,6 +235,47 @@ public struct PaletteColor: Sendable, Equatable {
     }
 }
 
+/// A preset or custom account color supplied to the setter.
+public enum AccountColor: Sendable, Equatable {
+    case paletteV1(slot: UInt8)
+    case custom(colorSrgb: String)
+
+    var generated: SweetbriarCore.AccountColor {
+        switch self {
+        case .paletteV1(let slot): return .paletteV1(slot: slot)
+        case .custom(let color): return .custom(colorSrgb: color)
+        }
+    }
+}
+
+public struct AccountAppearanceChange: Sendable, Equatable {
+    public var color: AccountColor
+    public var symbol: String?
+
+    public init(color: AccountColor, symbol: String?) {
+        self.color = color
+        self.symbol = symbol
+    }
+
+    var generated: SweetbriarCore.AccountAppearanceChange {
+        .init(color: color.generated, symbol: symbol)
+    }
+}
+
+public struct IdentityAppearanceChange: Sendable, Equatable {
+    public var colorOverrideSrgb: String?
+    public var symbolOverride: String?
+
+    public init(colorOverrideSrgb: String?, symbolOverride: String?) {
+        self.colorOverrideSrgb = colorOverrideSrgb
+        self.symbolOverride = symbolOverride
+    }
+
+    var generated: SweetbriarCore.IdentityAppearanceChange {
+        .init(colorOverrideSrgb: colorOverrideSrgb, symbolOverride: symbolOverride)
+    }
+}
+
 /// What an appearance subscription reports (spec/07).
 public enum AppearanceEvent: Sendable, Equatable {
     /// Committed appearance changed; re-read `appearance()`.
@@ -246,12 +287,18 @@ public enum AppearanceEvent: Sendable, Equatable {
 
 /// The appearance queries a model needs from the core (spec/07).
 /// `CoreBridge` adopts it; tests substitute a fake.
-public protocol AppearanceSource: Sendable {
+public protocol AppearanceSource: AnyObject, Sendable {
     /// `appearance()`: the resolved snapshot and its generation mark.
     func appearance() async throws -> Appearance
     /// `subscribe_appearance(generation)`: committed appearance
     /// changes from `generation`, pulled one `next` at a time.
     func appearanceEvents(generation: UInt64) async throws -> any AppearanceEventSource
+    func setAccountAppearance(
+        accountId: String, expectedRevision: Int64, change: AccountAppearanceChange
+    ) async throws -> Receipt
+    func setIdentityAppearance(
+        identityId: String, expectedRevision: Int64?, change: IdentityAppearanceChange
+    ) async throws -> Receipt
     /// The v1 account palette, a constant (spec/02).
     func palette() -> [PaletteColor]
 }
@@ -293,6 +340,25 @@ public final class AppearanceModel {
         self.source = source
     }
 
+    /// The subscription publishes the committed snapshot after a setter succeeds.
+    @discardableResult
+    public func setAccountAppearance(
+        accountId: String, expectedRevision: Int64, change: AccountAppearanceChange
+    ) async throws -> Receipt {
+        try await source.setAccountAppearance(
+            accountId: accountId, expectedRevision: expectedRevision, change: change
+        )
+    }
+
+    @discardableResult
+    public func setIdentityAppearance(
+        identityId: String, expectedRevision: Int64?, change: IdentityAppearanceChange
+    ) async throws -> Receipt {
+        try await source.setIdentityAppearance(
+            identityId: identityId, expectedRevision: expectedRevision, change: change
+        )
+    }
+
     /// Load `appearance()`, then pull its subscription until the
     /// calling task is cancelled or a read or pull fails: an
     /// `invalidated` re-reads on the same stream; `resetRequired`
@@ -306,6 +372,7 @@ public final class AppearanceModel {
         do {
             outer: while !Task.isCancelled {
                 let snapshot = try await readOnce()
+                try Task.checkCancellation()
                 let events = try await source.appearanceEvents(generation: snapshot.generation)
                 while !Task.isCancelled {
                     switch try await events.next() {
@@ -325,6 +392,7 @@ public final class AppearanceModel {
     /// Read `appearance()` and publish it, clearing the last failure.
     private func readOnce() async throws -> Appearance {
         let snapshot = try await source.appearance()
+        try Task.checkCancellation()
         appearance = snapshot
         lastError = nil
         return snapshot

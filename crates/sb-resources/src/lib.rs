@@ -58,8 +58,8 @@ pub use seen::{ReceivedCommit, ReceivedPreparation, ReceivedRevisions, ReceivedS
 // defaults.
 pub use acquire::{AcquiredMessage, FlagExtraction, SourceAcquisition, SourcePosition};
 pub use import::{
-    ImportInventory, ImportInventoryOutcome, ImportProblem, ImportProblemKind, ImportProgress,
-    SourceInventory, SourceKind,
+    BundleFormat, ImportInventory, ImportInventoryOutcome, ImportProblem, ImportProblemKind,
+    ImportProgress, SourceBundle, SourceInventory, SourceKind,
 };
 pub use import_jobs::{
     ImportJobBatch, ImportJobCheckpoint, ImportJobRecord, ImportTotals, LISTED_PROBLEMS,
@@ -241,7 +241,7 @@ impl Resources {
 
     /// Blocking file writer for a sealed export capture (spec/09
     /// "Export file output"): claims the destination, streams verified
-    /// acquisitions per message (EML; mboxrd lands in M1.7c2), then
+    /// acquisitions per message (EML) or per mailbox (mboxrd), then
     /// publishes the version-1 manifest; `Break` stops before the next
     /// commit.
     pub fn export_files(

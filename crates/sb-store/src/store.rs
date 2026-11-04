@@ -81,7 +81,7 @@ pub(crate) const CLEAN_SHUTDOWN_KEY: &str = "clean_shutdown_at";
 pub struct Store {
     readers: Readers,
     pub(crate) writer: Arc<Writer>,
-    objects: FileObjectStore,
+    objects: Arc<FileObjectStore>,
     pub(crate) backups: crate::backups::Backups,
     pub(crate) activation: crate::activation::inputs::Owner,
     source_snapshots: ImportSourceSnapshots,
@@ -125,6 +125,21 @@ impl Store {
             ));
         }
         self.backups.snapshot(destination)
+    }
+
+    /// Publish a pinned snapshot as a verified, durable backup generation.
+    /// Blocking; never call on the writer thread. A failure leaves the
+    /// generation in progress for interrupted-generation recovery.
+    pub fn complete_backup(
+        &self,
+        snapshot: crate::backups::BackupSnapshot,
+    ) -> Result<crate::backups::BackupReceipt, StoreError> {
+        if self.writer.is_writer_thread() {
+            return Err(StoreError::internal(
+                "the writer thread cannot back up through its own queue",
+            ));
+        }
+        self.backups.complete(snapshot)
     }
 
     /// Stream a full capture through bounded writer turns. Blocking;
@@ -171,6 +186,15 @@ impl Store {
         snapshot: &crate::ImportSourceSnapshot,
     ) -> Result<Box<dyn sb_types::fs::ReadFile>, StoreError> {
         self.source_snapshots.open(snapshot)
+    }
+
+    /// Verify and reopen a private copy, checking cancellation during hashing.
+    pub fn open_import_source_cancellable(
+        &self,
+        snapshot: &crate::ImportSourceSnapshot,
+        progress: impl FnMut(u64) -> std::ops::ControlFlow<()>,
+    ) -> Result<crate::Scoped<Box<dyn sb_types::fs::ReadFile>>, StoreError> {
+        self.source_snapshots.open_cancellable(snapshot, progress)
     }
 
     /// Terminal-job cleanup (spec/03): remove these private copies and
@@ -435,14 +459,14 @@ pub(crate) fn open_with(
     // The layout exists: the object store can publish into it. Built
     // only now, so every publication reserves through the writer and
     // no earlier open step could publish unreserved (spec/03).
-    let objects = FileObjectStore::new(
+    let objects = Arc::new(FileObjectStore::new(
         Arc::clone(seams.fs_arc()),
         Arc::clone(seams.random_arc()),
         paths.objects().to_path_buf(),
         paths.recovery().to_path_buf(),
         Arc::clone(&writer),
         Arc::clone(seams.clock_arc()),
-    );
+    ));
     // The backup coordinator snapshots through its own connection, so
     // the copy never holds the writer (spec/03 "Backup generations").
     let backups = crate::backups::Backups::new(
@@ -452,6 +476,7 @@ pub(crate) fn open_with(
         Arc::clone(&writer),
         paths.state_db().to_path_buf(),
         paths.backups().to_path_buf(),
+        Arc::clone(&objects),
     );
     Ok(Store {
         readers,

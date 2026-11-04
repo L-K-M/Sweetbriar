@@ -92,8 +92,11 @@ fn confirm(
 
 /// Row counts straight from the store.
 fn count(engine: &Engine, sql: &'static str) -> i64 {
-    engine
-        .resources()
+    resource_count(engine.resources(), sql)
+}
+
+fn resource_count(resources: &Resources, sql: &'static str) -> i64 {
+    resources
         .read(|tx| {
             tx.query_row(sql, [], |row| row.get(0))
                 .map_err(|e| StoreError::internal(e.to_string()))
@@ -246,25 +249,65 @@ fn cancelling_a_running_job_stops_it_durably() {
 #[test]
 fn shutdown_pauses_ingest_and_the_next_open_resumes_without_duplicates() {
     let scratch = ScratchDir::new("import-pause");
-    let path = scratch.path().join("Big.mbox");
-    fs::write(&path, mbox(260)).unwrap();
+    let path = scratch.path().join("Two.mbox");
+    fs::write(&path, mbox(2)).unwrap();
     let root = scratch.path().join("store");
     let engine = open(&root);
-    let id = start(&engine, &[path]);
-    settle(&engine, &id, ImportJobState::AwaitingConfirmation);
-    confirm(&engine, &id, vec![]).unwrap();
-    // Wherever ingest is, shutdown waits for it to pause or finish.
+    let id = plant(&engine, &path, ImportJobState::Running, 1);
+
+    // Park after one commit and leave only the next gather unstarted.
+    let (entered, reached) = mpsc::channel();
+    *engine
+        .imports()
+        .before_task
+        .lock()
+        .expect("a panicking thread held the import job registry") =
+        Some(Arc::new(move |shutting_down| {
+            entered.send(()).unwrap();
+            while !shutting_down() {
+                std::thread::yield_now();
+            }
+        }));
+    engine.recover_imports().unwrap();
+    reached.recv_timeout(PATIENCE).unwrap();
+    let paused = status(&engine, &id);
+    assert_eq!(paused.state(), ImportJobState::Running);
+    assert_eq!(paused.checkpoint().totals().processed, 1);
+    assert_eq!(count(&engine, "SELECT count(*) FROM occurrences"), 1);
+
+    // The real shutdown signal releases the hook; gather then stops.
     block_on(engine.shutdown()).unwrap();
+
+    // Read without Engine recovery: shutdown must have left one owed row.
+    let resources = Resources::open(&root).unwrap();
+    let stored = resources.read(|tx| import_job(tx, &id)).unwrap();
+    assert_eq!(stored.state(), ImportJobState::Running);
+    assert_eq!(
+        (
+            stored.checkpoint().totals().processed,
+            stored.checkpoint().totals().imported
+        ),
+        (1, 1)
+    );
+    assert_eq!(
+        resource_count(&resources, "SELECT count(*) FROM occurrences"),
+        1
+    );
+    assert_eq!(
+        resource_count(&resources, "SELECT count(*) FROM acquisition_sources"),
+        1
+    );
+    resources.close().unwrap();
 
     let engine = open(&root);
     let done = settle(&engine, &id, ImportJobState::Completed);
     let totals = done.checkpoint().totals();
-    assert_eq!((totals.processed, totals.imported), (260, 260));
-    assert_eq!((totals.read_from_headers, totals.read_default), (1, 259));
-    assert_eq!(count(&engine, "SELECT count(*) FROM occurrences"), 260);
+    assert_eq!((totals.processed, totals.imported), (2, 2));
+    assert_eq!((totals.read_from_headers, totals.read_default), (1, 1));
+    assert_eq!(count(&engine, "SELECT count(*) FROM occurrences"), 2);
     assert_eq!(
         count(&engine, "SELECT count(*) FROM acquisition_sources"),
-        260
+        2
     );
     block_on(engine.shutdown()).unwrap();
 }
@@ -864,7 +907,7 @@ fn replayed_cancel_on_live_import(engine: &Engine, job: &Path, key: &str) -> (St
         .imports()
         .before_task
         .lock()
-        .expect("a panicking thread held the import job registry") = Some(Arc::new(move || {
+        .expect("a panicking thread held the import job registry") = Some(Arc::new(move |_| {
         entered.send(()).unwrap();
         released.lock().unwrap().recv().unwrap();
     }));
@@ -920,7 +963,7 @@ fn a_replayed_cancel_key_cannot_stop_another_live_ingest() {
         .imports()
         .before_task
         .lock()
-        .expect("a panicking thread held the import job registry") = Some(Arc::new(move || {
+        .expect("a panicking thread held the import job registry") = Some(Arc::new(move |_| {
         entered.send(()).unwrap();
         released.lock().unwrap().recv().unwrap();
     }));
@@ -977,5 +1020,118 @@ fn a_replayed_cancel_key_cannot_rewrite_another_jobs_report() {
         a_report.exists(),
         "the replay did not redo the receipt target's cleanup"
     );
+    block_on(engine.shutdown()).unwrap();
+}
+
+/// Plant v2 sources without discovery; d1b will create these inventories.
+fn plant_bundle(engine: &Engine, dir: &Path, state: ImportJobState) -> (String, String) {
+    let paths: Vec<_> = ["one.eml", "two.eml", "manifest.eml"]
+        .iter()
+        .map(|name| dir.join(name))
+        .collect();
+    for path in &paths {
+        fs::write(path, b"Subject: synthetic\n\nbody\n").unwrap();
+    }
+    let ImportInventoryOutcome::Complete(inventory) = engine
+        .resources()
+        .inventory_import_sources(&paths, |_| ControlFlow::Continue(()))
+    else {
+        panic!("inventory cancelled");
+    };
+    assert!(inventory.problems().is_empty());
+    let sources = inventory.sources();
+    let manifest: serde_json::Value = serde_json::from_str(&sources[2].to_json()).unwrap();
+    let token = sources[2].snapshot().token().to_owned();
+    let sources: Vec<_> = sources[..2]
+        .iter()
+        .map(|source| {
+            let mut json: serde_json::Value = serde_json::from_str(&source.to_json()).unwrap();
+            json["v"] = 2.into();
+            json["bundle"] = serde_json::json!({"manifest": manifest["snapshot"], "format": "eml"});
+            SourceInventory::from_json(&json.to_string()).unwrap()
+        })
+        .collect();
+    let snapshots = all_snapshots(sources.iter());
+    assert_eq!(snapshots.len(), 3);
+    assert_eq!(snapshots.iter().filter(|s| s.token() == token).count(), 1);
+    let id = engine.resources().new_uuid_string();
+    let job = id.clone();
+    let now = engine.resources().now();
+    block_on(engine.resources().write(WritePriority::Sync, move |tx| {
+        create_import_job(tx, &job, &paths, now)?;
+        record_import_sources(tx, &job, 0, &sources)?;
+        let checkpoint = ImportJobCheckpoint::inventoried(&sources, &[]);
+        let waiting = advance_import_job(
+            tx,
+            &job,
+            1,
+            ImportJobState::AwaitingConfirmation,
+            &checkpoint,
+            now,
+        )?;
+        if state == ImportJobState::Running {
+            advance_import_job(
+                tx,
+                &job,
+                waiting.revision(),
+                state,
+                waiting.checkpoint(),
+                now,
+            )?;
+        }
+        Ok(())
+    }))
+    .unwrap();
+    (id, token)
+}
+
+#[test]
+fn bundle_resume_verifies_manifest_and_refuses_unverified_ingest() {
+    for damage in ["none", "missing", "corrupt"] {
+        let scratch = ScratchDir::new("bundle-resume");
+        let root = scratch.path().join("store");
+        let engine = open(&root);
+        let (id, token) = plant_bundle(&engine, scratch.path(), ImportJobState::Running);
+        block_on(engine.shutdown()).unwrap();
+        let manifest = root.join("recovery").join(format!("import-source-{token}"));
+        match damage {
+            "missing" => fs::remove_file(manifest).unwrap(),
+            "corrupt" => fs::write(manifest, b"corrupt").unwrap(),
+            _ => (),
+        }
+        let engine = open(&root);
+        let failed = settle(&engine, &id, ImportJobState::Failed);
+        let failure = failed.checkpoint().failure().unwrap();
+        if damage == "none" {
+            assert!(failure.contains("M1.7d2"), "{failure}");
+        } else {
+            assert!(failure.contains(&token), "{failure}");
+        }
+        assert_eq!(failed.checkpoint().totals().processed, 0);
+        assert!(
+            failed
+                .sources()
+                .iter()
+                .all(|s| s.position() == SourcePosition::START)
+        );
+        assert_eq!(count(&engine, "SELECT count(*) FROM occurrences"), 0);
+        block_on(engine.shutdown()).unwrap();
+    }
+}
+
+#[test]
+fn cancelling_bundle_removes_shared_snapshots() {
+    let scratch = ScratchDir::new("bundle-cleanup");
+    let root = scratch.path().join("store");
+    let engine = open(&root);
+    let (id, _) = plant_bundle(
+        &engine,
+        scratch.path(),
+        ImportJobState::AwaitingConfirmation,
+    );
+    assert_eq!(snapshots(&root), 3);
+    block_on(engine.cancel_job(&engine.new_idempotency_key(), &id)).unwrap();
+    assert_eq!(snapshots(&root), 0);
+    assert!(report(&engine, &id).contains("\"state\": \"cancelled\""));
     block_on(engine.shutdown()).unwrap();
 }

@@ -126,6 +126,21 @@ pub(crate) fn open(
     variant: Option<MboxVariant>,
     position: SourcePosition,
 ) -> Result<SourceAcquisition, StoreError> {
+    // A bundle source ingests only through manifest-verified
+    // acquisition, which M1.7d2 adds; it never falls back to the plain
+    // path (spec/09 "Export bundles"). Its manifest snapshot verifies
+    // exactly like a source's, so a missing or corrupt copy fails the
+    // job the same way.
+    if let Some(bundle) = source.bundle() {
+        store.open_import_source(bundle.manifest())?;
+        return Err(StoreError::Unavailable {
+            reason: format!(
+                "{} is an export bundle member; manifest-verified ingest arrives with M1.7d2",
+                source.path().display()
+            ),
+            io_kind: None,
+        });
+    }
     let variant = match (source.quoting(), variant) {
         (_, Some(variant)) => variant,
         (MboxQuoting::Equivalent, None) => MboxVariant::Mboxrd,

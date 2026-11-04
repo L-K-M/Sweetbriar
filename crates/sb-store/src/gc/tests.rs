@@ -594,6 +594,7 @@ fn an_unlink_first_lets_the_republished_reservation_install_anew() {
     store.objects().set_pauses(Pauses {
         before_reservation: Some(Arc::clone(&reservation_gate)),
         before_unlink: Some(Arc::clone(&unlink_gate)),
+        ..Default::default()
     });
     let on_thread = Arc::clone(&store);
     let pass = std::thread::spawn(move || on_thread.collect_garbage(GC_GRACE_PERIOD));

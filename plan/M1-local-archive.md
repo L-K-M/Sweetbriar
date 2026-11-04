@@ -950,11 +950,47 @@ local drafts. No network yet.
       hashes, the mboxrd manifest fields, the `sb-mime`
       `MBOXRD_ENVELOPE` constant and their tests; same qualifications
       for the mboxrd format.
-  - **M1.7d Manifest-aware import — L:** capture and verify the sidecar
-    with the source, validate mboxrd framing/length/hash before ingest,
-    and include the framing identity in replay. Native imports of c's
-    bundles preserve unterminated acquisitions and multiplicity; malformed
-    framing never silently trims bytes or falls back to changed originals.
+  - **M1.7d1a Bundle source metadata and safe lifecycle — M:** persist
+    bundle source metadata and manifest snapshot references, verify the
+    snapshot on resume, refuse unverified ingest until d2, and remove shared
+    snapshots once at terminal cleanup. Plain source metadata stays unchanged.
+  - **M1.7d1b1a Bounded JSON syntax and refusal — M:** recognise bundle
+    directories before Apple packages, capture the manifest, check JSON syntax
+    with bounded state, discard the snapshot and refuse bundle import. Directly
+    chosen manifests are refused; direct `.mbox` files remain plain. Capture
+    and parser reads check cancellation; Store snapshot verification before
+    returning its handle does not yet check cancellation.
+  - **M1.7d1b1b1 Manifest envelope and scope — L:** validate the version-1
+    envelope and scope through the bundle caller, with bounded parsing and
+    cancellable snapshot verification. Bundles remain refused and discarded.
+    File and message schemas, consumed-byte ranges, names and references
+    remain deferred to b1b2. Invalid nested fields, availability, spans and
+    file relationships are tested there before any bundle can be retained.
+  - **M1.7d1b1b2a Manifest file-table validation — L:** validate each file
+    entry's shape, counts and unique safe decoded name. Preserve the table's
+    byte range and count across cancellable scans of one verified snapshot.
+    Valid bundles remain unsupported and their snapshots are discarded.
+  - **M1.7d1b1b2b1 Manifest message schemas — L:** validate exact message
+    schemas, availability, spans and local keyword and tag invariants. Keep
+    bundles unsupported and discard their snapshots; global relationships
+    remain unchecked and cannot admit a source.
+  - **M1.7d1b1b2b2 Manifest message relationships — L:** validate counts,
+    ordered-ID digest, unique occurrence IDs, file references and EML
+    agreement using bounded scans of the verified snapshot. Prove writer
+    manifests, hostile tokens and cleanup before bundle inventory.
+  - **M1.7d1b2 Bundle file agreement and inventory — L:** check every declared
+    direct child's kind, byte length and record count independently before
+    ingest, report missing or disagreeing files without suppressing valid
+    siblings, and retain the shared manifest snapshot while any bundle source
+    references it. Preserve sorted canonical discovery, alias deduplication,
+    cancellation cleanup and real EML/mboxrd exporter proof.
+  - **M1.7d2 Manifest-verified ingest — L:** each bundle record's
+    boundary, framing, original length and SHA-256 are verified before
+    its bytes publish; only the declared framing LF is removed; the
+    framing identity joins replay. Native imports of c's bundles
+    preserve unterminated acquisitions and multiplicity; malformed
+    framing never silently trims bytes or falls back to changed
+    originals.
   - **M1.7e Export engine — L:** counted background jobs, start/query,
     cancel, shutdown and reopen over b2/c. Own real-worker lifecycle,
     crash/resume and all original round-trip acceptance checks using d.
@@ -1276,10 +1312,19 @@ local drafts. No network yet.
   - **M1.10d2 Command FFI and bridge — L:** setter SDK and bridge consume
     c/d1, with receipts, typed errors, replay/drop/lifecycle proof and
     regenerated bindings.
-  - **M1.10e App appearance — L:** sidebar monograms, mixed-account row
-    rails and Settings swatches/Custom through the bridge. Tests cover
-    duplicate initials, actual light/dark/selected surfaces, accessibility
-    and updates across open windows. Color never replaces native selection.
+  - **M1.10e App appearance — L:** split before implementation to keep each
+    complete artifact below 1,450 gross lines. All consume the bridge APIs:
+    - **M1.10e1 Sidebar appearance — L:** share a committed appearance
+      subscription across open windows and draw sidebar account monograms.
+      Test duplicate initials, distinguishing accessibility labels, light,
+      dark and high-contrast rendering, and updates across open windows.
+    - **M1.10e2 List appearance — L:** after e1, draw mixed-account row
+      rails and monograms in both AppKit and SwiftUI. Test actual light,
+      dark and selected surfaces, accessibility, and updates across open
+      windows. Account color never replaces native selection colors.
+    - **M1.10e3 Appearance settings — L:** after e1, add Settings → Accounts
+      → Appearance swatches and Custom through bridge setters. Test failure
+      and conflict handling and committed updates across open windows.
   - **M1.10f Qualification — M:** colors survive the real M1.8 backup and
     restore APIs, and the owner's rendered contrast/accessibility checks
     are recorded. Pure token tests do not substitute for these checks.

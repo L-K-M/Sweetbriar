@@ -31,8 +31,9 @@ mod windows;
 
 pub use api::{Core, CoreConfig, Receipt, Setting, open_core, platform_default_config};
 pub use appearance::{
-    AccountAppearance, Appearance, AppearanceAssignment, AppearanceEvent, AppearanceSubscription,
-    AppearanceTokens, AppearanceVariant, IdentityAppearance, PaletteColor, palette,
+    AccountAppearance, AccountAppearanceChange, AccountColor, Appearance, AppearanceAssignment,
+    AppearanceEvent, AppearanceSubscription, AppearanceTokens, AppearanceVariant,
+    IdentityAppearance, IdentityAppearanceChange, PaletteColor, palette,
 };
 pub use cancel::CancelToken;
 pub use error::{CoreError, SearchParseCode};

@@ -13,6 +13,7 @@ use sb_resources::{
 };
 
 use super::{AppearanceTokens, SrgbColor};
+use crate::engine::validate_idempotency_key;
 use crate::{Engine, EngineError};
 
 /// The commands' names in `command_receipts` (spec/07).
@@ -226,6 +227,7 @@ impl Engine {
         expected_revision: i64,
         change: &AccountAppearanceChange,
     ) -> Result<Receipt, EngineError> {
+        validate_idempotency_key(idempotency_key)?;
         let color = valid_color(&change.color)?;
         valid_key("account_id", account_id)?;
         valid_revision(expected_revision)?;
@@ -250,6 +252,7 @@ impl Engine {
         expected_revision: Option<i64>,
         change: &IdentityAppearanceChange,
     ) -> Result<Receipt, EngineError> {
+        validate_idempotency_key(idempotency_key)?;
         let color = optional_color(change.color.as_deref())?;
         valid_key("identity_id", identity_id)?;
         if let Some(revision) = expected_revision {

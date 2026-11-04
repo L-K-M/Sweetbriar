@@ -27,7 +27,7 @@ use sb_resources::{
     run_once, set_user_pause,
 };
 
-use crate::engine::{Spawn, Worker};
+use crate::engine::{Spawn, Worker, validate_idempotency_key};
 use crate::threads::{ThreadRebuilds, schedule_threads};
 use crate::{Engine, EngineError};
 
@@ -61,14 +61,15 @@ pub(crate) struct ImportJobs {
     /// The thread rebuild each worker's turn may start (spec/02).
     threads: Arc<ThreadRebuilds>,
     /// A test's callback at a worker's task entry (spec/11): it may
-    /// observe or block the real worker, never supply results.
+    /// observe or block the real worker, never supply results. The
+    /// callback receives the worker's real shutdown check.
     #[cfg(test)]
     before_task: Mutex<Option<BeforeTask>>,
 }
 
 /// A test hook run once at a worker's task entry.
 #[cfg(test)]
-type BeforeTask = Arc<dyn Fn() + Send + Sync>;
+type BeforeTask = Arc<dyn Fn(&dyn Fn() -> bool) + Send + Sync>;
 
 /// What a live worker's job has been asked since it started.
 #[derive(Default)]
@@ -275,6 +276,7 @@ impl Engine {
         idempotency_key: &str,
         paths: Vec<PathBuf>,
     ) -> Result<ImportStarted, EngineError> {
+        validate_idempotency_key(idempotency_key)?;
         if paths.is_empty() {
             return Err(EngineError::invalid_input(
                 "paths",
@@ -317,6 +319,7 @@ impl Engine {
         job_id: &str,
         variants: Vec<(u64, MboxVariant)>,
     ) -> Result<Receipt, EngineError> {
+        validate_idempotency_key(idempotency_key)?;
         // Validate a waiting job's inventory first, so a bad choice names
         // its field. The write accepts only that revision; anything else
         // is decided there, where a repeated key still finds its receipt.
@@ -361,6 +364,7 @@ impl Engine {
         idempotency_key: &str,
         job_id: &str,
     ) -> Result<Receipt, EngineError> {
+        validate_idempotency_key(idempotency_key)?;
         let now = self.resources().now();
         let (key, id) = (idempotency_key.to_owned(), job_id.to_owned());
         let imports = Arc::clone(self.imports());
@@ -613,7 +617,7 @@ async fn run_job(worker: Worker, mut claim: Claim, task: Task) {
         .expect("a panicking thread held the import job registry")
         .clone()
     {
-        before();
+        before(&worker.shutdown_check());
     }
     let mut task = Some(task);
     while let Some(current) = task {
@@ -673,11 +677,7 @@ async fn discard_if_cancelled(worker: &Worker, claim: &Claim, inventory: ImportI
     if !matches!(state, Ok(Ok(job)) if job.state() == ImportJobState::Cancelled) {
         return;
     }
-    let snapshots: Vec<_> = inventory
-        .sources()
-        .iter()
-        .map(|source| source.snapshot().clone())
-        .collect();
+    let snapshots = all_snapshots(inventory.sources().iter());
     let _ = worker
         .blocking(move |resources| resources.remove_import_sources(&snapshots))
         .await;
@@ -713,14 +713,26 @@ fn finish(resources: &Resources, id: &str) -> Result<bool, StoreError> {
         job.state(),
         ImportJobState::Completed | ImportJobState::Cancelled
     ) {
-        let snapshots: Vec<_> = sources
-            .iter()
-            .map(|(source, _)| source.snapshot().clone())
-            .collect();
-        resources.remove_import_sources(&snapshots)?;
+        resources
+            .remove_import_sources(&all_snapshots(sources.iter().map(|(source, _)| source)))?;
     }
     resources.write_import_report(id, &import_report(&job, &sources))?;
     Ok(true)
+}
+
+/// Every snapshot the sources reference, each once: members of one
+/// export bundle share their manifest's (spec/09 "Export bundles").
+fn all_snapshots<'a>(
+    sources: impl Iterator<Item = &'a SourceInventory>,
+) -> Vec<sb_resources::ImportSourceSnapshot> {
+    let mut seen = HashSet::new();
+    let mut snapshots = Vec::new();
+    for snapshot in sources.flat_map(SourceInventory::snapshots) {
+        if seen.insert(snapshot.token().to_owned()) {
+            snapshots.push(snapshot.clone());
+        }
+    }
+    snapshots
 }
 
 /// Whether the job left this worker's hands: no longer at `revision`
