@@ -184,6 +184,20 @@ struct FaultConfinedDir {
 }
 
 impl ConfinedDir for FaultConfinedDir {
+    fn visit_children(
+        &self,
+        visitor: &mut dyn FnMut(&Path) -> io::Result<std::ops::ControlFlow<()>>,
+    ) -> io::Result<std::ops::ControlFlow<()>> {
+        if let Some(kind) = self.plan.fire(FsOp::ReadDir) {
+            return Err(fault_error(kind));
+        }
+        self.inner.visit_children(&mut |name| {
+            if let Some(kind) = self.plan.fire(FsOp::Read) {
+                return Err(fault_error(kind));
+            }
+            visitor(name)
+        })
+    }
     fn set_ownership(&self, bytes: &[u8]) -> io::Result<()> {
         if let Some(kind) = self.plan.fire(FsOp::Write) {
             return Err(fault_error(kind));
@@ -477,6 +491,32 @@ mod tests {
         let fs = Arc::new(SimFs::new());
         fs.create_dir(Path::new("/x")).unwrap();
         (fs, PathBuf::from("/x"))
+    }
+
+    #[test]
+    fn confined_enumeration_propagates_faults_and_retries() {
+        use std::ops::ControlFlow;
+        let (inner, dir) = scratch_fs();
+        inner.create(&dir.join("a")).unwrap();
+        inner.create(&dir.join("b")).unwrap();
+        for (op, nth) in [(FsOp::ReadDir, 1), (FsOp::Read, 2)] {
+            let fs = FaultFs::new(inner.clone(), op, nth, FaultKind::Eio);
+            let root = fs.open_confined_dir(&dir).unwrap();
+            assert!(
+                root.visit_children(&mut |_| Ok(ControlFlow::Continue(())))
+                    .is_err()
+            );
+            let mut count = 0;
+            assert_eq!(
+                root.visit_children(&mut |_| {
+                    count += 1;
+                    Ok(ControlFlow::Continue(()))
+                })
+                .unwrap(),
+                ControlFlow::Continue(())
+            );
+            assert_eq!(count, 2);
+        }
     }
 
     #[test]

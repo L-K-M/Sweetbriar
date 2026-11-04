@@ -57,6 +57,70 @@ const OWNER_ATTRIBUTE: &std::ffi::CStr = c"com.sweetbriar.verifier-owner";
 const OWNER_ATTRIBUTE: &std::ffi::CStr = c"user.sweetbriar.verifier-owner";
 
 impl ConfinedDir for RealConfinedDir {
+    fn visit_children(
+        &self,
+        visitor: &mut dyn FnMut(&Path) -> io::Result<std::ops::ControlFlow<()>>,
+    ) -> io::Result<std::ops::ControlFlow<()>> {
+        use std::ops::ControlFlow;
+        use std::os::unix::ffi::OsStrExt as _;
+        // Open a fresh file description so each visit starts at the beginning
+        // and does not change the retained descriptor's directory offset.
+        let file = open_child(&self.0, std::ffi::OsStr::new("."), true)?;
+        use std::os::fd::IntoRawFd;
+        let fd = file.into_raw_fd();
+        // SAFETY: fd is an owned directory descriptor; fdopendir takes it on success.
+        let dir = unsafe { libc::fdopendir(fd) };
+        if dir.is_null() {
+            let error = io::Error::last_os_error();
+            // SAFETY: fdopendir failed and did not take ownership.
+            unsafe { libc::close(fd) };
+            return Err(error);
+        }
+        struct Directory(*mut libc::DIR);
+        impl Drop for Directory {
+            fn drop(&mut self) {
+                if !self.0.is_null() {
+                    // SAFETY: this guard owns the directory stream.
+                    unsafe { libc::closedir(self.0) };
+                }
+            }
+        }
+        let mut guard = Directory(dir);
+        let result = loop {
+            // readdir signals end and error with null; clear errno first.
+            #[cfg(target_os = "macos")]
+            let errno = unsafe { libc::__error() };
+            #[cfg(target_os = "linux")]
+            let errno = unsafe { libc::__errno_location() };
+            // SAFETY: errno is thread-local and dir is a live stream.
+            unsafe { *errno = 0 };
+            let entry = unsafe { libc::readdir(dir) };
+            if entry.is_null() {
+                let error = unsafe { *errno };
+                break if error == 0 {
+                    Ok(ControlFlow::Continue(()))
+                } else {
+                    Err(io::Error::from_raw_os_error(error))
+                };
+            }
+            // SAFETY: readdir returned a live, NUL-terminated directory entry.
+            let name = unsafe { std::ffi::CStr::from_ptr((*entry).d_name.as_ptr()) }.to_bytes();
+            if name == b"." || name == b".." {
+                continue;
+            }
+            match visitor(Path::new(std::ffi::OsStr::from_bytes(name))) {
+                Ok(ControlFlow::Continue(())) => {}
+                other => break other,
+            }
+        };
+        // SAFETY: the guard owns dir; clear it before returning.
+        let close = unsafe { libc::closedir(dir) };
+        guard.0 = std::ptr::null_mut();
+        if close != 0 && result.is_ok() {
+            return Err(io::Error::last_os_error());
+        }
+        result
+    }
     fn set_ownership(&self, bytes: &[u8]) -> io::Result<()> {
         if bytes.is_empty() || bytes.len() > 36 {
             return Err(io::ErrorKind::InvalidInput.into());
@@ -567,6 +631,57 @@ mod tests {
     fn the_quarantine_record_names_its_download_time() {
         let downloaded = std::time::UNIX_EPOCH + Duration::from_secs(0x6900_0000);
         assert_eq!(quarantine_record(downloaded), "0081;69000000;Sweetbriar;");
+    }
+
+    #[test]
+    fn confined_enumeration_survives_replacement_and_stops() {
+        use std::ops::ControlFlow;
+        let scratch = Scratch::new("confined-enumeration");
+        let root = scratch.0.join("root");
+        std::fs::create_dir(&root).unwrap();
+        for n in 0..300 {
+            std::fs::write(root.join(format!("{n:03}")), []).unwrap();
+        }
+        let root = root.canonicalize().unwrap();
+        let dir = RealFs.open_confined_dir(&root).unwrap();
+        std::fs::rename(&root, scratch.0.join("moved")).unwrap();
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join("replacement"), []).unwrap();
+        let mut count = 0;
+        assert_eq!(
+            dir.visit_children(&mut |name| {
+                assert_ne!(name, Path::new("replacement"));
+                count += 1;
+                Ok(ControlFlow::Continue(()))
+            })
+            .unwrap(),
+            ControlFlow::Continue(())
+        );
+        assert_eq!(count, 300);
+        let mut count = 0;
+        assert_eq!(
+            dir.visit_children(&mut |_| {
+                count += 1;
+                Ok(ControlFlow::Break(()))
+            })
+            .unwrap(),
+            ControlFlow::Break(())
+        );
+        assert_eq!(count, 1);
+        let err = dir
+            .visit_children(&mut |_| Err(io::ErrorKind::Interrupted.into()))
+            .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::Interrupted);
+        let mut count = 0;
+        assert_eq!(
+            dir.visit_children(&mut |_| {
+                count += 1;
+                Ok(ControlFlow::Continue(()))
+            })
+            .unwrap(),
+            ControlFlow::Continue(())
+        );
+        assert_eq!(count, 300);
     }
 
     #[test]
