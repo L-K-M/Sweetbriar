@@ -540,6 +540,16 @@ backups/<generation-id>/
 
 ## Restore
 
+SQLite inspection of a verifier image reads through a read-only VFS backed by
+an already-open file, without resolving its pathname or opening WAL, journal,
+shared-memory or temporary files. Holding the file preserves its identity,
+not OS-enforced immutability: a same-UID process holding an earlier writable
+file descriptor can still change its bytes. Inspection bounds SQLite work and
+checks cancellation before reporting success. Crash recovery removes a scratch
+directory only with durable ownership and directory identity evidence. If a
+crash precedes that proof, recovery retains the unprovable directory and its
+row for resolution; it must not infer ownership from emptiness.
+
 Restoring creates a **new incarnation** and runs quarantined. The steps:
 
 The process holds `<data root>.lock` throughout.
