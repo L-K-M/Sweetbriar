@@ -23,11 +23,11 @@ struct ListAppearanceTests {
                                       hasAttachments: false, tags: [], accountID: "one")
     }
 
-    @Test func flaggedIsMixedAndSingleAccountWindowsStayPlain() {
+    @Test func mixedAccountWindowsShowMarkersAndMailboxesStayPlain() {
         #expect(WindowSpec.flagged.showsAccountMarker)
         #expect(WindowSpec.unified(.inbox).showsAccountMarker)
+        #expect(WindowSpec.thread(1).showsAccountMarker)
         #expect(!WindowSpec.mailbox(1).showsAccountMarker)
-        #expect(!WindowSpec.thread(1).showsAccountMarker)
     }
 
     @Test func flaggedControllerShowsBothAccountsAndSurvivesAppearanceReset() async throws {

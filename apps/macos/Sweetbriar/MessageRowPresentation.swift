@@ -292,8 +292,8 @@ extension WindowSpec {
     /// Mixed-account lists need to identify each row's account.
     var showsAccountMarker: Bool {
         switch self {
-        case .unified, .search, .flagged, .debugSynthetic: true
-        case .mailbox, .thread: false
+        case .unified, .search, .flagged, .thread, .debugSynthetic: true
+        case .mailbox: false
         }
     }
 }
