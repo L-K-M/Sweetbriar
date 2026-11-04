@@ -4,7 +4,7 @@
 //! and must discard partial results after any error. Lexical number validity
 //! does not imply representability by serde_json::Number (for example 1e9999).
 
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 
 const INPUT_BYTES: usize = 8192;
 // serde_json starts with 128, decrements on entry, then rejects zero. Count
@@ -17,6 +17,7 @@ pub(super) enum Invalid {
     Nesting,
     StringCapacity,
     UnsignedInteger,
+    NumberRange,
 }
 
 impl std::fmt::Display for Invalid {
@@ -26,6 +27,7 @@ impl std::fmt::Display for Invalid {
             Self::Nesting => "JSON nesting limit exceeded",
             Self::StringCapacity => "decoded JSON string exceeds fixed storage",
             Self::UnsignedInteger => "JSON number is not an exact u64",
+            Self::NumberRange => "JSON number is not representable",
         })
     }
 }
@@ -198,6 +200,108 @@ impl<'a, R: Read, C: FnMut() -> io::Result<()>> Reader<'a, R, C> {
         self.number(NumberMode::Unsigned)
     }
 
+    /// Match the pinned serde_json Value parser's number range and as_u64.
+    /// Its default float parser keeps a u64 significand and decimal exponent;
+    /// synthesize that bounded pair and let serde_json check its float range.
+    pub(super) fn value_number(&mut self) -> io::Result<Option<u64>> {
+        let negative = self.peek()? == Some(b'-');
+        if negative {
+            self.take()?;
+        }
+        let first = self.take()?.ok_or_else(syntax)?;
+        if !first.is_ascii_digit() {
+            return Err(syntax());
+        }
+        let mut sig = u64::from(first - b'0');
+        let mut overflow = false;
+        let mut exponent = 0i32;
+        if first != b'0' {
+            while let Some(c @ b'0'..=b'9') = self.peek()? {
+                self.take()?;
+                if !overflow {
+                    if let Some(n) = sig
+                        .checked_mul(10)
+                        .and_then(|n| n.checked_add(u64::from(c - b'0')))
+                    {
+                        sig = n;
+                        continue;
+                    }
+                    overflow = true;
+                }
+                exponent = exponent.saturating_add(1);
+            }
+        }
+        let mut float = overflow;
+        if self.peek()? == Some(b'.') {
+            float = true;
+            self.take()?;
+            if !self.peek()?.is_some_and(|c| c.is_ascii_digit()) {
+                return Err(syntax());
+            }
+            let mut fraction_overflow = false;
+            while let Some(c @ b'0'..=b'9') = self.peek()? {
+                self.take()?;
+                if !fraction_overflow {
+                    if let Some(n) = sig
+                        .checked_mul(10)
+                        .and_then(|n| n.checked_add(u64::from(c - b'0')))
+                    {
+                        sig = n;
+                        exponent = exponent.saturating_sub(1);
+                    } else {
+                        fraction_overflow = true;
+                    }
+                }
+            }
+        }
+        if matches!(self.peek()?, Some(b'e' | b'E')) {
+            float = true;
+            self.take()?;
+            let exp_negative = self.peek()? == Some(b'-');
+            if matches!(self.peek()?, Some(b'+' | b'-')) {
+                self.take()?;
+            }
+            if !self.peek()?.is_some_and(|c| c.is_ascii_digit()) {
+                return Err(syntax());
+            }
+            let mut exp = 0i32;
+            let mut exp_overflow = false;
+            while let Some(c @ b'0'..=b'9') = self.peek()? {
+                self.take()?;
+                if let Some(n) = exp
+                    .checked_mul(10)
+                    .and_then(|n| n.checked_add(i32::from(c - b'0')))
+                {
+                    exp = n;
+                } else {
+                    exp_overflow = true;
+                }
+            }
+            if exp_overflow {
+                if !exp_negative && sig != 0 {
+                    return Err(invalid(Invalid::NumberRange));
+                }
+                exponent = i32::MIN;
+            } else if exp_negative {
+                exponent = exponent.saturating_sub(exp);
+            } else {
+                exponent = exponent.saturating_add(exp);
+            }
+        }
+        self.delimiter()?;
+        if !float {
+            return Ok((!negative).then_some(sig));
+        }
+        // A u64, 'e', sign and i32 magnitude fit in 32 bytes.
+        let mut reduced = [0; 32];
+        let mut output = &mut reduced[..];
+        write!(output, "{sig}e{exponent}")?;
+        let len = 32 - output.len();
+        serde_json::from_slice::<serde_json::Value>(&reduced[..len])
+            .map_err(|_| invalid(Invalid::NumberRange))?;
+        Ok(None)
+    }
+
     pub(super) fn fixed_string(&mut self, out: &mut [u8]) -> io::Result<usize> {
         let mut len = 0;
         self.string(|ch| {
@@ -303,6 +407,15 @@ impl<'a, R: Read, C: FnMut() -> io::Result<()>> Reader<'a, R, C> {
     /// Consume exactly one value. `enclosing` counts containers already opened
     /// by a semantic caller; ignoring an extra field must not reset its budget.
     pub(super) fn skip_value(&mut self, enclosing: usize) -> io::Result<()> {
+        self.skip_value_inner(enclosing, false)
+    }
+
+    /// As skip_value, also enforce serde_json::Value number representability.
+    pub(super) fn skip_value_serde(&mut self, enclosing: usize) -> io::Result<()> {
+        self.skip_value_inner(enclosing, true)
+    }
+
+    fn skip_value_inner(&mut self, enclosing: usize, serde_numbers: bool) -> io::Result<()> {
         if enclosing > MAX_CONTAINERS {
             return Err(invalid(Invalid::Nesting));
         }
@@ -327,7 +440,11 @@ impl<'a, R: Read, C: FnMut() -> io::Result<()>> Reader<'a, R, C> {
                 Some(b'f') => self.literal(b"false")?,
                 Some(b'n') => self.literal(b"null")?,
                 Some(b'-' | b'0'..=b'9') => {
-                    self.number(NumberMode::Grammar)?;
+                    if serde_numbers {
+                        self.value_number()?;
+                    } else {
+                        self.number(NumberMode::Grammar)?;
+                    }
                 }
                 _ => return Err(syntax()),
             }
@@ -383,4 +500,4 @@ pub(super) fn hex(c: u8) -> io::Result<u8> {
 }
 
 #[cfg(test)]
-mod tests;
+pub(super) mod tests;

@@ -4,9 +4,11 @@
 //! pinned objects, flushes the generation and writes the manifest last,
 //! then releases pins and marks the generation complete.
 
+#[allow(dead_code)] // The snapshot walker consumes this in M1.8e1c1c.
+mod attachments;
 mod image;
 mod image_inspect;
-#[allow(dead_code)] // Semantic attachment decoding follows in M1.8e1c1b2.
+#[allow(dead_code)] // Used by the snapshot walker and manifest parser.
 mod json;
 #[allow(dead_code)] // Used by the next verifier slice.
 mod ledger;
