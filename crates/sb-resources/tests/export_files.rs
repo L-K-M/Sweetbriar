@@ -1264,6 +1264,20 @@ fn manifest_schema_rejects_invalid_writer_manifests() {
                                 message.insert((*span).into(), value);
                             }
                         }
+                        if !file {
+                            let name = original["messages"][0]["file"].as_str().unwrap();
+                            let files = changed["files"].as_array_mut().unwrap();
+                            let index = files
+                                .iter()
+                                .position(|entry| entry["name"] == name)
+                                .unwrap();
+                            if matches!(format, ExportFormat::Eml) {
+                                files.remove(index);
+                            } else {
+                                let records = files[index]["records"].as_u64().unwrap();
+                                files[index]["records"] = json!(records - 1);
+                            }
+                        }
                         let valid_pair = match availability {
                             "acquired" => acquisition && file,
                             "not_acquired" => !acquisition && !file,
@@ -1316,6 +1330,18 @@ fn manifest_schema_rejects_invalid_writer_manifests() {
             changed["messages"][0]["mailbox"]["id"] = json!(i64::MIN);
             changed["messages"][0]["acquisition"]["id"] = json!(i64::MAX);
             changed["messages"][0]["acquisition"]["bytes"] = json!(u64::MAX);
+            if matches!(format, ExportFormat::Eml) {
+                let old = original["messages"][0]["file"].as_str().unwrap();
+                let file = changed["files"]
+                    .as_array_mut()
+                    .unwrap()
+                    .iter_mut()
+                    .find(|file| file["name"] == old)
+                    .unwrap();
+                file["name"] = json!(format!("{}.eml", i64::MIN));
+                file["bytes"] = json!(u64::MAX);
+                changed["messages"][0]["file"] = json!(format!("{}.eml", i64::MIN));
+            }
             if matches!(format, ExportFormat::Mboxrd) {
                 changed["messages"][0]["record_offset"] = json!(u64::MAX);
                 changed["messages"][0]["encoded_bytes"] = json!(u64::MAX);
