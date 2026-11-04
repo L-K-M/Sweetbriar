@@ -27,6 +27,17 @@ impl Fs for RealFs {
         Ok(Box::new(File::open(path)?))
     }
 
+    fn open_no_follow(&self, path: &Path) -> io::Result<Box<dyn sb_types::fs::ReadFile>> {
+        let file = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_NOCTTY)
+            .open(path)?;
+        if !file.metadata()?.is_file() {
+            return Err(not_regular(path));
+        }
+        Ok(Box::new(file))
+    }
+
     fn open_regular(&self, path: &Path) -> io::Result<(Box<dyn sb_types::fs::ReadFile>, Metadata)> {
         // O_NONBLOCK so a fifo open returns instead of waiting for a
         // writer, O_NOCTTY so a terminal device can't become this
