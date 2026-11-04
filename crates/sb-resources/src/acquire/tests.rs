@@ -36,6 +36,170 @@ X-Status: RD\r\n\
 Hello body.\r\n";
 const JOB: &str = "00000000-0000-4000-8000-0000000000c2";
 
+#[test]
+fn verified_eml_copy_requires_length_digest_and_completion() {
+    let bytes = b"abc";
+    let hash = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+    let mut out = Vec::new();
+    assert!(matches!(
+        copy_eml_bytes(&mut &bytes[..], &mut out, 3, hash, "source", &mut || {
+            ControlFlow::Continue(())
+        }),
+        Ok(sb_store::Scoped::Done(()))
+    ));
+    assert_eq!(out, bytes);
+    for (length, digest) in [(2, hash), (4, hash), (3, "wrong")] {
+        assert!(matches!(
+            copy_eml_bytes(
+                &mut &bytes[..],
+                &mut Vec::new(),
+                length,
+                digest,
+                "source",
+                &mut || ControlFlow::Continue(())
+            ),
+            Err(StoreError::Corrupt { .. })
+        ));
+    }
+    assert!(matches!(
+        copy_eml_bytes(
+            &mut &bytes[..],
+            &mut Vec::new(),
+            3,
+            hash,
+            "source",
+            &mut || ControlFlow::Break(())
+        ),
+        Ok(sb_store::Scoped::Stopped)
+    ));
+}
+
+#[test]
+fn verified_eml_copy_stops_midstream_and_preserves_read_failure() {
+    struct FailsAfterPrefix(bool);
+    impl Read for FailsAfterPrefix {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            if self.0 {
+                return Err(io::Error::new(io::ErrorKind::PermissionDenied, "denied"));
+            }
+            self.0 = true;
+            buf[..3].copy_from_slice(b"abc");
+            Ok(3)
+        }
+    }
+    let mut calls = 0;
+    let mut output = Vec::new();
+    let result = copy_eml_bytes(
+        &mut FailsAfterPrefix(false),
+        &mut output,
+        3,
+        "unused",
+        "source",
+        &mut || {
+            calls += 1;
+            if calls == 2 {
+                ControlFlow::Break(())
+            } else {
+                ControlFlow::Continue(())
+            }
+        },
+    );
+    assert!(matches!(result, Ok(sb_store::Scoped::Stopped)));
+    assert_eq!(output, b"abc");
+    let error = copy_eml_bytes(
+        &mut FailsAfterPrefix(false),
+        &mut Vec::new(),
+        3,
+        "unused",
+        "source",
+        &mut || ControlFlow::Continue(()),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(error, StoreError::Unavailable { io_kind: Some(io::ErrorKind::PermissionDenied), ref reason } if reason.contains("byte 3"))
+    );
+}
+
+#[test]
+fn bundle_eml_copy_binds_manifest_and_resumes_at_file_boundary() {
+    use serde_json::json;
+    use sha2::{Digest, Sha256};
+    let digest = |bytes: &[u8]| {
+        Sha256::digest(bytes)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>()
+    };
+    let (scratch, res) = resources("bundle-eml-copy");
+    let path = scratch.path().join("message.eml");
+    fs::write(&path, RICH).unwrap();
+    let plain = source(&res, &path);
+    let entry = json!({"v":1,"occurrence_id":1,"message_id":1,
+        "account":{"id":"a","name":"a"},"mailbox":{"id":1,"name":"m"},
+        "occurrence_state":"present","flags":{"seen":false,"flagged":false,"answered":false,"draft":false,"deleted":false},
+        "keywords":[],"acquisition":{"id":1,"sha256":digest(RICH),"bytes":RICH.len()},
+        "body_availability":"acquired","tags":[],"note":null,"file":"message.eml"});
+    let manifest = json!({"v":1,"kind":"export-manifest","job":"j","format":"eml","destination":"/d",
+        "scope":{"kind":"mailbox","id":1,"generation":1},"generation":1,"entries":1,
+        "ids_sha256":digest(&1_i64.to_be_bytes()),
+        "files":[{"name":"message.eml","bytes":RICH.len(),"records":1}],"messages":[entry]});
+    let manifest_path = scratch.path().join("manifest.eml");
+    fs::write(&manifest_path, manifest.to_string()).unwrap();
+    let manifest_source = source(&res, &manifest_path);
+    let mut metadata: serde_json::Value = serde_json::from_str(&plain.to_json()).unwrap();
+    let manifest_metadata: serde_json::Value =
+        serde_json::from_str(&manifest_source.to_json()).unwrap();
+    metadata["v"] = json!(2);
+    metadata["bundle"] =
+        json!({"manifest":manifest_metadata["snapshot"],"format":"eml","file_ordinal":0});
+    let bundle = SourceInventory::from_json(&metadata.to_string()).unwrap();
+    fs::write(&path, b"changed original").unwrap();
+    let mut output = Vec::new();
+    let mut stop = || ControlFlow::Continue(());
+    let sb_store::Scoped::Done(Some(next)) = copy_bundle_eml(
+        &res.store,
+        &bundle,
+        SourcePosition::START,
+        &mut output,
+        &mut stop,
+    )
+    .unwrap() else {
+        panic!("copy failed")
+    };
+    assert_eq!(output, RICH);
+    assert_eq!(next, SourcePosition::new(RICH.len() as u64, 1));
+    assert!(matches!(
+        copy_bundle_eml(&res.store, &bundle, next, &mut Vec::new(), &mut stop),
+        Ok(sb_store::Scoped::Done(None))
+    ));
+    assert!(
+        copy_bundle_eml(
+            &res.store,
+            &bundle,
+            SourcePosition::new(1, 0),
+            &mut Vec::new(),
+            &mut stop
+        )
+        .is_err()
+    );
+    metadata["bundle"]["file_ordinal"] = json!(1);
+    let invalid = SourceInventory::from_json(&metadata.to_string()).unwrap();
+    assert!(
+        copy_bundle_eml(
+            &res.store,
+            &invalid,
+            SourcePosition::START,
+            &mut Vec::new(),
+            &mut stop
+        )
+        .is_err()
+    );
+    assert!(
+        res.open_import_acquisition(&bundle, None, SourcePosition::START)
+            .is_err()
+    );
+}
+
 fn fixtures() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/import")
 }

@@ -10,7 +10,8 @@
 //!                                              parse + import_flags
 //! ```
 
-use std::io::{self, BufReader, Read, Seek, SeekFrom};
+use std::io::{self, BufReader, Read, Seek, SeekFrom, Write};
+use std::ops::ControlFlow;
 
 use sb_mime::{
     Limits, MailboxAddress, MboxError, MboxRecord, MboxScanner, MboxVariant, ParseOutcome,
@@ -19,6 +20,7 @@ use sb_store::imports::{
     ImportFlags, ImportMessage, ImportParseState, ImportReadState, ImportSourceKind, ImportSummary,
 };
 use sb_store::{ObjectStore, PublishedObject, ReadFile, Store, StoreError};
+use sha2::{Digest, Sha256};
 
 use crate::{MboxQuoting, SourceInventory, SourceKind};
 
@@ -308,8 +310,107 @@ mod bundle_cursor {
     }
 }
 
-#[cfg(test)]
 use bundle_cursor::prepare_bundle;
+
+// The destination is provisional until success. Its owner must discard it on
+// cancellation or error; this private boundary never publishes an object.
+#[allow(dead_code)]
+fn copy_bundle_eml(
+    store: &Store,
+    source: &SourceInventory,
+    position: SourcePosition,
+    destination: &mut impl Write,
+    stop: &mut dyn FnMut() -> ControlFlow<()>,
+) -> Result<sb_store::Scoped<Option<SourcePosition>>, StoreError> {
+    if source.kind() != SourceKind::Eml {
+        return Err(invalid("only bundle EML is supported"));
+    }
+    let mut cursor = match prepare_bundle(store, source, position, stop)? {
+        sb_store::Scoped::Stopped => return Ok(sb_store::Scoped::Stopped),
+        sb_store::Scoped::Done(cursor) => cursor,
+    };
+    let descriptor = match cursor.next()? {
+        sb_store::Scoped::Stopped => return Ok(sb_store::Scoped::Stopped),
+        sb_store::Scoped::Done(descriptor) => descriptor,
+    };
+    match cursor.next()? {
+        sb_store::Scoped::Stopped => return Ok(sb_store::Scoped::Stopped),
+        sb_store::Scoped::Done(Some(_)) => return Err(corrupt("extra EML descriptor".into())),
+        sb_store::Scoped::Done(None) => {}
+    }
+    drop(cursor);
+    let mut file = match store.open_import_source_cancellable(source.snapshot(), |_| stop())? {
+        sb_store::Scoped::Stopped => return Ok(sb_store::Scoped::Stopped),
+        sb_store::Scoped::Done(file) => file,
+    };
+    let Some(descriptor) = descriptor else {
+        return Ok(sb_store::Scoped::Done(None));
+    };
+    let path = source.path().to_str().expect("source paths are UTF-8");
+    match copy_eml_bytes(
+        &mut file,
+        destination,
+        descriptor.bytes,
+        &descriptor.sha256,
+        path,
+        stop,
+    )? {
+        sb_store::Scoped::Stopped => Ok(sb_store::Scoped::Stopped),
+        sb_store::Scoped::Done(()) => Ok(sb_store::Scoped::Done(Some(SourcePosition::new(
+            source.snapshot().byte_length(),
+            1,
+        )))),
+    }
+}
+
+fn copy_eml_bytes(
+    input: &mut impl Read,
+    output: &mut impl Write,
+    length: u64,
+    expected_hash: &str,
+    path: &str,
+    stop: &mut dyn FnMut() -> ControlFlow<()>,
+) -> Result<sb_store::Scoped<()>, StoreError> {
+    let mut buffer = [0_u8; 16 * 1024];
+    let mut hash = Sha256::new();
+    let mut offset = 0_u64;
+    loop {
+        if stop().is_break() {
+            return Ok(sb_store::Scoped::Stopped);
+        }
+        let count = match input.read(&mut buffer) {
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(unreadable(path, offset, error)),
+            Ok(count) => count,
+        };
+        if count == 0 {
+            let actual = hash
+                .finalize()
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>();
+            if offset != length || actual != expected_hash {
+                return Err(corrupt(format!("{path}: bundle EML integrity mismatch")));
+            }
+            return Ok(sb_store::Scoped::Done(()));
+        }
+        offset = offset
+            .checked_add(count as u64)
+            .ok_or_else(|| corrupt("EML length overflow".into()))?;
+        if offset > length {
+            return Err(corrupt(format!(
+                "{path}: bundle EML exceeds declared length"
+            )));
+        }
+        hash.update(&buffer[..count]);
+        output
+            .write_all(&buffer[..count])
+            .map_err(|error| StoreError::Unavailable {
+                reason: format!("cannot write provisional EML copy: {error}"),
+                io_kind: Some(error.kind()),
+            })?;
+    }
+}
 
 /// Check `position` against `source`, then verify and reopen its
 /// snapshot (spec/03). Equivalent sources decode identically either way,
