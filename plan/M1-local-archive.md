@@ -1076,10 +1076,19 @@ local drafts. No network yet.
     completed image through the reader above. Bound disk, memory and SQLite
     work, including cancellation. Acceptance: source changes cannot alter the
     inspection; malformed schemas are bounded; cancellation never succeeds.
-  - **M1.8e1 Restore generation verification (M):** select a complete
-    generation recorded in the current store and verify its manifest, snapshot
-    and every object, including identity, size and hash mismatches. Staging
-    must verify the bytes it actually copies again.
+  - **M1.8e1a Streaming manifest parser (L):** parse the format-1 manifest
+    incrementally with bounded memory and a streaming object sink. Reject
+    unknown or duplicate fields and invalid scalar values; validate Unicode,
+    integer overflow, truncation and cancellation. This does not verify a
+    generation or retain an object ledger.
+  - **M1.8e1b Verification ledger (L):** retain manifest object metadata in
+    bounded, owned scratch with duplicate detection and cleanup evidence.
+  - **M1.8e1c Snapshot reconciliation (L):** compare the isolated snapshot's
+    identity and referenced objects with the parsed manifest and ledger.
+  - **M1.8e1d Recorded generation verification (L):** select a complete
+    generation recorded in the current store, reconcile its manifest and
+    snapshot, and verify every object's size and hash. Staging must verify
+    the bytes it actually copies again.
   - **M1.8e2 Restore discovery and verified handoff (M):** discover and
     select complete external generations, including restore into a fresh data
     root, and hand a verified selection to staging. Do not assume a row in
