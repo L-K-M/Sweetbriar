@@ -2205,6 +2205,257 @@ fn verifier_ledger_batches_reconcile_and_reject_duplicates() {
 }
 
 #[test]
+fn recorded_verification_checks_real_empty_backup() {
+    let (_scratch, _paths, store) = open("recorded-verification-empty");
+    let snapshot = store.backup_snapshot(BackupDestination::DataRoot).unwrap();
+    let receipt = store.complete_backup(snapshot).unwrap();
+    let cancelled = std::sync::atomic::AtomicBool::new(false);
+    assert!(matches!(
+        store.verify_recorded_backup(receipt.generation_id(), &cancelled),
+        Ok(crate::BackupImageInspection::Inspected { .. })
+    ));
+}
+
+#[test]
+fn recorded_verification_pages_real_objects_and_rejects_corruption() {
+    use std::sync::atomic::AtomicBool;
+    let (_scratch, _paths, store) = open("recorded-verification-objects");
+    let mut hashes = Vec::new();
+    for n in 0..201 {
+        let (id, hash) = object(&store, format!("object {n}").as_bytes());
+        reference(&store, &id, "published");
+        hashes.push(hash);
+    }
+    let receipt = store
+        .complete_backup(store.backup_snapshot(BackupDestination::DataRoot).unwrap())
+        .unwrap();
+    let cancel = AtomicBool::new(false);
+    let verify = || store.verify_recorded_backup(receipt.generation_id(), &cancel);
+    assert!(matches!(
+        verify(),
+        Ok(crate::BackupImageInspection::Inspected { .. })
+    ));
+    let hash = &hashes[0];
+    let path = receipt.location().join(format!(
+        "objects/sha256/{}/{}/{}",
+        &hash[..2],
+        &hash[2..4],
+        hash
+    ));
+    let original = std::fs::read(&path).unwrap();
+    for bytes in [
+        Vec::new(),
+        vec![b'x'; original.len()],
+        [original.as_slice(), b"x"].concat(),
+    ] {
+        std::fs::write(&path, bytes).unwrap();
+        assert!(verify().is_err());
+    }
+    std::fs::remove_file(&path).unwrap();
+    assert!(verify().is_err());
+    std::fs::write(&path, original).unwrap();
+    let manifest = receipt.location().join("manifest.json");
+    let original = std::fs::read(&manifest).unwrap();
+    std::fs::write(&manifest, b"{}").unwrap();
+    assert!(verify().is_err());
+    std::fs::write(manifest, original).unwrap();
+    assert!(matches!(
+        verify(),
+        Ok(crate::BackupImageInspection::Inspected { .. })
+    ));
+}
+
+#[test]
+fn recorded_verification_cancellation_and_cleanup_failure() {
+    use std::sync::atomic::AtomicBool;
+    let (_scratch, paths, store) = open("recorded-verification-errors");
+    let (id, _) = object(&store, PAYLOAD);
+    reference(&store, &id, "published");
+    let receipt = store
+        .complete_backup(store.backup_snapshot(BackupDestination::DataRoot).unwrap())
+        .unwrap();
+    assert!(matches!(
+        store.verify_recorded_backup(receipt.generation_id(), &AtomicBool::new(true)),
+        Ok(crate::BackupImageInspection::Cancelled)
+    ));
+    let fs = Arc::new(FaultFs::new(
+        real_fs(),
+        FsOp::RemoveDirAll,
+        1,
+        FaultKind::Eio,
+    ));
+    let failing = faulty_backups(&store, &paths, fs);
+    assert!(
+        failing
+            .verify_recorded(receipt.generation_id(), &AtomicBool::new(false))
+            .is_err()
+    );
+    assert!(matches!(
+        store.verify_recorded_backup(receipt.generation_id(), &AtomicBool::new(false)),
+        Ok(crate::BackupImageInspection::Inspected { .. })
+    ));
+}
+
+#[test]
+fn recorded_verification_rejects_record_and_symlink_substitution() {
+    use std::sync::atomic::AtomicBool;
+    let (_scratch, paths, store) = open("recorded-verification-substitution");
+    let (id, hash) = object(&store, PAYLOAD);
+    reference(&store, &id, "published");
+    let receipt = store
+        .complete_backup(store.backup_snapshot(BackupDestination::DataRoot).unwrap())
+        .unwrap();
+    let cancel = AtomicBool::new(false);
+    for (change, restore) in [
+        ("state='failed'", "state='complete'"),
+        ("object_count=2", "object_count=1"),
+        ("started_at=started_at+1", "started_at=started_at-1"),
+        ("total_bytes=total_bytes+1", "total_bytes=total_bytes-1"),
+    ] {
+        sql(&store, format!("UPDATE backup_generations SET {change}"));
+        assert!(
+            store
+                .verify_recorded_backup(receipt.generation_id(), &cancel)
+                .is_err()
+        );
+        sql(&store, format!("UPDATE backup_generations SET {restore}"));
+    }
+    let path = receipt.location().join(format!(
+        "objects/sha256/{}/{}/{}",
+        &hash[..2],
+        &hash[2..4],
+        hash
+    ));
+    let renamed = path.with_extension("held");
+    std::fs::rename(&path, &renamed).unwrap();
+    std::os::unix::fs::symlink(&renamed, &path).unwrap();
+    assert!(
+        store
+            .verify_recorded_backup(receipt.generation_id(), &cancel)
+            .is_err()
+    );
+    std::fs::remove_file(&path).unwrap();
+    std::fs::rename(&renamed, &path).unwrap();
+    let fs = Arc::new(FaultFs::new(real_fs(), FsOp::Read, 1, FaultKind::Eio));
+    let failing = faulty_backups(&store, &paths, fs);
+    assert!(
+        failing
+            .verify_recorded(receipt.generation_id(), &cancel)
+            .is_err()
+    );
+    sql(&store, "CREATE TRIGGER fail_verifier_insert BEFORE INSERT ON verifier_objects BEGIN SELECT RAISE(ABORT, 'injected'); END".into());
+    assert!(
+        store
+            .verify_recorded_backup(receipt.generation_id(), &cancel)
+            .is_err()
+    );
+    sql(&store, "DROP TRIGGER fail_verifier_insert".into());
+    assert!(matches!(
+        store.verify_recorded_backup(receipt.generation_id(), &cancel),
+        Ok(crate::BackupImageInspection::Inspected { .. })
+    ));
+}
+
+#[test]
+fn recorded_verification_stream_cancellation_and_mutation() {
+    use super::recorded::StreamPhase;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let (_scratch, _paths, store) = open("recorded-verification-streams");
+    let payload = vec![b'a'; 131072];
+    let (id, hash) = object(&store, &payload);
+    reference(&store, &id, "published");
+    let receipt = store
+        .complete_backup(store.backup_snapshot(BackupDestination::DataRoot).unwrap())
+        .unwrap();
+    let path = receipt.location().join(format!(
+        "objects/sha256/{}/{}/{}",
+        &hash[..2],
+        &hash[2..4],
+        hash
+    ));
+    for target in [StreamPhase::Manifest, StreamPhase::Object] {
+        let cancel = AtomicBool::new(false);
+        let mut reached = false;
+        let result =
+            store
+                .backups
+                .verify_recorded_with(receipt.generation_id(), &cancel, |phase| {
+                    if phase == target {
+                        reached = true;
+                        cancel.store(true, Ordering::Release);
+                    }
+                });
+        assert!(reached);
+        assert!(matches!(
+            result,
+            Ok(crate::BackupImageInspection::Cancelled)
+        ));
+    }
+    let mut changed = false;
+    let cancel = AtomicBool::new(false);
+    let result = store
+        .backups
+        .verify_recorded_with(receipt.generation_id(), &cancel, |phase| {
+            if phase == StreamPhase::Object && !changed {
+                use std::io::{Seek, SeekFrom, Write};
+                let mut file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+                file.seek(SeekFrom::Start(100000)).unwrap();
+                file.write_all(b"changed").unwrap();
+                changed = true;
+            }
+        });
+    assert!(changed);
+    assert!(result.is_err());
+    std::fs::write(&path, payload).unwrap();
+    assert!(matches!(
+        store.verify_recorded_backup(receipt.generation_id(), &cancel),
+        Ok(crate::BackupImageInspection::Inspected { .. })
+    ));
+}
+
+#[test]
+fn recorded_verification_rejects_generation_root_symlink() {
+    use super::recorded::StreamPhase;
+    use std::sync::atomic::AtomicBool;
+    let (_scratch, _paths, store) = open("recorded-verification-root");
+    let receipt = store
+        .complete_backup(store.backup_snapshot(BackupDestination::DataRoot).unwrap())
+        .unwrap();
+    let root = receipt.location();
+    let held = root.with_extension("held");
+    std::fs::rename(root, &held).unwrap();
+    std::os::unix::fs::symlink(&held, root).unwrap();
+    assert!(
+        store
+            .verify_recorded_backup(receipt.generation_id(), &AtomicBool::new(false))
+            .is_err()
+    );
+    std::fs::remove_file(root).unwrap();
+    std::fs::rename(held, root).unwrap();
+    let held = root.with_extension("held");
+    let mut replaced = false;
+    let result = store.backups.verify_recorded_with(
+        receipt.generation_id(),
+        &AtomicBool::new(false),
+        |phase| {
+            if phase == StreamPhase::Manifest && !replaced {
+                std::fs::rename(root, &held).unwrap();
+                std::os::unix::fs::symlink(&held, root).unwrap();
+                replaced = true;
+            }
+        },
+    );
+    assert!(replaced);
+    assert!(result.is_err());
+    std::fs::remove_file(root).unwrap();
+    std::fs::rename(held, root).unwrap();
+    assert!(matches!(
+        store.verify_recorded_backup(receipt.generation_id(), &AtomicBool::new(false)),
+        Ok(crate::BackupImageInspection::Inspected { .. })
+    ));
+}
+
+#[test]
 fn reconciliation_accepts_real_empty_backup() {
     use sha2::{Digest, Sha256};
     use std::ops::ControlFlow;
@@ -3063,11 +3314,24 @@ fn verifier_image_transaction_cut_child() {
     let root = env::var("SB_VERIFIER_TX_ROOT").unwrap();
     let paths = StorePaths::new(root).unwrap();
     let store = crate::open(&paths, &test_seams(real_fs())).unwrap();
+    if env::var_os("SB_RECORDED_CUT").is_some() {
+        let (id, _) = object(&store, PAYLOAD);
+        reference(&store, &id, "published");
+    }
     let snapshot = store.backup_snapshot(BackupDestination::DataRoot).unwrap();
     let receipt = store.complete_backup(snapshot).unwrap();
     let data = std::fs::read(receipt.state_db()).unwrap();
     let digest = Sha256::digest(&data).into();
     std::fs::write(paths.recovery().join("user-sentinel"), b"untouched").unwrap();
+    if env::var_os("SB_RECORDED_CUT").is_some() {
+        store
+            .verify_recorded_backup(
+                receipt.generation_id(),
+                &std::sync::atomic::AtomicBool::new(false),
+            )
+            .unwrap();
+        return;
+    }
     store
         .inspect_backup_image(
             receipt.location(),
@@ -3111,6 +3375,38 @@ fn verifier_image_transaction_cuts_recover_owned_scratch() {
                 .map_err(bug)
         });
         assert_eq!(count, 0, "{point}");
+        assert_eq!(
+            std::fs::read(paths.recovery().join("user-sentinel")).unwrap(),
+            b"untouched"
+        );
+    }
+}
+
+#[test]
+fn recorded_verification_crash_recovers_ledger_and_manifest() {
+    use std::os::unix::process::ExitStatusExt;
+    let scratch = ScratchDir::new("recorded-verification-cuts");
+    for point in ["before-cleanup", "after-cleanup", "delete-before-commit"] {
+        let root = scratch.path().join(point);
+        std::fs::create_dir(&root).unwrap();
+        let status = std::process::Command::new(env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "backups::tests::verifier_image_transaction_cut_child",
+                "--ignored",
+            ])
+            .env("SB_VERIFIER_TX_CUT", point)
+            .env("SB_VERIFIER_TX_ROOT", &root)
+            .env("SB_RECORDED_CUT", "1")
+            .status()
+            .unwrap();
+        assert_eq!(status.signal(), Some(9));
+        let paths = StorePaths::new(root).unwrap();
+        let store = crate::open(&paths, &test_seams(real_fs())).unwrap();
+        let counts: (i64, i64) = reading(&store, |tx| {
+            tx.query_row("SELECT (SELECT count(*) FROM verifier_scratch), (SELECT count(*) FROM verifier_objects)", [], |r| Ok((r.get(0)?, r.get(1)?))).map_err(bug)
+        });
+        assert_eq!(counts, (0, 0));
         assert_eq!(
             std::fs::read(paths.recovery().join("user-sentinel")).unwrap(),
             b"untouched"

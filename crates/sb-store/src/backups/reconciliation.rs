@@ -57,7 +57,7 @@ impl<R: Read> Read for Tracked<'_, R> {
     }
 }
 
-fn uuid(bytes: [u8; 16]) -> String {
+pub(super) fn uuid(bytes: [u8; 16]) -> String {
     let mut out = String::with_capacity(36);
     use std::fmt::Write;
     for (i, byte) in bytes.iter().enumerate() {
@@ -249,6 +249,18 @@ pub(super) fn run(
     expected: Expected,
     cancelled: &AtomicBool,
 ) -> Result<ControlFlow<()>, StoreError> {
+    run_checked(conn, backups, id, input, expected, cancelled, None)
+}
+
+pub(super) fn run_checked(
+    conn: &Connection,
+    backups: &Backups,
+    id: &str,
+    input: impl Read,
+    expected: Expected,
+    cancelled: &AtomicBool,
+    identity: Option<(&str, i64, &str)>,
+) -> Result<ControlFlow<()>, StoreError> {
     let mut entries = Vec::with_capacity(ledger::BATCH);
     let mut count = 0u64;
     let mut total = 0u64;
@@ -305,6 +317,15 @@ pub(super) fn run(
             StoreError::unavailable_io(format!("read manifest: {e}"), e.kind())
         }
     })?;
+    if let Some((generation, started, store)) = identity
+        && (uuid(manifest.generation_id) != generation
+            || manifest.created_at != started
+            || uuid(manifest.store_uuid) != store)
+    {
+        return Err(StoreError::corrupt(
+            "manifest identity differs from selected generation",
+        ));
+    }
     ledger::insert(&backups.writer, id.to_owned(), entries)?;
     let total = total
         .checked_add(manifest.database.bytes)

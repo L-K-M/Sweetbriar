@@ -16,6 +16,7 @@ mod ledger;
 mod manifest;
 #[allow(dead_code)] // The recorded-generation verifier consumes this seam in M1.8e1d.
 mod reconciliation;
+mod recorded;
 mod references;
 pub use image::BackupImageInspection;
 mod scratch;
