@@ -1,10 +1,8 @@
-//! Backup generations (spec/03 "Backup generations"), procedure steps
-//! 1–3: the `in_progress` row whose existence freezes GC, the
-//! consistent `state.sqlite` snapshot taken through SQLite's online
-//! backup API — bounded steps on a read-only source, so the writer
-//! never waits on the copy — and the `backup_in_progress` pins the
-//! snapshot's own references produce. The object copy, `manifest.json`
-//! and `complete` are the procedure's later steps, not this code's.
+//! Backup generations (spec/03 "Backup generations"): an in-progress
+//! row freezes GC, SQLite's online API takes a consistent snapshot,
+//! and its references are pinned. Publication copies and verifies the
+//! pinned objects, flushes the generation and writes the manifest last,
+//! then releases pins and marks the generation complete.
 
 use std::collections::BTreeSet;
 use std::ffi::c_int;
@@ -18,7 +16,7 @@ use std::time::Duration;
 use rusqlite::backup::{Backup, StepResult};
 use rusqlite::{Connection, params};
 
-use sb_types::fs::{FileKind, Fs};
+use sb_types::fs::{FileKind, Fs, WriteFile};
 use sb_types::random::Random;
 use sb_types::time::Clock;
 
@@ -46,6 +44,11 @@ const SNAPSHOT_BUSY_PAUSE: Duration = Duration::from_millis(10);
 /// edits are bounded (spec/03 "bounded transactions").
 const PIN_BATCH: usize = 200;
 
+// Charge the table row, primary key and partial owner index, including
+// generous framing, for a 64-byte hash and UUID generation reference.
+const PIN_IMAGE_BYTES: usize = 3 * (64 + PIN_KIND.len() + 36) + 192;
+const _: () = assert!(PIN_BATCH * PIN_IMAGE_BYTES <= crate::imports::MAX_IMPORT_CHANGES_BYTES);
+
 /// Where a generation's directory goes (spec/03).
 pub enum BackupDestination {
     /// The data root's `backups/` — the pilot's default.
@@ -60,7 +63,7 @@ pub enum BackupDestination {
 /// in the generation's directory, and a `backup_in_progress` pin on
 /// every object the snapshot references — everything the object copy
 /// and manifest steps need to finish the generation.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct BackupSnapshot {
     /// The `backup_generations.generation_id` (a UUID's text form).
     generation_id: String,
@@ -69,7 +72,18 @@ pub struct BackupSnapshot {
     location: PathBuf,
     /// Every object hash the snapshot references — the pin set, and
     /// the copy step's work list — sorted and deduplicated.
-    referenced: Vec<String>,
+    referenced: Arc<[String]>,
+    snapshot_handle: Arc<std::sync::Mutex<Box<dyn WriteFile>>>,
+}
+
+impl std::fmt::Debug for BackupSnapshot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BackupSnapshot")
+            .field("generation_id", &self.generation_id)
+            .field("location", &self.location)
+            .field("referenced", &self.referenced)
+            .finish_non_exhaustive()
+    }
 }
 
 impl BackupSnapshot {
@@ -98,6 +112,33 @@ impl BackupSnapshot {
     }
 }
 
+/// A completed generation whose manifest and directory chain are durable.
+#[derive(Debug, Clone)]
+pub struct BackupReceipt {
+    generation_id: String,
+    location: PathBuf,
+    manifest_sha256: String,
+}
+
+impl BackupReceipt {
+    /// The completed generation's identifier.
+    pub fn generation_id(&self) -> &str {
+        &self.generation_id
+    }
+    /// The generation directory recorded in the store.
+    pub fn location(&self) -> &Path {
+        &self.location
+    }
+    /// The generation's database snapshot.
+    pub fn state_db(&self) -> PathBuf {
+        self.location.join(SNAPSHOT_FILE)
+    }
+    /// SHA-256 of the exact published manifest bytes.
+    pub fn manifest_sha256(&self) -> &str {
+        &self.manifest_sha256
+    }
+}
+
 /// The backup coordinator: the seams and paths the snapshot procedure
 /// needs, built at open like the import coordinators (spec/03).
 pub(crate) struct Backups {
@@ -109,6 +150,7 @@ pub(crate) struct Backups {
     state_db: PathBuf,
     /// The default destination: the layout's `backups/`.
     backups_dir: PathBuf,
+    objects: Arc<crate::objects::FileObjectStore>,
     /// The copy-timing barriers a test may arm (spec/03).
     #[cfg(test)]
     pauses: Mutex<Pauses>,
@@ -125,6 +167,7 @@ impl Backups {
         writer: Arc<Writer>,
         state_db: PathBuf,
         backups_dir: PathBuf,
+        objects: Arc<crate::objects::FileObjectStore>,
     ) -> Self {
         Self {
             fs,
@@ -133,6 +176,7 @@ impl Backups {
             writer,
             state_db,
             backups_dir,
+            objects,
             #[cfg(test)]
             pauses: Mutex::new(Pauses::default()),
         }
@@ -211,13 +255,14 @@ impl Backups {
             Ok(())
         }))?;
 
-        self.write_snapshot(&location)?;
+        let snapshot_handle = self.write_snapshot(&location)?;
         let referenced = self.referenced_objects(&location)?;
         self.pin_references(&generation_id, &referenced)?;
         Ok(BackupSnapshot {
             generation_id,
             location,
-            referenced,
+            referenced: referenced.into(),
+            snapshot_handle: Arc::new(std::sync::Mutex::new(snapshot_handle)),
         })
     }
 
@@ -294,7 +339,7 @@ impl Backups {
     /// its handle stays for the end-of-copy fsync — then the online
     /// backup copy, the file flush and the directory flush, in the
     /// publication protocol's order (spec/03).
-    fn write_snapshot(&self, location: &Path) -> Result<(), StoreError> {
+    fn write_snapshot(&self, location: &Path) -> Result<Box<dyn WriteFile>, StoreError> {
         let failed = |e: io::Error| {
             StoreError::unavailable_io(format!("cannot write the backup snapshot: {e}"), e.kind())
         };
@@ -313,9 +358,10 @@ impl Backups {
             self.pause(|p| &p.after_snapshot_file);
             self.pause(|p| &p.after_snapshot_file);
         }
-        self.copy_database(&file)
-            .and_then(|()| handle.sync_all().map_err(failed))
-            .and_then(|()| self.fs.sync_dir(location).map_err(failed))
+        self.copy_database(&file)?;
+        handle.sync_all().map_err(failed)?;
+        self.fs.sync_dir(location).map_err(failed)?;
+        Ok(handle)
     }
 
     /// The online-backup step loop: a dedicated read-only source —
@@ -435,6 +481,8 @@ pub(crate) struct Pauses {
     /// Waited on twice: park, then release to the snapshot read — a
     /// test lands a live-only reference in between.
     pub(crate) before_referenced_read: Option<Arc<std::sync::Barrier>>,
+    pub(crate) during_pin_validation: Option<Arc<std::sync::Barrier>>,
+    pub(crate) before_pin_release: Option<Arc<std::sync::Barrier>>,
 }
 
 /// A finished snapshot opened for reads. The copy marks it WAL (it
@@ -500,3 +548,5 @@ fn collect_attachments(conn: &Connection, shas: &mut BTreeSet<String>) -> Result
 
 #[cfg(test)]
 mod tests;
+
+mod publication;

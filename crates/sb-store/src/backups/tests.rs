@@ -18,7 +18,7 @@ use sb_test_support::{
 use sb_types::fs::Fs;
 use sb_types::time::Timestamp;
 
-use super::{BackupDestination, BackupSnapshot, Backups, Pauses};
+use super::{BackupDestination, Backups, Pauses};
 use crate::objects::{ObjectId, ObjectStore, ReservationRelease, release_reservation};
 use crate::schema::bug;
 use crate::testing::{FIXED_NOW_MS, reading, scratch_paths, test_seams, writing};
@@ -431,6 +431,14 @@ fn an_unusable_destination_is_invalid_input() {
 /// only the snapshot path's operations can fail, so fault points are
 /// exact.
 fn faulty_backups(store: &Store, paths: &StorePaths, fs: Arc<dyn Fs>) -> Backups {
+    let objects = Arc::new(crate::objects::FileObjectStore::new(
+        Arc::clone(&fs),
+        Arc::new(SeededRandom::new(7)),
+        paths.objects().to_path_buf(),
+        paths.recovery().to_path_buf(),
+        Arc::clone(&store.writer),
+        Arc::new(FixedClock::new(Timestamp::from_millis(FIXED_NOW_MS))),
+    ));
     Backups::new(
         fs,
         Arc::new(SeededRandom::new(7)),
@@ -438,12 +446,13 @@ fn faulty_backups(store: &Store, paths: &StorePaths, fs: Arc<dyn Fs>) -> Backups
         Arc::clone(&store.writer),
         paths.state_db().to_path_buf(),
         paths.backups().to_path_buf(),
+        objects,
     )
 }
 
 /// One fault point's aftermath: `Unavailable`, the row still
 /// `in_progress`, and a retry `Conflict` on the leftover.
-fn assert_failed_snapshot(store: &Store, result: Result<BackupSnapshot, StoreError>) {
+fn assert_failed_snapshot<T: std::fmt::Debug>(store: &Store, result: Result<T, StoreError>) {
     let err = result.unwrap_err();
     assert!(
         matches!(err, StoreError::Unavailable { .. }),
@@ -583,14 +592,7 @@ fn snapshot_cut_child() {
     let (id_a, _a) = object(&store, b"one");
     reference(&store, &id_a, "published");
     let (_id_o, _o) = object(&store, b"two");
-    let backups = Backups::new(
-        Arc::new(CutFs::new(real_fs(), nth)),
-        Arc::new(SeededRandom::new(3)),
-        Arc::new(FixedClock::new(Timestamp::from_millis(FIXED_NOW_MS))),
-        Arc::clone(&store.writer),
-        paths.state_db().to_path_buf(),
-        paths.backups().to_path_buf(),
-    );
+    let backups = faulty_backups(&store, &paths, Arc::new(CutFs::new(real_fs(), nth)));
     backups.snapshot(BackupDestination::DataRoot).unwrap();
 }
 
@@ -647,4 +649,603 @@ fn crash_cuts_leave_the_generation_in_progress_never_complete() {
         },
     );
     assert!(cuts > 0, "the sweep must have killed children");
+}
+
+#[test]
+fn publication_verifies_objects_and_commits_a_manifest() {
+    let (_scratch, _paths, store) = open("backup-publish");
+    let (id, sha) = object(&store, PAYLOAD);
+    reference(&store, &id, "published");
+    let snapshot = store.backup_snapshot(BackupDestination::DataRoot).unwrap();
+    let receipt = store.complete_backup(snapshot.clone()).unwrap();
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(snapshot.location().join("manifest.json")).unwrap())
+            .unwrap();
+    let db = Connection::open(snapshot.state_db()).unwrap();
+    let store_uuid: String = db
+        .query_row(
+            "SELECT value FROM store_meta WHERE key='store_uuid'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let schema_version: i64 = db
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(manifest.as_object().unwrap().len(), 8);
+    assert_eq!(manifest["format"], 1);
+    assert_eq!(manifest["store_uuid"], store_uuid);
+    assert_eq!(manifest["app_version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(manifest["schema_version"], schema_version);
+    assert_eq!(manifest["created_at"], FIXED_NOW_MS);
+    assert_eq!(manifest["generation_id"], snapshot.generation_id());
+    assert_eq!(manifest["database"]["file"], "state.sqlite");
+    assert_eq!(manifest["objects"][0]["sha256"], sha);
+    assert_eq!(manifest["objects"][0]["bytes"], PAYLOAD.len());
+    assert_eq!(receipt.generation_id(), snapshot.generation_id());
+    assert_eq!(
+        generation_row(&store, snapshot.generation_id()).unwrap().0,
+        "complete"
+    );
+    assert!(backup_pins(&store).is_empty());
+}
+
+#[test]
+fn publication_failures_leave_the_generation_in_progress() {
+    // Sweep all calls until the first successful run, including the
+    // snapshot's and publication's flushes and both streamed writes.
+    for op in [
+        FsOp::SyncFile,
+        FsOp::SyncDir,
+        FsOp::CreateDir,
+        FsOp::Create,
+        FsOp::Read,
+        FsOp::Write,
+    ] {
+        let mut failures = 0;
+        let mut finished = false;
+        for nth in 1..40 {
+            let (_scratch, paths, store) = open("backup-publication-fault");
+            let (id, _) = object(&store, PAYLOAD);
+            reference(&store, &id, "published");
+            let fs = Arc::new(FaultFs::new(real_fs(), op, nth, FaultKind::Eio));
+            let backups = faulty_backups(&store, &paths, fs);
+            let result = backups
+                .snapshot(BackupDestination::DataRoot)
+                .and_then(|s| backups.complete(s));
+            if result.is_ok() {
+                finished = true;
+                break;
+            }
+            failures += 1;
+            assert_failed_snapshot(&store, result);
+        }
+        assert!(failures > 0, "{op:?} must be exercised");
+        assert!(finished, "{op:?} sweep must reach the end");
+    }
+}
+
+#[test]
+fn damaged_or_missing_source_never_completes() {
+    for missing in [false, true] {
+        let (_scratch, _paths, store) = open("backup-damaged");
+        let (id, _) = object(&store, PAYLOAD);
+        reference(&store, &id, "published");
+        let snapshot = store.backup_snapshot(BackupDestination::DataRoot).unwrap();
+        let source = store.objects().object_path(&id);
+        if missing {
+            std::fs::remove_file(&source).unwrap();
+        } else {
+            std::fs::write(&source, b"damaged").unwrap();
+        }
+        let err = store.complete_backup(snapshot.clone()).unwrap_err();
+        if missing {
+            assert!(matches!(err, StoreError::NotFound { .. }), "{err:?}");
+        } else {
+            assert!(matches!(err, StoreError::Corrupt { .. }), "{err:?}");
+            assert!(!source.exists(), "damaged source must be quarantined");
+        }
+        assert_eq!(
+            generation_row(&store, snapshot.generation_id()).unwrap().0,
+            "in_progress"
+        );
+        assert!(!snapshot.location().join("manifest.json").exists());
+        assert_eq!(backup_pins(&store).len(), 1);
+    }
+}
+
+#[test]
+fn gc_stays_blocked_until_publication_commits() {
+    let (_scratch, _paths, store) = open("backup-publish-gc");
+    let (id, sha) = object(&store, PAYLOAD);
+    reference(&store, &id, "published");
+    let snapshot = store.backup_snapshot(BackupDestination::DataRoot).unwrap();
+    sql(&store, "DELETE FROM acquisitions".to_owned());
+    pin(&store, &sha, "gc_grace", 0);
+    let report = store.collect_garbage(GC_GRACE_PERIOD).unwrap();
+    assert_eq!(report.blocked, Some(GcGate::BackupInProgress));
+    assert!(store.objects().exists(&id).unwrap());
+    store.complete_backup(snapshot).unwrap();
+    let report = store.collect_garbage(GC_GRACE_PERIOD).unwrap();
+    assert_eq!(report.blocked, None);
+    assert_eq!(report.removed, 1);
+}
+
+const PUBLICATION_CUT_N: &str = "SB_BACKUP_PUBLICATION_CUT_N";
+const PUBLICATION_CUT_ROOT: &str = "SB_BACKUP_PUBLICATION_CUT_ROOT";
+
+#[test]
+#[ignore = "spawned by run_crash_cuts"]
+fn publication_cut_child() {
+    let nth = env::var(PUBLICATION_CUT_N).unwrap().parse().unwrap();
+    let root = env::var(PUBLICATION_CUT_ROOT).unwrap();
+    let paths = StorePaths::new(Path::new(&root)).unwrap();
+    let store = crate::open(&paths, &test_seams(real_fs())).unwrap();
+    let (id, _) = object(&store, PAYLOAD);
+    reference(&store, &id, "published");
+    let backups = faulty_backups(&store, &paths, Arc::new(CutFs::new(real_fs(), nth)));
+    let snapshot = backups.snapshot(BackupDestination::DataRoot).unwrap();
+    backups.complete(snapshot).unwrap();
+}
+
+#[test]
+fn publication_crash_cuts_never_complete() {
+    let scratch = ScratchDir::new("backup-publication-cuts");
+    let cuts = run_crash_cuts(
+        PUBLICATION_CUT_N,
+        PUBLICATION_CUT_ROOT,
+        "backups::tests::publication_cut_child",
+        &mut |n| {
+            let root = scratch.path().join(format!("cut-{n}"));
+            std::fs::create_dir(&root).unwrap();
+            root
+        },
+        &mut |root| {
+            let paths = StorePaths::new(root).unwrap();
+            let store = crate::open(&paths, &test_seams(real_fs())).unwrap();
+            let complete: i64 = reading(&store, |tx| {
+                tx.query_row(
+                    "SELECT count(*) FROM backup_generations WHERE state='complete'",
+                    [],
+                    |r| r.get(0),
+                )
+                .map_err(bug)
+            });
+            assert_eq!(complete, 0);
+        },
+    );
+    assert!(cuts > 0);
+}
+
+#[test]
+fn completion_receipt_survives_a_power_cut() {
+    use sb_test_support::SimFs;
+    use sha2::{Digest, Sha256};
+    use std::io::{Read, Write};
+    let hash = |bytes: &[u8]| {
+        Sha256::digest(bytes)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>()
+    };
+
+    let (_scratch, paths, store) = open("backup-power-cut");
+    let (id, sha) = object(&store, PAYLOAD);
+    reference(&store, &id, "published");
+    let mut snapshot = store.backup_snapshot(BackupDestination::DataRoot).unwrap();
+    let sim = Arc::new(SimFs::new());
+    let destination = snapshot.location().parent().unwrap();
+    sim.create_dir_all(destination).unwrap();
+    sim.create_dir(snapshot.location()).unwrap();
+    let mut state = sim.create(&snapshot.state_db()).unwrap();
+    state
+        .write_all(&std::fs::read(snapshot.state_db()).unwrap())
+        .unwrap();
+    snapshot.snapshot_handle = Arc::new(std::sync::Mutex::new(state));
+    let source = store.objects().object_path(&id);
+    sim.create_dir_all(source.parent().unwrap()).unwrap();
+    let mut source_file = sim.create(&source).unwrap();
+    source_file.write_all(PAYLOAD).unwrap();
+    source_file.sync_all().unwrap();
+    sim.sync_dir(source.parent().unwrap()).unwrap();
+    let backups = faulty_backups(&store, &paths, sim.clone());
+    let receipt = backups.complete(snapshot).unwrap();
+    sim.power_cut();
+    let mut data = Vec::new();
+    sim.open(&receipt.location().join("manifest.json"))
+        .unwrap()
+        .read_to_end(&mut data)
+        .unwrap();
+    let manifest: serde_json::Value = serde_json::from_slice(&data).unwrap();
+    let mut database = Vec::new();
+    sim.open(&receipt.state_db())
+        .unwrap()
+        .read_to_end(&mut database)
+        .unwrap();
+    assert_eq!(manifest["database"]["sha256"], hash(&database));
+    assert_eq!(manifest["database"]["bytes"], database.len());
+    let copy = receipt
+        .location()
+        .join("objects/sha256")
+        .join(&sha[..2])
+        .join(&sha[2..4])
+        .join(&sha);
+    let mut bytes = Vec::new();
+    sim.open(&copy).unwrap().read_to_end(&mut bytes).unwrap();
+    assert_eq!(bytes, PAYLOAD);
+    assert_eq!(manifest["objects"][0]["sha256"], hash(&bytes));
+    assert_eq!(
+        generation_row(&store, receipt.generation_id()).unwrap().0,
+        "complete"
+    );
+    let persisted_hash: String = reading(&store, |tx| {
+        tx.query_row(
+            "SELECT manifest_sha256 FROM backup_generations WHERE generation_id=?1",
+            [receipt.generation_id()],
+            |r| r.get(0),
+        )
+        .map_err(bug)
+    });
+    assert_eq!(persisted_hash, hash(&data));
+    assert_eq!(receipt.manifest_sha256(), persisted_hash);
+    let id = receipt.generation_id().to_owned();
+    drop(backups);
+    drop(store);
+    let reopened = crate::open(&paths, &test_seams(real_fs())).unwrap();
+    assert_eq!(generation_row(&reopened, &id).unwrap().0, "complete");
+}
+
+#[test]
+fn failed_pin_release_keeps_gc_gated() {
+    let (_scratch, _paths, store) = open("backup-pin-release-failure");
+    let (id, sha) = object(&store, PAYLOAD);
+    reference(&store, &id, "published");
+    let snapshot = store.backup_snapshot(BackupDestination::DataRoot).unwrap();
+    sql(&store, "CREATE TRIGGER fail_backup_unpin BEFORE DELETE ON object_pins WHEN OLD.pin_kind='backup_in_progress' BEGIN SELECT RAISE(ABORT, 'test unpin failure'); END;".to_owned());
+    assert!(store.complete_backup(snapshot.clone()).is_err());
+    assert_eq!(
+        generation_row(&store, snapshot.generation_id()).unwrap().0,
+        "in_progress"
+    );
+    assert_eq!(backup_pins(&store), vec![sha]);
+    assert_eq!(
+        store.collect_garbage(GC_GRACE_PERIOD).unwrap().blocked,
+        Some(GcGate::BackupInProgress)
+    );
+    assert!(store.objects().exists(&id).unwrap());
+}
+
+#[test]
+fn interruption_between_pin_batches_keeps_gc_gated() {
+    let (_scratch, _paths, store) = open("backup-partial-pin-release");
+    let (id, sha) = object(&store, PAYLOAD);
+    reference(&store, &id, "published");
+    let mut snapshot = store.backup_snapshot(BackupDestination::DataRoot).unwrap();
+    let mut pins: Vec<String> = (1..=200).map(|n| format!("{n:064x}")).collect();
+    assert!(pins.iter().all(|pin| pin < &sha));
+    let generation = snapshot.generation_id().to_owned();
+    let seeded = pins.clone();
+    writing(&store, move |tx| {
+        for pin_sha in seeded {
+            tx.execute(
+                "INSERT INTO object_pins VALUES (?1, 'backup_in_progress', ?2, 0)",
+                [&pin_sha, &generation],
+            )
+            .map_err(bug)?;
+        }
+        Ok(())
+    });
+    pins.push(sha.clone());
+    snapshot.referenced = pins.into();
+    sql(
+        &store,
+        format!(
+            "CREATE TRIGGER fail_last_backup_unpin BEFORE DELETE ON object_pins WHEN OLD.pin_kind='backup_in_progress' AND OLD.object_sha256='{sha}' BEGIN SELECT RAISE(ABORT, 'test second batch failure'); END;"
+        ),
+    );
+    assert!(store.backups.release_pins(&snapshot).is_err());
+    assert_eq!(backup_pins(&store), vec![sha]);
+    assert_eq!(
+        generation_row(&store, snapshot.generation_id()).unwrap().0,
+        "in_progress"
+    );
+    assert_eq!(
+        store.collect_garbage(GC_GRACE_PERIOD).unwrap().blocked,
+        Some(GcGate::BackupInProgress)
+    );
+    assert!(store.objects().exists(&id).unwrap());
+}
+
+#[test]
+fn completion_commit_failure_keeps_gc_gated_after_pins_are_released() {
+    let (_scratch, _paths, store) = open("backup-completion-failure");
+    let (id, _) = object(&store, PAYLOAD);
+    reference(&store, &id, "published");
+    let snapshot = store.backup_snapshot(BackupDestination::DataRoot).unwrap();
+    sql(&store, "CREATE TRIGGER fail_backup_complete BEFORE UPDATE ON backup_generations WHEN NEW.state='complete' BEGIN SELECT RAISE(ABORT, 'test completion failure'); END;".to_owned());
+    assert!(store.complete_backup(snapshot.clone()).is_err());
+    assert_eq!(
+        generation_row(&store, snapshot.generation_id()).unwrap().0,
+        "in_progress"
+    );
+    assert!(backup_pins(&store).is_empty());
+    assert_eq!(
+        store.collect_garbage(GC_GRACE_PERIOD).unwrap().blocked,
+        Some(GcGate::BackupInProgress)
+    );
+    assert!(store.objects().exists(&id).unwrap());
+}
+
+#[test]
+fn empty_generation_completes_and_store_closes_cleanly() {
+    let (_scratch, paths, store) = open("backup-empty");
+    let snapshot = store.backup_snapshot(BackupDestination::DataRoot).unwrap();
+    let receipt = store.complete_backup(snapshot).unwrap();
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(receipt.location().join("manifest.json")).unwrap())
+            .unwrap();
+    assert_eq!(manifest["objects"], serde_json::json!([]));
+    store.close().unwrap();
+    let reopened = crate::open(&paths, &test_seams(real_fs())).unwrap();
+    assert_eq!(
+        generation_row(&reopened, receipt.generation_id())
+            .unwrap()
+            .0,
+        "complete"
+    );
+}
+
+#[test]
+fn backup_reader_does_not_quarantine_a_repaired_object() {
+    let (_scratch, _paths, store) = open("backup-repair-race");
+    let (id, _) = object(&store, PAYLOAD);
+    reference(&store, &id, "published");
+    let snapshot = store.backup_snapshot(BackupDestination::DataRoot).unwrap();
+    std::fs::write(store.objects().object_path(&id), b"bad").unwrap();
+    let gate = Arc::new(Barrier::new(2));
+    store.objects().set_pauses(crate::objects::Pauses {
+        backup_opened: Some(gate.clone()),
+        ..Default::default()
+    });
+    let store = Arc::new(store);
+    let backup = {
+        let store = store.clone();
+        std::thread::spawn(move || store.complete_backup(snapshot))
+    };
+    gate.wait();
+    assert!(matches!(
+        store.objects().open(&id),
+        Err(StoreError::Corrupt { .. })
+    ));
+    let replacement = store.objects().publish(PAYLOAD).unwrap();
+    gate.wait();
+    let _ = backup.join().unwrap();
+    let mut bytes = Vec::new();
+    use std::io::Read;
+    store
+        .objects()
+        .open(replacement.id())
+        .unwrap()
+        .read_to_end(&mut bytes)
+        .unwrap();
+    assert_eq!(bytes, PAYLOAD);
+}
+
+#[test]
+fn remaining_pin_fence_uses_a_leading_generation_index() {
+    let (_scratch, _paths, store) = open("backup-pin-index");
+    let plan: String = reading(&store, |tx| {
+        tx.query_row(
+        "EXPLAIN QUERY PLAN SELECT 1 FROM object_pins WHERE pin_kind='backup_in_progress' AND pin_ref='gen' LIMIT 1", [], |r| r.get(3)).map_err(bug)
+    });
+    assert!(
+        plan.contains("SEARCH") && plan.contains("pin_kind=? AND pin_ref=?"),
+        "{plan}"
+    );
+}
+
+const TX_CUT: &str = "SB_BACKUP_TX_CUT";
+const TX_CUT_ROOT: &str = "SB_BACKUP_TX_CUT_ROOT";
+
+#[test]
+#[ignore = "spawned by transaction_cuts_preserve_backup_state"]
+fn transaction_cut_child() {
+    let point = env::var(TX_CUT).unwrap();
+    let root = env::var(TX_CUT_ROOT).unwrap();
+    let paths = StorePaths::new(root).unwrap();
+    let store = crate::open(&paths, &test_seams(real_fs())).unwrap();
+    let (id, _) = object(&store, PAYLOAD);
+    reference(&store, &id, "published");
+    let mut snapshot = store.backup_snapshot(BackupDestination::DataRoot).unwrap();
+    if point.contains("batch") {
+        let mut pins: Vec<String> = (1..=200).map(|n| format!("{n:064x}")).collect();
+        let generation = snapshot.generation_id().to_owned();
+        let seeded = pins.clone();
+        writing(&store, move |tx| {
+            for sha in seeded {
+                tx.execute(
+                    "INSERT INTO object_pins VALUES (?1, 'backup_in_progress', ?2, 0)",
+                    [&sha, &generation],
+                )
+                .map_err(bug)?;
+            }
+            Ok(())
+        });
+        pins.push(id.sha256_hex());
+        pins.sort();
+        snapshot.referenced = pins.into();
+        store.backups.release_pins(&snapshot).unwrap();
+    } else {
+        store.complete_backup(snapshot).unwrap();
+    }
+}
+
+#[test]
+fn transaction_cuts_preserve_backup_state() {
+    use std::os::unix::process::ExitStatusExt;
+    let scratch = ScratchDir::new("backup-tx-cuts");
+    for point in [
+        "before-batch-0",
+        "inside-batch-0",
+        "after-batch-0",
+        "before-batch-1",
+        "inside-batch-1",
+        "after-batch-1",
+        "before-completion-commit",
+        "after-completion-commit",
+    ] {
+        let root = scratch.path().join(point);
+        std::fs::create_dir(&root).unwrap();
+        let status = std::process::Command::new(env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "backups::tests::transaction_cut_child",
+                "--ignored",
+            ])
+            .env(TX_CUT, point)
+            .env(TX_CUT_ROOT, &root)
+            .status()
+            .unwrap();
+        assert_eq!(
+            status.signal(),
+            Some(9),
+            "cut did not fire at {point}: {status}"
+        );
+        let paths = StorePaths::new(root).unwrap();
+        let store = crate::open(&paths, &test_seams(real_fs())).unwrap();
+        let (state, location, hash): (String, String, Option<String>) = reading(&store, |tx| {
+            tx.query_row(
+                "SELECT state, location, manifest_sha256 FROM backup_generations",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .map_err(bug)
+        });
+        if point == "after-completion-commit" {
+            use sha2::{Digest, Sha256};
+            let data = std::fs::read(Path::new(&location).join("manifest.json")).unwrap();
+            let actual = Sha256::digest(&data)
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>();
+            assert_eq!(state, "complete");
+            assert_eq!(hash.as_deref(), Some(actual.as_str()));
+            let manifest: serde_json::Value = serde_json::from_slice(&data).unwrap();
+            let database = std::fs::read(Path::new(&location).join("state.sqlite")).unwrap();
+            let database_sha = Sha256::digest(&database)
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>();
+            assert_eq!(manifest["database"]["sha256"], database_sha);
+            assert_eq!(manifest["database"]["bytes"], database.len());
+            let sha = manifest["objects"][0]["sha256"].as_str().unwrap();
+            let bytes = std::fs::read(
+                Path::new(&location)
+                    .join("objects/sha256")
+                    .join(&sha[..2])
+                    .join(&sha[2..4])
+                    .join(sha),
+            )
+            .unwrap();
+            assert_eq!(bytes, PAYLOAD);
+            let object_sha = Sha256::digest(&bytes)
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>();
+            assert_eq!(sha, object_sha);
+        } else {
+            assert_eq!(state, "in_progress", "{point}");
+            assert_eq!(
+                store.collect_garbage(GC_GRACE_PERIOD).unwrap().blocked,
+                Some(GcGate::BackupInProgress)
+            );
+            let count = backup_pins(&store).len();
+            let expected = match point {
+                "before-batch-0" | "inside-batch-0" => 201,
+                "after-batch-0" | "before-batch-1" | "inside-batch-1" => 1,
+                _ => 0,
+            };
+            assert_eq!(count, expected, "{point}");
+        }
+    }
+}
+
+#[test]
+fn user_writes_progress_during_large_pin_validation() {
+    let (_scratch, _paths, store) = open("backup-validation-progress");
+    let (id, _) = object(&store, PAYLOAD);
+    reference(&store, &id, "published");
+    let mut snapshot = store.backup_snapshot(BackupDestination::DataRoot).unwrap();
+    let mut pins: Vec<String> = (1..=400).map(|n| format!("{n:064x}")).collect();
+    let seeded = pins.clone();
+    let generation = snapshot.generation_id().to_owned();
+    writing(&store, move |tx| {
+        for sha in seeded {
+            tx.execute(
+                "INSERT INTO object_pins VALUES (?1, 'backup_in_progress', ?2, 0)",
+                [&sha, &generation],
+            )
+            .map_err(bug)?;
+        }
+        Ok(())
+    });
+    pins.push(id.sha256_hex());
+    pins.sort();
+    snapshot.referenced = pins.into();
+    let gate = Arc::new(Barrier::new(2));
+    store.backups.set_pauses(Pauses {
+        during_pin_validation: Some(gate.clone()),
+        ..Default::default()
+    });
+    let store = Arc::new(store);
+    let worker = {
+        let store = store.clone();
+        std::thread::spawn(move || store.complete_backup(snapshot))
+    };
+    gate.wait();
+    sql(
+        &store,
+        "CREATE TABLE user_write_during_validation (id INTEGER) STRICT".to_owned(),
+    );
+    gate.wait();
+    assert!(worker.join().unwrap().is_err()); // synthetic source hashes do not exist
+    assert_eq!(
+        store.collect_garbage(GC_GRACE_PERIOD).unwrap().blocked,
+        Some(GcGate::BackupInProgress)
+    );
+}
+
+#[test]
+fn a_new_pin_after_validation_prevents_completion() {
+    let (_scratch, _paths, store) = open("backup-pin-fence");
+    let (id, _) = object(&store, PAYLOAD);
+    reference(&store, &id, "published");
+    let snapshot = store.backup_snapshot(BackupDestination::DataRoot).unwrap();
+    let generation = snapshot.generation_id().to_owned();
+    let gate = Arc::new(Barrier::new(2));
+    store.backups.set_pauses(Pauses {
+        before_pin_release: Some(gate.clone()),
+        ..Default::default()
+    });
+    let store = Arc::new(store);
+    let worker = {
+        let store = store.clone();
+        std::thread::spawn(move || store.complete_backup(snapshot))
+    };
+    gate.wait();
+    writing(&store, move |tx| {
+        tx.execute(
+            "INSERT INTO object_pins VALUES ('late', 'backup_in_progress', ?1, 0)",
+            [generation],
+        )
+        .map_err(bug)?;
+        Ok(())
+    });
+    gate.wait();
+    assert!(worker.join().unwrap().is_err());
+    assert_eq!(backup_pins(&store), vec!["late"]);
+    assert_eq!(
+        store.collect_garbage(GC_GRACE_PERIOD).unwrap().blocked,
+        Some(GcGate::BackupInProgress)
+    );
 }
