@@ -7,7 +7,7 @@ use std::sync::{
 use std::time::Duration;
 
 const PROGRESS_OPS: i32 = 1_000;
-const MAX_PROGRESS_CALLS: u32 = 2_000;
+pub(super) const MAX_PROGRESS_CALLS: u32 = 2_000;
 const MAX_SQLITE_VALUE: i32 = 1_048_576;
 
 /// Result of inspecting a retained image; cancellation carries no identity.
@@ -39,7 +39,7 @@ impl Drop for ClearProgress<'_> {
 
 // The monitor borrows the caller's flag, while SQLite's 'static progress
 // callback owns a shared mirror. It also interrupts native SQLite work.
-fn guarded<T>(
+pub(super) fn guarded<T>(
     conn: &Connection,
     cancelled: &AtomicBool,
     budget: u32,
@@ -109,7 +109,7 @@ fn guarded<T>(
     })
 }
 
-fn inspection_error(error: rusqlite::Error, what: &str) -> crate::StoreError {
+pub(super) fn inspection_error(error: rusqlite::Error, what: &str) -> crate::StoreError {
     match error {
         rusqlite::Error::QueryReturnedNoRows
         | rusqlite::Error::InvalidColumnType(..)
