@@ -377,11 +377,16 @@ fn validate_draft(
             ));
         }
     }
-    if content
-        .attachments
-        .iter()
-        .any(|a| a.filename.is_empty() || a.media_type.is_empty())
-    {
+    if content.attachments.iter().any(|a| match a {
+        DraftAttachment::New {
+            filename,
+            media_type,
+            ..
+        } => filename.is_empty() || media_type.is_empty(),
+        DraftAttachment::Retained(reference) => {
+            reference.filename.is_empty() || reference.media_type.is_empty()
+        }
+    }) {
         return Err(EngineError::invalid_input(
             "attachments",
             "a draft attachment needs a filename and media type",
