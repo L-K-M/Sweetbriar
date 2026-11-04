@@ -972,10 +972,9 @@ fn message_rescans_cancel_and_preserve_other_snapshots() {
     let message = r##"{"v":1,"occurrence_id":1,"message_id":2,"account":{"id":"a","name":"a"},"mailbox":{"id":1,"name":"m"},"occurrence_state":"present","flags":{"seen":false,"flagged":false,"answered":false,"draft":false,"deleted":false},"keywords":["a","b"],"acquisition":null,"body_availability":"not_acquired","tags":[{"id":"a","name":"a","color_srgb":null},{"id":"b","name":"b","color_srgb":"#010203"},{"id":"c","name":"c","color_srgb":null}],"note":null,"file":null}"##;
     let manifest = table_manifest("[]").replace(TABLE_MESSAGE, message);
     fs::write(dir.join("sweetbriar-metadata.json"), &manifest).unwrap();
-    assert_eq!(
-        run(&res, std::slice::from_ref(&dir)).problems()[0].kind(),
-        ImportProblemKind::Unsupported
-    );
+    let inventory = run(&res, std::slice::from_ref(&dir));
+    assert!(inventory.sources().is_empty());
+    assert!(inventory.problems().is_empty());
     assert_eq!(snapshot_names(&scratch), before);
 
     let mut previous = 0;
@@ -1073,10 +1072,12 @@ fn relationship_passes_cancel_and_preserve_other_snapshots() {
         (outcome, seeks)
     };
     let (outcome, seeks) = scan(usize::MAX);
-    assert_eq!(
-        outcome.inventory().problems()[0].kind(),
-        ImportProblemKind::Unsupported
-    );
+    assert!(outcome.inventory().problems().is_empty());
+    let snapshots: Vec<_> = outcome.inventory().sources()[0]
+        .snapshots()
+        .cloned()
+        .collect();
+    res.remove_import_sources(&snapshots).unwrap();
     assert!(seeks > 8);
     for stop_at in 1..=seeks {
         assert!(

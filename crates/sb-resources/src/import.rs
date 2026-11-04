@@ -361,16 +361,31 @@ pub(crate) fn inventory(
         pending: roots
             .iter()
             .rev()
-            .map(|path| (path.clone(), Origin::Chosen))
+            .map(|path| Work::Visit(path.clone(), Origin::Chosen))
             .collect(),
     };
-    while let Some((path, origin)) = walker.pending.pop() {
-        if walker.check(&path) {
-            break;
+    while let Some(work) = walker.pending.pop() {
+        match work {
+            Work::Visit(path, origin) => {
+                if !walker.check(&path) {
+                    walker.visit(path, origin);
+                }
+            }
+            Work::BundleChild(path, format, bytes, records, ordinal, manifest) => {
+                if !walker.check(&path) {
+                    walker.check_bundle_child(&path, format, bytes, records, ordinal, &manifest);
+                }
+            }
+            Work::BundleEnd(manifest) => walker.finish_bundle(&manifest),
         }
-        walker.visit(path, origin);
         if walker.cancelled {
             break;
+        }
+    }
+    // Pending finalizers own manifests until a returned source references them.
+    while let Some(work) = walker.pending.pop() {
+        if let Work::BundleEnd(manifest) = work {
+            walker.finish_bundle(&manifest);
         }
     }
     if walker.cancelled {
@@ -391,7 +406,13 @@ struct Walker<'a> {
     seen_files: HashSet<PathBuf>,
     inventory: ImportInventory,
     cancelled: bool,
-    pending: Vec<(PathBuf, Origin)>,
+    pending: Vec<Work>,
+}
+
+enum Work {
+    Visit(PathBuf, Origin),
+    BundleChild(PathBuf, BundleFormat, u64, u64, u64, ImportSourceSnapshot),
+    BundleEnd(ImportSourceSnapshot),
 }
 
 #[derive(Clone, Copy)]
@@ -495,7 +516,7 @@ impl Walker<'_> {
         }
     }
 
-    /// Validate a recognized bundle, then refuse it until admission exists.
+    /// Validate the manifest before scheduling its children.
     fn bundle(&mut self, dir: &Path, manifest: &Path) {
         let captured = self.store.capture_import_source(manifest, |bytes| {
             (self.progress)(ImportProgress::Capturing {
@@ -543,23 +564,22 @@ impl Walker<'_> {
                     None
                 } else {
                     match result {
-                        Ok(table) => self.bundle_children(dir, manifest, &mut file, &table),
+                        Ok(table) => {
+                            self.bundle_children(dir, manifest, &mut file, &table, &snapshot)
+                        }
                         Err(error) => Some(Err(error.to_string())),
                     }
                 }
             }
             Err(error) => Some(Err(error.to_string())),
         };
-        self.discard(&snapshot);
         match result {
-            None => {}
-            Some(Err(error)) => self.failed(dir, error),
-            Some(Ok(true)) => self.problem(
-                dir,
-                ImportProblemKind::Unsupported,
-                "export bundle manifest captured; bundle import is not yet supported",
-            ),
-            Some(Ok(false)) => {}
+            None => self.discard(&snapshot),
+            Some(Err(error)) => {
+                self.discard(&snapshot);
+                self.failed(dir, error);
+            }
+            Some(Ok(())) => {}
         }
     }
 
@@ -570,14 +590,14 @@ impl Walker<'_> {
         manifest: &Path,
         file: &mut (impl Read + Seek),
         table: &json_syntax::FileTable,
-    ) -> Option<Result<bool, String>> {
+        manifest_snapshot: &ImportSourceSnapshot,
+    ) -> Option<Result<(), String>> {
         let entries = match self.fs.read_dir(dir) {
             Ok(entries) => entries,
             Err(error) => return Some(Err(error.to_string())),
         };
         let mut matched = vec![false; entries.len()];
         let (mut offset, count) = table.files();
-        let mut valid = true;
         for ordinal in 1..=count {
             if self.check(dir) {
                 return None;
@@ -627,18 +647,17 @@ impl Walker<'_> {
                     dir.join(name)
                 };
                 self.failed(&path, detail);
-                valid = false;
                 continue;
             };
             matched[index] = true;
         }
+        let mut pending = Vec::new();
         for (path, found) in entries.iter().zip(matched) {
             if self.check(path) {
                 return None;
             }
             if path.to_str().is_none() {
                 self.problem(path, ImportProblemKind::NonUtf8, "the path is not UTF-8");
-                valid = false;
                 continue;
             }
             if found {
@@ -655,10 +674,10 @@ impl Walker<'_> {
                         .file_name()
                         .and_then(|name| name.to_str())
                         .ok_or_else(|| io::Error::other("invalid child name"))?;
-                    for _ in 0..count {
+                    for ordinal in 0..count {
                         let (child, next) = json_syntax::child(&mut reader, offset)?;
                         if child.matches(&mut reader, name)? {
-                            return Ok(child);
+                            return Ok((child, ordinal));
                         }
                         offset = next;
                     }
@@ -670,15 +689,21 @@ impl Walker<'_> {
                     self.cancelled = true;
                     return None;
                 }
-                let child = match result {
+                let (child, ordinal) = match result {
                     Ok(child) => child,
                     Err(error) => return Some(Err(error.to_string())),
                 };
-                if !self.check_bundle_child(path, table.format(), child.bytes, child.records) {
-                    valid = false;
-                }
-                if self.cancelled {
-                    return None;
+                pending.push(Work::BundleChild(
+                    path.clone(),
+                    table.format(),
+                    child.bytes,
+                    child.records,
+                    ordinal,
+                    manifest_snapshot.clone(),
+                ));
+                if matches!(self.fs.metadata(path), Ok(Some(md)) if md.kind() == FileKind::Directory)
+                {
+                    pending.push(Work::Visit(path.clone(), Origin::Listed));
                 }
                 continue;
             }
@@ -686,21 +711,26 @@ impl Walker<'_> {
                 match self.fs.metadata(path) {
                     Ok(Some(md)) if md.kind() == FileKind::File => {
                         self.failed(path, "bundle file is not listed in the manifest");
-                        valid = false;
                     }
                     Err(error) => {
                         self.failed(path, error);
-                        valid = false;
                     }
                     Ok(None) => {
                         self.failed(path, "bundle child disappeared during discovery");
-                        valid = false;
+                    }
+                    Ok(Some(md)) if md.kind() == FileKind::Directory => {
+                        pending.push(Work::Visit(path.clone(), Origin::Listed));
                     }
                     _ => {}
                 }
+            } else {
+                pending.push(Work::Visit(path.clone(), Origin::Listed));
             }
         }
-        Some(Ok(valid))
+        self.pending
+            .push(Work::BundleEnd(manifest_snapshot.clone()));
+        self.pending.extend(pending.into_iter().rev());
+        Some(Ok(()))
     }
 
     fn check_bundle_child(
@@ -709,27 +739,32 @@ impl Walker<'_> {
         format: BundleFormat,
         bytes: u64,
         records: u64,
-    ) -> bool {
+        ordinal: u64,
+        manifest: &ImportSourceSnapshot,
+    ) {
         let extension = match format {
             BundleFormat::Eml => "eml",
             BundleFormat::Mboxrd => "mbox",
         };
         if !has_extension(path, extension) {
             self.failed(path, "bundle child format does not match the manifest");
-            return false;
+            return;
         }
         let capture = self.store.capture_import_source(path, |bytes| {
             (self.progress)(ImportProgress::Capturing { path, bytes })
         });
-        let snapshot = match capture {
-            Ok(ImportSourceCapture::Captured { snapshot, .. }) => snapshot,
+        let (source_path, snapshot) = match capture {
+            Ok(ImportSourceCapture::Captured {
+                source_path,
+                snapshot,
+            }) => (source_path, snapshot),
             Ok(ImportSourceCapture::Cancelled) => {
                 self.cancelled = true;
-                return false;
+                return;
             }
             Err(error) => {
                 self.failed(path, error);
-                return false;
+                return;
             }
         };
         let result = if snapshot.byte_length() != bytes {
@@ -772,12 +807,49 @@ impl Walker<'_> {
                 Err(error) => Err(error.to_string()),
             }
         };
-        self.discard(&snapshot);
         if let Err(error) = result {
+            self.discard(&snapshot);
             self.failed(path, error);
-            return false;
+            return;
         }
-        !self.cancelled
+        if self.cancelled || self.seen_files.contains(&source_path) {
+            self.discard(&snapshot);
+            return;
+        }
+        let mailbox = match format {
+            BundleFormat::Eml => folder_name(path),
+            BundleFormat::Mboxrd => stem(path),
+        };
+        let Some(mailbox) = mailbox else {
+            self.discard(&snapshot);
+            self.name_problem(path);
+            return;
+        };
+        if source_path.to_str().is_none() {
+            self.discard(&snapshot);
+            self.name_problem(&source_path);
+            return;
+        }
+        self.seen_files.insert(source_path.clone());
+        self.inventory.sources.push(SourceInventory {
+            path: source_path,
+            kind: format.source_kind(),
+            mailbox,
+            snapshot,
+            messages: records,
+            quoting: MboxQuoting::Equivalent,
+            bundle: Some(SourceBundle::new(manifest.clone(), format, Some(ordinal))),
+        });
+    }
+
+    fn finish_bundle(&self, manifest: &ImportSourceSnapshot) {
+        if !self.inventory.sources.iter().any(|source| {
+            source
+                .bundle()
+                .is_some_and(|bundle| bundle.manifest() == manifest)
+        }) {
+            self.discard(manifest);
+        }
     }
 
     /// A directory contributes its sorted entries once; canonical
@@ -787,8 +859,12 @@ impl Walker<'_> {
             Ok(entries) => entries,
             Err(error) => return self.problem_io(dir, error),
         };
-        self.pending
-            .extend(entries.into_iter().rev().map(|path| (path, Origin::Listed)));
+        self.pending.extend(
+            entries
+                .into_iter()
+                .rev()
+                .map(|path| Work::Visit(path, Origin::Listed)),
+        );
     }
 
     /// An Apple-style package contributes only its `mbox` file;
