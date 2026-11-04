@@ -94,6 +94,16 @@ impl CutConfinedDir {
 }
 
 impl ConfinedDir for CutConfinedDir {
+    fn visit_children(
+        &self,
+        visitor: &mut dyn FnMut(&Path) -> std::io::Result<std::ops::ControlFlow<()>>,
+    ) -> std::io::Result<std::ops::ControlFlow<()>> {
+        self.trip();
+        self.inner.visit_children(&mut |name| {
+            self.trip();
+            visitor(name)
+        })
+    }
     fn set_ownership(&self, bytes: &[u8]) -> std::io::Result<()> {
         self.trip();
         self.inner.set_ownership(bytes)
@@ -397,6 +407,23 @@ mod tests {
     use std::io::Write as _;
 
     use super::*;
+
+    #[test]
+    fn confined_enumeration_counts_each_cut_point() {
+        use std::ops::ControlFlow;
+        let inner = Arc::new(crate::SimFs::new());
+        inner.create_dir(Path::new("/root")).unwrap();
+        inner.create(Path::new("/root/a")).unwrap();
+        inner.create(Path::new("/root/b")).unwrap();
+        let fs = CutFs::new(inner, u64::MAX);
+        let root = fs.open_confined_dir(Path::new("/root")).unwrap();
+        assert_eq!(
+            root.visit_children(&mut |_| Ok(ControlFlow::Continue(())))
+                .unwrap(),
+            ControlFlow::Continue(())
+        );
+        assert_eq!(fs.operations(), 4);
+    }
 
     /// The env vars the operation child reads: which operation, and
     /// the directory it works in.

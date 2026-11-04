@@ -80,6 +80,18 @@ pub trait Fs: Send + Sync {
 
 /// A directory capability for race-safe, no-symlink descendant reads.
 pub trait ConfinedDir: Send + Sync {
+    /// Visit direct child names with bounded memory, in unspecified order.
+    /// Names are untrusted and may change during or after the visit. Opening
+    /// a child separately must still enforce confinement. Returning `Break`
+    /// stops immediately; a visitor error or enumeration error is propagated.
+    /// The visitor may use `Break` for cancellation and must discard partial
+    /// results on error. Unsupported adapters fail closed.
+    fn visit_children(
+        &self,
+        _visitor: &mut dyn FnMut(&Path) -> io::Result<std::ops::ControlFlow<()>>,
+    ) -> io::Result<std::ops::ControlFlow<()>> {
+        Err(io::ErrorKind::Unsupported.into())
+    }
     /// Create this directory's private ownership marker, without replacing one.
     /// `sync` makes the marker durable along with the directory.
     fn set_ownership(&self, _bytes: &[u8]) -> io::Result<()> {
