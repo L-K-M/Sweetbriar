@@ -549,6 +549,20 @@ pairs. Identifiers and hashes have fixed decoded sizes, numbers are checked,
 and cancellation is observed while scanning whitespace, strings and records.
 Parsing alone does not establish that a generation is authentic or complete.
 
+The verifier's private JSON lexical reader uses fixed input and scalar scratch
+storage. It validates strings, including discarded keys and values, without
+retaining their text; decoded names can be matched against a fixed set or
+captured into caller-supplied storage with explicit overflow. Number scanning
+checks the JSON grammar; exact unsigned reads additionally refuse signs,
+fractions, exponents and overflow. Skipping a value is iterative with a fixed
+nesting stack: like the pinned serde_json reader's default 128-level budget,
+at most 127 simultaneously open arrays/objects are accepted, including any
+enclosing containers supplied by the caller. Cancellation is checked during
+all token scanning and native reader errors are preserved. This lexical
+prerequisite alone establishes no attachment semantics. The later attachment
+decoder must preserve the canonical draft reader's field, duplicate-key and
+numeric representation semantics, including for arbitrary extra fields.
+
 SQLite inspection of a verifier image reads through a read-only VFS backed by
 an already-open file, without resolving its pathname or opening WAL, journal,
 shared-memory or temporary files. Holding the file preserves its identity,
