@@ -1232,12 +1232,19 @@ local drafts. No network yet.
         typed errors and query cancellation, Rust codec and lifecycle
         tests, regenerated Swift bindings and `cargo xtask check-ffi`.
         Depends on M1.9b1.
+      - **M1.9b2a1 Shared draft attachment reservations (S):** share
+        the original publication reservation across copies of the service
+        attachment handle, so a retry can reach its durable receipt after
+        an accepted save or a dropped caller. A fresh command must not spend
+        the reservation twice. Cover replay and reservation ownership through
+        native APIs without moving validation outside the receipt transaction.
+        Depends on M1.9b2a.
       - **M1.9b2b Draft commands over FFI (L):** create, save, discard
         and attachment publication, FFI-owned input records and enums,
         the attachment-object handle, complete mappings, typed errors
         and command cancellation, Rust codec, error and lifecycle tests,
         regenerated Swift bindings and `cargo xtask check-ffi`. Depends
-        on M1.9b2a.
+        on M1.9b2a1.
       - **M1.9b2c Draft bridge (L):** the SweetbriarBridge owned draft
         model with load, save over the base revision, discard and the
         typed `Conflict` outcome M1.9c shows as keep-both, with Swift
