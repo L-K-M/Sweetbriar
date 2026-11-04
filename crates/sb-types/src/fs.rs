@@ -21,6 +21,10 @@ pub trait Fs: Send + Sync {
     fn create(&self, path: &Path) -> io::Result<Box<dyn WriteFile>>;
     /// Open an existing file for reading and seeking.
     fn open(&self, path: &Path) -> io::Result<Box<dyn ReadFile>>;
+    /// Open a regular file without following its final symlink.
+    fn open_no_follow(&self, _path: &Path) -> io::Result<Box<dyn ReadFile>> {
+        Err(io::ErrorKind::Unsupported.into())
+    }
     /// Open `path` for reading and seeking only when it names a
     /// regular file, and return the `Metadata` of the file actually
     /// opened with the handle. One operation: a `metadata` look

@@ -97,6 +97,12 @@ impl Backups {
 
     /// Prune one row at a time, after its directory entry is durable.
     pub(super) fn retain(&self) -> Result<(), StoreError> {
+        self.retain_protecting(None)
+    }
+
+    /// Preserve the just-completed receipt for this pass while still counting
+    /// it normally in every bucket. A later pass applies the ordinary policy.
+    pub(super) fn retain_protecting(&self, protected: Option<&str>) -> Result<(), StoreError> {
         let conn = open_connection(&self.state_db, Access::ReadOnly, READER_PRAGMAS)?;
         let mut stmt = conn.prepare("SELECT generation_id, location, started_at FROM backup_generations WHERE state='complete' ORDER BY started_at DESC, generation_id DESC")
             .map_err(|e| classify(e, "list backup generations for retention"))?;
@@ -125,7 +131,7 @@ impl Backups {
             let keep = bucket(&mut hours, hour, 24)
                 | bucket(&mut days, day, 7)
                 | bucket(&mut weeks, week, 4);
-            if !keep {
+            if !keep && protected != Some(generation.id.as_str()) {
                 expired.push(generation);
             }
         }

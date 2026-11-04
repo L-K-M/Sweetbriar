@@ -970,9 +970,18 @@ local drafts. No network yet.
     entry's shape, counts and unique safe decoded name. Preserve the table's
     byte range and count across cancellable scans of one verified snapshot.
     Valid bundles remain unsupported and their snapshots are discarded.
-  - **M1.7d1b1b2b Manifest message validation — L:** validate message schemas,
-    references and format-specific fields using the verified file table.
-    Prove writer manifests, hostile tokens and cleanup before bundle inventory.
+  - **M1.7d1b1b2b1 Manifest message schemas — L:** validate exact message
+    schemas, availability, spans and local keyword and tag invariants. Keep
+    bundles unsupported and discard their snapshots; global relationships
+    remain unchecked and cannot admit a source.
+  - **M1.7d1b1b2b1a Validation scratch lease — M:** add Store-owned,
+    disposable bounded scratch with two fixed tapes and explicit cleanup,
+    isolated concurrent leases and writable-open cleanup. This prerequisite
+    does not add a manifest cap or implement relationship validation.
+  - **M1.7d1b1b2b2 Manifest message relationships — L:** validate counts,
+    ordered-ID digest, unique occurrence IDs, file references and EML
+    agreement using bounded scans of the verified snapshot. Prove writer
+    manifests, hostile tokens and cleanup before bundle inventory.
   - **M1.7d1b2 Bundle file agreement and inventory — L:** check every declared
     direct child's kind, byte length and record count independently before
     ingest, report missing or disagreeing files without suppressing valid
@@ -1216,7 +1225,48 @@ local drafts. No network yet.
       (an acknowledged save is its receipt). Depends on M1.9a1.
   - **M1.9b Drafts service and FFI (L):** owned Service DTOs, FFI
     exports, regenerated bindings and the SweetbriarBridge model over a,
-    with receipts and lifecycle proof.
+    with receipts and lifecycle proof. Re-sized 2026-11-02: the complete
+    artifact estimates well over the 1,450-line limit (the Service
+    surface alone measures ~1,000 gross changed lines including its
+    tests, and the FFI exports, bindings and bridge roughly double
+    that). Split below with every deliverable and acceptance check
+    assigned.
+    - **M1.9b1 Drafts service (L):** the Service-owned draft DTOs —
+      `DraftSource`, `ComposeFormat`, `DraftState`, `AttemptState`,
+      `DraftRecipient`, `DraftAttachmentRef`, `LiveAttempt`,
+      `DraftRevision`, `Draft`, `DraftSummary`, `DraftCreated`,
+      `DraftSaved`, and the `DraftAttachmentObject`/`DraftAttachment`/
+      `DraftContent` save inputs — with explicit Engine mapping, and
+      `Core`'s `create_draft`, `save_draft`, `discard_draft`,
+      `drafts()`, `draft()` and `publish_draft_attachment`. The Service
+      tests prove the DTO crossing, receipt replay, the same-base
+      `Conflict`, the publication ordering, the NULL route, the
+      live-attempt refusal, reopen durability and a dropped caller's
+      commit through shutdown. No FFI, bindings or bridge. Depends on
+      M1.9a2.
+    - **M1.9b2 Drafts FFI and bridge:** re-sized 2026-11-04 using the
+      existing import FFI commits as a generator measurement: the job
+      query added 690 Swift binding lines and the commands added 363,
+      alongside 320 and 272 gross Rust lines respectively. Drafts has
+      both a full revision vocabulary and commands, plus an owned Swift
+      model and tests, so split it into:
+      - **M1.9b2a Draft queries over FFI (L):** FFI-owned query records
+        and enums, field-by-field mappings, `drafts()` and `draft()`,
+        typed errors and query cancellation, Rust codec and lifecycle
+        tests, regenerated Swift bindings and `cargo xtask check-ffi`.
+        Depends on M1.9b1.
+      - **M1.9b2b Draft commands over FFI (L):** create, save, discard
+        and attachment publication, FFI-owned input records and enums,
+        the attachment-object handle, complete mappings, typed errors
+        and command cancellation, Rust codec, error and lifecycle tests,
+        regenerated Swift bindings and `cargo xtask check-ffi`. Depends
+        on M1.9b2a.
+      - **M1.9b2c Draft bridge (L):** the SweetbriarBridge owned draft
+        model with load, save over the base revision, discard and the
+        typed `Conflict` outcome M1.9c shows as keep-both, with Swift
+        Testing coverage of the codec, conflict and lifecycle. Depends on
+        M1.9b2b.
+      Re-size again if any artifact exceeds the limit.
   - **M1.9c Compose window (L):** the macOS compose window — token
     fields, subject, a plain or Markdown editor on the M0.11 probe's
     TextKit 2 view, autosave after 1.5 s, "Saved" only after the
@@ -1285,10 +1335,19 @@ local drafts. No network yet.
   - **M1.10d2 Command FFI and bridge — L:** setter SDK and bridge consume
     c/d1, with receipts, typed errors, replay/drop/lifecycle proof and
     regenerated bindings.
-  - **M1.10e App appearance — L:** sidebar monograms, mixed-account row
-    rails and Settings swatches/Custom through the bridge. Tests cover
-    duplicate initials, actual light/dark/selected surfaces, accessibility
-    and updates across open windows. Color never replaces native selection.
+  - **M1.10e App appearance — L:** split before implementation to keep each
+    complete artifact below 1,450 gross lines. All consume the bridge APIs:
+    - **M1.10e1 Sidebar appearance — L:** share a committed appearance
+      subscription across open windows and draw sidebar account monograms.
+      Test duplicate initials, distinguishing accessibility labels, light,
+      dark and high-contrast rendering, and updates across open windows.
+    - **M1.10e2 List appearance — L:** after e1, draw mixed-account row
+      rails and monograms in both AppKit and SwiftUI. Test actual light,
+      dark and selected surfaces, accessibility, and updates across open
+      windows. Account color never replaces native selection colors.
+    - **M1.10e3 Appearance settings — L:** after e1, add Settings → Accounts
+      → Appearance swatches and Custom through bridge setters. Test failure
+      and conflict handling and committed updates across open windows.
   - **M1.10f Qualification — M:** colors survive the real M1.8 backup and
     restore APIs, and the owner's rendered contrast/accessibility checks
     are recorded. Pure token tests do not substitute for these checks.
