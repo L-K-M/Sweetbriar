@@ -92,8 +92,11 @@ fn confirm(
 
 /// Row counts straight from the store.
 fn count(engine: &Engine, sql: &'static str) -> i64 {
-    engine
-        .resources()
+    resource_count(engine.resources(), sql)
+}
+
+fn resource_count(resources: &Resources, sql: &'static str) -> i64 {
+    resources
         .read(|tx| {
             tx.query_row(sql, [], |row| row.get(0))
                 .map_err(|e| StoreError::internal(e.to_string()))
@@ -246,25 +249,65 @@ fn cancelling_a_running_job_stops_it_durably() {
 #[test]
 fn shutdown_pauses_ingest_and_the_next_open_resumes_without_duplicates() {
     let scratch = ScratchDir::new("import-pause");
-    let path = scratch.path().join("Big.mbox");
-    fs::write(&path, mbox(260)).unwrap();
+    let path = scratch.path().join("Two.mbox");
+    fs::write(&path, mbox(2)).unwrap();
     let root = scratch.path().join("store");
     let engine = open(&root);
-    let id = start(&engine, &[path]);
-    settle(&engine, &id, ImportJobState::AwaitingConfirmation);
-    confirm(&engine, &id, vec![]).unwrap();
-    // Wherever ingest is, shutdown waits for it to pause or finish.
+    let id = plant(&engine, &path, ImportJobState::Running, 1);
+
+    // Park after one commit and leave only the next gather unstarted.
+    let (entered, reached) = mpsc::channel();
+    *engine
+        .imports()
+        .before_task
+        .lock()
+        .expect("a panicking thread held the import job registry") =
+        Some(Arc::new(move |shutting_down| {
+            entered.send(()).unwrap();
+            while !shutting_down() {
+                std::thread::yield_now();
+            }
+        }));
+    engine.recover_imports().unwrap();
+    reached.recv_timeout(PATIENCE).unwrap();
+    let paused = status(&engine, &id);
+    assert_eq!(paused.state(), ImportJobState::Running);
+    assert_eq!(paused.checkpoint().totals().processed, 1);
+    assert_eq!(count(&engine, "SELECT count(*) FROM occurrences"), 1);
+
+    // The real shutdown signal releases the hook; gather then stops.
     block_on(engine.shutdown()).unwrap();
+
+    // Read without Engine recovery: shutdown must have left one owed row.
+    let resources = Resources::open(&root).unwrap();
+    let stored = resources.read(|tx| import_job(tx, &id)).unwrap();
+    assert_eq!(stored.state(), ImportJobState::Running);
+    assert_eq!(
+        (
+            stored.checkpoint().totals().processed,
+            stored.checkpoint().totals().imported
+        ),
+        (1, 1)
+    );
+    assert_eq!(
+        resource_count(&resources, "SELECT count(*) FROM occurrences"),
+        1
+    );
+    assert_eq!(
+        resource_count(&resources, "SELECT count(*) FROM acquisition_sources"),
+        1
+    );
+    resources.close().unwrap();
 
     let engine = open(&root);
     let done = settle(&engine, &id, ImportJobState::Completed);
     let totals = done.checkpoint().totals();
-    assert_eq!((totals.processed, totals.imported), (260, 260));
-    assert_eq!((totals.read_from_headers, totals.read_default), (1, 259));
-    assert_eq!(count(&engine, "SELECT count(*) FROM occurrences"), 260);
+    assert_eq!((totals.processed, totals.imported), (2, 2));
+    assert_eq!((totals.read_from_headers, totals.read_default), (1, 1));
+    assert_eq!(count(&engine, "SELECT count(*) FROM occurrences"), 2);
     assert_eq!(
         count(&engine, "SELECT count(*) FROM acquisition_sources"),
-        260
+        2
     );
     block_on(engine.shutdown()).unwrap();
 }
@@ -864,7 +907,7 @@ fn replayed_cancel_on_live_import(engine: &Engine, job: &Path, key: &str) -> (St
         .imports()
         .before_task
         .lock()
-        .expect("a panicking thread held the import job registry") = Some(Arc::new(move || {
+        .expect("a panicking thread held the import job registry") = Some(Arc::new(move |_| {
         entered.send(()).unwrap();
         released.lock().unwrap().recv().unwrap();
     }));
@@ -920,7 +963,7 @@ fn a_replayed_cancel_key_cannot_stop_another_live_ingest() {
         .imports()
         .before_task
         .lock()
-        .expect("a panicking thread held the import job registry") = Some(Arc::new(move || {
+        .expect("a panicking thread held the import job registry") = Some(Arc::new(move |_| {
         entered.send(()).unwrap();
         released.lock().unwrap().recv().unwrap();
     }));
