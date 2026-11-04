@@ -470,6 +470,7 @@ A **generation** is a complete, self-verifying recovery point:
 
 ```
 backups/<generation-id>/
+  .sweetbriar-owner    durable ownership marker
   state.sqlite          consistent snapshot (SQLite online backup API)
   objects/sha256/...    every object the snapshot references
   manifest.json         written last
@@ -512,10 +513,28 @@ backups/<generation-id>/
 - A generation is taken every hour while there were changes, so the
   recovery point is ≤ 1 hour. The research's 5 minutes is the test
   setting.
-- **Retention:** the last 24 hourly, 7 daily and 4 weekly generations.
+- **Retention:** keep the union of the newest complete generation in each
+  of the last 24 occupied UTC hour buckets, 7 occupied UTC day buckets,
+  and 4 occupied UTC week buckets (weeks start Monday). Break timestamp
+  ties by the lexicographically greatest generation ID. Remove expired
+  complete generations oldest first (lowest ID first on a timestamp tie).
+  Failed and in-progress rows are never retention candidates.
 - An interrupted generation is never treated as complete. The next run
   marks any `in_progress` generation `failed`, deletes its
-  `backup_in_progress` pins and removes its directory.
+  `backup_in_progress` pins and removes its directory. Record cleanup
+  ownership durably when marking it failed, so retries can distinguish it
+  from failed rows inherited through restore. Remove and flush the directory
+  entry before releasing pins; keep the failed row as evidence. A cleanup
+  error stops the new run and is retryable. A generation still active in
+  this process is not an interrupted generation. A fresh random ownership
+  token is stored with the generation before creating its directory, then
+  written and flushed in an ownership marker before any snapshot content.
+  Recovery and retention verify this marker before removing a nonempty
+  directory. A missing directory is harmless; an empty directory, or one
+  containing only a marker that is a prefix of its stored token, may be
+  removed as an interrupted creation. Missing or mismatched ownership proof
+  on other content fails closed, including for legacy generations. Validate
+  the canonical parent and generation paths before removal.
 
 ## Restore
 
