@@ -999,6 +999,13 @@ local drafts. No network yet.
   - **M1.7d2b EML verification — L:** validate complete EML bytes, length,
     hash and replay framing before publication; prove durable reservation precedes
     installation at first exposure. Preserve plain source references.
+    - **M1.7d2b1 Verified EML copy — M:** privately copy a single EML record
+      only after checking its manifest binding and checkpoint; bound memory and
+      check cancellation while verifying length and digest. Publication and
+      replay identity remain in b2.
+    - **M1.7d2b2 Publication and replay — L:** publish verified EML with
+      durable reservation ordering and framing identity; keep public bundle
+      ingest guarded until the lifecycle step.
   - **M1.7d2c mboxrd verification — L:** validate complete record boundaries,
     framing, decoded length and hash before publication; prove reservation
     ordering and bundle framing identity in replay without changing plain import.

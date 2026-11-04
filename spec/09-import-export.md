@@ -78,6 +78,12 @@ user-granted permission path.
      entries and preserving manifest order. Resume is the filtered descriptor
      index; inconsistent checkpoints fail closed. Parsing and verification use
      bounded memory and check cancellation, which is distinct from corruption.
+     The private EML copy checks the verified source snapshot and its single
+     manifest descriptor's length and SHA-256 before accepting the copy. It
+     checks cancellation during copying and accepts only the initial or final
+     file-boundary checkpoint. A stopped or failed copy is provisional and
+     must be discarded; only a successful copy supplies the final checkpoint.
+     Public bundle ingest remains refused until the lifecycle is wired.
      Native import restores verified bytes and multiplicity into the normal
      source-derived local mailbox with header-derived flags. Exported IDs are
      provenance, not destination IDs. Accounts, mailbox identities, occurrence
