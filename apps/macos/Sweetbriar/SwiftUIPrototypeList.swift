@@ -57,6 +57,7 @@ final class SwiftUIPrototypeList: NSView {
     init(
         model: ListWindowModel,
         formatter: MessageRowFormatter,
+        spec: WindowSpec = .debugSynthetic,
         appearance: AppearanceModel? = nil,
         accountLabel: @escaping (String) -> String = { $0 },
         onIndexChange: (@MainActor () -> Void)? = nil
@@ -70,6 +71,7 @@ final class SwiftUIPrototypeList: NSView {
                 state: state,
                 model: model,
                 formatter: formatter,
+                showsAccountMarker: spec.showsAccountMarker,
                 appearance: appearance,
                 accountLabel: accountLabel
             )
@@ -164,6 +166,7 @@ private struct PrototypeListRoot: View {
     @Bindable var state: PrototypeListState
     let model: ListWindowModel
     let formatter: MessageRowFormatter
+    let showsAccountMarker: Bool
     let appearance: AppearanceModel?
     let accountLabel: (String) -> String
 
@@ -179,6 +182,7 @@ private struct PrototypeListRoot: View {
                         page: model.page(containing: element.rank),
                         offset: element.rank % ListWindowModel.pageSize,
                         formatter: formatter,
+                        showsAccountMarker: showsAccountMarker,
                         appearance: appearance,
                         accountLabel: accountLabel
                     )
@@ -272,6 +276,7 @@ private struct MessageRowView: View {
     let page: ListWindowModel.Page
     let offset: Int
     let formatter: MessageRowFormatter
+    let showsAccountMarker: Bool
     let appearance: AppearanceModel?
     let accountLabel: (String) -> String
 
@@ -279,7 +284,8 @@ private struct MessageRowView: View {
         if let row = page.row(at: offset) {
             let account = appearance?.appearance?.accounts.first { $0.accountId == row.accountId }
             RenderedMessageRow(content: formatter.present(row), account: account,
-                               accountLabel: accountLabel(row.accountId), usesAppearance: appearance != nil)
+                               accountLabel: accountLabel(row.accountId), usesAppearance: appearance != nil,
+                               showsAccountMarker: showsAccountMarker)
         } else {
             placeholder
         }
@@ -303,6 +309,7 @@ struct RenderedMessageRow: View {
     let account: AccountAppearance?
     let accountLabel: String
     let usesAppearance: Bool
+    var showsAccountMarker = true
     var contrastOverride: Bool? = nil
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
@@ -315,7 +322,7 @@ struct RenderedMessageRow: View {
         let variant = account.map { colorScheme == .dark ? $0.tokens.dark : $0.tokens.light }
         let accountColor = variant.map { Color(nsColor: appearanceColor($0.markerSrgb)) }
             ?? Self.accountColor(at: content.accountColorIndex)
-        let showMarker = !usesAppearance || account != nil
+        let showMarker = showsAccountMarker && (!usesAppearance || account != nil)
         let strip = variant.map { Color(nsColor: appearanceColor($0.stripSrgb)) } ?? accountColor
         let outline = variant.map { Color(nsColor: appearanceColor($0.outlineSrgb)) } ?? accountColor
         let strong = contrastOverride ?? (colorSchemeContrast == .increased || differentiate)
@@ -358,7 +365,7 @@ struct RenderedMessageRow: View {
                         ))
                         .lineLimit(1)
                     Spacer(minLength: 4)
-                    if account?.collides == true {
+                    if showMarker && account?.collides == true {
                         Text(accountLabel)
                             .font(.system(size: 11, weight: .semibold))
                             .lineLimit(1)
@@ -411,7 +418,7 @@ struct RenderedMessageRow: View {
         // (sender, subject, date, unread, flagged).
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text(verbatim: content.accessibilityLabel
-            + (account == nil ? "" : ", account \(accountLabel)")))
+            + (showMarker && account != nil ? ", account \(accountLabel)" : "")))
     }
 
     /// The palette slot's color — the same slot the AppKit cell uses.

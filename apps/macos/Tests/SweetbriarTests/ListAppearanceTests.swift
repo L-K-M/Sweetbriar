@@ -23,6 +23,111 @@ struct ListAppearanceTests {
                                       hasAttachments: false, tags: [], accountID: "one")
     }
 
+    @Test func flaggedIsMixedAndSingleAccountWindowsStayPlain() {
+        #expect(WindowSpec.flagged.showsAccountMarker)
+        #expect(WindowSpec.unified(.inbox).showsAccountMarker)
+        #expect(!WindowSpec.mailbox(1).showsAccountMarker)
+        #expect(!WindowSpec.thread(1).showsAccountMarker)
+    }
+
+    @Test func flaggedControllerShowsBothAccountsAndSurvivesAppearanceReset() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let config = CoreConfig(dataRoot: root.appendingPathComponent("data").path,
+                                cacheRoot: root.appendingPathComponent("cache").path)
+        let batcher = FrameBatcher<[Setting]>(clock: ImmediateClock()) { _ in }
+        let bridge = try await CoreBridge.open(config: config, snapshots: batcher)
+        let sidebar = SidebarModel(source: TwoSidebarAccounts())
+        await sidebar.reload()
+        let source = TwoAccountAppearanceSource()
+        let shared = SharedAppearance()
+        let appearance = shared.model(source: source)
+        let controller = MessageListViewController(bridge: bridge, sidebar: sidebar, appearance: appearance,
+                                                   listSource: TwoFlaggedRows(), clock: ImmediateClock())
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 300),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentViewController = controller
+        defer { window.close() }
+        controller.show(.flagged)
+        for _ in 0..<300 where controller.model?.row(at: 1) == nil || appearance.appearance == nil {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(controller.model?.row(at: 1) != nil)
+        let list = try #require(controller.list)
+        let scroll = try #require(list.listView as? NSScrollView)
+        let table = try #require(scroll.documentView as? NSTableView)
+        table.reloadData()
+        controller.view.layoutSubtreeIfNeeded()
+        let first = try #require(table.view(atColumn: 0, row: 0, makeIfNecessary: true) as? MessageRowCellView)
+        let second = try #require(table.view(atColumn: 0, row: 1, makeIfNecessary: true) as? MessageRowCellView)
+        first.layoutSubtreeIfNeeded()
+        second.layoutSubtreeIfNeeded()
+        #expect(first.accessibilityLabel()?.contains("account 1 · Work · account-1") == true)
+        #expect(second.accessibilityLabel()?.contains("account 2 · Work · account-2") == true)
+        #expect(first.subviews.compactMap { $0 as? NSTextField }.contains { $0.stringValue.hasPrefix("1 · Work") && !$0.isHidden })
+        #expect(second.subviews.compactMap { $0 as? NSTextField }.contains { $0.stringValue.hasPrefix("2 · Work") && !$0.isHidden })
+        try checkRail(render(first))
+        try checkRail(render(second))
+        #expect(try hasMonogramInk(render(first)))
+        #expect(try hasMonogramInk(render(second)))
+        table.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+        for _ in 0..<200 where !(await source.waiting) {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(await source.waiting)
+        await source.removeSecondAndReset()
+        for _ in 0..<200 where appearance.appearance?.generation != 1 {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(appearance.appearance?.generation == 1)
+        for _ in 0..<200 {
+            if let cell = table.view(atColumn: 0, row: 1, makeIfNecessary: true) as? MessageRowCellView,
+               cell.accessibilityLabel()?.contains("account ") == false { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let missing = try #require(table.view(atColumn: 0, row: 1, makeIfNecessary: true) as? MessageRowCellView)
+        #expect(missing.accessibilityLabel()?.contains("account ") == false)
+        #expect(missing.subviews[0].isHidden && missing.subviews[1].isHidden)
+        #expect(table.selectedRowIndexes == IndexSet(integer: 0))
+        await controller.close()
+        await bridge.shutdown()
+    }
+
+    @Test func swiftUIFlaggedRowsShowMixedAccountCues() throws {
+        var second = sampleAccount
+        second.accountId = "account-2"
+        func renderRow(_ account: AccountAppearance, label: String, spec: WindowSpec) throws -> NSBitmapImageRep {
+            let host = NSHostingView(rootView: RenderedMessageRow(content: content, account: account,
+                accountLabel: label, usesAppearance: true, showsAccountMarker: spec.showsAccountMarker))
+            host.frame = NSRect(x: 0, y: 0, width: 300, height: 56)
+            host.layoutSubtreeIfNeeded()
+            return try render(host)
+        }
+        let first = try renderRow(sampleAccount, label: "1 · Work · account-1", spec: .flagged)
+        let other = try renderRow(second, label: "2 · Work · account-2", spec: .flagged)
+        try checkRail(first)
+        try checkRail(other)
+        #expect(try hasMonogramInk(first))
+        #expect(try hasMonogramInk(other))
+        #expect(first.tiffRepresentation != other.tiffRepresentation)
+        let single = try renderRow(sampleAccount, label: "Work", spec: .mailbox(1))
+        let pixel = try #require(single.colorAt(x: 4, y: 28)?.usingColorSpace(.sRGB))
+        #expect(pixel.alphaComponent < 0.1)
+    }
+
+    private func hasMonogramInk(_ bitmap: NSBitmapImageRep) throws -> Bool {
+        let marker = appearanceColor(sampleAccount.tokens.light.markerSrgb)
+        for y in 15..<41 {
+            for x in 18..<44 {
+                guard let pixel = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+                if abs(pixel.redComponent - marker.redComponent) < 0.15,
+                   abs(pixel.greenComponent - marker.greenComponent) < 0.15,
+                   abs(pixel.blueComponent - marker.blueComponent) < 0.15 { return true }
+            }
+        }
+        return false
+    }
+
     @Test func appKitUsesAccountTokensAndNames() throws {
         let cell = MessageRowCellView(showsAccountMarker: true)
         cell.frame = NSRect(x: 0, y: 0, width: 300, height: 56)
@@ -311,6 +416,75 @@ struct ListAppearanceTests {
 
 private struct ImmediateClock: FrameClock {
     func nextFrame() async { try? await Task.sleep(for: .milliseconds(1)) }
+}
+
+private struct TwoSidebarAccounts: SidebarSource {
+    func accounts() async throws -> [Account] {
+        ["account-1", "account-2"].enumerated().map { index, id in
+            Account(accountId: id, kind: .local, displayName: "Work", state: .active,
+                    stateReason: nil, sortOrder: Int64(index))
+        }
+    }
+    func mailboxes(accountId: String) async throws -> Mailboxes { Mailboxes(generation: 0, mailboxes: []) }
+}
+
+private actor TwoAccountAppearanceSource: AppearanceSource, AppearanceEventSource {
+    private var generation: UInt64 = 0
+    private var continuation: CheckedContinuation<AppearanceEvent, any Error>?
+    var waiting: Bool { continuation != nil }
+
+    func appearance() async throws -> Appearance {
+        var second = sampleAccount
+        second.accountId = "account-2"
+        return Appearance(generation: generation, accounts: generation == 0 ? [sampleAccount, second] : [sampleAccount], identities: [])
+    }
+    func appearanceEvents(generation: UInt64) async throws -> any AppearanceEventSource { self }
+    func next() async throws -> AppearanceEvent {
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation = $0 }
+        } onCancel: { Task { await self.cancel() } }
+    }
+    private func cancel() {
+        continuation?.resume(throwing: CancellationError())
+        continuation = nil
+    }
+    func removeSecondAndReset() {
+        generation = 1
+        continuation?.resume(returning: .resetRequired)
+        continuation = nil
+    }
+    func setAccountAppearance(accountId: String, expectedRevision: Int64, change: AccountAppearanceChange) async throws -> Receipt {
+        fatalError("unused")
+    }
+    func setIdentityAppearance(identityId: String, expectedRevision: Int64?, change: IdentityAppearanceChange) async throws -> Receipt {
+        fatalError("unused")
+    }
+    nonisolated func palette() -> [PaletteColor] { [] }
+}
+
+private actor TwoFlaggedRows: ListWindowSource, WindowEventSource {
+    private var rows: [ListRow] {
+        ["account-1", "account-2"].enumerated().map { index, id in
+            ListRow(occurrenceId: Int64(index + 1), messageId: Int64(index + 1), accountId: id,
+                    mailboxId: 1, sortDate: 0, sender: "Sender", subject: "Subject", snippet: "Snippet",
+                    unread: false, flagged: true, hasAttachments: false, tags: [])
+        }
+    }
+    func openWindow(spec: WindowSpec, anchor: SweetbriarBridge.Anchor, limit: UInt32) async throws -> ListWindow {
+        guard spec == .flagged else { throw CancellationError() }
+        return ListWindow(windowId: 1, generation: 0, rows: rows, before: nil, after: nil,
+                          hasMoreAfter: false, hasMoreBefore: false, total: .exact(n: 2), search: nil)
+    }
+    func readWindow(id: UInt64, generation: UInt64, anchor: SweetbriarBridge.Anchor, limit: UInt32) async throws -> ListWindow {
+        try await openWindow(spec: .flagged, anchor: anchor, limit: limit)
+    }
+    func windowIDs(id: UInt64) async throws -> WindowIDs { WindowIDs(generation: 0, ids: [1, 2]) }
+    func closeWindow(id: UInt64) async {}
+    func windowEvents(id: UInt64) async throws -> any WindowEventSource { self }
+    func next() async throws -> WindowEvent {
+        try await Task.sleep(for: .seconds(3600))
+        throw CancellationError()
+    }
 }
 
 private actor OneRowSource: ListWindowSource, WindowEventSource {

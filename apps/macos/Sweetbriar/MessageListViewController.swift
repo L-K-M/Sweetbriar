@@ -19,6 +19,8 @@ import SweetbriarBridge
 @MainActor
 final class MessageListViewController: NSViewController {
     private let bridge: CoreBridge
+    private let listSource: any ListWindowSource
+    private let clockOverride: (any FrameClock)?
     private let searchModel: SearchFieldModel
     private let search: SearchFieldController
     private let formatter = MessageRowFormatter()
@@ -81,8 +83,11 @@ final class MessageListViewController: NSViewController {
     var searchFieldForBenchmark: NSSearchField { search.fieldForBenchmark }
     var searchModelForBenchmark: SearchFieldModel { searchModel }
 
-    init(bridge: CoreBridge, sidebar: SidebarModel, appearance: AppearanceModel) {
+    init(bridge: CoreBridge, sidebar: SidebarModel, appearance: AppearanceModel,
+         listSource: (any ListWindowSource)? = nil, clock: (any FrameClock)? = nil) {
         self.bridge = bridge
+        self.listSource = listSource ?? bridge
+        self.clockOverride = clock
         self.appearance = appearance
         self.sidebar = sidebar
         let model = SearchFieldModel(parser: bridge, label: { reference in
@@ -198,9 +203,15 @@ final class MessageListViewController: NSViewController {
         // spec/08 closes the replaced handle; M1.6r2e overlaps that with this open.
         detach()
 
-        let clock = self.clock ?? DisplayLinkClock(view: view)
-        self.clock = clock
-        let model = ListWindowModel(source: bridge, spec: spec, clock: clock)
+        let clock: any FrameClock
+        if let clockOverride {
+            clock = clockOverride
+        } else {
+            let displayClock = self.clock ?? DisplayLinkClock(view: view)
+            self.clock = displayClock
+            clock = displayClock
+        }
+        let model = ListWindowModel(source: listSource, spec: spec, clock: clock)
         // Only this choice's model stamps its stages: the replaced one
         // may still answer or deliver until `detach` silences it.
         model.onOpeningPageForBenchmark = { [weak self, weak model] in
@@ -468,13 +479,6 @@ final class MessageListViewController: NSViewController {
 }
 
 private extension WindowSpec {
-    var showsAccountMarker: Bool {
-        switch self {
-        case .unified, .search: true
-        default: false
-        }
-    }
-
     var isSearch: Bool {
         if case .search = self { return true }
         return false

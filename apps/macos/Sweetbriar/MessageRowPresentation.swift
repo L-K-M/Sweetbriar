@@ -288,6 +288,16 @@ struct RankedIDs: RandomAccessCollection {
 }
 
 #if canImport(SweetbriarBridge)
+extension WindowSpec {
+    /// Mixed-account lists need to identify each row's account.
+    var showsAccountMarker: Bool {
+        switch self {
+        case .unified, .search, .flagged, .debugSynthetic: true
+        case .mailbox, .thread: false
+        }
+    }
+}
+
 extension MessageRowFormatter {
     /// `present` straight off a bridge `ListRow` — the convenience the
     /// lists call; kept behind `canImport` so this file type-checks
