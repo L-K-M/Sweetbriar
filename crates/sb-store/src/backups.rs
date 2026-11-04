@@ -4,6 +4,7 @@
 //! pinned objects, flushes the generation and writes the manifest last,
 //! then releases pins and marks the generation complete.
 
+mod image_inspect;
 mod scratch;
 
 pub(crate) fn recover_scratch(

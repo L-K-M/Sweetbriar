@@ -321,7 +321,7 @@ fn require_identity_keys(conn: &Connection, current: i64) -> Result<(), StoreErr
 /// fixes every column, type, constraint and trigger open's upserts
 /// meet. If a migration ever changes `store_meta`, this check must
 /// follow it.
-fn has_store_meta_table(conn: &Connection) -> Result<bool, StoreError> {
+pub(crate) fn has_store_meta_table(conn: &Connection) -> Result<bool, StoreError> {
     let expected = Connection::open_in_memory().map_err(step_err)?;
     expected.execute_batch(V1_SQL).map_err(bug)?;
     Ok(store_meta_objects(conn)? == store_meta_objects(&expected)?)
@@ -336,7 +336,7 @@ fn store_meta_objects(conn: &Connection) -> Result<Vec<SchemaObject>, StoreError
         .prepare(
             "SELECT type, name, sql FROM sqlite_schema
              WHERE tbl_name = 'store_meta' COLLATE NOCASE
-             ORDER BY type, name",
+             ORDER BY type, name LIMIT 3",
         )
         .map_err(step_err)?;
     stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
