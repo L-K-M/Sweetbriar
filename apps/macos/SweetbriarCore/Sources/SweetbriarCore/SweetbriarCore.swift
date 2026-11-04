@@ -1045,6 +1045,24 @@ public protocol CoreProtocol: AnyObject, Sendable {
     func publishDraftAttachment(token: CancelToken, input: DraftAttachmentPublish) async throws  -> DraftAttachmentObject
     
     /**
+     * `save_draft(draft_id, base_revision_id, content)` (spec/07
+     * "Commands"): append an immutable revision and make it the
+     * draft's current one, in the transaction that also spends each
+     * new attachment's publication reservation. `base_revision_id`
+     * must name the current revision (`None` before the first
+     * save); anything else is `Conflict`. Retained attachments must
+     * exactly match references in that base revision. An unknown
+     * draft or identity is `NotFound`; a `sent` or `discarded` draft
+     * refuses the same way as a wrong base. The receipt answers
+     * `{"revision_id": ...}` and replays it: a repeated key answers
+     * its stored receipt before any replacement validation or
+     * reservation spending, so a spent handle cannot block its own
+     * replay. Like every command it honours the token only until it
+     * holds the core; once begun it runs to completion.
+     */
+    func saveDraft(token: CancelToken, idempotencyKey: String, draftId: String, baseRevisionId: String?, content: DraftContent) async throws  -> DraftSaved
+    
+    /**
      * Cancel an import or durably pause Search index work; committed work stays.
      * Completed imports are Conflict; completed rebuilds are no-ops.
      * An index user hold survives reopen until resume_search_rebuild.
@@ -1531,6 +1549,38 @@ open func publishDraftAttachment(token: CancelToken, input: DraftAttachmentPubli
             completeFunc: ffi_sb_ffi_rust_future_complete_u64,
             freeFunc: ffi_sb_ffi_rust_future_free_u64,
             liftFunc: FfiConverterTypeDraftAttachmentObject_lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * `save_draft(draft_id, base_revision_id, content)` (spec/07
+     * "Commands"): append an immutable revision and make it the
+     * draft's current one, in the transaction that also spends each
+     * new attachment's publication reservation. `base_revision_id`
+     * must name the current revision (`None` before the first
+     * save); anything else is `Conflict`. Retained attachments must
+     * exactly match references in that base revision. An unknown
+     * draft or identity is `NotFound`; a `sent` or `discarded` draft
+     * refuses the same way as a wrong base. The receipt answers
+     * `{"revision_id": ...}` and replays it: a repeated key answers
+     * its stored receipt before any replacement validation or
+     * reservation spending, so a spent handle cannot block its own
+     * replay. Like every command it honours the token only until it
+     * holds the core; once begun it runs to completion.
+     */
+open func saveDraft(token: CancelToken, idempotencyKey: String, draftId: String, baseRevisionId: String?, content: DraftContent)async throws  -> DraftSaved  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_save_draft(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterString.lower(idempotencyKey),FfiConverterString.lower(draftId),FfiConverterOptionString.lower(baseRevisionId),FfiConverterTypeDraftContent_lower(content)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeDraftSaved_lift,
             errorHandler: FfiConverterTypeCoreError_lift
         )
 }
@@ -3381,6 +3431,121 @@ public func FfiConverterTypeDraftAttachmentRef_lower(_ value: DraftAttachmentRef
 
 
 /**
+ * One save's content (spec/07 `save_draft`'s `content`): everything
+ * a revision records but its ids — the core assigns the revision id
+ * and checks the base. Crosses field by field.
+ */
+public struct DraftContent {
+    /**
+     * The sending identity the route snapshots (`None` keeps the
+     * revision unrouted: a draft with no sending identity, spec/02).
+     */
+    public var identityId: String?
+    public var format: ComposeFormat
+    /**
+     * `false` is the per-draft literal plain-text option (spec/05).
+     */
+    public var plainFlowed: Bool
+    public var subject: String
+    public var to: [DraftRecipient]
+    public var cc: [DraftRecipient]
+    public var bcc: [DraftRecipient]
+    /**
+     * Markdown or plain source as composed (spec/05); the outgoing
+     * MIME is built from it at send.
+     */
+    public var bodySource: String
+    /**
+     * The published objects this revision references.
+     */
+    public var attachments: [DraftAttachment]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * The sending identity the route snapshots (`None` keeps the
+         * revision unrouted: a draft with no sending identity, spec/02).
+         */identityId: String?, format: ComposeFormat, 
+        /**
+         * `false` is the per-draft literal plain-text option (spec/05).
+         */plainFlowed: Bool, subject: String, to: [DraftRecipient], cc: [DraftRecipient], bcc: [DraftRecipient], 
+        /**
+         * Markdown or plain source as composed (spec/05); the outgoing
+         * MIME is built from it at send.
+         */bodySource: String, 
+        /**
+         * The published objects this revision references.
+         */attachments: [DraftAttachment]) {
+        self.identityId = identityId
+        self.format = format
+        self.plainFlowed = plainFlowed
+        self.subject = subject
+        self.to = to
+        self.cc = cc
+        self.bcc = bcc
+        self.bodySource = bodySource
+        self.attachments = attachments
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension DraftContent: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeDraftContent: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> DraftContent {
+        return
+            try DraftContent(
+                identityId: FfiConverterOptionString.read(from: &buf), 
+                format: FfiConverterTypeComposeFormat.read(from: &buf), 
+                plainFlowed: FfiConverterBool.read(from: &buf), 
+                subject: FfiConverterString.read(from: &buf), 
+                to: FfiConverterSequenceTypeDraftRecipient.read(from: &buf), 
+                cc: FfiConverterSequenceTypeDraftRecipient.read(from: &buf), 
+                bcc: FfiConverterSequenceTypeDraftRecipient.read(from: &buf), 
+                bodySource: FfiConverterString.read(from: &buf), 
+                attachments: FfiConverterSequenceTypeDraftAttachment.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: DraftContent, into buf: inout [UInt8]) {
+        FfiConverterOptionString.write(value.identityId, into: &buf)
+        FfiConverterTypeComposeFormat.write(value.format, into: &buf)
+        FfiConverterBool.write(value.plainFlowed, into: &buf)
+        FfiConverterString.write(value.subject, into: &buf)
+        FfiConverterSequenceTypeDraftRecipient.write(value.to, into: &buf)
+        FfiConverterSequenceTypeDraftRecipient.write(value.cc, into: &buf)
+        FfiConverterSequenceTypeDraftRecipient.write(value.bcc, into: &buf)
+        FfiConverterString.write(value.bodySource, into: &buf)
+        FfiConverterSequenceTypeDraftAttachment.write(value.attachments, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeDraftContent_lift(_ buf: RustBuffer) throws -> DraftContent {
+    return try FfiConverterTypeDraftContent.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeDraftContent_lower(_ value: DraftContent) -> RustBuffer {
+    return FfiConverterTypeDraftContent.lower(value)
+}
+
+
+/**
  * What `create_draft` answers: its receipt and the draft id the
  * receipt names — the stored id on a replayed key.
  */
@@ -3591,6 +3756,64 @@ public func FfiConverterTypeDraftRevision_lift(_ buf: RustBuffer) throws -> Draf
 #endif
 public func FfiConverterTypeDraftRevision_lower(_ value: DraftRevision) -> RustBuffer {
     return FfiConverterTypeDraftRevision.lower(value)
+}
+
+
+/**
+ * What `save_draft` answers: its receipt and the revision id the
+ * receipt names — the stored id on a replayed key.
+ */
+public struct DraftSaved: Equatable, Hashable {
+    public var receipt: Receipt
+    public var revisionId: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(receipt: Receipt, revisionId: String) {
+        self.receipt = receipt
+        self.revisionId = revisionId
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension DraftSaved: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeDraftSaved: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> DraftSaved {
+        return
+            try DraftSaved(
+                receipt: FfiConverterTypeReceipt.read(from: &buf), 
+                revisionId: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: DraftSaved, into buf: inout [UInt8]) {
+        FfiConverterTypeReceipt.write(value.receipt, into: &buf)
+        FfiConverterString.write(value.revisionId, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeDraftSaved_lift(_ buf: RustBuffer) throws -> DraftSaved {
+    return try FfiConverterTypeDraftSaved.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeDraftSaved_lower(_ value: DraftSaved) -> RustBuffer {
+    return FfiConverterTypeDraftSaved.lower(value)
 }
 
 
@@ -6833,6 +7056,87 @@ public func FfiConverterTypeCount_lower(_ value: Count) -> RustBuffer {
 
 
 /**
+ * A newly published object, or an unchanged reference from the base
+ * revision. `New` carries the live [`DraftAttachmentObject`] handle
+ * and spends its reservation in the save's transaction; `Retained`
+ * names a reference the base already holds and cannot authorize a
+ * spend. No variant rebuilds a handle from an object's identity.
+ */
+
+public enum DraftAttachment {
+    
+    case new(object: DraftAttachmentObject, filename: String, mediaType: String
+    )
+    case retained(DraftAttachmentRef
+    )
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension DraftAttachment: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeDraftAttachment: FfiConverterRustBuffer {
+    typealias SwiftType = DraftAttachment
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> DraftAttachment {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .new(object: try FfiConverterTypeDraftAttachmentObject.read(from: &buf), filename: try FfiConverterString.read(from: &buf), mediaType: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 2: return .retained(try FfiConverterTypeDraftAttachmentRef.read(from: &buf)
+        )
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: DraftAttachment, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case let .new(object,filename,mediaType):
+            writeInt(&buf, Int32(1))
+            FfiConverterTypeDraftAttachmentObject.write(object, into: &buf)
+            FfiConverterString.write(filename, into: &buf)
+            FfiConverterString.write(mediaType, into: &buf)
+            
+        
+        case let .retained(v1):
+            writeInt(&buf, Int32(2))
+            FfiConverterTypeDraftAttachmentRef.write(v1, into: &buf)
+            
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeDraftAttachment_lift(_ buf: RustBuffer) throws -> DraftAttachment {
+    return try FfiConverterTypeDraftAttachment.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeDraftAttachment_lower(_ value: DraftAttachment) -> RustBuffer {
+    return FfiConverterTypeDraftAttachment.lower(value)
+}
+
+
+
+/**
  * `create_draft`'s `context` (spec/07): `New`, or the source
  * occurrence a reply, reply-all or forward answers. The service
  * resolves a forward to its logical message.
@@ -9159,6 +9463,31 @@ fileprivate struct FfiConverterSequenceTypeVariantChoice: FfiConverterRustBuffer
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeDraftAttachment: FfiConverterRustBuffer {
+    typealias SwiftType = [DraftAttachment]
+
+    public static func write(_ value: [DraftAttachment], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeDraftAttachment.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [DraftAttachment] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [DraftAttachment]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeDraftAttachment.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeSearchLimitation: FfiConverterRustBuffer {
     typealias SwiftType = [SearchLimitation]
 
@@ -9333,6 +9662,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_core_publish_draft_attachment() != 18368) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_save_draft() != 24235) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_core_cancel_job() != 65113) {
