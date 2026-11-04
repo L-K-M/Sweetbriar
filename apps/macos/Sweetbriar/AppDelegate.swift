@@ -12,6 +12,7 @@ import SweetbriarBridge
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var mainWindow: MainWindowController?
     private var session: CoreSession?
+    private let appearance = SharedAppearance()
 
     /// The menu builder is retained: `NSMenuItem.target` is weak, so
     /// the Debug items die with their builder otherwise.
@@ -54,7 +55,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         self.session = session
 
-        let mainWindow = MainWindowController(session: session)
+        let mainWindow = MainWindowController(session: session, appearance: appearance)
         self.mainWindow = mainWindow
         mainWindow.showWindow(nil)
         mainWindow.start()

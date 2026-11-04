@@ -287,7 +287,7 @@ public enum AppearanceEvent: Sendable, Equatable {
 
 /// The appearance queries a model needs from the core (spec/07).
 /// `CoreBridge` adopts it; tests substitute a fake.
-public protocol AppearanceSource: Sendable {
+public protocol AppearanceSource: AnyObject, Sendable {
     /// `appearance()`: the resolved snapshot and its generation mark.
     func appearance() async throws -> Appearance
     /// `subscribe_appearance(generation)`: committed appearance
@@ -372,6 +372,7 @@ public final class AppearanceModel {
         do {
             outer: while !Task.isCancelled {
                 let snapshot = try await readOnce()
+                try Task.checkCancellation()
                 let events = try await source.appearanceEvents(generation: snapshot.generation)
                 while !Task.isCancelled {
                     switch try await events.next() {
@@ -391,6 +392,7 @@ public final class AppearanceModel {
     /// Read `appearance()` and publish it, clearing the last failure.
     private func readOnce() async throws -> Appearance {
         let snapshot = try await source.appearance()
+        try Task.checkCancellation()
         appearance = snapshot
         lastError = nil
         return snapshot
