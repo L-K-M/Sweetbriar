@@ -1266,10 +1266,19 @@ local drafts. No network yet.
   - **M1.10d2 Command FFI and bridge — L:** setter SDK and bridge consume
     c/d1, with receipts, typed errors, replay/drop/lifecycle proof and
     regenerated bindings.
-  - **M1.10e App appearance — L:** sidebar monograms, mixed-account row
-    rails and Settings swatches/Custom through the bridge. Tests cover
-    duplicate initials, actual light/dark/selected surfaces, accessibility
-    and updates across open windows. Color never replaces native selection.
+  - **M1.10e App appearance:** split before implementation to keep each
+    complete artifact below 1,450 gross lines. All consume the bridge APIs:
+    - **M1.10e1 Sidebar appearance — L:** share a committed appearance
+      subscription across open windows and draw sidebar account monograms.
+      Test duplicate initials, distinguishing accessibility labels, light,
+      dark and high-contrast rendering, and updates across open windows.
+    - **M1.10e2 List appearance — L:** after e1, draw mixed-account row
+      rails and monograms in both AppKit and SwiftUI. Test actual light,
+      dark and selected surfaces and accessibility. Account color never
+      replaces native selection colors.
+    - **M1.10e3 Appearance settings — L:** after e1, add Settings → Accounts
+      → Appearance swatches and Custom through bridge setters. Test failure
+      and conflict handling and committed updates across open windows.
   - **M1.10f Qualification — M:** colors survive the real M1.8 backup and
     restore APIs, and the owner's rendered contrast/accessibility checks
     are recorded. Pure token tests do not substitute for these checks.
