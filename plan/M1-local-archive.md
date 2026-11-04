@@ -1214,7 +1214,12 @@ local drafts. No network yet.
     select complete external generations, including restore into a fresh data
     root, and hand a verified selection to staging. Do not assume a row in
     the current store. Verify the actual copied bytes again during staging.
-  - **M1.8e3 Quarantined restore staging (L):** verify and copy the chosen
+  - **M1.8e3a Quarantine transaction prerequisite (L):** implement and test
+    the atomic staging-database transformation, including inherited cleanup
+    authority and component-aware location rewriting. It cannot qualify or
+    publish a staging directory. The caller must supply the verified source
+    location and manifest metadata; this prerequisite does not validate them.
+  - **M1.8e3b Quarantined restore staging (L):** verify and copy the chosen
     generation into `<data root>.restoring-<inc>` with publication flushes,
     then run the staging quarantine transaction: new incarnation, all
     accounts paused, unfinished import jobs failed with requests and
