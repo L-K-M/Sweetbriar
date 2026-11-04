@@ -9,7 +9,9 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use sb_types::fs::{Fs, Lease, Location, LockError, Metadata, WriteFile};
+use sb_types::fs::{
+    ConfinedDir, DirectoryIdentity, Fs, Lease, Location, LockError, Metadata, ReadFile, WriteFile,
+};
 
 /// The filesystem operations `FaultFs` can count and fail, named after
 /// the `Fs` (or write-handle) method they wrap.
@@ -47,6 +49,8 @@ pub enum FaultKind {
     /// space runs out mid-block. Only meaningful on [`FsOp::Write`];
     /// everywhere else it behaves like [`FaultKind::Eio`].
     ShortWrite,
+    /// A recursive removal deletes some entries, then fails with EIO.
+    PartialRemove,
     /// `ENOSPC`: the filesystem is full.
     NoSpace,
     /// `EIO`: the storage layer failed.
@@ -135,7 +139,9 @@ fn fault_error(kind: FaultKind) -> io::Error {
         FaultKind::NoSpace => io::Error::from_raw_os_error(libc::ENOSPC),
         // `ShortWrite` already wrote its half; the error that ends the
         // write is the same one a failing device would give.
-        FaultKind::Eio | FaultKind::ShortWrite => io::Error::from_raw_os_error(libc::EIO),
+        FaultKind::Eio | FaultKind::ShortWrite | FaultKind::PartialRemove => {
+            io::Error::from_raw_os_error(libc::EIO)
+        }
         FaultKind::Kind(kind) => io::Error::from(kind),
     }
 }
@@ -168,6 +174,101 @@ impl FaultFs {
     }
 }
 
+struct FaultConfinedDir {
+    inner: Box<dyn ConfinedDir>,
+    plan: Arc<FaultPlan>,
+}
+
+impl ConfinedDir for FaultConfinedDir {
+    fn visit_children(
+        &self,
+        visitor: &mut dyn FnMut(&Path) -> io::Result<std::ops::ControlFlow<()>>,
+    ) -> io::Result<std::ops::ControlFlow<()>> {
+        if let Some(kind) = self.plan.fire(FsOp::ReadDir) {
+            return Err(fault_error(kind));
+        }
+        self.inner.visit_children(&mut |name| {
+            if let Some(kind) = self.plan.fire(FsOp::Read) {
+                return Err(fault_error(kind));
+            }
+            visitor(name)
+        })
+    }
+    fn set_ownership(&self, bytes: &[u8]) -> io::Result<()> {
+        if let Some(kind) = self.plan.fire(FsOp::Write) {
+            return Err(fault_error(kind));
+        }
+        self.inner.set_ownership(bytes)
+    }
+    fn ownership(&self) -> io::Result<Vec<u8>> {
+        if let Some(kind) = self.plan.fire(FsOp::Read) {
+            return Err(fault_error(kind));
+        }
+        self.inner.ownership()
+    }
+    fn identity(&self) -> io::Result<DirectoryIdentity> {
+        if let Some(kind) = self.plan.fire(FsOp::Open) {
+            return Err(fault_error(kind));
+        }
+        self.inner.identity()
+    }
+    fn open_dir(&self, name: &Path) -> io::Result<Box<dyn ConfinedDir>> {
+        if let Some(kind) = self.plan.fire(FsOp::Open) {
+            return Err(fault_error(kind));
+        }
+        Ok(Box::new(Self {
+            inner: self.inner.open_dir(name)?,
+            plan: self.plan.clone(),
+        }))
+    }
+    fn create_private_dir(&self, name: &Path) -> io::Result<()> {
+        if let Some(kind) = self.plan.fire(FsOp::CreatePrivateDir) {
+            return Err(fault_error(kind));
+        }
+        self.inner.create_private_dir(name)
+    }
+    fn create(&self, name: &Path) -> io::Result<Box<dyn WriteFile>> {
+        if let Some(kind) = self.plan.fire(FsOp::Create) {
+            return Err(fault_error(kind));
+        }
+        Ok(Box::new(FaultWrite {
+            inner: self.inner.create(name)?,
+            plan: self.plan.clone(),
+        }))
+    }
+    fn remove_file(&self, name: &Path) -> io::Result<()> {
+        if let Some(kind) = self.plan.fire(FsOp::Remove) {
+            return Err(fault_error(kind));
+        }
+        self.inner.remove_file(name)
+    }
+    fn remove_empty_dir(&self, name: &Path) -> io::Result<()> {
+        if let Some(kind) = self.plan.fire(FsOp::RemoveDirAll) {
+            return Err(fault_error(kind));
+        }
+        self.inner.remove_empty_dir(name)
+    }
+    fn sync(&self) -> io::Result<()> {
+        if let Some(kind) = self.plan.fire(FsOp::SyncDir) {
+            return Err(fault_error(kind));
+        }
+        self.inner.sync()
+    }
+    fn open_regular(&self, path: &Path) -> io::Result<(Box<dyn ReadFile>, Metadata)> {
+        if let Some(kind) = self.plan.fire(FsOp::Open) {
+            return Err(fault_error(kind));
+        }
+        let (inner, metadata) = self.inner.open_regular(path)?;
+        Ok((
+            Box::new(FaultRead {
+                inner,
+                plan: self.plan.clone(),
+            }),
+            metadata,
+        ))
+    }
+}
+
 impl Fs for FaultFs {
     fn open_no_follow(&self, path: &Path) -> io::Result<Box<dyn sb_types::fs::ReadFile>> {
         if let Some(kind) = self.plan.fire(FsOp::Open) {
@@ -178,6 +279,16 @@ impl Fs for FaultFs {
             plan: self.plan.clone(),
         }))
     }
+    fn open_confined_dir(&self, path: &Path) -> io::Result<Box<dyn ConfinedDir>> {
+        if let Some(kind) = self.plan.fire(FsOp::Open) {
+            return Err(fault_error(kind));
+        }
+        Ok(Box::new(FaultConfinedDir {
+            inner: self.inner.open_confined_dir(path)?,
+            plan: self.plan.clone(),
+        }))
+    }
+
     fn create(&self, path: &Path) -> io::Result<Box<dyn WriteFile>> {
         if let Some(kind) = self.plan.fire(FsOp::Create) {
             return Err(fault_error(kind));
@@ -244,6 +355,15 @@ impl Fs for FaultFs {
 
     fn remove_dir_all(&self, path: &Path) -> io::Result<()> {
         if let Some(kind) = self.plan.fire(FsOp::RemoveDirAll) {
+            if matches!(kind, FaultKind::PartialRemove) {
+                for name in [".sweetbriar-owner", "state.sqlite"] {
+                    match self.inner.remove(&path.join(name)) {
+                        Ok(()) => {}
+                        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                        Err(e) => return Err(e),
+                    }
+                }
+            }
             return Err(fault_error(kind));
         }
         self.inner.remove_dir_all(path)
@@ -364,6 +484,50 @@ mod tests {
         let fs = Arc::new(SimFs::new());
         fs.create_dir(Path::new("/x")).unwrap();
         (fs, PathBuf::from("/x"))
+    }
+
+    #[test]
+    fn confined_enumeration_propagates_faults_and_retries() {
+        use std::ops::ControlFlow;
+        let (inner, dir) = scratch_fs();
+        inner.create(&dir.join("a")).unwrap();
+        inner.create(&dir.join("b")).unwrap();
+        for (op, nth) in [(FsOp::ReadDir, 1), (FsOp::Read, 2)] {
+            let fs = FaultFs::new(inner.clone(), op, nth, FaultKind::Eio);
+            let root = fs.open_confined_dir(&dir).unwrap();
+            assert!(
+                root.visit_children(&mut |_| Ok(ControlFlow::Continue(())))
+                    .is_err()
+            );
+            let mut count = 0;
+            assert_eq!(
+                root.visit_children(&mut |_| {
+                    count += 1;
+                    Ok(ControlFlow::Continue(()))
+                })
+                .unwrap(),
+                ControlFlow::Continue(())
+            );
+            assert_eq!(count, 2);
+        }
+    }
+
+    #[test]
+    fn confined_directory_operations_obey_open_and_read_faults() {
+        let (inner, dir) = scratch_fs();
+        inner
+            .create(&dir.join("file"))
+            .unwrap()
+            .write_all(b"data")
+            .unwrap();
+        let fs = FaultFs::new(inner.clone(), FsOp::Open, 2, FaultKind::Eio);
+        let root = fs.open_confined_dir(&dir).unwrap();
+        assert!(root.open_regular(Path::new("file")).is_err());
+        assert!(root.open_regular(Path::new("file")).is_ok());
+        let fs = FaultFs::new(inner, FsOp::Read, 1, FaultKind::Eio);
+        let root = fs.open_confined_dir(&dir).unwrap();
+        let mut file = root.open_regular(Path::new("file")).unwrap().0;
+        assert!(std::io::Read::read(&mut file, &mut [0; 4]).is_err());
     }
 
     /// Only the Nth call of the chosen operation fails — exactly once —

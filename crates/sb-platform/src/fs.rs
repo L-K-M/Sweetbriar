@@ -4,10 +4,15 @@
 
 use std::fs::{File, OpenOptions, TryLockError};
 use std::io;
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
-use std::path::{Path, PathBuf};
+use std::os::fd::{AsRawFd, FromRawFd};
+use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
+use std::path::{Component, Path, PathBuf};
 
-use sb_types::fs::{FileKind, Fs, Lease, Location, LockError, Metadata, WriteFile};
+use sb_types::fs::{
+    ConfinedDir, DirectoryIdentity, FileKind, Fs, Lease, Location, LockError, Metadata, ReadFile,
+    WriteFile,
+};
 
 use crate::location;
 
@@ -16,7 +21,272 @@ use crate::location;
 #[derive(Debug, Default, Clone, Copy)]
 pub struct RealFs;
 
+struct RealConfinedDir(File);
+
+// Each openat is relative to a retained directory descriptor; O_NOFOLLOW
+// applies independently to every component rather than only the final leaf.
+fn open_child(parent: &File, name: &std::ffi::OsStr, directory: bool) -> io::Result<File> {
+    let name = std::ffi::CString::new(name.as_bytes()).map_err(|_| io::ErrorKind::InvalidInput)?;
+    let mut flags =
+        libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_NOCTTY;
+    if directory {
+        flags |= libc::O_DIRECTORY;
+    }
+    // SAFETY: parent is a live descriptor and name is NUL-terminated; on
+    // success openat returns a new owned descriptor.
+    let fd = unsafe { libc::openat(parent.as_raw_fd(), name.as_ptr(), flags) };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: fd was just returned by openat and ownership transfers here.
+    Ok(unsafe { File::from_raw_fd(fd) })
+}
+
+fn child_name(path: &Path) -> io::Result<std::ffi::CString> {
+    let mut parts = path.components();
+    let name = match (parts.next(), parts.next()) {
+        (Some(Component::Normal(name)), None) => name,
+        _ => return Err(io::ErrorKind::InvalidInput.into()),
+    };
+    std::ffi::CString::new(name.as_bytes()).map_err(|_| io::ErrorKind::InvalidInput.into())
+}
+
+#[cfg(target_os = "macos")]
+const OWNER_ATTRIBUTE: &std::ffi::CStr = c"com.sweetbriar.verifier-owner";
+#[cfg(target_os = "linux")]
+const OWNER_ATTRIBUTE: &std::ffi::CStr = c"user.sweetbriar.verifier-owner";
+
+impl ConfinedDir for RealConfinedDir {
+    fn visit_children(
+        &self,
+        visitor: &mut dyn FnMut(&Path) -> io::Result<std::ops::ControlFlow<()>>,
+    ) -> io::Result<std::ops::ControlFlow<()>> {
+        use std::ops::ControlFlow;
+        use std::os::unix::ffi::OsStrExt as _;
+        // Open a fresh file description so each visit starts at the beginning
+        // and does not change the retained descriptor's directory offset.
+        let file = open_child(&self.0, std::ffi::OsStr::new("."), true)?;
+        use std::os::fd::IntoRawFd;
+        let fd = file.into_raw_fd();
+        // SAFETY: fd is an owned directory descriptor; fdopendir takes it on success.
+        let dir = unsafe { libc::fdopendir(fd) };
+        if dir.is_null() {
+            let error = io::Error::last_os_error();
+            // SAFETY: fdopendir failed and did not take ownership.
+            unsafe { libc::close(fd) };
+            return Err(error);
+        }
+        struct Directory(*mut libc::DIR);
+        impl Drop for Directory {
+            fn drop(&mut self) {
+                if !self.0.is_null() {
+                    // SAFETY: this guard owns the directory stream.
+                    unsafe { libc::closedir(self.0) };
+                }
+            }
+        }
+        let mut guard = Directory(dir);
+        let result = loop {
+            // readdir signals end and error with null; clear errno first.
+            #[cfg(target_os = "macos")]
+            let errno = unsafe { libc::__error() };
+            #[cfg(target_os = "linux")]
+            let errno = unsafe { libc::__errno_location() };
+            // SAFETY: errno is thread-local and dir is a live stream.
+            unsafe { *errno = 0 };
+            let entry = unsafe { libc::readdir(dir) };
+            if entry.is_null() {
+                let error = unsafe { *errno };
+                break if error == 0 {
+                    Ok(ControlFlow::Continue(()))
+                } else {
+                    Err(io::Error::from_raw_os_error(error))
+                };
+            }
+            // SAFETY: readdir returned a live, NUL-terminated directory entry.
+            let name = unsafe { std::ffi::CStr::from_ptr((*entry).d_name.as_ptr()) }.to_bytes();
+            if name == b"." || name == b".." {
+                continue;
+            }
+            match visitor(Path::new(std::ffi::OsStr::from_bytes(name))) {
+                Ok(ControlFlow::Continue(())) => {}
+                other => break other,
+            }
+        };
+        // SAFETY: the guard owns dir; clear it before returning.
+        let close = unsafe { libc::closedir(dir) };
+        guard.0 = std::ptr::null_mut();
+        if close != 0 && result.is_ok() {
+            return Err(io::Error::last_os_error());
+        }
+        result
+    }
+    fn set_ownership(&self, bytes: &[u8]) -> io::Result<()> {
+        if bytes.is_empty() || bytes.len() > 36 {
+            return Err(io::ErrorKind::InvalidInput.into());
+        }
+        // SAFETY: the descriptor, attribute name and buffer stay live for the call.
+        #[cfg(target_os = "macos")]
+        let rc = unsafe {
+            libc::fsetxattr(
+                self.0.as_raw_fd(),
+                OWNER_ATTRIBUTE.as_ptr(),
+                bytes.as_ptr().cast(),
+                bytes.len(),
+                0,
+                libc::XATTR_CREATE,
+            )
+        };
+        #[cfg(target_os = "linux")]
+        let rc = unsafe {
+            libc::fsetxattr(
+                self.0.as_raw_fd(),
+                OWNER_ATTRIBUTE.as_ptr(),
+                bytes.as_ptr().cast(),
+                bytes.len(),
+                libc::XATTR_CREATE,
+            )
+        };
+        if rc != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+    fn ownership(&self) -> io::Result<Vec<u8>> {
+        let mut bytes = [0u8; 36];
+        // SAFETY: the descriptor, attribute name and buffer stay live for the call.
+        #[cfg(target_os = "macos")]
+        let n = unsafe {
+            libc::fgetxattr(
+                self.0.as_raw_fd(),
+                OWNER_ATTRIBUTE.as_ptr(),
+                bytes.as_mut_ptr().cast(),
+                bytes.len(),
+                0,
+                0,
+            )
+        };
+        #[cfg(target_os = "linux")]
+        let n = unsafe {
+            libc::fgetxattr(
+                self.0.as_raw_fd(),
+                OWNER_ATTRIBUTE.as_ptr(),
+                bytes.as_mut_ptr().cast(),
+                bytes.len(),
+            )
+        };
+        if n < 0 {
+            let error = io::Error::last_os_error();
+            #[cfg(target_os = "macos")]
+            let missing = error.raw_os_error() == Some(libc::ENOATTR);
+            #[cfg(target_os = "linux")]
+            let missing = error.raw_os_error() == Some(libc::ENODATA);
+            return Err(if missing {
+                io::ErrorKind::NotFound.into()
+            } else {
+                error
+            });
+        }
+        Ok(bytes[..n as usize].to_vec())
+    }
+    fn identity(&self) -> io::Result<DirectoryIdentity> {
+        let meta = self.0.metadata()?;
+        Ok(DirectoryIdentity {
+            device: meta.dev(),
+            inode: meta.ino(),
+        })
+    }
+    fn open_dir(&self, name: &Path) -> io::Result<Box<dyn ConfinedDir>> {
+        child_name(name)?;
+        Ok(Box::new(RealConfinedDir(open_child(
+            &self.0,
+            name.as_os_str(),
+            true,
+        )?)))
+    }
+    fn create_private_dir(&self, name: &Path) -> io::Result<()> {
+        let name = child_name(name)?;
+        // SAFETY: both arguments designate live objects; mkdirat retains neither.
+        if unsafe { libc::mkdirat(self.0.as_raw_fd(), name.as_ptr(), 0o700) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+    fn create(&self, name: &Path) -> io::Result<Box<dyn WriteFile>> {
+        let name = child_name(name)?;
+        // SAFETY: the live directory descriptor and C string remain valid.
+        let fd = unsafe {
+            libc::openat(
+                self.0.as_raw_fd(),
+                name.as_ptr(),
+                libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                0o600,
+            )
+        };
+        if fd < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: openat returned a fresh owned descriptor.
+        Ok(Box::new(RealWriteFile(unsafe { File::from_raw_fd(fd) })))
+    }
+    fn remove_file(&self, name: &Path) -> io::Result<()> {
+        self.unlink(name, 0)
+    }
+    fn remove_empty_dir(&self, name: &Path) -> io::Result<()> {
+        self.unlink(name, libc::AT_REMOVEDIR)
+    }
+    fn sync(&self) -> io::Result<()> {
+        flush_durably(&self.0)
+    }
+    fn open_regular(&self, relative: &Path) -> io::Result<(Box<dyn ReadFile>, Metadata)> {
+        let parts: Vec<_> = relative
+            .components()
+            .map(|part| match part {
+                Component::Normal(name) => Ok(name),
+                _ => Err(io::Error::from(io::ErrorKind::InvalidInput)),
+            })
+            .collect::<io::Result<_>>()?;
+        let (last, parents) = parts.split_last().ok_or(io::ErrorKind::InvalidInput)?;
+        let mut dir = self.0.try_clone()?;
+        for name in parents {
+            dir = open_child(&dir, name, true)?;
+        }
+        let file = open_child(&dir, last, false)?;
+        let md = file.metadata()?;
+        if !md.is_file() {
+            return Err(not_regular(relative));
+        }
+        Ok((Box::new(file), Metadata::new(FileKind::File, md.len())))
+    }
+}
+
+impl RealConfinedDir {
+    fn unlink(&self, name: &Path, flags: libc::c_int) -> io::Result<()> {
+        let name = child_name(name)?;
+        // SAFETY: the directory descriptor and the NUL-terminated name are live.
+        if unsafe { libc::unlinkat(self.0.as_raw_fd(), name.as_ptr(), flags) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+}
+
 impl Fs for RealFs {
+    fn open_confined_dir(&self, path: &Path) -> io::Result<Box<dyn ConfinedDir>> {
+        if !path.is_absolute() {
+            return Err(io::ErrorKind::InvalidInput.into());
+        }
+        let mut dir = File::open("/")?;
+        for component in path.components() {
+            match component {
+                Component::RootDir => {}
+                Component::Normal(name) => dir = open_child(&dir, name, true)?,
+                _ => return Err(io::ErrorKind::InvalidInput.into()),
+            }
+        }
+        Ok(Box::new(RealConfinedDir(dir)))
+    }
+
     fn create(&self, path: &Path) -> io::Result<Box<dyn WriteFile>> {
         // create_new: fails when the file already exists.
         let file = OpenOptions::new().write(true).create_new(true).open(path)?;
@@ -361,6 +631,82 @@ mod tests {
     fn the_quarantine_record_names_its_download_time() {
         let downloaded = std::time::UNIX_EPOCH + Duration::from_secs(0x6900_0000);
         assert_eq!(quarantine_record(downloaded), "0081;69000000;Sweetbriar;");
+    }
+
+    #[test]
+    fn confined_enumeration_survives_replacement_and_stops() {
+        use std::ops::ControlFlow;
+        let scratch = Scratch::new("confined-enumeration");
+        let root = scratch.0.join("root");
+        std::fs::create_dir(&root).unwrap();
+        for n in 0..300 {
+            std::fs::write(root.join(format!("{n:03}")), []).unwrap();
+        }
+        let root = root.canonicalize().unwrap();
+        let dir = RealFs.open_confined_dir(&root).unwrap();
+        std::fs::rename(&root, scratch.0.join("moved")).unwrap();
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join("replacement"), []).unwrap();
+        let mut count = 0;
+        assert_eq!(
+            dir.visit_children(&mut |name| {
+                assert_ne!(name, Path::new("replacement"));
+                count += 1;
+                Ok(ControlFlow::Continue(()))
+            })
+            .unwrap(),
+            ControlFlow::Continue(())
+        );
+        assert_eq!(count, 300);
+        let mut count = 0;
+        assert_eq!(
+            dir.visit_children(&mut |_| {
+                count += 1;
+                Ok(ControlFlow::Break(()))
+            })
+            .unwrap(),
+            ControlFlow::Break(())
+        );
+        assert_eq!(count, 1);
+        let err = dir
+            .visit_children(&mut |_| Err(io::ErrorKind::Interrupted.into()))
+            .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::Interrupted);
+        let mut count = 0;
+        assert_eq!(
+            dir.visit_children(&mut |_| {
+                count += 1;
+                Ok(ControlFlow::Continue(()))
+            })
+            .unwrap(),
+            ControlFlow::Continue(())
+        );
+        assert_eq!(count, 300);
+    }
+
+    #[test]
+    fn confined_directory_refuses_symlinks_and_keeps_open_root() {
+        use std::os::unix::fs::symlink;
+        let scratch = Scratch::new("confined");
+        let root = scratch.0.join("root");
+        std::fs::create_dir(&root).unwrap();
+        std::fs::create_dir(root.join("child")).unwrap();
+        std::fs::write(root.join("child/file"), b"original").unwrap();
+        symlink(root.join("child"), root.join("link")).unwrap();
+        symlink(root.join("child/file"), root.join("file-link")).unwrap();
+        let root = root.canonicalize().unwrap();
+        let dir = RealFs.open_confined_dir(&root).unwrap();
+        assert!(dir.open_regular(Path::new("link/file")).is_err());
+        assert!(dir.open_regular(Path::new("file-link")).is_err());
+        assert!(dir.open_regular(Path::new("../outside")).is_err());
+        let moved = scratch.0.join("moved");
+        std::fs::rename(&root, &moved).unwrap();
+        std::fs::create_dir(&root).unwrap();
+        let mut file = dir.open_regular(Path::new("child/file")).unwrap().0;
+        let mut content = String::new();
+        file.read_to_string(&mut content).unwrap();
+        assert_eq!(content, "original");
+        assert!(RealFs.open_confined_dir(&moved.join("link")).is_err());
     }
 
     #[test]

@@ -11,9 +11,13 @@
 use std::collections::{HashMap, HashSet};
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use sb_types::fs::{FileKind, Fs, Lease, Location, LockError, Metadata, WriteFile};
+use sb_types::fs::{
+    ConfinedDir, DirectoryIdentity, FileKind, Fs, Lease, Location, LockError, Metadata, ReadFile,
+    WriteFile,
+};
 
 /// An in-memory filesystem whose only ground truth is what was
 /// flushed. Tests drive it exactly like a real one and then call
@@ -24,16 +28,35 @@ pub struct SimFs {
     locks: Arc<Mutex<HashSet<PathBuf>>>,
     /// Held by every operation on the tree, so each is atomic as on a
     /// real filesystem: no thread sees a rename half done.
-    ops: Mutex<()>,
+    ops: Arc<Mutex<()>>,
 }
 
 /// A directory: the entries it holds now, and the entries its last
 /// `sync_dir` snapshot recorded. Children are shared by handle, so a
 /// snapshot and the live tree can point at one node.
-#[derive(Default)]
 struct SimDir {
+    identity: u64,
+    owner: Option<Vec<u8>>,
+    durable_owner: Option<Vec<u8>>,
     live: HashMap<Box<Path>, Child>,
     durable: HashMap<Box<Path>, Child>,
+}
+
+static NEXT_DIR_ID: AtomicU64 = AtomicU64::new(1);
+
+impl Default for SimDir {
+    fn default() -> Self {
+        let identity = NEXT_DIR_ID
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
+            .expect("sim directory identities exhausted");
+        Self {
+            identity,
+            owner: None,
+            durable_owner: None,
+            live: HashMap::new(),
+            durable: HashMap::new(),
+        }
+    }
 }
 
 /// One directory entry. `Dir` nodes are shared (`Arc`), because a
@@ -162,6 +185,7 @@ fn cut_dir(dir: &Mutex<SimDir>) {
     let children = {
         let mut d = dir.lock().expect("a panicking thread held the sim tree");
         d.live = d.durable.clone();
+        d.owner = d.durable_owner.clone();
         d.live.values().cloned().collect::<Vec<_>>()
     };
     for child in children {
@@ -212,10 +236,217 @@ fn relative_components(path: &Path) -> impl Iterator<Item = Box<Path>> {
         .into_iter()
 }
 
+struct SimConfinedDir {
+    dir: Arc<Mutex<SimDir>>,
+    ops: Arc<Mutex<()>>,
+}
+
+fn confined_name(name: &Path) -> io::Result<Box<Path>> {
+    let mut parts = name.components();
+    match (parts.next(), parts.next()) {
+        (Some(Component::Normal(name)), None) => Ok(Box::from(Path::new(name))),
+        _ => Err(io::ErrorKind::InvalidInput.into()),
+    }
+}
+
+impl ConfinedDir for SimConfinedDir {
+    fn visit_children(
+        &self,
+        visitor: &mut dyn FnMut(&Path) -> io::Result<std::ops::ControlFlow<()>>,
+    ) -> io::Result<std::ops::ControlFlow<()>> {
+        use std::ops::ControlFlow;
+        let mut after: Option<Box<Path>> = None;
+        loop {
+            let next = {
+                let _op = self.ops.lock().expect("sim operation lock");
+                let dir = self.dir.lock().expect("sim tree lock");
+                dir.live
+                    .keys()
+                    .filter(|name| after.as_ref().is_none_or(|last| *name > last))
+                    .min()
+                    .cloned()
+            };
+            let Some(name) = next else {
+                return Ok(ControlFlow::Continue(()));
+            };
+            if visitor(&name)?.is_break() {
+                return Ok(ControlFlow::Break(()));
+            }
+            after = Some(name);
+        }
+    }
+    fn set_ownership(&self, bytes: &[u8]) -> io::Result<()> {
+        if bytes.is_empty() || bytes.len() > 36 {
+            return Err(io::ErrorKind::InvalidInput.into());
+        }
+        let _op = self.ops.lock().expect("sim operation lock");
+        let mut dir = self.dir.lock().expect("sim tree lock");
+        if dir.owner.is_some() {
+            return Err(io::ErrorKind::AlreadyExists.into());
+        }
+        dir.owner = Some(bytes.to_vec());
+        Ok(())
+    }
+    fn ownership(&self) -> io::Result<Vec<u8>> {
+        let _op = self.ops.lock().expect("sim operation lock");
+        self.dir
+            .lock()
+            .expect("sim tree lock")
+            .owner
+            .clone()
+            .ok_or(io::ErrorKind::NotFound.into())
+    }
+    fn identity(&self) -> io::Result<DirectoryIdentity> {
+        Ok(DirectoryIdentity {
+            device: 0,
+            inode: self.dir.lock().expect("sim tree lock").identity,
+        })
+    }
+    fn open_dir(&self, name: &Path) -> io::Result<Box<dyn ConfinedDir>> {
+        let name = confined_name(name)?;
+        let _op = self.ops.lock().expect("sim operation lock");
+        let child = self
+            .dir
+            .lock()
+            .expect("sim tree lock")
+            .live
+            .get(&name)
+            .cloned();
+        match child {
+            Some(Child::Dir(dir)) => Ok(Box::new(Self {
+                dir,
+                ops: self.ops.clone(),
+            })),
+            Some(Child::File(_)) => Err(io::ErrorKind::NotADirectory.into()),
+            None => Err(io::ErrorKind::NotFound.into()),
+        }
+    }
+    fn create_private_dir(&self, name: &Path) -> io::Result<()> {
+        let name = confined_name(name)?;
+        let _op = self.ops.lock().expect("sim operation lock");
+        let mut dir = self.dir.lock().expect("sim tree lock");
+        if dir.live.contains_key(&name) {
+            return Err(io::ErrorKind::AlreadyExists.into());
+        }
+        dir.live
+            .insert(name, Child::Dir(Arc::new(Mutex::new(SimDir::default()))));
+        Ok(())
+    }
+    fn create(&self, name: &Path) -> io::Result<Box<dyn WriteFile>> {
+        let name = confined_name(name)?;
+        let _op = self.ops.lock().expect("sim operation lock");
+        let mut dir = self.dir.lock().expect("sim tree lock");
+        if dir.live.contains_key(&name) {
+            return Err(io::ErrorKind::AlreadyExists.into());
+        }
+        let node = Arc::new(Mutex::new(SimFile::default()));
+        dir.live.insert(name, Child::File(node.clone()));
+        Ok(Box::new(SimWriteFile { node }))
+    }
+    fn remove_file(&self, name: &Path) -> io::Result<()> {
+        let name = confined_name(name)?;
+        let _op = self.ops.lock().expect("sim operation lock");
+        let mut dir = self.dir.lock().expect("sim tree lock");
+        match dir.live.get(&name) {
+            Some(Child::File(_)) => {
+                dir.live.remove(&name);
+                Ok(())
+            }
+            Some(Child::Dir(_)) => Err(io::ErrorKind::IsADirectory.into()),
+            None => Err(io::ErrorKind::NotFound.into()),
+        }
+    }
+    fn remove_empty_dir(&self, name: &Path) -> io::Result<()> {
+        let name = confined_name(name)?;
+        let _op = self.ops.lock().expect("sim operation lock");
+        let mut dir = self.dir.lock().expect("sim tree lock");
+        match dir.live.get(&name) {
+            Some(Child::Dir(child)) if child.lock().expect("sim tree lock").live.is_empty() => {
+                dir.live.remove(&name);
+                Ok(())
+            }
+            Some(Child::Dir(_)) => Err(io::Error::other("directory not empty")),
+            Some(Child::File(_)) => Err(io::ErrorKind::NotADirectory.into()),
+            None => Err(io::ErrorKind::NotFound.into()),
+        }
+    }
+    fn sync(&self) -> io::Result<()> {
+        let _op = self.ops.lock().expect("sim operation lock");
+        let mut dir = self.dir.lock().expect("sim tree lock");
+        dir.durable = dir.live.clone();
+        dir.durable_owner = dir.owner.clone();
+        Ok(())
+    }
+    fn open_regular(&self, relative: &Path) -> io::Result<(Box<dyn ReadFile>, Metadata)> {
+        let _op = self
+            .ops
+            .lock()
+            .expect("a panicking thread held the sim operation lock");
+        let parts: Vec<_> = relative
+            .components()
+            .map(|part| match part {
+                Component::Normal(name) => Ok(Box::<Path>::from(Path::new(name))),
+                _ => Err(io::Error::from(io::ErrorKind::InvalidInput)),
+            })
+            .collect::<io::Result<_>>()?;
+        let (last, parents) = parts.split_last().ok_or(io::ErrorKind::InvalidInput)?;
+        let mut dir = self.dir.clone();
+        for name in parents {
+            let next = dir
+                .lock()
+                .expect("a panicking thread held the sim tree")
+                .live
+                .get(name)
+                .cloned();
+            match next {
+                Some(Child::Dir(child)) => dir = child,
+                _ => return Err(io::ErrorKind::NotFound.into()),
+            }
+        }
+        let child = dir
+            .lock()
+            .expect("a panicking thread held the sim tree")
+            .live
+            .get(last)
+            .cloned();
+        match child {
+            Some(Child::File(node)) => {
+                let len = node
+                    .lock()
+                    .expect("a panicking thread held a sim file")
+                    .live
+                    .len() as u64;
+                Ok((
+                    Box::new(SimReadFile { node, pos: 0 }),
+                    Metadata::new(FileKind::File, len),
+                ))
+            }
+            Some(Child::Dir(_)) => Err(not_regular(relative)),
+            None => Err(io::ErrorKind::NotFound.into()),
+        }
+    }
+}
+
 impl Fs for SimFs {
     fn open_no_follow(&self, path: &Path) -> io::Result<Box<dyn sb_types::fs::ReadFile>> {
         self.open(path)
     }
+    fn open_confined_dir(&self, path: &Path) -> io::Result<Box<dyn ConfinedDir>> {
+        if !path.is_absolute()
+            || path
+                .components()
+                .any(|part| matches!(part, Component::ParentDir | Component::Prefix(_)))
+        {
+            return Err(io::ErrorKind::InvalidInput.into());
+        }
+        let _op = self.op();
+        let dir = self.dir(path).ok_or(io::ErrorKind::NotFound)?;
+        Ok(Box::new(SimConfinedDir {
+            dir,
+            ops: self.ops.clone(),
+        }))
+    }
+
     fn create(&self, path: &Path) -> io::Result<Box<dyn WriteFile>> {
         let _op = self.op();
         let path = normalise(path)?;
@@ -585,6 +816,97 @@ impl Seek for SimReadFile {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn confined_enumeration_visits_retained_directory_and_can_stop() {
+        use super::*;
+        use std::ops::ControlFlow;
+        let fs = SimFs::new();
+        fs.create_dir_all(Path::new("/root")).unwrap();
+        for n in 0..300 {
+            fs.create(&PathBuf::from(format!("/root/{n:03}"))).unwrap();
+        }
+        let root = fs.open_confined_dir(Path::new("/root")).unwrap();
+        fs.rename(Path::new("/root"), Path::new("/moved")).unwrap();
+        fs.create_dir(Path::new("/root")).unwrap();
+        let mut count = 0;
+        assert_eq!(
+            root.visit_children(&mut |name| {
+                count += 1;
+                assert!(root.open_regular(name).is_ok());
+                Ok(ControlFlow::Continue(()))
+            })
+            .unwrap(),
+            ControlFlow::Continue(())
+        );
+        assert_eq!(count, 300);
+        assert_eq!(
+            root.visit_children(&mut |_| Ok(ControlFlow::Break(())))
+                .unwrap(),
+            ControlFlow::Break(())
+        );
+        assert_eq!(
+            root.visit_children(&mut |_| Err(io::ErrorKind::Interrupted.into()))
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::Interrupted
+        );
+    }
+
+    #[test]
+    fn confined_scratch_operations_survive_power_cut_and_refuse_nonempty_removal() {
+        use super::*;
+        use std::io::Write as _;
+        let fs = SimFs::new();
+        fs.create_dir_all(Path::new("/root")).unwrap();
+        let root = fs.open_confined_dir(Path::new("/root")).unwrap();
+        root.create_private_dir(Path::new("scratch")).unwrap();
+        root.sync().unwrap();
+        let scratch = root.open_dir(Path::new("scratch")).unwrap();
+        let mut file = scratch.create(Path::new("state.sqlite")).unwrap();
+        file.write_all(b"data").unwrap();
+        file.sync_all().unwrap();
+        scratch.sync().unwrap();
+        fs.power_cut();
+        assert!(root.remove_empty_dir(Path::new("scratch")).is_err());
+        let mut data = String::new();
+        scratch
+            .open_regular(Path::new("state.sqlite"))
+            .unwrap()
+            .0
+            .read_to_string(&mut data)
+            .unwrap();
+        assert_eq!(data, "data");
+        scratch.remove_file(Path::new("state.sqlite")).unwrap();
+        scratch.sync().unwrap();
+        root.remove_empty_dir(Path::new("scratch")).unwrap();
+        root.sync().unwrap();
+        fs.power_cut();
+        assert!(root.open_dir(Path::new("scratch")).is_err());
+    }
+
+    #[test]
+    fn confined_directory_survives_rename_and_refuses_escape() {
+        use super::*;
+        let fs = SimFs::new();
+        fs.create_dir_all(Path::new("/root/child")).unwrap();
+        use std::io::Write as _;
+        fs.create(Path::new("/root/child/file"))
+            .unwrap()
+            .write_all(b"old")
+            .unwrap();
+        let root = fs.open_confined_dir(Path::new("/root")).unwrap();
+        assert!(root.open_regular(Path::new("../outside")).is_err());
+        fs.rename(Path::new("/root"), Path::new("/moved")).unwrap();
+        fs.create_dir(Path::new("/root")).unwrap();
+        let mut content = String::new();
+        root.open_regular(Path::new("child/file"))
+            .unwrap()
+            .0
+            .read_to_string(&mut content)
+            .unwrap();
+        assert_eq!(content, "old");
+    }
+
     use std::io::Write as _;
 
     use super::*;

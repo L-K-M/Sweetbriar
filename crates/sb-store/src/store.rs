@@ -118,8 +118,9 @@ impl Store {
     /// snapshot in the generation's directory — the copy never holds
     /// the writer — and a `backup_in_progress` pin on every object the
     /// snapshot references. Blocking (it awaits the writer and file
-    /// I/O); never call it on the writer thread. The object copy,
-    /// `manifest.json` and `complete` are the procedure's later steps.
+    /// I/O); never call it on the writer thread. First recovers interrupted
+    /// generations and applies retention. The object copy, `manifest.json`
+    /// and completion are the procedure's later steps.
     pub fn backup_snapshot(
         &self,
         destination: crate::backups::BackupDestination,
@@ -134,7 +135,9 @@ impl Store {
 
     /// Publish a pinned snapshot as a verified, durable backup generation.
     /// Blocking; never call on the writer thread. A failure leaves the
-    /// generation in progress for interrupted-generation recovery.
+    /// generation in progress for interrupted-generation recovery. Once
+    /// complete, retention runs before returning; its error is reported even
+    /// though the new generation may already be complete.
     pub fn complete_backup(
         &self,
         snapshot: crate::backups::BackupSnapshot,
@@ -145,6 +148,56 @@ impl Store {
             ));
         }
         self.backups.complete(snapshot)
+    }
+
+    /// Inspect a private copy authenticated against a verified manifest.
+    /// The supplied digest and length must come from that manifest. A same-UID
+    /// process holding a writable descriptor can still change the image.
+    pub fn inspect_backup_image(
+        &self,
+        generation: &Path,
+        sha256: [u8; 32],
+        bytes: u64,
+        cancelled: &std::sync::atomic::AtomicBool,
+        progress: impl FnMut(u64) -> std::ops::ControlFlow<()>,
+    ) -> Result<crate::BackupImageInspection, StoreError> {
+        self.backups
+            .inspect_image(generation, sha256, bytes, cancelled, progress)
+    }
+
+    /// Verify a recorded complete generation at the time of this call.
+    /// A same-UID process can still mutate it; this is not an immutable
+    /// restore handoff. Restore staging must verify the bytes it copies again.
+    pub fn verify_recorded_backup(
+        &self,
+        generation: &str,
+        cancelled: &std::sync::atomic::AtomicBool,
+    ) -> Result<crate::BackupImageInspection, StoreError> {
+        self.backups.verify_recorded(generation, cancelled)
+    }
+
+    /// Verify an external generation for a point-in-time restore handoff.
+    /// Staging must verify the actual bytes it copies again. `None` means cancelled.
+    pub fn verify_external_backup(
+        &self,
+        parent: &Path,
+        generation: &str,
+        cancelled: &std::sync::atomic::AtomicBool,
+    ) -> Result<Option<crate::VerifiedExternalBackup>, StoreError> {
+        self.backups.verify_external(parent, generation, cancelled)
+    }
+
+    /// Visit verified external generations with bounded memory. Identified
+    /// invalid or incomplete source candidates are skipped. Other failures,
+    /// including errors without source provenance, propagate.
+    /// The visitor can stop early. Cancellation also returns `Break`.
+    pub fn discover_external_backups(
+        &self,
+        parent: &Path,
+        cancelled: &std::sync::atomic::AtomicBool,
+        visitor: impl FnMut(crate::VerifiedExternalBackup) -> std::ops::ControlFlow<()>,
+    ) -> Result<std::ops::ControlFlow<()>, StoreError> {
+        self.backups.discover_external(parent, cancelled, visitor)
     }
 
     /// Stream a full capture through bounded writer turns. Blocking;
@@ -457,6 +510,14 @@ pub(crate) fn open_with(
     run_migrations(&mut conn, seams, migrations)?;
     // Finish startup writes before the writer's asynchronous idle checkpoint.
     crate::objects::expire_reservations(&mut conn, seams.clock().now())?;
+    if read_user_version(&conn)? >= 23 {
+        crate::backups::recover_scratch(
+            &conn,
+            fs,
+            paths.recovery(),
+            read_user_version(&conn)? >= 24,
+        )?;
+    }
     // The readers first, from the same constructor (spec/03): if one
     // fails, the writer connection still doesn't checkpoint on close.
     let readers = Readers::open(paths.state_db(), reader_pragmas)?;

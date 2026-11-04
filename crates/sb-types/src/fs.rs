@@ -10,6 +10,13 @@ use std::path::{Path, PathBuf};
 
 /// The filesystem seam. Object-safe; shared as `Arc<dyn Fs>`.
 pub trait Fs: Send + Sync {
+    /// Open an absolute directory without following any symbolic link.
+    /// The returned capability remains anchored to that directory if its
+    /// pathname is renamed. Unsupported adapters fail closed.
+    fn open_confined_dir(&self, _path: &Path) -> io::Result<Box<dyn ConfinedDir>> {
+        Err(io::ErrorKind::Unsupported.into())
+    }
+
     /// Create a new file for writing; fails if `path` already exists.
     fn create(&self, path: &Path) -> io::Result<Box<dyn WriteFile>>;
     /// Open an existing file for reading and seeking.
@@ -73,6 +80,72 @@ pub trait Fs: Send + Sync {
     /// Classify the filesystem location of `path`, or of its nearest
     /// existing ancestor when `path` does not exist.
     fn location(&self, path: &Path) -> io::Result<Location>;
+}
+
+/// A directory capability for race-safe, no-symlink descendant reads.
+pub trait ConfinedDir: Send + Sync {
+    /// Visit direct child names with bounded memory, in unspecified order.
+    /// Names are untrusted and may change during or after the visit. Opening
+    /// a child separately must still enforce confinement. Returning `Break`
+    /// stops immediately; a visitor error or enumeration error is propagated.
+    /// The visitor may use `Break` for cancellation and must discard partial
+    /// results on error. Unsupported adapters fail closed.
+    fn visit_children(
+        &self,
+        _visitor: &mut dyn FnMut(&Path) -> io::Result<std::ops::ControlFlow<()>>,
+    ) -> io::Result<std::ops::ControlFlow<()>> {
+        Err(io::ErrorKind::Unsupported.into())
+    }
+    /// Create this directory's private ownership marker, without replacing one.
+    /// `sync` makes the marker durable along with the directory.
+    fn set_ownership(&self, _bytes: &[u8]) -> io::Result<()> {
+        Err(io::ErrorKind::Unsupported.into())
+    }
+    /// Read this directory's private ownership marker, at most 36 bytes.
+    fn ownership(&self) -> io::Result<Vec<u8>> {
+        Err(io::ErrorKind::Unsupported.into())
+    }
+    /// Stable filesystem identity of this open directory.
+    fn identity(&self) -> io::Result<DirectoryIdentity> {
+        Err(io::ErrorKind::Unsupported.into())
+    }
+    /// Open a direct child directory without following links.
+    fn open_dir(&self, _name: &Path) -> io::Result<Box<dyn ConfinedDir>> {
+        Err(io::ErrorKind::Unsupported.into())
+    }
+    /// Create an owner-only direct child directory exclusively.
+    fn create_private_dir(&self, _name: &Path) -> io::Result<()> {
+        Err(io::ErrorKind::Unsupported.into())
+    }
+    /// Create a direct child file exclusively.
+    fn create(&self, _name: &Path) -> io::Result<Box<dyn WriteFile>> {
+        Err(io::ErrorKind::Unsupported.into())
+    }
+    /// Remove a direct child file without following links.
+    fn remove_file(&self, _name: &Path) -> io::Result<()> {
+        Err(io::ErrorKind::Unsupported.into())
+    }
+    /// Remove an empty direct child directory, without following links.
+    fn remove_empty_dir(&self, _name: &Path) -> io::Result<()> {
+        Err(io::ErrorKind::Unsupported.into())
+    }
+    /// Flush this directory.
+    fn sync(&self) -> io::Result<()> {
+        Err(io::ErrorKind::Unsupported.into())
+    }
+    /// Open a regular file below this directory. Reject absolute paths,
+    /// parent components, symlinks and non-regular files. Resolution stays
+    /// anchored to the opened directory even if its pathname is replaced.
+    fn open_regular(&self, relative: &Path) -> io::Result<(Box<dyn ReadFile>, Metadata)>;
+}
+
+/// Filesystem-local identity of an open directory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DirectoryIdentity {
+    /// Filesystem device identifier.
+    pub device: u64,
+    /// Directory inode identifier.
+    pub inode: u64,
 }
 
 /// A file open for writing through the `Fs` seam.

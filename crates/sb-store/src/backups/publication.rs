@@ -145,6 +145,19 @@ fn check_generation(
 
 impl Backups {
     pub(crate) fn complete(&self, snapshot: BackupSnapshot) -> Result<BackupReceipt, StoreError> {
+        let mut active = self
+            .active
+            .try_lock()
+            .map_err(|_| StoreError::conflict("a backup operation is already running"))?;
+        if !active
+            .as_ref()
+            .and_then(Weak::upgrade)
+            .is_some_and(|token| Arc::ptr_eq(&token, &snapshot.active))
+        {
+            return Err(StoreError::conflict(
+                "backup generation is not active in this store",
+            ));
+        }
         // A read transaction provides one consistent view without
         // occupying the single writer while the pin corpus is scanned.
         let mut conn = open_connection(&self.state_db, Access::ReadOnly, READER_PRAGMAS)?;
@@ -262,6 +275,8 @@ impl Backups {
         }))?;
         #[cfg(test)]
         tx_cut("after-completion-commit");
+        *active = None;
+        self.retain()?;
         Ok(receipt)
     }
 

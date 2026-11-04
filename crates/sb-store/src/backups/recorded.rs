@@ -1,0 +1,303 @@
+//! Point-in-time verification of a generation recorded in this store.
+use super::*;
+use rusqlite::OptionalExtension;
+use sha2::{Digest, Sha256};
+use std::cell::RefCell;
+use std::io::{Read, Write};
+use std::ops::ControlFlow;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+fn io_error(e: io::Error) -> StoreError {
+    StoreError::unavailable_io(format!("backup verification I/O: {e}"), e.kind())
+}
+
+fn cancelled(cancel: &AtomicBool) -> bool {
+    cancel.load(Ordering::Acquire)
+}
+
+pub(super) fn verify_objects(
+    backups: &Backups,
+    source: &dyn sb_types::fs::ConfinedDir,
+    id: &str,
+    cancel: &AtomicBool,
+    mut progress: impl FnMut(),
+    mut source_error: impl FnMut(&StoreError),
+) -> Result<ControlFlow<()>, StoreError> {
+    let conn = open_connection(&backups.state_db, Access::ReadOnly, READER_PRAGMAS)?;
+    let mut after = None;
+    loop {
+        if cancelled(cancel) {
+            return Ok(ControlFlow::Break(()));
+        }
+        let page = ledger::page(&conn, id, after)?;
+        for row in &page {
+            let hash = row
+                .entry
+                .sha256
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>();
+            let path = format!("objects/sha256/{}/{}/{}", &hash[..2], &hash[2..4], hash);
+            let (mut file, _) = source.open_regular(Path::new(&path)).map_err(|e| {
+                let e = io_error(e);
+                source_error(&e);
+                e
+            })?;
+            let mut hasher = Sha256::new();
+            let mut length = 0u64;
+            let mut buf = [0; 65536];
+            loop {
+                if cancelled(cancel) {
+                    return Ok(ControlFlow::Break(()));
+                }
+                let n = file.read(&mut buf).map_err(|e| {
+                    let e = io_error(e);
+                    source_error(&e);
+                    e
+                })?;
+                if n == 0 {
+                    break;
+                }
+                length = length.checked_add(n as u64).ok_or_else(|| {
+                    let e = StoreError::corrupt("object length overflow");
+                    source_error(&e);
+                    e
+                })?;
+                if length > row.entry.bytes {
+                    let e = StoreError::corrupt("object length mismatch");
+                    source_error(&e);
+                    return Err(e);
+                }
+                hasher.update(&buf[..n]);
+                progress();
+            }
+            if length != row.entry.bytes || hasher.finalize().as_slice() != row.entry.sha256 {
+                let e = StoreError::corrupt("object digest or length mismatch");
+                source_error(&e);
+                return Err(e);
+            }
+        }
+        if page.len() < ledger::BATCH {
+            break;
+        }
+        after = page.last().map(|row| row.entry.sha256);
+    }
+    Ok(if cancelled(cancel) {
+        ControlFlow::Break(())
+    } else {
+        ControlFlow::Continue(())
+    })
+}
+
+struct HashReader<R> {
+    input: R,
+    hash: Sha256,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum StreamPhase {
+    Manifest,
+    Object,
+}
+impl<R: Read> Read for HashReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let n = self.input.read(buf)?;
+        self.hash.update(&buf[..n]);
+        Ok(n)
+    }
+}
+
+fn digest(text: &str) -> Result<[u8; 32], StoreError> {
+    if text.len() != 64
+        || !text
+            .bytes()
+            .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+    {
+        return Err(StoreError::corrupt("invalid recorded manifest digest"));
+    }
+    let mut out = [0; 32];
+    for (i, pair) in text.as_bytes().as_chunks::<2>().0.iter().enumerate() {
+        out[i] = super::json::hex(pair[0]).unwrap() * 16 + super::json::hex(pair[1]).unwrap();
+    }
+    Ok(out)
+}
+
+impl Backups {
+    pub(crate) fn verify_recorded(
+        &self,
+        generation: &str,
+        cancel: &AtomicBool,
+    ) -> Result<BackupImageInspection, StoreError> {
+        self.verify_recorded_with(generation, cancel, |_| {})
+    }
+
+    pub(super) fn verify_recorded_with(
+        &self,
+        generation: &str,
+        cancel: &AtomicBool,
+        progress: impl FnMut(StreamPhase),
+    ) -> Result<BackupImageInspection, StoreError> {
+        let progress = RefCell::new(progress);
+        if self.writer.is_writer_thread() {
+            return Err(StoreError::internal("writer cannot verify a backup"));
+        }
+        let token = self.reserve_operation()?;
+        let conn = open_connection(&self.state_db, Access::ReadOnly, READER_PRAGMAS)?;
+        let row: Option<(String, i64, String, String, i64, i64, i64)> = conn.query_row(
+            "SELECT location, started_at, state, manifest_sha256, object_count, total_bytes, completed_at FROM backup_generations WHERE generation_id=?1", [generation],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?))
+        ).optional().map_err(|e| classify(e, "read recorded generation"))?;
+        let (location, started, state, manifest_hash, count, total, _completed) =
+            row.ok_or_else(|| StoreError::corrupt("recorded generation not found"))?;
+        let parsed_id: Uuid = generation
+            .parse()
+            .map_err(|_| StoreError::corrupt("invalid generation id"))?;
+        if parsed_id.to_string() != generation
+            || state != "complete"
+            || count < 0
+            || total < 0
+            || Path::new(&location)
+                .file_name()
+                .and_then(|name| name.to_str())
+                != Some(generation)
+        {
+            return Err(StoreError::corrupt("invalid recorded generation"));
+        }
+        let store: String = conn
+            .query_row(
+                "SELECT value FROM store_meta WHERE key='store_uuid'",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(|e| classify(e, "read store identity"))?;
+        drop(conn);
+        let expected_hash = digest(&manifest_hash)?;
+        let path = Path::new(&location);
+        let parent = self
+            .fs
+            .open_confined_dir(
+                path.parent()
+                    .ok_or_else(|| StoreError::corrupt("invalid backup location"))?,
+            )
+            .map_err(io_error)?;
+        let name = Path::new(generation);
+        let source = parent.open_dir(name).map_err(io_error)?;
+        let identity = source.identity().map_err(io_error)?;
+        let database = RefCell::new(None);
+        let outcome = self.inspect_image_session(
+            source.as_ref(),
+            cancel,
+            |_| ControlFlow::Continue(()),
+            |scratch| {
+                let (mut input, _) = source
+                    .open_regular(Path::new("manifest.json"))
+                    .map_err(io_error)?;
+                let mut output = scratch
+                    .create(Path::new("manifest.json"))
+                    .map_err(io_error)?;
+                let mut buf = [0; 65536];
+                loop {
+                    if cancelled(cancel) {
+                        return Ok(([0; 32], 0));
+                    }
+                    let n = input.read(&mut buf).map_err(io_error)?;
+                    if n == 0 {
+                        break;
+                    }
+                    output.write_all(&buf[..n]).map_err(io_error)?;
+                    progress.borrow_mut()(StreamPhase::Manifest);
+                }
+                output.sync_all().map_err(io_error)?;
+                drop(output);
+                scratch.sync().map_err(io_error)?;
+                let (input, _) = scratch
+                    .open_regular(Path::new("manifest.json"))
+                    .map_err(io_error)?;
+                let mut input = HashReader {
+                    input,
+                    hash: Sha256::new(),
+                };
+                let parsed = manifest::parse(
+                    &mut input,
+                    || {
+                        if cancelled(cancel) {
+                            Err(io::Error::from(io::ErrorKind::Interrupted))
+                        } else {
+                            Ok(())
+                        }
+                    },
+                    |_| Ok(()),
+                );
+                let manifest = match parsed {
+                    Err(e) if e.kind() == io::ErrorKind::Interrupted && cancelled(cancel) => {
+                        return Ok(([0; 32], 0));
+                    }
+                    result => result.map_err(io_error)?,
+                };
+                if input.hash.finalize().as_slice() != expected_hash {
+                    return Err(StoreError::corrupt("manifest digest mismatch"));
+                }
+                let result = (manifest.database.sha256, manifest.database.bytes);
+                *database.borrow_mut() = Some(manifest.database);
+                Ok(result)
+            },
+            |image, id, scratch| {
+                let (input, _) = scratch
+                    .open_regular(Path::new("manifest.json"))
+                    .map_err(io_error)?;
+                let mut input = HashReader {
+                    input,
+                    hash: Sha256::new(),
+                };
+                let expected = reconciliation::Expected {
+                    database: database.borrow_mut().take().expect("prepared manifest"),
+                    object_count: count as u64,
+                    total_bytes: total as u64,
+                };
+                let result = reconciliation::run_checked(
+                    image,
+                    self,
+                    id,
+                    &mut input,
+                    expected,
+                    cancel,
+                    Some((generation, started, &store)),
+                )?;
+                if result.is_break() {
+                    return Ok(result);
+                }
+                if input.hash.finalize().as_slice() != expected_hash {
+                    return Err(StoreError::corrupt("manifest digest mismatch"));
+                }
+                if verify_objects(
+                    self,
+                    source.as_ref(),
+                    id,
+                    cancel,
+                    || progress.borrow_mut()(StreamPhase::Object),
+                    |_| {},
+                )?
+                .is_break()
+                {
+                    return Ok(ControlFlow::Break(()));
+                }
+                if cancelled(cancel) {
+                    Ok(ControlFlow::Break(()))
+                } else {
+                    if parent
+                        .open_dir(name)
+                        .map_err(io_error)?
+                        .identity()
+                        .map_err(io_error)?
+                        != identity
+                    {
+                        return Err(StoreError::corrupt("backup generation directory changed"));
+                    }
+                    Ok(ControlFlow::Continue(()))
+                }
+            },
+        );
+        drop(token);
+        outcome
+    }
+}

@@ -482,6 +482,7 @@ so their objects stay referenced.
 A **generation** is a complete, self-verifying recovery point:
 
 ```
+backups/.<generation-id>.sweetbriar-owner   durable ownership marker
 backups/<generation-id>/
   state.sqlite          consistent snapshot (SQLite online backup API)
   objects/sha256/...    every object the snapshot references
@@ -525,12 +526,107 @@ backups/<generation-id>/
 - A generation is taken every hour while there were changes, so the
   recovery point is ≤ 1 hour. The research's 5 minutes is the test
   setting.
-- **Retention:** the last 24 hourly, 7 daily and 4 weekly generations.
+- **Retention:** keep the union of the newest complete generation in each
+  of the last 24 occupied UTC hour buckets, 7 occupied UTC day buckets,
+  and 4 occupied UTC week buckets (weeks start Monday). Break timestamp
+  ties by the lexicographically greatest generation ID. Remove expired
+  complete generations oldest first (lowest ID first on a timestamp tie).
+  Failed and in-progress rows are never retention candidates.
 - An interrupted generation is never treated as complete. The next run
   marks any `in_progress` generation `failed`, deletes its
-  `backup_in_progress` pins and removes its directory.
+  `backup_in_progress` pins and removes its directory. Record cleanup
+  ownership durably when marking it failed, so retries can distinguish it
+  from failed rows inherited through restore. Remove and flush the directory
+  entry before releasing pins; keep the failed row as evidence. A cleanup
+  error stops the new run and is retryable. A generation still active in
+  this process is not an interrupted generation. A fresh random ownership
+  token is stored with the generation before creating its directory, then
+  written and flushed in a sibling marker, and its parent flushed, before
+  creating the generation directory. Recovery and retention verify the marker
+  before removing the directory. Keep the marker until directory removal and
+  the parent flush succeed, then remove and flush the marker before unpinning
+  or deleting the row. A missing directory and marker are safe to retry; a
+  partial token marker can be removed only while the directory is absent.
+  Missing or mismatched ownership proof on an existing directory fails
+  closed, including for legacy generations. Validate the canonical parent
+  and generation paths before removal.
 
 ## Restore
+
+The format-1 manifest reader streams records to its caller without a total
+manifest or object-count limit or corpus-sized memory. It rejects unknown,
+duplicate and missing fields; its grammar has only the documented envelope,
+database object and object-record array, with no arbitrary nested values.
+Strings are validated incrementally, including UTF-8 and escaped surrogate
+pairs. Identifiers and hashes have fixed decoded sizes, numbers are checked,
+and cancellation is observed while scanning whitespace, strings and records.
+Parsing alone does not establish that a generation is authentic or complete.
+
+The verifier's private JSON lexical reader uses fixed input and scalar scratch
+storage. It validates strings, including discarded keys and values, without
+retaining their text; decoded names can be matched against a fixed set or
+captured into caller-supplied storage with explicit overflow. Number scanning
+checks the JSON grammar; exact unsigned reads additionally refuse signs,
+fractions, exponents and overflow. Skipping a value is iterative with a fixed
+nesting stack: like the pinned serde_json reader's default 128-level budget,
+at most 127 simultaneously open arrays/objects are accepted, including any
+enclosing containers supplied by the caller. Cancellation is checked during
+all token scanning and native reader errors are preserved. The attachment
+decoder preserves the draft reader's field, duplicate-key and numeric
+representation semantics, including in arbitrary extra fields. It retains the
+last effective field values and emits a reference only after its object closes.
+Since manifest hashes are 64 bytes, any other length is represented as an
+unmatchable reference instead of rejecting a string accepted by the draft
+reader. The caller discards all emitted references after any error. This parser
+alone establishes no snapshot traversal or reconciliation claim.
+
+SQLite inspection of a verifier image reads through a read-only VFS backed by
+an already-open file, without resolving its pathname or opening WAL, journal,
+shared-memory or temporary files. Holding the file preserves its identity,
+not OS-enforced immutability: a same-UID process holding an earlier writable
+file descriptor can still change its bytes. Inspection bounds SQLite work and
+checks cancellation before reporting success. Crash recovery removes a scratch
+directory only with durable ownership and directory identity evidence. If a
+crash precedes that proof, recovery retains the unprovable directory and its
+row for resolution; it must not infer ownership from emptiness.
+Internal caller-owned work may run on that same connection after metadata
+inspection, while the retained handle and scratch ownership are alive. It gets
+no pathname. Its error or cancellation cannot produce a successful result;
+the caller discards partial effects. Completing this callback establishes no
+generation verification or object reconciliation claim.
+The verifier records a fresh name, token and current incarnation in that row
+before creating a sibling token marker and flushing it and its parent. It
+creates the private directory, records its filesystem identity in the sibling
+marker and flushes that update, then stores and flushes the token as a
+private extended attribute on the directory. Both the attribute and identity
+must match before cleanup. The attribute remains attached until directory
+removal, so failed removals can be retried. In-process cleanup also checks its
+retained directory handle. Immediately before name-based removal, reopen and
+compare the directory identity again. POSIX cannot make that comparison and
+removal atomic; a malicious same-UID rename after the final check is outside
+this threat model. Once the directory and sibling marker are removed and the
+parent flushed, remove the row. Unsupported extended attributes fail closed.
+Rows inherited from another incarnation never authorize cleanup.
+
+The snapshot reference walker pages physical rows of acquisitions, send
+attempts and all draft revisions, and streams each attachment list without a
+corpus-sized set or total reference limit. It emits every occurrence, including
+duplicates, with its stored size where available. A caller discards all emitted
+references after cancellation or any failure. The walk alone does not prove
+that the references match a manifest.
+
+The verifier retains manifest object hashes and unsigned lengths in the
+trusted store's disk-backed ledger, keyed by the scratch owner. Duplicate
+hashes are rejected. Reconciliation marks references and pages through the
+ledger without holding the corpus in memory. Ledger writes and deletion use
+bounded batches of at most 200 rows. Cleanup removes the ledger in batches
+before deleting its owner row; an interruption leaves evidence to retry.
+Reconciliation compares the retained image's store UUID, schema version,
+generation ID and start time with the manifest, and checks the database
+metadata and object count and byte total against independently supplied
+expectations. Every occurrence must name a manifest object and match its
+stored size when present; every manifest object must be referenced. This
+comparison does not verify the object files or select a generation.
 
 Restoring creates a **new incarnation** and runs quarantined. The steps:
 

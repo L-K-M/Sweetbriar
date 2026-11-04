@@ -1066,18 +1066,81 @@ local drafts. No network yet.
     `failed`, deletes its pins and removes its directory. Acceptance: the
     interrupted generation's marking and removal; on restart after a cut
     no inherited unfinished job blocks GC.
-  - **M1.8e Quarantined restore staging (L):** verify the chosen
-    generation against its manifest (`state.sqlite` hash, every object
-    hash), stage the copy into `<data root>.restoring-<inc>` with the
-    publication flushes, and run the staging quarantine transaction: new
-    incarnation, all accounts `paused`, unfinished import jobs `failed`
-    with requests/checkpoints intact, intents `quarantined`, attempts in
-    `held`/`queued`/`submitting` become `outcome_unknown`, copied-source
-    locations rewritten (never to absent originals) and the inherited
-    backup rows fixed — then flush staging. Acceptance: every
-    after-restore row state; no original-path substitution; crash cuts
-    during staging leave the live store untouched and stage nothing
-    unquarantined.
+  - **M1.8e0a Confined backup reads (M):** add a retained directory
+    capability that opens descendants without following symlinks, including
+    simulator and fault behavior. Acceptance: path replacement cannot redirect
+    an open capability; links and traversal are refused; failures propagate.
+  - **M1.8e0b1 Retained-file SQLite reader (M):** provide a read-only
+    SQLite VFS backed only by an already-open reader. Refuse sidecars and
+    other file opens. Acceptance: replacing the pathname cannot change the
+    queried image; no source WAL is read; Linux and macOS tests pass.
+  - **M1.8e0b2 Verifier scratch ownership (L):** create and recover private
+    scratch with durable ownership and directory identity. Cleanup fails
+    closed and retains evidence when ownership cannot be proved, including
+    an unmarked directory after a crash; retry proven cleanup. Acceptance:
+    crash cuts and substitutions preserve unowned data, and proven leftovers
+    are recovered; simulator and fault behavior agree.
+  - **M1.8e0b3 Isolated verifier image (L):** stream a confined source into
+    owned scratch, checking digest and length, and inspect only the retained
+    completed image through the reader above. Bound disk, memory and SQLite
+    work, including cancellation. Acceptance: source changes cannot alter the
+    inspection; malformed schemas are bounded; cancellation never succeeds.
+  - **M1.8e1a Streaming manifest parser (L):** parse the format-1 manifest
+    incrementally with bounded memory and a streaming object sink. Reject
+    unknown or duplicate fields and invalid scalar values; validate Unicode,
+    integer overflow, truncation and cancellation. This does not verify a
+    generation or retain an object ledger.
+  - **M1.8e1b Verification ledger (L):** retain manifest object metadata in
+    bounded, owned scratch with duplicate detection and cleanup evidence.
+  - **M1.8e1c1a Retained-image callback (S):** allow caller-owned work on
+    the authenticated private image while its connection and scratch remain
+    owned. Completion claims metadata inspection only. Cancellation, errors
+    and cleanup failures never claim success.
+  - **M1.8e1c1b1 Bounded JSON lexical reader (L):** extract the manifest's
+    incremental Unicode scanner into a private reusable reader. Validate JSON
+    tokens and skip arbitrary values with fixed input, string and nesting
+    storage, cancellation and native I/O errors. Provide decoded name matching,
+    fixed-buffer string capture and exact unsigned integers. Mirror the
+    effective serde_json recursion boundary, accounting for enclosing values.
+    This prerequisite implements no attachment fields or snapshot traversal.
+  - **M1.8e1c1b2 Streaming attachment decoder (L):** use b1 to decode the
+    canonical draft attachment JSON shape with bounded memory and cancellation,
+    including arbitrary extra fields and duplicate-key read semantics. Preserve
+    the existing canonical reader's acceptance and reference semantics,
+    including numeric representation constraints beyond lexical JSON grammar.
+  - **M1.8e1c1c Snapshot reference walker (L):** page acquisitions and send
+    attempts and stream draft attachment blobs through the decoder, yielding
+    every reference without a corpus-sized set or total cap.
+  - **M1.8e1c2 Snapshot reconciliation (L):** compare the isolated snapshot's
+    identity and all references with the parsed manifest and ledger.
+  - **M1.8e1d Recorded generation verification (L):** select a complete
+    generation recorded in the current store, reconcile its manifest and
+    snapshot, and verify every object's size and hash. Staging must verify
+    the bytes it actually copies again.
+  - **M1.8e2a Confined streaming enumeration (M):** enumerate child names
+    through a retained directory capability with bounded memory, early stop,
+    and propagated I/O errors. Cover native, simulator and fault adapters.
+  - **M1.8e2b Restore discovery and verified handoff (M):** discover and
+    select complete external generations, including restore into a fresh data
+    root, and hand a verified selection to staging. Do not assume a row in
+    the current store. Verify the actual copied bytes again during staging.
+  - **M1.8e3a Quarantine transaction prerequisite (L):** implement and test
+    the atomic staging-database transformation, including inherited cleanup
+    authority and component-aware location rewriting. It cannot qualify or
+    publish a staging directory. The caller must supply the verified source
+    location and manifest metadata; this prerequisite does not validate them.
+  - **M1.8e3b Quarantined restore staging (L):** verify and copy the chosen
+    generation into `<data root>.restoring-<inc>` with publication flushes,
+    then run the staging quarantine transaction: new incarnation, all
+    accounts paused, unfinished import jobs failed with requests and
+    checkpoints intact, intents quarantined, held/queued/submitting attempts
+    outcome unknown, copied-source locations rewritten without substituting
+    absent original paths, and inherited backup rows fixed. Flush staging.
+    Acceptance: every after-restore row state; internal and external backup
+    location semantics; no original-path substitution; cancellation and
+    injected I/O, SQL and flush failures; retry and wrong generation or
+    incarnation; crash cuts leave the live store untouched and no
+    unquarantined stage eligible for publication.
   - **M1.8f Durable swap and startup recovery (L):** the restore-pending
     marker (new incarnation, generation id and path), both renames with
     their flushes, the startup handling of all three marker states, the
