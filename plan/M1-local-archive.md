@@ -1185,15 +1185,29 @@ local drafts. No network yet.
       live-attempt refusal, reopen durability and a dropped caller's
       commit through shutdown. No FFI, bindings or bridge. Depends on
       M1.9a2.
-    - **M1.9b2 Drafts FFI and bridge (L):** the UniFFI exports over b1 —
-      FFI-owned records and enums plus the attachment-object handle,
-      field-by-field mappings, typed errors and the existing
-      cancellation rules — the regenerated Swift bindings,
-      `cargo xtask check-ffi`, and the SweetbriarBridge owned draft
-      model with load, save over the base revision, discard and the
-      typed `Conflict` outcome M1.9c shows as keep-both, with Swift
-      Testing coverage of the codec and the conflict. Depends on
-      M1.9b1; re-size again if the artifact still exceeds the limit.
+    - **M1.9b2 Drafts FFI and bridge:** re-sized 2026-11-04 using the
+      existing import FFI commits as a generator measurement: the job
+      query added 690 Swift binding lines and the commands added 363,
+      alongside 320 and 272 gross Rust lines respectively. Drafts has
+      both a full revision vocabulary and commands, plus an owned Swift
+      model and tests, so split it into:
+      - **M1.9b2a Draft queries over FFI (L):** FFI-owned query records
+        and enums, field-by-field mappings, `drafts()` and `draft()`,
+        typed errors and query cancellation, Rust codec and lifecycle
+        tests, regenerated Swift bindings and `cargo xtask check-ffi`.
+        Depends on M1.9b1.
+      - **M1.9b2b Draft commands over FFI (L):** create, save, discard
+        and attachment publication, FFI-owned input records and enums,
+        the attachment-object handle, complete mappings, typed errors
+        and command cancellation, Rust codec, error and lifecycle tests,
+        regenerated Swift bindings and `cargo xtask check-ffi`. Depends
+        on M1.9b2a.
+      - **M1.9b2c Draft bridge (L):** the SweetbriarBridge owned draft
+        model with load, save over the base revision, discard and the
+        typed `Conflict` outcome M1.9c shows as keep-both, with Swift
+        Testing coverage of the codec, conflict and lifecycle. Depends on
+        M1.9b2b.
+      Re-size again if any artifact exceeds the limit.
   - **M1.9c Compose window (L):** the macOS compose window — token
     fields, subject, a plain or Markdown editor on the M0.11 probe's
     TextKit 2 view, autosave after 1.5 s, "Saved" only after the
