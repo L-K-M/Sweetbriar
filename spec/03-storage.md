@@ -558,6 +558,11 @@ checks cancellation before reporting success. Crash recovery removes a scratch
 directory only with durable ownership and directory identity evidence. If a
 crash precedes that proof, recovery retains the unprovable directory and its
 row for resolution; it must not infer ownership from emptiness.
+Internal caller-owned work may run on that same connection after metadata
+inspection, while the retained handle and scratch ownership are alive. It gets
+no pathname. Its error or cancellation cannot produce a successful result;
+the caller discards partial effects. Completing this callback establishes no
+generation verification or object reconciliation claim.
 The verifier records a fresh name, token and current incarnation in that row
 before creating a sibling token marker and flushing it and its parent. It
 creates the private directory, records its filesystem identity in the sibling

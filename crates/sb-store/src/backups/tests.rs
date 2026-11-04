@@ -2254,6 +2254,200 @@ fn startup_ledger_purge_failure_retains_owner_for_retry() {
 }
 
 #[test]
+fn retained_image_callback_outcomes_clean_owned_evidence() {
+    use sha2::{Digest, Sha256};
+    use std::ops::ControlFlow;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let (_scratch, paths, store) = open("image-callback-outcomes");
+    let snapshot = store.backup_snapshot(BackupDestination::DataRoot).unwrap();
+    let receipt = store.complete_backup(snapshot).unwrap();
+    let data = std::fs::read(receipt.state_db()).unwrap();
+    let digest = Sha256::digest(&data).into();
+    for mode in ["success", "error", "before", "during", "break"] {
+        let cancelled = AtomicBool::new(mode == "before");
+        let mut called = false;
+        let closes_before = crate::image_vfs::closes_on_this_thread();
+        let result = store.backups.inspect_image_with(
+            receipt.location(),
+            digest,
+            data.len() as u64,
+            &cancelled,
+            |_| ControlFlow::Continue(()),
+            |conn| {
+                called = true;
+                assert_eq!(std::fs::read_dir(paths.recovery()).unwrap().count(), 2);
+                let _: i64 = conn
+                    .query_row("PRAGMA user_version", [], |r| r.get(0))
+                    .unwrap();
+                let id: String = reading(&store, |tx| {
+                    tx.query_row("SELECT id FROM verifier_scratch", [], |r| r.get(0))
+                        .map_err(bug)
+                });
+                super::ledger::insert(
+                    &store.writer,
+                    id,
+                    vec![super::manifest::Entry {
+                        sha256: [1; 32],
+                        bytes: 1,
+                    }],
+                )?;
+                match mode {
+                    "error" => Err(StoreError::corrupt("callback error")),
+                    "during" => {
+                        cancelled.store(true, Ordering::Release);
+                        Ok(ControlFlow::Continue(()))
+                    }
+                    "break" => Ok(ControlFlow::Break(())),
+                    _ => Ok(ControlFlow::Continue(())),
+                }
+            },
+        );
+        assert_eq!(called, mode != "before");
+        assert_eq!(
+            crate::image_vfs::closes_on_this_thread(),
+            closes_before + usize::from(called),
+            "connection close after {mode}"
+        );
+        match mode {
+            "success" => assert!(matches!(
+                result,
+                Ok(crate::BackupImageInspection::Inspected { .. })
+            )),
+            "error" => assert!(matches!(result, Err(StoreError::Corrupt { .. }))),
+            _ => assert!(matches!(
+                result,
+                Ok(crate::BackupImageInspection::Cancelled)
+            )),
+        }
+        let counts = reading(&store, |tx| {
+            tx.query_row(
+            "SELECT (SELECT count(*) FROM verifier_scratch), (SELECT count(*) FROM verifier_objects)", [],
+            |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)),
+        ).map_err(bug)
+        });
+        assert_eq!(counts, (0, 0), "{mode}");
+        assert_eq!(std::fs::read_dir(paths.recovery()).unwrap().count(), 0);
+    }
+}
+
+#[test]
+fn retained_image_callback_uses_pinned_connection_after_path_replacement() {
+    use sha2::{Digest, Sha256};
+    use std::ops::ControlFlow;
+    use std::sync::atomic::AtomicBool;
+    let (_scratch, paths, store) = open("image-callback-pinned");
+    let snapshot = store.backup_snapshot(BackupDestination::DataRoot).unwrap();
+    let receipt = store.complete_backup(snapshot).unwrap();
+    let data = std::fs::read(receipt.state_db()).unwrap();
+    let digest = Sha256::digest(&data).into();
+    let result = store.backups.inspect_image_with(
+        receipt.location(),
+        digest,
+        data.len() as u64,
+        &AtomicBool::new(false),
+        |_| ControlFlow::Continue(()),
+        |conn| {
+            let dir = std::fs::read_dir(paths.recovery())
+                .unwrap()
+                .map(|e| e.unwrap().path())
+                .find(|p| {
+                    p.file_name()
+                        .unwrap()
+                        .to_string_lossy()
+                        .starts_with("verifier-")
+                })
+                .unwrap();
+            let image = dir.join("state.sqlite");
+            let old = paths.data_root().join("old-image");
+            std::fs::rename(&image, &old).unwrap();
+            std::fs::write(&image, b"replacement").unwrap();
+            let version: i64 = conn
+                .query_row("PRAGMA user_version", [], |r| r.get(0))
+                .unwrap();
+            assert!(version > 0);
+            assert!(
+                conn.execute_batch("ATTACH DATABASE '/tmp/sb-image-escape' AS other")
+                    .is_err()
+            );
+            std::fs::remove_file(old).unwrap();
+            Ok(ControlFlow::Continue(()))
+        },
+    );
+    assert!(matches!(
+        result,
+        Ok(crate::BackupImageInspection::Inspected { .. })
+    ));
+    assert_eq!(std::fs::read_dir(paths.recovery()).unwrap().count(), 0);
+}
+
+#[test]
+fn retained_image_callback_cleanup_failure_retains_evidence_for_retry() {
+    use sha2::{Digest, Sha256};
+    use std::ops::ControlFlow;
+    use std::sync::atomic::AtomicBool;
+    let (_scratch, paths, store) = open("image-callback-cleanup");
+    let snapshot = store.backup_snapshot(BackupDestination::DataRoot).unwrap();
+    let receipt = store.complete_backup(snapshot).unwrap();
+    let data = std::fs::read(receipt.state_db()).unwrap();
+    let digest = Sha256::digest(&data).into();
+    let fs = Arc::new(FaultFs::new(
+        real_fs(),
+        FsOp::RemoveDirAll,
+        1,
+        FaultKind::Eio,
+    ));
+    let verifier = faulty_backups(&store, &paths, fs);
+    let result = verifier.inspect_image_with(
+        receipt.location(),
+        digest,
+        data.len() as u64,
+        &AtomicBool::new(false),
+        |_| ControlFlow::Continue(()),
+        |_| {
+            let id: String = reading(&store, |tx| {
+                tx.query_row("SELECT id FROM verifier_scratch", [], |r| r.get(0))
+                    .map_err(bug)
+            });
+            super::ledger::insert(
+                &store.writer,
+                id,
+                vec![super::manifest::Entry {
+                    sha256: [2; 32],
+                    bytes: 2,
+                }],
+            )?;
+            Err(StoreError::corrupt("callback error"))
+        },
+    );
+    assert!(result.is_err());
+    let counts = reading(&store, |tx| {
+        tx.query_row(
+        "SELECT (SELECT count(*) FROM verifier_scratch), (SELECT count(*) FROM verifier_objects)", [],
+        |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)),
+    ).map_err(bug)
+    });
+    assert_eq!(counts, (1, 1));
+    assert!(matches!(
+        store.inspect_backup_image(
+            receipt.location(),
+            digest,
+            data.len() as u64,
+            &AtomicBool::new(false),
+            |_| ControlFlow::Continue(())
+        ),
+        Ok(crate::BackupImageInspection::Inspected { .. })
+    ));
+    let counts = reading(&store, |tx| {
+        tx.query_row(
+        "SELECT (SELECT count(*) FROM verifier_scratch), (SELECT count(*) FROM verifier_objects)", [],
+        |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)),
+    ).map_err(bug)
+    });
+    assert_eq!(counts, (0, 0));
+}
+
+#[test]
 fn verifier_image_reads_only_authenticated_copied_database() {
     use sha2::{Digest, Sha256};
     let (_scratch, _paths, store) = open("image-copy");

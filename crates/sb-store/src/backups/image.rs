@@ -75,7 +75,26 @@ impl Backups {
         expected: [u8; 32],
         length: u64,
         cancelled: &std::sync::atomic::AtomicBool,
+        progress: impl FnMut(u64) -> ControlFlow<()>,
+    ) -> Result<BackupImageInspection, StoreError> {
+        self.inspect_image_with(generation, expected, length, cancelled, progress, |_| {
+            Ok(ControlFlow::Continue(()))
+        })
+    }
+
+    /// Run a caller's work on the authenticated private image, after bounded
+    /// metadata inspection and before closing the connection or its scratch.
+    /// Completion reports only metadata inspection, not generation verification.
+    /// Callback errors retain their classification; partial effects belong to
+    /// the caller and must be discarded on failure or cancellation.
+    pub(crate) fn inspect_image_with(
+        &self,
+        generation: &Path,
+        expected: [u8; 32],
+        length: u64,
+        cancelled: &std::sync::atomic::AtomicBool,
         mut progress: impl FnMut(u64) -> ControlFlow<()>,
+        callback: impl FnOnce(&Connection) -> Result<ControlFlow<()>, StoreError>,
     ) -> Result<BackupImageInspection, StoreError> {
         if self.writer.is_writer_thread() {
             return Err(StoreError::internal("writer cannot inspect a backup"));
@@ -202,10 +221,21 @@ impl Backups {
             }
             let conn = crate::image_vfs::open(pinned)
                 .map_err(|e| classify(e, "open authenticated backup image"))?;
-            let inspected = image_inspect::inspect(&conn, cancelled)?;
+            let inspected = image_inspect::inspect(&conn, cancelled).and_then(|inspected| {
+                if cancelled.load(std::sync::atomic::Ordering::Acquire) {
+                    return Ok(image_inspect::Inspection::Cancelled);
+                }
+                match inspected {
+                    image_inspect::Inspection::Cancelled => Ok(inspected),
+                    _ => match callback(&conn)? {
+                        ControlFlow::Continue(()) => Ok(inspected),
+                        ControlFlow::Break(()) => Ok(image_inspect::Inspection::Cancelled),
+                    },
+                }
+            });
             conn.close()
                 .map_err(|(_, e)| classify(e, "close backup image"))?;
-            Ok(match inspected {
+            Ok(match inspected? {
                 image_inspect::Inspection::Inspected {
                     store_uuid,
                     schema_version,
