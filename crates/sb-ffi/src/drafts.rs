@@ -1,11 +1,13 @@
 //! Draft queries and commands over FFI (spec/07 "Commands", "Other
 //! queries"): the service-owned draft DTOs cross as this crate's own
 //! records, field by field, and `create_draft` and `discard_draft`
-//! each take the token and key the shell made. Attachment publication
-//! and save follow in M1.9b2b2 and M1.9b2b3.
+//! each take the token and key the shell made. Attachment bytes
+//! publish through the opaque [`DraftAttachmentObject`] handle, whose
+//! reservation a save (M1.9b2b3) spends.
 
 use crate::api::Receipt;
 use crate::{CancelToken, Core, CoreError};
+use std::io::Cursor;
 use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
@@ -246,6 +248,42 @@ impl From<sb_service::DraftCreated> for DraftCreated {
     }
 }
 
+/// One attachment publication's input (spec/02 "Drafts", spec/08
+/// "Attachments"): the exact bytes to publish durably under the data
+/// root before the revision that references them. Only bytes cross —
+/// the caller names no object, so the published identity cannot be
+/// forged.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct DraftAttachmentPublish {
+    /// The attachment's bytes, as the shell read them.
+    pub bytes: Vec<u8>,
+}
+
+/// A published draft attachment (spec/02): the opaque handle a later
+/// save spends. It wraps the service's publication and keeps its
+/// one-shot reservation, so a caller cannot rebuild one from an
+/// identity — only [`Core::publish_draft_attachment`] makes one, and
+/// the getters report only what was published.
+#[derive(Debug, uniffi::Object)]
+pub struct DraftAttachmentObject {
+    /// The service-owned publication and the reservation a save
+    /// spends; no engine or store type crosses.
+    inner: sb_service::DraftAttachmentObject,
+}
+
+#[uniffi::export]
+impl DraftAttachmentObject {
+    /// The published object's SHA-256: 64 lowercase hex digits.
+    pub fn object_sha256(&self) -> String {
+        self.inner.object_sha256.clone()
+    }
+
+    /// The published object's length in bytes.
+    pub fn byte_length(&self) -> u64 {
+        self.inner.byte_length
+    }
+}
+
 #[uniffi::export]
 impl Core {
     /// List local drafts, newest first.
@@ -307,6 +345,29 @@ impl Core {
             })
             .await?;
         Ok(Receipt::from_service(&receipt))
+    }
+
+    /// Publish one attachment's bytes for a later save (spec/02:
+    /// attachments are published to the object store before the
+    /// revision that references them). The bytes cross as
+    /// [`DraftAttachmentPublish`]'s `bytes`; the returned handle
+    /// reports the published object's identity and length and holds
+    /// the reservation a save spends. Like every command it honours
+    /// the token only until it holds the core: once begun it runs to
+    /// completion and publishes durably, so a cancel or a dropped
+    /// caller cannot strand a half-written object.
+    pub async fn publish_draft_attachment(
+        &self,
+        token: Arc<CancelToken>,
+        input: DraftAttachmentPublish,
+    ) -> Result<Arc<DraftAttachmentObject>, CoreError> {
+        let object = self
+            .command(&token, async |core| {
+                core.publish_draft_attachment(Cursor::new(input.bytes))
+                    .await
+            })
+            .await?;
+        Ok(Arc::new(DraftAttachmentObject { inner: object }))
     }
 }
 
