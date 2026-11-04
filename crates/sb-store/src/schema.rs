@@ -119,6 +119,10 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 19,
         run: migration_19,
     },
+    Migration {
+        version: 20,
+        run: migration_20,
+    },
 ];
 
 /// The `store_meta` keys every migrated store holds (spec/02): a
@@ -708,6 +712,11 @@ fn migration_19(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
     tx.execute_batch(include_str!("schema/v19.sql"))
         .map_err(bug)?;
     crate::appearance::appearance_generation(tx).map(|_| ())
+}
+
+fn migration_20(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
+    tx.execute_batch(include_str!("schema/v20.sql"))
+        .map_err(bug)
 }
 
 /// One version-4 UUID from the randomness seam. A seam that can't

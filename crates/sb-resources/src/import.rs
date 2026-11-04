@@ -529,8 +529,10 @@ impl Walker<'_> {
                     cancelled: false,
                     progress: &mut *self.progress,
                 });
-                let result = json_syntax::validate_envelope(&mut reader)
-                    .and_then(|table| json_syntax::validate_file_names(&mut reader, &table));
+                let result = json_syntax::validate_envelope(&mut reader).and_then(|table| {
+                    json_syntax::validate_file_names(&mut reader, &table)?;
+                    json_syntax::validate_messages(&mut reader, &table)
+                });
                 if reader.get_ref().cancelled {
                     self.cancelled = true;
                     None

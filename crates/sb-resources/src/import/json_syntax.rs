@@ -1,8 +1,13 @@
-//! Bounded manifest envelope, scope and file-table validation.
+//! Bounded manifest envelope, scope, file-table and message validation.
 
 use std::io::{self, Read, Seek, SeekFrom};
 
 use sha2::{Digest, Sha256};
+
+use super::BundleFormat;
+
+mod messages;
+pub(super) use messages::validate_messages;
 
 // Search query nodes have depth 32 (spec/06). A node can add an object
 // and an operands array; the manifest and scope wrappers fit in 16 more.
@@ -53,6 +58,8 @@ pub(super) struct FileTable {
     start: u64,
     end: u64,
     count: u64,
+    messages: (u64, u64, u64),
+    format: BundleFormat,
 }
 
 struct FileName {
@@ -279,6 +286,8 @@ impl<R: Read> Parser<R> {
         let mut ids_hash = None;
         let mut scope = None;
         let mut files = None;
+        let mut messages = None;
+        let mut format = None;
         self.object(|p, key| {
             let index = FIELDS
                 .iter()
@@ -309,9 +318,7 @@ impl<R: Read> Parser<R> {
                 }
                 "destination" => p.absolute_path()?,
                 "format" => {
-                    if !matches!(p.decoded(64)?.as_str(), "eml" | "mboxrd") {
-                        return Err(invalid());
-                    }
+                    format = Some(BundleFormat::from_name(&p.decoded(64)?).ok_or_else(invalid)?);
                 }
                 "scope" => scope = Some(p.scope()?),
                 "generation" => generation = Some(p.integer::<u64>()?),
@@ -319,10 +326,25 @@ impl<R: Read> Parser<R> {
                 "ids_sha256" => ids_hash = Some(p.hash()?),
                 "files" => files = Some(p.file_table()?),
                 "messages" => {
-                    if p.peek()? != Some(b'[') {
-                        return Err(invalid());
+                    let start = p.position;
+                    p.expect(b'[')?;
+                    p.whitespace()?;
+                    let mut count = 0u64;
+                    if p.peek()? != Some(b']') {
+                        loop {
+                            p.value(1)?;
+                            count = count.checked_add(1).ok_or_else(invalid)?;
+                            p.whitespace()?;
+                            match p.take()? {
+                                Some(b',') => p.whitespace()?,
+                                Some(b']') => break,
+                                _ => return Err(invalid()),
+                            }
+                        }
+                    } else {
+                        p.take()?;
                     }
-                    p.value(1)?;
+                    messages = Some((start, p.position, count));
                 }
                 _ => unreachable!(),
             }
@@ -340,7 +362,10 @@ impl<R: Read> Parser<R> {
         {
             return Err(invalid());
         }
-        files.ok_or_else(invalid)
+        let mut files = files.ok_or_else(invalid)?;
+        files.messages = messages.ok_or_else(invalid)?;
+        files.format = format.ok_or_else(invalid)?;
+        Ok(files)
     }
 
     fn file_table(&mut self) -> io::Result<FileTable> {
@@ -366,6 +391,8 @@ impl<R: Read> Parser<R> {
             start,
             end: self.position,
             count,
+            messages: (0, 0, 0),
+            format: BundleFormat::Eml,
         })
     }
 
