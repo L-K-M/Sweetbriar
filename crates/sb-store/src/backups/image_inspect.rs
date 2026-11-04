@@ -128,7 +128,6 @@ fn inspection_error(error: rusqlite::Error, what: &str) -> crate::StoreError {
 }
 
 /// Inspect the validated metadata shape, limiting SQLite work and row size.
-#[allow(dead_code)] // Integrated after the retained-reader review.
 pub(super) fn inspect(
     conn: &Connection,
     cancelled: &AtomicBool,

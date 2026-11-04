@@ -2105,3 +2105,483 @@ fn startup_retries_proved_verifier_scratch() {
     assert_eq!(count, 0);
     assert!(!paths.recovery().join(format!("verifier-{id}")).exists());
 }
+
+#[test]
+fn verifier_image_reads_only_authenticated_copied_database() {
+    use sha2::{Digest, Sha256};
+    let (_scratch, _paths, store) = open("image-copy");
+    let snapshot = store.backup_snapshot(BackupDestination::DataRoot).unwrap();
+    let receipt = store.complete_backup(snapshot).unwrap();
+    let bytes = std::fs::read(receipt.state_db()).unwrap();
+    let digest: [u8; 32] = Sha256::digest(&bytes).into();
+    let result = store
+        .inspect_backup_image(
+            receipt.location(),
+            digest,
+            bytes.len() as u64,
+            &std::sync::atomic::AtomicBool::new(false),
+            |_| std::ops::ControlFlow::Continue(()),
+        )
+        .unwrap();
+    assert!(matches!(
+        result,
+        crate::BackupImageInspection::Inspected { .. }
+    ));
+    let wrong = store.inspect_backup_image(
+        receipt.location(),
+        [0; 32],
+        bytes.len() as u64,
+        &std::sync::atomic::AtomicBool::new(false),
+        |_| std::ops::ControlFlow::Continue(()),
+    );
+    assert!(matches!(wrong, Err(StoreError::Corrupt { .. })));
+    let cancelled = store
+        .inspect_backup_image(
+            receipt.location(),
+            digest,
+            bytes.len() as u64,
+            &std::sync::atomic::AtomicBool::new(false),
+            |_| std::ops::ControlFlow::Break(()),
+        )
+        .unwrap();
+    assert!(matches!(cancelled, crate::BackupImageInspection::Cancelled));
+}
+
+#[test]
+fn verifier_image_survives_source_change_after_copy_and_ignores_sidecars() {
+    use sha2::{Digest, Sha256};
+    let (_scratch, _paths, store) = open("image-source-race");
+    let snapshot = store.backup_snapshot(BackupDestination::DataRoot).unwrap();
+    let receipt = store.complete_backup(snapshot).unwrap();
+    let path = receipt.state_db();
+    let data = std::fs::read(&path).unwrap();
+    let digest = Sha256::digest(&data).into();
+    let wal = receipt.location().join("state.sqlite-wal");
+    std::fs::write(&wal, b"untrusted sidecar").unwrap();
+    let mut changed = false;
+    let report = store
+        .inspect_backup_image(
+            receipt.location(),
+            digest,
+            data.len() as u64,
+            &std::sync::atomic::AtomicBool::new(false),
+            |n| {
+                if n == data.len() as u64 && !changed {
+                    std::fs::write(&path, b"replaced after copy").unwrap();
+                    changed = true;
+                }
+                std::ops::ControlFlow::Continue(())
+            },
+        )
+        .unwrap();
+    assert!(matches!(
+        report,
+        crate::BackupImageInspection::Inspected { .. }
+    ));
+    assert!(changed);
+    assert_eq!(std::fs::read(&wal).unwrap(), b"untrusted sidecar");
+    assert!(!receipt.location().join("state.sqlite-shm").exists());
+}
+
+#[test]
+fn verifier_image_sql_failure_never_claims_success() {
+    use sha2::{Digest, Sha256};
+    for operation in ["INSERT", "DELETE"] {
+        let (_scratch, paths, store) = open("image-sql-fault");
+        let snapshot = store.backup_snapshot(BackupDestination::DataRoot).unwrap();
+        let receipt = store.complete_backup(snapshot).unwrap();
+        let data = std::fs::read(receipt.state_db()).unwrap();
+        let digest = Sha256::digest(&data).into();
+        sql(
+            &store,
+            format!(
+                "CREATE TRIGGER fail_image BEFORE {operation} ON verifier_scratch BEGIN SELECT RAISE(ABORT, 'fault'); END;"
+            ),
+        );
+        assert!(
+            store
+                .inspect_backup_image(
+                    receipt.location(),
+                    digest,
+                    data.len() as u64,
+                    &std::sync::atomic::AtomicBool::new(false),
+                    |_| { std::ops::ControlFlow::Continue(()) }
+                )
+                .is_err()
+        );
+        sql(&store, "DROP TRIGGER fail_image".into());
+        store.close().unwrap();
+        let reopened = crate::open(&paths, &test_seams(real_fs())).unwrap();
+        let count: i64 = reading(&reopened, |tx| {
+            tx.query_row("SELECT count(*) FROM verifier_scratch", [], |r| r.get(0))
+                .map_err(bug)
+        });
+        assert_eq!(count, 0);
+    }
+}
+
+#[test]
+fn verifier_image_remains_pinned_when_scratch_parent_is_replaced() {
+    use sha2::{Digest, Sha256};
+    let (_scratch, paths, store) = open("image-parent-swap");
+    let snapshot = store.backup_snapshot(BackupDestination::DataRoot).unwrap();
+    let receipt = store.complete_backup(snapshot).unwrap();
+    let data = std::fs::read(receipt.state_db()).unwrap();
+    let digest = Sha256::digest(&data).into();
+    let old = paths.data_root().join("old-recovery");
+    let mut swapped = false;
+    let result = store
+        .inspect_backup_image(
+            receipt.location(),
+            digest,
+            data.len() as u64,
+            &std::sync::atomic::AtomicBool::new(false),
+            |n| {
+                if n == data.len() as u64 && !swapped {
+                    std::fs::rename(paths.recovery(), &old).unwrap();
+                    std::fs::create_dir(paths.recovery()).unwrap();
+                    std::fs::write(paths.recovery().join("untouched"), b"replacement").unwrap();
+                    swapped = true;
+                }
+                std::ops::ControlFlow::Continue(())
+            },
+        )
+        .unwrap();
+    assert!(matches!(
+        result,
+        crate::BackupImageInspection::Inspected { .. }
+    ));
+    assert_eq!(
+        std::fs::read(paths.recovery().join("untouched")).unwrap(),
+        b"replacement"
+    );
+    assert_eq!(std::fs::read_dir(&old).unwrap().count(), 0);
+}
+
+#[test]
+fn verifier_image_accepts_read_only_generation_without_creating_sidecars() {
+    use sha2::{Digest, Sha256};
+    use std::os::unix::fs::PermissionsExt;
+    let (_scratch, _paths, store) = open("image-readonly");
+    let snapshot = store.backup_snapshot(BackupDestination::DataRoot).unwrap();
+    let receipt = store.complete_backup(snapshot).unwrap();
+    let path = receipt.state_db();
+    let data = std::fs::read(&path).unwrap();
+    let digest = Sha256::digest(&data).into();
+    let before: Vec<_> = std::fs::read_dir(receipt.location())
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .collect();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o444)).unwrap();
+    std::fs::set_permissions(receipt.location(), std::fs::Permissions::from_mode(0o555)).unwrap();
+    let result = store.inspect_backup_image(
+        receipt.location(),
+        digest,
+        data.len() as u64,
+        &std::sync::atomic::AtomicBool::new(false),
+        |_| std::ops::ControlFlow::Continue(()),
+    );
+    std::fs::set_permissions(receipt.location(), std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(matches!(
+        result.unwrap(),
+        crate::BackupImageInspection::Inspected { .. }
+    ));
+    let after: Vec<_> = std::fs::read_dir(receipt.location())
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .collect();
+    assert_eq!(before, after);
+}
+
+#[test]
+fn verifier_image_cleanup_preserves_a_substituted_user_directory() {
+    use sha2::{Digest, Sha256};
+    let (_scratch, paths, store) = open("image-dir-swap");
+    let snapshot = store.backup_snapshot(BackupDestination::DataRoot).unwrap();
+    let receipt = store.complete_backup(snapshot).unwrap();
+    let data = std::fs::read(receipt.state_db()).unwrap();
+    let digest = Sha256::digest(&data).into();
+    let old = paths.data_root().join("owned-image-moved");
+    let mut scratch_path = None;
+    let result = store.inspect_backup_image(
+        receipt.location(),
+        digest,
+        data.len() as u64,
+        &std::sync::atomic::AtomicBool::new(false),
+        |n| {
+            if n == data.len() as u64 && scratch_path.is_none() {
+                let path = std::fs::read_dir(paths.recovery())
+                    .unwrap()
+                    .map(|e| e.unwrap().path())
+                    .find(|p| {
+                        p.file_name()
+                            .unwrap()
+                            .to_string_lossy()
+                            .starts_with("verifier-")
+                    })
+                    .unwrap();
+                std::fs::rename(&path, &old).unwrap();
+                std::fs::create_dir(&path).unwrap();
+                std::fs::write(path.join("state.sqlite"), b"user data").unwrap();
+                scratch_path = Some(path);
+            }
+            std::ops::ControlFlow::Continue(())
+        },
+    );
+    assert!(result.is_err());
+    let path = scratch_path.unwrap();
+    assert_eq!(
+        std::fs::read(path.join("state.sqlite")).unwrap(),
+        b"user data"
+    );
+    std::fs::remove_file(path.join("state.sqlite")).unwrap();
+    std::fs::remove_dir(&path).unwrap();
+    std::fs::rename(old, path).unwrap();
+    store.close().unwrap();
+    crate::open(&paths, &test_seams(real_fs())).unwrap();
+}
+
+#[test]
+#[ignore = "spawned by verifier_image_transaction_cuts"]
+fn verifier_image_transaction_cut_child() {
+    use sha2::{Digest, Sha256};
+    let root = env::var("SB_VERIFIER_TX_ROOT").unwrap();
+    let paths = StorePaths::new(root).unwrap();
+    let store = crate::open(&paths, &test_seams(real_fs())).unwrap();
+    let snapshot = store.backup_snapshot(BackupDestination::DataRoot).unwrap();
+    let receipt = store.complete_backup(snapshot).unwrap();
+    let data = std::fs::read(receipt.state_db()).unwrap();
+    let digest = Sha256::digest(&data).into();
+    std::fs::write(paths.recovery().join("user-sentinel"), b"untouched").unwrap();
+    store
+        .inspect_backup_image(
+            receipt.location(),
+            digest,
+            data.len() as u64,
+            &std::sync::atomic::AtomicBool::new(false),
+            |_| std::ops::ControlFlow::Continue(()),
+        )
+        .unwrap();
+}
+
+#[test]
+fn verifier_image_transaction_cuts_recover_owned_scratch() {
+    use std::os::unix::process::ExitStatusExt;
+    let scratch = ScratchDir::new("verifier-tx-cuts");
+    for point in [
+        "insert-before-commit",
+        "insert-after-commit",
+        "before-cleanup",
+        "after-cleanup",
+        "delete-before-commit",
+        "delete-after-commit",
+    ] {
+        let root = scratch.path().join(point);
+        std::fs::create_dir(&root).unwrap();
+        let status = std::process::Command::new(env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "backups::tests::verifier_image_transaction_cut_child",
+                "--ignored",
+            ])
+            .env("SB_VERIFIER_TX_CUT", point)
+            .env("SB_VERIFIER_TX_ROOT", &root)
+            .status()
+            .unwrap();
+        assert_eq!(status.signal(), Some(9), "{point}: {status}");
+        let paths = StorePaths::new(root).unwrap();
+        let store = crate::open(&paths, &test_seams(real_fs())).unwrap();
+        let count: i64 = reading(&store, |tx| {
+            tx.query_row("SELECT count(*) FROM verifier_scratch", [], |r| r.get(0))
+                .map_err(bug)
+        });
+        assert_eq!(count, 0, "{point}");
+        assert_eq!(
+            std::fs::read(paths.recovery().join("user-sentinel")).unwrap(),
+            b"untouched"
+        );
+    }
+}
+
+#[test]
+fn verifier_image_cleanup_failure_is_retryable_without_restart() {
+    use sha2::{Digest, Sha256};
+    let (_scratch, paths, store) = open("image-retry");
+    let snapshot = store.backup_snapshot(BackupDestination::DataRoot).unwrap();
+    let receipt = store.complete_backup(snapshot).unwrap();
+    let data = std::fs::read(receipt.state_db()).unwrap();
+    let digest = Sha256::digest(&data).into();
+    let fs = Arc::new(FaultFs::new(
+        real_fs(),
+        FsOp::RemoveDirAll,
+        1,
+        FaultKind::Eio,
+    ));
+    let verifier = faulty_backups(&store, &paths, fs);
+    assert!(
+        verifier
+            .inspect_image(
+                receipt.location(),
+                digest,
+                data.len() as u64,
+                &std::sync::atomic::AtomicBool::new(false),
+                |_| { std::ops::ControlFlow::Continue(()) }
+            )
+            .is_err()
+    );
+    drop(verifier);
+    assert!(matches!(
+        store
+            .inspect_backup_image(
+                receipt.location(),
+                digest,
+                data.len() as u64,
+                &std::sync::atomic::AtomicBool::new(false),
+                |_| { std::ops::ControlFlow::Continue(()) }
+            )
+            .unwrap(),
+        crate::BackupImageInspection::Inspected { .. }
+    ));
+    let count: i64 = reading(&store, |tx| {
+        tx.query_row("SELECT count(*) FROM verifier_scratch", [], |r| r.get(0))
+            .map_err(bug)
+    });
+    assert_eq!(count, 0);
+}
+
+#[test]
+fn verifier_image_rejects_modified_private_copy() {
+    use sha2::{Digest, Sha256};
+    let (_scratch, paths, store) = open("image-copy-tamper");
+    let snapshot = store.backup_snapshot(BackupDestination::DataRoot).unwrap();
+    let receipt = store.complete_backup(snapshot).unwrap();
+    let data = std::fs::read(receipt.state_db()).unwrap();
+    let digest = Sha256::digest(&data).into();
+    let mut changed = false;
+    let result = store.inspect_backup_image(
+        receipt.location(),
+        digest,
+        data.len() as u64,
+        &std::sync::atomic::AtomicBool::new(false),
+        |n| {
+            if n == data.len() as u64 && !changed {
+                let scratch = std::fs::read_dir(paths.recovery())
+                    .unwrap()
+                    .map(|e| e.unwrap().path())
+                    .find(|p| {
+                        p.file_name()
+                            .unwrap()
+                            .to_string_lossy()
+                            .starts_with("verifier-")
+                    })
+                    .unwrap();
+                std::fs::write(scratch.join("state.sqlite"), b"tampered").unwrap();
+                changed = true;
+            }
+            std::ops::ControlFlow::Continue(())
+        },
+    );
+    assert!(changed);
+    assert!(matches!(result, Err(StoreError::Corrupt { .. })));
+}
+
+#[test]
+fn verifier_image_atomic_cancellation_cleans_scratch() {
+    use sha2::{Digest, Sha256};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let (_scratch, paths, store) = open("image-atomic-cancel");
+    let snapshot = store.backup_snapshot(BackupDestination::DataRoot).unwrap();
+    let receipt = store.complete_backup(snapshot).unwrap();
+    let data = std::fs::read(receipt.state_db()).unwrap();
+    let digest = Sha256::digest(&data).into();
+    let cancelled = AtomicBool::new(false);
+    let result = store
+        .inspect_backup_image(
+            receipt.location(),
+            digest,
+            data.len() as u64,
+            &cancelled,
+            |n| {
+                if n > 0 {
+                    cancelled.store(true, Ordering::Relaxed);
+                }
+                std::ops::ControlFlow::Continue(())
+            },
+        )
+        .unwrap();
+    assert!(matches!(result, crate::BackupImageInspection::Cancelled));
+    let count: i64 = reading(&store, |tx| {
+        tx.query_row("SELECT count(*) FROM verifier_scratch", [], |r| r.get(0))
+            .map_err(bug)
+    });
+    assert_eq!(count, 0);
+    assert_eq!(std::fs::read_dir(paths.recovery()).unwrap().count(), 0);
+}
+
+const IMAGE_CUT_N: &str = "SB_IMAGE_CUT_N";
+const IMAGE_CUT_ROOT: &str = "SB_IMAGE_CUT_ROOT";
+
+#[test]
+#[ignore = "spawned by run_crash_cuts"]
+fn verifier_image_cut_child() {
+    use sha2::{Digest, Sha256};
+    let nth = env::var(IMAGE_CUT_N).unwrap().parse().unwrap();
+    let root = env::var(IMAGE_CUT_ROOT).unwrap();
+    let paths = StorePaths::new(Path::new(&root)).unwrap();
+    let store = crate::open(&paths, &test_seams(real_fs())).unwrap();
+    let snapshot = store.backup_snapshot(BackupDestination::DataRoot).unwrap();
+    let receipt = store.complete_backup(snapshot).unwrap();
+    let data = std::fs::read(receipt.state_db()).unwrap();
+    let digest = Sha256::digest(&data).into();
+    std::fs::write(paths.recovery().join("user-sentinel"), b"untouched").unwrap();
+    let verifier = faulty_backups(&store, &paths, Arc::new(CutFs::new(real_fs(), nth)));
+    verifier
+        .inspect_image(
+            receipt.location(),
+            digest,
+            data.len() as u64,
+            &std::sync::atomic::AtomicBool::new(false),
+            |_| std::ops::ControlFlow::Continue(()),
+        )
+        .unwrap();
+}
+
+#[test]
+fn verifier_image_crash_cuts_recover_owned_scratch() {
+    let scratch = ScratchDir::new("verifier-cuts");
+    let cuts = run_crash_cuts(
+        IMAGE_CUT_N,
+        IMAGE_CUT_ROOT,
+        "backups::tests::verifier_image_cut_child",
+        &mut |n| {
+            let root = scratch.path().join(format!("cut-{n}"));
+            std::fs::create_dir(&root).unwrap();
+            root
+        },
+        &mut |root| {
+            let paths = StorePaths::new(root).unwrap();
+            match crate::open(&paths, &test_seams(real_fs())) {
+                Ok(store) => {
+                    let count: i64 = reading(&store, |tx| {
+                        tx.query_row("SELECT count(*) FROM verifier_scratch", [], |r| r.get(0))
+                            .map_err(bug)
+                    });
+                    assert_eq!(count, 0);
+                }
+                Err(_) => {
+                    // A cut before ownership proof deliberately retains evidence.
+                    let conn = Connection::open(paths.state_db()).unwrap();
+                    let count: i64 = conn
+                        .query_row("SELECT count(*) FROM verifier_scratch", [], |r| r.get(0))
+                        .unwrap();
+                    assert_eq!(count, 1);
+                }
+            }
+            assert_eq!(
+                std::fs::read(paths.recovery().join("user-sentinel")).unwrap(),
+                b"untouched"
+            );
+        },
+    );
+    assert!(cuts > 0);
+}

@@ -61,7 +61,6 @@ fn absent_ok(result: io::Result<()>) -> io::Result<()> {
 
 /// Create after the durable row exists; partial creation is deliberately
 /// left for recovery, which refuses to guess an unproved directory's owner.
-#[allow(dead_code)] // Integrated by the next stacked step.
 pub(super) fn prepare(
     root: &dyn ConfinedDir,
     id: &str,
@@ -86,7 +85,6 @@ pub(super) fn prepare(
 
 /// Recover using durable markers, optionally checking the still-retained
 /// directory from the operation which created it.
-#[allow(dead_code)] // Integrated by the next stacked step.
 pub(super) fn cleanup(
     root: &dyn ConfinedDir,
     id: &str,
