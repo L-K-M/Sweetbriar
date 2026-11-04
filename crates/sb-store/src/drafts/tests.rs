@@ -87,7 +87,7 @@ fn a_spent_or_missing_attachment_reservation_conflicts() {
     });
     let mut with_object = input("r1");
     with_object.attachments = vec![DraftAttachment::New {
-        object: published,
+        object: std::sync::Arc::new(published),
         filename: "one.txt".to_owned(),
         media_type: "text/plain".to_owned(),
     }];
@@ -111,7 +111,7 @@ fn a_spent_or_missing_attachment_reservation_conflicts() {
         .unwrap();
     let mut with_foreign = input("r2");
     with_foreign.attachments = vec![DraftAttachment::New {
-        object: foreign_object,
+        object: std::sync::Arc::new(foreign_object),
         filename: "two.txt".to_owned(),
         media_type: "text/plain".to_owned(),
     }];
