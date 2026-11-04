@@ -57,6 +57,8 @@ final class SwiftUIPrototypeList: NSView {
     init(
         model: ListWindowModel,
         formatter: MessageRowFormatter,
+        appearance: AppearanceModel? = nil,
+        accountLabel: @escaping (String) -> String = { $0 },
         onIndexChange: (@MainActor () -> Void)? = nil
     ) {
         self.model = model
@@ -67,7 +69,9 @@ final class SwiftUIPrototypeList: NSView {
             rootView: PrototypeListRoot(
                 state: state,
                 model: model,
-                formatter: formatter
+                formatter: formatter,
+                appearance: appearance,
+                accountLabel: accountLabel
             )
         )
         super.init(frame: .zero)
@@ -160,6 +164,8 @@ private struct PrototypeListRoot: View {
     @Bindable var state: PrototypeListState
     let model: ListWindowModel
     let formatter: MessageRowFormatter
+    let appearance: AppearanceModel?
+    let accountLabel: (String) -> String
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -172,7 +178,9 @@ private struct PrototypeListRoot: View {
                     MessageRowView(
                         page: model.page(containing: element.rank),
                         offset: element.rank % ListWindowModel.pageSize,
-                        formatter: formatter
+                        formatter: formatter,
+                        appearance: appearance,
+                        accountLabel: accountLabel
                     )
                     // Exactly `pitch` apart: fixed row height, no
                     // insets, no separators, and the list's minimum
@@ -264,35 +272,64 @@ private struct MessageRowView: View {
     let page: ListWindowModel.Page
     let offset: Int
     let formatter: MessageRowFormatter
+    let appearance: AppearanceModel?
+    let accountLabel: (String) -> String
 
     var body: some View {
         if let row = page.row(at: offset) {
-            populated(formatter.present(row))
+            let account = appearance?.appearance?.accounts.first { $0.accountId == row.accountId }
+            RenderedMessageRow(content: formatter.present(row), account: account,
+                               accountLabel: accountLabel(row.accountId), usesAppearance: appearance != nil)
         } else {
             placeholder
         }
     }
 
+    private var placeholder: some View {
+        RoundedRectangle(
+            cornerRadius: MessageRowMetrics.placeholderCornerRadius
+        )
+        .fill(
+            Color.primary.opacity(MessageRowMetrics.placeholderFillOpacity)
+        )
+        .padding(.horizontal, MessageRowMetrics.placeholderInsetX)
+        .padding(.vertical, MessageRowMetrics.placeholderInsetY)
+    }
+}
+
+@MainActor
+struct RenderedMessageRow: View {
+    let content: MessageRowContent
+    let account: AccountAppearance?
+    let accountLabel: String
+    let usesAppearance: Bool
+    @Environment(\.colorScheme) private var colorScheme
+
     /// Same content, same order as the AppKit cell: rail + monogram,
     /// sender (bold when unread) with date trailing, subject, one-line
     /// snippet, and the markers.
-    private func populated(_ content: MessageRowContent) -> some View {
-        let accountColor = Self.accountColor(at: content.accountColorIndex)
+    var body: some View {
+        let variant = account.map { colorScheme == .dark ? $0.tokens.dark : $0.tokens.light }
+        let accountColor = variant.map { Color(nsColor: appearanceColor($0.markerSrgb)) }
+            ?? Self.accountColor(at: content.accountColorIndex)
+        let showMarker = !usesAppearance || account != nil
         return HStack(spacing: 0) {
-            Rectangle()
-                .fill(accountColor)
-                .frame(width: MessageRowMetrics.railWidth)
-            ZStack {
-                Circle().fill(accountColor)
-                Text(content.monogram)
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.white)
+            if showMarker {
+                Rectangle()
+                    .fill(accountColor)
+                    .frame(width: MessageRowMetrics.railWidth)
+                ZStack {
+                    Circle().fill(variant.map { Color(nsColor: appearanceColor($0.stripSrgb)) } ?? accountColor)
+                    Text(account?.monogram ?? content.monogram)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(variant == nil ? Color.white : accountColor)
+                }
+                .frame(
+                    width: MessageRowMetrics.monogramSize,
+                    height: MessageRowMetrics.monogramSize
+                )
+                .padding(.leading, MessageRowMetrics.innerGap)
             }
-            .frame(
-                width: MessageRowMetrics.monogramSize,
-                height: MessageRowMetrics.monogramSize
-            )
-            .padding(.leading, MessageRowMetrics.innerGap)
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: MessageRowMetrics.markerSpacing) {
                     if content.unread {
@@ -355,18 +392,8 @@ private struct MessageRowView: View {
         // One element, one label — the shared VoiceOver order
         // (sender, subject, date, unread, flagged).
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(Text(verbatim: content.accessibilityLabel))
-    }
-
-    private var placeholder: some View {
-        RoundedRectangle(
-            cornerRadius: MessageRowMetrics.placeholderCornerRadius
-        )
-        .fill(
-            Color.primary.opacity(MessageRowMetrics.placeholderFillOpacity)
-        )
-        .padding(.horizontal, MessageRowMetrics.placeholderInsetX)
-        .padding(.vertical, MessageRowMetrics.placeholderInsetY)
+        .accessibilityLabel(Text(verbatim: content.accessibilityLabel
+            + (account == nil ? "" : ", account \(accountLabel)")))
     }
 
     /// The palette slot's color — the same slot the AppKit cell uses.

@@ -154,7 +154,7 @@ private struct SidebarAccounts: SidebarSource {
     }
 }
 
-private let sampleAccount = AccountAppearance(
+let sampleAccount = AccountAppearance(
     accountId: "account-1", colorSrgb: "#0072b2",
     tokens: AppearanceTokens(
         light: AppearanceVariant(markerSrgb: "#0072b2", stripSrgb: "#ffffff", foregroundSrgb: "#000000", outlineSrgb: "#000000"),
@@ -162,7 +162,7 @@ private let sampleAccount = AccountAppearance(
     ), symbol: nil, monogram: "W", collides: true, assignment: .custom, revision: 0
 )
 
-private actor SidebarAppearanceSource: AppearanceSource, AppearanceEventSource {
+actor SidebarAppearanceSource: AppearanceSource, AppearanceEventSource {
     private var generation: UInt64 = 0
     private var continuation: CheckedContinuation<AppearanceEvent, any Error>?
     private(set) var subscriptions = 0

@@ -7,6 +7,7 @@
 // selection fetches nothing and follows its messages across indexes.
 
 import AppKit
+import Observation
 import SweetbriarBridge
 
 /// The AppKit list: a scroll view plus a one-column table. `init`
@@ -30,8 +31,7 @@ final class AppKitPrototypeList: NSView {
     /// Whether rows show the account marker — the rail and monogram.
     enum AccountMarker {
         case shown
-        /// Until M1.10's appearance service gives accounts colors:
-        /// none is derived from an id (spec/08 "Sidebar").
+        /// Single-account windows need no account marker.
         case hidden
     }
 
@@ -50,6 +50,9 @@ final class AppKitPrototypeList: NSView {
     private let model: ListWindowModel
     private let formatter: MessageRowFormatter
     private let accountMarker: AccountMarker
+    private let appearanceModel: AppearanceModel?
+    private let accountLabel: (String) -> String
+    private let observeAccountLabels: () -> Void
     private let selectionLoss: SelectionLoss
     private let scrollView = NSScrollView()
     private let tableView = NSTableView()
@@ -71,16 +74,23 @@ final class AppKitPrototypeList: NSView {
         model: ListWindowModel,
         formatter: MessageRowFormatter,
         accountMarker: AccountMarker = .shown,
+        appearance: AppearanceModel? = nil,
+        accountLabel: @escaping (String) -> String = { $0 },
+        observeAccountLabels: @escaping () -> Void = {},
         selectionLoss: SelectionLoss = .keepPosition,
         onIndexChange: (@MainActor () -> Void)? = nil
     ) {
         self.model = model
         self.formatter = formatter
         self.accountMarker = accountMarker
+        self.appearanceModel = appearance
+        self.accountLabel = accountLabel
+        self.observeAccountLabels = observeAccountLabels
         self.selectionLoss = selectionLoss
         super.init(frame: .zero)
         buildTable()
         observeClipView()
+        observeAppearance()
 
         // Pages land at most once per frame; reload just the rows of
         // the delivered pages that are on screen (spec/08).
@@ -101,6 +111,23 @@ final class AppKitPrototypeList: NSView {
                 scrollToRank(0)
             }
             onSelectionChange?(ids)
+        }
+    }
+
+    private func observeAppearance() {
+        guard let appearanceModel else { return }
+        withObservationTracking {
+            _ = appearanceModel.appearance
+            observeAccountLabels()
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                restoringSelection = true
+                tableView.reloadData()
+                restoreSelection()
+                restoringSelection = false
+                observeAppearance()
+            }
         }
     }
 
@@ -248,7 +275,10 @@ extension AppKitPrototypeList: NSTableViewDataSource, NSTableViewDelegate {
         let cell =
             tableView.makeView(withIdentifier: Self.cellIdentifier, owner: nil)
             as? MessageRowCellView ?? makeCell()
-        cell.configure(content: model.row(at: row).map { formatter.present($0) })
+        let row = model.row(at: row)
+        let account = row.flatMap { row in appearanceModel?.appearance?.accounts.first { $0.accountId == row.accountId } }
+        cell.configure(content: row.map { formatter.present($0) }, account: account,
+                       accountLabel: row.map { accountLabel($0.accountId) }, usesAppearance: appearanceModel != nil)
         return cell
     }
 
@@ -365,7 +395,7 @@ extension AppKitPrototypeList: PrototypeList {
 /// The reused cell. Every subview is created once and framed by hand
 /// in `layoutSubviews()` — no Auto Layout in cells (plan M0.10).
 /// `isFlipped` keeps the layout math top-down like the SwiftUI row's.
-private final class MessageRowCellView: NSTableCellView {
+final class MessageRowCellView: NSTableCellView {
     /// The trailing date's reserved width — wide enough for the short
     /// date form.
     private static let dateWidth: CGFloat = 84
@@ -391,6 +421,7 @@ private final class MessageRowCellView: NSTableCellView {
     /// The row's account color, kept so the layer colors can be
     /// resolved again when the appearance changes.
     private var accountColor: NSColor = .clear
+    private var accountAppearance: AccountAppearance?
 
     /// Whether the rail and monogram show; without them the text
     /// starts at the leading edge.
@@ -477,12 +508,13 @@ private final class MessageRowCellView: NSTableCellView {
     /// placeholder — same height, no text, a subtle fill (spec/08).
     /// The placeholder is no accessibility element: an unlabeled row
     /// is worse than an absent one.
-    func configure(content: MessageRowContent?) {
+    func configure(content: MessageRowContent?, account: AccountAppearance? = nil,
+                   accountLabel: String? = nil, usesAppearance: Bool = false) {
         placeholderFill.isHidden = content != nil
         for subview in contentSubviews {
             subview.isHidden = content == nil
         }
-        if !showsAccountMarker {
+        if !showsAccountMarker || (usesAppearance && account == nil) {
             rail.isHidden = true
             monogram.isHidden = true
         }
@@ -492,12 +524,12 @@ private final class MessageRowCellView: NSTableCellView {
             return
         }
 
+        accountAppearance = account
         accountColor = AppKitPrototypeList.accountColor(
             at: content.accountColorIndex
         )
         applyLayerColors()
-        monogram.fillColor = accountColor
-        monogram.title = content.monogram
+        monogram.title = account?.monogram ?? content.monogram
 
         senderField.stringValue = content.sender
         senderField.font = content.unread
@@ -519,7 +551,8 @@ private final class MessageRowCellView: NSTableCellView {
         }
 
         setAccessibilityElement(true)
-        setAccessibilityLabel(content.accessibilityLabel)
+        let label = showsAccountMarker && account != nil ? ", account \(accountLabel ?? "")" : ""
+        setAccessibilityLabel(content.accessibilityLabel + label)
         needsLayout = true
     }
 
@@ -534,7 +567,12 @@ private final class MessageRowCellView: NSTableCellView {
     /// appearance.
     private func applyLayerColors() {
         effectiveAppearance.performAsCurrentDrawingAppearance {
-            rail.layer?.backgroundColor = accountColor.cgColor
+            let dark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            let variant = accountAppearance.map { dark ? $0.tokens.dark : $0.tokens.light }
+            let marker = variant.map { appearanceColor($0.markerSrgb) } ?? accountColor
+            rail.layer?.backgroundColor = marker.cgColor
+            monogram.fillColor = variant.map { appearanceColor($0.stripSrgb) } ?? accountColor
+            monogram.titleColor = variant.map { appearanceColor($0.markerSrgb) } ?? .white
             placeholderFill.layer?.backgroundColor = NSColor.labelColor
                 .withAlphaComponent(MessageRowMetrics.placeholderFillOpacity)
                 .cgColor

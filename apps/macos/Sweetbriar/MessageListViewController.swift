@@ -22,6 +22,8 @@ final class MessageListViewController: NSViewController {
     private let searchModel: SearchFieldModel
     private let search: SearchFieldController
     private let formatter = MessageRowFormatter()
+    private let appearance: AppearanceModel
+    private let sidebar: SidebarModel
     private var clock: DisplayLinkClock?
     private(set) var model: ListWindowModel?
     private(set) var list: AppKitPrototypeList?
@@ -79,8 +81,10 @@ final class MessageListViewController: NSViewController {
     var searchFieldForBenchmark: NSSearchField { search.fieldForBenchmark }
     var searchModelForBenchmark: SearchFieldModel { searchModel }
 
-    init(bridge: CoreBridge, sidebar: SidebarModel) {
+    init(bridge: CoreBridge, sidebar: SidebarModel, appearance: AppearanceModel) {
         self.bridge = bridge
+        self.appearance = appearance
+        self.sidebar = sidebar
         let model = SearchFieldModel(parser: bridge, label: { reference in
             switch reference {
             case .account(let id): return sidebar.sections.first { $0.id == id }?.title
@@ -213,7 +217,13 @@ final class MessageListViewController: NSViewController {
         let list = AppKitPrototypeList(
             model: model,
             formatter: formatter,
-            accountMarker: .hidden,
+            accountMarker: spec.showsAccountMarker ? .shown : .hidden,
+            appearance: appearance,
+            accountLabel: { [weak sidebar] id in
+                guard let sidebar, let section = sidebar.sections.first(where: { $0.id == id }) else { return id }
+                return SidebarViewController.accountLabel(section, among: sidebar.sections)
+            },
+            observeAccountLabels: { [weak sidebar] in _ = sidebar?.sections },
             // spec/08: reopen at Top once the selected message is no
             // longer a hit.
             selectionLoss: spec.isSearch ? .reopenAtTop : .keepPosition
@@ -451,6 +461,13 @@ final class MessageListViewController: NSViewController {
 }
 
 private extension WindowSpec {
+    var showsAccountMarker: Bool {
+        switch self {
+        case .unified, .search: true
+        default: false
+        }
+    }
+
     var isSearch: Bool {
         if case .search = self { return true }
         return false
