@@ -322,27 +322,39 @@ fn require_identity_keys(conn: &Connection, current: i64) -> Result<(), StoreErr
 /// meet. If a migration ever changes `store_meta`, this check must
 /// follow it.
 pub(crate) fn has_store_meta_table(conn: &Connection) -> Result<bool, StoreError> {
+    has_store_meta_table_with(conn, step_err)
+}
+
+/// Classify errors from the inspected database separately from the trusted
+/// reference schema, for callers reading untrusted images.
+pub(crate) fn has_store_meta_table_with(
+    conn: &Connection,
+    map_error: fn(rusqlite::Error) -> StoreError,
+) -> Result<bool, StoreError> {
     let expected = Connection::open_in_memory().map_err(step_err)?;
     expected.execute_batch(V1_SQL).map_err(bug)?;
-    Ok(store_meta_objects(conn)? == store_meta_objects(&expected)?)
+    Ok(store_meta_objects(conn, map_error)? == store_meta_objects(&expected, step_err)?)
 }
 
 /// Every schema object on `store_meta` as (type, name, `CREATE`
 /// statement as SQLite stores it), sorted. SQLite matches table names
 /// without regard to case but keeps each object's own spelling, so a
 /// trigger `ON STORE_META` counts too.
-fn store_meta_objects(conn: &Connection) -> Result<Vec<SchemaObject>, StoreError> {
+fn store_meta_objects(
+    conn: &Connection,
+    map_error: fn(rusqlite::Error) -> StoreError,
+) -> Result<Vec<SchemaObject>, StoreError> {
     let mut stmt = conn
         .prepare(
             "SELECT type, name, sql FROM sqlite_schema
              WHERE tbl_name = 'store_meta' COLLATE NOCASE
              ORDER BY type, name LIMIT 3",
         )
-        .map_err(step_err)?;
+        .map_err(map_error)?;
     stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
-        .map_err(step_err)?
+        .map_err(map_error)?
         .collect::<Result<_, _>>()
-        .map_err(step_err)
+        .map_err(map_error)
 }
 
 /// One `sqlite_schema` row: type, name, and the `CREATE` statement

@@ -109,6 +109,24 @@ fn guarded<T>(
     })
 }
 
+fn inspection_error(error: rusqlite::Error, what: &str) -> crate::StoreError {
+    match error {
+        rusqlite::Error::QueryReturnedNoRows
+        | rusqlite::Error::InvalidColumnType(..)
+        | rusqlite::Error::IntegralValueOutOfRange(..)
+        | rusqlite::Error::FromSqlConversionFailure(..)
+        | rusqlite::Error::Utf8Error(..) => {
+            crate::StoreError::corrupt(format!("{what}: invalid metadata: {error}"))
+        }
+        rusqlite::Error::SqliteFailure(ref sqlite, _)
+            if sqlite.code == rusqlite::ErrorCode::TooBig =>
+        {
+            crate::StoreError::corrupt(format!("{what}: metadata exceeds SQLite limits: {error}"))
+        }
+        _ => crate::schema::classify(error, what),
+    }
+}
+
 /// Inspect the validated metadata shape, limiting SQLite work and row size.
 #[allow(dead_code)] // Integrated after the retained-reader review.
 pub(super) fn inspect(
@@ -124,7 +142,9 @@ pub(super) fn inspect(
             "PRAGMA trusted_schema=OFF; PRAGMA query_only=ON; PRAGMA temp_store=MEMORY;",
         )
         .map_err(|e| crate::schema::classify(e, "configure verifier SQLite"))?;
-        if !crate::schema::has_store_meta_table(conn)? {
+        if !crate::schema::has_store_meta_table_with(conn, |e| {
+            inspection_error(e, "read backup metadata schema")
+        })? {
             return Err(crate::StoreError::corrupt("invalid backup metadata schema"));
         }
         let value: String = conn
@@ -133,12 +153,12 @@ pub(super) fn inspect(
                 [],
                 |row| row.get(0),
             )
-            .map_err(|e| crate::schema::classify(e, "read backup identity"))?;
+            .map_err(|e| inspection_error(e, "read backup identity"))?;
         if value.parse::<sb_types::id::Uuid>().is_err() {
             return Err(crate::StoreError::corrupt("invalid backup identity"));
         }
         let schema_version = crate::schema::read_user_version(conn)?;
-        if schema_version < 0 {
+        if schema_version <= 0 {
             return Err(crate::StoreError::corrupt("invalid backup schema version"));
         }
         Ok(Inspection::Inspected {
@@ -247,6 +267,80 @@ mod tests {
             [huge],
         )
         .unwrap();
-        assert!(inspect(&conn, &AtomicBool::new(false)).is_err());
+        assert!(matches!(
+            inspect(&conn, &AtomicBool::new(false)),
+            Err(crate::StoreError::Corrupt { .. })
+        ));
+    }
+    #[test]
+    fn rejects_missing_identity_and_nonpositive_schema_versions() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(include_str!("../schema/v1.sql"))
+            .unwrap();
+        conn.pragma_update(None, "user_version", 23).unwrap();
+        assert!(matches!(
+            inspect(&conn, &AtomicBool::new(false)),
+            Err(crate::StoreError::Corrupt { .. })
+        ));
+        conn.execute_batch("PRAGMA query_only=OFF; INSERT INTO store_meta VALUES ('store_uuid', '00000000-0000-4000-8000-000000000041'); PRAGMA user_version=0;").unwrap();
+        assert!(matches!(
+            inspect(&conn, &AtomicBool::new(false)),
+            Err(crate::StoreError::Corrupt { .. })
+        ));
+        conn.execute_batch("PRAGMA query_only=OFF; PRAGMA user_version=-1;")
+            .unwrap();
+        assert!(matches!(
+            inspect(&conn, &AtomicBool::new(false)),
+            Err(crate::StoreError::Corrupt { .. })
+        ));
+    }
+
+    #[test]
+    fn rejects_blob_identity_in_canonical_schema() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(include_str!("../schema/v1.sql"))
+            .unwrap();
+        // Simulate an image whose on-disk row violates the declared STRICT schema.
+        conn.execute_batch("PRAGMA writable_schema=ON; UPDATE sqlite_schema SET sql=replace(sql, ') STRICT', ')') WHERE name='store_meta'; PRAGMA schema_version=2; INSERT INTO store_meta VALUES ('store_uuid', x'0102'); UPDATE sqlite_schema SET sql=sql || ' STRICT' WHERE name='store_meta'; PRAGMA schema_version=3; PRAGMA writable_schema=OFF; PRAGMA user_version=23;").unwrap();
+        assert!(matches!(
+            inspect(&conn, &AtomicBool::new(false)),
+            Err(crate::StoreError::Corrupt { .. })
+        ));
+    }
+
+    #[test]
+    fn invalid_metadata_errors_preserve_environment_and_interrupt_causes() {
+        use rusqlite::{Error, ErrorCode, ffi};
+        for err in [
+            Error::InvalidColumnType(0, "value".into(), rusqlite::types::Type::Blob),
+            Error::QueryReturnedNoRows,
+            Error::SqliteFailure(ffi::Error::new(ffi::SQLITE_TOOBIG), None),
+        ] {
+            assert!(matches!(
+                inspection_error(err, "test"),
+                crate::StoreError::Corrupt { .. }
+            ));
+        }
+        for (code, unavailable) in [(ffi::SQLITE_IOERR, true), (ffi::SQLITE_INTERRUPT, false)] {
+            let err = Error::SqliteFailure(ffi::Error::new(code), None);
+            assert_eq!(
+                if let Error::SqliteFailure(e, _) = &err {
+                    e.code
+                } else {
+                    unreachable!()
+                },
+                if unavailable {
+                    ErrorCode::SystemIoFailure
+                } else {
+                    ErrorCode::OperationInterrupted
+                }
+            );
+            let outcome = inspection_error(err, "test");
+            assert!(if unavailable {
+                matches!(outcome, crate::StoreError::Unavailable { .. })
+            } else {
+                matches!(outcome, crate::StoreError::Interrupted { .. })
+            });
+        }
     }
 }
