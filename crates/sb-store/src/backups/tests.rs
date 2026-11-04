@@ -2205,6 +2205,380 @@ fn verifier_ledger_batches_reconcile_and_reject_duplicates() {
 }
 
 #[test]
+fn reconciliation_accepts_real_empty_backup() {
+    use sha2::{Digest, Sha256};
+    use std::ops::ControlFlow;
+    use std::sync::atomic::AtomicBool;
+
+    let (_scratch, _paths, store) = open("reconciliation-empty");
+    let snapshot = store.backup_snapshot(BackupDestination::DataRoot).unwrap();
+    let receipt = store.complete_backup(snapshot).unwrap();
+    let database = std::fs::read(receipt.state_db()).unwrap();
+    let manifest = std::fs::read(receipt.location().join("manifest.json")).unwrap();
+    let digest = Sha256::digest(&database).into();
+    let cancelled = AtomicBool::new(false);
+    let result = store.backups.reconcile_image(
+        receipt.location(),
+        manifest.as_slice(),
+        super::reconciliation::Expected {
+            database: super::manifest::Entry {
+                sha256: digest,
+                bytes: database.len() as u64,
+            },
+            object_count: 0,
+            total_bytes: database.len() as u64,
+        },
+        &cancelled,
+        |_| ControlFlow::Continue(()),
+    );
+    assert!(matches!(
+        result,
+        Ok(crate::BackupImageInspection::Inspected { .. })
+    ));
+}
+
+#[test]
+fn reconciliation_accepts_real_backup_and_retains_evidence_on_cleanup_failure() {
+    use sha2::{Digest, Sha256};
+    use std::ops::ControlFlow;
+    use std::sync::atomic::AtomicBool;
+
+    let (_scratch, paths, store) = open("reconciliation-real");
+    let (object, _) = object(&store, PAYLOAD);
+    reference(&store, &object, "published");
+    let snapshot = store.backup_snapshot(BackupDestination::DataRoot).unwrap();
+    let receipt = store.complete_backup(snapshot).unwrap();
+    let database = std::fs::read(receipt.state_db()).unwrap();
+    let manifest = std::fs::read(receipt.location().join("manifest.json")).unwrap();
+    let digest = Sha256::digest(&database).into();
+    let cancelled = AtomicBool::new(false);
+    let verify = |verifier: &Backups| {
+        verifier.reconcile_image(
+            receipt.location(),
+            manifest.as_slice(),
+            super::reconciliation::Expected {
+                database: super::manifest::Entry {
+                    sha256: digest,
+                    bytes: database.len() as u64,
+                },
+                object_count: 1,
+                total_bytes: database.len() as u64 + PAYLOAD.len() as u64,
+            },
+            &cancelled,
+            |_| ControlFlow::Continue(()),
+        )
+    };
+    assert!(matches!(
+        verify(&store.backups),
+        Ok(crate::BackupImageInspection::Inspected { .. })
+    ));
+    let fs = Arc::new(FaultFs::new(
+        real_fs(),
+        FsOp::RemoveDirAll,
+        1,
+        FaultKind::Eio,
+    ));
+    let failing = faulty_backups(&store, &paths, fs);
+    assert!(verify(&failing).is_err());
+    let counts = reading(&store, |tx| {
+        tx.query_row("SELECT (SELECT count(*) FROM verifier_scratch), (SELECT count(*) FROM verifier_objects)", [], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))).map_err(bug)
+    });
+    assert_eq!(counts, (1, 1));
+    assert!(matches!(
+        verify(&store.backups),
+        Ok(crate::BackupImageInspection::Inspected { .. })
+    ));
+    let counts = reading(&store, |tx| {
+        tx.query_row("SELECT (SELECT count(*) FROM verifier_scratch), (SELECT count(*) FROM verifier_objects)", [], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))).map_err(bug)
+    });
+    assert_eq!(counts, (0, 0));
+}
+
+struct ReconciliationFixture {
+    _scratch: ScratchDir,
+    store: Store,
+    image: Connection,
+}
+
+impl ReconciliationFixture {
+    fn new() -> Self {
+        let (scratch, _paths, store) = open("reconciliation-fixture");
+        sql(
+            &store,
+            "INSERT INTO verifier_scratch VALUES ('owner','token','current')".into(),
+        );
+        let image = Connection::open_in_memory().unwrap();
+        image
+            .execute_batch(include_str!("../schema/v1.sql"))
+            .unwrap();
+        image.execute_batch("PRAGMA foreign_keys=OFF; PRAGMA user_version=1; INSERT INTO store_meta VALUES ('store_uuid','00000000-0000-4000-8000-000000000041'); INSERT INTO backup_generations(generation_id,started_at,state,location) VALUES ('00000000-0000-4000-8000-000000000042',7,'in_progress','fixture');").unwrap();
+        Self {
+            _scratch: scratch,
+            store,
+            image,
+        }
+    }
+
+    fn run(
+        &self,
+        doc: &[u8],
+        count: u64,
+        total: u64,
+        cancelled: &std::sync::atomic::AtomicBool,
+    ) -> Result<std::ops::ControlFlow<()>, StoreError> {
+        super::reconciliation::run(
+            &self.image,
+            &self.store.backups,
+            "owner",
+            doc,
+            super::reconciliation::Expected {
+                database: super::manifest::Entry {
+                    sha256: [0; 32],
+                    bytes: 5,
+                },
+                object_count: count,
+                total_bytes: total,
+            },
+            cancelled,
+        )
+    }
+}
+
+fn reconciliation_manifest(objects: &[(&str, u64)]) -> Vec<u8> {
+    let objects: Vec<_> = objects
+        .iter()
+        .map(|(hash, size)| serde_json::json!({"sha256": hash, "bytes": size}))
+        .collect();
+    serde_json::to_vec(&serde_json::json!({"format":1,"store_uuid":"00000000-0000-4000-8000-000000000041","generation_id":"00000000-0000-4000-8000-000000000042","app_version":"test","schema_version":1,"created_at":7,"database":{"file":"state.sqlite","sha256":"00".repeat(32),"bytes":5},"objects":objects})).unwrap()
+}
+
+#[test]
+fn reconciliation_checks_every_occurrence_and_manifest_entry() {
+    use std::ops::ControlFlow;
+    use std::sync::atomic::AtomicBool;
+    let hash = "ab".repeat(32);
+    let other = "cd".repeat(32);
+    for mode in [
+        "matching",
+        "size",
+        "missing",
+        "extra",
+        "duplicate",
+        "hash",
+        "count",
+        "total",
+        "database",
+        "uuid",
+        "generation",
+        "time",
+        "schema",
+        "decoder",
+    ] {
+        let f = ReconciliationFixture::new();
+        let size = if mode == "size" { 4 } else { 3 };
+        f.image.execute("INSERT INTO acquisitions(content_sha256,byte_length,object_state,first_acquired_at) VALUES (?1,3,'published',0)", [&hash]).unwrap();
+        f.image.execute("INSERT INTO send_attempts(attempt_id,draft_id,revision_id,account_id,config_generation,identity_id,mime_sha256,message_id_header,envelope_from,state,sent_copy,created_at,updated_at) VALUES ('s','d','r','a',1,'i',?1,'m','e','cancelled','filed',0,0)", [&hash]).unwrap();
+        let attachment = if mode == "decoder" {
+            format!(
+                r#"[{{"object_sha256":"{hash}","filename":"f","media_type":"x","size":{size}}},{{}}]"#
+            )
+        } else {
+            format!(
+                r#"[{{"object_sha256":"{hash}","filename":"f","media_type":"x","size":{size}}}]"#
+            )
+        };
+        f.image.execute("INSERT INTO draft_revisions(revision_id,draft_id,seq,compose_format,subject,to_json,cc_json,bcc_json,body_source,attachments_json,created_at) VALUES ('r','d',1,'plain','','[]','[]','[]','',?1,0)", [&attachment]).unwrap();
+        let objects = match mode {
+            "missing" => vec![],
+            "extra" => vec![(hash.as_str(), 3), (other.as_str(), 1)],
+            "duplicate" => vec![(hash.as_str(), 3), (hash.as_str(), 3)],
+            "hash" => vec![(other.as_str(), 3)],
+            _ => vec![(hash.as_str(), 3)],
+        };
+        let mut doc: serde_json::Value =
+            serde_json::from_slice(&reconciliation_manifest(&objects)).unwrap();
+        match mode {
+            "database" => doc["database"]["bytes"] = 6.into(),
+            "uuid" => doc["store_uuid"] = "00000000-0000-4000-8000-000000000043".into(),
+            "generation" => doc["generation_id"] = "00000000-0000-4000-8000-000000000043".into(),
+            "time" => doc["created_at"] = 8.into(),
+            "schema" => doc["schema_version"] = 2.into(),
+            _ => {}
+        }
+        let count = objects.len() as u64 + u64::from(mode == "count");
+        let total = 5 + objects.iter().map(|(_, n)| n).sum::<u64>() + u64::from(mode == "total");
+        let outcome = f.run(
+            &serde_json::to_vec(&doc).unwrap(),
+            count,
+            total,
+            &AtomicBool::new(false),
+        );
+        if mode == "matching" {
+            assert_eq!(outcome.unwrap(), ControlFlow::Continue(()));
+        } else {
+            assert!(
+                matches!(outcome, Err(StoreError::Corrupt { .. })),
+                "{mode}: {outcome:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn reconciliation_pages_large_unique_and_duplicate_sets_without_a_total_cap() {
+    use std::ops::ControlFlow;
+    use std::sync::atomic::AtomicBool;
+    let f = ReconciliationFixture::new();
+    f.image.execute_batch("BEGIN").unwrap();
+    let mut hashes = Vec::new();
+    for n in 0..20_001u64 {
+        let hash = format!("{n:064x}");
+        f.image.execute("INSERT INTO acquisitions(content_sha256,byte_length,object_state,first_acquired_at) VALUES (?1,3,'published',0)", [&hash]).unwrap();
+        hashes.push(hash);
+    }
+    for n in 0..401 {
+        f.image.execute("INSERT INTO backup_generations(generation_id,started_at,state,location) VALUES (?1,0,'failed','x')", [format!("history-{n}")]).unwrap();
+    }
+    let item = format!(
+        r#"{{"object_sha256":"{}","filename":"f","media_type":"x","size":3}}"#,
+        hashes[0]
+    );
+    let attachment = format!("[{}]", vec![item; 201].join(","));
+    f.image.execute("INSERT INTO draft_revisions(revision_id,draft_id,seq,compose_format,subject,to_json,cc_json,bcc_json,body_source,attachments_json,created_at) VALUES ('r','d',1,'plain','','[]','[]','[]','',?1,0)", [&attachment]).unwrap();
+    f.image.execute_batch("COMMIT").unwrap();
+    let items: Vec<_> = hashes.iter().map(|hash| (hash.as_str(), 3)).collect();
+    let doc = reconciliation_manifest(&items);
+    assert_eq!(
+        f.run(&doc, 20_001, 60_008, &AtomicBool::new(false))
+            .unwrap(),
+        ControlFlow::Continue(())
+    );
+}
+
+#[test]
+fn reconciliation_rejects_hostile_schema_and_propagates_failures() {
+    use std::io::{self, Read};
+    use std::ops::ControlFlow;
+    use std::sync::atomic::AtomicBool;
+    let doc = reconciliation_manifest(&[]);
+    let cancelled = AtomicBool::new(true);
+    let f = ReconciliationFixture::new();
+    assert_eq!(
+        f.run(&doc, 0, 5, &cancelled).unwrap(),
+        ControlFlow::Break(())
+    );
+    let f = ReconciliationFixture::new();
+    f.image
+        .execute_batch(
+            "DROP TABLE send_attempts; CREATE VIEW send_attempts AS SELECT 'x' AS mime_sha256;",
+        )
+        .unwrap();
+    assert!(matches!(
+        f.run(&doc, 0, 5, &AtomicBool::new(false)),
+        Err(StoreError::Corrupt { .. })
+    ));
+    for schema in [
+        "DROP TABLE backup_generations; CREATE VIEW backup_generations AS SELECT 'x' generation_id, 7 started_at, 'in_progress' state;",
+        "DROP TABLE backup_generations; CREATE TABLE backup_generations(rowid INTEGER, generation_id TEXT, started_at INTEGER, state TEXT);",
+        "DROP TABLE backup_generations; CREATE TABLE backup_generations(generation_id TEXT, started_at INTEGER, state TEXT); INSERT INTO backup_generations VALUES ('00000000-0000-4000-8000-000000000042',7,'in_progress'),('00000000-0000-4000-8000-000000000042',7,'in_progress');",
+    ] {
+        let f = ReconciliationFixture::new();
+        f.image.execute_batch(schema).unwrap();
+        assert!(
+            matches!(
+                f.run(&doc, 0, 5, &AtomicBool::new(false)),
+                Err(StoreError::Corrupt { .. })
+            ),
+            "{schema}"
+        );
+    }
+    struct Broken;
+    impl Read for Broken {
+        fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+            Err(io::Error::new(io::ErrorKind::InvalidData, "native read"))
+        }
+    }
+    let f = ReconciliationFixture::new();
+    let result = super::reconciliation::run(
+        &f.image,
+        &f.store.backups,
+        "owner",
+        Broken,
+        super::reconciliation::Expected {
+            database: super::manifest::Entry {
+                sha256: [0; 32],
+                bytes: 5,
+            },
+            object_count: 0,
+            total_bytes: 5,
+        },
+        &AtomicBool::new(false),
+    );
+    assert_eq!(
+        result.unwrap_err().io_kind(),
+        Some(io::ErrorKind::InvalidData)
+    );
+    let f = ReconciliationFixture::new();
+    sql(&f.store, "CREATE TRIGGER ledger_insert_fault BEFORE INSERT ON verifier_objects BEGIN SELECT RAISE(ABORT,'fault'); END;".into());
+    let hash = "ab".repeat(32);
+    assert!(
+        f.run(
+            &reconciliation_manifest(&[(&hash, 3)]),
+            1,
+            8,
+            &AtomicBool::new(false)
+        )
+        .is_err()
+    );
+    let f = ReconciliationFixture::new();
+    f.image.execute("INSERT INTO acquisitions(content_sha256,byte_length,object_state,first_acquired_at) VALUES (?1,3,'published',0)", [&hash]).unwrap();
+    sql(&f.store, "CREATE TRIGGER ledger_update_fault BEFORE UPDATE ON verifier_objects BEGIN SELECT RAISE(ABORT,'fault'); END;".into());
+    assert!(
+        f.run(
+            &reconciliation_manifest(&[(&hash, 3)]),
+            1,
+            8,
+            &AtomicBool::new(false)
+        )
+        .is_err()
+    );
+
+    struct CancelRead<'a> {
+        data: &'a [u8],
+        cancelled: &'a AtomicBool,
+    }
+    impl Read for CancelRead<'_> {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            let n = self.data.read(buf)?;
+            self.cancelled
+                .store(true, std::sync::atomic::Ordering::Release);
+            Ok(n)
+        }
+    }
+    let f = ReconciliationFixture::new();
+    let cancelled = AtomicBool::new(false);
+    let result = super::reconciliation::run(
+        &f.image,
+        &f.store.backups,
+        "owner",
+        CancelRead {
+            data: &doc,
+            cancelled: &cancelled,
+        },
+        super::reconciliation::Expected {
+            database: super::manifest::Entry {
+                sha256: [0; 32],
+                bytes: 5,
+            },
+            object_count: 0,
+            total_bytes: 5,
+        },
+        &cancelled,
+    );
+    assert_eq!(result.unwrap(), ControlFlow::Break(()));
+}
+
+#[test]
 fn startup_ledger_purge_failure_retains_owner_for_retry() {
     let (_temp, paths, store) = open("verifier-ledger-retry");
     let id = "00000000-0000-4000-8000-000000000041";
@@ -2274,7 +2648,7 @@ fn retained_image_callback_outcomes_clean_owned_evidence() {
             data.len() as u64,
             &cancelled,
             |_| ControlFlow::Continue(()),
-            |conn| {
+            |conn, _| {
                 called = true;
                 assert_eq!(std::fs::read_dir(paths.recovery()).unwrap().count(), 2);
                 let _: i64 = conn
@@ -2347,7 +2721,7 @@ fn retained_image_callback_uses_pinned_connection_after_path_replacement() {
         data.len() as u64,
         &AtomicBool::new(false),
         |_| ControlFlow::Continue(()),
-        |conn| {
+        |conn, _| {
             let dir = std::fs::read_dir(paths.recovery())
                 .unwrap()
                 .map(|e| e.unwrap().path())
@@ -2404,7 +2778,7 @@ fn retained_image_callback_cleanup_failure_retains_evidence_for_retry() {
         data.len() as u64,
         &AtomicBool::new(false),
         |_| ControlFlow::Continue(()),
-        |_| {
+        |_, _| {
             let id: String = reading(&store, |tx| {
                 tx.query_row("SELECT id FROM verifier_scratch", [], |r| r.get(0))
                     .map_err(bug)

@@ -14,7 +14,8 @@ mod ledger;
 // The next restore slice attaches this parser to the verification ledger.
 #[allow(dead_code)]
 mod manifest;
-#[allow(dead_code)] // Reconciliation consumes the walker in M1.8e1c2.
+#[allow(dead_code)] // The recorded-generation verifier consumes this seam in M1.8e1d.
+mod reconciliation;
 mod references;
 pub use image::BackupImageInspection;
 mod scratch;
