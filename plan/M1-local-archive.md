@@ -974,6 +974,10 @@ local drafts. No network yet.
     schemas, availability, spans and local keyword and tag invariants. Keep
     bundles unsupported and discard their snapshots; global relationships
     remain unchecked and cannot admit a source.
+  - **M1.7d1b1b2b1a Validation scratch lease — M:** add Store-owned,
+    disposable bounded scratch with two fixed tapes and explicit cleanup,
+    isolated concurrent leases and writable-open cleanup. This prerequisite
+    does not add a manifest cap or implement relationship validation.
   - **M1.7d1b1b2b2 Manifest message relationships — L:** validate counts,
     ordered-ID digest, unique occurrence IDs, file references and EML
     agreement using bounded scans of the verified snapshot. Prove writer
