@@ -1223,6 +1223,14 @@ CREATE TABLE verifier_scratch (                   -- verifier image cleanup auth
   incarnation TEXT NOT NULL
 ) STRICT;
 
+CREATE TABLE verifier_objects (                   -- transient reconciliation ledger
+  scratch_id TEXT NOT NULL REFERENCES verifier_scratch(id),
+  sha256     BLOB NOT NULL CHECK (length(sha256) = 32),
+  bytes      BLOB NOT NULL CHECK (length(bytes) = 8), -- big-endian unsigned length
+  referenced INTEGER NOT NULL DEFAULT 0 CHECK (referenced IN (0, 1)),
+  PRIMARY KEY (scratch_id, sha256)
+) STRICT, WITHOUT ROWID;
+
 CREATE TABLE object_pins (                        -- objects GC must keep regardless of references
   object_sha256 TEXT NOT NULL,
   pin_kind      TEXT NOT NULL CHECK (pin_kind IN ('backup_in_progress','gc_grace','reservation','send_attempt','quarantine')),
