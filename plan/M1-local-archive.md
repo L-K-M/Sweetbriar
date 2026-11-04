@@ -1040,6 +1040,36 @@ local drafts. No network yet.
     preserve unterminated acquisitions and multiplicity; malformed
     framing never silently trims bytes or falls back to changed
     originals.
+    Split (2026-11-05) before coding; retain every deliverable and
+    acceptance above, each artifact fitting 1,450 gross changed lines:
+    - **M1.7d2c1 Manifest proof registry — M:** a bounded, job-lifetime
+      registry prerequisite in Store and Resources. One owned disposable
+      root lease holds each validated snapshot's token-namespaced, fixed-file
+      proof (descriptors, dense lookup, header) with a fixed header binding
+      full snapshot identity, format, file and record totals and exact output
+      lengths; production runs the existing one-manifest proof once and
+      streams its verified outputs into the namespace, freezing the header
+      last. Later lookups reopen only the header and fixed slots directly,
+      never rehashing or scanning the manifest or prior entries. Fail closed
+      on conflicting identity, incomplete or truncated workspaces; clean up
+      on finish, drop and startup. Native tests prove at least 257
+      interleaved and shuffled sources across distinct manifests, no extra
+      manifest reads on reuse, conflict, missing ordinal, range and
+      truncation rejection, cancellation and error cleanup, injected
+      read/write/seek/sync faults, bounded handles and Send. No Engine loop
+      change, physical acquisition or message publication.
+    - **M1.7d2c2 Physical verified acquisition — L:** consume the frozen
+      registry outputs in Resources to acquire each bundle record's exact
+      bytes: record boundary, declared framing, original length and SHA-256
+      verified before publication, only the declared framing LF removed, the
+      framing identity joining replay, unterminated acquisitions and
+      multiplicity preserved, and malformed framing never silently trimming
+      bytes or falling back to changed originals. Native random-access,
+      fault and scaling proof.
+    - **M1.7d2c3 Engine integration and verified ingest — L:** consume the
+      verified acquisition in the real import job without changing source
+      order, with durable job, resume, order and crash acceptance and
+      failed-source evidence. Expose no export-scope API.
   - **M1.7e Export engine — L:** counted background jobs, start/query,
     cancel, shutdown and reopen over b2/c. Own real-worker lifecycle,
     crash/resume and all original round-trip acceptance checks using d.
