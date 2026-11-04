@@ -117,6 +117,200 @@ impl std::fmt::Debug for SourceAcquisition {
     }
 }
 
+// The manifest cursor is private until record verification can consume it.
+#[allow(dead_code)]
+mod bundle_cursor {
+    use std::cell::Cell;
+    use std::io::{self, BufReader, Read, Seek, SeekFrom};
+    use std::ops::ControlFlow;
+    use std::rc::Rc;
+
+    use super::SourcePosition;
+    use crate::SourceInventory;
+    use crate::import::json_syntax::cursor::{Cursor, Descriptor};
+    use sb_store::{ReadFile, Scoped, Store, StoreError};
+
+    struct StopReader<'a> {
+        inner: Box<dyn ReadFile>,
+        stop: &'a mut dyn FnMut() -> ControlFlow<()>,
+        stopped: Rc<Cell<bool>>,
+        native_error: Rc<Cell<Option<io::ErrorKind>>>,
+    }
+
+    impl Read for StopReader<'_> {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            if (self.stop)().is_break() {
+                self.stopped.set(true);
+                return Err(io::Error::other("manifest preparation cancelled"));
+            }
+            self.inner
+                .read(buf)
+                .inspect_err(|error| self.native_error.set(Some(error.kind())))
+        }
+    }
+
+    impl Seek for StopReader<'_> {
+        fn seek(&mut self, position: SeekFrom) -> io::Result<u64> {
+            self.inner
+                .seek(position)
+                .inspect_err(|error| self.native_error.set(Some(error.kind())))
+        }
+    }
+
+    pub(super) struct BundleCursor<'a> {
+        inner: Cursor<BufReader<StopReader<'a>>>,
+        stopped: Rc<Cell<bool>>,
+        native_error: Rc<Cell<Option<io::ErrorKind>>>,
+        pending: Option<Descriptor>,
+    }
+
+    impl BundleCursor<'_> {
+        pub(super) fn next(&mut self) -> Result<Scoped<Option<Descriptor>>, StoreError> {
+            if let Some(pending) = self.pending.take() {
+                return Ok(Scoped::Done(Some(pending)));
+            }
+            match self.inner.next() {
+                Ok(descriptor) => Ok(Scoped::Done(descriptor)),
+                Err(_) if self.stopped.get() => Ok(Scoped::Stopped),
+                Err(error) => Err(read_error(error, self.native_error.get())),
+            }
+        }
+    }
+
+    fn read_error(error: io::Error, native: Option<io::ErrorKind>) -> StoreError {
+        if native.is_none()
+            && matches!(
+                error.kind(),
+                io::ErrorKind::InvalidData | io::ErrorKind::UnexpectedEof
+            )
+        {
+            return StoreError::Corrupt {
+                detail: format!("invalid bundle manifest: {error}"),
+            };
+        }
+        StoreError::Unavailable {
+            reason: format!("cannot read bundle manifest: {error}"),
+            io_kind: Some(native.unwrap_or(error.kind())),
+        }
+    }
+
+    pub(super) fn prepare_bundle<'a>(
+        store: &Store,
+        source: &SourceInventory,
+        position: SourcePosition,
+        stop: &'a mut dyn FnMut() -> ControlFlow<()>,
+    ) -> Result<Scoped<BundleCursor<'a>>, StoreError> {
+        let bundle = source
+            .bundle()
+            .ok_or_else(|| super::invalid("source is not a bundle"))?;
+        let ordinal = bundle
+            .file_ordinal()
+            .ok_or_else(|| super::invalid("bundle file ordinal is missing"))?;
+        if bundle.format().source_kind() != source.kind()
+            || position.messages() > source.message_count()
+            || (position.messages() == 0 && position.offset() != 0)
+        {
+            return Err(super::invalid(
+                "bundle source or checkpoint is inconsistent",
+            ));
+        }
+        let file = match store.open_import_source_cancellable(bundle.manifest(), |_| stop())? {
+            Scoped::Stopped => return Ok(Scoped::Stopped),
+            Scoped::Done(file) => file,
+        };
+        let stopped = Rc::new(Cell::new(false));
+        let native_error = Rc::new(Cell::new(None));
+        let reader = BufReader::new(StopReader {
+            inner: file,
+            stop,
+            stopped: stopped.clone(),
+            native_error: native_error.clone(),
+        });
+        let cursor = Cursor::prepare(
+            reader,
+            ordinal,
+            bundle.format(),
+            source.snapshot().byte_length(),
+            source.message_count(),
+        );
+        let inner = match cursor {
+            Ok(cursor) => cursor,
+            Err(_) if stopped.get() => return Ok(Scoped::Stopped),
+            Err(error) => return Err(read_error(error, native_error.get())),
+        };
+        let mut cursor = BundleCursor {
+            inner,
+            stopped,
+            native_error,
+            pending: None,
+        };
+        for _ in 0..position.messages() {
+            match cursor.next()? {
+                Scoped::Stopped => return Ok(Scoped::Stopped),
+                Scoped::Done(Some(_)) => {}
+                Scoped::Done(None) => {
+                    return Err(super::invalid("bundle checkpoint exceeds descriptors"));
+                }
+            }
+        }
+        let pending = match cursor.next()? {
+            Scoped::Stopped => return Ok(Scoped::Stopped),
+            Scoped::Done(next) => next,
+        };
+        let expected_offset = match &pending {
+            Some(descriptor) => descriptor
+                .framing
+                .as_ref()
+                .map_or(0, |framing| framing.offset),
+            None => source.snapshot().byte_length(),
+        };
+        if position.offset() != expected_offset {
+            return Err(super::invalid("bundle checkpoint offset is inconsistent"));
+        }
+        cursor.pending = pending;
+        Ok(Scoped::Done(cursor))
+    }
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        struct FailingFile;
+        impl Read for FailingFile {
+            fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+                Err(io::Error::new(io::ErrorKind::InvalidData, "native failure"))
+            }
+        }
+        impl Seek for FailingFile {
+            fn seek(&mut self, _: SeekFrom) -> io::Result<u64> {
+                Ok(0)
+            }
+        }
+
+        #[test]
+        fn native_invalid_data_is_unavailable() {
+            let native = Rc::new(Cell::new(None));
+            let mut stop = || ControlFlow::Continue(());
+            let mut reader = StopReader {
+                inner: Box::new(FailingFile),
+                stop: &mut stop,
+                stopped: Rc::new(Cell::new(false)),
+                native_error: native.clone(),
+            };
+            let error = reader.read(&mut [0]).unwrap_err();
+            assert!(matches!(
+                read_error(error, native.get()),
+                StoreError::Unavailable {
+                    io_kind: Some(io::ErrorKind::InvalidData),
+                    ..
+                }
+            ));
+        }
+    }
+}
+
+#[cfg(test)]
+use bundle_cursor::prepare_bundle;
+
 /// Check `position` against `source`, then verify and reopen its
 /// snapshot (spec/03). Equivalent sources decode identically either way,
 /// so only `Ambiguous` ones need `variant`.

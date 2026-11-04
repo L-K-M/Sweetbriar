@@ -6,6 +6,7 @@ use sha2::{Digest, Sha256};
 
 use super::BundleFormat;
 
+pub(crate) mod cursor;
 mod messages;
 pub(super) use messages::validate_messages;
 

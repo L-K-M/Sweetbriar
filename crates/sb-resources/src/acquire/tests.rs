@@ -625,3 +625,218 @@ fn verified_bundle_manifest_refuses_unverified_ingest() {
     assert!(matches!(error, StoreError::Unavailable { .. }));
     assert!(error.to_string().contains("M1.7d2"));
 }
+
+#[test]
+fn bundle_preparation_distinguishes_cancellation() {
+    let (scratch, res) = resources("bundle-prepare-cancel");
+    let message = scratch.path().join("message.eml");
+    let manifest = scratch.path().join("manifest.eml");
+    fs::write(&message, b"body").unwrap();
+    fs::write(&manifest, b"synthetic manifest").unwrap();
+    let source_json = source(&res, &message).to_json();
+    let manifest_json = source(&res, &manifest).to_json();
+    let mut json: serde_json::Value = serde_json::from_str(&source_json).unwrap();
+    let manifest_json: serde_json::Value = serde_json::from_str(&manifest_json).unwrap();
+    json["v"] = serde_json::json!(2);
+    json["bundle"] = serde_json::json!({"manifest": manifest_json["snapshot"], "format": "eml", "file_ordinal": 0});
+    let bundle = SourceInventory::from_json(&json.to_string()).unwrap();
+    assert!(matches!(
+        prepare_bundle(&res.store, &bundle, SourcePosition::START, &mut || {
+            ControlFlow::Break(())
+        }),
+        Ok(sb_store::Scoped::Stopped)
+    ));
+    let mut calls = 0;
+    let mut stop_in_parser = || {
+        calls += 1;
+        if calls >= 3 {
+            ControlFlow::Break(())
+        } else {
+            ControlFlow::Continue(())
+        }
+    };
+    assert!(matches!(
+        prepare_bundle(
+            &res.store,
+            &bundle,
+            SourcePosition::START,
+            &mut stop_in_parser
+        ),
+        Ok(sb_store::Scoped::Stopped)
+    ));
+    assert!(matches!(
+        prepare_bundle(&res.store, &bundle, SourcePosition::START, &mut || {
+            ControlFlow::Continue(())
+        }),
+        Err(StoreError::Corrupt { .. })
+    ));
+    res.remove_import_sources(&[bundle.bundle().unwrap().manifest().clone()])
+        .unwrap();
+    assert!(
+        prepare_bundle(&res.store, &bundle, SourcePosition::START, &mut || {
+            ControlFlow::Continue(())
+        })
+        .is_err()
+    );
+}
+
+#[test]
+fn bundle_cursor_selects_interleaved_descriptors_and_resumes() {
+    use serde_json::json;
+    use sha2::{Digest, Sha256};
+
+    let (scratch, res) = resources("bundle-cursor");
+    let path = scratch.path().join("alias.mbox");
+    let contents = format!("{ENVELOPE}a\n{ENVELOPE}b\n");
+    fs::write(&path, &contents).unwrap();
+    let plain = source(&res, &path);
+    let offset = (ENVELOPE.len() + 2) as u64;
+    let entry = |id: i64, file: Option<&str>, start: u64| {
+        let mut value = json!({"v":1,"occurrence_id":id,"message_id":id,
+            "account":{"id":"a","name":"a"},"mailbox":{"id":1,"name":"m"},
+            "occurrence_state":"present","flags":{"seen":false,"flagged":false,"answered":false,"draft":false,"deleted":false},
+            "keywords":[],"acquisition":{"id":id,"sha256":"a".repeat(64),"bytes":2},
+            "body_availability":"acquired","tags":[],"note":null,"file":file,
+            "record_offset":start,"encoded_bytes":2,"original_bytes":2,"framing_lf_added":false});
+        if file.is_none() {
+            value["acquisition"] = serde_json::Value::Null;
+            value["body_availability"] = json!("not_acquired");
+            for key in [
+                "record_offset",
+                "encoded_bytes",
+                "original_bytes",
+                "framing_lf_added",
+            ] {
+                value.as_object_mut().unwrap().remove(key);
+            }
+        }
+        value
+    };
+    let mut messages = vec![
+        entry(1, Some("target.mbox"), 0),
+        entry(2, Some("other.mbox"), 0),
+        entry(3, None, 0),
+        entry(4, Some("target.mbox"), offset),
+    ];
+    messages[3]["encoded_bytes"] = json!(3);
+    messages[3]["framing_lf_added"] = json!(true);
+    let mut digest = Sha256::new();
+    for id in 1_i64..=4 {
+        digest.update(id.to_be_bytes());
+    }
+    let hash = digest
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<String>();
+    let mut manifest = json!({"v":1,"kind":"export-manifest","job":"j","format":"mboxrd","destination":"/d",
+        "scope":{"kind":"mailbox","id":1,"generation":1},"generation":1,"entries":4,"ids_sha256":hash,
+        "files":[{"name":"other.mbox","bytes":1,"records":1},{"name":"target.mbox","bytes":contents.len(),"records":2}],"messages":messages});
+    // Force multiple parser reads inside a single unbounded JSON string.
+    const LONG_NOTE_BYTES: usize = 32 * 1024;
+    const STOP_DURING_STRING_READ: usize = 5;
+    manifest["messages"][0]["note"] = json!("x".repeat(LONG_NOTE_BYTES));
+    let manifest_path = scratch.path().join("manifest.eml");
+    fs::write(&manifest_path, manifest.to_string()).unwrap();
+    let manifest_source = source(&res, &manifest_path);
+    let mut metadata: serde_json::Value = serde_json::from_str(&plain.to_json()).unwrap();
+    let manifest_metadata: serde_json::Value =
+        serde_json::from_str(&manifest_source.to_json()).unwrap();
+    metadata["v"] = json!(2);
+    metadata["bundle"] =
+        json!({"manifest":manifest_metadata["snapshot"],"format":"mboxrd","file_ordinal":1});
+    let bundle = SourceInventory::from_json(&metadata.to_string()).unwrap();
+    let mut reads = 0;
+    let mut stop_in_string = || {
+        reads += 1;
+        if reads == STOP_DURING_STRING_READ {
+            ControlFlow::Break(())
+        } else {
+            ControlFlow::Continue(())
+        }
+    };
+    assert!(matches!(
+        prepare_bundle(
+            &res.store,
+            &bundle,
+            SourcePosition::START,
+            &mut stop_in_string
+        ),
+        Ok(sb_store::Scoped::Stopped)
+    ));
+    assert_eq!(reads, STOP_DURING_STRING_READ);
+    let mut stop = || ControlFlow::Continue(());
+    let sb_store::Scoped::Done(mut cursor) = prepare_bundle(
+        &res.store,
+        &bundle,
+        SourcePosition::new(offset, 1),
+        &mut stop,
+    )
+    .unwrap() else {
+        panic!("cancelled")
+    };
+    let sb_store::Scoped::Done(Some(descriptor)) = cursor.next().unwrap() else {
+        panic!("missing descriptor")
+    };
+    assert_eq!(descriptor.sha256, "a".repeat(64));
+    assert_eq!(descriptor.bytes, 2);
+    let framing = descriptor.framing.unwrap();
+    assert_eq!(framing.offset, offset);
+    assert_eq!(framing.encoded_bytes, 3);
+    assert!(framing.framing_lf_added);
+    assert!(matches!(
+        cursor.next().unwrap(),
+        sb_store::Scoped::Done(None)
+    ));
+    drop(cursor);
+    assert!(
+        prepare_bundle(
+            &res.store,
+            &bundle,
+            SourcePosition::new(offset + 1, 1),
+            &mut stop
+        )
+        .is_err()
+    );
+    assert!(
+        res.open_import_acquisition(&bundle, None, SourcePosition::START)
+            .is_err()
+    );
+    let sb_store::Scoped::Done(mut finished) = prepare_bundle(
+        &res.store,
+        &bundle,
+        SourcePosition::new(contents.len() as u64, 2),
+        &mut stop,
+    )
+    .unwrap() else {
+        panic!("cancelled")
+    };
+    assert!(matches!(
+        finished.next().unwrap(),
+        sb_store::Scoped::Done(None)
+    ));
+    drop(finished);
+    metadata["bundle"]["file_ordinal"] = json!(2);
+    let out_of_range = SourceInventory::from_json(&metadata.to_string()).unwrap();
+    assert!(prepare_bundle(&res.store, &out_of_range, SourcePosition::START, &mut stop).is_err());
+    metadata["bundle"]
+        .as_object_mut()
+        .unwrap()
+        .remove("file_ordinal");
+    let legacy = SourceInventory::from_json(&metadata.to_string()).unwrap();
+    assert!(prepare_bundle(&res.store, &legacy, SourcePosition::START, &mut stop).is_err());
+
+    // Tampering with the retained manifest invalidates its snapshot proof.
+    let snapshot = bundle.bundle().unwrap().manifest();
+    let copy = scratch
+        .path()
+        .join("store/recovery")
+        .join(format!("import-source-{}", snapshot.token()));
+    let mut changed = fs::read(&copy).unwrap();
+    changed[0] ^= 1;
+    fs::write(copy, changed).unwrap();
+    assert!(matches!(
+        prepare_bundle(&res.store, &bundle, SourcePosition::START, &mut stop),
+        Err(StoreError::Corrupt { .. })
+    ));
+}

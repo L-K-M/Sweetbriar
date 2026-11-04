@@ -12,7 +12,7 @@ use sb_store::imports::MAX_IMPORT_CHANGES_BYTES;
 use sb_store::{FileKind, Fs, ImportSourceCapture, ImportSourceSnapshot, Store, StoreError};
 
 pub(crate) mod bundle;
-mod json_syntax;
+pub(crate) mod json_syntax;
 pub use bundle::{BundleFormat, SourceBundle};
 
 /// The metadata object's format version (spec/09). A bundle source

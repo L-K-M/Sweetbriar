@@ -11,6 +11,12 @@ use super::{
 
 const BATCH_SIZE: usize = 64;
 
+#[derive(Clone, Copy)]
+enum TagIds {
+    Check,
+    Admitted,
+}
+
 enum Identity {
     Account,
     Mailbox,
@@ -39,7 +45,7 @@ pub(in crate::import) fn validate_messages(
             p.expect(b',')?;
             p.whitespace()?;
         }
-        let (id, has_file) = p.message(table.format)?;
+        let (id, has_file) = p.message(table.format, TagIds::Check)?;
         digest.update(id.to_be_bytes());
         references = references
             .checked_add(u64::from(has_file))
@@ -246,7 +252,10 @@ impl<R: Read + Seek> Parser<R> {
         }
     }
 
-    fn nullable(&mut self, parse: impl FnOnce(&mut Self) -> io::Result<()>) -> io::Result<bool> {
+    pub(super) fn nullable(
+        &mut self,
+        parse: impl FnOnce(&mut Self) -> io::Result<()>,
+    ) -> io::Result<bool> {
         if self.peek()? == Some(b'n') {
             self.literal(b"null")?;
             return Ok(false);
@@ -367,7 +376,7 @@ impl<R: Read + Seek> Parser<R> {
         Ok((id, name))
     }
 
-    fn tags(&mut self) -> io::Result<()> {
+    fn tags(&mut self, ids: TagIds) -> io::Result<()> {
         let first = self.position + 1;
         let mut count = 0u64;
         let mut last_name = None;
@@ -379,27 +388,34 @@ impl<R: Read + Seek> Parser<R> {
             {
                 return Err(invalid());
             }
-            // Names are strictly ordered; IDs require a bounded rescan.
-            p.restore(first)?;
-            for index in 0..count {
-                p.whitespace()?;
-                if index != 0 {
-                    p.expect(b',')?;
+            if matches!(ids, TagIds::Check) {
+                // Names are strictly ordered; IDs require a bounded rescan.
+                p.restore(first)?;
+                for index in 0..count {
                     p.whitespace()?;
+                    if index != 0 {
+                        p.expect(b',')?;
+                        p.whitespace()?;
+                    }
+                    let (prior_id, _) = p.tag()?;
+                    if p.compare(prior_id, id)? == Ordering::Equal {
+                        return Err(invalid());
+                    }
                 }
-                let (prior_id, _) = p.tag()?;
-                if p.compare(prior_id, id)? == Ordering::Equal {
-                    return Err(invalid());
-                }
+                p.restore(resume)?;
+                count = count.checked_add(1).ok_or_else(invalid)?;
             }
-            p.restore(resume)?;
-            count = count.checked_add(1).ok_or_else(invalid)?;
             last_name = Some(name);
             Ok(())
         })
     }
 
-    fn message(&mut self, format: BundleFormat) -> io::Result<(i64, bool)> {
+    // Only for the cursor over the same verified snapshot that passed admission.
+    pub(super) fn admitted_message(&mut self, format: BundleFormat) -> io::Result<(i64, bool)> {
+        self.message(format, TagIds::Admitted)
+    }
+
+    fn message(&mut self, format: BundleFormat, ids: TagIds) -> io::Result<(i64, bool)> {
         const FIELDS: &[&str] = &[
             "v",
             "occurrence_id",
@@ -458,7 +474,7 @@ impl<R: Read + Seek> Parser<R> {
                     })?;
                 }
                 "body_availability" => availability = p.decoded(128)?,
-                "tags" => p.tags()?,
+                "tags" => p.tags(ids)?,
                 "note" => {
                     p.nullable(|p| p.string())?;
                 }
@@ -618,6 +634,21 @@ mod tests {
         duplicate[64]["occurrence_id"] = json!(0);
         let duplicate = manifest(format, files, duplicate);
         assert!(check(&duplicate.to_string()).is_err());
+    }
+
+    #[test]
+    fn admission_rejects_duplicate_tag_ids() {
+        let mut message = message(1, Some("a"), BundleFormat::Eml);
+        message["tags"] = json!([
+            {"id":"same", "name":"a", "color_srgb":null},
+            {"id":"same", "name":"b", "color_srgb":null}
+        ]);
+        let raw = manifest(
+            BundleFormat::Eml,
+            json!([{"name":"a","bytes":2,"records":1}]),
+            vec![message],
+        );
+        assert!(check(&raw.to_string()).is_err());
     }
 
     #[test]

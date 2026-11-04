@@ -1179,6 +1179,19 @@ fn discovered_bundle_cancellation_removes_shared_snapshots() {
     let failed = settle(&engine, &failed, ImportJobState::Failed);
     assert!(failed.checkpoint().failure().unwrap().contains("M1.7d2"));
     assert_eq!(failed.checkpoint().totals().processed, 0);
+    assert!(
+        failed
+            .sources()
+            .iter()
+            .all(|source| source.position() == SourcePosition::START)
+    );
+    assert_eq!(count(&engine, "SELECT count(*) FROM acquisitions"), 0);
+    assert_eq!(count(&engine, "SELECT count(*) FROM occurrences"), 0);
+    assert_eq!(count(&engine, "SELECT count(*) FROM object_pins"), 0);
+    assert_eq!(
+        fs::read_dir(root.join("objects/sha256")).unwrap().count(),
+        0
+    );
     assert_eq!(snapshots(&root), 3);
     block_on(engine.shutdown()).unwrap();
 }
