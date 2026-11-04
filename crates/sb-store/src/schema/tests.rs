@@ -1020,3 +1020,46 @@ fn sqlite_environment_failures_carry_their_io_kind() {
         Some(io::ErrorKind::Other)
     );
 }
+
+#[test]
+fn migration_20_indexes_existing_backup_pins() {
+    let (_scratch, paths) = scratch_paths("schema-pin-index-upgrade");
+    let seams = test_seams(real_fs());
+    let store = crate::store::open_with(
+        &paths,
+        &seams,
+        WRITER_PRAGMAS,
+        crate::store::READER_PRAGMAS,
+        &PINNED_SQLITE,
+        &MIGRATIONS[..19],
+    )
+    .unwrap();
+    crate::testing::writing(&store, |tx| {
+        tx.execute(
+            "INSERT INTO object_pins VALUES ('abc', 'backup_in_progress', 'gen', 1)",
+            [],
+        )
+        .map_err(bug)?;
+        Ok(())
+    });
+    store.close().unwrap();
+    let upgraded = crate::open(&paths, &seams).unwrap();
+    reading(&upgraded, |tx| {
+        assert_eq!(one_int(tx, "PRAGMA user_version"), 20);
+        assert_eq!(
+            one_int(
+                tx,
+                "SELECT count(*) FROM object_pins WHERE object_sha256='abc'"
+            ),
+            1
+        );
+        assert_eq!(
+            one_int(
+                tx,
+                "SELECT count(*) FROM sqlite_schema WHERE type='index' AND name='object_pins_by_owner'"
+            ),
+            1
+        );
+        Ok(())
+    });
+}

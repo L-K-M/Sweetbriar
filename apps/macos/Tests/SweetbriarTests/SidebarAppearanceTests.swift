@@ -134,6 +134,68 @@ struct SidebarAppearanceTests {
         #expect(await source.subscriptions == 1)
     }
 
+    @Test func replacingSourceCancelsAndReleasesEachFollower() async throws {
+        let shared = SharedAppearance()
+        let firstSource = SidebarAppearanceSource()
+        let secondSource = SidebarAppearanceSource()
+        var first: AppearanceModel? = shared.model(source: firstSource)
+        weak let oldModel = first
+        #expect(first === shared.model(source: firstSource))
+        for _ in 0..<200 where !(await firstSource.waiting) {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(await firstSource.subscriptions == 1)
+        #expect(await firstSource.waiting)
+
+        let second = shared.model(source: secondSource)
+        #expect(first !== second)
+        first = nil
+        for _ in 0..<200 {
+            if !(await firstSource.waiting), await secondSource.waiting, oldModel == nil { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(!(await firstSource.waiting))
+        #expect(await firstSource.cancellations == 1)
+        #expect(oldModel == nil)
+        #expect(await secondSource.subscriptions == 1)
+        await firstSource.update()
+        #expect(second.appearance?.generation == 0)
+        await secondSource.update()
+        for _ in 0..<200 where second.appearance?.generation != 1 {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(second.appearance?.generation == 1)
+        for _ in 0..<200 where !(await secondSource.waiting) {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let third = shared.model(source: firstSource)
+        #expect(third !== second)
+        #expect(third === shared.model(source: firstSource))
+        for _ in 0..<200 {
+            if !(await secondSource.waiting), await firstSource.waiting { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(await secondSource.cancellations == 1)
+        #expect(await firstSource.subscriptions == 2)
+    }
+
+    @Test func releasingSharedAppearanceCancelsFollower() async throws {
+        let source = SidebarAppearanceSource()
+        var shared: SharedAppearance? = SharedAppearance()
+        weak let model = shared?.model(source: source)
+        for _ in 0..<200 where !(await source.waiting) {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(await source.waiting)
+        shared = nil
+        for _ in 0..<200 {
+            if !(await source.waiting), model == nil { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(await source.cancellations == 1)
+        #expect(model == nil)
+    }
+
     private func header(_ sidebar: SidebarViewController) -> SidebarHeaderCell? {
         guard let scroll = sidebar.view as? NSScrollView,
               let outline = scroll.documentView as? NSOutlineView else { return nil }
@@ -154,7 +216,7 @@ private struct SidebarAccounts: SidebarSource {
     }
 }
 
-private let sampleAccount = AccountAppearance(
+let sampleAccount = AccountAppearance(
     accountId: "account-1", colorSrgb: "#0072b2",
     tokens: AppearanceTokens(
         light: AppearanceVariant(markerSrgb: "#0072b2", stripSrgb: "#ffffff", foregroundSrgb: "#000000", outlineSrgb: "#000000"),
@@ -162,10 +224,11 @@ private let sampleAccount = AccountAppearance(
     ), symbol: nil, monogram: "W", collides: true, assignment: .custom, revision: 0
 )
 
-private actor SidebarAppearanceSource: AppearanceSource, AppearanceEventSource {
+actor SidebarAppearanceSource: AppearanceSource, AppearanceEventSource {
     private var generation: UInt64 = 0
     private var continuation: CheckedContinuation<AppearanceEvent, any Error>?
     private(set) var subscriptions = 0
+    private(set) var cancellations = 0
     var waiting: Bool { continuation != nil }
 
     func appearance() async throws -> Appearance {
@@ -185,6 +248,7 @@ private actor SidebarAppearanceSource: AppearanceSource, AppearanceEventSource {
         }
     }
     private func cancel() {
+        if continuation != nil { cancellations += 1 }
         continuation?.resume(throwing: CancellationError())
         continuation = nil
     }
