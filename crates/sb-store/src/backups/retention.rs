@@ -165,12 +165,11 @@ impl Backups {
             return Err(StoreError::corrupt("backup destination parent changed"));
         }
         let directory = self.fs.metadata(path).map_err(failed)?;
-        if let Some(metadata) = directory {
-            if metadata.kind() != FileKind::Directory
-                || self.fs.canonicalize(path).map_err(failed)? != path
-            {
-                return Err(StoreError::corrupt("backup generation directory changed"));
-            }
+        if let Some(metadata) = directory
+            && (metadata.kind() != FileKind::Directory
+                || self.fs.canonicalize(path).map_err(failed)? != path)
+        {
+            return Err(StoreError::corrupt("backup generation directory changed"));
         }
         let marker = owner_path(path);
         let Some(_) = self.fs.metadata(&marker).map_err(failed)? else {

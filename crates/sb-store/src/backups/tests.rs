@@ -1406,7 +1406,7 @@ fn own_fixture(store: &Store, path: &Path) {
         store,
         format!("INSERT INTO backup_ownership VALUES ('{id}','{token}')"),
     );
-    std::fs::write(super::owner_path(&path), token).unwrap();
+    std::fs::write(super::owner_path(path), token).unwrap();
     std::fs::write(path.join("payload"), b"generation").unwrap();
 }
 
