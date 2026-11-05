@@ -13,10 +13,20 @@ enum Identity {
     Mailbox,
 }
 
+#[cfg(test)]
 pub(in crate::import) fn validate_messages(
     reader: &mut (impl Read + Seek),
     table: &FileTable,
     scratch: &sb_store::ValidationScratch<'_>,
+) -> io::Result<()> {
+    validate_messages_with_children(reader, table, scratch, &mut |_, _, _, _| Ok(()))
+}
+
+pub(in crate::import) fn validate_messages_with_children<R: Read + Seek>(
+    reader: &mut R,
+    table: &FileTable,
+    scratch: &sb_store::ValidationScratch<'_>,
+    child: &mut impl FnMut(&mut R, u64, u64, u64) -> io::Result<()>,
 ) -> io::Result<()> {
     let (start, end, count) = table.messages;
     if count != table.entries {
@@ -45,14 +55,15 @@ pub(in crate::import) fn validate_messages(
         return Err(invalid());
     }
     unique_occurrences(reader, table, scratch)?;
-    validate_file_relationships(reader, table, scratch)
+    validate_file_relationships(reader, table, scratch, child)
 }
 
 // The schema and occurrence passes have released both tapes before this pass.
-fn validate_file_relationships(
-    reader: &mut (impl Read + Seek),
+fn validate_file_relationships<R: Read + Seek>(
+    reader: &mut R,
     table: &FileTable,
     scratch: &sb_store::ValidationScratch<'_>,
+    child: &mut impl FnMut(&mut R, u64, u64, u64) -> io::Result<()>,
 ) -> io::Result<()> {
     reader.seek(SeekFrom::Start(table.start + 1))?;
     let mut p = Parser {
@@ -171,6 +182,10 @@ fn validate_file_relationships(
                 && p.compare(last, entry.key)? != Ordering::Equal
             {
                 check_group(declaration, references)?;
+                let (bytes, records) = declaration.ok_or_else(invalid)?;
+                let resume = p.position;
+                child(p.reader, last, bytes, records)?;
+                p.restore(resume)?;
                 declaration = None;
                 references = 0;
             }
@@ -194,8 +209,10 @@ fn validate_file_relationships(
             Ok(())
         },
     )?;
-    if previous.is_some() {
+    if let Some(last) = previous {
         check_group(declaration, references)?;
+        let (bytes, records) = declaration.ok_or_else(invalid)?;
+        child(p.reader, last, bytes, records)?;
     }
     Ok(())
 }
@@ -815,9 +832,30 @@ mod tests {
             seeks: 0,
             bytes: 0,
         };
-        validate_file_relationships(&mut reader, &table, &scratch).unwrap();
+        validate_file_relationships(&mut reader, &table, &scratch, &mut |_, _, _, _| Ok(()))
+            .unwrap();
         assert!(reader.seeks < 150_000, "{} seeks", reader.seeks);
         scratch.finish().unwrap();
+
+        // A failure or cancellation while consuming the grouped declarations
+        // must release the same scratch lease as a sort failure.
+        for kind in [io::ErrorKind::Other, io::ErrorKind::Interrupted] {
+            let scratch = resources.store.import_validation_scratch().unwrap();
+            let mut reader = io::Cursor::new(input.as_bytes());
+            let error =
+                validate_file_relationships(&mut reader, &table, &scratch, &mut |_, _, _, _| {
+                    Err(io::Error::new(kind, "child match stopped"))
+                })
+                .unwrap_err();
+            assert_eq!(error.kind(), kind);
+            drop(scratch);
+            assert_eq!(
+                std::fs::read_dir(tmp.path().join("store/objects/tmp/import-validation"))
+                    .unwrap()
+                    .count(),
+                0
+            );
+        }
 
         struct FailAfter<R> {
             inner: R,
@@ -846,9 +884,14 @@ mod tests {
                 kind,
             };
             assert_eq!(
-                validate_file_relationships(&mut reader, &table, &scratch)
-                    .unwrap_err()
-                    .kind(),
+                validate_file_relationships(
+                    &mut reader,
+                    &table,
+                    &scratch,
+                    &mut |_, _, _, _| Ok(())
+                )
+                .unwrap_err()
+                .kind(),
                 kind
             );
             drop(scratch);

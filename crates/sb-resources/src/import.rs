@@ -496,6 +496,20 @@ impl Walker<'_> {
     /// A recognized bundle never enters ordinary discovery. The envelope
     /// is checked before later record validation can admit a source.
     fn bundle(&mut self, dir: &Path, manifest: &Path) {
+        let entries = match self.fs.read_dir(dir) {
+            Ok(entries) => entries,
+            Err(error) => return self.problem_io(dir, error),
+        };
+        let mut children: Vec<_> = entries.into_iter().map(|path| (path, None)).collect();
+        // Fs returns sorted paths; UTF-8 byte order agrees with decoded
+        // scalar order. Non-UTF-8 names are skipped by the merge and
+        // reported. The child callback fires per declaration group in
+        // the relationship sort's ascending order — declaration order
+        // in the manifest itself is irrelevant — so the two sequences
+        // merge in one pass.
+        let mut cursor = 0;
+        let mut missing = Vec::new();
+        let mut missing_overflow = 0u64;
         let captured = self.store.capture_import_source(manifest, |bytes| {
             (self.progress)(ImportProgress::Capturing {
                 path: manifest,
@@ -534,10 +548,40 @@ impl Walker<'_> {
                     let scratch = self.store.import_validation_scratch().map_err(|e| {
                         io::Error::new(e.io_kind().unwrap_or(io::ErrorKind::Other), e)
                     })?;
-                    json_syntax::validate_messages(&mut reader, &table, &scratch)?;
-                    scratch
-                        .finish()
-                        .map_err(|e| io::Error::new(e.io_kind().unwrap_or(io::ErrorKind::Other), e))
+                    json_syntax::validate_messages_with_children(
+                        &mut reader,
+                        &table,
+                        &scratch,
+                        &mut |reader, offset, bytes, records| {
+                            while cursor < children.len() {
+                                let Some(name) =
+                                    children[cursor].0.file_name().and_then(|n| n.to_str())
+                                else {
+                                    cursor += 1;
+                                    continue;
+                                };
+                                match json_syntax::compare_child(reader, offset, name)? {
+                                    std::cmp::Ordering::Greater => cursor += 1,
+                                    std::cmp::Ordering::Equal => {
+                                        children[cursor].1 = Some((bytes, records));
+                                        cursor += 1;
+                                        return Ok(());
+                                    }
+                                    std::cmp::Ordering::Less => break,
+                                }
+                            }
+                            if missing.len() < 64 {
+                                missing.push(json_syntax::child_prefix(reader, offset)?);
+                            } else {
+                                missing_overflow = missing_overflow.saturating_add(1);
+                            }
+                            Ok(())
+                        },
+                    )?;
+                    scratch.finish().map_err(|e| {
+                        io::Error::new(e.io_kind().unwrap_or(io::ErrorKind::Other), e)
+                    })?;
+                    Ok(table.format())
                 });
                 if reader.get_ref().cancelled {
                     self.cancelled = true;
@@ -552,12 +596,151 @@ impl Walker<'_> {
         match result {
             None => {}
             Some(Err(error)) => self.failed(dir, error),
-            Some(Ok(())) => self.problem(
-                dir,
-                ImportProblemKind::Unsupported,
-                "export bundle manifest captured; bundle import is not yet supported",
-            ),
+            Some(Ok(format)) => {
+                let mut valid = true;
+                for (name, truncated) in missing {
+                    let path = if truncated {
+                        dir.to_path_buf()
+                    } else {
+                        dir.join(&name)
+                    };
+                    self.failed(
+                        &path,
+                        format!(
+                            "missing declared child {name:?}{}",
+                            if truncated { " (truncated)" } else { "" }
+                        ),
+                    );
+                    valid = false;
+                }
+                if missing_overflow > 0 {
+                    self.failed(
+                        dir,
+                        format!("{missing_overflow} more declared children are missing"),
+                    );
+                    valid = false;
+                }
+                for (path, declaration) in children {
+                    if self.check(&path) {
+                        return;
+                    }
+                    if path.to_str().is_none() {
+                        self.problem(&path, ImportProblemKind::NonUtf8, "the path is not UTF-8");
+                        valid = false;
+                    } else if let Some((bytes, records)) = declaration {
+                        if !self.check_bundle_child(&path, format, bytes, records) {
+                            valid = false;
+                        }
+                        if self.cancelled {
+                            return;
+                        }
+                    } else if has_extension(&path, "eml") || has_extension(&path, "mbox") {
+                        match self.fs.metadata(&path) {
+                            Ok(Some(md)) if md.kind() == FileKind::File => {
+                                self.failed(&path, "bundle file is not listed in the manifest");
+                                valid = false;
+                            }
+                            Err(error) => {
+                                self.failed(&path, error);
+                                valid = false;
+                            }
+                            Ok(None) => {
+                                self.failed(&path, "bundle child disappeared during discovery");
+                                valid = false;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                if valid {
+                    self.problem(
+                        dir,
+                        ImportProblemKind::Unsupported,
+                        "export bundle manifest captured; bundle import is not yet supported",
+                    );
+                }
+            }
         }
+    }
+
+    fn check_bundle_child(
+        &mut self,
+        path: &Path,
+        format: BundleFormat,
+        bytes: u64,
+        records: u64,
+    ) -> bool {
+        let extension = match format {
+            BundleFormat::Eml => "eml",
+            BundleFormat::Mboxrd => "mbox",
+        };
+        if !has_extension(path, extension) {
+            self.failed(path, "bundle child format does not match the manifest");
+            return false;
+        }
+        let capture = self.store.capture_import_source(path, |bytes| {
+            (self.progress)(ImportProgress::Capturing { path, bytes })
+        });
+        let snapshot = match capture {
+            Ok(ImportSourceCapture::Captured { snapshot, .. }) => snapshot,
+            Ok(ImportSourceCapture::Cancelled) => {
+                self.cancelled = true;
+                return false;
+            }
+            Err(error) => {
+                self.failed(path, error);
+                return false;
+            }
+        };
+        let result = if snapshot.byte_length() != bytes {
+            Err("bundle child byte length differs from the manifest".to_owned())
+        } else {
+            match self
+                .store
+                .open_import_source_cancellable(&snapshot, |bytes| {
+                    (self.progress)(ImportProgress::Scanning { path, bytes })
+                }) {
+                Ok(sb_store::Scoped::Stopped) => {
+                    self.cancelled = true;
+                    Ok(())
+                }
+                // A zero-byte EML is a legitimate emitted child: an
+                // acquired-but-empty stored object exports as an empty
+                // file that still counts as one record.
+                Ok(sb_store::Scoped::Done(_)) if format == BundleFormat::Eml && records == 1 => {
+                    Ok(())
+                }
+                Ok(sb_store::Scoped::Done(_)) if format == BundleFormat::Eml => {
+                    Err("bundle child record count differs from the manifest".to_owned())
+                }
+                Ok(sb_store::Scoped::Done(file)) => match scan_snapshot(
+                    path,
+                    file.take(bytes.saturating_add(1)),
+                    &mut *self.progress,
+                ) {
+                    Scan::Counted(inventory)
+                        if inventory.source_bytes() == bytes && inventory.messages() == records =>
+                    {
+                        Ok(())
+                    }
+                    Scan::Counted(_) => Err(
+                        "bundle child record count or length differs from the manifest".to_owned(),
+                    ),
+                    Scan::Cancelled => {
+                        self.cancelled = true;
+                        Ok(())
+                    }
+                    Scan::Failed(error) => Err(error.to_string()),
+                },
+                Err(error) => Err(error.to_string()),
+            }
+        };
+        self.discard(&snapshot);
+        if let Err(error) = result {
+            self.failed(path, error);
+            return false;
+        }
+        !self.cancelled
     }
 
     /// A directory contributes its sorted entries once; canonical
