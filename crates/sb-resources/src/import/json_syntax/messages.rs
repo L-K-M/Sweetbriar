@@ -19,13 +19,15 @@ pub(in crate::import) fn validate_messages(
     table: &FileTable,
     scratch: &sb_store::ValidationScratch<'_>,
 ) -> io::Result<()> {
-    validate_messages_with_children(reader, table, scratch, &mut |_, _, _, _, _| Ok(()))}
+    validate_messages_with_children(reader, table, scratch, &mut |_, _, _, _, _| Ok(()))
+}
 
 pub(in crate::import) fn validate_messages_with_children<R: Read + Seek>(
     reader: &mut R,
     table: &FileTable,
     scratch: &sb_store::ValidationScratch<'_>,
-    child: &mut impl FnMut(&mut R, u64, u64, u64, u64) -> io::Result<()>,) -> io::Result<()> {
+    child: &mut impl FnMut(&mut R, u64, u64, u64, u64) -> io::Result<()>,
+) -> io::Result<()> {
     let (start, end, count) = table.messages;
     if count != table.entries {
         return Err(invalid());
@@ -61,7 +63,8 @@ fn validate_file_relationships<R: Read + Seek>(
     reader: &mut R,
     table: &FileTable,
     scratch: &sb_store::ValidationScratch<'_>,
-    child: &mut impl FnMut(&mut R, u64, u64, u64, u64) -> io::Result<()>,) -> io::Result<()> {
+    child: &mut impl FnMut(&mut R, u64, u64, u64, u64) -> io::Result<()>,
+) -> io::Result<()> {
     reader.seek(SeekFrom::Start(table.start + 1))?;
     let mut p = Parser {
         reader,
@@ -183,7 +186,8 @@ fn validate_file_relationships<R: Read + Seek>(
                 check_group(declaration, references)?;
                 let (bytes, records, ordinal) = declaration.ok_or_else(invalid)?;
                 let resume = p.position;
-                child(p.reader, last, bytes, records, ordinal)?;                p.restore(resume)?;
+                child(p.reader, last, bytes, records, ordinal)?;
+                p.restore(resume)?;
                 declaration = None;
                 references = 0;
             }
@@ -213,7 +217,8 @@ fn validate_file_relationships<R: Read + Seek>(
     if let Some(last) = previous {
         check_group(declaration, references)?;
         let (bytes, records, ordinal) = declaration.ok_or_else(invalid)?;
-        child(p.reader, last, bytes, records, ordinal)?;    }
+        child(p.reader, last, bytes, records, ordinal)?;
+    }
     Ok(())
 }
 
@@ -852,7 +857,8 @@ mod tests {
             seeks: 0,
             bytes: 0,
         };
-        validate_file_relationships(&mut reader, &table, &scratch, &mut |_, _, _, _, _| Ok(()))            .unwrap();
+        validate_file_relationships(&mut reader, &table, &scratch, &mut |_, _, _, _, _| Ok(()))
+            .unwrap();
         assert!(reader.seeks < 150_000, "{} seeks", reader.seeks);
         scratch.finish().unwrap();
 
@@ -862,7 +868,8 @@ mod tests {
             let scratch = resources.store.import_validation_scratch().unwrap();
             let mut reader = io::Cursor::new(input.as_bytes());
             let error =
-                validate_file_relationships(&mut reader, &table, &scratch, &mut |_, _, _, _, _| {                    Err(io::Error::new(kind, "child match stopped"))
+                validate_file_relationships(&mut reader, &table, &scratch, &mut |_, _, _, _, _| {
+                    Err(io::Error::new(kind, "child match stopped"))
                 })
                 .unwrap_err();
             assert_eq!(error.kind(), kind);
@@ -906,7 +913,8 @@ mod tests {
                     &mut reader,
                     &table,
                     &scratch,
-                    &mut |_, _, _, _, _| Ok(())                )
+                    &mut |_, _, _, _, _| Ok(())
+                )
                 .unwrap_err()
                 .kind(),
                 kind
