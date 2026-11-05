@@ -91,6 +91,7 @@ public final class DraftModel {
     }
 
     private let source: any DraftStore
+    private let discardKey = UUID().uuidString
     @ObservationIgnored private var loadTicket: UInt64 = 0
     @ObservationIgnored private var saveTicket: UInt64 = 0
     @ObservationIgnored private var userEditVersion: UInt64 = 0
@@ -170,7 +171,7 @@ public final class DraftModel {
         }
     }
 
-    /// Mark the draft discarded under a fresh idempotency key.
+    /// Retry one discard intent under its original idempotency key.
     public func discard() async {
         guard !isStopped, !isDiscarded, !isSaving, !isDiscarding else { return }
         isDiscarding = true
@@ -180,7 +181,7 @@ public final class DraftModel {
         failure = nil
         do {
             _ = try await source.discardDraft(
-                idempotencyKey: UUID().uuidString, draftId: draftId
+                idempotencyKey: discardKey, draftId: draftId
             )
             guard !isStopped else { return }
             isDiscarded = true

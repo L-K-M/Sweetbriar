@@ -405,9 +405,12 @@ private actor ReceiptHeldDraftStore: DraftStore {
     let releaseReceipt = Gate()
     private var failRead = false
     private var loseReceipt = false
+    private var loseDiscardReceipt = false
+    private(set) var discardKeys: [String] = []
     init(_ bridge: CoreBridge) { self.bridge = bridge }
     func failNextRead() { failRead = true }
     func loseFirstReceipt() { loseReceipt = true }
+    func loseFirstDiscardReceipt() { loseDiscardReceipt = true }
     func draft(id: String) async throws -> Draft {
         if failRead { failRead = false; throw CoreFailure.unavailable(reason: "injected refresh failure") }
         return try await bridge.draft(id: id)
@@ -424,8 +427,37 @@ private actor ReceiptHeldDraftStore: DraftStore {
         return receipt
     }
     func discardDraft(idempotencyKey: String, draftId: String) async throws -> Receipt {
-        try await bridge.discardDraft(idempotencyKey: idempotencyKey, draftId: draftId)
+        discardKeys.append(idempotencyKey)
+        let receipt = try await bridge.discardDraft(idempotencyKey: idempotencyKey, draftId: draftId)
+        if loseDiscardReceipt {
+            loseDiscardReceipt = false
+            throw CoreFailure.unavailable(reason: "injected discard failure after commit")
+        }
+        return receipt
     }
+}
+
+@MainActor
+@Test(.timeLimit(.minutes(1)))
+func aCommittedDiscardWithALostReplyReplaysItsReceipt() async throws {
+    let (dir, config) = tempConfig()
+    let bridge = try await CoreBridge.open(config: config,
+        snapshots: sinkBatcher(clock: ManualFrameClock()))
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let created = try await bridge.createDraft(idempotencyKey: UUID().uuidString, source: .new)
+    let source = ReceiptHeldDraftStore(bridge)
+    await source.loseFirstDiscardReceipt()
+    let model = DraftModel(source: source, draftId: created.draftId)
+    await model.load()
+    await model.discard()
+    #expect(model.failure != nil && !model.isDiscarded)
+    await model.discard()
+    #expect(model.failure == nil && model.isDiscarded)
+    let keys = await source.discardKeys
+    #expect(keys.count == 2 && keys[0] == keys[1])
+    let stored = try await bridge.draft(id: created.draftId)
+    #expect(stored.state == .discarded)
+    await bridge.shutdown()
 }
 
 private enum AttachmentAcknowledgementCase: CaseIterable, Sendable {
