@@ -36,7 +36,7 @@ func createPublishSaveLoadRoundTrip() async throws {
     let created = try await bridge.createDraft(idempotencyKey: createKey, source: .new)
     #expect(created.receipt.command == "create_draft")
     let replayed = try await bridge.createDraft(idempotencyKey: createKey, source: .new)
-    #expect(replayed.draftId == created.draftId)
+    #expect(replayed == created)
 
     let bytes = Data("attachment-bytes".utf8)
     let attachment = try await bridge.publishDraftAttachment(bytes: bytes)
@@ -117,7 +117,7 @@ func sameKeyReplayRetainsTheHandleAndSkipsTheSpend() async throws {
         idempotencyKey: key, draftId: created.draftId, baseRevisionId: nil, content: contentValue
     )
     #expect(second.revisionId == first.revisionId)
-    #expect(second.receipt.createdAtMs == first.receipt.createdAtMs)
+    #expect(second.receipt == first.receipt)
 
     let loaded = try await bridge.draft(id: created.draftId)
     let r = try #require(loaded.revision)

@@ -636,7 +636,7 @@ extension Setting {
 
 extension Receipt {
     /// Map the generated record field by field.
-    fileprivate init(_ generated: SweetbriarCore.Receipt) {
+    init(_ generated: SweetbriarCore.Receipt) {
         self.init(
             command: generated.command,
             resultJson: generated.resultJson,

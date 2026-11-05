@@ -368,10 +368,7 @@ public struct DraftCreated: Sendable, Equatable {
 
     /// Map the generated record field by field.
     init(_ g: SweetbriarCore.DraftCreated) {
-        receipt = Receipt(
-            command: g.receipt.command, resultJson: g.receipt.resultJson,
-            createdAtMs: g.receipt.createdAtMs
-        )
+        receipt = Receipt(g.receipt)
         draftId = g.draftId
     }
 }
@@ -388,10 +385,7 @@ public struct DraftSaved: Sendable, Equatable {
 
     /// Map the generated record field by field.
     init(_ g: SweetbriarCore.DraftSaved) {
-        receipt = Receipt(
-            command: g.receipt.command, resultJson: g.receipt.resultJson,
-            createdAtMs: g.receipt.createdAtMs
-        )
+        receipt = Receipt(g.receipt)
         revisionId = g.revisionId
     }
 }
@@ -424,16 +418,16 @@ public struct DraftSummary: Sendable, Equatable {
         self.attempt = attempt
     }
 
-    init(_ generated: SweetbriarCore.DraftSummary) {
-        draftId = generated.draftId
-        state = DraftState(generated.state)
-        accountId = generated.accountId
-        identityId = generated.identityId
-        subject = generated.subject
-        to = generated.to.map(DraftRecipient.init)
-        cc = generated.cc.map(DraftRecipient.init)
-        bcc = generated.bcc.map(DraftRecipient.init)
-        updatedAtMs = generated.updatedAtMs
-        attempt = generated.attempt.map(LiveAttempt.init)
+    init(_ g: SweetbriarCore.DraftSummary) {
+        draftId = g.draftId
+        state = DraftState(g.state)
+        accountId = g.accountId
+        identityId = g.identityId
+        subject = g.subject
+        to = g.to.map(DraftRecipient.init)
+        cc = g.cc.map(DraftRecipient.init)
+        bcc = g.bcc.map(DraftRecipient.init)
+        updatedAtMs = g.updatedAtMs
+        attempt = g.attempt.map(LiveAttempt.init)
     }
 }
