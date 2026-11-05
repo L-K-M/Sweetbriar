@@ -10,6 +10,13 @@ use std::path::{Path, PathBuf};
 
 /// The filesystem seam. Object-safe; shared as `Arc<dyn Fs>`.
 pub trait Fs: Send + Sync {
+    /// Open an absolute directory without following any symbolic link.
+    /// The returned capability remains anchored to that directory if its
+    /// pathname is renamed. Unsupported adapters fail closed.
+    fn open_confined_dir(&self, _path: &Path) -> io::Result<Box<dyn ConfinedDir>> {
+        Err(io::ErrorKind::Unsupported.into())
+    }
+
     /// Create a new file for writing; fails if `path` already exists.
     fn create(&self, path: &Path) -> io::Result<Box<dyn WriteFile>>;
     /// Open an existing file for reading and seeking.
@@ -73,6 +80,14 @@ pub trait Fs: Send + Sync {
     /// Classify the filesystem location of `path`, or of its nearest
     /// existing ancestor when `path` does not exist.
     fn location(&self, path: &Path) -> io::Result<Location>;
+}
+
+/// A directory capability for race-safe, no-symlink descendant reads.
+pub trait ConfinedDir: Send + Sync {
+    /// Open a regular file below this directory. Reject absolute paths,
+    /// parent components, symlinks and non-regular files. Resolution stays
+    /// anchored to the opened directory even if its pathname is replaced.
+    fn open_regular(&self, relative: &Path) -> io::Result<(Box<dyn ReadFile>, Metadata)>;
 }
 
 /// A file open for writing through the `Fs` seam.
