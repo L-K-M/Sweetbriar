@@ -25,6 +25,15 @@ impl From<sb_service::ComposeFormat> for ComposeFormat {
     }
 }
 
+impl From<ComposeFormat> for sb_service::ComposeFormat {
+    fn from(value: ComposeFormat) -> Self {
+        match value {
+            ComposeFormat::Plain => Self::Plain,
+            ComposeFormat::Markdown => Self::Markdown,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 pub enum DraftState {
     Editing,
@@ -83,6 +92,15 @@ impl From<sb_service::DraftRecipient> for DraftRecipient {
     }
 }
 
+impl From<DraftRecipient> for sb_service::DraftRecipient {
+    fn from(value: DraftRecipient) -> Self {
+        Self {
+            address: value.address,
+            name: value.name,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct DraftAttachmentRef {
     pub object_sha256: String,
@@ -92,6 +110,17 @@ pub struct DraftAttachmentRef {
 }
 impl From<sb_service::DraftAttachmentRef> for DraftAttachmentRef {
     fn from(value: sb_service::DraftAttachmentRef) -> Self {
+        Self {
+            object_sha256: value.object_sha256,
+            filename: value.filename,
+            media_type: value.media_type,
+            size: value.size,
+        }
+    }
+}
+
+impl From<DraftAttachmentRef> for sb_service::DraftAttachmentRef {
+    fn from(value: DraftAttachmentRef) -> Self {
         Self {
             object_sha256: value.object_sha256,
             filename: value.filename,
@@ -248,6 +277,137 @@ impl From<sb_service::DraftCreated> for DraftCreated {
     }
 }
 
+/// One save's content (spec/07 `save_draft`'s `content`): everything
+/// a revision records but its ids — the core assigns the revision id
+/// and checks the base. Crosses field by field.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct DraftContent {
+    /// The sending identity the route snapshots (`None` keeps the
+    /// revision unrouted: a draft with no sending identity, spec/02).
+    pub identity_id: Option<String>,
+    pub format: ComposeFormat,
+    /// `false` is the per-draft literal plain-text option (spec/05).
+    pub plain_flowed: bool,
+    pub subject: String,
+    pub to: Vec<DraftRecipient>,
+    pub cc: Vec<DraftRecipient>,
+    pub bcc: Vec<DraftRecipient>,
+    /// Markdown or plain source as composed (spec/05); the outgoing
+    /// MIME is built from it at send.
+    pub body_source: String,
+    /// The published objects this revision references.
+    pub attachments: Vec<DraftAttachment>,
+}
+
+impl DraftContent {
+    fn into_service(self) -> sb_service::DraftContent {
+        sb_service::DraftContent {
+            identity_id: self.identity_id,
+            format: self.format.into(),
+            plain_flowed: self.plain_flowed,
+            subject: self.subject,
+            to: self.to.into_iter().map(Into::into).collect(),
+            cc: self.cc.into_iter().map(Into::into).collect(),
+            bcc: self.bcc.into_iter().map(Into::into).collect(),
+            body_source: self.body_source,
+            attachments: self.attachments.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl PartialEq for DraftContent {
+    fn eq(&self, other: &Self) -> bool {
+        self.identity_id == other.identity_id
+            && self.format == other.format
+            && self.plain_flowed == other.plain_flowed
+            && self.subject == other.subject
+            && self.to == other.to
+            && self.cc == other.cc
+            && self.bcc == other.bcc
+            && self.body_source == other.body_source
+            && self.attachments == other.attachments
+    }
+}
+impl Eq for DraftContent {}
+
+/// A newly published object, or an unchanged reference from the base
+/// revision. `New` carries the live [`DraftAttachmentObject`] handle
+/// and spends its reservation in the save's transaction; `Retained`
+/// names a reference the base already holds and cannot authorize a
+/// spend. No variant rebuilds a handle from an object's identity.
+#[derive(Debug, Clone, uniffi::Enum)]
+pub enum DraftAttachment {
+    New {
+        object: Arc<DraftAttachmentObject>,
+        filename: String,
+        media_type: String,
+    },
+    Retained(DraftAttachmentRef),
+}
+
+impl From<DraftAttachment> for sb_service::DraftAttachment {
+    fn from(value: DraftAttachment) -> Self {
+        match value {
+            DraftAttachment::New {
+                object,
+                filename,
+                media_type,
+            } => Self::New {
+                // Cloning the service publication shares its one
+                // reservation; the save's transaction spends it.
+                object: object.inner.clone(),
+                filename,
+                media_type,
+            },
+            DraftAttachment::Retained(reference) => Self::Retained(reference.into()),
+        }
+    }
+}
+
+impl PartialEq for DraftAttachment {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (
+                Self::New {
+                    object: left,
+                    filename: left_filename,
+                    media_type: left_media_type,
+                },
+                Self::New {
+                    object: right,
+                    filename: right_filename,
+                    media_type: right_media_type,
+                },
+            ) => {
+                left.object_sha256() == right.object_sha256()
+                    && left.byte_length() == right.byte_length()
+                    && left_filename == right_filename
+                    && left_media_type == right_media_type
+            }
+            (Self::Retained(left), Self::Retained(right)) => left == right,
+            _ => false,
+        }
+    }
+}
+impl Eq for DraftAttachment {}
+
+/// What `save_draft` answers: its receipt and the revision id the
+/// receipt names — the stored id on a replayed key.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct DraftSaved {
+    pub receipt: Receipt,
+    pub revision_id: String,
+}
+
+impl From<sb_service::DraftSaved> for DraftSaved {
+    fn from(value: sb_service::DraftSaved) -> Self {
+        Self {
+            receipt: Receipt::from_service(&value.receipt),
+            revision_id: value.revision_id,
+        }
+    }
+}
+
 /// One attachment publication's input (spec/02 "Drafts", spec/08
 /// "Attachments"): the exact bytes to publish durably under the data
 /// root before the revision that references them. Only bytes cross —
@@ -326,6 +486,42 @@ impl Core {
             })
             .await?;
         Ok(DraftCreated::from(created))
+    }
+
+    /// `save_draft(draft_id, base_revision_id, content)` (spec/07
+    /// "Commands"): append an immutable revision and make it the
+    /// draft's current one, in the transaction that also spends each
+    /// new attachment's publication reservation. `base_revision_id`
+    /// must name the current revision (`None` before the first
+    /// save); anything else is `Conflict`. Retained attachments must
+    /// exactly match references in that base revision. An unknown
+    /// draft or identity is `NotFound`; a `sent` or `discarded` draft
+    /// refuses the same way as a wrong base. The receipt answers
+    /// `{"revision_id": ...}` and replays it: a repeated key answers
+    /// its stored receipt before any replacement validation or
+    /// reservation spending, so a spent handle cannot block its own
+    /// replay. Like every command it honours the token only until it
+    /// holds the core; once begun it runs to completion.
+    pub async fn save_draft(
+        &self,
+        token: Arc<CancelToken>,
+        idempotency_key: String,
+        draft_id: String,
+        base_revision_id: Option<String>,
+        content: DraftContent,
+    ) -> Result<DraftSaved, CoreError> {
+        let saved = self
+            .command(&token, async move |core| {
+                core.save_draft(
+                    &idempotency_key,
+                    &draft_id,
+                    base_revision_id.as_deref(),
+                    content.into_service(),
+                )
+                .await
+            })
+            .await?;
+        Ok(DraftSaved::from(saved))
     }
 
     /// `discard_draft(id)` (spec/07 "Commands", spec/05): refuse
