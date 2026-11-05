@@ -1225,6 +1225,12 @@ local drafts. No network yet.
     leaving connection limits on unrelated archive rows. Preserve large
     requests and checkpoints. Schema inspection bounds remain part of e3b's
     qualification prerequisite; this step qualifies no staging directory.
+  - **M1.8e3a2 Inherited publication authority (M):** revoke copied
+    publication reservation pins in the quarantine transaction. Native proof
+    through a real completed backup and a fresh restored store must reject
+    an old handle for a missing attachment, preserve receipt replay and other
+    pin kinds, leave the source handle valid, and accept fresh publications.
+    Keep the change atomic with the other quarantine transformations.
   - **M1.8e3b Quarantined restore staging (L):** verify and copy the chosen
     generation into `<data root>.restoring-<inc>` with publication flushes,
     then run the staging quarantine transaction: new incarnation, all
