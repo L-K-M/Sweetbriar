@@ -4960,6 +4960,68 @@ fn stage_schema_inspection_honours_cancellation() {
 }
 
 #[test]
+fn stage_schema_inherited_programs_do_not_run_during_inspection() {
+    let child = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--ignored",
+            "--exact",
+            "backups::tests::stage_schema_inherited_program_child",
+            "--nocapture",
+        ])
+        .env("SB_STAGE_SCHEMA_PROGRAM_CHILD", "1")
+        .output()
+        .unwrap();
+    assert!(
+        child.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&child.stdout),
+        String::from_utf8_lossy(&child.stderr)
+    );
+}
+
+#[test]
+#[ignore = "spawned by stage_schema_inherited_programs_do_not_run_during_inspection"]
+fn stage_schema_inherited_program_child() {
+    assert_eq!(
+        std::env::var("SB_STAGE_SCHEMA_PROGRAM_CHILD").as_deref(),
+        Ok("1")
+    );
+    let source = staging_source("stage-schema-program");
+    let stage = prepare(
+        &source.store,
+        source.select_with(&source.store),
+        source.receipt.location(),
+        source.metadata,
+    );
+    let db = stage.path().join("state.sqlite");
+    let huge = "x".repeat(16 * 1024 * 1024);
+    {
+        let conn = Connection::open(&db).unwrap();
+        conn.execute_batch(&format!(
+            "PRAGMA foreign_keys=OFF;
+             DROP TABLE accounts;
+             CREATE VIRTUAL TABLE accounts USING fts5(state);
+             DROP TABLE accounts_config;
+             CREATE TABLE marker_payload(k TEXT PRIMARY KEY, v TEXT) STRICT;
+             CREATE VIEW accounts_config AS SELECT k, v FROM marker_payload;
+             INSERT INTO marker_payload(k, v) VALUES('k', '{huge}');"
+        ))
+        .unwrap();
+    }
+    let _ = crate::image_vfs::largest_allocation(true).unwrap();
+    let result = stage.inspect_stage_schema(&AtomicBool::new(false));
+    let largest = crate::image_vfs::largest_allocation(false).unwrap();
+    assert!(
+        largest < i64::from(crate::backups::staging::MAX_SCHEMA_VALUE_BYTES),
+        "an inherited program ran during inspection: {largest}"
+    );
+    assert!(
+        matches!(result, Err(StoreError::Corrupt { .. })),
+        "an inherited view or virtual table must fail closed: {result:?}"
+    );
+}
+
+#[test]
 fn stage_schema_metadata_allocation_is_bounded() {
     // SQLite's allocation high-water mark is global to a process.
     let child = std::process::Command::new(std::env::current_exe().unwrap())

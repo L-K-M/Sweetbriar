@@ -3,7 +3,7 @@
 //! SQLite owns each `sqlite3_file` until xClose. Its embedded pointer owns an
 //! Arc to the retained reader; a thread-local slot transfers that Arc to
 //! xOpen. The VFS stays registered for the life of the process.
-use rusqlite::{Connection, OpenFlags, ffi};
+use rusqlite::{Connection, OpenFlags, config::DbConfig, ffi};
 use sb_types::fs::ReadFile;
 use std::cell::RefCell;
 use std::ffi::{CStr, c_char, c_int, c_void};
@@ -106,7 +106,23 @@ pub(crate) fn open(file: Box<dyn ReadFile>) -> rusqlite::Result<Connection> {
         );
         // xOpen owns its own Arc; this slot only transfers it during open.
         *opening.borrow_mut() = None;
-        result
+        result.and_then(|conn| {
+            // Retained images carry an inherited schema: no virtual-table
+            // module, view or trigger may run while it is inspected, not
+            // even a module's xConnect during schema resolution. Canonical
+            // images only expose ordinary STRICT tables, so nothing
+            // legitimate needs these capabilities. Eponymous pragma
+            // readers keep working after modules are dropped.
+            // SAFETY: the handle is this connection's live sqlite3*, and a
+            // NULL keep-list disables every droppable module.
+            let rc = unsafe { ffi::sqlite3_drop_modules(conn.handle(), std::ptr::null_mut()) };
+            if rc != ffi::SQLITE_OK {
+                return Err(rusqlite::Error::SqliteFailure(ffi::Error::new(rc), None));
+            }
+            conn.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_VIEW, false)?;
+            conn.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_TRIGGER, false)?;
+            Ok(conn)
+        })
     })
 }
 
