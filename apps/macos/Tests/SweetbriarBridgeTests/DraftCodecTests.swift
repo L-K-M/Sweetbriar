@@ -32,7 +32,8 @@ import Testing
     let revision = DraftRevision(
         revisionId: "r", seq: 9, baseRevisionId: "base", accountId: "account", identityId: "identity",
         format: .markdown, plainFlowed: false, subject: "Subject", to: [recipient],
-        cc: [.init(address: "cc@example.test", name: nil)], bcc: [], bodySource: "Body 😀",
+        cc: [.init(address: "cc@example.test", name: nil)],
+        bcc: [.init(address: "bcc@example.test", name: "Hidden")], bodySource: "Body 😀",
         attachments: [reference], createdAtMs: 17
     )
     let mapped = Draft(.init(
@@ -41,7 +42,8 @@ import Testing
             revisionId: "r", seq: 9, baseRevisionId: "base", accountId: "account", identityId: "identity",
             format: .markdown, plainFlowed: false, subject: "Subject",
             to: [.init(address: "a@example.test", name: "Å")],
-            cc: [.init(address: "cc@example.test", name: nil)], bcc: [], bodySource: "Body 😀",
+            cc: [.init(address: "cc@example.test", name: nil)],
+            bcc: [.init(address: "bcc@example.test", name: "Hidden")], bodySource: "Body 😀",
             attachments: [.init(objectSha256: "ab", filename: "ä.txt", mediaType: "text/plain", size: 73)],
             createdAtMs: 17
         ), attempt: .init(attemptId: "attempt", state: .outcomeUnknown), createdAtMs: 19, updatedAtMs: 23
@@ -63,7 +65,9 @@ import Testing
     let content = DraftContent(revision).generated
     #expect(content.identityId == "identity" && content.format == .markdown && !content.plainFlowed)
     #expect(content.subject == "Subject" && content.bodySource == "Body 😀")
-    #expect(content.to == [recipient.generated] && content.cc.count == 1 && content.bcc.isEmpty)
+    #expect(content.to == [recipient.generated])
+    #expect(content.cc == [.init(address: "cc@example.test", name: nil)])
+    #expect(content.bcc == [.init(address: "bcc@example.test", name: "Hidden")])
     guard case .retained(let ref) = try #require(content.attachments.first) else {
         Issue.record("a stored reference must stay retained"); return
     }

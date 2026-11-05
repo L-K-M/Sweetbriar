@@ -79,6 +79,23 @@ func createPublishSaveLoadRoundTrip() async throws {
     #expect(summary.to == r2.to && summary.cc == r2.cc && summary.bcc == r2.bcc)
     #expect(summary.updatedAtMs == reloaded.updatedAtMs)
 
+    let discardKey = UUID().uuidString
+    let discarded = try await bridge.discardDraft(idempotencyKey: discardKey, draftId: created.draftId)
+    #expect(discarded.command == "discard_draft")
+    let discardReplay = try await bridge.discardDraft(idempotencyKey: discardKey, draftId: created.draftId)
+    #expect(discardReplay == discarded)
+    let terminal = try await bridge.draft(id: created.draftId)
+    #expect(terminal.state == .discarded && terminal.revision == r2)
+    #expect(try await bridge.drafts().allSatisfy { $0.draftId != created.draftId })
+    do {
+        _ = try await bridge.saveDraft(idempotencyKey: UUID().uuidString,
+            draftId: created.draftId, baseRevisionId: r2.revisionId,
+            content: content(subject: "Terminal edit", attachments: [.retained(ref)]))
+        Issue.record("a fresh save of a discarded draft must conflict")
+    } catch let failure as CoreFailure {
+        guard case .conflict = failure else { Issue.record("expected Conflict, got \(failure)"); return }
+    }
+
     await bridge.shutdown()
 }
 
