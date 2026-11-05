@@ -21,6 +21,7 @@
 mod api;
 mod appearance;
 mod cancel;
+mod drafts;
 mod error;
 mod imports;
 mod messages;
@@ -31,10 +32,15 @@ mod windows;
 
 pub use api::{Core, CoreConfig, Receipt, Setting, open_core, platform_default_config};
 pub use appearance::{
-    AccountAppearance, Appearance, AppearanceAssignment, AppearanceEvent, AppearanceSubscription,
-    AppearanceTokens, AppearanceVariant, IdentityAppearance, PaletteColor, palette,
+    AccountAppearance, AccountAppearanceChange, AccountColor, Appearance, AppearanceAssignment,
+    AppearanceEvent, AppearanceSubscription, AppearanceTokens, AppearanceVariant,
+    IdentityAppearance, IdentityAppearanceChange, PaletteColor, palette,
 };
 pub use cancel::CancelToken;
+pub use drafts::{
+    AttemptState, ComposeFormat, Draft, DraftAttachmentRef, DraftCreated, DraftRecipient,
+    DraftRevision, DraftSource, DraftState, DraftSummary, LiveAttempt,
+};
 pub use error::{CoreError, SearchParseCode};
 pub use imports::{
     ImportJob, ImportJobState, ImportProblem, ImportProblemKind, ImportReport, ImportSource,

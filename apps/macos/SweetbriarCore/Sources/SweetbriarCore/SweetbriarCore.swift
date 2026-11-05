@@ -956,12 +956,62 @@ public protocol CoreProtocol: AnyObject, Sendable {
     func appearance(token: CancelToken) async throws  -> Appearance
     
     /**
+     * `set_account_appearance` (spec/07 "Commands"): one command
+     * under an idempotency key the shell made (`UUID()` in Swift) —
+     * a repeated key returns the stored receipt, a stale
+     * `expected_revision` is `Conflict`, an unknown account
+     * `NotFound` and an invalid pick `InvalidInput` (spec/02). Like
+     * every command it honours the token only until it holds the
+     * core; once begun it runs to completion.
+     */
+    func setAccountAppearance(token: CancelToken, idempotencyKey: String, accountId: String, expectedRevision: Int64, change: AccountAppearanceChange) async throws  -> Receipt
+    
+    /**
+     * `set_identity_appearance` (spec/07 "Commands", spec/02
+     * "Identity appearance"): one command under an idempotency key.
+     * `expected_revision` names the record it writes — `None` the
+     * absent-record state — and a stale one is `Conflict`; an
+     * unknown identity is `NotFound`.
+     */
+    func setIdentityAppearance(token: CancelToken, idempotencyKey: String, identityId: String, expectedRevision: Int64?, change: IdentityAppearanceChange) async throws  -> Receipt
+    
+    /**
      * `subscribe_appearance` (spec/07 "Subscriptions"): committed
      * appearance generations from `generation` — what the caller's
      * last `appearance()` answer reported. A query like `subscribe`:
      * the token races the core's lock.
      */
     func subscribeAppearance(token: CancelToken, generation: UInt64) async throws  -> AppearanceSubscription
+    
+    /**
+     * `create_draft(context)` (spec/07 "Commands"): a new `editing`
+     * draft under an idempotency key the shell made (`UUID()` in
+     * Swift) — a repeated key returns the stored receipt and its
+     * draft id. A reply, reply-all or forward context's source
+     * occurrence must exist (`NotFound`); a forward resolves to the
+     * logical message. Like every command it honours the token only
+     * until it holds the core; once begun it runs to completion.
+     */
+    func createDraft(token: CancelToken, idempotencyKey: String, context: DraftSource) async throws  -> DraftCreated
+    
+    /**
+     * `discard_draft(id)` (spec/07 "Commands", spec/05): refuse
+     * `Conflict` while a live attempt exists or the draft already
+     * sits at a terminal state; otherwise mark it `discarded`,
+     * keeping every revision. The receipt answers
+     * `{"draft_id": ...}`.
+     */
+    func discardDraft(token: CancelToken, idempotencyKey: String, draftId: String) async throws  -> Receipt
+    
+    /**
+     * Load a draft and its current revision.
+     */
+    func draft(token: CancelToken, draftId: String) async throws  -> Draft
+    
+    /**
+     * List local drafts, newest first.
+     */
+    func drafts(token: CancelToken) async throws  -> [DraftSummary]
     
     /**
      * Cancel an import or durably pause Search index work; committed work stays.
@@ -1272,6 +1322,54 @@ open func appearance(token: CancelToken)async throws  -> Appearance  {
 }
     
     /**
+     * `set_account_appearance` (spec/07 "Commands"): one command
+     * under an idempotency key the shell made (`UUID()` in Swift) —
+     * a repeated key returns the stored receipt, a stale
+     * `expected_revision` is `Conflict`, an unknown account
+     * `NotFound` and an invalid pick `InvalidInput` (spec/02). Like
+     * every command it honours the token only until it holds the
+     * core; once begun it runs to completion.
+     */
+open func setAccountAppearance(token: CancelToken, idempotencyKey: String, accountId: String, expectedRevision: Int64, change: AccountAppearanceChange)async throws  -> Receipt  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_set_account_appearance(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterString.lower(idempotencyKey),FfiConverterString.lower(accountId),FfiConverterInt64.lower(expectedRevision),FfiConverterTypeAccountAppearanceChange_lower(change)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeReceipt_lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * `set_identity_appearance` (spec/07 "Commands", spec/02
+     * "Identity appearance"): one command under an idempotency key.
+     * `expected_revision` names the record it writes — `None` the
+     * absent-record state — and a stale one is `Conflict`; an
+     * unknown identity is `NotFound`.
+     */
+open func setIdentityAppearance(token: CancelToken, idempotencyKey: String, identityId: String, expectedRevision: Int64?, change: IdentityAppearanceChange)async throws  -> Receipt  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_set_identity_appearance(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterString.lower(idempotencyKey),FfiConverterString.lower(identityId),FfiConverterOptionInt64.lower(expectedRevision),FfiConverterTypeIdentityAppearanceChange_lower(change)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeReceipt_lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
      * `subscribe_appearance` (spec/07 "Subscriptions"): committed
      * appearance generations from `generation` — what the caller's
      * last `appearance()` answer reported. A query like `subscribe`:
@@ -1289,6 +1387,92 @@ open func subscribeAppearance(token: CancelToken, generation: UInt64)async throw
             completeFunc: ffi_sb_ffi_rust_future_complete_u64,
             freeFunc: ffi_sb_ffi_rust_future_free_u64,
             liftFunc: FfiConverterTypeAppearanceSubscription_lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * `create_draft(context)` (spec/07 "Commands"): a new `editing`
+     * draft under an idempotency key the shell made (`UUID()` in
+     * Swift) — a repeated key returns the stored receipt and its
+     * draft id. A reply, reply-all or forward context's source
+     * occurrence must exist (`NotFound`); a forward resolves to the
+     * logical message. Like every command it honours the token only
+     * until it holds the core; once begun it runs to completion.
+     */
+open func createDraft(token: CancelToken, idempotencyKey: String, context: DraftSource)async throws  -> DraftCreated  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_create_draft(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterString.lower(idempotencyKey),FfiConverterTypeDraftSource_lower(context)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeDraftCreated_lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * `discard_draft(id)` (spec/07 "Commands", spec/05): refuse
+     * `Conflict` while a live attempt exists or the draft already
+     * sits at a terminal state; otherwise mark it `discarded`,
+     * keeping every revision. The receipt answers
+     * `{"draft_id": ...}`.
+     */
+open func discardDraft(token: CancelToken, idempotencyKey: String, draftId: String)async throws  -> Receipt  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_discard_draft(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterString.lower(idempotencyKey),FfiConverterString.lower(draftId)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeReceipt_lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * Load a draft and its current revision.
+     */
+open func draft(token: CancelToken, draftId: String)async throws  -> Draft  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_draft(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterString.lower(draftId)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeDraft_lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * List local drafts, newest first.
+     */
+open func drafts(token: CancelToken)async throws  -> [DraftSummary]  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_drafts(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterSequenceTypeDraftSummary.lift,
             errorHandler: FfiConverterTypeCoreError_lift
         )
 }
@@ -2167,6 +2351,75 @@ public func FfiConverterTypeAccountAppearance_lower(_ value: AccountAppearance) 
 
 
 /**
+ * `set_account_appearance`'s new values (spec/07 "Commands").
+ */
+public struct AccountAppearanceChange: Equatable, Hashable {
+    /**
+     * The color pick.
+     */
+    public var color: AccountColor
+    /**
+     * The symbol; `None` clears back to the derived monogram.
+     */
+    public var symbol: String?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * The color pick.
+         */color: AccountColor, 
+        /**
+         * The symbol; `None` clears back to the derived monogram.
+         */symbol: String?) {
+        self.color = color
+        self.symbol = symbol
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension AccountAppearanceChange: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeAccountAppearanceChange: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> AccountAppearanceChange {
+        return
+            try AccountAppearanceChange(
+                color: FfiConverterTypeAccountColor.read(from: &buf), 
+                symbol: FfiConverterOptionString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: AccountAppearanceChange, into buf: inout [UInt8]) {
+        FfiConverterTypeAccountColor.write(value.color, into: &buf)
+        FfiConverterOptionString.write(value.symbol, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAccountAppearanceChange_lift(_ buf: RustBuffer) throws -> AccountAppearanceChange {
+    return try FfiConverterTypeAccountAppearanceChange.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAccountAppearanceChange_lower(_ value: AccountAppearanceChange) -> RustBuffer {
+    return FfiConverterTypeAccountAppearanceChange.lower(value)
+}
+
+
+/**
  * `appearance()`'s answer (spec/07): every account and identity at
  * one committed appearance generation — `subscribe_appearance`'s
  * starting mark.
@@ -2712,6 +2965,446 @@ public func FfiConverterTypeCoverage_lower(_ value: Coverage) -> RustBuffer {
 }
 
 
+public struct Draft: Equatable, Hashable {
+    public var draftId: String
+    public var state: DraftState
+    public var replyToOccurrenceId: Int64?
+    public var forwardOfMessageId: Int64?
+    public var revision: DraftRevision?
+    public var attempt: LiveAttempt?
+    public var createdAtMs: Int64
+    public var updatedAtMs: Int64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(draftId: String, state: DraftState, replyToOccurrenceId: Int64?, forwardOfMessageId: Int64?, revision: DraftRevision?, attempt: LiveAttempt?, createdAtMs: Int64, updatedAtMs: Int64) {
+        self.draftId = draftId
+        self.state = state
+        self.replyToOccurrenceId = replyToOccurrenceId
+        self.forwardOfMessageId = forwardOfMessageId
+        self.revision = revision
+        self.attempt = attempt
+        self.createdAtMs = createdAtMs
+        self.updatedAtMs = updatedAtMs
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension Draft: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeDraft: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Draft {
+        return
+            try Draft(
+                draftId: FfiConverterString.read(from: &buf), 
+                state: FfiConverterTypeDraftState.read(from: &buf), 
+                replyToOccurrenceId: FfiConverterOptionInt64.read(from: &buf), 
+                forwardOfMessageId: FfiConverterOptionInt64.read(from: &buf), 
+                revision: FfiConverterOptionTypeDraftRevision.read(from: &buf), 
+                attempt: FfiConverterOptionTypeLiveAttempt.read(from: &buf), 
+                createdAtMs: FfiConverterInt64.read(from: &buf), 
+                updatedAtMs: FfiConverterInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: Draft, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.draftId, into: &buf)
+        FfiConverterTypeDraftState.write(value.state, into: &buf)
+        FfiConverterOptionInt64.write(value.replyToOccurrenceId, into: &buf)
+        FfiConverterOptionInt64.write(value.forwardOfMessageId, into: &buf)
+        FfiConverterOptionTypeDraftRevision.write(value.revision, into: &buf)
+        FfiConverterOptionTypeLiveAttempt.write(value.attempt, into: &buf)
+        FfiConverterInt64.write(value.createdAtMs, into: &buf)
+        FfiConverterInt64.write(value.updatedAtMs, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeDraft_lift(_ buf: RustBuffer) throws -> Draft {
+    return try FfiConverterTypeDraft.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeDraft_lower(_ value: Draft) -> RustBuffer {
+    return FfiConverterTypeDraft.lower(value)
+}
+
+
+public struct DraftAttachmentRef: Equatable, Hashable {
+    public var objectSha256: String
+    public var filename: String
+    public var mediaType: String
+    public var size: UInt64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(objectSha256: String, filename: String, mediaType: String, size: UInt64) {
+        self.objectSha256 = objectSha256
+        self.filename = filename
+        self.mediaType = mediaType
+        self.size = size
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension DraftAttachmentRef: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeDraftAttachmentRef: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> DraftAttachmentRef {
+        return
+            try DraftAttachmentRef(
+                objectSha256: FfiConverterString.read(from: &buf), 
+                filename: FfiConverterString.read(from: &buf), 
+                mediaType: FfiConverterString.read(from: &buf), 
+                size: FfiConverterUInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: DraftAttachmentRef, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.objectSha256, into: &buf)
+        FfiConverterString.write(value.filename, into: &buf)
+        FfiConverterString.write(value.mediaType, into: &buf)
+        FfiConverterUInt64.write(value.size, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeDraftAttachmentRef_lift(_ buf: RustBuffer) throws -> DraftAttachmentRef {
+    return try FfiConverterTypeDraftAttachmentRef.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeDraftAttachmentRef_lower(_ value: DraftAttachmentRef) -> RustBuffer {
+    return FfiConverterTypeDraftAttachmentRef.lower(value)
+}
+
+
+/**
+ * What `create_draft` answers: its receipt and the draft id the
+ * receipt names — the stored id on a replayed key.
+ */
+public struct DraftCreated: Equatable, Hashable {
+    public var receipt: Receipt
+    public var draftId: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(receipt: Receipt, draftId: String) {
+        self.receipt = receipt
+        self.draftId = draftId
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension DraftCreated: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeDraftCreated: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> DraftCreated {
+        return
+            try DraftCreated(
+                receipt: FfiConverterTypeReceipt.read(from: &buf), 
+                draftId: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: DraftCreated, into buf: inout [UInt8]) {
+        FfiConverterTypeReceipt.write(value.receipt, into: &buf)
+        FfiConverterString.write(value.draftId, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeDraftCreated_lift(_ buf: RustBuffer) throws -> DraftCreated {
+    return try FfiConverterTypeDraftCreated.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeDraftCreated_lower(_ value: DraftCreated) -> RustBuffer {
+    return FfiConverterTypeDraftCreated.lower(value)
+}
+
+
+public struct DraftRecipient: Equatable, Hashable {
+    public var address: String
+    public var name: String?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(address: String, name: String?) {
+        self.address = address
+        self.name = name
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension DraftRecipient: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeDraftRecipient: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> DraftRecipient {
+        return
+            try DraftRecipient(
+                address: FfiConverterString.read(from: &buf), 
+                name: FfiConverterOptionString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: DraftRecipient, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.address, into: &buf)
+        FfiConverterOptionString.write(value.name, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeDraftRecipient_lift(_ buf: RustBuffer) throws -> DraftRecipient {
+    return try FfiConverterTypeDraftRecipient.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeDraftRecipient_lower(_ value: DraftRecipient) -> RustBuffer {
+    return FfiConverterTypeDraftRecipient.lower(value)
+}
+
+
+public struct DraftRevision: Equatable, Hashable {
+    public var revisionId: String
+    public var seq: Int64
+    public var baseRevisionId: String?
+    public var accountId: String?
+    public var identityId: String?
+    public var format: ComposeFormat
+    public var plainFlowed: Bool
+    public var subject: String
+    public var to: [DraftRecipient]
+    public var cc: [DraftRecipient]
+    public var bcc: [DraftRecipient]
+    public var bodySource: String
+    public var attachments: [DraftAttachmentRef]
+    public var createdAtMs: Int64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(revisionId: String, seq: Int64, baseRevisionId: String?, accountId: String?, identityId: String?, format: ComposeFormat, plainFlowed: Bool, subject: String, to: [DraftRecipient], cc: [DraftRecipient], bcc: [DraftRecipient], bodySource: String, attachments: [DraftAttachmentRef], createdAtMs: Int64) {
+        self.revisionId = revisionId
+        self.seq = seq
+        self.baseRevisionId = baseRevisionId
+        self.accountId = accountId
+        self.identityId = identityId
+        self.format = format
+        self.plainFlowed = plainFlowed
+        self.subject = subject
+        self.to = to
+        self.cc = cc
+        self.bcc = bcc
+        self.bodySource = bodySource
+        self.attachments = attachments
+        self.createdAtMs = createdAtMs
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension DraftRevision: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeDraftRevision: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> DraftRevision {
+        return
+            try DraftRevision(
+                revisionId: FfiConverterString.read(from: &buf), 
+                seq: FfiConverterInt64.read(from: &buf), 
+                baseRevisionId: FfiConverterOptionString.read(from: &buf), 
+                accountId: FfiConverterOptionString.read(from: &buf), 
+                identityId: FfiConverterOptionString.read(from: &buf), 
+                format: FfiConverterTypeComposeFormat.read(from: &buf), 
+                plainFlowed: FfiConverterBool.read(from: &buf), 
+                subject: FfiConverterString.read(from: &buf), 
+                to: FfiConverterSequenceTypeDraftRecipient.read(from: &buf), 
+                cc: FfiConverterSequenceTypeDraftRecipient.read(from: &buf), 
+                bcc: FfiConverterSequenceTypeDraftRecipient.read(from: &buf), 
+                bodySource: FfiConverterString.read(from: &buf), 
+                attachments: FfiConverterSequenceTypeDraftAttachmentRef.read(from: &buf), 
+                createdAtMs: FfiConverterInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: DraftRevision, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.revisionId, into: &buf)
+        FfiConverterInt64.write(value.seq, into: &buf)
+        FfiConverterOptionString.write(value.baseRevisionId, into: &buf)
+        FfiConverterOptionString.write(value.accountId, into: &buf)
+        FfiConverterOptionString.write(value.identityId, into: &buf)
+        FfiConverterTypeComposeFormat.write(value.format, into: &buf)
+        FfiConverterBool.write(value.plainFlowed, into: &buf)
+        FfiConverterString.write(value.subject, into: &buf)
+        FfiConverterSequenceTypeDraftRecipient.write(value.to, into: &buf)
+        FfiConverterSequenceTypeDraftRecipient.write(value.cc, into: &buf)
+        FfiConverterSequenceTypeDraftRecipient.write(value.bcc, into: &buf)
+        FfiConverterString.write(value.bodySource, into: &buf)
+        FfiConverterSequenceTypeDraftAttachmentRef.write(value.attachments, into: &buf)
+        FfiConverterInt64.write(value.createdAtMs, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeDraftRevision_lift(_ buf: RustBuffer) throws -> DraftRevision {
+    return try FfiConverterTypeDraftRevision.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeDraftRevision_lower(_ value: DraftRevision) -> RustBuffer {
+    return FfiConverterTypeDraftRevision.lower(value)
+}
+
+
+public struct DraftSummary: Equatable, Hashable {
+    public var draftId: String
+    public var state: DraftState
+    public var accountId: String?
+    public var identityId: String?
+    public var subject: String
+    public var to: [DraftRecipient]
+    public var cc: [DraftRecipient]
+    public var bcc: [DraftRecipient]
+    public var updatedAtMs: Int64
+    public var attempt: LiveAttempt?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(draftId: String, state: DraftState, accountId: String?, identityId: String?, subject: String, to: [DraftRecipient], cc: [DraftRecipient], bcc: [DraftRecipient], updatedAtMs: Int64, attempt: LiveAttempt?) {
+        self.draftId = draftId
+        self.state = state
+        self.accountId = accountId
+        self.identityId = identityId
+        self.subject = subject
+        self.to = to
+        self.cc = cc
+        self.bcc = bcc
+        self.updatedAtMs = updatedAtMs
+        self.attempt = attempt
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension DraftSummary: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeDraftSummary: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> DraftSummary {
+        return
+            try DraftSummary(
+                draftId: FfiConverterString.read(from: &buf), 
+                state: FfiConverterTypeDraftState.read(from: &buf), 
+                accountId: FfiConverterOptionString.read(from: &buf), 
+                identityId: FfiConverterOptionString.read(from: &buf), 
+                subject: FfiConverterString.read(from: &buf), 
+                to: FfiConverterSequenceTypeDraftRecipient.read(from: &buf), 
+                cc: FfiConverterSequenceTypeDraftRecipient.read(from: &buf), 
+                bcc: FfiConverterSequenceTypeDraftRecipient.read(from: &buf), 
+                updatedAtMs: FfiConverterInt64.read(from: &buf), 
+                attempt: FfiConverterOptionTypeLiveAttempt.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: DraftSummary, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.draftId, into: &buf)
+        FfiConverterTypeDraftState.write(value.state, into: &buf)
+        FfiConverterOptionString.write(value.accountId, into: &buf)
+        FfiConverterOptionString.write(value.identityId, into: &buf)
+        FfiConverterString.write(value.subject, into: &buf)
+        FfiConverterSequenceTypeDraftRecipient.write(value.to, into: &buf)
+        FfiConverterSequenceTypeDraftRecipient.write(value.cc, into: &buf)
+        FfiConverterSequenceTypeDraftRecipient.write(value.bcc, into: &buf)
+        FfiConverterInt64.write(value.updatedAtMs, into: &buf)
+        FfiConverterOptionTypeLiveAttempt.write(value.attempt, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeDraftSummary_lift(_ buf: RustBuffer) throws -> DraftSummary {
+    return try FfiConverterTypeDraftSummary.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeDraftSummary_lower(_ value: DraftSummary) -> RustBuffer {
+    return FfiConverterTypeDraftSummary.lower(value)
+}
+
+
 /**
  * An identity's resolved appearance (spec/07): the effective color
  * and monogram — its overrides where set, its account's where
@@ -2833,6 +3526,80 @@ public func FfiConverterTypeIdentityAppearance_lift(_ buf: RustBuffer) throws ->
 #endif
 public func FfiConverterTypeIdentityAppearance_lower(_ value: IdentityAppearance) -> RustBuffer {
     return FfiConverterTypeIdentityAppearance.lower(value)
+}
+
+
+/**
+ * `set_identity_appearance`'s new values (spec/07 "Commands",
+ * spec/02 "Identity appearance"): `None` fields clear the overrides,
+ * returning the identity to inheriting its account's color and
+ * monogram.
+ */
+public struct IdentityAppearanceChange: Equatable, Hashable {
+    /**
+     * The color override, `#rrggbb`; `None` inherits the account's.
+     */
+    public var colorOverrideSrgb: String?
+    /**
+     * The symbol override; `None` inherits the account's symbol, or
+     * the identity's own name-derived mark when the account has none.
+     */
+    public var symbolOverride: String?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * The color override, `#rrggbb`; `None` inherits the account's.
+         */colorOverrideSrgb: String?, 
+        /**
+         * The symbol override; `None` inherits the account's symbol, or
+         * the identity's own name-derived mark when the account has none.
+         */symbolOverride: String?) {
+        self.colorOverrideSrgb = colorOverrideSrgb
+        self.symbolOverride = symbolOverride
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension IdentityAppearanceChange: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeIdentityAppearanceChange: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> IdentityAppearanceChange {
+        return
+            try IdentityAppearanceChange(
+                colorOverrideSrgb: FfiConverterOptionString.read(from: &buf), 
+                symbolOverride: FfiConverterOptionString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: IdentityAppearanceChange, into buf: inout [UInt8]) {
+        FfiConverterOptionString.write(value.colorOverrideSrgb, into: &buf)
+        FfiConverterOptionString.write(value.symbolOverride, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeIdentityAppearanceChange_lift(_ buf: RustBuffer) throws -> IdentityAppearanceChange {
+    return try FfiConverterTypeIdentityAppearanceChange.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeIdentityAppearanceChange_lower(_ value: IdentityAppearanceChange) -> RustBuffer {
+    return FfiConverterTypeIdentityAppearanceChange.lower(value)
 }
 
 
@@ -3387,6 +4154,60 @@ public func FfiConverterTypeListRow_lift(_ buf: RustBuffer) throws -> ListRow {
 #endif
 public func FfiConverterTypeListRow_lower(_ value: ListRow) -> RustBuffer {
     return FfiConverterTypeListRow.lower(value)
+}
+
+
+public struct LiveAttempt: Equatable, Hashable {
+    public var attemptId: String
+    public var state: AttemptState
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(attemptId: String, state: AttemptState) {
+        self.attemptId = attemptId
+        self.state = state
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension LiveAttempt: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeLiveAttempt: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> LiveAttempt {
+        return
+            try LiveAttempt(
+                attemptId: FfiConverterString.read(from: &buf), 
+                state: FfiConverterTypeAttemptState.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: LiveAttempt, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.attemptId, into: &buf)
+        FfiConverterTypeAttemptState.write(value.state, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeLiveAttempt_lift(_ buf: RustBuffer) throws -> LiveAttempt {
+    return try FfiConverterTypeLiveAttempt.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeLiveAttempt_lower(_ value: LiveAttempt) -> RustBuffer {
+    return FfiConverterTypeLiveAttempt.lower(value)
 }
 
 
@@ -4639,6 +5460,88 @@ public func FfiConverterTypeWindowIds_lower(_ value: WindowIds) -> RustBuffer {
 
 
 /**
+ * `set_account_appearance`'s color pick (spec/02 "Validation"):
+ * either a palette-v1 slot, or a custom `#rrggbb`.
+ */
+
+public enum AccountColor: Equatable, Hashable {
+    
+    /**
+     * The v1 preset at this slot; the stored color is the preset's.
+     */
+    case paletteV1(slot: UInt8
+    )
+    /**
+     * An explicit `#rrggbb`, stored lowercase (spec/02).
+     */
+    case custom(colorSrgb: String
+    )
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension AccountColor: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeAccountColor: FfiConverterRustBuffer {
+    typealias SwiftType = AccountColor
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> AccountColor {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .paletteV1(slot: try FfiConverterUInt8.read(from: &buf)
+        )
+        
+        case 2: return .custom(colorSrgb: try FfiConverterString.read(from: &buf)
+        )
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: AccountColor, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case let .paletteV1(slot):
+            writeInt(&buf, Int32(1))
+            FfiConverterUInt8.write(slot, into: &buf)
+            
+        
+        case let .custom(colorSrgb):
+            writeInt(&buf, Int32(2))
+            FfiConverterString.write(colorSrgb, into: &buf)
+            
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAccountColor_lift(_ buf: RustBuffer) throws -> AccountColor {
+    return try FfiConverterTypeAccountColor.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAccountColor_lower(_ value: AccountColor) -> RustBuffer {
+    return FfiConverterTypeAccountColor.lower(value)
+}
+
+
+
+/**
  * How an account reaches its mail.
  */
 
@@ -5055,6 +5958,107 @@ public func FfiConverterTypeAppearanceEvent_lower(_ value: AppearanceEvent) -> R
 
 
 
+public enum AttemptState: Equatable, Hashable {
+    
+    case held
+    case queued
+    case submitting
+    case accepted
+    case failed
+    case outcomeUnknown
+    case cancelled
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension AttemptState: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeAttemptState: FfiConverterRustBuffer {
+    typealias SwiftType = AttemptState
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> AttemptState {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .held
+        
+        case 2: return .queued
+        
+        case 3: return .submitting
+        
+        case 4: return .accepted
+        
+        case 5: return .failed
+        
+        case 6: return .outcomeUnknown
+        
+        case 7: return .cancelled
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: AttemptState, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .held:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .queued:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .submitting:
+            writeInt(&buf, Int32(3))
+        
+        
+        case .accepted:
+            writeInt(&buf, Int32(4))
+        
+        
+        case .failed:
+            writeInt(&buf, Int32(5))
+        
+        
+        case .outcomeUnknown:
+            writeInt(&buf, Int32(6))
+        
+        
+        case .cancelled:
+            writeInt(&buf, Int32(7))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAttemptState_lift(_ buf: RustBuffer) throws -> AttemptState {
+    return try FfiConverterTypeAttemptState.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAttemptState_lower(_ value: AttemptState) -> RustBuffer {
+    return FfiConverterTypeAttemptState.lower(value)
+}
+
+
+
+
 public enum BodyAvailability: Equatable, Hashable {
     
     case notAcquired
@@ -5203,6 +6207,72 @@ public func FfiConverterTypeBodyKind_lift(_ buf: RustBuffer) throws -> BodyKind 
 #endif
 public func FfiConverterTypeBodyKind_lower(_ value: BodyKind) -> RustBuffer {
     return FfiConverterTypeBodyKind.lower(value)
+}
+
+
+
+
+public enum ComposeFormat: Equatable, Hashable {
+    
+    case plain
+    case markdown
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension ComposeFormat: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeComposeFormat: FfiConverterRustBuffer {
+    typealias SwiftType = ComposeFormat
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ComposeFormat {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .plain
+        
+        case 2: return .markdown
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: ComposeFormat, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .plain:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .markdown:
+            writeInt(&buf, Int32(2))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeComposeFormat_lift(_ buf: RustBuffer) throws -> ComposeFormat {
+    return try FfiConverterTypeComposeFormat.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeComposeFormat_lower(_ value: ComposeFormat) -> RustBuffer {
+    return FfiConverterTypeComposeFormat.lower(value)
 }
 
 
@@ -5483,6 +6553,180 @@ public func FfiConverterTypeCount_lift(_ buf: RustBuffer) throws -> Count {
 #endif
 public func FfiConverterTypeCount_lower(_ value: Count) -> RustBuffer {
     return FfiConverterTypeCount.lower(value)
+}
+
+
+
+/**
+ * `create_draft`'s `context` (spec/07): `New`, or the source
+ * occurrence a reply, reply-all or forward answers. The service
+ * resolves a forward to its logical message.
+ */
+
+public enum DraftSource: Equatable, Hashable {
+    
+    case new
+    case reply(occurrenceId: Int64
+    )
+    case replyAll(occurrenceId: Int64
+    )
+    case forward(occurrenceId: Int64
+    )
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension DraftSource: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeDraftSource: FfiConverterRustBuffer {
+    typealias SwiftType = DraftSource
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> DraftSource {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .new
+        
+        case 2: return .reply(occurrenceId: try FfiConverterInt64.read(from: &buf)
+        )
+        
+        case 3: return .replyAll(occurrenceId: try FfiConverterInt64.read(from: &buf)
+        )
+        
+        case 4: return .forward(occurrenceId: try FfiConverterInt64.read(from: &buf)
+        )
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: DraftSource, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .new:
+            writeInt(&buf, Int32(1))
+        
+        
+        case let .reply(occurrenceId):
+            writeInt(&buf, Int32(2))
+            FfiConverterInt64.write(occurrenceId, into: &buf)
+            
+        
+        case let .replyAll(occurrenceId):
+            writeInt(&buf, Int32(3))
+            FfiConverterInt64.write(occurrenceId, into: &buf)
+            
+        
+        case let .forward(occurrenceId):
+            writeInt(&buf, Int32(4))
+            FfiConverterInt64.write(occurrenceId, into: &buf)
+            
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeDraftSource_lift(_ buf: RustBuffer) throws -> DraftSource {
+    return try FfiConverterTypeDraftSource.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeDraftSource_lower(_ value: DraftSource) -> RustBuffer {
+    return FfiConverterTypeDraftSource.lower(value)
+}
+
+
+
+
+public enum DraftState: Equatable, Hashable {
+    
+    case editing
+    case queued
+    case sent
+    case discarded
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension DraftState: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeDraftState: FfiConverterRustBuffer {
+    typealias SwiftType = DraftState
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> DraftState {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .editing
+        
+        case 2: return .queued
+        
+        case 3: return .sent
+        
+        case 4: return .discarded
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: DraftState, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .editing:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .queued:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .sent:
+            writeInt(&buf, Int32(3))
+        
+        
+        case .discarded:
+            writeInt(&buf, Int32(4))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeDraftState_lift(_ buf: RustBuffer) throws -> DraftState {
+    return try FfiConverterTypeDraftState.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeDraftState_lower(_ value: DraftState) -> RustBuffer {
+    return FfiConverterTypeDraftState.lower(value)
 }
 
 
@@ -6997,6 +8241,30 @@ fileprivate struct FfiConverterOptionString: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionTypeDraftRevision: FfiConverterRustBuffer {
+    typealias SwiftType = DraftRevision?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeDraftRevision.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeDraftRevision.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionTypeImportReport: FfiConverterRustBuffer {
     typealias SwiftType = ImportReport?
 
@@ -7013,6 +8281,30 @@ fileprivate struct FfiConverterOptionTypeImportReport: FfiConverterRustBuffer {
         switch try readInt(&buf) as Int8 {
         case 0: return nil
         case 1: return try FfiConverterTypeImportReport.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionTypeLiveAttempt: FfiConverterRustBuffer {
+    typealias SwiftType = LiveAttempt?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeLiveAttempt.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeLiveAttempt.read(from: &buf)
         default: throw UniffiInternalError.unexpectedOptionalTag
         }
     }
@@ -7209,6 +8501,81 @@ fileprivate struct FfiConverterSequenceTypeAccountAppearance: FfiConverterRustBu
         seq.reserveCapacity(Int(len))
         for _ in 0 ..< len {
             seq.append(try FfiConverterTypeAccountAppearance.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeDraftAttachmentRef: FfiConverterRustBuffer {
+    typealias SwiftType = [DraftAttachmentRef]
+
+    public static func write(_ value: [DraftAttachmentRef], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeDraftAttachmentRef.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [DraftAttachmentRef] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [DraftAttachmentRef]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeDraftAttachmentRef.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeDraftRecipient: FfiConverterRustBuffer {
+    typealias SwiftType = [DraftRecipient]
+
+    public static func write(_ value: [DraftRecipient], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeDraftRecipient.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [DraftRecipient] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [DraftRecipient]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeDraftRecipient.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeDraftSummary: FfiConverterRustBuffer {
+    typealias SwiftType = [DraftSummary]
+
+    public static func write(_ value: [DraftSummary], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeDraftSummary.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [DraftSummary] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [DraftSummary]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeDraftSummary.read(from: &buf))
         }
         return seq
     }
@@ -7669,7 +9036,25 @@ private let initializationResult: InitializationResult = {
     if (uniffi_sb_ffi_checksum_method_core_appearance() != 24354) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_sb_ffi_checksum_method_core_set_account_appearance() != 2756) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_set_identity_appearance() != 18317) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_sb_ffi_checksum_method_core_subscribe_appearance() != 19997) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_create_draft() != 12088) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_discard_draft() != 49406) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_draft() != 55256) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_drafts() != 18485) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_core_cancel_job() != 65113) {

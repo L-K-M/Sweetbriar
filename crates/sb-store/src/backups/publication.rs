@@ -276,7 +276,7 @@ impl Backups {
         #[cfg(test)]
         tx_cut("after-completion-commit");
         *active = None;
-        self.retain()?;
+        self.retain_protecting(Some(&snapshot.generation_id))?;
         Ok(receipt)
     }
 

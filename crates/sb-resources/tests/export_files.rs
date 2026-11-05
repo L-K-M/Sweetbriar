@@ -1219,6 +1219,537 @@ fn resume_republishes_files_failing_mboxrd_verification() {
     }
 }
 
+#[test]
+fn manifest_schema_rejects_invalid_writer_manifests() {
+    let (scratch, res, _) = fixture();
+    for (job, format) in [
+        ("schema-eml", ExportFormat::Eml),
+        ("schema-mbox", ExportFormat::Mboxrd),
+    ] {
+        let dest = scratch.path().join(job);
+        capture(&res, job, format, &dest, mailbox_scope(&res, 1));
+        export(&res, job);
+        let original = manifest(&dest);
+        let mut cases: Vec<(String, String)> = Vec::new();
+
+        let spans = [
+            "record_offset",
+            "encoded_bytes",
+            "original_bytes",
+            "framing_lf_added",
+        ];
+        for availability in ["acquired", "not_acquired", "missing", "quarantined"] {
+            for acquisition in [false, true] {
+                for file in [false, true] {
+                    for mask in 0..16 {
+                        let mut changed = original.clone();
+                        let message = changed["messages"][0].as_object_mut().unwrap();
+                        message.insert("body_availability".into(), json!(availability));
+                        if !acquisition {
+                            message.insert("acquisition".into(), Value::Null);
+                        }
+                        if !file {
+                            message.insert("file".into(), Value::Null);
+                        }
+                        for (index, span) in spans.iter().enumerate() {
+                            message.remove(*span);
+                            if mask & (1 << index) != 0 {
+                                let value = match *span {
+                                    "original_bytes" => {
+                                        original["messages"][0]["acquisition"]["bytes"].clone()
+                                    }
+                                    "framing_lf_added" => json!(false),
+                                    _ => json!(0),
+                                };
+                                message.insert((*span).into(), value);
+                            }
+                        }
+                        if !file {
+                            let name = original["messages"][0]["file"].as_str().unwrap();
+                            let files = changed["files"].as_array_mut().unwrap();
+                            let index = files
+                                .iter()
+                                .position(|entry| entry["name"] == name)
+                                .unwrap();
+                            if matches!(format, ExportFormat::Eml) {
+                                files.remove(index);
+                            } else {
+                                let records = files[index]["records"].as_u64().unwrap();
+                                files[index]["records"] = json!(records - 1);
+                            }
+                        }
+                        let valid_pair = match availability {
+                            "acquired" => acquisition && file,
+                            "not_acquired" => !acquisition && !file,
+                            _ => acquisition && !file,
+                        };
+                        let required = if availability == "acquired"
+                            && matches!(format, ExportFormat::Mboxrd)
+                        {
+                            15
+                        } else {
+                            0
+                        };
+                        let expected = if valid_pair && mask == required {
+                            sb_resources::ImportProblemKind::Unsupported
+                        } else {
+                            sb_resources::ImportProblemKind::Failed
+                        };
+                        std::fs::write(dest.join(MANIFEST), changed.to_string()).unwrap();
+                        let outcome = res
+                            .inventory_import_sources(std::slice::from_ref(&dest), |_| {
+                                ControlFlow::Continue(())
+                            });
+                        assert!(outcome.inventory().sources().is_empty());
+                        assert_eq!(
+                            outcome.inventory().problems()[0].kind(),
+                            expected,
+                            "{job}: messages[0] availability={availability} acquisition={acquisition} file={file} spans={mask:04b}"
+                        );
+                    }
+                }
+            }
+        }
+
+        for state in [
+            "present",
+            "vanish_pending",
+            "vanished",
+            "epoch_stale",
+            "superseded",
+        ] {
+            let mut changed = original.clone();
+            changed["messages"][0]["occurrence_state"] = json!(state);
+            changed["messages"][0]["occurrence_id"] = json!(i64::MIN);
+            let mut ids = Sha256::new();
+            for message in changed["messages"].as_array().unwrap() {
+                ids.update(message["occurrence_id"].as_i64().unwrap().to_be_bytes());
+            }
+            changed["ids_sha256"] = json!(hex(ids.finalize().as_slice()));
+            changed["messages"][0]["message_id"] = json!(i64::MAX);
+            changed["messages"][0]["mailbox"]["id"] = json!(i64::MIN);
+            changed["messages"][0]["acquisition"]["id"] = json!(i64::MAX);
+            changed["messages"][0]["acquisition"]["bytes"] = json!(u64::MAX);
+            if matches!(format, ExportFormat::Eml) {
+                let old = original["messages"][0]["file"].as_str().unwrap();
+                let file = changed["files"]
+                    .as_array_mut()
+                    .unwrap()
+                    .iter_mut()
+                    .find(|file| file["name"] == old)
+                    .unwrap();
+                file["name"] = json!(format!("{}.eml", i64::MIN));
+                file["bytes"] = json!(u64::MAX);
+                changed["messages"][0]["file"] = json!(format!("{}.eml", i64::MIN));
+            }
+            if matches!(format, ExportFormat::Mboxrd) {
+                changed["messages"][0]["record_offset"] = json!(u64::MAX);
+                changed["messages"][0]["encoded_bytes"] = json!(u64::MAX);
+                changed["messages"][0]["original_bytes"] = json!(u64::MAX);
+            }
+            if state == "present" {
+                changed["messages"][0]["account"]["name"] = json!("x".repeat(100_000));
+                let mut keywords = (0..300).map(|n| format!("{n:04}")).collect::<Vec<_>>();
+                keywords.extend([
+                    format!("{}a", "z".repeat(100_000)),
+                    format!("{}b", "z".repeat(100_000)),
+                ]);
+                changed["messages"][0]["keywords"] = json!(keywords);
+                let mut tags = (0..70).map(|n| json!({"id":format!("{n:04}"),"name":format!("{n:04}"),"color_srgb":null})).collect::<Vec<_>>();
+                for suffix in ["a", "b"] {
+                    tags.push(json!({"id":format!("{}{suffix}", "z".repeat(10_000)), "name":format!("{}{suffix}", "z".repeat(10_000)), "color_srgb":"#0123ab"}));
+                }
+                changed["messages"][0]["tags"] = json!(tags);
+            }
+            std::fs::write(dest.join(MANIFEST), changed.to_string()).unwrap();
+            let outcome = res.inventory_import_sources(std::slice::from_ref(&dest), |_| {
+                ControlFlow::Continue(())
+            });
+            assert!(outcome.inventory().sources().is_empty());
+            assert_eq!(
+                outcome.inventory().problems()[0].kind(),
+                sb_resources::ImportProblemKind::Unsupported,
+                "{job}: messages[0].occurrence_state {state}"
+            );
+        }
+
+        for span in spans {
+            for value in [json!(-1), json!(1.5), json!("bad")] {
+                let mut changed = original.clone();
+                changed["messages"][0][span] = value;
+                cases.push((
+                    format!("messages[0].{span}: invalid span"),
+                    changed.to_string(),
+                ));
+            }
+        }
+        if matches!(format, ExportFormat::Mboxrd) {
+            let mut changed = original.clone();
+            changed["messages"][0]["original_bytes"] = json!(0);
+            assert_ne!(
+                changed["messages"][0]["original_bytes"],
+                original["messages"][0]["acquisition"]["bytes"]
+            );
+            cases.push((
+                "messages[0].original_bytes mismatch".into(),
+                changed.to_string(),
+            ));
+        }
+
+        for key in ["id", "name", "color_srgb"] {
+            let tag = json!({"id":"a","name":"a","color_srgb":null});
+            let mut missing = tag.clone();
+            missing.as_object_mut().unwrap().remove(key);
+            let mut changed = original.clone();
+            changed["messages"][0]["tags"] = json!([missing]);
+            cases.push((
+                format!("messages[0].tags[0].{key}: missing"),
+                changed.to_string(),
+            ));
+            changed["messages"][0]["tags"] = json!([tag.clone()]);
+            let raw = tag.to_string();
+            let escaped = format!("\\u{:04x}{}", key.as_bytes()[0], &key[1..]);
+            let duplicate = raw.replacen('{', &format!("{{\"{escaped}\":{},", tag[key]), 1);
+            cases.push((
+                format!("messages[0].tags[0].{key}: escaped duplicate"),
+                changed.to_string().replacen(&raw, &duplicate, 1),
+            ));
+        }
+
+        for (field, value) in [
+            ("v", json!(2)),
+            ("occurrence_id", json!("1")),
+            ("message_id", json!("1")),
+            ("account", json!({})),
+            ("mailbox", json!({})),
+            ("occurrence_state", json!("unknown")),
+            ("flags", json!({})),
+            ("keywords", json!(["z", "a"])),
+            ("acquisition", json!({})),
+            ("body_availability", json!("unknown")),
+            ("tags", json!([{}])),
+            ("note", json!(false)),
+            ("file", json!(false)),
+        ] {
+            let mut changed = original.clone();
+            changed["messages"][0][field] = value;
+            cases.push((
+                format!("messages[0].{field}: invalid value"),
+                changed.to_string(),
+            ));
+
+            let mut missing = original.clone();
+            missing["messages"][0]
+                .as_object_mut()
+                .unwrap()
+                .remove(field);
+            cases.push((format!("messages[0].{field}: missing"), missing.to_string()));
+        }
+
+        for (field, value) in [
+            ("account", json!({"id": 1, "name": "a"})),
+            ("mailbox", json!({"id": "1", "name": "m"})),
+            (
+                "flags",
+                json!({"seen": true, "flagged": false, "answered": false, "draft": false, "deleted": 0}),
+            ),
+            (
+                "acquisition",
+                json!({"id": 1, "sha256": "A".repeat(64), "bytes": 0}),
+            ),
+            (
+                "tags",
+                json!([{"id": "a", "name": "x", "color_srgb": "#ABCDEF"}]),
+            ),
+            (
+                "tags",
+                json!([{"id": "a", "name": "x", "color_srgb": null}, {"id": "b", "name": "x", "color_srgb": null}]),
+            ),
+            (
+                "tags",
+                json!([{"id": "a", "name": "x", "color_srgb": null}, {"id": "a", "name": "y", "color_srgb": null}]),
+            ),
+        ] {
+            let mut changed = original.clone();
+            changed["messages"][0][field] = value;
+            cases.push((
+                format!("messages[0].{field}: invalid value"),
+                changed.to_string(),
+            ));
+        }
+
+        for (object, field) in [
+            ("account", "id"),
+            ("account", "name"),
+            ("mailbox", "id"),
+            ("mailbox", "name"),
+            ("flags", "seen"),
+            ("flags", "flagged"),
+            ("flags", "answered"),
+            ("flags", "draft"),
+            ("flags", "deleted"),
+            ("acquisition", "id"),
+            ("acquisition", "sha256"),
+            ("acquisition", "bytes"),
+        ] {
+            let mut missing = original.clone();
+            missing["messages"][0][object]
+                .as_object_mut()
+                .unwrap()
+                .remove(field);
+            cases.push((
+                format!("messages[0].{object}.{field}: missing"),
+                missing.to_string(),
+            ));
+
+            let mut unknown = original.clone();
+            unknown["messages"][0][object]["unexpected"] = json!(true);
+            cases.push((
+                format!("messages[0].{object}: unknown key near {field}"),
+                unknown.to_string(),
+            ));
+        }
+
+        for availability in ["not_acquired", "missing", "quarantined"] {
+            let mut changed = original.clone();
+            changed["messages"][0]["body_availability"] = json!(availability);
+            cases.push((
+                format!("messages[0].body_availability: incompatible {availability}"),
+                changed.to_string(),
+            ));
+        }
+
+        for (field, value) in [
+            ("occurrence_id", json!(1.5)),
+            ("message_id", json!(1.5)),
+            ("keywords", json!(["a", "a"])),
+            ("keywords", json!(["a", 1])),
+            (
+                "tags",
+                json!([{"id":"a","name":"z","color_srgb":null},{"id":"b","name":"a","color_srgb":null}]),
+            ),
+            (
+                "tags",
+                json!([{"id":"a","name":"a","color_srgb":null},{"id":"b","name":"b","color_srgb":null},{"id":"a","name":"c","color_srgb":null}]),
+            ),
+            (
+                "tags",
+                json!([{"id":"a","name":"a","color_srgb":null},{"id":"b","name":"b","color_srgb":null},{"id":"c","name":"a","color_srgb":null}]),
+            ),
+            (
+                "tags",
+                json!([{"id":"a","name":"a","color_srgb":"#12345g"}]),
+            ),
+            ("tags", json!([{"id":"a","name":"a"}])),
+            (
+                "tags",
+                json!([{"id":"a","name":"a","color_srgb":null,"extra":0}]),
+            ),
+            (
+                "acquisition",
+                json!({"id":0,"sha256":"a".repeat(64),"bytes":-1}),
+            ),
+            (
+                "acquisition",
+                json!({"id":0,"sha256":"a".repeat(64),"bytes":1.5}),
+            ),
+        ] {
+            let mut changed = original.clone();
+            changed["messages"][0][field] = value;
+            cases.push((
+                format!("messages[0].{field}: invalid value"),
+                changed.to_string(),
+            ));
+        }
+
+        for (field, raw) in [
+            ("occurrence_id", "-9223372036854775809"),
+            ("message_id", "9223372036854775808"),
+        ] {
+            let old = original["messages"][0][field].to_string();
+            let document = original.to_string().replacen(
+                &format!("\"{field}\":{old}"),
+                &format!("\"{field}\":{raw}"),
+                1,
+            );
+            assert_ne!(document, original.to_string());
+            cases.push((format!("messages[0].{field}: overflow"), document));
+        }
+
+        for (field, replacement) in [("v", "18446744073709551616"), ("v", "1.5")] {
+            let raw = original["messages"][0].to_string();
+            let changed = raw.replacen(
+                &format!("\"{field}\":{}", original["messages"][0][field]),
+                &format!("\"{field}\":{replacement}"),
+                1,
+            );
+            assert_ne!(raw, changed);
+            cases.push((
+                format!("messages[0].{field}: {replacement}"),
+                original.to_string().replacen(&raw, &changed, 1),
+            ));
+        }
+        if matches!(format, ExportFormat::Mboxrd) {
+            for field in ["record_offset", "encoded_bytes", "original_bytes"] {
+                let raw = original["messages"][0].to_string();
+                let changed = raw.replacen(
+                    &format!("\"{field}\":{}", original["messages"][0][field]),
+                    &format!("\"{field}\":18446744073709551616"),
+                    1,
+                );
+                assert_ne!(raw, changed);
+                cases.push((
+                    format!("messages[0].{field}: overflow"),
+                    original.to_string().replacen(&raw, &changed, 1),
+                ));
+            }
+        }
+
+        for (object, field, raw_value) in [
+            ("mailbox", "id", "9223372036854775808"),
+            ("mailbox", "id", "1.5"),
+            ("acquisition", "id", "-9223372036854775809"),
+            ("acquisition", "id", "1.5"),
+            ("acquisition", "bytes", "18446744073709551616"),
+        ] {
+            let nested = &original["messages"][0][object];
+            let raw = nested.to_string();
+            let changed = raw.replacen(
+                &format!("\"{field}\":{}", nested[field]),
+                &format!("\"{field}\":{raw_value}"),
+                1,
+            );
+            assert_ne!(raw, changed);
+            cases.push((
+                format!("messages[0].{object}.{field}: {raw_value}"),
+                original.to_string().replacen(&raw, &changed, 1),
+            ));
+        }
+
+        for (object, key) in [
+            ("account", "id"),
+            ("account", "name"),
+            ("mailbox", "id"),
+            ("mailbox", "name"),
+            ("flags", "seen"),
+            ("flags", "flagged"),
+            ("flags", "answered"),
+            ("flags", "draft"),
+            ("flags", "deleted"),
+            ("acquisition", "id"),
+            ("acquisition", "sha256"),
+            ("acquisition", "bytes"),
+        ] {
+            let nested = &original["messages"][0][object];
+            let raw = nested.to_string();
+            let escaped = format!("\\u{:04x}{}", key.as_bytes()[0], &key[1..]);
+            let duplicate = raw.replacen('{', &format!("{{\"{escaped}\":{},", nested[key]), 1);
+            let document = original.to_string().replacen(&raw, &duplicate, 1);
+            assert_ne!(document, original.to_string());
+            cases.push((
+                format!("messages[0].{object}.{key}: escaped duplicate"),
+                document,
+            ));
+        }
+
+        let raw = original["messages"][0].to_string();
+        let duplicate = raw.replacen('{', r#"{"\u0076":1,"#, 1);
+        cases.push((
+            "messages[0].v: escaped duplicate".into(),
+            original.to_string().replacen(&raw, &duplicate, 1),
+        ));
+
+        let mut escaped = original.clone();
+        escaped["messages"][0]["keywords"] = json!(["a", "b"]);
+        cases.push((
+            "messages[0].keywords: escaped duplicate".into(),
+            escaped
+                .to_string()
+                .replacen(r#"["a","b"]"#, r#"["a","\u0061"]"#, 1),
+        ));
+
+        let mut escaped = original.clone();
+        escaped["messages"][0]["tags"] = json!([
+            {"id":"a","name":"a","color_srgb":null},
+            {"id":"b","name":"b","color_srgb":null},
+            {"id":"c","name":"c","color_srgb":null}
+        ]);
+        cases.push((
+            "messages[0].tags: escaped duplicate id".into(),
+            escaped
+                .to_string()
+                .replacen(r#""id":"c""#, r#""id":"\u0061""#, 1),
+        ));
+        cases.push((
+            "messages[0].tags: escaped duplicate name".into(),
+            escaped
+                .to_string()
+                .replacen(r#""name":"c""#, r#""name":"\u0061""#, 1),
+        ));
+
+        let id = original["messages"][0]["occurrence_id"].to_string();
+        let overflow = original.to_string().replacen(
+            &format!(r#""occurrence_id":{id}"#),
+            r#""occurrence_id":9223372036854775808"#,
+            1,
+        );
+        assert_ne!(overflow, original.to_string());
+        cases.push(("messages[0].occurrence_id: overflow".into(), overflow));
+
+        let mut unknown = original.clone();
+        unknown["messages"][0]["unexpected"] = json!(true);
+        cases.push(("messages[0]: unknown key".into(), unknown.to_string()));
+
+        let mut invalid_hash = original.clone();
+        invalid_hash["messages"][0]["acquisition"]["sha256"] = json!("x".repeat(64));
+        cases.push((
+            "messages[0].acquisition.sha256: invalid hash".into(),
+            invalid_hash.to_string(),
+        ));
+
+        let mut invalid_availability = original.clone();
+        invalid_availability["messages"][0]["body_availability"] = json!("unknown");
+        cases.push((
+            "messages[0].body_availability: unknown".into(),
+            invalid_availability.to_string(),
+        ));
+
+        let mut no_file = original.clone();
+        no_file["messages"][0]["file"] = Value::Null;
+        cases.push((
+            "messages[0].file: missing for acquired".into(),
+            no_file.to_string(),
+        ));
+
+        if matches!(format, ExportFormat::Mboxrd) {
+            let mut missing_span = original.clone();
+            missing_span["messages"][0]
+                .as_object_mut()
+                .unwrap()
+                .remove("record_offset");
+            cases.push((
+                "messages[0].record_offset: missing".into(),
+                missing_span.to_string(),
+            ));
+        }
+
+        for (label, document) in cases {
+            std::fs::write(dest.join(MANIFEST), document).unwrap();
+            let inventory = res.inventory_import_sources(std::slice::from_ref(&dest), |_| {
+                ControlFlow::Continue(())
+            });
+            let inventory = inventory.inventory();
+            assert!(inventory.sources().is_empty(), "{job}: {label}");
+            assert_eq!(inventory.problems().len(), 1, "{job}: {label}");
+            assert_eq!(
+                inventory.problems()[0].kind(),
+                sb_resources::ImportProblemKind::Failed,
+                "{job}: {label}"
+            );
+        }
+    }
+}
+
 /// Destination claiming under the injected filesystem (spec/09): the
 /// exclusive lease serializes first claims so exactly one job owns the
 /// destination, and a retried claim repeats every durability barrier.
@@ -1579,13 +2110,34 @@ fn emitted_bundles_are_captured_and_refused_without_plain_import() {
         ("eml-import", ExportFormat::Eml, mailbox_scope(&res, 1)),
         ("mbox-import", ExportFormat::Mboxrd, account_scope(&res)),
         (
+            "mbox-mailbox-import",
+            ExportFormat::Mboxrd,
+            mailbox_scope(&res, 1),
+        ),
+        ("eml-account-import", ExportFormat::Eml, account_scope(&res)),
+        (
             "selection-import",
             ExportFormat::Eml,
             selection_scope(&res, &[1, 2]),
         ),
         (
+            "mbox-selection-import",
+            ExportFormat::Mboxrd,
+            selection_scope(&res, &[1, 2]),
+        ),
+        (
             "search-import",
             ExportFormat::Eml,
+            ExportScope::Search {
+                query: Query::parse_json(r#"{"v":1,"q":{"flag":"flagged"}}"#).unwrap(),
+                scope: SearchScope::Mailbox(1),
+                sort: ExportSearchSort::Date,
+                expected_generation: res.read(|tx| search_generation(tx)).unwrap() as u64,
+            },
+        ),
+        (
+            "mbox-search-import",
+            ExportFormat::Mboxrd,
             ExportScope::Search {
                 query: Query::parse_json(r#"{"v":1,"q":{"flag":"flagged"}}"#).unwrap(),
                 scope: SearchScope::Mailbox(1),
