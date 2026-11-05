@@ -129,7 +129,7 @@ fn inspection_error(error: rusqlite::Error, what: &str) -> crate::StoreError {
 
 /// Inspect the validated metadata shape, limiting SQLite work and row size.
 ///
-/// Consumes `conn`: it leaves `query_only`, `trusted_schema=OFF`, an
+/// Leaves `conn` in a hardened state: `query_only`, `trusted_schema=OFF`, an
 /// in-memory temp store, and 1 MiB value/SQL limits in place. A caller
 /// must open a fresh connection for anything after inspection rather
 /// than reusing this one; the hardened state is the point, not
