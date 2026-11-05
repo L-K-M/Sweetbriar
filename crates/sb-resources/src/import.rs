@@ -535,10 +535,10 @@ impl Walker<'_> {
                         io::Error::new(e.io_kind().unwrap_or(io::ErrorKind::Other), e)
                     })?;
                     json_syntax::validate_file_names(&mut reader, &table, &scratch)?;
-                    scratch.finish().map_err(|e| {
-                        io::Error::new(e.io_kind().unwrap_or(io::ErrorKind::Other), e)
-                    })?;
-                    json_syntax::validate_messages(&mut reader, &table)
+                    json_syntax::validate_messages(&mut reader, &table, &scratch)?;
+                    scratch
+                        .finish()
+                        .map_err(|e| io::Error::new(e.io_kind().unwrap_or(io::ErrorKind::Other), e))
                 });
                 if reader.get_ref().cancelled {
                     self.cancelled = true;
