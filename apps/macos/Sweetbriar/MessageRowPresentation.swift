@@ -21,6 +21,9 @@ enum MessageRowMetrics {
     /// (spec/08 "Rows": a 4 pt colored rail plus monogram).
     static let railWidth: CGFloat = 4
 
+    /// Opaque token surface and one-point boundaries around the rail.
+    static let railSurfaceWidth: CGFloat = 10
+
     /// The monogram disc's diameter.
     static let monogramSize: CGFloat = 26
 
@@ -285,6 +288,16 @@ struct RankedIDs: RandomAccessCollection {
 }
 
 #if canImport(SweetbriarBridge)
+extension WindowSpec {
+    /// Mixed-account lists need to identify each row's account.
+    var showsAccountMarker: Bool {
+        switch self {
+        case .unified, .search, .flagged, .thread, .debugSynthetic: true
+        case .mailbox: false
+        }
+    }
+}
+
 extension MessageRowFormatter {
     /// `present` straight off a bridge `ListRow` — the convenience the
     /// lists call; kept behind `canImport` so this file type-checks

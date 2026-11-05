@@ -92,6 +92,19 @@ async fn Core::shutdown(self);   // flush writer, release the lease
   the Proton policy forbids (04). `undo(token)` creates compensating
   intents, or inverse local commands for local effects. Undo is the inverse
   command, never a rollback of history.
+- **Attachment republication:** `republish_draft_attachment(draft_id,
+  revision_id, reference)` re-publishes one stored attachment reference
+  from an exact immutable draft revision. The revision must belong to the
+  draft, and `reference` must match one of that revision's stored
+  attachments in hash, size, filename and media type. An older revision
+  — including one in a noncurrent or terminal source draft — is a valid
+  source: this creates a new publication, never a mutation of that
+  draft. The bytes are read
+  through the ordinary verifying object reader and published through the
+  real object store, so the result is a fresh `PublishedObject` with its
+  own reservation, which a following `save_draft` spends once. It takes
+  no idempotency key, returns no receipt, and writes no revision or
+  draft row.
 
 ## Queries
 

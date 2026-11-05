@@ -1411,6 +1411,38 @@ fn own_fixture(store: &Store, path: &Path) {
 }
 
 #[test]
+fn completion_receipt_survives_retention_until_the_next_pass() {
+    for offset in [1, 0] {
+        let (_scratch, paths, store) = open("backup-receipt-retention");
+        let snapshot = store.backup_snapshot(BackupDestination::DataRoot).unwrap();
+        let id = "ffffffff-ffff-4fff-bfff-ffffffffffff";
+        assert!(snapshot.generation_id() < id);
+        let path = paths.backups().join(id);
+        sql(
+            &store,
+            format!(
+                "INSERT INTO backup_generations (generation_id, started_at, state, location) VALUES ('{id}', {}, 'complete', '{}')",
+                FIXED_NOW_MS + offset,
+                path.display()
+            ),
+        );
+        std::fs::create_dir(&path).unwrap();
+        own_fixture(&store, &path);
+
+        let receipt = store.complete_backup(snapshot).unwrap();
+        let row = generation_row(&store, receipt.generation_id()).unwrap();
+        assert_eq!(row.0, "complete");
+        assert_eq!(Path::new(&row.1), receipt.location());
+        assert!(receipt.location().join("manifest.json").is_file());
+
+        store.backups.retain().unwrap();
+        assert!(generation_row(&store, receipt.generation_id()).is_none());
+        assert!(!receipt.location().exists());
+        assert!(path.exists());
+    }
+}
+
+#[test]
 fn retention_keeps_bucket_union_and_deletes_oldest_first() {
     let (_scratch, paths, store) = open("backup-retention");
     const HOUR: i64 = 3_600_000;
@@ -2105,6 +2137,7 @@ fn startup_retries_proved_verifier_scratch() {
     assert_eq!(count, 0);
     assert!(!paths.recovery().join(format!("verifier-{id}")).exists());
 }
+<<<<<<< HEAD
 
 #[test]
 fn verifier_image_reads_only_authenticated_copied_database() {
