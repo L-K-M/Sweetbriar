@@ -881,6 +881,26 @@ fn table_manifest(files: &str) -> String {
     )
 }
 
+fn table_messages(manifest: String, messages: &str, ids: &[i64]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut digest = Sha256::new();
+    for id in ids {
+        digest.update(id.to_be_bytes());
+    }
+    let hash = digest
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<String>();
+    manifest
+        .replace("\"messages\":[]", &format!("\"messages\":[{messages}]"))
+        .replace("\"entries\":0", &format!("\"entries\":{}", ids.len()))
+        .replace(
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            &hash,
+        )
+}
+
 #[test]
 fn message_rescans_cancel_and_preserve_other_snapshots() {
     let (scratch, res) = resources("bundle-message-scans");
@@ -891,8 +911,7 @@ fn message_rescans_cancel_and_preserve_other_snapshots() {
     let dir = scratch.path().join("bundle");
     fs::create_dir(&dir).unwrap();
     let message = r##"{"v":1,"occurrence_id":1,"message_id":2,"account":{"id":"a","name":"a"},"mailbox":{"id":1,"name":"m"},"occurrence_state":"present","flags":{"seen":false,"flagged":false,"answered":false,"draft":false,"deleted":false},"keywords":["a","b"],"acquisition":null,"body_availability":"not_acquired","tags":[{"id":"a","name":"a","color_srgb":null},{"id":"b","name":"b","color_srgb":"#010203"},{"id":"c","name":"c","color_srgb":null}],"note":null,"file":null}"##;
-    let manifest =
-        table_manifest("[]").replace("\"messages\":[]", &format!("\"messages\":[{message}]"));
+    let manifest = table_messages(table_manifest("[]"), message, &[1]);
     fs::write(dir.join("sweetbriar-metadata.json"), &manifest).unwrap();
     assert_eq!(
         run(&res, std::slice::from_ref(&dir)).problems()[0].kind(),
@@ -953,9 +972,11 @@ fn bundle_rejects_duplicate_tag_ids_across_sort_runs() {
         r#"{{"v":1,"occurrence_id":1,"message_id":2,"account":{{"id":"a","name":"a"}},"mailbox":{{"id":1,"name":"m"}},"occurrence_state":"present","flags":{{"seen":false,"flagged":false,"answered":false,"draft":false,"deleted":false}},"keywords":[],"acquisition":null,"body_availability":"not_acquired","tags":[{tags}],"note":null,"file":null}}"#
     );
     let valid_message = message.replace(r#"\u00e9\uD83D\uDE00"#, "unique");
-    let valid = table_manifest(r#"[{"name":"a.eml","bytes":0,"records":0}]"#).replace(
-        "\"messages\":[]",
-        &format!("\"messages\":[{valid_message},{valid_message}]"),
+    let second_message = valid_message.replace("\"occurrence_id\":1", "\"occurrence_id\":2");
+    let valid = table_messages(
+        table_manifest(r#"[{"name":"a.eml","bytes":0,"records":0}]"#),
+        &format!("{valid_message},{second_message}"),
+        &[1, 2],
     );
     fs::write(dir.join("sweetbriar-metadata.json"), valid).unwrap();
     assert_eq!(
@@ -964,9 +985,11 @@ fn bundle_rejects_duplicate_tag_ids_across_sort_runs() {
     );
     assert!(snapshot_names(&scratch).is_empty());
 
-    let manifest = table_manifest("[]").replace(
-        "\"messages\":[]",
-        &format!("\"messages\":[{valid_message},{message}]"),
+    let message = message.replace("\"occurrence_id\":1", "\"occurrence_id\":2");
+    let manifest = table_messages(
+        table_manifest("[]"),
+        &format!("{valid_message},{message}"),
+        &[1, 2],
     );
     fs::write(dir.join("sweetbriar-metadata.json"), manifest).unwrap();
     let inventory = run(&res, &[dir]);

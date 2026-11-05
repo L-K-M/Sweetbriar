@@ -60,6 +60,8 @@ pub(super) struct FileTable {
     count: u64,
     messages: (u64, u64, u64),
     format: BundleFormat,
+    entries: u64,
+    ids_hash: String,
 }
 
 struct FileName {
@@ -358,6 +360,8 @@ impl<R: Read> Parser<R> {
         let mut files = files.ok_or_else(invalid)?;
         files.messages = messages.ok_or_else(invalid)?;
         files.format = format.ok_or_else(invalid)?;
+        files.entries = entries.ok_or_else(invalid)?;
+        files.ids_hash = ids_hash.ok_or_else(invalid)?;
         Ok(files)
     }
 
@@ -386,6 +390,8 @@ impl<R: Read> Parser<R> {
             count,
             messages: (0, 0, 0),
             format: BundleFormat::Eml,
+            entries: 0,
+            ids_hash: String::new(),
         })
     }
 
