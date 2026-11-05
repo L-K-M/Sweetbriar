@@ -1344,6 +1344,18 @@ local drafts. No network yet.
         typed `Conflict` outcome M1.9c shows as keep-both, with Swift
         Testing coverage of the codec, conflict and lifecycle. Depends on
         M1.9b2b3.
+      Split c again before adding the complete editor-state proof:
+      - **M1.9b2c1 Draft bridge APIs and codecs (L):** bridge-owned draft
+        records, complete generated mappings, query/create/publication/save/
+        discard adapters, original opaque attachment handles, and isolated
+        native endpoint, codec, error and lifecycle tests. No editor model.
+      - **M1.9b2c2 Revision-safe editor model (L):** load, reload, edit, save,
+        discard and stop over c1. Preserve the editor's base on dirty reload,
+        acknowledge saved attachment publications without spending them
+        again, preserve later typing and attachments, fence stale reads and
+        writes, and expose typed conflict without losing content. Include
+        deterministic concurrency and native attachment-save regression
+        tests. M1.9c still owns the compose window, autosave and keep-both UI.
       Re-size again if any artifact exceeds the limit.
   - **M1.9c Compose window (L):** the macOS compose window — token
     fields, subject, a plain or Markdown editor on the M0.11 probe's
