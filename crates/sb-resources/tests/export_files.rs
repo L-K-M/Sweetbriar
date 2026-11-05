@@ -1307,6 +1307,11 @@ fn manifest_schema_rejects_invalid_writer_manifests() {
             let mut changed = original.clone();
             changed["messages"][0]["occurrence_state"] = json!(state);
             changed["messages"][0]["occurrence_id"] = json!(i64::MIN);
+            let mut ids = Sha256::new();
+            for message in changed["messages"].as_array().unwrap() {
+                ids.update(message["occurrence_id"].as_i64().unwrap().to_be_bytes());
+            }
+            changed["ids_sha256"] = json!(hex(ids.finalize().as_slice()));
             changed["messages"][0]["message_id"] = json!(i64::MAX);
             changed["messages"][0]["mailbox"]["id"] = json!(i64::MIN);
             changed["messages"][0]["acquisition"]["id"] = json!(i64::MAX);
