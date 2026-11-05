@@ -40,16 +40,25 @@ impl BundleFormat {
 }
 
 /// A bundle source's binding to its manifest: the private snapshot the
-/// manifest was captured into and the format it declares (spec/09).
+/// manifest was captured into, its format and its file binding (spec/09).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourceBundle {
     manifest: ImportSourceSnapshot,
     format: BundleFormat,
+    file_ordinal: Option<u64>,
 }
 
 impl SourceBundle {
-    pub(crate) fn new(manifest: ImportSourceSnapshot, format: BundleFormat) -> Self {
-        Self { manifest, format }
+    pub(crate) fn new(
+        manifest: ImportSourceSnapshot,
+        format: BundleFormat,
+        file_ordinal: Option<u64>,
+    ) -> Self {
+        Self {
+            manifest,
+            format,
+            file_ordinal,
+        }
     }
 
     /// The verified private copy of the bundle's manifest.
@@ -60,5 +69,10 @@ impl SourceBundle {
     /// The format the manifest declares: `eml` or `mboxrd`.
     pub fn format(&self) -> BundleFormat {
         self.format
+    }
+
+    /// Zero-based file entry in the captured manifest, absent in legacy rows.
+    pub(crate) fn file_ordinal(&self) -> Option<u64> {
+        self.file_ordinal
     }
 }

@@ -746,7 +746,14 @@ impl FileObjectStore {
         streamed().map_err(|e| {
             // Best effort: the real error is the one reported.
             let _ = self.fs.remove(tmp);
-            failed(e)
+            // A verifying reader reports its own typed failure (a hash
+            // mismatch, a quarantine that could not move the file);
+            // propagate that rather than wrapping it as a generic I/O
+            // failure, so its kind and detail survive the copy.
+            match read_error_as_store_error(&e) {
+                Some(error) => error.clone(),
+                None => failed(e),
+            }
         })
     }
 

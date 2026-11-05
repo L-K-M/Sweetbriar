@@ -419,6 +419,9 @@ impl Fs for SimFs {
         }))
     }
 
+    fn open_no_follow(&self, path: &Path) -> io::Result<Box<dyn sb_types::fs::ReadFile>> {
+        self.open(path)
+    }
     fn create(&self, path: &Path) -> io::Result<Box<dyn WriteFile>> {
         let _op = self.op();
         let path = normalise(path)?;
