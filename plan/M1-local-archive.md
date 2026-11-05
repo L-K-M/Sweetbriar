@@ -1093,15 +1093,57 @@ local drafts. No network yet.
     completed image through the reader above. Bound disk, memory and SQLite
     work, including cancellation. Acceptance: source changes cannot alter the
     inspection; malformed schemas are bounded; cancellation never succeeds.
-  - **M1.8e1 Restore generation verification (M):** select a complete
-    generation recorded in the current store and verify its manifest, snapshot
-    and every object, including identity, size and hash mismatches. Staging
-    must verify the bytes it actually copies again.
-  - **M1.8e2 Restore discovery and verified handoff (M):** discover and
+  - **M1.8e1a Streaming manifest parser (L):** parse the format-1 manifest
+    incrementally with bounded memory and a streaming object sink. Reject
+    unknown or duplicate fields and invalid scalar values; validate Unicode,
+    integer overflow, truncation and cancellation. This does not verify a
+    generation or retain an object ledger.
+  - **M1.8e1b Verification ledger (L):** retain manifest object metadata in
+    bounded, owned scratch with duplicate detection and cleanup evidence.
+  - **M1.8e1c1a Retained-image callback (S):** allow caller-owned work on
+    the authenticated private image while its connection and scratch remain
+    owned. Completion claims metadata inspection only. Cancellation, errors
+    and cleanup failures never claim success.
+  - **M1.8e1c1b1 Bounded JSON lexical reader (L):** extract the manifest's
+    incremental Unicode scanner into a private reusable reader. Validate JSON
+    tokens and skip arbitrary values with fixed input, string and nesting
+    storage, cancellation and native I/O errors. Provide decoded name matching,
+    fixed-buffer string capture and exact unsigned integers. Mirror the
+    effective serde_json recursion boundary, accounting for enclosing values.
+    This prerequisite implements no attachment fields or snapshot traversal.
+  - **M1.8e1c1b2 Streaming attachment decoder (L):** use b1 to decode the
+    canonical draft attachment JSON shape with bounded memory and cancellation,
+    including arbitrary extra fields and duplicate-key read semantics. Preserve
+    the existing canonical reader's acceptance and reference semantics,
+    including numeric representation constraints beyond lexical JSON grammar.
+  - **M1.8e1c1c Snapshot reference walker (L):** page acquisitions and send
+    attempts and stream draft attachment blobs through the decoder, yielding
+    every reference without a corpus-sized set or total cap.
+  - **M1.8e1c2 Snapshot reconciliation (L):** compare the isolated snapshot's
+    identity and all references with the parsed manifest and ledger.
+  - **M1.8e1d Recorded generation verification (L):** select a complete
+    generation recorded in the current store, reconcile its manifest and
+    snapshot, and verify every object's size and hash. Staging must verify
+    the bytes it actually copies again.
+  - **M1.8e2a Confined streaming enumeration (M):** enumerate child names
+    through a retained directory capability with bounded memory, early stop,
+    and propagated I/O errors. Cover native, simulator and fault adapters.
+  - **M1.8e2b Restore discovery and verified handoff (M):** discover and
     select complete external generations, including restore into a fresh data
     root, and hand a verified selection to staging. Do not assume a row in
     the current store. Verify the actual copied bytes again during staging.
-  - **M1.8e3 Quarantined restore staging (L):** verify and copy the chosen
+  - **M1.8e3a Quarantine transaction prerequisite (L):** implement and test
+    the atomic staging-database transformation, including inherited cleanup
+    authority and component-aware location rewriting. It cannot qualify or
+    publish a staging directory. The caller must supply the verified source
+    location and manifest metadata; this prerequisite does not validate them.
+  - **M1.8e3a1 Bounded inherited metadata reads (M):** bound SQLite values
+    while reading inherited generation identifiers and locations, before
+    allocating owned strings. Reject oversized metadata atomically without
+    leaving connection limits on unrelated archive rows. Preserve large
+    requests and checkpoints. Schema inspection bounds remain part of e3b's
+    qualification prerequisite; this step qualifies no staging directory.
+  - **M1.8e3b Quarantined restore staging (L):** verify and copy the chosen
     generation into `<data root>.restoring-<inc>` with publication flushes,
     then run the staging quarantine transaction: new incarnation, all
     accounts paused, unfinished import jobs failed with requests and

@@ -12,8 +12,39 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 type Reader = Arc<Mutex<Box<dyn ReadFile>>>;
+
+/// Process-global SQLite allocation diagnostics, for isolated child tests only.
+#[cfg(test)]
+pub(crate) fn largest_allocation(reset: bool) -> rusqlite::Result<i64> {
+    let (mut current, mut largest) = (0, 0);
+    // Both pointers refer to live i64 locals; SQLite synchronizes its counters.
+    let result = unsafe {
+        ffi::sqlite3_status64(
+            ffi::SQLITE_STATUS_MALLOC_SIZE,
+            &mut current,
+            &mut largest,
+            i32::from(reset),
+        )
+    };
+    if result != ffi::SQLITE_OK {
+        return Err(rusqlite::Error::SqliteFailure(
+            ffi::Error::new(result),
+            None,
+        ));
+    }
+    Ok(largest)
+}
+
 thread_local! {
     static OPENING: RefCell<Option<(String, Reader)>> = const { RefCell::new(None) };
+}
+#[cfg(test)]
+thread_local! {
+    static CLOSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+#[cfg(test)]
+pub(crate) fn closes_on_this_thread() -> usize {
+    CLOSES.with(std::cell::Cell::get)
 }
 static NEXT_ID: AtomicU64 = AtomicU64::new(0);
 static REGISTERED: OnceLock<c_int> = OnceLock::new();
@@ -50,7 +81,6 @@ static METHODS: ffi::sqlite3_io_methods = ffi::sqlite3_io_methods {
 
 /// Open only the supplied handle. SQLite cannot open any other file through
 /// this VFS, including a WAL, journal, temporary file or source pathname.
-#[allow(dead_code)] // Used by the verifier in the next stacked step.
 pub(crate) fn open(file: Box<dyn ReadFile>) -> rusqlite::Result<Connection> {
     let rc = *REGISTERED.get_or_init(register);
     if rc != ffi::SQLITE_OK {
@@ -156,6 +186,8 @@ unsafe extern "C" fn close(file: *mut ffi::sqlite3_file) -> c_int {
     // SAFETY: xOpen initialized this pointer and SQLite calls xClose once.
     std::panic::catch_unwind(|| unsafe {
         drop(Box::from_raw((*file.cast::<ImageFile>()).reader));
+        #[cfg(test)]
+        CLOSES.with(|count| count.set(count.get() + 1));
     })
     .map_or(ffi::SQLITE_IOERR_CLOSE, |()| ffi::SQLITE_OK)
 }
