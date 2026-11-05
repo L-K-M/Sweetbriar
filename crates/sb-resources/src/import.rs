@@ -438,7 +438,8 @@ enum Scan {
 }
 
 impl Walker<'_> {
-    /// The shared progress check; a break latches so the walk stops.
+    /// The shared progress check; a break latches so the walk stops. This
+    /// only probes cancellation — the dedup sets are not touched here.
     fn check(&mut self, path: &Path) -> bool {
         self.cancelled =
             self.cancelled || (self.progress)(ImportProgress::Checking { path }).is_break();
@@ -661,6 +662,9 @@ impl Walker<'_> {
                     if path.to_str().is_none() {
                         self.problem(&path, ImportProblemKind::NonUtf8, "the path is not UTF-8");
                     } else if let Some((bytes, records, ordinal)) = declaration {
+                        // The declaration wins: a child named in the manifest is
+                        // checked as a file even when a directory occupies its
+                        // path, so its entries are not hoisted as real sources.
                         pending.push(Work::Child(
                             path.clone(),
                             format,
@@ -669,10 +673,6 @@ impl Walker<'_> {
                             ordinal,
                             owner.clone(),
                         ));
-                        if matches!(self.fs.metadata(&path), Ok(Some(md)) if md.kind() == FileKind::Directory)
-                        {
-                            pending.push(Work::Visit(path, Origin::Listed));
-                        }
                     } else if has_extension(&path, "eml") || has_extension(&path, "mbox") {
                         match self.fs.metadata(&path) {
                             Ok(Some(md)) if md.kind() == FileKind::File => {
@@ -782,13 +782,15 @@ impl Walker<'_> {
             self.discard(&snapshot);
             return;
         }
+        // The stored path is canonicalized, so the mailbox label is
+        // derived from it rather than the possibly-aliased declared path.
         let mailbox = match format {
-            BundleFormat::Eml => folder_name(path),
-            BundleFormat::Mboxrd => stem(path),
+            BundleFormat::Eml => folder_name(&source_path),
+            BundleFormat::Mboxrd => stem(&source_path),
         };
         let Some(mailbox) = mailbox else {
             self.discard(&snapshot);
-            self.name_problem(path);
+            self.name_problem(&source_path);
             return;
         };
         if source_path.to_str().is_none() {
