@@ -110,9 +110,10 @@ pub(crate) fn open(file: Box<dyn ReadFile>) -> rusqlite::Result<Connection> {
             // Retained images carry an inherited schema: no virtual-table
             // module, view or trigger may run while it is inspected, not
             // even a module's xConnect during schema resolution. Canonical
-            // images only expose ordinary STRICT tables, so nothing
-            // legitimate needs these capabilities. Eponymous pragma
-            // readers keep working after modules are dropped.
+            // images do contain an fts5 virtual table and triggers, but no
+            // inspection step needs them to execute — they only enumerate
+            // as metadata. Eponymous pragma readers keep working after
+            // modules are dropped.
             // SAFETY: the handle is this connection's live sqlite3*, and a
             // NULL keep-list disables every droppable module.
             let rc = unsafe { ffi::sqlite3_drop_modules(conn.handle(), std::ptr::null_mut()) };
