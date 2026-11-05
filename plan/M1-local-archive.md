@@ -1078,18 +1078,45 @@ local drafts. No network yet.
     `failed`, deletes its pins and removes its directory. Acceptance: the
     interrupted generation's marking and removal; on restart after a cut
     no inherited unfinished job blocks GC.
-  - **M1.8e Quarantined restore staging (L):** verify the chosen
-    generation against its manifest (`state.sqlite` hash, every object
-    hash), stage the copy into `<data root>.restoring-<inc>` with the
-    publication flushes, and run the staging quarantine transaction: new
-    incarnation, all accounts `paused`, unfinished import jobs `failed`
-    with requests/checkpoints intact, intents `quarantined`, attempts in
-    `held`/`queued`/`submitting` become `outcome_unknown`, copied-source
-    locations rewritten (never to absent originals) and the inherited
-    backup rows fixed — then flush staging. Acceptance: every
-    after-restore row state; no original-path substitution; crash cuts
-    during staging leave the live store untouched and stage nothing
-    unquarantined.
+  - **M1.8e0a Confined backup reads (M):** add a retained directory
+    capability that opens descendants without following symlinks, including
+    simulator and fault behavior. Acceptance: path replacement cannot redirect
+    an open capability; links and traversal are refused; failures propagate.
+  - **M1.8e0b1 Retained-file SQLite reader (M):** provide a read-only
+    SQLite VFS backed only by an already-open reader. Refuse sidecars and
+    other file opens. Acceptance: replacing the pathname cannot change the
+    queried image; no source WAL is read; Linux and macOS tests pass.
+  - **M1.8e0b2 Verifier scratch ownership (L):** create and recover private
+    scratch with durable ownership and directory identity. Cleanup fails
+    closed and retains evidence when ownership cannot be proved, including
+    an unmarked directory after a crash; retry proven cleanup. Acceptance:
+    crash cuts and substitutions preserve unowned data, and proven leftovers
+    are recovered; simulator and fault behavior agree.
+  - **M1.8e0b3 Isolated verifier image (L):** stream a confined source into
+    owned scratch, checking digest and length, and inspect only the retained
+    completed image through the reader above. Bound disk, memory and SQLite
+    work, including cancellation. Acceptance: source changes cannot alter the
+    inspection; malformed schemas are bounded; cancellation never succeeds.
+  - **M1.8e1 Restore generation verification (M):** select a complete
+    generation recorded in the current store and verify its manifest, snapshot
+    and every object, including identity, size and hash mismatches. Staging
+    must verify the bytes it actually copies again.
+  - **M1.8e2 Restore discovery and verified handoff (M):** discover and
+    select complete external generations, including restore into a fresh data
+    root, and hand a verified selection to staging. Do not assume a row in
+    the current store. Verify the actual copied bytes again during staging.
+  - **M1.8e3 Quarantined restore staging (L):** verify and copy the chosen
+    generation into `<data root>.restoring-<inc>` with publication flushes,
+    then run the staging quarantine transaction: new incarnation, all
+    accounts paused, unfinished import jobs failed with requests and
+    checkpoints intact, intents quarantined, held/queued/submitting attempts
+    outcome unknown, copied-source locations rewritten without substituting
+    absent original paths, and inherited backup rows fixed. Flush staging.
+    Acceptance: every after-restore row state; internal and external backup
+    location semantics; no original-path substitution; cancellation and
+    injected I/O, SQL and flush failures; retry and wrong generation or
+    incarnation; crash cuts leave the live store untouched and no
+    unquarantined stage eligible for publication.
   - **M1.8f Durable swap and startup recovery (L):** the restore-pending
     marker (new incarnation, generation id and path), both renames with
     their flushes, the startup handling of all three marker states, the
@@ -1218,7 +1245,55 @@ local drafts. No network yet.
       (an acknowledged save is its receipt). Depends on M1.9a1.
   - **M1.9b Drafts service and FFI (L):** owned Service DTOs, FFI
     exports, regenerated bindings and the SweetbriarBridge model over a,
-    with receipts and lifecycle proof.
+    with receipts and lifecycle proof. Re-sized 2026-11-02: the complete
+    artifact estimates well over the 1,450-line limit (the Service
+    surface alone measures ~1,000 gross changed lines including its
+    tests, and the FFI exports, bindings and bridge roughly double
+    that). Split below with every deliverable and acceptance check
+    assigned.
+    - **M1.9b1 Drafts service (L):** the Service-owned draft DTOs —
+      `DraftSource`, `ComposeFormat`, `DraftState`, `AttemptState`,
+      `DraftRecipient`, `DraftAttachmentRef`, `LiveAttempt`,
+      `DraftRevision`, `Draft`, `DraftSummary`, `DraftCreated`,
+      `DraftSaved`, and the `DraftAttachmentObject`/`DraftAttachment`/
+      `DraftContent` save inputs — with explicit Engine mapping, and
+      `Core`'s `create_draft`, `save_draft`, `discard_draft`,
+      `drafts()`, `draft()` and `publish_draft_attachment`. The Service
+      tests prove the DTO crossing, receipt replay, the same-base
+      `Conflict`, the publication ordering, the NULL route, the
+      live-attempt refusal, reopen durability and a dropped caller's
+      commit through shutdown. No FFI, bindings or bridge. Depends on
+      M1.9a2.
+    - **M1.9b2 Drafts FFI and bridge:** re-sized 2026-11-04 using the
+      existing import FFI commits as a generator measurement: the job
+      query added 690 Swift binding lines and the commands added 363,
+      alongside 320 and 272 gross Rust lines respectively. Drafts has
+      both a full revision vocabulary and commands, plus an owned Swift
+      model and tests, so split it into:
+      - **M1.9b2a Draft queries over FFI (L):** FFI-owned query records
+        and enums, field-by-field mappings, `drafts()` and `draft()`,
+        typed errors and query cancellation, Rust codec and lifecycle
+        tests, regenerated Swift bindings and `cargo xtask check-ffi`.
+        Depends on M1.9b1.
+      - **M1.9b2a1 Shared draft attachment reservations (S):** share
+        the original publication reservation across copies of the service
+        attachment handle, so a retry can reach its durable receipt after
+        an accepted save or a dropped caller. A fresh command must not spend
+        the reservation twice. Cover replay and reservation ownership through
+        native APIs without moving validation outside the receipt transaction.
+        Depends on M1.9b2a.
+      - **M1.9b2b Draft commands over FFI (L):** create, save, discard
+        and attachment publication, FFI-owned input records and enums,
+        the attachment-object handle, complete mappings, typed errors
+        and command cancellation, Rust codec, error and lifecycle tests,
+        regenerated Swift bindings and `cargo xtask check-ffi`. Depends
+        on M1.9b2a1.
+      - **M1.9b2c Draft bridge (L):** the SweetbriarBridge owned draft
+        model with load, save over the base revision, discard and the
+        typed `Conflict` outcome M1.9c shows as keep-both, with Swift
+        Testing coverage of the codec, conflict and lifecycle. Depends on
+        M1.9b2b.
+      Re-size again if any artifact exceeds the limit.
   - **M1.9c Compose window (L):** the macOS compose window — token
     fields, subject, a plain or Markdown editor on the M0.11 probe's
     TextKit 2 view, autosave after 1.5 s, "Saved" only after the
