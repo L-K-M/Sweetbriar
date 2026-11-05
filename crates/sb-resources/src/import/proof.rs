@@ -168,13 +168,17 @@ fn read_header(reader: &mut impl Read) -> io::Result<RegistryHeader> {
 fn copy_bounded(
     source: &mut dyn sb_store::ReadFile,
     target: &mut dyn sb_store::WriteFile,
-) -> io::Result<u64> {
+    check: &mut impl FnMut() -> ControlFlow<()>,
+) -> io::Result<Scoped<u64>> {
     let mut buffer = vec![0; REGISTRY_COPY_CHUNK];
     let mut copied = 0u64;
     loop {
+        if check().is_break() {
+            return Ok(Scoped::Stopped);
+        }
         let read = source.read(&mut buffer)?;
         if read == 0 {
-            return Ok(copied);
+            return Ok(Scoped::Done(copied));
         }
         target.write_all(&buffer[..read])?;
         copied = copied.checked_add(read as u64).ok_or_else(invalid)?;
@@ -318,11 +322,18 @@ impl ManifestProofRegistry {
         progress: impl FnMut(u64) -> ControlFlow<()>,
         use_proof: impl FnOnce(&mut ManifestProof) -> io::Result<T>,
     ) -> io::Result<Scoped<T>> {
-        let header = match self.ensure_header(bundle, resources, progress)? {
+        let progress = RefCell::new(progress);
+        if (progress.borrow_mut())(0).is_break() {
+            return Ok(Scoped::Stopped);
+        }
+        let header = match self.ensure_header(bundle, resources, &progress)? {
             Scoped::Done(header) => header,
             Scoped::Stopped => return Ok(Scoped::Stopped),
         };
         let mut proof = ManifestProof::from_registry(&self.scratch, bundle, header)?;
+        if (progress.borrow_mut())(bundle.manifest().byte_length()).is_break() {
+            return Ok(Scoped::Stopped);
+        }
         use_proof(&mut proof).map(Scoped::Done)
     }
 
@@ -333,7 +344,7 @@ impl ManifestProofRegistry {
         &self,
         bundle: &SourceBundle,
         resources: &crate::Resources,
-        progress: impl FnMut(u64) -> ControlFlow<()>,
+        progress: &RefCell<impl FnMut(u64) -> ControlFlow<()>>,
     ) -> io::Result<Scoped<RegistryHeader>> {
         {
             let _read = self
@@ -360,11 +371,18 @@ impl ManifestProofRegistry {
                     store_error(error)
                 }
             })?;
-        let produced =
-            resources.with_manifest_proof(bundle, progress, |proof| self.freeze(proof, bundle));
+        let produced = resources.with_manifest_proof(
+            bundle,
+            |n| (progress.borrow_mut())(n),
+            |proof| {
+                self.freeze(proof, bundle, &mut || {
+                    (progress.borrow_mut())(bundle.manifest().byte_length())
+                })
+            },
+        );
         match produced {
-            Ok(Scoped::Done(())) => {}
-            Ok(Scoped::Stopped) => {
+            Ok(Scoped::Done(Scoped::Done(()))) => {}
+            Ok(Scoped::Done(Scoped::Stopped)) | Ok(Scoped::Stopped) => {
                 let cleanup = self.scratch.remove_registry_dir(bundle.manifest());
                 return match cleanup {
                     Ok(()) => Ok(Scoped::Stopped),
@@ -415,7 +433,12 @@ impl ManifestProofRegistry {
 
     /// Stream the producer's verified outputs into the snapshot namespace
     /// and freeze the header last.
-    fn freeze(&self, proof: &mut ManifestProof, bundle: &SourceBundle) -> io::Result<()> {
+    fn freeze(
+        &self,
+        proof: &mut ManifestProof,
+        bundle: &SourceBundle,
+        check: &mut impl FnMut() -> ControlFlow<()>,
+    ) -> io::Result<Scoped<()>> {
         let snapshot = bundle.manifest();
         let descriptors_len = proof
             .records
@@ -432,8 +455,18 @@ impl ManifestProofRegistry {
             .scratch
             .create_registry_file(snapshot, RegistryFile::Lookup)
             .map_err(store_error)?;
-        let copied_descriptors = copy_bounded(&mut *proof.descriptors, &mut *descriptors)?;
-        let copied_lookup = copy_bounded(&mut *proof.lookup, &mut *lookup)?;
+        let copied_descriptors =
+            match copy_bounded(&mut *proof.descriptors, &mut *descriptors, check)? {
+                Scoped::Done(bytes) => bytes,
+                Scoped::Stopped => return Ok(Scoped::Stopped),
+            };
+        let copied_lookup = match copy_bounded(&mut *proof.lookup, &mut *lookup, check)? {
+            Scoped::Done(bytes) => bytes,
+            Scoped::Stopped => return Ok(Scoped::Stopped),
+        };
+        if check().is_break() {
+            return Ok(Scoped::Stopped);
+        }
         descriptors.sync_all()?;
         lookup.sync_all()?;
         if copied_descriptors != descriptors_len || copied_lookup != lookup_len {
@@ -441,6 +474,9 @@ impl ManifestProofRegistry {
         }
         drop(descriptors);
         drop(lookup);
+        if check().is_break() {
+            return Ok(Scoped::Stopped);
+        }
         let header = RegistryHeader {
             token: snapshot.token().to_owned(),
             sha256: snapshot.sha256(),
@@ -457,7 +493,10 @@ impl ManifestProofRegistry {
             .map_err(store_error)?;
         write_header(&mut *header_file, &header)?;
         header_file.sync_all()?;
-        Ok(())
+        if check().is_break() {
+            return Ok(Scoped::Stopped);
+        }
+        Ok(Scoped::Done(()))
     }
 }
 
@@ -1416,6 +1455,101 @@ mod tests {
             .scratch
             .remove_registry_dir(bundle.manifest())
             .unwrap();
+    }
+
+    #[test]
+    fn registry_cancelled_reuse_never_invokes_the_consumer() {
+        let tmp = ScratchDir::new("manifest-proof-cancel-reuse");
+        let resources = crate::Resources::open(&tmp.path().join("store")).unwrap();
+        let registry = resources.manifest_proof_registry().unwrap();
+        let bundle = captured_bundle(&resources, tmp.path(), 0, BundleFormat::Eml, Some(0));
+        done(
+            registry
+                .with_proof(
+                    &resources,
+                    &bundle,
+                    |_| ControlFlow::Continue(()),
+                    |_| Ok(()),
+                )
+                .unwrap(),
+        );
+        let result = registry.with_proof(
+            &resources,
+            &bundle,
+            |_| ControlFlow::Break(()),
+            |_| -> io::Result<()> { panic!("cancelled cached proof escaped") },
+        );
+        assert!(matches!(result.unwrap(), Scoped::Stopped));
+        assert!(registry.read_header(&bundle).unwrap().is_some());
+    }
+
+    #[test]
+    fn registry_cancellation_during_freeze_removes_the_namespace() {
+        let tmp = ScratchDir::new("manifest-proof-cancel-freeze");
+        let resources = crate::Resources::open(&tmp.path().join("store")).unwrap();
+        let registry = resources.manifest_proof_registry().unwrap();
+        let bundle = captured_bundle(&resources, tmp.path(), 0, BundleFormat::Eml, Some(0));
+        let mut observed_copy = false;
+        let result = registry.with_proof(
+            &resources,
+            &bundle,
+            |_| {
+                if let Ok(mut file) = registry
+                    .scratch
+                    .open_registry_file(bundle.manifest(), RegistryFile::Descriptors)
+                    && file.seek(SeekFrom::End(0)).unwrap() > 0
+                {
+                    observed_copy = true;
+                    ControlFlow::Break(())
+                } else {
+                    ControlFlow::Continue(())
+                }
+            },
+            |_| -> io::Result<()> { panic!("cancelled frozen proof escaped") },
+        );
+        assert!(matches!(result.unwrap(), Scoped::Stopped));
+        assert!(observed_copy);
+        assert!(registry.read_header(&bundle).unwrap().is_none());
+        registry
+            .scratch
+            .create_registry_dir(bundle.manifest())
+            .unwrap();
+        registry
+            .scratch
+            .remove_registry_dir(bundle.manifest())
+            .unwrap();
+    }
+
+    #[test]
+    fn registry_output_copy_checks_cancellation_between_chunks() {
+        let tmp = ScratchDir::new("manifest-proof-cancel-chunk");
+        let resources = crate::Resources::open(&tmp.path().join("store")).unwrap();
+        let scratch = resources.store.import_validation_scratch().unwrap();
+        let mut writer = scratch.create_file(ValidationFile::Descriptors).unwrap();
+        writer.write_all(&vec![1; 3 * REGISTRY_COPY_CHUNK]).unwrap();
+        drop(writer);
+        let mut source = scratch.open_file(ValidationFile::Descriptors).unwrap();
+        let mut target = scratch.create_file(ValidationFile::Lookup).unwrap();
+        let mut checks = 0;
+        let result = copy_bounded(&mut *source, &mut *target, &mut || {
+            checks += 1;
+            if checks == 2 {
+                ControlFlow::Break(())
+            } else {
+                ControlFlow::Continue(())
+            }
+        })
+        .unwrap();
+        assert!(matches!(result, Scoped::Stopped));
+        drop(target);
+        let mut output = scratch.open_file(ValidationFile::Lookup).unwrap();
+        assert_eq!(
+            output.seek(SeekFrom::End(0)).unwrap(),
+            REGISTRY_COPY_CHUNK as u64
+        );
+        drop(output);
+        drop(source);
+        scratch.finish().unwrap();
     }
 
     #[test]
