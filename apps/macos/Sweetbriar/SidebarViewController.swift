@@ -5,6 +5,7 @@
 // that opens nothing shows disabled, its note as the tooltip.
 
 import AppKit
+import Observation
 import SweetbriarBridge
 
 @MainActor
@@ -13,13 +14,8 @@ final class SidebarViewController: NSViewController {
     static let accessibilityID = "sidebar"
     private static let entryCellID = NSUserInterfaceItemIdentifier("SidebarEntry")
     private static let headerCellID = NSUserInterfaceItemIdentifier("SidebarHeader")
-    /// An account's neutral symbol before M1.10's appearance service.
-    private static let accountSymbol = NSImage(
-        systemSymbolName: "person.crop.circle",
-        accessibilityDescription: nil
-    )
-
     private let model: SidebarModel
+    private let appearance: AppearanceModel
     private let outlineView = NSOutlineView()
 
     /// The outline's items, rebuilt per reload: NSOutlineView keys its
@@ -36,9 +32,23 @@ final class SidebarViewController: NSViewController {
     /// Choosing an entry that opens a window.
     var onChoose: (@MainActor (WindowSpec) -> Void)?
 
-    init(model: SidebarModel) {
+    init(model: SidebarModel, appearance: AppearanceModel) {
         self.model = model
+        self.appearance = appearance
         super.init(nibName: nil, bundle: nil)
+        observeAppearance()
+    }
+
+    private func observeAppearance() {
+        withObservationTracking {
+            _ = appearance.appearance
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                if self.isViewLoaded { self.reloadSections() }
+                self.observeAppearance()
+            }
+        }
     }
 
     required init?(coder: NSCoder) {
@@ -46,6 +56,10 @@ final class SidebarViewController: NSViewController {
     }
 
     override func loadView() {
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self, selector: #selector(accessibilityOptionsChanged),
+            name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil
+        )
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("entries"))
         column.resizingMask = .autoresizingMask
         outlineView.addTableColumn(column)
@@ -64,6 +78,10 @@ final class SidebarViewController: NSViewController {
         scrollView.autohidesScrollers = true
         scrollView.drawsBackground = false
         view = scrollView
+    }
+
+    @objc private func accessibilityOptionsChanged() {
+        reloadSections()
     }
 
     /// Show the model's sections, every one expanded, keeping the
@@ -140,6 +158,10 @@ extension SidebarViewController: NSOutlineViewDataSource, NSOutlineViewDelegate 
         item is SectionNode
     }
 
+    func outlineView(_ outlineView: NSOutlineView, heightOfRowByItem item: Any) -> CGFloat {
+        item is SectionNode ? 24 : outlineView.rowHeight
+    }
+
     /// Only entries that open a window can be selected (spec/08: a
     /// mailbox that isn't selectable opens no window).
     func outlineView(_ outlineView: NSOutlineView, shouldSelectItem item: Any) -> Bool {
@@ -156,13 +178,10 @@ extension SidebarViewController: NSOutlineViewDataSource, NSOutlineViewDelegate 
     ) -> NSView? {
         if let section = item as? SectionNode {
             let cell = outlineView.makeView(withIdentifier: Self.headerCellID, owner: nil)
-                as? NSTableCellView ?? makeHeaderCell()
-            cell.textField?.stringValue = section.section.title
-            // Accounts carry a neutral symbol until M1.10 gives them
-            // colors and monograms (spec/08 "Sidebar").
-            let isAccount = section.section.id != SidebarModel.unifiedSectionID
-            cell.imageView?.image = isAccount ? Self.accountSymbol : nil
-            cell.imageView?.isHidden = !isAccount
+                as? SidebarHeaderCell ?? SidebarHeaderCell(identifier: Self.headerCellID)
+            let account = appearance.appearance?.accounts.first { $0.accountId == section.section.id }
+            let label = Self.accountLabel(section.section, among: model.sections)
+            cell.configure(title: label, account: account, isAccount: section.section.id != SidebarModel.unifiedSectionID)
             return cell
         }
         guard let node = item as? EntryNode else { return nil }
@@ -184,32 +203,120 @@ extension SidebarViewController: NSOutlineViewDataSource, NSOutlineViewDelegate 
         onChoose?(spec)
     }
 
-    private func makeHeaderCell() -> NSTableCellView {
-        let cell = NSTableCellView()
-        cell.identifier = Self.headerCellID
-        let symbol = NSImageView()
-        symbol.translatesAutoresizingMaskIntoConstraints = false
-        symbol.contentTintColor = .secondaryLabelColor
-        symbol.setAccessibilityElement(false)
-        let label = NSTextField(labelWithString: "")
-        label.translatesAutoresizingMaskIntoConstraints = false
-        let row = NSStackView(views: [symbol, label])
-        row.orientation = .horizontal
-        row.spacing = 4
-        row.translatesAutoresizingMaskIntoConstraints = false
-        cell.addSubview(row)
-        cell.imageView = symbol
-        cell.textField = label
-        NSLayoutConstraint.activate([
-            row.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 2),
-            row.trailingAnchor.constraint(lessThanOrEqualTo: cell.trailingAnchor),
-            row.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
-        ])
-        return cell
+    static func accountLabel(_ section: SidebarModel.Section, among sections: [SidebarModel.Section]) -> String {
+        guard section.id != SidebarModel.unifiedSectionID else { return section.title }
+        let accounts = sections.filter { $0.id != SidebarModel.unifiedSectionID }.sorted { $0.id < $1.id }
+        guard let sectionIndex = accounts.firstIndex(where: { $0.id == section.id }) else { return section.title }
+        let titleCounts = Dictionary(grouping: accounts, by: \.title).mapValues(\.count)
+        var labels = accounts.map { account in
+            titleCounts[account.title, default: 0] > 1 ? "\(account.title) · \(account.id)" : account.title
+        }
+        // A generated label can itself be another account's literal name.
+        // Bound the retries, then use unique ordinal prefixes for every account.
+        for _ in 0..<accounts.count {
+            let counts = Dictionary(grouping: labels, by: { $0 }).mapValues(\.count)
+            if counts.values.allSatisfy({ $0 == 1 }) {
+                return labels[sectionIndex]
+            }
+            for index in accounts.indices where counts[labels[index], default: 0] > 1 {
+                labels[index] += " · \(accounts[index].id)"
+            }
+        }
+        return "\(sectionIndex + 1). \(section.title)"
     }
 }
 
 // MARK: - Items and cells
+
+@MainActor
+final class SidebarHeaderCell: NSTableCellView {
+    private(set) var badge = SidebarMonogramView()
+    private let label = NSTextField(labelWithString: "")
+
+    init(identifier: NSUserInterfaceItemIdentifier) {
+        super.init(frame: .zero)
+        self.identifier = identifier
+        badge.translatesAutoresizingMaskIntoConstraints = false
+        badge.setAccessibilityElement(false)
+        label.translatesAutoresizingMaskIntoConstraints = false
+        let row = NSStackView(views: [badge, label])
+        row.orientation = .horizontal
+        row.spacing = 4
+        row.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(row)
+        textField = label
+        NSLayoutConstraint.activate([
+            badge.widthAnchor.constraint(equalToConstant: 20),
+            badge.heightAnchor.constraint(equalToConstant: 20),
+            row.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 2),
+            row.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor),
+            row.centerYAnchor.constraint(equalTo: centerYAnchor),
+        ])
+    }
+
+    required init?(coder: NSCoder) { fatalError("SidebarHeaderCell is built in code") }
+
+    func configure(title: String, account: AccountAppearance?, isAccount: Bool) {
+        label.stringValue = title
+        badge.isHidden = !isAccount
+        badge.account = account
+        setAccessibilityLabel(isAccount ? "Account, \(title)" : title)
+    }
+}
+
+@MainActor
+final class SidebarMonogramView: NSView {
+    var contrastOptions: () -> (increaseContrast: Bool, differentiate: Bool) = {
+        (NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast,
+         NSWorkspace.shared.accessibilityDisplayShouldDifferentiateWithoutColor)
+    }
+    var account: AccountAppearance? { didSet { needsDisplay = true } }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsDisplay = true
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        guard let account else {
+            NSImage(systemSymbolName: "person.crop.circle", accessibilityDescription: nil)?
+                .draw(in: bounds)
+            return
+        }
+        let dark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let variant = dark ? account.tokens.dark : account.tokens.light
+        let shape = NSBezierPath(ovalIn: bounds.insetBy(dx: 1, dy: 1))
+        Self.color(variant.stripSrgb).setFill()
+        shape.fill()
+        let appearanceName = appearance?.name ?? effectiveAppearance.name
+        let highContrast = appearanceName == .accessibilityHighContrastAqua
+            || appearanceName == .accessibilityHighContrastDarkAqua
+        let options = contrastOptions()
+        if highContrast || options.increaseContrast || options.differentiate {
+            Self.color(variant.outlineSrgb).setStroke()
+            shape.lineWidth = 1.5
+            shape.stroke()
+        }
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.boldSystemFont(ofSize: 11),
+            .foregroundColor: Self.color(variant.markerSrgb),
+        ]
+        let text = account.monogram as NSString
+        let size = text.size(withAttributes: attributes)
+        text.draw(at: NSPoint(x: (bounds.width - size.width) / 2, y: (bounds.height - size.height) / 2),
+                  withAttributes: attributes)
+    }
+
+    private static func color(_ hex: String) -> NSColor {
+        guard hex.count == 7, hex.first == "#", let value = UInt32(hex.dropFirst(), radix: 16) else {
+            return .labelColor
+        }
+        return NSColor(srgbRed: CGFloat((value >> 16) & 255) / 255,
+                       green: CGFloat((value >> 8) & 255) / 255,
+                       blue: CGFloat(value & 255) / 255, alpha: 1)
+    }
+}
 
 /// A section as an outline item.
 private final class SectionNode: NSObject {

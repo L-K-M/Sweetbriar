@@ -23,6 +23,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     private static let listMinimumWidth: CGFloat = 320
 
     private let session: CoreSession
+    private let appearance: SharedAppearance
     private let statusLabel = NSTextField(labelWithString: "Opening the archive…")
     private(set) var sidebarModel: SidebarModel?
     private(set) var sidebar: SidebarViewController?
@@ -32,8 +33,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     private var closed = false
 
 
-    init(session: CoreSession) {
+    init(session: CoreSession, appearance: SharedAppearance) {
         self.session = session
+        self.appearance = appearance
         let window = NSWindow(
             contentRect: NSRect(origin: .zero, size: Self.defaultContentSize),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
@@ -100,8 +102,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     private func install(_ bridge: CoreBridge) {
         guard let window else { return }
         let sidebarModel = SidebarModel(source: bridge)
-        let sidebar = SidebarViewController(model: sidebarModel)
-        let messageList = MessageListViewController(bridge: bridge, sidebar: sidebarModel)
+        let appearanceModel = appearance.model(source: bridge)
+        let sidebar = SidebarViewController(model: sidebarModel, appearance: appearanceModel)
+        let messageList = MessageListViewController(bridge: bridge, sidebar: sidebarModel, appearance: appearanceModel)
         let reader = ReaderViewController(model: ReaderModel(source: bridge, preferred: .sanitizedHtml))
         self.reader = reader
         sidebar.onChoose = { [weak messageList] spec in
