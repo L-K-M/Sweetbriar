@@ -19,7 +19,9 @@ use crate::{list_rows, threads};
 /// The app version the workspace `Cargo.toml` carries: what
 /// `last_migrated_by` and `app_version_last_opened` record (spec/02).
 pub(crate) const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
-#[cfg(test)]
+/// The production migration list's latest version. Production readers
+/// (the restore staging schema inspection) must use this, never a
+/// test-only duplicate.
 pub(crate) const LATEST_SCHEMA_VERSION: u32 = MIGRATIONS[MIGRATIONS.len() - 1].version;
 
 /// One migration: the schema version it moves the store to, and the

@@ -4646,3 +4646,392 @@ fn staging_crash_cuts_leave_store_and_source_untouched() {
         "the highest cut points should survive a complete run"
     );
 }
+
+// --- M1.8e3b2a: bounded staged-schema inspection ---
+
+#[test]
+fn stage_schema_inspection_accepts_a_valid_copy() {
+    let source = staging_source("stage-schema-valid");
+    let stage = prepare(
+        &source.store,
+        source.select_with(&source.store),
+        source.receipt.location(),
+        source.metadata,
+    );
+    let entries = || {
+        let mut names: Vec<_> = std::fs::read_dir(stage.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        names.sort();
+        names
+    };
+    let before = entries();
+    let inspection = stage.inspect_stage_schema(&AtomicBool::new(false)).unwrap();
+    assert_eq!(
+        inspection.schema_version,
+        i64::from(crate::schema::LATEST_SCHEMA_VERSION)
+    );
+    // The inspection is read-only: no -shm/-wal or other side file is
+    // left in the stage, and its exact bytes are unchanged.
+    assert_eq!(before, entries());
+    assert_stage_objects(&stage, &source.payloads);
+    source.assert_untouched();
+}
+
+#[test]
+fn stage_schema_inspection_ignores_large_unrelated_archive_data() {
+    let (_scratch, _paths, store) = open("stage-schema-large-archive");
+    draft_rows(&store);
+    let request = "r".repeat(3 * 1024 * 1024);
+    let stored_request = request.clone();
+    writing(&store, move |tx| {
+        tx.execute(
+            "INSERT INTO import_jobs VALUES ('large','running',?1,'checkpoint',1,0,0)",
+            rusqlite::params![stored_request],
+        )
+        .map_err(bug)
+    });
+    let snapshot = store.backup_snapshot(BackupDestination::DataRoot).unwrap();
+    let receipt = store.complete_backup(snapshot).unwrap();
+    let metadata = restore_metadata(&store, receipt.generation_id());
+    let selection = store
+        .verify_external_backup(
+            receipt.location().parent().unwrap(),
+            receipt.generation_id(),
+            &AtomicBool::new(false),
+        )
+        .unwrap()
+        .unwrap();
+    let stage = store
+        .stage_restore(
+            selection,
+            receipt.location(),
+            metadata,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+    let inspection = stage.inspect_stage_schema(&AtomicBool::new(false)).unwrap();
+    assert_eq!(
+        inspection.schema_version,
+        i64::from(crate::schema::LATEST_SCHEMA_VERSION)
+    );
+    // The >1 MiB request is untouched and still readable on a fresh
+    // connection: the inspection's bound never leaked to archive data.
+    let staged_db = stage.path().join("state.sqlite");
+    let conn = Connection::open_with_flags(&staged_db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .unwrap();
+    let saved: String = conn
+        .query_row(
+            "SELECT request_json FROM import_jobs WHERE job_id='large'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(saved, request);
+    let default_limit = Connection::open_in_memory()
+        .unwrap()
+        .limit(rusqlite::limits::Limit::SQLITE_LIMIT_LENGTH)
+        .unwrap();
+    assert_eq!(
+        conn.limit(rusqlite::limits::Limit::SQLITE_LIMIT_LENGTH)
+            .unwrap(),
+        default_limit
+    );
+}
+
+#[test]
+fn stage_schema_inspection_rejects_historical_schema_22() {
+    let source = staging_source("stage-schema-22");
+    let stage = prepare(
+        &source.store,
+        source.select_with(&source.store),
+        source.receipt.location(),
+        source.metadata,
+    );
+    let db = stage.path().join("state.sqlite");
+    {
+        let conn = Connection::open(&db).unwrap();
+        conn.pragma_update(None, "user_version", 22).unwrap();
+    }
+    let error = stage
+        .inspect_stage_schema(&AtomicBool::new(false))
+        .unwrap_err();
+    let StoreError::Corrupt { detail } = error else {
+        panic!("historical schema must fail closed: {error:?}");
+    };
+    assert!(detail.contains("22"), "{detail}");
+    assert!(detail.contains("verifier 23/24"), "{detail}");
+    assert!(detail.contains("not migrated"), "{detail}");
+}
+
+#[test]
+fn stage_schema_inspection_rejects_a_view_substituted_for_a_table() {
+    let source = staging_source("stage-schema-view");
+    let stage = prepare(
+        &source.store,
+        source.select_with(&source.store),
+        source.receipt.location(),
+        source.metadata,
+    );
+    let db = stage.path().join("state.sqlite");
+    {
+        let conn = Connection::open(&db).unwrap();
+        conn.execute_batch(
+            "DROP TABLE backup_cleanup_pending;
+             CREATE VIEW backup_cleanup_pending AS SELECT 'x' AS generation_id;",
+        )
+        .unwrap();
+    }
+    let error = stage
+        .inspect_stage_schema(&AtomicBool::new(false))
+        .unwrap_err();
+    let StoreError::Corrupt { detail } = error else {
+        panic!("a view must fail closed: {error:?}");
+    };
+    assert!(detail.contains("backup_cleanup_pending"), "{detail}");
+    assert!(detail.contains("view"), "{detail}");
+}
+
+#[test]
+fn stage_schema_inspection_rejects_a_virtual_table_substituted_for_a_table() {
+    let source = staging_source("stage-schema-virtual");
+    let stage = prepare(
+        &source.store,
+        source.select_with(&source.store),
+        source.receipt.location(),
+        source.metadata,
+    );
+    let db = stage.path().join("state.sqlite");
+    {
+        let conn = Connection::open(&db).unwrap();
+        conn.execute_batch(
+            "PRAGMA foreign_keys=OFF;
+             DROP TABLE accounts;
+             CREATE VIRTUAL TABLE accounts USING fts5(state);",
+        )
+        .unwrap();
+    }
+    let error = stage
+        .inspect_stage_schema(&AtomicBool::new(false))
+        .unwrap_err();
+    let StoreError::Corrupt { detail } = error else {
+        panic!("a virtual table must fail closed: {error:?}");
+    };
+    assert!(detail.contains("accounts"), "{detail}");
+    assert!(detail.contains("virtual"), "{detail}");
+}
+
+#[test]
+fn stage_schema_inspection_rejects_wrong_rowid_shapes() {
+    // backup_generations must stay a rowid table for NOT INDEXED.
+    let source = staging_source("stage-schema-bg-shape");
+    let stage = prepare(
+        &source.store,
+        source.select_with(&source.store),
+        source.receipt.location(),
+        source.metadata,
+    );
+    let db = stage.path().join("state.sqlite");
+    {
+        let conn = Connection::open(&db).unwrap();
+        conn.execute_batch(
+            "PRAGMA foreign_keys=OFF;
+             DROP TABLE backup_generations;
+             CREATE TABLE backup_generations (
+               generation_id TEXT PRIMARY KEY,
+               started_at INTEGER NOT NULL,
+               completed_at INTEGER,
+               state TEXT NOT NULL,
+               location TEXT NOT NULL,
+               manifest_sha256 TEXT,
+               object_count INTEGER,
+               total_bytes INTEGER
+             ) STRICT, WITHOUT ROWID;",
+        )
+        .unwrap();
+    }
+    let error = stage
+        .inspect_stage_schema(&AtomicBool::new(false))
+        .unwrap_err();
+    let StoreError::Corrupt { detail } = error else {
+        panic!("a WITHOUT ROWID backup_generations must fail closed: {error:?}");
+    };
+    assert!(detail.contains("backup_generations"), "{detail}");
+    assert!(detail.contains("rowid"), "{detail}");
+}
+
+#[test]
+fn stage_schema_inspection_rejects_a_rowid_verifier_objects() {
+    let source = staging_source("stage-schema-verifier-shape");
+    let stage = prepare(
+        &source.store,
+        source.select_with(&source.store),
+        source.receipt.location(),
+        source.metadata,
+    );
+    let db = stage.path().join("state.sqlite");
+    {
+        let conn = Connection::open(&db).unwrap();
+        conn.execute_batch(
+            "DROP TABLE verifier_objects;
+             CREATE TABLE verifier_objects (
+               scratch_id TEXT NOT NULL,
+               sha256 BLOB NOT NULL,
+               bytes BLOB NOT NULL,
+               referenced INTEGER NOT NULL DEFAULT 0,
+               PRIMARY KEY(scratch_id, sha256)
+             ) STRICT;",
+        )
+        .unwrap();
+    }
+    let error = stage
+        .inspect_stage_schema(&AtomicBool::new(false))
+        .unwrap_err();
+    let StoreError::Corrupt { detail } = error else {
+        panic!("a rowid verifier_objects must fail closed: {error:?}");
+    };
+    assert!(detail.contains("verifier_objects"), "{detail}");
+    assert!(detail.contains("rowid"), "{detail}");
+}
+
+#[test]
+fn stage_schema_inspection_rejects_missing_and_renamed_columns() {
+    let source = staging_source("stage-schema-missing-table");
+    let stage = prepare(
+        &source.store,
+        source.select_with(&source.store),
+        source.receipt.location(),
+        source.metadata,
+    );
+    let db = stage.path().join("state.sqlite");
+    {
+        let conn = Connection::open(&db).unwrap();
+        conn.execute_batch("DROP TABLE backup_cleanup_pending;")
+            .unwrap();
+    }
+    let error = stage
+        .inspect_stage_schema(&AtomicBool::new(false))
+        .unwrap_err();
+    let StoreError::Corrupt { detail } = error else {
+        panic!("a missing table must fail closed: {error:?}");
+    };
+    assert!(detail.contains("missing"), "{detail}");
+
+    let source = staging_source("stage-schema-missing-column");
+    let stage = prepare(
+        &source.store,
+        source.select_with(&source.store),
+        source.receipt.location(),
+        source.metadata,
+    );
+    let db = stage.path().join("state.sqlite");
+    {
+        let conn = Connection::open(&db).unwrap();
+        conn.execute_batch("ALTER TABLE accounts RENAME COLUMN state TO status;")
+            .unwrap();
+    }
+    let error = stage
+        .inspect_stage_schema(&AtomicBool::new(false))
+        .unwrap_err();
+    let StoreError::Corrupt { detail } = error else {
+        panic!("a renamed column must fail closed: {error:?}");
+    };
+    assert!(detail.contains("accounts"), "{detail}");
+    assert!(detail.contains("column"), "{detail}");
+}
+
+#[test]
+fn stage_schema_inspection_honours_cancellation() {
+    let source = staging_source("stage-schema-cancel");
+    let stage = prepare(
+        &source.store,
+        source.select_with(&source.store),
+        source.receipt.location(),
+        source.metadata,
+    );
+    let error = stage
+        .inspect_stage_schema(&AtomicBool::new(true))
+        .unwrap_err();
+    assert!(
+        matches!(error, StoreError::Unavailable { .. }),
+        "cancellation must be refused: {error:?}"
+    );
+}
+
+#[test]
+fn stage_schema_metadata_allocation_is_bounded() {
+    // SQLite's allocation high-water mark is global to a process.
+    let child = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--ignored",
+            "--exact",
+            "backups::tests::stage_schema_allocation_child",
+            "--nocapture",
+        ])
+        .env("SB_STAGE_SCHEMA_ALLOC_CHILD", "1")
+        .output()
+        .unwrap();
+    assert!(
+        child.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&child.stdout),
+        String::from_utf8_lossy(&child.stderr)
+    );
+}
+
+#[test]
+#[ignore = "spawned by stage_schema_metadata_allocation_is_bounded"]
+fn stage_schema_allocation_child() {
+    assert_eq!(
+        std::env::var("SB_STAGE_SCHEMA_ALLOC_CHILD").as_deref(),
+        Ok("1")
+    );
+    let source = staging_source("stage-schema-alloc");
+    let stage = prepare(
+        &source.store,
+        source.select_with(&source.store),
+        source.receipt.location(),
+        source.metadata,
+    );
+    let db = stage.path().join("state.sqlite");
+    let huge = "x".repeat(16 * 1024 * 1024);
+    {
+        let conn = Connection::open(&db).unwrap();
+        conn.execute_batch(&format!("ALTER TABLE accounts ADD COLUMN \"{huge}\" TEXT"))
+            .unwrap();
+    }
+    // The legacy unbounded read reproduces the huge allocation.
+    let legacy =
+        Connection::open_with_flags(&db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+    let _ = crate::image_vfs::largest_allocation(true).unwrap();
+    let legacy_result = (|| -> rusqlite::Result<Vec<(String, String)>> {
+        let mut stmt = legacy.prepare("PRAGMA table_info(accounts)")?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(1)?, row.get::<_, String>(2)?))
+        })?;
+        rows.collect()
+    })();
+    let legacy_largest = crate::image_vfs::largest_allocation(false).unwrap();
+    assert!(
+        legacy_result.is_ok(),
+        "the legacy unbounded read should materialize the huge column"
+    );
+    assert!(
+        legacy_largest >= 16 * 1024 * 1024,
+        "legacy unbounded allocation not observed: {legacy_largest}"
+    );
+    drop(legacy);
+    // The bounded inspection fails closed without a comparable allocation.
+    let _ = crate::image_vfs::largest_allocation(true).unwrap();
+    let result = stage.inspect_stage_schema(&AtomicBool::new(false));
+    let bounded_largest = crate::image_vfs::largest_allocation(false).unwrap();
+    assert!(
+        bounded_largest < i64::from(crate::backups::staging::MAX_SCHEMA_VALUE_BYTES),
+        "bounded schema allocation: {bounded_largest}"
+    );
+    assert!(
+        matches!(result, Err(StoreError::Corrupt { .. })),
+        "oversized schema metadata must fail closed"
+    );
+}

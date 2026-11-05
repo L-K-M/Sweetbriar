@@ -12,6 +12,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use rusqlite::{OptionalExtension, limits::Limit};
 use sha2::{Digest, Sha256};
 
 use super::*;
@@ -40,7 +41,6 @@ pub struct RestoreMetadata {
 /// does NOT certify eligibility for a swap: b2 must inspect and quarantine
 /// the staged database, recheck the binding fields, and only then expose
 /// a qualified stage. The operation Arc lease is held until drop.
-#[derive(Debug)]
 pub struct PreparedRestoreStage {
     path: PathBuf,
     incarnation: String,
@@ -48,6 +48,11 @@ pub struct PreparedRestoreStage {
     manifest_sha256: String,
     source_location: PathBuf,
     preserved_root: PathBuf,
+    /// The store's filesystem capability, used to open the private staged
+    /// database through the safe read-only native reader. It is never a
+    /// raw-path restore authority: only this stage's own database is
+    /// opened, and only read-only.
+    fs: Arc<dyn Fs>,
     /// The live data root, the live incarnation the preserved root was
     /// derived from, the coordinator token, and the revalidated
     /// metadata. b2 must recheck every component before qualifying; a
@@ -64,6 +69,19 @@ pub struct PreparedRestoreStage {
     /// qualified stage b2 builds from it) is dropped.
     #[allow(dead_code)] // moved into the b2 qualified stage
     pub(crate) operation: Arc<()>,
+}
+
+impl std::fmt::Debug for PreparedRestoreStage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PreparedRestoreStage")
+            .field("path", &self.path)
+            .field("incarnation", &self.incarnation)
+            .field("generation_id", &self.generation_id)
+            .field("manifest_sha256", &self.manifest_sha256)
+            .field("source_location", &self.source_location)
+            .field("preserved_root", &self.preserved_root)
+            .finish_non_exhaustive()
+    }
 }
 
 impl PreparedRestoreStage {
@@ -93,6 +111,325 @@ impl PreparedRestoreStage {
     pub fn preserved_root(&self) -> &Path {
         &self.preserved_root
     }
+
+    /// Read-only, bounded compatibility inspection of the private staged
+    /// copy. This certifies only that the staged database exposes the
+    /// current schema shape the reviewed quarantine relies on; it is not a
+    /// quarantine, eligibility or swap verdict. The staged database is
+    /// opened through the safe read-only native reader on this stage's own
+    /// path, with SQLite value, SQL-length, column and work limits set
+    /// before the first schema materialization. Nothing is written to the
+    /// stage, the live store or the source, and the operation lease stays
+    /// held. b2b must recheck the live root, coordinator, incarnation and
+    /// metadata and consume the same lease before qualifying the stage.
+    #[allow(dead_code)] // consumed by the b2b qualifier
+    pub(crate) fn inspect_stage_schema(
+        &self,
+        cancel: &AtomicBool,
+    ) -> Result<StageSchemaInspection, StoreError> {
+        let staged_db = self.path.join(SNAPSHOT_FILE);
+        let file = self
+            .fs
+            .open_no_follow(&staged_db)
+            .map_err(|error| io_error("opening the staged database for inspection", error))?;
+        let conn = crate::image_vfs::open(file)
+            .map_err(|error| classify(error, "open the staged database for inspection"))?;
+        let result = (|| {
+            // Set the schema/value/work limits before the first schema
+            // materialization. The staged copy is private, but its schema
+            // is inherited from an untrusted generation.
+            for limit in [Limit::SQLITE_LIMIT_LENGTH, Limit::SQLITE_LIMIT_SQL_LENGTH] {
+                conn.set_limit(limit, MAX_SCHEMA_VALUE_BYTES)
+                    .map_err(|error| classify(error, "bound restore staging schema metadata"))?;
+            }
+            conn.set_limit(Limit::SQLITE_LIMIT_COLUMN, MAX_SCHEMA_COLUMNS)
+                .map_err(|error| classify(error, "bound restore staging schema metadata"))?;
+            conn.execute_batch("PRAGMA trusted_schema=OFF; PRAGMA query_only=ON;")
+                .map_err(|error| classify(error, "harden restore staging inspection"))?;
+            let inspection = super::image_inspect::guarded(
+                &conn,
+                cancel,
+                super::image_inspect::MAX_PROGRESS_CALLS,
+                |conn| inspect_stage_schema(conn, cancel),
+            )?;
+            inspection.ok_or_else(|| {
+                StoreError::unavailable("restore staging schema inspection cancelled")
+            })
+        })();
+        conn.close()
+            .map_err(|(_, error)| classify(error, "close restore staging inspection"))?;
+        result
+    }
+}
+
+/// Certify the staged database's schema shape. The connection already
+/// carries the inspection limits and hardening pragmas; every read is
+/// bounded and streamed, and no inherited program runs.
+fn inspect_stage_schema(
+    conn: &Connection,
+    cancel: &AtomicBool,
+) -> Result<StageSchemaInspection, StoreError> {
+    let schema_version = conn
+        .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+        .map_err(|error| {
+            super::image_inspect::inspection_error(error, "read restore staging schema version")
+        })?;
+    // Support the current schema only. Historical schemas lack the
+    // verifier tables added in migrations 23 and 24 and must fail closed;
+    // b3 owns any explicit migration artifact.
+    if schema_version != i64::from(crate::schema::LATEST_SCHEMA_VERSION) {
+        return Err(StoreError::corrupt(format!(
+            "restore staging schema version {schema_version} is incompatible with the current \
+             schema {}; historical schemas lack the verifier 23/24 tables and are not \
+             migrated here",
+            crate::schema::LATEST_SCHEMA_VERSION
+        )));
+    }
+    for table in REQUIRED_SCHEMA {
+        if cancel.load(Ordering::Acquire) {
+            return Err(StoreError::unavailable(
+                "restore staging schema inspection cancelled",
+            ));
+        }
+        inspect_required_table(conn, table)?;
+    }
+    Ok(StageSchemaInspection { schema_version })
+}
+
+/// Verify one required table's shape and columns. The table must be a
+/// real STRICT table with the expected rowid shape, not a view, virtual
+/// table or shadow table; every required column must be an ordinary
+/// column with the declared canonical type. Rows are streamed and fields
+/// are borrowed, so the scan stays bounded by the connection limits.
+fn inspect_required_table(conn: &Connection, table: &RequiredTable) -> Result<(), StoreError> {
+    let shape = conn
+        .query_row(
+            "SELECT type, wr, strict FROM pragma_table_list
+             WHERE schema='main' AND name=?1",
+            [table.name],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<i64>>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(|error| {
+            super::image_inspect::inspection_error(error, "read restore staging schema")
+        })?;
+    let Some((kind, without_rowid, strict)) = shape else {
+        return Err(StoreError::corrupt(format!(
+            "restore staging table {} is missing",
+            table.name
+        )));
+    };
+    if kind != "table" {
+        return Err(StoreError::corrupt(format!(
+            "restore staging table {} is a {kind}, not a table",
+            table.name
+        )));
+    }
+    if strict != 1 {
+        return Err(StoreError::corrupt(format!(
+            "restore staging table {} is not STRICT",
+            table.name
+        )));
+    }
+    let expected = if table.without_rowid { 1 } else { 0 };
+    if without_rowid != Some(expected) {
+        return Err(StoreError::corrupt(format!(
+            "restore staging table {} has the wrong rowid shape",
+            table.name
+        )));
+    }
+    let mut statement = conn
+        .prepare("SELECT name, type, hidden FROM pragma_table_xinfo(?1)")
+        .map_err(|error| {
+            super::image_inspect::inspection_error(error, "inspect restore staging table")
+        })?;
+    let mut rows = statement.query([table.name]).map_err(|error| {
+        super::image_inspect::inspection_error(error, "inspect restore staging table")
+    })?;
+    let mut found = 0u32;
+    while let Some(row) = rows.next().map_err(|error| {
+        super::image_inspect::inspection_error(error, "inspect restore staging table")
+    })? {
+        let name = row
+            .get_ref(0)
+            .map_err(|error| {
+                super::image_inspect::inspection_error(error, "inspect restore staging table")
+            })?
+            .as_str()
+            .map_err(|error| {
+                super::image_inspect::inspection_error(
+                    error.into(),
+                    "inspect restore staging table",
+                )
+            })?;
+        let declared = row
+            .get_ref(1)
+            .map_err(|error| {
+                super::image_inspect::inspection_error(error, "inspect restore staging table")
+            })?
+            .as_str()
+            .map_err(|error| {
+                super::image_inspect::inspection_error(
+                    error.into(),
+                    "inspect restore staging table",
+                )
+            })?;
+        let hidden: i64 = row.get(2).map_err(|error| {
+            super::image_inspect::inspection_error(error, "inspect restore staging table")
+        })?;
+        if hidden != 0 {
+            continue;
+        }
+        // A column named like the rowid alias is not an ordinary column
+        // and would change the meaning of rowid-based statements.
+        if !table.without_rowid
+            && (name.eq_ignore_ascii_case("rowid")
+                || name.eq_ignore_ascii_case("_rowid_")
+                || name.eq_ignore_ascii_case("oid"))
+        {
+            return Err(StoreError::corrupt(format!(
+                "restore staging table {} shadows rowid",
+                table.name
+            )));
+        }
+        for (index, (column, expected_type)) in table.columns.iter().enumerate() {
+            if name.eq_ignore_ascii_case(column) && declared.eq_ignore_ascii_case(expected_type) {
+                found |= 1 << index;
+            }
+        }
+    }
+    if found != (1u32 << table.columns.len()) - 1 {
+        return Err(StoreError::corrupt(format!(
+            "restore staging table {} lacks a required column or declared type",
+            table.name
+        )));
+    }
+    Ok(())
+}
+
+/// The schema shape the reviewed quarantine transaction relies on: the
+/// tables it reads or writes, the declared STRICT types of the columns it
+/// names, and the rowid shape its statements require. `backup_generations`
+/// must be a rowid table because the quarantine preflights `octet_length`
+/// with `NOT INDEXED`; `verifier_objects` is `STRICT, WITHOUT ROWID` and
+/// must not be assumed to have a rowid. Inherited programs are never
+/// executed here: the inspection reads only the schema, and the
+/// quarantine's own authorizer denies every action a trigger or view would
+/// take.
+struct RequiredTable {
+    name: &'static str,
+    without_rowid: bool,
+    columns: &'static [(&'static str, &'static str)],
+}
+
+const REQUIRED_SCHEMA: &[RequiredTable] = &[
+    RequiredTable {
+        name: "store_meta",
+        without_rowid: false,
+        columns: &[("key", "TEXT"), ("value", "TEXT")],
+    },
+    RequiredTable {
+        name: "accounts",
+        without_rowid: false,
+        columns: &[("account_id", "TEXT"), ("state", "TEXT")],
+    },
+    RequiredTable {
+        name: "import_jobs",
+        without_rowid: false,
+        columns: &[("job_id", "TEXT"), ("state", "TEXT")],
+    },
+    RequiredTable {
+        name: "intents",
+        without_rowid: false,
+        columns: &[
+            ("intent_id", "TEXT"),
+            ("state", "TEXT"),
+            ("quarantine_reason", "TEXT"),
+        ],
+    },
+    RequiredTable {
+        name: "send_attempts",
+        without_rowid: false,
+        columns: &[("attempt_id", "TEXT"), ("state", "TEXT")],
+    },
+    RequiredTable {
+        // The NOT INDEXED octet_length preflight needs a rowid table.
+        name: "backup_generations",
+        without_rowid: false,
+        columns: &[
+            ("generation_id", "TEXT"),
+            ("started_at", "INTEGER"),
+            ("completed_at", "INTEGER"),
+            ("state", "TEXT"),
+            ("location", "TEXT"),
+            ("manifest_sha256", "TEXT"),
+            ("object_count", "INTEGER"),
+            ("total_bytes", "INTEGER"),
+        ],
+    },
+    RequiredTable {
+        name: "object_pins",
+        without_rowid: false,
+        columns: &[
+            ("object_sha256", "TEXT"),
+            ("pin_kind", "TEXT"),
+            ("pin_ref", "TEXT"),
+            ("created_at", "INTEGER"),
+        ],
+    },
+    RequiredTable {
+        name: "backup_ownership",
+        without_rowid: false,
+        columns: &[("generation_id", "TEXT"), ("token", "TEXT")],
+    },
+    RequiredTable {
+        name: "backup_cleanup_pending",
+        without_rowid: false,
+        columns: &[("generation_id", "TEXT")],
+    },
+    RequiredTable {
+        name: "verifier_scratch",
+        without_rowid: false,
+        columns: &[("id", "TEXT"), ("token", "TEXT"), ("incarnation", "TEXT")],
+    },
+    RequiredTable {
+        // STRICT WITHOUT ROWID: the inspection must not require a rowid
+        // of every table.
+        name: "verifier_objects",
+        without_rowid: true,
+        columns: &[
+            ("scratch_id", "TEXT"),
+            ("sha256", "BLOB"),
+            ("bytes", "BLOB"),
+            ("referenced", "INTEGER"),
+        ],
+    },
+];
+
+/// The largest schema metadata value (a column name, a declared type, or
+/// a table's CREATE statement) the inspection connection will
+/// materialize. The bound is per connection and applies to schema
+/// metadata only; it is never applied to archive request or blob data.
+pub(crate) const MAX_SCHEMA_VALUE_BYTES: i32 = super::image_inspect::MAX_SQLITE_VALUE;
+/// The most columns a required table may declare. Every canonical table
+/// is far below this; the bound stops a hostile schema from making the
+/// row scan unbounded.
+const MAX_SCHEMA_COLUMNS: i32 = 64;
+
+/// A staged schema compatibility verdict. `Compatible` certifies only
+/// that the staged database exposes the current schema shape; it is not a
+/// quarantine, eligibility or swap verdict.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct StageSchemaInspection {
+    /// The staged database's `user_version`, equal to the production
+    /// migrations' latest version.
+    pub schema_version: i64,
 }
 
 /// Progress points a test may observe to cancel mid-stage
@@ -616,6 +953,7 @@ impl Backups {
             manifest_sha256: to_hex(&digest),
             source_location: source_location.to_path_buf(),
             preserved_root,
+            fs: Arc::clone(&self.fs),
             data_root,
             live_incarnation: current,
             metadata,
