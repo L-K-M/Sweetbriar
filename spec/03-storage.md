@@ -553,6 +553,15 @@ backups/<generation-id>/
 
 ## Restore
 
+The format-1 manifest reader streams records to its caller without a total
+manifest or object-count limit or corpus-sized memory. It rejects unknown,
+duplicate and missing fields; its grammar has only the documented envelope,
+database object and object-record array, with no arbitrary nested values.
+Strings are validated incrementally, including UTF-8 and escaped surrogate
+pairs. Identifiers and hashes have fixed decoded sizes, numbers are checked,
+and cancellation is observed while scanning whitespace, strings and records.
+Parsing alone does not establish that a generation is authentic or complete.
+
 SQLite inspection of a verifier image reads through a read-only VFS backed by
 an already-open file, without resolving its pathname or opening WAL, journal,
 shared-memory or temporary files. Holding the file preserves its identity,

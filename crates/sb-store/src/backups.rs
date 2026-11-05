@@ -6,6 +6,9 @@
 
 mod image;
 mod image_inspect;
+// The next restore slice attaches this parser to the verification ledger.
+#[allow(dead_code)]
+mod manifest;
 pub use image::BackupImageInspection;
 mod scratch;
 
