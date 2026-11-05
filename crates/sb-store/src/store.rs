@@ -151,6 +151,21 @@ impl Store {
         self.backups.complete(snapshot)
     }
 
+    /// Inspect a private copy authenticated against a verified manifest.
+    /// The supplied digest and length must come from that manifest. A same-UID
+    /// process holding a writable descriptor can still change the image.
+    pub fn inspect_backup_image(
+        &self,
+        generation: &Path,
+        sha256: [u8; 32],
+        bytes: u64,
+        cancelled: &std::sync::atomic::AtomicBool,
+        progress: impl FnMut(u64) -> std::ops::ControlFlow<()>,
+    ) -> Result<crate::BackupImageInspection, StoreError> {
+        self.backups
+            .inspect_image(generation, sha256, bytes, cancelled, progress)
+    }
+
     /// Stream a full capture through bounded writer turns. Blocking;
     /// finish explicitly and release read transactions before writing.
     pub fn export_chunk_writer(
