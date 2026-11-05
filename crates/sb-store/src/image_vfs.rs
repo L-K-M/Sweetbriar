@@ -12,6 +12,29 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 type Reader = Arc<Mutex<Box<dyn ReadFile>>>;
+
+/// Process-global SQLite allocation diagnostics, for isolated child tests only.
+#[cfg(test)]
+pub(crate) fn largest_allocation(reset: bool) -> rusqlite::Result<i64> {
+    let (mut current, mut largest) = (0, 0);
+    // Both pointers refer to live i64 locals; SQLite synchronizes its counters.
+    let result = unsafe {
+        ffi::sqlite3_status64(
+            ffi::SQLITE_STATUS_MALLOC_SIZE,
+            &mut current,
+            &mut largest,
+            i32::from(reset),
+        )
+    };
+    if result != ffi::SQLITE_OK {
+        return Err(rusqlite::Error::SqliteFailure(
+            ffi::Error::new(result),
+            None,
+        ));
+    }
+    Ok(largest)
+}
+
 thread_local! {
     static OPENING: RefCell<Option<(String, Reader)>> = const { RefCell::new(None) };
 }

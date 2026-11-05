@@ -60,6 +60,9 @@ fn authorize(ctx: AuthContext<'_>) -> Authorization {
     }
     let allowed = match ctx.action {
         Select | Transaction { .. } => true,
+        Function {
+            function_name: "octet_length",
+        } => true,
         Read { .. } => ctx.database_name == Some("main"),
         Update {
             table_name,
@@ -148,6 +151,36 @@ fn valid(path: &Path) -> bool {
             .all(|part| matches!(part, Component::RootDir | Component::Normal(_)))
 }
 
+fn preflight_location_sizes(tx: &Transaction<'_>, cancel: &AtomicBool) -> Result<(), StoreError> {
+    // An index seek can allocate an entire key before SQLITE_LIMIT_LENGTH is
+    // checked. Scan the canonical rowid table first. octet_length's SQLite
+    // byte-length opcode reads record metadata without loading TEXT values;
+    // length(TEXT) or a CAST would lose that property. No sort or index scan.
+    let mut statement = tx.prepare(
+        "SELECT octet_length(generation_id), octet_length(location) FROM backup_generations NOT INDEXED",
+    ).map_err(|e| classify(e, "prepare inherited metadata sizes"))?;
+    let mut rows = statement
+        .query([])
+        .map_err(|e| classify(e, "read inherited metadata sizes"))?;
+    while let Some(row) = rows
+        .next()
+        .map_err(|e| classify(e, "read inherited metadata sizes"))?
+    {
+        if cancel.load(Ordering::Acquire) {
+            return Err(StoreError::unavailable("restore quarantine cancelled"));
+        }
+        for column in [0, 1] {
+            let bytes: i64 = row
+                .get(column)
+                .map_err(|e| classify(e, "read inherited metadata size"))?;
+            if !(0..=i64::from(MAX_LOCATION_ROW_BYTES)).contains(&bytes) {
+                return Err(StoreError::corrupt("oversized inherited backup metadata"));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn visit_locations(
     tx: &Transaction<'_>,
     cancel: &AtomicBool,
@@ -197,7 +230,7 @@ fn apply_inner(conn: &mut Connection, input: &Quarantine<'_>) -> Result<(), Stor
         .map_err(|e| classify(e, "begin restore quarantine"))?;
     // Reject oversized inherited values before even a subquery or update can
     // materialize them. Large payloads in unrelated archive tables stay valid.
-    visit_locations(&tx, input.cancel, |_, _| Ok(()))?;
+    preflight_location_sizes(&tx, input.cancel)?;
     // A snapshot can define REPLACE or IGNORE conflict policies. Override
     // them on every update so no row is silently deleted or left unchanged.
     let changed = execute(
@@ -550,6 +583,68 @@ mod tests {
             original_limit
         );
         assert_eq!(std::fs::read(snapshot.state_db()).unwrap(), source_bytes);
+    }
+
+    #[test]
+    fn index_metadata_allocation_is_bounded() {
+        // SQLite's allocation high-water mark is global to a process.
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--ignored",
+                "--exact",
+                "backups::quarantine::tests::metadata_allocation_child",
+                "--nocapture",
+            ])
+            .env("SB_QUARANTINE_ALLOC_CHILD", "1")
+            .output()
+            .unwrap();
+        assert!(
+            child.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&child.stdout),
+            String::from_utf8_lossy(&child.stderr)
+        );
+    }
+
+    #[test]
+    #[ignore = "spawned by index_metadata_allocation_is_bounded"]
+    fn metadata_allocation_child() {
+        assert_eq!(
+            std::env::var("SB_QUARANTINE_ALLOC_CHILD").as_deref(),
+            Ok("1")
+        );
+        let (_scratch, paths, store) = open("restore-metadata-allocation");
+        let snapshot = store.backup_snapshot(BackupDestination::DataRoot).unwrap();
+        let generation = snapshot.generation_id().to_owned();
+        let stage = paths.data_root().with_extension("allocation.sqlite");
+        std::fs::copy(snapshot.state_db(), &stage).unwrap();
+        drop(snapshot);
+        store.close().unwrap();
+        let mut conn = Connection::open(stage).unwrap();
+        conn.execute("INSERT INTO backup_generations (generation_id,started_at,state,location) VALUES (?1,0,'complete','/external/backup')", ["x".repeat(16 * 1024 * 1024)]).unwrap();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let input = Quarantine {
+            new_incarnation: "00000000-0000-4000-8000-000000000001",
+            generation: &generation,
+            source_location: "/external/source",
+            current_root: paths.data_root(),
+            preserved_root: Path::new("/preserved"),
+            manifest_sha256: "digest",
+            object_count: 0,
+            total_bytes: 0,
+            completed_at: 1,
+            cancel: &cancel,
+        };
+        // The oversized fixture must have registered, proving telemetry is on.
+        let largest = crate::image_vfs::largest_allocation(true).unwrap();
+        assert!(largest >= 16 * 1024 * 1024);
+        let result = apply(&mut conn, &input);
+        let largest = crate::image_vfs::largest_allocation(false).unwrap();
+        assert!(matches!(result, Err(StoreError::Corrupt { .. })));
+        assert!(
+            largest < MAX_LOCATION_ROW_BYTES.into(),
+            "oversized SQLite allocation: {largest}"
+        );
     }
 
     #[test]
