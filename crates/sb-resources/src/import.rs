@@ -502,7 +502,11 @@ impl Walker<'_> {
         };
         let mut children: Vec<_> = entries.into_iter().map(|path| (path, None)).collect();
         // Fs returns sorted paths; UTF-8 byte order agrees with decoded
-        // scalar order. Non-UTF-8 names are skipped by the merge and reported.
+        // scalar order. Non-UTF-8 names are skipped by the merge and
+        // reported. The child callback fires per declaration group in
+        // the relationship sort's ascending order — declaration order
+        // in the manifest itself is irrelevant — so the two sequences
+        // merge in one pass.
         let mut cursor = 0;
         let mut missing = Vec::new();
         let mut missing_overflow = 0u64;
@@ -700,6 +704,9 @@ impl Walker<'_> {
                     self.cancelled = true;
                     Ok(())
                 }
+                // A zero-byte EML is a legitimate emitted child: an
+                // acquired-but-empty stored object exports as an empty
+                // file that still counts as one record.
                 Ok(sb_store::Scoped::Done(_)) if format == BundleFormat::Eml && records == 1 => {
                     Ok(())
                 }

@@ -123,6 +123,18 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 20,
         run: migration_20,
     },
+    Migration {
+        version: 21,
+        run: migration_21,
+    },
+    Migration {
+        version: 22,
+        run: migration_22,
+    },
+    Migration {
+        version: 23,
+        run: migration_23,
+    },
 ];
 
 /// The `store_meta` keys every migrated store holds (spec/02): a
@@ -717,6 +729,18 @@ fn migration_19(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
 fn migration_20(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
     tx.execute_batch(include_str!("schema/v20.sql"))
         .map_err(bug)
+}
+
+fn migration_21(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
+    tx.execute_batch("CREATE TABLE backup_cleanup_pending (generation_id TEXT PRIMARY KEY REFERENCES backup_generations(generation_id)) STRICT;").map_err(bug)
+}
+
+fn migration_22(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
+    tx.execute_batch("CREATE TABLE backup_ownership (generation_id TEXT PRIMARY KEY REFERENCES backup_generations(generation_id), token TEXT NOT NULL) STRICT;").map_err(bug)
+}
+
+fn migration_23(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
+    tx.execute_batch("CREATE TABLE verifier_scratch (id TEXT PRIMARY KEY, token TEXT NOT NULL, incarnation TEXT NOT NULL) STRICT;").map_err(bug)
 }
 
 /// One version-4 UUID from the randomness seam. A seam that can't

@@ -1,7 +1,7 @@
 //! `sb-store` — L5. SQLite, migrations, object store, backups, FTS5,
 //! query AST + SQL. Doesn't know about IMAP; reaches platform services
 //! only through `sb-types` seam traits.
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 
 pub mod activation;
 mod address_keys;
@@ -13,6 +13,8 @@ mod error;
 mod export_metadata;
 pub mod exports;
 mod gc;
+#[allow(unsafe_code)]
+mod image_vfs;
 mod import_reports;
 pub mod imports;
 pub mod index;
