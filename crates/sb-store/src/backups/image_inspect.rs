@@ -1,5 +1,5 @@
 //! Bounded inspection of an untrusted SQLite image.
-use rusqlite::{Connection, limits::Limit};
+use rusqlite::{Connection, OptionalExtension, limits::Limit};
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
@@ -128,6 +128,13 @@ fn inspection_error(error: rusqlite::Error, what: &str) -> crate::StoreError {
 }
 
 /// Inspect the validated metadata shape, limiting SQLite work and row size.
+///
+/// Leaves `conn` in a hardened state: `query_only`, `trusted_schema=OFF`, an
+/// in-memory temp store, and 1 MiB value/SQL limits in place. A caller
+/// must open a fresh connection for anything after inspection rather
+/// than reusing this one; the hardened state is the point, not
+/// something to unwind on an untrusted image.
+#[allow(dead_code)] // Integrated after the retained-reader review.
 pub(super) fn inspect(
     conn: &Connection,
     cancelled: &AtomicBool,
@@ -153,6 +160,20 @@ pub(super) fn inspect(
                 |row| row.get(0),
             )
             .map_err(|e| inspection_error(e, "read backup identity"))?;
+        // A crafted image's b-tree can hold a second identity row the
+        // declared PRIMARY KEY forbids and the UNIQUE index never
+        // recorded; NOT INDEXED forces a table scan that sees it.
+        let second = conn
+            .query_row(
+                "SELECT 1 FROM store_meta NOT INDEXED WHERE key='store_uuid' LIMIT 1 OFFSET 1",
+                [],
+                |_| Ok(()),
+            )
+            .optional()
+            .map_err(|e| inspection_error(e, "read backup identity"))?;
+        if second.is_some() {
+            return Err(crate::StoreError::corrupt("duplicate backup identity"));
+        }
         if value.parse::<sb_types::id::Uuid>().is_err() {
             return Err(crate::StoreError::corrupt("invalid backup identity"));
         }
@@ -301,6 +322,26 @@ mod tests {
             .unwrap();
         // Simulate an image whose on-disk row violates the declared STRICT schema.
         conn.execute_batch("PRAGMA writable_schema=ON; UPDATE sqlite_schema SET sql=replace(sql, ') STRICT', ')') WHERE name='store_meta'; PRAGMA schema_version=2; INSERT INTO store_meta VALUES ('store_uuid', x'0102'); UPDATE sqlite_schema SET sql=sql || ' STRICT' WHERE name='store_meta'; PRAGMA schema_version=3; PRAGMA writable_schema=OFF; PRAGMA user_version=23;").unwrap();
+        assert!(matches!(
+            inspect(&conn, &AtomicBool::new(false)),
+            Err(crate::StoreError::Corrupt { .. })
+        ));
+    }
+
+    #[test]
+    fn rejects_duplicate_identity_in_canonical_schema() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(include_str!("../schema/v1.sql"))
+            .unwrap();
+        conn.execute(
+            "INSERT INTO store_meta VALUES ('store_uuid', '00000000-0000-4000-8000-000000000041')",
+            [],
+        )
+        .unwrap();
+        // A crafted file's b-tree can carry rows the declared PRIMARY
+        // KEY forbids; the stored CREATE still claims the canonical
+        // shape, so schema equality passes while duplicates hide.
+        conn.execute_batch("PRAGMA writable_schema=ON; UPDATE sqlite_schema SET sql=replace(sql, 'TEXT PRIMARY KEY', 'TEXT') WHERE name='store_meta'; UPDATE sqlite_schema SET sql=replace(sql, ') STRICT', ')') WHERE name='store_meta'; PRAGMA schema_version=2; INSERT INTO store_meta VALUES ('store_uuid', '00000000-0000-4000-8000-000000000042'); UPDATE sqlite_schema SET sql=replace(sql, 'key   TEXT,', 'key   TEXT PRIMARY KEY,') WHERE name='store_meta'; UPDATE sqlite_schema SET sql=sql || ' STRICT' WHERE name='store_meta'; PRAGMA schema_version=3; PRAGMA writable_schema=OFF; PRAGMA user_version=23;").unwrap();
         assert!(matches!(
             inspect(&conn, &AtomicBool::new(false)),
             Err(crate::StoreError::Corrupt { .. })
