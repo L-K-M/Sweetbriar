@@ -9,6 +9,8 @@
 //! reservation stays inside the service's [`DraftAttachmentObject`]
 //! until a save spends it.
 
+use std::sync::Arc;
+
 use crate::{Core, CoreError, Receipt};
 
 /// `create_draft`'s `context` (spec/07): `New` or the source
@@ -326,18 +328,21 @@ pub struct DraftSaved {
 /// the object identity the shell shows, wrapped around the
 /// publication reservation a `save_draft` spends. Not a record — the
 /// reservation inside keeps the object pinned until the save's
-/// transaction consumes it.
-#[derive(Debug)]
+/// transaction consumes it. Clones share that one reservation so an
+/// identical request can be retried; a fresh command cannot spend it
+/// twice. This opaque descriptor can survive a close and reopen in
+/// the same process, but cannot be reconstructed in another process.
+#[derive(Debug, Clone)]
 pub struct DraftAttachmentObject {
     /// The published object's sha256, 64 lowercase hex.
     pub object_sha256: String,
     /// The published object's length in bytes.
     pub byte_length: u64,
-    object: sb_engine::PublishedObject,
+    object: Arc<sb_engine::PublishedObject>,
 }
 
 /// A newly published object, or an unchanged reference from the base revision.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum DraftAttachment {
     New {
         object: DraftAttachmentObject,
@@ -350,7 +355,7 @@ pub enum DraftAttachment {
 /// One save's content (spec/07 `save_draft`'s `content`): everything
 /// a revision records but its ids — the engine assigns the revision
 /// id and checks the base.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DraftContent {
     /// The sending identity the route snapshots (`None` keeps the
     /// revision unrouted: a draft with no sending identity, spec/02).
@@ -524,7 +529,7 @@ impl Core {
         Ok(DraftAttachmentObject {
             object_sha256: object.id().sha256_hex(),
             byte_length: object.id().byte_length(),
-            object,
+            object: Arc::new(object),
         })
     }
 }
