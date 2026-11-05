@@ -38,8 +38,8 @@ pub use appearance::{
 };
 pub use cancel::CancelToken;
 pub use drafts::{
-    AttemptState, ComposeFormat, Draft, DraftAttachmentRef, DraftRecipient, DraftRevision,
-    DraftState, DraftSummary, LiveAttempt,
+    AttemptState, ComposeFormat, Draft, DraftAttachmentRef, DraftCreated, DraftRecipient,
+    DraftRevision, DraftSource, DraftState, DraftSummary, LiveAttempt,
 };
 pub use error::{CoreError, SearchParseCode};
 pub use imports::{
