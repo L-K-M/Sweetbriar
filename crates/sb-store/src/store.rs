@@ -86,6 +86,7 @@ pub struct Store {
     pub(crate) activation: crate::activation::inputs::Owner,
     source_snapshots: ImportSourceSnapshots,
     import_reports: ImportReports,
+    validation_scratch: crate::validation_scratch::ScratchOwner,
     lease: Box<dyn Lease>,
     /// The clock [`Store::close`] stamps the clean-shutdown marker
     /// with, held from the seams the store opened with.
@@ -93,6 +94,10 @@ pub struct Store {
 }
 
 impl Store {
+    /// Lease disposable workspace for bounded import validation.
+    pub fn import_validation_scratch(&self) -> Result<crate::ValidationScratch<'_>, StoreError> {
+        self.validation_scratch.lease()
+    }
     /// The store's object store (spec/03): publishing objects through
     /// it lands them under this store's `objects/`.
     pub fn objects(&self) -> &FileObjectStore {
@@ -113,8 +118,9 @@ impl Store {
     /// snapshot in the generation's directory — the copy never holds
     /// the writer — and a `backup_in_progress` pin on every object the
     /// snapshot references. Blocking (it awaits the writer and file
-    /// I/O); never call it on the writer thread. The object copy,
-    /// `manifest.json` and `complete` are the procedure's later steps.
+    /// I/O); never call it on the writer thread. First recovers interrupted
+    /// generations and applies retention. The object copy, `manifest.json`
+    /// and completion are the procedure's later steps.
     pub fn backup_snapshot(
         &self,
         destination: crate::backups::BackupDestination,
@@ -129,7 +135,10 @@ impl Store {
 
     /// Publish a pinned snapshot as a verified, durable backup generation.
     /// Blocking; never call on the writer thread. A failure leaves the
-    /// generation in progress for interrupted-generation recovery.
+    /// generation in progress for interrupted-generation recovery. Once
+    /// complete, retention runs before returning and preserves this generation
+    /// for the receipt. Its error is reported even though the new generation
+    /// may already be complete. Later retention applies the usual policy.
     pub fn complete_backup(
         &self,
         snapshot: crate::backups::BackupSnapshot,
@@ -320,6 +329,7 @@ impl Store {
             objects,
             source_snapshots,
             import_reports,
+            validation_scratch,
             backups,
             lease,
             clock,
@@ -335,6 +345,7 @@ impl Store {
         drop(backups);
         drop(source_snapshots);
         drop(import_reports);
+        drop(validation_scratch);
         drop(lease);
         marker.and(readers_closed).and(writer_closed)
     }
@@ -443,6 +454,7 @@ pub(crate) fn open_with(
     // From here on an early return drops `lease`, releasing the lock.
     ensure_layout(fs, paths)?;
     examine_existing(fs, paths, pinned, migrations)?;
+    crate::validation_scratch::ScratchOwner::cleanup(fs, paths.objects_tmp())?;
     let mut conn = open_connection(paths.state_db(), Access::ReadWrite, writer_pragmas)?;
     check_sqlite_version(&conn, pinned)?;
     startup_quick_check(&conn)?;
@@ -492,6 +504,11 @@ pub(crate) fn open_with(
             Arc::clone(seams.fs_arc()),
             Arc::clone(seams.random_arc()),
             paths.recovery().to_path_buf(),
+        ),
+        validation_scratch: crate::validation_scratch::ScratchOwner::new(
+            Arc::clone(seams.fs_arc()),
+            Arc::clone(seams.random_arc()),
+            paths.objects_tmp(),
         ),
         backups,
         lease,
