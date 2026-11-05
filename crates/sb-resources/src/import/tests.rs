@@ -876,7 +876,7 @@ fn bundle_capture_and_parser_cancellation_remove_only_its_snapshot() {
 
 fn table_manifest(files: &str) -> String {
     format!(
-        r#"{{"messages":[],"files":{files},"ids_sha256":"{}","entries":0,"generation":1,"scope":{{"generation":1,"id":1,"kind":"mailbox"}},"destination":"/destination","format":"eml","job":"j","kind":"export-manifest","v":1}}"#,
+        r#"{{"messages":[],"files":{files},"ids_sha256":"{}","entries":0,"generation":1,"scope":{{"generation":1,"id":1,"kind":"mailbox"}},"destination":"/destination","format":"mboxrd","job":"j","kind":"export-manifest","v":1}}"#,
         "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     )
 }
