@@ -102,8 +102,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     private func install(_ bridge: CoreBridge) {
         guard let window else { return }
         let sidebarModel = SidebarModel(source: bridge)
-        let sidebar = SidebarViewController(model: sidebarModel, appearance: appearance.model(source: bridge))
-        let messageList = MessageListViewController(bridge: bridge, sidebar: sidebarModel)
+        let appearanceModel = appearance.model(source: bridge)
+        let sidebar = SidebarViewController(model: sidebarModel, appearance: appearanceModel)
+        let messageList = MessageListViewController(bridge: bridge, sidebar: sidebarModel, appearance: appearanceModel)
         let reader = ReaderViewController(model: ReaderModel(source: bridge, preferred: .sanitizedHtml))
         self.reader = reader
         sidebar.onChoose = { [weak messageList] spec in

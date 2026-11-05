@@ -9,7 +9,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use sb_types::fs::{Fs, Lease, Location, LockError, Metadata, WriteFile};
+use sb_types::fs::{ConfinedDir, Fs, Lease, Location, LockError, Metadata, ReadFile, WriteFile};
 
 /// The filesystem operations `FaultFs` can count and fail, named after
 /// the `Fs` (or write-handle) method they wrap.
@@ -172,7 +172,38 @@ impl FaultFs {
     }
 }
 
+struct FaultConfinedDir {
+    inner: Box<dyn ConfinedDir>,
+    plan: Arc<FaultPlan>,
+}
+
+impl ConfinedDir for FaultConfinedDir {
+    fn open_regular(&self, path: &Path) -> io::Result<(Box<dyn ReadFile>, Metadata)> {
+        if let Some(kind) = self.plan.fire(FsOp::Open) {
+            return Err(fault_error(kind));
+        }
+        let (inner, metadata) = self.inner.open_regular(path)?;
+        Ok((
+            Box::new(FaultRead {
+                inner,
+                plan: self.plan.clone(),
+            }),
+            metadata,
+        ))
+    }
+}
+
 impl Fs for FaultFs {
+    fn open_confined_dir(&self, path: &Path) -> io::Result<Box<dyn ConfinedDir>> {
+        if let Some(kind) = self.plan.fire(FsOp::Open) {
+            return Err(fault_error(kind));
+        }
+        Ok(Box::new(FaultConfinedDir {
+            inner: self.inner.open_confined_dir(path)?,
+            plan: self.plan.clone(),
+        }))
+    }
+
     fn open_no_follow(&self, path: &Path) -> io::Result<Box<dyn sb_types::fs::ReadFile>> {
         if let Some(kind) = self.plan.fire(FsOp::Open) {
             return Err(fault_error(kind));
@@ -377,6 +408,24 @@ mod tests {
         let fs = Arc::new(SimFs::new());
         fs.create_dir(Path::new("/x")).unwrap();
         (fs, PathBuf::from("/x"))
+    }
+
+    #[test]
+    fn confined_directory_operations_obey_open_and_read_faults() {
+        let (inner, dir) = scratch_fs();
+        inner
+            .create(&dir.join("file"))
+            .unwrap()
+            .write_all(b"data")
+            .unwrap();
+        let fs = FaultFs::new(inner.clone(), FsOp::Open, 2, FaultKind::Eio);
+        let root = fs.open_confined_dir(&dir).unwrap();
+        assert!(root.open_regular(Path::new("file")).is_err());
+        assert!(root.open_regular(Path::new("file")).is_ok());
+        let fs = FaultFs::new(inner, FsOp::Read, 1, FaultKind::Eio);
+        let root = fs.open_confined_dir(&dir).unwrap();
+        let mut file = root.open_regular(Path::new("file")).unwrap().0;
+        assert!(std::io::Read::read(&mut file, &mut [0; 4]).is_err());
     }
 
     /// Only the Nth call of the chosen operation fails — exactly once —

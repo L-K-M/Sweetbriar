@@ -978,6 +978,14 @@ local drafts. No network yet.
     disposable bounded scratch with two fixed tapes and explicit cleanup,
     isolated concurrent leases and writable-open cleanup. This prerequisite
     does not add a manifest cap or implement relationship validation.
+  - **M1.7d1b1b2b1b Offset sorting prerequisite — M:** sort source offsets
+    in fixed-memory runs on the two validation tapes and use exact decoded
+    file-name comparison to replace quadratic file-table uniqueness scans.
+    Message relationships remain deferred to b2.
+  - **M1.7d1b1b2b1c Tag-ID sorting prerequisite — M:** reuse the bounded
+    offset sorter for exact local tag-ID uniqueness validation while retaining
+    manifest-order tag-name checks. This removes only quadratic local tag-ID
+    validation; it does not validate or admit global message relationships.
   - **M1.7d1b1b2b2 Manifest message relationships — L:** validate counts,
     ordered-ID digest, unique occurrence IDs, file references and EML
     agreement using bounded scans of the verified snapshot. Prove writer
@@ -1066,18 +1074,37 @@ local drafts. No network yet.
     `failed`, deletes its pins and removes its directory. Acceptance: the
     interrupted generation's marking and removal; on restart after a cut
     no inherited unfinished job blocks GC.
-  - **M1.8e Quarantined restore staging (L):** verify the chosen
-    generation against its manifest (`state.sqlite` hash, every object
-    hash), stage the copy into `<data root>.restoring-<inc>` with the
-    publication flushes, and run the staging quarantine transaction: new
-    incarnation, all accounts `paused`, unfinished import jobs `failed`
-    with requests/checkpoints intact, intents `quarantined`, attempts in
-    `held`/`queued`/`submitting` become `outcome_unknown`, copied-source
-    locations rewritten (never to absent originals) and the inherited
-    backup rows fixed — then flush staging. Acceptance: every
-    after-restore row state; no original-path substitution; crash cuts
-    during staging leave the live store untouched and stage nothing
-    unquarantined.
+  - **M1.8e0a Confined backup reads (M):** add a retained directory
+    capability that opens descendants without following symlinks, including
+    simulator and fault behavior. Acceptance: path replacement cannot redirect
+    an open capability; links and traversal are refused; failures propagate.
+  - **M1.8e0b Isolated verifier image (L):** stream a confined source into a
+    private owned scratch image, checking its digest and length. SQLite reads
+    only that immutable completed image. Bound memory and disk use; implement
+    durable ownership, crash recovery, cancellation and retryable cleanup.
+    Acceptance: source changes cannot alter the inspected image; no source WAL
+    is read; all injected failures and crash cuts preserve unowned data; Linux,
+    macOS, simulator and fault behavior agree.
+  - **M1.8e1 Restore generation verification (M):** select a complete
+    generation recorded in the current store and verify its manifest, snapshot
+    and every object, including identity, size and hash mismatches. Staging
+    must verify the bytes it actually copies again.
+  - **M1.8e2 Restore discovery and verified handoff (M):** discover and
+    select complete external generations, including restore into a fresh data
+    root, and hand a verified selection to staging. Do not assume a row in
+    the current store. Verify the actual copied bytes again during staging.
+  - **M1.8e3 Quarantined restore staging (L):** verify and copy the chosen
+    generation into `<data root>.restoring-<inc>` with publication flushes,
+    then run the staging quarantine transaction: new incarnation, all
+    accounts paused, unfinished import jobs failed with requests and
+    checkpoints intact, intents quarantined, held/queued/submitting attempts
+    outcome unknown, copied-source locations rewritten without substituting
+    absent original paths, and inherited backup rows fixed. Flush staging.
+    Acceptance: every after-restore row state; internal and external backup
+    location semantics; no original-path substitution; cancellation and
+    injected I/O, SQL and flush failures; retry and wrong generation or
+    incarnation; crash cuts leave the live store untouched and no
+    unquarantined stage eligible for publication.
   - **M1.8f Durable swap and startup recovery (L):** the restore-pending
     marker (new incarnation, generation id and path), both renames with
     their flushes, the startup handling of all three marker states, the

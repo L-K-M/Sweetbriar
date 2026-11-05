@@ -12,6 +12,7 @@ import SweetbriarBridge
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var mainWindow: MainWindowController?
     private var session: CoreSession?
+    private var settingsWindow: AppearanceSettingsWindow?
     private let appearance = SharedAppearance()
 
     /// The menu builder is retained: `NSMenuItem.target` is weak, so
@@ -37,8 +38,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         installMainMenu()
 
-        // Settings snapshots have no window to show in until the
-        // Settings window lands; the bridge still needs their batcher.
+        // The bridge batches setting snapshots on the display clock.
         let clockView = NSView()
         let batcher = FrameBatcher<[Setting]>(clock: DisplayLinkClock(view: clockView)) { _ in }
 
@@ -105,10 +105,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             onImport: { [weak self] in
                 self?.mainWindow?.showWindow(nil)
                 self?.mainWindow?.beginImport()
-            }
+            },
+            onSettings: { [weak self] in self?.showSettings() }
         )
         NSApplication.shared.mainMenu = builder.makeMainMenu()
         menuBuilder = builder
+    }
+
+    private func showSettings() {
+        guard let session else { return }
+        if settingsWindow == nil {
+            settingsWindow = AppearanceSettingsWindow(session: session, shared: appearance)
+        }
+        settingsWindow?.showWindow(nil)
+        settingsWindow?.window?.makeKeyAndOrderFront(nil)
     }
 
     /// Debug → Fill 500,000 Synthetic Rows: fill through the session's
