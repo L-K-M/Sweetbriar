@@ -1213,6 +1213,27 @@ fn bundle_child_matching_scales_with_directory_size() {
 }
 
 #[test]
+fn bundle_rejects_an_empty_eml_child_declared_as_one_record() {
+    let (scratch, res) = resources("bundle-empty-eml");
+    let dir = scratch.path().join("bundle");
+    fs::create_dir(&dir).unwrap();
+    fs::write(dir.join("1.eml"), b"").unwrap();
+    let message = r#"{"v":1,"occurrence_id":1,"message_id":2,"account":{"id":"a","name":"a"},"mailbox":{"id":1,"name":"m"},"occurrence_state":"present","flags":{"seen":false,"flagged":false,"answered":false,"draft":false,"deleted":false},"keywords":[],"acquisition":{"id":1,"sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","bytes":0},"body_availability":"acquired","tags":[],"note":null,"file":"1.eml"}"#;
+    let manifest = table_messages(
+        table_manifest(r#"[{"name":"1.eml","bytes":0,"records":1}]"#)
+            .replace(r#""format":"mboxrd""#, r#""format":"eml""#),
+        message,
+        &[1],
+    );
+    fs::write(dir.join("sweetbriar-metadata.json"), manifest).unwrap();
+    assert_eq!(
+        run(&res, std::slice::from_ref(&dir)).problems()[0].kind(),
+        ImportProblemKind::Failed
+    );
+    assert!(snapshot_names(&scratch).is_empty());
+}
+
+#[test]
 fn bundle_file_names_across_sort_runs_are_exact() {
     let (scratch, res) = resources("bundle-sort-runs");
     let dir = scratch.path().join("bundle");
