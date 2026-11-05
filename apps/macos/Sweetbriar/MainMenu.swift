@@ -67,6 +67,7 @@ final class MainMenuBuilder: NSObject {
     private let isBenchmarkEnabled: @MainActor () -> Bool
     private let onShowComposerProbe: @MainActor () -> Void
     private let onImport: @MainActor () -> Void
+    private let onSettings: @MainActor () -> Void
 
     /// `NSMenuItem.identifier`s that `validateMenuItem` treats
     /// specially.
@@ -106,7 +107,8 @@ final class MainMenuBuilder: NSObject {
         onRunSearchBenchmark: @escaping @MainActor () -> Void,
         isBenchmarkEnabled: @escaping @MainActor () -> Bool,
         onShowComposerProbe: @escaping @MainActor () -> Void,
-        onImport: @escaping @MainActor () -> Void
+        onImport: @escaping @MainActor () -> Void,
+        onSettings: @escaping @MainActor () -> Void = {}
     ) {
         self.onFillSynthetic = onFillSynthetic
         self.onShowPrototype = onShowPrototype
@@ -117,6 +119,7 @@ final class MainMenuBuilder: NSObject {
         self.isBenchmarkEnabled = isBenchmarkEnabled
         self.onShowComposerProbe = onShowComposerProbe
         self.onImport = onImport
+        self.onSettings = onSettings
         super.init()
     }
 
@@ -142,6 +145,10 @@ final class MainMenuBuilder: NSObject {
             action: #selector(NSApplication.orderFrontStandardAboutPanel(_:))
         ))
         menu.addItem(.separator())
+        let settings = Self.item("Settings…", action: #selector(showSettings(_:)), key: ",")
+        settings.target = self
+        menu.addItem(settings)
+        menu.addItem(.separator())
         menu.addItem(Self.item(
             "Hide Sweetbriar",
             action: #selector(NSApplication.hide(_:)),
@@ -166,6 +173,8 @@ final class MainMenuBuilder: NSObject {
         item.submenu = menu
         return item
     }
+
+    @objc private func showSettings(_ sender: Any?) { onSettings() }
 
     /// File: Import… (spec/09 "In the app").
     private func makeFileMenu() -> NSMenuItem {

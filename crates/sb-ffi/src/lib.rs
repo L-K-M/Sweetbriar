@@ -21,6 +21,7 @@
 mod api;
 mod appearance;
 mod cancel;
+mod drafts;
 mod error;
 mod imports;
 mod messages;
@@ -36,6 +37,11 @@ pub use appearance::{
     IdentityAppearance, IdentityAppearanceChange, PaletteColor, palette,
 };
 pub use cancel::CancelToken;
+pub use drafts::{
+    AttemptState, ComposeFormat, Draft, DraftAttachment, DraftAttachmentObject,
+    DraftAttachmentPublish, DraftAttachmentRef, DraftContent, DraftCreated, DraftRecipient,
+    DraftRevision, DraftSaved, DraftSource, DraftState, DraftSummary, LiveAttempt,
+};
 pub use error::{CoreError, SearchParseCode};
 pub use imports::{
     ImportJob, ImportJobState, ImportProblem, ImportProblemKind, ImportReport, ImportSource,
