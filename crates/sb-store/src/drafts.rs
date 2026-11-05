@@ -3,6 +3,8 @@
 //! object-store references a save's attachments were published for.
 //! The schema is migration 1's; these are its reads and writes.
 
+use std::sync::Arc;
+
 use rusqlite::{OptionalExtension, Transaction, params};
 use sb_types::time::Timestamp;
 
@@ -128,13 +130,16 @@ pub struct DraftRecipient {
     pub name: Option<String>,
 }
 
-/// An attachment a new revision references. The engine published the
-/// object first (spec/02: before the revision that references them);
-/// the save's transaction releases this publication's own reservation.
-pub struct DraftAttachment {
-    pub object: PublishedObject,
-    pub filename: String,
-    pub media_type: String,
+/// A new publication or an unchanged attachment from the base revision.
+/// Sharing a publication permits identical command retries; its reservation
+/// still authorizes only one new reference.
+pub enum DraftAttachment {
+    New {
+        object: Arc<PublishedObject>,
+        filename: String,
+        media_type: String,
+    },
+    Retained(AttachmentRef),
 }
 
 /// What `create_draft` records about the message being answered
@@ -265,7 +270,7 @@ pub fn create_draft(
 /// `Conflict`; `sent` and `discarded` refuse the same. `identity_id`
 /// `Some` resolves its account (`NotFound` when unknown); `None`
 /// stores the draft-with-no-route revision spec/02 allows. One
-/// transaction: the revision row, each attachment's reservation
+/// transaction: the revision row, each new attachment's reservation
 /// release, `current_revision_id`, `editing`.
 pub fn save_draft(
     tx: &Transaction,
@@ -292,7 +297,11 @@ pub fn save_draft(
     let to = recipients_json(&revision.to)?;
     let cc = recipients_json(&revision.cc)?;
     let bcc = recipients_json(&revision.bcc)?;
-    let attachments = attachments_json(&revision.attachments)?;
+    let base_attachments = match base {
+        Some(id) => self::revision(tx, draft_id, id)?.attachments,
+        None => Vec::new(),
+    };
+    let attachments = attachments_json(&revision.attachments, &base_attachments)?;
     tx.execute(
         "INSERT INTO draft_revisions (revision_id, draft_id, seq, base_revision_id,
              account_id, identity_id, compose_format, plain_flowed, subject,
@@ -320,7 +329,9 @@ pub fn save_draft(
     // The revision now names each published object: spend this
     // publication's reservation in the same transaction (spec/03).
     for attachment in &revision.attachments {
-        release_reservation(tx, &attachment.object, ReservationRelease::Required)?;
+        if let DraftAttachment::New { object, .. } = attachment {
+            release_reservation(tx, object, ReservationRelease::Required)?;
+        }
     }
     tx.execute(
         "UPDATE drafts SET current_revision_id = ?2, state = 'editing', updated_at = ?3
@@ -668,25 +679,44 @@ fn recipients_json(recipients: &[DraftRecipient]) -> Result<String, StoreError> 
 /// The attachments' canonical JSON: `{filename, media_type,
 /// object_sha256, size}` each (spec/02; the map's sorted keys are the
 /// canonical order).
-fn attachments_json(attachments: &[DraftAttachment]) -> Result<String, StoreError> {
+fn attachments_json(
+    attachments: &[DraftAttachment],
+    base: &[AttachmentRef],
+) -> Result<String, StoreError> {
     let mut list = Vec::with_capacity(attachments.len());
     for attachment in attachments {
-        if attachment.filename.is_empty() || attachment.media_type.is_empty() {
+        let reference = match attachment {
+            DraftAttachment::New {
+                object,
+                filename,
+                media_type,
+            } => AttachmentRef {
+                object_sha256: object.id().sha256_hex(),
+                filename: filename.clone(),
+                media_type: media_type.clone(),
+                size: object.id().byte_length(),
+            },
+            DraftAttachment::Retained(reference) => {
+                if !base.contains(reference) {
+                    return Err(StoreError::conflict(
+                        "attachment is not in the base revision",
+                    ));
+                }
+                reference.clone()
+            }
+        };
+        if reference.filename.is_empty() || reference.media_type.is_empty() {
             return Err(StoreError::InvalidInput {
                 message: "a draft attachment needs a filename and media type".to_owned(),
             });
         }
-        let id = attachment.object.id();
         let mut entry = serde_json::Map::new();
-        entry.insert("filename".to_owned(), attachment.filename.clone().into());
-        entry.insert(
-            "media_type".to_owned(),
-            attachment.media_type.clone().into(),
-        );
-        entry.insert("object_sha256".to_owned(), id.sha256_hex().into());
+        entry.insert("filename".to_owned(), reference.filename.into());
+        entry.insert("media_type".to_owned(), reference.media_type.into());
+        entry.insert("object_sha256".to_owned(), reference.object_sha256.into());
         entry.insert(
             "size".to_owned(),
-            serde_json::Value::Number(id.byte_length().into()),
+            serde_json::Value::Number(reference.size.into()),
         );
         list.push(serde_json::Value::Object(entry));
     }

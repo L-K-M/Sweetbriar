@@ -1045,7 +1045,10 @@ fn migration_20_indexes_existing_backup_pins() {
     store.close().unwrap();
     let upgraded = crate::open(&paths, &seams).unwrap();
     reading(&upgraded, |tx| {
-        assert_eq!(one_int(tx, "PRAGMA user_version"), 20);
+        assert_eq!(
+            one_int(tx, "PRAGMA user_version"),
+            i64::from(LATEST_SCHEMA_VERSION)
+        );
         assert_eq!(
             one_int(
                 tx,
