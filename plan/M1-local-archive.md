@@ -982,23 +982,94 @@ local drafts. No network yet.
     in fixed-memory runs on the two validation tapes and use exact decoded
     file-name comparison to replace quadratic file-table uniqueness scans.
     Message relationships remain deferred to b2.
-  - **M1.7d1b1b2b2 Manifest message relationships — L:** validate counts,
-    ordered-ID digest, unique occurrence IDs, file references and EML
-    agreement using bounded scans of the verified snapshot. Prove writer
-    manifests, hostile tokens and cleanup before bundle inventory.
-  - **M1.7d1b2 Bundle file agreement and inventory — L:** check every declared
-    direct child's kind, byte length and record count independently before
-    ingest, report missing or disagreeing files without suppressing valid
-    siblings, and retain the shared manifest snapshot while any bundle source
-    references it. Preserve sorted canonical discovery, alias deduplication,
-    cancellation cleanup and real EML/mboxrd exporter proof.
-  - **M1.7d2 Manifest-verified ingest — L:** each bundle record's
+  - **M1.7d1b1b2b1c Tag-ID sorting prerequisite — M:** reuse the bounded
+    offset sorter for exact local tag-ID uniqueness validation while retaining
+    manifest-order tag-name checks. This removes only quadratic local tag-ID
+    validation; it does not validate or admit global message relationships.
+  - **M1.7d1b1b2b2a Occurrence relationships — M:** validate the message
+    count, ordered occurrence-ID digest and global occurrence-ID uniqueness
+    with bounded scans and scratch. Keep bundle admission deferred.
+  - **M1.7d1b1b2b2b File relationships — M:** validate file references,
+    record counts and EML agreement using bounded scans of the verified
+    snapshot. Prove writer manifests, hostile tokens and cleanup before
+    bundle inventory.
+  - **M1.7d1b2a Bundle child agreement — L:** check each direct child's kind,
+    captured byte length and record count independently, reporting missing,
+    unlisted or disagreeing files without suppressing sibling checks. Refuse
+    bundle sources and discard temporary snapshots, including on cancellation.
+  - **M1.7d1b2a1 File ordinal propagation — S:** preserve each original
+    zero-based manifest file ordinal through the bounded declaration sort
+    and child agreement. Keep bundle admission deferred and discard snapshots.
+  - **M1.7d1b2b Bundle inventory — L:** admit verified bundle sources and
+    retain their shared manifest snapshot. Restore recursive nested discovery,
+    sorted canonical deduplication and version-2 inventory lifecycle.
+  - **M1.7d2 split:** retain all d2 deliverables and acceptance below; each
+    artifact, including its native proof, fits 1,450 gross changed lines.
+    The Store workspace is separated from the Resources proof because the
+    latter needs simultaneous output files and two reusable sort tapes, as
+    well as native random-access, fault and scaling tests.
+  - **M1.7d2a Proof workspace — S:** extend the existing disposable Store
+    validation lease with fixed descriptor, index-spool and dense-lookup file
+    identities, distinct from the two sort tapes. Prove exclusive creation,
+    lease isolation, coexistence, reuse and cleanup. This creates no index,
+    changes no snapshot contract and enables no acquisition publication.
+  - **M1.7d2b Manifest descriptor proof — L:** in Resources, verify one
+    captured manifest once and run its bounded validation passes. Stream
+    grouped fixed-record descriptors and `(original file ordinal, start,
+    count)` rows to workspace files; reuse the released sort tapes to sort
+    those rows numerically and emit dense fixed-size lookup slots. Freeze all
+    needed framing fields and full-width source message offsets and original
+    ordinals, preserving message order within each file. Close the verified
+    manifest handle after production. A scoped native consumer must access
+    arbitrary files without manifest rescans and reject invalid identity,
+    ordinal, range or truncation; legacy missing ordinals fail safely or use
+    bounded name lookup. Prove at least 257 EML files, interleaved mbox rows,
+    shuffled access, read counts, cancellation, faults, cleanup and bounded
+    handles. This proof is scoped to one manifest and publishes nothing.
+  - **M1.7d2c Job integration and verified ingest — L:** consume those
+    proofs in the real import job without changing source order. A bounded
+    job-level registry can retain snapshot identities and disposable proof
+    references on disk, open one scoped proof at a time, and reopen its fixed
+    outputs for interleaved sources; it must bind every lookup to the
+    verified snapshot identity and avoid unbounded handles or memory. Define
+    and test the lifecycle, cancellation and failed-source evidence before
+    publication. Each bundle record's
     boundary, framing, original length and SHA-256 are verified before
     its bytes publish; only the declared framing LF is removed; the
     framing identity joins replay. Native imports of c's bundles
     preserve unterminated acquisitions and multiplicity; malformed
     framing never silently trims bytes or falls back to changed
     originals.
+    Split (2026-11-05) before coding; retain every deliverable and
+    acceptance above, each artifact fitting 1,450 gross changed lines:
+    - **M1.7d2c1 Manifest proof registry — M:** a bounded, job-lifetime
+      registry prerequisite in Store and Resources. One owned disposable
+      root lease holds each validated snapshot's token-namespaced, fixed-file
+      proof (descriptors, dense lookup, header) with a fixed header binding
+      full snapshot identity, format, file and record totals and exact output
+      lengths; production runs the existing one-manifest proof once and
+      streams its verified outputs into the namespace, freezing the header
+      last. Later lookups reopen only the header and fixed slots directly,
+      never rehashing or scanning the manifest or prior entries. Fail closed
+      on conflicting identity, incomplete or truncated workspaces; clean up
+      on finish, drop and startup. Native tests prove at least 257
+      interleaved and shuffled sources across distinct manifests, no extra
+      manifest reads on reuse, conflict, missing ordinal, range and
+      truncation rejection, cancellation and error cleanup, injected
+      read/write/seek/sync faults, bounded handles and Send. No Engine loop
+      change, physical acquisition or message publication.
+    - **M1.7d2c2 Physical verified acquisition — L:** consume the frozen
+      registry outputs in Resources to acquire each bundle record's exact
+      bytes: record boundary, declared framing, original length and SHA-256
+      verified before publication, only the declared framing LF removed, the
+      framing identity joining replay, unterminated acquisitions and
+      multiplicity preserved, and malformed framing never silently trimming
+      bytes or falling back to changed originals. Native random-access,
+      fault and scaling proof.
+    - **M1.7d2c3 Engine integration and verified ingest — L:** consume the
+      verified acquisition in the real import job without changing source
+      order, with durable job, resume, order and crash acceptance and
+      failed-source evidence. Expose no export-scope API.
   - **M1.7e Export engine — L:** counted background jobs, start/query,
     cancel, shutdown and reopen over b2/c. Own real-worker lifecycle,
     crash/resume and all original round-trip acceptance checks using d.
