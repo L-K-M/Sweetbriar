@@ -9,7 +9,9 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use sb_types::fs::{ConfinedDir, Fs, Lease, Location, LockError, Metadata, ReadFile, WriteFile};
+use sb_types::fs::{
+    ConfinedDir, DirectoryIdentity, Fs, Lease, Location, LockError, Metadata, ReadFile, WriteFile,
+};
 
 /// The filesystem operations `FaultFs` can count and fail, named after
 /// the `Fs` (or write-handle) method they wrap.
@@ -178,6 +180,66 @@ struct FaultConfinedDir {
 }
 
 impl ConfinedDir for FaultConfinedDir {
+    fn set_ownership(&self, bytes: &[u8]) -> io::Result<()> {
+        if let Some(kind) = self.plan.fire(FsOp::Write) {
+            return Err(fault_error(kind));
+        }
+        self.inner.set_ownership(bytes)
+    }
+    fn ownership(&self) -> io::Result<Vec<u8>> {
+        if let Some(kind) = self.plan.fire(FsOp::Read) {
+            return Err(fault_error(kind));
+        }
+        self.inner.ownership()
+    }
+    fn identity(&self) -> io::Result<DirectoryIdentity> {
+        if let Some(kind) = self.plan.fire(FsOp::Open) {
+            return Err(fault_error(kind));
+        }
+        self.inner.identity()
+    }
+    fn open_dir(&self, name: &Path) -> io::Result<Box<dyn ConfinedDir>> {
+        if let Some(kind) = self.plan.fire(FsOp::Open) {
+            return Err(fault_error(kind));
+        }
+        Ok(Box::new(Self {
+            inner: self.inner.open_dir(name)?,
+            plan: self.plan.clone(),
+        }))
+    }
+    fn create_private_dir(&self, name: &Path) -> io::Result<()> {
+        if let Some(kind) = self.plan.fire(FsOp::CreatePrivateDir) {
+            return Err(fault_error(kind));
+        }
+        self.inner.create_private_dir(name)
+    }
+    fn create(&self, name: &Path) -> io::Result<Box<dyn WriteFile>> {
+        if let Some(kind) = self.plan.fire(FsOp::Create) {
+            return Err(fault_error(kind));
+        }
+        Ok(Box::new(FaultWrite {
+            inner: self.inner.create(name)?,
+            plan: self.plan.clone(),
+        }))
+    }
+    fn remove_file(&self, name: &Path) -> io::Result<()> {
+        if let Some(kind) = self.plan.fire(FsOp::Remove) {
+            return Err(fault_error(kind));
+        }
+        self.inner.remove_file(name)
+    }
+    fn remove_empty_dir(&self, name: &Path) -> io::Result<()> {
+        if let Some(kind) = self.plan.fire(FsOp::RemoveDirAll) {
+            return Err(fault_error(kind));
+        }
+        self.inner.remove_empty_dir(name)
+    }
+    fn sync(&self) -> io::Result<()> {
+        if let Some(kind) = self.plan.fire(FsOp::SyncDir) {
+            return Err(fault_error(kind));
+        }
+        self.inner.sync()
+    }
     fn open_regular(&self, path: &Path) -> io::Result<(Box<dyn ReadFile>, Metadata)> {
         if let Some(kind) = self.plan.fire(FsOp::Open) {
             return Err(fault_error(kind));

@@ -986,16 +986,20 @@ local drafts. No network yet.
     offset sorter for exact local tag-ID uniqueness validation while retaining
     manifest-order tag-name checks. This removes only quadratic local tag-ID
     validation; it does not validate or admit global message relationships.
-  - **M1.7d1b1b2b2 Manifest message relationships — L:** validate counts,
-    ordered-ID digest, unique occurrence IDs, file references and EML
-    agreement using bounded scans of the verified snapshot. Prove writer
-    manifests, hostile tokens and cleanup before bundle inventory.
-  - **M1.7d1b2 Bundle file agreement and inventory — L:** check every declared
-    direct child's kind, byte length and record count independently before
-    ingest, report missing or disagreeing files without suppressing valid
-    siblings, and retain the shared manifest snapshot while any bundle source
-    references it. Preserve sorted canonical discovery, alias deduplication,
-    cancellation cleanup and real EML/mboxrd exporter proof.
+  - **M1.7d1b1b2b2a Occurrence relationships — M:** validate the message
+    count, ordered occurrence-ID digest and global occurrence-ID uniqueness
+    with bounded scans and scratch. Keep bundle admission deferred.
+  - **M1.7d1b1b2b2b File relationships — M:** validate file references,
+    record counts and EML agreement using bounded scans of the verified
+    snapshot. Prove writer manifests, hostile tokens and cleanup before
+    bundle inventory.
+  - **M1.7d1b2a Bundle child agreement — L:** check each direct child's kind,
+    captured byte length and record count independently, reporting missing,
+    unlisted or disagreeing files without suppressing sibling checks. Refuse
+    bundle sources and discard temporary snapshots, including on cancellation.
+  - **M1.7d1b2b Bundle inventory — L:** admit verified bundle sources and
+    retain their shared manifest snapshot. Restore recursive nested discovery,
+    sorted canonical deduplication and version-2 inventory lifecycle.
   - **M1.7d2 Manifest-verified ingest — L:** each bundle record's
     boundary, framing, original length and SHA-256 are verified before
     its bytes publish; only the declared framing LF is removed; the
@@ -1078,13 +1082,21 @@ local drafts. No network yet.
     capability that opens descendants without following symlinks, including
     simulator and fault behavior. Acceptance: path replacement cannot redirect
     an open capability; links and traversal are refused; failures propagate.
-  - **M1.8e0b Isolated verifier image (L):** stream a confined source into a
-    private owned scratch image, checking its digest and length. SQLite reads
-    only that immutable completed image. Bound memory and disk use; implement
-    durable ownership, crash recovery, cancellation and retryable cleanup.
-    Acceptance: source changes cannot alter the inspected image; no source WAL
-    is read; all injected failures and crash cuts preserve unowned data; Linux,
-    macOS, simulator and fault behavior agree.
+  - **M1.8e0b1 Retained-file SQLite reader (M):** provide a read-only
+    SQLite VFS backed only by an already-open reader. Refuse sidecars and
+    other file opens. Acceptance: replacing the pathname cannot change the
+    queried image; no source WAL is read; Linux and macOS tests pass.
+  - **M1.8e0b2 Verifier scratch ownership (L):** create and recover private
+    scratch with durable ownership and directory identity. Cleanup fails
+    closed and retains evidence when ownership cannot be proved, including
+    an unmarked directory after a crash; retry proven cleanup. Acceptance:
+    crash cuts and substitutions preserve unowned data, and proven leftovers
+    are recovered; simulator and fault behavior agree.
+  - **M1.8e0b3 Isolated verifier image (L):** stream a confined source into
+    owned scratch, checking digest and length, and inspect only the retained
+    completed image through the reader above. Bound disk, memory and SQLite
+    work, including cancellation. Acceptance: source changes cannot alter the
+    inspection; malformed schemas are bounded; cancellation never succeeds.
   - **M1.8e1 Restore generation verification (M):** select a complete
     generation recorded in the current store and verify its manifest, snapshot
     and every object, including identity, size and hash mismatches. Staging
@@ -1270,6 +1282,28 @@ local drafts. No network yet.
         the reservation twice. Cover replay and reservation ownership through
         native APIs without moving validation outside the receipt transaction.
         Depends on M1.9b2a.
+      - **M1.9b2a2 Authorized attachment republication (M):** the
+        Store/Resources primitive
+        `republish_draft_attachment(draft_id, revision_id, reference)`,
+        the native prerequisite for M1.9c's keep-both and attachment
+        undo. Store validation proves the revision belongs to the draft
+        and the full stored `AttachmentRef` (hash, size, filename,
+        media type) is a member of that revision. An older immutable
+        revision is allowed after the head advances, and a noncurrent or
+        terminal source draft is allowed because the operation creates
+        a new publication rather than mutating that draft. The exact
+        source bytes are read through the protected verifying reader
+        and published through the real object store, returning a fresh
+        opaque `PublishedObject` with a distinct reservation per call.
+        No idempotency key or receipt; no new revision or draft row; the
+        following save spends the returned reservation once. Native
+        Resources tests prove the old-revision copy, distinct
+        reservations, a copy saved into a new draft, an unchanged
+        source, denial of a wrong draft, revision, hash, size, filename
+        or media type, missing and tampered sources, injected read,
+        write, sync and rename failures, and the native GC/read lifetime.
+        No Engine, Service, FFI, bridge or Compose surface; those stay
+        in the later artifacts. Depends on M1.9a1 and M1.8a1.
       - **M1.9b2b Draft commands over FFI:** re-sized 2026-11-04: the
         complete create/save/discard/publication artifact measures 1,922
         gross changed lines including generated bindings and tests, over

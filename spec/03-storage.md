@@ -553,6 +553,29 @@ backups/<generation-id>/
 
 ## Restore
 
+SQLite inspection of a verifier image reads through a read-only VFS backed by
+an already-open file, without resolving its pathname or opening WAL, journal,
+shared-memory or temporary files. Holding the file preserves its identity,
+not OS-enforced immutability: a same-UID process holding an earlier writable
+file descriptor can still change its bytes. Inspection bounds SQLite work and
+checks cancellation before reporting success. Crash recovery removes a scratch
+directory only with durable ownership and directory identity evidence. If a
+crash precedes that proof, recovery retains the unprovable directory and its
+row for resolution; it must not infer ownership from emptiness.
+The verifier records a fresh name, token and current incarnation in that row
+before creating a sibling token marker and flushing it and its parent. It
+creates the private directory, records its filesystem identity in the sibling
+marker and flushes that update, then stores and flushes the token as a
+private extended attribute on the directory. Both the attribute and identity
+must match before cleanup. The attribute remains attached until directory
+removal, so failed removals can be retried. In-process cleanup also checks its
+retained directory handle. Immediately before name-based removal, reopen and
+compare the directory identity again. POSIX cannot make that comparison and
+removal atomic; a malicious same-UID rename after the final check is outside
+this threat model. Once the directory and sibling marker are removed and the
+parent flushed, remove the row. Unsupported extended attributes fail closed.
+Rows inherited from another incarnation never authorize cleanup.
+
 Restoring creates a **new incarnation** and runs quarantined. The steps:
 
 The process holds `<data root>.lock` throughout.
