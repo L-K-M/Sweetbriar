@@ -3,6 +3,8 @@
 //! object-store references a save's attachments were published for.
 //! The schema is migration 1's; these are its reads and writes.
 
+use std::sync::Arc;
+
 use rusqlite::{OptionalExtension, Transaction, params};
 use sb_types::time::Timestamp;
 
@@ -129,9 +131,11 @@ pub struct DraftRecipient {
 }
 
 /// A new publication or an unchanged attachment from the base revision.
+/// Sharing a publication permits identical command retries; its reservation
+/// still authorizes only one new reference.
 pub enum DraftAttachment {
     New {
-        object: PublishedObject,
+        object: Arc<PublishedObject>,
         filename: String,
         media_type: String,
     },
