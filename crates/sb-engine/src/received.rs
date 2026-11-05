@@ -207,6 +207,15 @@ impl ReceivedJobs {
     }
 
     #[cfg(test)]
+    pub(crate) fn parked_failure_for(&self, lane: Lane) -> Option<Failure> {
+        let state = self.lock();
+        if !state.waiting || state.again {
+            return None;
+        }
+        state.failures[lane as usize].clone()
+    }
+
+    #[cfg(test)]
     pub(crate) fn starts(&self) -> usize {
         self.lock().starts
     }

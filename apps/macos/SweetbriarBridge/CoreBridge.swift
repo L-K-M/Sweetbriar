@@ -168,6 +168,34 @@ public final class CoreBridge: Sendable {
         return snapshot
     }
 
+    /// Commit an account appearance change against the displayed revision.
+    public func setAccountAppearance(
+        accountId: String, expectedRevision: Int64, change: AccountAppearanceChange
+    ) async throws -> Receipt {
+        let token = SweetbriarCore.CancelToken()
+        let receipt = try await Self.withCancellation(token: token) {
+            try await self.core.setAccountAppearance(
+                token: token, idempotencyKey: UUID().uuidString, accountId: accountId,
+                expectedRevision: expectedRevision, change: change.generated
+            )
+        }
+        return Receipt(receipt)
+    }
+
+    /// Commit identity overrides against the displayed revision, or absence.
+    public func setIdentityAppearance(
+        identityId: String, expectedRevision: Int64?, change: IdentityAppearanceChange
+    ) async throws -> Receipt {
+        let token = SweetbriarCore.CancelToken()
+        let receipt = try await Self.withCancellation(token: token) {
+            try await self.core.setIdentityAppearance(
+                token: token, idempotencyKey: UUID().uuidString, identityId: identityId,
+                expectedRevision: expectedRevision, change: change.generated
+            )
+        }
+        return Receipt(receipt)
+    }
+
     /// Write one setting under a fresh `UUID` idempotency key.
     ///
     /// Once the core has begun the command it runs to completion
