@@ -143,7 +143,8 @@ impl<'a, 's> OffsetSort<'a, 's> {
             }
             visit(context, get(&mut *reader, index)?)?;
         }
-        Ok(())
+        drop(reader);
+        self.scratch.remove(source).map_err(scratch_error)
     }
 }
 
