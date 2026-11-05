@@ -15,7 +15,7 @@ mod ledger;
 // The next restore slice attaches this parser to the verification ledger.
 #[allow(dead_code)]
 mod manifest;
-#[allow(dead_code)] // The staging integration consumes this prerequisite.
+#[allow(dead_code)] // The b2 staging qualification consumes this prerequisite.
 mod quarantine;
 #[allow(dead_code)] // The recorded-generation verifier consumes this seam in M1.8e1d.
 mod reconciliation;
@@ -23,6 +23,8 @@ mod recorded;
 mod references;
 pub use external::VerifiedExternalBackup;
 pub use image::BackupImageInspection;
+mod staging;
+pub use staging::{PreparedRestoreStage, RestoreMetadata};
 mod scratch;
 
 pub(crate) fn recover_scratch(
@@ -182,6 +184,10 @@ pub(crate) struct Backups {
     backups_dir: PathBuf,
     objects: Arc<crate::objects::FileObjectStore>,
     active: Mutex<Option<Weak<()>>>,
+    /// This coordinator's identity. A prepared capability carries a
+    /// clone; the b2 qualifier rechecks it so a capability from another
+    /// coordinator or store is refused.
+    coordinator: Arc<()>,
     image_lock: Mutex<()>,
     /// The copy-timing barriers a test may arm (spec/03).
     #[cfg(test)]
@@ -225,6 +231,7 @@ impl Backups {
             backups_dir,
             objects,
             active: Mutex::new(None),
+            coordinator: Arc::new(()),
             image_lock: Mutex::new(()),
             #[cfg(test)]
             pauses: Mutex::new(Pauses::default()),

@@ -7,18 +7,20 @@
 
 use std::env;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Barrier};
 
 use rusqlite::Connection;
+use sha2::{Digest, Sha256};
 
 use sb_test_support::{
     CutFs, FaultFs, FaultKind, FixedClock, FsOp, ScratchDir, SeededRandom, block_on, real_fs,
-    run_crash_cuts,
+    run_crash_cut_points, run_crash_cuts,
 };
 use sb_types::fs::Fs;
 use sb_types::time::Timestamp;
 
-use super::{BackupDestination, Backups, Pauses};
+use super::{BackupDestination, BackupReceipt, Backups, Pauses};
 use crate::objects::{ObjectId, ObjectStore, ReservationRelease, release_reservation};
 use crate::schema::bug;
 use crate::testing::{FIXED_NOW_MS, reading, scratch_paths, test_seams, writing};
@@ -430,6 +432,16 @@ fn an_unusable_destination_is_invalid_input() {
 /// only the snapshot path's operations can fail, so fault points are
 /// exact.
 fn faulty_backups(store: &Store, paths: &StorePaths, fs: Arc<dyn Fs>) -> Backups {
+    faulty_backups_seeded(store, paths, fs, 7)
+}
+
+/// `faulty_backups` with a chosen random seed, so two stages can draw
+/// different incarnations (or the same one, deliberately).
+fn faulty_backups_seeded(store: &Store, paths: &StorePaths, fs: Arc<dyn Fs>, seed: u64) -> Backups {
+    // Staging opens confined directories, which never follow a symlinked
+    // ancestor (macOS's /var); resolve the root the way `open` does.
+    let resolved = std::fs::canonicalize(paths.data_root()).expect("the scratch store root");
+    let paths = StorePaths::new(resolved).unwrap();
     let objects = Arc::new(crate::objects::FileObjectStore::new(
         Arc::clone(&fs),
         Arc::new(SeededRandom::new(7)),
@@ -440,7 +452,7 @@ fn faulty_backups(store: &Store, paths: &StorePaths, fs: Arc<dyn Fs>) -> Backups
     ));
     Backups::new(
         fs,
-        Arc::new(SeededRandom::new(7)),
+        Arc::new(SeededRandom::new(seed)),
         Arc::new(FixedClock::new(Timestamp::from_millis(FIXED_NOW_MS))),
         Arc::clone(&store.writer),
         paths.state_db().to_path_buf(),
@@ -3904,4 +3916,733 @@ fn verifier_image_crash_cuts_recover_owned_scratch() {
         },
     );
     assert!(cuts > 0);
+}
+
+// --- M1.8e3b b1: verified private stage copy ---
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+fn to_hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn hex32(text: &str) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    for (index, pair) in text.as_bytes().chunks(2).enumerate() {
+        out[index] = u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap();
+    }
+    out
+}
+
+fn restore_metadata(store: &Store, generation: &str) -> crate::RestoreMetadata {
+    reading(store, |tx| {
+        let row = tx
+            .query_row(
+                "SELECT manifest_sha256, object_count, total_bytes, completed_at
+                 FROM backup_generations WHERE generation_id=?1",
+                [generation],
+                |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, i64>(1)?,
+                        r.get::<_, i64>(2)?,
+                        r.get::<_, i64>(3)?,
+                    ))
+                },
+            )
+            .map_err(bug)?;
+        Ok(crate::RestoreMetadata {
+            manifest_sha256: hex32(&row.0),
+            object_count: row.1,
+            total_bytes: row.2,
+            completed_at: row.3,
+        })
+    })
+}
+
+/// A source store with a published backup whose manifest, database and
+/// object hashes are real (spec/03). The first payload is referenced by
+/// both an acquisition and a send attempt, so the manifest holds one
+/// record for a hash referenced twice.
+struct StagingSource {
+    _scratch: ScratchDir,
+    paths: StorePaths,
+    store: Store,
+    receipt: BackupReceipt,
+    payloads: Vec<(String, Vec<u8>)>,
+    metadata: crate::RestoreMetadata,
+}
+
+fn staging_source(label: &str) -> StagingSource {
+    let (scratch, paths, store) = open(label);
+    draft_rows(&store);
+    let mut payloads = Vec::new();
+    for (index, payload) in [
+        PAYLOAD.to_vec(),
+        vec![b'a'; 70_000],
+        b"third staging payload".to_vec(),
+        vec![0x5a; 100_000],
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let (id, sha) = object(&store, &payload);
+        if index == 0 {
+            reference(&store, &id, "published");
+            send_attempt(&store, &sha, "staging");
+        } else if index < 3 {
+            reference(&store, &id, "published");
+        }
+        payloads.push((sha, payload));
+    }
+    let attached = payloads[3].0.clone();
+    let attached_len = payloads[3].1.len();
+    sql(
+        &store,
+        format!(
+            "UPDATE draft_revisions SET attachments_json = '[{{\"object_sha256\":\"{attached}\",\
+             \"filename\":\"only-attachment.bin\",\"media_type\":\"application/octet-stream\",\
+             \"size\":{attached_len}}}]'"
+        ),
+    );
+    let snapshot = store.backup_snapshot(BackupDestination::DataRoot).unwrap();
+    let receipt = store.complete_backup(snapshot).unwrap();
+    let metadata = restore_metadata(&store, receipt.generation_id());
+    StagingSource {
+        _scratch: scratch,
+        paths,
+        store,
+        receipt,
+        payloads,
+        metadata,
+    }
+}
+
+impl StagingSource {
+    fn select_with(&self, store: &Store) -> super::VerifiedExternalBackup {
+        let cancel = AtomicBool::new(false);
+        store
+            .verify_external_backup(
+                self.receipt.location().parent().unwrap(),
+                self.receipt.generation_id(),
+                &cancel,
+            )
+            .unwrap()
+            .unwrap()
+    }
+
+    fn live_incarnation(&self) -> String {
+        reading(&self.store, |tx| {
+            tx.query_row(
+                "SELECT value FROM store_meta WHERE key='incarnation'",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(bug)
+        })
+    }
+
+    /// The generation directory still holds exactly the bytes its
+    /// manifest declares, and the live row was not rewritten.
+    fn assert_untouched(&self) {
+        let manifest = std::fs::read(self.receipt.location().join("manifest.json")).unwrap();
+        assert_eq!(
+            Sha256::digest(&manifest).as_slice(),
+            self.metadata.manifest_sha256
+        );
+        let value: serde_json::Value = serde_json::from_slice(&manifest).unwrap();
+        let db_sha = value["database"]["sha256"].as_str().unwrap();
+        let db_bytes = value["database"]["bytes"].as_u64().unwrap();
+        let db = std::fs::read(self.receipt.state_db()).unwrap();
+        assert_eq!(db.len() as u64, db_bytes);
+        assert_eq!(sha256_hex(&db), db_sha);
+        for (sha, payload) in &self.payloads {
+            let path = self.receipt.location().join(format!(
+                "objects/sha256/{}/{}/{}",
+                &sha[..2],
+                &sha[2..4],
+                sha
+            ));
+            assert_eq!(&std::fs::read(path).unwrap(), payload);
+        }
+        let (state, location, _) =
+            generation_row(&self.store, self.receipt.generation_id()).unwrap();
+        assert_eq!(state, "complete");
+        assert_eq!(location, self.receipt.location().to_str().unwrap());
+    }
+}
+
+fn assert_no_stage_dir(paths: &StorePaths) {
+    for entry in std::fs::read_dir(paths.data_root().parent().unwrap()).unwrap() {
+        let name = entry.unwrap().file_name().to_string_lossy().into_owned();
+        assert!(!name.contains(".restoring-"), "unexpected stage {name}");
+    }
+}
+
+/// Byte-exact objects and the layout a swapped root will need.
+fn assert_stage_objects(stage: &crate::PreparedRestoreStage, payloads: &[(String, Vec<u8>)]) {
+    let manifest = std::fs::read(stage.path().join("manifest.json")).unwrap();
+    assert_eq!(sha256_hex(&manifest), stage.manifest_sha256());
+    let value: serde_json::Value = serde_json::from_slice(&manifest).unwrap();
+    let objects = value["objects"].as_array().unwrap();
+    assert_eq!(objects.len(), payloads.len());
+    for entry in objects {
+        let sha = entry["sha256"].as_str().unwrap();
+        let bytes = entry["bytes"].as_u64().unwrap();
+        let (_, payload) = payloads.iter().find(|(hash, _)| hash == sha).unwrap();
+        assert_eq!(payload.len() as u64, bytes);
+        let path = stage.path().join(format!(
+            "objects/sha256/{}/{}/{}",
+            &sha[..2],
+            &sha[2..4],
+            sha
+        ));
+        assert_eq!(&std::fs::read(path).unwrap(), payload);
+    }
+    for dir in [
+        "objects",
+        "objects/tmp",
+        "objects/sha256",
+        "backups",
+        "recovery",
+    ] {
+        assert!(std::fs::metadata(stage.path().join(dir)).unwrap().is_dir());
+    }
+}
+
+/// A clean stage through the public entry point.
+fn prepare(
+    store: &Store,
+    selection: super::VerifiedExternalBackup,
+    location: &Path,
+    metadata: crate::RestoreMetadata,
+) -> crate::PreparedRestoreStage {
+    store
+        .stage_restore(selection, location, metadata, &AtomicBool::new(false))
+        .unwrap()
+}
+
+/// How many generation rows the live store holds.
+fn generation_count(store: &Store) -> i64 {
+    reading(store, |tx| {
+        tx.query_row("SELECT count(*) FROM backup_generations", [], |r| r.get(0))
+            .map_err(bug)
+    })
+}
+
+fn assert_stage_err(
+    source: &StagingSource,
+    selection: super::VerifiedExternalBackup,
+    location: &Path,
+    metadata: crate::RestoreMetadata,
+    cancel: &AtomicBool,
+) {
+    assert!(
+        source
+            .store
+            .stage_restore(selection, location, metadata, cancel)
+            .is_err()
+    );
+}
+
+/// Stage while cancelling at `phase`, for the cancellation checks.
+fn stage_cancel_at(
+    source: &StagingSource,
+    phase: super::staging::StagePhase,
+) -> Result<crate::PreparedRestoreStage, StoreError> {
+    let incarnation = match phase {
+        super::staging::StagePhase::Located => "00000000-0000-4000-8000-0000000000d1",
+        super::staging::StagePhase::DatabaseCopied => "00000000-0000-4000-8000-0000000000d2",
+        super::staging::StagePhase::ManifestCopied => "00000000-0000-4000-8000-0000000000d3",
+    };
+    let selection = source.select_with(&source.store);
+    let cancelled = AtomicBool::new(false);
+    source.store.backups.stage_into(
+        &selection,
+        source.receipt.location(),
+        source.metadata,
+        incarnation,
+        &cancelled,
+        |observed| {
+            if observed == phase {
+                cancelled.store(true, Ordering::Release);
+            }
+        },
+    )
+}
+
+#[test]
+fn staging_copies_internal_and_external_generations() {
+    let source = staging_source("staging-both");
+    let internal = prepare(
+        &source.store,
+        source.select_with(&source.store),
+        source.receipt.location(),
+        source.metadata,
+    );
+    assert_eq!(
+        internal.path().file_name().unwrap().to_str().unwrap(),
+        format!("store.restoring-{}", internal.incarnation())
+    );
+    assert_eq!(
+        std::fs::canonicalize(internal.path().parent().unwrap()).unwrap(),
+        std::fs::canonicalize(source.paths.data_root().parent().unwrap()).unwrap()
+    );
+    assert_eq!(
+        internal
+            .preserved_root()
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap(),
+        format!("store.preserved-{}", source.live_incarnation())
+    );
+    assert_eq!(internal.source_location(), source.receipt.location());
+    assert_eq!(internal.generation_id(), source.receipt.generation_id());
+    assert_eq!(
+        internal.manifest_sha256(),
+        to_hex(&source.metadata.manifest_sha256)
+    );
+    assert_stage_objects(&internal, &source.payloads);
+    let database = std::fs::read(internal.path().join("state.sqlite")).unwrap();
+    assert_eq!(
+        &database,
+        &std::fs::read(source.receipt.state_db()).unwrap()
+    );
+    assert_eq!(generation_count(&source.store), 1);
+
+    // A fresh store with a live incarnation the source never had: the
+    // preserved suffix provably comes from the live store.
+    let (_scratch, _paths, fresh) = open("staging-both-fresh");
+    sql(
+        &fresh,
+        "UPDATE store_meta SET value='00000000-0000-4000-8000-0000000000f1'
+         WHERE key='incarnation'"
+            .into(),
+    );
+    let external = prepare(
+        &fresh,
+        source.select_with(&fresh),
+        source.receipt.location(),
+        source.metadata,
+    );
+    let preserved = external
+        .preserved_root()
+        .file_name()
+        .unwrap()
+        .to_str()
+        .unwrap();
+    assert_eq!(
+        preserved,
+        "store.preserved-00000000-0000-4000-8000-0000000000f1"
+    );
+    assert_ne!(
+        preserved,
+        format!("store.preserved-{}", source.live_incarnation()),
+        "the preserved suffix comes from the live store, not the source"
+    );
+    assert_stage_objects(&external, &source.payloads);
+    assert_eq!(generation_count(&fresh), 0);
+    source.assert_untouched();
+}
+#[test]
+fn staging_rejects_metadata_locator_and_source_changes() {
+    let source = staging_source("staging-rejects");
+    let cancel = AtomicBool::new(false);
+    let metadata = source.metadata;
+
+    // A declared digest, count, total or negative value fails before
+    // anything is created.
+    for bad in [
+        crate::RestoreMetadata {
+            manifest_sha256: [0u8; 32],
+            ..metadata
+        },
+        crate::RestoreMetadata {
+            object_count: metadata.object_count + 1,
+            ..metadata
+        },
+        crate::RestoreMetadata {
+            total_bytes: metadata.total_bytes + 1,
+            ..metadata
+        },
+        crate::RestoreMetadata {
+            object_count: -1,
+            ..metadata
+        },
+    ] {
+        assert_stage_err(
+            &source,
+            source.select_with(&source.store),
+            source.receipt.location(),
+            bad,
+            &cancel,
+        );
+        assert_no_stage_dir(&source.paths);
+    }
+
+    // A locator that does not name the selected generation directory.
+    let bad_leaf = source
+        .receipt
+        .location()
+        .parent()
+        .unwrap()
+        .join("not-a-generation");
+    assert_stage_err(
+        &source,
+        source.select_with(&source.store),
+        &bad_leaf,
+        metadata,
+        &cancel,
+    );
+
+    // A same-named directory with a different identity is not the source.
+    let impostor = source.paths.data_root().parent().unwrap().join("impostor");
+    std::fs::create_dir_all(impostor.join(source.receipt.generation_id())).unwrap();
+    assert_stage_err(
+        &source,
+        source.select_with(&source.store),
+        &impostor.join(source.receipt.generation_id()),
+        metadata,
+        &cancel,
+    );
+    assert_no_stage_dir(&source.paths);
+
+    // A stale locator after the generation moved away cannot reopen it.
+    let selection = source.select_with(&source.store);
+    let moved = source.receipt.location().with_extension("moved");
+    std::fs::rename(source.receipt.location(), &moved).unwrap();
+    assert_stage_err(
+        &source,
+        selection,
+        source.receipt.location(),
+        metadata,
+        &cancel,
+    );
+    std::fs::rename(&moved, source.receipt.location()).unwrap();
+
+    // Changed manifest, database or object bytes, and a longer object,
+    // fail against the exact selected bytes.
+    let manifest_path = source.receipt.location().join("manifest.json");
+    let db_path = source.receipt.state_db();
+    let object_path = source.receipt.location().join(format!(
+        "objects/sha256/{}/{}/{}",
+        &source.payloads[0].0[..2],
+        &source.payloads[0].0[2..4],
+        source.payloads[0].0
+    ));
+    let original_object = std::fs::read(&object_path).unwrap();
+    let original_manifest = std::fs::read(&manifest_path).unwrap();
+    let original_db = std::fs::read(&db_path).unwrap();
+    let mut longer = original_object.clone();
+    longer.extend_from_slice(b"trailing");
+    for (path, original, replacement) in [
+        (manifest_path, original_manifest, b"{}".to_vec()),
+        (db_path, original_db, b"damaged".to_vec()),
+        (
+            object_path.clone(),
+            original_object.clone(),
+            b"substituted".to_vec(),
+        ),
+        (object_path.clone(), original_object.clone(), longer),
+    ] {
+        let selection = source.select_with(&source.store);
+        std::fs::write(&path, &replacement).unwrap();
+        assert_stage_err(
+            &source,
+            selection,
+            source.receipt.location(),
+            metadata,
+            &cancel,
+        );
+        std::fs::write(&path, &original).unwrap();
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::symlink;
+        // The selection was verified against the real object; replacing
+        // it with a symlink cannot redirect the confined read.
+        let selection = source.select_with(&source.store);
+        std::fs::remove_file(&object_path).unwrap();
+        symlink("/etc/hosts", &object_path).unwrap();
+        assert_stage_err(
+            &source,
+            selection,
+            source.receipt.location(),
+            metadata,
+            &cancel,
+        );
+        std::fs::remove_file(&object_path).unwrap();
+        std::fs::write(&object_path, &original_object).unwrap();
+    }
+
+    // The source is byte-identical again, and a clean stage succeeds.
+    source.assert_untouched();
+    let stage = source
+        .store
+        .stage_restore(
+            source.select_with(&source.store),
+            source.receipt.location(),
+            metadata,
+            &cancel,
+        )
+        .unwrap();
+    assert_stage_objects(&stage, &source.payloads);
+}
+#[test]
+fn staging_pre_and_mid_cancellation_never_prepare() {
+    let source = staging_source("staging-cancel");
+
+    // Pre-cancelled: nothing is created at all.
+    let cancelled = AtomicBool::new(true);
+    assert_stage_err(
+        &source,
+        source.select_with(&source.store),
+        source.receipt.location(),
+        source.metadata,
+        &cancelled,
+    );
+    assert_no_stage_dir(&source.paths);
+
+    // Cancelled after the locator, after the database copy and after the
+    // manifest copy: each returns no prepared capability.
+    assert!(stage_cancel_at(&source, super::staging::StagePhase::Located).is_err());
+    assert_no_stage_dir(&source.paths);
+    assert!(stage_cancel_at(&source, super::staging::StagePhase::DatabaseCopied).is_err());
+    source.assert_untouched();
+    assert!(stage_cancel_at(&source, super::staging::StagePhase::ManifestCopied).is_err());
+    source.assert_untouched();
+}
+
+#[test]
+fn staging_refuses_existing_and_stale_stage_paths() {
+    let source = staging_source("staging-stale");
+    let (_scratch, fresh_paths, fresh) = open("staging-stale-fresh");
+    let parent = std::fs::canonicalize(fresh_paths.data_root().parent().unwrap()).unwrap();
+    let existing = "00000000-0000-4000-8000-0000000000b1";
+    let stage_dir = parent.join(format!("store.restoring-{existing}"));
+    std::fs::create_dir_all(&stage_dir).unwrap();
+    let selection = source.select_with(&fresh);
+    let stage_with = |incarnation: &str| {
+        fresh.backups.stage_into(
+            &selection,
+            source.receipt.location(),
+            source.metadata,
+            incarnation,
+            &AtomicBool::new(false),
+            |_| {},
+        )
+    };
+    let error = stage_with(existing).unwrap_err();
+    assert!(matches!(error, StoreError::Conflict { .. }), "{error:?}");
+    assert_eq!(std::fs::read_dir(&stage_dir).unwrap().count(), 0);
+
+    let stale = "00000000-0000-4000-8000-0000000000b2";
+    let first = stage_with(stale).unwrap();
+    let first_path = first.path().to_path_buf();
+    let first_manifest = std::fs::read(first.path().join("manifest.json")).unwrap();
+    assert_stage_objects(&first, &source.payloads);
+    drop(first);
+    let second = prepare(
+        &fresh,
+        source.select_with(&fresh),
+        source.receipt.location(),
+        source.metadata,
+    );
+    assert_ne!(second.incarnation(), stale);
+    assert!(first_path.is_dir());
+    assert_eq!(
+        std::fs::read(first_path.join("manifest.json")).unwrap(),
+        first_manifest
+    );
+    assert_stage_objects(&second, &source.payloads);
+}
+
+#[test]
+fn staging_rejects_bad_incarnations() {
+    let source = staging_source("staging-bad-incarnations");
+    let reused = "00000000-0000-4000-8000-0000000000c1";
+    sql(
+        &source.store,
+        format!("UPDATE store_meta SET value='{reused}' WHERE key='incarnation'"),
+    );
+    let selection = source.select_with(&source.store);
+    let stage_with = |incarnation: &str| {
+        source.store.backups.stage_into(
+            &selection,
+            source.receipt.location(),
+            source.metadata,
+            incarnation,
+            &AtomicBool::new(false),
+            |_| {},
+        )
+    };
+    let error = stage_with(reused).unwrap_err();
+    assert!(matches!(error, StoreError::Conflict { .. }), "{error:?}");
+    assert_no_stage_dir(&source.paths);
+
+    for invalid in ["not-a-uuid", "00000000-0000-4000-8000-0000000000A1"] {
+        let error = stage_with(invalid).unwrap_err();
+        assert!(
+            matches!(error, StoreError::Corrupt { .. }),
+            "{invalid}: {error:?}"
+        );
+    }
+    assert_no_stage_dir(&source.paths);
+}
+
+#[test]
+fn staging_io_failures_never_prepare() {
+    let source = staging_source("staging-io-faults");
+    let (_scratch, fresh_paths, fresh) = open("staging-io-faults-fresh");
+    let cancel = AtomicBool::new(false);
+    for (op, nth, kind) in [
+        (FsOp::CreatePrivateDir, 1, FaultKind::Eio),
+        (FsOp::Create, 1, FaultKind::Eio),
+        (FsOp::Read, 1, FaultKind::Eio),
+        (FsOp::Write, 1, FaultKind::ShortWrite),
+        (FsOp::SyncFile, 1, FaultKind::Eio),
+        (FsOp::SyncDir, 1, FaultKind::Eio),
+    ] {
+        let selection = source.select_with(&fresh);
+        let fs: Arc<dyn Fs> = Arc::new(FaultFs::new(real_fs(), op, nth, kind));
+        let backups = faulty_backups(&fresh, &fresh_paths, fs);
+        assert!(
+            backups
+                .stage_restore(
+                    selection,
+                    source.receipt.location(),
+                    source.metadata,
+                    &cancel
+                )
+                .is_err()
+        );
+        source.assert_untouched();
+    }
+}
+
+#[test]
+fn prepared_stage_holds_the_operation_lease_until_drop() {
+    let source = staging_source("staging-lease");
+    let selection = source.select_with(&source.store);
+    let stage = prepare(
+        &source.store,
+        selection,
+        source.receipt.location(),
+        source.metadata,
+    );
+    assert_eq!(stage.data_root, source.paths.data_root());
+    assert_eq!(stage.live_incarnation, source.live_incarnation());
+    assert!(Arc::ptr_eq(
+        &stage.coordinator,
+        &source.store.backups.coordinator
+    ));
+    // A normal backup retention pass cannot start while the handoff is held.
+    assert!(matches!(
+        source.store.backup_snapshot(BackupDestination::DataRoot),
+        Err(StoreError::Conflict { .. })
+    ));
+    drop(stage);
+    drop(
+        source
+            .store
+            .backup_snapshot(BackupDestination::DataRoot)
+            .unwrap(),
+    );
+}
+
+const STAGE_CUT_N: &str = "SB_STAGE_CUT_N";
+const STAGE_CUT_ROOT: &str = "SB_STAGE_CUT_ROOT";
+
+#[test]
+#[ignore = "spawned by staging_crash_cuts_leave_store_and_source_untouched"]
+fn staging_cut_child() {
+    let nth: u64 = env::var(STAGE_CUT_N).unwrap().parse().unwrap();
+    let root = PathBuf::from(env::var(STAGE_CUT_ROOT).unwrap());
+    let source_paths = StorePaths::new(root.join("source/store")).unwrap();
+    let source = crate::open(&source_paths, &test_seams(real_fs())).unwrap();
+    let (id, sha) = object(&source, PAYLOAD);
+    reference(&source, &id, "published");
+    let receipt = source
+        .complete_backup(source.backup_snapshot(BackupDestination::DataRoot).unwrap())
+        .unwrap();
+    let manifest = std::fs::read(receipt.location().join("manifest.json")).unwrap();
+    let database = std::fs::read(receipt.state_db()).unwrap();
+    let object_path = receipt.location().join(format!(
+        "objects/sha256/{}/{}/{}",
+        &sha[..2],
+        &sha[2..4],
+        sha
+    ));
+    let object = std::fs::read(&object_path).unwrap();
+    let expected = [
+        (receipt.location().join("manifest.json"), &manifest),
+        (receipt.state_db(), &database),
+        (object_path, &object),
+    ]
+    .map(|(path, bytes)| format!("{} {}\n", path.display(), sha256_hex(bytes)))
+    .concat();
+    std::fs::write(root.join("expected.txt"), expected).unwrap();
+
+    let fresh_paths = StorePaths::new(root.join("fresh/store")).unwrap();
+    let fresh = crate::open(&fresh_paths, &test_seams(real_fs())).unwrap();
+    let cancel = AtomicBool::new(false);
+    let selection = fresh
+        .verify_external_backup(
+            receipt.location().parent().unwrap(),
+            receipt.generation_id(),
+            &cancel,
+        )
+        .unwrap()
+        .unwrap();
+    let metadata = restore_metadata(&source, receipt.generation_id());
+    let cut = Arc::new(CutFs::new(real_fs(), nth));
+    let backups = faulty_backups_seeded(&fresh, &fresh_paths, cut, 9);
+    let location = receipt.location();
+    backups
+        .stage_restore(selection, location, metadata, &cancel)
+        .unwrap();
+}
+
+#[test]
+fn staging_crash_cuts_leave_store_and_source_untouched() {
+    let scratch = ScratchDir::new("staging-cuts");
+    // A seeded spread over the seam's cut points: the small ones bracket
+    // locator validation and stage creation, the large ones the copy and
+    // flush boundaries. Points past the run's last operation survive and
+    // are recorded by the harness.
+    let points = [1, 2, 5, 13, 21, 34, 55, 89];
+    let cuts = run_crash_cut_points(
+        STAGE_CUT_N,
+        STAGE_CUT_ROOT,
+        "backups::tests::staging_cut_child",
+        &points,
+        &mut |n| {
+            let root = scratch.path().join(format!("cut-{n}"));
+            std::fs::create_dir(&root).unwrap();
+            root
+        },
+        &mut |root| {
+            let root = PathBuf::from(root);
+            // The source generation's bytes are unchanged.
+            let expected = std::fs::read_to_string(root.join("expected.txt")).unwrap();
+            for line in expected.lines() {
+                let (path, hash) = line.split_once(' ').unwrap();
+                assert_eq!(sha256_hex(&std::fs::read(path).unwrap()), hash, "{path}");
+            }
+            // The live fresh store was not renamed or replaced.
+            let fresh_paths = StorePaths::new(root.join("fresh/store")).unwrap();
+            assert!(fresh_paths.state_db().is_file());
+        },
+    );
+    assert!(!cuts.killed.is_empty(), "no cut point killed the child");
+    assert!(
+        cuts.survived.iter().any(|point| *point > 1),
+        "the highest cut points should survive a complete run"
+    );
 }

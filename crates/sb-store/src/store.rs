@@ -188,6 +188,25 @@ impl Store {
         self.backups.verify_external(parent, generation, cancelled)
     }
 
+    /// Copy a verified external generation into an exclusive sibling of
+    /// this store's data root. The supplied locator is reopened through a
+    /// confined capability and must name the retained generation identity;
+    /// every copied byte is reverified against the exact selected manifest.
+    /// The returned [`crate::PreparedRestoreStage`] is unqualified: b2 must
+    /// inspect and quarantine the staged database, recheck the binding, and
+    /// only then expose a stage that may be swapped. Any failure returns
+    /// `Err` and leaves the live store and source unchanged.
+    pub fn stage_restore(
+        &self,
+        selection: crate::VerifiedExternalBackup,
+        source_location: &Path,
+        metadata: crate::RestoreMetadata,
+        cancelled: &std::sync::atomic::AtomicBool,
+    ) -> Result<crate::PreparedRestoreStage, StoreError> {
+        self.backups
+            .stage_restore(selection, source_location, metadata, cancelled)
+    }
+
     /// Visit verified external generations with bounded memory. Identified
     /// invalid or incomplete source candidates are skipped. Other failures,
     /// including errors without source provenance, propagate.
