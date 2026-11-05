@@ -235,6 +235,47 @@ public struct PaletteColor: Sendable, Equatable {
     }
 }
 
+/// A preset or custom account color supplied to the setter.
+public enum AccountColor: Sendable, Equatable {
+    case paletteV1(slot: UInt8)
+    case custom(colorSrgb: String)
+
+    var generated: SweetbriarCore.AccountColor {
+        switch self {
+        case .paletteV1(let slot): return .paletteV1(slot: slot)
+        case .custom(let color): return .custom(colorSrgb: color)
+        }
+    }
+}
+
+public struct AccountAppearanceChange: Sendable, Equatable {
+    public var color: AccountColor
+    public var symbol: String?
+
+    public init(color: AccountColor, symbol: String?) {
+        self.color = color
+        self.symbol = symbol
+    }
+
+    var generated: SweetbriarCore.AccountAppearanceChange {
+        .init(color: color.generated, symbol: symbol)
+    }
+}
+
+public struct IdentityAppearanceChange: Sendable, Equatable {
+    public var colorOverrideSrgb: String?
+    public var symbolOverride: String?
+
+    public init(colorOverrideSrgb: String?, symbolOverride: String?) {
+        self.colorOverrideSrgb = colorOverrideSrgb
+        self.symbolOverride = symbolOverride
+    }
+
+    var generated: SweetbriarCore.IdentityAppearanceChange {
+        .init(colorOverrideSrgb: colorOverrideSrgb, symbolOverride: symbolOverride)
+    }
+}
+
 /// What an appearance subscription reports (spec/07).
 public enum AppearanceEvent: Sendable, Equatable {
     /// Committed appearance changed; re-read `appearance()`.
@@ -246,12 +287,18 @@ public enum AppearanceEvent: Sendable, Equatable {
 
 /// The appearance queries a model needs from the core (spec/07).
 /// `CoreBridge` adopts it; tests substitute a fake.
-public protocol AppearanceSource: Sendable {
+public protocol AppearanceSource: AnyObject, Sendable {
     /// `appearance()`: the resolved snapshot and its generation mark.
     func appearance() async throws -> Appearance
     /// `subscribe_appearance(generation)`: committed appearance
     /// changes from `generation`, pulled one `next` at a time.
     func appearanceEvents(generation: UInt64) async throws -> any AppearanceEventSource
+    func setAccountAppearance(
+        accountId: String, expectedRevision: Int64, change: AccountAppearanceChange
+    ) async throws -> Receipt
+    func setIdentityAppearance(
+        identityId: String, expectedRevision: Int64?, change: IdentityAppearanceChange
+    ) async throws -> Receipt
     /// The v1 account palette, a constant (spec/02).
     func palette() -> [PaletteColor]
 }
@@ -279,8 +326,11 @@ public final class AppearanceModel {
     /// The last snapshot the follow loop published, if any.
     public private(set) var appearance: Appearance?
 
-    /// The last read or pull's failure, if any.
-    public private(set) var lastError: (any Error)?
+    /// A failed refresh or follow, including while a cached snapshot is shown.
+    public var lastError: (any Error)? { refreshError ?? followError }
+
+    private var refreshError: (any Error)?
+    private var followError: (any Error)?
 
     /// The v1 palette the pickers index (spec/02): a constant.
     public var palette: [PaletteColor] { source.palette() }
@@ -288,45 +338,125 @@ public final class AppearanceModel {
     private let source: any AppearanceSource
     @ObservationIgnored
     private var following = false
+    @ObservationIgnored
+    private var retryRequested = false
+    @ObservationIgnored
+    private var retryWaiter: CheckedContinuation<Void, Never>?
 
     public init(source: any AppearanceSource) {
         self.source = source
     }
 
-    /// Load `appearance()`, then pull its subscription until the
-    /// calling task is cancelled or a read or pull fails: an
-    /// `invalidated` re-reads on the same stream; `resetRequired`
-    /// re-reads and resubscribes at the answer's generation. One
-    /// follow at a time — a second call while one runs returns at
-    /// once.
+    /// The subscription publishes the committed snapshot after a setter succeeds.
+    @discardableResult
+    public func setAccountAppearance(
+        accountId: String, expectedRevision: Int64, change: AccountAppearanceChange
+    ) async throws -> Receipt {
+        try await source.setAccountAppearance(
+            accountId: accountId, expectedRevision: expectedRevision, change: change
+        )
+    }
+
+    @discardableResult
+    public func setIdentityAppearance(
+        identityId: String, expectedRevision: Int64?, change: IdentityAppearanceChange
+    ) async throws -> Receipt {
+        try await source.setIdentityAppearance(
+            identityId: identityId, expectedRevision: expectedRevision, change: change
+        )
+    }
+
+    /// Re-read after a command or conflict. A successful retry also wakes
+    /// a failed follower; its error remains visible until it resubscribes.
+    public func refresh() async {
+        do {
+            _ = try await readOnce()
+            try Task.checkCancellation()
+            refreshError = nil
+            if following, followError != nil { requestRetry() }
+        } catch is CancellationError {
+            if !Task.isCancelled {
+                refreshError = CoreFailure.unavailable(reason: "Appearance refresh was interrupted.")
+            }
+        } catch {
+            refreshError = error
+        }
+    }
+
+    /// Follow committed invalidations until cancelled. A failed read or
+    /// subscription keeps the last snapshot and waits for a successful refresh
+    /// before resubscribing at the latest generation. Only one follow runs.
     public func follow() async {
         guard !following else { return }
         following = true
-        defer { following = false }
-        do {
-            outer: while !Task.isCancelled {
+        defer {
+            following = false
+            retryRequested = false
+        }
+        while !Task.isCancelled {
+            do {
                 let snapshot = try await readOnce()
+                try Task.checkCancellation()
                 let events = try await source.appearanceEvents(generation: snapshot.generation)
-                while !Task.isCancelled {
+                try Task.checkCancellation()
+                retryRequested = false
+                followError = nil
+                eventsLoop: while !Task.isCancelled {
                     switch try await events.next() {
                     case .invalidated:
                         _ = try await readOnce()
                     case .resetRequired:
-                        continue outer
+                        break eventsLoop
                     }
                 }
+            } catch is CancellationError {
+                if Task.isCancelled { return }
+                followError = CoreFailure.unavailable(reason: "Appearance updates were interrupted.")
+                await waitForRetry()
+            } catch {
+                followError = error
+                await waitForRetry()
             }
-        } catch is CancellationError {
-        } catch {
-            lastError = error
         }
     }
 
-    /// Read `appearance()` and publish it, clearing the last failure.
+    private func requestRetry() {
+        if let waiter = retryWaiter {
+            retryWaiter = nil
+            waiter.resume()
+        } else {
+            retryRequested = true
+        }
+    }
+
+    private func waitForRetry() async {
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                if retryRequested || Task.isCancelled {
+                    continuation.resume()
+                } else {
+                    retryWaiter = continuation
+                }
+                retryRequested = false
+            }
+        } onCancel: {
+            Task { @MainActor in self.cancelRetryWait() }
+        }
+    }
+
+    private func cancelRetryWait() {
+        retryWaiter?.resume()
+        retryWaiter = nil
+    }
+
+    /// Read `appearance()` and publish it without replacing newer data.
     private func readOnce() async throws -> Appearance {
         let snapshot = try await source.appearance()
+        try Task.checkCancellation()
+        if let current = appearance, current.generation > snapshot.generation {
+            return current
+        }
         appearance = snapshot
-        lastError = nil
         return snapshot
     }
 }

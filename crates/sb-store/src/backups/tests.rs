@@ -1411,6 +1411,38 @@ fn own_fixture(store: &Store, path: &Path) {
 }
 
 #[test]
+fn completion_receipt_survives_retention_until_the_next_pass() {
+    for offset in [1, 0] {
+        let (_scratch, paths, store) = open("backup-receipt-retention");
+        let snapshot = store.backup_snapshot(BackupDestination::DataRoot).unwrap();
+        let id = "ffffffff-ffff-4fff-bfff-ffffffffffff";
+        assert!(snapshot.generation_id() < id);
+        let path = paths.backups().join(id);
+        sql(
+            &store,
+            format!(
+                "INSERT INTO backup_generations (generation_id, started_at, state, location) VALUES ('{id}', {}, 'complete', '{}')",
+                FIXED_NOW_MS + offset,
+                path.display()
+            ),
+        );
+        std::fs::create_dir(&path).unwrap();
+        own_fixture(&store, &path);
+
+        let receipt = store.complete_backup(snapshot).unwrap();
+        let row = generation_row(&store, receipt.generation_id()).unwrap();
+        assert_eq!(row.0, "complete");
+        assert_eq!(Path::new(&row.1), receipt.location());
+        assert!(receipt.location().join("manifest.json").is_file());
+
+        store.backups.retain().unwrap();
+        assert!(generation_row(&store, receipt.generation_id()).is_none());
+        assert!(!receipt.location().exists());
+        assert!(path.exists());
+    }
+}
+
+#[test]
 fn retention_keeps_bucket_union_and_deletes_oldest_first() {
     let (_scratch, paths, store) = open("backup-retention");
     const HOUR: i64 = 3_600_000;
@@ -2145,6 +2177,40 @@ fn verifier_image_reads_only_authenticated_copied_database() {
         )
         .unwrap();
     assert!(matches!(cancelled, crate::BackupImageInspection::Cancelled));
+}
+
+#[test]
+fn verifier_image_lock_recovers_after_progress_panic() {
+    use sha2::{Digest, Sha256};
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    let (_scratch, _paths, store) = open("image-lock-panic");
+    let snapshot = store.backup_snapshot(BackupDestination::DataRoot).unwrap();
+    let receipt = store.complete_backup(snapshot).unwrap();
+    let data = std::fs::read(receipt.state_db()).unwrap();
+    let digest: [u8; 32] = Sha256::digest(&data).into();
+    let panicked = catch_unwind(AssertUnwindSafe(|| {
+        let _ = store.inspect_backup_image(
+            receipt.location(),
+            digest,
+            data.len() as u64,
+            &std::sync::atomic::AtomicBool::new(false),
+            |_| panic!("progress callback panicked"),
+        );
+    }));
+    assert!(panicked.is_err());
+    let retry = store
+        .inspect_backup_image(
+            receipt.location(),
+            digest,
+            data.len() as u64,
+            &std::sync::atomic::AtomicBool::new(false),
+            |_| std::ops::ControlFlow::Continue(()),
+        )
+        .unwrap();
+    assert!(matches!(
+        retry,
+        crate::BackupImageInspection::Inspected { .. }
+    ));
 }
 
 #[test]

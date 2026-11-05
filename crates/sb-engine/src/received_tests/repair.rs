@@ -593,15 +593,43 @@ fn a_later_message_write_or_commit_failure_rolls_back_the_entire_population_batc
             tx.execute_batch(&format!("CREATE TEMP TABLE batch_parent(id INTEGER PRIMARY KEY); CREATE TEMP TABLE batch_probe(id INTEGER REFERENCES batch_parent(id) DEFERRABLE INITIALLY DEFERRED); CREATE TEMP TRIGGER reject_later_message AFTER INSERT ON main.seen_address_messages WHEN NEW.message_id=2 BEGIN {action}; END")).unwrap();
             Ok(())
         });
+        // A committed input may wake the worker immediately after failure.
+        let received = Arc::downgrade(engine.received());
+        let woken = AtomicBool::new(false);
+        hook(&engine, move |event| {
+            if event != Event::Failure(Lane::Population) {
+                return;
+            }
+            let received = received.upgrade().unwrap();
+            let failure = received.failure_for(Lane::Population).unwrap();
+            // The seed's future target can still fail before start restores it.
+            if matches!(failure.error, StoreError::Internal { .. })
+                && !woken.swap(true, Ordering::SeqCst)
+            {
+                received.wake();
+            }
+        });
         start(&engine);
-        lane_parked(&engine, Lane::Population, 1);
+        let mut parked = None;
+        wait(|| {
+            parked = engine.received().parked_failure_for(Lane::Population);
+            parked
+                .as_ref()
+                .is_some_and(|failure| failure.attempts >= 2 && failure.retry_at.is_some())
+        });
+        let failure = parked.unwrap();
+        assert!(matches!(failure.error, StoreError::Internal { .. }));
+        let retry_at = failure.retry_at.unwrap();
+        assert!(retry_at.as_millis() > 10_000);
         let ledger = count(&engine, LEDGER);
         write(&engine, |tx| {
             tx.execute_batch("DROP TRIGGER reject_later_message")
                 .unwrap();
             Ok(())
         });
-        clock.0.store(11_000, Ordering::SeqCst);
+        clock.0.store(retry_at.as_millis(), Ordering::SeqCst);
+        // A later input can rearm the lane after the snapshot.
+        engine.received().wake();
         complete(&engine);
         assert_eq!(count(&engine, LEDGER), 2);
         assert_eq!(
