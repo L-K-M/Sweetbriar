@@ -317,8 +317,7 @@ uint64_t uniffi_sb_ffi_fn_method_core_publish_draft_attachment(uint64_t ptr, uin
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_SAVE_DRAFT
 uint64_t uniffi_sb_ffi_fn_method_core_save_draft(uint64_t ptr, uint64_t token, RustBuffer idempotency_key, RustBuffer draft_id, RustBuffer base_revision_id, RustBuffer content
 );
-#endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_CANCEL_JOB
+#endif#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_CANCEL_JOB
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_CANCEL_JOB
 uint64_t uniffi_sb_ffi_fn_method_core_cancel_job(uint64_t ptr, uint64_t token, RustBuffer idempotency_key, RustBuffer job_id
 );
@@ -886,8 +885,7 @@ uint16_t uniffi_sb_ffi_checksum_method_core_publish_draft_attachment(void
 uint16_t uniffi_sb_ffi_checksum_method_core_save_draft(void
     
 );
-#endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_CANCEL_JOB
+#endif#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_CANCEL_JOB
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_CANCEL_JOB
 uint16_t uniffi_sb_ffi_checksum_method_core_cancel_job(void
     
