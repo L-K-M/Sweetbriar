@@ -39,6 +39,9 @@ fn put(writer: &mut dyn sb_store::WriteFile, value: SortEntry) -> io::Result<()>
     Ok(())
 }
 
+// Tape files are ephemeral scratch space created and consumed within one
+// import run; the 40-byte record layout must match `put` and is not a
+// stable on-disk format.
 fn get(reader: &mut dyn sb_store::ReadFile, index: u64) -> io::Result<SortEntry> {
     let position = index
         .checked_mul(40)

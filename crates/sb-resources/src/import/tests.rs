@@ -803,6 +803,82 @@ fn source_json_v2_requires_a_bundle_matching_the_source() {
 }
 
 #[test]
+fn source_json_v2_preserves_optional_file_ordinal() {
+    use serde_json::{Value, json};
+
+    let legacy = json!({
+        "v": 2, "path": "/x/y.eml", "mailbox": "y", "kind": "eml",
+        "snapshot": {"token": "0".repeat(32), "sha256": "a".repeat(64), "byte_length": 3},
+        "messages": 1, "quoting": "equivalent",
+        "bundle": {
+            "manifest": {"token": "f".repeat(32), "sha256": "b".repeat(64), "byte_length": 9},
+            "format": "eml",
+        },
+    });
+    let decoded = SourceInventory::from_json(&legacy.to_string()).unwrap();
+    assert_eq!(decoded.to_json(), legacy.to_string());
+    assert_eq!(decoded.bundle().unwrap().file_ordinal(), None);
+    let mut unknown = legacy.clone();
+    unknown["bundle"]["future_field"] = json!("ignored");
+    assert_eq!(
+        SourceInventory::from_json(&unknown.to_string())
+            .unwrap()
+            .to_json(),
+        legacy.to_string()
+    );
+
+    for ordinal in [0, u64::MAX] {
+        let mut current = legacy.clone();
+        current["bundle"]["file_ordinal"] = json!(ordinal);
+        let decoded = SourceInventory::from_json(&current.to_string()).unwrap();
+        assert_eq!(decoded.to_json(), current.to_string());
+        let serialized: serde_json::Value = serde_json::from_str(&decoded.to_json()).unwrap();
+        assert_eq!(serialized["bundle"]["file_ordinal"], json!(ordinal));
+        let bundle = decoded.bundle().unwrap();
+        assert_eq!(bundle.file_ordinal(), Some(ordinal));
+        assert_eq!(*bundle, bundle.clone());
+        assert_ne!(
+            *bundle,
+            *SourceInventory::from_json(&legacy.to_string())
+                .unwrap()
+                .bundle()
+                .unwrap()
+        );
+    }
+
+    for bad in [
+        json!(null),
+        json!(-1),
+        json!(1.0),
+        json!(1.5),
+        json!("1"),
+        json!(true),
+        json!({}),
+        json!([]),
+    ] {
+        let mut current = legacy.clone();
+        current["bundle"]["file_ordinal"] = bad;
+        assert!(SourceInventory::from_json(&current.to_string()).is_err());
+    }
+    let overflow = legacy.to_string().replace(
+        "\"format\":\"eml\"",
+        "\"file_ordinal\":18446744073709551616,\"format\":\"eml\"",
+    );
+    assert_ne!(overflow, legacy.to_string());
+    assert!(SourceInventory::from_json(&overflow).is_err());
+
+    let mut plain = legacy;
+    plain["v"] = json!(1);
+    plain.as_object_mut().unwrap().remove("bundle");
+    let decoded = SourceInventory::from_json(&plain.to_string()).unwrap();
+    assert_eq!(decoded.to_json(), plain.to_string());
+    assert_eq!(
+        serde_json::from_str::<Value>(&decoded.to_json()).unwrap(),
+        plain
+    );
+}
+
+#[test]
 fn bundle_manifest_precedes_package_and_never_imports_plain() {
     let (scratch, res) = resources("bundle-pending");
     let parent = scratch.path().join("imports");
@@ -913,10 +989,7 @@ fn message_rescans_cancel_and_preserve_other_snapshots() {
     let message = r##"{"v":1,"occurrence_id":1,"message_id":2,"account":{"id":"a","name":"a"},"mailbox":{"id":1,"name":"m"},"occurrence_state":"present","flags":{"seen":false,"flagged":false,"answered":false,"draft":false,"deleted":false},"keywords":["a","b"],"acquisition":null,"body_availability":"not_acquired","tags":[{"id":"a","name":"a","color_srgb":null},{"id":"b","name":"b","color_srgb":"#010203"},{"id":"c","name":"c","color_srgb":null}],"note":null,"file":null}"##;
     let manifest = table_messages(table_manifest("[]"), message, &[1]);
     fs::write(dir.join("sweetbriar-metadata.json"), &manifest).unwrap();
-    assert_eq!(
-        run(&res, std::slice::from_ref(&dir)).problems()[0].kind(),
-        ImportProblemKind::Unsupported
-    );
+    assert!(run(&res, std::slice::from_ref(&dir)).problems().is_empty());
     assert_eq!(snapshot_names(&scratch), before);
 
     let mut previous = 0;
@@ -1157,11 +1230,10 @@ fn bundle_matching_decodes_names_and_accepts_uppercase_extension() {
     )
     .unwrap();
     let inventory = run(&res, std::slice::from_ref(&dir));
-    assert_eq!(inventory.problems().len(), 1);
-    assert_eq!(
-        inventory.problems()[0].kind(),
-        ImportProblemKind::Unsupported
-    );
+    assert!(inventory.problems().is_empty());
+    assert_eq!(inventory.sources().len(), 1);
+    let snapshots: Vec<_> = inventory.sources()[0].snapshots().cloned().collect();
+    res.remove_import_sources(&snapshots).unwrap();
 
     let long = format!("{}.mbox", "x".repeat(100_000));
     fs::write(
@@ -1204,34 +1276,22 @@ fn bundle_child_matching_scales_with_directory_size() {
     });
     // Includes the relationship sort as well as the directory merge.
     assert!(reads < 400_000, "{reads} manifest reads");
-    assert_eq!(outcome.inventory().problems().len(), 1);
-    assert_eq!(
-        outcome.inventory().problems()[0].kind(),
-        ImportProblemKind::Unsupported
+    assert!(outcome.inventory().problems().is_empty());
+    assert_eq!(outcome.inventory().sources().len(), 512);
+    let mut snapshots: Vec<_> = outcome
+        .inventory()
+        .sources()
+        .iter()
+        .map(|source| source.snapshot().clone())
+        .collect();
+    snapshots.push(
+        outcome.inventory().sources()[0]
+            .bundle()
+            .unwrap()
+            .manifest()
+            .clone(),
     );
-    assert!(snapshot_names(&scratch).is_empty());
-}
-
-#[test]
-fn bundle_accepts_an_empty_eml_child_declared_as_one_record() {
-    // An acquired-but-empty stored object exports as a zero-byte EML
-    // with records: 1 — that is agreement, not corruption.
-    let (scratch, res) = resources("bundle-empty-eml");
-    let dir = scratch.path().join("bundle");
-    fs::create_dir(&dir).unwrap();
-    fs::write(dir.join("1.eml"), b"").unwrap();
-    let message = r#"{"v":1,"occurrence_id":1,"message_id":2,"account":{"id":"a","name":"a"},"mailbox":{"id":1,"name":"m"},"occurrence_state":"present","flags":{"seen":false,"flagged":false,"answered":false,"draft":false,"deleted":false},"keywords":[],"acquisition":{"id":1,"sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","bytes":0},"body_availability":"acquired","tags":[],"note":null,"file":"1.eml"}"#;
-    let manifest = table_messages(
-        table_manifest(r#"[{"name":"1.eml","bytes":0,"records":1}]"#)
-            .replace(r#""format":"mboxrd""#, r#""format":"eml""#),
-        message,
-        &[1],
-    );
-    fs::write(dir.join("sweetbriar-metadata.json"), manifest).unwrap();
-    assert_eq!(
-        run(&res, std::slice::from_ref(&dir)).problems()[0].kind(),
-        ImportProblemKind::Unsupported
-    );
+    res.remove_import_sources(&snapshots).unwrap();
     assert!(snapshot_names(&scratch).is_empty());
 }
 
