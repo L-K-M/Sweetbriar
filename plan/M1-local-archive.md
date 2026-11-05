@@ -1281,6 +1281,28 @@ local drafts. No network yet.
         the reservation twice. Cover replay and reservation ownership through
         native APIs without moving validation outside the receipt transaction.
         Depends on M1.9b2a.
+      - **M1.9b2a2 Authorized attachment republication (S):** the
+        Store/Resources primitive
+        `republish_draft_attachment(draft_id, revision_id, reference)`,
+        the native prerequisite for M1.9c's keep-both and attachment
+        undo. Store validation proves the revision belongs to the draft
+        and the full stored `AttachmentRef` (hash, size, filename,
+        media type) is a member of that revision. An older immutable
+        revision is allowed after the head advances, and a noncurrent or
+        terminal source draft is allowed because the operation creates
+        a new publication rather than mutating that draft. The exact
+        source bytes are read through the protected verifying reader
+        and published through the real object store, returning a fresh
+        opaque `PublishedObject` with a distinct reservation per call.
+        No idempotency key or receipt; no new revision or draft row; the
+        following save spends the returned reservation once. Native
+        Resources tests prove the old-revision copy, distinct
+        reservations, a copy saved into a new draft, an unchanged
+        source, denial of a wrong draft, revision, hash, size, filename
+        or media type, missing and tampered sources, injected read,
+        write, sync and rename failures, and the native GC/read lifetime.
+        No Engine, Service, FFI, bridge or Compose surface; those stay
+        in the later artifacts. Depends on M1.9a1 and M1.8a1.
       - **M1.9b2b Draft commands over FFI (L):** create, save, discard
         and attachment publication, FFI-owned input records and enums,
         the attachment-object handle, complete mappings, typed errors
