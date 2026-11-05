@@ -4,6 +4,7 @@ use std::io::{self, Read, Seek, SeekFrom};
 
 use super::BundleFormat;
 use super::offset_sort::OffsetSort;
+#[cfg(test)]
 use std::cmp::Ordering;
 
 mod messages;
@@ -60,14 +61,19 @@ pub(super) struct FileTable {
     count: u64,
     messages: (u64, u64, u64),
     format: BundleFormat,
+    entries: u64,
+    ids_hash: String,
 }
 
 struct FileName {
     start: u64,
+    bytes: u64,
+    records: u64,
 }
 
 /// Compare decoded names exactly using fixed-memory sorted offsets.
-pub(super) fn validate_file_names(
+#[cfg(test)]
+fn validate_file_names(
     reader: &mut (impl Read + Seek),
     table: &FileTable,
     scratch: &sb_store::ValidationScratch<'_>,
@@ -99,6 +105,7 @@ pub(super) fn validate_file_names(
     )
 }
 
+#[cfg(test)]
 fn read_entry(reader: &mut (impl Read + Seek), offset: u64) -> io::Result<(FileName, u64)> {
     reader.seek(SeekFrom::Start(offset))?;
     let mut parser = Parser {
@@ -140,6 +147,7 @@ fn name_chunk(
     Ok(length)
 }
 
+#[cfg(test)]
 fn compare_names(
     reader: &mut (impl Read + Seek),
     mut left: u64,
@@ -358,6 +366,8 @@ impl<R: Read> Parser<R> {
         let mut files = files.ok_or_else(invalid)?;
         files.messages = messages.ok_or_else(invalid)?;
         files.format = format.ok_or_else(invalid)?;
+        files.entries = entries.ok_or_else(invalid)?;
+        files.ids_hash = ids_hash.ok_or_else(invalid)?;
         Ok(files)
     }
 
@@ -386,12 +396,16 @@ impl<R: Read> Parser<R> {
             count,
             messages: (0, 0, 0),
             format: BundleFormat::Eml,
+            entries: 0,
+            ids_hash: String::new(),
         })
     }
 
     fn file_entry(&mut self) -> io::Result<FileName> {
         let mut seen = 0u8;
         let mut name = None;
+        let mut bytes = 0;
+        let mut records = 0;
         self.object(|p, key| {
             let bit = match key {
                 "name" => 1,
@@ -405,9 +419,8 @@ impl<R: Read> Parser<R> {
             seen |= bit;
             match key {
                 "name" => name = Some(p.file_name()?),
-                "bytes" | "records" => {
-                    p.integer::<u64>()?;
-                }
+                "bytes" => bytes = p.integer::<u64>()?,
+                "records" => records = p.integer::<u64>()?,
                 _ => unreachable!(),
             }
             Ok(())
@@ -415,7 +428,10 @@ impl<R: Read> Parser<R> {
         if seen != 0b111 {
             return Err(invalid());
         }
-        name.ok_or_else(invalid)
+        let mut name = name.ok_or_else(invalid)?;
+        name.bytes = bytes;
+        name.records = records;
+        Ok(name)
     }
 
     fn file_name(&mut self) -> io::Result<FileName> {
@@ -433,7 +449,11 @@ impl<R: Read> Parser<R> {
         if length == 0 || (dots && length <= 2) {
             return Err(invalid());
         }
-        Ok(FileName { start })
+        Ok(FileName {
+            start,
+            bytes: 0,
+            records: 0,
+        })
     }
 
     fn string_char(&mut self) -> io::Result<Option<char>> {

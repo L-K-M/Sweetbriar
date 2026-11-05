@@ -986,10 +986,13 @@ local drafts. No network yet.
     offset sorter for exact local tag-ID uniqueness validation while retaining
     manifest-order tag-name checks. This removes only quadratic local tag-ID
     validation; it does not validate or admit global message relationships.
-  - **M1.7d1b1b2b2 Manifest message relationships — L:** validate counts,
-    ordered-ID digest, unique occurrence IDs, file references and EML
-    agreement using bounded scans of the verified snapshot. Prove writer
-    manifests, hostile tokens and cleanup before bundle inventory.
+  - **M1.7d1b1b2b2a Occurrence relationships — M:** validate the message
+    count, ordered occurrence-ID digest and global occurrence-ID uniqueness
+    with bounded scans and scratch. Keep bundle admission deferred.
+  - **M1.7d1b1b2b2b File relationships — M:** validate file references,
+    record counts and EML agreement using bounded scans of the verified
+    snapshot. Prove writer manifests, hostile tokens and cleanup before
+    bundle inventory.
   - **M1.7d1b2 Bundle file agreement and inventory — L:** check every declared
     direct child's kind, byte length and record count independently before
     ingest, report missing or disagreeing files without suppressing valid
@@ -1078,13 +1081,21 @@ local drafts. No network yet.
     capability that opens descendants without following symlinks, including
     simulator and fault behavior. Acceptance: path replacement cannot redirect
     an open capability; links and traversal are refused; failures propagate.
-  - **M1.8e0b Isolated verifier image (L):** stream a confined source into a
-    private owned scratch image, checking its digest and length. SQLite reads
-    only that immutable completed image. Bound memory and disk use; implement
-    durable ownership, crash recovery, cancellation and retryable cleanup.
-    Acceptance: source changes cannot alter the inspected image; no source WAL
-    is read; all injected failures and crash cuts preserve unowned data; Linux,
-    macOS, simulator and fault behavior agree.
+  - **M1.8e0b1 Retained-file SQLite reader (M):** provide a read-only
+    SQLite VFS backed only by an already-open reader. Refuse sidecars and
+    other file opens. Acceptance: replacing the pathname cannot change the
+    queried image; no source WAL is read; Linux and macOS tests pass.
+  - **M1.8e0b2 Verifier scratch ownership (L):** create and recover private
+    scratch with durable ownership and directory identity. Cleanup fails
+    closed and retains evidence when ownership cannot be proved, including
+    an unmarked directory after a crash; retry proven cleanup. Acceptance:
+    crash cuts and substitutions preserve unowned data, and proven leftovers
+    are recovered; simulator and fault behavior agree.
+  - **M1.8e0b3 Isolated verifier image (L):** stream a confined source into
+    owned scratch, checking digest and length, and inspect only the retained
+    completed image through the reader above. Bound disk, memory and SQLite
+    work, including cancellation. Acceptance: source changes cannot alter the
+    inspection; malformed schemas are bounded; cancellation never succeeds.
   - **M1.8e1 Restore generation verification (M):** select a complete
     generation recorded in the current store and verify its manifest, snapshot
     and every object, including identity, size and hash mismatches. Staging

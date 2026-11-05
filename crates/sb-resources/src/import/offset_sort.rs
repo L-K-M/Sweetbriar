@@ -10,25 +10,58 @@ fn scratch_error(error: sb_store::StoreError) -> io::Error {
     io::Error::new(error.io_kind().unwrap_or(io::ErrorKind::Other), error)
 }
 
-fn put(writer: &mut dyn sb_store::WriteFile, value: u64) -> io::Result<()> {
-    writer.write_all(&value.to_le_bytes())
+#[derive(Clone, Copy)]
+pub(super) struct SortEntry {
+    pub key: u64,
+    pub position: u64,
+    pub extra: u64,
+    pub kind: SortKind,
 }
 
-fn get(reader: &mut dyn sb_store::ReadFile, index: u64) -> io::Result<u64> {
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) enum SortKind {
+    Offset,
+    Declaration,
+    Reference,
+}
+
+fn put(writer: &mut dyn sb_store::WriteFile, value: SortEntry) -> io::Result<()> {
+    for part in [value.key, value.position, value.extra, value.kind as u64] {
+        writer.write_all(&part.to_le_bytes())?;
+    }
+    Ok(())
+}
+
+fn get(reader: &mut dyn sb_store::ReadFile, index: u64) -> io::Result<SortEntry> {
     let position = index
-        .checked_mul(8)
+        .checked_mul(32)
         .ok_or_else(|| io::Error::other("offset tape too large"))?;
     reader.seek(SeekFrom::Start(position))?;
-    let mut bytes = [0; 8];
+    let mut bytes = [0; 32];
     reader.read_exact(&mut bytes)?;
-    Ok(u64::from_le_bytes(bytes))
+    Ok(SortEntry {
+        key: u64::from_le_bytes(bytes[0..8].try_into().unwrap()),
+        position: u64::from_le_bytes(bytes[8..16].try_into().unwrap()),
+        extra: u64::from_le_bytes(bytes[16..24].try_into().unwrap()),
+        kind: match u64::from_le_bytes(bytes[24..32].try_into().unwrap()) {
+            0 => SortKind::Offset,
+            1 => SortKind::Declaration,
+            2 => SortKind::Reference,
+            _ => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "invalid sort entry kind",
+                ));
+            }
+        },
+    })
 }
 
 /// The caller supplies exact, fallible comparison and phase cancellation.
 pub(super) struct OffsetSort<'a, 's> {
     scratch: &'a ValidationScratch<'s>,
     writer: Box<dyn sb_store::WriteFile>,
-    run: Vec<u64>,
+    run: Vec<SortEntry>,
     count: u64,
 }
 
@@ -48,6 +81,24 @@ impl<'a, 's> OffsetSort<'a, 's> {
         context: &mut C,
         compare: &mut impl FnMut(&mut C, u64, u64) -> io::Result<Ordering>,
     ) -> io::Result<()> {
+        self.push_entry(
+            SortEntry {
+                key: value,
+                position: 0,
+                extra: 0,
+                kind: SortKind::Offset,
+            },
+            context,
+            &mut |c, a, b| compare(c, a.key, b.key),
+        )
+    }
+
+    pub(super) fn push_entry<C>(
+        &mut self,
+        value: SortEntry,
+        context: &mut C,
+        compare: &mut impl FnMut(&mut C, SortEntry, SortEntry) -> io::Result<Ordering>,
+    ) -> io::Result<()> {
         self.run.push(value);
         self.count = self
             .count
@@ -62,7 +113,7 @@ impl<'a, 's> OffsetSort<'a, 's> {
     fn flush<C>(
         &mut self,
         context: &mut C,
-        compare: &mut impl FnMut(&mut C, u64, u64) -> io::Result<Ordering>,
+        compare: &mut impl FnMut(&mut C, SortEntry, SortEntry) -> io::Result<Ordering>,
     ) -> io::Result<()> {
         // Insertion sort permits fallible comparisons without storing keys.
         for i in 1..self.run.len() {
@@ -80,11 +131,26 @@ impl<'a, 's> OffsetSort<'a, 's> {
     }
 
     pub(super) fn finish<C>(
-        mut self,
+        self,
         context: &mut C,
         compare: &mut impl FnMut(&mut C, u64, u64) -> io::Result<Ordering>,
         check: &mut impl FnMut(&mut C) -> io::Result<()>,
         mut visit: impl FnMut(&mut C, u64) -> io::Result<()>,
+    ) -> io::Result<()> {
+        self.finish_entries(
+            context,
+            &mut |c, a, b| compare(c, a.key, b.key),
+            check,
+            |c, entry| visit(c, entry.key),
+        )
+    }
+
+    pub(super) fn finish_entries<C>(
+        mut self,
+        context: &mut C,
+        compare: &mut impl FnMut(&mut C, SortEntry, SortEntry) -> io::Result<Ordering>,
+        check: &mut impl FnMut(&mut C) -> io::Result<()>,
+        mut visit: impl FnMut(&mut C, SortEntry) -> io::Result<()>,
     ) -> io::Result<()> {
         self.flush(context, compare)?;
         self.writer.sync_all()?;
@@ -218,6 +284,53 @@ mod tests {
             scratch.finish().unwrap();
             assert_eq!(std::fs::read_dir(&root).unwrap().count(), 0);
         }
+    }
+
+    #[test]
+    fn typed_entries_keep_full_width_metadata_across_merge() {
+        let tmp = ScratchDir::new("typed-sort");
+        let resources = crate::Resources::open(&tmp.path().join("store")).unwrap();
+        let scratch = resources.store.import_validation_scratch().unwrap();
+        let mut sorter = OffsetSort::new(&scratch).unwrap();
+        let mut compare = |_: &mut (), a: SortEntry, b: SortEntry| Ok(a.key.cmp(&b.key));
+        for key in (0..257).rev() {
+            sorter
+                .push_entry(
+                    SortEntry {
+                        key,
+                        position: u64::MAX - key,
+                        extra: u64::MAX,
+                        kind: if key % 2 == 0 {
+                            SortKind::Declaration
+                        } else {
+                            SortKind::Reference
+                        },
+                    },
+                    &mut (),
+                    &mut compare,
+                )
+                .unwrap();
+        }
+        let mut expected = 0;
+        sorter
+            .finish_entries(&mut (), &mut compare, &mut |_| Ok(()), |_, entry| {
+                assert_eq!(entry.key, expected);
+                assert_eq!(entry.position, u64::MAX - expected);
+                assert_eq!(entry.extra, u64::MAX);
+                assert!(
+                    entry.kind
+                        == if expected % 2 == 0 {
+                            SortKind::Declaration
+                        } else {
+                            SortKind::Reference
+                        }
+                );
+                expected += 1;
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(expected, 257);
+        scratch.finish().unwrap();
     }
 
     #[test]
