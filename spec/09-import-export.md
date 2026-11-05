@@ -105,6 +105,20 @@ user-granted permission path.
      `acquisition_sources.source_ref`. A source message already imported
      isn't imported again. Two byte-identical mbox files under different
      names are two sources, and both are imported.
+   - **Bundle-message framing identity:** a bundle mboxrd message's
+     replay identity is its plain source identity plus a
+     domain-separated SHA-256 over the captured file's SHA-256 and its
+     validated framing descriptor: the original SHA-256 and byte length,
+     the record offset, the encoded length and the framing-LF flag. The
+     domain is `sweetbriar-bundle-message-v1\n`; the two hashes are 32
+     raw bytes, the three lengths are little-endian `u64` and the flag is
+     one byte. `acquisition_sources.source_ref` adds that hash under
+     `bundle_framing`; a plain source's reference is unchanged. Snapshot
+     tokens never enter the identity. The same captured bytes and
+     descriptor replay identically; the same physical mbox with a
+     different valid framing intent has a different descriptor, so a
+     different identity, and cannot silently replay the earlier
+     interpretation.
    - Byte duplicates are counted in the report.
 4. **Flags.** Read state comes from `Status` and `X-Status` headers where
    present. Otherwise imported messages are marked read: an archive isn't
