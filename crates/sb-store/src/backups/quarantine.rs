@@ -2,6 +2,7 @@
 //! This does not establish that the database or supplied metadata is verified.
 use crate::{StoreError, schema::classify};
 use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
+use rusqlite::limits::Limit;
 use rusqlite::{Connection, OptionalExtension, Params, Transaction, params};
 use std::path::{Component, Path};
 use std::sync::{
@@ -12,6 +13,9 @@ use std::sync::{
 const FIRST_LOCATION: &str =
     "SELECT generation_id, location FROM backup_generations ORDER BY generation_id LIMIT 1";
 const NEXT_LOCATION: &str = "SELECT generation_id, location FROM backup_generations WHERE generation_id > ?1 ORDER BY generation_id LIMIT 1";
+// The image verifier uses the same bound. UUIDs and filesystem locations fit
+// comfortably; archive requests and attachment blobs are outside this read.
+const MAX_LOCATION_ROW_BYTES: i32 = 1_048_576;
 
 #[derive(Clone, Copy)]
 pub(super) struct Quarantine<'a> {
@@ -56,6 +60,9 @@ fn authorize(ctx: AuthContext<'_>) -> Authorization {
     }
     let allowed = match ctx.action {
         Select | Transaction { .. } => true,
+        Function {
+            function_name: "octet_length",
+        } => true,
         Read { .. } => ctx.database_name == Some("main"),
         Update {
             table_name,
@@ -107,15 +114,100 @@ fn execute(tx: &Transaction<'_>, sql: &str, args: impl Params) -> Result<usize, 
     Ok(changed)
 }
 
+fn read_location(
+    tx: &Transaction<'_>,
+    after: Option<&str>,
+) -> Result<Option<(String, String)>, StoreError> {
+    // Bound SQLite's materialization as well as Rust's String allocation.
+    // Restore the prior limit even on failure, before any archive-row update.
+    let previous = tx
+        .limit(Limit::SQLITE_LIMIT_LENGTH)
+        .map_err(|e| classify(e, "read SQLite value limit"))?;
+    tx.set_limit(
+        Limit::SQLITE_LIMIT_LENGTH,
+        previous.min(MAX_LOCATION_ROW_BYTES),
+    )
+    .map_err(|e| classify(e, "bound inherited backup metadata"))?;
+    let result = match after {
+        None => tx.query_row(FIRST_LOCATION, [], |row| Ok((row.get(0)?, row.get(1)?))),
+        Some(id) => tx.query_row(NEXT_LOCATION, [id], |row| Ok((row.get(0)?, row.get(1)?))),
+    }
+    .optional();
+    tx.set_limit(Limit::SQLITE_LIMIT_LENGTH, previous)
+        .map_err(|e| classify(e, "restore SQLite value limit"))?;
+    result.map_err(|error| {
+        if error.sqlite_error_code() == Some(rusqlite::ErrorCode::TooBig) {
+            StoreError::corrupt("oversized inherited backup metadata")
+        } else {
+            classify(error, "read backup location")
+        }
+    })
+}
+
+fn valid(path: &Path) -> bool {
+    path.is_absolute()
+        && path
+            .components()
+            .all(|part| matches!(part, Component::RootDir | Component::Normal(_)))
+}
+
+fn preflight_location_sizes(tx: &Transaction<'_>, cancel: &AtomicBool) -> Result<(), StoreError> {
+    // An index seek can allocate an entire key before SQLITE_LIMIT_LENGTH is
+    // checked. Scan the canonical rowid table first. octet_length's SQLite
+    // byte-length opcode reads record metadata without loading TEXT values;
+    // length(TEXT) or a CAST would lose that property. No sort or index scan.
+    let mut statement = tx.prepare(
+        "SELECT octet_length(generation_id), octet_length(location) FROM backup_generations NOT INDEXED",
+    ).map_err(|e| classify(e, "prepare inherited metadata sizes"))?;
+    let mut rows = statement
+        .query([])
+        .map_err(|e| classify(e, "read inherited metadata sizes"))?;
+    while let Some(row) = rows
+        .next()
+        .map_err(|e| classify(e, "read inherited metadata sizes"))?
+    {
+        if cancel.load(Ordering::Acquire) {
+            return Err(StoreError::unavailable("restore quarantine cancelled"));
+        }
+        for column in [0, 1] {
+            let bytes: i64 = row
+                .get(column)
+                .map_err(|e| classify(e, "read inherited metadata size"))?;
+            if !(0..=i64::from(MAX_LOCATION_ROW_BYTES)).contains(&bytes) {
+                return Err(StoreError::corrupt("oversized inherited backup metadata"));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn visit_locations(
+    tx: &Transaction<'_>,
+    cancel: &AtomicBool,
+    mut visit: impl FnMut(&str, &Path) -> Result<(), StoreError>,
+) -> Result<(), StoreError> {
+    let mut after: Option<String> = None;
+    loop {
+        if cancel.load(Ordering::Acquire) {
+            return Err(StoreError::unavailable("restore quarantine cancelled"));
+        }
+        // Finish each bounded read before allowing the visitor to update rows.
+        let Some((id, location)) = read_location(tx, after.as_deref())? else {
+            break;
+        };
+        let path = Path::new(&location);
+        if !valid(path) {
+            return Err(StoreError::corrupt("invalid inherited backup location"));
+        }
+        visit(&id, path)?;
+        after = Some(id);
+    }
+    Ok(())
+}
+
 fn apply_inner(conn: &mut Connection, input: &Quarantine<'_>) -> Result<(), StoreError> {
     if input.cancel.load(Ordering::Acquire) {
         return Err(StoreError::unavailable("restore quarantine cancelled"));
-    }
-    fn valid(path: &Path) -> bool {
-        path.is_absolute()
-            && path
-                .components()
-                .all(|part| matches!(part, Component::RootDir | Component::Normal(_)))
     }
     if !valid(input.current_root)
         || !valid(input.preserved_root)
@@ -136,6 +228,9 @@ fn apply_inner(conn: &mut Connection, input: &Quarantine<'_>) -> Result<(), Stor
     let tx = conn
         .transaction()
         .map_err(|e| classify(e, "begin restore quarantine"))?;
+    // Reject oversized inherited values before even a subquery or update can
+    // materialize them. Large payloads in unrelated archive tables stay valid.
+    preflight_location_sizes(&tx, input.cancel)?;
     // A snapshot can define REPLACE or IGNORE conflict policies. Override
     // them on every update so no row is silently deleted or left unchanged.
     let changed = execute(
@@ -170,23 +265,8 @@ fn apply_inner(conn: &mut Connection, input: &Quarantine<'_>) -> Result<(), Stor
     }
     // Rewrite with Path components, never string prefixes. The selected
     // source is supplied by the future capability-validating caller.
-    let mut after: Option<String> = None;
-    loop {
-        if input.cancel.load(Ordering::Acquire) {
-            return Err(StoreError::unavailable("restore quarantine cancelled"));
-        }
-        // Finish each read before changing the table; memory stays bounded.
-        let next: Option<(String, String)> = match &after {
-            None => tx.query_row(FIRST_LOCATION, [], |row| Ok((row.get(0)?, row.get(1)?))),
-            Some(id) => tx.query_row(NEXT_LOCATION, [id], |row| Ok((row.get(0)?, row.get(1)?))),
-        }
-        .optional()
-        .map_err(|e| classify(e, "read backup location"))?;
-        let Some((id, location)) = next else { break };
-        if !valid(Path::new(&location)) {
-            return Err(StoreError::corrupt("invalid inherited backup location"));
-        }
-        if let Ok(relative) = Path::new(&location).strip_prefix(input.current_root) {
+    visit_locations(&tx, input.cancel, |id, location| {
+        if let Ok(relative) = location.strip_prefix(input.current_root) {
             let rewritten = input.preserved_root.join(relative);
             let text = rewritten
                 .to_str()
@@ -197,8 +277,8 @@ fn apply_inner(conn: &mut Connection, input: &Quarantine<'_>) -> Result<(), Stor
                 params![text, id],
             )?;
         }
-        after = Some(id);
-    }
+        Ok(())
+    })?;
     for sql in [
         "UPDATE OR ABORT accounts SET state='paused'",
         "UPDATE OR ABORT import_jobs SET state='failed' WHERE state IN ('inventory','awaiting_confirmation','running')",
@@ -411,6 +491,160 @@ mod tests {
             .query_row("SELECT pin_kind FROM object_pins", [], |r| r.get(0))
             .unwrap();
         assert_eq!(pin, "quarantine");
+    }
+
+    #[test]
+    fn oversized_inherited_metadata_rolls_back_without_capping_requests() {
+        let (_scratch, paths, store) = open("restore-large-inherited-metadata");
+        let snapshot = store.backup_snapshot(BackupDestination::DataRoot).unwrap();
+        let source_bytes = std::fs::read(snapshot.state_db()).unwrap();
+        let stage = paths.data_root().with_extension("large-metadata.sqlite");
+        std::fs::write(&stage, &source_bytes).unwrap();
+        let mut conn = Connection::open(stage).unwrap();
+        let old: String = conn
+            .query_row(
+                "SELECT value FROM store_meta WHERE key='incarnation'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let original_limit = conn
+            .limit(rusqlite::limits::Limit::SQLITE_LIMIT_LENGTH)
+            .unwrap();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let input = Quarantine {
+            new_incarnation: "00000000-0000-4000-8000-000000000001",
+            generation: snapshot.generation_id(),
+            source_location: "/external/source",
+            current_root: paths.data_root(),
+            preserved_root: Path::new("/preserved"),
+            manifest_sha256: "digest",
+            object_count: 0,
+            total_bytes: 0,
+            completed_at: 1,
+            cancel: &cancel,
+        };
+        for inherited_state in ["complete", "in_progress"] {
+            for (id, location) in [
+                ("x".repeat(2 * 1024 * 1024), "/external/backup".into()),
+                ("other".into(), format!("/{}", "x".repeat(2 * 1024 * 1024))),
+            ] {
+                conn.execute("INSERT INTO backup_generations (generation_id,started_at,state,location) VALUES (?1,0,?3,?2)", params![id, location, inherited_state]).unwrap();
+                assert!(
+                    matches!(apply(&mut conn, &input), Err(StoreError::Corrupt { .. })),
+                    "oversized inherited metadata must not qualify"
+                );
+                let unchanged: String = conn
+                    .query_row(
+                        "SELECT value FROM store_meta WHERE key='incarnation'",
+                        [],
+                        |r| r.get(0),
+                    )
+                    .unwrap();
+                assert_eq!(unchanged, old);
+                let state: String = conn
+                    .query_row(
+                        "SELECT state FROM backup_generations WHERE generation_id=?1",
+                        [snapshot.generation_id()],
+                        |r| r.get(0),
+                    )
+                    .unwrap();
+                assert_eq!(state, "in_progress");
+                assert_eq!(
+                    conn.limit(rusqlite::limits::Limit::SQLITE_LIMIT_LENGTH)
+                        .unwrap(),
+                    original_limit
+                );
+                conn.execute(
+                    "DELETE FROM backup_generations WHERE generation_id=?1",
+                    [id],
+                )
+                .unwrap();
+            }
+        }
+        let request = "r".repeat(3 * 1024 * 1024);
+        conn.execute(
+            "INSERT INTO import_jobs VALUES ('large','running',?1,'checkpoint',1,0,0)",
+            [&request],
+        )
+        .unwrap();
+        apply(&mut conn, &input).unwrap();
+        let saved: (String, String) = conn
+            .query_row(
+                "SELECT state,request_json FROM import_jobs WHERE job_id='large'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(saved, ("failed".into(), request));
+        assert_eq!(
+            conn.limit(rusqlite::limits::Limit::SQLITE_LIMIT_LENGTH)
+                .unwrap(),
+            original_limit
+        );
+        assert_eq!(std::fs::read(snapshot.state_db()).unwrap(), source_bytes);
+    }
+
+    #[test]
+    fn index_metadata_allocation_is_bounded() {
+        // SQLite's allocation high-water mark is global to a process.
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--ignored",
+                "--exact",
+                "backups::quarantine::tests::metadata_allocation_child",
+                "--nocapture",
+            ])
+            .env("SB_QUARANTINE_ALLOC_CHILD", "1")
+            .output()
+            .unwrap();
+        assert!(
+            child.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&child.stdout),
+            String::from_utf8_lossy(&child.stderr)
+        );
+    }
+
+    #[test]
+    #[ignore = "spawned by index_metadata_allocation_is_bounded"]
+    fn metadata_allocation_child() {
+        assert_eq!(
+            std::env::var("SB_QUARANTINE_ALLOC_CHILD").as_deref(),
+            Ok("1")
+        );
+        let (_scratch, paths, store) = open("restore-metadata-allocation");
+        let snapshot = store.backup_snapshot(BackupDestination::DataRoot).unwrap();
+        let generation = snapshot.generation_id().to_owned();
+        let stage = paths.data_root().with_extension("allocation.sqlite");
+        std::fs::copy(snapshot.state_db(), &stage).unwrap();
+        drop(snapshot);
+        store.close().unwrap();
+        let mut conn = Connection::open(stage).unwrap();
+        conn.execute("INSERT INTO backup_generations (generation_id,started_at,state,location) VALUES (?1,0,'complete','/external/backup')", ["x".repeat(16 * 1024 * 1024)]).unwrap();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let input = Quarantine {
+            new_incarnation: "00000000-0000-4000-8000-000000000001",
+            generation: &generation,
+            source_location: "/external/source",
+            current_root: paths.data_root(),
+            preserved_root: Path::new("/preserved"),
+            manifest_sha256: "digest",
+            object_count: 0,
+            total_bytes: 0,
+            completed_at: 1,
+            cancel: &cancel,
+        };
+        // The oversized fixture must have registered, proving telemetry is on.
+        let largest = crate::image_vfs::largest_allocation(true).unwrap();
+        assert!(largest >= 16 * 1024 * 1024);
+        let result = apply(&mut conn, &input);
+        let largest = crate::image_vfs::largest_allocation(false).unwrap();
+        assert!(matches!(result, Err(StoreError::Corrupt { .. })));
+        assert!(
+            largest < MAX_LOCATION_ROW_BYTES.into(),
+            "oversized SQLite allocation: {largest}"
+        );
     }
 
     #[test]

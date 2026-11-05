@@ -982,6 +982,10 @@ local drafts. No network yet.
     in fixed-memory runs on the two validation tapes and use exact decoded
     file-name comparison to replace quadratic file-table uniqueness scans.
     Message relationships remain deferred to b2.
+  - **M1.7d1b1b2b1c Tag-ID sorting prerequisite — M:** reuse the bounded
+    offset sorter for exact local tag-ID uniqueness validation while retaining
+    manifest-order tag-name checks. This removes only quadratic local tag-ID
+    validation; it does not validate or admit global message relationships.
   - **M1.7d1b1b2b2 Manifest message relationships — L:** validate counts,
     ordered-ID digest, unique occurrence IDs, file references and EML
     agreement using bounded scans of the verified snapshot. Prove writer
@@ -1133,6 +1137,12 @@ local drafts. No network yet.
     authority and component-aware location rewriting. It cannot qualify or
     publish a staging directory. The caller must supply the verified source
     location and manifest metadata; this prerequisite does not validate them.
+  - **M1.8e3a1 Bounded inherited metadata reads (M):** bound SQLite values
+    while reading inherited generation identifiers and locations, before
+    allocating owned strings. Reject oversized metadata atomically without
+    leaving connection limits on unrelated archive rows. Preserve large
+    requests and checkpoints. Schema inspection bounds remain part of e3b's
+    qualification prerequisite; this step qualifies no staging directory.
   - **M1.8e3b Quarantined restore staging (L):** verify and copy the chosen
     generation into `<data root>.restoring-<inc>` with publication flushes,
     then run the staging quarantine transaction: new incarnation, all
