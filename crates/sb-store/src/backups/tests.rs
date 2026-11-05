@@ -2137,7 +2137,6 @@ fn startup_retries_proved_verifier_scratch() {
     assert_eq!(count, 0);
     assert!(!paths.recovery().join(format!("verifier-{id}")).exists());
 }
-<<<<<<< HEAD
 
 #[test]
 fn verifier_image_reads_only_authenticated_copied_database() {
