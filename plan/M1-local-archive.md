@@ -1179,27 +1179,54 @@ local drafts. No network yet.
       retain unqualified evidence; the live store and source are unchanged;
       the held lease blocks a backup retention pass and releases on Drop.
       No source SQL, schema inspection or quarantine transaction here.
-    - **b2 Bounded quarantine qualification (L):** inspect the staged
-      schema with bounded reads, then run the reviewed quarantine
-      transaction on a fresh staging connection, checkpoint and close,
-      consuming the held operation lease rather than reserving again.
-      Acceptance: an observed RED regression for huge inherited location
-      and column-name/type values before the bounded fix, with no blind
-      global 1 MiB limit that rejects valid large archive request or blob
-      data; every after-restore row state; internal and external backup
-      location semantics; no original-path substitution; bounded inherited
-      location/generation and schema reads; every inherited cleanup
-      authority row; cancellation and injected I/O, SQL and flush failures;
-      retry and wrong generation or incarnation; crash cuts leave the live
-      store untouched and no unquarantined stage eligible for publication.
-      `completed_at` is caller-asserted bookkeeping absent from the
-      manifest: document it as provenance, never as a verified timestamp.
-      Historical schema 22 lacks the verifier 23/24 tables: fail closed
-      with an explicit incompatibility until a separate compatible
-      migration artifact exists; never execute arbitrary inherited programs.
+    - **b2a Bounded schema inspection prerequisite (M):** add a narrow
+      read-only method on `PreparedRestoreStage` that opens the private
+      staged copy on its own connection and certifies, with bounded reads,
+      that the staged database is exactly the current schema version and
+      exposes the canonical STRICT tables, columns, declared types and
+      rowid shapes the reviewed quarantine relies on. Set SQLite value,
+      SQL-length, column and work limits before the first schema
+      materialization; stream bounded rows with borrowed fields rather
+      than an unbounded collection; reject views or virtual tables
+      substituted for required tables; never execute inherited programs.
+      The method certifies compatibility only, never quarantine or
+      eligibility for a swap, keeps the operation lease, and adds no
+      public constructor, Clone or generic raw-path restore authority.
+      Later b2b must recheck the live root, coordinator, incarnation and
+      metadata and consume the same lease. Acceptance: an observed RED
+      regression for huge inherited column-name/type values before the
+      bounded fix, using the actual pinned Rust-linked SQLite and
+      isolated child allocation diagnostics, with no blind global 1 MiB
+      limit that rejects valid large archive request or blob data; a
+      native consumer test proving the bounded inspection stays under its
+      allocation bound; schema 22 returns an explicit incompatibility
+      pending b3; views or virtual tables substituted for required tables
+      are rejected; cancellation and the work budget are enforced; valid
+      staged copies with >1 MiB unrelated archive data pass without
+      fetching that payload; the huge inherited location bound already
+      proven by the separate quarantine metadata fix is preserved and
+      referenced, not duplicated.
+    - **b2b Bounded quarantine qualification (L):** on the same
+      `PreparedRestoreStage`, recheck the live root, coordinator,
+      incarnation and metadata, consume the held operation lease, then
+      run the reviewed quarantine transaction on a fresh staging
+      connection, checkpoint and close, and only then expose a qualified
+      stage. Acceptance: every after-restore row state; internal and
+      external backup location semantics; no original-path substitution;
+      bounded inherited location/generation and schema reads; every
+      inherited cleanup authority row; wrong-root, coordinator and
+      incarnation fences; cancellation and injected I/O, SQL and flush
+      failures; retry and wrong generation or incarnation; crash cuts
+      leave the live store untouched and no unquarantined stage eligible
+      for publication. `completed_at` is caller-asserted bookkeeping absent
+      from the manifest: document it as provenance, never as a verified
+      timestamp. Historical schema 22 lacks the verifier 23/24 tables:
+      fail closed with an explicit incompatibility until a separate
+      compatible migration artifact exists; never execute arbitrary
+      inherited programs.
     - **b3 Historical schema compatibility (only if required):** a
       separate explicit migration artifact may add the verifier tables to a
-      staged schema-22 copy; until it lands, b2 stays fail-closed.
+      staged schema-22 copy; until it lands, b2a and b2b stay fail-closed.
   - **M1.8f Durable swap and startup recovery (L):** the restore-pending
     marker (new incarnation, generation id and path), both renames with
     their flushes, the startup handling of all three marker states, the
