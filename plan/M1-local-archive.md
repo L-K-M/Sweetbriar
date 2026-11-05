@@ -1240,17 +1240,50 @@ local drafts. No network yet.
         typed errors and query cancellation, Rust codec and lifecycle
         tests, regenerated Swift bindings and `cargo xtask check-ffi`.
         Depends on M1.9b1.
-      - **M1.9b2b Draft commands over FFI (L):** create, save, discard
-        and attachment publication, FFI-owned input records and enums,
-        the attachment-object handle, complete mappings, typed errors
-        and command cancellation, Rust codec, error and lifecycle tests,
-        regenerated Swift bindings and `cargo xtask check-ffi`. Depends
-        on M1.9b2a.
+      - **M1.9b2a1 Shared draft attachment reservations (S):** share
+        the original publication reservation across copies of the service
+        attachment handle, so a retry can reach its durable receipt after
+        an accepted save or a dropped caller. A fresh command must not spend
+        the reservation twice. Cover replay and reservation ownership through
+        native APIs without moving validation outside the receipt transaction.
+        Depends on M1.9b2a.
+      - **M1.9b2b Draft commands over FFI:** re-sized 2026-11-04: the
+        complete create/save/discard/publication artifact measures 1,922
+        gross changed lines including generated bindings and tests, over
+        the 1,450-line limit. Split by command below, preserving every
+        deliverable and acceptance check; publication moves ahead of
+        save because save spends its handle:
+        - **M1.9b2b1 Create and discard commands over FFI (M):**
+          FFI-owned `DraftSource` enum and `DraftCreated` record,
+          `create_draft` and `discard_draft` exports under a shell-made
+          idempotency key, explicit field mappings, typed errors and
+          the terminal-draft `Conflict`, receipt replay, a command
+          cancelled before it begins leaving its key free, a begun
+          command committing despite a cancel or a dropped caller,
+          Rust codec and lifecycle tests, regenerated Swift bindings
+          and `cargo xtask check-ffi`. Depends on M1.9b2a1.
+        - **M1.9b2b2 Attachment publication over FFI (M):** the
+          FFI-owned `DraftAttachmentPublish` input and the opaque
+          `DraftAttachmentObject` handle with its object-identity
+          getters, the bytes durably published under the data root, a
+          cancelled token publishing nothing, Rust codec and lifecycle
+          tests, regenerated Swift bindings and `cargo xtask
+          check-ffi`. Depends on M1.9b2b1.
+        - **M1.9b2b3 Save command over FFI (L):** FFI-owned
+          `DraftContent`, `DraftAttachment` and `DraftSaved` records
+          and enums, the `save_draft` export spending published
+          reservations, receipt lookup before replacement validation,
+          the same-base `Conflict`, publication-before-reference,
+          one-shot reservation ownership on fresh commands, retained
+          references matching the base, typed errors, command
+          cancellation/drop, Rust codec, error and lifecycle tests,
+          regenerated Swift bindings and `cargo xtask check-ffi`.
+          Depends on M1.9b2b2.
       - **M1.9b2c Draft bridge (L):** the SweetbriarBridge owned draft
         model with load, save over the base revision, discard and the
         typed `Conflict` outcome M1.9c shows as keep-both, with Swift
         Testing coverage of the codec, conflict and lifecycle. Depends on
-        M1.9b2b.
+        M1.9b2b3.
       Re-size again if any artifact exceeds the limit.
   - **M1.9c Compose window (L):** the macOS compose window — token
     fields, subject, a plain or Markdown editor on the M0.11 probe's
