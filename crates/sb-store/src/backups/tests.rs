@@ -243,8 +243,7 @@ fn the_snapshot_is_a_consistent_copy_while_writes_continue() {
     assert_eq!(snapshot.location(), expected.as_path());
     assert_eq!(snapshot.state_db(), expected.join("state.sqlite"));
     assert_eq!(snapshot.referenced_objects(), &[sha][..]);
-    // Only the generation's own file lives in its directory so far:
-    // no WAL leftovers stay behind.
+    // Only the snapshot is present: no WAL leftovers stay behind.
     let mut entries: Vec<_> = std::fs::read_dir(&expected)
         .unwrap()
         .map(|entry| entry.unwrap().file_name())
@@ -450,8 +449,8 @@ fn faulty_backups(store: &Store, paths: &StorePaths, fs: Arc<dyn Fs>) -> Backups
     )
 }
 
-/// One fault point's aftermath: `Unavailable`, the row still
-/// `in_progress`, and a retry `Conflict` on the leftover.
+/// One fault point's aftermath: `Unavailable`, the row stays
+/// `in_progress`, and the next run recovers the leftover.
 fn assert_failed_snapshot<T: std::fmt::Debug>(store: &Store, result: Result<T, StoreError>) {
     let err = result.unwrap_err();
     assert!(
@@ -468,12 +467,10 @@ fn assert_failed_snapshot<T: std::fmt::Debug>(store: &Store, result: Result<T, S
         rows.collect::<Result<Vec<_>, _>>().map_err(bug)
     });
     assert_eq!(rows, ["in_progress"], "the row stays for recovery");
-    let retry = store
-        .backup_snapshot(BackupDestination::DataRoot)
-        .unwrap_err();
-    assert!(
-        matches!(retry, StoreError::Conflict { .. }),
-        "the leftover gates the next run: {retry:?}"
+    let retry = store.backup_snapshot(BackupDestination::DataRoot).unwrap();
+    assert_eq!(
+        generation_row(store, retry.generation_id()).unwrap().0,
+        "in_progress"
     );
 }
 
@@ -549,6 +546,7 @@ fn a_failed_snapshot_write_is_an_error_not_a_partial() {
     std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o444)).unwrap();
     gate.wait();
     let result = background.join().unwrap();
+    store.backups.set_pauses(Pauses::default());
     std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
     assert_failed_snapshot(&store, result);
 }
@@ -599,9 +597,7 @@ fn snapshot_cut_child() {
 /// At every cut point: the store reopens, every generation is
 /// `in_progress` — `complete` and `failed` are unreachable — a
 /// `backup_in_progress` pin only ever belongs to a live generation,
-/// and the next run either refuses the leftover or backs up cleanly
-/// (acceptance: "crash cuts ... leave the row `in_progress` for
-/// M1.8d's recovery to mark `failed`").
+/// and the next run recovers the leftover and backs up cleanly.
 #[test]
 fn crash_cuts_leave_the_generation_in_progress_never_complete() {
     let scratch = ScratchDir::new("backup-cuts");
@@ -641,11 +637,9 @@ fn crash_cuts_leave_the_generation_in_progress_never_complete() {
                 .map_err(bug)
             });
             assert_eq!(stray, 0, "a backup pin only belongs to a live generation");
-            match store.backup_snapshot(BackupDestination::DataRoot) {
-                Ok(_) => assert_eq!(open_rows, 0, "two generations ran at once"),
-                Err(StoreError::Conflict { .. }) => assert_eq!(open_rows, 1),
-                Err(e) => panic!("a cut leftover must not break the next backup: {e:?}"),
-            }
+            store
+                .backup_snapshot(BackupDestination::DataRoot)
+                .expect("recover the cut generation");
         },
     );
     assert!(cuts > 0, "the sweep must have killed children");
@@ -849,6 +843,7 @@ fn completion_receipt_survives_a_power_cut() {
     source_file.sync_all().unwrap();
     sim.sync_dir(source.parent().unwrap()).unwrap();
     let backups = faulty_backups(&store, &paths, sim.clone());
+    *backups.active.lock().unwrap() = Some(Arc::downgrade(&snapshot.active));
     let receipt = backups.complete(snapshot).unwrap();
     sim.power_cut();
     let mut data = Vec::new();
@@ -1248,4 +1243,897 @@ fn a_new_pin_after_validation_prevents_completion() {
         store.collect_garbage(GC_GRACE_PERIOD).unwrap().blocked,
         Some(GcGate::BackupInProgress)
     );
+}
+
+#[test]
+fn next_backup_recovers_an_abandoned_generation() {
+    let (_scratch, _paths, store) = open("backup-recover-abandoned");
+    let snapshot = store.backup_snapshot(BackupDestination::DataRoot).unwrap();
+    let id = snapshot.generation_id().to_owned();
+    let location = snapshot.location().to_owned();
+    drop(snapshot);
+    let next = store.backup_snapshot(BackupDestination::DataRoot).unwrap();
+    assert_ne!(next.generation_id(), id);
+    assert_eq!(generation_row(&store, &id).unwrap().0, "failed");
+    assert!(!location.exists());
+}
+
+#[test]
+fn another_store_rejects_an_active_snapshot() {
+    let (_scratch_a, _paths_a, store_a) = open("backup-token-store-a");
+    let (_scratch_b, _paths_b, store_b) = open("backup-token-store-b");
+    let a = store_a
+        .backup_snapshot(BackupDestination::DataRoot)
+        .unwrap();
+    let b = store_b
+        .backup_snapshot(BackupDestination::DataRoot)
+        .unwrap();
+
+    assert!(matches!(
+        store_b.complete_backup(a.clone()),
+        Err(StoreError::Conflict { .. })
+    ));
+    assert_eq!(
+        generation_row(&store_a, a.generation_id()).unwrap().0,
+        "in_progress"
+    );
+    assert_eq!(
+        generation_row(&store_b, b.generation_id()).unwrap().0,
+        "in_progress"
+    );
+    assert!(!a.location().join("manifest.json").exists());
+    assert!(!b.location().join("manifest.json").exists());
+    store_a.complete_backup(a).unwrap();
+    store_b.complete_backup(b).unwrap();
+}
+
+#[test]
+fn cloned_snapshot_alone_prevents_recovery_until_dropped() {
+    let (_scratch, _paths, store) = open("backup-clone-ownership");
+    let snapshot = store.backup_snapshot(BackupDestination::DataRoot).unwrap();
+    let id = snapshot.generation_id().to_owned();
+    let location = snapshot.location().to_owned();
+    let clone = snapshot.clone();
+    drop(snapshot);
+
+    assert!(matches!(
+        store.backup_snapshot(BackupDestination::DataRoot),
+        Err(StoreError::Conflict { .. })
+    ));
+    assert_eq!(generation_row(&store, &id).unwrap().0, "in_progress");
+    assert!(location.join("state.sqlite").is_file());
+    drop(clone);
+    let next = store.backup_snapshot(BackupDestination::DataRoot).unwrap();
+    assert_ne!(next.generation_id(), id);
+    assert_eq!(generation_row(&store, &id).unwrap().0, "failed");
+    assert!(!location.exists());
+}
+
+fn seed_generation(
+    store: &Store,
+    root: &Path,
+    n: u64,
+    time: i64,
+    state: &str,
+) -> (String, PathBuf) {
+    let id = format!("00000000-0000-4000-8000-{n:012x}");
+    let path = root.join(&id);
+    sql(
+        store,
+        format!(
+            "INSERT INTO backup_generations (generation_id, started_at, state, location) VALUES ('{id}', {time}, '{state}', '{}')",
+            path.display()
+        ),
+    );
+    (id, path)
+}
+
+#[test]
+fn recovery_retries_failed_cleanup_without_touching_inherited_failed_rows() {
+    for (op, kind) in [
+        (FsOp::RemoveDirAll, std::io::ErrorKind::PermissionDenied),
+        (FsOp::RemoveDirAll, std::io::ErrorKind::Other),
+        (FsOp::SyncDir, std::io::ErrorKind::StorageFull),
+        (FsOp::SyncDir, std::io::ErrorKind::PermissionDenied),
+    ] {
+        let (_scratch, paths, store) = open("backup-recovery-fault");
+        let external = paths.data_root().parent().unwrap().join("external");
+        std::fs::create_dir(&external).unwrap();
+        let (id, path) = seed_generation(&store, &external, 1, 0, "in_progress");
+        std::fs::create_dir(&path).unwrap();
+        own_fixture(&store, &path);
+        let (_, inherited) = seed_generation(&store, &external, 2, 0, "failed");
+        std::fs::create_dir(&inherited).unwrap();
+        sql(
+            &store,
+            format!(
+                "INSERT INTO object_pins VALUES ('one','backup_in_progress','{id}',0); INSERT INTO object_pins VALUES ('two','reservation','{id}',0)"
+            ),
+        );
+        let fault = Arc::new(FaultFs::new(real_fs(), op, 1, FaultKind::Kind(kind)));
+        let backups = faulty_backups(&store, &paths, fault);
+        let err = backups.recover().unwrap_err();
+        assert_eq!(err.io_kind(), Some(kind));
+        assert_eq!(generation_row(&store, &id).unwrap().0, "failed");
+        assert_eq!(backup_pins(&store), ["one"]);
+        assert!(inherited.exists());
+        drop(backups);
+        let backups = faulty_backups(&store, &paths, real_fs());
+        backups.recover().unwrap();
+        assert!(!path.exists());
+        assert!(inherited.exists());
+        assert!(backup_pins(&store).is_empty());
+        let other: i64 = reading(&store, |tx| {
+            tx.query_row(
+                "SELECT count(*) FROM object_pins WHERE pin_kind='reservation'",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(bug)
+        });
+        assert_eq!(other, 1);
+        assert_eq!(generation_row(&store, &id).unwrap().0, "failed");
+    }
+}
+
+#[test]
+fn recovery_handles_missing_directories_and_rejects_bad_locations() {
+    let (_scratch, paths, store) = open("backup-recovery-locations");
+    let (id, _) = seed_generation(&store, paths.backups(), 3, 0, "in_progress");
+    store.backups.recover().unwrap();
+    assert_eq!(generation_row(&store, &id).unwrap().0, "failed");
+    let (bad, path) = seed_generation(&store, paths.backups(), 4, 1, "in_progress");
+    std::fs::create_dir(&path).unwrap();
+    sql(
+        &store,
+        format!(
+            "UPDATE backup_generations SET location='{}' WHERE generation_id='{bad}'",
+            paths.backups().display()
+        ),
+    );
+    assert!(matches!(
+        store.backups.recover(),
+        Err(StoreError::Corrupt { .. })
+    ));
+    assert!(path.exists());
+    assert_eq!(generation_row(&store, &bad).unwrap().0, "in_progress");
+}
+
+fn own_fixture(store: &Store, path: &Path) {
+    let id = path.file_name().unwrap().to_str().unwrap();
+    let token = "9f17c0aa-0000-4000-8000-000000000001";
+    sql(
+        store,
+        format!("INSERT INTO backup_ownership VALUES ('{id}','{token}')"),
+    );
+    std::fs::write(super::owner_path(path), token).unwrap();
+    std::fs::write(path.join("payload"), b"generation").unwrap();
+}
+
+#[test]
+fn completion_receipt_survives_retention_until_the_next_pass() {
+    for offset in [1, 0] {
+        let (_scratch, paths, store) = open("backup-receipt-retention");
+        let snapshot = store.backup_snapshot(BackupDestination::DataRoot).unwrap();
+        let id = "ffffffff-ffff-4fff-bfff-ffffffffffff";
+        assert!(snapshot.generation_id() < id);
+        let path = paths.backups().join(id);
+        sql(
+            &store,
+            format!(
+                "INSERT INTO backup_generations (generation_id, started_at, state, location) VALUES ('{id}', {}, 'complete', '{}')",
+                FIXED_NOW_MS + offset,
+                path.display()
+            ),
+        );
+        std::fs::create_dir(&path).unwrap();
+        own_fixture(&store, &path);
+
+        let receipt = store.complete_backup(snapshot).unwrap();
+        let row = generation_row(&store, receipt.generation_id()).unwrap();
+        assert_eq!(row.0, "complete");
+        assert_eq!(Path::new(&row.1), receipt.location());
+        assert!(receipt.location().join("manifest.json").is_file());
+
+        store.backups.retain().unwrap();
+        assert!(generation_row(&store, receipt.generation_id()).is_none());
+        assert!(!receipt.location().exists());
+        assert!(path.exists());
+    }
+}
+
+#[test]
+fn retention_keeps_bucket_union_and_deletes_oldest_first() {
+    let (_scratch, paths, store) = open("backup-retention");
+    const HOUR: i64 = 3_600_000;
+    for n in 0..30 {
+        let (_, path) = seed_generation(&store, paths.backups(), n, n as i64 * HOUR, "complete");
+        std::fs::create_dir(&path).unwrap();
+        own_fixture(&store, &path);
+    }
+    let fault = Arc::new(FaultFs::new(
+        real_fs(),
+        FsOp::RemoveDirAll,
+        2,
+        FaultKind::Eio,
+    ));
+    let backups = faulty_backups(&store, &paths, fault);
+    assert!(backups.retain().is_err());
+    assert!(generation_row(&store, "00000000-0000-4000-8000-000000000000").is_none());
+    assert!(generation_row(&store, "00000000-0000-4000-8000-000000000001").is_some());
+    store.backups.retain().unwrap();
+    for n in 0..30 {
+        let id = format!("00000000-0000-4000-8000-{n:012x}");
+        assert_eq!(generation_row(&store, &id).is_some(), n >= 6, "{n}");
+    }
+}
+
+#[test]
+#[ignore = "spawned by recovery_crash_boundaries"]
+fn recovery_cut_child() {
+    let root = env::var("SB_BACKUP_RECOVERY_ROOT").unwrap();
+    let paths = StorePaths::new(Path::new(&root)).unwrap();
+    let store = crate::open(&paths, &test_seams(real_fs())).unwrap();
+    let (id, path) = seed_generation(&store, paths.backups(), 9, 0, "in_progress");
+    std::fs::create_dir(&path).unwrap();
+    own_fixture(&store, &path);
+    sql(
+        &store,
+        format!(
+            "INSERT INTO object_pins SELECT printf('%064d', x), 'backup_in_progress', '{id}', 0 FROM (WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c WHERE x<201) SELECT x FROM c)"
+        ),
+    );
+    store.backups.recover().unwrap();
+}
+
+#[test]
+fn recovery_crash_boundaries() {
+    use std::os::unix::process::ExitStatusExt;
+    let scratch = ScratchDir::new("backup-recovery-cuts");
+    for point in [
+        "before-mark",
+        "inside-mark",
+        "marked",
+        "unlinked",
+        "directory-synced",
+        "marker-unlinked",
+        "marker-synced",
+        "removed",
+        "unpin",
+        "before-finish",
+        "finished",
+    ] {
+        let root = scratch.path().join(point);
+        std::fs::create_dir(&root).unwrap();
+        let status = std::process::Command::new(env::current_exe().unwrap())
+            .args(["--exact", "backups::tests::recovery_cut_child", "--ignored"])
+            .env("SB_BACKUP_RECOVERY_CUT", point)
+            .env("SB_BACKUP_RECOVERY_ROOT", &root)
+            .status()
+            .unwrap();
+        assert_eq!(status.signal(), Some(9), "{point}");
+        let paths = StorePaths::new(root).unwrap();
+        let store = crate::open(&paths, &test_seams(real_fs())).unwrap();
+        store.backups.recover().unwrap();
+        let id = "00000000-0000-4000-8000-000000000009";
+        assert_eq!(generation_row(&store, id).unwrap().0, "failed");
+        assert!(!paths.backups().join(id).exists());
+        assert!(backup_pins(&store).is_empty());
+        assert_ne!(
+            store.collect_garbage(GC_GRACE_PERIOD).unwrap().blocked,
+            Some(GcGate::BackupInProgress)
+        );
+    }
+}
+
+#[test]
+fn retention_preserves_sparse_daily_and_weekly_buckets() {
+    let (_scratch, paths, store) = open("backup-retention-sparse");
+    const HOUR: i64 = 3_600_000;
+    const DAY: i64 = 24 * HOUR;
+    // Eight old weekly buckets, then thirty hourly buckets crossing midnight.
+    for n in 0..8 {
+        let (_, path) = seed_generation(
+            &store,
+            paths.backups(),
+            n,
+            (45 + n as i64 * 7) * DAY,
+            "complete",
+        );
+        std::fs::create_dir(&path).unwrap();
+        own_fixture(&store, &path);
+    }
+    for n in 0..30 {
+        let (_, path) = seed_generation(
+            &store,
+            paths.backups(),
+            100 + n,
+            100 * DAY + n as i64 * HOUR,
+            "complete",
+        );
+        std::fs::create_dir(&path).unwrap();
+        own_fixture(&store, &path);
+    }
+    store.backups.retain().unwrap();
+    for n in 0..8 {
+        let id = format!("00000000-0000-4000-8000-{n:012x}");
+        assert_eq!(generation_row(&store, &id).is_some(), n >= 3, "old {n}");
+    }
+    for n in 0..30 {
+        let id = format!("00000000-0000-4000-8000-{:012x}", 100 + n);
+        assert_eq!(generation_row(&store, &id).is_some(), n >= 6, "hour {n}");
+    }
+}
+
+#[test]
+fn retention_keeps_weekly_buckets_across_monday_boundary() {
+    let (_scratch, paths, store) = open("backup-retention-week-boundary");
+    const DAY: i64 = 86_400_000;
+    const HOUR: i64 = 3_600_000;
+    // Day 74 is Monday. These straddle its UTC boundary and are too
+    // old for the hourly and daily selections.
+    for (id, time) in [(1, 74 * DAY - 1), (2, 74 * DAY)] {
+        let (_, path) = seed_generation(&store, paths.backups(), id, time, "complete");
+        std::fs::create_dir(&path).unwrap();
+        own_fixture(&store, &path);
+    }
+    for n in 0..6 {
+        let (_, path) = seed_generation(
+            &store,
+            paths.backups(),
+            10 + n,
+            (90 + n as i64) * DAY,
+            "complete",
+        );
+        std::fs::create_dir(&path).unwrap();
+        own_fixture(&store, &path);
+    }
+    for n in 0..30 {
+        let (_, path) = seed_generation(
+            &store,
+            paths.backups(),
+            100 + n,
+            100 * DAY + n as i64 * HOUR,
+            "complete",
+        );
+        std::fs::create_dir(&path).unwrap();
+        own_fixture(&store, &path);
+    }
+    store.backups.retain().unwrap();
+    for id in [1, 2] {
+        let id = format!("00000000-0000-4000-8000-{id:012x}");
+        assert!(generation_row(&store, &id).is_some());
+    }
+}
+
+#[test]
+fn concurrent_snapshot_cannot_recover_a_live_generation() {
+    let (_scratch, _paths, store) = open("backup-recovery-concurrent");
+    let store = Arc::new(store);
+    let gate = Arc::new(Barrier::new(2));
+    store.backups.set_pauses(Pauses {
+        after_snapshot_file: Some(gate.clone()),
+        ..Pauses::default()
+    });
+    let worker = {
+        let store = Arc::clone(&store);
+        std::thread::spawn(move || store.backup_snapshot(BackupDestination::DataRoot))
+    };
+    gate.wait();
+    let result = store.backup_snapshot(BackupDestination::DataRoot);
+    assert!(matches!(result, Err(StoreError::Conflict { .. })));
+    gate.wait();
+    let snapshot = worker.join().unwrap().unwrap();
+    assert_eq!(
+        generation_row(&store, snapshot.generation_id()).unwrap().0,
+        "in_progress"
+    );
+    assert!(snapshot.state_db().is_file());
+}
+
+#[test]
+fn abandoned_backup_recovery_releases_real_gc_gate() {
+    let (_scratch, _paths, store) = open("backup-recovery-gc");
+    let (id, sha) = object(&store, PAYLOAD);
+    pin(&store, &sha, "gc_grace", 0);
+    let snapshot = store.backup_snapshot(BackupDestination::DataRoot).unwrap();
+    assert_eq!(
+        store.collect_garbage(GC_GRACE_PERIOD).unwrap().blocked,
+        Some(GcGate::BackupInProgress)
+    );
+    drop(snapshot);
+    store.backups.recover().unwrap();
+    let report = store.collect_garbage(GC_GRACE_PERIOD).unwrap();
+    assert_eq!(report.blocked, None);
+    assert_eq!(report.removed, 1);
+    assert!(!store.objects().exists(&id).unwrap());
+}
+
+#[test]
+fn retention_breaks_equal_timestamp_ties_by_generation_id() {
+    let (_scratch, paths, store) = open("backup-retention-ties");
+    for id in [1, 2] {
+        let (_, path) = seed_generation(&store, paths.backups(), id, 0, "complete");
+        std::fs::create_dir(&path).unwrap();
+        own_fixture(&store, &path);
+    }
+    for n in 0..30 {
+        let (_, path) = seed_generation(
+            &store,
+            paths.backups(),
+            100 + n,
+            864_000_000 + n as i64 * 3_600_000,
+            "complete",
+        );
+        std::fs::create_dir(&path).unwrap();
+        own_fixture(&store, &path);
+    }
+    store.backups.retain().unwrap();
+    assert!(generation_row(&store, "00000000-0000-4000-8000-000000000001").is_none());
+    assert!(generation_row(&store, "00000000-0000-4000-8000-000000000002").is_some());
+}
+
+#[test]
+fn recovery_refuses_a_marker_on_a_complete_generation() {
+    let (_scratch, paths, store) = open("backup-recovery-corrupt-marker");
+    let (id, path) = seed_generation(&store, paths.backups(), 5, 0, "complete");
+    std::fs::create_dir(&path).unwrap();
+    sql(
+        &store,
+        format!("INSERT INTO backup_cleanup_pending VALUES ('{id}')"),
+    );
+    assert!(matches!(
+        store.backups.recover(),
+        Err(StoreError::Corrupt { .. })
+    ));
+    assert!(path.exists());
+    assert_eq!(generation_row(&store, &id).unwrap().0, "complete");
+}
+
+#[test]
+fn unrelated_external_uuid_directory_is_never_removed() {
+    let (_scratch, paths, store) = open("backup-unrelated-directory");
+    let external = paths.data_root().parent().unwrap().join("external-owner");
+    std::fs::create_dir(&external).unwrap();
+    let (id, path) = seed_generation(&store, &external, 17, 0, "in_progress");
+    std::fs::create_dir(&path).unwrap();
+    std::fs::write(path.join("important"), b"unrelated").unwrap();
+    sql(
+        &store,
+        format!("INSERT INTO object_pins VALUES ('one','backup_in_progress','{id}',0)"),
+    );
+    assert!(matches!(
+        store.backup_snapshot(BackupDestination::DataRoot),
+        Err(StoreError::Corrupt { .. })
+    ));
+    assert_eq!(std::fs::read(path.join("important")).unwrap(), b"unrelated");
+    assert_eq!(backup_pins(&store), ["one"]);
+    assert!(generation_row(&store, &id).is_some());
+}
+
+#[test]
+#[ignore = "spawned by marker_creation_cuts_recover"]
+fn marker_creation_cut_child() {
+    let root = env::var("SB_BACKUP_RECOVERY_ROOT").unwrap();
+    let paths = StorePaths::new(Path::new(&root)).unwrap();
+    let store = crate::open(&paths, &test_seams(real_fs())).unwrap();
+    store.backup_snapshot(BackupDestination::DataRoot).unwrap();
+}
+
+#[test]
+fn marker_creation_cuts_recover() {
+    use std::os::unix::process::ExitStatusExt;
+    let scratch = ScratchDir::new("backup-owner-cuts");
+    for point in [
+        "owner-before-create",
+        "owner-dir",
+        "owner-create",
+        "owner-write",
+        "owner-sync",
+        "owner-dir-sync",
+    ] {
+        let root = scratch.path().join(point);
+        std::fs::create_dir(&root).unwrap();
+        let status = std::process::Command::new(env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "backups::tests::marker_creation_cut_child",
+                "--ignored",
+            ])
+            .env("SB_BACKUP_RECOVERY_CUT", point)
+            .env("SB_BACKUP_RECOVERY_ROOT", &root)
+            .status()
+            .unwrap();
+        assert_eq!(status.signal(), Some(9), "{point}");
+        let paths = StorePaths::new(root).unwrap();
+        let store = crate::open(&paths, &test_seams(real_fs())).unwrap();
+        store.backups.recover().unwrap();
+        let (state, location): (String, String) = reading(&store, |tx| {
+            tx.query_row("SELECT state, location FROM backup_generations", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .map_err(bug)
+        });
+        assert_eq!(state, "failed");
+        assert!(!Path::new(&location).exists());
+    }
+}
+
+#[test]
+fn ownership_marker_failures_report_io_and_recover() {
+    for op in [FsOp::Create, FsOp::Write, FsOp::SyncFile, FsOp::SyncDir] {
+        let (_scratch, paths, store) = open("backup-owner-failure");
+        let fault = Arc::new(FaultFs::new(
+            real_fs(),
+            op,
+            1,
+            FaultKind::Kind(std::io::ErrorKind::PermissionDenied),
+        ));
+        let backups = faulty_backups(&store, &paths, fault);
+        let err = backups.snapshot(BackupDestination::DataRoot).unwrap_err();
+        assert_eq!(err.io_kind(), Some(std::io::ErrorKind::PermissionDenied));
+        let state: String = reading(&store, |tx| {
+            tx.query_row("SELECT state FROM backup_generations", [], |r| r.get(0))
+                .map_err(bug)
+        });
+        assert_eq!(state, "in_progress");
+        drop(backups);
+        store.backup_snapshot(BackupDestination::DataRoot).unwrap();
+    }
+}
+
+#[test]
+fn missing_or_wrong_owner_marker_preserves_nonempty_directory_and_pins() {
+    for wrong in [false, true] {
+        let (_scratch, paths, store) = open("backup-owner-mismatch");
+        let (id, path) = seed_generation(&store, paths.backups(), 21, 0, "in_progress");
+        std::fs::create_dir(&path).unwrap();
+        own_fixture(&store, &path);
+        if wrong {
+            std::fs::write(super::owner_path(&path), b"wrong").unwrap();
+        } else {
+            std::fs::remove_file(super::owner_path(&path)).unwrap();
+        }
+        sql(
+            &store,
+            format!("INSERT INTO object_pins VALUES ('one','backup_in_progress','{id}',0)"),
+        );
+        assert!(matches!(
+            store.backup_snapshot(BackupDestination::DataRoot),
+            Err(StoreError::Corrupt { .. })
+        ));
+        assert!(path.join("payload").exists());
+        assert_eq!(backup_pins(&store), ["one"]);
+        assert_eq!(generation_row(&store, &id).unwrap().0, "in_progress");
+    }
+}
+
+#[test]
+fn partial_owner_marker_is_recoverable_only_without_other_content() {
+    let (_scratch, paths, store) = open("backup-partial-owner");
+    let (id, path) = seed_generation(&store, paths.backups(), 22, 0, "in_progress");
+    std::fs::create_dir(&path).unwrap();
+    own_fixture(&store, &path);
+    std::fs::write(super::owner_path(&path), b"9f17c0aa").unwrap();
+    assert!(matches!(
+        store.backups.recover(),
+        Err(StoreError::Corrupt { .. })
+    ));
+    std::fs::remove_dir_all(&path).unwrap();
+    store.backups.recover().unwrap();
+    assert!(!path.exists());
+    assert_eq!(generation_row(&store, &id).unwrap().0, "failed");
+}
+
+#[test]
+fn changed_parent_symlink_cannot_redirect_recovery() {
+    use std::os::unix::fs::symlink;
+    let (_scratch, paths, store) = open("backup-owner-parent");
+    let root = paths.data_root().parent().unwrap();
+    let external = root.join("external");
+    let replacement = root.join("replacement");
+    std::fs::create_dir(&external).unwrap();
+    std::fs::create_dir(&replacement).unwrap();
+    let (id, path) = seed_generation(&store, &external, 23, 0, "in_progress");
+    std::fs::create_dir(&path).unwrap();
+    own_fixture(&store, &path);
+    let moved = root.join("moved");
+    std::fs::rename(&external, &moved).unwrap();
+    std::fs::create_dir(replacement.join(&id)).unwrap();
+    std::fs::write(replacement.join(&id).join("important"), b"keep").unwrap();
+    symlink(&replacement, &external).unwrap();
+    assert!(matches!(
+        store.backups.recover(),
+        Err(StoreError::Corrupt { .. })
+    ));
+    assert!(replacement.join(&id).join("important").exists());
+    assert!(moved.join(&id).join("payload").exists());
+}
+
+#[test]
+fn retention_sync_failure_retries_missing_generation_before_row_removal() {
+    let (_scratch, paths, store) = open("backup-retention-sync");
+    for n in 0..26 {
+        let (_, path) =
+            seed_generation(&store, paths.backups(), n, n as i64 * 3_600_000, "complete");
+        std::fs::create_dir(&path).unwrap();
+        own_fixture(&store, &path);
+    }
+    let fault = Arc::new(FaultFs::new(real_fs(), FsOp::SyncDir, 1, FaultKind::Eio));
+    let backups = faulty_backups(&store, &paths, fault);
+    assert!(matches!(
+        backups.retain(),
+        Err(StoreError::Unavailable { .. })
+    ));
+    let oldest = "00000000-0000-4000-8000-000000000000";
+    assert!(!paths.backups().join(oldest).exists());
+    assert!(generation_row(&store, oldest).is_some());
+    store.backups.retain().unwrap();
+    assert!(generation_row(&store, oldest).is_none());
+}
+
+#[test]
+fn retention_refuses_legacy_nonempty_directory_without_proof() {
+    let (_scratch, paths, store) = open("backup-legacy-retention");
+    for n in 0..26 {
+        let (_, path) =
+            seed_generation(&store, paths.backups(), n, n as i64 * 3_600_000, "complete");
+        std::fs::create_dir(&path).unwrap();
+        if n == 0 {
+            std::fs::write(path.join("legacy"), b"keep").unwrap();
+        } else {
+            own_fixture(&store, &path);
+        }
+    }
+    assert!(matches!(
+        store.backups.retain(),
+        Err(StoreError::Corrupt { .. })
+    ));
+    let oldest = "00000000-0000-4000-8000-000000000000";
+    assert_eq!(
+        std::fs::read(paths.backups().join(oldest).join("legacy")).unwrap(),
+        b"keep"
+    );
+    assert!(generation_row(&store, oldest).is_some());
+}
+
+#[test]
+#[ignore = "spawned by retention_crash_retry"]
+fn retention_cut_child() {
+    let root = env::var("SB_BACKUP_RECOVERY_ROOT").unwrap();
+    let paths = StorePaths::new(Path::new(&root)).unwrap();
+    let store = crate::open(&paths, &test_seams(real_fs())).unwrap();
+    for n in 0..26 {
+        let (_, path) =
+            seed_generation(&store, paths.backups(), n, n as i64 * 3_600_000, "complete");
+        std::fs::create_dir(&path).unwrap();
+        own_fixture(&store, &path);
+    }
+    store.backups.retain().unwrap();
+}
+
+#[test]
+fn retention_crash_retry() {
+    use std::os::unix::process::ExitStatusExt;
+    let scratch = ScratchDir::new("backup-retention-cuts");
+    for point in [
+        "unlinked",
+        "directory-synced",
+        "marker-unlinked",
+        "marker-synced",
+        "retention-removed",
+        "retention-finished",
+    ] {
+        let root = scratch.path().join(point);
+        std::fs::create_dir(&root).unwrap();
+        let status = std::process::Command::new(env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "backups::tests::retention_cut_child",
+                "--ignored",
+            ])
+            .env("SB_BACKUP_RECOVERY_CUT", point)
+            .env("SB_BACKUP_RECOVERY_ROOT", &root)
+            .status()
+            .unwrap();
+        assert_eq!(status.signal(), Some(9), "{point}");
+        let paths = StorePaths::new(root).unwrap();
+        let store = crate::open(&paths, &test_seams(real_fs())).unwrap();
+        store.backups.retain().unwrap();
+        let oldest = "00000000-0000-4000-8000-000000000000";
+        assert!(!paths.backups().join(oldest).exists());
+        assert!(generation_row(&store, oldest).is_none());
+    }
+}
+
+#[test]
+fn external_owned_generation_can_be_retained_and_parent_survives() {
+    let (_scratch, paths, store) = open("backup-external-retention");
+    let external = paths.data_root().parent().unwrap().join("external");
+    std::fs::create_dir(&external).unwrap();
+    for n in 0..26 {
+        let (_, path) = seed_generation(&store, &external, n, n as i64 * 3_600_000, "complete");
+        std::fs::create_dir(&path).unwrap();
+        own_fixture(&store, &path);
+    }
+    store.backups.retain().unwrap();
+    assert!(external.is_dir());
+    assert!(
+        !external
+            .join("00000000-0000-4000-8000-000000000000")
+            .exists()
+    );
+    assert!(
+        external
+            .join("00000000-0000-4000-8000-000000000019")
+            .join("payload")
+            .exists()
+    );
+}
+
+#[test]
+fn migration_22_keeps_legacy_generations_without_forging_ownership() {
+    let (_scratch, paths) = scratch_paths("backup-owner-upgrade");
+    let seams = test_seams(real_fs());
+    let store = crate::store::open_with(
+        &paths,
+        &seams,
+        crate::store::WRITER_PRAGMAS,
+        crate::store::READER_PRAGMAS,
+        &crate::store::PINNED_SQLITE,
+        &crate::schema::MIGRATIONS[..21],
+    )
+    .unwrap();
+    let (id, path) = seed_generation(&store, paths.backups(), 24, 0, "in_progress");
+    std::fs::create_dir(&path).unwrap();
+    std::fs::write(path.join("legacy"), b"keep").unwrap();
+    store.close().unwrap();
+    let store = crate::open(&paths, &seams).unwrap();
+    assert!(matches!(
+        store.backups.recover(),
+        Err(StoreError::Corrupt { .. })
+    ));
+    assert!(path.join("legacy").exists());
+    assert_eq!(generation_row(&store, &id).unwrap().0, "in_progress");
+}
+
+#[test]
+fn torn_marker_write_is_retryable() {
+    let (_scratch, paths, store) = open("backup-torn-owner");
+    let fault = Arc::new(FaultFs::new(
+        real_fs(),
+        FsOp::Write,
+        1,
+        FaultKind::ShortWrite,
+    ));
+    let backups = faulty_backups(&store, &paths, fault);
+    assert!(matches!(
+        backups.snapshot(BackupDestination::DataRoot),
+        Err(StoreError::Unavailable { .. })
+    ));
+    let (id, location): (String, String) = reading(&store, |tx| {
+        tx.query_row(
+            "SELECT generation_id, location FROM backup_generations",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .map_err(bug)
+    });
+    let marker = super::owner_path(Path::new(&location));
+    assert_eq!(std::fs::read(&marker).unwrap().len(), 18);
+    drop(backups);
+    store.backups.recover().unwrap();
+    assert!(!Path::new(&location).exists());
+    assert_eq!(generation_row(&store, &id).unwrap().0, "failed");
+}
+
+#[test]
+fn interrupted_recursive_removal_can_be_retried() {
+    let (_scratch, paths, store) = open("backup-partial-remove");
+    let snapshot = store.backup_snapshot(BackupDestination::DataRoot).unwrap();
+    let id = snapshot.generation_id().to_owned();
+    let path = snapshot.location().to_owned();
+    std::fs::write(path.join("payload"), b"keep until retry").unwrap();
+    sql(
+        &store,
+        format!("INSERT INTO object_pins VALUES ('one','backup_in_progress','{id}',0)"),
+    );
+    drop(snapshot);
+    let fault = Arc::new(FaultFs::new(
+        real_fs(),
+        FsOp::RemoveDirAll,
+        1,
+        FaultKind::PartialRemove,
+    ));
+    let backups = faulty_backups(&store, &paths, fault);
+    assert!(matches!(
+        backups.recover(),
+        Err(StoreError::Unavailable { .. })
+    ));
+    assert!(path.join("payload").exists());
+    assert!(super::owner_path(&path).is_file());
+    assert_eq!(backup_pins(&store), ["one"]);
+    assert_eq!(generation_row(&store, &id).unwrap().0, "failed");
+    drop(backups);
+    store.backups.recover().unwrap();
+    assert!(!path.exists());
+    assert!(backup_pins(&store).is_empty());
+}
+
+#[test]
+fn retention_retries_a_partial_recursive_removal() {
+    let (_scratch, paths, store) = open("backup-retention-partial");
+    for n in 0..26 {
+        let (_, path) =
+            seed_generation(&store, paths.backups(), n, n as i64 * 3_600_000, "complete");
+        std::fs::create_dir(&path).unwrap();
+        own_fixture(&store, &path);
+        std::fs::write(path.join("state.sqlite"), b"snapshot").unwrap();
+    }
+    let fault = Arc::new(FaultFs::new(
+        real_fs(),
+        FsOp::RemoveDirAll,
+        1,
+        FaultKind::PartialRemove,
+    ));
+    let backups = faulty_backups(&store, &paths, fault);
+    assert!(matches!(
+        backups.retain(),
+        Err(StoreError::Unavailable { .. })
+    ));
+    let id = "00000000-0000-4000-8000-000000000000";
+    let path = paths.backups().join(id);
+    assert!(path.join("payload").exists());
+    assert!(!path.join("state.sqlite").exists());
+    assert!(super::owner_path(&path).is_file());
+    assert!(generation_row(&store, id).is_some());
+    store.backups.retain().unwrap();
+    assert!(!path.exists());
+    assert!(!super::owner_path(&path).exists());
+    assert!(generation_row(&store, id).is_none());
+}
+
+#[test]
+fn preexisting_directory_is_not_granted_ownership() {
+    let (_scratch, paths, store) = open("backup-existing-directory");
+    let path = paths.backups().join("00000000-0000-4000-8000-000000000001");
+    std::fs::create_dir(&path).unwrap();
+    std::fs::write(path.join("important"), b"keep").unwrap();
+    let error = store
+        .backups
+        .write_snapshot(&path, "9f17c0aa-0000-4000-8000-000000000001")
+        .err()
+        .unwrap();
+    assert!(matches!(error, StoreError::Conflict { .. }));
+    assert!(!super::owner_path(&path).exists());
+    assert!(path.join("important").exists());
+}
+
+#[test]
+fn startup_retries_proved_verifier_scratch() {
+    let (_temp, paths, store) = open("scratch-startup");
+    let id = "00000000-0000-4000-8000-000000000041";
+    let token = "00000000-0000-4000-8000-000000000042";
+    let root = real_fs().open_confined_dir(paths.recovery()).unwrap();
+    let scratch = super::scratch::prepare(root.as_ref(), id, token).unwrap();
+    let mut file = scratch.create(Path::new("state.sqlite")).unwrap();
+    std::io::Write::write_all(&mut file, b"owned").unwrap();
+    file.sync_all().unwrap();
+    drop(file);
+    scratch.sync().unwrap();
+    sql(
+        &store,
+        format!(
+            "INSERT INTO verifier_scratch SELECT '{id}', '{token}', value FROM store_meta WHERE key='incarnation'"
+        ),
+    );
+    drop(scratch);
+    store.close().unwrap();
+    let reopened = crate::open(&paths, &test_seams(real_fs())).unwrap();
+    let count: i64 = reading(&reopened, |tx| {
+        tx.query_row("SELECT count(*) FROM verifier_scratch", [], |r| r.get(0))
+            .map_err(bug)
+    });
+    assert_eq!(count, 0);
+    assert!(!paths.recovery().join(format!("verifier-{id}")).exists());
 }

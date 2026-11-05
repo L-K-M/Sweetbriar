@@ -19,9 +19,13 @@ import SweetbriarBridge
 @MainActor
 final class MessageListViewController: NSViewController {
     private let bridge: CoreBridge
+    private let listSource: any ListWindowSource
+    private let clockOverride: (any FrameClock)?
     private let searchModel: SearchFieldModel
     private let search: SearchFieldController
     private let formatter = MessageRowFormatter()
+    private let appearance: AppearanceModel
+    private let sidebar: SidebarModel
     private var clock: DisplayLinkClock?
     private(set) var model: ListWindowModel?
     private(set) var list: AppKitPrototypeList?
@@ -79,8 +83,13 @@ final class MessageListViewController: NSViewController {
     var searchFieldForBenchmark: NSSearchField { search.fieldForBenchmark }
     var searchModelForBenchmark: SearchFieldModel { searchModel }
 
-    init(bridge: CoreBridge, sidebar: SidebarModel) {
+    init(bridge: CoreBridge, sidebar: SidebarModel, appearance: AppearanceModel,
+         listSource: (any ListWindowSource)? = nil, clock: (any FrameClock)? = nil) {
         self.bridge = bridge
+        self.listSource = listSource ?? bridge
+        self.clockOverride = clock
+        self.appearance = appearance
+        self.sidebar = sidebar
         let model = SearchFieldModel(parser: bridge, label: { reference in
             switch reference {
             case .account(let id): return sidebar.sections.first { $0.id == id }?.title
@@ -194,9 +203,15 @@ final class MessageListViewController: NSViewController {
         // spec/08 closes the replaced handle; M1.6r2e overlaps that with this open.
         detach()
 
-        let clock = self.clock ?? DisplayLinkClock(view: view)
-        self.clock = clock
-        let model = ListWindowModel(source: bridge, spec: spec, clock: clock)
+        let clock: any FrameClock
+        if let clockOverride {
+            clock = clockOverride
+        } else {
+            let displayClock = self.clock ?? DisplayLinkClock(view: view)
+            self.clock = displayClock
+            clock = displayClock
+        }
+        let model = ListWindowModel(source: listSource, spec: spec, clock: clock)
         // Only this choice's model stamps its stages: the replaced one
         // may still answer or deliver until `detach` silences it.
         model.onOpeningPageForBenchmark = { [weak self, weak model] in
@@ -213,7 +228,13 @@ final class MessageListViewController: NSViewController {
         let list = AppKitPrototypeList(
             model: model,
             formatter: formatter,
-            accountMarker: .hidden,
+            accountMarker: spec.showsAccountMarker ? .shown : .hidden,
+            appearance: appearance,
+            accountLabel: { [weak sidebar] id in
+                guard let sidebar else { return id }
+                return Self.accountLabel(id, sections: sidebar.sections)
+            },
+            observeAccountLabels: { [weak sidebar] in _ = sidebar?.sections },
             // spec/08: reopen at Top once the selected message is no
             // longer a hit.
             selectionLoss: spec.isSearch ? .reopenAtTop : .keepPosition
@@ -281,6 +302,13 @@ final class MessageListViewController: NSViewController {
             await old.close()
             self?.closing[id] = nil
         }
+    }
+
+    /// A short unique prefix survives truncation when two monograms collide.
+    static func accountLabel(_ id: String, sections: [SidebarModel.Section]) -> String {
+        let accounts = sections.filter { $0.id != SidebarModel.unifiedSectionID }.sorted { $0.id < $1.id }
+        guard let index = accounts.firstIndex(where: { $0.id == id }) else { return id }
+        return "\(index + 1) · \(SidebarViewController.accountLabel(accounts[index], among: sections))"
     }
 
     /// Show the model's read failures and Search status as they

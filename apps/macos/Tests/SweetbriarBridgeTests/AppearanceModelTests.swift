@@ -311,8 +311,7 @@ func aResetReReadsAndResubscribesAtTheNewGeneration() async throws {
     await follow.value
 }
 
-/// A failed re-read ends the follow with `lastError`, keeping the
-/// snapshot it showed.
+/// A failed re-read keeps its snapshot and waits for a retry or cancellation.
 @MainActor
 @Test(.timeLimit(.minutes(1)))
 func aFailedReReadKeepsTheSnapshot() async throws {
@@ -325,8 +324,10 @@ func aFailedReReadKeepsTheSnapshot() async throws {
 
     await fake.fail(CoreFailure.corrupt(detail: "damaged"))
     await fake.subscriptions[0].emit(.invalidated(generation: 1))
-    await follow.value
+    try #require(await eventually { await MainActor.run { model.lastError != nil } })
     #expect(model.appearance == archive(generation: 0))
+    follow.cancel()
+    await follow.value
     #expect(model.lastError != nil)
 }
 

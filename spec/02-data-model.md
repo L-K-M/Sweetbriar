@@ -1208,6 +1208,21 @@ CREATE TABLE backup_generations (
   total_bytes    INTEGER
 ) STRICT;
 
+CREATE TABLE backup_cleanup_pending (            -- interrupted cleanup to resume (03)
+  generation_id TEXT PRIMARY KEY REFERENCES backup_generations(generation_id)
+) STRICT;
+
+CREATE TABLE backup_ownership (                  -- directory ownership evidence (03)
+  generation_id TEXT PRIMARY KEY REFERENCES backup_generations(generation_id),
+  token         TEXT NOT NULL
+) STRICT;
+
+CREATE TABLE verifier_scratch (                   -- verifier image cleanup authority (03)
+  id          TEXT PRIMARY KEY,
+  token       TEXT NOT NULL,
+  incarnation TEXT NOT NULL
+) STRICT;
+
 CREATE TABLE object_pins (                        -- objects GC must keep regardless of references
   object_sha256 TEXT NOT NULL,
   pin_kind      TEXT NOT NULL CHECK (pin_kind IN ('backup_in_progress','gc_grace','reservation','send_attempt','quarantine')),
@@ -1218,6 +1233,13 @@ CREATE TABLE object_pins (                        -- objects GC must keep regard
 CREATE INDEX object_pins_by_owner ON object_pins (pin_kind, pin_ref, object_sha256)
   WHERE pin_kind = 'backup_in_progress';
 ```
+
+Recovery records a pending cleanup when it marks an interrupted generation
+failed, and clears it after removing the directory and pins. A failed row
+alone does not authorize cleanup. Ownership tokens match the separately
+flushed marker beside each generation directory; retention removes the
+ownership row with an expired complete generation. Legacy rows can lack
+ownership evidence.
 
 ## Derived tables
 
