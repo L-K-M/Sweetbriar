@@ -1062,7 +1062,8 @@ public protocol CoreProtocol: AnyObject, Sendable {
      */
     func saveDraft(token: CancelToken, idempotencyKey: String, draftId: String, baseRevisionId: String?, content: DraftContent) async throws  -> DraftSaved
     
-    /**     * Cancel an import or durably pause Search index work; committed work stays.
+    /**
+     * Cancel an import or durably pause Search index work; committed work stays.
      * Completed imports are Conflict; completed rebuilds are no-ops.
      * An index user hold survives reopen until resume_search_rebuild.
      */
@@ -1584,7 +1585,8 @@ open func saveDraft(token: CancelToken, idempotencyKey: String, draftId: String,
         )
 }
     
-    /**     * Cancel an import or durably pause Search index work; committed work stays.
+    /**
+     * Cancel an import or durably pause Search index work; committed work stays.
      * Completed imports are Conflict; completed rebuilds are no-ops.
      * An index user hold survives reopen until resume_search_rebuild.
      */
@@ -9664,7 +9666,8 @@ private let initializationResult: InitializationResult = {
     }
     if (uniffi_sb_ffi_checksum_method_core_save_draft() != 24235) {
         return InitializationResult.apiChecksumMismatch
-    }    if (uniffi_sb_ffi_checksum_method_core_cancel_job() != 65113) {
+    }
+    if (uniffi_sb_ffi_checksum_method_core_cancel_job() != 65113) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_core_confirm_import() != 51860) {
