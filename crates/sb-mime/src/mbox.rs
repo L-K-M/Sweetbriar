@@ -104,9 +104,15 @@ pub fn unquote_range<R: Read + Seek>(
     end: u64,
     variant: MboxVariant,
 ) -> io::Result<MboxReader<R>> {
+    let Some(bytes) = end.checked_sub(start) else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "mbox record range ends before it starts",
+        ));
+    };
     source.seek(SeekFrom::Start(start))?;
     Ok(MboxReader {
-        source: BufReader::new(source.take(end - start)),
+        source: BufReader::new(source.take(bytes)),
         variant,
         line_start: true,
         quotes: 0,
