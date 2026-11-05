@@ -345,7 +345,8 @@ impl Resources {
     /// manifest proof; the source's private snapshot is verified and
     /// reopened. `position` is `START` or the source's one finished
     /// message. `progress` cancels the first proof production before the
-    /// session exists. mboxrd is refused until M1.7d2c2b; a plain source
+    /// session exists. EML and mboxrd sources are dispatched on the
+    /// bundle's declared format; a plain source
     /// never falls back to the plain path.
     pub fn open_bundle_acquisition(
         &self,
