@@ -2108,3 +2108,32 @@ fn preexisting_directory_is_not_granted_ownership() {
     assert!(!super::owner_path(&path).exists());
     assert!(path.join("important").exists());
 }
+
+#[test]
+fn startup_retries_proved_verifier_scratch() {
+    let (_temp, paths, store) = open("scratch-startup");
+    let id = "00000000-0000-4000-8000-000000000041";
+    let token = "00000000-0000-4000-8000-000000000042";
+    let root = real_fs().open_confined_dir(paths.recovery()).unwrap();
+    let scratch = super::scratch::prepare(root.as_ref(), id, token).unwrap();
+    let mut file = scratch.create(Path::new("state.sqlite")).unwrap();
+    std::io::Write::write_all(&mut file, b"owned").unwrap();
+    file.sync_all().unwrap();
+    drop(file);
+    scratch.sync().unwrap();
+    sql(
+        &store,
+        format!(
+            "INSERT INTO verifier_scratch SELECT '{id}', '{token}', value FROM store_meta WHERE key='incarnation'"
+        ),
+    );
+    drop(scratch);
+    store.close().unwrap();
+    let reopened = crate::open(&paths, &test_seams(real_fs())).unwrap();
+    let count: i64 = reading(&reopened, |tx| {
+        tx.query_row("SELECT count(*) FROM verifier_scratch", [], |r| r.get(0))
+            .map_err(bug)
+    });
+    assert_eq!(count, 0);
+    assert!(!paths.recovery().join(format!("verifier-{id}")).exists());
+}

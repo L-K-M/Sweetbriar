@@ -1217,6 +1217,12 @@ CREATE TABLE backup_ownership (                  -- directory ownership evidence
   token         TEXT NOT NULL
 ) STRICT;
 
+CREATE TABLE verifier_scratch (                   -- verifier image cleanup authority (03)
+  id          TEXT PRIMARY KEY,
+  token       TEXT NOT NULL,
+  incarnation TEXT NOT NULL
+) STRICT;
+
 CREATE TABLE object_pins (                        -- objects GC must keep regardless of references
   object_sha256 TEXT NOT NULL,
   pin_kind      TEXT NOT NULL CHECK (pin_kind IN ('backup_in_progress','gc_grace','reservation','send_attempt','quarantine')),

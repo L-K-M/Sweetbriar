@@ -534,7 +534,6 @@ impl Walker<'_> {
                     let scratch = self.store.import_validation_scratch().map_err(|e| {
                         io::Error::new(e.io_kind().unwrap_or(io::ErrorKind::Other), e)
                     })?;
-                    json_syntax::validate_file_names(&mut reader, &table, &scratch)?;
                     json_syntax::validate_messages(&mut reader, &table, &scratch)?;
                     scratch
                         .finish()
