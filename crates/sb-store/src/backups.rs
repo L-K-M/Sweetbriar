@@ -4,6 +4,36 @@
 //! pinned objects, flushes the generation and writes the manifest last,
 //! then releases pins and marks the generation complete.
 
+mod attachments;
+mod external;
+mod image;
+mod image_inspect;
+#[allow(dead_code)] // Used by the snapshot walker and manifest parser.
+mod json;
+#[allow(dead_code)] // Used by the next verifier slice.
+mod ledger;
+// The next restore slice attaches this parser to the verification ledger.
+#[allow(dead_code)]
+mod manifest;
+#[allow(dead_code)] // The staging integration consumes this prerequisite.
+mod quarantine;
+#[allow(dead_code)] // The recorded-generation verifier consumes this seam in M1.8e1d.
+mod reconciliation;
+mod recorded;
+mod references;
+pub use external::VerifiedExternalBackup;
+pub use image::BackupImageInspection;
+mod scratch;
+
+pub(crate) fn recover_scratch(
+    conn: &rusqlite::Connection,
+    fs: &dyn sb_types::fs::Fs,
+    root: &std::path::Path,
+    has_ledger: bool,
+) -> Result<(), crate::StoreError> {
+    scratch::recover(conn, fs, root, has_ledger)
+}
+
 use std::collections::BTreeSet;
 use std::ffi::c_int;
 use std::io;
@@ -152,9 +182,25 @@ pub(crate) struct Backups {
     backups_dir: PathBuf,
     objects: Arc<crate::objects::FileObjectStore>,
     active: Mutex<Option<Weak<()>>>,
+    image_lock: Mutex<()>,
     /// The copy-timing barriers a test may arm (spec/03).
     #[cfg(test)]
     pauses: Mutex<Pauses>,
+}
+
+impl Backups {
+    fn reserve_operation(&self) -> Result<Arc<()>, StoreError> {
+        let token = Arc::new(());
+        let mut active = self
+            .active
+            .try_lock()
+            .map_err(|_| StoreError::conflict("backup operation is already running"))?;
+        if active.as_ref().and_then(Weak::upgrade).is_some() {
+            return Err(StoreError::conflict("backup operation is already running"));
+        }
+        *active = Some(Arc::downgrade(&token));
+        Ok(token)
+    }
 }
 
 impl Backups {
@@ -179,6 +225,7 @@ impl Backups {
             backups_dir,
             objects,
             active: Mutex::new(None),
+            image_lock: Mutex::new(()),
             #[cfg(test)]
             pauses: Mutex::new(Pauses::default()),
         }
