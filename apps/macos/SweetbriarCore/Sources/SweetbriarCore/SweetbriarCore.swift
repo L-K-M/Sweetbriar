@@ -596,6 +596,24 @@ fileprivate struct FfiConverterString: FfiConverter {
     }
 }
 
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterData: FfiConverterRustBuffer {
+    typealias SwiftType = Data
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Data {
+        let len: Int32 = try readInt(&buf)
+        return Data(try readBytes(&buf, count: Int(len)))
+    }
+
+    public static func write(_ value: Data, into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        writeBytes(&buf, value)
+    }
+}
+
 
 
 
@@ -1012,6 +1030,19 @@ public protocol CoreProtocol: AnyObject, Sendable {
      * List local drafts, newest first.
      */
     func drafts(token: CancelToken) async throws  -> [DraftSummary]
+    
+    /**
+     * Publish one attachment's bytes for a later save (spec/02:
+     * attachments are published to the object store before the
+     * revision that references them). The bytes cross as
+     * [`DraftAttachmentPublish`]'s `bytes`; the returned handle
+     * reports the published object's identity and length and holds
+     * the reservation a save spends. Like every command it honours
+     * the token only until it holds the core: once begun it runs to
+     * completion and publishes durably, so a cancel or a dropped
+     * caller cannot strand a half-written object.
+     */
+    func publishDraftAttachment(token: CancelToken, input: DraftAttachmentPublish) async throws  -> DraftAttachmentObject
     
     /**
      * Cancel an import or durably pause Search index work; committed work stays.
@@ -1473,6 +1504,33 @@ open func drafts(token: CancelToken)async throws  -> [DraftSummary]  {
             completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
             freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
             liftFunc: FfiConverterSequenceTypeDraftSummary.lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * Publish one attachment's bytes for a later save (spec/02:
+     * attachments are published to the object store before the
+     * revision that references them). The bytes cross as
+     * [`DraftAttachmentPublish`]'s `bytes`; the returned handle
+     * reports the published object's identity and length and holds
+     * the reservation a save spends. Like every command it honours
+     * the token only until it holds the core: once begun it runs to
+     * completion and publishes durably, so a cancel or a dropped
+     * caller cannot strand a half-written object.
+     */
+open func publishDraftAttachment(token: CancelToken, input: DraftAttachmentPublish)async throws  -> DraftAttachmentObject  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_publish_draft_attachment(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterTypeDraftAttachmentPublish_lower(input)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_u64,
+            completeFunc: ffi_sb_ffi_rust_future_complete_u64,
+            freeFunc: ffi_sb_ffi_rust_future_free_u64,
+            liftFunc: FfiConverterTypeDraftAttachmentObject_lift,
             errorHandler: FfiConverterTypeCoreError_lift
         )
 }
@@ -2003,6 +2061,160 @@ public func FfiConverterTypeCore_lift(_ handle: UInt64) throws -> Core {
 #endif
 public func FfiConverterTypeCore_lower(_ value: Core) -> UInt64 {
     return FfiConverterTypeCore.lower(value)
+}
+
+
+
+
+
+
+/**
+ * A published draft attachment (spec/02): the opaque handle a later
+ * save spends. It wraps the service's publication and keeps its
+ * one-shot reservation, so a caller cannot rebuild one from an
+ * identity — only [`Core::publish_draft_attachment`] makes one, and
+ * the getters report only what was published.
+ */
+public protocol DraftAttachmentObjectProtocol: AnyObject, Sendable {
+    
+    /**
+     * The published object's length in bytes.
+     */
+    func byteLength()  -> UInt64
+    
+    /**
+     * The published object's SHA-256: 64 lowercase hex digits.
+     */
+    func objectSha256()  -> String
+    
+}
+/**
+ * A published draft attachment (spec/02): the opaque handle a later
+ * save spends. It wraps the service's publication and keeps its
+ * one-shot reservation, so a caller cannot rebuild one from an
+ * identity — only [`Core::publish_draft_attachment`] makes one, and
+ * the getters report only what was published.
+ */
+open class DraftAttachmentObject: DraftAttachmentObjectProtocol, @unchecked Sendable {
+    fileprivate let handle: UInt64
+
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoHandle {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noHandle: NoHandle) {
+        self.handle = 0
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_sb_ffi_fn_clone_draftattachmentobject(self.handle, $0) }
+    }
+    // No primary constructor declared for this class.
+
+    deinit {
+        if handle == 0 {
+            // Mock objects have handle=0 don't try to free them
+            return
+        }
+
+        try! rustCall { uniffi_sb_ffi_fn_free_draftattachmentobject(handle, $0) }
+    }
+
+    
+
+    
+    /**
+     * The published object's length in bytes.
+     */
+open func byteLength() -> UInt64  {
+    return try!  FfiConverterUInt64.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_sb_ffi_fn_method_draftattachmentobject_byte_length(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+    
+    /**
+     * The published object's SHA-256: 64 lowercase hex digits.
+     */
+open func objectSha256() -> String  {
+    return try!  FfiConverterString.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_sb_ffi_fn_method_draftattachmentobject_object_sha256(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+    
+
+    
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeDraftAttachmentObject: FfiConverter {
+    typealias FfiType = UInt64
+    typealias SwiftType = DraftAttachmentObject
+
+    public static func lift(_ handle: UInt64) throws -> DraftAttachmentObject {
+        return DraftAttachmentObject(unsafeFromHandle: handle)
+    }
+
+    public static func lower(_ value: DraftAttachmentObject) -> UInt64 {
+        return value.uniffiCloneHandle()
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> DraftAttachmentObject {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+    public static func write(_ value: DraftAttachmentObject, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeDraftAttachmentObject_lift(_ handle: UInt64) throws -> DraftAttachmentObject {
+    return try FfiConverterTypeDraftAttachmentObject.lift(handle)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeDraftAttachmentObject_lower(_ value: DraftAttachmentObject) -> UInt64 {
+    return FfiConverterTypeDraftAttachmentObject.lower(value)
 }
 
 
@@ -3040,6 +3252,69 @@ public func FfiConverterTypeDraft_lift(_ buf: RustBuffer) throws -> Draft {
 #endif
 public func FfiConverterTypeDraft_lower(_ value: Draft) -> RustBuffer {
     return FfiConverterTypeDraft.lower(value)
+}
+
+
+/**
+ * One attachment publication's input (spec/02 "Drafts", spec/08
+ * "Attachments"): the exact bytes to publish durably under the data
+ * root before the revision that references them. Only bytes cross —
+ * the caller names no object, so the published identity cannot be
+ * forged.
+ */
+public struct DraftAttachmentPublish: Equatable, Hashable {
+    /**
+     * The attachment's bytes, as the shell read them.
+     */
+    public var bytes: Data
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * The attachment's bytes, as the shell read them.
+         */bytes: Data) {
+        self.bytes = bytes
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension DraftAttachmentPublish: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeDraftAttachmentPublish: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> DraftAttachmentPublish {
+        return
+            try DraftAttachmentPublish(
+                bytes: FfiConverterData.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: DraftAttachmentPublish, into buf: inout [UInt8]) {
+        FfiConverterData.write(value.bytes, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeDraftAttachmentPublish_lift(_ buf: RustBuffer) throws -> DraftAttachmentPublish {
+    return try FfiConverterTypeDraftAttachmentPublish.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeDraftAttachmentPublish_lower(_ value: DraftAttachmentPublish) -> RustBuffer {
+    return FfiConverterTypeDraftAttachmentPublish.lower(value)
 }
 
 
@@ -9057,6 +9332,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_sb_ffi_checksum_method_core_drafts() != 18485) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_sb_ffi_checksum_method_core_publish_draft_attachment() != 18368) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_sb_ffi_checksum_method_core_cancel_job() != 65113) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -9136,6 +9414,12 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_canceltoken_is_cancelled() != 65292) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_draftattachmentobject_byte_length() != 58171) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_draftattachmentobject_object_sha256() != 50977) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_subscription_next() != 14648) {
