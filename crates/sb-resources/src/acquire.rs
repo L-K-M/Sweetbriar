@@ -14,10 +14,12 @@ use std::io::{self, BufReader, Read, Seek, SeekFrom};
 use std::ops::ControlFlow;
 
 use sb_mime::{
-    Limits, MailboxAddress, MboxError, MboxRecord, MboxScanner, MboxVariant, ParseOutcome,
+    Limits, MBOXRD_ENVELOPE, MailboxAddress, MboxError, MboxRecord, MboxScanner, MboxVariant,
+    ParseOutcome, unquote_range,
 };
 use sb_store::imports::{
-    ImportFlags, ImportMessage, ImportParseState, ImportReadState, ImportSourceKind, ImportSummary,
+    BundleFraming, ImportFlags, ImportMessage, ImportParseState, ImportReadState, ImportSourceKind,
+    ImportSummary,
 };
 use sb_store::{
     ObjectStore, PublishedObject, ReadFile, Scoped, Store, StoreError, read_error_as_store_error,
@@ -25,7 +27,8 @@ use sb_store::{
 use sha2::{Digest, Sha256};
 
 use crate::{
-    BundleFormat, ManifestProofRegistry, MboxQuoting, Resources, SourceInventory, SourceKind,
+    BundleFormat, DescriptorCursor, ManifestProofRegistry, MboxQuoting, Resources, SourceInventory,
+    SourceKind,
 };
 
 /// Where one source's acquisition continues: the next unread snapshot
@@ -106,6 +109,11 @@ pub struct SourceAcquisition {
     total: u64,
     position: SourcePosition,
     verification: Option<VerifiedMessage>,
+    /// Frozen manifest descriptors for a bundle mboxrd session.
+    descriptors: Option<DescriptorCursor>,
+    /// Source offset the next record must start at; zero for a fresh
+    /// source and the finished offset for a completed one.
+    next_offset: u64,
 }
 
 /// The frozen manifest descriptor for one bundle EML message: the exact
@@ -183,7 +191,7 @@ pub(crate) fn open(
     };
     if !consistent {
         return Err(invalid(format!(
-            "position {offset}/{messages} does not fit a source of {length} bytes and {total} messages"
+            "position {offset}/{messages} does not fit {length}/{total}"
         )));
     }
     Ok(SourceAcquisition {
@@ -200,15 +208,14 @@ pub(crate) fn open(
         total,
         position,
         verification: None,
+        descriptors: None,
+        next_offset: 0,
     })
 }
 
-/// Open one bundle EML source's manifest-verified acquisition session.
-/// The frozen registry proof supplies the descriptor; the source's own
-/// snapshot is verified and reopened. `position` is `START` or the
-/// source's one finished message. `progress` cancels the first proof
-/// production before the session exists. mboxrd is refused until
-/// M1.7d2c2b; a plain source never falls back to the plain path.
+/// Open one bundle source's manifest-verified acquisition session,
+/// dispatching on the manifest's declared format. A plain source never
+/// falls back to the plain path.
 pub(crate) fn open_bundle(
     resources: &Resources,
     registry: &ManifestProofRegistry,
@@ -219,15 +226,25 @@ pub(crate) fn open_bundle(
     let bundle = source
         .bundle()
         .ok_or_else(|| invalid("manifest-verified acquisition needs a bundle source"))?;
-    if bundle.format() != BundleFormat::Eml {
-        return Err(StoreError::Unavailable {
-            reason: format!(
-                "{} is an mboxrd bundle member; framing-verified acquisition arrives with M1.7d2c2b",
-                source.path().display()
-            ),
-            io_kind: None,
-        });
+    match bundle.format() {
+        BundleFormat::Eml => open_bundle_eml(resources, registry, source, position, progress),
+        BundleFormat::Mboxrd => open_bundle_mboxrd(resources, registry, source, position, progress),
     }
+}
+
+/// Open one bundle EML source's session. The frozen registry proof
+/// supplies the one descriptor; the source's own snapshot is verified
+/// and reopened. `position` is `START` or the source's finished message.
+fn open_bundle_eml(
+    resources: &Resources,
+    registry: &ManifestProofRegistry,
+    source: &SourceInventory,
+    position: SourcePosition,
+    progress: impl FnMut(u64) -> ControlFlow<()>,
+) -> Result<Scoped<SourceAcquisition>, StoreError> {
+    let bundle = source
+        .bundle()
+        .ok_or_else(|| invalid("manifest-verified acquisition needs a bundle source"))?;
     if source.kind() != SourceKind::Eml {
         return Err(invalid("an EML bundle source must have kind eml"));
     }
@@ -287,6 +304,113 @@ pub(crate) fn open_bundle(
             sha256: descriptor.sha256,
             original_bytes: descriptor.original_bytes,
         }),
+        descriptors: None,
+        next_offset: 0,
+    }))
+}
+
+/// Open one bundle mboxrd source's session over the frozen registry.
+/// The source's own snapshot is verified and reopened; the cursor reads
+/// its descriptors directly. A checkpoint must name the exact next
+/// record offset and stay inside the captured file.
+fn open_bundle_mboxrd(
+    resources: &Resources,
+    registry: &ManifestProofRegistry,
+    source: &SourceInventory,
+    position: SourcePosition,
+    progress: impl FnMut(u64) -> ControlFlow<()>,
+) -> Result<Scoped<SourceAcquisition>, StoreError> {
+    let bundle = source
+        .bundle()
+        .ok_or_else(|| invalid("manifest-verified acquisition needs a bundle source"))?;
+    if bundle.format() != BundleFormat::Mboxrd {
+        return Err(invalid("an mboxrd bundle source must have format mboxrd"));
+    }
+    if source.kind() != SourceKind::Mbox {
+        return Err(invalid("an mboxrd bundle source must have kind mbox"));
+    }
+    let length = source.snapshot().byte_length();
+    let total = source.message_count();
+    let SourcePosition { offset, messages } = position;
+    if messages > total || offset > length {
+        return Err(invalid(format!(
+            "position {offset}/{messages} does not fit {length}/{total}"
+        )));
+    }
+    if total == 0 {
+        if position != SourcePosition::START {
+            return Err(invalid(format!(
+                "zero-message source has only start, not {offset}/{messages}"
+            )));
+        }
+    } else if messages == total && offset != length {
+        return Err(invalid(format!(
+            "finished source must be at {length}, not {offset}"
+        )));
+    }
+    let file = resources.store.open_import_source(source.snapshot())?;
+    let mut cursor = match registry
+        .open_source_descriptors(resources, bundle, source, messages, progress)
+        .map_err(proof_error)?
+    {
+        Scoped::Done(cursor) => cursor,
+        Scoped::Stopped => return Ok(Scoped::Stopped),
+    };
+    let next_offset = if total == 0 || messages == total {
+        length
+    } else {
+        cursor.seek_to(messages).map_err(proof_error)?;
+        let descriptor = match cursor.next().map_err(proof_error)? {
+            Some(descriptor) => descriptor,
+            None => {
+                return Err(corrupt(format!(
+                    "{}: proof ended before {messages}",
+                    source.path().display()
+                )));
+            }
+        };
+        if descriptor.record_offset != offset {
+            return Err(invalid(format!(
+                "checkpoint {offset} != descriptor {messages} ({})",
+                descriptor.record_offset
+            )));
+        }
+        let end = descriptor
+            .record_offset
+            .checked_add(descriptor.encoded_bytes)
+            .ok_or_else(|| {
+                corrupt(format!(
+                    "{}: record at {} overflows",
+                    source.path().display(),
+                    descriptor.record_offset
+                ))
+            })?;
+        if end > length {
+            return Err(corrupt(format!(
+                "{}: record at {} ends {end} past {length}",
+                source.path().display(),
+                descriptor.record_offset
+            )));
+        }
+        cursor.seek_to(messages).map_err(proof_error)?;
+        offset
+    };
+    Ok(Scoped::Done(SourceAcquisition {
+        file,
+        kind: SourceKind::Mbox,
+        variant: MboxVariant::Mboxrd,
+        path: source
+            .path()
+            .to_str()
+            .expect("source paths are UTF-8")
+            .to_owned(),
+        sha256: source.snapshot().sha256_hex(),
+        length,
+        total,
+        position,
+        verification: None,
+        descriptors: Some(cursor),
+        next_offset,
     }))
 }
 
@@ -324,6 +448,21 @@ pub(crate) fn next(
     if messages == source.total {
         return Ok(None);
     }
+    let keep = limits.max_message_bytes().saturating_add(1);
+    if source.descriptors.is_some() {
+        let (object, prefix, next, framing) =
+            next_bundle_mboxrd(store, source, offset, messages, keep)?;
+        source.position = next;
+        return Ok(Some(build_message(
+            source,
+            object,
+            &prefix,
+            limits,
+            offset,
+            Some(framing),
+            next,
+        )));
+    }
     let record = match source.kind {
         SourceKind::Eml => None,
         SourceKind::Mbox => Some(record(source)?),
@@ -341,7 +480,6 @@ pub(crate) fn next(
 
     // Identity is the separator for mbox and 0 for EML: the position's
     // offset either way.
-    let keep = limits.max_message_bytes().saturating_add(1);
     let published = match record {
         None => {
             let length = source.length;
@@ -384,7 +522,24 @@ pub(crate) fn next(
         )));
     }
 
-    let extracted = sb_mime::import_flags(&prefix, limits);
+    source.position = next;
+    Ok(Some(build_message(
+        source, object, &prefix, limits, offset, None, next,
+    )))
+}
+
+/// Build one acquired message and its next position from a verified
+/// publication. The caller has already checked the source boundary.
+fn build_message(
+    source: &SourceAcquisition,
+    object: PublishedObject,
+    prefix: &[u8],
+    limits: &Limits,
+    offset: u64,
+    bundle_framing: Option<BundleFraming>,
+    next: SourcePosition,
+) -> AcquiredMessage {
+    let extracted = sb_mime::import_flags(prefix, limits);
     let flags = ImportFlags {
         read: extracted
             .seen()
@@ -405,11 +560,11 @@ pub(crate) fn next(
         source_path: source.path.clone(),
         source_sha256: source.sha256.clone(),
         offset,
+        bundle_framing,
         flags,
-        summary: summary(&sb_mime::parse(&prefix, limits)),
+        summary: summary(&sb_mime::parse(prefix, limits)),
     };
-    source.position = next;
-    Ok(Some(AcquiredMessage {
+    AcquiredMessage {
         message,
         flags: if extracted.is_complete() {
             FlagExtraction::Complete
@@ -417,7 +572,211 @@ pub(crate) fn next(
             FlagExtraction::Incomplete
         },
         next,
-    }))
+    }
+}
+
+/// Verify and publish one bundle mboxrd record from the frozen cursor.
+/// Every check runs before the publisher sees a successful EOF: the
+/// descriptor's exact range and envelope, contiguous boundaries, the
+/// declared framing LF, and the original length and SHA-256.
+fn next_bundle_mboxrd(
+    store: &Store,
+    source: &mut SourceAcquisition,
+    offset: u64,
+    messages: u64,
+    keep: usize,
+) -> Result<(PublishedObject, Vec<u8>, SourcePosition, BundleFraming), StoreError> {
+    let path = source.path.clone();
+    let (descriptor, next_descriptor, end) = {
+        let cursor = source.descriptors.as_mut().expect("bundle mboxrd cursor");
+        let descriptor = match cursor.next().map_err(proof_error)? {
+            Some(descriptor) => descriptor,
+            None => {
+                return Err(corrupt(format!(
+                    "{path}: proof ended after {messages} of {}",
+                    source.total
+                )));
+            }
+        };
+        if descriptor.record_offset != source.next_offset {
+            return Err(corrupt(format!(
+                "{path}: record at {} after boundary {}",
+                descriptor.record_offset, source.next_offset
+            )));
+        }
+        let end = descriptor
+            .record_offset
+            .checked_add(descriptor.encoded_bytes)
+            .ok_or_else(|| {
+                corrupt(format!(
+                    "{path}: record at {} overflows",
+                    descriptor.record_offset
+                ))
+            })?;
+        if end > source.length {
+            return Err(corrupt(format!(
+                "{path}: record at {} ends {end} past {}",
+                descriptor.record_offset, source.length
+            )));
+        }
+        let next_descriptor = cursor.peek().map_err(proof_error)?;
+        (descriptor, next_descriptor, end)
+    };
+    match next_descriptor {
+        Some(next) if next.record_offset != end => {
+            return Err(corrupt(format!(
+                "{path}: record at {} ends {end}, next at {}",
+                descriptor.record_offset, next.record_offset
+            )));
+        }
+        None if messages + 1 != source.total => {
+            return Err(corrupt(format!(
+                "{path}: proof ended after {} of {}",
+                messages + 1,
+                source.total
+            )));
+        }
+        None if end != source.length => {
+            return Err(corrupt(format!(
+                "{path}: last record ends {end} of {}",
+                source.length
+            )));
+        }
+        _ => {}
+    }
+    let envelope_len = MBOXRD_ENVELOPE.len() as u64;
+    if descriptor.encoded_bytes < envelope_len {
+        return Err(corrupt(format!(
+            "{path}: record at {} shorter than envelope",
+            descriptor.record_offset
+        )));
+    }
+    let body_start = descriptor.record_offset + envelope_len;
+    let body_end = end;
+    let unquote_end = if descriptor.framing_lf_added {
+        if descriptor.original_bytes == 0 || body_end - body_start < 2 {
+            return Err(corrupt(format!(
+                "{path}: record at {} pads empty/one-byte body",
+                descriptor.record_offset
+            )));
+        }
+        let padding_offset = body_end - 1;
+        let mut padding = [0u8; 1];
+        source
+            .file
+            .seek(SeekFrom::Start(padding_offset))
+            .map_err(|e| unreadable(&path, offset, e))?;
+        source
+            .file
+            .read_exact(&mut padding)
+            .map_err(|e| unreadable(&path, offset, e))?;
+        if padding[0] != b'\n' {
+            return Err(corrupt(format!(
+                "{path}: record at {} missing framing LF",
+                descriptor.record_offset
+            )));
+        }
+        let before = body_end - 2;
+        let mut previous = [0u8; 1];
+        source
+            .file
+            .seek(SeekFrom::Start(before))
+            .map_err(|e| unreadable(&path, offset, e))?;
+        source
+            .file
+            .read_exact(&mut previous)
+            .map_err(|e| unreadable(&path, offset, e))?;
+        if previous[0] == b'\n' {
+            return Err(corrupt(format!(
+                "{path}: record at {} pads an LF-terminated original",
+                descriptor.record_offset
+            )));
+        }
+        padding_offset
+    } else {
+        if descriptor.original_bytes > 0 {
+            if body_end == body_start {
+                return Err(corrupt(format!(
+                    "{path}: record at {} missing final LF",
+                    descriptor.record_offset
+                )));
+            }
+            let mut last = [0u8; 1];
+            source
+                .file
+                .seek(SeekFrom::Start(body_end - 1))
+                .map_err(|e| unreadable(&path, offset, e))?;
+            source
+                .file
+                .read_exact(&mut last)
+                .map_err(|e| unreadable(&path, offset, e))?;
+            if last[0] != b'\n' {
+                return Err(corrupt(format!(
+                    "{path}: record at {} missing final LF",
+                    descriptor.record_offset
+                )));
+            }
+        } else if body_end != body_start {
+            return Err(corrupt(format!(
+                "{path}: empty record at {} has padding",
+                descriptor.record_offset
+            )));
+        }
+        body_end
+    };
+    source
+        .file
+        .seek(SeekFrom::Start(descriptor.record_offset))
+        .map_err(|e| unreadable(&path, offset, e))?;
+    let mut envelope = [0u8; MBOXRD_ENVELOPE.len()];
+    source
+        .file
+        .read_exact(&mut envelope)
+        .map_err(|e| unreadable(&path, offset, e))?;
+    if envelope != *MBOXRD_ENVELOPE {
+        return Err(corrupt(format!(
+            "{path}: record at {} has wrong envelope",
+            descriptor.record_offset
+        )));
+    }
+    let decoded = unquote_range(
+        &mut *source.file,
+        body_start,
+        unquote_end,
+        MboxVariant::Mboxrd,
+    )
+    .map_err(|e| unreadable(&path, offset, e))?;
+    let verified = VerifiedRead::new(
+        decoded,
+        VerifiedMessage {
+            sha256: descriptor.sha256,
+            original_bytes: descriptor.original_bytes,
+        },
+    );
+    let (object, prefix) = match publish(store, verified, keep) {
+        Ok(published) => published,
+        Err(Failure::Read(e)) => {
+            if let Some(error) = read_error_as_store_error(&e) {
+                return Err(error.clone());
+            }
+            return Err(unreadable(&path, offset, e));
+        }
+        Err(Failure::Store(e)) => return Err(e),
+    };
+    let framing = BundleFraming {
+        original_sha256: descriptor.sha256,
+        original_bytes: descriptor.original_bytes,
+        record_offset: descriptor.record_offset,
+        encoded_bytes: descriptor.encoded_bytes,
+        framing_lf_added: descriptor.framing_lf_added,
+    };
+    source.next_offset = end;
+    Ok((
+        object,
+        prefix,
+        SourcePosition::new(end, messages + 1),
+        framing,
+    ))
 }
 
 /// Scan the one record that starts at the position's separator.
@@ -639,6 +998,9 @@ mod tests;
 
 #[cfg(test)]
 mod bundle_tests;
+
+#[cfg(test)]
+mod mboxrd_tests;
 
 #[cfg(test)]
 mod reservation_tests;

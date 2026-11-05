@@ -57,6 +57,7 @@ pub use seen::{ReceivedCommit, ReceivedPreparation, ReceivedRevisions, ReceivedS
 // default roots climb the same way, for the service's platform
 // defaults.
 pub use acquire::{AcquiredMessage, FlagExtraction, SourceAcquisition, SourcePosition};
+pub(crate) use import::DescriptorCursor;
 pub use import::{
     BundleFormat, ImportInventory, ImportInventoryOutcome, ImportProblem, ImportProblemKind,
     ImportProgress, ManifestDescriptor, ManifestProof, ManifestProofRegistry, SourceBundle,

@@ -18,7 +18,7 @@ const HEADER_MAGIC: &[u8; 8] = b"MPROOF1\n";
 const HEADER_SIZE: u64 = 8 + 1 + 8 + 8 + 8 + 8 + 32 + 8 + 32;
 
 /// The validated manifest's expected bytes and mbox framing for a message.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ManifestDescriptor {
     /// SHA-256 of the original message bytes.
     pub sha256: [u8; 32],
@@ -61,7 +61,7 @@ fn put_u64(writer: &mut dyn Write, value: u64) -> io::Result<()> {
     writer.write_all(&value.to_le_bytes())
 }
 
-fn get_u64(reader: &mut impl Read) -> io::Result<u64> {
+fn get_u64(reader: &mut (impl Read + ?Sized)) -> io::Result<u64> {
     let mut bytes = [0; 8];
     reader.read_exact(&mut bytes)?;
     Ok(u64::from_le_bytes(bytes))
@@ -76,7 +76,7 @@ impl ManifestDescriptor {
         writer.write_all(&[u8::from(self.framing_lf_added)])
     }
 
-    fn read(reader: &mut impl Read) -> io::Result<Self> {
+    fn read(reader: &mut (impl Read + ?Sized)) -> io::Result<Self> {
         let mut sha256 = [0; 32];
         reader.read_exact(&mut sha256)?;
         let original_bytes = get_u64(reader)?;
@@ -204,31 +204,17 @@ impl ManifestProof {
         mut visit: impl FnMut(ManifestDescriptor) -> io::Result<()>,
     ) -> io::Result<()> {
         let bundle = source.bundle().ok_or_else(invalid)?;
-        if bundle.manifest() != &self.identity
-            || bundle.format() != self.format
-            || source.kind() != self.format.source_kind()
-        {
+        if bundle.manifest() != &self.identity {
             return Err(invalid());
         }
-        let ordinal = bundle.file_ordinal().ok_or_else(invalid)?;
-        if ordinal >= self.files {
-            return Err(invalid());
-        }
-        self.lookup.seek(SeekFrom::Start(
-            ordinal.checked_mul(SLOT_SIZE).ok_or_else(invalid)?,
-        ))?;
-        let start = get_u64(&mut self.lookup)?;
-        let count = get_u64(&mut self.lookup)?;
-        let bytes = get_u64(&mut self.lookup)?;
-        if bytes != source.snapshot().byte_length()
-            || count != source.message_count()
-            || start
-                .checked_add(count)
-                .filter(|end| *end <= self.records)
-                .is_none()
-        {
-            return Err(invalid());
-        }
+        let (start, count) = validate_source(
+            self.files,
+            self.records,
+            self.format,
+            &mut *self.lookup,
+            bundle,
+            source,
+        )?;
         self.descriptors.seek(SeekFrom::Start(
             start.checked_mul(DESCRIPTOR_SIZE).ok_or_else(invalid)?,
         ))?;
@@ -286,6 +272,98 @@ impl ManifestProof {
     }
 }
 
+/// Validate one source against the frozen lookup and return its
+/// descriptor group's start and count. Shared by the streaming visit
+/// and the owned descriptor cursor; legacy missing ordinals fail closed.
+fn validate_source<R: Read + Seek + ?Sized>(
+    files: u64,
+    records: u64,
+    format: BundleFormat,
+    lookup: &mut R,
+    bundle: &SourceBundle,
+    source: &SourceInventory,
+) -> io::Result<(u64, u64)> {
+    if bundle.format() != format || source.kind() != format.source_kind() {
+        return Err(invalid());
+    }
+    let ordinal = bundle.file_ordinal().ok_or_else(invalid)?;
+    if ordinal >= files {
+        return Err(invalid());
+    }
+    lookup.seek(SeekFrom::Start(
+        ordinal.checked_mul(SLOT_SIZE).ok_or_else(invalid)?,
+    ))?;
+    let start = get_u64(lookup)?;
+    let count = get_u64(lookup)?;
+    let bytes = get_u64(lookup)?;
+    if bytes != source.snapshot().byte_length()
+        || count != source.message_count()
+        || start
+            .checked_add(count)
+            .filter(|end| *end <= records)
+            .is_none()
+    {
+        return Err(invalid());
+    }
+    Ok((start, count))
+}
+
+/// A narrow owned cursor over one source's frozen descriptors. It reads
+/// fixed-size descriptors in order and keeps no per-mailbox vector.
+pub(crate) struct DescriptorCursor {
+    descriptors: Box<dyn sb_store::ReadFile>,
+    start: u64,
+    end: u64,
+    next: u64,
+    pending: Option<ManifestDescriptor>,
+}
+
+impl DescriptorCursor {
+    fn new(descriptors: Box<dyn sb_store::ReadFile>, start: u64, end: u64) -> Self {
+        Self {
+            descriptors,
+            start,
+            end,
+            next: start,
+            pending: None,
+        }
+    }
+
+    /// Position at a descriptor index relative to this source's group.
+    pub(crate) fn seek_to(&mut self, index: u64) -> io::Result<()> {
+        if index > self.end - self.start {
+            return Err(invalid());
+        }
+        self.next = self.start + index;
+        self.pending = None;
+        self.descriptors.seek(SeekFrom::Start(
+            self.next.checked_mul(DESCRIPTOR_SIZE).ok_or_else(invalid)?,
+        ))?;
+        Ok(())
+    }
+
+    /// The next descriptor without consuming it.
+    pub(crate) fn peek(&mut self) -> io::Result<Option<ManifestDescriptor>> {
+        if self.pending.is_none() && self.next < self.end {
+            self.descriptors.seek(SeekFrom::Start(
+                self.next.checked_mul(DESCRIPTOR_SIZE).ok_or_else(invalid)?,
+            ))?;
+            self.pending = Some(ManifestDescriptor::read(&mut *self.descriptors)?);
+        }
+        Ok(self.pending)
+    }
+
+    /// Consume and return the next descriptor, or `None` at the group end.
+    pub(crate) fn next(&mut self) -> io::Result<Option<ManifestDescriptor>> {
+        self.peek()?;
+        let descriptor = self.pending.take();
+        if descriptor.is_some() {
+            self.next += 1;
+        }
+        Ok(descriptor)
+    }
+}
+
 /// A job-lifetime, disposable registry of frozen manifest proofs.
 ///
 /// One owned root lease holds each validated snapshot's token-namespaced
@@ -311,6 +389,53 @@ impl ManifestProofRegistry {
     /// failure. Dropping the registry cleans the same way.
     pub fn finish(self) -> Result<(), sb_store::StoreError> {
         self.scratch.finish()
+    }
+
+    /// Freeze `bundle`'s proof on first encounter, then open a narrow
+    /// cursor over one source's descriptors. `skip` is the number of
+    /// already-consumed messages; the cursor starts at that record.
+    /// `Break` stops before the cursor exists.
+    pub(crate) fn open_source_descriptors(
+        &self,
+        resources: &crate::Resources,
+        bundle: &SourceBundle,
+        source: &SourceInventory,
+        skip: u64,
+        progress: impl FnMut(u64) -> ControlFlow<()>,
+    ) -> io::Result<Scoped<DescriptorCursor>> {
+        let progress = RefCell::new(progress);
+        if (progress.borrow_mut())(0).is_break() {
+            return Ok(Scoped::Stopped);
+        }
+        let header = match self.ensure_header(bundle, resources, &progress)? {
+            Scoped::Done(header) => header,
+            Scoped::Stopped => return Ok(Scoped::Stopped),
+        };
+        let mut lookup = self
+            .scratch
+            .open_registry_file(bundle.manifest(), RegistryFile::Lookup)
+            .map_err(store_error)?;
+        let (start, count) = validate_source(
+            header.files,
+            header.records,
+            header.format,
+            &mut *lookup,
+            bundle,
+            source,
+        )?;
+        if skip > count {
+            return Err(invalid());
+        }
+        let descriptors = self
+            .scratch
+            .open_registry_file(bundle.manifest(), RegistryFile::Descriptors)
+            .map_err(store_error)?;
+        let mut cursor = DescriptorCursor::new(descriptors, start, start + count);
+        cursor.seek_to(skip)?;
+        if (progress.borrow_mut())(bundle.manifest().byte_length()).is_break() {
+            return Ok(Scoped::Stopped);
+        }
+        Ok(Scoped::Done(cursor))
     }
 
     /// Freeze `bundle`'s proof on first encounter, then visit one source

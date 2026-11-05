@@ -142,6 +142,7 @@ fn message_with(object: PublishedObject, path: &str, offset: u64) -> ImportMessa
         source_path: path.to_owned(),
         source_sha256: SOURCE_HASH.to_owned(),
         offset,
+        bundle_framing: None,
         flags: ImportFlags::default(),
         summary: ImportSummary::default(),
     }

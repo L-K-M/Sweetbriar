@@ -88,21 +88,33 @@ impl MboxRecord {
     /// truncated inside the range yields `UnexpectedEof`, never success.
     pub fn reader<R: Read + Seek>(
         &self,
-        mut source: R,
+        source: R,
         variant: MboxVariant,
     ) -> io::Result<MboxReader<R>> {
-        source.seek(SeekFrom::Start(self.start))?;
-        Ok(MboxReader {
-            source: BufReader::new(source.take(self.end - self.start)),
-            variant,
-            line_start: true,
-            quotes: 0,
-            prefix: [0; FROM_PREFIX.len()],
-            prefix_start: 0,
-            prefix_end: 0,
-            failed: None,
-        })
+        unquote_range(source, self.start, self.end, variant)
     }
+}
+
+/// Unquote exactly the byte range `[start, end)` as one mbox record
+/// body. The caller owns the range and its boundary validation; this
+/// is the shared decoder behind [`MboxRecord::reader`].
+pub fn unquote_range<R: Read + Seek>(
+    mut source: R,
+    start: u64,
+    end: u64,
+    variant: MboxVariant,
+) -> io::Result<MboxReader<R>> {
+    source.seek(SeekFrom::Start(start))?;
+    Ok(MboxReader {
+        source: BufReader::new(source.take(end - start)),
+        variant,
+        line_start: true,
+        quotes: 0,
+        prefix: [0; FROM_PREFIX.len()],
+        prefix_start: 0,
+        prefix_end: 0,
+        failed: None,
+    })
 }
 
 /// A scan failure, retaining the source offset for the import report.

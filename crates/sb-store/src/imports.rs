@@ -10,8 +10,8 @@ pub use jobs::{
     record_import_source, recoverable_import_jobs,
 };
 pub use messages::{
-    ImportBatch, ImportBatchStats, ImportFlags, ImportMessage, ImportParseState, ImportReadState,
-    ImportSourceKind, ImportSummary, MAX_IMPORT_BATCH, MAX_IMPORT_CHANGES_BYTES,
+    BundleFraming, ImportBatch, ImportBatchStats, ImportFlags, ImportMessage, ImportParseState,
+    ImportReadState, ImportSourceKind, ImportSummary, MAX_IMPORT_BATCH, MAX_IMPORT_CHANGES_BYTES,
     commit_import_batch,
 };
 
