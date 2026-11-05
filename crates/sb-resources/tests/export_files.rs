@@ -1510,8 +1510,18 @@ fn bundle_inventory_checks_child_kind_length_and_count() {
         }
         std::fs::remove_file(&path).unwrap();
         std::fs::create_dir(&path).unwrap();
+        // A declared child keeps file semantics even when a directory
+        // occupies its path: the directory's entries are not hoisted
+        // into sources of their own.
+        std::fs::write(path.join("nested.eml"), BODY_A).unwrap();
         check("regular");
-        std::fs::remove_dir(&path).unwrap();
+        let outcome = res
+            .inventory_import_sources(std::slice::from_ref(&dest), |_| ControlFlow::Continue(()));
+        assert_eq!(
+            outcome.inventory().sources().len(),
+            original["files"].as_array().unwrap().len() - 1
+        );
+        std::fs::remove_dir_all(&path).unwrap();
         std::fs::write(&path, &bytes).unwrap();
 
         if matches!(format, ExportFormat::Eml) {

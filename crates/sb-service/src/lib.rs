@@ -15,6 +15,7 @@ pub use bodies::{
     AttachmentLease, BodyKind, BodyLease, LeaseReleaser, RenderWarning, RenderWarningCode,
 };
 mod api;
+mod drafts;
 mod error;
 mod imports;
 mod messages;
@@ -24,6 +25,11 @@ mod sidebar;
 mod windows;
 
 pub use api::{Core, CoreConfig, Receipt, Setting, open_core};
+pub use drafts::{
+    AttemptState, ComposeFormat, Draft, DraftAttachment, DraftAttachmentObject, DraftAttachmentRef,
+    DraftContent, DraftCreated, DraftRecipient, DraftRevision, DraftSaved, DraftSource, DraftState,
+    DraftSummary, LiveAttempt,
+};
 pub use error::{CoreError, SearchParseCode};
 pub use imports::{
     ImportJob, ImportJobState, ImportProblem, ImportProblemKind, ImportReport, ImportSource,
