@@ -36,7 +36,7 @@ impl Resources {
     /// the returned [`PublishedObject`] is a fresh publication with its
     /// own reservation for a following save to spend once. No receipt,
     /// no new revision or draft row. Blocking file I/O; run on a
-    /// blocking thread.
+    /// blocking thread, never the writer's.
     pub fn republish_draft_attachment(
         &self,
         draft_id: &str,

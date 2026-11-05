@@ -521,7 +521,7 @@ fn revision_attachments(
         .map_err(|e| classify(e, "read a draft revision"))?;
     let Some(json) = json else {
         return Err(StoreError::not_found(format!(
-            "revision {revision_id} of draft {draft_id}"
+            "draft {draft_id} revision {revision_id}"
         )));
     };
     parse_attachments(&json)
