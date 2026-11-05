@@ -1,5 +1,10 @@
-//! Draft queries over FFI.
+//! Draft queries and commands over FFI (spec/07 "Commands", "Other
+//! queries"): the service-owned draft DTOs cross as this crate's own
+//! records, field by field, and `create_draft` and `discard_draft`
+//! each take the token and key the shell made. Attachment publication
+//! and save follow in M1.9b2b2 and M1.9b2b3.
 
+use crate::api::Receipt;
 use crate::{CancelToken, Core, CoreError};
 use std::sync::Arc;
 
@@ -202,6 +207,45 @@ impl From<sb_service::DraftSummary> for DraftSummary {
     }
 }
 
+/// `create_draft`'s `context` (spec/07): `New`, or the source
+/// occurrence a reply, reply-all or forward answers. The service
+/// resolves a forward to its logical message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum DraftSource {
+    New,
+    Reply { occurrence_id: i64 },
+    ReplyAll { occurrence_id: i64 },
+    Forward { occurrence_id: i64 },
+}
+
+impl From<DraftSource> for sb_service::DraftSource {
+    fn from(value: DraftSource) -> Self {
+        match value {
+            DraftSource::New => Self::New,
+            DraftSource::Reply { occurrence_id } => Self::Reply { occurrence_id },
+            DraftSource::ReplyAll { occurrence_id } => Self::ReplyAll { occurrence_id },
+            DraftSource::Forward { occurrence_id } => Self::Forward { occurrence_id },
+        }
+    }
+}
+
+/// What `create_draft` answers: its receipt and the draft id the
+/// receipt names — the stored id on a replayed key.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct DraftCreated {
+    pub receipt: Receipt,
+    pub draft_id: String,
+}
+
+impl From<sb_service::DraftCreated> for DraftCreated {
+    fn from(value: sb_service::DraftCreated) -> Self {
+        Self {
+            receipt: Receipt::from_service(&value.receipt),
+            draft_id: value.draft_id,
+        }
+    }
+}
+
 #[uniffi::export]
 impl Core {
     /// List local drafts, newest first.
@@ -223,6 +267,46 @@ impl Core {
             .query(&token, async |core| core.draft(&draft_id).await)
             .await?
             .into())
+    }
+
+    /// `create_draft(context)` (spec/07 "Commands"): a new `editing`
+    /// draft under an idempotency key the shell made (`UUID()` in
+    /// Swift) — a repeated key returns the stored receipt and its
+    /// draft id. A reply, reply-all or forward context's source
+    /// occurrence must exist (`NotFound`); a forward resolves to the
+    /// logical message. Like every command it honours the token only
+    /// until it holds the core; once begun it runs to completion.
+    pub async fn create_draft(
+        &self,
+        token: Arc<CancelToken>,
+        idempotency_key: String,
+        context: DraftSource,
+    ) -> Result<DraftCreated, CoreError> {
+        let created = self
+            .command(&token, async |core| {
+                core.create_draft(&idempotency_key, context.into()).await
+            })
+            .await?;
+        Ok(DraftCreated::from(created))
+    }
+
+    /// `discard_draft(id)` (spec/07 "Commands", spec/05): refuse
+    /// `Conflict` while a live attempt exists or the draft already
+    /// sits at a terminal state; otherwise mark it `discarded`,
+    /// keeping every revision. The receipt answers
+    /// `{"draft_id": ...}`.
+    pub async fn discard_draft(
+        &self,
+        token: Arc<CancelToken>,
+        idempotency_key: String,
+        draft_id: String,
+    ) -> Result<Receipt, CoreError> {
+        let receipt = self
+            .command(&token, async |core| {
+                core.discard_draft(&idempotency_key, &draft_id).await
+            })
+            .await?;
+        Ok(Receipt::from_service(&receipt))
     }
 }
 

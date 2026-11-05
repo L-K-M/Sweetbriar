@@ -1,6 +1,9 @@
+use std::sync::Arc;
+use std::task::{Context, Waker};
+
 use super::*;
 use crate::{CancelToken, CoreConfig, CoreError, open_core};
-use sb_test_support::{ScratchDir, block_on};
+use sb_test_support::{ScratchDir, block_on, with_sqlite_write_lock};
 
 fn round_trip<T>(value: T) -> T
 where
@@ -12,6 +15,19 @@ where
     let result = <T as uniffi::Lift<crate::UniFfiTag>>::try_read(&mut input).unwrap();
     assert!(input.is_empty());
     result
+}
+
+fn scratch_core(label: &str) -> (ScratchDir, Arc<Core>) {
+    let scratch = ScratchDir::new(label);
+    let core = block_on(open_core(
+        CancelToken::new(),
+        CoreConfig {
+            data_root: scratch.path().join("store").to_string_lossy().into_owned(),
+            cache_root: scratch.path().join("cache").to_string_lossy().into_owned(),
+        },
+    ))
+    .unwrap();
+    (scratch, core)
 }
 
 #[test]
@@ -294,4 +310,199 @@ fn queries_report_missing_cancellation_and_shutdown() {
         block_on(core.draft(CancelToken::new(), "missing".into())),
         Err(CoreError::Unavailable { .. })
     ));
+}
+
+/// Every create input maps field for field and round-trips the codec:
+/// all four contexts and the command answer (spec/07).
+#[test]
+fn create_inputs_map_every_field_and_round_trip_the_codec() {
+    for (source, expected) in [
+        (DraftSource::New, sb_service::DraftSource::New),
+        (
+            DraftSource::Reply { occurrence_id: 11 },
+            sb_service::DraftSource::Reply { occurrence_id: 11 },
+        ),
+        (
+            DraftSource::ReplyAll { occurrence_id: 12 },
+            sb_service::DraftSource::ReplyAll { occurrence_id: 12 },
+        ),
+        (
+            DraftSource::Forward { occurrence_id: 13 },
+            sb_service::DraftSource::Forward { occurrence_id: 13 },
+        ),
+    ] {
+        assert_eq!(sb_service::DraftSource::from(source), expected);
+        assert_eq!(round_trip(source), source);
+    }
+    let created = DraftCreated {
+        receipt: Receipt {
+            command: "create_draft".into(),
+            result_json: "{\"draft_id\":\"draft\"}".into(),
+            created_at_ms: 5,
+        },
+        draft_id: "draft".into(),
+    };
+    assert_eq!(round_trip(created.clone()), created);
+}
+
+/// Create and discard through the exported surface: the receipts with
+/// their canonical JSON, replay before validation, the terminal
+/// `Conflict`, and every typed failure (spec/02, spec/07).
+#[test]
+fn create_and_discard_cross_with_receipts_and_typed_errors() {
+    let (_scratch, core) = scratch_core("ffi-draft-create-discard");
+    let created =
+        block_on(core.create_draft(CancelToken::new(), "create-1".into(), DraftSource::New))
+            .unwrap();
+    assert_eq!(created.receipt.command, "create_draft");
+    assert_eq!(
+        created.receipt.result_json,
+        format!("{{\"draft_id\":\"{}\"}}", created.draft_id)
+    );
+    assert!(created.receipt.created_at_ms > 0);
+    let draft_id = created.draft_id.clone();
+
+    // A replayed key answers its stored receipt, not a rerun: the
+    // changed context would be `NotFound` if it were validated.
+    let replay = block_on(core.create_draft(
+        CancelToken::new(),
+        "create-1".into(),
+        DraftSource::Reply { occurrence_id: 404 },
+    ))
+    .unwrap();
+    assert_eq!(replay, created);
+    assert_eq!(
+        block_on(core.drafts(CancelToken::new())).unwrap().len(),
+        1,
+        "the replay created nothing"
+    );
+
+    let draft = block_on(core.draft(CancelToken::new(), draft_id.clone())).unwrap();
+    assert_eq!(draft.state, DraftState::Editing);
+    assert!(draft.revision.is_none());
+
+    // Unknown ids are NotFound; an empty id names its field.
+    for err in [
+        block_on(core.draft(CancelToken::new(), "no-such-draft".into())).unwrap_err(),
+        block_on(core.discard_draft(
+            CancelToken::new(),
+            "discard-missing".into(),
+            "no-such-draft".into(),
+        ))
+        .unwrap_err(),
+    ] {
+        assert!(matches!(err, CoreError::NotFound { .. }), "{err}");
+    }
+    match block_on(core.discard_draft(CancelToken::new(), "discard-empty".into(), String::new())) {
+        Err(CoreError::InvalidInput { field, .. }) => assert_eq!(field, "draft_id"),
+        other => panic!("an empty draft id must be InvalidInput: {other:?}"),
+    }
+
+    let receipt =
+        block_on(core.discard_draft(CancelToken::new(), "discard-1".into(), draft_id.clone()))
+            .unwrap();
+    assert_eq!(receipt.command, "discard_draft");
+    assert_eq!(
+        receipt.result_json,
+        format!("{{\"draft_id\":\"{draft_id}\"}}")
+    );
+    let draft = block_on(core.draft(CancelToken::new(), draft_id.clone())).unwrap();
+    assert_eq!(draft.state, DraftState::Discarded);
+    assert!(
+        block_on(core.drafts(CancelToken::new()))
+            .unwrap()
+            .is_empty()
+    );
+    // A terminal draft refuses another discard, and a spent key
+    // answers its stored receipt rather than running again.
+    let replayed =
+        block_on(core.discard_draft(CancelToken::new(), "discard-1".into(), draft_id.clone()))
+            .unwrap();
+    assert_eq!(replayed, receipt);
+    match block_on(core.discard_draft(CancelToken::new(), "discard-2".into(), draft_id.clone())) {
+        Err(CoreError::Conflict { .. }) => {}
+        other => panic!("a discarded draft must refuse discard: {other:?}"),
+    }
+    block_on(core.shutdown());
+}
+
+/// Commands honour the token until the core begins them, then commit
+/// despite a cancel or a dropped caller; a cancelled-before-begin
+/// command leaves its key free; a call after shutdown is
+/// `Unavailable` (spec/07).
+#[test]
+fn command_cancellation_drop_and_shutdown() {
+    let (scratch, core) = scratch_core("ffi-draft-cancel");
+    let state_db = scratch.path().join("store/state.sqlite");
+
+    let cancelled = CancelToken::new();
+    cancelled.cancel();
+    let err =
+        block_on(core.create_draft(cancelled, "create-1".into(), DraftSource::New)).unwrap_err();
+    assert!(matches!(err, CoreError::Cancelled), "{err}");
+    let created =
+        block_on(core.create_draft(CancelToken::new(), "create-1".into(), DraftSource::New))
+            .unwrap();
+    let draft_id = created.draft_id;
+
+    // A begun create ignores the cancel and returns its receipt.
+    let token = CancelToken::new();
+    let mut begun = Box::pin(core.create_draft(token.clone(), "create-2".into(), DraftSource::New));
+    with_sqlite_write_lock(&state_db, || {
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(begun.as_mut().poll(&mut cx).is_pending());
+        token.cancel();
+    });
+    let second = block_on(begun.as_mut()).expect("a begun command runs to completion");
+    assert_eq!(second.receipt.command, "create_draft");
+
+    // A dropped caller's create still commits; its key replays the
+    // stored receipt after a reopen.
+    let mut future =
+        Box::pin(core.create_draft(CancelToken::new(), "create-3".into(), DraftSource::New));
+    with_sqlite_write_lock(&state_db, || {
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(future.as_mut().poll(&mut cx).is_pending());
+        drop(future);
+    });
+    block_on(core.shutdown());
+
+    let core = block_on(open_core(
+        CancelToken::new(),
+        CoreConfig {
+            data_root: scratch.path().join("store").to_string_lossy().into_owned(),
+            cache_root: scratch.path().join("cache").to_string_lossy().into_owned(),
+        },
+    ))
+    .unwrap();
+    let before_replay = block_on(core.drafts(CancelToken::new())).unwrap();
+    assert_eq!(
+        before_replay.len(),
+        3,
+        "the dropped create committed before replay"
+    );
+    let replay =
+        block_on(core.create_draft(CancelToken::new(), "create-3".into(), DraftSource::New))
+            .unwrap();
+    assert_eq!(replay.receipt.command, "create_draft");
+    assert!(
+        before_replay
+            .iter()
+            .any(|row| row.draft_id == replay.draft_id)
+    );
+    let listed = block_on(core.drafts(CancelToken::new())).unwrap();
+    assert!(
+        listed.iter().any(|row| row.draft_id == replay.draft_id),
+        "the dropped create committed: {listed:?}"
+    );
+
+    block_on(core.shutdown());
+    for err in [
+        block_on(core.create_draft(CancelToken::new(), "create-4".into(), DraftSource::New))
+            .unwrap_err(),
+        block_on(core.discard_draft(CancelToken::new(), "discard-4".into(), draft_id.clone()))
+            .unwrap_err(),
+    ] {
+        assert!(matches!(err, CoreError::Unavailable { .. }), "{err}");
+    }
 }
