@@ -982,6 +982,10 @@ local drafts. No network yet.
     in fixed-memory runs on the two validation tapes and use exact decoded
     file-name comparison to replace quadratic file-table uniqueness scans.
     Message relationships remain deferred to b2.
+  - **M1.7d1b1b2b1c Tag-ID sorting prerequisite — M:** reuse the bounded
+    offset sorter for exact local tag-ID uniqueness validation while retaining
+    manifest-order tag-name checks. This removes only quadratic local tag-ID
+    validation; it does not validate or admit global message relationships.
   - **M1.7d1b1b2b2 Manifest message relationships — L:** validate counts,
     ordered-ID digest, unique occurrence IDs, file references and EML
     agreement using bounded scans of the verified snapshot. Prove writer
