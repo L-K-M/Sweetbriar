@@ -6,6 +6,7 @@
 //! NULL-route draft and the live-attempt refusal wiring.
 
 use std::fs;
+use std::path::{Path, PathBuf};
 
 use sb_resources::{
     AttachmentRef, AttemptState, ComposeFormat, DraftAttachment, DraftRecipient, DraftSource,
@@ -71,6 +72,55 @@ fn input(revision_id: &str) -> RevisionInput {
 /// object.
 fn publish(res: &Resources, bytes: &[u8]) -> PublishedObject {
     res.publish_draft_attachment(bytes).unwrap()
+}
+
+/// Save `r1` on `d1` with one published attachment and return its
+/// stored reference: the exact value `republish_draft_attachment`
+/// validates and republishes.
+fn save_one_attachment(res: &Resources, bytes: &[u8], sha: &str) -> AttachmentRef {
+    create(res, "d1", DraftSource::New);
+    let object = publish(res, bytes);
+    let mut with_file = input("r1");
+    with_file.attachments = vec![DraftAttachment::New {
+        object: std::sync::Arc::new(object),
+        filename: "one.txt".to_owned(),
+        media_type: "text/plain".to_owned(),
+    }];
+    save(res, "d1", None, with_file);
+    let reference = one(res, "d1").revision.unwrap().attachments[0].clone();
+    assert_eq!(reference.object_sha256, sha);
+    reference
+}
+
+/// The object file a stored SHA-256 names (the store's layout).
+fn object_path(root: &Path, sha: &str) -> PathBuf {
+    root.join("objects/sha256")
+        .join(&sha[..2])
+        .join(&sha[2..4])
+        .join(sha)
+}
+
+/// How many live `reservation` pins one object has.
+fn reservation_pins(res: &Resources, sha: &str) -> i64 {
+    let sql = format!(
+        "SELECT count(*) FROM object_pins
+         WHERE pin_kind = 'reservation' AND object_sha256 = '{sha}'"
+    );
+    count(res, &sql)
+}
+
+/// One revision's stored `attachments_json`, to prove a republication
+/// changed no source row.
+fn stored_attachments_json(res: &Resources, draft_id: &str, revision_id: &str) -> String {
+    let sql = format!(
+        "SELECT attachments_json FROM draft_revisions
+         WHERE draft_id = '{draft_id}' AND revision_id = '{revision_id}'"
+    );
+    res.read(move |tx| {
+        tx.query_row(&sql, [], |row| row.get::<_, String>(0))
+            .map_err(|e| StoreError::internal(e.to_string()))
+    })
+    .unwrap()
 }
 
 fn create(res: &Resources, draft_id: &str, source: DraftSource) {
@@ -474,5 +524,354 @@ fn a_reply_or_forward_resolves_its_source_occurrence() {
             matches!(&error, StoreError::NotFound { what } if what == "occurrence 404"),
             "{error:?}"
         );
+    }
+}
+
+#[test]
+fn an_old_revision_copies_after_the_head_advances() {
+    let (_scratch, res) = open("draft-republish-old-revision");
+    let reference = save_one_attachment(&res, ATTACHMENT_ONE, ATTACHMENT_ONE_SHA);
+
+    // The head advances; r1 is immutable history, not the current
+    // revision.
+    save(&res, "d1", Some("r1"), input("r2"));
+    assert_eq!(one(&res, "d1").revision.unwrap().revision_id, "r2");
+
+    let copy = res
+        .republish_draft_attachment("d1", "r1", &reference)
+        .unwrap();
+    assert_eq!(copy.id().sha256_hex(), ATTACHMENT_ONE_SHA);
+    assert_eq!(copy.id().byte_length(), ATTACHMENT_ONE.len() as u64);
+
+    // A terminal source draft is just as valid: this creates a new
+    // publication, it never mutates that draft.
+    let id = "d1".to_owned();
+    write(&res, move |tx| discard_draft(tx, &id, now()));
+    assert_eq!(one(&res, "d1").state, DraftState::Discarded);
+    let copy = res
+        .republish_draft_attachment("d1", "r1", &reference)
+        .unwrap();
+    assert_eq!(copy.id().sha256_hex(), ATTACHMENT_ONE_SHA);
+    assert_eq!(
+        reservation_pins(&res, ATTACHMENT_ONE_SHA),
+        2,
+        "each call minted its own reservation"
+    );
+}
+
+#[test]
+fn each_republication_gets_its_own_spendable_reservation() {
+    let (_scratch, res) = open("draft-republish-reservations");
+    let reference = save_one_attachment(&res, ATTACHMENT_ONE, ATTACHMENT_ONE_SHA);
+    assert_eq!(
+        reservation_pins(&res, ATTACHMENT_ONE_SHA),
+        0,
+        "the save spent the original reservation"
+    );
+
+    let first = std::sync::Arc::new(
+        res.republish_draft_attachment("d1", "r1", &reference)
+            .unwrap(),
+    );
+    let second = std::sync::Arc::new(
+        res.republish_draft_attachment("d1", "r1", &reference)
+            .unwrap(),
+    );
+    assert_eq!(first.id(), second.id(), "the same bytes have one identity");
+    assert_eq!(
+        reservation_pins(&res, ATTACHMENT_ONE_SHA),
+        2,
+        "identical bytes still need distinct publication lifetimes"
+    );
+
+    // Each copy saves into a different new draft, spending its own pin.
+    for (draft_id, revision_id, copy) in [("d2", "r2", first.clone()), ("d3", "r3", second.clone())]
+    {
+        create(&res, draft_id, DraftSource::New);
+        let mut content = input(revision_id);
+        content.attachments = vec![DraftAttachment::New {
+            object: copy,
+            filename: "one.txt".to_owned(),
+            media_type: "text/plain".to_owned(),
+        }];
+        save(&res, draft_id, None, content);
+        let stored = &one(&res, draft_id).revision.unwrap().attachments;
+        assert_eq!(stored.len(), 1);
+        assert_eq!(stored[0].object_sha256, ATTACHMENT_ONE_SHA);
+        assert_eq!(stored[0].filename, "one.txt");
+        assert_eq!(stored[0].media_type, "text/plain");
+        assert_eq!(stored[0].size, ATTACHMENT_ONE.len() as u64);
+    }
+    assert_eq!(reservation_pins(&res, ATTACHMENT_ONE_SHA), 0);
+
+    // A replay of the first save cannot spend the spent pin again.
+    let mut replay = input("r2-replay");
+    replay.attachments = vec![DraftAttachment::New {
+        object: first,
+        filename: "one.txt".to_owned(),
+        media_type: "text/plain".to_owned(),
+    }];
+    let error = write_err(&res, move |tx| {
+        save_draft(tx, "d2", Some("r2"), replay, now())
+    });
+    assert!(matches!(error, StoreError::Conflict { .. }), "{error:?}");
+    assert_eq!(
+        count(
+            &res,
+            "SELECT count(*) FROM draft_revisions WHERE draft_id = 'd2'"
+        ),
+        1,
+        "the refused replay inserted a revision"
+    );
+}
+
+#[test]
+fn republish_preserves_the_source_revision_and_its_object() {
+    let (scratch, res) = open("draft-republish-source-preserved");
+    let root = scratch.path().join("store");
+    let reference = save_one_attachment(&res, ATTACHMENT_ONE, ATTACHMENT_ONE_SHA);
+    let stored_before = stored_attachments_json(&res, "d1", "r1");
+    let revisions_before = count(&res, "SELECT count(*) FROM draft_revisions");
+    let drafts_before = count(&res, "SELECT count(*) FROM drafts");
+
+    let _copy = res
+        .republish_draft_attachment("d1", "r1", &reference)
+        .unwrap();
+
+    assert_eq!(stored_attachments_json(&res, "d1", "r1"), stored_before);
+    assert_eq!(
+        count(&res, "SELECT count(*) FROM draft_revisions"),
+        revisions_before
+    );
+    assert_eq!(count(&res, "SELECT count(*) FROM drafts"), drafts_before);
+    assert_eq!(
+        fs::read(object_path(&root, ATTACHMENT_ONE_SHA)).unwrap(),
+        ATTACHMENT_ONE,
+        "the source object's bytes changed"
+    );
+    // The preserved reference still authorizes another publication.
+    assert!(
+        res.republish_draft_attachment("d1", "r1", &reference)
+            .is_ok()
+    );
+}
+
+#[test]
+fn republish_denies_a_foreign_revision_or_reference() {
+    let (_scratch, res) = open("draft-republish-denied");
+    let reference = save_one_attachment(&res, ATTACHMENT_ONE, ATTACHMENT_ONE_SHA);
+    create(&res, "d2", DraftSource::New);
+    save(&res, "d2", None, input("r2"));
+
+    // A revision the draft does not have is NotFound.
+    for (draft_id, revision_id) in [
+        ("d2", "r1"),
+        ("d1", "r2"),
+        ("d1", "never-saved"),
+        ("no-such-draft", "r1"),
+    ] {
+        let error = res
+            .republish_draft_attachment(draft_id, revision_id, &reference)
+            .unwrap_err();
+        assert!(
+            matches!(error, StoreError::NotFound { .. }),
+            "{draft_id}/{revision_id}: {error:?}"
+        );
+    }
+
+    // A reference that is not a member of the revision is Conflict,
+    // whichever field differs.
+    let mut wrong_hash = reference.clone();
+    let mut digits: Vec<char> = wrong_hash.object_sha256.chars().collect();
+    digits[0] = if digits[0] == '0' { '1' } else { '0' };
+    wrong_hash.object_sha256 = digits.into_iter().collect();
+    let mut wrong_size = reference.clone();
+    wrong_size.size += 1;
+    let mut wrong_filename = reference.clone();
+    wrong_filename.filename = "other.txt".to_owned();
+    let mut wrong_media_type = reference.clone();
+    wrong_media_type.media_type = "application/octet-stream".to_owned();
+    for wrong in [&wrong_hash, &wrong_size, &wrong_filename, &wrong_media_type] {
+        let error = res
+            .republish_draft_attachment("d1", "r1", wrong)
+            .unwrap_err();
+        assert!(
+            matches!(error, StoreError::Conflict { .. }),
+            "{wrong:?}: {error:?}"
+        );
+    }
+
+    assert_eq!(reservation_pins(&res, ATTACHMENT_ONE_SHA), 0);
+    assert_eq!(count(&res, "SELECT count(*) FROM draft_revisions"), 2);
+}
+
+#[test]
+fn a_missing_source_is_never_republished() {
+    let (scratch, res) = open("draft-republish-missing");
+    let root = scratch.path().join("store");
+    let reference = save_one_attachment(&res, ATTACHMENT_ONE, ATTACHMENT_ONE_SHA);
+    let path = object_path(&root, ATTACHMENT_ONE_SHA);
+    let stored_before = stored_attachments_json(&res, "d1", "r1");
+    fs::remove_file(&path).unwrap();
+
+    let error = res
+        .republish_draft_attachment("d1", "r1", &reference)
+        .unwrap_err();
+    assert!(matches!(error, StoreError::NotFound { .. }), "{error:?}");
+    assert_eq!(reservation_pins(&res, ATTACHMENT_ONE_SHA), 0);
+    assert!(!path.exists(), "a replacement object was installed");
+    assert_eq!(stored_attachments_json(&res, "d1", "r1"), stored_before);
+}
+
+#[test]
+fn a_same_length_tampered_source_fails_before_install() {
+    let (scratch, res) = open("draft-republish-tampered-same-length");
+    let root = scratch.path().join("store");
+    let reference = save_one_attachment(&res, ATTACHMENT_ONE, ATTACHMENT_ONE_SHA);
+    let path = object_path(&root, ATTACHMENT_ONE_SHA);
+    let stored_before = stored_attachments_json(&res, "d1", "r1");
+    // Same length, different bytes: only the reader's EOF hash catches
+    // it, after the temp file was written and before any install.
+    fs::write(&path, vec![b'x'; ATTACHMENT_ONE.len()]).unwrap();
+
+    let error = res
+        .republish_draft_attachment("d1", "r1", &reference)
+        .unwrap_err();
+    assert!(matches!(error, StoreError::Corrupt { .. }), "{error:?}");
+    assert_eq!(reservation_pins(&res, ATTACHMENT_ONE_SHA), 0);
+    assert!(!path.exists(), "the damaged file was not quarantined");
+    assert_eq!(stored_attachments_json(&res, "d1", "r1"), stored_before);
+}
+
+#[test]
+fn a_grown_tampered_source_is_refused_as_corrupt() {
+    let (scratch, res) = open("draft-republish-tampered-grown");
+    let root = scratch.path().join("store");
+    let reference = save_one_attachment(&res, ATTACHMENT_ONE, ATTACHMENT_ONE_SHA);
+    let path = object_path(&root, ATTACHMENT_ONE_SHA);
+    let stored_before = stored_attachments_json(&res, "d1", "r1");
+    fs::write(&path, vec![b'y'; ATTACHMENT_ONE.len() + 10]).unwrap();
+
+    let error = res
+        .republish_draft_attachment("d1", "r1", &reference)
+        .unwrap_err();
+    assert!(matches!(error, StoreError::Corrupt { .. }), "{error:?}");
+    assert_eq!(reservation_pins(&res, ATTACHMENT_ONE_SHA), 0);
+    assert!(!path.exists(), "the damaged file was not quarantined");
+    assert_eq!(stored_attachments_json(&res, "d1", "r1"), stored_before);
+}
+
+#[cfg(feature = "test-seams")]
+mod republish_faults {
+    use std::io;
+    use std::path::{Path, PathBuf};
+    use std::sync::Arc;
+
+    use sb_test_support::{FaultFs, FaultKind, FsOp, ScratchDir, real_fs};
+
+    use super::*;
+
+    fn open_with_fault(
+        label: &str,
+        op: FsOp,
+        nth: u64,
+        kind: FaultKind,
+    ) -> (ScratchDir, Resources, PathBuf) {
+        let scratch = ScratchDir::new(label);
+        let root = scratch.path().join("store");
+        let fs = Arc::new(FaultFs::new(real_fs(), op, nth, kind));
+        let res = Resources::open_with_fs(&root, fs).unwrap();
+        (scratch, res, root)
+    }
+
+    fn object_path(root: &Path, sha: &str) -> PathBuf {
+        root.join("objects/sha256")
+            .join(&sha[..2])
+            .join(&sha[2..4])
+            .join(sha)
+    }
+
+    fn setup(res: &Resources) -> AttachmentRef {
+        create(res, "d1", DraftSource::New);
+        let object = publish(res, ATTACHMENT_ONE);
+        let mut with_file = input("r1");
+        with_file.attachments = vec![DraftAttachment::New {
+            object: Arc::new(object),
+            filename: "one.txt".to_owned(),
+            media_type: "text/plain".to_owned(),
+        }];
+        save(res, "d1", None, with_file);
+        one(res, "d1").revision.unwrap().attachments[0].clone()
+    }
+
+    fn pins(res: &Resources, sha: &str) -> i64 {
+        let sql = format!(
+            "SELECT count(*) FROM object_pins
+             WHERE pin_kind = 'reservation' AND object_sha256 = '{sha}'"
+        );
+        count(res, &sql)
+    }
+
+    #[test]
+    fn injected_read_write_and_sync_failures_keep_their_kinds() {
+        for (op, nth, label) in [
+            (FsOp::Read, 1, "read"),
+            (FsOp::Write, 2, "write"),
+            (FsOp::SyncFile, 2, "sync"),
+        ] {
+            let kind = FaultKind::Kind(io::ErrorKind::StorageFull);
+            let (_scratch, res, _root) =
+                open_with_fault(&format!("draft-republish-fault-{label}"), op, nth, kind);
+            let reference = setup(&res);
+            assert_eq!(pins(&res, ATTACHMENT_ONE_SHA), 0);
+
+            let error = res
+                .republish_draft_attachment("d1", "r1", &reference)
+                .unwrap_err();
+            assert!(
+                matches!(error, StoreError::Unavailable { .. }),
+                "{label}: {error:?}"
+            );
+            assert_eq!(error.io_kind(), Some(io::ErrorKind::StorageFull), "{label}");
+            assert_eq!(pins(&res, ATTACHMENT_ONE_SHA), 0, "{label}");
+
+            // The fault is spent: a retry republishes the intact source.
+            let copy = res
+                .republish_draft_attachment("d1", "r1", &reference)
+                .unwrap();
+            assert_eq!(copy.id().sha256_hex(), ATTACHMENT_ONE_SHA);
+            assert_eq!(pins(&res, ATTACHMENT_ONE_SHA), 1, "{label}");
+            res.close().unwrap();
+        }
+    }
+
+    #[test]
+    fn an_injected_quarantine_rename_failure_keeps_its_kind() {
+        let kind = FaultKind::Kind(io::ErrorKind::ResourceBusy);
+        let (_scratch, res, root) =
+            open_with_fault("draft-republish-fault-rename", FsOp::Rename, 2, kind);
+        let reference = setup(&res);
+        let path = object_path(&root, ATTACHMENT_ONE_SHA);
+        // Damage in place at the same length: only the EOF hash catches it.
+        std::fs::write(&path, vec![b'x'; ATTACHMENT_ONE.len()]).unwrap();
+
+        let error = res
+            .republish_draft_attachment("d1", "r1", &reference)
+            .unwrap_err();
+        assert!(matches!(error, StoreError::Unavailable { .. }), "{error:?}");
+        assert_eq!(error.io_kind(), Some(io::ErrorKind::ResourceBusy));
+        assert_eq!(pins(&res, ATTACHMENT_ONE_SHA), 0);
+        assert!(path.exists(), "the failed quarantine moved nothing");
+
+        // The fault is spent: the retry quarantines the damaged file and
+        // reports the corruption without an I/O kind.
+        let error = res
+            .republish_draft_attachment("d1", "r1", &reference)
+            .unwrap_err();
+        assert!(matches!(error, StoreError::Corrupt { .. }), "{error:?}");
+        assert_eq!(error.io_kind(), None);
+        assert!(!path.exists(), "the damaged file was not quarantined");
+        assert_eq!(pins(&res, ATTACHMENT_ONE_SHA), 0);
+        res.close().unwrap();
     }
 }

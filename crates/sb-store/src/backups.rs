@@ -4,6 +4,22 @@
 //! pinned objects, flushes the generation and writes the manifest last,
 //! then releases pins and marks the generation complete.
 
+mod image;
+mod image_inspect;
+// The next restore slice attaches this parser to the verification ledger.
+#[allow(dead_code)]
+mod manifest;
+pub use image::BackupImageInspection;
+mod scratch;
+
+pub(crate) fn recover_scratch(
+    conn: &rusqlite::Connection,
+    fs: &dyn sb_types::fs::Fs,
+    root: &std::path::Path,
+) -> Result<(), crate::StoreError> {
+    scratch::recover(conn, fs, root)
+}
+
 use std::collections::BTreeSet;
 use std::ffi::c_int;
 use std::io;
@@ -152,6 +168,7 @@ pub(crate) struct Backups {
     backups_dir: PathBuf,
     objects: Arc<crate::objects::FileObjectStore>,
     active: Mutex<Option<Weak<()>>>,
+    image_lock: Mutex<()>,
     /// The copy-timing barriers a test may arm (spec/03).
     #[cfg(test)]
     pauses: Mutex<Pauses>,
@@ -179,6 +196,7 @@ impl Backups {
             backups_dir,
             objects,
             active: Mutex::new(None),
+            image_lock: Mutex::new(()),
             #[cfg(test)]
             pauses: Mutex::new(Pauses::default()),
         }

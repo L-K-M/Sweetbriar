@@ -553,6 +553,15 @@ backups/<generation-id>/
 
 ## Restore
 
+The format-1 manifest reader streams records to its caller without a total
+manifest or object-count limit or corpus-sized memory. It rejects unknown,
+duplicate and missing fields; its grammar has only the documented envelope,
+database object and object-record array, with no arbitrary nested values.
+Strings are validated incrementally, including UTF-8 and escaped surrogate
+pairs. Identifiers and hashes have fixed decoded sizes, numbers are checked,
+and cancellation is observed while scanning whitespace, strings and records.
+Parsing alone does not establish that a generation is authentic or complete.
+
 SQLite inspection of a verifier image reads through a read-only VFS backed by
 an already-open file, without resolving its pathname or opening WAL, journal,
 shared-memory or temporary files. Holding the file preserves its identity,
@@ -562,6 +571,19 @@ checks cancellation before reporting success. Crash recovery removes a scratch
 directory only with durable ownership and directory identity evidence. If a
 crash precedes that proof, recovery retains the unprovable directory and its
 row for resolution; it must not infer ownership from emptiness.
+The verifier records a fresh name, token and current incarnation in that row
+before creating a sibling token marker and flushing it and its parent. It
+creates the private directory, records its filesystem identity in the sibling
+marker and flushes that update, then stores and flushes the token as a
+private extended attribute on the directory. Both the attribute and identity
+must match before cleanup. The attribute remains attached until directory
+removal, so failed removals can be retried. In-process cleanup also checks its
+retained directory handle. Immediately before name-based removal, reopen and
+compare the directory identity again. POSIX cannot make that comparison and
+removal atomic; a malicious same-UID rename after the final check is outside
+this threat model. Once the directory and sibling marker are removed and the
+parent flushed, remove the row. Unsupported extended attributes fail closed.
+Rows inherited from another incarnation never authorize cleanup.
 
 Restoring creates a **new incarnation** and runs quarantined. The steps:
 

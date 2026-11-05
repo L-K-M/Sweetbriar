@@ -993,12 +993,16 @@ local drafts. No network yet.
     record counts and EML agreement using bounded scans of the verified
     snapshot. Prove writer manifests, hostile tokens and cleanup before
     bundle inventory.
-  - **M1.7d1b2 Bundle file agreement and inventory — L:** check every declared
-    direct child's kind, byte length and record count independently before
-    ingest, report missing or disagreeing files without suppressing valid
-    siblings, and retain the shared manifest snapshot while any bundle source
-    references it. Preserve sorted canonical discovery, alias deduplication,
-    cancellation cleanup and real EML/mboxrd exporter proof.
+  - **M1.7d1b2a Bundle child agreement — L:** check each direct child's kind,
+    captured byte length and record count independently, reporting missing,
+    unlisted or disagreeing files without suppressing sibling checks. Refuse
+    bundle sources and discard temporary snapshots, including on cancellation.
+  - **M1.7d1b2a1 File ordinal propagation — S:** preserve each original
+    zero-based manifest file ordinal through the bounded declaration sort
+    and child agreement. Bundle admission lands in M1.7d1b2b below.
+  - **M1.7d1b2b Bundle inventory — L:** admit verified bundle sources and
+    retain their shared manifest snapshot. Restore recursive nested discovery,
+    sorted canonical deduplication and version-2 inventory lifecycle.
   - **M1.7d2 Manifest-verified ingest — L:** each bundle record's
     boundary, framing, original length and SHA-256 are verified before
     its bytes publish; only the declared framing LF is removed; the
@@ -1096,10 +1100,19 @@ local drafts. No network yet.
     completed image through the reader above. Bound disk, memory and SQLite
     work, including cancellation. Acceptance: source changes cannot alter the
     inspection; malformed schemas are bounded; cancellation never succeeds.
-  - **M1.8e1 Restore generation verification (M):** select a complete
-    generation recorded in the current store and verify its manifest, snapshot
-    and every object, including identity, size and hash mismatches. Staging
-    must verify the bytes it actually copies again.
+  - **M1.8e1a Streaming manifest parser (L):** parse the format-1 manifest
+    incrementally with bounded memory and a streaming object sink. Reject
+    unknown or duplicate fields and invalid scalar values; validate Unicode,
+    integer overflow, truncation and cancellation. This does not verify a
+    generation or retain an object ledger.
+  - **M1.8e1b Verification ledger (L):** retain manifest object metadata in
+    bounded, owned scratch with duplicate detection and cleanup evidence.
+  - **M1.8e1c Snapshot reconciliation (L):** compare the isolated snapshot's
+    identity and referenced objects with the parsed manifest and ledger.
+  - **M1.8e1d Recorded generation verification (L):** select a complete
+    generation recorded in the current store, reconcile its manifest and
+    snapshot, and verify every object's size and hash. Staging must verify
+    the bytes it actually copies again.
   - **M1.8e2 Restore discovery and verified handoff (M):** discover and
     select complete external generations, including restore into a fresh data
     root, and hand a verified selection to staging. Do not assume a row in
@@ -1281,6 +1294,28 @@ local drafts. No network yet.
         the reservation twice. Cover replay and reservation ownership through
         native APIs without moving validation outside the receipt transaction.
         Depends on M1.9b2a.
+      - **M1.9b2a2 Authorized attachment republication (M):** the
+        Store/Resources primitive
+        `republish_draft_attachment(draft_id, revision_id, reference)`,
+        the native prerequisite for M1.9c's keep-both and attachment
+        undo. Store validation proves the revision belongs to the draft
+        and the full stored `AttachmentRef` (hash, size, filename,
+        media type) is a member of that revision. An older immutable
+        revision is allowed after the head advances, and a noncurrent or
+        terminal source draft is allowed because the operation creates
+        a new publication rather than mutating that draft. The exact
+        source bytes are read through the protected verifying reader
+        and published through the real object store, returning a fresh
+        opaque `PublishedObject` with a distinct reservation per call.
+        No idempotency key or receipt; no new revision or draft row; the
+        following save spends the returned reservation once. Native
+        Resources tests prove the old-revision copy, distinct
+        reservations, a copy saved into a new draft, an unchanged
+        source, denial of a wrong draft, revision, hash, size, filename
+        or media type, missing and tampered sources, injected read,
+        write, sync and rename failures, and the native GC/read lifetime.
+        No Engine, Service, FFI, bridge or Compose surface; those stay
+        in the later artifacts. Depends on M1.9a1 and M1.8a1.
       - **M1.9b2b Draft commands over FFI:** re-sized 2026-11-04: the
         complete create/save/discard/publication artifact measures 1,922
         gross changed lines including generated bindings and tests, over

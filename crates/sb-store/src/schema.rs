@@ -131,6 +131,10 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 22,
         run: migration_22,
     },
+    Migration {
+        version: 23,
+        run: migration_23,
+    },
 ];
 
 /// The `store_meta` keys every migrated store holds (spec/02): a
@@ -317,28 +321,45 @@ fn require_identity_keys(conn: &Connection, current: i64) -> Result<(), StoreErr
 /// fixes every column, type, constraint and trigger open's upserts
 /// meet. If a migration ever changes `store_meta`, this check must
 /// follow it.
-fn has_store_meta_table(conn: &Connection) -> Result<bool, StoreError> {
+pub(crate) fn has_store_meta_table(conn: &Connection) -> Result<bool, StoreError> {
+    has_store_meta_table_with(conn, step_err)
+}
+
+/// Classify errors from the inspected database separately from the trusted
+/// reference schema, for callers reading untrusted images.
+pub(crate) fn has_store_meta_table_with(
+    conn: &Connection,
+    map_error: fn(rusqlite::Error) -> StoreError,
+) -> Result<bool, StoreError> {
     let expected = Connection::open_in_memory().map_err(step_err)?;
     expected.execute_batch(V1_SQL).map_err(bug)?;
-    Ok(store_meta_objects(conn)? == store_meta_objects(&expected)?)
+    let expected_objects = store_meta_objects(&expected, step_err, i64::MAX)?;
+    // One row past the expected count still bounds an untrusted scan
+    // while letting any extra object show up as a longer vector.
+    let bound = expected_objects.len() as i64 + 1;
+    Ok(store_meta_objects(conn, map_error, bound)? == expected_objects)
 }
 
 /// Every schema object on `store_meta` as (type, name, `CREATE`
 /// statement as SQLite stores it), sorted. SQLite matches table names
 /// without regard to case but keeps each object's own spelling, so a
 /// trigger `ON STORE_META` counts too.
-fn store_meta_objects(conn: &Connection) -> Result<Vec<SchemaObject>, StoreError> {
+fn store_meta_objects(
+    conn: &Connection,
+    map_error: fn(rusqlite::Error) -> StoreError,
+    limit: i64,
+) -> Result<Vec<SchemaObject>, StoreError> {
     let mut stmt = conn
         .prepare(
             "SELECT type, name, sql FROM sqlite_schema
              WHERE tbl_name = 'store_meta' COLLATE NOCASE
-             ORDER BY type, name",
+             ORDER BY type, name LIMIT ?",
         )
-        .map_err(step_err)?;
-    stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
-        .map_err(step_err)?
+        .map_err(map_error)?;
+    stmt.query_map([limit], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+        .map_err(map_error)?
         .collect::<Result<_, _>>()
-        .map_err(step_err)
+        .map_err(map_error)
 }
 
 /// One `sqlite_schema` row: type, name, and the `CREATE` statement
@@ -733,6 +754,10 @@ fn migration_21(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
 
 fn migration_22(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
     tx.execute_batch("CREATE TABLE backup_ownership (generation_id TEXT PRIMARY KEY REFERENCES backup_generations(generation_id), token TEXT NOT NULL) STRICT;").map_err(bug)
+}
+
+fn migration_23(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
+    tx.execute_batch("CREATE TABLE verifier_scratch (id TEXT PRIMARY KEY, token TEXT NOT NULL, incarnation TEXT NOT NULL) STRICT;").map_err(bug)
 }
 
 /// One version-4 UUID from the randomness seam. A seam that can't

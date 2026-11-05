@@ -50,7 +50,6 @@ static METHODS: ffi::sqlite3_io_methods = ffi::sqlite3_io_methods {
 
 /// Open only the supplied handle. SQLite cannot open any other file through
 /// this VFS, including a WAL, journal, temporary file or source pathname.
-#[allow(dead_code)] // Used by the verifier in the next stacked step.
 pub(crate) fn open(file: Box<dyn ReadFile>) -> rusqlite::Result<Connection> {
     let rc = *REGISTERED.get_or_init(register);
     if rc != ffi::SQLITE_OK {
