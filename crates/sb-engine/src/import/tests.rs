@@ -58,8 +58,11 @@ fn status(engine: &Engine, id: &str) -> ImportJobStatus {
 fn settle(engine: &Engine, id: &str, state: ImportJobState) -> ImportJobStatus {
     let deadline = Instant::now() + PATIENCE;
     loop {
-        let current = status(engine, id);
         let live = engine.imports().lock().contains_key(id);
+        // A worker can publish its report and release its claim between
+        // these reads. Read status after the idle observation so we cannot
+        // return a stale completed status that still lacks its report.
+        let current = status(engine, id);
         if current.state() == state && !live {
             return current;
         }

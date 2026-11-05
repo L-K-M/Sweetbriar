@@ -14,6 +14,7 @@ Rests on research [04-data-safety](../research/04-data-safety.md),
   state.sqlite (+ -wal, -shm)     the database (02)
   objects/
     tmp/                          in-progress writes, same volume
+      import-validation/<token>/  private disposable validation tapes
     sha256/ab/cd/<64 hex>         published immutable objects
   backups/<generation-id>/        backup generations (below)
   recovery/                       preserved evidence: quarantined objects, pre-migration snapshots
@@ -39,6 +40,18 @@ and no files (an interrupted creation); anything else without
 `state.sqlite` is refused (`Unavailable`). A store with `state.sqlite`
 but a missing layout directory is `Corrupt`; the directory isn't
 recreated.
+
+Import validation scratch is disposable, not recovery evidence. Each
+borrowed lease owns an exclusive private random-token directory and two
+fixed tape identities. Explicit success cleanup reports failure; drop
+cleanup is best effort and preserves the primary error. A writable open
+removes only the import-validation namespace after acquiring the exclusive
+store lease and before starting workers; failure prevents open with an
+actionable error. Read-only open does not clean it. Tape opens do not
+follow the final component if it is a symlink. The Store-owned layout and
+private ancestor directories are trusted not to be replaced during scratch
+operations; the path-based filesystem seam does not protect ancestor traversal
+against concurrent replacement.
 
 - **The data root lives on a local filesystem.** At startup the engine
   refuses with an explanation if the data root is under iCloud Drive,
@@ -469,6 +482,7 @@ so their objects stay referenced.
 A **generation** is a complete, self-verifying recovery point:
 
 ```
+backups/.<generation-id>.sweetbriar-owner   durable ownership marker
 backups/<generation-id>/
   state.sqlite          consistent snapshot (SQLite online backup API)
   objects/sha256/...    every object the snapshot references
@@ -512,10 +526,30 @@ backups/<generation-id>/
 - A generation is taken every hour while there were changes, so the
   recovery point is ≤ 1 hour. The research's 5 minutes is the test
   setting.
-- **Retention:** the last 24 hourly, 7 daily and 4 weekly generations.
+- **Retention:** keep the union of the newest complete generation in each
+  of the last 24 occupied UTC hour buckets, 7 occupied UTC day buckets,
+  and 4 occupied UTC week buckets (weeks start Monday). Break timestamp
+  ties by the lexicographically greatest generation ID. Remove expired
+  complete generations oldest first (lowest ID first on a timestamp tie).
+  Failed and in-progress rows are never retention candidates.
 - An interrupted generation is never treated as complete. The next run
   marks any `in_progress` generation `failed`, deletes its
-  `backup_in_progress` pins and removes its directory.
+  `backup_in_progress` pins and removes its directory. Record cleanup
+  ownership durably when marking it failed, so retries can distinguish it
+  from failed rows inherited through restore. Remove and flush the directory
+  entry before releasing pins; keep the failed row as evidence. A cleanup
+  error stops the new run and is retryable. A generation still active in
+  this process is not an interrupted generation. A fresh random ownership
+  token is stored with the generation before creating its directory, then
+  written and flushed in a sibling marker, and its parent flushed, before
+  creating the generation directory. Recovery and retention verify the marker
+  before removing the directory. Keep the marker until directory removal and
+  the parent flush succeed, then remove and flush the marker before unpinning
+  or deleting the row. A missing directory and marker are safe to retry; a
+  partial token marker can be removed only while the directory is absent.
+  Missing or mismatched ownership proof on an existing directory fails
+  closed, including for legacy generations. Validate the canonical parent
+  and generation paths before removal.
 
 ## Restore
 

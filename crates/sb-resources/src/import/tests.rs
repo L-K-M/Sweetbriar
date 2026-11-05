@@ -1082,6 +1082,36 @@ fn bundle_file_table_handles_large_names_and_many_entries() {
 }
 
 #[test]
+fn bundle_file_names_across_sort_runs_are_exact() {
+    let (scratch, res) = resources("bundle-sort-runs");
+    let dir = scratch.path().join("bundle");
+    fs::create_dir(&dir).unwrap();
+    let mut entries = (0..257)
+        .map(|n| format!(r#"{{"name":"file-{n:04}","bytes":0,"records":0}}"#))
+        .collect::<Vec<_>>();
+    entries[0] = r#"{"name":"é😀","bytes":0,"records":0}"#.to_owned();
+    fs::write(
+        dir.join("sweetbriar-metadata.json"),
+        table_manifest(&format!("[{}]", entries.join(","))),
+    )
+    .unwrap();
+    assert_eq!(
+        run(&res, std::slice::from_ref(&dir)).problems()[0].kind(),
+        ImportProblemKind::Unsupported
+    );
+    entries[256] = r#"{"name":"\u00e9\uD83D\uDE00","bytes":0,"records":0}"#.to_owned();
+    fs::write(
+        dir.join("sweetbriar-metadata.json"),
+        table_manifest(&format!("[{}]", entries.join(","))),
+    )
+    .unwrap();
+    assert_eq!(
+        run(&res, &[dir]).problems()[0].kind(),
+        ImportProblemKind::Failed
+    );
+}
+
+#[test]
 fn invalid_manifest_is_reported_and_removed() {
     let (scratch, res) = resources("bundle-invalid");
     let dir = scratch.path().join("bundle");

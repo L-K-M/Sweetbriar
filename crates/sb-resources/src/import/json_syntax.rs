@@ -2,9 +2,9 @@
 
 use std::io::{self, Read, Seek, SeekFrom};
 
-use sha2::{Digest, Sha256};
-
 use super::BundleFormat;
+use super::offset_sort::OffsetSort;
+use std::cmp::Ordering;
 
 mod messages;
 pub(super) use messages::validate_messages;
@@ -64,51 +64,39 @@ pub(super) struct FileTable {
 
 struct FileName {
     start: u64,
-    digest: [u8; 32],
 }
 
-/// Compare decoded names exactly; hashes only avoid unnecessary comparisons.
+/// Compare decoded names exactly using fixed-memory sorted offsets.
 pub(super) fn validate_file_names(
     reader: &mut (impl Read + Seek),
     table: &FileTable,
+    scratch: &sb_store::ValidationScratch<'_>,
 ) -> io::Result<()> {
-    // A fixed batch reduces rescans without retaining names for the corpus.
-    const BATCH_SIZE: usize = 64;
-    let mut outer = table.start + 1;
-    let mut processed = 0;
-    while processed < table.count {
-        let mut batch = Vec::with_capacity(BATCH_SIZE);
-        while batch.len() < BATCH_SIZE && processed < table.count {
-            let (name, next) = read_entry(reader, outer)?;
-            check_name(reader, &batch, &name)?;
-            batch.push(name);
-            outer = next;
-            processed += 1;
-        }
-        let mut inner = outer;
-        for _ in processed..table.count {
-            let (other, after) = read_entry(reader, inner)?;
-            check_name(reader, &batch, &other)?;
-            inner = after;
-        }
+    let mut sorter = OffsetSort::new(scratch)?;
+    let mut offset = table.start + 1;
+    for _ in 0..table.count {
+        let (name, next) = read_entry(reader, offset)?;
+        sorter.push(name.start, reader, &mut compare_names)?;
+        offset = next;
     }
-    if outer > table.end {
+    if offset > table.end {
         return Err(invalid());
     }
-    Ok(())
-}
-
-fn check_name(
-    reader: &mut (impl Read + Seek),
-    batch: &[FileName],
-    name: &FileName,
-) -> io::Result<()> {
-    for previous in batch {
-        if previous.digest == name.digest && same_name(reader, previous.start, name.start)? {
-            return Err(invalid());
-        }
-    }
-    Ok(())
+    let mut previous = None;
+    sorter.finish(
+        reader,
+        &mut compare_names,
+        &mut |r| r.stream_position().map(|_| ()),
+        |r, offset| {
+            if let Some(last) = previous
+                && compare_names(r, last, offset)? == Ordering::Equal
+            {
+                return Err(invalid());
+            }
+            previous = Some(offset);
+            Ok(())
+        },
+    )
 }
 
 fn read_entry(reader: &mut (impl Read + Seek), offset: u64) -> io::Result<(FileName, u64)> {
@@ -152,18 +140,23 @@ fn name_chunk(
     Ok(length)
 }
 
-fn same_name(reader: &mut (impl Read + Seek), mut left: u64, mut right: u64) -> io::Result<bool> {
+fn compare_names(
+    reader: &mut (impl Read + Seek),
+    mut left: u64,
+    mut right: u64,
+) -> io::Result<Ordering> {
     const CHUNK: usize = 256;
     loop {
         let mut a = ['\0'; CHUNK];
         let mut b = ['\0'; CHUNK];
         let a_len = name_chunk(reader, &mut left, &mut a)?;
         let b_len = name_chunk(reader, &mut right, &mut b)?;
-        if a_len != b_len || a[..a_len] != b[..b_len] {
-            return Ok(false);
+        let ordering = a[..a_len].cmp(&b[..b_len]);
+        if ordering != Ordering::Equal {
+            return Ok(ordering);
         }
         if a_len < CHUNK {
-            return Ok(true);
+            return Ok(Ordering::Equal);
         }
     }
 }
@@ -428,7 +421,6 @@ impl<R: Read> Parser<R> {
     fn file_name(&mut self) -> io::Result<FileName> {
         self.expect(b'"')?;
         let start = self.position;
-        let mut hash = Sha256::new();
         let mut length = 0u64;
         let mut dots = true;
         while let Some(ch) = self.string_char()? {
@@ -437,16 +429,11 @@ impl<R: Read> Parser<R> {
             }
             dots &= ch == '.';
             length = length.checked_add(1).ok_or_else(invalid)?;
-            let mut bytes = [0; 4];
-            hash.update(ch.encode_utf8(&mut bytes).as_bytes());
         }
         if length == 0 || (dots && length <= 2) {
             return Err(invalid());
         }
-        Ok(FileName {
-            start,
-            digest: hash.finalize().into(),
-        })
+        Ok(FileName { start })
     }
 
     fn string_char(&mut self) -> io::Result<Option<char>> {
@@ -816,6 +803,68 @@ impl<R: Read> Parser<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn decoded_comparison_handles_nul_unicode_and_long_prefixes() {
+        let prefix = "x".repeat(800);
+        for (left, right, expected) in [
+            (
+                r#"\u0000"#.to_string(),
+                r#"\u0000"#.to_string(),
+                Ordering::Equal,
+            ),
+            (
+                "é😀".to_string(),
+                r#"\u00e9\uD83D\uDE00"#.to_string(),
+                Ordering::Equal,
+            ),
+            (format!("{prefix}a"), format!("{prefix}b"), Ordering::Less),
+            (prefix.clone(), format!("{prefix}a"), Ordering::Less),
+        ] {
+            let text = format!("{left}\"{right}\"");
+            let mut reader = io::Cursor::new(text.as_bytes());
+            assert_eq!(
+                compare_names(&mut reader, 0, left.len() as u64 + 1).unwrap(),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn file_name_validation_avoids_quadratic_entry_rescans() {
+        struct CountSeeks<R> {
+            inner: R,
+            seeks: usize,
+        }
+        impl<R: Read> Read for CountSeeks<R> {
+            fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+                self.inner.read(buf)
+            }
+        }
+        impl<R: Seek> Seek for CountSeeks<R> {
+            fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+                self.seeks += 1;
+                self.inner.seek(pos)
+            }
+        }
+        let files = (0..4096)
+            .map(|n| format!(r#"{{"name":"{n:04}","bytes":0,"records":0}}"#))
+            .collect::<Vec<_>>()
+            .join(",");
+        let input = envelope(r#"{"kind":"mailbox","id":1,"generation":1}"#)
+            .replace(r#""files":[]"#, &format!(r#""files":[{files}]"#));
+        let table = validate_envelope(input.as_bytes()).unwrap();
+        let mut reader = CountSeeks {
+            inner: io::Cursor::new(input.as_bytes()),
+            seeks: 0,
+        };
+        let tmp = sb_test_support::ScratchDir::new("sort-scaling");
+        let resources = crate::Resources::open(&tmp.path().join("store")).unwrap();
+        let scratch = resources.store.import_validation_scratch().unwrap();
+        validate_file_names(&mut reader, &table, &scratch).unwrap();
+        scratch.finish().unwrap();
+        assert!(reader.seeks < 100_000, "{} seeks", reader.seeks);
+    }
 
     fn accepted(input: &[u8]) -> bool {
         validate(io::BufReader::with_capacity(1, input)).is_ok()
