@@ -1213,7 +1213,9 @@ fn bundle_child_matching_scales_with_directory_size() {
 }
 
 #[test]
-fn bundle_rejects_an_empty_eml_child_declared_as_one_record() {
+fn bundle_accepts_an_empty_eml_child_declared_as_one_record() {
+    // An acquired-but-empty stored object exports as a zero-byte EML
+    // with records: 1 — that is agreement, not corruption.
     let (scratch, res) = resources("bundle-empty-eml");
     let dir = scratch.path().join("bundle");
     fs::create_dir(&dir).unwrap();
@@ -1228,7 +1230,7 @@ fn bundle_rejects_an_empty_eml_child_declared_as_one_record() {
     fs::write(dir.join("sweetbriar-metadata.json"), manifest).unwrap();
     assert_eq!(
         run(&res, std::slice::from_ref(&dir)).problems()[0].kind(),
-        ImportProblemKind::Failed
+        ImportProblemKind::Unsupported
     );
     assert!(snapshot_names(&scratch).is_empty());
 }

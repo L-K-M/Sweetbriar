@@ -704,9 +704,10 @@ impl Walker<'_> {
                     self.cancelled = true;
                     Ok(())
                 }
-                Ok(sb_store::Scoped::Done(_))
-                    if format == BundleFormat::Eml && records == 1 && bytes > 0 =>
-                {
+                // A zero-byte EML is a legitimate emitted child: an
+                // acquired-but-empty stored object exports as an empty
+                // file that still counts as one record.
+                Ok(sb_store::Scoped::Done(_)) if format == BundleFormat::Eml && records == 1 => {
                     Ok(())
                 }
                 Ok(sb_store::Scoped::Done(_)) if format == BundleFormat::Eml => {
