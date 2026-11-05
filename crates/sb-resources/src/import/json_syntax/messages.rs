@@ -19,14 +19,14 @@ pub(in crate::import) fn validate_messages(
     table: &FileTable,
     scratch: &sb_store::ValidationScratch<'_>,
 ) -> io::Result<()> {
-    validate_messages_with_children(reader, table, scratch, &mut |_, _, _, _| Ok(()))
+    validate_messages_with_children(reader, table, scratch, &mut |_, _, _, _, _| Ok(()))
 }
 
 pub(in crate::import) fn validate_messages_with_children<R: Read + Seek>(
     reader: &mut R,
     table: &FileTable,
     scratch: &sb_store::ValidationScratch<'_>,
-    child: &mut impl FnMut(&mut R, u64, u64, u64) -> io::Result<()>,
+    child: &mut impl FnMut(&mut R, u64, u64, u64, u64) -> io::Result<()>,
 ) -> io::Result<()> {
     let (start, end, count) = table.messages;
     if count != table.entries {
@@ -63,7 +63,7 @@ fn validate_file_relationships<R: Read + Seek>(
     reader: &mut R,
     table: &FileTable,
     scratch: &sb_store::ValidationScratch<'_>,
-    child: &mut impl FnMut(&mut R, u64, u64, u64) -> io::Result<()>,
+    child: &mut impl FnMut(&mut R, u64, u64, u64, u64) -> io::Result<()>,
 ) -> io::Result<()> {
     reader.seek(SeekFrom::Start(table.start + 1))?;
     let mut p = Parser {
@@ -88,6 +88,7 @@ fn validate_file_relationships<R: Read + Seek>(
                 key: file.start,
                 position: file.bytes,
                 extra: file.records,
+                ordinal: index,
                 kind: SortKind::Declaration,
             },
             &mut p,
@@ -150,6 +151,7 @@ fn validate_file_relationships<R: Read + Seek>(
                     key,
                     position: bytes,
                     extra: 0,
+                    ordinal: 0,
                     kind: SortKind::Reference,
                 },
                 &mut p,
@@ -166,8 +168,8 @@ fn validate_file_relationships<R: Read + Seek>(
     let mut previous = None;
     let mut declaration = None;
     let mut references = 0u64;
-    let check_group = |declaration: Option<(u64, u64)>, references: u64| -> io::Result<()> {
-        let (_, records) = declaration.ok_or_else(invalid)?;
+    let check_group = |declaration: Option<(u64, u64, u64)>, references: u64| -> io::Result<()> {
+        let (_, records, _) = declaration.ok_or_else(invalid)?;
         if records != references || (table.format == BundleFormat::Eml && references != 1) {
             return Err(invalid());
         }
@@ -182,16 +184,19 @@ fn validate_file_relationships<R: Read + Seek>(
                 && p.compare(last, entry.key)? != Ordering::Equal
             {
                 check_group(declaration, references)?;
-                let (bytes, records) = declaration.ok_or_else(invalid)?;
+                let (bytes, records, ordinal) = declaration.ok_or_else(invalid)?;
                 let resume = p.position;
-                child(p.reader, last, bytes, records)?;
+                child(p.reader, last, bytes, records, ordinal)?;
                 p.restore(resume)?;
                 declaration = None;
                 references = 0;
             }
             match entry.kind {
                 SortKind::Declaration => {
-                    if declaration.replace((entry.position, entry.extra)).is_some() {
+                    if declaration
+                        .replace((entry.position, entry.extra, entry.ordinal))
+                        .is_some()
+                    {
                         return Err(invalid());
                     }
                 }
@@ -211,8 +216,8 @@ fn validate_file_relationships<R: Read + Seek>(
     )?;
     if let Some(last) = previous {
         check_group(declaration, references)?;
-        let (bytes, records) = declaration.ok_or_else(invalid)?;
-        child(p.reader, last, bytes, records)?;
+        let (bytes, records, ordinal) = declaration.ok_or_else(invalid)?;
+        child(p.reader, last, bytes, records, ordinal)?;
     }
     Ok(())
 }
@@ -795,6 +800,26 @@ mod tests {
     }
 
     #[test]
+    fn child_groups_keep_original_file_ordinals() {
+        let mut document = linked_manifest(777, "mboxrd");
+        document["files"].as_array_mut().unwrap().reverse();
+        let input = document.to_string();
+        let table = super::super::validate_envelope(input.as_bytes()).unwrap();
+        let tmp = sb_test_support::ScratchDir::new("child-ordinals");
+        let resources = crate::Resources::open(&tmp.path().join("store")).unwrap();
+        let scratch = resources.store.import_validation_scratch().unwrap();
+        let mut reader = io::Cursor::new(input.as_bytes());
+        let mut ordinals = Vec::new();
+        validate_file_relationships(&mut reader, &table, &scratch, &mut |_, _, _, _, ordinal| {
+            ordinals.push(ordinal);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(ordinals, (0..777).rev().collect::<Vec<_>>());
+        scratch.finish().unwrap();
+    }
+
+    #[test]
     fn file_relationship_counts_and_eml_agreement() {
         let base = linked_manifest(1, "eml");
         for (field, value) in [
@@ -832,7 +857,7 @@ mod tests {
             seeks: 0,
             bytes: 0,
         };
-        validate_file_relationships(&mut reader, &table, &scratch, &mut |_, _, _, _| Ok(()))
+        validate_file_relationships(&mut reader, &table, &scratch, &mut |_, _, _, _, _| Ok(()))
             .unwrap();
         assert!(reader.seeks < 150_000, "{} seeks", reader.seeks);
         scratch.finish().unwrap();
@@ -843,7 +868,7 @@ mod tests {
             let scratch = resources.store.import_validation_scratch().unwrap();
             let mut reader = io::Cursor::new(input.as_bytes());
             let error =
-                validate_file_relationships(&mut reader, &table, &scratch, &mut |_, _, _, _| {
+                validate_file_relationships(&mut reader, &table, &scratch, &mut |_, _, _, _, _| {
                     Err(io::Error::new(kind, "child match stopped"))
                 })
                 .unwrap_err();
@@ -888,7 +913,7 @@ mod tests {
                     &mut reader,
                     &table,
                     &scratch,
-                    &mut |_, _, _, _| Ok(())
+                    &mut |_, _, _, _, _| Ok(())
                 )
                 .unwrap_err()
                 .kind(),

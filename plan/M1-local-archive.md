@@ -997,6 +997,9 @@ local drafts. No network yet.
     captured byte length and record count independently, reporting missing,
     unlisted or disagreeing files without suppressing sibling checks. Refuse
     bundle sources and discard temporary snapshots, including on cancellation.
+  - **M1.7d1b2a1 File ordinal propagation — S:** preserve each original
+    zero-based manifest file ordinal through the bounded declaration sort
+    and child agreement. Keep bundle admission deferred and discard snapshots.
   - **M1.7d1b2b Bundle inventory — L:** admit verified bundle sources and
     retain their shared manifest snapshot. Restore recursive nested discovery,
     sorted canonical deduplication and version-2 inventory lifecycle.

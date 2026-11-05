@@ -552,7 +552,7 @@ impl Walker<'_> {
                         &mut reader,
                         &table,
                         &scratch,
-                        &mut |reader, offset, bytes, records| {
+                        &mut |reader, offset, bytes, records, ordinal| {
                             while cursor < children.len() {
                                 let Some(name) =
                                     children[cursor].0.file_name().and_then(|n| n.to_str())
@@ -563,7 +563,7 @@ impl Walker<'_> {
                                 match json_syntax::compare_child(reader, offset, name)? {
                                     std::cmp::Ordering::Greater => cursor += 1,
                                     std::cmp::Ordering::Equal => {
-                                        children[cursor].1 = Some((bytes, records));
+                                        children[cursor].1 = Some((bytes, records, ordinal));
                                         cursor += 1;
                                         return Ok(());
                                     }
@@ -627,7 +627,7 @@ impl Walker<'_> {
                     if path.to_str().is_none() {
                         self.problem(&path, ImportProblemKind::NonUtf8, "the path is not UTF-8");
                         valid = false;
-                    } else if let Some((bytes, records)) = declaration {
+                    } else if let Some((bytes, records, _ordinal)) = declaration {
                         if !self.check_bundle_child(&path, format, bytes, records) {
                             valid = false;
                         }
