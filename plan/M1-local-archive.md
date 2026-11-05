@@ -982,16 +982,27 @@ local drafts. No network yet.
     in fixed-memory runs on the two validation tapes and use exact decoded
     file-name comparison to replace quadratic file-table uniqueness scans.
     Message relationships remain deferred to b2.
-  - **M1.7d1b1b2b2 Manifest message relationships — L:** validate counts,
-    ordered-ID digest, unique occurrence IDs, file references and EML
-    agreement using bounded scans of the verified snapshot. Prove writer
-    manifests, hostile tokens and cleanup before bundle inventory.
-  - **M1.7d1b2 Bundle file agreement and inventory — L:** check every declared
-    direct child's kind, byte length and record count independently before
-    ingest, report missing or disagreeing files without suppressing valid
-    siblings, and retain the shared manifest snapshot while any bundle source
-    references it. Preserve sorted canonical discovery, alias deduplication,
-    cancellation cleanup and real EML/mboxrd exporter proof.
+  - **M1.7d1b1b2b1c Tag-ID sorting prerequisite — M:** reuse the bounded
+    offset sorter for exact local tag-ID uniqueness validation while retaining
+    manifest-order tag-name checks. This removes only quadratic local tag-ID
+    validation; it does not validate or admit global message relationships.
+  - **M1.7d1b1b2b2a Occurrence relationships — M:** validate the message
+    count, ordered occurrence-ID digest and global occurrence-ID uniqueness
+    with bounded scans and scratch. Keep bundle admission deferred.
+  - **M1.7d1b1b2b2b File relationships — M:** validate file references,
+    record counts and EML agreement using bounded scans of the verified
+    snapshot. Prove writer manifests, hostile tokens and cleanup before
+    bundle inventory.
+  - **M1.7d1b2a Bundle child agreement — L:** check each direct child's kind,
+    captured byte length and record count independently, reporting missing,
+    unlisted or disagreeing files without suppressing sibling checks. Refuse
+    bundle sources and discard temporary snapshots, including on cancellation.
+  - **M1.7d1b2a1 File ordinal propagation — S:** preserve each original
+    zero-based manifest file ordinal through the bounded declaration sort
+    and child agreement. Keep bundle admission deferred and discard snapshots.
+  - **M1.7d1b2b Bundle inventory — L:** admit verified bundle sources and
+    retain their shared manifest snapshot. Restore recursive nested discovery,
+    sorted canonical deduplication and version-2 inventory lifecycle.
   - **M1.7d2 Manifest-verified ingest — L:** each bundle record's
     boundary, framing, original length and SHA-256 are verified before
     its bytes publish; only the declared framing LF is removed; the
@@ -1070,18 +1081,45 @@ local drafts. No network yet.
     `failed`, deletes its pins and removes its directory. Acceptance: the
     interrupted generation's marking and removal; on restart after a cut
     no inherited unfinished job blocks GC.
-  - **M1.8e Quarantined restore staging (L):** verify the chosen
-    generation against its manifest (`state.sqlite` hash, every object
-    hash), stage the copy into `<data root>.restoring-<inc>` with the
-    publication flushes, and run the staging quarantine transaction: new
-    incarnation, all accounts `paused`, unfinished import jobs `failed`
-    with requests/checkpoints intact, intents `quarantined`, attempts in
-    `held`/`queued`/`submitting` become `outcome_unknown`, copied-source
-    locations rewritten (never to absent originals) and the inherited
-    backup rows fixed — then flush staging. Acceptance: every
-    after-restore row state; no original-path substitution; crash cuts
-    during staging leave the live store untouched and stage nothing
-    unquarantined.
+  - **M1.8e0a Confined backup reads (M):** add a retained directory
+    capability that opens descendants without following symlinks, including
+    simulator and fault behavior. Acceptance: path replacement cannot redirect
+    an open capability; links and traversal are refused; failures propagate.
+  - **M1.8e0b1 Retained-file SQLite reader (M):** provide a read-only
+    SQLite VFS backed only by an already-open reader. Refuse sidecars and
+    other file opens. Acceptance: replacing the pathname cannot change the
+    queried image; no source WAL is read; Linux and macOS tests pass.
+  - **M1.8e0b2 Verifier scratch ownership (L):** create and recover private
+    scratch with durable ownership and directory identity. Cleanup fails
+    closed and retains evidence when ownership cannot be proved, including
+    an unmarked directory after a crash; retry proven cleanup. Acceptance:
+    crash cuts and substitutions preserve unowned data, and proven leftovers
+    are recovered; simulator and fault behavior agree.
+  - **M1.8e0b3 Isolated verifier image (L):** stream a confined source into
+    owned scratch, checking digest and length, and inspect only the retained
+    completed image through the reader above. Bound disk, memory and SQLite
+    work, including cancellation. Acceptance: source changes cannot alter the
+    inspection; malformed schemas are bounded; cancellation never succeeds.
+  - **M1.8e1 Restore generation verification (M):** select a complete
+    generation recorded in the current store and verify its manifest, snapshot
+    and every object, including identity, size and hash mismatches. Staging
+    must verify the bytes it actually copies again.
+  - **M1.8e2 Restore discovery and verified handoff (M):** discover and
+    select complete external generations, including restore into a fresh data
+    root, and hand a verified selection to staging. Do not assume a row in
+    the current store. Verify the actual copied bytes again during staging.
+  - **M1.8e3 Quarantined restore staging (L):** verify and copy the chosen
+    generation into `<data root>.restoring-<inc>` with publication flushes,
+    then run the staging quarantine transaction: new incarnation, all
+    accounts paused, unfinished import jobs failed with requests and
+    checkpoints intact, intents quarantined, held/queued/submitting attempts
+    outcome unknown, copied-source locations rewritten without substituting
+    absent original paths, and inherited backup rows fixed. Flush staging.
+    Acceptance: every after-restore row state; internal and external backup
+    location semantics; no original-path substitution; cancellation and
+    injected I/O, SQL and flush failures; retry and wrong generation or
+    incarnation; crash cuts leave the live store untouched and no
+    unquarantined stage eligible for publication.
   - **M1.8f Durable swap and startup recovery (L):** the restore-pending
     marker (new incarnation, generation id and path), both renames with
     their flushes, the startup handling of all three marker states, the
@@ -1247,6 +1285,28 @@ local drafts. No network yet.
         the reservation twice. Cover replay and reservation ownership through
         native APIs without moving validation outside the receipt transaction.
         Depends on M1.9b2a.
+      - **M1.9b2a2 Authorized attachment republication (M):** the
+        Store/Resources primitive
+        `republish_draft_attachment(draft_id, revision_id, reference)`,
+        the native prerequisite for M1.9c's keep-both and attachment
+        undo. Store validation proves the revision belongs to the draft
+        and the full stored `AttachmentRef` (hash, size, filename,
+        media type) is a member of that revision. An older immutable
+        revision is allowed after the head advances, and a noncurrent or
+        terminal source draft is allowed because the operation creates
+        a new publication rather than mutating that draft. The exact
+        source bytes are read through the protected verifying reader
+        and published through the real object store, returning a fresh
+        opaque `PublishedObject` with a distinct reservation per call.
+        No idempotency key or receipt; no new revision or draft row; the
+        following save spends the returned reservation once. Native
+        Resources tests prove the old-revision copy, distinct
+        reservations, a copy saved into a new draft, an unchanged
+        source, denial of a wrong draft, revision, hash, size, filename
+        or media type, missing and tampered sources, injected read,
+        write, sync and rename failures, and the native GC/read lifetime.
+        No Engine, Service, FFI, bridge or Compose surface; those stay
+        in the later artifacts. Depends on M1.9a1 and M1.8a1.
       - **M1.9b2b Draft commands over FFI:** re-sized 2026-11-04: the
         complete create/save/discard/publication artifact measures 1,922
         gross changed lines including generated bindings and tests, over
@@ -1284,6 +1344,18 @@ local drafts. No network yet.
         typed `Conflict` outcome M1.9c shows as keep-both, with Swift
         Testing coverage of the codec, conflict and lifecycle. Depends on
         M1.9b2b3.
+      Split c again before adding the complete editor-state proof:
+      - **M1.9b2c1 Draft bridge APIs and codecs (L):** bridge-owned draft
+        records, complete generated mappings, query/create/publication/save/
+        discard adapters, original opaque attachment handles, and isolated
+        native endpoint, codec, error and lifecycle tests. No editor model.
+      - **M1.9b2c2 Revision-safe editor model (L):** load, reload, edit, save,
+        discard and stop over c1. Preserve the editor's base on dirty reload,
+        acknowledge saved attachment publications without spending them
+        again, preserve later typing and attachments, fence stale reads and
+        writes, and expose typed conflict without losing content. Include
+        deterministic concurrency and native attachment-save regression
+        tests. M1.9c still owns the compose window, autosave and keep-both UI.
       Re-size again if any artifact exceeds the limit.
   - **M1.9c Compose window (L):** the macOS compose window — token
     fields, subject, a plain or Markdown editor on the M0.11 probe's

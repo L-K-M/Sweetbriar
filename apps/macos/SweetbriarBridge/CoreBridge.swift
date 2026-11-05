@@ -350,8 +350,16 @@ public final class CoreBridge: Sendable {
         SweetbriarCore.palette().map(PaletteColor.init)
     }
 
-    /// `draft(draft_id)` (spec/07): the draft, its current revision
-    /// and any live attempt; an unknown id is `notFound`.
+    /// Local draft summaries for the sidebar (spec/07).
+    public func drafts() async throws -> [DraftSummary] {
+        let token = SweetbriarCore.CancelToken()
+        let rows = try await Self.withCancellation(token: token) {
+            try await self.core.drafts(token: token)
+        }
+        return rows.map(DraftSummary.init)
+    }
+
+    /// The draft, current revision and live attempt; an unknown id is NotFound.
     public func draft(id: String) async throws -> Draft {
         let token = SweetbriarCore.CancelToken()
         let value = try await Self.withCancellation(token: token) {
@@ -628,7 +636,7 @@ extension Setting {
 
 extension Receipt {
     /// Map the generated record field by field.
-    fileprivate init(_ generated: SweetbriarCore.Receipt) {
+    init(_ generated: SweetbriarCore.Receipt) {
         self.init(
             command: generated.command,
             resultJson: generated.resultJson,

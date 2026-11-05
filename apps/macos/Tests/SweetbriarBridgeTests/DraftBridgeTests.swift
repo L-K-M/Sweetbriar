@@ -36,7 +36,7 @@ func createPublishSaveLoadRoundTrip() async throws {
     let created = try await bridge.createDraft(idempotencyKey: createKey, source: .new)
     #expect(created.receipt.command == "create_draft")
     let replayed = try await bridge.createDraft(idempotencyKey: createKey, source: .new)
-    #expect(replayed.draftId == created.draftId)
+    #expect(replayed == created)
 
     let bytes = Data("attachment-bytes".utf8)
     let attachment = try await bridge.publishDraftAttachment(bytes: bytes)
@@ -73,6 +73,28 @@ func createPublishSaveLoadRoundTrip() async throws {
     let r2 = try #require(reloaded.revision)
     #expect(r2.revisionId == savedAgain.revisionId && r2.baseRevisionId == saved.revisionId)
     #expect(r2.subject == "Hello again" && r2.attachments == [ref])
+    let summary = try #require(try await bridge.drafts().first { $0.draftId == created.draftId })
+    #expect(summary.state == .editing && summary.subject == "Hello again")
+    #expect(summary.accountId == nil && summary.identityId == nil && summary.attempt == nil)
+    #expect(summary.to == r2.to && summary.cc == r2.cc && summary.bcc == r2.bcc)
+    #expect(summary.updatedAtMs == reloaded.updatedAtMs)
+
+    let discardKey = UUID().uuidString
+    let discarded = try await bridge.discardDraft(idempotencyKey: discardKey, draftId: created.draftId)
+    #expect(discarded.command == "discard_draft")
+    let discardReplay = try await bridge.discardDraft(idempotencyKey: discardKey, draftId: created.draftId)
+    #expect(discardReplay == discarded)
+    let terminal = try await bridge.draft(id: created.draftId)
+    #expect(terminal.state == .discarded && terminal.revision == r2)
+    #expect(try await bridge.drafts().allSatisfy { $0.draftId != created.draftId })
+    do {
+        _ = try await bridge.saveDraft(idempotencyKey: UUID().uuidString,
+            draftId: created.draftId, baseRevisionId: r2.revisionId,
+            content: content(subject: "Terminal edit", attachments: [.retained(ref)]))
+        Issue.record("a fresh save of a discarded draft must conflict")
+    } catch let failure as CoreFailure {
+        guard case .conflict = failure else { Issue.record("expected Conflict, got \(failure)"); return }
+    }
 
     await bridge.shutdown()
 }
@@ -95,7 +117,7 @@ func sameKeyReplayRetainsTheHandleAndSkipsTheSpend() async throws {
         idempotencyKey: key, draftId: created.draftId, baseRevisionId: nil, content: contentValue
     )
     #expect(second.revisionId == first.revisionId)
-    #expect(second.receipt.createdAtMs == first.receipt.createdAtMs)
+    #expect(second.receipt == first.receipt)
 
     let loaded = try await bridge.draft(id: created.draftId)
     let r = try #require(loaded.revision)
