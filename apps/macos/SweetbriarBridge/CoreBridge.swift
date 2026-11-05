@@ -350,6 +350,87 @@ public final class CoreBridge: Sendable {
         SweetbriarCore.palette().map(PaletteColor.init)
     }
 
+    /// Local draft summaries for the sidebar (spec/07).
+    public func drafts() async throws -> [DraftSummary] {
+        let token = SweetbriarCore.CancelToken()
+        let rows = try await Self.withCancellation(token: token) {
+            try await self.core.drafts(token: token)
+        }
+        return rows.map(DraftSummary.init)
+    }
+
+    /// The draft, current revision and live attempt; an unknown id is NotFound.
+    public func draft(id: String) async throws -> Draft {
+        let token = SweetbriarCore.CancelToken()
+        let value = try await Self.withCancellation(token: token) {
+            try await self.core.draft(token: token, draftId: id)
+        }
+        return Draft(value)
+    }
+
+    /// `create_draft(context)` (spec/07) under a shell-made key: a new
+    /// `editing` draft; a repeated key replays its receipt and id.
+    public func createDraft(
+        idempotencyKey: String, source: DraftSource
+    ) async throws -> DraftCreated {
+        let token = SweetbriarCore.CancelToken()
+        let created = try await Self.withCancellation(token: token) {
+            try await self.core.createDraft(
+                token: token, idempotencyKey: idempotencyKey, context: source.generated
+            )
+        }
+        return DraftCreated(created)
+    }
+
+    /// `publish_draft_attachment` (spec/02): the bytes publish
+    /// durably; the opaque handle retains the native reservation.
+    public func publishDraftAttachment(bytes: Data) async throws -> DraftAttachmentObject {
+        let token = SweetbriarCore.CancelToken()
+        let object = try await Self.withCancellation(token: token) {
+            try await self.core.publishDraftAttachment(
+                token: token, input: SweetbriarCore.DraftAttachmentPublish(bytes: bytes)
+            )
+        }
+        return DraftAttachmentObject(object)
+    }
+
+    /// `save_draft(draft_id, base_revision_id, content)` (spec/07)
+    /// under a shell-made key: append a revision, make it current and
+    /// spend each new attachment's reservation in one transaction. A
+    /// repeated key replays its receipt before validation or spending.
+    public func saveDraft(
+        idempotencyKey: String,
+        draftId: String,
+        baseRevisionId: String?,
+        content: DraftContent
+    ) async throws -> DraftSaved {
+        let token = SweetbriarCore.CancelToken()
+        let saved = try await Self.withCancellation(token: token) {
+            try await self.core.saveDraft(
+                token: token,
+                idempotencyKey: idempotencyKey,
+                draftId: draftId,
+                baseRevisionId: baseRevisionId,
+                content: content.generated
+            )
+        }
+        return DraftSaved(saved)
+    }
+
+    /// `discard_draft(id)` (spec/07, spec/05) under a shell-made key:
+    /// mark the draft discarded, keeping every revision.
+    public func discardDraft(
+        idempotencyKey: String, draftId: String
+    ) async throws -> Receipt {
+        let token = SweetbriarCore.CancelToken()
+        let receipt = try await Self.withCancellation(token: token) {
+            try await self.core.discardDraft(
+                token: token, idempotencyKey: idempotencyKey, draftId: draftId
+            )
+        }
+        return Receipt(receipt)
+    }
+
     /// `open_window` (spec/07): register a window over `spec` and
     /// return its first page at the source's current generation.
     public func openWindow(
