@@ -1281,7 +1281,7 @@ local drafts. No network yet.
         the reservation twice. Cover replay and reservation ownership through
         native APIs without moving validation outside the receipt transaction.
         Depends on M1.9b2a.
-      - **M1.9b2a2 Authorized attachment republication (S):** the
+      - **M1.9b2a2 Authorized attachment republication (M):** the
         Store/Resources primitive
         `republish_draft_attachment(draft_id, revision_id, reference)`,
         the native prerequisite for M1.9c's keep-both and attachment
