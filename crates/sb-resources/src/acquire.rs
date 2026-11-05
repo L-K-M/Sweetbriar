@@ -11,6 +11,7 @@
 //! ```
 
 use std::io::{self, BufReader, Read, Seek, SeekFrom};
+use std::ops::ControlFlow;
 
 use sb_mime::{
     Limits, MailboxAddress, MboxError, MboxRecord, MboxScanner, MboxVariant, ParseOutcome,
@@ -18,9 +19,14 @@ use sb_mime::{
 use sb_store::imports::{
     ImportFlags, ImportMessage, ImportParseState, ImportReadState, ImportSourceKind, ImportSummary,
 };
-use sb_store::{ObjectStore, PublishedObject, ReadFile, Store, StoreError};
+use sb_store::{
+    ObjectStore, PublishedObject, ReadFile, Scoped, Store, StoreError, read_error_as_store_error,
+};
+use sha2::{Digest, Sha256};
 
-use crate::{MboxQuoting, SourceInventory, SourceKind};
+use crate::{
+    BundleFormat, ManifestProofRegistry, MboxQuoting, Resources, SourceInventory, SourceKind,
+};
 
 /// Where one source's acquisition continues: the next unread snapshot
 /// offset and the messages consumed before it (spec/09). The job stores
@@ -99,6 +105,16 @@ pub struct SourceAcquisition {
     length: u64,
     total: u64,
     position: SourcePosition,
+    verification: Option<VerifiedMessage>,
+}
+
+/// The frozen manifest descriptor for one bundle EML message: the exact
+/// bytes the streaming verifier must observe before the publisher may
+/// install the object (spec/09 "Export bundles").
+#[derive(Debug, Clone, Copy)]
+struct VerifiedMessage {
+    sha256: [u8; 32],
+    original_bytes: u64,
 }
 
 impl SourceAcquisition {
@@ -183,7 +199,117 @@ pub(crate) fn open(
         length,
         total,
         position,
+        verification: None,
     })
+}
+
+/// Open one bundle EML source's manifest-verified acquisition session.
+/// The frozen registry proof supplies the descriptor; the source's own
+/// snapshot is verified and reopened. `position` is `START` or the
+/// source's one finished message. `progress` cancels the first proof
+/// production before the session exists. mboxrd is refused until
+/// M1.7d2c2b; a plain source never falls back to the plain path.
+pub(crate) fn open_bundle(
+    resources: &Resources,
+    registry: &ManifestProofRegistry,
+    source: &SourceInventory,
+    position: SourcePosition,
+    progress: impl FnMut(u64) -> ControlFlow<()>,
+) -> Result<Scoped<SourceAcquisition>, StoreError> {
+    let bundle = source
+        .bundle()
+        .ok_or_else(|| invalid("manifest-verified acquisition needs a bundle source"))?;
+    if bundle.format() != BundleFormat::Eml {
+        return Err(StoreError::Unavailable {
+            reason: format!(
+                "{} is an mboxrd bundle member; framing-verified acquisition arrives with M1.7d2c2b",
+                source.path().display()
+            ),
+            io_kind: None,
+        });
+    }
+    if source.kind() != SourceKind::Eml {
+        return Err(invalid("an EML bundle source must have kind eml"));
+    }
+    let length = source.snapshot().byte_length();
+    let total = source.message_count();
+    if total != 1 {
+        return Err(corrupt(format!(
+            "an EML bundle source must hold one message, not {total}"
+        )));
+    }
+    if position != SourcePosition::START && position != SourcePosition::new(length, 1) {
+        return Err(invalid(format!(
+            "position {}/{} does not fit a one-message source of {length} bytes",
+            position.offset(),
+            position.messages()
+        )));
+    }
+    let file = resources.store.open_import_source(source.snapshot())?;
+    let descriptor = match registry.with_proof(resources, bundle, progress, |proof| {
+        let mut descriptors = Vec::new();
+        proof.visit_source(source, |descriptor| {
+            descriptors.push(descriptor);
+            Ok(())
+        })?;
+        if descriptors.len() != 1 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "an EML bundle source must resolve exactly one descriptor",
+            ));
+        }
+        Ok(descriptors.pop().expect("one descriptor"))
+    }) {
+        Ok(Scoped::Done(descriptor)) => descriptor,
+        Ok(Scoped::Stopped) => return Ok(Scoped::Stopped),
+        Err(error) => return Err(proof_error(error)),
+    };
+    if descriptor.original_bytes != length || descriptor.sha256 != source.snapshot().sha256() {
+        return Err(corrupt(format!(
+            "{}'s manifest descriptor does not match its captured bytes",
+            source.path().display()
+        )));
+    }
+    Ok(Scoped::Done(SourceAcquisition {
+        file,
+        kind: SourceKind::Eml,
+        variant: MboxVariant::Mboxrd,
+        path: source
+            .path()
+            .to_str()
+            .expect("source paths are UTF-8")
+            .to_owned(),
+        sha256: source.snapshot().sha256_hex(),
+        length,
+        total,
+        position,
+        verification: Some(VerifiedMessage {
+            sha256: descriptor.sha256,
+            original_bytes: descriptor.original_bytes,
+        }),
+    }))
+}
+
+/// Map a registry proof failure back to its typed store cause.
+fn proof_error(error: io::Error) -> StoreError {
+    if let Some(error) = read_error_as_store_error(&error) {
+        return error.clone();
+    }
+    match error.kind() {
+        io::ErrorKind::NotFound => StoreError::NotFound {
+            what: error.to_string(),
+        },
+        io::ErrorKind::InvalidData => StoreError::Corrupt {
+            detail: error.to_string(),
+        },
+        io::ErrorKind::Interrupted => StoreError::Interrupted {
+            detail: error.to_string(),
+        },
+        kind => StoreError::Unavailable {
+            reason: error.to_string(),
+            io_kind: Some(kind),
+        },
+    }
 }
 
 /// Publish the next message and summarize its bounded prefix, or `None`
@@ -223,7 +349,14 @@ pub(crate) fn next(
                 .file
                 .seek(SeekFrom::Start(0))
                 .map_err(|e| unreadable(&source.path, offset, e))?;
-            publish(store, (&mut source.file).take(length), keep)
+            match source.verification {
+                Some(verification) => publish(
+                    store,
+                    VerifiedRead::new(&mut *source.file, verification),
+                    keep,
+                ),
+                None => publish(store, (&mut source.file).take(length), keep),
+            }
         }
         Some(record) => {
             let reader = record
@@ -234,7 +367,12 @@ pub(crate) fn next(
     };
     let (object, prefix) = match published {
         Ok(published) => published,
-        Err(Failure::Read(e)) => return Err(unreadable(&source.path, offset, e)),
+        Err(Failure::Read(e)) => {
+            if let Some(error) = read_error_as_store_error(&e) {
+                return Err(error.clone());
+            }
+            return Err(unreadable(&source.path, offset, e));
+        }
         Err(Failure::Store(e)) => return Err(e),
     };
     if record.is_none() && object.id().byte_length() != source.length {
@@ -323,6 +461,83 @@ fn publish(
         Ok(object) => Ok((object, tee.prefix)),
         Err(error) => Err(tee.failure.map_or(Failure::Store(error), Failure::Read)),
     }
+}
+
+/// A counted, hashed reader that verifies the expected SHA-256 and
+/// length at EOF, before the publisher sees a successful EOF and may
+/// install the object. It reads at most the expected bytes and probes
+/// one more to reject growth; I/O errors keep their native kind.
+struct VerifiedRead<R> {
+    inner: R,
+    expected: VerifiedMessage,
+    hasher: Sha256,
+    read: u64,
+    done: bool,
+}
+
+impl<R: Read> VerifiedRead<R> {
+    fn new(inner: R, expected: VerifiedMessage) -> Self {
+        Self {
+            inner,
+            expected,
+            hasher: Sha256::new(),
+            read: 0,
+            done: false,
+        }
+    }
+
+    fn corrupt(&self, detail: String) -> io::Error {
+        io::Error::new(io::ErrorKind::InvalidData, StoreError::Corrupt { detail })
+    }
+
+    fn finish(&mut self) -> io::Result<()> {
+        let actual: [u8; 32] = self.hasher.clone().finalize().into();
+        if self.read != self.expected.original_bytes || actual != self.expected.sha256 {
+            return Err(self.corrupt(format!(
+                "expected {} bytes hashed {}, found {} bytes hashed {}",
+                self.expected.original_bytes,
+                hex(&self.expected.sha256),
+                self.read,
+                hex(&actual)
+            )));
+        }
+        Ok(())
+    }
+}
+
+impl<R: Read> Read for VerifiedRead<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        if self.done {
+            return Ok(0);
+        }
+        if self.read == self.expected.original_bytes {
+            let mut extra = [0];
+            let n = self.inner.read(&mut extra)?;
+            if n > 0 {
+                return Err(self.corrupt(format!(
+                    "message grew past its {} expected bytes",
+                    self.expected.original_bytes
+                )));
+            }
+            self.done = true;
+            return self.finish().map(|()| 0);
+        }
+        let room = (self.expected.original_bytes - self.read).min(buf.len() as u64) as usize;
+        let n = self.inner.read(&mut buf[..room])?;
+        if n == 0 {
+            return Err(self.corrupt(format!(
+                "message ended after {} of {} expected bytes",
+                self.read, self.expected.original_bytes
+            )));
+        }
+        self.hasher.update(&buf[..n]);
+        self.read += n as u64;
+        Ok(n)
+    }
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 /// Exact bytes pass through untouched; only a bounded prefix is copied.
@@ -421,6 +636,9 @@ fn invalid(message: impl Into<String>) -> StoreError {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod bundle_tests;
 
 #[cfg(test)]
 mod reservation_tests;
