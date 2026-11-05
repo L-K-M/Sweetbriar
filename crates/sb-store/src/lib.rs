@@ -1,7 +1,7 @@
 //! `sb-store` — L5. SQLite, migrations, object store, backups, FTS5,
 //! query AST + SQL. Doesn't know about IMAP; reaches platform services
 //! only through `sb-types` seam traits.
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 
 pub mod activation;
 mod address_keys;
@@ -13,6 +13,8 @@ mod error;
 mod export_metadata;
 pub mod exports;
 mod gc;
+#[allow(unsafe_code)]
+mod image_vfs;
 mod import_reports;
 pub mod imports;
 pub mod index;
@@ -52,7 +54,9 @@ pub use sb_types::time::{Clock, Timestamp};
 // dependency of its own.
 pub use rusqlite::Transaction;
 
-pub use backups::{BackupDestination, BackupReceipt, BackupSnapshot};
+pub use backups::{
+    BackupDestination, BackupImageInspection, BackupReceipt, BackupSnapshot, VerifiedExternalBackup,
+};
 pub use error::StoreError;
 pub use export_metadata::{ExportMetadata, export_occurrence_metadata};
 pub use gc::{GC_GRACE_PERIOD, GcGate, GcReport};
