@@ -200,6 +200,24 @@ impl Store {
         self.backups.discover_external(parent, cancelled, visitor)
     }
 
+    /// Stage a verified external generation as a quarantined sibling of
+    /// this store's data root. The supplied locator is reopened through a
+    /// confined capability and must name the retained generation identity;
+    /// every copied byte is reverified against the exact selected manifest.
+    /// A qualified [`crate::RestoreStage`] is exposed only after the copy,
+    /// quarantine commit, checkpoint, close and flushes all succeed. Any
+    /// failure returns `Err` and leaves the live store and source unchanged.
+    pub fn stage_restore(
+        &self,
+        selection: crate::VerifiedExternalBackup,
+        source_location: &Path,
+        metadata: crate::RestoreMetadata,
+        cancelled: &std::sync::atomic::AtomicBool,
+    ) -> Result<crate::RestoreStage, StoreError> {
+        self.backups
+            .stage_restore(selection, source_location, metadata, cancelled)
+    }
+
     /// Stream a full capture through bounded writer turns. Blocking;
     /// finish explicitly and release read transactions before writing.
     pub fn export_chunk_writer(

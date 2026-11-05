@@ -7,18 +7,19 @@
 
 use std::env;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Barrier};
+use std::sync::{Arc, Barrier, atomic::Ordering};
 
 use rusqlite::Connection;
+use sha2::{Digest, Sha256};
 
 use sb_test_support::{
     CutFs, FaultFs, FaultKind, FixedClock, FsOp, ScratchDir, SeededRandom, block_on, real_fs,
-    run_crash_cuts,
+    run_crash_cut_points, run_crash_cuts,
 };
 use sb_types::fs::Fs;
 use sb_types::time::Timestamp;
 
-use super::{BackupDestination, Backups, Pauses};
+use super::{BackupDestination, BackupReceipt, Backups, Pauses};
 use crate::objects::{ObjectId, ObjectStore, ReservationRelease, release_reservation};
 use crate::schema::bug;
 use crate::testing::{FIXED_NOW_MS, reading, scratch_paths, test_seams, writing};
@@ -430,6 +431,16 @@ fn an_unusable_destination_is_invalid_input() {
 /// only the snapshot path's operations can fail, so fault points are
 /// exact.
 fn faulty_backups(store: &Store, paths: &StorePaths, fs: Arc<dyn Fs>) -> Backups {
+    faulty_backups_seeded(store, paths, fs, 7)
+}
+
+/// `faulty_backups` with a chosen random seed, so two stages can draw
+/// different incarnations (or the same one, deliberately).
+fn faulty_backups_seeded(store: &Store, paths: &StorePaths, fs: Arc<dyn Fs>, seed: u64) -> Backups {
+    // Staging opens confined directories, which never follow a symlinked
+    // ancestor (macOS's /var); resolve the root the way `open` does.
+    let resolved = std::fs::canonicalize(paths.data_root()).expect("the scratch store root");
+    let paths = StorePaths::new(resolved).unwrap();
     let objects = Arc::new(crate::objects::FileObjectStore::new(
         Arc::clone(&fs),
         Arc::new(SeededRandom::new(7)),
@@ -440,7 +451,7 @@ fn faulty_backups(store: &Store, paths: &StorePaths, fs: Arc<dyn Fs>) -> Backups
     ));
     Backups::new(
         fs,
-        Arc::new(SeededRandom::new(7)),
+        Arc::new(SeededRandom::new(seed)),
         Arc::new(FixedClock::new(Timestamp::from_millis(FIXED_NOW_MS))),
         Arc::clone(&store.writer),
         paths.state_db().to_path_buf(),
@@ -3872,4 +3883,1262 @@ fn verifier_image_crash_cuts_recover_owned_scratch() {
         },
     );
     assert!(cuts > 0);
+}
+
+// --- M1.8e3b: verified quarantined restore staging (spec/03) ---
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+fn to_hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn hex32(text: &str) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    for (index, pair) in text.as_bytes().chunks(2).enumerate() {
+        out[index] = u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap();
+    }
+    out
+}
+
+fn restore_metadata(store: &Store, generation: &str) -> crate::RestoreMetadata {
+    reading(store, |tx| {
+        let row = tx
+            .query_row(
+                "SELECT manifest_sha256, object_count, total_bytes, completed_at
+                 FROM backup_generations WHERE generation_id=?1",
+                [generation],
+                |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, i64>(1)?,
+                        r.get::<_, i64>(2)?,
+                        r.get::<_, i64>(3)?,
+                    ))
+                },
+            )
+            .map_err(bug)?;
+        Ok(crate::RestoreMetadata {
+            manifest_sha256: hex32(&row.0),
+            object_count: row.1,
+            total_bytes: row.2,
+            completed_at: row.3,
+        })
+    })
+}
+
+/// A source store with a published backup whose manifest, database and
+/// object hashes are real (spec/03), plus every quarantine-state row the
+/// reviewed transaction transforms and inherited complete generations.
+struct StagingSource {
+    _scratch: ScratchDir,
+    paths: StorePaths,
+    store: Store,
+    receipt: BackupReceipt,
+    payloads: Vec<(String, Vec<u8>)>,
+    metadata: crate::RestoreMetadata,
+}
+
+fn staging_source(label: &str) -> StagingSource {
+    staging_source_inner(label, None)
+}
+
+fn staging_source_inner(label: &str, incarnation: Option<&str>) -> StagingSource {
+    let (scratch, paths, store) = open(label);
+    draft_rows(&store);
+    let mut payloads = Vec::new();
+    for (index, payload) in [
+        PAYLOAD.to_vec(),
+        vec![b'a'; 70_000],
+        b"third staging payload".to_vec(),
+        vec![0x5a; 100_000],
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let (id, sha) = object(&store, &payload);
+        // The fourth object is referenced only by a draft attachment.
+        if index < 3 {
+            reference(&store, &id, "published");
+        }
+        payloads.push((sha, payload));
+    }
+    let attached = payloads[3].0.clone();
+    let attached_len = payloads[3].1.len();
+    sql(
+        &store,
+        format!(
+            "UPDATE draft_revisions SET attachments_json = '[{{\"object_sha256\":\"{attached}\",\
+             \"filename\":\"only-attachment.bin\",\"media_type\":\"application/octet-stream\",\
+             \"size\":{attached_len}}}]'"
+        ),
+    );
+
+    let attempt_sha = payloads[0].0.clone();
+    writing(&store, move |tx| {
+        for (id, state) in [
+            ("job-inventory", "inventory"),
+            ("job-awaiting", "awaiting_confirmation"),
+            ("job-running", "running"),
+            ("job-completed", "completed"),
+            ("job-cancelled", "cancelled"),
+            ("job-failed", "failed"),
+        ] {
+            tx.execute(
+                "INSERT INTO import_jobs
+                 (job_id,state,request_json,checkpoint_json,revision,created_at,updated_at)
+                 VALUES (?1,?2,?3,?4,1,0,0)",
+                rusqlite::params![
+                    id,
+                    state,
+                    format!("request-{id}"),
+                    format!("checkpoint-{id}")
+                ],
+            )
+            .map_err(bug)?;
+            tx.execute(
+                "INSERT INTO import_job_sources (job_id,ordinal,source_json,checkpoint_json)
+                 VALUES (?1,0,?2,?3)",
+                rusqlite::params![id, format!("source-{id}"), format!("position-{id}")],
+            )
+            .map_err(bug)?;
+        }
+        for (id, state) in [
+            ("intent-pending", "pending"),
+            ("intent-inflight", "in_flight"),
+            ("intent-parked", "parked"),
+            ("intent-done", "done"),
+            ("intent-quarantined", "quarantined"),
+            ("intent-cancelled", "cancelled"),
+        ] {
+            tx.execute(
+                "INSERT INTO intents
+                 (intent_id,account_id,config_generation,op,target_json,args_json,
+                  preconditions_json,state,idempotency_key,origin,created_at,updated_at)
+                 VALUES (?1,?2,1,'move','{}','{}','{}',?3,?4,'user',0,0)",
+                rusqlite::params![id, ACCOUNT, state, format!("key-{id}")],
+            )
+            .map_err(bug)?;
+        }
+        for (seq, state) in [
+            (2i64, "held"),
+            (3, "queued"),
+            (4, "submitting"),
+            (5, "accepted"),
+            (6, "failed"),
+            (7, "outcome_unknown"),
+            (8, "cancelled"),
+        ] {
+            let revision = format!("rev-{state}");
+            tx.execute(
+                "INSERT INTO draft_revisions
+                 (revision_id,draft_id,seq,account_id,identity_id,compose_format,subject,
+                  to_json,cc_json,bcc_json,body_source,attachments_json,created_at)
+                 VALUES (?1,?2,?3,?4,?5,'plain','','[]','[]','[]','','[]',0)",
+                rusqlite::params![revision, DRAFT, seq, ACCOUNT, IDENTITY],
+            )
+            .map_err(bug)?;
+            let resolution: Option<&str> = (state == "outcome_unknown").then_some("marked_sent");
+            let resolved_at: Option<i64> = (state == "outcome_unknown").then_some(0);
+            tx.execute(
+                "INSERT INTO send_attempts
+                 (attempt_id,draft_id,revision_id,account_id,config_generation,identity_id,
+                  mime_sha256,message_id_header,envelope_from,state,sent_copy,
+                  resolution,resolved_at,created_at,updated_at)
+                 VALUES (?1,?2,?3,?4,1,?5,?9,'<m@x>','me@example.com',?6,'pending',?7,?8,0,0)",
+                rusqlite::params![
+                    format!("att-{state}"),
+                    DRAFT,
+                    revision,
+                    ACCOUNT,
+                    IDENTITY,
+                    state,
+                    resolution,
+                    resolved_at,
+                    attempt_sha
+                ],
+            )
+            .map_err(bug)?;
+        }
+        Ok(())
+    });
+
+    let inside = paths
+        .data_root()
+        .join("backups/11111111-1111-4111-8111-111111111111");
+    let inside_text = inside.to_str().unwrap().to_owned();
+    writing(&store, move |tx| {
+        tx.execute(
+            "INSERT INTO backup_generations
+             (generation_id,started_at,state,location,manifest_sha256,object_count,total_bytes,completed_at)
+             VALUES ('11111111-1111-4111-8111-111111111111',?2,'complete',?1,
+                     'inside-manifest',1,2,3)",
+            rusqlite::params![inside_text, FIXED_NOW_MS - 3_600_000i64],
+        )
+        .map_err(bug)?;
+        tx.execute(
+            "INSERT INTO backup_generations
+             (generation_id,started_at,state,location,manifest_sha256,object_count,total_bytes,completed_at)
+             VALUES ('22222222-2222-4222-8222-222222222222',?1,'complete',
+                     '/external/22222222-2222-4222-8222-222222222222',
+                     'outside-manifest',1,2,3)",
+            rusqlite::params![FIXED_NOW_MS - 10_800_000i64],
+        )
+        .map_err(bug)?;
+        tx.execute(
+            "INSERT INTO backup_ownership VALUES
+             ('11111111-1111-4111-8111-111111111111','inside-token')",
+            [],
+        )
+        .map_err(bug)?;
+        tx.execute(
+            "INSERT INTO backup_ownership VALUES
+             ('22222222-2222-4222-8222-222222222222','outside-token')",
+            [],
+        )
+        .map_err(bug)?;
+        tx.execute(
+            "INSERT INTO verifier_scratch VALUES ('v1','token','inc')",
+            [],
+        )
+        .map_err(bug)?;
+        tx.execute(
+            "INSERT INTO verifier_objects VALUES ('v1',zeroblob(32),zeroblob(8),0)",
+            [],
+        )
+        .map_err(bug)?;
+        tx.execute(
+            "INSERT INTO object_pins VALUES ('keep','gc_grace','gc',0)",
+            [],
+        )
+        .map_err(bug)?;
+        Ok(())
+    });
+    if let Some(incarnation) = incarnation {
+        sql(
+            &store,
+            format!("UPDATE store_meta SET value='{incarnation}' WHERE key='incarnation'"),
+        );
+    }
+    let snapshot = store.backup_snapshot(BackupDestination::DataRoot).unwrap();
+    let receipt = store.complete_backup(snapshot).unwrap();
+    let metadata = restore_metadata(&store, receipt.generation_id());
+    StagingSource {
+        _scratch: scratch,
+        paths,
+        store,
+        receipt,
+        payloads,
+        metadata,
+    }
+}
+
+impl StagingSource {
+    fn select_with(&self, store: &Store) -> super::VerifiedExternalBackup {
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        store
+            .verify_external_backup(
+                self.receipt.location().parent().unwrap(),
+                self.receipt.generation_id(),
+                &cancel,
+            )
+            .unwrap()
+            .unwrap()
+    }
+
+    fn live_incarnation(&self) -> String {
+        reading(&self.store, |tx| {
+            tx.query_row(
+                "SELECT value FROM store_meta WHERE key='incarnation'",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(bug)
+        })
+    }
+
+    /// The generation directory still holds exactly the bytes its
+    /// manifest declares, and the live row was not rewritten.
+    fn assert_untouched(&self) {
+        let manifest = std::fs::read(self.receipt.location().join("manifest.json")).unwrap();
+        assert_eq!(
+            Sha256::digest(&manifest).as_slice(),
+            self.metadata.manifest_sha256
+        );
+        let value: serde_json::Value = serde_json::from_slice(&manifest).unwrap();
+        let db_sha = value["database"]["sha256"].as_str().unwrap();
+        let db_bytes = value["database"]["bytes"].as_u64().unwrap();
+        let db = std::fs::read(self.receipt.state_db()).unwrap();
+        assert_eq!(db.len() as u64, db_bytes);
+        assert_eq!(sha256_hex(&db), db_sha);
+        for (sha, payload) in &self.payloads {
+            let path = self.receipt.location().join(format!(
+                "objects/sha256/{}/{}/{}",
+                &sha[..2],
+                &sha[2..4],
+                sha
+            ));
+            assert_eq!(&std::fs::read(path).unwrap(), payload);
+        }
+        let (state, location, _) =
+            generation_row(&self.store, self.receipt.generation_id()).unwrap();
+        assert_eq!(state, "complete");
+        assert_eq!(location, self.receipt.location().to_str().unwrap());
+    }
+}
+
+fn assert_no_stage_dir(paths: &StorePaths) {
+    for entry in std::fs::read_dir(paths.data_root().parent().unwrap()).unwrap() {
+        let name = entry.unwrap().file_name().to_string_lossy().into_owned();
+        assert!(!name.contains(".restoring-"), "unexpected stage {name}");
+    }
+}
+
+/// Every after-restore row state of a qualified stage (spec/03 step 3).
+fn assert_quarantined_stage(
+    stage: &crate::RestoreStage,
+    metadata: &crate::RestoreMetadata,
+    expected_location: &Path,
+    expected_inherited_inside: &Path,
+) {
+    assert_eq!(stage.manifest_sha256(), to_hex(&metadata.manifest_sha256));
+    let conn = Connection::open(stage.path().join("state.sqlite")).unwrap();
+    conn.execute_batch("PRAGMA query_only=ON").unwrap();
+    let incarnation: String = conn
+        .query_row(
+            "SELECT value FROM store_meta WHERE key='incarnation'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(incarnation, stage.incarnation());
+    let active: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM accounts WHERE state<>'paused'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(active, 0);
+    assert!(
+        conn.query_row::<i64, _, _>("SELECT count(*) FROM accounts", [], |r| r.get(0))
+            .unwrap()
+            >= 2
+    );
+    for (id, expected) in [
+        ("job-inventory", "failed"),
+        ("job-awaiting", "failed"),
+        ("job-running", "failed"),
+        ("job-completed", "completed"),
+        ("job-cancelled", "cancelled"),
+        ("job-failed", "failed"),
+    ] {
+        let row: (String, String, String) = conn
+            .query_row(
+                "SELECT state,request_json,checkpoint_json FROM import_jobs WHERE job_id=?1",
+                [id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            row,
+            (
+                expected.to_owned(),
+                format!("request-{id}"),
+                format!("checkpoint-{id}")
+            )
+        );
+    }
+    for id in ["job-inventory", "job-running", "job-completed"] {
+        let row: (String, String) = conn
+            .query_row(
+                "SELECT source_json,checkpoint_json FROM import_job_sources WHERE job_id=?1",
+                [id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(row, (format!("source-{id}"), format!("position-{id}")));
+    }
+    for (id, expected_state, expected_reason) in [
+        ("intent-pending", "quarantined", Some("restore")),
+        ("intent-inflight", "quarantined", Some("restore")),
+        ("intent-parked", "quarantined", Some("restore")),
+        ("intent-done", "done", None),
+        ("intent-quarantined", "quarantined", None),
+        ("intent-cancelled", "cancelled", None),
+    ] {
+        let row: (String, Option<String>) = conn
+            .query_row(
+                "SELECT state,quarantine_reason FROM intents WHERE intent_id=?1",
+                [id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(row.0, expected_state);
+        assert_eq!(row.1, expected_reason.map(str::to_owned));
+    }
+    for (id, expected) in [
+        ("att-held", "outcome_unknown"),
+        ("att-queued", "outcome_unknown"),
+        ("att-submitting", "outcome_unknown"),
+        ("att-accepted", "accepted"),
+        ("att-failed", "failed"),
+        ("att-outcome_unknown", "outcome_unknown"),
+        ("att-cancelled", "cancelled"),
+    ] {
+        let actual: String = conn
+            .query_row(
+                "SELECT state FROM send_attempts WHERE attempt_id=?1",
+                [id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(actual, expected);
+    }
+    let row: (String, String, String, i64, i64, i64) = conn
+        .query_row(
+            "SELECT state,location,manifest_sha256,object_count,total_bytes,completed_at
+             FROM backup_generations WHERE generation_id=?1",
+            [stage.generation_id()],
+            |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                ))
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        row,
+        (
+            "complete".to_owned(),
+            expected_location.to_str().unwrap().to_owned(),
+            to_hex(&metadata.manifest_sha256),
+            metadata.object_count,
+            metadata.total_bytes,
+            metadata.completed_at
+        )
+    );
+    let inside: String = conn
+        .query_row(
+            "SELECT location FROM backup_generations WHERE generation_id=
+             '11111111-1111-4111-8111-111111111111'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(inside, expected_inherited_inside.to_str().unwrap());
+    let outside: String = conn
+        .query_row(
+            "SELECT location FROM backup_generations WHERE generation_id=
+             '22222222-2222-4222-8222-222222222222'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(outside, "/external/22222222-2222-4222-8222-222222222222");
+    let owners: Vec<String> = conn
+        .prepare("SELECT generation_id FROM backup_ownership ORDER BY generation_id")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    assert_eq!(
+        owners,
+        vec![
+            "11111111-1111-4111-8111-111111111111".to_owned(),
+            "22222222-2222-4222-8222-222222222222".to_owned()
+        ]
+    );
+    for table in [
+        "backup_cleanup_pending",
+        "verifier_scratch",
+        "verifier_objects",
+    ] {
+        let count: i64 = conn
+            .query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 0, "{table}");
+    }
+    let pins: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM object_pins WHERE pin_kind='backup_in_progress'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(pins, 0);
+    let kept: String = conn
+        .query_row(
+            "SELECT pin_kind FROM object_pins WHERE object_sha256='keep'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(kept, "gc_grace");
+}
+
+/// Byte-exact objects and the layout a swapped root will need.
+fn assert_stage_objects(stage: &crate::RestoreStage, payloads: &[(String, Vec<u8>)]) {
+    let manifest = std::fs::read(stage.path().join("manifest.json")).unwrap();
+    assert_eq!(sha256_hex(&manifest), stage.manifest_sha256());
+    let value: serde_json::Value = serde_json::from_slice(&manifest).unwrap();
+    let objects = value["objects"].as_array().unwrap();
+    assert_eq!(objects.len(), payloads.len());
+    for entry in objects {
+        let sha = entry["sha256"].as_str().unwrap();
+        let bytes = entry["bytes"].as_u64().unwrap();
+        let (_, payload) = payloads.iter().find(|(hash, _)| hash == sha).unwrap();
+        assert_eq!(payload.len() as u64, bytes);
+        let path = stage.path().join(format!(
+            "objects/sha256/{}/{}/{}",
+            &sha[..2],
+            &sha[2..4],
+            sha
+        ));
+        assert_eq!(&std::fs::read(path).unwrap(), payload);
+    }
+    for dir in [
+        "objects",
+        "objects/tmp",
+        "objects/sha256",
+        "backups",
+        "recovery",
+    ] {
+        assert!(std::fs::metadata(stage.path().join(dir)).unwrap().is_dir());
+    }
+}
+
+#[test]
+fn staging_copies_and_quarantines_an_internal_generation() {
+    let source = staging_source("staging-internal");
+    let selection = source.select_with(&source.store);
+    let stage = source
+        .store
+        .stage_restore(
+            selection,
+            source.receipt.location(),
+            source.metadata,
+            &std::sync::atomic::AtomicBool::new(false),
+        )
+        .unwrap();
+    let expected_location = stage
+        .preserved_root()
+        .join("backups")
+        .join(source.receipt.generation_id());
+    let expected_inherited_inside = stage
+        .preserved_root()
+        .join("backups/11111111-1111-4111-8111-111111111111");
+    assert_eq!(
+        stage
+            .preserved_root()
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap(),
+        format!("store.preserved-{}", source.live_incarnation())
+    );
+    assert_eq!(
+        std::fs::canonicalize(stage.path().parent().unwrap()).unwrap(),
+        std::fs::canonicalize(source.paths.data_root().parent().unwrap()).unwrap()
+    );
+    assert!(
+        stage
+            .path()
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .starts_with("store.restoring-")
+    );
+    assert_quarantined_stage(
+        &stage,
+        &source.metadata,
+        &expected_location,
+        &expected_inherited_inside,
+    );
+    assert_stage_objects(&stage, &source.payloads);
+    // The live store keeps its own rows and account states.
+    let rows: i64 = reading(&source.store, |tx| {
+        tx.query_row("SELECT count(*) FROM backup_generations", [], |r| r.get(0))
+            .map_err(bug)
+    });
+    assert_eq!(rows, 3);
+    let paused: i64 = reading(&source.store, |tx| {
+        tx.query_row(
+            "SELECT count(*) FROM accounts WHERE state<>'paused'",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(bug)
+    });
+    assert_eq!(paused, 2);
+    source.assert_untouched();
+}
+
+#[test]
+fn staging_an_external_generation_into_a_fresh_store() {
+    let source = staging_source("staging-external-source");
+    let (_fresh_scratch, _fresh_paths, fresh) = open("staging-external-fresh");
+    // Give the live store an incarnation the source never had, so the
+    // preserved suffix provably comes from the live store.
+    sql(
+        &fresh,
+        "UPDATE store_meta SET value='00000000-0000-4000-8000-0000000000f1'
+         WHERE key='incarnation'"
+            .into(),
+    );
+    let selection = source.select_with(&fresh);
+    let stage = fresh
+        .stage_restore(
+            selection,
+            source.receipt.location(),
+            source.metadata,
+            &std::sync::atomic::AtomicBool::new(false),
+        )
+        .unwrap();
+    assert_eq!(
+        stage
+            .preserved_root()
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap(),
+        "store.preserved-00000000-0000-4000-8000-0000000000f1"
+    );
+    assert_ne!(
+        stage
+            .preserved_root()
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap(),
+        format!("store.preserved-{}", source.live_incarnation()),
+        "the preserved suffix comes from the live store, not the source"
+    );
+    // An external locator stays where it is after the swap.
+    // An inherited location inside the *source* root is not under this
+    // fresh store's root, so it stays external to the swap.
+    let inherited_inside = source
+        .paths
+        .data_root()
+        .join("backups/11111111-1111-4111-8111-111111111111");
+    assert_quarantined_stage(
+        &stage,
+        &source.metadata,
+        source.receipt.location(),
+        &inherited_inside,
+    );
+    assert_stage_objects(&stage, &source.payloads);
+    // The fresh live store owns no generation row and was not written.
+    let rows: i64 = reading(&fresh, |tx| {
+        tx.query_row("SELECT count(*) FROM backup_generations", [], |r| r.get(0))
+            .map_err(bug)
+    });
+    assert_eq!(rows, 0);
+    source.assert_untouched();
+}
+
+#[test]
+fn staging_rejects_metadata_locator_and_source_changes() {
+    let source = staging_source("staging-rejects");
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+
+    // A declared digest or count mismatch fails before anything is created.
+    let selection = source.select_with(&source.store);
+    let wrong_digest = crate::RestoreMetadata {
+        manifest_sha256: [0u8; 32],
+        ..source.metadata
+    };
+    assert!(
+        source
+            .store
+            .stage_restore(selection, source.receipt.location(), wrong_digest, &cancel)
+            .is_err()
+    );
+    assert_no_stage_dir(&source.paths);
+    let selection = source.select_with(&source.store);
+    let wrong_count = crate::RestoreMetadata {
+        object_count: source.metadata.object_count + 1,
+        ..source.metadata
+    };
+    assert!(
+        source
+            .store
+            .stage_restore(selection, source.receipt.location(), wrong_count, &cancel)
+            .is_err()
+    );
+    assert_no_stage_dir(&source.paths);
+
+    // A locator that does not name the selected generation directory.
+    let selection = source.select_with(&source.store);
+    let bad_leaf = source
+        .receipt
+        .location()
+        .parent()
+        .unwrap()
+        .join("not-a-generation");
+    assert!(
+        source
+            .store
+            .stage_restore(selection, &bad_leaf, source.metadata, &cancel)
+            .is_err()
+    );
+
+    // A same-named directory with a different identity is not the
+    // verified source snapshot.
+    let impostor = source.paths.data_root().parent().unwrap().join("impostor");
+    std::fs::create_dir_all(impostor.join(source.receipt.generation_id())).unwrap();
+    let selection = source.select_with(&source.store);
+    assert!(
+        source
+            .store
+            .stage_restore(
+                selection,
+                &impostor.join(source.receipt.generation_id()),
+                source.metadata,
+                &cancel
+            )
+            .is_err()
+    );
+    assert_no_stage_dir(&source.paths);
+
+    // A stale locator after the generation moved away cannot reopen it.
+    let selection = source.select_with(&source.store);
+    let moved = source.receipt.location().with_extension("moved");
+    std::fs::rename(source.receipt.location(), &moved).unwrap();
+    assert!(
+        source
+            .store
+            .stage_restore(
+                selection,
+                source.receipt.location(),
+                source.metadata,
+                &cancel
+            )
+            .is_err()
+    );
+    std::fs::rename(&moved, source.receipt.location()).unwrap();
+
+    // Changed manifest, database, object or a symlink substitute all
+    // fail against the exact selected bytes.
+    let manifest_path = source.receipt.location().join("manifest.json");
+    let original_manifest = std::fs::read(&manifest_path).unwrap();
+    let selection = source.select_with(&source.store);
+    std::fs::write(&manifest_path, b"{}").unwrap();
+    assert!(
+        source
+            .store
+            .stage_restore(
+                selection,
+                source.receipt.location(),
+                source.metadata,
+                &cancel
+            )
+            .is_err()
+    );
+    std::fs::write(&manifest_path, &original_manifest).unwrap();
+
+    let db_path = source.receipt.state_db();
+    let original_db = std::fs::read(&db_path).unwrap();
+    let selection = source.select_with(&source.store);
+    std::fs::write(&db_path, b"damaged").unwrap();
+    assert!(
+        source
+            .store
+            .stage_restore(
+                selection,
+                source.receipt.location(),
+                source.metadata,
+                &cancel
+            )
+            .is_err()
+    );
+    std::fs::write(&db_path, &original_db).unwrap();
+
+    let object_path = source.receipt.location().join(format!(
+        "objects/sha256/{}/{}/{}",
+        &source.payloads[0].0[..2],
+        &source.payloads[0].0[2..4],
+        source.payloads[0].0
+    ));
+    let original_object = std::fs::read(&object_path).unwrap();
+    let selection = source.select_with(&source.store);
+    std::fs::write(&object_path, b"substituted").unwrap();
+    assert!(
+        source
+            .store
+            .stage_restore(
+                selection,
+                source.receipt.location(),
+                source.metadata,
+                &cancel
+            )
+            .is_err()
+    );
+    std::fs::write(&object_path, &original_object).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::symlink;
+        // The selection was verified against the real object; replacing
+        // it with a symlink cannot redirect the confined read.
+        let selection = source.select_with(&source.store);
+        std::fs::remove_file(&object_path).unwrap();
+        symlink("/etc/hosts", &object_path).unwrap();
+        assert!(
+            source
+                .store
+                .stage_restore(
+                    selection,
+                    source.receipt.location(),
+                    source.metadata,
+                    &cancel
+                )
+                .is_err()
+        );
+        std::fs::remove_file(&object_path).unwrap();
+        std::fs::write(&object_path, &original_object).unwrap();
+    }
+
+    // The source is byte-identical again, and a clean stage succeeds.
+    source.assert_untouched();
+    let selection = source.select_with(&source.store);
+    let stage = source
+        .store
+        .stage_restore(
+            selection,
+            source.receipt.location(),
+            source.metadata,
+            &cancel,
+        )
+        .unwrap();
+    assert_stage_objects(&stage, &source.payloads);
+}
+
+#[test]
+fn staging_pre_and_mid_cancellation_never_qualify() {
+    let source = staging_source("staging-cancel");
+
+    // Pre-cancelled: nothing is created at all.
+    let selection = source.select_with(&source.store);
+    let cancelled = std::sync::atomic::AtomicBool::new(true);
+    assert!(
+        source
+            .store
+            .stage_restore(
+                selection,
+                source.receipt.location(),
+                source.metadata,
+                &cancelled
+            )
+            .is_err()
+    );
+    assert_no_stage_dir(&source.paths);
+
+    // Cancelled right after the locator was validated: the manifest
+    // parse observes it and no stage directory exists.
+    let selection = source.select_with(&source.store);
+    let cancelled = std::sync::atomic::AtomicBool::new(false);
+    let result = source.store.backups.stage_restore_with(
+        selection,
+        source.receipt.location(),
+        source.metadata,
+        &cancelled,
+        |phase| {
+            if phase == super::staging::StagePhase::Located {
+                cancelled.store(true, Ordering::Release);
+            }
+        },
+    );
+    assert!(result.is_err());
+    assert_no_stage_dir(&source.paths);
+
+    // Cancelled after the database copy: a partial stage may remain as
+    // evidence, but the call never qualifies it.
+    let selection = source.select_with(&source.store);
+    let cancelled = std::sync::atomic::AtomicBool::new(false);
+    let result = source.store.backups.stage_restore_with(
+        selection,
+        source.receipt.location(),
+        source.metadata,
+        &cancelled,
+        |phase| {
+            if phase == super::staging::StagePhase::DatabaseCopied {
+                cancelled.store(true, Ordering::Release);
+            }
+        },
+    );
+    assert!(result.is_err());
+    source.assert_untouched();
+    let (state, location, _) =
+        generation_row(&source.store, source.receipt.generation_id()).unwrap();
+    assert_eq!(state, "complete");
+    assert_eq!(location, source.receipt.location().to_str().unwrap());
+
+    // Cancelled just before the quarantine transaction: the stage holds
+    // copied bytes but never a committed, qualified result.
+    let selection = source.select_with(&source.store);
+    let cancelled = std::sync::atomic::AtomicBool::new(false);
+    let result = source.store.backups.stage_restore_with(
+        selection,
+        source.receipt.location(),
+        source.metadata,
+        &cancelled,
+        |phase| {
+            if phase == super::staging::StagePhase::ManifestCopied {
+                cancelled.store(true, Ordering::Release);
+            }
+        },
+    );
+    assert!(result.is_err());
+    source.assert_untouched();
+}
+
+#[test]
+fn staging_retry_refuses_a_stale_stage_path() {
+    let source = staging_source("staging-retry-source");
+    let (_scratch, fresh_paths, fresh) = open("staging-retry-fresh");
+    let selection = source.select_with(&fresh);
+    let incarnation = "00000000-0000-4000-8000-0000000000b1";
+    let first = fresh
+        .backups
+        .stage_into(
+            &selection,
+            source.receipt.location(),
+            source.metadata,
+            incarnation,
+            &std::sync::atomic::AtomicBool::new(false),
+            |_| {},
+        )
+        .unwrap();
+    let expected_stage = std::fs::canonicalize(fresh_paths.data_root().parent().unwrap())
+        .unwrap()
+        .join(format!("store.restoring-{incarnation}"));
+    assert_eq!(first.path(), expected_stage);
+
+    // A second attempt under the same incarnation refuses the existing
+    // path rather than overwriting the first stage.
+    let error = fresh
+        .backups
+        .stage_into(
+            &selection,
+            source.receipt.location(),
+            source.metadata,
+            incarnation,
+            &std::sync::atomic::AtomicBool::new(false),
+            |_| {},
+        )
+        .unwrap_err();
+    assert!(matches!(error, StoreError::Conflict { .. }), "{error:?}");
+    assert_stage_objects(&first, &source.payloads);
+
+    // A fresh attempt draws a new incarnation and leaves the stale one.
+    let second = fresh
+        .stage_restore(
+            selection,
+            source.receipt.location(),
+            source.metadata,
+            &std::sync::atomic::AtomicBool::new(false),
+        )
+        .unwrap();
+    assert_ne!(second.incarnation(), first.incarnation());
+    assert!(first.path().is_dir());
+    assert!(second.path().is_dir());
+    assert_stage_objects(&second, &source.payloads);
+}
+
+#[test]
+fn staging_rejects_a_reused_incarnation() {
+    let reused = "00000000-0000-4000-8000-0000000000c1";
+    let source = staging_source_inner("staging-reused-incarnation", Some(reused));
+    let (_scratch, fresh_paths, fresh) = open("staging-reused-fresh");
+    let selection = source.select_with(&fresh);
+    let error = fresh
+        .backups
+        .stage_into(
+            &selection,
+            source.receipt.location(),
+            source.metadata,
+            reused,
+            &std::sync::atomic::AtomicBool::new(false),
+            |_| {},
+        )
+        .unwrap_err();
+    assert!(matches!(error, StoreError::Corrupt { .. }), "{error:?}");
+    // The staged database rolled back to its source incarnation.
+    let staged_db = fresh_paths
+        .data_root()
+        .parent()
+        .unwrap()
+        .join(format!("store.restoring-{reused}"))
+        .join("state.sqlite");
+    let conn = Connection::open(&staged_db).unwrap();
+    let incarnation: String = conn
+        .query_row(
+            "SELECT value FROM store_meta WHERE key='incarnation'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(incarnation, reused);
+    let state: String = conn
+        .query_row(
+            "SELECT state FROM backup_generations WHERE generation_id=?1",
+            [source.receipt.generation_id()],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(state, "in_progress");
+}
+
+#[test]
+fn staging_io_and_sql_failures_never_qualify() {
+    let source = staging_source("staging-io-faults");
+    let (_scratch, fresh_paths, fresh) = open("staging-io-faults-fresh");
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    for (op, nth, kind) in [
+        (FsOp::CreatePrivateDir, 1, FaultKind::Eio),
+        (FsOp::Create, 1, FaultKind::Eio),
+        (FsOp::Write, 1, FaultKind::ShortWrite),
+        (FsOp::SyncFile, 1, FaultKind::Eio),
+        (FsOp::SyncDir, 1, FaultKind::Eio),
+    ] {
+        let selection = source.select_with(&fresh);
+        let fs: Arc<dyn Fs> = Arc::new(FaultFs::new(real_fs(), op, nth, kind));
+        let backups = faulty_backups(&fresh, &fresh_paths, fs);
+        assert!(
+            backups
+                .stage_restore(
+                    selection,
+                    source.receipt.location(),
+                    source.metadata,
+                    &cancel
+                )
+                .is_err()
+        );
+        source.assert_untouched();
+    }
+
+    // A clean run counts the staging directory flushes; failing the last
+    // one must still return no qualified stage.
+    let selection = source.select_with(&fresh);
+    let counter = Arc::new(FaultFs::new(
+        real_fs(),
+        FsOp::SyncDir,
+        u64::MAX,
+        FaultKind::Eio,
+    ));
+    let count = Arc::clone(&counter);
+    let fs: Arc<dyn Fs> = counter;
+    let backups = faulty_backups_seeded(&fresh, &fresh_paths, fs, 21);
+    backups
+        .stage_restore(
+            selection,
+            source.receipt.location(),
+            source.metadata,
+            &cancel,
+        )
+        .unwrap();
+    let total = count.calls(FsOp::SyncDir);
+    assert!(total > 1, "the stage flushed at least twice");
+    let selection = source.select_with(&fresh);
+    let fs: Arc<dyn Fs> = Arc::new(FaultFs::new(
+        real_fs(),
+        FsOp::SyncDir,
+        total,
+        FaultKind::Eio,
+    ));
+    let backups = faulty_backups_seeded(&fresh, &fresh_paths, fs, 22);
+    assert!(
+        backups
+            .stage_restore(
+                selection,
+                source.receipt.location(),
+                source.metadata,
+                &cancel
+            )
+            .is_err()
+    );
+    source.assert_untouched();
+}
+
+#[test]
+fn staging_refuses_an_inherited_trigger() {
+    let (_scratch, paths, store) = open("staging-trigger");
+    draft_rows(&store);
+    sql(
+        &store,
+        "CREATE TRIGGER fail_staging BEFORE UPDATE ON accounts
+         BEGIN SELECT RAISE(ABORT, 'injected'); END;"
+            .to_owned(),
+    );
+    let receipt = store
+        .complete_backup(store.backup_snapshot(BackupDestination::DataRoot).unwrap())
+        .unwrap();
+    let (_fresh_scratch, _fresh_paths, fresh) = open("staging-trigger-fresh");
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    let selection = fresh
+        .verify_external_backup(
+            receipt.location().parent().unwrap(),
+            receipt.generation_id(),
+            &cancel,
+        )
+        .unwrap()
+        .unwrap();
+    let metadata = restore_metadata(&store, receipt.generation_id());
+    let error = fresh
+        .stage_restore(selection, receipt.location(), metadata, &cancel)
+        .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            StoreError::Internal { .. } | StoreError::Corrupt { .. }
+        ),
+        "an inherited trigger must fail the quarantine, not {error:?}"
+    );
+    assert!(
+        paths
+            .data_root()
+            .parent()
+            .unwrap()
+            .read_dir()
+            .unwrap()
+            .all(|entry| !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .contains(".restoring-"))
+    );
+}
+
+const STAGE_CUT_N: &str = "SB_STAGE_CUT_N";
+const STAGE_CUT_ROOT: &str = "SB_STAGE_CUT_ROOT";
+
+#[test]
+#[ignore = "spawned by staging_crash_cuts_leave_store_and_source_untouched"]
+fn staging_cut_child() {
+    let nth: u64 = env::var(STAGE_CUT_N).unwrap().parse().unwrap();
+    let root = PathBuf::from(env::var(STAGE_CUT_ROOT).unwrap());
+    let source_paths = StorePaths::new(root.join("source/store")).unwrap();
+    let source = crate::open(&source_paths, &test_seams(real_fs())).unwrap();
+    let (id, sha) = object(&source, PAYLOAD);
+    reference(&source, &id, "published");
+    let receipt = source
+        .complete_backup(source.backup_snapshot(BackupDestination::DataRoot).unwrap())
+        .unwrap();
+    let manifest = std::fs::read(receipt.location().join("manifest.json")).unwrap();
+    let database = std::fs::read(receipt.state_db()).unwrap();
+    let object_path = receipt.location().join(format!(
+        "objects/sha256/{}/{}/{}",
+        &sha[..2],
+        &sha[2..4],
+        sha
+    ));
+    let object = std::fs::read(&object_path).unwrap();
+    let mut expected = String::new();
+    for (path, bytes) in [
+        (receipt.location().join("manifest.json"), &manifest),
+        (receipt.state_db(), &database),
+        (object_path, &object),
+    ] {
+        expected.push_str(&format!("{} {}\n", path.display(), sha256_hex(bytes)));
+    }
+    std::fs::write(root.join("expected.txt"), expected).unwrap();
+
+    let fresh_paths = StorePaths::new(root.join("fresh/store")).unwrap();
+    let fresh = crate::open(&fresh_paths, &test_seams(real_fs())).unwrap();
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    let selection = fresh
+        .verify_external_backup(
+            receipt.location().parent().unwrap(),
+            receipt.generation_id(),
+            &cancel,
+        )
+        .unwrap()
+        .unwrap();
+    let metadata = restore_metadata(&source, receipt.generation_id());
+    let backups = faulty_backups_seeded(
+        &fresh,
+        &fresh_paths,
+        Arc::new(CutFs::new(real_fs(), nth)),
+        9,
+    );
+    backups
+        .stage_restore(selection, receipt.location(), metadata, &cancel)
+        .unwrap();
+}
+
+#[test]
+fn staging_crash_cuts_leave_store_and_source_untouched() {
+    let scratch = ScratchDir::new("staging-cuts");
+    // A seeded spread over the seam's cut points: the small ones bracket
+    // locator validation and stage creation, the large ones the copy,
+    // quarantine and final flush boundaries. Points past the run's last
+    // operation survive and are recorded by the harness.
+    let points = [1, 2, 5, 13, 21, 34, 55, 89];
+    let cuts = run_crash_cut_points(
+        STAGE_CUT_N,
+        STAGE_CUT_ROOT,
+        "backups::tests::staging_cut_child",
+        &points,
+        &mut |n| {
+            let root = scratch.path().join(format!("cut-{n}"));
+            std::fs::create_dir(&root).unwrap();
+            root
+        },
+        &mut |root| {
+            let root = PathBuf::from(root);
+            // The source generation's bytes are unchanged.
+            let expected = std::fs::read_to_string(root.join("expected.txt")).unwrap();
+            for line in expected.lines() {
+                let (path, hash) = line.split_once(' ').unwrap();
+                let bytes = std::fs::read(path).unwrap();
+                assert_eq!(sha256_hex(&bytes), hash, "{path}");
+            }
+            // The live fresh store owns nothing and was not renamed; no
+            // marker and no preserved sibling exist.
+            let fresh_paths = StorePaths::new(root.join("fresh/store")).unwrap();
+            assert!(fresh_paths.state_db().is_file());
+            let fresh = crate::open_read_only(&fresh_paths, &test_seams(real_fs())).unwrap();
+            let rows: i64 = fresh
+                .read(|tx| {
+                    tx.query_row("SELECT count(*) FROM backup_generations", [], |r| r.get(0))
+                        .map_err(bug)
+                })
+                .unwrap();
+            assert_eq!(rows, 0);
+            let scratch_rows: i64 = fresh
+                .read(|tx| {
+                    tx.query_row("SELECT count(*) FROM verifier_scratch", [], |r| r.get(0))
+                        .map_err(bug)
+                })
+                .unwrap();
+            assert_eq!(scratch_rows, 0);
+            let mut marker = fresh_paths.data_root().as_os_str().to_os_string();
+            marker.push(".restore-pending");
+            assert!(std::fs::metadata(PathBuf::from(marker)).is_err());
+            for entry in std::fs::read_dir(fresh_paths.data_root().parent().unwrap()).unwrap() {
+                let name = entry.unwrap().file_name().to_string_lossy().into_owned();
+                assert!(
+                    !name.contains(".preserved-"),
+                    "unexpected preserved root {name}"
+                );
+            }
+        },
+    );
+    assert!(!cuts.killed.is_empty(), "no cut point killed the child");
+    assert!(
+        cuts.survived.iter().any(|point| *point > 1),
+        "the highest cut points should survive a complete run"
+    );
 }

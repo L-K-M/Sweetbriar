@@ -1141,6 +1141,21 @@ local drafts. No network yet.
     injected I/O, SQL and flush failures; retry and wrong generation or
     incarnation; crash cuts leave the live store untouched and no
     unquarantined stage eligible for publication.
+    Size note (2026-11-04): the complete artifact measures 2,200 gross
+    changed lines (883 new `backups/staging.rs`, 1,273 test lines, 37
+    wiring/plan lines), over this milestone's 1,450 gross budget. The
+    committed implementation keeps every acceptance check. Review split,
+    both halves used together as delivered:
+    - **b1 Verified stage copy:** locator revalidation, manifest/DB/object
+      reverification, exclusive `<data root>.restoring-<inc>` creation,
+      bounded copies and publication flushes, cancellation and failure
+      semantics (~880-line module through the copy paths; ~1,500 gross
+      with its mismatch/cancellation/flush tests).
+    - **b2 Quarantined qualification:** schema inspection,
+      `quarantine::apply` on a fresh staging connection, checkpoint/close,
+      the opaque qualified result and its quarantine-state and crash-cut
+      tests (~700 gross). b1 is the prerequisite seam b2 consumes; neither
+      half qualifies a stage alone.
   - **M1.8f Durable swap and startup recovery (L):** the restore-pending
     marker (new incarnation, generation id and path), both renames with
     their flushes, the startup handling of all three marker states, the
