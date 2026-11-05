@@ -55,6 +55,178 @@ fn save(core: &Core, draft_id: &str, base: Option<&str>, content: DraftContent) 
     block_on(core.save_draft(&key, draft_id, base, content)).unwrap()
 }
 
+#[test]
+fn identical_attachment_request_replays_its_receipt() {
+    let scratch = ScratchDir::new("service-attachment-replay");
+    let core = open(&scratch);
+    let draft = create(&core, DraftSource::New);
+    let object = block_on(core.publish_draft_attachment(Cursor::new(b"file"))).unwrap();
+    let mut request = content("one");
+    request.attachments.push(DraftAttachment::New {
+        object,
+        filename: "file.txt".into(),
+        media_type: "text/plain".into(),
+    });
+    let key = core.new_idempotency_key();
+    let saved = block_on(core.save_draft(&key, &draft.draft_id, None, request.clone())).unwrap();
+    let replay = block_on(core.save_draft(&key, &draft.draft_id, None, request)).unwrap();
+    assert_eq!(saved, replay);
+    block_on(core.shutdown());
+}
+
+fn with_attachment(subject: &str, object: DraftAttachmentObject) -> DraftContent {
+    let mut request = content(subject);
+    request.attachments.push(DraftAttachment::New {
+        object,
+        filename: "file.txt".into(),
+        media_type: "text/plain".into(),
+    });
+    request
+}
+
+#[test]
+fn overlapping_attachment_retries_share_the_receipt() {
+    let scratch = ScratchDir::new("service-attachment-overlap");
+    let core = open(&scratch);
+    let draft = create(&core, DraftSource::New);
+    let object = block_on(core.publish_draft_attachment(Cursor::new(b"file"))).unwrap();
+    let request = with_attachment("one", object);
+    let key = core.new_idempotency_key();
+    let mut first = Box::pin(core.save_draft(&key, &draft.draft_id, None, request.clone()));
+    let mut second = Box::pin(core.save_draft(&key, &draft.draft_id, None, request));
+    with_sqlite_write_lock(&state_db(&scratch), || {
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(first.as_mut().poll(&mut cx).is_pending());
+        assert!(second.as_mut().poll(&mut cx).is_pending());
+    });
+    assert_eq!(block_on(first).unwrap(), block_on(second).unwrap());
+    assert_eq!(
+        block_on(core.draft(&draft.draft_id))
+            .unwrap()
+            .revision
+            .unwrap()
+            .seq,
+        1
+    );
+    block_on(core.shutdown());
+}
+
+#[test]
+fn attachment_reservations_remain_one_shot_on_fresh_commands() {
+    let scratch = ScratchDir::new("service-attachment-reservations");
+    let core = open(&scratch);
+    let draft = create(&core, DraftSource::New);
+    let other = create(&core, DraftSource::New);
+    let object = block_on(core.publish_draft_attachment(Cursor::new(b"same"))).unwrap();
+    let first = with_attachment("first", object.clone());
+    let key = core.new_idempotency_key();
+    let saved = block_on(core.save_draft(&key, &draft.draft_id, None, first)).unwrap();
+    for (id, base) in [
+        (draft.draft_id.as_str(), Some(saved.revision_id.as_str())),
+        (other.draft_id.as_str(), None),
+    ] {
+        assert!(matches!(
+            block_on(core.save_draft(
+                &core.new_idempotency_key(),
+                id,
+                base,
+                with_attachment("spent", object.clone())
+            )),
+            Err(CoreError::Conflict { .. })
+        ));
+    }
+
+    // Replay ignores a different valid payload and must not spend its fresh reservation.
+    let fresh = block_on(core.publish_draft_attachment(Cursor::new(b"unrelated"))).unwrap();
+    let replay = block_on(core.save_draft(
+        &key,
+        &draft.draft_id,
+        None,
+        with_attachment("changed", fresh.clone()),
+    ))
+    .unwrap();
+    assert_eq!(replay, saved);
+    assert_eq!(
+        block_on(core.draft(&draft.draft_id))
+            .unwrap()
+            .revision
+            .unwrap()
+            .subject,
+        "first"
+    );
+    save(
+        &core,
+        &other.draft_id,
+        None,
+        with_attachment("fresh", fresh),
+    );
+    assert!(matches!(
+        block_on(core.discard_draft(&key, &draft.draft_id)),
+        Err(CoreError::Conflict { .. })
+    ));
+    block_on(core.shutdown());
+}
+
+#[test]
+fn duplicate_publication_rolls_back_and_independent_reservations_succeed() {
+    let scratch = ScratchDir::new("service-attachment-duplicate");
+    let core = open(&scratch);
+    let draft = create(&core, DraftSource::New);
+    let object = block_on(core.publish_draft_attachment(Cursor::new(b"same"))).unwrap();
+    let mut duplicate = with_attachment("duplicate", object.clone());
+    duplicate.attachments.push(duplicate.attachments[0].clone());
+    assert!(matches!(
+        block_on(core.save_draft(
+            &core.new_idempotency_key(),
+            &draft.draft_id,
+            None,
+            duplicate
+        )),
+        Err(CoreError::Conflict { .. })
+    ));
+    assert!(
+        block_on(core.draft(&draft.draft_id))
+            .unwrap()
+            .revision
+            .is_none()
+    );
+    let second = block_on(core.publish_draft_attachment(Cursor::new(b"same"))).unwrap();
+    let mut valid = with_attachment("valid", object);
+    valid
+        .attachments
+        .extend(with_attachment("valid", second).attachments);
+    save(&core, &draft.draft_id, None, valid);
+    assert_eq!(
+        block_on(core.draft(&draft.draft_id))
+            .unwrap()
+            .revision
+            .unwrap()
+            .attachments
+            .len(),
+        2
+    );
+    block_on(core.shutdown());
+}
+
+#[test]
+fn dropping_an_unpolled_save_leaves_its_reservation_available() {
+    let scratch = ScratchDir::new("service-attachment-unpolled");
+    let core = open(&scratch);
+    let draft = create(&core, DraftSource::New);
+    let object = block_on(core.publish_draft_attachment(Cursor::new(b"file"))).unwrap();
+    let request = with_attachment("file", object);
+    let key = core.new_idempotency_key();
+    drop(core.save_draft(&key, &draft.draft_id, None, request.clone()));
+    assert!(
+        block_on(core.draft(&draft.draft_id))
+            .unwrap()
+            .revision
+            .is_none()
+    );
+    block_on(core.save_draft(&key, &draft.draft_id, None, request)).unwrap();
+    block_on(core.shutdown());
+}
+
 /// `discard_draft` under a fresh idempotency key.
 fn discard(core: &Core, draft_id: &str) -> Receipt {
     let key = core.new_idempotency_key();
@@ -719,14 +891,11 @@ fn a_dropped_callers_save_still_commits() {
     let core = open(&scratch);
     let created = create(&core, DraftSource::New);
     let save_key = core.new_idempotency_key();
+    let object = block_on(core.publish_draft_attachment(Cursor::new(b"file"))).unwrap();
+    let request = with_attachment("dropped caller", object);
     drop_mid_write(
         &state_db(&scratch),
-        core.save_draft(
-            &save_key,
-            &created.draft_id,
-            None,
-            content("dropped caller"),
-        ),
+        core.save_draft(&save_key, &created.draft_id, None, request.clone()),
     );
     block_on(core.shutdown());
     let core = open(&scratch);
@@ -737,8 +906,8 @@ fn a_dropped_callers_save_still_commits() {
     assert_eq!(revision.subject, "dropped caller");
 
     // The dropped command's key stored its receipt.
-    let replayed =
-        block_on(core.save_draft(&save_key, &created.draft_id, None, content("replayed"))).unwrap();
+    // The opaque descriptor is process-local; this is a same-process reopen.
+    let replayed = block_on(core.save_draft(&save_key, &created.draft_id, None, request)).unwrap();
     assert_eq!(replayed.revision_id, revision.revision_id);
     assert_eq!(replayed.receipt.command, "save_draft");
     block_on(core.shutdown());
