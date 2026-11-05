@@ -95,7 +95,7 @@ pub struct Store {
 
 impl Store {
     /// Lease disposable workspace for bounded import validation.
-    pub fn import_validation_scratch(&self) -> Result<crate::ValidationScratch<'_>, StoreError> {
+    pub fn import_validation_scratch(&self) -> Result<crate::ValidationScratch, StoreError> {
         self.validation_scratch.lease()
     }
     /// The store's object store (spec/03): publishing objects through

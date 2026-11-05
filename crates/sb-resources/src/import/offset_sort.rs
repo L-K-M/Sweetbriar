@@ -69,15 +69,15 @@ fn get(reader: &mut dyn sb_store::ReadFile, index: u64) -> io::Result<SortEntry>
 }
 
 /// The caller supplies exact, fallible comparison and phase cancellation.
-pub(super) struct OffsetSort<'a, 's> {
-    scratch: &'a ValidationScratch<'s>,
+pub(super) struct OffsetSort<'a> {
+    scratch: &'a ValidationScratch,
     writer: Box<dyn sb_store::WriteFile>,
     run: Vec<SortEntry>,
     count: u64,
 }
 
-impl<'a, 's> OffsetSort<'a, 's> {
-    pub(super) fn new(scratch: &'a ValidationScratch<'s>) -> io::Result<Self> {
+impl<'a> OffsetSort<'a> {
+    pub(super) fn new(scratch: &'a ValidationScratch) -> io::Result<Self> {
         Ok(Self {
             scratch,
             writer: scratch.create(ValidationTape::A).map_err(scratch_error)?,

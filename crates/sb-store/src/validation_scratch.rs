@@ -4,7 +4,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use crate::StoreError;
+use crate::{ImportSourceSnapshot, StoreError};
 use sb_types::fs::{Fs, ReadFile, WriteFile};
 use sb_types::random::Random;
 
@@ -36,9 +36,21 @@ pub enum ValidationFile {
     Lookup,
 }
 
-/// A private disposable workspace borrowed from an open store.
-pub struct ValidationScratch<'a> {
-    owner: &'a ScratchOwner,
+/// Fixed files in one validated snapshot's private registry namespace.
+/// They are disposable frozen proof, not durable evidence.
+#[derive(Clone, Copy)]
+pub enum RegistryFile {
+    /// Fixed-size descriptors in grouped order.
+    Descriptors,
+    /// Dense file-ordinal lookup slots.
+    Lookup,
+    /// The identity header, created last as the ready marker.
+    Header,
+}
+
+/// A private disposable workspace owned by its caller.
+pub struct ValidationScratch {
+    fs: Arc<dyn Fs>,
     dir: PathBuf,
     finished: bool,
 }
@@ -69,7 +81,7 @@ impl ScratchOwner {
             .map_err(|e| error("remove", &root, e))
     }
 
-    pub(crate) fn lease(&self) -> Result<ValidationScratch<'_>, StoreError> {
+    pub(crate) fn lease(&self) -> Result<ValidationScratch, StoreError> {
         let _guard = self
             .setup
             .lock()
@@ -95,7 +107,7 @@ impl ScratchOwner {
             match self.fs.create_private_dir(&dir) {
                 Ok(()) => {
                     return Ok(ValidationScratch {
-                        owner: self,
+                        fs: Arc::clone(&self.fs),
                         dir,
                         finished: false,
                     });
@@ -110,7 +122,7 @@ impl ScratchOwner {
     }
 }
 
-impl ValidationScratch<'_> {
+impl ValidationScratch {
     fn path(&self, tape: ValidationTape) -> PathBuf {
         self.dir.join(match tape {
             ValidationTape::A => "a",
@@ -124,19 +136,27 @@ impl ValidationScratch<'_> {
             ValidationFile::Lookup => "lookup",
         })
     }
+    fn registry_dir(&self, snapshot: &ImportSourceSnapshot) -> PathBuf {
+        self.dir.join(snapshot.token())
+    }
+    fn registry_file_path(&self, snapshot: &ImportSourceSnapshot, file: RegistryFile) -> PathBuf {
+        self.registry_dir(snapshot).join(match file {
+            RegistryFile::Descriptors => "descriptors",
+            RegistryFile::Lookup => "lookup",
+            RegistryFile::Header => "header",
+        })
+    }
     /// Create an empty tape exclusively. The writer exposes checked writes and sync.
     pub fn create(&self, tape: ValidationTape) -> Result<Box<dyn WriteFile>, StoreError> {
         let path = self.path(tape);
-        self.owner
-            .fs
+        self.fs
             .create(&path)
             .map_err(|e| error("create tape", &path, e))
     }
     /// Open an existing tape for reading and seeking.
     pub fn open(&self, tape: ValidationTape) -> Result<Box<dyn ReadFile>, StoreError> {
         let path = self.path(tape);
-        self.owner
-            .fs
+        self.fs
             .open_no_follow(&path)
             .map_err(|e| error("open tape", &path, e))
     }
@@ -147,16 +167,14 @@ impl ValidationScratch<'_> {
     /// Create a fixed proof file exclusively within this lease.
     pub fn create_file(&self, file: ValidationFile) -> Result<Box<dyn WriteFile>, StoreError> {
         let path = self.file_path(file);
-        self.owner
-            .fs
+        self.fs
             .create(&path)
             .map_err(|e| error("create file", &path, e))
     }
     /// Open a fixed proof file for reading and seeking, without following links.
     pub fn open_file(&self, file: ValidationFile) -> Result<Box<dyn ReadFile>, StoreError> {
         let path = self.file_path(file);
-        self.owner
-            .fs
+        self.fs
             .open_no_follow(&path)
             .map_err(|e| error("open file", &path, e))
     }
@@ -164,8 +182,46 @@ impl ValidationScratch<'_> {
     pub fn remove_file(&self, file: ValidationFile) -> Result<(), StoreError> {
         self.remove_path(&self.file_path(file))
     }
+    /// Create one snapshot's private registry namespace exclusively.
+    pub fn create_registry_dir(&self, snapshot: &ImportSourceSnapshot) -> Result<(), StoreError> {
+        let dir = self.registry_dir(snapshot);
+        self.fs
+            .create_private_dir(&dir)
+            .map_err(|e| error("create registry dir", &dir, e))
+    }
+    /// Create a fixed registry file exclusively within the snapshot's namespace.
+    pub fn create_registry_file(
+        &self,
+        snapshot: &ImportSourceSnapshot,
+        file: RegistryFile,
+    ) -> Result<Box<dyn WriteFile>, StoreError> {
+        let path = self.registry_file_path(snapshot, file);
+        self.fs
+            .create(&path)
+            .map_err(|e| error("create registry file", &path, e))
+    }
+    /// Open a fixed registry file for reading and seeking, without following links.
+    pub fn open_registry_file(
+        &self,
+        snapshot: &ImportSourceSnapshot,
+        file: RegistryFile,
+    ) -> Result<Box<dyn ReadFile>, StoreError> {
+        let path = self.registry_file_path(snapshot, file);
+        self.fs
+            .open_no_follow(&path)
+            .map_err(|e| error("open registry file", &path, e))
+    }
+    /// Remove a snapshot's registry namespace, treating an absent one as removed.
+    pub fn remove_registry_dir(&self, snapshot: &ImportSourceSnapshot) -> Result<(), StoreError> {
+        let dir = self.registry_dir(snapshot);
+        match self.fs.remove_dir_all(&dir) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(error("remove registry dir", &dir, e)),
+        }
+    }
     fn remove_path(&self, path: &Path) -> Result<(), StoreError> {
-        match self.owner.fs.remove(path) {
+        match self.fs.remove(path) {
             Ok(()) => Ok(()),
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
             Err(e) => Err(error("remove file", path, e)),
@@ -173,18 +229,17 @@ impl ValidationScratch<'_> {
     }
     /// Remove the workspace explicitly, reporting cleanup failure.
     pub fn finish(mut self) -> Result<(), StoreError> {
-        self.owner
-            .fs
+        self.fs
             .remove_dir_all(&self.dir)
             .map_err(|e| error("remove", &self.dir, e))?;
         self.finished = true;
         Ok(())
     }
 }
-impl Drop for ValidationScratch<'_> {
+impl Drop for ValidationScratch {
     fn drop(&mut self) {
         if !self.finished {
-            let _ = self.owner.fs.remove_dir_all(&self.dir);
+            let _ = self.fs.remove_dir_all(&self.dir);
         }
     }
 }
@@ -197,6 +252,134 @@ mod tests {
 
     fn owner(root: &Path, fs: Arc<dyn Fs>) -> ScratchOwner {
         ScratchOwner::new(fs, Arc::new(SeededRandom::new(42)), root)
+    }
+
+    fn registry_snapshot(token: char) -> ImportSourceSnapshot {
+        ImportSourceSnapshot::from_metadata(&token.to_string().repeat(32), [7; 32], 64).unwrap()
+    }
+
+    #[test]
+    fn registry_namespaces_are_exclusive_isolated_and_cleaned() {
+        let tmp = ScratchDir::new("validation-registry-namespaces");
+        let owner = owner(tmp.path(), real_fs());
+        let lease = owner.lease().unwrap();
+        let other = owner.lease().unwrap();
+        let snapshot = registry_snapshot('a');
+        lease.create_registry_dir(&snapshot).unwrap();
+        assert!(matches!(
+            lease.create_registry_dir(&snapshot),
+            Err(StoreError::Unavailable { .. })
+        ));
+        let files = [
+            RegistryFile::Descriptors,
+            RegistryFile::Lookup,
+            RegistryFile::Header,
+        ];
+        for (index, file) in files.iter().copied().enumerate() {
+            let mut writer = lease.create_registry_file(&snapshot, file).unwrap();
+            writer.write_all(&[index as u8]).unwrap();
+            writer.sync_all().unwrap();
+            assert!(lease.create_registry_file(&snapshot, file).is_err());
+            assert!(other.open_registry_file(&snapshot, file).is_err());
+        }
+        for (index, file) in files.iter().copied().enumerate() {
+            let mut bytes = [0];
+            lease
+                .open_registry_file(&snapshot, file)
+                .unwrap()
+                .read_exact(&mut bytes)
+                .unwrap();
+            assert_eq!(bytes, [index as u8]);
+        }
+        lease.remove_registry_dir(&snapshot).unwrap();
+        lease.remove_registry_dir(&snapshot).unwrap();
+        assert!(
+            lease
+                .open_registry_file(&snapshot, RegistryFile::Header)
+                .is_err()
+        );
+        lease.create_registry_dir(&snapshot).unwrap();
+        let dir = lease.dir.join(snapshot.token());
+        drop(lease);
+        assert!(!dir.exists());
+        other.finish().unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn registry_file_open_refuses_symlinks() {
+        let tmp = ScratchDir::new("validation-registry-symlink");
+        let owner = owner(tmp.path(), real_fs());
+        let lease = owner.lease().unwrap();
+        let snapshot = registry_snapshot('b');
+        lease.create_registry_dir(&snapshot).unwrap();
+        let target = tmp.path().join("target");
+        std::fs::write(&target, b"outside").unwrap();
+        std::os::unix::fs::symlink(
+            &target,
+            lease.registry_file_path(&snapshot, RegistryFile::Header),
+        )
+        .unwrap();
+        assert!(
+            lease
+                .open_registry_file(&snapshot, RegistryFile::Header)
+                .is_err()
+        );
+        lease.finish().unwrap();
+        assert_eq!(std::fs::read(target).unwrap(), b"outside");
+    }
+
+    #[test]
+    fn registry_file_operations_propagate_faults() {
+        for op in [FsOp::Create, FsOp::Open, FsOp::RemoveDirAll, FsOp::SyncFile] {
+            let tmp = ScratchDir::new("validation-registry-fault");
+            let fs = Arc::new(FaultFs::new(real_fs(), op, 1, FaultKind::Eio));
+            let lease = owner(tmp.path(), fs).lease().unwrap();
+            let snapshot = registry_snapshot('c');
+            lease.create_registry_dir(&snapshot).unwrap();
+            let file = RegistryFile::Descriptors;
+            match op {
+                FsOp::Create => assert!(lease.create_registry_file(&snapshot, file).is_err()),
+                FsOp::Open => assert!(lease.open_registry_file(&snapshot, file).is_err()),
+                FsOp::RemoveDirAll => {
+                    assert!(lease.remove_registry_dir(&snapshot).is_err())
+                }
+                FsOp::SyncFile => {
+                    assert!(
+                        lease
+                            .create_registry_file(&snapshot, file)
+                            .unwrap()
+                            .sync_all()
+                            .is_err()
+                    )
+                }
+                _ => unreachable!(),
+            }
+            lease.finish().unwrap();
+        }
+    }
+
+    #[test]
+    fn interrupted_registry_namespace_drop_removes_every_file() {
+        let tmp = ScratchDir::new("validation-registry-drop");
+        let owner = owner(tmp.path(), real_fs());
+        let lease = owner.lease().unwrap();
+        let snapshot = registry_snapshot('d');
+        lease.create_registry_dir(&snapshot).unwrap();
+        for file in [
+            RegistryFile::Descriptors,
+            RegistryFile::Lookup,
+            RegistryFile::Header,
+        ] {
+            lease
+                .create_registry_file(&snapshot, file)
+                .unwrap()
+                .write_all(b"partial")
+                .unwrap();
+        }
+        let dir = lease.dir.join(snapshot.token());
+        drop(lease);
+        assert!(!dir.exists());
     }
 
     #[test]

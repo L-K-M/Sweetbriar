@@ -64,7 +64,7 @@ enum Identity {
 pub(in crate::import) fn validate_messages(
     reader: &mut (impl Read + Seek),
     table: &FileTable,
-    scratch: &sb_store::ValidationScratch<'_>,
+    scratch: &sb_store::ValidationScratch,
 ) -> io::Result<()> {
     validate_messages_with_children(reader, table, scratch, &mut |_, _, _, _, _| Ok(()))
 }
@@ -72,7 +72,7 @@ pub(in crate::import) fn validate_messages(
 pub(in crate::import) fn validate_messages_with_children<R: Read + Seek>(
     reader: &mut R,
     table: &FileTable,
-    scratch: &sb_store::ValidationScratch<'_>,
+    scratch: &sb_store::ValidationScratch,
     child: &mut impl FnMut(&mut R, u64, u64, u64, u64) -> io::Result<()>,
 ) -> io::Result<()> {
     validate_messages_with_references(reader, table, scratch, child, &mut |_, _, _, _| Ok(()))
@@ -81,7 +81,7 @@ pub(in crate::import) fn validate_messages_with_children<R: Read + Seek>(
 pub(in crate::import) fn validate_messages_with_references<R: Read + Seek>(
     reader: &mut R,
     table: &FileTable,
-    scratch: &sb_store::ValidationScratch<'_>,
+    scratch: &sb_store::ValidationScratch,
     child: &mut impl FnMut(&mut R, u64, u64, u64, u64) -> io::Result<()>,
     reference: &mut impl FnMut(&mut R, u64, u64, u64) -> io::Result<()>,
 ) -> io::Result<()> {
@@ -120,7 +120,7 @@ pub(in crate::import) fn validate_messages_with_references<R: Read + Seek>(
 fn validate_file_relationships<R: Read + Seek>(
     reader: &mut R,
     table: &FileTable,
-    scratch: &sb_store::ValidationScratch<'_>,
+    scratch: &sb_store::ValidationScratch,
     child: &mut impl FnMut(&mut R, u64, u64, u64, u64) -> io::Result<()>,
 ) -> io::Result<()> {
     validate_file_relationships_with_references(reader, table, scratch, child, &mut |_, _, _, _| {
@@ -131,7 +131,7 @@ fn validate_file_relationships<R: Read + Seek>(
 fn validate_file_relationships_with_references<R: Read + Seek>(
     reader: &mut R,
     table: &FileTable,
-    scratch: &sb_store::ValidationScratch<'_>,
+    scratch: &sb_store::ValidationScratch,
     child: &mut impl FnMut(&mut R, u64, u64, u64, u64) -> io::Result<()>,
     reference: &mut impl FnMut(&mut R, u64, u64, u64) -> io::Result<()>,
 ) -> io::Result<()> {
@@ -305,7 +305,7 @@ fn validate_file_relationships_with_references<R: Read + Seek>(
 fn unique_occurrences(
     reader: &mut (impl Read + Seek),
     table: &FileTable,
-    scratch: &sb_store::ValidationScratch<'_>,
+    scratch: &sb_store::ValidationScratch,
 ) -> io::Result<()> {
     let (start, end, count) = table.messages;
     reader.seek(SeekFrom::Start(start + 1))?;
@@ -541,7 +541,7 @@ impl<R: Read + Seek> Parser<R> {
         Ok((id, name))
     }
 
-    fn tags(&mut self, scratch: &sb_store::ValidationScratch<'_>) -> io::Result<()> {
+    fn tags(&mut self, scratch: &sb_store::ValidationScratch) -> io::Result<()> {
         let mut sorter = OffsetSort::new(scratch)?;
         let mut last_name = None;
         self.array(|p| {
@@ -575,7 +575,7 @@ impl<R: Read + Seek> Parser<R> {
     fn message(
         &mut self,
         format: BundleFormat,
-        scratch: &sb_store::ValidationScratch<'_>,
+        scratch: &sb_store::ValidationScratch,
     ) -> io::Result<i64> {
         const FIELDS: &[&str] = &[
             "v",
