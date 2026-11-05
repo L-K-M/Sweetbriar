@@ -566,6 +566,34 @@ fn two_valid_framing_interpretations_are_distinct_sources() {
     res.close().unwrap();
 }
 
+#[test]
+fn mboxrd_cancellation_stops_before_the_session() {
+    let (scratch, res) = resources("mboxrd-cancel");
+    let dir = scratch.path().join("bundle");
+    let file = encode_mbox("0.mbox", &[body_for(0)]);
+    write_mboxrd_bundle(
+        &dir,
+        std::slice::from_ref(&file),
+        &[0],
+        &[0],
+        &mut |_, _, _| {},
+    );
+    let sources = inventory_sources(&res, &dir);
+    let registry = res.manifest_proof_registry().unwrap();
+    let mut calls = 0;
+    let stopped = res
+        .open_bundle_acquisition(&registry, &sources[0], SourcePosition::START, |_| {
+            calls += 1;
+            ControlFlow::Break(())
+        })
+        .unwrap();
+    assert!(matches!(stopped, Scoped::Stopped) && calls == 1);
+    let message = acquire_all(&res, &registry, &sources[0]).remove(0);
+    assert_eq!(published(&res, &message), body_for(0));
+    registry.finish().unwrap();
+    res.close().unwrap();
+}
+
 #[cfg(feature = "test-seams")]
 #[test]
 fn shuffled_mboxrd_sources_acquire_with_linear_reads_and_no_manifest() {
