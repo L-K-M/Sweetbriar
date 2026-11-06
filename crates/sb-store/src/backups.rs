@@ -6,6 +6,8 @@
 
 mod image;
 mod image_inspect;
+#[allow(dead_code)] // Used by the next verifier slice.
+mod ledger;
 // The next restore slice attaches this parser to the verification ledger.
 #[allow(dead_code)]
 mod manifest;
@@ -16,8 +18,9 @@ pub(crate) fn recover_scratch(
     conn: &rusqlite::Connection,
     fs: &dyn sb_types::fs::Fs,
     root: &std::path::Path,
+    has_ledger: bool,
 ) -> Result<(), crate::StoreError> {
-    scratch::recover(conn, fs, root)
+    scratch::recover(conn, fs, root, has_ledger)
 }
 
 use std::collections::BTreeSet;

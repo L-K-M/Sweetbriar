@@ -585,6 +585,13 @@ this threat model. Once the directory and sibling marker are removed and the
 parent flushed, remove the row. Unsupported extended attributes fail closed.
 Rows inherited from another incarnation never authorize cleanup.
 
+The verifier retains manifest object hashes and unsigned lengths in the
+trusted store's disk-backed ledger, keyed by the scratch owner. Duplicate
+hashes are rejected. Reconciliation marks references and pages through the
+ledger without holding the corpus in memory. Ledger writes and deletion use
+bounded batches of at most 200 rows. Cleanup removes the ledger in batches
+before deleting its owner row; an interruption leaves evidence to retry.
+
 Restoring creates a **new incarnation** and runs quarantined. The steps:
 
 The process holds `<data root>.lock` throughout.

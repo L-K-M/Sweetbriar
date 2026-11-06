@@ -344,7 +344,8 @@ mod tests {
         conn.execute_batch("PRAGMA writable_schema=ON; UPDATE sqlite_schema SET sql=replace(sql, 'TEXT PRIMARY KEY', 'TEXT') WHERE name='store_meta'; UPDATE sqlite_schema SET sql=replace(sql, ') STRICT', ')') WHERE name='store_meta'; PRAGMA schema_version=2; INSERT INTO store_meta VALUES ('store_uuid', '00000000-0000-4000-8000-000000000042'); UPDATE sqlite_schema SET sql=replace(sql, 'key   TEXT,', 'key   TEXT PRIMARY KEY,') WHERE name='store_meta'; UPDATE sqlite_schema SET sql=sql || ' STRICT' WHERE name='store_meta'; PRAGMA schema_version=3; PRAGMA writable_schema=OFF; PRAGMA user_version=23;").unwrap();
         assert!(matches!(
             inspect(&conn, &AtomicBool::new(false)),
-            Err(crate::StoreError::Corrupt { .. })
+            Err(crate::StoreError::Corrupt { ref detail })
+                if detail.contains("duplicate backup identity")
         ));
     }
 

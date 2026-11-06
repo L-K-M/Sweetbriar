@@ -144,6 +144,7 @@ pub(super) fn recover(
     conn: &rusqlite::Connection,
     fs: &dyn sb_types::fs::Fs,
     path: &Path,
+    has_ledger: bool,
 ) -> Result<(), crate::StoreError> {
     use rusqlite::OptionalExtension;
     let io_error = |e: io::Error| {
@@ -174,6 +175,9 @@ pub(super) fn recover(
             slot @ None => slot.insert(fs.open_confined_dir(path).map_err(io_error)?),
         };
         cleanup(root.as_ref(), &id, &token, None).map_err(io_error)?;
+        if has_ledger {
+            while super::ledger::purge_batch(conn, &id)? != 0 {}
+        }
         conn.execute("DELETE FROM verifier_scratch WHERE id=?1", [&id])
             .map_err(|e| crate::schema::classify(e, "finish verifier cleanup"))?;
     }
@@ -297,7 +301,7 @@ mod tests {
         .unwrap();
         let (dir, _) = names(ID, TOKEN).unwrap();
         root.create_private_dir(&dir).unwrap();
-        assert!(recover(&conn, &fs, Path::new("/root")).is_err());
+        assert!(recover(&conn, &fs, Path::new("/root"), false).is_err());
         assert!(root.open_dir(&dir).is_ok());
         let count: i64 = conn
             .query_row("SELECT count(*) FROM verifier_scratch", [], |r| r.get(0))
@@ -305,7 +309,7 @@ mod tests {
         assert_eq!(count, 1);
         conn.execute("UPDATE verifier_scratch SET incarnation='inherited'", [])
             .unwrap();
-        recover(&conn, &fs, Path::new("/root")).unwrap();
+        recover(&conn, &fs, Path::new("/root"), false).unwrap();
         assert!(root.open_dir(&dir).is_ok());
         let count: i64 = conn
             .query_row("SELECT count(*) FROM verifier_scratch", [], |r| r.get(0))
@@ -336,7 +340,7 @@ mod tests {
                 [ID, TOKEN],
             )
             .unwrap();
-            assert!(recover(&conn, &fs, Path::new("/root")).is_err());
+            assert!(recover(&conn, &fs, Path::new("/root"), false).is_err());
             assert_eq!(read_marker(root.as_ref(), &marker).unwrap(), bytes);
             assert_eq!(
                 conn.query_row("SELECT count(*) FROM verifier_scratch", [], |r| r
@@ -371,7 +375,7 @@ mod tests {
             root.open_dir(&dir).err().unwrap().kind(),
             io::ErrorKind::NotADirectory
         );
-        assert!(recover(&conn, &fs, Path::new("/root")).is_err());
+        assert!(recover(&conn, &fs, Path::new("/root"), false).is_err());
         assert_eq!(read_marker(root.as_ref(), &dir).unwrap(), b"foreign");
         assert_eq!(
             read_marker(root.as_ref(), &marker).unwrap(),
