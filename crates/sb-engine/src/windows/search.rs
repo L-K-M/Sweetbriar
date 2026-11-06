@@ -56,6 +56,15 @@ impl SearchSpec {
             SearchQuery::Json(_) => Err(EngineError::internal("unvalidated Search window")),
         }
     }
+
+    /// The checked query, candidate scope and sort an export Search
+    /// scope freezes (spec/09); validates like `open` first.
+    pub(crate) fn export_parts(self) -> Result<(Query, StoreScope, SearchSort), EngineError> {
+        let prepared = self.prepare()?;
+        let query = prepared.query()?;
+        let scope = prepared.scope.stored()?;
+        Ok((Arc::unwrap_or_clone(query), scope, prepared.sort))
+    }
 }
 
 /// Query-independent coverage and exact final unknowns from the page snapshot.

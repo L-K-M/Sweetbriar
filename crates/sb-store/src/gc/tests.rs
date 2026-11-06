@@ -147,6 +147,7 @@ fn commit(store: &Store, clock: &TestClock, revision: i64, object: PublishedObje
                     source_path: path,
                     source_sha256: SOURCE_HASH.to_owned(),
                     offset: 0,
+                    bundle_framing: None,
                     flags: ImportFlags::default(),
                     summary: ImportSummary::default(),
                 }],

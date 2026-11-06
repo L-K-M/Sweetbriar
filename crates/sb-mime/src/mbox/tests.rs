@@ -25,6 +25,58 @@ fn decode(record: &MboxRecord, bytes: &[u8], variant: MboxVariant) -> Vec<u8> {
 }
 
 #[test]
+fn direct_range_unquotes_both_variants_without_leaking_adjacent_bytes() {
+    let prefix = b"outside-before\n";
+    let body = b">From first\r\n>>From second\n\xfftail";
+    let mut bytes = prefix.to_vec();
+    bytes.extend_from_slice(body);
+    bytes.extend_from_slice(b"\noutside-after");
+    for (variant, expected) in [
+        (
+            MboxVariant::Mboxo,
+            b"From first\r\n>>From second\n\xfftail".as_slice(),
+        ),
+        (
+            MboxVariant::Mboxrd,
+            b"From first\r\n>From second\n\xfftail".as_slice(),
+        ),
+    ] {
+        let mut reader = unquote_range(
+            Cursor::new(&bytes),
+            prefix.len() as u64,
+            (prefix.len() + body.len()) as u64,
+            variant,
+        )
+        .unwrap();
+        let mut actual = Vec::new();
+        reader.read_to_end(&mut actual).unwrap();
+        assert_eq!(actual, expected, "{variant:?}");
+    }
+}
+
+#[test]
+fn direct_range_rejects_inversion_and_accepts_empty_ranges() {
+    match unquote_range(Cursor::new(b"abc"), 2, 1, MboxVariant::Mboxrd) {
+        Err(error) => assert_eq!(error.kind(), io::ErrorKind::InvalidInput),
+        Ok(_) => panic!("an inverted range must be refused"),
+    }
+    for (bytes, offset) in [(b"".as_slice(), 0), (b"abc".as_slice(), 3)] {
+        let mut reader =
+            unquote_range(Cursor::new(bytes), offset, offset, MboxVariant::Mboxrd).unwrap();
+        let mut actual = Vec::new();
+        reader.read_to_end(&mut actual).unwrap();
+        assert!(actual.is_empty());
+    }
+}
+
+#[test]
+fn direct_range_reports_source_truncation() {
+    let mut reader = unquote_range(Cursor::new(b"body"), 0, 9, MboxVariant::Mboxrd).unwrap();
+    let error = reader.read_to_end(&mut Vec::new()).unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::UnexpectedEof);
+}
+
+#[test]
 fn fixture_bytes_and_hashes_match_each_variant() {
     let record = records(QUOTING, 7)[0];
     let cases = [

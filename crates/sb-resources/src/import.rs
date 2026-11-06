@@ -18,7 +18,8 @@ mod json_syntax;
 mod offset_sort;
 mod proof;
 pub use bundle::{BundleFormat, SourceBundle};
-pub use proof::{ManifestDescriptor, ManifestProof};
+pub(crate) use proof::DescriptorCursor;
+pub use proof::{ManifestDescriptor, ManifestProof, ManifestProofRegistry};
 
 /// The metadata object's format version (spec/09). A bundle source
 /// records version 2: the version-1 fields plus its `bundle` object.

@@ -8,7 +8,8 @@ use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
 use sb_service::{
-    Core, CoreConfig, CoreError, ImportJob, ImportJobState, ImportTarget, MboxVariant, open_core,
+    Anchor, Core, CoreConfig, CoreError, ExportFormat, ExportJobState, ExportScopeInput, ImportJob,
+    ImportJobState, ImportTarget, MboxVariant, WindowSpec, open_core,
 };
 
 /// How a usage failure exits: everything the user mistyped (plan M0.7).
@@ -47,22 +48,55 @@ struct Invocation {
 /// `import` (plan M1.2, spec/09).
 enum Command {
     /// `settings get [<key>]`: every setting, or one.
-    SettingsGet { key: Option<String> },
+    SettingsGet {
+        key: Option<String>,
+    },
     /// `settings set <key> <value>`: one command under a fresh
     /// idempotency key from the service.
-    SettingsSet { key: String, value: String },
+    SettingsSet {
+        key: String,
+        value: String,
+    },
     /// `import [--variant mboxo|mboxrd] <path>...`: one import job,
     /// inventory to completion, with `variant` for ambiguous sources.
     Import {
         variant: Option<MboxVariant>,
         paths: Vec<PathBuf>,
     },
+    /// `export mailbox <mailbox_id> <destination> [--format eml|mboxrd]`:
+    /// one export job, capture to completed output.
+    /// `export account <account_id> <destination> [--format ...]`: the
+    /// account's mailboxes.
+    /// `export status <job_id>`: the durable record, printed as JSON-ish
+    /// fields.
+    /// `export cancel <job_id>`: durably cancel a live job.
+    Export {
+        scope: CliExportScope,
+        format: ExportFormat,
+        destination: String,
+    },
+    ExportStatus {
+        job_id: String,
+    },
+    ExportCancel {
+        job_id: String,
+    },
+}
+
+/// The scope word after `export`, with the id it names.
+enum CliExportScope {
+    Mailbox(i64),
+    Account(String),
 }
 
 /// The usage text a usage error prints.
 const USAGE: &str = "usage: sb-cli [--data-root <path>] settings get [<key>]
        sb-cli [--data-root <path>] settings set <key> <value>
-       sb-cli [--data-root <path>] import [--variant mboxo|mboxrd] <path>...";
+       sb-cli [--data-root <path>] import [--variant mboxo|mboxrd] <path>...
+       sb-cli [--data-root <path>] export mailbox <mailbox_id> <destination> [--format eml|mboxrd]
+       sb-cli [--data-root <path>] export account <account_id> <destination> [--format eml|mboxrd]
+       sb-cli [--data-root <path>] export status <job_id>
+       sb-cli [--data-root <path>] export cancel <job_id>";
 
 /// Parse the arguments after the program name: options, then exactly
 /// one command with its fixed shape. Anything else is a usage error
@@ -95,6 +129,9 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Invocation, String> {
 fn command_from(word: String, args: &mut impl Iterator<Item = String>) -> Result<Command, String> {
     if word == "import" {
         return import_from(args);
+    }
+    if word == "export" {
+        return export_from(args);
     }
     if word != "settings" {
         return Err(format!("unknown command '{word}'"));
@@ -151,6 +188,72 @@ fn import_from(args: &mut impl Iterator<Item = String>) -> Result<Command, Strin
     Ok(Command::Import { variant, paths })
 }
 
+/// `export`'s arguments: a scope word with its id and a destination,
+/// then an optional `--format`; `status`/`cancel` take just the job id.
+fn export_from(args: &mut impl Iterator<Item = String>) -> Result<Command, String> {
+    let Some(subcommand) = args.next() else {
+        return Err("export needs a subcommand".to_owned());
+    };
+    match subcommand.as_str() {
+        "status" | "cancel" => {
+            let rest: Vec<String> = args.collect();
+            if rest.len() != 1 || rest[0].starts_with("--") {
+                return Err(format!("export {subcommand} takes exactly one job id"));
+            }
+            return Ok(if subcommand == "status" {
+                Command::ExportStatus {
+                    job_id: rest[0].clone(),
+                }
+            } else {
+                Command::ExportCancel {
+                    job_id: rest[0].clone(),
+                }
+            });
+        }
+        "mailbox" | "account" => {}
+        other => return Err(format!("unknown export subcommand '{other}'")),
+    }
+    let Some(id) = args.next() else {
+        return Err(format!("export {subcommand} needs its id"));
+    };
+    let scope = match subcommand.as_str() {
+        "mailbox" => CliExportScope::Mailbox(
+            id.parse::<i64>()
+                .map_err(|_| "mailbox_id must be an integer".to_owned())?,
+        ),
+        _ => CliExportScope::Account(id),
+    };
+    let mut destination = None;
+    let mut format = None;
+    while let Some(arg) = args.next() {
+        if arg == "--format" {
+            let chosen = match args.next().as_deref() {
+                Some("eml") => ExportFormat::Eml,
+                Some("mboxrd") => ExportFormat::Mboxrd,
+                _ => return Err("--format takes eml or mboxrd".to_owned()),
+            };
+            if format.replace(chosen).is_some() {
+                return Err("--format was given twice".to_owned());
+            }
+            continue;
+        }
+        if arg.starts_with("--") {
+            return Err(format!("unknown export option '{arg}'"));
+        }
+        if destination.replace(arg).is_some() {
+            return Err("export takes exactly one destination".to_owned());
+        }
+    }
+    let Some(destination) = destination else {
+        return Err("export needs a destination path".to_owned());
+    };
+    Ok(Command::Export {
+        scope,
+        format: format.unwrap_or(ExportFormat::Mboxrd),
+        destination,
+    })
+}
+
 /// Open the core over the chosen data root (the platform's default
 /// unless `--data-root` says otherwise), run the command, then shut
 /// the core down before exiting — the CLI never leaves a store open
@@ -171,6 +274,13 @@ fn run(invocation: Invocation) -> Result<(), u8> {
         Command::SettingsGet { key } => get(&core, key.as_deref()),
         Command::SettingsSet { key, value } => set(&core, key, value),
         Command::Import { variant, paths } => import(&core, *variant, paths),
+        Command::Export {
+            scope,
+            format,
+            destination,
+        } => export(&core, scope, *format, destination),
+        Command::ExportStatus { job_id } => export_status(&core, job_id),
+        Command::ExportCancel { job_id } => export_cancel(&core, job_id),
     };
     block_on(core.shutdown());
     outcome
@@ -323,6 +433,95 @@ fn print_inventory(job: &ImportJob) {
     if unlisted > 0 {
         println!("  and {unlisted} more, counted in the report");
     }
+}
+
+/// `export` (spec/09 "Export file output"): fence the scope at the
+/// generation the CLI just read (the window's, or `mailboxes`'s for
+/// an account), start the job, wait and report. A `Conflict` at
+/// capture means the generation moved; the job is `Failed` with the
+/// reason in its checkpoint.
+fn export(
+    core: &Core,
+    scope: &CliExportScope,
+    format: ExportFormat,
+    destination: &str,
+) -> Result<(), u8> {
+    // Persist an absolute identity, without requiring the output to exist.
+    let absolute_destination = std::path::absolute(destination).map_err(|error| {
+        eprintln!("sb-cli: cannot resolve the export destination: {error}");
+        ERROR_EXIT
+    })?;
+    let destination = absolute_destination.to_str().ok_or_else(|| {
+        eprintln!("sb-cli: the export destination must be a UTF-8 path");
+        ERROR_EXIT
+    })?;
+    let scope = match scope {
+        CliExportScope::Mailbox(mailbox_id) => {
+            let window =
+                block_on(core.open_window(WindowSpec::Mailbox(*mailbox_id), Anchor::Top, 1))
+                    .map_err(error_exit)?;
+            ExportScopeInput::Mailbox {
+                mailbox_id: *mailbox_id,
+                generation: window.generation,
+            }
+        }
+        CliExportScope::Account(account_id) => {
+            let mailboxes = block_on(core.mailboxes(account_id)).map_err(error_exit)?;
+            ExportScopeInput::Account {
+                account_id: account_id.clone(),
+                generation: mailboxes.generation,
+            }
+        }
+    };
+    let key = core.new_idempotency_key();
+    let started = block_on(core.start_export(&key, scope, format, destination.to_owned()))
+        .map_err(error_exit)?;
+    println!("job {}", started.job_id);
+    let mut last_state = None;
+    let job = loop {
+        let job = block_on(core.export_job(&started.job_id)).map_err(error_exit)?;
+        if job.state.is_finished() {
+            break job;
+        }
+        if last_state != Some(job.state) {
+            eprintln!(
+                "sb-cli: export {} is {:?} ({} capture chunks)",
+                started.job_id, job.state, job.captured_chunks
+            );
+            last_state = Some(job.state);
+        }
+        std::thread::sleep(IMPORT_POLL);
+    };
+    println!("{:?}: {} capture chunks", job.state, job.captured_chunks);
+    if job.state != ExportJobState::Completed {
+        eprintln!(
+            "sb-cli: the export did not complete; checkpoint: {}",
+            job.checkpoint_json
+        );
+        return Err(ERROR_EXIT);
+    }
+    println!("manifest: {}/sweetbriar-metadata.json", destination);
+    Ok(())
+}
+
+/// `export status`: the durable record — state, sealed request hash,
+/// checkpoint and captured chunk count.
+fn export_status(core: &Core, job_id: &str) -> Result<(), u8> {
+    let job = block_on(core.export_job(job_id)).map_err(error_exit)?;
+    println!("state: {:?}", job.state);
+    println!("request: {}", job.request_json);
+    println!("checkpoint: {}", job.checkpoint_json);
+    println!("captured_chunks: {}", job.captured_chunks);
+    Ok(())
+}
+
+/// `export cancel`: the durable cancel; a live worker stops at its
+/// next progress check. A finished job is `Conflict`.
+fn export_cancel(core: &Core, job_id: &str) -> Result<(), u8> {
+    let receipt =
+        block_on(core.cancel_job(&core.new_idempotency_key(), job_id)).map_err(error_exit)?;
+    println!("{}", receipt.result_json);
+    Ok(())
 }
 
 /// Print a finished job's totals and report; only completion succeeds.

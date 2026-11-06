@@ -315,6 +315,7 @@ fn ordinary_import_prices_mixed_bound_and_base_sources_without_replacing_either(
                 source_path: "/synthetic/activation.mbox".into(),
                 source_sha256: "a".repeat(64),
                 offset: 0,
+                bundle_framing: None,
                 flags: ImportFlags::default(),
             };
             let stats = commit_import_batch(

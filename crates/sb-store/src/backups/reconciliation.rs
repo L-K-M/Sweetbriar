@@ -15,6 +15,9 @@ use crate::{
     store::{Access, READER_PRAGMAS, open_connection},
 };
 
+#[cfg(test)]
+mod tests;
+
 pub(super) struct Expected {
     pub database: manifest::Entry,
     pub object_count: u64,
@@ -87,8 +90,8 @@ fn reference_hash(hash: Hash) -> Result<[u8; 32], StoreError> {
     Ok(result)
 }
 
-// Page physical rows rather than trusting an image-supplied index or imposing
-// a total work limit on a long backup history. Each page has its own budget.
+// Retain the physical cursor across bounded batches. Keyset seeks can skip
+// a duplicate generation hidden by corrupt rowid order in the source image.
 fn generation_matches(
     conn: &Connection,
     manifest: &manifest::Manifest,
@@ -154,40 +157,51 @@ fn generation_matches(
         return Ok(ControlFlow::Break(()));
     }
     let target = uuid(manifest.generation_id);
-    let mut after = None;
+    let Some(mut stmt) = image_inspect::guarded(
+        conn,
+        cancelled,
+        image_inspect::MAX_PROGRESS_CALLS,
+        |_| {
+            conn.prepare("SELECT rowid, typeof(generation_id), substr(CAST(generation_id AS BLOB),1,37), started_at, typeof(state), substr(CAST(state AS BLOB),1,12) FROM backup_generations NOT INDEXED ORDER BY rowid")
+            .map_err(|e| image_inspect::inspection_error(e, "read snapshot generation"))
+        },
+    )?
+    else {
+        return Ok(ControlFlow::Break(()));
+    };
+    let Some(mut rows) =
+        image_inspect::guarded(conn, cancelled, image_inspect::MAX_PROGRESS_CALLS, |_| {
+            stmt.query([])
+                .map_err(|e| image_inspect::inspection_error(e, "read snapshot generation"))
+        })?
+    else {
+        return Ok(ControlFlow::Break(()));
+    };
+    let mut last = None;
     let mut matched = false;
     loop {
-        let page = image_inspect::guarded(
-            conn,
-            cancelled,
-            image_inspect::MAX_PROGRESS_CALLS,
-            |conn| {
-                let sql = if after.is_some() {
-                    "SELECT rowid, typeof(generation_id), substr(CAST(generation_id AS BLOB),1,37), started_at, typeof(state), substr(CAST(state AS BLOB),1,12) FROM backup_generations NOT INDEXED WHERE rowid>?1 ORDER BY rowid LIMIT 200"
-                } else {
-                    "SELECT rowid, typeof(generation_id), substr(CAST(generation_id AS BLOB),1,37), started_at, typeof(state), substr(CAST(state AS BLOB),1,12) FROM backup_generations NOT INDEXED ORDER BY rowid LIMIT 200"
-                };
-                let mut stmt = conn
-                    .prepare(sql)
-                    .map_err(|e| image_inspect::inspection_error(e, "read snapshot generation"))?;
-                let mut rows = if let Some(id) = after {
-                    stmt.query([id])
-                } else {
-                    stmt.query([])
-                }
-                .map_err(|e| image_inspect::inspection_error(e, "read snapshot generation"))?;
+        let page =
+            image_inspect::guarded(conn, cancelled, image_inspect::MAX_PROGRESS_CALLS, |_| {
                 let mut count = 0;
-                let mut last = after;
-                while let Some(row) = rows
-                    .next()
-                    .map_err(|e| image_inspect::inspection_error(e, "read snapshot generation"))?
-                {
+                while count < ledger::BATCH {
+                    let Some(row) = rows.next().map_err(|e| {
+                        image_inspect::inspection_error(e, "read snapshot generation")
+                    })?
+                    else {
+                        break;
+                    };
                     if cancelled.load(Ordering::Acquire) {
                         break;
                     }
-                    last = Some(row.get::<_, i64>(0).map_err(|e| {
+                    let id = row.get::<_, i64>(0).map_err(|e| {
                         image_inspect::inspection_error(e, "read snapshot generation")
-                    })?);
+                    })?;
+                    if last.is_some_and(|previous| id <= previous) {
+                        return Err(StoreError::corrupt(
+                            "snapshot generation rowids are out of order",
+                        ));
+                    }
+                    last = Some(id);
                     let kind: String = row.get(1).map_err(|e| {
                         image_inspect::inspection_error(e, "read snapshot generation")
                     })?;
@@ -217,16 +231,14 @@ fn generation_matches(
                     }
                     count += 1;
                 }
-                Ok((last, count))
-            },
-        )?;
-        let Some((last, count)) = page else {
+                Ok(count)
+            })?;
+        let Some(count) = page else {
             return Ok(ControlFlow::Break(()));
         };
         if count < ledger::BATCH {
             break;
         }
-        after = last;
     }
     if !matched {
         return Err(StoreError::corrupt("snapshot generation identity mismatch"));
