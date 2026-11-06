@@ -207,6 +207,21 @@ impl Store {
             .stage_restore(selection, source_location, metadata, cancelled)
     }
 
+    /// Qualify a stage this store's coordinator prepared: recheck the
+    /// capability's binding to this coordinator, data root and live
+    /// incarnation, inspect the staged schema, quarantine the staged
+    /// database, checkpoint and close the staging connection, and only
+    /// then expose a [`crate::RestoreStage`] that a later swap may claim.
+    /// Any failure consumes the stage's lease and leaves the unqualified
+    /// stage on disk as evidence.
+    pub fn qualify_restore_stage(
+        &self,
+        stage: crate::PreparedRestoreStage,
+        cancelled: &std::sync::atomic::AtomicBool,
+    ) -> Result<crate::RestoreStage, StoreError> {
+        self.backups.qualify_restore_stage(stage, cancelled)
+    }
+
     /// Visit verified external generations with bounded memory. Identified
     /// invalid or incomplete source candidates are skipped. Other failures,
     /// including errors without source provenance, propagate.

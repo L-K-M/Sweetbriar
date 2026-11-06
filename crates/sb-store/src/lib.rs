@@ -56,7 +56,7 @@ pub use rusqlite::Transaction;
 
 pub use backups::{
     BackupDestination, BackupImageInspection, BackupReceipt, BackupSnapshot, PreparedRestoreStage,
-    RestoreMetadata, VerifiedExternalBackup,
+    RestoreMetadata, RestoreStage, VerifiedExternalBackup,
 };
 pub use error::StoreError;
 pub use export_metadata::{ExportMetadata, export_occurrence_metadata};

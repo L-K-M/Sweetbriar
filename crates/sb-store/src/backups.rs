@@ -24,7 +24,7 @@ mod references;
 pub use external::VerifiedExternalBackup;
 pub use image::BackupImageInspection;
 mod staging;
-pub use staging::{PreparedRestoreStage, RestoreMetadata};
+pub use staging::{PreparedRestoreStage, RestoreMetadata, RestoreStage};
 mod scratch;
 
 pub(crate) fn recover_scratch(

@@ -4014,6 +4014,10 @@ struct StagingSource {
 }
 
 fn staging_source(label: &str) -> StagingSource {
+    staging_source_inner(label, None)
+}
+
+fn staging_source_inner(label: &str, incarnation: Option<&str>) -> StagingSource {
     let (scratch, paths, store) = open(label);
     draft_rows(&store);
     let mut payloads = Vec::new();
@@ -4045,6 +4049,153 @@ fn staging_source(label: &str) -> StagingSource {
              \"size\":{attached_len}}}]'"
         ),
     );
+
+    let attempt_sha = payloads[0].0.clone();
+    writing(&store, move |tx| {
+        for (id, state) in [
+            ("job-inventory", "inventory"),
+            ("job-awaiting", "awaiting_confirmation"),
+            ("job-running", "running"),
+            ("job-completed", "completed"),
+            ("job-cancelled", "cancelled"),
+            ("job-failed", "failed"),
+        ] {
+            tx.execute(
+                "INSERT INTO import_jobs
+                 (job_id,state,request_json,checkpoint_json,revision,created_at,updated_at)
+                 VALUES (?1,?2,?3,?4,1,0,0)",
+                rusqlite::params![
+                    id,
+                    state,
+                    format!("request-{id}"),
+                    format!("checkpoint-{id}")
+                ],
+            )
+            .map_err(bug)?;
+            tx.execute(
+                "INSERT INTO import_job_sources (job_id,ordinal,source_json,checkpoint_json)
+                 VALUES (?1,0,?2,?3)",
+                rusqlite::params![id, format!("source-{id}"), format!("position-{id}")],
+            )
+            .map_err(bug)?;
+        }
+        for (id, state) in [
+            ("intent-pending", "pending"),
+            ("intent-inflight", "in_flight"),
+            ("intent-parked", "parked"),
+            ("intent-done", "done"),
+            ("intent-quarantined", "quarantined"),
+            ("intent-cancelled", "cancelled"),
+        ] {
+            tx.execute(
+                "INSERT INTO intents
+                 (intent_id,account_id,config_generation,op,target_json,args_json,
+                  preconditions_json,state,idempotency_key,origin,created_at,updated_at)
+                 VALUES (?1,?2,1,'move','{}','{}','{}',?3,?4,'user',0,0)",
+                rusqlite::params![id, ACCOUNT, state, format!("key-{id}")],
+            )
+            .map_err(bug)?;
+        }
+        for (seq, state) in [
+            (2i64, "held"),
+            (3, "queued"),
+            (4, "submitting"),
+            (5, "accepted"),
+            (6, "failed"),
+            (7, "outcome_unknown"),
+            (8, "cancelled"),
+        ] {
+            let revision = format!("rev-{state}");
+            tx.execute(
+                "INSERT INTO draft_revisions
+                 (revision_id,draft_id,seq,account_id,identity_id,compose_format,subject,
+                  to_json,cc_json,bcc_json,body_source,attachments_json,created_at)
+                 VALUES (?1,?2,?3,?4,?5,'plain','','[]','[]','[]','','[]',0)",
+                rusqlite::params![revision, DRAFT, seq, ACCOUNT, IDENTITY],
+            )
+            .map_err(bug)?;
+            let resolution: Option<&str> = (state == "outcome_unknown").then_some("marked_sent");
+            let resolved_at: Option<i64> = (state == "outcome_unknown").then_some(0);
+            tx.execute(
+                "INSERT INTO send_attempts
+                 (attempt_id,draft_id,revision_id,account_id,config_generation,identity_id,
+                  mime_sha256,message_id_header,envelope_from,state,sent_copy,
+                  resolution,resolved_at,created_at,updated_at)
+                 VALUES (?1,?2,?3,?4,1,?5,?9,'<m@x>','me@example.com',?6,'pending',?7,?8,0,0)",
+                rusqlite::params![
+                    format!("att-{state}"),
+                    DRAFT,
+                    revision,
+                    ACCOUNT,
+                    IDENTITY,
+                    state,
+                    resolution,
+                    resolved_at,
+                    attempt_sha
+                ],
+            )
+            .map_err(bug)?;
+        }
+        Ok(())
+    });
+
+    let inside = paths
+        .data_root()
+        .join("backups/11111111-1111-4111-8111-111111111111");
+    let inside_text = inside.to_str().unwrap().to_owned();
+    writing(&store, move |tx| {
+        tx.execute(
+            "INSERT INTO backup_generations
+             (generation_id,started_at,state,location,manifest_sha256,object_count,total_bytes,completed_at)
+             VALUES ('11111111-1111-4111-8111-111111111111',?2,'complete',?1,
+                     'inside-manifest',1,2,3)",
+            rusqlite::params![inside_text, FIXED_NOW_MS - 3_600_000i64],
+        )
+        .map_err(bug)?;
+        tx.execute(
+            "INSERT INTO backup_generations
+             (generation_id,started_at,state,location,manifest_sha256,object_count,total_bytes,completed_at)
+             VALUES ('22222222-2222-4222-8222-222222222222',?1,'complete',
+                     '/external/22222222-2222-4222-8222-222222222222',
+                     'outside-manifest',1,2,3)",
+            rusqlite::params![FIXED_NOW_MS - 10_800_000i64],
+        )
+        .map_err(bug)?;
+        tx.execute(
+            "INSERT INTO backup_ownership VALUES
+             ('11111111-1111-4111-8111-111111111111','inside-token')",
+            [],
+        )
+        .map_err(bug)?;
+        tx.execute(
+            "INSERT INTO backup_ownership VALUES
+             ('22222222-2222-4222-8222-222222222222','outside-token')",
+            [],
+        )
+        .map_err(bug)?;
+        tx.execute(
+            "INSERT INTO verifier_scratch VALUES ('v1','token','inc')",
+            [],
+        )
+        .map_err(bug)?;
+        tx.execute(
+            "INSERT INTO verifier_objects VALUES ('v1',zeroblob(32),zeroblob(8),0)",
+            [],
+        )
+        .map_err(bug)?;
+        tx.execute(
+            "INSERT INTO object_pins VALUES ('keep','gc_grace','gc',0)",
+            [],
+        )
+        .map_err(bug)?;
+        Ok(())
+    });
+    if let Some(incarnation) = incarnation {
+        sql(
+            &store,
+            format!("UPDATE store_meta SET value='{incarnation}' WHERE key='incarnation'"),
+        );
+    }
     let snapshot = store.backup_snapshot(BackupDestination::DataRoot).unwrap();
     let receipt = store.complete_backup(snapshot).unwrap();
     let metadata = restore_metadata(&store, receipt.generation_id());
@@ -4120,9 +4271,9 @@ fn assert_no_stage_dir(paths: &StorePaths) {
 }
 
 /// Byte-exact objects and the layout a swapped root will need.
-fn assert_stage_objects(stage: &crate::PreparedRestoreStage, payloads: &[(String, Vec<u8>)]) {
-    let manifest = std::fs::read(stage.path().join("manifest.json")).unwrap();
-    assert_eq!(sha256_hex(&manifest), stage.manifest_sha256());
+fn assert_stage_objects(stage_path: &Path, manifest_sha256: &str, payloads: &[(String, Vec<u8>)]) {
+    let manifest = std::fs::read(stage_path.join("manifest.json")).unwrap();
+    assert_eq!(sha256_hex(&manifest), manifest_sha256);
     let value: serde_json::Value = serde_json::from_slice(&manifest).unwrap();
     let objects = value["objects"].as_array().unwrap();
     assert_eq!(objects.len(), payloads.len());
@@ -4131,7 +4282,7 @@ fn assert_stage_objects(stage: &crate::PreparedRestoreStage, payloads: &[(String
         let bytes = entry["bytes"].as_u64().unwrap();
         let (_, payload) = payloads.iter().find(|(hash, _)| hash == sha).unwrap();
         assert_eq!(payload.len() as u64, bytes);
-        let path = stage.path().join(format!(
+        let path = stage_path.join(format!(
             "objects/sha256/{}/{}/{}",
             &sha[..2],
             &sha[2..4],
@@ -4146,7 +4297,7 @@ fn assert_stage_objects(stage: &crate::PreparedRestoreStage, payloads: &[(String
         "backups",
         "recovery",
     ] {
-        assert!(std::fs::metadata(stage.path().join(dir)).unwrap().is_dir());
+        assert!(std::fs::metadata(stage_path.join(dir)).unwrap().is_dir());
     }
 }
 
@@ -4194,6 +4345,8 @@ fn stage_cancel_at(
         super::staging::StagePhase::Located => "00000000-0000-4000-8000-0000000000d1",
         super::staging::StagePhase::DatabaseCopied => "00000000-0000-4000-8000-0000000000d2",
         super::staging::StagePhase::ManifestCopied => "00000000-0000-4000-8000-0000000000d3",
+        // Quarantined fires only inside qualification, never staging.
+        super::staging::StagePhase::Quarantined => "00000000-0000-4000-8000-0000000000d4",
     };
     let selection = source.select_with(&source.store);
     let cancelled = AtomicBool::new(false);
@@ -4243,13 +4396,17 @@ fn staging_copies_internal_and_external_generations() {
         internal.manifest_sha256(),
         to_hex(&source.metadata.manifest_sha256)
     );
-    assert_stage_objects(&internal, &source.payloads);
+    assert_stage_objects(
+        internal.path(),
+        internal.manifest_sha256(),
+        &source.payloads,
+    );
     let database = std::fs::read(internal.path().join("state.sqlite")).unwrap();
     assert_eq!(
         &database,
         &std::fs::read(source.receipt.state_db()).unwrap()
     );
-    assert_eq!(generation_count(&source.store), 1);
+    assert_eq!(generation_count(&source.store), 3);
 
     // A fresh store with a live incarnation the source never had: the
     // preserved suffix provably comes from the live store.
@@ -4281,7 +4438,11 @@ fn staging_copies_internal_and_external_generations() {
         format!("store.preserved-{}", source.live_incarnation()),
         "the preserved suffix comes from the live store, not the source"
     );
-    assert_stage_objects(&external, &source.payloads);
+    assert_stage_objects(
+        external.path(),
+        external.manifest_sha256(),
+        &source.payloads,
+    );
     assert_eq!(generation_count(&fresh), 0);
     source.assert_untouched();
 }
@@ -4427,7 +4588,7 @@ fn staging_rejects_metadata_locator_and_source_changes() {
             &cancel,
         )
         .unwrap();
-    assert_stage_objects(&stage, &source.payloads);
+    assert_stage_objects(stage.path(), stage.manifest_sha256(), &source.payloads);
 }
 #[test]
 fn staging_pre_and_mid_cancellation_never_prepare() {
@@ -4481,7 +4642,7 @@ fn staging_refuses_existing_and_stale_stage_paths() {
     let first = stage_with(stale).unwrap();
     let first_path = first.path().to_path_buf();
     let first_manifest = std::fs::read(first.path().join("manifest.json")).unwrap();
-    assert_stage_objects(&first, &source.payloads);
+    assert_stage_objects(first.path(), first.manifest_sha256(), &source.payloads);
     drop(first);
     let second = prepare(
         &fresh,
@@ -4495,7 +4656,7 @@ fn staging_refuses_existing_and_stale_stage_paths() {
         std::fs::read(first_path.join("manifest.json")).unwrap(),
         first_manifest
     );
-    assert_stage_objects(&second, &source.payloads);
+    assert_stage_objects(second.path(), second.manifest_sha256(), &source.payloads);
 }
 
 #[test]
@@ -4639,9 +4800,12 @@ fn staging_cut_child() {
     let cut = Arc::new(CutFs::new(real_fs(), nth));
     let backups = faulty_backups_seeded(&fresh, &fresh_paths, cut, 9);
     let location = receipt.location();
-    backups
+    let stage = backups
         .stage_restore(selection, location, metadata, &cancel)
         .unwrap();
+    // A cut point past staging lands inside qualification: the
+    // inspection, quarantine, checkpoint, close or final flushes.
+    backups.qualify_restore_stage(stage, &cancel).unwrap();
 }
 
 #[test]
@@ -4710,7 +4874,7 @@ fn stage_schema_inspection_accepts_a_valid_copy() {
     // The inspection is read-only: no -shm/-wal or other side file is
     // left in the stage, and its exact bytes are unchanged.
     assert_eq!(before, entries());
-    assert_stage_objects(&stage, &source.payloads);
+    assert_stage_objects(stage.path(), stage.manifest_sha256(), &source.payloads);
     source.assert_untouched();
 }
 
@@ -5131,4 +5295,653 @@ fn stage_schema_allocation_child() {
         matches!(result, Err(StoreError::Corrupt { .. })),
         "oversized schema metadata must fail closed"
     );
+}
+
+/// Every after-restore row state of a qualified stage (spec/03 step 3).
+fn assert_quarantined_stage(
+    stage: &crate::RestoreStage,
+    metadata: &crate::RestoreMetadata,
+    expected_location: &Path,
+    expected_inherited_inside: &Path,
+) {
+    assert_eq!(stage.manifest_sha256(), to_hex(&metadata.manifest_sha256));
+    let conn = Connection::open(stage.path().join("state.sqlite")).unwrap();
+    conn.execute_batch("PRAGMA query_only=ON").unwrap();
+    let incarnation: String = conn
+        .query_row(
+            "SELECT value FROM store_meta WHERE key='incarnation'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(incarnation, stage.incarnation());
+    let active: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM accounts WHERE state<>'paused'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(active, 0);
+    assert!(
+        conn.query_row::<i64, _, _>("SELECT count(*) FROM accounts", [], |r| r.get(0))
+            .unwrap()
+            >= 2
+    );
+    for (id, expected) in [
+        ("job-inventory", "failed"),
+        ("job-awaiting", "failed"),
+        ("job-running", "failed"),
+        ("job-completed", "completed"),
+        ("job-cancelled", "cancelled"),
+        ("job-failed", "failed"),
+    ] {
+        let row: (String, String, String) = conn
+            .query_row(
+                "SELECT state,request_json,checkpoint_json FROM import_jobs WHERE job_id=?1",
+                [id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            row,
+            (
+                expected.to_owned(),
+                format!("request-{id}"),
+                format!("checkpoint-{id}")
+            )
+        );
+    }
+    for id in ["job-inventory", "job-running", "job-completed"] {
+        let row: (String, String) = conn
+            .query_row(
+                "SELECT source_json,checkpoint_json FROM import_job_sources WHERE job_id=?1",
+                [id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(row, (format!("source-{id}"), format!("position-{id}")));
+    }
+    for (id, expected_state, expected_reason) in [
+        ("intent-pending", "quarantined", Some("restore")),
+        ("intent-inflight", "quarantined", Some("restore")),
+        ("intent-parked", "quarantined", Some("restore")),
+        ("intent-done", "done", None),
+        ("intent-quarantined", "quarantined", None),
+        ("intent-cancelled", "cancelled", None),
+    ] {
+        let row: (String, Option<String>) = conn
+            .query_row(
+                "SELECT state,quarantine_reason FROM intents WHERE intent_id=?1",
+                [id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(row.0, expected_state);
+        assert_eq!(row.1, expected_reason.map(str::to_owned));
+    }
+    for (id, expected) in [
+        ("att-held", "outcome_unknown"),
+        ("att-queued", "outcome_unknown"),
+        ("att-submitting", "outcome_unknown"),
+        ("att-accepted", "accepted"),
+        ("att-failed", "failed"),
+        ("att-outcome_unknown", "outcome_unknown"),
+        ("att-cancelled", "cancelled"),
+    ] {
+        let actual: String = conn
+            .query_row(
+                "SELECT state FROM send_attempts WHERE attempt_id=?1",
+                [id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(actual, expected);
+    }
+    let row: (String, String, String, i64, i64, i64) = conn
+        .query_row(
+            "SELECT state,location,manifest_sha256,object_count,total_bytes,completed_at
+             FROM backup_generations WHERE generation_id=?1",
+            [stage.generation_id()],
+            |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                ))
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        row,
+        (
+            "complete".to_owned(),
+            expected_location.to_str().unwrap().to_owned(),
+            to_hex(&metadata.manifest_sha256),
+            metadata.object_count,
+            metadata.total_bytes,
+            metadata.completed_at
+        )
+    );
+    let inside: String = conn
+        .query_row(
+            "SELECT location FROM backup_generations WHERE generation_id=
+             '11111111-1111-4111-8111-111111111111'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(inside, expected_inherited_inside.to_str().unwrap());
+    let outside: String = conn
+        .query_row(
+            "SELECT location FROM backup_generations WHERE generation_id=
+             '22222222-2222-4222-8222-222222222222'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(outside, "/external/22222222-2222-4222-8222-222222222222");
+    let owners: Vec<String> = conn
+        .prepare("SELECT generation_id FROM backup_ownership ORDER BY generation_id")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    assert_eq!(
+        owners,
+        vec![
+            "11111111-1111-4111-8111-111111111111".to_owned(),
+            "22222222-2222-4222-8222-222222222222".to_owned()
+        ]
+    );
+    for table in [
+        "backup_cleanup_pending",
+        "verifier_scratch",
+        "verifier_objects",
+    ] {
+        let count: i64 = conn
+            .query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 0, "{table}");
+    }
+    let pins: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM object_pins WHERE pin_kind='backup_in_progress'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(pins, 0);
+    let kept: String = conn
+        .query_row(
+            "SELECT pin_kind FROM object_pins WHERE object_sha256='keep'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(kept, "gc_grace");
+}
+
+/// A clean qualify through the public entry point.
+fn qualify(store: &Store, stage: crate::PreparedRestoreStage) -> crate::RestoreStage {
+    store
+        .qualify_restore_stage(stage, &AtomicBool::new(false))
+        .unwrap()
+}
+
+#[test]
+fn staging_qualifies_an_internal_generation() {
+    let source = staging_source("staging-qualify-internal");
+    let prepared = prepare(
+        &source.store,
+        source.select_with(&source.store),
+        source.receipt.location(),
+        source.metadata,
+    );
+    let stage = qualify(&source.store, prepared);
+    let expected_location = stage
+        .preserved_root()
+        .join("backups")
+        .join(source.receipt.generation_id());
+    let expected_inherited_inside = stage
+        .preserved_root()
+        .join("backups/11111111-1111-4111-8111-111111111111");
+    assert_eq!(
+        stage
+            .preserved_root()
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap(),
+        format!("store.preserved-{}", source.live_incarnation())
+    );
+    assert_quarantined_stage(
+        &stage,
+        &source.metadata,
+        &expected_location,
+        &expected_inherited_inside,
+    );
+    assert_stage_objects(stage.path(), stage.manifest_sha256(), &source.payloads);
+    // The staged database was quarantined in place: it no longer equals
+    // the source bytes.
+    assert_ne!(
+        std::fs::read(stage.path().join("state.sqlite")).unwrap(),
+        std::fs::read(source.receipt.state_db()).unwrap()
+    );
+    // The live store keeps its own rows and account states.
+    assert_eq!(generation_count(&source.store), 3);
+    let paused: i64 = reading(&source.store, |tx| {
+        tx.query_row(
+            "SELECT count(*) FROM accounts WHERE state<>'paused'",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(bug)
+    });
+    assert_eq!(paused, 2);
+    source.assert_untouched();
+}
+
+#[test]
+fn qualifying_an_external_generation_into_a_fresh_store() {
+    let source = staging_source("qualify-external-source");
+    let (_fresh_scratch, _fresh_paths, fresh) = open("qualify-external-fresh");
+    // Give the live store an incarnation the source never had, so the
+    // preserved suffix provably comes from the live store.
+    sql(
+        &fresh,
+        "UPDATE store_meta SET value='00000000-0000-4000-8000-0000000000f1'
+         WHERE key='incarnation'"
+            .into(),
+    );
+    let prepared = prepare(
+        &fresh,
+        source.select_with(&fresh),
+        source.receipt.location(),
+        source.metadata,
+    );
+    let stage = qualify(&fresh, prepared);
+    assert_eq!(
+        stage
+            .preserved_root()
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap(),
+        "store.preserved-00000000-0000-4000-8000-0000000000f1"
+    );
+    // An external locator stays where it is after the swap; an inherited
+    // location inside the *source* root stays external to this store.
+    let inherited_inside = source
+        .paths
+        .data_root()
+        .join("backups/11111111-1111-4111-8111-111111111111");
+    assert_quarantined_stage(
+        &stage,
+        &source.metadata,
+        source.receipt.location(),
+        &inherited_inside,
+    );
+    assert_stage_objects(stage.path(), stage.manifest_sha256(), &source.payloads);
+    assert_eq!(generation_count(&fresh), 0);
+    source.assert_untouched();
+}
+
+#[test]
+fn qualification_rejects_a_foreign_coordinator() {
+    let source = staging_source("qualify-foreign");
+    let stage = prepare(
+        &source.store,
+        source.select_with(&source.store),
+        source.receipt.location(),
+        source.metadata,
+    );
+    // A second Backups for the same store carries another coordinator
+    // token; the stage's binding refuses it.
+    let foreign = faulty_backups(&source.store, &source.paths, real_fs());
+    let error = foreign
+        .qualify_restore_stage(stage, &AtomicBool::new(false))
+        .unwrap_err();
+    assert!(
+        matches!(error, StoreError::InvalidInput { .. }),
+        "{error:?}"
+    );
+    // The unqualified stage stays on disk as evidence and its lease is
+    // released.
+    assert!(
+        source
+            .paths
+            .data_root()
+            .parent()
+            .unwrap()
+            .read_dir()
+            .unwrap()
+            .any(|entry| entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .contains(".restoring-"))
+    );
+    source
+        .store
+        .backup_snapshot(BackupDestination::DataRoot)
+        .unwrap();
+}
+
+#[test]
+fn qualification_rejects_a_moved_incarnation() {
+    let source = staging_source("qualify-moved-incarnation");
+    let stage = prepare(
+        &source.store,
+        source.select_with(&source.store),
+        source.receipt.location(),
+        source.metadata,
+    );
+    // A restore or rebuild between staging and qualification moves the
+    // live incarnation; the stage's preserved-root suffix is stale.
+    sql(
+        &source.store,
+        "UPDATE store_meta SET value='00000000-0000-4000-8000-0000000000e1'
+         WHERE key='incarnation'"
+            .into(),
+    );
+    let error = source
+        .store
+        .qualify_restore_stage(stage, &AtomicBool::new(false))
+        .unwrap_err();
+    assert!(matches!(error, StoreError::Conflict { .. }), "{error:?}");
+    source.assert_untouched();
+}
+
+#[test]
+fn qualification_rejects_forged_binding_fields() {
+    let source = staging_source("qualify-forged");
+    let cancel = AtomicBool::new(false);
+
+    // A forged data root is refused.
+    let stage = prepare(
+        &source.store,
+        source.select_with(&source.store),
+        source.receipt.location(),
+        source.metadata,
+    );
+    let mut forged = stage;
+    forged.data_root = PathBuf::from("/elsewhere/store");
+    let error = source
+        .store
+        .qualify_restore_stage(forged, &cancel)
+        .unwrap_err();
+    assert!(matches!(error, StoreError::Conflict { .. }), "{error:?}");
+
+    // A forged live incarnation is refused.
+    let stage = prepare(
+        &source.store,
+        source.select_with(&source.store),
+        source.receipt.location(),
+        source.metadata,
+    );
+    let mut forged = stage;
+    forged.live_incarnation = "00000000-0000-4000-8000-0000000000e2".into();
+    let error = source
+        .store
+        .qualify_restore_stage(forged, &cancel)
+        .unwrap_err();
+    assert!(matches!(error, StoreError::Conflict { .. }), "{error:?}");
+
+    // A forged preserved root is refused.
+    let stage = prepare(
+        &source.store,
+        source.select_with(&source.store),
+        source.receipt.location(),
+        source.metadata,
+    );
+    let mut forged = stage;
+    forged.preserved_root = PathBuf::from("/elsewhere/store.preserved-x");
+    let error = source
+        .store
+        .qualify_restore_stage(forged, &cancel)
+        .unwrap_err();
+    assert!(matches!(error, StoreError::Corrupt { .. }), "{error:?}");
+
+    // A forged coordinator token is refused first.
+    let stage = prepare(
+        &source.store,
+        source.select_with(&source.store),
+        source.receipt.location(),
+        source.metadata,
+    );
+    let mut forged = stage;
+    forged.coordinator = Arc::new(());
+    let error = source
+        .store
+        .qualify_restore_stage(forged, &cancel)
+        .unwrap_err();
+    assert!(
+        matches!(error, StoreError::InvalidInput { .. }),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn qualification_pre_and_post_inspect_cancellation() {
+    let source = staging_source("qualify-cancel");
+
+    // Pre-cancelled: nothing is touched, the stage stays unqualified.
+    let stage = prepare(
+        &source.store,
+        source.select_with(&source.store),
+        source.receipt.location(),
+        source.metadata,
+    );
+    let stage_path = stage.path().to_path_buf();
+    let cancelled = AtomicBool::new(true);
+    assert!(
+        source
+            .store
+            .qualify_restore_stage(stage, &cancelled)
+            .is_err()
+    );
+    assert!(stage_path.is_dir(), "the unqualified stage is evidence");
+    source.assert_untouched();
+
+    // A cancel observed after the copy qualifies nothing but releases
+    // the lease; a fresh operation proceeds.
+    let stage = prepare(
+        &source.store,
+        source.select_with(&source.store),
+        source.receipt.location(),
+        source.metadata,
+    );
+    source
+        .store
+        .qualify_restore_stage(stage, &AtomicBool::new(true))
+        .unwrap_err();
+    source
+        .store
+        .backup_snapshot(BackupDestination::DataRoot)
+        .unwrap();
+
+    // A cancel that lands only after the committed quarantine cannot
+    // uncommit it: qualification completes.
+    let stage = prepare(
+        &source.store,
+        source.select_with(&source.store),
+        source.receipt.location(),
+        source.metadata,
+    );
+    let cancelled = AtomicBool::new(false);
+    let flag = &cancelled;
+    let stage = source
+        .store
+        .backups
+        .qualify_restore_stage_with(stage, &cancelled, |phase| {
+            if phase == super::staging::StagePhase::Quarantined {
+                flag.store(true, Ordering::Release);
+            }
+        })
+        .unwrap();
+    assert_quarantined_stage(
+        &stage,
+        &source.metadata,
+        &stage
+            .preserved_root()
+            .join("backups")
+            .join(source.receipt.generation_id()),
+        &stage
+            .preserved_root()
+            .join("backups/11111111-1111-4111-8111-111111111111"),
+    );
+    source.assert_untouched();
+}
+
+#[test]
+fn a_held_stage_excludes_other_backup_operations() {
+    let source = staging_source("qualify-lease");
+    let stage = prepare(
+        &source.store,
+        source.select_with(&source.store),
+        source.receipt.location(),
+        source.metadata,
+    );
+    // The prepared stage holds the operation lease.
+    let error = source
+        .store
+        .backup_snapshot(BackupDestination::DataRoot)
+        .unwrap_err();
+    assert!(matches!(error, StoreError::Conflict { .. }), "{error:?}");
+    let qualified = qualify(&source.store, stage);
+    let error = source
+        .store
+        .backup_snapshot(BackupDestination::DataRoot)
+        .unwrap_err();
+    assert!(matches!(error, StoreError::Conflict { .. }), "{error:?}");
+    // Dropping the qualified stage releases the moved lease.
+    drop(qualified);
+    source
+        .store
+        .backup_snapshot(BackupDestination::DataRoot)
+        .unwrap();
+}
+
+#[test]
+fn qualifying_rolls_back_an_inherited_trigger() {
+    let (_scratch, paths, store) = open("qualify-trigger");
+    draft_rows(&store);
+    sql(
+        &store,
+        "CREATE TRIGGER fail_staging BEFORE UPDATE ON accounts
+         BEGIN SELECT RAISE(ABORT, 'injected'); END;"
+            .to_owned(),
+    );
+    let receipt = store
+        .complete_backup(store.backup_snapshot(BackupDestination::DataRoot).unwrap())
+        .unwrap();
+    let (_fresh_scratch, fresh_paths, fresh) = open("qualify-trigger-fresh");
+    let cancel = AtomicBool::new(false);
+    let selection = fresh
+        .verify_external_backup(
+            receipt.location().parent().unwrap(),
+            receipt.generation_id(),
+            &cancel,
+        )
+        .unwrap()
+        .unwrap();
+    let metadata = restore_metadata(&store, receipt.generation_id());
+    let stage = fresh
+        .stage_restore(selection, receipt.location(), metadata, &cancel)
+        .unwrap();
+    let error = fresh.qualify_restore_stage(stage, &cancel).unwrap_err();
+    assert!(
+        matches!(
+            error,
+            StoreError::Internal { .. } | StoreError::Corrupt { .. }
+        ),
+        "an inherited trigger must fail the quarantine, not {error:?}"
+    );
+    // The unqualified stage remains as evidence; it is never removed.
+    assert!(
+        fresh_paths
+            .data_root()
+            .parent()
+            .unwrap()
+            .read_dir()
+            .unwrap()
+            .any(|entry| entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .contains(".restoring-"))
+    );
+    let _ = paths;
+}
+
+#[test]
+fn qualification_io_failures_never_qualify() {
+    let source = staging_source("qualify-io-faults");
+    let (_scratch, fresh_paths, fresh) = open("qualify-io-faults-fresh");
+    let cancel = AtomicBool::new(false);
+
+    // A clean run counts the staging-parent SyncDir calls; the last two
+    // belong to qualification (stage dir + parent). Failing either must
+    // return no qualified stage.
+    let counter = Arc::new(FaultFs::new(
+        real_fs(),
+        FsOp::SyncDir,
+        u64::MAX,
+        FaultKind::Eio,
+    ));
+    let count = Arc::clone(&counter);
+    let backups = faulty_backups_seeded(&fresh, &fresh_paths, counter, 31);
+    let stage = backups
+        .stage_restore(
+            source.select_with(&fresh),
+            source.receipt.location(),
+            source.metadata,
+            &cancel,
+        )
+        .unwrap();
+    let qualified = backups.qualify_restore_stage(stage, &cancel).unwrap();
+    let total = count.calls(FsOp::SyncDir);
+    drop(qualified);
+
+    // Failing the stage-dir flush (second to last SyncDir).
+    let fs: Arc<dyn Fs> = Arc::new(FaultFs::new(
+        real_fs(),
+        FsOp::SyncDir,
+        total - 1,
+        FaultKind::Eio,
+    ));
+    let backups = faulty_backups_seeded(&fresh, &fresh_paths, fs, 32);
+    let stage = backups
+        .stage_restore(
+            source.select_with(&fresh),
+            source.receipt.location(),
+            source.metadata,
+            &cancel,
+        )
+        .unwrap();
+    assert!(backups.qualify_restore_stage(stage, &cancel).is_err());
+
+    // Failing the parent flush (last SyncDir).
+    let fs: Arc<dyn Fs> = Arc::new(FaultFs::new(
+        real_fs(),
+        FsOp::SyncDir,
+        total,
+        FaultKind::Eio,
+    ));
+    let backups = faulty_backups_seeded(&fresh, &fresh_paths, fs, 33);
+    let stage = backups
+        .stage_restore(
+            source.select_with(&fresh),
+            source.receipt.location(),
+            source.metadata,
+            &cancel,
+        )
+        .unwrap();
+    assert!(backups.qualify_restore_stage(stage, &cancel).is_err());
+    source.assert_untouched();
 }

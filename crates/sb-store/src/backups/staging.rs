@@ -1,9 +1,11 @@
-//! Verified private restore copy (spec/03 "Restore" steps 1-3, b1):
-//! revalidate the retained selection against the supplied locator and
-//! copy the database, objects and manifest into an exclusive sibling
-//! stage. b2 qualifies the staged database; nothing here runs source SQL
-//! or touches the live store, and a failure leaves only unqualified
-//! evidence behind. A stale or failed stage is never removed or reused.
+//! Verified private restore copy (spec/03 "Restore" steps 1-3, b1) and
+//! stage qualification (b2): revalidate the retained selection against
+//! the supplied locator, copy the database, objects and manifest into an
+//! exclusive sibling stage, then inspect the staged schema, quarantine
+//! the staged database and checkpoint it before a qualified stage is
+//! exposed. Nothing here touches the live store's data, and a failure
+//! leaves only unqualified evidence behind. A stale or failed stage is
+//! never removed or reused.
 
 use std::cell::Cell;
 use std::ffi::OsString;
@@ -47,7 +49,7 @@ pub struct PreparedRestoreStage {
     generation_id: String,
     manifest_sha256: String,
     source_location: PathBuf,
-    preserved_root: PathBuf,
+    pub(crate) preserved_root: PathBuf,
     /// The store's filesystem capability, used to open the private staged
     /// database through the safe read-only native reader. It is never a
     /// raw-path restore authority: only this stage's own database is
@@ -57,17 +59,12 @@ pub struct PreparedRestoreStage {
     /// derived from, the coordinator token, and the revalidated
     /// metadata. b2 must recheck every component before qualifying; a
     /// capability from another coordinator or store is refused.
-    #[allow(dead_code)] // consumed by the b2 qualifier
     pub(crate) data_root: PathBuf,
-    #[allow(dead_code)] // consumed by the b2 qualifier
     pub(crate) live_incarnation: String,
-    #[allow(dead_code)] // consumed by the b2 qualifier
     pub(crate) metadata: RestoreMetadata,
-    #[allow(dead_code)] // consumed by the b2 qualifier
     pub(crate) coordinator: Arc<()>,
     /// The backup-operation lease. Held until this capability (and the
     /// qualified stage b2 builds from it) is dropped.
-    #[allow(dead_code)] // moved into the b2 qualified stage
     pub(crate) operation: Arc<()>,
 }
 
@@ -122,7 +119,6 @@ impl PreparedRestoreStage {
     /// stage, the live store or the source, and the operation lease stays
     /// held. b2b must recheck the live root, coordinator, incarnation and
     /// metadata and consume the same lease before qualifying the stage.
-    #[allow(dead_code)] // consumed by the b2b qualifier
     pub(crate) fn inspect_stage_schema(
         &self,
         cancel: &AtomicBool,
@@ -159,6 +155,54 @@ impl PreparedRestoreStage {
         conn.close()
             .map_err(|(_, error)| classify(error, "close restore staging inspection"))?;
         result
+    }
+}
+
+/// An opaque, qualified restore stage. Exposed only after the staged
+/// copy passed the bounded schema inspection, the quarantine
+/// transaction committed, the staging SQLite connection checkpointed
+/// and closed, and the required file, directory and parent flushes
+/// succeeded. The backup-operation lease moved out of the prepared
+/// stage stays held until drop.
+#[derive(Debug)]
+pub struct RestoreStage {
+    path: PathBuf,
+    incarnation: String,
+    generation_id: String,
+    manifest_sha256: String,
+    source_location: PathBuf,
+    preserved_root: PathBuf,
+    /// The lease qualification moved out of the prepared stage; held so
+    /// an unswapped qualified stage keeps backup operations exclusive.
+    #[allow(dead_code)]
+    operation: Arc<()>,
+}
+
+impl RestoreStage {
+    /// The exclusive staging root `<data root>.restoring-<incarnation>`.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+    /// The new incarnation the staged store will carry.
+    pub fn incarnation(&self) -> &str {
+        &self.incarnation
+    }
+    /// The restored-from generation's identifier.
+    pub fn generation_id(&self) -> &str {
+        &self.generation_id
+    }
+    /// SHA-256 of the exact verified manifest bytes.
+    pub fn manifest_sha256(&self) -> &str {
+        &self.manifest_sha256
+    }
+    /// The validated locator the selection was reopened from.
+    pub fn source_location(&self) -> &Path {
+        &self.source_location
+    }
+    /// The future `<data root>.preserved-<live incarnation>` root, whose
+    /// suffix comes from the live store, not the source database.
+    pub fn preserved_root(&self) -> &Path {
+        &self.preserved_root
     }
 }
 
@@ -442,6 +486,54 @@ pub(crate) enum StagePhase {
     DatabaseCopied,
     /// The manifest itself was copied into the stage.
     ManifestCopied,
+    /// The quarantine transaction committed and the staging connection
+    /// checkpointed and closed; the stage is not yet qualified.
+    Quarantined,
+}
+
+/// Run the quarantine transaction on the staged database while the
+/// caller's cancellation flag is observed. `quarantine::apply` checks a
+/// shared flag inside SQLite's progress handler, so a monitor thread
+/// forwards the caller's flag; the transaction must never outlive an
+/// observed cancellation by more than its page step.
+fn apply_quarantine_live(
+    conn: &mut Connection,
+    input: quarantine::Quarantine<'_>,
+    cancel: &AtomicBool,
+) -> Result<(), StoreError> {
+    let shared = Arc::new(AtomicBool::new(cancel.load(Ordering::Acquire)));
+    let done = Arc::new(AtomicBool::new(false));
+    std::thread::scope(|scope| {
+        let watch = Arc::clone(&shared);
+        let stop = Arc::clone(&done);
+        let monitor = std::thread::Builder::new()
+            .name("restore-quarantine-cancel".into())
+            .spawn_scoped(scope, move || {
+                while !stop.load(Ordering::Acquire) {
+                    if cancel.load(Ordering::Acquire) {
+                        watch.store(true, Ordering::Release);
+                        return;
+                    }
+                    std::thread::park_timeout(Duration::from_millis(2));
+                }
+            })
+            .map_err(|error| {
+                StoreError::unavailable_io(
+                    "cannot start restore quarantine cancellation monitor",
+                    error.kind(),
+                )
+            })?;
+        let outcome = quarantine::apply(
+            conn,
+            &quarantine::Quarantine {
+                cancel: &shared,
+                ..input
+            },
+        );
+        done.store(true, Ordering::Release);
+        monitor.thread().unpark();
+        outcome
+    })
 }
 
 fn io_error(context: &str, error: io::Error) -> StoreError {
@@ -770,22 +862,7 @@ impl Backups {
             .parent()
             .expect("the state database has a parent")
             .to_path_buf();
-        let conn = open_connection(&self.state_db, Access::ReadOnly, READER_PRAGMAS)?;
-        let current: String = conn
-            .query_row(
-                "SELECT value FROM store_meta WHERE key='incarnation'",
-                [],
-                |row| row.get(0),
-            )
-            .map_err(|error| classify(error, "read the live store incarnation"))?;
-        let parsed: Uuid = current
-            .parse()
-            .map_err(|_| StoreError::corrupt("the live store incarnation is invalid"))?;
-        if parsed.to_string() != current {
-            return Err(StoreError::corrupt("the live store incarnation is invalid"));
-        }
-        conn.close()
-            .map_err(|(_, error)| classify(error, "close the live store incarnation read"))?;
+        let current = self.live_incarnation()?;
         if current == new_incarnation {
             return Err(StoreError::conflict(
                 "the restore incarnation reuses the live store incarnation",
@@ -960,5 +1037,179 @@ impl Backups {
             coordinator: Arc::clone(&self.coordinator),
             operation,
         })
+    }
+
+    /// Qualify a private prepared stage for a future swap (spec/03
+    /// "Restore" steps 4-5): recheck the capability's binding to this
+    /// coordinator, this data root and the live incarnation, inspect the
+    /// staged schema, run the quarantine transaction, checkpoint and
+    /// close the staging connection, and only then expose the stage.
+    /// Blocking SQLite work; never call it on the writer thread's behalf
+    /// without offloading. Any cancellation, I/O, SQL or flush failure
+    /// returns `Err`, consumes the stage's lease and leaves the
+    /// unqualified stage on disk as evidence.
+    pub(crate) fn qualify_restore_stage(
+        &self,
+        stage: PreparedRestoreStage,
+        cancel: &AtomicBool,
+    ) -> Result<RestoreStage, StoreError> {
+        self.qualify_into(stage, cancel, |_| {})
+    }
+
+    /// Test-only variant exposing the deterministic progress points.
+    #[cfg(test)]
+    pub(crate) fn qualify_restore_stage_with(
+        &self,
+        stage: PreparedRestoreStage,
+        cancel: &AtomicBool,
+        progress: impl FnMut(StagePhase),
+    ) -> Result<RestoreStage, StoreError> {
+        self.qualify_into(stage, cancel, progress)
+    }
+
+    /// The shared qualifier body. A capability staged by another
+    /// coordinator or for a store whose data root or incarnation moved
+    /// on is refused before the staged database is touched.
+    fn qualify_into(
+        &self,
+        stage: PreparedRestoreStage,
+        cancel: &AtomicBool,
+        mut progress: impl FnMut(StagePhase),
+    ) -> Result<RestoreStage, StoreError> {
+        if cancel.load(Ordering::Acquire) {
+            return Err(cancelled());
+        }
+        if !Arc::ptr_eq(&stage.coordinator, &self.coordinator) {
+            return Err(StoreError::InvalidInput {
+                message: "the prepared restore stage belongs to a different coordinator".into(),
+            });
+        }
+        let data_root = self
+            .state_db
+            .parent()
+            .expect("the state database has a parent")
+            .to_path_buf();
+        if data_root != stage.data_root {
+            return Err(StoreError::conflict(
+                "the prepared restore stage names a different data root",
+            ));
+        }
+        // The staged preserved-root suffix was derived from the live
+        // incarnation at staging; a restore or rebuild in between leaves
+        // this stage pointing at the wrong preserved root.
+        let current = self.live_incarnation()?;
+        if current != stage.live_incarnation {
+            return Err(StoreError::conflict(
+                "the live store incarnation changed since staging",
+            ));
+        }
+        let preserved_root = data_root
+            .parent()
+            .expect("a data root always has a parent")
+            .join(sibling_name(&data_root, ".preserved-", &current));
+        if preserved_root != stage.preserved_root {
+            return Err(StoreError::corrupt(
+                "the prepared restore stage's preserved root is stale",
+            ));
+        }
+
+        stage.inspect_stage_schema(cancel)?;
+        if cancel.load(Ordering::Acquire) {
+            return Err(cancelled());
+        }
+
+        // The quarantine transaction runs on a fresh private connection
+        // against the inspected schema; the stage path is still private,
+        // and the authorizer inside `quarantine::apply` denies every
+        // action an inherited trigger or view would take.
+        let staged_db = stage.path.join(SNAPSHOT_FILE);
+        let mut conn = Connection::open(&staged_db)
+            .map_err(|error| classify(error, "open restore staging"))?;
+        conn.execute_batch("PRAGMA trusted_schema=OFF;")
+            .map_err(|error| classify(error, "harden restore staging"))?;
+        let location_text = stage
+            .source_location
+            .to_str()
+            .ok_or_else(|| StoreError::corrupt("the restore source location is not UTF-8"))?
+            .to_owned();
+        let applied = apply_quarantine_live(
+            &mut conn,
+            quarantine::Quarantine {
+                new_incarnation: &stage.incarnation,
+                generation: &stage.generation_id,
+                source_location: &location_text,
+                current_root: &data_root,
+                preserved_root: &preserved_root,
+                manifest_sha256: &stage.manifest_sha256,
+                object_count: stage.metadata.object_count,
+                total_bytes: stage.metadata.total_bytes,
+                completed_at: stage.metadata.completed_at,
+                cancel: &Arc::new(AtomicBool::new(false)),
+            },
+            cancel,
+        );
+        applied?;
+        let busy: i64 = conn
+            .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| row.get(0))
+            .map_err(|error| classify(error, "checkpoint restore staging"))?;
+        if busy != 0 {
+            return Err(StoreError::unavailable(
+                "restore staging checkpoint could not complete",
+            ));
+        }
+        conn.close()
+            .map_err(|(_, error)| classify(error, "close restore staging"))?;
+        progress(StagePhase::Quarantined);
+
+        // Qualify only after the checkpoint, close and every required
+        // flush succeeded: the stage directory and its parent entry.
+        let stage_parent = self
+            .fs
+            .open_confined_dir(data_root.parent().expect("a data root has a parent"))
+            .map_err(|error| io_error("reopening the staging parent", error))?;
+        let stage_name = stage
+            .path
+            .file_name()
+            .ok_or_else(|| StoreError::corrupt("the restore stage path has no name"))?;
+        let staged = stage_parent
+            .open_dir(Path::new(stage_name))
+            .map_err(|error| io_error("reopening the qualified stage", error))?;
+        staged
+            .sync()
+            .map_err(|error| io_error("flushing the qualified stage", error))?;
+        stage_parent
+            .sync()
+            .map_err(|error| io_error("flushing the qualified stage parent", error))?;
+        Ok(RestoreStage {
+            path: stage.path,
+            incarnation: stage.incarnation,
+            generation_id: stage.generation_id,
+            manifest_sha256: stage.manifest_sha256,
+            source_location: stage.source_location,
+            preserved_root: stage.preserved_root,
+            operation: stage.operation,
+        })
+    }
+
+    /// The live store's current incarnation, validated as a canonical
+    /// UUID. The staged database's own value is irrelevant here.
+    fn live_incarnation(&self) -> Result<String, StoreError> {
+        let conn = open_connection(&self.state_db, Access::ReadOnly, READER_PRAGMAS)?;
+        let incarnation: String = conn
+            .query_row(
+                "SELECT value FROM store_meta WHERE key='incarnation'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|error| classify(error, "read the live store incarnation"))?;
+        let parsed: Uuid = incarnation
+            .parse()
+            .map_err(|_| StoreError::corrupt("the live store incarnation is invalid"))?;
+        if parsed.to_string() != incarnation {
+            return Err(StoreError::corrupt("the live store incarnation is invalid"));
+        }
+        conn.close()
+            .map_err(|(_, error)| classify(error, "close the live store incarnation read"))?;
+        Ok(incarnation)
     }
 }
