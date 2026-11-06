@@ -575,8 +575,9 @@ all token scanning and native reader errors are preserved. The attachment
 decoder preserves the draft reader's field, duplicate-key and numeric
 representation semantics, including in arbitrary extra fields. It retains the
 last effective field values and emits a reference only after its object closes.
-Since manifest hashes are 64 bytes, any other length is represented as an
-unmatchable reference instead of rejecting a string accepted by the draft
+Since manifest hashes are 64 bytes, any other length is represented as a
+reference no valid hash can equal (a dedicated unmatchable variant, never a
+sentinel byte pattern) instead of rejecting a string accepted by the draft
 reader. The caller discards all emitted references after any error. This parser
 alone establishes no snapshot traversal or reconciliation claim.
 
