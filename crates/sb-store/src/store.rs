@@ -476,13 +476,9 @@ pub(crate) fn open_with(
     run_migrations(&mut conn, seams, migrations)?;
     // Finish startup writes before the writer's asynchronous idle checkpoint.
     crate::objects::expire_reservations(&mut conn, seams.clock().now())?;
-    if read_user_version(&conn)? >= 23 {
-        crate::backups::recover_scratch(
-            &conn,
-            fs,
-            paths.recovery(),
-            read_user_version(&conn)? >= 24,
-        )?;
+    let schema_version = read_user_version(&conn)?;
+    if schema_version >= 23 {
+        crate::backups::recover_scratch(&conn, fs, paths.recovery(), schema_version >= 24)?;
     }
     // The readers first, from the same constructor (spec/03): if one
     // fails, the writer connection still doesn't checkpoint on close.
