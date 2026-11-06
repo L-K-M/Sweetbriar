@@ -100,7 +100,7 @@ fn real_worker_phase_pause_retry_cancel_resume_and_completion_invalidate_search(
             .phase,
         sb_resources::RebuildPhase::Reset
     );
-    let weak = Arc::downgrade(engine.resources());
+    let weak = Arc::downgrade(&engine.resources());
     let (committed, notices) = mpsc::channel();
     let (release, released) = mpsc::channel();
     let released = Mutex::new(released);

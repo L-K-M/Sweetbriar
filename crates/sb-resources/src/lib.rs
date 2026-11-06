@@ -129,8 +129,9 @@ pub use sb_store::threads::{
     remove_thread, stored_threads, thread_memberships, thread_revisions, thread_sources,
 };
 pub use sb_store::{
-    AppearanceObserver, ExportMetadata, ImportSourceSnapshot, ListObserver, PublishedObject,
-    ReadStop, Receipt, Scoped, SearchObserver, StoreError, Timestamp, Transaction, Uuid,
+    AppearanceObserver, BackupDestination, BackupReceipt, BackupSnapshot, ExportMetadata,
+    ImportSourceSnapshot, ListObserver, PublishedObject, ReadStop, Receipt, RestoreMetadata,
+    Scoped, SearchObserver, StoreError, Timestamp, Transaction, Uuid, VerifiedExternalBackup,
     WriteFuture, WritePriority, encode_job_receipt, export_occurrence_metadata, receipt_job_id,
     run_once,
 };
@@ -392,6 +393,86 @@ impl Resources {
         self.store.close()
     }
 
+    /// Close the store for a restore swap (spec/03 "Restore" step 4):
+    /// the same ordered teardown as `close`, but the sibling lock and
+    /// the coordinator stay held in the returned `RestoringResources`.
+    /// A rendition cache is never carried: the restored image holds
+    /// different objects.
+    pub fn close_for_restore(self) -> Result<RestoringResources, StoreError> {
+        let Self {
+            store,
+            renditions: _,
+            fs,
+            clock,
+            random,
+        } = self;
+        Ok(RestoringResources {
+            lease: store.close_for_restore()?,
+            fs,
+            clock,
+            random,
+        })
+    }
+
+    /// Pin a consistent snapshot for a backup generation; see
+    /// [`Store::backup_snapshot`]. Blocking.
+    pub fn backup_snapshot(
+        &self,
+        destination: sb_store::BackupDestination,
+    ) -> Result<sb_store::BackupSnapshot, StoreError> {
+        self.store.backup_snapshot(destination)
+    }
+
+    /// Publish a pinned snapshot as a durable backup generation; see
+    /// [`Store::complete_backup`]. Blocking.
+    pub fn complete_backup(
+        &self,
+        snapshot: sb_store::BackupSnapshot,
+    ) -> Result<sb_store::BackupReceipt, StoreError> {
+        self.store.complete_backup(snapshot)
+    }
+
+    /// The data root this store owns (spec/03); a restore's fallback
+    /// reopen needs it after the lease path is spent.
+    pub fn data_root(&self) -> &Path {
+        self.store.data_root()
+    }
+
+    /// Select a verified external generation (spec/03 step 1): see
+    /// [`Store::verify_external_backup`].
+    pub fn verify_external_backup(
+        &self,
+        parent: &Path,
+        generation: &str,
+        cancelled: &std::sync::atomic::AtomicBool,
+    ) -> Result<Option<sb_store::VerifiedExternalBackup>, StoreError> {
+        self.store
+            .verify_external_backup(parent, generation, cancelled)
+    }
+
+    /// Stage a verified generation beside the data root (spec/03 step
+    /// 2): see [`Store::stage_restore`].
+    pub fn stage_restore(
+        &self,
+        selection: sb_store::VerifiedExternalBackup,
+        source_location: &Path,
+        metadata: sb_store::RestoreMetadata,
+        cancelled: &std::sync::atomic::AtomicBool,
+    ) -> Result<sb_store::PreparedRestoreStage, StoreError> {
+        self.store
+            .stage_restore(selection, source_location, metadata, cancelled)
+    }
+
+    /// Qualify a staged copy for the swap (spec/03 step 3): see
+    /// [`Store::qualify_restore_stage`].
+    pub fn qualify_restore_stage(
+        &self,
+        stage: sb_store::PreparedRestoreStage,
+        cancelled: &std::sync::atomic::AtomicBool,
+    ) -> Result<sb_store::RestoreStage, StoreError> {
+        self.store.qualify_restore_stage(stage, cancelled)
+    }
+
     /// The clock's "now", for command receipts and settings rows: the
     /// seams stay behind this layer (spec/01 rule 5).
     pub fn now(&self) -> Timestamp {
@@ -408,6 +489,49 @@ impl Resources {
             .fill(&mut bytes)
             .expect("the OS randomness source failed; cannot make an idempotency key");
         Uuid::from_random_bytes(bytes).to_string()
+    }
+}
+
+/// A store closed for a restore swap, still holding its sibling lease
+/// and the seams its resume needs (spec/03 "Restore" step 4): swap a
+/// qualified stage through it, then `resume` to reopen under the same
+/// lock — no second process can open either root meanwhile.
+pub struct RestoringResources {
+    lease: sb_store::StoreLease,
+    fs: Arc<dyn Fs>,
+    clock: Arc<dyn Clock>,
+    random: Arc<dyn Random>,
+}
+
+impl RestoringResources {
+    /// Swap a qualified restore stage into the data-root place; see
+    /// [`sb_store::StoreLease::swap_restore`].
+    pub fn swap_restore(
+        &self,
+        stage: sb_store::RestoreStage,
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> Result<(), StoreError> {
+        self.lease.swap_restore(stage, cancel)
+    }
+
+    /// Reopen under the still-held lease: the restored image after a
+    /// swap, or this store when no swap ran. A marker a failed swap
+    /// left resolves exactly as a fresh open would.
+    pub fn resume(self) -> Result<Resources, StoreError> {
+        let Self {
+            lease,
+            fs,
+            clock,
+            random,
+        } = self;
+        let seams = Seams::new(Arc::clone(&fs), Arc::clone(&clock), Arc::clone(&random));
+        Ok(Resources {
+            store: lease.resume(&seams)?,
+            renditions: None,
+            fs,
+            clock,
+            random,
+        })
     }
 }
 

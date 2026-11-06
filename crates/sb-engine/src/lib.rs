@@ -32,6 +32,9 @@ mod rebuild;
 mod received;
 #[cfg(test)]
 mod received_tests;
+mod restore;
+#[cfg(test)]
+mod restore_tests;
 mod search;
 mod settings;
 mod sidebar;
@@ -43,11 +46,11 @@ mod windows;
 // needs, re-exported by item through this layer (spec/01 rule 3;
 // `sb-service` itself re-exports nothing).
 pub use sb_resources::{
-    AccountColor, AccountKind, AccountState, AppearanceAssignment, ExportSelection,
-    ImportJobCheckpoint, ImportJobState, ImportProblem, ImportProblemKind, ImportTotals,
-    MailboxKind, MailboxList, MailboxRole, MboxQuoting, MboxVariant, Receipt, SourceInventory,
-    SourceKind, SourcePosition, StoredAccount, StoredMailbox, Timestamp, default_cache_root,
-    default_data_root,
+    AccountColor, AccountKind, AccountState, AppearanceAssignment, BackupDestination,
+    BackupReceipt, ExportSelection, ImportJobCheckpoint, ImportJobState, ImportProblem,
+    ImportProblemKind, ImportTotals, MailboxKind, MailboxList, MailboxRole, MboxQuoting,
+    MboxVariant, Receipt, SourceInventory, SourceKind, SourcePosition, StoredAccount,
+    StoredMailbox, Timestamp, default_cache_root, default_data_root,
 };
 
 pub use drafts::{DraftContent, DraftCreated, DraftSaved};

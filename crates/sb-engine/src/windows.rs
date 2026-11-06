@@ -465,6 +465,10 @@ struct Versions {
     /// The committed appearance revision (spec/02), independent of
     /// the list and Search sources.
     appearance: u64,
+    /// The restore epoch (spec/03): a swap can bring an image whose
+    /// generations coincidentally equal the old store's, so staleness
+    /// compares this counter, not the generation alone.
+    restored: u64,
     closes: u64,
     shut: bool,
 }
@@ -477,15 +481,19 @@ struct Versions {
 struct OpenWindow {
     spec: WindowSpec,
     seen: Arc<AtomicU64>,
+    /// The restore epoch this window opened under; a restore stales it
+    /// whatever generation the new image happens to report.
+    epoch: u64,
     /// Close also stops this window's admitted ID reads (spec/07).
     stop: ReadStop,
 }
 
 impl OpenWindow {
-    fn new(spec: WindowSpec, seen: u64) -> Self {
+    fn new(spec: WindowSpec, seen: u64, epoch: u64) -> Self {
         Self {
             spec,
             seen: Arc::new(AtomicU64::new(seen)),
+            epoch,
             stop: ReadStop::default(),
         }
     }
@@ -551,6 +559,25 @@ impl Windows {
             inner: Mutex::new(WindowsInner::default()),
             versions: watch::Sender::new(Versions::default()),
         }
+    }
+
+    /// A restore swapped the store (spec/03): bump the epoch so every
+    /// window opened before it is stale — a restored generation can
+    /// coincidentally equal a recorded one, so generations alone
+    /// cannot name the change. Subscriptions wake on the versions
+    /// write; `read_window` and `window_ids` compare epochs directly.
+    pub(crate) fn restored(&self) {
+        self.versions.send_modify(|versions| versions.restored += 1);
+    }
+
+    /// The current restore epoch.
+    fn restore_epoch(&self) -> u64 {
+        self.versions.borrow().restored
+    }
+
+    /// Whether this window predates the current restore epoch.
+    fn restore_stale(&self, open: &OpenWindow) -> bool {
+        open.epoch != self.restore_epoch()
     }
 
     /// The store committed `generation` (spec/07): wake subscriptions.
@@ -627,9 +654,14 @@ impl Windows {
         let range = resolve(&spec, anchor, source.generation, source.count, limit)?;
         let window_id = inner.take_window_id();
         // The window closes if this page never reaches its caller.
-        inner
-            .open
-            .insert(window_id, OpenWindow::new(spec.clone(), source.generation));
+        inner.open.insert(
+            window_id,
+            OpenWindow::new(
+                spec.clone(),
+                source.generation,
+                self.versions.borrow().restored,
+            ),
+        );
         Ok(page(
             window_id,
             source.generation,
@@ -706,7 +738,10 @@ impl Windows {
     fn register(&self, spec: WindowSpec, seen: u64) -> WindowId {
         let mut inner = self.lock();
         let window_id = inner.take_window_id();
-        inner.open.insert(window_id, OpenWindow::new(spec, seen));
+        inner.open.insert(
+            window_id,
+            OpenWindow::new(spec, seen, self.versions.borrow().restored),
+        );
         window_id
     }
 
@@ -1190,6 +1225,11 @@ impl Engine {
         // The lookup and a store read are separate tasks, so a close in
         // between still gets this page: the read saw the window open.
         let open = self.compute(move || lookup.window(window_id)).await?;
+        if windows.restore_stale(&open) {
+            return Err(EngineError::ResetRequired {
+                generation: windows.versions.borrow().store,
+            });
+        }
         let scope = match open.spec.source() {
             WindowSource::Search(spec) => {
                 let window = self
@@ -1239,6 +1279,11 @@ impl Engine {
         let windows = Arc::clone(self.windows());
         let lookup = Arc::clone(&windows);
         let open = self.compute(move || lookup.window(window_id)).await?;
+        if windows.restore_stale(&open) {
+            return Err(EngineError::ResetRequired {
+                generation: windows.versions.borrow().store,
+            });
+        }
         let scope = match open.spec.source() {
             WindowSource::Search(spec) => {
                 let ids = self

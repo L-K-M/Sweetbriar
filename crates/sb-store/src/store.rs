@@ -434,6 +434,13 @@ impl Store {
         marker.and(readers_closed).and(writer_closed)
     }
 
+    /// The data root this store owns, bound through the backup
+    /// coordinator (spec/03), stays valid for the swap's renames and
+    /// `resume`'s reopen.
+    pub fn data_root(&self) -> &Path {
+        self.backups.data_root()
+    }
+
     /// Close the store for a restore swap (spec/03 "Restore" step 4):
     /// the same ordered teardown as `close`, except the sibling
     /// `<root>.lock` lease and the backups coordinator stay held in the

@@ -95,6 +95,12 @@ impl IndexJobs {
         self.ready.notify_all();
     }
 
+    /// Clear a stopped worker's state for the store a restore swapped
+    /// in: `schedule_index` may run it again (spec/03 "Restore").
+    pub(crate) fn reset(&self) {
+        *self.lock() = State::default();
+    }
+
     pub(super) fn stopped(&self) -> bool {
         self.lock().stopping
     }

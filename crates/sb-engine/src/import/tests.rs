@@ -95,7 +95,7 @@ fn confirm(
 
 /// Row counts straight from the store.
 fn count(engine: &Engine, sql: &'static str) -> i64 {
-    resource_count(engine.resources(), sql)
+    resource_count(&engine.resources(), sql)
 }
 
 fn resource_count(resources: &Resources, sql: &'static str) -> i64 {

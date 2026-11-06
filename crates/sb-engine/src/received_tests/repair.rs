@@ -219,7 +219,7 @@ fn mixed_source_failures_do_not_starve_fresh_mail_or_hot_retry_on_irrelevant_wak
         fault(&engine, "d_repair_assemblies", 2, cut);
         let begins = Arc::new(AtomicU64::new(0));
         let observed = begins.clone();
-        let resources = Arc::downgrade(engine.resources());
+        let resources = Arc::downgrade(&engine.resources());
         let registry = Arc::downgrade(engine.received());
         let (done, folded) = mpsc::channel();
         hook(&engine, move |event| {
@@ -505,7 +505,7 @@ fn replaying_an_unchanged_received_key_does_not_rewrite_its_kept_row() {
     let (_scratch, engine, _) = seed(1, SIMPLE);
     start(&engine);
     complete(&engine);
-    let kept = history(engine.resources());
+    let kept = history(&engine.resources());
     write(&engine, |tx| {
         tx.execute_batch("CREATE TEMP TRIGGER reject_replayed_history BEFORE UPDATE ON main.seen_addresses WHEN OLD.canonical='new@x.test' BEGIN SELECT RAISE(ABORT,'unchanged history rewrite'); END").unwrap();
         Ok(())
@@ -522,7 +522,7 @@ fn replaying_an_unchanged_received_key_does_not_rewrite_its_kept_row() {
     change(&engine, "SELECT 1");
     let successful = result.recv_timeout(Duration::from_secs(300)).unwrap();
     engine.received().stop();
-    assert_eq!(history(engine.resources()), kept);
+    assert_eq!(history(&engine.resources()), kept);
     block_on(engine.shutdown()).unwrap();
     assert!(
         successful,
@@ -545,7 +545,7 @@ fn current_population_batches_many_messages_within_one_key_and_byte_budget() {
     let seen = commits.clone();
     let before = Arc::new(AtomicU64::new(0));
     let starting = before.clone();
-    let resources = Arc::downgrade(engine.resources());
+    let resources = Arc::downgrade(&engine.resources());
     hook(&engine, move |event| {
         if !matches!(
             event,
@@ -651,7 +651,7 @@ fn a_later_message_write_or_commit_failure_rolls_back_the_entire_population_batc
 fn a_changed_later_source_recaptures_before_any_earlier_message_mutation() {
     let (scratch, engine, _) = seed(2, SIMPLE);
     current_source(&engine);
-    let resources = Arc::downgrade(engine.resources());
+    let resources = Arc::downgrade(&engine.resources());
     let registry = Arc::downgrade(engine.received());
     let changed = AtomicBool::new(false);
     let (finished, result) = mpsc::channel();
@@ -733,7 +733,7 @@ fn corpus_write_and_commit_failures_preserve_published_sources_and_retry_indepen
 fn a_failed_corpus_write_arms_backoff_from_completion_not_the_round_start() {
     let (_scratch, engine, clock) = seed(1, SIMPLE);
     fault(&engine, "d_message_bindings", 1, WriteCut::Statement);
-    let resources = Arc::downgrade(engine.resources());
+    let resources = Arc::downgrade(&engine.resources());
     let advanced = AtomicBool::new(false);
     let observed = clock.clone();
     let registry = Arc::downgrade(engine.received());
@@ -918,7 +918,7 @@ fn shutdown_and_drop_stop_all_six_eager_sites_and_drain_actual_submitted_writes(
                     },
                 );
                 let root = scratch.path().join("store");
-                let resources = Arc::downgrade(engine.resources());
+                let resources = Arc::downgrade(&engine.resources());
                 let before = Arc::new(Mutex::new(None));
                 let after = Arc::new(Mutex::new(None));
                 let captured = before.clone();
@@ -1011,21 +1011,21 @@ fn index_writer_failure_does_not_gate_real_repair_activation_or_address_history(
         sb_resources::set_user_pause(tx, UserPause::Resume)
     });
     engine.indexer().wake();
-    wait(|| engine.indexer().status(engine.resources()).is_err());
+    wait(|| engine.indexer().status(&engine.resources()).is_err());
     start(&engine);
     complete(&engine);
     assert!(engine.resources().catchup_status().unwrap().complete());
     assert_eq!(count(&engine, BINDINGS), 3);
     assert_eq!(count(&engine, LEDGER), 3);
     assert!(block_on(engine.coverage(crate::SearchScope::All)).is_err());
-    let kept = history(engine.resources());
+    let kept = history(&engine.resources());
     write(&engine, |tx| {
         tx.execute_batch("DROP TRIGGER reject_fts").unwrap();
         Ok(())
     });
     engine.indexer().wake();
     wait(|| count(&engine, "SELECT count(*) FROM d_search_docs") == 1);
-    assert_eq!(history(engine.resources()), kept);
+    assert_eq!(history(&engine.resources()), kept);
     block_on(engine.shutdown()).unwrap();
 }
 
@@ -1078,7 +1078,7 @@ fn worker_crash_child() {
     let cuts = Arc::new(sb_test_support::CutFs::new(real_fs(), nth));
     let observed = cuts.clone();
     let directory = root.clone();
-    let resources = Arc::downgrade(engine.resources());
+    let resources = Arc::downgrade(&engine.resources());
     let before = AtomicBool::new(false);
     let after = AtomicBool::new(false);
     hook(&engine, move |event| {
@@ -1175,7 +1175,7 @@ fn real_worker_repairs_activates_and_populates_one_hundred_thousand_shared_messa
     assert_eq!(count(&engine, "SELECT count(*) FROM acquisitions"), 1);
     let activated = Arc::new(AtomicU64::new(0));
     let observed = activated.clone();
-    let resources = Arc::downgrade(engine.resources());
+    let resources = Arc::downgrade(&engine.resources());
     hook(&engine, move |event| {
         if let Event::CatchupCommitted {
             processed,
@@ -1229,12 +1229,12 @@ fn real_worker_repairs_activates_and_populates_one_hundred_thousand_shared_messa
             .unwrap()
             .stale()
     });
-    let kept = history(engine.resources());
+    let kept = history(&engine.resources());
     let root = scratch.path().join("store");
     block_on(engine.shutdown()).unwrap();
     let engine = block_on(Engine::open(&root)).unwrap();
     complete(&engine);
-    assert_eq!(history(engine.resources()), kept);
+    assert_eq!(history(&engine.resources()), kept);
     assert_eq!(count(&engine, LEDGER), MESSAGES);
     block_on(engine.shutdown()).unwrap();
 }

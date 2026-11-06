@@ -97,6 +97,18 @@ impl ImportJobs {
             .insert(id.to_owned());
     }
 
+    /// Clear every registry for the store a restore swapped in: the
+    /// workers drained with the quiesce, and the restored image's open
+    /// recovery owns its own jobs and reports (spec/03 "Restore").
+    pub(crate) fn reset(&self) {
+        self.lock().clear();
+        self.reports
+            .lock()
+            .expect("a panicking thread held the import report registry")
+            .clear();
+        self.threads.reset();
+    }
+
     /// Whether `id`'s report is known to be written.
     fn report_written(&self, id: &str) -> bool {
         self.reports
@@ -487,7 +499,7 @@ impl Engine {
             // Best-effort, like the cleanup it gates: an unreadable
             // `recovery/` must not keep the store closed.
             let found = matches!(self.resources().import_report_exists(job.id()), Ok(true));
-            if found || matches!(finish(self.resources(), job.id()), Ok(true)) {
+            if found || matches!(finish(&self.resources(), job.id()), Ok(true)) {
                 self.imports().note_report(job.id());
             }
         }
@@ -502,7 +514,7 @@ impl Engine {
                         let state = ImportJobState::Failed;
                         advance_import_job(tx, &id, revision, state, &checkpoint, now).map(drop)
                     }))?;
-                    if matches!(finish(self.resources(), job.id()), Ok(true)) {
+                    if matches!(finish(&self.resources(), job.id()), Ok(true)) {
                         self.imports().note_report(job.id());
                     }
                 }

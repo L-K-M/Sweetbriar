@@ -89,6 +89,15 @@ impl ThreadRebuilds {
         self.lock().running = false;
     }
 
+    /// Clear the slot after a restore swap: the restored image gets a
+    /// fresh pass. The test-only request counter survives so a test
+    /// keeps its cumulative reading.
+    pub(crate) fn reset(&self) {
+        let mut state = self.lock();
+        state.running = false;
+        state.again = false;
+    }
+
     #[cfg(test)]
     pub(crate) fn requests(&self) -> usize {
         self.lock().requests

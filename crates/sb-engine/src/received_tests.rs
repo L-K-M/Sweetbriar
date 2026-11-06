@@ -135,7 +135,7 @@ fn real_imports_populate_without_pokes_while_search_holds_and_partial_sources_st
     assert!(
         engine
             .indexer()
-            .status(engine.resources())
+            .status(&engine.resources())
             .unwrap()
             .io_pause()
             .is_some()
@@ -170,7 +170,7 @@ fn index_writer_failure_does_not_gate_received_publication() {
         sb_resources::set_user_pause(tx, UserPause::Resume)
     });
     engine.indexer().wake();
-    wait(|| engine.indexer().status(engine.resources()).is_err());
+    wait(|| engine.indexer().status(&engine.resources()).is_err());
     assert_eq!(count(&engine, "SELECT count(*) FROM d_search_docs"), 0);
     import(
         &engine,
@@ -178,7 +178,7 @@ fn index_writer_failure_does_not_gate_received_publication() {
         b"From: fresh@example.test\r\nSubject: later\r\n\r\nsecond\r\n",
     );
     settled(&engine);
-    wait(|| engine.indexer().status(engine.resources()).is_err());
+    wait(|| engine.indexer().status(&engine.resources()).is_err());
     assert_eq!(count(&engine, LEDGER), 3);
     assert_eq!(
         count(
@@ -187,7 +187,7 @@ fn index_writer_failure_does_not_gate_received_publication() {
         ),
         1
     );
-    assert!(engine.indexer().status(engine.resources()).is_err());
+    assert!(engine.indexer().status(&engine.resources()).is_err());
     block_on(engine.shutdown()).unwrap();
 }
 
@@ -212,7 +212,7 @@ fn captured_revision_ack_leaves_late_eligibility_of_an_old_id_owed() {
         .unwrap()
         .inputs;
     let first = AtomicBool::new(false);
-    let weak = Arc::downgrade(engine.resources());
+    let weak = Arc::downgrade(&engine.resources());
     let completions = Arc::new(Mutex::new(Vec::new()));
     let observed = completions.clone();
     hook(&engine, move |event| {
@@ -400,11 +400,11 @@ fn startup_replays_a_real_multichunk_import_without_recounting_committed_keys() 
         count(&engine, "SELECT sum(times_received) FROM seen_addresses"),
         1000
     );
-    let kept = history(engine.resources());
+    let kept = history(&engine.resources());
     block_on(engine.shutdown()).unwrap();
     let engine = block_on(Engine::open(&root)).unwrap();
     settled(&engine);
-    assert_eq!(history(engine.resources()), kept);
+    assert_eq!(history(&engine.resources()), kept);
     assert_eq!(
         engine
             .resources()
@@ -837,7 +837,7 @@ fn real_search_and_thread_rebuilds_keep_all_address_history() {
         tx.execute_batch("UPDATE seen_addresses SET times_sent_to=7; UPDATE store_meta SET value=CAST(CAST(value AS INTEGER)+1 AS TEXT) WHERE key='thread_inputs'").unwrap();
         Ok(())
     });
-    let before = history(engine.resources());
+    let before = history(&engine.resources());
     let revisions = engine.resources().received_address_revisions().unwrap();
     let started = block_on(engine.start_search_rebuild(&engine.new_idempotency_key())).unwrap();
     engine.schedule_threads();
@@ -864,7 +864,7 @@ fn real_search_and_thread_rebuilds_keep_all_address_history() {
         1
     );
     assert_eq!(count(&engine, LEDGER), 2);
-    assert_eq!(history(engine.resources()), before);
+    assert_eq!(history(&engine.resources()), before);
     assert_eq!(
         engine.resources().received_address_revisions().unwrap(),
         revisions

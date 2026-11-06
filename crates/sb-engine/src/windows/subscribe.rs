@@ -75,6 +75,11 @@ impl Subscription {
                 return Err(shut_down());
             }
             let open = self.window().await?;
+            // A restore stales the window by epoch, whatever the new
+            // image's generation happens to be (spec/03).
+            if open.epoch != seen.restored {
+                return Ok(WindowEvent::ResetRequired);
+            }
             let current = source_generation(&open.spec, seen);
             let mark = *self.lock_mark().get_or_insert(open.seen());
             if current > mark {

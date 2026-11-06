@@ -108,7 +108,7 @@ fn empty_startup(engine: &Engine) {
 }
 
 fn status(engine: &Engine) -> sb_resources::SearchIndexStatus {
-    engine.indexer().status(engine.resources()).unwrap()
+    engine.indexer().status(&engine.resources()).unwrap()
 }
 
 fn hook(engine: &Engine, body: impl Fn(Event) + Send + Sync + 'static) {
@@ -651,7 +651,7 @@ fn a_missing_lookup_is_a_terminal_read_error_not_an_io_retry() {
     pause(&engine, UserPause::Resume);
     wait(|| {
         matches!(
-            engine.indexer().status(engine.resources()),
+            engine.indexer().status(&engine.resources()),
             Err(StoreError::NotFound { .. })
         )
     });
@@ -700,7 +700,7 @@ fn reset_enqueue_drive_the_due_hold_and_a_newer_target_never_extracts() {
     wait_for(Duration::from_secs(30), || {
         engine
             .indexer()
-            .status(engine.resources())
+            .status(&engine.resources())
             .is_ok_and(|state| {
                 state.io_pause().is_some_and(|pause| {
                     pause.code() == sb_resources::SearchIoCode::StorageFull
@@ -808,7 +808,7 @@ fn failed_publication_and_failed_pause_persistence_gate_reads_until_recovery_com
             if event == Event::Recovered {
                 let engine = weak.upgrade().unwrap();
                 assert!(matches!(
-                    engine.indexer().status(engine.resources()),
+                    engine.indexer().status(&engine.resources()),
                     Err(StoreError::Unavailable { .. })
                 ));
                 assert!(matches!(
@@ -825,11 +825,11 @@ fn failed_publication_and_failed_pause_persistence_gate_reads_until_recovery_com
         pause(&engine, UserPause::Resume);
         wait(|| {
             matches!(
-                engine.indexer().status(engine.resources()),
+                engine.indexer().status(&engine.resources()),
                 Err(StoreError::Unavailable { .. })
             )
         });
-        let failed = snapshot(engine.resources());
+        let failed = snapshot(&engine.resources());
         assert!(matches!(
             block_on(engine.read_window(
                 search.window_id(),
@@ -854,10 +854,10 @@ fn failed_publication_and_failed_pause_persistence_gate_reads_until_recovery_com
         engine.indexer().wake();
         rejected.recv_timeout(Duration::from_secs(30)).unwrap();
         assert!(matches!(
-            engine.indexer().status(engine.resources()),
+            engine.indexer().status(&engine.resources()),
             Err(StoreError::Unavailable { .. })
         ));
-        assert_eq!(snapshot(engine.resources()), failed);
+        assert_eq!(snapshot(&engine.resources()), failed);
         assert!(matches!(
             block_on(engine.coverage(crate::SearchScope::All)),
             Err(crate::EngineError::Unavailable { .. })
@@ -943,7 +943,7 @@ fn native_bulk_full_persists_pause_history_when_status_writes_still_fit() {
     wait(|| {
         engine
             .indexer()
-            .status(engine.resources())
+            .status(&engine.resources())
             .is_ok_and(|state| state.io_pause().is_some())
     });
     let state = status(&engine);
@@ -969,7 +969,7 @@ fn native_bulk_full_persists_pause_history_when_status_writes_still_fit() {
     wait(|| {
         engine
             .indexer()
-            .status(engine.resources())
+            .status(&engine.resources())
             .is_ok_and(|state| state.io_attempts() == 2)
     });
     assert_eq!(
@@ -1113,7 +1113,7 @@ fn a_blocking_worker_panic_surfaces_an_error_and_preserves_unsubmitted_work() {
     pause(&engine, UserPause::Resume);
     reached.recv_timeout(Duration::from_secs(30)).unwrap();
     let deadline = Instant::now() + Duration::from_secs(5);
-    while engine.indexer().status(engine.resources()).is_ok() {
+    while engine.indexer().status(&engine.resources()).is_ok() {
         assert!(
             Instant::now() < deadline,
             "a dead worker left status readable"
@@ -1187,7 +1187,7 @@ fn process_crashes_on_both_sides_of_worker_publication_converge_after_restart() 
             resources.close().unwrap();
             let engine = block_on(Engine::open(root)).unwrap();
             drained(&engine);
-            assert_eq!(snapshot(engine.resources()), new);
+            assert_eq!(snapshot(&engine.resources()), new);
             block_on(engine.shutdown()).unwrap();
         },
     );
@@ -1644,7 +1644,7 @@ mod rebuild {
         engine.indexer().wake();
         wait(|| {
             matches!(
-                engine.indexer().status(engine.resources()),
+                engine.indexer().status(&engine.resources()),
                 Err(StoreError::Unavailable { .. })
             )
         });
@@ -1754,7 +1754,7 @@ mod rebuild {
                 wait(|| {
                     engine
                         .indexer()
-                        .status(engine.resources())
+                        .status(&engine.resources())
                         .is_ok_and(|state| state.user_paused())
                 });
                 assert_eq!(job(&engine).id(), "native-phase");
@@ -1773,7 +1773,7 @@ mod rebuild {
                 wait(|| {
                     engine
                         .indexer()
-                        .status(engine.resources())
+                        .status(&engine.resources())
                         .is_ok_and(|state| state.io_pause().is_some())
                 });
                 let state = status(&engine);
@@ -1863,7 +1863,7 @@ mod rebuild {
         );
         assert_eq!(state.io_attempts(), 6);
         assert_eq!(state.io_pause().unwrap().retry_at().as_millis(), 42_000);
-        assert!(engine.indexer().status(engine.resources()).is_ok());
+        assert!(engine.indexer().status(&engine.resources()).is_ok());
         if rebuild {
             assert_eq!(phase(&engine), "enqueue");
             assert_eq!((count(&engine, DOCS), count(&engine, QUEUE)), (0, 1));

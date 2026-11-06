@@ -40,6 +40,16 @@ struct KeptUnknown {
 }
 
 impl SearchMemo {
+    /// Forget every cache for the store a restore swapped in: the
+    /// generations they key on belong to the old image (spec/03
+    /// "Restore").
+    pub(crate) fn reset(&self) {
+        lock(&self.coverage).clear();
+        lock(&self.unknown).clear();
+    }
+}
+
+impl SearchMemo {
     /// Coverage at the snapshot's generation, scanning the scope once per
     /// generation, with the scope counts that prove driven reads (spec/06).
     pub(crate) fn coverage(

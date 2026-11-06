@@ -63,7 +63,14 @@ type Cleanup = (
 /// joins its writer thread, which must not block an async caller), then
 /// the runtime shuts down in the background.
 pub struct Engine {
-    resources: Option<Arc<Resources>>,
+    /// The store handle; present until `shutdown` or drop takes it, or
+    /// a restore replaces it with the restored image. Behind a mutex so
+    /// the swap can detach and reinstall it atomically; the Arc clone
+    /// each command takes keeps it off every hot path's lock.
+    resources: Arc<Mutex<Option<Arc<Resources>>>>,
+    /// A restore is in flight: command entry points return
+    /// `Unavailable` until it finishes, without ending the engine.
+    restoring: std::sync::atomic::AtomicBool,
     blocking: Arc<BlockingWork>,
     runtime: OwnedRuntime,
     /// The open windows and the debug source behind them (spec/07
@@ -131,7 +138,7 @@ impl Drop for OwnedRuntime {
 /// blocking task, so shutdown waits here until every one has finished
 /// and given its store handle back, and refuses new ones meanwhile.
 #[derive(Default)]
-struct BlockingWork {
+pub(crate) struct BlockingWork {
     state: Mutex<BlockingState>,
     idle: Condvar,
 }
@@ -140,6 +147,10 @@ struct BlockingWork {
 struct BlockingState {
     running: usize,
     closing: bool,
+    /// A restore quiesced the store: new work refuses, running work
+    /// drains, and loops polling `closing` unwind — without ending
+    /// the engine (spec/03 "Restore" step 4).
+    paused: bool,
 }
 
 impl BlockingWork {
@@ -149,19 +160,44 @@ impl BlockingWork {
             .expect("a panicking thread held the engine's work lock")
     }
 
-    /// Count one more blocking task, unless shutdown has begun.
+    /// Count one more blocking task, unless shutdown or a restore
+    /// quiesce has begun.
     fn start(self: &Arc<Self>) -> Result<Running, EngineError> {
         let mut state = self.state();
         if state.closing {
             return Err(EngineError::unavailable("the core is shutting down"));
         }
+        if state.paused {
+            return Err(EngineError::unavailable("a restore is in progress"));
+        }
         state.running += 1;
         Ok(Running(Arc::clone(self)))
     }
 
-    /// Whether shutdown has begun, for long work that pauses itself.
+    /// Whether shutdown or a restore pause has begun, for long work
+    /// that pauses itself.
     fn closing(&self) -> bool {
-        self.state().closing
+        let state = self.state();
+        state.closing || state.paused
+    }
+
+    /// Stop new blocking work and wait until the running tasks end,
+    /// without ending the engine: the restore quiesce. `resume` opens
+    /// the gate again after the swap.
+    pub(crate) fn quiesce(&self) {
+        let mut state = self.state();
+        state.paused = true;
+        while state.running > 0 {
+            state = self
+                .idle
+                .wait(state)
+                .expect("a panicking thread held the engine's work lock");
+        }
+    }
+
+    /// Let blocking work start again after a restore pause.
+    pub(crate) fn resume(&self) {
+        self.state().paused = false;
     }
 
     /// Refuse new blocking tasks and wait until the running ones end.
@@ -269,7 +305,7 @@ impl Spawn for Engine {
         Fut: std::future::Future<Output = ()> + Send + 'static,
     {
         spawn(
-            self.resources(),
+            &self.resources(),
             &self.index,
             &self.received,
             &self.blocking,
@@ -294,6 +330,48 @@ impl Spawn for Worker {
             body,
         )
     }
+}
+
+/// Register a resources' generation observers on `windows`, and the
+/// maintenance-input wake on `received`, then announce the current
+/// generations. Open and restore both run this against their freshly
+/// opened store so subscriptions and the worker keep moving.
+pub(crate) fn announce_generations(
+    windows: &Arc<Windows>,
+    received: &Arc<ReceivedJobs>,
+    resources: &Resources,
+) -> Result<(), EngineError> {
+    let announced = Arc::clone(windows);
+    resources.observe_list_generation(Arc::new(move |generation| {
+        announced.store_moved(generation);
+    }));
+    windows.store_moved(resources.read(list_generation)?);
+    let announced = Arc::clone(windows);
+    resources.observe_search_generation(Arc::new(move |generation| {
+        announced.search_moved(generation);
+    }));
+    windows.search_moved(resources.read(|tx| {
+        search_generation(tx)?
+            .try_into()
+            .map_err(|_| sb_resources::StoreError::Corrupt {
+                detail: "negative search generation".into(),
+            })
+    })?);
+    // Appearance subscriptions hear every committed appearance
+    // generation (spec/02); the observer registers before the initial
+    // read so no commit lands between them.
+    let announced = Arc::clone(windows);
+    resources.observe_appearance_generation(Arc::new(move |generation| {
+        announced.appearance_moved(generation);
+    }));
+    windows.appearance_moved(resources.read(appearance_generation)?);
+    let maintenance = Arc::downgrade(received);
+    resources.observe_maintenance_inputs(Arc::new(move || {
+        if let Some(worker) = maintenance.upgrade() {
+            worker.wake();
+        }
+    }));
+    Ok(())
 }
 
 fn spawn<F, Fut>(
@@ -456,40 +534,11 @@ impl Engine {
                     // Subscriptions hear every committed list generation
                     // from here on, starting from the current one.
                     let windows = Arc::new(Windows::new());
-                    let announced = Arc::clone(&windows);
-                    resources.observe_list_generation(Arc::new(move |generation| {
-                        announced.store_moved(generation);
-                    }));
-                    windows.store_moved(resources.read(list_generation)?);
-                    let announced = Arc::clone(&windows);
-                    resources.observe_search_generation(Arc::new(move |generation| {
-                        announced.search_moved(generation);
-                    }));
-                    windows.search_moved(resources.read(|tx| {
-                        search_generation(tx)?.try_into().map_err(|_| {
-                            sb_resources::StoreError::Corrupt {
-                                detail: "negative search generation".into(),
-                            }
-                        })
-                    })?);
-                    // Appearance subscriptions hear every committed
-                    // appearance generation (spec/02); the observer
-                    // registers before the initial read so no commit
-                    // lands between them.
-                    let announced = Arc::clone(&windows);
-                    resources.observe_appearance_generation(Arc::new(move |generation| {
-                        announced.appearance_moved(generation);
-                    }));
-                    windows.appearance_moved(resources.read(appearance_generation)?);
                     let received: Arc<ReceivedJobs> = Arc::default();
-                    let maintenance = Arc::downgrade(&received);
-                    resources.observe_maintenance_inputs(Arc::new(move || {
-                        if let Some(worker) = maintenance.upgrade() {
-                            worker.wake();
-                        }
-                    }));
+                    announce_generations(&windows, &received, &resources)?;
                     Ok(Self {
-                        resources: Some(Arc::new(resources)),
+                        resources: Arc::new(Mutex::new(Some(Arc::new(resources)))),
+                        restoring: std::sync::atomic::AtomicBool::new(false),
                         blocking: Arc::default(),
                         runtime,
                         windows,
@@ -526,10 +575,15 @@ impl Engine {
     }
 
     /// The store handle; present until `shutdown` or drop takes it.
-    pub(crate) fn resources(&self) -> &Arc<Resources> {
+    /// Cloning the Arc lets a restore swap the shared cell without a
+    /// lock on every call site.
+    pub(crate) fn resources(&self) -> Arc<Resources> {
         self.resources
+            .lock()
+            .expect("the resources lock poisoned")
             .as_ref()
             .expect("the store handle lives until shutdown")
+            .clone()
     }
 
     /// The window table; crate-visible so the `windows` module can
@@ -559,6 +613,37 @@ impl Engine {
 
     pub(crate) fn search_memo(&self) -> &Arc<crate::search::SearchMemo> {
         &self.search_memo
+    }
+
+    /// The rendition-file lease registry; `restore` closes it so the
+    /// swap holds no old-store file handles.
+    pub(crate) fn rendition_leases(&self) -> &Arc<crate::bodies::Leases> {
+        &self.leases
+    }
+
+    /// The blocking-work gate; `restore` quiesces and resumes it.
+    pub(crate) fn blocking(&self) -> &Arc<BlockingWork> {
+        &self.blocking
+    }
+
+    /// The shared resources cell; `restore` detaches the old handle
+    /// and installs the restored one under the quiesce.
+    pub(crate) fn resources_cell(&self) -> Arc<Mutex<Option<Arc<Resources>>>> {
+        Arc::clone(&self.resources)
+    }
+
+    /// Claim the restore slot: `true` when this call owns the restore
+    /// now. The caller clears it with `end_restore`.
+    pub(crate) fn begin_restore(&self) -> bool {
+        !self
+            .restoring
+            .swap(true, std::sync::atomic::Ordering::AcqRel)
+    }
+
+    /// Release the restore slot.
+    pub(crate) fn end_restore(&self) {
+        self.restoring
+            .store(false, std::sync::atomic::Ordering::Release);
     }
 
     /// Observe command acceptance, after any preliminary asynchronous validation.
@@ -604,14 +689,22 @@ impl Engine {
     /// blocking an async context. A close failure is reported to the
     /// caller, who has nothing left to do: the next open's
     /// `quick_check` is the safety net (spec/03).
-    pub async fn shutdown(mut self) -> Result<(), EngineError> {
+    pub async fn shutdown(self) -> Result<(), EngineError> {
         self.windows.shut();
         self.index.stop();
         self.received.stop();
-        let resources = self
+        // A restore mid-swap may hold the only handle; its own failure
+        // paths reinstall it, and an engine ending anyway leaves the
+        // lease for the marker protocol at the next open.
+        let Some(resources) = self
             .resources
+            .lock()
+            .expect("the resources lock poisoned")
             .take()
-            .expect("the store handle lives until shutdown");
+        else {
+            self.blocking.close_and_wait();
+            return Ok(());
+        };
         let blocking = Arc::clone(&self.blocking);
         let leases = self.leases.clone();
         let windows = Arc::clone(&self.windows);
@@ -660,7 +753,7 @@ impl Engine {
         F: FnOnce(&Resources) -> Result<T, sb_resources::StoreError> + Send + 'static,
     {
         let running = self.blocking.start()?;
-        let resources = Arc::clone(self.resources());
+        let resources = self.resources();
         let task = self.runtime.handle().spawn_blocking(move || {
             let result = f(&resources);
             // The handle goes back before the task counts out, so
@@ -756,7 +849,12 @@ impl Drop for Engine {
         self.windows.shut();
         self.index.stop();
         self.received.stop();
-        let Some(resources) = self.resources.take() else {
+        let Some(resources) = self
+            .resources
+            .lock()
+            .expect("the resources lock poisoned")
+            .take()
+        else {
             return;
         };
         let _ = self.cleanup.send((

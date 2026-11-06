@@ -48,7 +48,7 @@ fn a_stopped_search_ids_read_wins_over_a_later_status_failure() {
     }
 
     // Fail a real SQLite statement through the worker's production write gate.
-    let (index, resources) = (Arc::clone(engine.indexer()), Arc::clone(engine.resources()));
+    let (index, resources) = (Arc::clone(engine.indexer()), engine.resources());
     let failure = block_on(engine.runtime_handle().spawn_blocking(move || {
         index.write(&resources, |tx| {
             tx.execute_batch("SELECT missing_column FROM missing_index_test_table")

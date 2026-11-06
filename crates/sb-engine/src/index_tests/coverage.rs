@@ -91,7 +91,7 @@ fn public_polling_reports_complete_owned_values_and_scope_errors() {
 fn resources_capability_uses_the_same_snapshot_as_scoped_facts_and_progress() {
     let scratch = ScratchDir::new("coverage-capability-snapshot");
     let engine = held(&scratch.path().join("store"));
-    let resources = Arc::clone(engine.resources());
+    let resources = engine.resources();
     let (captured, before_rx) = mpsc::channel();
     let (release, released) = mpsc::channel();
     let reader = std::thread::spawn(move || {

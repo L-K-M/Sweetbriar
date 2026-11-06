@@ -46,6 +46,12 @@ pub struct VerifiedExternalBackup {
     pub(super) source: Box<dyn ConfinedDir>,
     pub(super) identity: DirectoryIdentity,
     pub(super) manifest_sha256: [u8; 32],
+    /// Object records the verified manifest declared.
+    object_count: u64,
+    /// Database bytes plus every object record's bytes, as declared.
+    total_bytes: u64,
+    /// The manifest's asserted completion time.
+    created_at: i64,
 }
 impl VerifiedExternalBackup {
     /// The selected generation's canonical identifier.
@@ -63,6 +69,18 @@ impl VerifiedExternalBackup {
     /// Digest of the exact manifest verified during selection.
     pub fn manifest_sha256(&self) -> [u8; 32] {
         self.manifest_sha256
+    }
+    /// Object records the verified manifest declared.
+    pub fn object_count(&self) -> u64 {
+        self.object_count
+    }
+    /// Database bytes plus every object record's bytes, as declared.
+    pub fn total_bytes(&self) -> u64 {
+        self.total_bytes
+    }
+    /// The verified manifest's asserted completion time.
+    pub fn created_at(&self) -> i64 {
+        self.created_at
     }
 }
 
@@ -303,12 +321,18 @@ impl Backups {
         let outcome = outcome?;
         match outcome {
             BackupImageInspection::Cancelled => Ok(None),
-            BackupImageInspection::Inspected { .. } => Ok(Some(VerifiedExternalBackup {
-                generation: generation.to_owned(),
-                source,
-                identity,
-                manifest_sha256: prepared.into_inner().expect("prepared manifest").digest,
-            })),
+            BackupImageInspection::Inspected { .. } => {
+                let prepared = prepared.into_inner().expect("prepared manifest");
+                Ok(Some(VerifiedExternalBackup {
+                    generation: generation.to_owned(),
+                    source,
+                    identity,
+                    manifest_sha256: prepared.digest,
+                    object_count: prepared.count,
+                    total_bytes: prepared.total,
+                    created_at: prepared.manifest.created_at,
+                }))
+            }
         }
     }
 
