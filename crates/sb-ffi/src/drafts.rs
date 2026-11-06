@@ -565,6 +565,36 @@ impl Core {
             .await?;
         Ok(Arc::new(DraftAttachmentObject { inner: object }))
     }
+
+    /// `republish_draft_attachment(draft_id, revision_id, reference)`
+    /// (spec/07): re-publish one stored attachment reference from an
+    /// exact immutable draft revision. `reference` crosses owned and
+    /// must equal one of that revision's stored attachments in hash,
+    /// size, filename and media type: a revision the draft does not
+    /// have is `NotFound`, a non-member `Conflict`. An older revision
+    /// or a terminal source draft is a valid source because this makes
+    /// a new publication, never a mutation of that draft. The returned
+    /// handle carries a fresh reservation a following save spends
+    /// once; every call reserves independently. No key and no receipt:
+    /// only the publication is written. Like every command it honours
+    /// the token only until it holds the core; once begun it runs to
+    /// completion and reserves durably, so a cancel or a dropped
+    /// caller cannot strand a half-written object.
+    pub async fn republish_draft_attachment(
+        &self,
+        token: Arc<CancelToken>,
+        draft_id: String,
+        revision_id: String,
+        reference: DraftAttachmentRef,
+    ) -> Result<Arc<DraftAttachmentObject>, CoreError> {
+        let object = self
+            .command(&token, async |core| {
+                core.republish_draft_attachment(&draft_id, &revision_id, reference.into())
+                    .await
+            })
+            .await?;
+        Ok(Arc::new(DraftAttachmentObject { inner: object }))
+    }
 }
 
 #[cfg(test)]

@@ -1045,6 +1045,24 @@ public protocol CoreProtocol: AnyObject, Sendable {
     func publishDraftAttachment(token: CancelToken, input: DraftAttachmentPublish) async throws  -> DraftAttachmentObject
     
     /**
+     * `republish_draft_attachment(draft_id, revision_id, reference)`
+     * (spec/07): re-publish one stored attachment reference from an
+     * exact immutable draft revision. `reference` crosses owned and
+     * must equal one of that revision's stored attachments in hash,
+     * size, filename and media type: a revision the draft does not
+     * have is `NotFound`, a non-member `Conflict`. An older revision
+     * or a terminal source draft is a valid source because this makes
+     * a new publication, never a mutation of that draft. The returned
+     * handle carries a fresh reservation a following save spends
+     * once; every call reserves independently. No key and no receipt:
+     * only the publication is written. Like every command it honours
+     * the token only until it holds the core; once begun it runs to
+     * completion and reserves durably, so a cancel or a dropped
+     * caller cannot strand a half-written object.
+     */
+    func republishDraftAttachment(token: CancelToken, draftId: String, revisionId: String, reference: DraftAttachmentRef) async throws  -> DraftAttachmentObject
+    
+    /**
      * `save_draft(draft_id, base_revision_id, content)` (spec/07
      * "Commands"): append an immutable revision and make it the
      * draft's current one, in the transaction that also spends each
@@ -1543,6 +1561,38 @@ open func publishDraftAttachment(token: CancelToken, input: DraftAttachmentPubli
             rustFutureFunc: {
                 uniffi_sb_ffi_fn_method_core_publish_draft_attachment(
                         self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterTypeDraftAttachmentPublish_lower(input)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_u64,
+            completeFunc: ffi_sb_ffi_rust_future_complete_u64,
+            freeFunc: ffi_sb_ffi_rust_future_free_u64,
+            liftFunc: FfiConverterTypeDraftAttachmentObject_lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * `republish_draft_attachment(draft_id, revision_id, reference)`
+     * (spec/07): re-publish one stored attachment reference from an
+     * exact immutable draft revision. `reference` crosses owned and
+     * must equal one of that revision's stored attachments in hash,
+     * size, filename and media type: a revision the draft does not
+     * have is `NotFound`, a non-member `Conflict`. An older revision
+     * or a terminal source draft is a valid source because this makes
+     * a new publication, never a mutation of that draft. The returned
+     * handle carries a fresh reservation a following save spends
+     * once; every call reserves independently. No key and no receipt:
+     * only the publication is written. Like every command it honours
+     * the token only until it holds the core; once begun it runs to
+     * completion and reserves durably, so a cancel or a dropped
+     * caller cannot strand a half-written object.
+     */
+open func republishDraftAttachment(token: CancelToken, draftId: String, revisionId: String, reference: DraftAttachmentRef)async throws  -> DraftAttachmentObject  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_republish_draft_attachment(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterString.lower(draftId),FfiConverterString.lower(revisionId),FfiConverterTypeDraftAttachmentRef_lower(reference)
                 )
             },
             pollFunc: ffi_sb_ffi_rust_future_poll_u64,
@@ -9662,6 +9712,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_core_publish_draft_attachment() != 18368) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_republish_draft_attachment() != 106) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_core_save_draft() != 24235) {

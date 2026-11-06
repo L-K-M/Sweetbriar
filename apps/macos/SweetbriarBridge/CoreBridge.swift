@@ -394,6 +394,25 @@ public final class CoreBridge: Sendable {
         return DraftAttachmentObject(object)
     }
 
+    /// `republish_draft_attachment` (spec/07): re-publish one stored
+    /// attachment reference from an exact immutable revision; an older
+    /// revision or a terminal source draft stays a valid source. The
+    /// opaque handle carries a fresh reservation a following save
+    /// spends once; each call reserves independently. No key, no
+    /// receipt.
+    public func republishDraftAttachment(
+        draftId: String, revisionId: String, reference: DraftAttachmentRef
+    ) async throws -> DraftAttachmentObject {
+        let token = SweetbriarCore.CancelToken()
+        let object = try await Self.withCancellation(token: token) {
+            try await self.core.republishDraftAttachment(
+                token: token, draftId: draftId, revisionId: revisionId,
+                reference: reference.generated
+            )
+        }
+        return DraftAttachmentObject(object)
+    }
+
     /// `save_draft(draft_id, base_revision_id, content)` (spec/07)
     /// under a shell-made key: append a revision, make it current and
     /// spend each new attachment's reservation in one transaction. A
