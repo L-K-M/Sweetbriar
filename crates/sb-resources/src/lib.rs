@@ -59,7 +59,8 @@ pub use seen::{ReceivedCommit, ReceivedPreparation, ReceivedRevisions, ReceivedS
 pub use acquire::{AcquiredMessage, FlagExtraction, SourceAcquisition, SourcePosition};
 pub use import::{
     BundleFormat, ImportInventory, ImportInventoryOutcome, ImportProblem, ImportProblemKind,
-    ImportProgress, ManifestDescriptor, ManifestProof, SourceBundle, SourceInventory, SourceKind,
+    ImportProgress, ManifestDescriptor, ManifestProof, ManifestProofRegistry, SourceBundle,
+    SourceInventory, SourceKind,
 };
 pub use import_jobs::{
     ImportJobBatch, ImportJobCheckpoint, ImportJobRecord, ImportTotals, LISTED_PROBLEMS,
@@ -85,7 +86,7 @@ pub use sb_store::exports::{
     ExportCaptureRequest, ExportChunkWriter, ExportFormat, ExportJob, ExportJobState, ExportScope,
     ExportSearchSort, ExportSelection, MAX_EXPORT_CHANGED_BYTES, MAX_EXPORT_CHUNK_BYTES,
     MAX_EXPORT_CHUNKS, MAX_EXPORT_JSON_BYTES, advance_export_job, append_export_chunks,
-    create_export_job, export_chunks, export_job,
+    create_export_job, export_chunks, export_job, recoverable_export_jobs,
 };
 pub use sb_store::imports::{
     ImportJobState, ImportMessage, ImportParseState, ImportSummary, MAX_IMPORT_BATCH,
