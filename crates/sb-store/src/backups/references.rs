@@ -5,7 +5,7 @@ use std::io::{self, Read};
 use std::ops::ControlFlow;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use rusqlite::{Connection, params};
+use rusqlite::Connection;
 
 use super::attachments::{self, Hash};
 use super::image_inspect::{MAX_PROGRESS_CALLS, guarded, inspection_error};
@@ -23,6 +23,8 @@ enum Source {
     SendAttempt,
     Draft,
 }
+
+const ROWS_PER_BATCH: usize = 200;
 
 fn sql_error(e: rusqlite::Error) -> StoreError {
     inspection_error(e, "read snapshot references")
@@ -170,42 +172,50 @@ pub(super) fn walk(
     if guarded(conn, cancelled, MAX_PROGRESS_CALLS, validate_schema)?.is_none() {
         return Ok(ControlFlow::Break(()));
     }
-    for (first, next, source) in [
+    for (sql, source) in [
         (
-            "SELECT rowid, typeof(content_sha256), substr(CAST(content_sha256 AS BLOB),1,65), byte_length FROM acquisitions ORDER BY rowid LIMIT 200",
-            "SELECT rowid, typeof(content_sha256), substr(CAST(content_sha256 AS BLOB),1,65), byte_length FROM acquisitions WHERE rowid>?1 ORDER BY rowid LIMIT 200",
+            "SELECT rowid, typeof(content_sha256), substr(CAST(content_sha256 AS BLOB),1,65), byte_length FROM acquisitions NOT INDEXED ORDER BY rowid",
             Source::Acquisition,
         ),
         (
-            "SELECT rowid, typeof(mime_sha256), substr(CAST(mime_sha256 AS BLOB),1,65) FROM send_attempts ORDER BY rowid LIMIT 200",
-            "SELECT rowid, typeof(mime_sha256), substr(CAST(mime_sha256 AS BLOB),1,65) FROM send_attempts WHERE rowid>?1 ORDER BY rowid LIMIT 200",
+            "SELECT rowid, typeof(mime_sha256), substr(CAST(mime_sha256 AS BLOB),1,65) FROM send_attempts NOT INDEXED ORDER BY rowid",
             Source::SendAttempt,
         ),
         (
-            "SELECT rowid, typeof(attachments_json) FROM draft_revisions ORDER BY rowid LIMIT 200",
-            "SELECT rowid, typeof(attachments_json) FROM draft_revisions WHERE rowid>?1 ORDER BY rowid LIMIT 200",
+            "SELECT rowid, typeof(attachments_json) FROM draft_revisions NOT INDEXED ORDER BY rowid",
             Source::Draft,
         ),
     ] {
-        let mut after = None;
+        // Keep the physical table cursor across bounded batches. A fresh
+        // WHERE rowid > last seek can skip references in a corrupt b-tree;
+        // indexes from the untrusted image cannot certify completeness either.
+        let Some(mut stmt) = guarded(conn, cancelled, MAX_PROGRESS_CALLS, |_| {
+            conn.prepare(sql).map_err(sql_error)
+        })?
+        else {
+            return Ok(ControlFlow::Break(()));
+        };
+        let Some(mut rows) = guarded(conn, cancelled, MAX_PROGRESS_CALLS, |_| {
+            stmt.query([]).map_err(sql_error)
+        })?
+        else {
+            return Ok(ControlFlow::Break(()));
+        };
+        let mut last = None;
         loop {
             let page = guarded(conn, cancelled, MAX_PROGRESS_CALLS, |conn| {
-                let mut stmt = conn
-                    .prepare(if after.is_some() { next } else { first })
-                    .map_err(sql_error)?;
-                let mut rows = if let Some(id) = after {
-                    stmt.query(params![id])
-                } else {
-                    stmt.query([])
-                }
-                .map_err(sql_error)?;
                 let mut count = 0;
-                let mut last = after;
-                while let Some(row) = rows.next().map_err(sql_error)? {
+                while count < ROWS_PER_BATCH {
+                    let Some(row) = rows.next().map_err(sql_error)? else {
+                        break;
+                    };
                     if cancelled.load(Ordering::Acquire) {
                         break;
                     }
                     let id: i64 = row.get(0).map_err(sql_error)?;
+                    if last.is_some_and(|previous| id <= previous) {
+                        return Err(StoreError::corrupt("snapshot rowids are out of order"));
+                    }
                     let ty: String = row.get(1).map_err(sql_error)?;
                     if ty != "text" {
                         return Err(StoreError::corrupt("invalid snapshot reference type"));
@@ -213,7 +223,19 @@ pub(super) fn walk(
                     if source == Source::Draft {
                         let blob = conn
                             .blob_open("main", "draft_revisions", "attachments_json", id, true)
-                            .map_err(sql_error)?;
+                            .map_err(|error| match error {
+                                // The validated column and observed row exist.
+                                // Failure to seek that row is corrupt input,
+                                // not an internal programming error.
+                                rusqlite::Error::SqliteFailure(ref code, _)
+                                    if code.extended_code == rusqlite::ffi::SQLITE_ERROR =>
+                                {
+                                    StoreError::corrupt(format!(
+                                        "invalid snapshot attachment row: {error}"
+                                    ))
+                                }
+                                _ => sql_error(error),
+                            })?;
                         decode(blob, cancelled, &mut sink)?;
                     } else {
                         let bytes: Vec<u8> = row.get(2).map_err(sql_error)?;
@@ -233,15 +255,14 @@ pub(super) fn walk(
                     last = Some(id);
                     count += 1;
                 }
-                Ok((last, count))
+                Ok(count)
             })?;
-            let Some((last, count)) = page else {
+            let Some(count) = page else {
                 return Ok(ControlFlow::Break(()));
             };
-            if count < 200 {
+            if count < ROWS_PER_BATCH {
                 break;
             }
-            after = last;
         }
     }
     if cancelled.load(Ordering::Acquire) {
@@ -254,6 +275,7 @@ pub(super) fn walk(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rusqlite::params;
 
     fn db() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
@@ -535,6 +557,68 @@ mod tests {
             walk(&conn, &AtomicBool::new(false), |_| Ok(())),
             Err(StoreError::Corrupt { .. })
         ));
+    }
+
+    #[test]
+    fn out_of_order_btree_rows_never_certify_a_complete_walk() {
+        for table in ["acquisitions", "send_attempts", "draft_revisions"] {
+            for (left, right) in [(199, 200), (3, 4)] {
+                let scratch = sb_test_support::ScratchDir::new("walker-btree-order");
+                let path = scratch.path().join("image.sqlite");
+                let conn = Connection::open(&path).unwrap();
+                // Keep every row in one leaf so the corruption is exactly two
+                // swapped cell pointers, including across a 200-row boundary.
+                const PAGE_SIZE: usize = 65_536;
+                conn.execute_batch("PRAGMA page_size=65536; CREATE TABLE acquisitions(content_sha256 TEXT NOT NULL, byte_length INTEGER NOT NULL); CREATE TABLE send_attempts(mime_sha256 TEXT NOT NULL); CREATE TABLE draft_revisions(attachments_json TEXT NOT NULL); BEGIN;").unwrap();
+                for id in 1..=300 {
+                    let hash = format!("{id:064x}");
+                    match table {
+                        "acquisitions" => {
+                            conn.execute("INSERT INTO acquisitions VALUES (?1,1)", [&hash])
+                                .unwrap();
+                        }
+                        "send_attempts" => {
+                            conn.execute("INSERT INTO send_attempts VALUES (?1)", [&hash])
+                                .unwrap();
+                        }
+                        _ => {
+                            conn.execute(
+                                "INSERT INTO draft_revisions VALUES (?1)",
+                                [format!("[{}]", entry(&hash, 1))],
+                            )
+                            .unwrap();
+                        }
+                    }
+                }
+                conn.execute_batch("COMMIT").unwrap();
+                let root: u32 = conn
+                    .query_row(
+                        "SELECT rootpage FROM sqlite_schema WHERE name=?1",
+                        [table],
+                        |row| row.get(0),
+                    )
+                    .unwrap();
+                drop(conn);
+                let mut bytes = std::fs::read(path).unwrap();
+                let page = (usize::try_from(root).unwrap() - 1) * PAGE_SIZE;
+                assert_eq!(bytes[page], 0x0d, "table leaf page");
+                assert_eq!(u16::from_be_bytes([bytes[page + 3], bytes[page + 4]]), 300);
+                let first = page + 8 + left * 2;
+                let second = page + 8 + right * 2;
+                bytes.swap(first, second);
+                bytes.swap(first + 1, second + 1);
+                let conn = crate::image_vfs::open(Box::new(std::io::Cursor::new(bytes))).unwrap();
+                let mut emitted = 0;
+                let result = walk(&conn, &AtomicBool::new(false), |_| {
+                    emitted += 1;
+                    Ok(())
+                });
+                assert!(
+                    matches!(result, Err(StoreError::Corrupt { .. })),
+                    "{table}, cells {left}/{right}: {result:?}, emitted {emitted}"
+                );
+            }
+        }
     }
 
     #[test]

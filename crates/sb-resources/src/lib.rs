@@ -59,7 +59,8 @@ pub use seen::{ReceivedCommit, ReceivedPreparation, ReceivedRevisions, ReceivedS
 pub use acquire::{AcquiredMessage, FlagExtraction, SourceAcquisition, SourcePosition};
 pub use import::{
     BundleFormat, ImportInventory, ImportInventoryOutcome, ImportProblem, ImportProblemKind,
-    ImportProgress, ManifestDescriptor, ManifestProof, SourceBundle, SourceInventory, SourceKind,
+    ImportProgress, ManifestDescriptor, ManifestProof, ManifestProofRegistry, SourceBundle,
+    SourceInventory, SourceKind,
 };
 pub use import_jobs::{
     ImportJobBatch, ImportJobCheckpoint, ImportJobRecord, ImportTotals, LISTED_PROBLEMS,
@@ -85,7 +86,7 @@ pub use sb_store::exports::{
     ExportCaptureRequest, ExportChunkWriter, ExportFormat, ExportJob, ExportJobState, ExportScope,
     ExportSearchSort, ExportSelection, MAX_EXPORT_CHANGED_BYTES, MAX_EXPORT_CHUNK_BYTES,
     MAX_EXPORT_CHUNKS, MAX_EXPORT_JSON_BYTES, advance_export_job, append_export_chunks,
-    create_export_job, export_chunks, export_job,
+    create_export_job, export_chunks, export_job, recoverable_export_jobs,
 };
 pub use sb_store::imports::{
     ImportJobState, ImportMessage, ImportParseState, ImportSummary, MAX_IMPORT_BATCH,
@@ -336,6 +337,23 @@ impl Resources {
         position: SourcePosition,
     ) -> Result<SourceAcquisition, StoreError> {
         acquire::open(&self.store, source, variant, position)
+    }
+
+    /// Open one bundle EML source's manifest-verified acquisition session
+    /// (spec/09 "Export bundles"). `registry` supplies the frozen
+    /// manifest proof; the source's private snapshot is verified and
+    /// reopened. `position` is `START` or the source's one finished
+    /// message. `progress` cancels the first proof production before the
+    /// session exists. mboxrd is refused until M1.7d2c2b; a plain source
+    /// never falls back to the plain path.
+    pub fn open_bundle_acquisition(
+        &self,
+        registry: &ManifestProofRegistry,
+        source: &SourceInventory,
+        position: SourcePosition,
+        progress: impl FnMut(u64) -> ControlFlow<()>,
+    ) -> Result<Scoped<SourceAcquisition>, StoreError> {
+        acquire::open_bundle(self, registry, source, position, progress)
     }
 
     /// Publish the next message's exact bytes and summarize them under

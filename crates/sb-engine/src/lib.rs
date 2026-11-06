@@ -53,13 +53,17 @@ pub use sb_resources::{
 pub use drafts::{DraftContent, DraftCreated, DraftSaved};
 pub use engine::Engine;
 pub use error::EngineError;
-pub use import::{ImportJobStatus, ImportReport, ImportSourceStatus, ImportStarted};
+pub use import::{
+    ExportJobStatus, ExportScopeInput, ExportStarted, ImportJobStatus, ImportReport,
+    ImportSourceStatus, ImportStarted,
+};
 pub use rebuild::SearchRebuildStarted;
 pub use sb_resources::ParseCode as SearchParseCode;
 pub use sb_resources::{
     Coverage, RebuildPhase as SearchRebuildPhase, SearchIndexState, SearchIoCode, SearchLimitation,
     SearchRebuildProgress,
 };
+pub use sb_resources::{ExportFormat, ExportJobState};
 pub use search::SearchScope;
 pub use settings::Setting;
 pub use windows::{

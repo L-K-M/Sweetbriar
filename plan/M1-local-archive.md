@@ -1040,6 +1040,47 @@ local drafts. No network yet.
     preserve unterminated acquisitions and multiplicity; malformed
     framing never silently trims bytes or falls back to changed
     originals.
+    Split (2026-11-05) before coding; retain every deliverable and
+    acceptance above, each artifact fitting 1,450 gross changed lines:
+    - **M1.7d2c1 Manifest proof registry — M:** a bounded, job-lifetime
+      registry prerequisite in Store and Resources. One owned disposable
+      root lease holds each validated snapshot's token-namespaced, fixed-file
+      proof (descriptors, dense lookup, header) with a fixed header binding
+      full snapshot identity, format, file and record totals and exact output
+      lengths; production runs the existing one-manifest proof once and
+      streams its verified outputs into the namespace, freezing the header
+      last. Later lookups reopen only the header and fixed slots directly,
+      never rehashing or scanning the manifest or prior entries. Fail closed
+      on conflicting identity, incomplete or truncated workspaces; clean up
+      on finish, drop and startup. Native tests prove at least 257
+      interleaved and shuffled sources across distinct manifests, no extra
+      manifest reads on reuse, conflict, missing ordinal, range and
+      truncation rejection, cancellation and error cleanup, injected
+      read/write/seek/sync faults, bounded handles and Send. No Engine loop
+      change, physical acquisition or message publication.
+    Split (2026-11-05) before coding; retain every deliverable and
+    acceptance above, each artifact fitting 1,450 gross changed lines:
+    - **M1.7d2c2a EML byte verifier and acquisition — M:** a shared
+      counted/hashed streaming primitive that verifies the expected
+      SHA-256 and length at EOF before the publisher renames, plus the
+      Resources manifest-verified EML open/acquire session over the frozen
+      registry. Exact bytes, growth/truncation/hash rejection, EML
+      round-trip including unterminated bytes, multiplicity and source
+      identity replay, shuffled message order, binding and checkpoint
+      rejection, and fault, cancellation and reservation proof. mboxrd is
+      refused until c2b; the plain path still refuses bundles. No Engine
+      loop change.
+    - **M1.7d2c2b mboxrd framing verifier and session — M:** the mboxrd
+      record boundary, declared framing LF, original length and SHA-256
+      verification reusing the shared primitive, with the framing identity
+      joining replay and malformed framing never silently trimming bytes
+      or falling back to changed originals. Native random-access, fault
+      and scaling proof. Split again first if it exceeds 1,450 gross
+      changed lines.
+    - **M1.7d2c3 Engine integration and verified ingest — L:** consume
+      the verified acquisitions in the real import job without changing
+      source order, with durable job, resume, order and crash acceptance
+      and failed-source evidence. Expose no export-scope API.
   - **M1.7e Export engine — L:** counted background jobs, start/query,
     cancel, shutdown and reopen over b2/c. Own real-worker lifecycle,
     crash/resume and all original round-trip acceptance checks using d.
