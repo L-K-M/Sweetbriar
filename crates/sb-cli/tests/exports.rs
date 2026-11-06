@@ -3,7 +3,7 @@
 use std::path::Path;
 use std::process::{Command, Output};
 
-use sb_service::{CoreConfig, open_core};
+use sb_service::{CoreConfig, SearchIndexState, SearchScope, open_core};
 use sb_test_support::{ScratchDir, block_on};
 
 const BIN: &str = env!("CARGO_BIN_EXE_sb-cli");
@@ -35,13 +35,48 @@ fn imported(directory: &Path) -> (String, String) {
     success(&cli(directory, &["import", fixture.to_str().unwrap()]));
     let core = block_on(open_core(CoreConfig {
         data_root: directory.join("store"),
-        cache_root: directory.join("cache"),
+        cache_root: directory.join(if cfg!(target_os = "macos") {
+            "Library/Caches/Sweetbriar"
+        } else {
+            "cache/sweetbriar"
+        }),
     }))
     .unwrap();
     let accounts = block_on(core.accounts()).unwrap();
     let account = accounts[0].account_id.clone();
     let mailboxes = block_on(core.mailboxes(&account)).unwrap();
     let mailbox = mailboxes.mailboxes[0].mailbox_id.to_string();
+    // Export deliberately fences membership. Settle the fixture's ingestion
+    // work so this test does not race a legitimate generation change.
+    let db = directory.join("store/state.sqlite");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        let settled = [
+            ("thread_inputs", "threads_built"),
+            ("seen_address_inputs", "seen_address_swept"),
+            ("repair_inputs", "repair_swept"),
+        ]
+        .into_iter()
+        .all(|(input, completed)| {
+            let input = sb_test_support::store_meta_value(&db, input).expect("input watermark");
+            let completed =
+                sb_test_support::store_meta_value(&db, completed).expect("completed watermark");
+            input == completed
+        });
+        let coverage = block_on(core.coverage(SearchScope::All)).unwrap();
+        if settled
+            && coverage.pending == 0
+            && coverage.queue_length == 0
+            && coverage.index_state == SearchIndexState::Ready
+        {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "fixture maintenance did not settle: {coverage:?}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
     block_on(core.shutdown());
     (account, mailbox)
 }
