@@ -28,6 +28,42 @@ fn open_scratch(label: &str) -> (ScratchDir, StorePaths, Store) {
     (scratch, paths, store)
 }
 
+#[test]
+fn validation_scratch_reopen_cleanup_preserves_other_temps_and_read_only() {
+    let (_scratch, paths, store) = open_scratch("validation-reopen");
+    let lease = store.import_validation_scratch().unwrap();
+    lease.create(crate::ValidationTape::A).unwrap();
+    std::mem::forget(lease);
+    store.close().unwrap();
+    let root = paths.objects_tmp().join("import-validation");
+    let other = paths.objects_tmp().join("other");
+    fs::write(&other, b"keep").unwrap();
+    open_read_only(&paths, &test_seams(real_fs()))
+        .unwrap()
+        .close()
+        .unwrap();
+    assert!(root.exists());
+    let store = open(&paths, &test_seams(real_fs())).unwrap();
+    assert!(!root.exists());
+    assert_eq!(fs::read(other).unwrap(), b"keep");
+    store.close().unwrap();
+}
+
+#[test]
+fn validation_cleanup_failure_refuses_writable_open() {
+    use sb_test_support::{FaultFs, FaultKind, FsOp};
+    let (_scratch, paths, store) = open_scratch("validation-cleanup-failure");
+    store.close().unwrap();
+    let fs = Arc::new(FaultFs::new(
+        real_fs(),
+        FsOp::RemoveDirAll,
+        1,
+        FaultKind::Eio,
+    ));
+    let error = open(&paths, &test_seams(fs)).unwrap_err();
+    assert!(error.to_string().contains("import validation scratch"));
+}
+
 /// The linked SQLite matches the pin and the release bounds (spec/03).
 #[test]
 fn linked_sqlite_matches_pin_and_bounds() {
@@ -538,6 +574,9 @@ impl HookedFs {
 }
 
 impl Fs for HookedFs {
+    fn remove_dir_all(&self, path: &Path) -> io::Result<()> {
+        self.inner.remove_dir_all(path)
+    }
     fn location(&self, path: &Path) -> io::Result<Location> {
         match &self.location {
             Some(location) => Ok(location.clone()),

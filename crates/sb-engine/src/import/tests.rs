@@ -58,8 +58,11 @@ fn status(engine: &Engine, id: &str) -> ImportJobStatus {
 fn settle(engine: &Engine, id: &str, state: ImportJobState) -> ImportJobStatus {
     let deadline = Instant::now() + PATIENCE;
     loop {
-        let current = status(engine, id);
         let live = engine.imports().lock().contains_key(id);
+        // A worker can publish its report and release its claim between
+        // these reads. Read status after the idle observation so we cannot
+        // return a stale completed status that still lacks its report.
+        let current = status(engine, id);
         if current.state() == state && !live {
             return current;
         }
@@ -810,6 +813,61 @@ fn a_durable_cancel_discards_an_inventory_without_its_flag() {
     idle(&engine, &id);
     assert_eq!(snapshots(&root), 0);
     assert!(report(&engine, &id).contains("\"state\": \"cancelled\""));
+    block_on(engine.shutdown()).unwrap();
+}
+
+#[test]
+fn discovered_bundle_cancellation_removes_shared_snapshots() {
+    let scratch = ScratchDir::new("discovered-bundle-cleanup");
+    let root = scratch.path().join("store");
+    let engine = open(&root);
+    let dir = scratch.path().join("bundle");
+    fs::create_dir(&dir).unwrap();
+    let bytes = b"Subject: synthetic\n\nbody\n";
+    for name in ["1.eml", "2.eml"] {
+        fs::write(dir.join(name), bytes).unwrap();
+    }
+    let message = |id, file| {
+        serde_json::json!({
+            "v":1, "occurrence_id":id, "message_id":id,
+            "account":{"id":"a","name":"a"}, "mailbox":{"id":1,"name":"m"},
+            "occurrence_state":"present", "flags":{"seen":false,"flagged":false,"answered":false,"draft":false,"deleted":false},
+            "keywords":[], "acquisition":{"id":id,"sha256":"a".repeat(64),"bytes":bytes.len()},
+            "body_availability":"acquired", "tags":[], "note":null, "file":file
+        })
+    };
+    let manifest = serde_json::json!({
+        "v":1, "kind":"export-manifest", "job":"j", "format":"eml",
+        "destination":"/d", "scope":{"kind":"mailbox","id":1,"generation":1},
+        "generation":1, "entries":2,
+        "ids_sha256":"8c7654ecfd7b0b623b803e2f4e02ad1cc84278efdfcd7c4c9208edd81f17e115",
+        "files":[{"name":"1.eml","bytes":bytes.len(),"records":1},{"name":"2.eml","bytes":bytes.len(),"records":1}],
+        "messages":[message(1,"1.eml"),message(2,"2.eml")]
+    });
+    fs::write(dir.join("sweetbriar-metadata.json"), manifest.to_string()).unwrap();
+    let id = start(&engine, std::slice::from_ref(&dir));
+    let waiting = settle(&engine, &id, ImportJobState::AwaitingConfirmation);
+    assert_eq!(
+        waiting.sources().len(),
+        2,
+        "{:?}",
+        waiting.checkpoint().problems()
+    );
+    assert_eq!(snapshots(&root), 3);
+    block_on(engine.cancel_job(&engine.new_idempotency_key(), &id)).unwrap();
+    assert_eq!(snapshots(&root), 0);
+    assert!(report(&engine, &id).contains("\"state\": \"cancelled\""));
+
+    let failed = start(&engine, &[dir]);
+    settle(&engine, &failed, ImportJobState::AwaitingConfirmation);
+    block_on(engine.shutdown()).unwrap();
+    let engine = open(&root);
+    assert_eq!(status(&engine, &failed).sources().len(), 2);
+    confirm(&engine, &failed, vec![]).unwrap();
+    let failed = settle(&engine, &failed, ImportJobState::Failed);
+    assert!(failed.checkpoint().failure().unwrap().contains("M1.7d2"));
+    assert_eq!(failed.checkpoint().totals().processed, 0);
+    assert_eq!(snapshots(&root), 3);
     block_on(engine.shutdown()).unwrap();
 }
 

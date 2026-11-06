@@ -86,6 +86,7 @@ pub struct Store {
     pub(crate) activation: crate::activation::inputs::Owner,
     source_snapshots: ImportSourceSnapshots,
     import_reports: ImportReports,
+    validation_scratch: crate::validation_scratch::ScratchOwner,
     lease: Box<dyn Lease>,
     /// The clock [`Store::close`] stamps the clean-shutdown marker
     /// with, held from the seams the store opened with.
@@ -93,6 +94,10 @@ pub struct Store {
 }
 
 impl Store {
+    /// Lease disposable workspace for bounded import validation.
+    pub fn import_validation_scratch(&self) -> Result<crate::ValidationScratch<'_>, StoreError> {
+        self.validation_scratch.lease()
+    }
     /// The store's object store (spec/03): publishing objects through
     /// it lands them under this store's `objects/`.
     pub fn objects(&self) -> &FileObjectStore {
@@ -131,8 +136,9 @@ impl Store {
     /// Publish a pinned snapshot as a verified, durable backup generation.
     /// Blocking; never call on the writer thread. A failure leaves the
     /// generation in progress for interrupted-generation recovery. Once
-    /// complete, retention runs before returning; its error is reported even
-    /// though the new generation may already be complete.
+    /// complete, retention runs before returning and preserves this generation
+    /// for the receipt. Its error is reported even though the new generation
+    /// may already be complete. Later retention applies the usual policy.
     pub fn complete_backup(
         &self,
         snapshot: crate::backups::BackupSnapshot,
@@ -349,6 +355,7 @@ impl Store {
             objects,
             source_snapshots,
             import_reports,
+            validation_scratch,
             backups,
             lease,
             clock,
@@ -364,6 +371,7 @@ impl Store {
         drop(backups);
         drop(source_snapshots);
         drop(import_reports);
+        drop(validation_scratch);
         drop(lease);
         marker.and(readers_closed).and(writer_closed)
     }
@@ -472,19 +480,16 @@ pub(crate) fn open_with(
     // From here on an early return drops `lease`, releasing the lock.
     ensure_layout(fs, paths)?;
     examine_existing(fs, paths, pinned, migrations)?;
+    crate::validation_scratch::ScratchOwner::cleanup(fs, paths.objects_tmp())?;
     let mut conn = open_connection(paths.state_db(), Access::ReadWrite, writer_pragmas)?;
     check_sqlite_version(&conn, pinned)?;
     startup_quick_check(&conn)?;
     run_migrations(&mut conn, seams, migrations)?;
     // Finish startup writes before the writer's asynchronous idle checkpoint.
     crate::objects::expire_reservations(&mut conn, seams.clock().now())?;
-    if read_user_version(&conn)? >= 23 {
-        crate::backups::recover_scratch(
-            &conn,
-            fs,
-            paths.recovery(),
-            read_user_version(&conn)? >= 24,
-        )?;
+    let schema_version = read_user_version(&conn)?;
+    if schema_version >= 23 {
+        crate::backups::recover_scratch(&conn, fs, paths.recovery(), schema_version >= 24)?;
     }
     // The readers first, from the same constructor (spec/03): if one
     // fails, the writer connection still doesn't checkpoint on close.
@@ -529,6 +534,11 @@ pub(crate) fn open_with(
             Arc::clone(seams.fs_arc()),
             Arc::clone(seams.random_arc()),
             paths.recovery().to_path_buf(),
+        ),
+        validation_scratch: crate::validation_scratch::ScratchOwner::new(
+            Arc::clone(seams.fs_arc()),
+            Arc::clone(seams.random_arc()),
+            paths.objects_tmp(),
         ),
         backups,
         lease,
