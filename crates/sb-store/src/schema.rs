@@ -337,7 +337,11 @@ pub(crate) fn has_store_meta_table_with(
 ) -> Result<bool, StoreError> {
     let expected = Connection::open_in_memory().map_err(step_err)?;
     expected.execute_batch(V1_SQL).map_err(bug)?;
-    Ok(store_meta_objects(conn, map_error)? == store_meta_objects(&expected, step_err)?)
+    let expected_objects = store_meta_objects(&expected, step_err, i64::MAX)?;
+    // One row past the expected count still bounds an untrusted scan
+    // while letting any extra object show up as a longer vector.
+    let bound = expected_objects.len() as i64 + 1;
+    Ok(store_meta_objects(conn, map_error, bound)? == expected_objects)
 }
 
 /// Every schema object on `store_meta` as (type, name, `CREATE`
@@ -347,15 +351,16 @@ pub(crate) fn has_store_meta_table_with(
 fn store_meta_objects(
     conn: &Connection,
     map_error: fn(rusqlite::Error) -> StoreError,
+    limit: i64,
 ) -> Result<Vec<SchemaObject>, StoreError> {
     let mut stmt = conn
         .prepare(
             "SELECT type, name, sql FROM sqlite_schema
              WHERE tbl_name = 'store_meta' COLLATE NOCASE
-             ORDER BY type, name LIMIT 3",
+             ORDER BY type, name LIMIT ?",
         )
         .map_err(map_error)?;
-    stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+    stmt.query_map([limit], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
         .map_err(map_error)?
         .collect::<Result<_, _>>()
         .map_err(map_error)

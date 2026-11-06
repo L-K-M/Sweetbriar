@@ -328,7 +328,7 @@ fn nested(depth: usize, kind: usize) -> String {
 
 #[test]
 fn fixed_stack_matches_effective_serde_depth_including_enclosing_values() {
-    for depth in [0, 1, 2, 126, 127, 128, 129] {
+    for depth in [0, 1, 2, 126, 127, 128] {
         for kind in 0..2 {
             let text = nested(depth, kind);
             differential(text.as_bytes());
@@ -346,6 +346,15 @@ fn fixed_stack_matches_effective_serde_depth_including_enclosing_values() {
                 }
             }
         }
+    }
+    // Our own bound above serde_json's: pinned without a differential, since
+    // the comparison would couple the test to serde_json's limit.
+    for kind in 0..2 {
+        let text = nested(129, kind);
+        assert!(parse(text.as_bytes()).is_err());
+        let mut cancel = || Ok(());
+        let mut reader = Reader::new(text.as_bytes(), &mut cancel);
+        assert!(reader.skip_value(0).is_err());
     }
     for (open, close) in [("[", "]"), ("{\"\":", "}")] {
         for depth in [127, 128] {
