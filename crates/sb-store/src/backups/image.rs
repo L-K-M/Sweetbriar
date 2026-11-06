@@ -323,9 +323,6 @@ impl Backups {
                     conn.close()
                         .map_err(|(_, e)| classify(e, "close backup image"))?;
                     status.closed.set(true);
-                    if invalid_metadata {
-                        status.source_invalid.set(true);
-                    }
                     Ok(inspected)
                 }
                 Err(error) => {
@@ -335,6 +332,9 @@ impl Backups {
                     // failure stays skippable.
                     let _ = conn.close();
                     status.closed.set(true);
+                    if invalid_metadata {
+                        status.source_invalid.set(true);
+                    }
                     Err(error)
                 }
             };

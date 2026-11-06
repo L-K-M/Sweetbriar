@@ -2344,6 +2344,62 @@ fn recorded_verification_missing_generation_is_not_found() {
 }
 
 #[test]
+fn external_discovery_skips_authenticated_invalid_metadata() {
+    use sha2::Digest;
+    use std::ops::ControlFlow;
+    let (_source_scratch, _source_paths, source) = open("external-invalid-metadata-source");
+    let invalid = source
+        .complete_backup(source.backup_snapshot(BackupDestination::DataRoot).unwrap())
+        .unwrap();
+    let (_other_scratch, _other_paths, other) = open("external-valid-metadata-source");
+    // Fresh synthetic stores share deterministic entropy; give this
+    // generation a distinct identifier and a real object to verify.
+    let (id, _) = object(&other, b"valid generation");
+    reference(&other, &id, "published");
+    let valid = other
+        .complete_backup(
+            other
+                .backup_snapshot(BackupDestination::Directory(
+                    invalid.location().parent().unwrap().to_path_buf(),
+                ))
+                .unwrap(),
+        )
+        .unwrap();
+    let database = invalid.location().join(super::SNAPSHOT_FILE);
+    let conn = rusqlite::Connection::open(&database).unwrap();
+    conn.pragma_update(None, "user_version", 0).unwrap();
+    conn.close().unwrap();
+    let bytes = std::fs::read(&database).unwrap();
+    let digest = sha2::Sha256::digest(&bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let path = invalid.location().join("manifest.json");
+    let mut manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert!(manifest["database"]["sha256"].is_string());
+    manifest["database"]["sha256"] = digest.into();
+    manifest["database"]["bytes"] = (bytes.len() as u64).into();
+    std::fs::write(path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+    let (_fresh_scratch, _fresh_paths, fresh) = open("external-invalid-metadata-fresh");
+    let parent = invalid.location().parent().unwrap();
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    let result = fresh.verify_external_backup(parent, invalid.generation_id(), &cancel);
+    assert!(matches!(result, Err(StoreError::Corrupt { ref detail })
+        if detail == "invalid backup schema version"));
+    let mut found = Vec::new();
+    let result = fresh.discover_external_backups(parent, &cancel, |selection| {
+        found.push(selection.generation_id().to_owned());
+        ControlFlow::Continue(())
+    });
+    assert!(
+        matches!(result, Ok(ControlFlow::Continue(()))),
+        "{result:?}"
+    );
+    assert_eq!(found, [valid.generation_id()]);
+}
+
+#[test]
 fn external_discovery_skips_missing_source_objects() {
     use std::ops::ControlFlow;
     let (_source_scratch, _source_paths, source) = open("external-missing-object-source");
