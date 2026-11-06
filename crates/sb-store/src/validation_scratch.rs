@@ -349,7 +349,10 @@ mod tests {
             let file = RegistryFile::Descriptors;
             match op {
                 FsOp::Create => assert!(lease.create_registry_file(&snapshot, file).is_err()),
-                FsOp::Open => assert!(lease.open_registry_file(&snapshot, file).is_err()),
+                FsOp::Open => {
+                    lease.create_registry_file(&snapshot, file).unwrap();
+                    assert!(lease.open_registry_file(&snapshot, file).is_err())
+                }
                 FsOp::RemoveDirAll => {
                     assert!(lease.remove_registry_dir(&snapshot).is_err())
                 }

@@ -140,6 +140,23 @@ pub fn create_export_job(
     export_job(tx, id)
 }
 
+/// Unfinished export work, oldest first: `capturing` fails at open
+/// (its request is not durable), `ready` and `running` resume.
+pub fn recoverable_export_jobs(tx: &Transaction) -> Result<Vec<ExportJob>, StoreError> {
+    let mut statement = tx
+        .prepare(
+            "SELECT job_id FROM export_jobs WHERE state IN ('capturing','ready','running')
+             ORDER BY created_at, job_id",
+        )
+        .map_err(sql_error)?;
+    let ids = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(sql_error)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(sql_error)?;
+    ids.iter().map(|id| export_job(tx, id)).collect()
+}
+
 pub fn export_job(tx: &Transaction, id: &str) -> Result<ExportJob, StoreError> {
     let row = tx
         .query_row(
