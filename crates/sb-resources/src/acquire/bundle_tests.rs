@@ -597,7 +597,8 @@ fn wrong_binding_format_and_checkpoint_are_rejected() {
         "{error:?}"
     );
 
-    // mboxrd is refused explicitly until c2b, never falling back.
+    // A format that disagrees with the frozen manifest is corrupt,
+    // never a fallback to the plain path.
     let mboxrd = tampered(&sources[0], |json| {
         json["kind"] = "mbox".into();
         json["bundle"]["format"] = "mboxrd".into();
@@ -607,8 +608,7 @@ fn wrong_binding_format_and_checkpoint_are_rejected() {
             ControlFlow::Continue(())
         })
         .unwrap_err();
-    assert!(matches!(error, StoreError::Unavailable { .. }), "{error:?}");
-    assert!(error.to_string().contains("M1.7d2c2b"), "{error:?}");
+    assert!(matches!(error, StoreError::Corrupt { .. }), "{error:?}");
 
     // An invented midpoint is not a checkpoint.
     for (offset, messages) in [(length / 2, 0), (0, 1), (length, 0)] {
@@ -668,6 +668,8 @@ fn bundle_read_faults_keep_the_native_kind_and_publish_nothing() {
                 sha256: [0; 32],
                 original_bytes: 7,
             }),
+            descriptors: None,
+            next_offset: 0,
         };
         let error = next(&res.store, &mut acquisition, &Limits::default()).unwrap_err();
         let StoreError::Unavailable { io_kind, reason } = &error else {
@@ -750,6 +752,8 @@ fn digest_mismatch_aborts_before_install_or_reservation() {
         total: 1,
         position: SourcePosition::START,
         verification: Some(expected),
+        descriptors: None,
+        next_offset: 0,
     };
     let error = next(&res.store, &mut acquisition, &Limits::default()).unwrap_err();
     assert!(matches!(error, StoreError::Corrupt { .. }), "{error:?}");
