@@ -624,6 +624,12 @@ hashes are rejected. Reconciliation marks references and pages through the
 ledger without holding the corpus in memory. Ledger writes and deletion use
 bounded batches of at most 200 rows. Cleanup removes the ledger in batches
 before deleting its owner row; an interruption leaves evidence to retry.
+Reconciliation compares the retained image's store UUID, schema version,
+generation ID and start time with the manifest, and checks the database
+metadata and object count and byte total against independently supplied
+expectations. Every occurrence must name a manifest object and match its
+stored size when present; every manifest object must be referenced. This
+comparison does not verify the object files or select a generation.
 
 Restoring creates a **new incarnation** and runs quarantined. The steps:
 

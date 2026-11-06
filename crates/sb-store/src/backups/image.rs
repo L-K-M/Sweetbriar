@@ -77,7 +77,7 @@ impl Backups {
         cancelled: &std::sync::atomic::AtomicBool,
         progress: impl FnMut(u64) -> ControlFlow<()>,
     ) -> Result<BackupImageInspection, StoreError> {
-        self.inspect_image_with(generation, expected, length, cancelled, progress, |_| {
+        self.inspect_image_with(generation, expected, length, cancelled, progress, |_, _| {
             Ok(ControlFlow::Continue(()))
         })
     }
@@ -94,7 +94,7 @@ impl Backups {
         length: u64,
         cancelled: &std::sync::atomic::AtomicBool,
         mut progress: impl FnMut(u64) -> ControlFlow<()>,
-        callback: impl FnOnce(&Connection) -> Result<ControlFlow<()>, StoreError>,
+        callback: impl FnOnce(&Connection, &str) -> Result<ControlFlow<()>, StoreError>,
     ) -> Result<BackupImageInspection, StoreError> {
         if self.writer.is_writer_thread() {
             return Err(StoreError::internal("writer cannot inspect a backup"));
@@ -238,7 +238,7 @@ impl Backups {
                 }
                 match inspected {
                     image_inspect::Inspection::Cancelled => Ok(inspected),
-                    _ => match callback(&conn)? {
+                    _ => match callback(&conn, &id)? {
                         ControlFlow::Continue(()) => Ok(inspected),
                         ControlFlow::Break(()) => Ok(image_inspect::Inspection::Cancelled),
                     },

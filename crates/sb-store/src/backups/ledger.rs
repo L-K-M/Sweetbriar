@@ -42,18 +42,30 @@ pub(super) fn reference(
     id: String,
     hashes: Vec<[u8; 32]>,
 ) -> Result<(), StoreError> {
+    reference_sized(
+        writer,
+        id,
+        hashes.into_iter().map(|hash| (hash, None)).collect(),
+    )
+}
+
+pub(super) fn reference_sized(
+    writer: &Writer,
+    id: String,
+    hashes: Vec<([u8; 32], Option<u64>)>,
+) -> Result<(), StoreError> {
     bounded(hashes.len())?;
     await_write(writer.submit(WritePriority::Index, move |tx| {
-        for hash in hashes {
+        for (hash, size) in hashes {
             let count = tx
                 .execute(
-                    "UPDATE verifier_objects SET referenced=1 WHERE scratch_id=?1 AND sha256=?2",
-                    params![id, hash.as_slice()],
+                    "UPDATE verifier_objects SET referenced=1 WHERE scratch_id=?1 AND sha256=?2 AND (?3 IS NULL OR bytes=?3)",
+                    params![id, hash.as_slice(), size.map(u64::to_be_bytes).as_ref().map(|n| n.as_slice())],
                 )
                 .map_err(|e| classify(e, "reference verifier object"))?;
             if count == 0 {
                 return Err(StoreError::corrupt(
-                    "snapshot references absent manifest object",
+                    "snapshot reference absent from manifest or size differs",
                 ));
             }
         }
