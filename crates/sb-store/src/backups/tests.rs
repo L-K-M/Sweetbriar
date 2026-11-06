@@ -2282,6 +2282,23 @@ fn recorded_verification_incomplete_generation_is_conflict() {
 }
 
 #[test]
+fn recorded_verification_missing_database_is_not_found() {
+    let (_scratch, _paths, store) = open("recorded-verification-missing-database");
+    let receipt = store
+        .complete_backup(store.backup_snapshot(BackupDestination::DataRoot).unwrap())
+        .unwrap();
+    std::fs::remove_file(receipt.location().join(super::SNAPSHOT_FILE)).unwrap();
+    let result = store.verify_recorded_backup(
+        receipt.generation_id(),
+        &std::sync::atomic::AtomicBool::new(false),
+    );
+    assert!(
+        matches!(result, Err(StoreError::NotFound { .. })),
+        "{result:?}"
+    );
+}
+
+#[test]
 fn recorded_verification_complete_metadata_cannot_be_missing() {
     for column in [
         "manifest_sha256",

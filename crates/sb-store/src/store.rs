@@ -167,7 +167,7 @@ impl Store {
     }
 
     /// Verify a recorded complete generation at the time of this call.
-    /// An absent generation, manifest or object is `NotFound`; an
+    /// An absent generation, database, manifest or object is `NotFound`; an
     /// unfinished/failed generation is `Conflict`, not store damage.
     /// Malformed manifests and incomplete metadata on a complete row
     /// are `Corrupt`; filesystem failures retain their native I/O kind.

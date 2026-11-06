@@ -11,16 +11,6 @@ fn io_error(e: io::Error) -> StoreError {
     StoreError::unavailable_io(format!("backup verification I/O: {e}"), e.kind())
 }
 
-// A missing required source file is an absent entity, not transient I/O.
-// Keep scratch/environment failures on the ordinary typed I/O path.
-fn source_open_error(error: io::Error, what: impl Into<String>) -> StoreError {
-    if error.kind() == io::ErrorKind::NotFound {
-        StoreError::not_found(what)
-    } else {
-        io_error(error)
-    }
-}
-
 struct RecordedGeneration {
     location: String,
     started: i64,

@@ -187,7 +187,7 @@ impl Backups {
             }
             let (mut input, _) = source
                 .open_regular(Path::new(SNAPSHOT_FILE))
-                .map_err(io_error)?;
+                .map_err(|error| source_open_error(error, "backup database image"))?;
             let mut output = scratch.create(Path::new(SNAPSHOT_FILE)).map_err(io_error)?;
             let mut hash = Sha256::new();
             let mut total = 0u64;
