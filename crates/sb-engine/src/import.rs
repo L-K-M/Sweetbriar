@@ -1,5 +1,6 @@
-//! Import jobs (spec/09 "Job lifecycle"): the commands, the job query
-//! and the two workers that do the long work off every caller's thread.
+//! Background jobs (spec/09 "Job lifecycle", spec/07): the import and
+//! export commands, their queries and the workers that do the long work
+//! off every caller's thread.
 //!
 //! ```text
 //! start_import ─▶ inventory worker ─▶ awaiting_confirmation
@@ -7,8 +8,11 @@
 //!                                           ▼
 //!                  ingest worker ◀─────── running ─▶ completed | failed
 //!
+//! start_export ─▶ capture ─▶ ready ─▶ export files ─▶ completed | failed
+//!                    │     (sealed at open resumes; capturing fails)
+//!
 //! cancel_job: cancelled at once, durably; a live worker's next commit
-//! then conflicts and the worker ends.
+//! or progress check then ends it.
 //! ```
 
 use std::collections::{HashMap, HashSet};
@@ -17,24 +21,28 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use sb_resources::{
-    AcquiredMessage, FlagExtraction, ImportInventory, ImportInventoryOutcome, ImportJobBatch,
+    AcquiredMessage, ExportCaptureRequest, ExportFormat, ExportJob, ExportJobState, ExportScope,
+    ExportSearchSort, FlagExtraction, ImportInventory, ImportInventoryOutcome, ImportJobBatch,
     ImportJobCheckpoint, ImportJobRecord, ImportJobState, ImportMessage, JobKind, MAX_IMPORT_BATCH,
-    MAX_IMPORT_CHANGES_BYTES, MboxVariant, RebuildPhase, Receipt, Resources, SourceAcquisition,
-    SourceInventory, SourcePosition, StoreError, UserPause, WritePriority, advance_import_job,
-    commit_import_job_batch, create_import_job, encode_job_receipt, finished_import_jobs,
-    import_job, import_job_source, import_job_sources, import_report, job_kind, rebuild_job,
-    receipt_job_id, record_import_sources, recorded_import_job_sources, recoverable_import_jobs,
-    run_once, set_user_pause,
+    MAX_IMPORT_CHANGES_BYTES, MboxVariant, RebuildPhase, Receipt, Resources, Scoped,
+    SourceAcquisition, SourceInventory, SourcePosition, StoreError, UserPause, WritePriority,
+    advance_export_job, advance_import_job, commit_import_job_batch, create_export_job,
+    create_import_job, encode_job_receipt, export_job, finished_import_jobs, import_job,
+    import_job_source, import_job_sources, import_report, job_kind, rebuild_job, receipt_job_id,
+    record_import_sources, recorded_import_job_sources, recoverable_export_jobs,
+    recoverable_import_jobs, run_once, set_user_pause,
 };
 
 use crate::engine::{Spawn, Worker, validate_idempotency_key};
 use crate::threads::{ThreadRebuilds, schedule_threads};
-use crate::{Engine, EngineError};
+use crate::windows::SelectionId;
+use crate::{Engine, EngineError, SearchSort, SearchSpec};
 
 /// The commands' names in `command_receipts` (spec/07).
 const START_IMPORT: &str = "start_import";
 const CONFIRM_IMPORT: &str = "confirm_import";
 const CANCEL_JOB: &str = "cancel_job";
+const START_EXPORT: &str = "start_export";
 
 /// Imports are background work behind user and sync writes (spec/03).
 const PRIORITY: WritePriority = WritePriority::Index;
@@ -47,6 +55,7 @@ const CHECKPOINT_SLACK: usize = 1024;
 const SOURCE_ROW_BYTES: usize = 256;
 
 const INTERRUPTED_INVENTORY: &str = "the inventory was interrupted; start a new import";
+const INTERRUPTED_CAPTURE: &str = "the export capture was interrupted; start a new export";
 
 /// Jobs with a live worker in this process. One worker owns a job at a
 /// time; an ingest asked for meanwhile is handed to that worker before
@@ -117,6 +126,9 @@ impl ImportJobs {
 enum Task {
     Inventory(Vec<PathBuf>),
     Ingest,
+    /// `Some`: run the capture phase first. `None`: the job is already
+    /// sealed (`ready`/`running` at open), so only file output remains.
+    Export(Option<ExportCaptureRequest>),
 }
 
 /// A worker's hold on its job, released at the worker's end.
@@ -266,6 +278,78 @@ impl ImportSourceStatus {
     }
 }
 
+/// The scope `start_export` freezes (spec/09): account, mailbox, Search
+/// or a frozen selection handle. Generations fence membership at the
+/// generation the shell read; a stale one is `Conflict` at capture.
+#[derive(Debug, Clone)]
+pub enum ExportScopeInput {
+    /// Every present occurrence of one account's mailboxes, in id order.
+    Account { account_id: String, generation: u64 },
+    /// One mailbox's occurrences, in date order.
+    Mailbox { mailbox_id: i64, generation: u64 },
+    /// A checked Search spec's chosen occurrences at `generation`.
+    Search { spec: SearchSpec, generation: u64 },
+    /// A frozen selection handle's immutable ordered ids.
+    Selection(SelectionId),
+}
+
+/// What `start_export` answers: its receipt and the job it names.
+#[derive(Debug, Clone)]
+pub struct ExportStarted {
+    receipt: Receipt,
+    job_id: String,
+}
+
+impl ExportStarted {
+    /// The command receipt: replay-safe evidence of acceptance.
+    pub fn receipt(&self) -> &Receipt {
+        &self.receipt
+    }
+
+    /// The durable job the receipt names.
+    pub fn job_id(&self) -> &str {
+        &self.job_id
+    }
+}
+
+/// An export job's durable record as `export_job` answers it (spec/07):
+/// state, the bounded request, the last checkpoint and the captured
+/// chunk count. A job whose row no longer decodes is `Corrupt`.
+#[derive(Debug, Clone)]
+pub struct ExportJobStatus {
+    job: ExportJob,
+}
+
+impl ExportJobStatus {
+    /// `capturing`, `ready`, `running` or a terminal state (spec/09).
+    pub fn state(&self) -> ExportJobState {
+        self.job.state()
+    }
+
+    /// The bounded request the job was created under.
+    pub fn request_json(&self) -> &str {
+        self.job.request_json()
+    }
+
+    /// The last committed checkpoint's JSON.
+    pub fn checkpoint_json(&self) -> &str {
+        self.job.checkpoint_json()
+    }
+
+    /// Capture chunks held by the sealed-or-partial ledger.
+    pub fn captured_chunks(&self) -> u64 {
+        self.job.captured_chunks()
+    }
+
+    /// Whether the job ended (`completed`, `cancelled` or `failed`).
+    pub fn is_finished(&self) -> bool {
+        matches!(
+            self.job.state(),
+            ExportJobState::Completed | ExportJobState::Cancelled | ExportJobState::Failed
+        )
+    }
+}
+
 impl Engine {
     /// `start_import(paths, target)` (spec/07, 09): record the job under
     /// the idempotency key, then inventory it in the background. The
@@ -402,11 +486,97 @@ impl Engine {
                         })
                         .await;
                 }
+                // The durable cancel is already recorded; a live export
+                // worker stops at its next progress check.
+                JobKind::Export => imports.cancel(&target),
                 JobKind::SearchRebuild => worker.indexer().wake(),
-                // Capture storage has no worker until M1.7e.
-                JobKind::Export => {}
             }
             Ok(receipt)
+        })
+        .await
+    }
+
+    /// `start_export(scope, format, destination)` (spec/07, 09): record
+    /// the job under the idempotency key, then run its capture and file
+    /// output in the background. The receipt names the job; a repeated
+    /// key returns that receipt and starts nothing. `destination` is an
+    /// absolute path the job claims; the store never touches it here.
+    pub async fn start_export(
+        &self,
+        idempotency_key: &str,
+        scope: ExportScopeInput,
+        format: ExportFormat,
+        destination: String,
+    ) -> Result<ExportStarted, EngineError> {
+        validate_idempotency_key(idempotency_key)?;
+        let scope = match scope {
+            ExportScopeInput::Account {
+                account_id,
+                generation,
+            } => ExportScope::Account {
+                account_id,
+                expected_generation: generation,
+            },
+            ExportScopeInput::Mailbox {
+                mailbox_id,
+                generation,
+            } => ExportScope::Mailbox {
+                mailbox_id,
+                expected_generation: generation,
+            },
+            ExportScopeInput::Search { spec, generation } => {
+                let (query, candidates, sort) = spec.export_parts()?;
+                ExportScope::Search {
+                    query,
+                    scope: candidates,
+                    sort: match sort {
+                        SearchSort::Date => ExportSearchSort::Date,
+                        SearchSort::Relevance => ExportSearchSort::Relevance,
+                    },
+                    expected_generation: generation,
+                }
+            }
+            ExportScopeInput::Selection(id) => {
+                ExportScope::Selection(self.selection_for_export(id).await?)
+            }
+        };
+        let request = ExportCaptureRequest::new(format, destination, scope)?;
+        let id = self.resources().new_uuid_string();
+        let now = self.resources().now();
+        let fresh = encode_job_receipt(&id, None);
+        let key = idempotency_key.to_owned();
+        let jobs = Arc::clone(self.imports());
+        self.command(move |worker| async move {
+            let (job, request_json, result) =
+                (id.clone(), request.request_json().to_owned(), fresh.clone());
+            let receipt = worker
+                .resources()
+                .write(WritePriority::User, move |tx| {
+                    run_once(tx, &key, START_EXPORT, now, |tx| {
+                        create_export_job(tx, &job, &request_json, now)?;
+                        Ok(result)
+                    })
+                })
+                .await?;
+            if receipt.result_json() == fresh {
+                // Refused during shutdown: the job stays in capturing,
+                // and the next open fails it visibly.
+                spawn_job(&worker, &jobs, id, Task::Export(Some(request)))?;
+            }
+            let job_id = receipt_job_id(&receipt)?;
+            Ok(ExportStarted { receipt, job_id })
+        })
+        .await
+    }
+
+    /// `export_job(job_id)` (spec/07): the job's durable state, request,
+    /// checkpoint and captured chunk count, from one read.
+    pub async fn export_job(&self, job_id: &str) -> Result<ExportJobStatus, EngineError> {
+        let id = job_id.to_owned();
+        self.read_through(move |resources| {
+            resources
+                .read(|tx| export_job(tx, &id))
+                .map(|job| ExportJobStatus { job })
         })
         .await
     }
@@ -508,6 +678,39 @@ impl Engine {
                 }
                 ImportJobState::Running => {
                     spawn_job(self, self.imports(), job.id().to_owned(), Task::Ingest)?;
+                }
+                _ => (),
+            }
+        }
+        // Unfinished exports recover the same way, except `capturing`:
+        // its request is not durable, so it fails like an interrupted
+        // inventory (spec/09: a partial capture is never output-ready).
+        for job in self.resources().read(recoverable_export_jobs)? {
+            match job.state() {
+                ExportJobState::Capturing => {
+                    let now = self.resources().now();
+                    let (id, revision) = (job.id().to_owned(), job.revision());
+                    self.block_on(self.resources().write(PRIORITY, move |tx| {
+                        let checkpoint =
+                            serde_json::json!({"v":1,"error":INTERRUPTED_CAPTURE}).to_string();
+                        advance_export_job(
+                            tx,
+                            &id,
+                            revision,
+                            ExportJobState::Failed,
+                            &checkpoint,
+                            now,
+                        )
+                        .map(drop)
+                    }))?;
+                }
+                ExportJobState::Ready | ExportJobState::Running => {
+                    spawn_job(
+                        self,
+                        self.imports(),
+                        job.id().to_owned(),
+                        Task::Export(None),
+                    )?;
                 }
                 _ => (),
             }
@@ -624,6 +827,7 @@ async fn run_job(worker: Worker, mut claim: Claim, task: Task) {
         match current {
             Task::Inventory(paths) => inventory(&worker, &claim, paths).await,
             Task::Ingest => ingest(&worker, &claim).await,
+            Task::Export(request) => export(&worker, &claim, request).await,
         }
         finished(&worker, &claim).await;
         // The turn may have added messages to thread (spec/02).
@@ -1003,6 +1207,112 @@ async fn commit(worker: &Worker, batch: Batch) -> Result<ImportJobRecord, StoreE
     worker.indexer().wake();
     worker.received().wake();
     Ok(committed)
+}
+
+/// A worker's export turn (spec/09): seal the capture when the job is
+/// still capturing, then run file output to completion. A progress
+/// `Break` — a durable cancel or shutdown — leaves the state its last
+/// commit recorded: sealed work resumes at the next open, while a
+/// partial capture, whose request is not durable, is failed there.
+async fn export(worker: &Worker, claim: &Claim, request: Option<ExportCaptureRequest>) {
+    let id = claim.id.clone();
+    let state = worker
+        .blocking(move |resources| resources.read(|tx| export_job(tx, &id)))
+        .await;
+    let Ok(Ok(job)) = state else {
+        return;
+    };
+    match job.state() {
+        ExportJobState::Capturing => {
+            // Only a worker started by `start_export` carries the
+            // request; open recovery fails `capturing` instead.
+            let Some(request) = request else {
+                return;
+            };
+            let id = claim.id.clone();
+            let stop = claim.stop_check(worker);
+            let captured = worker
+                .blocking(move |resources| {
+                    resources.capture_export(&id, &request, move |_| {
+                        if stop() {
+                            ControlFlow::Break(())
+                        } else {
+                            ControlFlow::Continue(())
+                        }
+                    })
+                })
+                .await;
+            match captured {
+                Ok(Ok(Scoped::Done(_))) => {}
+                Ok(Ok(Scoped::Stopped)) | Err(_) => return,
+                Ok(Err(error)) => {
+                    fail_export(worker, &claim.id, error.to_string()).await;
+                    return;
+                }
+            }
+        }
+        ExportJobState::Ready | ExportJobState::Running => {}
+        _ => return,
+    }
+    let id = claim.id.clone();
+    let stop = claim.stop_check(worker);
+    let written = worker
+        .blocking(move |resources| {
+            resources.export_files(&id, move |_| {
+                if stop() {
+                    ControlFlow::Break(())
+                } else {
+                    ControlFlow::Continue(())
+                }
+            })
+        })
+        .await;
+    if let Ok(Err(error)) = written {
+        fail_export(worker, &claim.id, error.to_string()).await;
+    }
+}
+
+/// Record a failure on an unfinished export job. If even that write
+/// fails, the job stays as it was: a sealed one resumes at the next
+/// open, a capturing one fails there.
+async fn fail_export(worker: &Worker, id: &str, detail: String) {
+    let now = worker.resources().now();
+    let job = id.to_owned();
+    let _ = worker
+        .resources()
+        .write(PRIORITY, move |tx| {
+            let current = export_job(tx, &job)?;
+            if matches!(
+                current.state(),
+                ExportJobState::Completed | ExportJobState::Cancelled | ExportJobState::Failed
+            ) {
+                return Ok(());
+            }
+            // Keep the progress the last commit recorded; the failure
+            // is evidence beside it, like an import's `with_failure`.
+            let mut checkpoint: serde_json::Map<String, serde_json::Value> =
+                serde_json::from_str(current.checkpoint_json())
+                    .ok()
+                    .and_then(|value| match value {
+                        serde_json::Value::Object(map) => Some(map),
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| {
+                        serde_json::Map::from_iter([("v".to_owned(), serde_json::Value::from(1))])
+                    });
+            checkpoint.insert("error".to_owned(), serde_json::Value::String(detail));
+            let checkpoint = serde_json::Value::Object(checkpoint).to_string();
+            advance_export_job(
+                tx,
+                &job,
+                current.revision(),
+                ExportJobState::Failed,
+                &checkpoint,
+                now,
+            )
+            .map(drop)
+        })
+        .await;
 }
 
 /// Record a failure on an unfinished job. If even that write fails, the

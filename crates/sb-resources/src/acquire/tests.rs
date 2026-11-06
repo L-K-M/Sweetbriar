@@ -567,6 +567,7 @@ fn failing(kind: SourceKind, bytes: Vec<u8>, total: u64, fail_at: u64) -> Source
         sha256: "0".repeat(64),
         total,
         position: SourcePosition::START,
+        verification: None,
     }
 }
 
