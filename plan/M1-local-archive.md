@@ -1058,18 +1058,29 @@ local drafts. No network yet.
       truncation rejection, cancellation and error cleanup, injected
       read/write/seek/sync faults, bounded handles and Send. No Engine loop
       change, physical acquisition or message publication.
-    - **M1.7d2c2 Physical verified acquisition — L:** consume the frozen
-      registry outputs in Resources to acquire each bundle record's exact
-      bytes: record boundary, declared framing, original length and SHA-256
-      verified before publication, only the declared framing LF removed, the
-      framing identity joining replay, unterminated acquisitions and
-      multiplicity preserved, and malformed framing never silently trimming
-      bytes or falling back to changed originals. Native random-access,
-      fault and scaling proof.
-    - **M1.7d2c3 Engine integration and verified ingest — L:** consume the
-      verified acquisition in the real import job without changing source
-      order, with durable job, resume, order and crash acceptance and
-      failed-source evidence. Expose no export-scope API.
+    Split (2026-11-05) before coding; retain every deliverable and
+    acceptance above, each artifact fitting 1,450 gross changed lines:
+    - **M1.7d2c2a EML byte verifier and acquisition — M:** a shared
+      counted/hashed streaming primitive that verifies the expected
+      SHA-256 and length at EOF before the publisher renames, plus the
+      Resources manifest-verified EML open/acquire session over the frozen
+      registry. Exact bytes, growth/truncation/hash rejection, EML
+      round-trip including unterminated bytes, multiplicity and source
+      identity replay, shuffled message order, binding and checkpoint
+      rejection, and fault, cancellation and reservation proof. mboxrd is
+      refused until c2b; the plain path still refuses bundles. No Engine
+      loop change.
+    - **M1.7d2c2b mboxrd framing verifier and session — M:** the mboxrd
+      record boundary, declared framing LF, original length and SHA-256
+      verification reusing the shared primitive, with the framing identity
+      joining replay and malformed framing never silently trimming bytes
+      or falling back to changed originals. Native random-access, fault
+      and scaling proof. Split again first if it exceeds 1,450 gross
+      changed lines.
+    - **M1.7d2c3 Engine integration and verified ingest — L:** consume
+      the verified acquisitions in the real import job without changing
+      source order, with durable job, resume, order and crash acceptance
+      and failed-source evidence. Expose no export-scope API.
   - **M1.7e Export engine — L:** counted background jobs, start/query,
     cancel, shutdown and reopen over b2/c. Own real-worker lifecycle,
     crash/resume and all original round-trip acceptance checks using d.
