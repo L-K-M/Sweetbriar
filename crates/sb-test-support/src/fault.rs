@@ -266,6 +266,15 @@ impl Fs for FaultFs {
         }))
     }
 
+    fn open_no_follow(&self, path: &Path) -> io::Result<Box<dyn sb_types::fs::ReadFile>> {
+        if let Some(kind) = self.plan.fire(FsOp::Open) {
+            return Err(fault_error(kind));
+        }
+        Ok(Box::new(FaultRead {
+            inner: self.inner.open_no_follow(path)?,
+            plan: self.plan.clone(),
+        }))
+    }
     fn create(&self, path: &Path) -> io::Result<Box<dyn WriteFile>> {
         if let Some(kind) = self.plan.fire(FsOp::Create) {
             return Err(fault_error(kind));

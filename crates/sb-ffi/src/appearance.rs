@@ -1,15 +1,17 @@
 //! The appearance surface over FFI (spec/07 "Other queries",
-//! "Subscriptions"; spec/02 "Appearance storage"): records mirroring
-//! `sb-service`'s appearance DTOs field by field — the resolved
-//! snapshot with its rendering tokens, the v1 palette — and the
-//! appearance subscription. Queries race the token at every wait;
-//! the subscription holds the service's, never the core's lock, so a
-//! pending `next` can't hold up `shutdown`. The setters cross in
-//! M1.10d2.
+//! "Commands", "Subscriptions"; spec/02 "Appearance storage"): records
+//! mirroring `sb-service`'s appearance DTOs field by field — the
+//! resolved snapshot with its rendering tokens, the v1 palette, the
+//! two setters' change records — and the appearance subscription.
+//! Queries race the token at every wait; the commands honour it only
+//! until the core begins them, so a committed write returns its
+//! receipt even when the caller dropped its future; the subscription
+//! holds the service's, never the core's lock, so a pending `next`
+//! can't hold up `shutdown`.
 
 use std::sync::Arc;
 
-use crate::api::Core;
+use crate::api::{Core, Receipt};
 use crate::cancel::{CancelToken, until_cancelled};
 use crate::error::CoreError;
 
@@ -119,6 +121,38 @@ pub struct PaletteColor {
     pub color_srgb: String,
 }
 
+/// `set_account_appearance`'s color pick (spec/02 "Validation"):
+/// either a palette-v1 slot, or a custom `#rrggbb`.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
+pub enum AccountColor {
+    /// The v1 preset at this slot; the stored color is the preset's.
+    PaletteV1 { slot: u8 },
+    /// An explicit `#rrggbb`, stored lowercase (spec/02).
+    Custom { color_srgb: String },
+}
+
+/// `set_account_appearance`'s new values (spec/07 "Commands").
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct AccountAppearanceChange {
+    /// The color pick.
+    pub color: AccountColor,
+    /// The symbol; `None` clears back to the derived monogram.
+    pub symbol: Option<String>,
+}
+
+/// `set_identity_appearance`'s new values (spec/07 "Commands",
+/// spec/02 "Identity appearance"): `None` fields clear the overrides,
+/// returning the identity to inheriting its account's color and
+/// monogram.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct IdentityAppearanceChange {
+    /// The color override, `#rrggbb`; `None` inherits the account's.
+    pub color_override_srgb: Option<String>,
+    /// The symbol override; `None` inherits the account's symbol, or
+    /// the identity's own name-derived mark when the account has none.
+    pub symbol_override: Option<String>,
+}
+
 /// The v1 account palette (spec/02): every preset in slot order. A
 /// constant — the in-memory value spec/07's one synchronous getter
 /// kind allows ("the appearance cache, for example").
@@ -181,6 +215,64 @@ impl Core {
             .query(&token, async |core| core.appearance().await)
             .await?;
         Ok(Appearance::from_service(&appearance))
+    }
+
+    /// `set_account_appearance` (spec/07 "Commands"): one command
+    /// under an idempotency key the shell made (`UUID()` in Swift) —
+    /// a repeated key returns the stored receipt, a stale
+    /// `expected_revision` is `Conflict`, an unknown account
+    /// `NotFound` and an invalid pick `InvalidInput` (spec/02). Like
+    /// every command it honours the token only until it holds the
+    /// core; once begun it runs to completion.
+    pub async fn set_account_appearance(
+        &self,
+        token: Arc<CancelToken>,
+        idempotency_key: String,
+        account_id: String,
+        expected_revision: i64,
+        change: AccountAppearanceChange,
+    ) -> Result<Receipt, CoreError> {
+        let change = change.into_service();
+        let receipt = self
+            .command(&token, async |core| {
+                core.set_account_appearance(
+                    &idempotency_key,
+                    &account_id,
+                    expected_revision,
+                    &change,
+                )
+                .await
+            })
+            .await?;
+        Ok(Receipt::from_service(&receipt))
+    }
+
+    /// `set_identity_appearance` (spec/07 "Commands", spec/02
+    /// "Identity appearance"): one command under an idempotency key.
+    /// `expected_revision` names the record it writes — `None` the
+    /// absent-record state — and a stale one is `Conflict`; an
+    /// unknown identity is `NotFound`.
+    pub async fn set_identity_appearance(
+        &self,
+        token: Arc<CancelToken>,
+        idempotency_key: String,
+        identity_id: String,
+        expected_revision: Option<i64>,
+        change: IdentityAppearanceChange,
+    ) -> Result<Receipt, CoreError> {
+        let change = change.into_service();
+        let receipt = self
+            .command(&token, async |core| {
+                core.set_identity_appearance(
+                    &idempotency_key,
+                    &identity_id,
+                    expected_revision,
+                    &change,
+                )
+                .await
+            })
+            .await?;
+        Ok(Receipt::from_service(&receipt))
     }
 
     /// `subscribe_appearance` (spec/07 "Subscriptions"): committed
@@ -280,6 +372,36 @@ impl AppearanceAssignment {
         match assignment {
             sb_service::AppearanceAssignment::PaletteV1(slot) => Self::PaletteV1 { slot: *slot },
             sb_service::AppearanceAssignment::Custom => Self::Custom,
+        }
+    }
+}
+
+impl AccountColor {
+    /// Mirror the color pick for the service variant for variant.
+    fn into_service(self) -> sb_service::AccountColor {
+        match self {
+            Self::PaletteV1 { slot } => sb_service::AccountColor::PaletteV1(slot),
+            Self::Custom { color_srgb } => sb_service::AccountColor::Custom(color_srgb),
+        }
+    }
+}
+
+impl AccountAppearanceChange {
+    /// Mirror the change for the service field by field.
+    fn into_service(self) -> sb_service::AccountAppearanceChange {
+        sb_service::AccountAppearanceChange {
+            color: self.color.into_service(),
+            symbol: self.symbol,
+        }
+    }
+}
+
+impl IdentityAppearanceChange {
+    /// Mirror the change for the service field by field.
+    fn into_service(self) -> sb_service::IdentityAppearanceChange {
+        sb_service::IdentityAppearanceChange {
+            color_override_srgb: self.color_override_srgb,
+            symbol_override: self.symbol_override,
         }
     }
 }
