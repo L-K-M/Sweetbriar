@@ -48,6 +48,9 @@ fn imported(root: &Path, cache: &Path) -> (Core, i64, u64) {
     let accounts = block_on(core.accounts()).unwrap();
     let mailboxes = block_on(core.mailboxes(&accounts[0].account_id)).unwrap();
     let mailbox_id = mailboxes.mailboxes[0].mailbox_id;
+    // `mailboxes.generation` is the same list-generation counter a
+    // window's generation comes from, so a mailbox-scope fence on it is
+    // exactly what the CLI reads through `open_window`.
     (core, mailbox_id, mailboxes.generation)
 }
 
