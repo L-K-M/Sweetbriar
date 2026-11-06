@@ -1,13 +1,6 @@
-// `DraftModel`: one draft as the compose window drives it (spec/02,
-// spec/05, spec/07; plan M1.9b2c). The DTOs live in DraftTypes.swift;
-// app code never sees a generated `SweetbriarCore` type.
-// `load` reads the draft, `save` compares against the displayed base
-// revision and exposes a typed `Conflict`, `discard` marks it discarded,
-// and `stop` ends the session without cancelling a begun command.
-
+// Revision-aware compose editor state over the owned draft bridge.
 import Foundation
 import Observation
-import SweetbriarCore
 
 // MARK: - Model
 
@@ -74,6 +67,7 @@ public final class DraftModel {
     /// True when `content` differs from the displayed base.
     public private(set) var isDirty = false
     public private(set) var isSaving = false
+    public private(set) var isDiscarding = false
     public private(set) var isLoading = false
     /// The last same-base refusal, until a reload or a successful save.
     public private(set) var conflict: Conflict?
@@ -93,14 +87,15 @@ public final class DraftModel {
 
     /// Whether a save can run now.
     public var canSave: Bool {
-        content != nil && !isSaving && !isStopped && !isDiscarded
+        content != nil && !isSaving && !isDiscarding && !isStopped && !isDiscarded
     }
 
     private let source: any DraftStore
+    private let discardKey = UUID().uuidString
     @ObservationIgnored private var loadTicket: UInt64 = 0
     @ObservationIgnored private var saveTicket: UInt64 = 0
     @ObservationIgnored private var userEditVersion: UInt64 = 0
-    @ObservationIgnored private var lastSave: (key: String, content: DraftContent, baseRevisionId: String?)?
+    @ObservationIgnored private var lastSave: (key: String, editVersion: UInt64, baseRevisionId: String?)?
 
     public init(source: any DraftStore, draftId: String) {
         self.source = source
@@ -109,12 +104,14 @@ public final class DraftModel {
 
     /// Read the draft and show its current revision, discarding unsaved content.
     public func load() async {
+        guard !isSaving, !isDiscarding else { return }
         await read(mode: .replace)
     }
 
     /// Read again: a clean editor follows the revision; an unsaved editor
     /// keeps its content, including an edit made while the read was in flight.
     public func reload() async {
+        guard !isSaving, !isDiscarding else { return }
         await read(mode: .preserveIfDirty)
     }
 
@@ -131,13 +128,14 @@ public final class DraftModel {
     /// same content and base replays its receipt, so a spent attachment
     /// reservation cannot block it; an edit during the save survives.
     public func save() async {
-        guard !isStopped, !isSaving, !isDiscarded, let content else { return }
+        guard canSave, let content else { return }
         let base = baseRevisionId
-        let key = saveKey(for: content, base: base)
+        let key = saveKey(base: base)
         let ticket = saveTicket &+ 1
         saveTicket = ticket
         let version = userEditVersion
         isSaving = true
+        invalidateReads()
         conflict = nil
         failure = nil
         defer { if !isStopped { isSaving = false } }
@@ -147,12 +145,11 @@ public final class DraftModel {
             )
             guard !isStopped, ticket == saveTicket else { return }
             baseRevisionId = saved.revisionId
-            isDirty = version == userEditVersion ? false : true
-            // Refresh the displayed revision behind the receipt; an
-            // unsaved editor keeps its newer content. A new attachment
-            // handle the save spent stays in that content; M1.9c must
-            // reconcile it with the reloaded revision's retained
-            // reference before the next save. No handle is rebuilt here.
+            acknowledgeAttachments(in: content)
+            isDirty = version != userEditVersion
+            // The receipt establishes the new base even if this read
+            // fails. Later edits keep that base and the acknowledged
+            // attachment references, without spending the handles again.
             await read(mode: .preserveIfDirty)
         } catch let error as CoreFailure {
             guard case .conflict(let detail) = error else {
@@ -174,14 +171,17 @@ public final class DraftModel {
         }
     }
 
-    /// Mark the draft discarded under a fresh idempotency key.
+    /// Retry one discard intent under its original idempotency key.
     public func discard() async {
-        guard !isStopped, !isDiscarded, !isSaving else { return }
+        guard !isStopped, !isDiscarded, !isSaving, !isDiscarding else { return }
+        isDiscarding = true
+        invalidateReads()
+        defer { if !isStopped { isDiscarding = false } }
         conflict = nil
         failure = nil
         do {
             _ = try await source.discardDraft(
-                idempotencyKey: UUID().uuidString, draftId: draftId
+                idempotencyKey: discardKey, draftId: draftId
             )
             guard !isStopped else { return }
             isDiscarded = true
@@ -210,10 +210,11 @@ public final class DraftModel {
         conflict = nil
         let ticket = loadTicket &+ 1
         loadTicket = ticket
+        let version = userEditVersion
         do {
             let draft = try await source.draft(id: draftId)
             guard !isStopped, ticket == loadTicket else { return }
-            let preserve = mode == .preserveIfDirty && isDirty
+            let preserve = userEditVersion != version || (mode == .preserveIfDirty && isDirty)
             apply(draft, preservingContent: preserve)
             failure = nil
         } catch is CancellationError {
@@ -236,31 +237,62 @@ public final class DraftModel {
     private func apply(_ draft: Draft, preservingContent: Bool) {
         self.draft = draft
         isDiscarded = draft.state == .discarded
+        if preservingContent {
+            // A remote revision is not the base of these unsaved edits.
+            // A read of our acknowledged base can fill in its metadata.
+            if draft.revision?.revisionId == baseRevisionId { revision = draft.revision }
+            return
+        }
+        lastSave = nil
         if let revision = draft.revision {
             self.revision = revision
             baseRevisionId = revision.revisionId
-            if !preservingContent {
-                content = DraftContent(revision)
-                isDirty = false
-            }
+            content = DraftContent(revision)
         } else {
             self.revision = nil
             baseRevisionId = nil
-            if !preservingContent {
-                content = DraftContent.empty()
-                isDirty = false
-            }
+            content = DraftContent.empty()
         }
+        isDirty = false
     }
 
-    /// The last key while content and base are unchanged, so an ambiguous
-    /// attempt replays its receipt.
-    private func saveKey(for content: DraftContent, base: String?) -> String {
-        if let lastSave, lastSave.content == content, lastSave.baseRevisionId == base {
+    private func invalidateReads() {
+        loadTicket &+= 1
+        isLoading = false
+    }
+
+    /// Only an acknowledged publication becomes a retained reference.
+    /// Same bytes in an independent publication are still a new handle.
+    /// Changing attachment metadata after acknowledgement requires a fresh
+    /// publication; retained references must exactly match the saved base.
+    private func acknowledgeAttachments(in savedContent: DraftContent) {
+        guard var current = content else { return }
+        current.attachments = current.attachments.map { attachment in
+            guard case .new(let object, let filename, let mediaType) = attachment else {
+                return attachment
+            }
+            let acknowledged = savedContent.attachments.contains { saved in
+                guard case .new(let original, let originalName, let originalType) = saved else {
+                    return false
+                }
+                return original === object && originalName.utf8.elementsEqual(filename.utf8)
+                    && originalType.utf8.elementsEqual(mediaType.utf8)
+            }
+            guard acknowledged else { return attachment }
+            return .retained(DraftAttachmentRef(objectSha256: object.objectSha256,
+                filename: filename, mediaType: mediaType, size: object.byteLength))
+        }
+        content = current
+    }
+
+    /// Retry an unchanged intent. Swift value equality would conflate
+    /// distinct UTF-8 strings and independent same-byte publications.
+    private func saveKey(base: String?) -> String {
+        if let lastSave, lastSave.editVersion == userEditVersion, lastSave.baseRevisionId == base {
             return lastSave.key
         }
         let key = UUID().uuidString
-        lastSave = (key, content, base)
+        lastSave = (key, userEditVersion, base)
         return key
     }
 }
