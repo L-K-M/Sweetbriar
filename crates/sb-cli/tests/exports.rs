@@ -50,21 +50,27 @@ fn imported(directory: &Path) -> (String, String) {
     // work so this test does not race a legitimate generation change.
     let db = directory.join("store/state.sqlite");
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-    loop {
-        let settled = [
+    let watermarks = || {
+        [
             ("thread_inputs", "threads_built"),
             ("seen_address_inputs", "seen_address_swept"),
             ("repair_inputs", "repair_swept"),
         ]
-        .into_iter()
-        .all(|(input, completed)| {
-            let input = sb_test_support::store_meta_value(&db, input).expect("input watermark");
-            let completed =
-                sb_test_support::store_meta_value(&db, completed).expect("completed watermark");
-            input == completed
-        });
+        .map(|(input, completed)| {
+            (
+                sb_test_support::store_meta_value(&db, input).expect("input watermark"),
+                sb_test_support::store_meta_value(&db, completed).expect("completed watermark"),
+            )
+        })
+    };
+    loop {
+        // These counters are monotonic. Identical reads bracketing coverage
+        // avoid combining a completed old lane with another lane's new work.
+        let before = watermarks();
         let coverage = block_on(core.coverage(SearchScope::All)).unwrap();
-        if settled
+        let after = watermarks();
+        if before == after
+            && before.iter().all(|(input, completed)| input == completed)
             && coverage.pending == 0
             && coverage.queue_length == 0
             && coverage.index_state == SearchIndexState::Ready
