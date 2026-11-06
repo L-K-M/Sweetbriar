@@ -40,6 +40,7 @@ private actor FakeDraftStore: DraftStore {
     private var draft: Draft
     private var loadGates: [Gate] = []
     private var saveGate: Gate?
+    private var discardGate: Gate?
     private var saveFailure: Error?
     private var loadFailure: Error?
     private var cancelFirstSave = false
@@ -53,15 +54,17 @@ private actor FakeDraftStore: DraftStore {
     func setDraft(_ draft: Draft) { self.draft = draft }
     func setLoadGates(_ gates: [Gate]) { loadGates = gates }
     func setSaveGate(_ gate: Gate?) { saveGate = gate }
+    func setDiscardGate(_ gate: Gate?) { discardGate = gate }
     func setSaveFailure(_ error: Error?) { saveFailure = error }
     func setLoadFailure(_ error: Error?) { loadFailure = error }
     func setCancelFirstSave() { cancelFirstSave = true }
 
     func draft(id: String) async throws -> Draft {
         loadCount += 1
+        let captured = draft
         if !loadGates.isEmpty { await loadGates.removeFirst().wait() }
         if let loadFailure { throw loadFailure }
-        return draft
+        return captured
     }
 
     func saveDraft(
@@ -114,6 +117,7 @@ private actor FakeDraftStore: DraftStore {
 
     func discardDraft(idempotencyKey: String, draftId: String) async throws -> Receipt {
         discards.append(idempotencyKey)
+        if let discardGate { await discardGate.wait() }
         return Receipt(
             command: "discard_draft",
             resultJson: "{\"draft_id\":\"\(draftId)\"}", createdAtMs: 3
@@ -310,6 +314,53 @@ func discardMarksTheDraftDiscarded() async {
 }
 
 @MainActor
+@Test(.timeLimit(.minutes(1)))
+func discardCannotOverlapCommandsOrBeRevivedByAStaleRead() async {
+    let loadGate = Gate()
+    let discardGate = Gate()
+    let store = FakeDraftStore(draft(revision: revision("r1")))
+    let model = DraftModel(source: store, draftId: "d1")
+    await model.load()
+    await store.setLoadGates([loadGate])
+    let loading = Task { await model.reload() }
+    #expect(await eventually { await store.loadCount == 2 })
+    await store.setDiscardGate(discardGate)
+    let discarding = Task { await model.discard() }
+    #expect(await eventually { await store.discards.count == 1 })
+    let secondDiscard = Task { await model.discard() }
+    await Task.yield()
+    await model.save()
+    let saves = await store.saveCount
+    let discards = await store.discards.count
+    await discardGate.open()
+    await discarding.value
+    await secondDiscard.value
+    await loadGate.open()
+    await loading.value
+    #expect(saves == 0 && discards == 1)
+    #expect(model.isDiscarded && !model.canSave)
+}
+
+@MainActor
+@Test
+func canonicallyEquivalentEditsKeepDistinctCommandIntent() async {
+    let store = FakeDraftStore(draft(revision: revision("r1")))
+    await store.setSaveFailure(CoreFailure.unavailable(reason: "ambiguous result"))
+    let model = DraftModel(source: store, draftId: "d1")
+    await model.load()
+    var edited = DraftContent.empty()
+    edited.subject = "\u{00e9}"
+    model.update(edited)
+    await model.save()
+    edited.subject = "e\u{0301}"
+    model.update(edited)
+    await model.save()
+    let saves = await store.saves
+    #expect(saves.count == 2 && saves[0].key != saves[1].key)
+    #expect(Array(saves[0].content.subject.utf8) != Array(saves[1].content.subject.utf8))
+}
+
+@MainActor
 @Test
 func reloadFollowsCleanAndPreservesDirty() async {
     let store = FakeDraftStore(draft(revision: revision("r1")))
@@ -326,7 +377,153 @@ func reloadFollowsCleanAndPreservesDirty() async {
     await store.setDraft(draft(revision: revision("r3", seq: 3, base: "r2")))
     await model.reload()
     #expect(model.content?.subject == "Unsaved" && model.isDirty)
-    #expect(model.baseRevisionId == "r3" && model.revision?.revisionId == "r3")
+    #expect(model.baseRevisionId == "r2" && model.revision?.revisionId == "r2")
+}
+
+@MainActor
+@Test
+func typingAfterExplicitLoadBeginsSurvivesItsCompletion() async throws {
+    let gate = Gate()
+    let store = FakeDraftStore(draft(revision: revision("r1")))
+    let model = DraftModel(source: store, draftId: "d1")
+    await model.load()
+    await store.setLoadGates([gate])
+    let pending = Task { await model.load() }
+    #expect(await eventually { await store.loadCount == 2 })
+    var edited = try #require(model.content)
+    edited.subject = "Typed after the read started"
+    model.update(edited)
+    await gate.open()
+    await pending.value
+    #expect(model.content?.subject == edited.subject && model.isDirty)
+    #expect(model.baseRevisionId == "r1")
+}
+
+private actor ReceiptHeldDraftStore: DraftStore {
+    let bridge: CoreBridge
+    let committed = Gate()
+    let releaseReceipt = Gate()
+    private var failRead = false
+    private var loseReceipt = false
+    private var loseDiscardReceipt = false
+    private(set) var discardKeys: [String] = []
+    init(_ bridge: CoreBridge) { self.bridge = bridge }
+    func failNextRead() { failRead = true }
+    func loseFirstReceipt() { loseReceipt = true }
+    func loseFirstDiscardReceipt() { loseDiscardReceipt = true }
+    func draft(id: String) async throws -> Draft {
+        if failRead { failRead = false; throw CoreFailure.unavailable(reason: "injected refresh failure") }
+        return try await bridge.draft(id: id)
+    }
+    func saveDraft(idempotencyKey: String, draftId: String, baseRevisionId: String?, content: DraftContent) async throws -> DraftSaved {
+        let receipt = try await bridge.saveDraft(idempotencyKey: idempotencyKey,
+            draftId: draftId, baseRevisionId: baseRevisionId, content: content)
+        await committed.open()
+        await releaseReceipt.wait()
+        if loseReceipt {
+            loseReceipt = false
+            throw CoreFailure.unavailable(reason: "injected failure after commit")
+        }
+        return receipt
+    }
+    func discardDraft(idempotencyKey: String, draftId: String) async throws -> Receipt {
+        discardKeys.append(idempotencyKey)
+        let receipt = try await bridge.discardDraft(idempotencyKey: idempotencyKey, draftId: draftId)
+        if loseDiscardReceipt {
+            loseDiscardReceipt = false
+            throw CoreFailure.unavailable(reason: "injected discard failure after commit")
+        }
+        return receipt
+    }
+}
+
+@MainActor
+@Test(.timeLimit(.minutes(1)))
+func aCommittedDiscardWithALostReplyReplaysItsReceipt() async throws {
+    let (dir, config) = tempConfig()
+    let bridge = try await CoreBridge.open(config: config,
+        snapshots: sinkBatcher(clock: ManualFrameClock()))
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let created = try await bridge.createDraft(idempotencyKey: UUID().uuidString, source: .new)
+    let source = ReceiptHeldDraftStore(bridge)
+    await source.loseFirstDiscardReceipt()
+    let model = DraftModel(source: source, draftId: created.draftId)
+    await model.load()
+    await model.discard()
+    #expect(model.failure != nil && !model.isDiscarded)
+    await model.discard()
+    #expect(model.failure == nil && model.isDiscarded)
+    let keys = await source.discardKeys
+    #expect(keys.count == 2 && keys[0] == keys[1])
+    let stored = try await bridge.draft(id: created.draftId)
+    #expect(stored.state == .discarded)
+    await bridge.shutdown()
+}
+
+private enum AttachmentAcknowledgementCase: CaseIterable, Sendable {
+    case typingDuringSave, independentReplacement, refreshFailure, ambiguousResponse
+}
+
+@MainActor
+@Test(.timeLimit(.minutes(1)), arguments: AttachmentAcknowledgementCase.allCases)
+private func acknowledgedAttachmentsRemainSaveable(scenario: AttachmentAcknowledgementCase) async throws {
+    let (dir, config) = tempConfig()
+    let bridge = try await CoreBridge.open(config: config,
+        snapshots: sinkBatcher(clock: ManualFrameClock()))
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let created = try await bridge.createDraft(idempotencyKey: UUID().uuidString, source: .new)
+    let bytes = Data("same bytes, independent reservations".utf8)
+    let original = try await bridge.publishDraftAttachment(bytes: bytes)
+    let replacement = try await bridge.publishDraftAttachment(bytes: bytes)
+    let source = ReceiptHeldDraftStore(bridge)
+    if scenario == .ambiguousResponse { await source.loseFirstReceipt() }
+    let model = DraftModel(source: source, draftId: created.draftId)
+    await model.load()
+    var first = try #require(model.content)
+    first.subject = "First"
+    first.attachments = [.new(object: original, filename: "a.txt", mediaType: "text/plain")]
+    model.update(first)
+    let pending = Task { await model.save() }
+    await source.committed.wait()
+    if scenario == .refreshFailure {
+        await source.failNextRead()
+    } else if scenario != .ambiguousResponse {
+        var edited = first
+        edited.subject = "Typed during save"
+        if scenario == .independentReplacement {
+            edited.attachments = [.new(object: replacement, filename: "a.txt", mediaType: "text/plain")]
+        }
+        model.update(edited)
+    }
+    await source.releaseReceipt.open()
+    await pending.value
+    if scenario == .ambiguousResponse {
+        #expect(model.failure != nil && model.isDirty && model.baseRevisionId == nil)
+        // The first save really committed and spent the publication.
+        // Its unchanged retry must replay the native receipt first.
+        await model.save()
+        #expect(model.failure == nil && !model.isDirty)
+    }
+    if scenario == .independentReplacement {
+        guard case .new(let object, _, _) = try #require(model.content?.attachments.first) else {
+            Issue.record("an independent unspent replacement must stay new"); await bridge.shutdown(); return
+        }
+        #expect(object === replacement)
+    } else {
+        guard case .retained = try #require(model.content?.attachments.first) else {
+            Issue.record("the acknowledged publication must become retained before another save")
+            await bridge.shutdown(); return
+        }
+    }
+    var next = try #require(model.content)
+    next.subject = "Later"
+    model.update(next)
+    await model.save()
+    #expect(model.failure == nil && model.conflict == nil && !model.isDirty)
+    let stored = try await bridge.draft(id: created.draftId)
+    #expect(stored.revision?.subject == "Later")
+    #expect(stored.revision?.attachments.first?.objectSha256 == original.objectSha256)
+    await bridge.shutdown()
 }
 
 @MainActor

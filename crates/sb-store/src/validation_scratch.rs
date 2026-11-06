@@ -311,7 +311,10 @@ mod tests {
             let file = ValidationFile::Descriptors;
             match op {
                 FsOp::Create => assert!(lease.create_file(file).is_err()),
-                FsOp::Open => assert!(lease.open_file(file).is_err()),
+                FsOp::Open => {
+                    lease.create_file(file).unwrap();
+                    assert!(lease.open_file(file).is_err());
+                }
                 FsOp::Remove => assert!(lease.remove_file(file).is_err()),
                 FsOp::SyncFile => assert!(lease.create_file(file).unwrap().sync_all().is_err()),
                 _ => unreachable!(),
