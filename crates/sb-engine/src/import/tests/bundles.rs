@@ -1,14 +1,14 @@
 //! Verified bundle ingest through the real engine (M1.7d2c3, spec/09
 //! "Export bundles"): a real export's destination directory re-imports
-//! as manifest-verified sources — byte-identical acquisitions, exact
-//! replay, durable checkpoints and resume — with failure evidence kept
+//! as manifest-verified sources: byte-identical acquisitions, exact
+//! replay, durable checkpoints and resume, with failure evidence kept
 //! and no plain-path fallback. One lazily created proof registry serves
 //! every bundle source in the turn, mixed with plain sources.
 
 use std::env;
 use std::sync::Arc;
 
-use sb_test_support::{CutFs, real_fs, run_crash_cut_points};
+use sb_test_support::{CutFs, FaultFs, FaultKind, FsOp, real_fs, run_crash_cut_points};
 
 use super::acceptance::{
     assert_intact, cut_points, finish_after_cut, outcome, states_before_recovery,
@@ -83,6 +83,57 @@ fn import_bundle(engine: &Engine, dir: &Path, state: ImportJobState) -> ImportJo
     settle(engine, &id, ImportJobState::AwaitingConfirmation);
     confirm(engine, &id, vec![]).unwrap();
     settle(engine, &id, state)
+}
+
+#[test]
+fn registry_cleanup_failure_cannot_report_completed_ingest() {
+    fn run(fault: u64) -> (u64, ImportJobStatus, usize) {
+        let scratch = ScratchDir::new("bundle-registry-cleanup");
+        let bundle = scratch.path().join("bundle");
+        write_bundle(&bundle, &BODIES[..2], &[0, 1], &[0, 1], IDS_01);
+        let root = scratch.path().join("store");
+        let fs = Arc::new(FaultFs::new(
+            real_fs(),
+            FsOp::RemoveDirAll,
+            fault,
+            FaultKind::Eio,
+        ));
+        let engine = block_on(Engine::open_with_fs(&root, fs.clone())).unwrap();
+        let id = start(&engine, &[bundle]);
+        settle(&engine, &id, ImportJobState::AwaitingConfirmation);
+        confirm(&engine, &id, vec![]).unwrap();
+        let deadline = std::time::Instant::now() + PATIENCE;
+        let terminal = loop {
+            let job = block_on(engine.import_job(&id)).unwrap();
+            if matches!(
+                job.state(),
+                ImportJobState::Completed | ImportJobState::Failed
+            ) {
+                break job;
+            }
+            assert!(std::time::Instant::now() < deadline, "{job:?}");
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        // Drain accepted work even if its completed state became visible too early.
+        block_on(engine.shutdown()).unwrap();
+        (fs.calls(FsOp::RemoveDirAll), terminal, snapshots(&root))
+    }
+    let (cleanup, complete, _) = run(u64::MAX);
+    assert_eq!(complete.state(), ImportJobState::Completed);
+    assert!(cleanup > 0);
+    // The last directory removal is the turn registry's explicit finish.
+    let (_, failed, evidence) = run(cleanup);
+    assert_eq!(failed.state(), ImportJobState::Failed);
+    assert!(
+        failed
+            .checkpoint()
+            .to_json()
+            .contains("manifest proof registry cleanup failed")
+    );
+    assert!(
+        evidence > 0,
+        "failed cleanup must retain captured source evidence"
+    );
 }
 
 #[test]

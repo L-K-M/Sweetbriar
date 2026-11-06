@@ -1034,9 +1034,8 @@ struct Gathered {
 ///
 /// The whole turn is one counted blocking task (M1.7d2c3): the manifest
 /// proof registry bundle sources verify against is created lazily on
-/// that task's stack and lives for every source of the turn — mixed
-/// plain and bundle alike — so no session outlives it and no manifest
-/// is re-validated per source.
+/// that task's stack and lives for the whole mixed plain/bundle turn,
+/// so no session outlives it and no manifest is re-validated per source.
 async fn run_ingest(worker: &Worker, claim: &Claim) -> Result<(), String> {
     let id = claim.id.clone();
     let stop = claim.stop_check(worker);
@@ -1048,10 +1047,14 @@ async fn run_ingest(worker: &Worker, claim: &Claim) -> Result<(), String> {
         .map_err(|e| e.to_string())?
 }
 
-/// The blocking turn's end: every acquisition and descriptor cursor
-/// ended inside `ingest_sources`, so a created registry is finished
-/// here. Its cleanup failure is reported, never erasing a primary
-/// ingest failure (spec/09 "Export bundles").
+struct IngestCompletion {
+    revision: i64,
+    checkpoint: ImportJobCheckpoint,
+}
+
+/// Finish the registry after every acquisition/cursor drops, before
+/// acknowledging completion. Cleanup failure must remain observable
+/// on the unfinished job and must not erase a primary ingest failure.
 fn ingest_turn(
     resources: &Resources,
     id: &str,
@@ -1062,15 +1065,32 @@ fn ingest_turn(
     let mut registry = None;
     let primary = ingest_sources(resources, id, stop, indexer, received, &mut registry);
     let cleanup = registry.map(ManifestProofRegistry::finish);
-    match (primary, cleanup) {
+    let completion = match (primary, cleanup) {
         (Err(primary), Some(Err(cleanup))) => Err(format!(
             "{primary}; manifest proof registry cleanup failed: {cleanup}"
         )),
         (Err(primary), _) => Err(primary),
-        (Ok(()), Some(Err(cleanup))) => {
+        (Ok(_), Some(Err(cleanup))) => {
             Err(format!("manifest proof registry cleanup failed: {cleanup}"))
         }
-        (Ok(()), _) => Ok(()),
+        (Ok(completion), _) => Ok(completion),
+    }?;
+    let Scoped::Done(IngestCompletion {
+        revision,
+        checkpoint,
+    }) = completion
+    else {
+        return Ok(());
+    };
+    let now = resources.now();
+    let job = id.to_owned();
+    match await_write(resources.write(PRIORITY, move |tx| {
+        let state = ImportJobState::Completed;
+        advance_import_job(tx, &job, revision, state, &checkpoint, now).map(drop)
+    })) {
+        Ok(()) => Ok(()),
+        Err(StoreError::Conflict { .. }) if moved_on_now(resources, id, Some(revision)) => Ok(()),
+        Err(error) => Err(error.to_string()),
     }
 }
 
@@ -1085,12 +1105,12 @@ fn ingest_sources<'a>(
     indexer: &IndexJobs,
     received: &ReceivedJobs,
     registry: &mut Option<ManifestProofRegistry<'a>>,
-) -> Result<(), String> {
+) -> Result<Scoped<IngestCompletion>, String> {
     let job = resources
         .read(|tx| import_job(tx, id))
         .map_err(|e| e.to_string())?;
     if job.state() != ImportJobState::Running {
-        return Ok(());
+        return Ok(Scoped::Stopped);
     }
     let mut revision = job.revision();
     let mut checkpoint = job.checkpoint().clone();
@@ -1105,7 +1125,7 @@ fn ingest_sources<'a>(
         {
             Scoped::Done(acquisition) => acquisition,
             // A stop during manifest proof production pauses the job.
-            Scoped::Stopped => return Ok(()),
+            Scoped::Stopped => return Ok(Scoped::Stopped),
         };
         let mut carry = None;
         loop {
@@ -1136,7 +1156,7 @@ fn ingest_sources<'a>(
                     Err(StoreError::Conflict { .. })
                         if moved_on_now(resources, id, Some(revision)) =>
                     {
-                        return Ok(());
+                        return Ok(Scoped::Stopped);
                     }
                     Err(error) => return Err(error.to_string()),
                 }
@@ -1145,29 +1165,23 @@ fn ingest_sources<'a>(
                 return Err(error.to_string());
             }
             if gathered.stopped || stop() {
-                return Ok(());
+                return Ok(Scoped::Stopped);
             }
             if finished {
                 break;
             }
         }
     }
-    let now = resources.now();
-    let job = id.to_owned();
-    match await_write(resources.write(PRIORITY, move |tx| {
-        let state = ImportJobState::Completed;
-        advance_import_job(tx, &job, revision, state, &checkpoint, now).map(drop)
-    })) {
-        Ok(()) => Ok(()),
-        Err(StoreError::Conflict { .. }) if moved_on_now(resources, id, Some(revision)) => Ok(()),
-        Err(error) => Err(error.to_string()),
-    }
+    Ok(Scoped::Done(IngestCompletion {
+        revision,
+        checkpoint,
+    }))
 }
 
 /// Open a source's acquisition at its position (spec/09): bundle members
-/// only through the turn's manifest-verified session — the registry is
-/// created on the first one — plain sources through the verified
-/// snapshot. No bundle ever falls back to the plain path.
+/// only through the turn's manifest-verified session, creating the
+/// registry on the first one; plain sources use the verified snapshot.
+/// No bundle ever falls back to the plain path.
 fn open<'a>(
     resources: &'a Resources,
     registry: &mut Option<ManifestProofRegistry<'a>>,
