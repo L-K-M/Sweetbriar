@@ -4,10 +4,11 @@ use std::io::{self, Read, Seek, SeekFrom};
 
 use super::BundleFormat;
 use super::offset_sort::OffsetSort;
+#[cfg(test)]
 use std::cmp::Ordering;
 
 mod messages;
-pub(super) use messages::validate_messages;
+pub(super) use messages::validate_messages_with_children;
 
 // Search query nodes have depth 32 (spec/06). A node can add an object
 // and an operands array; the manifest and scope wrappers fit in 16 more.
@@ -64,12 +65,58 @@ pub(super) struct FileTable {
     ids_hash: String,
 }
 
+impl FileTable {
+    pub(super) fn format(&self) -> BundleFormat {
+        self.format
+    }
+}
+
+/// Compare a decoded manifest string to a directory name without retaining it.
+pub(super) fn compare_child(
+    reader: &mut (impl Read + Seek),
+    mut offset: u64,
+    name: &str,
+) -> io::Result<std::cmp::Ordering> {
+    let mut expected = name.chars();
+    loop {
+        let mut chars = ['\0'; 256];
+        let length = name_chunk(reader, &mut offset, &mut chars)?;
+        for ch in &chars[..length] {
+            match expected.next() {
+                Some(other) if *ch == other => {}
+                Some(other) => return Ok(ch.cmp(&other)),
+                None => return Ok(std::cmp::Ordering::Greater),
+            }
+        }
+        if length < chars.len() {
+            return Ok(if expected.next().is_some() {
+                std::cmp::Ordering::Less
+            } else {
+                std::cmp::Ordering::Equal
+            });
+        }
+    }
+}
+
+/// Keep diagnostics bounded even when a hostile manifest contains huge names.
+pub(super) fn child_prefix(
+    reader: &mut (impl Read + Seek),
+    mut offset: u64,
+) -> io::Result<(String, bool)> {
+    let mut chars = ['\0'; 257];
+    let length = name_chunk(reader, &mut offset, &mut chars)?;
+    Ok((chars[..length.min(256)].iter().collect(), length > 256))
+}
+
 struct FileName {
     start: u64,
+    bytes: u64,
+    records: u64,
 }
 
 /// Compare decoded names exactly using fixed-memory sorted offsets.
-pub(super) fn validate_file_names(
+#[cfg(test)]
+fn validate_file_names(
     reader: &mut (impl Read + Seek),
     table: &FileTable,
     scratch: &sb_store::ValidationScratch<'_>,
@@ -101,6 +148,7 @@ pub(super) fn validate_file_names(
     )
 }
 
+#[cfg(test)]
 fn read_entry(reader: &mut (impl Read + Seek), offset: u64) -> io::Result<(FileName, u64)> {
     reader.seek(SeekFrom::Start(offset))?;
     let mut parser = Parser {
@@ -142,6 +190,7 @@ fn name_chunk(
     Ok(length)
 }
 
+#[cfg(test)]
 fn compare_names(
     reader: &mut (impl Read + Seek),
     mut left: u64,
@@ -398,6 +447,8 @@ impl<R: Read> Parser<R> {
     fn file_entry(&mut self) -> io::Result<FileName> {
         let mut seen = 0u8;
         let mut name = None;
+        let mut bytes = 0;
+        let mut records = 0;
         self.object(|p, key| {
             let bit = match key {
                 "name" => 1,
@@ -411,9 +462,8 @@ impl<R: Read> Parser<R> {
             seen |= bit;
             match key {
                 "name" => name = Some(p.file_name()?),
-                "bytes" | "records" => {
-                    p.integer::<u64>()?;
-                }
+                "bytes" => bytes = p.integer::<u64>()?,
+                "records" => records = p.integer::<u64>()?,
                 _ => unreachable!(),
             }
             Ok(())
@@ -421,7 +471,10 @@ impl<R: Read> Parser<R> {
         if seen != 0b111 {
             return Err(invalid());
         }
-        name.ok_or_else(invalid)
+        let mut name = name.ok_or_else(invalid)?;
+        name.bytes = bytes;
+        name.records = records;
+        Ok(name)
     }
 
     fn file_name(&mut self) -> io::Result<FileName> {
@@ -439,7 +492,11 @@ impl<R: Read> Parser<R> {
         if length == 0 || (dots && length <= 2) {
             return Err(invalid());
         }
-        Ok(FileName { start })
+        Ok(FileName {
+            start,
+            bytes: 0,
+            records: 0,
+        })
     }
 
     fn string_char(&mut self) -> io::Result<Option<char>> {

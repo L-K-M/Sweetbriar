@@ -3312,8 +3312,9 @@ fn retained_image_callback_uses_pinned_connection_after_path_replacement() {
                 .query_row("PRAGMA user_version", [], |r| r.get(0))
                 .unwrap();
             assert!(version > 0);
+            let escape = paths.data_root().join("sb-image-escape");
             assert!(
-                conn.execute_batch("ATTACH DATABASE '/tmp/sb-image-escape' AS other")
+                conn.execute_batch(&format!("ATTACH DATABASE '{}' AS other", escape.display()))
                     .is_err()
             );
             std::fs::remove_file(old).unwrap();
@@ -3432,6 +3433,40 @@ fn verifier_image_reads_only_authenticated_copied_database() {
         )
         .unwrap();
     assert!(matches!(cancelled, crate::BackupImageInspection::Cancelled));
+}
+
+#[test]
+fn verifier_image_lock_recovers_after_progress_panic() {
+    use sha2::{Digest, Sha256};
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    let (_scratch, _paths, store) = open("image-lock-panic");
+    let snapshot = store.backup_snapshot(BackupDestination::DataRoot).unwrap();
+    let receipt = store.complete_backup(snapshot).unwrap();
+    let data = std::fs::read(receipt.state_db()).unwrap();
+    let digest: [u8; 32] = Sha256::digest(&data).into();
+    let panicked = catch_unwind(AssertUnwindSafe(|| {
+        let _ = store.inspect_backup_image(
+            receipt.location(),
+            digest,
+            data.len() as u64,
+            &std::sync::atomic::AtomicBool::new(false),
+            |_| panic!("progress callback panicked"),
+        );
+    }));
+    assert!(panicked.is_err());
+    let retry = store
+        .inspect_backup_image(
+            receipt.location(),
+            digest,
+            data.len() as u64,
+            &std::sync::atomic::AtomicBool::new(false),
+            |_| std::ops::ControlFlow::Continue(()),
+        )
+        .unwrap();
+    assert!(matches!(
+        retry,
+        crate::BackupImageInspection::Inspected { .. }
+    ));
 }
 
 #[test]

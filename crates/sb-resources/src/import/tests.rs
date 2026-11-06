@@ -803,6 +803,82 @@ fn source_json_v2_requires_a_bundle_matching_the_source() {
 }
 
 #[test]
+fn source_json_v2_preserves_optional_file_ordinal() {
+    use serde_json::{Value, json};
+
+    let legacy = json!({
+        "v": 2, "path": "/x/y.eml", "mailbox": "y", "kind": "eml",
+        "snapshot": {"token": "0".repeat(32), "sha256": "a".repeat(64), "byte_length": 3},
+        "messages": 1, "quoting": "equivalent",
+        "bundle": {
+            "manifest": {"token": "f".repeat(32), "sha256": "b".repeat(64), "byte_length": 9},
+            "format": "eml",
+        },
+    });
+    let decoded = SourceInventory::from_json(&legacy.to_string()).unwrap();
+    assert_eq!(decoded.to_json(), legacy.to_string());
+    assert_eq!(decoded.bundle().unwrap().file_ordinal(), None);
+    let mut unknown = legacy.clone();
+    unknown["bundle"]["future_field"] = json!("ignored");
+    assert_eq!(
+        SourceInventory::from_json(&unknown.to_string())
+            .unwrap()
+            .to_json(),
+        legacy.to_string()
+    );
+
+    for ordinal in [0, u64::MAX] {
+        let mut current = legacy.clone();
+        current["bundle"]["file_ordinal"] = json!(ordinal);
+        let decoded = SourceInventory::from_json(&current.to_string()).unwrap();
+        assert_eq!(decoded.to_json(), current.to_string());
+        let serialized: serde_json::Value = serde_json::from_str(&decoded.to_json()).unwrap();
+        assert_eq!(serialized["bundle"]["file_ordinal"], json!(ordinal));
+        let bundle = decoded.bundle().unwrap();
+        assert_eq!(bundle.file_ordinal(), Some(ordinal));
+        assert_eq!(*bundle, bundle.clone());
+        assert_ne!(
+            *bundle,
+            *SourceInventory::from_json(&legacy.to_string())
+                .unwrap()
+                .bundle()
+                .unwrap()
+        );
+    }
+
+    for bad in [
+        json!(null),
+        json!(-1),
+        json!(1.0),
+        json!(1.5),
+        json!("1"),
+        json!(true),
+        json!({}),
+        json!([]),
+    ] {
+        let mut current = legacy.clone();
+        current["bundle"]["file_ordinal"] = bad;
+        assert!(SourceInventory::from_json(&current.to_string()).is_err());
+    }
+    let overflow = legacy.to_string().replace(
+        "\"format\":\"eml\"",
+        "\"file_ordinal\":18446744073709551616,\"format\":\"eml\"",
+    );
+    assert_ne!(overflow, legacy.to_string());
+    assert!(SourceInventory::from_json(&overflow).is_err());
+
+    let mut plain = legacy;
+    plain["v"] = json!(1);
+    plain.as_object_mut().unwrap().remove("bundle");
+    let decoded = SourceInventory::from_json(&plain.to_string()).unwrap();
+    assert_eq!(decoded.to_json(), plain.to_string());
+    assert_eq!(
+        serde_json::from_str::<Value>(&decoded.to_json()).unwrap(),
+        plain
+    );
+}
+
+#[test]
 fn bundle_manifest_precedes_package_and_never_imports_plain() {
     let (scratch, res) = resources("bundle-pending");
     let parent = scratch.path().join("imports");
@@ -876,7 +952,7 @@ fn bundle_capture_and_parser_cancellation_remove_only_its_snapshot() {
 
 fn table_manifest(files: &str) -> String {
     format!(
-        r#"{{"messages":[],"files":{files},"ids_sha256":"{}","entries":0,"generation":1,"scope":{{"generation":1,"id":1,"kind":"mailbox"}},"destination":"/destination","format":"eml","job":"j","kind":"export-manifest","v":1}}"#,
+        r#"{{"messages":[],"files":{files},"ids_sha256":"{}","entries":0,"generation":1,"scope":{{"generation":1,"id":1,"kind":"mailbox"}},"destination":"/destination","format":"mboxrd","job":"j","kind":"export-manifest","v":1}}"#,
         "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     )
 }
@@ -913,10 +989,7 @@ fn message_rescans_cancel_and_preserve_other_snapshots() {
     let message = r##"{"v":1,"occurrence_id":1,"message_id":2,"account":{"id":"a","name":"a"},"mailbox":{"id":1,"name":"m"},"occurrence_state":"present","flags":{"seen":false,"flagged":false,"answered":false,"draft":false,"deleted":false},"keywords":["a","b"],"acquisition":null,"body_availability":"not_acquired","tags":[{"id":"a","name":"a","color_srgb":null},{"id":"b","name":"b","color_srgb":"#010203"},{"id":"c","name":"c","color_srgb":null}],"note":null,"file":null}"##;
     let manifest = table_messages(table_manifest("[]"), message, &[1]);
     fs::write(dir.join("sweetbriar-metadata.json"), &manifest).unwrap();
-    assert_eq!(
-        run(&res, std::slice::from_ref(&dir)).problems()[0].kind(),
-        ImportProblemKind::Unsupported
-    );
+    assert!(run(&res, std::slice::from_ref(&dir)).problems().is_empty());
     assert_eq!(snapshot_names(&scratch), before);
 
     let mut previous = 0;
@@ -981,7 +1054,7 @@ fn bundle_rejects_duplicate_tag_ids_across_sort_runs() {
     fs::write(dir.join("sweetbriar-metadata.json"), valid).unwrap();
     assert_eq!(
         run(&res, std::slice::from_ref(&dir)).problems()[0].kind(),
-        ImportProblemKind::Unsupported
+        ImportProblemKind::Failed
     );
     assert!(snapshot_names(&scratch).is_empty());
 
@@ -1105,10 +1178,7 @@ fn bundle_file_table_handles_large_names_and_many_entries() {
     fs::write(dir.join("sweetbriar-metadata.json"), table_manifest(&files)).unwrap();
     let inventory = run(&res, std::slice::from_ref(&dir));
     assert!(inventory.sources().is_empty());
-    assert_eq!(
-        inventory.problems()[0].kind(),
-        ImportProblemKind::Unsupported
-    );
+    assert_eq!(inventory.problems()[0].kind(), ImportProblemKind::Failed);
     let duplicate = format!(
         r#"[{{"name":"{long}","bytes":0,"records":0}},{{"name":"\u0061{}","bytes":0,"records":0}}]"#,
         &long[1..]
@@ -1144,10 +1214,84 @@ fn bundle_file_table_handles_large_names_and_many_entries() {
     .unwrap();
     let inventory = run(&res, &[dir]);
     assert!(inventory.sources().is_empty());
-    assert_eq!(
-        inventory.problems()[0].kind(),
-        ImportProblemKind::Unsupported
+    assert_eq!(inventory.problems()[0].kind(), ImportProblemKind::Failed);
+    assert!(snapshot_names(&scratch).is_empty());
+}
+
+#[test]
+fn bundle_matching_decodes_names_and_accepts_uppercase_extension() {
+    let (scratch, res) = resources("bundle-decoded-children");
+    let dir = scratch.path().join("bundle");
+    fs::create_dir(&dir).unwrap();
+    fs::write(dir.join("é😀.MBOX"), b"").unwrap();
+    fs::write(
+        dir.join("sweetbriar-metadata.json"),
+        table_manifest(r#"[{"name":"\u00e9\ud83d\ude00.MBOX","bytes":0,"records":0}]"#),
+    )
+    .unwrap();
+    let inventory = run(&res, std::slice::from_ref(&dir));
+    assert!(inventory.problems().is_empty());
+    assert_eq!(inventory.sources().len(), 1);
+    let snapshots: Vec<_> = inventory.sources()[0].snapshots().cloned().collect();
+    res.remove_import_sources(&snapshots).unwrap();
+
+    let long = format!("{}.mbox", "x".repeat(100_000));
+    fs::write(
+        dir.join("sweetbriar-metadata.json"),
+        table_manifest(&format!(r#"[{{"name":"{long}","bytes":0,"records":0}}]"#)),
+    )
+    .unwrap();
+    let inventory = run(&res, std::slice::from_ref(&dir));
+    let problem = inventory
+        .problems()
+        .iter()
+        .find(|p| p.path() == dir)
+        .unwrap();
+    assert!(problem.detail().contains("truncated"));
+    assert!(problem.detail().len() < 1200);
+    assert!(snapshot_names(&scratch).is_empty());
+}
+
+#[test]
+fn bundle_child_matching_scales_with_directory_size() {
+    let (scratch, res) = resources("bundle-child-scaling");
+    let dir = scratch.path().join("bundle");
+    fs::create_dir(&dir).unwrap();
+    let mut files = Vec::new();
+    for n in (0..512).rev() {
+        let name = format!("child-{n:04}.mbox");
+        fs::write(dir.join(&name), b"").unwrap();
+        files.push(format!(r#"{{"name":"{name}","bytes":0,"records":0}}"#));
+    }
+    let manifest = dir.join("sweetbriar-metadata.json");
+    fs::write(&manifest, table_manifest(&format!("[{}]", files.join(",")))).unwrap();
+    let mut reads = 0u64;
+    let outcome = res.inventory_import_sources(std::slice::from_ref(&dir), |event| {
+        if let ImportProgress::Scanning { path, .. } = event
+            && path == manifest
+        {
+            reads += 1;
+        }
+        ControlFlow::Continue(())
+    });
+    // Includes the relationship sort as well as the directory merge.
+    assert!(reads < 400_000, "{reads} manifest reads");
+    assert!(outcome.inventory().problems().is_empty());
+    assert_eq!(outcome.inventory().sources().len(), 512);
+    let mut snapshots: Vec<_> = outcome
+        .inventory()
+        .sources()
+        .iter()
+        .map(|source| source.snapshot().clone())
+        .collect();
+    snapshots.push(
+        outcome.inventory().sources()[0]
+            .bundle()
+            .unwrap()
+            .manifest()
+            .clone(),
     );
+    res.remove_import_sources(&snapshots).unwrap();
     assert!(snapshot_names(&scratch).is_empty());
 }
 
@@ -1167,7 +1311,7 @@ fn bundle_file_names_across_sort_runs_are_exact() {
     .unwrap();
     assert_eq!(
         run(&res, std::slice::from_ref(&dir)).problems()[0].kind(),
-        ImportProblemKind::Unsupported
+        ImportProblemKind::Failed
     );
     entries[256] = r#"{"name":"\u00e9\uD83D\uDE00","bytes":0,"records":0}"#.to_owned();
     fs::write(

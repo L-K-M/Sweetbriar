@@ -5,6 +5,7 @@ use std::io::{self, Read, Seek, SeekFrom};
 
 use sha2::{Digest, Sha256};
 
+use super::super::offset_sort::{SortEntry, SortKind};
 use super::{BundleFormat, FileTable, OffsetSort, Parser, invalid, name_chunk};
 
 enum Identity {
@@ -12,10 +13,20 @@ enum Identity {
     Mailbox,
 }
 
+#[cfg(test)]
 pub(in crate::import) fn validate_messages(
     reader: &mut (impl Read + Seek),
     table: &FileTable,
     scratch: &sb_store::ValidationScratch<'_>,
+) -> io::Result<()> {
+    validate_messages_with_children(reader, table, scratch, &mut |_, _, _, _, _| Ok(()))
+}
+
+pub(in crate::import) fn validate_messages_with_children<R: Read + Seek>(
+    reader: &mut R,
+    table: &FileTable,
+    scratch: &sb_store::ValidationScratch<'_>,
+    child: &mut impl FnMut(&mut R, u64, u64, u64, u64) -> io::Result<()>,
 ) -> io::Result<()> {
     let (start, end, count) = table.messages;
     if count != table.entries {
@@ -43,7 +54,172 @@ pub(in crate::import) fn validate_messages(
     if p.position != end || super::super::sha256_from_hex(&table.ids_hash) != Some(hash.into()) {
         return Err(invalid());
     }
-    unique_occurrences(reader, table, scratch)
+    unique_occurrences(reader, table, scratch)?;
+    validate_file_relationships(reader, table, scratch, child)
+}
+
+// The schema and occurrence passes have released both tapes before this pass.
+fn validate_file_relationships<R: Read + Seek>(
+    reader: &mut R,
+    table: &FileTable,
+    scratch: &sb_store::ValidationScratch<'_>,
+    child: &mut impl FnMut(&mut R, u64, u64, u64, u64) -> io::Result<()>,
+) -> io::Result<()> {
+    reader.seek(SeekFrom::Start(table.start + 1))?;
+    let mut p = Parser {
+        reader,
+        next: None,
+        capture: None,
+        position: table.start + 1,
+    };
+    let mut sorter = OffsetSort::new(scratch)?;
+    let mut compare = |p: &mut Parser<_>, a: SortEntry, b: SortEntry| {
+        Ok(p.compare(a.key, b.key)?.then(a.kind.cmp(&b.kind)))
+    };
+    for index in 0..table.count {
+        p.whitespace()?;
+        if index != 0 {
+            p.expect(b',')?;
+            p.whitespace()?;
+        }
+        let file = p.file_entry()?;
+        sorter.push_entry(
+            SortEntry {
+                key: file.start,
+                position: file.bytes,
+                extra: file.records,
+                ordinal: index,
+                kind: SortKind::Declaration,
+            },
+            &mut p,
+            &mut compare,
+        )?;
+    }
+    p.whitespace()?;
+    p.expect(b']')?;
+    if p.position != table.end {
+        return Err(invalid());
+    }
+
+    let (start, end, count) = table.messages;
+    p.restore(start + 1)?;
+    for index in 0..count {
+        p.whitespace()?;
+        if index != 0 {
+            p.expect(b',')?;
+            p.whitespace()?;
+        }
+        let mut name = None;
+        let mut occurrence = None;
+        let mut bytes = None;
+        p.object(|p, key| {
+            match key {
+                "file" => {
+                    p.nullable(|p| {
+                        name = Some(p.marked_string()?);
+                        Ok(())
+                    })?;
+                }
+                "occurrence_id" => occurrence = Some(p.integer::<i64>()?),
+                "acquisition" => {
+                    p.nullable(|p| {
+                        bytes = Some(p.acquisition()?);
+                        Ok(())
+                    })?;
+                }
+                _ => p.value(1)?,
+            }
+            Ok(())
+        })?;
+        if let Some(key) = name {
+            let bytes = bytes.ok_or_else(invalid)?;
+            if table.format == BundleFormat::Eml {
+                let expected = format!("{}.eml", occurrence.ok_or_else(invalid)?);
+                let resume = p.position;
+                let mut at = key;
+                let mut chars = ['\0'; 32];
+                let length = name_chunk(&mut p.reader, &mut at, &mut chars)?;
+                let matches =
+                    length < chars.len() && chars[..length].iter().copied().eq(expected.chars());
+                p.restore(resume)?;
+                if !matches {
+                    return Err(invalid());
+                }
+            }
+            sorter.push_entry(
+                SortEntry {
+                    key,
+                    position: bytes,
+                    extra: 0,
+                    ordinal: 0,
+                    kind: SortKind::Reference,
+                },
+                &mut p,
+                &mut compare,
+            )?;
+        }
+    }
+    p.whitespace()?;
+    p.expect(b']')?;
+    if p.position != end {
+        return Err(invalid());
+    }
+
+    let mut previous = None;
+    let mut declaration = None;
+    let mut references = 0u64;
+    let check_group = |declaration: Option<(u64, u64, u64)>, references: u64| -> io::Result<()> {
+        let (_, records, _) = declaration.ok_or_else(invalid)?;
+        if records != references || (table.format == BundleFormat::Eml && references != 1) {
+            return Err(invalid());
+        }
+        Ok(())
+    };
+    sorter.finish_entries(
+        &mut p,
+        &mut compare,
+        &mut |p| p.reader.stream_position().map(|_| ()),
+        |p, entry| {
+            if let Some(last) = previous
+                && p.compare(last, entry.key)? != Ordering::Equal
+            {
+                check_group(declaration, references)?;
+                let (bytes, records, ordinal) = declaration.ok_or_else(invalid)?;
+                let resume = p.position;
+                child(p.reader, last, bytes, records, ordinal)?;
+                p.restore(resume)?;
+                declaration = None;
+                references = 0;
+            }
+            match entry.kind {
+                SortKind::Declaration => {
+                    if declaration
+                        .replace((entry.position, entry.extra, entry.ordinal))
+                        .is_some()
+                    {
+                        return Err(invalid());
+                    }
+                }
+                SortKind::Reference => {
+                    references = references.checked_add(1).ok_or_else(invalid)?;
+                    if table.format == BundleFormat::Eml
+                        && declaration.ok_or_else(invalid)?.0 != entry.position
+                    {
+                        return Err(invalid());
+                    }
+                }
+                SortKind::Offset => return Err(invalid()),
+            }
+            previous = Some(entry.key);
+            Ok(())
+        },
+    )?;
+    if let Some(last) = previous {
+        check_group(declaration, references)?;
+        let (bytes, records, ordinal) = declaration.ok_or_else(invalid)?;
+        child(p.reader, last, bytes, records, ordinal)?;
+    }
+    Ok(())
 }
 
 // The schema pass has finished all tag sorts before this sorter takes the tapes.
@@ -551,6 +727,206 @@ mod tests {
 
     fn check(input: &str) -> io::Result<()> {
         check_with(input, true)
+    }
+
+    fn linked_manifest(count: usize, format: &str) -> serde_json::Value {
+        let ids = (0..count as i64).collect::<Vec<_>>();
+        let mut document: serde_json::Value = serde_json::from_str(&manifest(&ids, "")).unwrap();
+        document["format"] = format.into();
+        let mut files = Vec::new();
+        for (i, message) in document["messages"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .enumerate()
+        {
+            let name = if format == "eml" {
+                format!("{i}.eml")
+            } else {
+                format!("file-{i:04}")
+            };
+            files.push(serde_json::json!({"name": name, "bytes": 42, "records": 1}));
+            message["acquisition"] = serde_json::json!({"id":1,"sha256":"a".repeat(64),"bytes":42});
+            message["body_availability"] = "acquired".into();
+            message["file"] = name.into();
+            if format == "mboxrd" {
+                message["record_offset"] = 0.into();
+                message["encoded_bytes"] = 0.into();
+                message["original_bytes"] = 42.into();
+                message["framing_lf_added"] = false.into();
+            }
+        }
+        document["files"] = files.into();
+        document
+    }
+
+    #[test]
+    fn file_relationships_cover_sort_boundaries_and_hostile_names() {
+        for count in [0, 1, 255, 256, 257] {
+            let mut document = linked_manifest(0, "mboxrd");
+            document["files"] = (0..count)
+                .map(|n| serde_json::json!({"name": format!("{n:04}"), "bytes": 0, "records": 0}))
+                .collect::<Vec<_>>()
+                .into();
+            check(&document.to_string()).unwrap();
+        }
+        for format in ["eml", "mboxrd"] {
+            for count in [0, 1, 255, 256, 257] {
+                let document = linked_manifest(count, format);
+                check(&document.to_string()).unwrap();
+                if count == 257 {
+                    let mut unknown = document.clone();
+                    unknown["messages"][0]["file"] = "unknown".into();
+                    assert!(check(&unknown.to_string()).is_err(), "{format} {count}");
+                    let mut wrong_count = document.clone();
+                    wrong_count["files"][count - 1]["records"] = 2.into();
+                    assert!(check(&wrong_count.to_string()).is_err());
+                    let mut duplicate = document.clone();
+                    let first = duplicate["files"][0].clone();
+                    duplicate["files"].as_array_mut().unwrap().push(first);
+                    assert!(check(&duplicate.to_string()).is_err());
+                }
+            }
+        }
+        let mut unicode = linked_manifest(257, "mboxrd");
+        unicode["files"][0]["name"] = "é😀".into();
+        unicode["messages"][0]["file"] = "é😀".into();
+        let encoded = unicode
+            .to_string()
+            .replacen("é😀", r#"\u00e9\ud83d\ude00"#, 1);
+        check(&encoded).unwrap();
+        unicode["files"][256]["name"] = "é😀".into();
+        assert!(check(&unicode.to_string()).is_err());
+    }
+
+    #[test]
+    fn child_groups_keep_original_file_ordinals() {
+        let mut document = linked_manifest(777, "mboxrd");
+        document["files"].as_array_mut().unwrap().reverse();
+        let input = document.to_string();
+        let table = super::super::validate_envelope(input.as_bytes()).unwrap();
+        let tmp = sb_test_support::ScratchDir::new("child-ordinals");
+        let resources = crate::Resources::open(&tmp.path().join("store")).unwrap();
+        let scratch = resources.store.import_validation_scratch().unwrap();
+        let mut reader = io::Cursor::new(input.as_bytes());
+        let mut ordinals = Vec::new();
+        validate_file_relationships(&mut reader, &table, &scratch, &mut |_, _, _, _, ordinal| {
+            ordinals.push(ordinal);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(ordinals, (0..777).rev().collect::<Vec<_>>());
+        scratch.finish().unwrap();
+    }
+
+    #[test]
+    fn file_relationship_counts_and_eml_agreement() {
+        let base = linked_manifest(1, "eml");
+        for (field, value) in [
+            ("name", serde_json::json!("01.eml")),
+            ("bytes", 41.into()),
+            ("records", 0.into()),
+            ("records", 2.into()),
+        ] {
+            let mut bad = base.clone();
+            bad["files"][0][field] = value;
+            assert!(check(&bad.to_string()).is_err());
+        }
+        let mut bad = base.clone();
+        bad["messages"][0]["file"] = "01.eml".into();
+        bad["files"][0]["name"] = "01.eml".into();
+        assert!(check(&bad.to_string()).is_err());
+        let mut mbox = linked_manifest(2, "mboxrd");
+        mbox["messages"][1]["file"] = mbox["messages"][0]["file"].clone();
+        mbox["files"][0]["records"] = 2.into();
+        mbox["files"][1]["records"] = 0.into();
+        check(&mbox.to_string()).unwrap();
+        mbox["files"][1]["records"] = 1.into();
+        assert!(check(&mbox.to_string()).is_err());
+    }
+
+    #[test]
+    fn file_relationship_sort_scales_and_releases_scratch_on_failure() {
+        let input = linked_manifest(1024, "mboxrd").to_string();
+        let table = super::super::validate_envelope(input.as_bytes()).unwrap();
+        let tmp = sb_test_support::ScratchDir::new("file-relationship-scaling");
+        let resources = crate::Resources::open(&tmp.path().join("store")).unwrap();
+        let scratch = resources.store.import_validation_scratch().unwrap();
+        let mut reader = CountSeeks {
+            inner: io::Cursor::new(input.as_bytes()),
+            seeks: 0,
+            bytes: 0,
+        };
+        validate_file_relationships(&mut reader, &table, &scratch, &mut |_, _, _, _, _| Ok(()))
+            .unwrap();
+        assert!(reader.seeks < 150_000, "{} seeks", reader.seeks);
+        scratch.finish().unwrap();
+
+        // A failure or cancellation while consuming the grouped declarations
+        // must release the same scratch lease as a sort failure.
+        for kind in [io::ErrorKind::Other, io::ErrorKind::Interrupted] {
+            let scratch = resources.store.import_validation_scratch().unwrap();
+            let mut reader = io::Cursor::new(input.as_bytes());
+            let error =
+                validate_file_relationships(&mut reader, &table, &scratch, &mut |_, _, _, _, _| {
+                    Err(io::Error::new(kind, "child match stopped"))
+                })
+                .unwrap_err();
+            assert_eq!(error.kind(), kind);
+            drop(scratch);
+            assert_eq!(
+                std::fs::read_dir(tmp.path().join("store/objects/tmp/import-validation"))
+                    .unwrap()
+                    .count(),
+                0
+            );
+        }
+
+        struct FailAfter<R> {
+            inner: R,
+            remaining: usize,
+            kind: io::ErrorKind,
+        }
+        impl<R: Read> Read for FailAfter<R> {
+            fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+                if self.remaining == 0 {
+                    return Err(io::Error::new(self.kind, "injected"));
+                }
+                self.remaining -= 1;
+                self.inner.read(buf)
+            }
+        }
+        impl<R: Seek> Seek for FailAfter<R> {
+            fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+                self.inner.seek(pos)
+            }
+        }
+        for kind in [io::ErrorKind::Other, io::ErrorKind::Interrupted] {
+            let scratch = resources.store.import_validation_scratch().unwrap();
+            let mut reader = FailAfter {
+                inner: io::Cursor::new(input.as_bytes()),
+                remaining: 30_000,
+                kind,
+            };
+            assert_eq!(
+                validate_file_relationships(
+                    &mut reader,
+                    &table,
+                    &scratch,
+                    &mut |_, _, _, _, _| Ok(())
+                )
+                .unwrap_err()
+                .kind(),
+                kind
+            );
+            drop(scratch);
+            assert_eq!(
+                std::fs::read_dir(tmp.path().join("store/objects/tmp/import-validation"))
+                    .unwrap()
+                    .count(),
+                0
+            );
+        }
     }
 
     #[test]
