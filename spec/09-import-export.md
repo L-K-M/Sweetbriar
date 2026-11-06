@@ -66,6 +66,9 @@ user-granted permission path.
      snapshot reference and declared format — and its quoting is decided
      by the manifest, so the variant question is never asked for it. A
      bundle source never degrades to a plain import.
+     Relationship validation uses bounded, cancellable scratch (03) when
+     needed; it does not impose a manifest size cap. Scratch is disposable
+     and is never used as recovery evidence.
 2. **Ingest.** For each message, in source order:
    - extract the exact bytes, undoing the variant's `From ` quoting:
      mboxrd removes one `>` from every `>+From ` line; mboxo only turns
