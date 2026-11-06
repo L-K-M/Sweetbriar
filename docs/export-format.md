@@ -6,6 +6,10 @@ published entry. A directory without the manifest is not a finished
 export; a receipt or job state never claims a manifest that has not
 been published and size-verified.
 
+`sb-cli export` resolves a relative destination against your current
+working directory before starting the job. The stored destination is
+always absolute, including when the output directory does not exist yet.
+
 ## Output by format
 
 | `format` | Files | One file holds |

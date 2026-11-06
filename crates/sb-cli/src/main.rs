@@ -446,6 +446,15 @@ fn export(
     format: ExportFormat,
     destination: &str,
 ) -> Result<(), u8> {
+    // Persist an absolute identity, without requiring the output to exist.
+    let absolute_destination = std::path::absolute(destination).map_err(|error| {
+        eprintln!("sb-cli: cannot resolve the export destination: {error}");
+        ERROR_EXIT
+    })?;
+    let destination = absolute_destination.to_str().ok_or_else(|| {
+        eprintln!("sb-cli: the export destination must be a UTF-8 path");
+        ERROR_EXIT
+    })?;
     let scope = match scope {
         CliExportScope::Mailbox(mailbox_id) => {
             let window =
