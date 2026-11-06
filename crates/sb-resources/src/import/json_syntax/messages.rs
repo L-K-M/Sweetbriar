@@ -3,7 +3,7 @@
 use std::cmp::Ordering;
 use std::io::{self, Read, Seek, SeekFrom};
 
-use super::{BundleFormat, FileTable, Parser, invalid, name_chunk};
+use super::{BundleFormat, FileTable, OffsetSort, Parser, invalid, name_chunk};
 
 enum Identity {
     Account,
@@ -13,6 +13,7 @@ enum Identity {
 pub(in crate::import) fn validate_messages(
     reader: &mut (impl Read + Seek),
     table: &FileTable,
+    scratch: &sb_store::ValidationScratch<'_>,
 ) -> io::Result<()> {
     let (start, end, count) = table.messages;
     reader.seek(SeekFrom::Start(start + 1))?;
@@ -28,7 +29,7 @@ pub(in crate::import) fn validate_messages(
             p.expect(b',')?;
             p.whitespace()?;
         }
-        p.message(table.format)?;
+        p.message(table.format, scratch)?;
     }
     p.whitespace()?;
     p.expect(b']')?;
@@ -220,39 +221,42 @@ impl<R: Read + Seek> Parser<R> {
         Ok((id, name))
     }
 
-    fn tags(&mut self) -> io::Result<()> {
-        let first = self.position + 1;
-        let mut count = 0u64;
+    fn tags(&mut self, scratch: &sb_store::ValidationScratch<'_>) -> io::Result<()> {
+        let mut sorter = OffsetSort::new(scratch)?;
         let mut last_name = None;
         self.array(|p| {
             let (id, name) = p.tag()?;
-            let resume = p.position;
             if let Some(last) = last_name
                 && p.compare(last, name)? != Ordering::Less
             {
                 return Err(invalid());
             }
-            // Names are strictly ordered; IDs require a bounded rescan.
-            p.restore(first)?;
-            for index in 0..count {
-                p.whitespace()?;
-                if index != 0 {
-                    p.expect(b',')?;
-                    p.whitespace()?;
-                }
-                let (prior_id, _) = p.tag()?;
-                if p.compare(prior_id, id)? == Ordering::Equal {
-                    return Err(invalid());
-                }
-            }
-            p.restore(resume)?;
-            count = count.checked_add(1).ok_or_else(invalid)?;
+            sorter.push(id, p, &mut Self::compare)?;
             last_name = Some(name);
             Ok(())
-        })
+        })?;
+        let mut previous = None;
+        sorter.finish(
+            self,
+            &mut Self::compare,
+            &mut |p| p.reader.stream_position().map(|_| ()),
+            |p, id| {
+                if let Some(last) = previous
+                    && p.compare(last, id)? == Ordering::Equal
+                {
+                    return Err(invalid());
+                }
+                previous = Some(id);
+                Ok(())
+            },
+        )
     }
 
-    fn message(&mut self, format: BundleFormat) -> io::Result<()> {
+    fn message(
+        &mut self,
+        format: BundleFormat,
+        scratch: &sb_store::ValidationScratch<'_>,
+    ) -> io::Result<()> {
         const FIELDS: &[&str] = &[
             "v",
             "occurrence_id",
@@ -309,7 +313,7 @@ impl<R: Read + Seek> Parser<R> {
                     })?;
                 }
                 "body_availability" => availability = p.decoded(128)?,
-                "tags" => p.tags()?,
+                "tags" => p.tags(scratch)?,
                 "note" => {
                     p.nullable(|p| p.string())?;
                 }
@@ -340,5 +344,99 @@ impl<R: Read + Seek> Parser<R> {
             return Err(invalid());
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct CountSeeks<R> {
+        inner: R,
+        seeks: usize,
+    }
+
+    impl<R: Read> Read for CountSeeks<R> {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            self.inner.read(buf)
+        }
+    }
+
+    impl<R: Seek> Seek for CountSeeks<R> {
+        fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+            self.seeks += 1;
+            self.inner.seek(pos)
+        }
+    }
+
+    #[test]
+    fn tag_ids_sort_across_runs_and_reuse_the_scratch() {
+        let tmp = sb_test_support::ScratchDir::new("tag-sort-boundaries");
+        let resources = crate::Resources::open(&tmp.path().join("store")).unwrap();
+        let scratch = resources.store.import_validation_scratch().unwrap();
+        for count in [255, 256, 257, 777, 0, 1] {
+            let make_tags = |duplicate: bool| {
+                (0..count)
+                    .map(|n| {
+                        let id = if n == 0 {
+                            "é😀".to_string()
+                        } else if duplicate && n == count - 1 {
+                            r#"\u00e9\uD83D\uDE00"#.to_string()
+                        } else {
+                            format!("id{n:04}")
+                        };
+                        format!(r#"{{"id":"{id}","name":"{n:04}","color_srgb":null}}"#)
+                    })
+                    .collect::<Vec<_>>()
+                    .join(",")
+            };
+            for duplicate in [false, true] {
+                if duplicate && count < 2 {
+                    continue;
+                }
+                let input = format!("[{}],", make_tags(duplicate));
+                let mut parser = Parser {
+                    reader: io::Cursor::new(input.as_bytes()),
+                    next: None,
+                    capture: None,
+                    position: 0,
+                };
+                let result = parser.tags(&scratch);
+                assert_eq!(result.is_err(), duplicate, "count {count}");
+                if !duplicate {
+                    parser.expect(b',').unwrap();
+                } else {
+                    // A failed sort leaves its disposable tape for lease cleanup.
+                    scratch.remove(sb_store::ValidationTape::A).unwrap();
+                    scratch.remove(sb_store::ValidationTape::B).unwrap();
+                }
+            }
+        }
+        scratch.finish().unwrap();
+    }
+
+    #[test]
+    fn tag_validation_avoids_quadratic_rescans() {
+        let tags = (0..1024)
+            .map(|n| format!(r#"{{"id":"{n:04}","name":"{n:04}","color_srgb":null}}"#))
+            .collect::<Vec<_>>()
+            .join(",");
+        let input = format!("[{tags}]");
+        let mut reader = CountSeeks {
+            inner: io::Cursor::new(input.as_bytes()),
+            seeks: 0,
+        };
+        let mut parser = Parser {
+            reader: &mut reader,
+            next: None,
+            capture: None,
+            position: 0,
+        };
+        let tmp = sb_test_support::ScratchDir::new("tag-sort-scaling");
+        let resources = crate::Resources::open(&tmp.path().join("store")).unwrap();
+        let scratch = resources.store.import_validation_scratch().unwrap();
+        parser.tags(&scratch).unwrap();
+        scratch.finish().unwrap();
+        assert!(reader.seeks < 50_000, "{} seeks", reader.seeks);
     }
 }

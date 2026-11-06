@@ -934,6 +934,53 @@ fn message_rescans_cancel_and_preserve_other_snapshots() {
 }
 
 #[test]
+fn bundle_rejects_duplicate_tag_ids_across_sort_runs() {
+    let (scratch, res) = resources("bundle-tag-sort");
+    let dir = scratch.path().join("bundle");
+    fs::create_dir(&dir).unwrap();
+    let tags = (0..257)
+        .map(|n| {
+            let id = match n {
+                0 => "é😀".to_string(),
+                256 => r#"\u00e9\uD83D\uDE00"#.to_string(),
+                _ => format!("id{n:04}"),
+            };
+            format!(r#"{{"id":"{id}","name":"{n:04}","color_srgb":null}}"#)
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    let message = format!(
+        r#"{{"v":1,"occurrence_id":1,"message_id":2,"account":{{"id":"a","name":"a"}},"mailbox":{{"id":1,"name":"m"}},"occurrence_state":"present","flags":{{"seen":false,"flagged":false,"answered":false,"draft":false,"deleted":false}},"keywords":[],"acquisition":null,"body_availability":"not_acquired","tags":[{tags}],"note":null,"file":null}}"#
+    );
+    let valid_message = message.replace(r#"\u00e9\uD83D\uDE00"#, "unique");
+    let valid = table_manifest(r#"[{"name":"a.eml","bytes":0,"records":0}]"#).replace(
+        "\"messages\":[]",
+        &format!("\"messages\":[{valid_message},{valid_message}]"),
+    );
+    fs::write(dir.join("sweetbriar-metadata.json"), valid).unwrap();
+    assert_eq!(
+        run(&res, std::slice::from_ref(&dir)).problems()[0].kind(),
+        ImportProblemKind::Unsupported
+    );
+    assert!(snapshot_names(&scratch).is_empty());
+
+    let manifest = table_manifest("[]").replace(
+        "\"messages\":[]",
+        &format!("\"messages\":[{valid_message},{message}]"),
+    );
+    fs::write(dir.join("sweetbriar-metadata.json"), manifest).unwrap();
+    let inventory = run(&res, &[dir]);
+    assert_eq!(inventory.problems()[0].kind(), ImportProblemKind::Failed);
+    assert!(
+        inventory.problems()[0]
+            .detail()
+            .contains("invalid manifest JSON")
+    );
+    assert!(inventory.sources().is_empty());
+    assert!(snapshot_names(&scratch).is_empty());
+}
+
+#[test]
 fn bundle_file_table_scans_cancel_and_preserve_other_snapshots() {
     let (scratch, res) = resources("bundle-file-scans");
     let other = scratch.path().join("other.eml");
@@ -1079,6 +1126,36 @@ fn bundle_file_table_handles_large_names_and_many_entries() {
         ImportProblemKind::Unsupported
     );
     assert!(snapshot_names(&scratch).is_empty());
+}
+
+#[test]
+fn bundle_file_names_across_sort_runs_are_exact() {
+    let (scratch, res) = resources("bundle-sort-runs");
+    let dir = scratch.path().join("bundle");
+    fs::create_dir(&dir).unwrap();
+    let mut entries = (0..257)
+        .map(|n| format!(r#"{{"name":"file-{n:04}","bytes":0,"records":0}}"#))
+        .collect::<Vec<_>>();
+    entries[0] = r#"{"name":"é😀","bytes":0,"records":0}"#.to_owned();
+    fs::write(
+        dir.join("sweetbriar-metadata.json"),
+        table_manifest(&format!("[{}]", entries.join(","))),
+    )
+    .unwrap();
+    assert_eq!(
+        run(&res, std::slice::from_ref(&dir)).problems()[0].kind(),
+        ImportProblemKind::Unsupported
+    );
+    entries[256] = r#"{"name":"\u00e9\uD83D\uDE00","bytes":0,"records":0}"#.to_owned();
+    fs::write(
+        dir.join("sweetbriar-metadata.json"),
+        table_manifest(&format!("[{}]", entries.join(","))),
+    )
+    .unwrap();
+    assert_eq!(
+        run(&res, &[dir]).problems()[0].kind(),
+        ImportProblemKind::Failed
+    );
 }
 
 #[test]

@@ -136,8 +136,9 @@ impl Store {
     /// Publish a pinned snapshot as a verified, durable backup generation.
     /// Blocking; never call on the writer thread. A failure leaves the
     /// generation in progress for interrupted-generation recovery. Once
-    /// complete, retention runs before returning; its error is reported even
-    /// though the new generation may already be complete.
+    /// complete, retention runs before returning and preserves this generation
+    /// for the receipt. Its error is reported even though the new generation
+    /// may already be complete. Later retention applies the usual policy.
     pub fn complete_backup(
         &self,
         snapshot: crate::backups::BackupSnapshot,

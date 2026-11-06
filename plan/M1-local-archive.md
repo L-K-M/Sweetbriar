@@ -978,6 +978,14 @@ local drafts. No network yet.
     disposable bounded scratch with two fixed tapes and explicit cleanup,
     isolated concurrent leases and writable-open cleanup. This prerequisite
     does not add a manifest cap or implement relationship validation.
+  - **M1.7d1b1b2b1b Offset sorting prerequisite — M:** sort source offsets
+    in fixed-memory runs on the two validation tapes and use exact decoded
+    file-name comparison to replace quadratic file-table uniqueness scans.
+    Message relationships remain deferred to b2.
+  - **M1.7d1b1b2b1c Tag-ID sorting prerequisite — M:** reuse the bounded
+    offset sorter for exact local tag-ID uniqueness validation while retaining
+    manifest-order tag-name checks. This removes only quadratic local tag-ID
+    validation; it does not validate or admit global message relationships.
   - **M1.7d1b1b2b2 Manifest message relationships — L:** validate counts,
     ordered-ID digest, unique occurrence IDs, file references and EML
     agreement using bounded scans of the verified snapshot. Prove writer
@@ -1129,6 +1137,18 @@ local drafts. No network yet.
     authority and component-aware location rewriting. It cannot qualify or
     publish a staging directory. The caller must supply the verified source
     location and manifest metadata; this prerequisite does not validate them.
+  - **M1.8e3a1 Bounded inherited metadata reads (M):** bound SQLite values
+    while reading inherited generation identifiers and locations, before
+    allocating owned strings. Reject oversized metadata atomically without
+    leaving connection limits on unrelated archive rows. Preserve large
+    requests and checkpoints. Schema inspection bounds remain part of e3b's
+    qualification prerequisite; this step qualifies no staging directory.
+  - **M1.8e3a2 Inherited publication authority (M):** revoke copied
+    publication reservation pins in the quarantine transaction. Native proof
+    through a real completed backup and a fresh restored store must reject
+    an old handle for a missing attachment, preserve receipt replay and other
+    pin kinds, leave the source handle valid, and accept fresh publications.
+    Keep the change atomic with the other quarantine transformations.
   - **M1.8e3b Quarantined restore staging (L):** verify and copy the chosen
     generation into `<data root>.restoring-<inc>` with publication flushes,
     then run the staging quarantine transaction: new incarnation, all
@@ -1314,12 +1334,19 @@ local drafts. No network yet.
         typed errors and query cancellation, Rust codec and lifecycle
         tests, regenerated Swift bindings and `cargo xtask check-ffi`.
         Depends on M1.9b1.
+      - **M1.9b2a1 Shared draft attachment reservations (S):** share
+        the original publication reservation across copies of the service
+        attachment handle, so a retry can reach its durable receipt after
+        an accepted save or a dropped caller. A fresh command must not spend
+        the reservation twice. Cover replay and reservation ownership through
+        native APIs without moving validation outside the receipt transaction.
+        Depends on M1.9b2a.
       - **M1.9b2b Draft commands over FFI (L):** create, save, discard
         and attachment publication, FFI-owned input records and enums,
         the attachment-object handle, complete mappings, typed errors
         and command cancellation, Rust codec, error and lifecycle tests,
         regenerated Swift bindings and `cargo xtask check-ffi`. Depends
-        on M1.9b2a.
+        on M1.9b2a1.
       - **M1.9b2c Draft bridge (L):** the SweetbriarBridge owned draft
         model with load, save over the base revision, discard and the
         typed `Conflict` outcome M1.9c shows as keep-both, with Swift
