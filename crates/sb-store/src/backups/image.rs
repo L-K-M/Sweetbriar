@@ -244,8 +244,13 @@ impl Backups {
                     },
                 }
             });
-            conn.close()
-                .map_err(|(_, e)| classify(e, "close backup image"))?;
+            // Close errors only surface when inspection and the callback
+            // succeeded; a primary error must keep its own classification.
+            let inspected = inspected.and_then(|inspected| {
+                conn.close()
+                    .map_err(|(_, e)| classify(e, "close backup image"))?;
+                Ok(inspected)
+            });
             Ok(match inspected? {
                 image_inspect::Inspection::Inspected {
                     store_uuid,
