@@ -999,7 +999,7 @@ local drafts. No network yet.
     bundle sources and discard temporary snapshots, including on cancellation.
   - **M1.7d1b2a1 File ordinal propagation — S:** preserve each original
     zero-based manifest file ordinal through the bounded declaration sort
-    and child agreement. Keep bundle admission deferred and discard snapshots.
+    and child agreement. Bundle admission lands in M1.7d1b2b below.
   - **M1.7d1b2b Bundle inventory — L:** admit verified bundle sources and
     retain their shared manifest snapshot. Restore recursive nested discovery,
     sorted canonical deduplication and version-2 inventory lifecycle.
@@ -1156,17 +1156,34 @@ local drafts. No network yet.
     capability that opens descendants without following symlinks, including
     simulator and fault behavior. Acceptance: path replacement cannot redirect
     an open capability; links and traversal are refused; failures propagate.
-  - **M1.8e0b Isolated verifier image (L):** stream a confined source into a
-    private owned scratch image, checking its digest and length. SQLite reads
-    only that immutable completed image. Bound memory and disk use; implement
-    durable ownership, crash recovery, cancellation and retryable cleanup.
-    Acceptance: source changes cannot alter the inspected image; no source WAL
-    is read; all injected failures and crash cuts preserve unowned data; Linux,
-    macOS, simulator and fault behavior agree.
-  - **M1.8e1 Restore generation verification (M):** select a complete
-    generation recorded in the current store and verify its manifest, snapshot
-    and every object, including identity, size and hash mismatches. Staging
-    must verify the bytes it actually copies again.
+  - **M1.8e0b1 Retained-file SQLite reader (M):** provide a read-only
+    SQLite VFS backed only by an already-open reader. Refuse sidecars and
+    other file opens. Acceptance: replacing the pathname cannot change the
+    queried image; no source WAL is read; Linux and macOS tests pass.
+  - **M1.8e0b2 Verifier scratch ownership (L):** create and recover private
+    scratch with durable ownership and directory identity. Cleanup fails
+    closed and retains evidence when ownership cannot be proved, including
+    an unmarked directory after a crash; retry proven cleanup. Acceptance:
+    crash cuts and substitutions preserve unowned data, and proven leftovers
+    are recovered; simulator and fault behavior agree.
+  - **M1.8e0b3 Isolated verifier image (L):** stream a confined source into
+    owned scratch, checking digest and length, and inspect only the retained
+    completed image through the reader above. Bound disk, memory and SQLite
+    work, including cancellation. Acceptance: source changes cannot alter the
+    inspection; malformed schemas are bounded; cancellation never succeeds.
+  - **M1.8e1a Streaming manifest parser (L):** parse the format-1 manifest
+    incrementally with bounded memory and a streaming object sink. Reject
+    unknown or duplicate fields and invalid scalar values; validate Unicode,
+    integer overflow, truncation and cancellation. This does not verify a
+    generation or retain an object ledger.
+  - **M1.8e1b Verification ledger (L):** retain manifest object metadata in
+    bounded, owned scratch with duplicate detection and cleanup evidence.
+  - **M1.8e1c Snapshot reconciliation (L):** compare the isolated snapshot's
+    identity and referenced objects with the parsed manifest and ledger.
+  - **M1.8e1d Recorded generation verification (L):** select a complete
+    generation recorded in the current store, reconcile its manifest and
+    snapshot, and verify every object's size and hash. Staging must verify
+    the bytes it actually copies again.
   - **M1.8e2 Restore discovery and verified handoff (M):** discover and
     select complete external generations, including restore into a fresh data
     root, and hand a verified selection to staging. Do not assume a row in
@@ -1348,17 +1365,77 @@ local drafts. No network yet.
         the reservation twice. Cover replay and reservation ownership through
         native APIs without moving validation outside the receipt transaction.
         Depends on M1.9b2a.
-      - **M1.9b2b Draft commands over FFI (L):** create, save, discard
-        and attachment publication, FFI-owned input records and enums,
-        the attachment-object handle, complete mappings, typed errors
-        and command cancellation, Rust codec, error and lifecycle tests,
-        regenerated Swift bindings and `cargo xtask check-ffi`. Depends
-        on M1.9b2a1.
+      - **M1.9b2a2 Authorized attachment republication (M):** the
+        Store/Resources primitive
+        `republish_draft_attachment(draft_id, revision_id, reference)`,
+        the native prerequisite for M1.9c's keep-both and attachment
+        undo. Store validation proves the revision belongs to the draft
+        and the full stored `AttachmentRef` (hash, size, filename,
+        media type) is a member of that revision. An older immutable
+        revision is allowed after the head advances, and a noncurrent or
+        terminal source draft is allowed because the operation creates
+        a new publication rather than mutating that draft. The exact
+        source bytes are read through the protected verifying reader
+        and published through the real object store, returning a fresh
+        opaque `PublishedObject` with a distinct reservation per call.
+        No idempotency key or receipt; no new revision or draft row; the
+        following save spends the returned reservation once. Native
+        Resources tests prove the old-revision copy, distinct
+        reservations, a copy saved into a new draft, an unchanged
+        source, denial of a wrong draft, revision, hash, size, filename
+        or media type, missing and tampered sources, injected read,
+        write, sync and rename failures, and the native GC/read lifetime.
+        No Engine, Service, FFI, bridge or Compose surface; those stay
+        in the later artifacts. Depends on M1.9a1 and M1.8a1.
+      - **M1.9b2b Draft commands over FFI:** re-sized 2026-11-04: the
+        complete create/save/discard/publication artifact measures 1,922
+        gross changed lines including generated bindings and tests, over
+        the 1,450-line limit. Split by command below, preserving every
+        deliverable and acceptance check; publication moves ahead of
+        save because save spends its handle:
+        - **M1.9b2b1 Create and discard commands over FFI (M):**
+          FFI-owned `DraftSource` enum and `DraftCreated` record,
+          `create_draft` and `discard_draft` exports under a shell-made
+          idempotency key, explicit field mappings, typed errors and
+          the terminal-draft `Conflict`, receipt replay, a command
+          cancelled before it begins leaving its key free, a begun
+          command committing despite a cancel or a dropped caller,
+          Rust codec and lifecycle tests, regenerated Swift bindings
+          and `cargo xtask check-ffi`. Depends on M1.9b2a1.
+        - **M1.9b2b2 Attachment publication over FFI (M):** the
+          FFI-owned `DraftAttachmentPublish` input and the opaque
+          `DraftAttachmentObject` handle with its object-identity
+          getters, the bytes durably published under the data root, a
+          cancelled token publishing nothing, Rust codec and lifecycle
+          tests, regenerated Swift bindings and `cargo xtask
+          check-ffi`. Depends on M1.9b2b1.
+        - **M1.9b2b3 Save command over FFI (L):** FFI-owned
+          `DraftContent`, `DraftAttachment` and `DraftSaved` records
+          and enums, the `save_draft` export spending published
+          reservations, receipt lookup before replacement validation,
+          the same-base `Conflict`, publication-before-reference,
+          one-shot reservation ownership on fresh commands, retained
+          references matching the base, typed errors, command
+          cancellation/drop, Rust codec, error and lifecycle tests,
+          regenerated Swift bindings and `cargo xtask check-ffi`.
+          Depends on M1.9b2b2.
       - **M1.9b2c Draft bridge (L):** the SweetbriarBridge owned draft
         model with load, save over the base revision, discard and the
         typed `Conflict` outcome M1.9c shows as keep-both, with Swift
         Testing coverage of the codec, conflict and lifecycle. Depends on
-        M1.9b2b.
+        M1.9b2b3.
+      Split c again before adding the complete editor-state proof:
+      - **M1.9b2c1 Draft bridge APIs and codecs (L):** bridge-owned draft
+        records, complete generated mappings, query/create/publication/save/
+        discard adapters, original opaque attachment handles, and isolated
+        native endpoint, codec, error and lifecycle tests. No editor model.
+      - **M1.9b2c2 Revision-safe editor model (L):** load, reload, edit, save,
+        discard and stop over c1. Preserve the editor's base on dirty reload,
+        acknowledge saved attachment publications without spending them
+        again, preserve later typing and attachments, fence stale reads and
+        writes, and expose typed conflict without losing content. Include
+        deterministic concurrency and native attachment-save regression
+        tests. M1.9c still owns the compose window, autosave and keep-both UI.
       Re-size again if any artifact exceeds the limit.
   - **M1.9c Compose window (L):** the macOS compose window — token
     fields, subject, a plain or Markdown editor on the M0.11 probe's

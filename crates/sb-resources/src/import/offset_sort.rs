@@ -41,6 +41,9 @@ fn put(writer: &mut dyn sb_store::WriteFile, value: SortEntry) -> io::Result<()>
     Ok(())
 }
 
+// Tape files are ephemeral scratch space created and consumed within one
+// import run; the 48-byte record layout must match `put` and is not a
+// stable on-disk format.
 fn get(reader: &mut dyn sb_store::ReadFile, index: u64) -> io::Result<SortEntry> {
     let position = index
         .checked_mul(48)
@@ -69,15 +72,15 @@ fn get(reader: &mut dyn sb_store::ReadFile, index: u64) -> io::Result<SortEntry>
 }
 
 /// The caller supplies exact, fallible comparison and phase cancellation.
-pub(super) struct OffsetSort<'a> {
-    scratch: &'a ValidationScratch,
+pub(super) struct OffsetSort<'a, 's> {
+    scratch: &'a ValidationScratch<'s>,
     writer: Box<dyn sb_store::WriteFile>,
     run: Vec<SortEntry>,
     count: u64,
 }
 
-impl<'a> OffsetSort<'a> {
-    pub(super) fn new(scratch: &'a ValidationScratch) -> io::Result<Self> {
+impl<'a, 's> OffsetSort<'a, 's> {
+    pub(super) fn new(scratch: &'a ValidationScratch<'s>) -> io::Result<Self> {
         Ok(Self {
             scratch,
             writer: scratch.create(ValidationTape::A).map_err(scratch_error)?,
