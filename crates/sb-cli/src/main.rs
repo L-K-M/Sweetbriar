@@ -468,10 +468,18 @@ fn export(
     let started = block_on(core.start_export(&key, scope, format, destination.to_owned()))
         .map_err(error_exit)?;
     println!("job {}", started.job_id);
+    let mut last_state = None;
     let job = loop {
         let job = block_on(core.export_job(&started.job_id)).map_err(error_exit)?;
         if job.state.is_finished() {
             break job;
+        }
+        if last_state != Some(job.state) {
+            eprintln!(
+                "sb-cli: export {} is {:?} ({} capture chunks)",
+                started.job_id, job.state, job.captured_chunks
+            );
+            last_state = Some(job.state);
         }
         std::thread::sleep(IMPORT_POLL);
     };
