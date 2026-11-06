@@ -1223,7 +1223,7 @@ local drafts. No network yet.
     publish a staging directory. The caller must supply the verified source
     location and manifest metadata; this prerequisite does not validate them.
     Consolidated before publication (2026-11-06): the core and its bounded
-    metadata/publication-authority hardening total about 1,215 gross lines,
+    metadata/publication-authority hardening total about 1,435 gross lines,
     within one L artifact. The a1/a2 labels below remain acceptance clauses,
     not separate PRs; no obsolete unbounded intermediate is published.
     - **M1.8e3a1 Bounded inherited metadata reads:** bound SQLite values

@@ -3,16 +3,15 @@
 use crate::{StoreError, schema::classify};
 use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
 use rusqlite::limits::Limit;
-use rusqlite::{Connection, OptionalExtension, Params, Transaction, params};
+use rusqlite::{Connection, Params, Transaction, params};
 use std::path::{Component, Path};
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
 
-const FIRST_LOCATION: &str =
-    "SELECT generation_id, location FROM backup_generations ORDER BY generation_id LIMIT 1";
-const NEXT_LOCATION: &str = "SELECT generation_id, location FROM backup_generations WHERE generation_id > ?1 ORDER BY generation_id LIMIT 1";
+const LOCATION_SCAN: &str =
+    "SELECT rowid, generation_id, location FROM backup_generations NOT INDEXED ORDER BY rowid";
 // The image verifier uses the same bound. UUIDs and filesystem locations fit
 // comfortably; archive requests and attachment blobs are outside this read.
 const MAX_LOCATION_ROW_BYTES: i32 = 1_048_576;
@@ -114,34 +113,12 @@ fn execute(tx: &Transaction<'_>, sql: &str, args: impl Params) -> Result<usize, 
     Ok(changed)
 }
 
-fn read_location(
-    tx: &Transaction<'_>,
-    after: Option<&str>,
-) -> Result<Option<(String, String)>, StoreError> {
-    // Bound SQLite's materialization as well as Rust's String allocation.
-    // Restore the prior limit even on failure, before any archive-row update.
-    let previous = tx
-        .limit(Limit::SQLITE_LIMIT_LENGTH)
-        .map_err(|e| classify(e, "read SQLite value limit"))?;
-    tx.set_limit(
-        Limit::SQLITE_LIMIT_LENGTH,
-        previous.min(MAX_LOCATION_ROW_BYTES),
-    )
-    .map_err(|e| classify(e, "bound inherited backup metadata"))?;
-    let result = match after {
-        None => tx.query_row(FIRST_LOCATION, [], |row| Ok((row.get(0)?, row.get(1)?))),
-        Some(id) => tx.query_row(NEXT_LOCATION, [id], |row| Ok((row.get(0)?, row.get(1)?))),
+fn location_error(error: rusqlite::Error) -> StoreError {
+    if error.sqlite_error_code() == Some(rusqlite::ErrorCode::TooBig) {
+        StoreError::corrupt("oversized inherited backup metadata")
+    } else {
+        classify(error, "read backup location")
     }
-    .optional();
-    tx.set_limit(Limit::SQLITE_LIMIT_LENGTH, previous)
-        .map_err(|e| classify(e, "restore SQLite value limit"))?;
-    result.map_err(|error| {
-        if error.sqlite_error_code() == Some(rusqlite::ErrorCode::TooBig) {
-            StoreError::corrupt("oversized inherited backup metadata")
-        } else {
-            classify(error, "read backup location")
-        }
-    })
 }
 
 fn valid(path: &Path) -> bool {
@@ -152,6 +129,16 @@ fn valid(path: &Path) -> bool {
 }
 
 fn preflight_location_sizes(tx: &Transaction<'_>, cancel: &AtomicBool) -> Result<(), StoreError> {
+    let columns = tx
+        .prepare("SELECT * FROM backup_generations LIMIT 0")
+        .map_err(location_error)?;
+    if columns.column_names().iter().any(|name| {
+        ["rowid", "_rowid_", "oid"]
+            .iter()
+            .any(|alias| name.eq_ignore_ascii_case(alias))
+    }) {
+        return Err(StoreError::corrupt("inherited backup table shadows rowid"));
+    }
     // An index seek can allocate an entire key before SQLITE_LIMIT_LENGTH is
     // checked. Scan the canonical rowid table first. octet_length's SQLite
     // byte-length opcode reads record metadata without loading TEXT values;
@@ -184,25 +171,47 @@ fn preflight_location_sizes(tx: &Transaction<'_>, cancel: &AtomicBool) -> Result
 fn visit_locations(
     tx: &Transaction<'_>,
     cancel: &AtomicBool,
-    mut visit: impl FnMut(&str, &Path) -> Result<(), StoreError>,
+    mut visit: impl FnMut(i64, &str, &Path) -> Result<(), StoreError>,
 ) -> Result<(), StoreError> {
-    let mut after: Option<String> = None;
-    loop {
-        if cancel.load(Ordering::Acquire) {
-            return Err(StoreError::unavailable("restore quarantine cancelled"));
+    let previous = tx
+        .limit(Limit::SQLITE_LIMIT_LENGTH)
+        .map_err(location_error)?;
+    tx.set_limit(
+        Limit::SQLITE_LIMIT_LENGTH,
+        previous.min(MAX_LOCATION_ROW_BYTES),
+    )
+    .map_err(location_error)?;
+    let result = (|| {
+        // One physical cursor, not seeks through inherited index entries.
+        // The visitor changes locations only, keeping rowids stable.
+        let mut statement = tx.prepare(LOCATION_SCAN).map_err(location_error)?;
+        let mut rows = statement.query([]).map_err(location_error)?;
+        let mut last = None;
+        while let Some(row) = rows.next().map_err(location_error)? {
+            if cancel.load(Ordering::Acquire) {
+                return Err(StoreError::unavailable("restore quarantine cancelled"));
+            }
+            let rowid: i64 = row.get(0).map_err(location_error)?;
+            if last.is_some_and(|previous| rowid <= previous) {
+                return Err(StoreError::corrupt(
+                    "inherited location rowids are out of order",
+                ));
+            }
+            last = Some(rowid);
+            let id: String = row.get(1).map_err(location_error)?;
+            let location: String = row.get(2).map_err(location_error)?;
+            let path = Path::new(&location);
+            if !valid(path) {
+                return Err(StoreError::corrupt("invalid inherited backup location"));
+            }
+            visit(rowid, &id, path)?;
         }
-        // Finish each bounded read before allowing the visitor to update rows.
-        let Some((id, location)) = read_location(tx, after.as_deref())? else {
-            break;
-        };
-        let path = Path::new(&location);
-        if !valid(path) {
-            return Err(StoreError::corrupt("invalid inherited backup location"));
-        }
-        visit(&id, path)?;
-        after = Some(id);
-    }
-    Ok(())
+        Ok(())
+    })();
+    // Restore before unrelated archive-row updates, including on failure.
+    tx.set_limit(Limit::SQLITE_LIMIT_LENGTH, previous)
+        .map_err(location_error)?;
+    result
 }
 
 fn apply_inner(conn: &mut Connection, input: &Quarantine<'_>) -> Result<(), StoreError> {
@@ -235,7 +244,7 @@ fn apply_inner(conn: &mut Connection, input: &Quarantine<'_>) -> Result<(), Stor
     // them on every update so no row is silently deleted or left unchanged.
     let changed = execute(
         &tx,
-        "UPDATE OR ABORT store_meta SET value=?1 WHERE key='incarnation' AND value<>?1",
+        "UPDATE OR ABORT store_meta NOT INDEXED SET value=?1 WHERE key='incarnation' AND value<>?1",
         [input.new_incarnation],
     )?;
     if changed != 1 {
@@ -243,12 +252,12 @@ fn apply_inner(conn: &mut Connection, input: &Quarantine<'_>) -> Result<(), Stor
     }
     execute(
         &tx,
-        "DELETE FROM backup_ownership WHERE generation_id IN (SELECT generation_id FROM backup_generations WHERE state='in_progress')",
+        "DELETE FROM backup_ownership NOT INDEXED WHERE generation_id IN (SELECT generation_id FROM backup_generations NOT INDEXED WHERE state='in_progress')",
         [],
     )?;
     let changed = execute(
         &tx,
-        "UPDATE OR ABORT backup_generations SET state='complete', location=?2, manifest_sha256=?3, object_count=?4, total_bytes=?5, completed_at=?6 WHERE generation_id=?1 AND state='in_progress'",
+        "UPDATE OR ABORT backup_generations NOT INDEXED SET state='complete', location=?2, manifest_sha256=?3, object_count=?4, total_bytes=?5, completed_at=?6 WHERE generation_id=?1 AND state='in_progress'",
         params![
             input.generation,
             input.source_location,
@@ -265,27 +274,32 @@ fn apply_inner(conn: &mut Connection, input: &Quarantine<'_>) -> Result<(), Stor
     }
     // Rewrite with Path components, never string prefixes. The selected
     // source is supplied by the future capability-validating caller.
-    visit_locations(&tx, input.cancel, |id, location| {
+    visit_locations(&tx, input.cancel, |rowid, id, location| {
         if let Ok(relative) = location.strip_prefix(input.current_root) {
             let rewritten = input.preserved_root.join(relative);
             let text = rewritten
                 .to_str()
                 .ok_or_else(|| StoreError::corrupt("non-UTF-8 preserved backup location"))?;
-            execute(
+            // The rowid came from the physical cursor. An exact one-row/id
+            // match makes a corrupt seek fail closed without quadratic scans.
+            if execute(
                 &tx,
-                "UPDATE OR ABORT backup_generations SET location=?1 WHERE generation_id=?2",
-                params![text, id],
-            )?;
+                "UPDATE OR ABORT backup_generations NOT INDEXED SET location=?1 WHERE rowid=?2 AND generation_id=?3",
+                params![text, rowid, id],
+            )? != 1
+            {
+                return Err(StoreError::corrupt("inherited backup location changed"));
+            }
         }
         Ok(())
     })?;
     for sql in [
-        "UPDATE OR ABORT accounts SET state='paused'",
-        "UPDATE OR ABORT import_jobs SET state='failed' WHERE state IN ('inventory','awaiting_confirmation','running')",
-        "UPDATE OR ABORT intents SET state='quarantined', quarantine_reason='restore' WHERE state IN ('pending','in_flight','parked')",
-        "UPDATE OR ABORT send_attempts SET state='outcome_unknown' WHERE state IN ('held','queued','submitting')",
-        "UPDATE OR ABORT backup_generations SET state='failed' WHERE state='in_progress'",
-        "DELETE FROM object_pins WHERE pin_kind IN ('backup_in_progress','reservation')",
+        "UPDATE OR ABORT accounts NOT INDEXED SET state='paused'",
+        "UPDATE OR ABORT import_jobs NOT INDEXED SET state='failed' WHERE state IN ('inventory','awaiting_confirmation','running')",
+        "UPDATE OR ABORT intents NOT INDEXED SET state='quarantined', quarantine_reason='restore' WHERE state IN ('pending','in_flight','parked')",
+        "UPDATE OR ABORT send_attempts NOT INDEXED SET state='outcome_unknown' WHERE state IN ('held','queued','submitting')",
+        "UPDATE OR ABORT backup_generations NOT INDEXED SET state='failed' WHERE state='in_progress'",
+        "DELETE FROM object_pins NOT INDEXED WHERE pin_kind IN ('backup_in_progress','reservation')",
         "DELETE FROM backup_cleanup_pending",
         "DELETE FROM verifier_objects",
         "DELETE FROM verifier_scratch",
@@ -299,6 +313,8 @@ fn apply_inner(conn: &mut Connection, input: &Quarantine<'_>) -> Result<(), Stor
         .map_err(|e| classify(e, "commit restore quarantine"))
 }
 
+#[cfg(test)]
+mod corruption_tests;
 #[cfg(test)]
 mod reservation_tests;
 
@@ -781,19 +797,19 @@ mod tests {
     }
 
     #[test]
-    fn location_paging_uses_generation_index_range() {
+    fn location_scan_uses_physical_rowid_order() {
         let (_scratch, _paths, store) = open("restore-location-plan");
         let snapshot = store.backup_snapshot(BackupDestination::DataRoot).unwrap();
         let conn = Connection::open(snapshot.state_db()).unwrap();
         let plan: String = conn
-            .query_row(
-                &format!("EXPLAIN QUERY PLAN {NEXT_LOCATION}"),
-                ["cursor"],
-                |r| r.get(3),
-            )
+            .query_row(&format!("EXPLAIN QUERY PLAN {LOCATION_SCAN}"), [], |r| {
+                r.get(3)
+            })
             .unwrap();
         assert!(
-            plan.contains("SEARCH backup_generations") && plan.contains("generation_id>?"),
+            plan.contains("SCAN backup_generations")
+                && !plan.contains("USING INDEX")
+                && !plan.contains("TEMP B-TREE"),
             "{plan}"
         );
     }
