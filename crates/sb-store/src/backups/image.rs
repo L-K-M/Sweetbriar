@@ -121,10 +121,21 @@ impl Backups {
         if self.writer.is_writer_thread() {
             return Err(StoreError::internal("writer cannot inspect a backup"));
         }
-        let _guard = self
-            .image_lock
-            .try_lock()
-            .map_err(|_| StoreError::conflict("backup image verification is already running"))?;
+        if cancelled.load(std::sync::atomic::Ordering::Acquire) {
+            return Ok(BackupImageInspection::Cancelled);
+        }
+        let _guard = match self.image_lock.try_lock() {
+            Ok(guard) => guard,
+            Err(std::sync::TryLockError::WouldBlock) => {
+                return Err(StoreError::conflict(
+                    "backup image verification is already running",
+                ));
+            }
+            // A panic during inspection leaves durable scratch state that
+            // recover_images() reclaims on the next call, so a poisoned
+            // lock is safe to recover from.
+            Err(std::sync::TryLockError::Poisoned(e)) => e.into_inner(),
+        };
         let root = self
             .state_db
             .parent()
@@ -261,8 +272,13 @@ impl Backups {
                     },
                 }
             });
-            conn.close()
-                .map_err(|(_, e)| classify(e, "close backup image"))?;
+            // Close errors only surface when inspection and the callback
+            // succeeded; a primary error must keep its own classification.
+            let inspected = inspected.and_then(|inspected| {
+                conn.close()
+                    .map_err(|(_, e)| classify(e, "close backup image"))?;
+                Ok(inspected)
+            });
             Ok(match inspected? {
                 image_inspect::Inspection::Inspected {
                     store_uuid,
