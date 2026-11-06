@@ -4,16 +4,17 @@
 //! the stored receipt and a dropped caller cannot strand an accepted
 //! write — and the `drafts()`/`draft()` queries the sidebar's Drafts
 //! (local) list reads. Attachment bytes publish through
-//! [`Engine::publish_draft_attachment`] on the blocking pool, before
-//! the revision that references them: no file I/O ever runs inside a
-//! write transaction.
+//! [`Engine::publish_draft_attachment`], or republish from a stored
+//! revision through [`Engine::republish_draft_attachment`], on the
+//! blocking pool, before the revision that references them: no file
+//! I/O ever runs inside a write transaction.
 
 use std::sync::{Arc, Mutex};
 
 use sb_resources::{
-    ComposeFormat, DraftAttachment, DraftRecipient, DraftSource, DraftSummary, PublishedObject,
-    Receipt, RevisionInput, StoreError, StoredDraft, WritePriority, create_draft, discard_draft,
-    draft, drafts, run_once, save_draft,
+    AttachmentRef, ComposeFormat, DraftAttachment, DraftRecipient, DraftSource, DraftSummary,
+    PublishedObject, Receipt, RevisionInput, StoreError, StoredDraft, WritePriority, create_draft,
+    discard_draft, draft, drafts, run_once, save_draft,
 };
 
 use crate::engine::validate_idempotency_key;
@@ -313,6 +314,33 @@ impl Engine {
     ) -> Result<PublishedObject, EngineError> {
         self.read_through(move |resources| resources.publish_draft_attachment(bytes))
             .await
+    }
+
+    /// `republish_draft_attachment(draft_id, revision_id, reference)`
+    /// (spec/07): re-publish one stored attachment reference from an
+    /// exact immutable draft revision. An older revision, or one from
+    /// a terminal draft, remains valid because this creates a new
+    /// publication, never a mutation of that draft.
+    /// `reference` must match one of that revision's stored
+    /// attachments in hash, size, filename and media type: a revision
+    /// the draft does not have is `NotFound`, a reference that is not
+    /// a member is `Conflict`. The returned [`PublishedObject`]
+    /// carries a fresh reservation a following save spends once, and
+    /// each call reserves independently. No idempotency key and no
+    /// receipt: only the publication and its reservation are written.
+    /// Blocking file I/O on the blocking pool, like
+    /// [`Engine::publish_draft_attachment`].
+    pub async fn republish_draft_attachment(
+        &self,
+        draft_id: &str,
+        revision_id: &str,
+        reference: AttachmentRef,
+    ) -> Result<PublishedObject, EngineError> {
+        let (draft_id, revision_id) = (draft_id.to_owned(), revision_id.to_owned());
+        self.read_through(move |resources| {
+            resources.republish_draft_attachment(&draft_id, &revision_id, &reference)
+        })
+        .await
     }
 
     /// `drafts()` (spec/07): every `editing` or `queued` draft, newest

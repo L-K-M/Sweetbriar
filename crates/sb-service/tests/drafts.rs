@@ -912,3 +912,252 @@ fn a_dropped_callers_save_still_commits() {
     assert_eq!(replayed.receipt.command, "save_draft");
     block_on(core.shutdown());
 }
+
+/// The stored reference of a draft's current revision attachment.
+fn attachment_ref(core: &Core, draft_id: &str) -> DraftAttachmentRef {
+    block_on(core.draft(draft_id))
+        .unwrap()
+        .revision
+        .unwrap()
+        .attachments[0]
+        .clone()
+}
+
+/// `republish_draft_attachment` (spec/07): an older, noncurrent
+/// revision, including from a terminal `discarded` source, yields a fresh
+/// `DraftAttachmentObject` whose own reservation a fresh local
+/// draft's save spends. The handle maps the source attachment's full
+/// reference: object identity and length.
+#[test]
+fn republished_attachments_copy_from_old_and_terminal_sources() {
+    let scratch = ScratchDir::new("service-republish-copies");
+    let core = open(&scratch);
+    let source = create(&core, DraftSource::New);
+    let object = block_on(core.publish_draft_attachment(Cursor::new(b"the file"))).unwrap();
+    let sha = object.object_sha256.clone();
+    let saved = save(
+        &core,
+        &source.draft_id,
+        None,
+        with_attachment("first", object),
+    );
+    let reference = attachment_ref(&core, &source.draft_id);
+    assert_eq!(reference.object_sha256, sha);
+    assert_eq!(reference.filename, "file.txt");
+    assert_eq!(reference.media_type, "text/plain");
+    assert_eq!(reference.size, 8);
+
+    // The head advances; the saved revision is immutable history but
+    // still authorizes a copy.
+    save(
+        &core,
+        &source.draft_id,
+        Some(&saved.revision_id),
+        content("second"),
+    );
+    let from_old = block_on(core.republish_draft_attachment(
+        &source.draft_id,
+        &saved.revision_id,
+        reference.clone(),
+    ))
+    .unwrap();
+    assert_eq!(from_old.object_sha256, reference.object_sha256);
+    assert_eq!(from_old.byte_length, reference.size);
+
+    // A terminal source draft is just as valid a source: the copy is
+    // a new publication, never a mutation of that draft.
+    discard(&core, &source.draft_id);
+    let from_terminal = block_on(core.republish_draft_attachment(
+        &source.draft_id,
+        &saved.revision_id,
+        reference.clone(),
+    ))
+    .unwrap();
+    assert_eq!(from_terminal.object_sha256, reference.object_sha256);
+
+    // Each copy saves into its own fresh draft, and the stored
+    // reference equals the source's field for field.
+    for copy in [from_old, from_terminal] {
+        let target = create(&core, DraftSource::New);
+        save(&core, &target.draft_id, None, with_attachment("copy", copy));
+        assert_eq!(attachment_ref(&core, &target.draft_id), reference);
+    }
+
+    // The source draft's head and content never moved.
+    let source_after = block_on(core.draft(&source.draft_id)).unwrap();
+    assert_eq!(source_after.state, DraftState::Discarded);
+    let head = source_after.revision.unwrap();
+    assert_eq!(head.subject, "second");
+    assert!(head.attachments.is_empty());
+    block_on(core.shutdown());
+}
+
+/// Two republishes of one stored reference mint independent
+/// reservations: each handle saves once into its own draft, and a
+/// spent handle cannot fund another save under a fresh key: its clones
+/// share the same reservation.
+#[test]
+fn republished_handles_are_independently_spendable_once() {
+    let scratch = ScratchDir::new("service-republish-reservations");
+    let core = open(&scratch);
+    let source = create(&core, DraftSource::New);
+    let object = block_on(core.publish_draft_attachment(Cursor::new(b"same"))).unwrap();
+    let saved = save(
+        &core,
+        &source.draft_id,
+        None,
+        with_attachment("source", object),
+    );
+    let reference = attachment_ref(&core, &source.draft_id);
+
+    let first = block_on(core.republish_draft_attachment(
+        &source.draft_id,
+        &saved.revision_id,
+        reference.clone(),
+    ))
+    .unwrap();
+    let second =
+        block_on(core.republish_draft_attachment(&source.draft_id, &saved.revision_id, reference))
+            .unwrap();
+    assert_eq!(
+        (first.object_sha256.as_str(), first.byte_length),
+        (second.object_sha256.as_str(), second.byte_length),
+        "the same bytes carry one object identity"
+    );
+
+    // Each handle spends its own reservation into a fresh draft.
+    let first_draft = create(&core, DraftSource::New);
+    let first_save = save(
+        &core,
+        &first_draft.draft_id,
+        None,
+        with_attachment("first copy", first.clone()),
+    );
+    let second_draft = create(&core, DraftSource::New);
+    save(
+        &core,
+        &second_draft.draft_id,
+        None,
+        with_attachment("second copy", second),
+    );
+
+    // A clone of the spent handle is `Conflict` under a fresh save
+    // key — on the draft that spent it and on another draft alike.
+    let third = create(&core, DraftSource::New);
+    for (draft_id, base) in [
+        (
+            first_draft.draft_id.as_str(),
+            Some(first_save.revision_id.as_str()),
+        ),
+        (third.draft_id.as_str(), None),
+    ] {
+        match block_on(core.save_draft(
+            &core.new_idempotency_key(),
+            draft_id,
+            base,
+            with_attachment("spent", first.clone()),
+        )) {
+            Err(CoreError::Conflict { .. }) => {}
+            other => panic!("a spent republished handle must be Conflict: {other:?}"),
+        }
+    }
+    assert_eq!(
+        block_on(core.draft(&first_draft.draft_id))
+            .unwrap()
+            .revision
+            .unwrap()
+            .subject,
+        "first copy",
+        "the refused saves inserted a revision"
+    );
+    block_on(core.shutdown());
+}
+
+/// Wrong draft, revision or reference metadata denies typed
+/// (spec/07): a revision the draft does not have is `NotFound`, and a
+/// reference that is not a member of the revision is `Conflict`, whichever
+/// field differs.
+#[test]
+fn republish_denies_wrong_metadata_typed() {
+    let scratch = ScratchDir::new("service-republish-denied");
+    let core = open(&scratch);
+    let source = create(&core, DraftSource::New);
+    let object = block_on(core.publish_draft_attachment(Cursor::new(b"file"))).unwrap();
+    let saved = save(
+        &core,
+        &source.draft_id,
+        None,
+        with_attachment("source", object),
+    );
+    let reference = attachment_ref(&core, &source.draft_id);
+    let other = create(&core, DraftSource::New);
+    let other_saved = save(&core, &other.draft_id, None, content("other"));
+
+    for (draft_id, revision_id) in [
+        ("no-such-draft", saved.revision_id.as_str()),
+        (other.draft_id.as_str(), saved.revision_id.as_str()),
+        (source.draft_id.as_str(), other_saved.revision_id.as_str()),
+        (source.draft_id.as_str(), "never-saved"),
+    ] {
+        match block_on(core.republish_draft_attachment(draft_id, revision_id, reference.clone())) {
+            Err(CoreError::NotFound { .. }) => {}
+            result => panic!("{draft_id}/{revision_id} must be NotFound: {result:?}"),
+        }
+    }
+
+    let mut wrong_hash = reference.clone();
+    wrong_hash.object_sha256 = "0".repeat(64);
+    let mut wrong_size = reference.clone();
+    wrong_size.size += 1;
+    let mut wrong_filename = reference.clone();
+    wrong_filename.filename = "other.txt".to_owned();
+    let mut wrong_media_type = reference.clone();
+    wrong_media_type.media_type = "application/octet-stream".to_owned();
+    for wrong in [wrong_hash, wrong_size, wrong_filename, wrong_media_type] {
+        match block_on(core.republish_draft_attachment(
+            &source.draft_id,
+            &saved.revision_id,
+            wrong.clone(),
+        )) {
+            Err(CoreError::Conflict { .. }) => {}
+            result => panic!("{wrong:?} must be Conflict: {result:?}"),
+        }
+    }
+    block_on(core.shutdown());
+}
+
+/// A republish writes no draft, revision or receipt row: the source
+/// draft's state, head revision and timestamps read identically
+/// afterwards, and the source object's bytes never move.
+#[test]
+fn republish_leaves_its_source_untouched() {
+    let scratch = ScratchDir::new("service-republish-source");
+    let core = open(&scratch);
+    let source = create(&core, DraftSource::New);
+    let bytes = b"immutable source bytes".as_slice();
+    let object = block_on(core.publish_draft_attachment(Cursor::new(bytes))).unwrap();
+    let sha = object.object_sha256.clone();
+    let saved = save(
+        &core,
+        &source.draft_id,
+        None,
+        with_attachment("source", object),
+    );
+    let before = block_on(core.draft(&source.draft_id)).unwrap();
+    let reference = before.revision.as_ref().unwrap().attachments[0].clone();
+
+    let _copy =
+        block_on(core.republish_draft_attachment(&source.draft_id, &saved.revision_id, reference))
+            .unwrap();
+
+    let after = block_on(core.draft(&source.draft_id)).unwrap();
+    assert_eq!(after, before, "the republish mutated its source draft");
+    let object_path = scratch
+        .path()
+        .join("store/objects/sha256")
+        .join(&sha[..2])
+        .join(&sha[2..4])
+        .join(&sha);
+    assert_eq!(std::fs::read(&object_path).unwrap(), bytes);
+    block_on(core.shutdown());
+}
