@@ -924,7 +924,7 @@ fn attachment_ref(core: &Core, draft_id: &str) -> DraftAttachmentRef {
 }
 
 /// `republish_draft_attachment` (spec/07): an older, noncurrent
-/// revision — and a terminal `discarded` source — yields a fresh
+/// revision, including from a terminal `discarded` source, yields a fresh
 /// `DraftAttachmentObject` whose own reservation a fresh local
 /// draft's save spends. The handle maps the source attachment's full
 /// reference: object identity and length.
@@ -994,8 +994,8 @@ fn republished_attachments_copy_from_old_and_terminal_sources() {
 
 /// Two republishes of one stored reference mint independent
 /// reservations: each handle saves once into its own draft, and a
-/// spent handle — its clones share the one reservation — cannot fund
-/// another save under a fresh key.
+/// spent handle cannot fund another save under a fresh key: its clones
+/// share the same reservation.
 #[test]
 fn republished_handles_are_independently_spendable_once() {
     let scratch = ScratchDir::new("service-republish-reservations");
@@ -1075,8 +1075,8 @@ fn republished_handles_are_independently_spendable_once() {
 
 /// Wrong draft, revision or reference metadata denies typed
 /// (spec/07): a revision the draft does not have is `NotFound`, and a
-/// reference that is not a member of the revision — whichever field
-/// differs — is `Conflict`.
+/// reference that is not a member of the revision is `Conflict`, whichever
+/// field differs.
 #[test]
 fn republish_denies_wrong_metadata_typed() {
     let scratch = ScratchDir::new("service-republish-denied");
@@ -1127,7 +1127,7 @@ fn republish_denies_wrong_metadata_typed() {
 }
 
 /// A republish writes no draft, revision or receipt row: the source
-/// draft — state, head revision and timestamps — reads identical
+/// draft's state, head revision and timestamps read identically
 /// afterwards, and the source object's bytes never move.
 #[test]
 fn republish_leaves_its_source_untouched() {

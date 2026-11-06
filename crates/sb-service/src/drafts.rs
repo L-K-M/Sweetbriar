@@ -545,9 +545,9 @@ impl Core {
 
     /// `republish_draft_attachment(draft_id, revision_id, reference)`
     /// (spec/07): re-publish one stored attachment reference from an
-    /// exact immutable draft revision — an older, noncurrent or
-    /// terminal source revision is a valid source because this
-    /// creates a new publication, never a mutation of that draft.
+    /// exact immutable draft revision. An older revision, or one from
+    /// a terminal draft, remains valid because this creates a new
+    /// publication, never a mutation of that draft.
     /// `reference` must match one of that revision's stored
     /// attachments in hash, size, filename and media type: a revision
     /// the draft does not have is `NotFound`, a reference that is not
