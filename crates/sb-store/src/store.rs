@@ -167,6 +167,10 @@ impl Store {
     }
 
     /// Verify a recorded complete generation at the time of this call.
+    /// An absent generation, database, manifest or object is `NotFound`; an
+    /// unfinished/failed generation is `Conflict`, not store damage.
+    /// Malformed manifests and incomplete metadata on a complete row
+    /// are `Corrupt`; filesystem failures retain their native I/O kind.
     /// A same-UID process can still mutate it; this is not an immutable
     /// restore handoff. Restore staging must verify the bytes it copies again.
     pub fn verify_recorded_backup(

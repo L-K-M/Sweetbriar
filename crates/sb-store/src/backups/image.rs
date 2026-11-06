@@ -225,7 +225,7 @@ impl Backups {
                         | io::ErrorKind::InvalidInput
                         | io::ErrorKind::NotADirectory
                 ));
-                io_error(e)
+                source_open_error(e, "backup database image")
             })?;
             let mut output = scratch.create(Path::new(SNAPSHOT_FILE)).map_err(io_error)?;
             let mut hash = Sha256::new();
@@ -323,9 +323,6 @@ impl Backups {
                     conn.close()
                         .map_err(|(_, e)| classify(e, "close backup image"))?;
                     status.closed.set(true);
-                    if invalid_metadata {
-                        status.source_invalid.set(true);
-                    }
                     Ok(inspected)
                 }
                 Err(error) => {
@@ -335,6 +332,9 @@ impl Backups {
                     // failure stays skippable.
                     let _ = conn.close();
                     status.closed.set(true);
+                    if invalid_metadata {
+                        status.source_invalid.set(true);
+                    }
                     Err(error)
                 }
             };

@@ -60,6 +60,16 @@ const PIN_KIND: &str = "backup_in_progress";
 const SNAPSHOT_FILE: &str = "state.sqlite";
 const OWNER_FILE: &str = ".sweetbriar-owner";
 
+// A missing required source file is an absent entity, not transient I/O.
+// Scratch/environment failures keep their ordinary typed I/O path.
+fn source_open_error(error: io::Error, what: impl Into<String>) -> StoreError {
+    if error.kind() == io::ErrorKind::NotFound {
+        StoreError::not_found(what)
+    } else {
+        StoreError::unavailable_io(format!("backup source I/O failed: {error}"), error.kind())
+    }
+}
+
 /// Source pages one `sqlite3_backup_step` copies at most: bounded so
 /// other reader work interleaves, large enough that calls don't
 /// dominate the copy (64 pages ≈ 256 KiB at 4 KiB pages).

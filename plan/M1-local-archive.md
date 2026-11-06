@@ -1213,10 +1213,13 @@ local drafts. No network yet.
   - **M1.8e2a Confined streaming enumeration (M):** enumerate child names
     through a retained directory capability with bounded memory, early stop,
     and propagated I/O errors. Cover native, simulator and fault adapters.
-  - **M1.8e2b Restore discovery and verified handoff (M):** discover and
+  - **M1.8e2b Restore discovery and verified handoff (L):** discover and
     select complete external generations, including restore into a fresh data
     root, and hand a verified selection to staging. Do not assume a row in
     the current store. Verify the actual copied bytes again during staging.
+    Recalibrated before integration fixes on 2026-11-06: the artifact
+    measured 880 gross changed lines including provenance/cleanup tests,
+    within L's 1,450-line limit rather than M's 800-line estimate.
   - **M1.8e3a Quarantine transaction prerequisite (L):** implement and test
     the atomic staging-database transformation, including inherited cleanup
     authority and component-aware location rewriting. It cannot qualify or
