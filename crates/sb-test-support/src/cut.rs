@@ -164,6 +164,10 @@ impl Fs for CutFs {
         }))
     }
 
+    fn open_no_follow(&self, path: &Path) -> std::io::Result<Box<dyn sb_types::fs::ReadFile>> {
+        self.trip();
+        self.inner.open_no_follow(path)
+    }
     fn create(&self, path: &Path) -> std::io::Result<Box<dyn WriteFile>> {
         self.trip();
         let inner = self.inner.create(path)?;

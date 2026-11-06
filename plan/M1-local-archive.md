@@ -970,16 +970,70 @@ local drafts. No network yet.
     entry's shape, counts and unique safe decoded name. Preserve the table's
     byte range and count across cancellable scans of one verified snapshot.
     Valid bundles remain unsupported and their snapshots are discarded.
-  - **M1.7d1b1b2b Manifest message validation — L:** validate message schemas,
-    references and format-specific fields using the verified file table.
-    Prove writer manifests, hostile tokens and cleanup before bundle inventory.
-  - **M1.7d1b2 Bundle file agreement and inventory — L:** check every declared
-    direct child's kind, byte length and record count independently before
-    ingest, report missing or disagreeing files without suppressing valid
-    siblings, and retain the shared manifest snapshot while any bundle source
-    references it. Preserve sorted canonical discovery, alias deduplication,
-    cancellation cleanup and real EML/mboxrd exporter proof.
-  - **M1.7d2 Manifest-verified ingest — L:** each bundle record's
+  - **M1.7d1b1b2b1 Manifest message schemas — L:** validate exact message
+    schemas, availability, spans and local keyword and tag invariants. Keep
+    bundles unsupported and discard their snapshots; global relationships
+    remain unchecked and cannot admit a source.
+  - **M1.7d1b1b2b1a Validation scratch lease — M:** add Store-owned,
+    disposable bounded scratch with two fixed tapes and explicit cleanup,
+    isolated concurrent leases and writable-open cleanup. This prerequisite
+    does not add a manifest cap or implement relationship validation.
+  - **M1.7d1b1b2b1b Offset sorting prerequisite — M:** sort source offsets
+    in fixed-memory runs on the two validation tapes and use exact decoded
+    file-name comparison to replace quadratic file-table uniqueness scans.
+    Message relationships remain deferred to b2.
+  - **M1.7d1b1b2b1c Tag-ID sorting prerequisite — M:** reuse the bounded
+    offset sorter for exact local tag-ID uniqueness validation while retaining
+    manifest-order tag-name checks. This removes only quadratic local tag-ID
+    validation; it does not validate or admit global message relationships.
+  - **M1.7d1b1b2b2a Occurrence relationships — M:** validate the message
+    count, ordered occurrence-ID digest and global occurrence-ID uniqueness
+    with bounded scans and scratch. Keep bundle admission deferred.
+  - **M1.7d1b1b2b2b File relationships — M:** validate file references,
+    record counts and EML agreement using bounded scans of the verified
+    snapshot. Prove writer manifests, hostile tokens and cleanup before
+    bundle inventory.
+  - **M1.7d1b2a Bundle child agreement — L:** check each direct child's kind,
+    captured byte length and record count independently, reporting missing,
+    unlisted or disagreeing files without suppressing sibling checks. Refuse
+    bundle sources and discard temporary snapshots, including on cancellation.
+  - **M1.7d1b2a1 File ordinal propagation — S:** preserve each original
+    zero-based manifest file ordinal through the bounded declaration sort
+    and child agreement. Bundle admission lands in M1.7d1b2b below.
+  - **M1.7d1b2b Bundle inventory — L:** admit verified bundle sources and
+    retain their shared manifest snapshot. Restore recursive nested discovery,
+    sorted canonical deduplication and version-2 inventory lifecycle.
+  - **M1.7d2 split:** retain all d2 deliverables and acceptance below; each
+    artifact, including its native proof, fits 1,450 gross changed lines.
+    The Store workspace is separated from the Resources proof because the
+    latter needs simultaneous output files and two reusable sort tapes, as
+    well as native random-access, fault and scaling tests.
+  - **M1.7d2a Proof workspace — S:** extend the existing disposable Store
+    validation lease with fixed descriptor, index-spool and dense-lookup file
+    identities, distinct from the two sort tapes. Prove exclusive creation,
+    lease isolation, coexistence, reuse and cleanup. This creates no index,
+    changes no snapshot contract and enables no acquisition publication.
+  - **M1.7d2b Manifest descriptor proof — L:** in Resources, verify one
+    captured manifest once and run its bounded validation passes. Stream
+    grouped fixed-record descriptors and `(original file ordinal, start,
+    count)` rows to workspace files; reuse the released sort tapes to sort
+    those rows numerically and emit dense fixed-size lookup slots. Freeze all
+    needed framing fields and full-width source message offsets and original
+    ordinals, preserving message order within each file. Close the verified
+    manifest handle after production. A scoped native consumer must access
+    arbitrary files without manifest rescans and reject invalid identity,
+    ordinal, range or truncation; legacy missing ordinals fail safely or use
+    bounded name lookup. Prove at least 257 EML files, interleaved mbox rows,
+    shuffled access, read counts, cancellation, faults, cleanup and bounded
+    handles. This proof is scoped to one manifest and publishes nothing.
+  - **M1.7d2c Job integration and verified ingest — L:** consume those
+    proofs in the real import job without changing source order. A bounded
+    job-level registry can retain snapshot identities and disposable proof
+    references on disk, open one scoped proof at a time, and reopen its fixed
+    outputs for interleaved sources; it must bind every lookup to the
+    verified snapshot identity and avoid unbounded handles or memory. Define
+    and test the lifecycle, cancellation and failed-source evidence before
+    publication. Each bundle record's
     boundary, framing, original length and SHA-256 are verified before
     its bytes publish; only the declared framing LF is removed; the
     framing identity joins replay. Native imports of c's bundles
@@ -1260,7 +1314,115 @@ local drafts. No network yet.
       (an acknowledged save is its receipt). Depends on M1.9a1.
   - **M1.9b Drafts service and FFI (L):** owned Service DTOs, FFI
     exports, regenerated bindings and the SweetbriarBridge model over a,
-    with receipts and lifecycle proof.
+    with receipts and lifecycle proof. Re-sized 2026-11-02: the complete
+    artifact estimates well over the 1,450-line limit (the Service
+    surface alone measures ~1,000 gross changed lines including its
+    tests, and the FFI exports, bindings and bridge roughly double
+    that). Split below with every deliverable and acceptance check
+    assigned.
+    - **M1.9b1 Drafts service (L):** the Service-owned draft DTOs —
+      `DraftSource`, `ComposeFormat`, `DraftState`, `AttemptState`,
+      `DraftRecipient`, `DraftAttachmentRef`, `LiveAttempt`,
+      `DraftRevision`, `Draft`, `DraftSummary`, `DraftCreated`,
+      `DraftSaved`, and the `DraftAttachmentObject`/`DraftAttachment`/
+      `DraftContent` save inputs — with explicit Engine mapping, and
+      `Core`'s `create_draft`, `save_draft`, `discard_draft`,
+      `drafts()`, `draft()` and `publish_draft_attachment`. The Service
+      tests prove the DTO crossing, receipt replay, the same-base
+      `Conflict`, the publication ordering, the NULL route, the
+      live-attempt refusal, reopen durability and a dropped caller's
+      commit through shutdown. No FFI, bindings or bridge. Depends on
+      M1.9a2.
+    - **M1.9b2 Drafts FFI and bridge:** re-sized 2026-11-04 using the
+      existing import FFI commits as a generator measurement: the job
+      query added 690 Swift binding lines and the commands added 363,
+      alongside 320 and 272 gross Rust lines respectively. Drafts has
+      both a full revision vocabulary and commands, plus an owned Swift
+      model and tests, so split it into:
+      - **M1.9b2a Draft queries over FFI (L):** FFI-owned query records
+        and enums, field-by-field mappings, `drafts()` and `draft()`,
+        typed errors and query cancellation, Rust codec and lifecycle
+        tests, regenerated Swift bindings and `cargo xtask check-ffi`.
+        Depends on M1.9b1.
+      - **M1.9b2a1 Shared draft attachment reservations (S):** share
+        the original publication reservation across copies of the service
+        attachment handle, so a retry can reach its durable receipt after
+        an accepted save or a dropped caller. A fresh command must not spend
+        the reservation twice. Cover replay and reservation ownership through
+        native APIs without moving validation outside the receipt transaction.
+        Depends on M1.9b2a.
+      - **M1.9b2a2 Authorized attachment republication (M):** the
+        Store/Resources primitive
+        `republish_draft_attachment(draft_id, revision_id, reference)`,
+        the native prerequisite for M1.9c's keep-both and attachment
+        undo. Store validation proves the revision belongs to the draft
+        and the full stored `AttachmentRef` (hash, size, filename,
+        media type) is a member of that revision. An older immutable
+        revision is allowed after the head advances, and a noncurrent or
+        terminal source draft is allowed because the operation creates
+        a new publication rather than mutating that draft. The exact
+        source bytes are read through the protected verifying reader
+        and published through the real object store, returning a fresh
+        opaque `PublishedObject` with a distinct reservation per call.
+        No idempotency key or receipt; no new revision or draft row; the
+        following save spends the returned reservation once. Native
+        Resources tests prove the old-revision copy, distinct
+        reservations, a copy saved into a new draft, an unchanged
+        source, denial of a wrong draft, revision, hash, size, filename
+        or media type, missing and tampered sources, injected read,
+        write, sync and rename failures, and the native GC/read lifetime.
+        No Engine, Service, FFI, bridge or Compose surface; those stay
+        in the later artifacts. Depends on M1.9a1 and M1.8a1.
+      - **M1.9b2b Draft commands over FFI:** re-sized 2026-11-04: the
+        complete create/save/discard/publication artifact measures 1,922
+        gross changed lines including generated bindings and tests, over
+        the 1,450-line limit. Split by command below, preserving every
+        deliverable and acceptance check; publication moves ahead of
+        save because save spends its handle:
+        - **M1.9b2b1 Create and discard commands over FFI (M):**
+          FFI-owned `DraftSource` enum and `DraftCreated` record,
+          `create_draft` and `discard_draft` exports under a shell-made
+          idempotency key, explicit field mappings, typed errors and
+          the terminal-draft `Conflict`, receipt replay, a command
+          cancelled before it begins leaving its key free, a begun
+          command committing despite a cancel or a dropped caller,
+          Rust codec and lifecycle tests, regenerated Swift bindings
+          and `cargo xtask check-ffi`. Depends on M1.9b2a1.
+        - **M1.9b2b2 Attachment publication over FFI (M):** the
+          FFI-owned `DraftAttachmentPublish` input and the opaque
+          `DraftAttachmentObject` handle with its object-identity
+          getters, the bytes durably published under the data root, a
+          cancelled token publishing nothing, Rust codec and lifecycle
+          tests, regenerated Swift bindings and `cargo xtask
+          check-ffi`. Depends on M1.9b2b1.
+        - **M1.9b2b3 Save command over FFI (L):** FFI-owned
+          `DraftContent`, `DraftAttachment` and `DraftSaved` records
+          and enums, the `save_draft` export spending published
+          reservations, receipt lookup before replacement validation,
+          the same-base `Conflict`, publication-before-reference,
+          one-shot reservation ownership on fresh commands, retained
+          references matching the base, typed errors, command
+          cancellation/drop, Rust codec, error and lifecycle tests,
+          regenerated Swift bindings and `cargo xtask check-ffi`.
+          Depends on M1.9b2b2.
+      - **M1.9b2c Draft bridge (L):** the SweetbriarBridge owned draft
+        model with load, save over the base revision, discard and the
+        typed `Conflict` outcome M1.9c shows as keep-both, with Swift
+        Testing coverage of the codec, conflict and lifecycle. Depends on
+        M1.9b2b3.
+      Split c again before adding the complete editor-state proof:
+      - **M1.9b2c1 Draft bridge APIs and codecs (L):** bridge-owned draft
+        records, complete generated mappings, query/create/publication/save/
+        discard adapters, original opaque attachment handles, and isolated
+        native endpoint, codec, error and lifecycle tests. No editor model.
+      - **M1.9b2c2 Revision-safe editor model (L):** load, reload, edit, save,
+        discard and stop over c1. Preserve the editor's base on dirty reload,
+        acknowledge saved attachment publications without spending them
+        again, preserve later typing and attachments, fence stale reads and
+        writes, and expose typed conflict without losing content. Include
+        deterministic concurrency and native attachment-save regression
+        tests. M1.9c still owns the compose window, autosave and keep-both UI.
+      Re-size again if any artifact exceeds the limit.
   - **M1.9c Compose window (L):** the macOS compose window — token
     fields, subject, a plain or Markdown editor on the M0.11 probe's
     TextKit 2 view, autosave after 1.5 s, "Saved" only after the
@@ -1329,10 +1491,19 @@ local drafts. No network yet.
   - **M1.10d2 Command FFI and bridge — L:** setter SDK and bridge consume
     c/d1, with receipts, typed errors, replay/drop/lifecycle proof and
     regenerated bindings.
-  - **M1.10e App appearance — L:** sidebar monograms, mixed-account row
-    rails and Settings swatches/Custom through the bridge. Tests cover
-    duplicate initials, actual light/dark/selected surfaces, accessibility
-    and updates across open windows. Color never replaces native selection.
+  - **M1.10e App appearance — L:** split before implementation to keep each
+    complete artifact below 1,450 gross lines. All consume the bridge APIs:
+    - **M1.10e1 Sidebar appearance — L:** share a committed appearance
+      subscription across open windows and draw sidebar account monograms.
+      Test duplicate initials, distinguishing accessibility labels, light,
+      dark and high-contrast rendering, and updates across open windows.
+    - **M1.10e2 List appearance — L:** after e1, draw mixed-account row
+      rails and monograms in both AppKit and SwiftUI. Test actual light,
+      dark and selected surfaces, accessibility, and updates across open
+      windows. Account color never replaces native selection colors.
+    - **M1.10e3 Appearance settings — L:** after e1, add Settings → Accounts
+      → Appearance swatches and Custom through bridge setters. Test failure
+      and conflict handling and committed updates across open windows.
   - **M1.10f Qualification — M:** colors survive the real M1.8 backup and
     restore APIs, and the owner's rendered contrast/accessibility checks
     are recorded. Pure token tests do not substitute for these checks.

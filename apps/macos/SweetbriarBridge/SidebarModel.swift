@@ -36,6 +36,12 @@ public final class SidebarModel {
         public var id: String
         public var title: String
         public var entries: [Entry]
+
+        public init(id: String, title: String, entries: [Entry]) {
+            self.id = id
+            self.title = title
+            self.entries = entries
+        }
     }
 
     /// One row under a heading.

@@ -79,6 +79,8 @@ impl<'a, R: Read, C: FnMut() -> io::Result<()>> Reader<'a, R, C> {
         }
     }
 
+    // Called from `peek`, i.e. roughly once per input byte. Keep the closure
+    // cheap (an atomic load) and free of blocking work.
     pub(super) fn check_cancel(&mut self) -> io::Result<()> {
         (self.cancel)()
     }
@@ -87,7 +89,14 @@ impl<'a, R: Read, C: FnMut() -> io::Result<()>> Reader<'a, R, C> {
         self.check_cancel()?;
         if self.position == self.filled && !self.eof {
             // Preserve the actual reader error, including custom error payloads.
-            self.filled = self.input.read(&mut self.buffer)?;
+            // `Interrupted` is non-fatal per the `Read` contract, so retry it.
+            self.filled = loop {
+                match self.input.read(&mut self.buffer) {
+                    Ok(filled) => break filled,
+                    Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                    Err(e) => return Err(e),
+                }
+            };
             self.position = 0;
             self.eof = self.filled == 0;
         }
@@ -112,7 +121,8 @@ impl<'a, R: Read, C: FnMut() -> io::Result<()>> Reader<'a, R, C> {
 
     pub(super) fn whitespace(&mut self) -> io::Result<()> {
         while matches!(self.peek()?, Some(b' ' | b'\n' | b'\r' | b'\t')) {
-            self.take()?;
+            // `peek` already guaranteed `position < filled`.
+            self.position += 1;
         }
         Ok(())
     }
