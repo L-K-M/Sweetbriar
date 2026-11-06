@@ -48,9 +48,9 @@ pub enum RegistryFile {
     Header,
 }
 
-/// A private disposable workspace owned by its caller.
-pub struct ValidationScratch {
-    fs: Arc<dyn Fs>,
+/// A private disposable workspace borrowed from an open store.
+pub struct ValidationScratch<'a> {
+    owner: &'a ScratchOwner,
     dir: PathBuf,
     finished: bool,
 }
@@ -81,7 +81,7 @@ impl ScratchOwner {
             .map_err(|e| error("remove", &root, e))
     }
 
-    pub(crate) fn lease(&self) -> Result<ValidationScratch, StoreError> {
+    pub(crate) fn lease(&self) -> Result<ValidationScratch<'_>, StoreError> {
         let _guard = self
             .setup
             .lock()
@@ -107,7 +107,7 @@ impl ScratchOwner {
             match self.fs.create_private_dir(&dir) {
                 Ok(()) => {
                     return Ok(ValidationScratch {
-                        fs: Arc::clone(&self.fs),
+                        owner: self,
                         dir,
                         finished: false,
                     });
@@ -122,7 +122,7 @@ impl ScratchOwner {
     }
 }
 
-impl ValidationScratch {
+impl ValidationScratch<'_> {
     fn path(&self, tape: ValidationTape) -> PathBuf {
         self.dir.join(match tape {
             ValidationTape::A => "a",
@@ -149,14 +149,16 @@ impl ValidationScratch {
     /// Create an empty tape exclusively. The writer exposes checked writes and sync.
     pub fn create(&self, tape: ValidationTape) -> Result<Box<dyn WriteFile>, StoreError> {
         let path = self.path(tape);
-        self.fs
+        self.owner
+            .fs
             .create(&path)
             .map_err(|e| error("create tape", &path, e))
     }
     /// Open an existing tape for reading and seeking.
     pub fn open(&self, tape: ValidationTape) -> Result<Box<dyn ReadFile>, StoreError> {
         let path = self.path(tape);
-        self.fs
+        self.owner
+            .fs
             .open_no_follow(&path)
             .map_err(|e| error("open tape", &path, e))
     }
@@ -167,14 +169,16 @@ impl ValidationScratch {
     /// Create a fixed proof file exclusively within this lease.
     pub fn create_file(&self, file: ValidationFile) -> Result<Box<dyn WriteFile>, StoreError> {
         let path = self.file_path(file);
-        self.fs
+        self.owner
+            .fs
             .create(&path)
             .map_err(|e| error("create file", &path, e))
     }
     /// Open a fixed proof file for reading and seeking, without following links.
     pub fn open_file(&self, file: ValidationFile) -> Result<Box<dyn ReadFile>, StoreError> {
         let path = self.file_path(file);
-        self.fs
+        self.owner
+            .fs
             .open_no_follow(&path)
             .map_err(|e| error("open file", &path, e))
     }
@@ -185,7 +189,8 @@ impl ValidationScratch {
     /// Create one snapshot's private registry namespace exclusively.
     pub fn create_registry_dir(&self, snapshot: &ImportSourceSnapshot) -> Result<(), StoreError> {
         let dir = self.registry_dir(snapshot);
-        self.fs
+        self.owner
+            .fs
             .create_private_dir(&dir)
             .map_err(|e| error("create registry dir", &dir, e))
     }
@@ -196,7 +201,8 @@ impl ValidationScratch {
         file: RegistryFile,
     ) -> Result<Box<dyn WriteFile>, StoreError> {
         let path = self.registry_file_path(snapshot, file);
-        self.fs
+        self.owner
+            .fs
             .create(&path)
             .map_err(|e| error("create registry file", &path, e))
     }
@@ -207,21 +213,22 @@ impl ValidationScratch {
         file: RegistryFile,
     ) -> Result<Box<dyn ReadFile>, StoreError> {
         let path = self.registry_file_path(snapshot, file);
-        self.fs
+        self.owner
+            .fs
             .open_no_follow(&path)
             .map_err(|e| error("open registry file", &path, e))
     }
     /// Remove a snapshot's registry namespace, treating an absent one as removed.
     pub fn remove_registry_dir(&self, snapshot: &ImportSourceSnapshot) -> Result<(), StoreError> {
         let dir = self.registry_dir(snapshot);
-        match self.fs.remove_dir_all(&dir) {
+        match self.owner.fs.remove_dir_all(&dir) {
             Ok(()) => Ok(()),
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
             Err(e) => Err(error("remove registry dir", &dir, e)),
         }
     }
     fn remove_path(&self, path: &Path) -> Result<(), StoreError> {
-        match self.fs.remove(path) {
+        match self.owner.fs.remove(path) {
             Ok(()) => Ok(()),
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
             Err(e) => Err(error("remove file", path, e)),
@@ -229,17 +236,18 @@ impl ValidationScratch {
     }
     /// Remove the workspace explicitly, reporting cleanup failure.
     pub fn finish(mut self) -> Result<(), StoreError> {
-        self.fs
+        self.owner
+            .fs
             .remove_dir_all(&self.dir)
             .map_err(|e| error("remove", &self.dir, e))?;
         self.finished = true;
         Ok(())
     }
 }
-impl Drop for ValidationScratch {
+impl Drop for ValidationScratch<'_> {
     fn drop(&mut self) {
         if !self.finished {
-            let _ = self.fs.remove_dir_all(&self.dir);
+            let _ = self.owner.fs.remove_dir_all(&self.dir);
         }
     }
 }
@@ -334,7 +342,8 @@ mod tests {
         for op in [FsOp::Create, FsOp::Open, FsOp::RemoveDirAll, FsOp::SyncFile] {
             let tmp = ScratchDir::new("validation-registry-fault");
             let fs = Arc::new(FaultFs::new(real_fs(), op, 1, FaultKind::Eio));
-            let lease = owner(tmp.path(), fs).lease().unwrap();
+            let owner = owner(tmp.path(), fs);
+            let lease = owner.lease().unwrap();
             let snapshot = registry_snapshot('c');
             lease.create_registry_dir(&snapshot).unwrap();
             let file = RegistryFile::Descriptors;
@@ -494,7 +503,10 @@ mod tests {
             let file = ValidationFile::Descriptors;
             match op {
                 FsOp::Create => assert!(lease.create_file(file).is_err()),
-                FsOp::Open => assert!(lease.open_file(file).is_err()),
+                FsOp::Open => {
+                    lease.create_file(file).unwrap();
+                    assert!(lease.open_file(file).is_err());
+                }
                 FsOp::Remove => assert!(lease.remove_file(file).is_err()),
                 FsOp::SyncFile => assert!(lease.create_file(file).unwrap().sync_all().is_err()),
                 _ => unreachable!(),

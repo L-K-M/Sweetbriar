@@ -95,7 +95,7 @@ pub struct Store {
 
 impl Store {
     /// Lease disposable workspace for bounded import validation.
-    pub fn import_validation_scratch(&self) -> Result<crate::ValidationScratch, StoreError> {
+    pub fn import_validation_scratch(&self) -> Result<crate::ValidationScratch<'_>, StoreError> {
         self.validation_scratch.lease()
     }
     /// The store's object store (spec/03): publishing objects through
@@ -149,6 +149,21 @@ impl Store {
             ));
         }
         self.backups.complete(snapshot)
+    }
+
+    /// Inspect a private copy authenticated against a verified manifest.
+    /// The supplied digest and length must come from that manifest. A same-UID
+    /// process holding a writable descriptor can still change the image.
+    pub fn inspect_backup_image(
+        &self,
+        generation: &Path,
+        sha256: [u8; 32],
+        bytes: u64,
+        cancelled: &std::sync::atomic::AtomicBool,
+        progress: impl FnMut(u64) -> std::ops::ControlFlow<()>,
+    ) -> Result<crate::BackupImageInspection, StoreError> {
+        self.backups
+            .inspect_image(generation, sha256, bytes, cancelled, progress)
     }
 
     /// Stream a full capture through bounded writer turns. Blocking;
@@ -461,6 +476,10 @@ pub(crate) fn open_with(
     run_migrations(&mut conn, seams, migrations)?;
     // Finish startup writes before the writer's asynchronous idle checkpoint.
     crate::objects::expire_reservations(&mut conn, seams.clock().now())?;
+    let schema_version = read_user_version(&conn)?;
+    if schema_version >= 23 {
+        crate::backups::recover_scratch(&conn, fs, paths.recovery(), schema_version >= 24)?;
+    }
     // The readers first, from the same constructor (spec/03): if one
     // fails, the writer connection still doesn't checkpoint on close.
     let readers = Readers::open(paths.state_db(), reader_pragmas)?;

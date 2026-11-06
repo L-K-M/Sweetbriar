@@ -124,7 +124,7 @@ struct FileName {
 fn validate_file_names(
     reader: &mut (impl Read + Seek),
     table: &FileTable,
-    scratch: &sb_store::ValidationScratch,
+    scratch: &sb_store::ValidationScratch<'_>,
 ) -> io::Result<()> {
     let mut sorter = OffsetSort::new(scratch)?;
     let mut offset = table.start + 1;

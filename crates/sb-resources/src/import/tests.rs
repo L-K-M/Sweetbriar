@@ -832,9 +832,8 @@ fn source_json_v2_preserves_optional_file_ordinal() {
         current["bundle"]["file_ordinal"] = json!(ordinal);
         let decoded = SourceInventory::from_json(&current.to_string()).unwrap();
         assert_eq!(decoded.to_json(), current.to_string());
-        assert!(decoded.to_json().starts_with(&format!(
-            "{{\"bundle\":{{\"file_ordinal\":{ordinal},\"format\":\"eml\",\"manifest\":"
-        )));
+        let serialized: serde_json::Value = serde_json::from_str(&decoded.to_json()).unwrap();
+        assert_eq!(serialized["bundle"]["file_ordinal"], json!(ordinal));
         let bundle = decoded.bundle().unwrap();
         assert_eq!(bundle.file_ordinal(), Some(ordinal));
         assert_eq!(*bundle, bundle.clone());
