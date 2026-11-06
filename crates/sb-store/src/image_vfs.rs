@@ -15,6 +15,14 @@ type Reader = Arc<Mutex<Box<dyn ReadFile>>>;
 thread_local! {
     static OPENING: RefCell<Option<(String, Reader)>> = const { RefCell::new(None) };
 }
+#[cfg(test)]
+thread_local! {
+    static CLOSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+#[cfg(test)]
+pub(crate) fn closes_on_this_thread() -> usize {
+    CLOSES.with(std::cell::Cell::get)
+}
 static NEXT_ID: AtomicU64 = AtomicU64::new(0);
 static REGISTERED: OnceLock<c_int> = OnceLock::new();
 const NAME: &CStr = c"sweetbriar-image";
@@ -155,6 +163,8 @@ unsafe extern "C" fn close(file: *mut ffi::sqlite3_file) -> c_int {
     // SAFETY: xOpen initialized this pointer and SQLite calls xClose once.
     std::panic::catch_unwind(|| unsafe {
         drop(Box::from_raw((*file.cast::<ImageFile>()).reader));
+        #[cfg(test)]
+        CLOSES.with(|count| count.set(count.get() + 1));
     })
     .map_or(ffi::SQLITE_IOERR_CLOSE, |()| ffi::SQLITE_OK)
 }
