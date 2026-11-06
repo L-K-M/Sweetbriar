@@ -433,6 +433,68 @@ impl Store {
         drop(lease);
         marker.and(readers_closed).and(writer_closed)
     }
+
+    /// Close the store for a restore swap (spec/03 "Restore" step 4):
+    /// the same ordered teardown as `close`, except the sibling
+    /// `<root>.lock` lease and the backups coordinator stay held in the
+    /// returned `StoreLease`, so no second process can open the store
+    /// while the data root is renamed out from under the lock path.
+    /// Every connection to the live database is closed before the swap.
+    pub fn close_for_restore(self) -> Result<StoreLease, StoreError> {
+        let Self {
+            readers,
+            writer,
+            activation,
+            objects,
+            source_snapshots,
+            import_reports,
+            validation_scratch,
+            backups,
+            lease,
+            clock,
+        } = self;
+        let marker = record_clean_shutdown(&writer, clock.as_ref());
+        let readers_closed = readers.close();
+        let writer_closed = writer.close();
+        drop(activation);
+        drop(objects);
+        drop(source_snapshots);
+        drop(import_reports);
+        drop(validation_scratch);
+        marker.and(readers_closed).and(writer_closed)?;
+        Ok(StoreLease { backups, lease })
+    }
+}
+
+/// A closed store still holding its ownership lease (spec/03): the
+/// caller swaps a qualified [`RestoreStage`] into the data-root place
+/// through it, then drops it to release the lock. The lock path is a
+/// sibling of the root and survives the root's rename.
+pub struct StoreLease {
+    backups: crate::backups::Backups,
+    #[allow(dead_code)]
+    lease: Box<dyn Lease>,
+}
+
+impl StoreLease {
+    /// Swap a qualified restore stage into this store's data-root
+    /// place: write the pending marker, rename the live root to
+    /// `<root>.preserved-<incarnation>`, rename the staging root to the
+    /// root, flush the parent and remove the marker. A failure leaves
+    /// the marker for the next open's recovery.
+    pub fn swap_restore(
+        &self,
+        stage: crate::backups::RestoreStage,
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> Result<(), StoreError> {
+        self.backups.swap_restore_stage(stage, cancel)
+    }
+}
+
+impl std::fmt::Debug for StoreLease {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("StoreLease")
+    }
 }
 
 /// The store is shared as `Arc<Store>` by many tasks (spec/01); prove
@@ -536,6 +598,9 @@ pub(crate) fn open_with(
     create_missing_ancestors(fs, paths)?;
     let lease = take_lease(fs, paths.lock_file())?;
     // From here on an early return drops `lease`, releasing the lock.
+    // A restore swap interrupted by a crash resolves before anything
+    // else: an empty root is never created over a pending marker.
+    crate::backups::handle_restore_marker(fs, paths.data_root())?;
     ensure_layout(fs, paths)?;
     examine_existing(fs, paths, pinned, migrations)?;
     crate::validation_scratch::ScratchOwner::cleanup(fs, paths.objects_tmp())?;
@@ -745,7 +810,9 @@ pub(crate) fn open_read_only_with(
     let paths = &resolve_root(fs, paths)?;
     check_location(fs, paths.data_root())?;
     let lease = take_lease(fs, paths.lock_file())?;
-    // Again under the lease: it may have changed meanwhile.
+    // Again under the lease: it may have changed meanwhile. A stale
+    // restore marker resolves here too; a missing root stays NotFound.
+    crate::backups::handle_restore_marker(fs, paths.data_root())?;
     require_existing(fs, paths)?;
     examine_read_only(fs, paths, pinned, migrations)?;
     let readers = Readers::open(paths.state_db(), reader_pragmas)?;

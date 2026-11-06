@@ -172,6 +172,12 @@ pub struct RestoreStage {
     manifest_sha256: String,
     source_location: PathBuf,
     preserved_root: PathBuf,
+    /// The live incarnation the preserved-root suffix was derived from;
+    /// the swap rechecks the staged derivation before renaming.
+    pub(crate) live_incarnation: String,
+    /// The coordinator token the stage was qualified under; the swap
+    /// refuses a capability carried into another coordinator.
+    pub(crate) coordinator: Arc<()>,
     /// The lease qualification moved out of the prepared stage; held so
     /// an unswapped qualified stage keeps backup operations exclusive.
     #[allow(dead_code)]
@@ -575,7 +581,7 @@ fn valid_absolute(path: &Path) -> bool {
 
 /// A sibling name derived from `root`'s final component:
 /// `<name><suffix><id>`, sharing `root`'s parent.
-fn sibling_name(root: &Path, suffix: &str, id: &str) -> OsString {
+pub(crate) fn sibling_name(root: &Path, suffix: &str, id: &str) -> OsString {
     let mut name = root
         .file_name()
         .expect("a data root always has a final name")
@@ -1187,6 +1193,8 @@ impl Backups {
             manifest_sha256: stage.manifest_sha256,
             source_location: stage.source_location,
             preserved_root: stage.preserved_root,
+            live_incarnation: stage.live_incarnation,
+            coordinator: stage.coordinator,
             operation: stage.operation,
         })
     }

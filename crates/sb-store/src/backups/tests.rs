@@ -5297,24 +5297,29 @@ fn stage_schema_allocation_child() {
     );
 }
 
-/// Every after-restore row state of a qualified stage (spec/03 step 3).
+/// Every after-restore row state of a qualified root (spec/03 step 3).
+/// Takes paths and ids rather than the stage so a swapped-in live root
+/// verifies the same way.
 fn assert_quarantined_stage(
-    stage: &crate::RestoreStage,
+    root: &Path,
+    incarnation: &str,
+    manifest_sha256: &str,
+    generation_id: &str,
     metadata: &crate::RestoreMetadata,
     expected_location: &Path,
     expected_inherited_inside: &Path,
 ) {
-    assert_eq!(stage.manifest_sha256(), to_hex(&metadata.manifest_sha256));
-    let conn = Connection::open(stage.path().join("state.sqlite")).unwrap();
+    assert_eq!(manifest_sha256, to_hex(&metadata.manifest_sha256));
+    let conn = Connection::open(root.join("state.sqlite")).unwrap();
     conn.execute_batch("PRAGMA query_only=ON").unwrap();
-    let incarnation: String = conn
+    let live_incarnation: String = conn
         .query_row(
             "SELECT value FROM store_meta WHERE key='incarnation'",
             [],
             |r| r.get(0),
         )
         .unwrap();
-    assert_eq!(incarnation, stage.incarnation());
+    assert_eq!(live_incarnation, incarnation);
     let active: i64 = conn
         .query_row(
             "SELECT count(*) FROM accounts WHERE state<>'paused'",
@@ -5402,7 +5407,7 @@ fn assert_quarantined_stage(
         .query_row(
             "SELECT state,location,manifest_sha256,object_count,total_bytes,completed_at
              FROM backup_generations WHERE generation_id=?1",
-            [stage.generation_id()],
+            [generation_id],
             |r| {
                 Ok((
                     r.get(0)?,
@@ -5520,7 +5525,10 @@ fn staging_qualifies_an_internal_generation() {
         format!("store.preserved-{}", source.live_incarnation())
     );
     assert_quarantined_stage(
-        &stage,
+        stage.path(),
+        stage.incarnation(),
+        stage.manifest_sha256(),
+        stage.generation_id(),
         &source.metadata,
         &expected_location,
         &expected_inherited_inside,
@@ -5581,7 +5589,10 @@ fn qualifying_an_external_generation_into_a_fresh_store() {
         .data_root()
         .join("backups/11111111-1111-4111-8111-111111111111");
     assert_quarantined_stage(
-        &stage,
+        stage.path(),
+        stage.incarnation(),
+        stage.manifest_sha256(),
+        stage.generation_id(),
         &source.metadata,
         source.receipt.location(),
         &inherited_inside,
@@ -5785,7 +5796,10 @@ fn qualification_pre_and_post_inspect_cancellation() {
         })
         .unwrap();
     assert_quarantined_stage(
-        &stage,
+        stage.path(),
+        stage.incarnation(),
+        stage.manifest_sha256(),
+        stage.generation_id(),
         &source.metadata,
         &stage
             .preserved_root()
@@ -5944,4 +5958,562 @@ fn qualification_io_failures_never_qualify() {
         .unwrap();
     assert!(backups.qualify_restore_stage(stage, &cancel).is_err());
     source.assert_untouched();
+}
+
+// --- M1.8f: durable swap + startup recovery ---
+
+/// A `<root>.restore-pending` marker written the way the swap writes it.
+fn write_restore_marker(
+    paths: &StorePaths,
+    staging: &str,
+    preserved: &str,
+    incarnation: &str,
+) -> PathBuf {
+    let mut marker = paths.data_root().as_os_str().to_os_string();
+    marker.push(".restore-pending");
+    let marker = PathBuf::from(marker);
+    std::fs::write(
+        &marker,
+        serde_json::json!({
+            "v": 1,
+            "staging": staging,
+            "preserved": preserved,
+            "generation_id": "00000000-0000-4000-8000-0000000000d4",
+            "incarnation": incarnation,
+        })
+        .to_string(),
+    )
+    .unwrap();
+    marker
+}
+
+fn live_incarnation(store: &Store) -> String {
+    reading(store, |tx| {
+        tx.query_row(
+            "SELECT value FROM store_meta WHERE key='incarnation'",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(bug)
+    })
+}
+
+fn store_incarnation(store: &Store) -> String {
+    live_incarnation(store)
+}
+
+#[test]
+fn restore_swap_places_the_qualified_stage_and_preserves_the_old_root() {
+    let source = staging_source("swap-source");
+    let (_scratch, paths, store) = open("swap-live");
+    draft_rows(&store);
+    let live = live_incarnation(&store);
+    let stage = qualify(
+        &store,
+        prepare(
+            &store,
+            source.select_with(&store),
+            source.receipt.location(),
+            source.metadata,
+        ),
+    );
+    let staged_incarnation = stage.incarnation().to_owned();
+    let generation = stage.generation_id().to_owned();
+    let manifest_sha = stage.manifest_sha256().to_owned();
+    let preserved = stage.preserved_root().to_path_buf();
+
+    let lease = store.close_for_restore().unwrap();
+    lease.swap_restore(stage, &AtomicBool::new(false)).unwrap();
+    drop(lease);
+
+    // The marker is gone and the staging name no longer exists.
+    let mut marker = paths.data_root().as_os_str().to_os_string();
+    marker.push(".restore-pending");
+    assert!(!PathBuf::from(&marker).exists());
+    assert!(
+        !paths
+            .data_root()
+            .parent()
+            .unwrap()
+            .join(format!("store.restoring-{staged_incarnation}"))
+            .exists()
+    );
+
+    // The live root now holds the quarantined image. The generation
+    // rows point inside the *source* root — external to this store —
+    // so their locations are unchanged and still resolve.
+    let expected_location = source.receipt.location().to_path_buf();
+    let expected_inherited_inside = source
+        .paths
+        .data_root()
+        .join("backups/11111111-1111-4111-8111-111111111111");
+    assert_quarantined_stage(
+        paths.data_root(),
+        &staged_incarnation,
+        &manifest_sha,
+        &generation,
+        &source.metadata,
+        &expected_location,
+        &expected_inherited_inside,
+    );
+    assert_stage_objects(paths.data_root(), &manifest_sha, &source.payloads);
+    assert!(preserved.join("state.sqlite").is_file());
+
+    // The preserved root is a working store with the old incarnation
+    // and unpaused accounts — never deleted, still openable.
+    let preserved_paths = StorePaths::new(&preserved).unwrap();
+    let preserved_store = crate::open(&preserved_paths, &test_seams(real_fs())).unwrap();
+    assert_eq!(store_incarnation(&preserved_store), live);
+    let active: i64 = reading(&preserved_store, |tx| {
+        tx.query_row(
+            "SELECT count(*) FROM accounts WHERE state<>'paused'",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(bug)
+    });
+    assert!(active >= 2, "the preserved store keeps its account states");
+    preserved_store.close().unwrap();
+
+    // The restored store opens normally and reports the new incarnation.
+    let restored = crate::open(&paths, &test_seams(real_fs())).unwrap();
+    assert_eq!(store_incarnation(&restored), staged_incarnation);
+    restored.close().unwrap();
+    source.assert_untouched();
+}
+
+#[test]
+fn restore_swap_keeps_internal_generations_resolvable() {
+    // The source is also the live store: its generation location is
+    // inside the live root, so the quarantine rewrites it into the
+    // future preserved root — the whole point of the rewrite is that
+    // it still resolves after the swap renamed the root.
+    let source = staging_source("swap-internal");
+    let live = live_incarnation(&source.store);
+    let stage = qualify(
+        &source.store,
+        prepare(
+            &source.store,
+            source.select_with(&source.store),
+            source.receipt.location(),
+            source.metadata,
+        ),
+    );
+    let staged_incarnation = stage.incarnation().to_owned();
+    let generation = stage.generation_id().to_owned();
+    let preserved = stage.preserved_root().to_path_buf();
+    let lease = source.store.close_for_restore().unwrap();
+    lease.swap_restore(stage, &AtomicBool::new(false)).unwrap();
+    drop(lease);
+
+    let restored = crate::open(&source.paths, &test_seams(real_fs())).unwrap();
+    assert_eq!(store_incarnation(&restored), staged_incarnation);
+    // The rewritten location resolves against the preserved root: the
+    // old root carried the generation's bytes through the rename.
+    let relocated = preserved.join("backups").join(&generation);
+    assert!(relocated.join("manifest.json").is_file());
+    assert!(relocated.join("state.sqlite").is_file());
+    let location: String = reading(&restored, |tx| {
+        tx.query_row(
+            "SELECT location FROM backup_generations WHERE generation_id=?1",
+            [generation.as_str()],
+            |r| r.get(0),
+        )
+        .map_err(bug)
+    });
+    assert_eq!(location, relocated.to_str().unwrap());
+    assert!(live != staged_incarnation);
+    // Restart and back up again (spec/03): G stays `complete`, intact
+    // and restorable, and the new generation verifies.
+    let snapshot = restored
+        .backup_snapshot(BackupDestination::DataRoot)
+        .unwrap();
+    let second = restored.complete_backup(snapshot).unwrap();
+    let (state, still, _) = generation_row(&restored, &generation).unwrap();
+    assert_eq!(state, "complete");
+    assert_eq!(still, relocated.to_str().unwrap());
+    let cancel = AtomicBool::new(false);
+    assert!(
+        restored
+            .verify_external_backup(
+                second.location().parent().unwrap(),
+                second.generation_id(),
+                &cancel
+            )
+            .unwrap()
+            .is_some()
+    );
+    restored.close().unwrap();
+}
+
+#[test]
+fn a_held_restore_lease_blocks_a_second_open() {
+    let source = staging_source("swap-lease-source");
+    let (_scratch, paths, store) = open("swap-lease-live");
+    let stage = qualify(
+        &store,
+        prepare(
+            &store,
+            source.select_with(&store),
+            source.receipt.location(),
+            source.metadata,
+        ),
+    );
+    let lease = store.close_for_restore().unwrap();
+    let err = crate::open(&paths, &test_seams(real_fs())).unwrap_err();
+    assert!(
+        matches!(err, StoreError::Locked),
+        "a second open while the swap lease is held must be Locked, not {err:?}"
+    );
+    drop(lease);
+    // The lease release leaves a still-valid old store to swap or open.
+    let _ = stage;
+}
+
+#[test]
+fn a_cancelled_swap_never_starts() {
+    let source = staging_source("swap-cancel-source");
+    let (_scratch, paths, store) = open("swap-cancel-live");
+    let live = live_incarnation(&store);
+    let stage = qualify(
+        &store,
+        prepare(
+            &store,
+            source.select_with(&store),
+            source.receipt.location(),
+            source.metadata,
+        ),
+    );
+    let stage_path = stage.path().to_path_buf();
+    let lease = store.close_for_restore().unwrap();
+    let cancelled = AtomicBool::new(true);
+    let err = lease.swap_restore(stage, &cancelled).unwrap_err();
+    assert!(matches!(err, StoreError::Unavailable { .. }), "{err:?}");
+    drop(lease);
+    // No marker, the live root untouched, the stage still on disk.
+    let mut marker = paths.data_root().as_os_str().to_os_string();
+    marker.push(".restore-pending");
+    assert!(!PathBuf::from(&marker).exists());
+    assert!(stage_path.join("state.sqlite").is_file());
+    let reopened = crate::open(&paths, &test_seams(real_fs())).unwrap();
+    assert_eq!(store_incarnation(&reopened), live);
+    reopened.close().unwrap();
+}
+
+#[test]
+fn a_foreign_stage_cannot_swap() {
+    let source = staging_source("swap-foreign-source");
+    let (_scratch, paths, store) = open("swap-foreign-live");
+    let other = faulty_backups(&store, &paths, real_fs());
+    let stage = other
+        .qualify_restore_stage(
+            other
+                .stage_restore(
+                    source.select_with(&store),
+                    source.receipt.location(),
+                    source.metadata,
+                    &AtomicBool::new(false),
+                )
+                .unwrap(),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+    let lease = store.close_for_restore().unwrap();
+    let err = lease
+        .swap_restore(stage, &AtomicBool::new(false))
+        .unwrap_err();
+    assert!(matches!(err, StoreError::InvalidInput { .. }), "{err:?}");
+    let mut marker = paths.data_root().as_os_str().to_os_string();
+    marker.push(".restore-pending");
+    assert!(!PathBuf::from(&marker).exists());
+}
+
+#[test]
+fn an_existing_preserved_root_refuses_the_swap() {
+    let source = staging_source("swap-clash-source");
+    let (_scratch, paths, store) = open("swap-clash-live");
+    let live = live_incarnation(&store);
+    let stage = qualify(
+        &store,
+        prepare(
+            &store,
+            source.select_with(&store),
+            source.receipt.location(),
+            source.metadata,
+        ),
+    );
+    let preserved = stage.preserved_root().to_path_buf();
+    std::fs::create_dir(&preserved).unwrap();
+    let lease = store.close_for_restore().unwrap();
+    let err = lease
+        .swap_restore(stage, &AtomicBool::new(false))
+        .unwrap_err();
+    assert!(matches!(err, StoreError::Conflict { .. }), "{err:?}");
+    drop(lease);
+    // The refusal left the live root and the pre-existing preserved
+    // dir in place; the store opens with its own incarnation.
+    assert!(preserved.is_dir());
+    let reopened = crate::open(&paths, &test_seams(real_fs())).unwrap();
+    assert_eq!(store_incarnation(&reopened), live);
+    reopened.close().unwrap();
+}
+
+// The three marker states at open (spec/03): a finished swap is
+// completed, an unstarted one is dropped, a finished one's marker is
+// removed — and an inconsistent marker fails closed.
+
+const RESTORED_INC: &str = "00000000-0000-4000-8000-0000000000e1";
+const OLD_INC: &str = "00000000-0000-4000-8000-0000000000e2";
+
+/// A real second store used as the staged image for the (false, true)
+/// recovery state.
+fn alternate_store(scratch: &ScratchDir, incarnation: &str) -> PathBuf {
+    let alt = StorePaths::new(scratch.path().join("alternate/store")).unwrap();
+    let store = crate::open(&alt, &test_seams(real_fs())).unwrap();
+    sql(
+        &store,
+        format!("UPDATE store_meta SET value='{incarnation}' WHERE key='incarnation'"),
+    );
+    store.close().unwrap();
+    alt.data_root().to_path_buf()
+}
+
+#[test]
+fn swap_recovery_finishes_an_interrupted_swap() {
+    let (scratch, paths, store) = open("swap-recover-finish");
+    store.close().unwrap();
+    let root = paths.data_root().to_path_buf();
+    let parent = root.parent().unwrap().to_path_buf();
+    let preserved = parent.join(format!("store.preserved-{OLD_INC}"));
+    let staging = parent.join(format!("store.restoring-{RESTORED_INC}"));
+    std::fs::rename(&root, &preserved).unwrap();
+    std::fs::rename(alternate_store(&scratch, RESTORED_INC), &staging).unwrap();
+    let marker = write_restore_marker(
+        &paths,
+        &format!("store.restoring-{RESTORED_INC}"),
+        &format!("store.preserved-{OLD_INC}"),
+        RESTORED_INC,
+    );
+
+    let reopened = crate::open(&paths, &test_seams(real_fs())).unwrap();
+    assert_eq!(store_incarnation(&reopened), RESTORED_INC);
+    reopened.close().unwrap();
+    assert!(!marker.exists());
+    assert!(!staging.exists());
+    assert!(preserved.join("state.sqlite").is_file());
+}
+
+#[test]
+fn swap_recovery_discards_an_unstarted_swap() {
+    let (_scratch, paths, store) = open("swap-recover-unstarted");
+    let live = live_incarnation(&store);
+    store.close().unwrap();
+    let staging = paths
+        .data_root()
+        .parent()
+        .unwrap()
+        .join(format!("store.restoring-{RESTORED_INC}"));
+    std::fs::create_dir(&staging).unwrap();
+    let marker = write_restore_marker(
+        &paths,
+        &format!("store.restoring-{RESTORED_INC}"),
+        &format!("store.preserved-{OLD_INC}"),
+        RESTORED_INC,
+    );
+
+    let reopened = crate::open(&paths, &test_seams(real_fs())).unwrap();
+    assert_eq!(store_incarnation(&reopened), live);
+    reopened.close().unwrap();
+    assert!(!marker.exists());
+    // The unstarted stage stays on disk as evidence.
+    assert!(staging.is_dir());
+}
+
+#[test]
+fn swap_recovery_removes_a_completed_marker() {
+    let (_scratch, paths, store) = open("swap-recover-complete");
+    let live = live_incarnation(&store);
+    store.close().unwrap();
+    let marker = write_restore_marker(
+        &paths,
+        &format!("store.restoring-{RESTORED_INC}"),
+        &format!("store.preserved-{OLD_INC}"),
+        RESTORED_INC,
+    );
+
+    let reopened = crate::open(&paths, &test_seams(real_fs())).unwrap();
+    assert_eq!(store_incarnation(&reopened), live);
+    reopened.close().unwrap();
+    assert!(!marker.exists());
+}
+
+#[test]
+fn swap_recovery_refuses_a_marker_over_nothing() {
+    let (_scratch, paths, store) = open("swap-recover-empty");
+    store.close().unwrap();
+    let hidden = paths.data_root().with_file_name("store.hidden");
+    std::fs::rename(paths.data_root(), &hidden).unwrap();
+    write_restore_marker(
+        &paths,
+        &format!("store.restoring-{RESTORED_INC}"),
+        &format!("store.preserved-{OLD_INC}"),
+        RESTORED_INC,
+    );
+    let err = crate::open(&paths, &test_seams(real_fs())).unwrap_err();
+    assert!(
+        matches!(err, StoreError::Corrupt { .. }),
+        "a marker naming nothing recoverable must fail closed, not {err:?}"
+    );
+}
+
+#[test]
+fn a_corrupt_restore_marker_fails_closed() {
+    let (_scratch, paths, store) = open("swap-marker-corrupt");
+    store.close().unwrap();
+    let mut marker = paths.data_root().as_os_str().to_os_string();
+    marker.push(".restore-pending");
+    std::fs::write(&marker, b"not a marker").unwrap();
+    let err = crate::open(&paths, &test_seams(real_fs())).unwrap_err();
+    assert!(matches!(err, StoreError::Corrupt { .. }), "{err:?}");
+}
+
+#[test]
+fn a_marker_naming_a_foreign_stage_fails_closed() {
+    let (_scratch, paths, store) = open("swap-marker-foreign");
+    store.close().unwrap();
+    // The staging name does not carry the recorded incarnation.
+    write_restore_marker(
+        &paths,
+        "store.restoring-something-else",
+        &format!("store.preserved-{OLD_INC}"),
+        RESTORED_INC,
+    );
+    let err = crate::open(&paths, &test_seams(real_fs())).unwrap_err();
+    assert!(matches!(err, StoreError::Corrupt { .. }), "{err:?}");
+}
+
+const SWAP_CUT_N: &str = "SB_SWAP_CUT_N";
+const SWAP_CUT_ROOT: &str = "SB_SWAP_CUT_ROOT";
+
+#[test]
+#[ignore = "spawned by restore_swap_cuts_leave_a_recoverable_store"]
+fn swap_cut_child() {
+    let nth: u64 = env::var(SWAP_CUT_N).unwrap().parse().unwrap();
+    let root = PathBuf::from(env::var(SWAP_CUT_ROOT).unwrap());
+    let source_paths = StorePaths::new(root.join("source/store")).unwrap();
+    let source = crate::open(&source_paths, &test_seams(real_fs())).unwrap();
+    let (id, sha) = object(&source, PAYLOAD);
+    reference(&source, &id, "published");
+    let receipt = source
+        .complete_backup(source.backup_snapshot(BackupDestination::DataRoot).unwrap())
+        .unwrap();
+    let manifest = std::fs::read(receipt.location().join("manifest.json")).unwrap();
+    let database = std::fs::read(receipt.state_db()).unwrap();
+    let object_path = receipt.location().join(format!(
+        "objects/sha256/{}/{}/{}",
+        &sha[..2],
+        &sha[2..4],
+        sha
+    ));
+    let object = std::fs::read(&object_path).unwrap();
+    let expected = [
+        (receipt.location().join("manifest.json"), &manifest),
+        (receipt.state_db(), &database),
+        (object_path, &object),
+    ]
+    .map(|(path, bytes)| format!("{} {}\n", path.display(), sha256_hex(bytes)))
+    .concat();
+    std::fs::write(root.join("expected.txt"), expected).unwrap();
+
+    let fresh_paths = StorePaths::new(root.join("fresh/store")).unwrap();
+    let fresh = crate::open(&fresh_paths, &test_seams(real_fs())).unwrap();
+    std::fs::write(root.join("live-incarnation.txt"), live_incarnation(&fresh)).unwrap();
+    let cancel = AtomicBool::new(false);
+    let selection = fresh
+        .verify_external_backup(
+            receipt.location().parent().unwrap(),
+            receipt.generation_id(),
+            &cancel,
+        )
+        .unwrap()
+        .unwrap();
+    let metadata = restore_metadata(&source, receipt.generation_id());
+    let cut = Arc::new(CutFs::new(real_fs(), nth));
+    let backups = faulty_backups_seeded(&fresh, &fresh_paths, cut, 9);
+    let location = receipt.location();
+    let stage = backups
+        .stage_restore(selection, location, metadata, &cancel)
+        .unwrap();
+    let stage = backups.qualify_restore_stage(stage, &cancel).unwrap();
+    // Record the new incarnation before the swap: the parent cannot
+    // recompute it after a kill.
+    std::fs::write(root.join("staged-incarnation.txt"), stage.incarnation()).unwrap();
+    // The live store closes all its connections; the coordinator's own
+    // fs still carries the cut seam for the swap itself.
+    fresh.close().unwrap();
+    backups.swap_restore_stage(stage, &cancel).unwrap();
+}
+
+#[test]
+fn restore_swap_cuts_leave_a_recoverable_store() {
+    let scratch = ScratchDir::new("swap-cuts");
+    let points = [1, 2, 5, 13, 21, 34, 55, 89, 144, 233];
+    let cuts = run_crash_cut_points(
+        SWAP_CUT_N,
+        SWAP_CUT_ROOT,
+        "backups::tests::swap_cut_child",
+        &points,
+        &mut |n| {
+            let root = scratch.path().join(format!("cut-{n}"));
+            std::fs::create_dir(&root).unwrap();
+            root
+        },
+        &mut |root| {
+            let root = PathBuf::from(root);
+            let expected = std::fs::read_to_string(root.join("expected.txt")).unwrap();
+            for line in expected.lines() {
+                let (path, hash) = line.split_once(' ').unwrap();
+                assert_eq!(sha256_hex(&std::fs::read(path).unwrap()), hash, "{path}");
+            }
+            let fresh_paths = StorePaths::new(root.join("fresh/store")).unwrap();
+            let mut marker = fresh_paths.data_root().as_os_str().to_os_string();
+            marker.push(".restore-pending");
+            let marker = PathBuf::from(marker);
+            let live = std::fs::read_to_string(root.join("live-incarnation.txt")).unwrap();
+            let staged = std::fs::read_to_string(root.join("staged-incarnation.txt")).ok();
+            match crate::open(&fresh_paths, &test_seams(real_fs())) {
+                Ok(store) => {
+                    // Recovery resolved the marker; the root holds either
+                    // the old store or the quarantined staged image.
+                    assert!(!marker.exists(), "a resolved marker must be gone");
+                    let incarnation = store_incarnation(&store);
+                    let preserved = fresh_paths
+                        .data_root()
+                        .parent()
+                        .unwrap()
+                        .join(format!("store.preserved-{live}"));
+                    match staged.as_deref() {
+                        Some(staged) if incarnation == staged => {
+                            assert!(
+                                preserved.join("state.sqlite").is_file(),
+                                "a swapped root keeps the old root preserved"
+                            );
+                        }
+                        _ => assert_eq!(incarnation, live, "the root must be the old store"),
+                    }
+                    store.close().unwrap();
+                }
+                Err(StoreError::Corrupt { .. }) => {
+                    // A torn or inconsistent marker fails closed; the
+                    // store simply does not open.
+                }
+                Err(other) => panic!("open after a swap cut failed unexpectedly: {other:?}"),
+            }
+        },
+    );
+    assert!(!cuts.killed.is_empty(), "no cut point killed the child");
+    assert!(
+        cuts.survived.iter().any(|point| *point > 1),
+        "the highest cut points should survive a complete run"
+    );
 }
