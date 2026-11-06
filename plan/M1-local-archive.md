@@ -1087,7 +1087,11 @@ local drafts. No network yet.
     - **M1.7d2c3 Engine integration and verified ingest — L:** consume
       the verified acquisitions in the real import job without changing
       source order, with durable job, resume, order and crash acceptance
-      and failed-source evidence. Expose no export-scope API.
+      and failed-source evidence. Expose no export-scope API. Keep one
+      proof registry per ingest turn inside one counted blocking scope;
+      preserve writer priorities, committed batch fences and post-commit
+      index/received wakeups. Do not rebuild a manifest per source or
+      rely on descriptor reads after registry cleanup.
   - **M1.7e Export engine — L:** counted background jobs, start/query,
     cancel, shutdown and reopen over b2/c. Own real-worker lifecycle,
     crash/resume and all original round-trip acceptance checks using d.
