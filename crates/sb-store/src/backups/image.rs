@@ -318,15 +318,26 @@ impl Backups {
             });
             // Close errors only surface when inspection and the callback
             // succeeded; a primary error must keep its own classification.
-            let inspected = inspected.and_then(|inspected| {
-                conn.close()
-                    .map_err(|(_, e)| classify(e, "close backup image"))?;
-                status.closed.set(true);
-                if invalid_metadata {
-                    status.source_invalid.set(true);
+            let inspected = match inspected {
+                Ok(inspected) => {
+                    conn.close()
+                        .map_err(|(_, e)| classify(e, "close backup image"))?;
+                    status.closed.set(true);
+                    if invalid_metadata {
+                        status.source_invalid.set(true);
+                    }
+                    Ok(inspected)
                 }
-                Ok(inspected)
-            });
+                Err(error) => {
+                    // The connection still releases: swallow its close
+                    // error so the primary error keeps its classification,
+                    // and mark the image closed so a skippable source
+                    // failure stays skippable.
+                    let _ = conn.close();
+                    status.closed.set(true);
+                    Err(error)
+                }
+            };
             Ok(match inspected? {
                 image_inspect::Inspection::Inspected {
                     store_uuid,
