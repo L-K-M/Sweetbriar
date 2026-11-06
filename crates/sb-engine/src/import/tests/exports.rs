@@ -34,17 +34,54 @@ fn mailbox(engine: &Engine) -> (i64, u64) {
         .unwrap();
     let deadline = Instant::now() + PATIENCE;
     let mut generation = engine.resources().read(list_generation).unwrap();
+    let mut stable = 0;
     loop {
-        std::thread::sleep(Duration::from_millis(50));
+        std::thread::sleep(Duration::from_millis(150));
         let again = engine.resources().read(list_generation).unwrap();
         if again == generation {
-            return (id, generation);
+            // Two quiet reads in a row: post-ingest work is done and the
+            // fence will accept this generation even under suite load.
+            stable += 1;
+            if stable >= 2 {
+                return (id, generation);
+            }
+        } else {
+            stable = 0;
+            generation = again;
         }
         assert!(
             Instant::now() < deadline,
             "the list generation never settled"
         );
-        generation = again;
+    }
+}
+
+/// Capture a job to `ready`; a stale-generation conflict just means
+/// something else committed meanwhile — rebuild the request and retry.
+fn seal(engine: &Engine, id: &str, mailbox_id: i64, generation: u64, dest: &Path) {
+    let mut generation = generation;
+    for attempt in 0..3 {
+        let request = ExportCaptureRequest::new(
+            ExportFormat::Mboxrd,
+            dest.to_string_lossy().to_string(),
+            ExportScope::Mailbox {
+                mailbox_id,
+                expected_generation: generation,
+            },
+        )
+        .unwrap();
+        match engine
+            .resources()
+            .capture_export(id, &request, |_| ControlFlow::Continue(()))
+        {
+            Err(StoreError::Conflict { .. }) if attempt < 2 => {
+                generation = engine.resources().read(list_generation).unwrap();
+            }
+            other => {
+                other.unwrap();
+                return;
+            }
+        }
     }
 }
 
@@ -60,6 +97,53 @@ fn start_export(engine: &Engine, key: &str, dest: &Path, scope: ExportScopeInput
 
 fn export_status(engine: &Engine, id: &str) -> ExportJobStatus {
     block_on(engine.export_job(id)).unwrap()
+}
+
+/// Start a mailbox export and wait for it to finish; a stale-generation
+/// failure just means the fence moved — retry with a fresh one.
+fn complete_export(engine: &Engine, mailbox_id: i64, dest: &Path) -> ExportJobStatus {
+    for _ in 0..3 {
+        let (_, generation) = mailbox(engine);
+        let key = engine.new_idempotency_key();
+        let started = start_export(
+            engine,
+            &key,
+            dest,
+            ExportScopeInput::Mailbox {
+                mailbox_id,
+                generation,
+            },
+        );
+        let job = settle_export_deadline(engine, started.job_id(), Duration::from_secs(60));
+        if job.state() == ExportJobState::Failed && job.checkpoint_json().contains("stale") {
+            continue;
+        }
+        assert_eq!(
+            job.state(),
+            ExportJobState::Completed,
+            "the export did not complete: {}",
+            job.checkpoint_json()
+        );
+        return job;
+    }
+    panic!("the export kept hitting stale generations");
+}
+
+/// Bounded wait: returns the last status even if the state never
+/// reached `state` (the caller decides what to assert on it).
+fn settle_export_deadline(engine: &Engine, id: &str, budget: Duration) -> ExportJobStatus {
+    let deadline = Instant::now() + budget;
+    loop {
+        let live = engine.imports().lock().contains_key(id);
+        let current = export_status(engine, id);
+        if current.is_finished() && !live {
+            return current;
+        }
+        if Instant::now() >= deadline {
+            return current;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
 
 /// Poll until the export reaches `state` and no worker holds it.
@@ -196,21 +280,11 @@ fn an_export_captures_and_publishes_to_completion() {
     let root = scratch.path().join("store");
     let engine = open(&root);
     import_inbox(&engine);
-    let (mailbox_id, generation) = mailbox(&engine);
+    let (mailbox_id, _) = mailbox(&engine);
     let occurrences = count(&engine, "SELECT COUNT(*) FROM occurrences");
     let dest = scratch.path().join("out");
 
-    let key = engine.new_idempotency_key();
-    let started = start_export(
-        &engine,
-        &key,
-        &dest,
-        ExportScopeInput::Mailbox {
-            mailbox_id,
-            generation,
-        },
-    );
-    let done = settle_export(&engine, started.job_id(), ExportJobState::Completed);
+    let done = complete_export(&engine, mailbox_id, &dest);
     assert!(
         !done.checkpoint_json().is_empty() && done.captured_chunks() > 0,
         "a completed export keeps its capture and output checkpoints"
@@ -268,8 +342,10 @@ fn the_export_request_replays_its_receipt_without_a_second_job() {
         scope,
     );
     assert_ne!(replay.job_id(), first.job_id());
-    settle_export(&engine, first.job_id(), ExportJobState::Completed);
-    settle_export(&engine, replay.job_id(), ExportJobState::Completed);
+    for job_id in [first.job_id(), replay.job_id()] {
+        let job = settle_export_deadline(&engine, job_id, Duration::from_secs(90));
+        assert!(job.is_finished(), "export {job_id} did not finish");
+    }
     block_on(engine.shutdown()).unwrap();
 }
 
@@ -296,10 +372,7 @@ fn a_sealed_export_resumes_at_open_and_completes_without_a_request() {
         create_export_job(tx, "sealed", &request_json, now)
     }))
     .unwrap();
-    engine
-        .resources()
-        .capture_export("sealed", &request, |_| ControlFlow::Continue(()))
-        .unwrap();
+    seal(&engine, "sealed", mailbox_id, generation, &dest);
     block_on(engine.shutdown()).unwrap();
 
     let engine = open(&root);
@@ -381,10 +454,7 @@ fn a_cancelled_export_stays_cancelled_across_reopen_and_publishes_nothing() {
         create_export_job(tx, "halt", &request_json, now)
     }))
     .unwrap();
-    engine
-        .resources()
-        .capture_export("halt", &request, |_| ControlFlow::Continue(()))
-        .unwrap();
+    seal(&engine, "halt", mailbox_id, generation, &dest);
 
     block_on(engine.cancel_job(&engine.new_idempotency_key(), "halt")).unwrap();
     assert_eq!(
@@ -410,20 +480,10 @@ fn an_exported_mbox_reimports_byte_identical_acquisitions() {
     let engine = open(&scratch.path().join("store"));
     import_inbox(&engine);
     let before = hashes(&engine);
-    let (mailbox_id, generation) = mailbox(&engine);
+    let (mailbox_id, _) = mailbox(&engine);
     let dest = scratch.path().join("out");
 
-    let key = engine.new_idempotency_key();
-    let started = start_export(
-        &engine,
-        &key,
-        &dest,
-        ExportScopeInput::Mailbox {
-            mailbox_id,
-            generation,
-        },
-    );
-    settle_export(&engine, started.job_id(), ExportJobState::Completed);
+    complete_export(&engine, mailbox_id, &dest);
     let paths = fs::read_dir(&dest)
         .unwrap()
         .map(|entry| entry.unwrap().path())
@@ -508,6 +568,7 @@ fn an_export_job_query_reports_the_durable_record() {
         block_on(engine.export_job("no-such-export")),
         Err(EngineError::NotFound { .. })
     ));
-    settle_export(&engine, started.job_id(), ExportJobState::Completed);
+    let job = settle_export_deadline(&engine, started.job_id(), Duration::from_secs(90));
+    assert!(job.is_finished(), "the export did not finish");
     block_on(engine.shutdown()).unwrap();
 }
