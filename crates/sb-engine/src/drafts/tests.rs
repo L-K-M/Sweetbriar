@@ -460,6 +460,84 @@ fn shared_publication_replays_but_cannot_fund_a_fresh_save() {
     block_on(engine.shutdown()).unwrap();
 }
 
+/// `republish_draft_attachment` (spec/07): a stored reference from an
+/// older, noncurrent revision republishes through the counted
+/// blocking path as a fresh publication whose own reservation a fresh
+/// draft's save spends once. Wrong metadata denies typed: a revision
+/// the draft does not have is `NotFound`, a reference that is not a
+/// member is `Conflict`.
+#[test]
+fn an_old_revision_republishes_into_a_fresh_draft() {
+    let (_scratch, engine) = scratch_engine("engine-draft-republish");
+    let source = create(&engine, DraftSource::New);
+    let object = block_on(engine.publish_draft_attachment(Cursor::new(b"file"))).unwrap();
+    let sha = object.id().sha256_hex();
+    let mut first = content("first");
+    first.attachments = vec![DraftAttachment::New {
+        object: Arc::new(object),
+        filename: "file.txt".to_owned(),
+        media_type: "text/plain".to_owned(),
+    }];
+    let saved = save(&engine, source.draft_id(), None, first);
+    let reference = block_on(engine.draft(source.draft_id()))
+        .unwrap()
+        .revision
+        .unwrap()
+        .attachments[0]
+        .clone();
+
+    // The head advances; the saved revision is immutable history but
+    // still authorizes a copy.
+    save(
+        &engine,
+        source.draft_id(),
+        Some(saved.revision_id()),
+        content("second"),
+    );
+    let copy = block_on(engine.republish_draft_attachment(
+        source.draft_id(),
+        saved.revision_id(),
+        reference.clone(),
+    ))
+    .unwrap();
+    assert_eq!(copy.id().sha256_hex(), sha);
+    assert_eq!(copy.id().byte_length(), 4);
+
+    // The fresh publication's own reservation spends once into a new draft.
+    let target = create(&engine, DraftSource::New);
+    let mut with_copy = content("copy");
+    with_copy.attachments = vec![DraftAttachment::New {
+        object: Arc::new(copy),
+        filename: "file.txt".to_owned(),
+        media_type: "text/plain".to_owned(),
+    }];
+    let copied = save(&engine, target.draft_id(), None, with_copy);
+    let stored = block_on(engine.draft(target.draft_id()))
+        .unwrap()
+        .revision
+        .unwrap()
+        .attachments;
+    assert_eq!(stored.len(), 1);
+    assert_eq!(stored[0], reference);
+
+    match block_on(engine.republish_draft_attachment(
+        source.draft_id(),
+        copied.revision_id(),
+        reference.clone(),
+    )) {
+        Err(EngineError::NotFound { .. }) => {}
+        other => panic!("a foreign revision must be NotFound: {other:?}"),
+    }
+    let mut wrong = reference.clone();
+    wrong.filename = "other.txt".to_owned();
+    match block_on(engine.republish_draft_attachment(source.draft_id(), saved.revision_id(), wrong))
+    {
+        Err(EngineError::Conflict { .. }) => {}
+        other => panic!("a non-member reference must be Conflict: {other:?}"),
+    }
+    block_on(engine.shutdown()).unwrap();
+}
+
 /// `discard_draft` is `Conflict` while an attempt is live (spec/05):
 /// `held`, `queued`, `submitting` and unresolved `outcome_unknown`
 /// count; a cancelled attempt is history.
