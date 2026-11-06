@@ -251,8 +251,8 @@ public enum DraftSource: Sendable, Equatable {
 /// A published attachment's opaque handle (spec/02): the wrapper
 /// retains the native publication and its reservation; never rebuilt.
 public final class DraftAttachmentObject: Sendable, Equatable {
-    /// The native publication handle; only `publishDraftAttachment`
-    /// makes one.
+    /// The native publication handle, created only by
+    /// `publishDraftAttachment` or `republishDraftAttachment`.
     let native: SweetbriarCore.DraftAttachmentObject
 
     /// The published object's SHA-256: 64 lowercase hex digits.
