@@ -8,7 +8,9 @@ use super::offset_sort::OffsetSort;
 use std::cmp::Ordering;
 
 mod messages;
-pub(super) use messages::validate_messages_with_children;
+pub(super) use messages::{
+    read_descriptor, validate_messages_with_children, validate_messages_with_references,
+};
 
 // Search query nodes have depth 32 (spec/06). A node can add an object
 // and an operands array; the manifest and scope wrappers fit in 16 more.
@@ -68,6 +70,9 @@ pub(super) struct FileTable {
 impl FileTable {
     pub(super) fn format(&self) -> BundleFormat {
         self.format
+    }
+    pub(super) fn file_count(&self) -> u64 {
+        self.count
     }
 }
 
