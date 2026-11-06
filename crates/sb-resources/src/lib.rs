@@ -133,8 +133,8 @@ pub use sb_store::threads::{
 pub use sb_store::{
     AppearanceObserver, ExportMetadata, ImportSourceSnapshot, ListObserver, PublishedObject,
     ReadStop, Receipt, Scoped, SearchObserver, StoreError, Timestamp, Transaction, Uuid,
-    WriteFuture, WritePriority, encode_job_receipt, export_occurrence_metadata, receipt_job_id,
-    run_once,
+    WriteFuture, WritePriority, await_write, encode_job_receipt, export_occurrence_metadata,
+    receipt_job_id, run_once,
 };
 
 #[cfg(feature = "test-seams")]
