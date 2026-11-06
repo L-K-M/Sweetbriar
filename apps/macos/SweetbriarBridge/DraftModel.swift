@@ -268,6 +268,7 @@ public final class DraftModel {
     /// publication; retained references must exactly match the saved base.
     private func acknowledgeAttachments(in savedContent: DraftContent) {
         guard var current = content else { return }
+        var acknowledgedAny = false
         current.attachments = current.attachments.map { attachment in
             guard case .new(let object, let filename, let mediaType) = attachment else {
                 return attachment
@@ -280,9 +281,11 @@ public final class DraftModel {
                     && originalType.utf8.elementsEqual(mediaType.utf8)
             }
             guard acknowledged else { return attachment }
+            acknowledgedAny = true
             return .retained(DraftAttachmentRef(objectSha256: object.objectSha256,
                 filename: filename, mediaType: mediaType, size: object.byteLength))
         }
+        guard acknowledgedAny else { return }
         content = current
     }
 
