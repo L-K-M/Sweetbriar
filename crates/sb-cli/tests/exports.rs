@@ -13,6 +13,7 @@ fn cli(directory: &Path, args: &[&str]) -> Output {
         .current_dir(directory)
         .arg("--data-root")
         .arg(directory.join("store"))
+        .env("HOME", directory)
         .env("XDG_CACHE_HOME", directory.join("cache"))
         .args(args)
         .output()
