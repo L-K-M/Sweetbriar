@@ -8,6 +8,53 @@ use sha2::{Digest, Sha256};
 use super::super::offset_sort::{SortEntry, SortKind};
 use super::{BundleFormat, FileTable, OffsetSort, Parser, invalid, name_chunk};
 
+pub(in crate::import) fn read_descriptor(
+    reader: &mut (impl Read + Seek),
+    offset: u64,
+) -> io::Result<super::super::proof::ManifestDescriptor> {
+    reader.seek(SeekFrom::Start(offset))?;
+    let mut p = Parser {
+        reader,
+        next: None,
+        capture: None,
+        position: offset,
+    };
+    let mut sha = None;
+    let mut bytes = None;
+    let mut record_offset = 0;
+    let mut encoded_bytes = 0;
+    let mut framing_lf_added = false;
+    p.object(|p, key| {
+        match key {
+            "acquisition" => {
+                p.object(|p, key| {
+                    match key {
+                        "sha256" => sha = super::super::sha256_from_hex(&p.hash()?),
+                        "bytes" => bytes = Some(p.integer::<u64>()?),
+                        _ => p.value(1)?,
+                    }
+                    Ok(())
+                })?;
+            }
+            "record_offset" => record_offset = p.integer()?,
+            "encoded_bytes" => encoded_bytes = p.integer()?,
+            "framing_lf_added" => {
+                framing_lf_added = p.peek()? == Some(b't');
+                p.boolean()?;
+            }
+            _ => p.value(1)?,
+        }
+        Ok(())
+    })?;
+    Ok(super::super::proof::ManifestDescriptor {
+        sha256: sha.ok_or_else(invalid)?,
+        original_bytes: bytes.ok_or_else(invalid)?,
+        record_offset,
+        encoded_bytes,
+        framing_lf_added,
+    })
+}
+
 enum Identity {
     Account,
     Mailbox,
@@ -27,6 +74,16 @@ pub(in crate::import) fn validate_messages_with_children<R: Read + Seek>(
     table: &FileTable,
     scratch: &sb_store::ValidationScratch<'_>,
     child: &mut impl FnMut(&mut R, u64, u64, u64, u64) -> io::Result<()>,
+) -> io::Result<()> {
+    validate_messages_with_references(reader, table, scratch, child, &mut |_, _, _, _| Ok(()))
+}
+
+pub(in crate::import) fn validate_messages_with_references<R: Read + Seek>(
+    reader: &mut R,
+    table: &FileTable,
+    scratch: &sb_store::ValidationScratch<'_>,
+    child: &mut impl FnMut(&mut R, u64, u64, u64, u64) -> io::Result<()>,
+    reference: &mut impl FnMut(&mut R, u64, u64, u64) -> io::Result<()>,
 ) -> io::Result<()> {
     let (start, end, count) = table.messages;
     if count != table.entries {
@@ -55,15 +112,28 @@ pub(in crate::import) fn validate_messages_with_children<R: Read + Seek>(
         return Err(invalid());
     }
     unique_occurrences(reader, table, scratch)?;
-    validate_file_relationships(reader, table, scratch, child)
+    validate_file_relationships_with_references(reader, table, scratch, child, reference)
 }
 
 // The schema and occurrence passes have released both tapes before this pass.
+#[cfg(test)]
 fn validate_file_relationships<R: Read + Seek>(
     reader: &mut R,
     table: &FileTable,
     scratch: &sb_store::ValidationScratch<'_>,
     child: &mut impl FnMut(&mut R, u64, u64, u64, u64) -> io::Result<()>,
+) -> io::Result<()> {
+    validate_file_relationships_with_references(reader, table, scratch, child, &mut |_, _, _, _| {
+        Ok(())
+    })
+}
+
+fn validate_file_relationships_with_references<R: Read + Seek>(
+    reader: &mut R,
+    table: &FileTable,
+    scratch: &sb_store::ValidationScratch<'_>,
+    child: &mut impl FnMut(&mut R, u64, u64, u64, u64) -> io::Result<()>,
+    reference: &mut impl FnMut(&mut R, u64, u64, u64) -> io::Result<()>,
 ) -> io::Result<()> {
     reader.seek(SeekFrom::Start(table.start + 1))?;
     let mut p = Parser {
@@ -74,7 +144,9 @@ fn validate_file_relationships<R: Read + Seek>(
     };
     let mut sorter = OffsetSort::new(scratch)?;
     let mut compare = |p: &mut Parser<_>, a: SortEntry, b: SortEntry| {
-        Ok(p.compare(a.key, b.key)?.then(a.kind.cmp(&b.kind)))
+        Ok(p.compare(a.key, b.key)?
+            .then(a.kind.cmp(&b.kind))
+            .then(a.ordinal.cmp(&b.ordinal)))
     };
     for index in 0..table.count {
         p.whitespace()?;
@@ -89,6 +161,7 @@ fn validate_file_relationships<R: Read + Seek>(
                 position: file.bytes,
                 extra: file.records,
                 ordinal: index,
+                message_offset: 0,
                 kind: SortKind::Declaration,
             },
             &mut p,
@@ -109,6 +182,7 @@ fn validate_file_relationships<R: Read + Seek>(
             p.expect(b',')?;
             p.whitespace()?;
         }
+        let message_offset = p.position;
         let mut name = None;
         let mut occurrence = None;
         let mut bytes = None;
@@ -151,7 +225,8 @@ fn validate_file_relationships<R: Read + Seek>(
                     key,
                     position: bytes,
                     extra: 0,
-                    ordinal: 0,
+                    ordinal: index,
+                    message_offset,
                     kind: SortKind::Reference,
                 },
                 &mut p,
@@ -207,6 +282,10 @@ fn validate_file_relationships<R: Read + Seek>(
                     {
                         return Err(invalid());
                     }
+                    let (_, _, file_ordinal) = declaration.ok_or_else(invalid)?;
+                    let resume = p.position;
+                    reference(p.reader, entry.message_offset, entry.ordinal, file_ordinal)?;
+                    p.restore(resume)?;
                 }
                 SortKind::Offset => return Err(invalid()),
             }
@@ -758,6 +837,52 @@ mod tests {
         }
         document["files"] = files.into();
         document
+    }
+
+    #[test]
+    fn grouped_references_keep_message_order_and_seekable_offsets() {
+        let mut document = linked_manifest(257, "mboxrd");
+        document["files"] = serde_json::json!([
+            {"name":"z", "bytes":42, "records":128},
+            {"name":"a", "bytes":42, "records":129}
+        ]);
+        for (index, message) in document["messages"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .enumerate()
+        {
+            message["file"] = if index % 2 == 0 { "a" } else { "z" }.into();
+        }
+        let input = document.to_string();
+        let table = super::super::validate_envelope(input.as_bytes()).unwrap();
+        let tmp = sb_test_support::ScratchDir::new("grouped-reference-order");
+        let resources = crate::Resources::open(&tmp.path().join("store")).unwrap();
+        let scratch = resources.store.import_validation_scratch().unwrap();
+        let mut reader = io::Cursor::new(input.as_bytes());
+        let mut seen = Vec::new();
+        validate_messages_with_references(
+            &mut reader,
+            &table,
+            &scratch,
+            &mut |_, _, _, _, _| Ok(()),
+            &mut |reader, offset, message_ordinal, file_ordinal| {
+                reader.seek(SeekFrom::Start(offset))?;
+                let mut first = [0];
+                reader.read_exact(&mut first)?;
+                assert_eq!(first, [b'{']);
+                seen.push((file_ordinal, message_ordinal));
+                Ok(())
+            },
+        )
+        .unwrap();
+        let expected = (0..257)
+            .step_by(2)
+            .map(|i| (1, i))
+            .chain((1..257).step_by(2).map(|i| (0, i)))
+            .collect::<Vec<_>>();
+        assert_eq!(seen, expected);
+        scratch.finish().unwrap();
     }
 
     #[test]
