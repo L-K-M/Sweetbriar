@@ -4,7 +4,9 @@
 //! database object and the objects array with its record objects. The sink may
 //! receive records before a later error; callers must discard partial results.
 
-use std::io::{self, BufReader, Read};
+use std::io::{self, Read};
+
+use super::json::{Reader as Parser, hex};
 
 #[derive(Debug, PartialEq, Eq)]
 pub(super) struct Entry {
@@ -31,11 +33,7 @@ pub(super) fn parse(
     mut cancel: impl FnMut() -> io::Result<()>,
     mut sink: impl FnMut(Entry) -> io::Result<()>,
 ) -> io::Result<Manifest> {
-    let mut p = Parser {
-        input: BufReader::new(input),
-        next: None,
-        cancel: &mut cancel,
-    };
+    let mut p = Parser::new(input, &mut cancel);
     let mut seen = 0u16;
     let (mut store, mut generation, mut schema, mut created, mut database) =
         (None, None, None, None, None);
@@ -91,45 +89,7 @@ pub(super) fn parse(
     })
 }
 
-struct Parser<'a, R, C> {
-    input: BufReader<R>,
-    next: Option<u8>,
-    cancel: &'a mut C,
-}
-
 impl<R: Read, C: FnMut() -> io::Result<()>> Parser<'_, R, C> {
-    fn peek(&mut self) -> io::Result<Option<u8>> {
-        if self.next.is_none() {
-            (self.cancel)()?;
-            let mut byte = [0];
-            if self.input.read(&mut byte)? != 0 {
-                self.next = Some(byte[0]);
-            }
-        }
-        Ok(self.next)
-    }
-
-    fn take(&mut self) -> io::Result<Option<u8>> {
-        let byte = self.peek()?;
-        self.next = None;
-        Ok(byte)
-    }
-
-    fn expect(&mut self, expected: u8) -> io::Result<()> {
-        if self.take()? == Some(expected) {
-            Ok(())
-        } else {
-            Err(invalid())
-        }
-    }
-
-    fn whitespace(&mut self) -> io::Result<()> {
-        while matches!(self.peek()?, Some(b' ' | b'\n' | b'\r' | b'\t')) {
-            self.take()?;
-        }
-        Ok(())
-    }
-
     fn object(
         &mut self,
         mut field: impl FnMut(&mut Self, &[u8]) -> io::Result<()>,
@@ -165,7 +125,7 @@ impl<R: Read, C: FnMut() -> io::Result<()>> Parser<'_, R, C> {
             return Ok(());
         }
         loop {
-            (self.cancel)()?;
+            self.check_cancel()?;
             sink(self.entry(false)?)?;
             self.whitespace()?;
             match self.take()? {
@@ -213,25 +173,6 @@ impl<R: Read, C: FnMut() -> io::Result<()>> Parser<'_, R, C> {
         })
     }
 
-    fn unsigned(&mut self) -> io::Result<u64> {
-        let first = self.take()?.ok_or_else(invalid)?;
-        if !first.is_ascii_digit() {
-            return Err(invalid());
-        }
-        let mut n = u64::from(first - b'0');
-        if first == b'0' {
-            return Ok(n);
-        }
-        while let Some(c @ b'0'..=b'9') = self.peek()? {
-            self.take()?;
-            n = n
-                .checked_mul(10)
-                .and_then(|n| n.checked_add(u64::from(c - b'0')))
-                .ok_or_else(invalid)?;
-        }
-        Ok(n)
-    }
-
     fn signed(&mut self) -> io::Result<i64> {
         let negative = self.peek()? == Some(b'-');
         if negative {
@@ -247,22 +188,6 @@ impl<R: Read, C: FnMut() -> io::Result<()>> Parser<'_, R, C> {
         } else {
             i64::try_from(n).map_err(|_| invalid())
         }
-    }
-
-    fn fixed_string(&mut self, out: &mut [u8]) -> io::Result<usize> {
-        let mut len = 0;
-        self.string(|ch| {
-            let mut buf = [0; 4];
-            let bytes = ch.encode_utf8(&mut buf).as_bytes();
-            let end = len + bytes.len();
-            if end > out.len() {
-                return Err(invalid());
-            }
-            out[len..end].copy_from_slice(bytes);
-            len = end;
-            Ok(())
-        })?;
-        Ok(len)
     }
 
     fn uuid(&mut self) -> io::Result<[u8; 16]> {
@@ -301,81 +226,6 @@ impl<R: Read, C: FnMut() -> io::Result<()>> Parser<'_, R, C> {
             *slot = hex(pair[0])? * 16 + hex(pair[1])?;
         }
         Ok(out)
-    }
-
-    fn string(&mut self, mut emit: impl FnMut(char) -> io::Result<()>) -> io::Result<()> {
-        self.expect(b'"')?;
-        loop {
-            let ch = match self.take()? {
-                Some(b'"') => return Ok(()),
-                Some(b'\\') => match self.take()? {
-                    Some(b'"') => '"',
-                    Some(b'\\') => '\\',
-                    Some(b'/') => '/',
-                    Some(b'b') => '\u{8}',
-                    Some(b'f') => '\u{c}',
-                    Some(b'n') => '\n',
-                    Some(b'r') => '\r',
-                    Some(b't') => '\t',
-                    Some(b'u') => {
-                        let a = self.hex4()?;
-                        let scalar = match a {
-                            0xd800..=0xdbff => {
-                                self.expect(b'\\')?;
-                                self.expect(b'u')?;
-                                let b = self.hex4()?;
-                                if !(0xdc00..=0xdfff).contains(&b) {
-                                    return Err(invalid());
-                                }
-                                0x10000 + ((u32::from(a) - 0xd800) << 10) + u32::from(b) - 0xdc00
-                            }
-                            0xdc00..=0xdfff => return Err(invalid()),
-                            _ => u32::from(a),
-                        };
-                        char::from_u32(scalar).ok_or_else(invalid)?
-                    }
-                    _ => return Err(invalid()),
-                },
-                Some(c @ 0x20..=0x7f) => char::from(c),
-                Some(first @ 0x80..=0xff) => {
-                    let len = match first {
-                        0xc2..=0xdf => 2,
-                        0xe0..=0xef => 3,
-                        0xf0..=0xf4 => 4,
-                        _ => return Err(invalid()),
-                    };
-                    let mut buf = [0; 4];
-                    buf[0] = first;
-                    for b in &mut buf[1..len] {
-                        *b = self.take()?.ok_or_else(invalid)?;
-                    }
-                    std::str::from_utf8(&buf[..len])
-                        .map_err(|_| invalid())?
-                        .chars()
-                        .next()
-                        .ok_or_else(invalid)?
-                }
-                _ => return Err(invalid()),
-            };
-            emit(ch)?;
-        }
-    }
-
-    fn hex4(&mut self) -> io::Result<u16> {
-        let mut n = 0;
-        for _ in 0..4 {
-            n = n * 16 + u16::from(hex(self.take()?.ok_or_else(invalid)?)?);
-        }
-        Ok(n)
-    }
-}
-
-fn hex(c: u8) -> io::Result<u8> {
-    match c {
-        b'0'..=b'9' => Ok(c - b'0'),
-        b'a'..=b'f' => Ok(c - b'a' + 10),
-        b'A'..=b'F' => Ok(c - b'A' + 10),
-        _ => Err(invalid()),
     }
 }
 

@@ -1137,8 +1137,27 @@ local drafts. No network yet.
     generation or retain an object ledger.
   - **M1.8e1b Verification ledger (L):** retain manifest object metadata in
     bounded, owned scratch with duplicate detection and cleanup evidence.
-  - **M1.8e1c Snapshot reconciliation (L):** compare the isolated snapshot's
-    identity and referenced objects with the parsed manifest and ledger.
+  - **M1.8e1c1a Retained-image callback (S):** allow caller-owned work on
+    the authenticated private image while its connection and scratch remain
+    owned. Completion claims metadata inspection only. Cancellation, errors
+    and cleanup failures never claim success.
+  - **M1.8e1c1b1 Bounded JSON lexical reader (L):** extract the manifest's
+    incremental Unicode scanner into a private reusable reader. Validate JSON
+    tokens and skip arbitrary values with fixed input, string and nesting
+    storage, cancellation and native I/O errors. Provide decoded name matching,
+    fixed-buffer string capture and exact unsigned integers. Mirror the
+    effective serde_json recursion boundary, accounting for enclosing values.
+    This prerequisite implements no attachment fields or snapshot traversal.
+  - **M1.8e1c1b2 Streaming attachment decoder (L):** use b1 to decode the
+    canonical draft attachment JSON shape with bounded memory and cancellation,
+    including arbitrary extra fields and duplicate-key read semantics. Preserve
+    the existing canonical reader's acceptance and reference semantics,
+    including numeric representation constraints beyond lexical JSON grammar.
+  - **M1.8e1c1c Snapshot reference walker (L):** page acquisitions and send
+    attempts and stream draft attachment blobs through the decoder, yielding
+    every reference without a corpus-sized set or total cap.
+  - **M1.8e1c2 Snapshot reconciliation (L):** compare the isolated snapshot's
+    identity and all references with the parsed manifest and ledger.
   - **M1.8e1d Recorded generation verification (L):** select a complete
     generation recorded in the current store, reconcile its manifest and
     snapshot, and verify every object's size and hash. Staging must verify

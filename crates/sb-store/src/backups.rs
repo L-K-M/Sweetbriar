@@ -6,6 +6,8 @@
 
 mod image;
 mod image_inspect;
+#[allow(dead_code)] // Semantic attachment decoding follows in M1.8e1c1b2.
+mod json;
 #[allow(dead_code)] // Used by the next verifier slice.
 mod ledger;
 // The next restore slice attaches this parser to the verification ledger.
