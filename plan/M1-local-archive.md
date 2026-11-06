@@ -999,7 +999,7 @@ local drafts. No network yet.
     bundle sources and discard temporary snapshots, including on cancellation.
   - **M1.7d1b2a1 File ordinal propagation — S:** preserve each original
     zero-based manifest file ordinal through the bounded declaration sort
-    and child agreement. Bundle admission lands in M1.7d1b2b below.
+    and child agreement. Keep bundle admission deferred and discard snapshots.
   - **M1.7d1b2b Bundle inventory — L:** admit verified bundle sources and
     retain their shared manifest snapshot. Restore recursive nested discovery,
     sorted canonical deduplication and version-2 inventory lifecycle.
