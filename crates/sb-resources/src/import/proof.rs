@@ -227,7 +227,7 @@ impl ManifestProof {
     /// Reopen a frozen registry proof, checking the header's identity and
     /// exact output lengths before any slot is read.
     fn from_registry(
-        scratch: &ValidationScratch,
+        scratch: &ValidationScratch<'_>,
         bundle: &SourceBundle,
         header: RegistryHeader,
     ) -> io::Result<Self> {
@@ -372,13 +372,13 @@ impl DescriptorCursor {
 /// reopen the frozen files directly, without rehashing or rescanning the
 /// manifest. The header is created last, so an absent header is never a
 /// validated proof.
-pub struct ManifestProofRegistry {
-    scratch: ValidationScratch,
+pub struct ManifestProofRegistry<'a> {
+    scratch: ValidationScratch<'a>,
     setup: RwLock<()>,
 }
 
-impl ManifestProofRegistry {
-    fn new(scratch: ValidationScratch) -> Self {
+impl<'a> ManifestProofRegistry<'a> {
+    fn new(scratch: ValidationScratch<'a>) -> Self {
         Self {
             scratch,
             setup: RwLock::new(()),
@@ -662,7 +662,7 @@ struct Output {
 
 fn build<R: Read + Seek>(
     reader: &mut R,
-    scratch: &ValidationScratch,
+    scratch: &ValidationScratch<'_>,
     format: BundleFormat,
 ) -> io::Result<(u64, u64)> {
     let table = json_syntax::validate_envelope(&mut *reader)?;
@@ -773,7 +773,9 @@ impl crate::Resources {
     /// Lease a disposable, job-lifetime registry of frozen manifest
     /// proofs. The registry is an owned `Send` value; its root lease is
     /// removed on `finish`, on drop and at the next store open.
-    pub fn manifest_proof_registry(&self) -> Result<ManifestProofRegistry, sb_store::StoreError> {
+    pub fn manifest_proof_registry(
+        &self,
+    ) -> Result<ManifestProofRegistry<'_>, sb_store::StoreError> {
         Ok(ManifestProofRegistry::new(
             self.store.import_validation_scratch()?,
         ))
@@ -1747,14 +1749,14 @@ mod tests {
     }
 
     #[test]
-    fn registry_capability_is_send_and_static() {
-        fn assert_send<T: Send + 'static>() {}
-        assert_send::<ManifestProofRegistry>();
-        assert_send::<Arc<ManifestProofRegistry>>();
+    fn registry_capability_is_send() {
+        fn assert_send<T: Send>() {}
+        assert_send::<ManifestProofRegistry<'static>>();
+        assert_send::<Arc<ManifestProofRegistry<'static>>>();
         let tmp = ScratchDir::new("manifest-proof-registry-send");
         let resources = crate::Resources::open(&tmp.path().join("store")).unwrap();
         let registry = resources.manifest_proof_registry().unwrap();
-        std::thread::spawn(move || drop(registry)).join().unwrap();
+        std::thread::scope(|s| s.spawn(move || drop(registry)).join().unwrap());
     }
 
     #[test]

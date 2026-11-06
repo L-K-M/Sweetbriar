@@ -84,10 +84,56 @@ pub trait Fs: Send + Sync {
 
 /// A directory capability for race-safe, no-symlink descendant reads.
 pub trait ConfinedDir: Send + Sync {
+    /// Create this directory's private ownership marker, without replacing one.
+    /// `sync` makes the marker durable along with the directory.
+    fn set_ownership(&self, _bytes: &[u8]) -> io::Result<()> {
+        Err(io::ErrorKind::Unsupported.into())
+    }
+    /// Read this directory's private ownership marker, at most 36 bytes.
+    fn ownership(&self) -> io::Result<Vec<u8>> {
+        Err(io::ErrorKind::Unsupported.into())
+    }
+    /// Stable filesystem identity of this open directory.
+    fn identity(&self) -> io::Result<DirectoryIdentity> {
+        Err(io::ErrorKind::Unsupported.into())
+    }
+    /// Open a direct child directory without following links.
+    fn open_dir(&self, _name: &Path) -> io::Result<Box<dyn ConfinedDir>> {
+        Err(io::ErrorKind::Unsupported.into())
+    }
+    /// Create an owner-only direct child directory exclusively.
+    fn create_private_dir(&self, _name: &Path) -> io::Result<()> {
+        Err(io::ErrorKind::Unsupported.into())
+    }
+    /// Create a direct child file exclusively.
+    fn create(&self, _name: &Path) -> io::Result<Box<dyn WriteFile>> {
+        Err(io::ErrorKind::Unsupported.into())
+    }
+    /// Remove a direct child file without following links.
+    fn remove_file(&self, _name: &Path) -> io::Result<()> {
+        Err(io::ErrorKind::Unsupported.into())
+    }
+    /// Remove an empty direct child directory, without following links.
+    fn remove_empty_dir(&self, _name: &Path) -> io::Result<()> {
+        Err(io::ErrorKind::Unsupported.into())
+    }
+    /// Flush this directory.
+    fn sync(&self) -> io::Result<()> {
+        Err(io::ErrorKind::Unsupported.into())
+    }
     /// Open a regular file below this directory. Reject absolute paths,
     /// parent components, symlinks and non-regular files. Resolution stays
     /// anchored to the opened directory even if its pathname is replaced.
     fn open_regular(&self, relative: &Path) -> io::Result<(Box<dyn ReadFile>, Metadata)>;
+}
+
+/// Filesystem-local identity of an open directory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DirectoryIdentity {
+    /// Filesystem device identifier.
+    pub device: u64,
+    /// Directory inode identifier.
+    pub inode: u64,
 }
 
 /// A file open for writing through the `Fs` seam.
