@@ -17,6 +17,7 @@ pub use bodies::{
 mod api;
 mod drafts;
 mod error;
+mod exports;
 mod imports;
 mod messages;
 mod rebuild;
@@ -31,6 +32,7 @@ pub use drafts::{
     DraftSummary, LiveAttempt,
 };
 pub use error::{CoreError, SearchParseCode};
+pub use exports::{ExportFormat, ExportJob, ExportJobState, ExportScopeInput, ExportStarted};
 pub use imports::{
     ImportJob, ImportJobState, ImportProblem, ImportProblemKind, ImportReport, ImportSource,
     ImportSourceKind, ImportStarted, ImportTarget, ImportTotals, MboxVariant,
