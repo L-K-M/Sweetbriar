@@ -16,6 +16,7 @@ mod ledger;
 mod manifest;
 #[allow(dead_code)] // The recorded-generation verifier consumes this seam in M1.8e1d.
 mod reconciliation;
+mod recorded;
 mod references;
 pub use image::BackupImageInspection;
 mod scratch;
@@ -54,6 +55,16 @@ const PIN_KIND: &str = "backup_in_progress";
 /// The snapshot's file name inside the generation's directory (spec/03).
 const SNAPSHOT_FILE: &str = "state.sqlite";
 const OWNER_FILE: &str = ".sweetbriar-owner";
+
+// A missing required source file is an absent entity, not transient I/O.
+// Scratch/environment failures keep their ordinary typed I/O path.
+fn source_open_error(error: io::Error, what: impl Into<String>) -> StoreError {
+    if error.kind() == io::ErrorKind::NotFound {
+        StoreError::not_found(what)
+    } else {
+        StoreError::unavailable_io(format!("backup source I/O failed: {error}"), error.kind())
+    }
+}
 
 /// Source pages one `sqlite3_backup_step` copies at most: bounded so
 /// other reader work interleaves, large enough that calls don't
