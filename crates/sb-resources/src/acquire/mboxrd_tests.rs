@@ -725,6 +725,7 @@ fn mboxrd_faults_leave_no_final_object() {
             .unwrap();
         assert!(!res.store.objects().exists(&id).unwrap());
         drop(session);
+        registry.finish().unwrap();
         res.close().unwrap();
     }
 }
