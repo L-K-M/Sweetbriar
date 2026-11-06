@@ -2249,6 +2249,94 @@ fn recorded_verification_checks_real_empty_backup() {
 }
 
 #[test]
+fn recorded_verification_missing_generation_is_not_found() {
+    let (_scratch, _paths, store) = open("recorded-verification-missing");
+    let result = store.verify_recorded_backup(
+        &Uuid::from_random_bytes([0x72; 16]).to_string(),
+        &std::sync::atomic::AtomicBool::new(false),
+    );
+    assert!(
+        matches!(result, Err(StoreError::NotFound { .. })),
+        "{result:?}"
+    );
+}
+
+#[test]
+fn recorded_verification_incomplete_generation_is_conflict() {
+    let (_scratch, _paths, store) = open("recorded-verification-incomplete");
+    let snapshot = store.backup_snapshot(BackupDestination::DataRoot).unwrap();
+    let generation = snapshot.generation_id().to_owned();
+    drop(snapshot);
+    for state in ["in_progress", "failed"] {
+        sql(
+            &store,
+            format!("UPDATE backup_generations SET state='{state}'"),
+        );
+        let result =
+            store.verify_recorded_backup(&generation, &std::sync::atomic::AtomicBool::new(false));
+        assert!(
+            matches!(result, Err(StoreError::Conflict { .. })),
+            "{state}: {result:?}"
+        );
+    }
+}
+
+#[test]
+fn recorded_verification_complete_metadata_cannot_be_missing() {
+    for column in [
+        "manifest_sha256",
+        "object_count",
+        "total_bytes",
+        "completed_at",
+    ] {
+        let (_scratch, _paths, store) = open("recorded-verification-missing-metadata");
+        let receipt = store
+            .complete_backup(store.backup_snapshot(BackupDestination::DataRoot).unwrap())
+            .unwrap();
+        sql(
+            &store,
+            format!("UPDATE backup_generations SET {column}=NULL"),
+        );
+        let result = store.verify_recorded_backup(
+            receipt.generation_id(),
+            &std::sync::atomic::AtomicBool::new(false),
+        );
+        assert!(
+            matches!(result, Err(StoreError::Corrupt { .. })),
+            "{column}: {result:?}"
+        );
+    }
+}
+
+#[test]
+fn recorded_verification_manifest_failures_are_typed() {
+    let (_scratch, _paths, store) = open("recorded-verification-manifest-syntax");
+    let receipt = store
+        .complete_backup(store.backup_snapshot(BackupDestination::DataRoot).unwrap())
+        .unwrap();
+    let path = receipt.location().join("manifest.json");
+    let original = std::fs::read(&path).unwrap();
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    std::fs::write(&path, b"{\"format\":1}").unwrap();
+    let result = store.verify_recorded_backup(receipt.generation_id(), &cancel);
+    assert!(
+        matches!(result, Err(StoreError::Corrupt { .. })),
+        "{result:?}"
+    );
+    std::fs::remove_file(&path).unwrap();
+    let result = store.verify_recorded_backup(receipt.generation_id(), &cancel);
+    assert!(
+        matches!(result, Err(StoreError::NotFound { .. })),
+        "{result:?}"
+    );
+    std::fs::write(path, original).unwrap();
+    assert!(matches!(
+        store.verify_recorded_backup(receipt.generation_id(), &cancel),
+        Ok(crate::BackupImageInspection::Inspected { .. })
+    ));
+}
+
+#[test]
 fn recorded_verification_pages_real_objects_and_rejects_corruption() {
     use std::sync::atomic::AtomicBool;
     let (_scratch, _paths, store) = open("recorded-verification-objects");
@@ -2284,12 +2372,20 @@ fn recorded_verification_pages_real_objects_and_rejects_corruption() {
         assert!(verify().is_err());
     }
     std::fs::remove_file(&path).unwrap();
-    assert!(verify().is_err());
+    let result = verify();
+    assert!(
+        matches!(result, Err(StoreError::NotFound { .. })),
+        "{result:?}"
+    );
     std::fs::write(&path, original).unwrap();
     let manifest = receipt.location().join("manifest.json");
     let original = std::fs::read(&manifest).unwrap();
     std::fs::write(&manifest, b"{}").unwrap();
-    assert!(verify().is_err());
+    let result = verify();
+    assert!(
+        matches!(result, Err(StoreError::Corrupt { .. })),
+        "{result:?}"
+    );
     std::fs::write(manifest, original).unwrap();
     assert!(matches!(
         verify(),
@@ -2370,11 +2466,13 @@ fn recorded_verification_rejects_record_and_symlink_substitution() {
     std::fs::rename(&renamed, &path).unwrap();
     let fs = Arc::new(FaultFs::new(real_fs(), FsOp::Read, 1, FaultKind::Eio));
     let failing = faulty_backups(&store, &paths, fs);
-    assert!(
-        failing
-            .verify_recorded(receipt.generation_id(), &cancel)
-            .is_err()
-    );
+    assert!(matches!(
+        failing.verify_recorded(receipt.generation_id(), &cancel),
+        Err(StoreError::Unavailable {
+            io_kind: Some(_),
+            ..
+        })
+    ));
     sql(&store, "CREATE TRIGGER fail_verifier_insert BEFORE INSERT ON verifier_objects BEGIN SELECT RAISE(ABORT, 'injected'); END".into());
     assert!(
         store

@@ -11,6 +11,26 @@ fn io_error(e: io::Error) -> StoreError {
     StoreError::unavailable_io(format!("backup verification I/O: {e}"), e.kind())
 }
 
+// A missing required source file is an absent entity, not transient I/O.
+// Keep scratch/environment failures on the ordinary typed I/O path.
+fn source_open_error(error: io::Error, what: impl Into<String>) -> StoreError {
+    if error.kind() == io::ErrorKind::NotFound {
+        StoreError::not_found(what)
+    } else {
+        io_error(error)
+    }
+}
+
+struct RecordedGeneration {
+    location: String,
+    started: i64,
+    state: String,
+    manifest_hash: Option<String>,
+    count: Option<i64>,
+    total: Option<i64>,
+    completed: Option<i64>,
+}
+
 fn cancelled(cancel: &AtomicBool) -> bool {
     cancel.load(Ordering::Acquire)
 }
@@ -79,17 +99,45 @@ impl Backups {
             *active = Some(Arc::downgrade(&token));
         }
         let conn = open_connection(&self.state_db, Access::ReadOnly, READER_PRAGMAS)?;
-        let row: Option<(String, i64, String, String, i64, i64, i64)> = conn.query_row(
+        let row = conn.query_row(
             "SELECT location, started_at, state, manifest_sha256, object_count, total_bytes, completed_at FROM backup_generations WHERE generation_id=?1", [generation],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?))
+            |r| Ok(RecordedGeneration {
+                location: r.get(0)?,
+                started: r.get(1)?,
+                state: r.get(2)?,
+                manifest_hash: r.get(3)?,
+                count: r.get(4)?,
+                total: r.get(5)?,
+                completed: r.get(6)?,
+            })
         ).optional().map_err(|e| classify(e, "read recorded generation"))?;
-        let (location, started, state, manifest_hash, count, total, _completed) =
-            row.ok_or_else(|| StoreError::corrupt("recorded generation not found"))?;
+        let RecordedGeneration {
+            location,
+            started,
+            state,
+            manifest_hash,
+            count,
+            total,
+            completed,
+        } = row.ok_or_else(|| StoreError::not_found(format!("backup generation {generation}")))?;
+        match state.as_str() {
+            "complete" => {}
+            "in_progress" | "failed" => {
+                return Err(StoreError::conflict("backup generation is not complete"));
+            }
+            _ => return Err(StoreError::corrupt("invalid recorded generation state")),
+        }
+        let (Some(manifest_hash), Some(count), Some(total), Some(_completed)) =
+            (manifest_hash, count, total, completed)
+        else {
+            return Err(StoreError::corrupt(
+                "incomplete metadata for complete generation",
+            ));
+        };
         let parsed_id: Uuid = generation
             .parse()
             .map_err(|_| StoreError::corrupt("invalid generation id"))?;
         if parsed_id.to_string() != generation
-            || state != "complete"
             || count < 0
             || total < 0
             || Path::new(&location)
@@ -127,7 +175,7 @@ impl Backups {
             |scratch| {
                 let (mut input, _) = source
                     .open_regular(Path::new("manifest.json"))
-                    .map_err(io_error)?;
+                    .map_err(|error| source_open_error(error, "backup manifest"))?;
                 let mut output = scratch
                     .create(Path::new("manifest.json"))
                     .map_err(io_error)?;
@@ -167,6 +215,11 @@ impl Backups {
                 let manifest = match parsed {
                     Err(e) if e.kind() == io::ErrorKind::Interrupted && cancelled(cancel) => {
                         return Ok(([0; 32], 0));
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::InvalidData => {
+                        return Err(StoreError::corrupt(format!(
+                            "invalid backup manifest: {error}"
+                        )));
                     }
                     result => result.map_err(io_error)?,
                 };
@@ -222,7 +275,9 @@ impl Backups {
                         let path =
                             format!("objects/sha256/{}/{}/{}", &hash[..2], &hash[2..4], hash);
                         let (mut file, _) =
-                            source.open_regular(Path::new(&path)).map_err(io_error)?;
+                            source.open_regular(Path::new(&path)).map_err(|error| {
+                                source_open_error(error, format!("backup object {hash}"))
+                            })?;
                         let mut hasher = Sha256::new();
                         let mut length = 0u64;
                         let mut buf = [0; 65536];
