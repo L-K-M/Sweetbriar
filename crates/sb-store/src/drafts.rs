@@ -3,11 +3,13 @@
 //! object-store references a save's attachments were published for.
 //! The schema is migration 1's; these are its reads and writes.
 
+use std::sync::Arc;
+
 use rusqlite::{OptionalExtension, Transaction, params};
 use sb_types::time::Timestamp;
 
 use crate::StoreError;
-use crate::objects::{PublishedObject, ReservationRelease, release_reservation};
+use crate::objects::{ObjectId, PublishedObject, ReservationRelease, release_reservation};
 use crate::schema::classify;
 
 /// The spec/02 draft state names, read back.
@@ -129,9 +131,11 @@ pub struct DraftRecipient {
 }
 
 /// A new publication or an unchanged attachment from the base revision.
+/// Sharing a publication permits identical command retries; its reservation
+/// still authorizes only one new reference.
 pub enum DraftAttachment {
     New {
-        object: PublishedObject,
+        object: Arc<PublishedObject>,
         filename: String,
         media_type: String,
     },
@@ -468,6 +472,59 @@ pub fn draft(tx: &Transaction, draft_id: &str) -> Result<Option<StoredDraft>, St
         created_at: Timestamp::from_millis(created_at),
         updated_at: Timestamp::from_millis(updated_at),
     }))
+}
+
+/// The exact source object one stored attachment reference names,
+/// after proving `revision_id` belongs to `draft_id` and `reference`
+/// is one of that revision's stored attachments: hash, size, filename
+/// and media type all match. An older, noncurrent or terminal
+/// revision is as valid a source as the head; this reads immutable
+/// history and never mutates the draft. `NotFound` names a revision
+/// the draft does not have; `Conflict` names a reference that is not
+/// in it. The returned id is what the object reader opens and the
+/// publisher republishes.
+pub fn attachment_source(
+    tx: &Transaction,
+    draft_id: &str,
+    revision_id: &str,
+    reference: &AttachmentRef,
+) -> Result<ObjectId, StoreError> {
+    let attachments = revision_attachments(tx, draft_id, revision_id)?;
+    if !attachments.contains(reference) {
+        return Err(StoreError::conflict(format!(
+            "revision {revision_id} of draft {draft_id} does not reference this attachment"
+        )));
+    }
+    ObjectId::from_hex(&reference.object_sha256, reference.size).map_err(|_| {
+        StoreError::corrupt(format!(
+            "revision {revision_id} of draft {draft_id} stores an invalid attachment SHA-256"
+        ))
+    })
+}
+
+/// One revision's stored attachment references, proving the revision
+/// belongs to the draft (`NotFound` when it does not). The row is
+/// immutable, so an older revision reads exactly what it stored.
+fn revision_attachments(
+    tx: &Transaction,
+    draft_id: &str,
+    revision_id: &str,
+) -> Result<Vec<AttachmentRef>, StoreError> {
+    let json = tx
+        .query_row(
+            "SELECT attachments_json FROM draft_revisions
+             WHERE draft_id = ?1 AND revision_id = ?2",
+            params![draft_id, revision_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|e| classify(e, "read a draft revision"))?;
+    let Some(json) = json else {
+        return Err(StoreError::not_found(format!(
+            "draft {draft_id} revision {revision_id}"
+        )));
+    };
+    parse_attachments(&json)
 }
 
 /// The draft row's state and current revision, or `NotFound`.

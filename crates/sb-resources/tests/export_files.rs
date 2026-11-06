@@ -46,6 +46,18 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+fn discard_inventory(res: &Resources, inventory: &sb_resources::ImportInventory) {
+    let mut seen = BTreeSet::new();
+    let snapshots: Vec<_> = inventory
+        .sources()
+        .iter()
+        .flat_map(|source| source.snapshots())
+        .filter(|snapshot| seen.insert(snapshot.token().to_owned()))
+        .cloned()
+        .collect();
+    res.remove_import_sources(&snapshots).unwrap();
+}
+
 fn object_path(root: &Path, bytes: &[u8]) -> PathBuf {
     let hex = sha_hex(bytes);
     root.join("objects/sha256")
@@ -1220,6 +1232,519 @@ fn resume_republishes_files_failing_mboxrd_verification() {
 }
 
 #[test]
+fn bundle_admission_retains_checked_children_and_shared_manifest() {
+    let (scratch, res, root) = fixture();
+    for (job, format) in [
+        ("admit-eml", ExportFormat::Eml),
+        ("admit-mbox", ExportFormat::Mboxrd),
+    ] {
+        let dest = scratch.path().join(job);
+        capture(&res, job, format, &dest, account_scope(&res));
+        export(&res, job);
+        let mut metadata = manifest(&dest);
+        metadata["files"].as_array_mut().unwrap().reverse();
+        std::fs::write(dest.join(MANIFEST), metadata.to_string()).unwrap();
+        let expected: Vec<_> = metadata["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|file| {
+                let path = dest.join(file["name"].as_str().unwrap());
+                let bytes = std::fs::read(&path).unwrap();
+                (path, bytes)
+            })
+            .collect();
+        let manifest_path = dest.join(MANIFEST);
+        let mut changed_during_scan = None;
+        let outcome = res.inventory_import_sources(std::slice::from_ref(&dest), |event| {
+            if changed_during_scan.is_none()
+                && let sb_resources::ImportProgress::Scanning { path, bytes } = event
+                && bytes > 0
+                && path != manifest_path
+            {
+                std::fs::write(path, b"changed during verification").unwrap();
+                changed_during_scan = Some(path.to_path_buf());
+            }
+            ControlFlow::Continue(())
+        });
+        let changed_during_scan = changed_during_scan.expect("a child was verified");
+        let sources = outcome.inventory().sources();
+        assert_eq!(sources.len(), metadata["files"].as_array().unwrap().len());
+        assert!(outcome.inventory().problems().is_empty());
+        let first = sources[0].bundle().unwrap().manifest().token();
+        for source in sources {
+            assert_eq!(source.quoting(), sb_resources::MboxQuoting::Equivalent);
+            let bundle = source.bundle().unwrap();
+            assert_eq!(bundle.manifest().token(), first);
+            let serialized: Value = serde_json::from_str(&source.to_json()).unwrap();
+            let ordinal = serialized["bundle"]["file_ordinal"].as_u64().unwrap() as usize;
+            assert_eq!(
+                source.path().file_name().unwrap(),
+                metadata["files"][ordinal]["name"].as_str().unwrap()
+            );
+            let decoded = sb_resources::SourceInventory::from_json(&source.to_json()).unwrap();
+            assert_eq!(decoded.to_json(), source.to_json());
+            let original = &expected
+                .iter()
+                .find(|(path, _)| path == source.path())
+                .unwrap()
+                .1;
+            std::fs::write(source.path(), b"changed after capture").unwrap();
+            let copy = root
+                .join("recovery")
+                .join(format!("import-source-{}", source.snapshot().token()));
+            assert_eq!(std::fs::read(copy).unwrap(), *original);
+        }
+        assert!(
+            sources
+                .iter()
+                .any(|source| source.path() == changed_during_scan)
+        );
+    }
+}
+
+#[test]
+fn admitted_bundle_reopen_refuses_missing_or_corrupt_manifest() {
+    for damage in ["missing", "corrupt"] {
+        let (scratch, res, root) = fixture();
+        let dest = scratch.path().join("bundle");
+        capture(
+            &res,
+            damage,
+            ExportFormat::Eml,
+            &dest,
+            mailbox_scope(&res, 1),
+        );
+        export(&res, damage);
+        let outcome = res
+            .inventory_import_sources(std::slice::from_ref(&dest), |_| ControlFlow::Continue(()));
+        let source = &outcome.inventory().sources()[0];
+        let manifest = root.join("recovery").join(format!(
+            "import-source-{}",
+            source.bundle().unwrap().manifest().token()
+        ));
+        if damage == "missing" {
+            std::fs::remove_file(manifest).unwrap();
+        } else {
+            std::fs::write(manifest, b"corrupt").unwrap();
+        }
+        assert!(
+            res.open_import_acquisition(source, None, sb_resources::SourcePosition::START)
+                .is_err()
+        );
+    }
+}
+
+#[test]
+fn bundle_cancellation_keeps_only_admitted_snapshots() {
+    let (scratch, res, root) = fixture();
+    let other = scratch.path().join("other.eml");
+    std::fs::write(&other, BODY_A).unwrap();
+    let unrelated =
+        res.inventory_import_sources(std::slice::from_ref(&other), |_| ControlFlow::Continue(()));
+    let other_snapshot = unrelated.inventory().sources()[0].snapshot().clone();
+    let dest = scratch.path().join("bundle");
+    capture(
+        &res,
+        "partial-admission",
+        ExportFormat::Eml,
+        &dest,
+        account_scope(&res),
+    );
+    export(&res, "partial-admission");
+    let mut child = None::<PathBuf>;
+    let outcome = res.inventory_import_sources(std::slice::from_ref(&dest), |event| {
+        if let sb_resources::ImportProgress::Capturing { path, .. } = event
+            && path != dest.join(MANIFEST)
+        {
+            if child.as_deref().is_some_and(|first| first != path) {
+                return ControlFlow::Break(());
+            }
+            child = Some(path.to_path_buf());
+        }
+        ControlFlow::Continue(())
+    });
+    assert!(matches!(
+        outcome,
+        sb_resources::ImportInventoryOutcome::Cancelled(_)
+    ));
+    let sources = outcome.inventory().sources();
+    assert_eq!(sources.len(), 1);
+    let owned: Vec<_> = sources[0].snapshots().cloned().collect();
+    for snapshot in &owned {
+        assert!(
+            root.join("recovery")
+                .join(format!("import-source-{}", snapshot.token()))
+                .exists()
+        );
+    }
+    res.remove_import_sources(&owned).unwrap();
+    assert!(
+        root.join("recovery")
+            .join(format!("import-source-{}", other_snapshot.token()))
+            .exists()
+    );
+}
+
+#[test]
+fn nested_bundles_keep_depth_first_order_and_distinct_manifests() {
+    let (scratch, res, _) = fixture();
+    let outer = scratch.path().join("outer");
+    capture(
+        &res,
+        "outer-bundle",
+        ExportFormat::Eml,
+        &outer,
+        mailbox_scope(&res, 1),
+    );
+    export(&res, "outer-bundle");
+    let inner = outer.join("000-nested");
+    capture(
+        &res,
+        "inner-bundle",
+        ExportFormat::Mboxrd,
+        &inner,
+        mailbox_scope(&res, 1),
+    );
+    export(&res, "inner-bundle");
+    let outcome =
+        res.inventory_import_sources(std::slice::from_ref(&outer), |_| ControlFlow::Continue(()));
+    assert!(outcome.inventory().problems().is_empty());
+    let sources = outcome.inventory().sources();
+    let paths: Vec<_> = sources
+        .iter()
+        .map(|source| source.path().to_path_buf())
+        .collect();
+    let mut sorted = paths.clone();
+    sorted.sort();
+    assert_eq!(paths, sorted);
+    let outer_tokens: BTreeSet<_> = sources
+        .iter()
+        .filter(|source| source.path().parent() == Some(outer.as_path()))
+        .map(|source| source.bundle().unwrap().manifest().token())
+        .collect();
+    let inner_tokens: BTreeSet<_> = sources
+        .iter()
+        .filter(|source| source.path().parent() == Some(inner.as_path()))
+        .map(|source| source.bundle().unwrap().manifest().token())
+        .collect();
+    assert_eq!(outer_tokens.len(), 1);
+    assert_eq!(inner_tokens.len(), 1);
+    assert_ne!(outer_tokens, inner_tokens);
+}
+
+#[test]
+fn bundle_inventory_reports_child_disagreements() {
+    let (scratch, res, _) = fixture();
+    for (job, format) in [
+        ("children-eml", ExportFormat::Eml),
+        ("children-mbox", ExportFormat::Mboxrd),
+    ] {
+        let dest = scratch.path().join(job);
+        capture(&res, job, format, &dest, account_scope(&res));
+        export(&res, job);
+        let metadata = manifest(&dest);
+        let files = metadata["files"].as_array().unwrap();
+        let missing = dest.join(files[0]["name"].as_str().unwrap());
+        std::fs::remove_file(&missing).unwrap();
+        let extra = dest.join("unlisted.eml");
+        std::fs::write(&extra, BODY_A).unwrap();
+        let mut captured = Vec::new();
+        let outcome = res.inventory_import_sources(std::slice::from_ref(&dest), |event| {
+            if let sb_resources::ImportProgress::Capturing { path, .. } = event {
+                captured.push(path.to_path_buf());
+            }
+            ControlFlow::Continue(())
+        });
+        let inventory = outcome.inventory();
+        assert_eq!(inventory.sources().len(), files.len() - 1);
+        assert!(inventory.problems().iter().any(|p| p.path() == missing));
+        assert!(inventory.problems().iter().any(|p| p.path() == extra));
+        if files.len() > 1 {
+            let sibling = dest.join(files[1]["name"].as_str().unwrap());
+            assert!(captured.contains(&sibling), "{job}: sibling not checked");
+        }
+    }
+}
+
+#[test]
+fn bundle_inventory_checks_child_kind_length_and_count() {
+    let (scratch, res, _) = fixture();
+    for (job, format) in [
+        ("agreement-eml", ExportFormat::Eml),
+        ("agreement-mbox", ExportFormat::Mboxrd),
+    ] {
+        let dest = scratch.path().join(job);
+        capture(&res, job, format, &dest, mailbox_scope(&res, 1));
+        export(&res, job);
+        let original = manifest(&dest);
+        let name = original["files"][0]["name"].as_str().unwrap();
+        let path = dest.join(name);
+        let bytes = std::fs::read(&path).unwrap();
+        let check = |property: &str| {
+            let outcome = res.inventory_import_sources(std::slice::from_ref(&dest), |_| {
+                ControlFlow::Continue(())
+            });
+            assert!(
+                outcome.inventory().problems().iter().any(|problem| {
+                    problem.path() == path && problem.detail().contains(property)
+                }),
+                "{job}: {property}: {:?}",
+                outcome.inventory().problems()
+            );
+        };
+
+        let mut longer = bytes.clone();
+        longer.push(b'x');
+        std::fs::write(&path, longer).unwrap();
+        check("length");
+        if matches!(format, ExportFormat::Mboxrd) {
+            let mut same_length = bytes.clone();
+            let separator = same_length
+                .windows(6)
+                .position(|window| window == b"\nFrom ")
+                .unwrap();
+            same_length[separator + 1] = b'X';
+            std::fs::write(&path, same_length).unwrap();
+            check("record count");
+        }
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        // A declared child keeps file semantics even when a directory
+        // occupies its path: the directory's entries are not hoisted
+        // into sources of their own.
+        std::fs::write(path.join("nested.eml"), BODY_A).unwrap();
+        check("regular");
+        let outcome = res
+            .inventory_import_sources(std::slice::from_ref(&dest), |_| ControlFlow::Continue(()));
+        assert_eq!(
+            outcome.inventory().sources().len(),
+            original["files"].as_array().unwrap().len() - 1
+        );
+        std::fs::remove_dir_all(&path).unwrap();
+        std::fs::write(&path, &bytes).unwrap();
+
+        if matches!(format, ExportFormat::Eml) {
+            continue;
+        }
+        let wrong_name = "wrong.txt";
+        let mut wrong = original.clone();
+        wrong["files"][0]["name"] = json!(wrong_name);
+        for message in wrong["messages"].as_array_mut().unwrap() {
+            if message["file"] == name {
+                message["file"] = json!(wrong_name);
+            }
+        }
+        let wrong_path = dest.join(wrong_name);
+        std::fs::rename(&path, &wrong_path).unwrap();
+        std::fs::write(dest.join(MANIFEST), wrong.to_string()).unwrap();
+        let outcome = res
+            .inventory_import_sources(std::slice::from_ref(&dest), |_| ControlFlow::Continue(()));
+        assert!(
+            outcome
+                .inventory()
+                .sources()
+                .iter()
+                .all(|source| source.path() != wrong_path)
+        );
+        assert!(
+            outcome
+                .inventory()
+                .problems()
+                .iter()
+                .any(|p| p.path() == wrong_path && p.detail().contains("format"))
+        );
+    }
+}
+
+#[test]
+fn bundle_and_direct_mbox_roots_do_not_suppress_each_other() {
+    let (scratch, res, _) = fixture();
+    let dest = scratch.path().join("bundle");
+    capture(
+        &res,
+        "alias-roots",
+        ExportFormat::Mboxrd,
+        &dest,
+        mailbox_scope(&res, 1),
+    );
+    export(&res, "alias-roots");
+    let child = dest.join(manifest(&dest)["files"][0]["name"].as_str().unwrap());
+    let alias = scratch.path().join("alias.mbox");
+    std::os::unix::fs::symlink(&child, &alias).unwrap();
+    for (roots, bundle_first) in [
+        (vec![dest.clone(), alias.clone()], true),
+        (vec![alias.clone(), dest.clone()], false),
+    ] {
+        let outcome = res.inventory_import_sources(&roots, |_| ControlFlow::Continue(()));
+        assert_eq!(outcome.inventory().sources().len(), 1);
+        assert_eq!(
+            outcome.inventory().sources()[0].bundle().is_some(),
+            bundle_first
+        );
+        assert!(outcome.inventory().problems().is_empty());
+    }
+}
+
+#[test]
+fn bundle_checks_each_declared_alias() {
+    let (scratch, res, _) = fixture();
+    let dest = scratch.path().join("aliases");
+    capture(
+        &res,
+        "declared-aliases",
+        ExportFormat::Eml,
+        &dest,
+        mailbox_scope(&res, 1),
+    );
+    export(&res, "declared-aliases");
+    let mut metadata = manifest(&dest);
+    let first = metadata["files"][0]["name"].as_str().unwrap().to_owned();
+    let second = metadata["files"][1]["name"].as_str().unwrap().to_owned();
+    let first_path = dest.join(&first);
+    let second_path = dest.join(&second);
+    let bytes = std::fs::metadata(&first_path).unwrap().len();
+    std::fs::remove_file(&second_path).unwrap();
+    std::os::unix::fs::symlink(&first_path, &second_path).unwrap();
+    metadata["files"][1]["bytes"] = json!(bytes);
+    for message in metadata["messages"].as_array_mut().unwrap() {
+        if message["file"] == second {
+            message["acquisition"]["bytes"] = json!(bytes);
+        }
+    }
+    std::fs::write(dest.join(MANIFEST), metadata.to_string()).unwrap();
+    let mut captured = BTreeSet::new();
+    let outcome = res.inventory_import_sources(std::slice::from_ref(&dest), |event| {
+        if let sb_resources::ImportProgress::Capturing { path, .. } = event {
+            captured.insert(path.to_path_buf());
+        }
+        ControlFlow::Continue(())
+    });
+    assert!(captured.contains(&first_path));
+    assert!(captured.contains(&second_path));
+    assert_eq!(
+        outcome.inventory().sources().len(),
+        metadata["files"].as_array().unwrap().len() - 1
+    );
+    assert!(outcome.inventory().problems().is_empty());
+}
+
+#[test]
+fn bundle_child_cancellation_discards_only_its_snapshots() {
+    let (scratch, res, root) = fixture();
+    let other = scratch.path().join("other.eml");
+    std::fs::write(&other, BODY_A).unwrap();
+    let other_inventory =
+        res.inventory_import_sources(std::slice::from_ref(&other), |_| ControlFlow::Continue(()));
+    assert_eq!(other_inventory.inventory().sources().len(), 1);
+    let snapshots = || {
+        std::fs::read_dir(root.join("recovery"))
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .filter(|name| name.to_string_lossy().starts_with("import-source-"))
+            .collect::<BTreeSet<_>>()
+    };
+    let before = snapshots();
+    let dest = scratch.path().join("cancellation");
+    capture(
+        &res,
+        "cancel-children",
+        ExportFormat::Mboxrd,
+        &dest,
+        mailbox_scope(&res, 1),
+    );
+    export(&res, "cancel-children");
+    let mut metadata = manifest(&dest);
+    let child = dest.join(metadata["files"][0]["name"].as_str().unwrap());
+    let mut content = std::fs::read(&child).unwrap();
+    content.extend(std::iter::repeat_n(b'x', 128 * 1024));
+    std::fs::write(&child, &content).unwrap();
+    metadata["files"][0]["bytes"] = json!(content.len());
+    std::fs::write(dest.join(MANIFEST), metadata.to_string()).unwrap();
+    for cancel_scan in [false, true] {
+        let mut seen_scan = 0;
+        let outcome =
+            res.inventory_import_sources(std::slice::from_ref(&dest), |event| match event {
+                sb_resources::ImportProgress::Capturing { path, .. }
+                    if path == child && !cancel_scan =>
+                {
+                    ControlFlow::Break(())
+                }
+                sb_resources::ImportProgress::Scanning { path, .. }
+                    if path == child && cancel_scan =>
+                {
+                    seen_scan += 1;
+                    if seen_scan == 4 {
+                        ControlFlow::Break(())
+                    } else {
+                        ControlFlow::Continue(())
+                    }
+                }
+                _ => ControlFlow::Continue(()),
+            });
+        assert!(matches!(
+            outcome,
+            sb_resources::ImportInventoryOutcome::Cancelled(_)
+        ));
+        assert_eq!(snapshots(), before);
+    }
+    let outcome =
+        res.inventory_import_sources(std::slice::from_ref(&dest), |_| ControlFlow::Continue(()));
+    assert!(outcome.inventory().problems().is_empty());
+    let owned: Vec<_> = outcome
+        .inventory()
+        .sources()
+        .iter()
+        .flat_map(|source| source.snapshots().cloned())
+        .collect();
+    res.remove_import_sources(&owned).unwrap();
+    assert_eq!(snapshots(), before);
+    std::fs::write(&child, b"bad").unwrap();
+    let outcome =
+        res.inventory_import_sources(std::slice::from_ref(&dest), |_| ControlFlow::Continue(()));
+    assert_eq!(
+        outcome.inventory().problems()[0].kind(),
+        sb_resources::ImportProblemKind::Failed
+    );
+    assert_eq!(snapshots(), before);
+}
+
+#[test]
+fn bundle_child_agreement_reports_missing_and_unlisted() {
+    let (scratch, res, _) = fixture();
+    let dest = scratch.path().join("child-agreement");
+    capture(
+        &res,
+        "child-agreement",
+        ExportFormat::Eml,
+        &dest,
+        account_scope(&res),
+    );
+    export(&res, "child-agreement");
+    let metadata = manifest(&dest);
+    let missing = dest.join(metadata["files"][0]["name"].as_str().unwrap());
+    std::fs::remove_file(&missing).unwrap();
+    let extra = dest.join("unlisted.eml");
+    std::fs::write(&extra, BODY_A).unwrap();
+    let outcome =
+        res.inventory_import_sources(std::slice::from_ref(&dest), |_| ControlFlow::Continue(()));
+    assert!(
+        outcome
+            .inventory()
+            .problems()
+            .iter()
+            .any(|p| p.path() == missing)
+    );
+    assert!(
+        outcome
+            .inventory()
+            .problems()
+            .iter()
+            .any(|p| p.path() == extra)
+    );
+}
+
+#[test]
 fn manifest_schema_rejects_invalid_writer_manifests() {
     let (scratch, res, _) = fixture();
     for (job, format) in [
@@ -1264,6 +1789,20 @@ fn manifest_schema_rejects_invalid_writer_manifests() {
                                 message.insert((*span).into(), value);
                             }
                         }
+                        if !file {
+                            let name = original["messages"][0]["file"].as_str().unwrap();
+                            let files = changed["files"].as_array_mut().unwrap();
+                            let index = files
+                                .iter()
+                                .position(|entry| entry["name"] == name)
+                                .unwrap();
+                            if matches!(format, ExportFormat::Eml) {
+                                files.remove(index);
+                            } else {
+                                let records = files[index]["records"].as_u64().unwrap();
+                                files[index]["records"] = json!(records - 1);
+                            }
+                        }
                         let valid_pair = match availability {
                             "acquired" => acquisition && file,
                             "not_acquired" => !acquisition && !file,
@@ -1276,22 +1815,24 @@ fn manifest_schema_rejects_invalid_writer_manifests() {
                         } else {
                             0
                         };
-                        let expected = if valid_pair && mask == required {
-                            sb_resources::ImportProblemKind::Unsupported
-                        } else {
-                            sb_resources::ImportProblemKind::Failed
-                        };
+                        let valid_schema = valid_pair && mask == required;
                         std::fs::write(dest.join(MANIFEST), changed.to_string()).unwrap();
                         let outcome = res
                             .inventory_import_sources(std::slice::from_ref(&dest), |_| {
                                 ControlFlow::Continue(())
                             });
-                        assert!(outcome.inventory().sources().is_empty());
+                        let problems = outcome.inventory().problems();
                         assert_eq!(
-                            outcome.inventory().problems()[0].kind(),
-                            expected,
-                            "{job}: messages[0] availability={availability} acquisition={acquisition} file={file} spans={mask:04b}"
+                            problems
+                                .iter()
+                                .any(|problem| problem.detail().contains("invalid manifest JSON")),
+                            !valid_schema,
+                            "{job}: messages[0] availability={availability} acquisition={acquisition} file={file} spans={mask:04b}: {problems:?}"
                         );
+                        if !valid_schema {
+                            assert!(outcome.inventory().sources().is_empty());
+                        }
+                        discard_inventory(&res, outcome.inventory());
                     }
                 }
             }
@@ -1307,10 +1848,27 @@ fn manifest_schema_rejects_invalid_writer_manifests() {
             let mut changed = original.clone();
             changed["messages"][0]["occurrence_state"] = json!(state);
             changed["messages"][0]["occurrence_id"] = json!(i64::MIN);
+            let mut ids = Sha256::new();
+            for message in changed["messages"].as_array().unwrap() {
+                ids.update(message["occurrence_id"].as_i64().unwrap().to_be_bytes());
+            }
+            changed["ids_sha256"] = json!(hex(ids.finalize().as_slice()));
             changed["messages"][0]["message_id"] = json!(i64::MAX);
             changed["messages"][0]["mailbox"]["id"] = json!(i64::MIN);
             changed["messages"][0]["acquisition"]["id"] = json!(i64::MAX);
             changed["messages"][0]["acquisition"]["bytes"] = json!(u64::MAX);
+            if matches!(format, ExportFormat::Eml) {
+                let old = original["messages"][0]["file"].as_str().unwrap();
+                let file = changed["files"]
+                    .as_array_mut()
+                    .unwrap()
+                    .iter_mut()
+                    .find(|file| file["name"] == old)
+                    .unwrap();
+                file["name"] = json!(format!("{}.eml", i64::MIN));
+                file["bytes"] = json!(u64::MAX);
+                changed["messages"][0]["file"] = json!(format!("{}.eml", i64::MIN));
+            }
             if matches!(format, ExportFormat::Mboxrd) {
                 changed["messages"][0]["record_offset"] = json!(u64::MAX);
                 changed["messages"][0]["encoded_bytes"] = json!(u64::MAX);
@@ -1334,12 +1892,15 @@ fn manifest_schema_rejects_invalid_writer_manifests() {
             let outcome = res.inventory_import_sources(std::slice::from_ref(&dest), |_| {
                 ControlFlow::Continue(())
             });
-            assert!(outcome.inventory().sources().is_empty());
-            assert_eq!(
-                outcome.inventory().problems()[0].kind(),
-                sb_resources::ImportProblemKind::Unsupported,
+            assert!(
+                outcome
+                    .inventory()
+                    .problems()
+                    .iter()
+                    .all(|problem| !problem.detail().contains("invalid manifest JSON")),
                 "{job}: messages[0].occurrence_state {state}"
             );
+            discard_inventory(&res, outcome.inventory());
         }
 
         for span in spans {
@@ -2073,7 +2634,7 @@ mod crash_cuts {
 }
 
 #[test]
-fn emitted_bundles_are_captured_and_refused_without_plain_import() {
+fn emitted_bundles_admit_members_in_all_scopes() {
     let (scratch, res, _) = fixture();
     for (job, format, scope) in [
         ("eml-import", ExportFormat::Eml, mailbox_scope(&res, 1)),
@@ -2127,17 +2688,17 @@ fn emitted_bundles_are_captured_and_refused_without_plain_import() {
         });
         let inventory = outcome.inventory();
         assert!(captured);
-        assert!(inventory.sources().is_empty());
-        assert_eq!(inventory.problems().len(), 1);
         assert_eq!(
-            inventory.problems()[0].kind(),
-            sb_resources::ImportProblemKind::Unsupported
+            inventory.sources().len(),
+            manifest(&dest)["files"].as_array().unwrap().len()
         );
         assert!(
-            inventory.problems()[0]
-                .detail()
-                .contains("not yet supported")
+            inventory
+                .sources()
+                .iter()
+                .all(|source| source.bundle().is_some())
         );
+        assert!(inventory.problems().is_empty());
     }
 }
 
