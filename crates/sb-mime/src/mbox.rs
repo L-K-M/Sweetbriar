@@ -95,9 +95,10 @@ impl MboxRecord {
     }
 }
 
-/// Unquote exactly the byte range `[start, end)` as one mbox record
-/// body. The caller owns the range and its boundary validation; this
-/// is the shared decoder behind [`MboxRecord::reader`].
+/// Unquote `[start, end)` as one mbox record body, using the same decoder
+/// as [`MboxRecord::reader`]. Inverted ranges return `InvalidInput`.
+/// The caller validates source identity and bounds against its inventory;
+/// truncation inside the range returns `UnexpectedEof`, never success.
 pub fn unquote_range<R: Read + Seek>(
     mut source: R,
     start: u64,

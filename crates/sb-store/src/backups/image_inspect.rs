@@ -7,7 +7,7 @@ use std::sync::{
 use std::time::Duration;
 
 const PROGRESS_OPS: i32 = 1_000;
-const MAX_PROGRESS_CALLS: u32 = 2_000;
+pub(super) const MAX_PROGRESS_CALLS: u32 = 2_000;
 const MAX_SQLITE_VALUE: i32 = 1_048_576;
 
 /// Result of inspecting a retained image; cancellation carries no identity.
@@ -39,7 +39,7 @@ impl Drop for ClearProgress<'_> {
 
 // The monitor borrows the caller's flag, while SQLite's 'static progress
 // callback owns a shared mirror. It also interrupts native SQLite work.
-fn guarded<T>(
+pub(super) fn guarded<T>(
     conn: &Connection,
     cancelled: &AtomicBool,
     budget: u32,
@@ -109,7 +109,7 @@ fn guarded<T>(
     })
 }
 
-fn inspection_error(error: rusqlite::Error, what: &str) -> crate::StoreError {
+pub(super) fn inspection_error(error: rusqlite::Error, what: &str) -> crate::StoreError {
     match error {
         rusqlite::Error::QueryReturnedNoRows
         | rusqlite::Error::InvalidColumnType(..)
@@ -153,9 +153,11 @@ pub(super) fn inspect(
         })? {
             return Err(crate::StoreError::corrupt("invalid backup metadata schema"));
         }
+        // A forged index can associate this key with an unrelated table row.
+        // Read the identity physically, just like the duplicate check below.
         let value: String = conn
             .query_row(
-                "SELECT value FROM store_meta WHERE key='store_uuid' LIMIT 2",
+                "SELECT value FROM store_meta NOT INDEXED WHERE key='store_uuid' LIMIT 2",
                 [],
                 |row| row.get(0),
             )
@@ -313,6 +315,60 @@ mod tests {
             inspect(&conn, &AtomicBool::new(false)),
             Err(crate::StoreError::Corrupt { .. })
         ));
+    }
+
+    #[test]
+    fn an_untrusted_index_cannot_supply_a_missing_identity() {
+        let scratch = sb_test_support::ScratchDir::new("backup-identity-index");
+        let path = scratch.path().join("image.sqlite");
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(include_str!("../schema/v1.sql"))
+            .unwrap();
+        conn.execute(
+            "INSERT INTO store_meta VALUES ('other_keyx', ?1)",
+            ["00000000-0000-4000-8000-000000000041"],
+        )
+        .unwrap();
+        conn.pragma_update(None, "user_version", 23).unwrap();
+        let root: u32 = conn
+            .query_row(
+                "SELECT rootpage FROM sqlite_schema WHERE name='sqlite_autoindex_store_meta_1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let page_size: u32 = conn
+            .query_row("PRAGMA page_size", [], |row| row.get(0))
+            .unwrap();
+        drop(conn);
+
+        let mut bytes = std::fs::read(path).unwrap();
+        let page_size = usize::try_from(page_size).unwrap();
+        let start = (usize::try_from(root).unwrap() - 1) * page_size;
+        let page = &mut bytes[start..start + page_size];
+        assert_eq!(page[0], 0x0a, "index leaf page");
+        let original = b"other_keyx";
+        let offset = page
+            .windows(original.len())
+            .position(|value| value == original)
+            .unwrap();
+        // Forge only the index key. The table still has no store_uuid row,
+        // but an indexed lookup returns the unrelated row's UUID value.
+        page[offset..offset + original.len()].copy_from_slice(b"store_uuid");
+        let conn = crate::image_vfs::open(Box::new(std::io::Cursor::new(bytes))).unwrap();
+        let physical: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM store_meta NOT INDEXED WHERE key='store_uuid'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(physical, 0);
+        let result = inspect(&conn, &AtomicBool::new(false));
+        assert!(
+            matches!(result, Err(crate::StoreError::Corrupt { .. })),
+            "{result:?}"
+        );
     }
 
     #[test]

@@ -1075,8 +1075,15 @@ local drafts. No network yet.
       verification reusing the shared primitive, with the framing identity
       joining replay and malformed framing never silently trimming bytes
       or falling back to changed originals. Native random-access, fault
-      and scaling proof. Split again first if it exceeds 1,450 gross
-      changed lines.
+      and scaling proof. Split (2026-11-06) before further integration
+      to keep each artifact within 1,450 gross changed lines:
+      - **M1.7d2c2b1 Shared range decoder — S:** expose the bounded
+        mbox byte-range unquoter used by the record reader, with native
+        range, quoting, empty-input and truncation proof. No acquisition
+        publication or Engine loop change.
+      - **M1.7d2c2b2 Verified mboxrd sessions — L:** the remaining c2b
+        framing, frozen-cursor, replay-identity and acquisition work,
+        retaining every c2b acceptance check above.
     - **M1.7d2c3 Engine integration and verified ingest — L:** consume
       the verified acquisitions in the real import job without changing
       source order, with durable job, resume, order and crash acceptance
