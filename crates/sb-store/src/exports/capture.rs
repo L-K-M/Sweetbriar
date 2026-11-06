@@ -161,6 +161,13 @@ impl ExportCaptureRequest {
             intent,
         })
     }
+
+    /// The bounded request the durable job keeps (spec/09). A job
+    /// created under it replays this exact request, never a different
+    /// intent.
+    pub fn request_json(&self) -> &str {
+        &self.request_json
+    }
 }
 
 /// The deterministic intent (spec/09): `v`, format, destination and a
