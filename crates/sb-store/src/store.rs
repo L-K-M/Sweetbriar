@@ -489,6 +489,28 @@ impl StoreLease {
     ) -> Result<(), StoreError> {
         self.backups.swap_restore_stage(stage, cancel)
     }
+
+    /// Reopen this store's root while the lease stays held (spec/03):
+    /// no window exists where a second process could take the lock
+    /// between the swap and the restored store's first connection.
+    /// A marker left by a failed swap resolves here the same way it
+    /// would on a fresh open.
+    pub fn resume(self, seams: &Seams) -> Result<Store, StoreError> {
+        let Self { backups, lease } = self;
+        let paths = StorePaths::new(backups.data_root())?;
+        // The old coordinator ends here; the reopened store mints its
+        // own, so a stage bound to the closed one cannot be reused.
+        drop(backups);
+        open_after_lease(
+            &paths,
+            seams,
+            lease,
+            WRITER_PRAGMAS,
+            READER_PRAGMAS,
+            &PINNED_SQLITE,
+            MIGRATIONS,
+        )
+    }
 }
 
 impl std::fmt::Debug for StoreLease {
@@ -598,8 +620,32 @@ pub(crate) fn open_with(
     create_missing_ancestors(fs, paths)?;
     let lease = take_lease(fs, paths.lock_file())?;
     // From here on an early return drops `lease`, releasing the lock.
-    // A restore swap interrupted by a crash resolves before anything
-    // else: an empty root is never created over a pending marker.
+    open_after_lease(
+        paths,
+        seams,
+        lease,
+        writer_pragmas,
+        reader_pragmas,
+        pinned,
+        migrations,
+    )
+}
+
+/// `open` past the lease: [`StoreLease::resume`] enters here with the
+/// lease it never released. A restore swap interrupted by a crash
+/// resolves before anything else — an empty root is never created
+/// over a pending marker.
+#[allow(clippy::too_many_arguments)]
+fn open_after_lease(
+    paths: &StorePaths,
+    seams: &Seams,
+    lease: Box<dyn Lease>,
+    writer_pragmas: &[PragmaSpec],
+    reader_pragmas: &[PragmaSpec],
+    pinned: &PinnedSqlite,
+    migrations: &[Migration],
+) -> Result<Store, StoreError> {
+    let fs = seams.fs();
     crate::backups::handle_restore_marker(fs, paths.data_root())?;
     ensure_layout(fs, paths)?;
     examine_existing(fs, paths, pinned, migrations)?;

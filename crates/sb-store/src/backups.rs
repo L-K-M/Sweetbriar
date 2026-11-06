@@ -240,6 +240,15 @@ impl Backups {
         }
     }
 
+    /// The data root this coordinator binds (the state database's
+    /// parent): where a swap puts the staged image and where a resume
+    /// reopens.
+    pub(crate) fn data_root(&self) -> &Path {
+        self.state_db
+            .parent()
+            .expect("the state database has a parent")
+    }
+
     /// Arm the copy-timing pause points (spec/03).
     #[cfg(test)]
     pub(crate) fn set_pauses(&self, pauses: Pauses) {

@@ -6024,7 +6024,8 @@ fn restore_swap_places_the_qualified_stage_and_preserves_the_old_root() {
 
     let lease = store.close_for_restore().unwrap();
     lease.swap_restore(stage, &AtomicBool::new(false)).unwrap();
-    drop(lease);
+    let restored = lease.resume(&test_seams(real_fs())).unwrap();
+    assert_eq!(store_incarnation(&restored), staged_incarnation);
 
     // The marker is gone and the staging name no longer exists.
     let mut marker = paths.data_root().as_os_str().to_os_string();
@@ -6075,10 +6076,11 @@ fn restore_swap_places_the_qualified_stage_and_preserves_the_old_root() {
     assert!(active >= 2, "the preserved store keeps its account states");
     preserved_store.close().unwrap();
 
-    // The restored store opens normally and reports the new incarnation.
-    let restored = crate::open(&paths, &test_seams(real_fs())).unwrap();
-    assert_eq!(store_incarnation(&restored), staged_incarnation);
+    // A plain open after the lease released also reaches the image.
     restored.close().unwrap();
+    let again = crate::open(&paths, &test_seams(real_fs())).unwrap();
+    assert_eq!(store_incarnation(&again), staged_incarnation);
+    again.close().unwrap();
     source.assert_untouched();
 }
 
@@ -6104,9 +6106,7 @@ fn restore_swap_keeps_internal_generations_resolvable() {
     let preserved = stage.preserved_root().to_path_buf();
     let lease = source.store.close_for_restore().unwrap();
     lease.swap_restore(stage, &AtomicBool::new(false)).unwrap();
-    drop(lease);
-
-    let restored = crate::open(&source.paths, &test_seams(real_fs())).unwrap();
+    let restored = lease.resume(&test_seams(real_fs())).unwrap();
     assert_eq!(store_incarnation(&restored), staged_incarnation);
     // The rewritten location resolves against the preserved root: the
     // old root carried the generation's bytes through the rename.
