@@ -102,7 +102,8 @@ public final class DraftModel {
         self.draftId = draftId
     }
 
-    /// Read the draft and show its current revision, discarding unsaved content.
+    /// Read the draft and show its current revision. Unsaved content is
+    /// discarded, except an edit that lands while the read is in flight.
     public func load() async {
         guard !isSaving, !isDiscarding else { return }
         await read(mode: .replace)
