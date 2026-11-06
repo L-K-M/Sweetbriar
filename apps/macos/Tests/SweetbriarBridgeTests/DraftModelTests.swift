@@ -328,15 +328,16 @@ func discardCannotOverlapCommandsOrBeRevivedByAStaleRead() async {
     let discarding = Task { await model.discard() }
     #expect(await eventually { await store.discards.count == 1 })
     let secondDiscard = Task { await model.discard() }
+    let saving = Task { await model.save() }
     await Task.yield()
-    await model.save()
-    let saves = await store.saveCount
-    let discards = await store.discards.count
     await discardGate.open()
     await discarding.value
     await secondDiscard.value
+    await saving.value
     await loadGate.open()
     await loading.value
+    let saves = await store.saveCount
+    let discards = await store.discards.count
     #expect(saves == 0 && discards == 1)
     #expect(model.isDiscarded && !model.canSave)
 }
@@ -479,7 +480,10 @@ private func acknowledgedAttachmentsRemainSaveable(scenario: AttachmentAcknowled
     if scenario == .ambiguousResponse { await source.loseFirstReceipt() }
     let model = DraftModel(source: source, draftId: created.draftId)
     await model.load()
-    var first = try #require(model.content)
+    guard var first = model.content else {
+        Issue.record("the loaded draft must have content")
+        await bridge.shutdown(); return
+    }
     first.subject = "First"
     first.attachments = [.new(object: original, filename: "a.txt", mediaType: "text/plain")]
     model.update(first)
