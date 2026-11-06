@@ -15,16 +15,16 @@ fn io_error(error: io::Error) -> StoreError {
     }
 }
 
+// Only candidate-attributed failures may be skipped. Ledger, close and
+// cleanup failures still propagate, including their NotFound causes.
 fn bad_candidate(error: &StoreError) -> bool {
-    matches!(error, StoreError::Corrupt { .. })
-        || matches!(
-            error.io_kind(),
-            Some(
-                io::ErrorKind::NotFound
-                    | io::ErrorKind::InvalidInput
-                    | io::ErrorKind::NotADirectory
-            )
-        )
+    matches!(
+        error,
+        StoreError::Corrupt { .. } | StoreError::NotFound { .. }
+    ) || matches!(
+        error.io_kind(),
+        Some(io::ErrorKind::NotFound | io::ErrorKind::InvalidInput | io::ErrorKind::NotADirectory)
+    )
 }
 
 struct HashReader<R> {
