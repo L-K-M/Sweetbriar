@@ -1480,12 +1480,25 @@ local drafts. No network yet.
         deterministic concurrency and native attachment-save regression
         tests. M1.9c still owns the compose window, autosave and keep-both UI.
       Re-size again if any artifact exceeds the limit.
-  - **M1.9c Compose window (L):** the macOS compose window — token
-    fields, subject, a plain or Markdown editor on the M0.11 probe's
-    TextKit 2 view, autosave after 1.5 s, "Saved" only after the
-    receipt — the sidebar's Drafts (local) list, the keep-both
-    conflict UI, and Send unavailable without a sending account. The
-    owner's write-quit-relaunch check stays with this artifact.
+  - **M1.9c Compose window:** split into bounded artifacts, retaining
+    every deliverable and acceptance check:
+    - **M1.9c1 Save scheduling (M):** a bridge-owned debounce controller
+      over the merged revision-aware editor model. Restart the 1.5 s
+      quiet period on edits, serialize saves, drain begun commands without
+      cancelling them, and expose an explicit flush result for blur,
+      close and quit. Do not acknowledge newer unsaved edits or retry
+      conflicts automatically. Test deadlines, receipt timing, failure,
+      concurrent flushes and edits during saves with deterministic gates.
+      This prerequisite alone does not wire a native compose window or
+      qualify persistence across application quit and relaunch.
+    - **M1.9c2 Native compose integration (L):** the macOS compose window,
+      token fields, subject, a plain or Markdown editor on the M0.11
+      probe's TextKit 2 view, attachment picking and dragging, autosave
+      after 1.5 s and flush on blur and quit, "Saved" only after the
+      receipt, the sidebar's Drafts (local) list, the keep-both conflict
+      UI, and Send unavailable without a sending account. The owner's
+      write-quit-relaunch check stays here. Split again before exceeding
+      the artifact limit without dropping acceptance coverage.
 
 - **Goal:** compose and save drafts locally, durably, with revisions and
   attachments. No sending yet.
