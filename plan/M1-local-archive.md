@@ -1406,6 +1406,20 @@ local drafts. No network yet.
         write, sync and rename failures, and the native GC/read lifetime.
         No Engine, Service, FFI, bridge or Compose surface; those stay
         in the later artifacts. Depends on M1.9a1 and M1.8a1.
+      - **M1.9b2a3 Republication application API (M):** Engine and
+        Service methods over the merged a2 primitive, using the counted
+        blocking path and an owned Service attachment reference. Return
+        the existing opaque publication handle with a fresh reservation
+        for each call, without a receipt or source mutation. Native Core
+        tests cover an older/terminal source revision, copies saved into
+        new drafts, independent reservations, one-shot reuse rejection,
+        full-reference mapping and typed authorization failures. No new
+        dependency, FFI, bridge or Compose surface. Depends on a2 and b1.
+      - **M1.9b2a4 Republication FFI and bridge (L):** expose a3 through
+        owned SDK/bridge records and the existing opaque attachment handle,
+        with field-by-field mapping, cancellation/lifecycle proof and
+        regenerated bindings. Keep-both and attachment undo remain M1.9c.
+        Depends on a3 and the merged draft bridge APIs.
       - **M1.9b2b Draft commands over FFI:** re-sized 2026-11-04: the
         complete create/save/discard/publication artifact measures 1,922
         gross changed lines including generated bindings and tests, over
