@@ -1433,6 +1433,7 @@ dependencies = [
 name = "sb-ffi"
 version = "0.0.1"
 dependencies = [
+ "rusqlite",
  "sb-service",
  "sb-test-support",
  "tokio",
