@@ -250,6 +250,31 @@ fn confined_name(name: &Path) -> io::Result<Box<Path>> {
 }
 
 impl ConfinedDir for SimConfinedDir {
+    fn visit_children(
+        &self,
+        visitor: &mut dyn FnMut(&Path) -> io::Result<std::ops::ControlFlow<()>>,
+    ) -> io::Result<std::ops::ControlFlow<()>> {
+        use std::ops::ControlFlow;
+        let mut after: Option<Box<Path>> = None;
+        loop {
+            let next = {
+                let _op = self.ops.lock().expect("sim operation lock");
+                let dir = self.dir.lock().expect("sim tree lock");
+                dir.live
+                    .keys()
+                    .filter(|name| after.as_ref().is_none_or(|last| *name > last))
+                    .min()
+                    .cloned()
+            };
+            let Some(name) = next else {
+                return Ok(ControlFlow::Continue(()));
+            };
+            if visitor(&name)?.is_break() {
+                return Ok(ControlFlow::Break(()));
+            }
+            after = Some(name);
+        }
+    }
     fn set_ownership(&self, bytes: &[u8]) -> io::Result<()> {
         if bytes.is_empty() || bytes.len() > 36 {
             return Err(io::ErrorKind::InvalidInput.into());
@@ -791,6 +816,42 @@ impl Seek for SimReadFile {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn confined_enumeration_visits_retained_directory_and_can_stop() {
+        use super::*;
+        use std::ops::ControlFlow;
+        let fs = SimFs::new();
+        fs.create_dir_all(Path::new("/root")).unwrap();
+        for n in 0..300 {
+            fs.create(&PathBuf::from(format!("/root/{n:03}"))).unwrap();
+        }
+        let root = fs.open_confined_dir(Path::new("/root")).unwrap();
+        fs.rename(Path::new("/root"), Path::new("/moved")).unwrap();
+        fs.create_dir(Path::new("/root")).unwrap();
+        let mut count = 0;
+        assert_eq!(
+            root.visit_children(&mut |name| {
+                count += 1;
+                assert!(root.open_regular(name).is_ok());
+                Ok(ControlFlow::Continue(()))
+            })
+            .unwrap(),
+            ControlFlow::Continue(())
+        );
+        assert_eq!(count, 300);
+        assert_eq!(
+            root.visit_children(&mut |_| Ok(ControlFlow::Break(())))
+                .unwrap(),
+            ControlFlow::Break(())
+        );
+        assert_eq!(
+            root.visit_children(&mut |_| Err(io::ErrorKind::Interrupted.into()))
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::Interrupted
+        );
+    }
+
     #[test]
     fn confined_scratch_operations_survive_power_cut_and_refuse_nonempty_removal() {
         use super::*;
