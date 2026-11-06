@@ -382,7 +382,7 @@ fn an_attachment_is_published_before_the_revision_references_it() {
     let object = block_on(engine.publish_draft_attachment(Cursor::new(bytes))).unwrap();
     let mut with_file = content("with file");
     with_file.attachments = vec![DraftAttachment::New {
-        object,
+        object: std::sync::Arc::new(object),
         filename: "one.txt".to_owned(),
         media_type: "text/plain".to_owned(),
     }];
@@ -412,7 +412,7 @@ fn an_attachment_is_published_before_the_revision_references_it() {
     let foreign = block_on(other.publish_draft_attachment(Cursor::new(bytes))).unwrap();
     let mut bad = content("foreign");
     bad.attachments = vec![DraftAttachment::New {
-        object: foreign,
+        object: std::sync::Arc::new(foreign),
         filename: "foreign.txt".to_owned(),
         media_type: "text/plain".to_owned(),
     }];
@@ -425,6 +425,38 @@ fn an_attachment_is_published_before_the_revision_references_it() {
     assert_eq!(revision.revision_id, saved.revision_id());
     assert_eq!(revision_ids(&engine, &draft_id).len(), 1);
     block_on(other.shutdown()).unwrap();
+    block_on(engine.shutdown()).unwrap();
+}
+
+#[test]
+fn shared_publication_replays_but_cannot_fund_a_fresh_save() {
+    let (_scratch, engine) = scratch_engine("engine-shared-draft-publication");
+    let draft = create(&engine, DraftSource::New);
+    let object = Arc::new(block_on(engine.publish_draft_attachment(Cursor::new(b"file"))).unwrap());
+    let request = || {
+        let mut request = content("file");
+        request.attachments.push(DraftAttachment::New {
+            object: Arc::clone(&object),
+            filename: "file.txt".into(),
+            media_type: "text/plain".into(),
+        });
+        request
+    };
+    let key = engine.new_idempotency_key();
+    let first = block_on(engine.save_draft(&key, draft.draft_id(), None, request())).unwrap();
+    let replay = block_on(engine.save_draft(&key, draft.draft_id(), None, request())).unwrap();
+    assert_eq!(first.receipt(), replay.receipt());
+    assert_eq!(first.revision_id(), replay.revision_id());
+    assert!(matches!(
+        block_on(engine.save_draft(
+            &engine.new_idempotency_key(),
+            draft.draft_id(),
+            Some(first.revision_id()),
+            request()
+        )),
+        Err(EngineError::Conflict { .. })
+    ));
+    assert_eq!(revision_ids(&engine, draft.draft_id()).len(), 1);
     block_on(engine.shutdown()).unwrap();
 }
 
@@ -639,7 +671,7 @@ fn invalid_content_names_its_field() {
     let object = block_on(engine.publish_draft_attachment(Cursor::new(b"x".as_slice()))).unwrap();
     let mut bad = content("x");
     bad.attachments = vec![DraftAttachment::New {
-        object,
+        object: std::sync::Arc::new(object),
         filename: String::new(),
         media_type: "text/plain".to_owned(),
     }];
@@ -784,7 +816,7 @@ fn drive_cut_sequence(engine: &Engine) {
     let object = block_on(engine.publish_draft_attachment(Cursor::new(CHILD_ATTACHMENT))).unwrap();
     let mut second = content("second");
     second.attachments = vec![DraftAttachment::New {
-        object,
+        object: std::sync::Arc::new(object),
         filename: "note.txt".to_owned(),
         media_type: "text/plain".to_owned(),
     }];
@@ -1027,7 +1059,7 @@ fn draft_receipts_precede_replacement_validation() {
                     block_on(engine.publish_draft_attachment(Cursor::new(b"replay".as_slice())))
                         .unwrap();
                 replacement.attachments.push(DraftAttachment::New {
-                    object,
+                    object: Arc::new(object),
                     filename: if field == "filename" { "" } else { "a" }.into(),
                     media_type: if field == "media_type" {
                         ""
@@ -1101,7 +1133,7 @@ fn fresh_draft_validation_preserves_fields_and_retry() {
                     block_on(engine.publish_draft_attachment(Cursor::new(b"fresh".as_slice())))
                         .unwrap();
                 bad.attachments.push(DraftAttachment::New {
-                    object,
+                    object: Arc::new(object),
                     filename: if field == "filename" { "" } else { "a" }.into(),
                     media_type: if field == "media_type" {
                         ""

@@ -285,7 +285,7 @@ fn apply_inner(conn: &mut Connection, input: &Quarantine<'_>) -> Result<(), Stor
         "UPDATE OR ABORT intents SET state='quarantined', quarantine_reason='restore' WHERE state IN ('pending','in_flight','parked')",
         "UPDATE OR ABORT send_attempts SET state='outcome_unknown' WHERE state IN ('held','queued','submitting')",
         "UPDATE OR ABORT backup_generations SET state='failed' WHERE state='in_progress'",
-        "DELETE FROM object_pins WHERE pin_kind='backup_in_progress'",
+        "DELETE FROM object_pins WHERE pin_kind IN ('backup_in_progress','reservation')",
         "DELETE FROM backup_cleanup_pending",
         "DELETE FROM verifier_objects",
         "DELETE FROM verifier_scratch",
@@ -298,6 +298,9 @@ fn apply_inner(conn: &mut Connection, input: &Quarantine<'_>) -> Result<(), Stor
     tx.commit()
         .map_err(|e| classify(e, "commit restore quarantine"))
 }
+
+#[cfg(test)]
+mod reservation_tests;
 
 #[cfg(test)]
 mod tests {
