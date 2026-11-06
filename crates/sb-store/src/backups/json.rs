@@ -302,11 +302,13 @@ impl<'a, R: Read, C: FnMut() -> io::Result<()>> Reader<'a, R, C> {
         if !float {
             return Ok((!negative).then_some(sig));
         }
-        // A u64, 'e', sign and i32 magnitude fit in 32 bytes.
-        let mut reduced = [0; 32];
+        // Margin over a u64, 'e', a sign and the i32 magnitude: an
+        // internal formatting failure must surface as a number-range
+        // error, not a transport one.
+        let mut reduced = [0; 40];
         let mut output = &mut reduced[..];
-        write!(output, "{sig}e{exponent}")?;
-        let len = 32 - output.len();
+        write!(output, "{sig}e{exponent}").map_err(|_| invalid(Invalid::NumberRange))?;
+        let len = 40 - output.len();
         serde_json::from_slice::<serde_json::Value>(&reduced[..len])
             .map_err(|_| invalid(Invalid::NumberRange))?;
         Ok(None)
