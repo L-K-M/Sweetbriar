@@ -542,7 +542,7 @@ fn multi_megabyte_strings_and_keys_use_fixed_memory_without_allocating() {
 
 // Test-only allocation instrumentation; production lexer has no unsafe code.
 #[allow(unsafe_code)]
-mod allocation {
+pub(in crate::backups) mod allocation {
     use std::alloc::{GlobalAlloc, Layout, System};
     use std::cell::Cell;
     thread_local! {
@@ -578,7 +578,7 @@ mod allocation {
             unsafe { System.dealloc(ptr, layout) }
         }
     }
-    pub(super) fn measure<T>(run: impl FnOnce() -> T) -> (T, usize, usize) {
+    pub(in crate::backups) fn measure<T>(run: impl FnOnce() -> T) -> (T, usize, usize) {
         struct Reset;
         impl Drop for Reset {
             fn drop(&mut self) {
