@@ -14,6 +14,7 @@ Rests on research [04-data-safety](../research/04-data-safety.md),
   state.sqlite (+ -wal, -shm)     the database (02)
   objects/
     tmp/                          in-progress writes, same volume
+      import-validation/<token>/  private disposable validation tapes
     sha256/ab/cd/<64 hex>         published immutable objects
   backups/<generation-id>/        backup generations (below)
   recovery/                       preserved evidence: quarantined objects, pre-migration snapshots
@@ -39,6 +40,18 @@ and no files (an interrupted creation); anything else without
 `state.sqlite` is refused (`Unavailable`). A store with `state.sqlite`
 but a missing layout directory is `Corrupt`; the directory isn't
 recreated.
+
+Import validation scratch is disposable, not recovery evidence. Each
+borrowed lease owns an exclusive private random-token directory and two
+fixed tape identities. Explicit success cleanup reports failure; drop
+cleanup is best effort and preserves the primary error. A writable open
+removes only the import-validation namespace after acquiring the exclusive
+store lease and before starting workers; failure prevents open with an
+actionable error. Read-only open does not clean it. Tape opens do not
+follow the final component if it is a symlink. The Store-owned layout and
+private ancestor directories are trusted not to be replaced during scratch
+operations; the path-based filesystem seam does not protect ancestor traversal
+against concurrent replacement.
 
 - **The data root lives on a local filesystem.** At startup the engine
   refuses with an explanation if the data root is under iCloud Drive,

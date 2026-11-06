@@ -2398,8 +2398,9 @@ fn retained_image_callback_uses_pinned_connection_after_path_replacement() {
                 .query_row("PRAGMA user_version", [], |r| r.get(0))
                 .unwrap();
             assert!(version > 0);
+            let escape = paths.data_root().join("sb-image-escape");
             assert!(
-                conn.execute_batch("ATTACH DATABASE '/tmp/sb-image-escape' AS other")
+                conn.execute_batch(&format!("ATTACH DATABASE '{}' AS other", escape.display()))
                     .is_err()
             );
             std::fs::remove_file(old).unwrap();
