@@ -863,6 +863,7 @@ fn publisher_faults_leave_no_object_or_reservation() {
         let id = ObjectId::from_hex(&sha_hex(&bodies[0]), bodies[0].len() as u64).unwrap();
         assert!(!res.store.objects().exists(&id).unwrap());
         drop(session);
+        registry.finish().unwrap();
         res.close().unwrap();
     }
 }
