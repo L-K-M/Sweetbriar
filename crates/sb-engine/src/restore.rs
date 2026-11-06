@@ -179,6 +179,9 @@ impl Engine {
                 self.schedule_threads();
                 self.schedule_index();
                 self.schedule_received();
+                // The quiesce drained the maintenance worker; the
+                // restored image's own cursors drive the restart.
+                self.schedule_maintenance();
                 Ok(())
             }
             Ok(Err(error)) => Err(error),

@@ -113,6 +113,21 @@ impl Store {
         crate::gc::collect_garbage(self, grace)
     }
 
+    /// The weekly object-verification pass (spec/03 "Reads and
+    /// verification"): re-hash the `rotation % 52` sample plus every
+    /// object a running backup pins, degrading `acquisitions` rows to
+    /// `missing` or `quarantined` as the pass proves.
+    pub fn verify_objects(&self, rotation: u64) -> Result<crate::verify::VerifyReport, StoreError> {
+        crate::verify::verify_objects(self, rotation)
+    }
+
+    /// SQLite's `PRAGMA integrity_check` on a reader connection
+    /// (spec/03 "Integrity"): `["ok"]` for a clean store, otherwise
+    /// the finding rows.
+    pub fn integrity_check(&self) -> Result<Vec<String>, StoreError> {
+        crate::verify::integrity_check(self)
+    }
+
     /// Steps 1–3 of spec/03 "Backup generations": the `in_progress`
     /// row whose commit freezes GC, a consistent `state.sqlite`
     /// snapshot in the generation's directory — the copy never holds

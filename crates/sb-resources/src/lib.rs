@@ -130,10 +130,10 @@ pub use sb_store::threads::{
 };
 pub use sb_store::{
     AppearanceObserver, BackupDestination, BackupReceipt, BackupSnapshot, ExportMetadata,
-    ImportSourceSnapshot, ListObserver, PublishedObject, ReadStop, Receipt, RestoreMetadata,
-    Scoped, SearchObserver, StoreError, Timestamp, Transaction, Uuid, VerifiedExternalBackup,
-    WriteFuture, WritePriority, encode_job_receipt, export_occurrence_metadata, receipt_job_id,
-    run_once,
+    GC_GRACE_PERIOD, GcReport, ImportSourceSnapshot, ListObserver, PublishedObject, ReadStop,
+    Receipt, RestoreMetadata, Scoped, SearchObserver, StoreError, Timestamp, Transaction, Uuid,
+    VerifiedExternalBackup, VerifyReport, WriteFuture, WritePriority, encode_job_receipt,
+    export_occurrence_metadata, receipt_job_id, run_once,
 };
 
 #[cfg(feature = "test-seams")]
@@ -436,6 +436,27 @@ impl Resources {
     /// reopen needs it after the lease path is spent.
     pub fn data_root(&self) -> &Path {
         self.store.data_root()
+    }
+
+    /// One garbage-collection pass (spec/03 "Garbage collection");
+    /// blocking — see [`Store::collect_garbage`].
+    pub fn collect_garbage(
+        &self,
+        grace: std::time::Duration,
+    ) -> Result<sb_store::GcReport, StoreError> {
+        self.store.collect_garbage(grace)
+    }
+
+    /// The weekly object-verification pass (spec/03); blocking — see
+    /// [`Store::verify_objects`].
+    pub fn verify_objects(&self, rotation: u64) -> Result<sb_store::VerifyReport, StoreError> {
+        self.store.verify_objects(rotation)
+    }
+
+    /// SQLite's `PRAGMA integrity_check` (spec/03); blocking — see
+    /// [`Store::integrity_check`].
+    pub fn integrity_check(&self) -> Result<Vec<String>, StoreError> {
+        self.store.integrity_check()
     }
 
     /// Select a verified external generation (spec/03 step 1): see

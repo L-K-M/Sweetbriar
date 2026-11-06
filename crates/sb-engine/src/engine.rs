@@ -83,6 +83,10 @@ pub struct Engine {
     received: Arc<ReceivedJobs>,
     leases: Arc<crate::bodies::Leases>,
     search_memo: Arc<crate::search::SearchMemo>,
+    /// The maintenance scheduler (spec/03, M1.8h): one worker running
+    /// the hourly generation/GC and weekly verification/integrity
+    /// passes, with its cadences in memory and cursors in `settings`.
+    pub(crate) schedules: Arc<crate::schedules::Schedules>,
     /// Fires each draft-write point inside a draft command's write,
     /// so a crash-cut child can die inside the transaction (spec/11).
     #[cfg(test)]
@@ -547,6 +551,7 @@ impl Engine {
                         received,
                         leases: Arc::default(),
                         search_memo: Arc::default(),
+                        schedules: Arc::new(crate::schedules::Schedules::new()),
                         #[cfg(test)]
                         drafts_hook: Mutex::new(None),
                         #[cfg(test)]
@@ -564,7 +569,8 @@ impl Engine {
                 // get their threads in the background (spec/02).
                 .inspect(Engine::schedule_threads)
                 .inspect(Engine::schedule_index)
-                .inspect(Engine::schedule_received);
+                .inspect(Engine::schedule_received)
+                .inspect(Engine::schedule_maintenance);
             // A caller that stopped waiting drops the engine here.
             let _ = opened.send(engine);
         }))

@@ -35,6 +35,9 @@ mod received_tests;
 mod restore;
 #[cfg(test)]
 mod restore_tests;
+mod schedules;
+#[cfg(test)]
+mod schedules_tests;
 mod search;
 mod settings;
 mod sidebar;
