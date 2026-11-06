@@ -568,6 +568,8 @@ fn failing(kind: SourceKind, bytes: Vec<u8>, total: u64, fail_at: u64) -> Source
         total,
         position: SourcePosition::START,
         verification: None,
+        descriptors: None,
+        next_offset: 0,
     }
 }
 

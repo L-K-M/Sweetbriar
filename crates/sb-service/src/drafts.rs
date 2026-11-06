@@ -3,11 +3,11 @@
 //! `save_draft` and `discard_draft` commands — one counted command
 //! each under an idempotency key, so a repeated key returns the stored
 //! receipt — the `drafts()`/`draft()` queries, and attachment
-//! publication. The DTOs are service-owned mirrors of the engine's
-//! records — nothing from below crosses into L1 (spec/01 rule 3) — so
-//! the methods convert field by field. A published attachment's
-//! reservation stays inside the service's [`DraftAttachmentObject`]
-//! until a save spends it.
+//! publication and republication. The DTOs are service-owned mirrors
+//! of the engine's records — nothing from below crosses into L1
+//! (spec/01 rule 3) — so the methods convert field by field. A
+//! published attachment's reservation stays inside the service's
+//! [`DraftAttachmentObject`] until a save spends it.
 
 use std::sync::Arc;
 
@@ -140,6 +140,15 @@ pub struct DraftAttachmentRef {
 }
 
 impl DraftAttachmentRef {
+    fn into_engine(self) -> sb_engine::AttachmentRef {
+        sb_engine::AttachmentRef {
+            object_sha256: self.object_sha256,
+            filename: self.filename,
+            media_type: self.media_type,
+            size: self.size,
+        }
+    }
+
     fn from_engine(reference: sb_engine::AttachmentRef) -> Self {
         Self {
             object_sha256: reference.object_sha256,
@@ -341,6 +350,16 @@ pub struct DraftAttachmentObject {
     object: Arc<sb_engine::PublishedObject>,
 }
 
+impl DraftAttachmentObject {
+    fn from_engine(object: sb_engine::PublishedObject) -> Self {
+        Self {
+            object_sha256: object.id().sha256_hex(),
+            byte_length: object.id().byte_length(),
+            object: Arc::new(object),
+        }
+    }
+}
+
 /// A newly published object, or an unchanged reference from the base revision.
 #[derive(Debug, Clone)]
 pub enum DraftAttachment {
@@ -411,12 +430,7 @@ impl DraftContent {
                         media_type,
                     },
                     DraftAttachment::Retained(reference) => {
-                        sb_engine::DraftAttachment::Retained(sb_engine::AttachmentRef {
-                            object_sha256: reference.object_sha256,
-                            filename: reference.filename,
-                            media_type: reference.media_type,
-                            size: reference.size,
-                        })
+                        sb_engine::DraftAttachment::Retained(reference.into_engine())
                     }
                 })
                 .collect(),
@@ -526,10 +540,32 @@ impl Core {
         bytes: impl std::io::Read + Send + 'static,
     ) -> Result<DraftAttachmentObject, CoreError> {
         let object = self.engine().publish_draft_attachment(bytes).await?;
-        Ok(DraftAttachmentObject {
-            object_sha256: object.id().sha256_hex(),
-            byte_length: object.id().byte_length(),
-            object: Arc::new(object),
-        })
+        Ok(DraftAttachmentObject::from_engine(object))
+    }
+
+    /// `republish_draft_attachment(draft_id, revision_id, reference)`
+    /// (spec/07): re-publish one stored attachment reference from an
+    /// exact immutable draft revision. An older revision, or one from
+    /// a terminal draft, remains valid because this creates a new
+    /// publication, never a mutation of that draft.
+    /// `reference` must match one of that revision's stored
+    /// attachments in hash, size, filename and media type: a revision
+    /// the draft does not have is `NotFound`, a reference that is not
+    /// a member is `Conflict`. The returned
+    /// [`DraftAttachmentObject`] carries a fresh reservation a
+    /// following `save_draft` spends once; each call reserves
+    /// independently. No idempotency key and no receipt: only the
+    /// publication and its reservation are written.
+    pub async fn republish_draft_attachment(
+        &self,
+        draft_id: &str,
+        revision_id: &str,
+        reference: DraftAttachmentRef,
+    ) -> Result<DraftAttachmentObject, CoreError> {
+        let object = self
+            .engine()
+            .republish_draft_attachment(draft_id, revision_id, reference.into_engine())
+            .await?;
+        Ok(DraftAttachmentObject::from_engine(object))
     }
 }

@@ -1075,8 +1075,15 @@ local drafts. No network yet.
       verification reusing the shared primitive, with the framing identity
       joining replay and malformed framing never silently trimming bytes
       or falling back to changed originals. Native random-access, fault
-      and scaling proof. Split again first if it exceeds 1,450 gross
-      changed lines.
+      and scaling proof. Split (2026-11-06) before further integration
+      to keep each artifact within 1,450 gross changed lines:
+      - **M1.7d2c2b1 Shared range decoder — S:** expose the bounded
+        mbox byte-range unquoter used by the record reader, with native
+        range, quoting, empty-input and truncation proof. No acquisition
+        publication or Engine loop change.
+      - **M1.7d2c2b2 Verified mboxrd sessions — L:** the remaining c2b
+        framing, frozen-cursor, replay-identity and acquisition work,
+        retaining every c2b acceptance check above.
     - **M1.7d2c3 Engine integration and verified ingest — L:** consume
       the verified acquisitions in the real import job without changing
       source order, with durable job, resume, order and crash acceptance
@@ -1412,6 +1419,20 @@ local drafts. No network yet.
         write, sync and rename failures, and the native GC/read lifetime.
         No Engine, Service, FFI, bridge or Compose surface; those stay
         in the later artifacts. Depends on M1.9a1 and M1.8a1.
+      - **M1.9b2a3 Republication application API (M):** Engine and
+        Service methods over the merged a2 primitive, using the counted
+        blocking path and an owned Service attachment reference. Return
+        the existing opaque publication handle with a fresh reservation
+        for each call, without a receipt or source mutation. Native Core
+        tests cover an older/terminal source revision, copies saved into
+        new drafts, independent reservations, one-shot reuse rejection,
+        full-reference mapping and typed authorization failures. No new
+        dependency, FFI, bridge or Compose surface. Depends on a2 and b1.
+      - **M1.9b2a4 Republication FFI and bridge (L):** expose a3 through
+        owned SDK/bridge records and the existing opaque attachment handle,
+        with field-by-field mapping, cancellation/lifecycle proof and
+        regenerated bindings. Keep-both and attachment undo remain M1.9c.
+        Depends on a3 and the merged draft bridge APIs.
       - **M1.9b2b Draft commands over FFI:** re-sized 2026-11-04: the
         complete create/save/discard/publication artifact measures 1,922
         gross changed lines including generated bindings and tests, over

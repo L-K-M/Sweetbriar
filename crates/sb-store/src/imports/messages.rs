@@ -12,9 +12,51 @@ use crate::list_rows::{
     REP_TEXT_COPIES, ROW_FRAME as LIST_ROW_BUDGET, TEXT_COPIES as LIST_ROW_TEXT_COPIES,
 };
 use crate::objects::{
-    PublishedObject, RESERVATION_PIN_IMAGE, ReservationRelease, release_reservation,
+    ObjectId, PublishedObject, RESERVATION_PIN_IMAGE, ReservationRelease, release_reservation,
 };
+use sha2::{Digest, Sha256};
+
 use crate::{StoreError, Timestamp, list_rows, threads};
+
+/// Domain separator for a bundle mboxrd message's framing identity
+/// (spec/09). Snapshot tokens never enter the hash.
+const BUNDLE_MESSAGE_DOMAIN: &[u8] = b"sweetbriar-bundle-message-v1\n";
+
+/// The validated framing descriptor of one bundle mboxrd message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BundleFraming {
+    /// SHA-256 of the original message bytes.
+    pub original_sha256: [u8; 32],
+    /// Length of the original message bytes.
+    pub original_bytes: u64,
+    /// Offset of the record's fixed envelope in the captured file.
+    pub record_offset: u64,
+    /// Encoded record length, including the envelope and framing LF.
+    pub encoded_bytes: u64,
+    /// Whether the encoder appended one framing LF.
+    pub framing_lf_added: bool,
+}
+
+/// Domain-separated framing identity (spec/09): the captured file's
+/// SHA-256 bound to the validated framing descriptor. The same bytes
+/// and descriptor replay identically; a different valid framing intent
+/// changes the descriptor and so the identity.
+fn bundle_framing_identity(
+    file_sha256: &str,
+    framing: &BundleFraming,
+) -> Result<String, StoreError> {
+    let file_sha256 = ObjectId::from_hex(file_sha256, 0)?.sha256();
+    let mut hasher = Sha256::new();
+    hasher.update(BUNDLE_MESSAGE_DOMAIN);
+    hasher.update(file_sha256);
+    hasher.update(framing.original_sha256);
+    hasher.update(framing.original_bytes.to_le_bytes());
+    hasher.update(framing.record_offset.to_le_bytes());
+    hasher.update(framing.encoded_bytes.to_le_bytes());
+    hasher.update([u8::from(framing.framing_lf_added)]);
+    let digest: [u8; 32] = hasher.finalize().into();
+    Ok(digest.iter().map(|byte| format!("{byte:02x}")).collect())
+}
 
 /// Spec/09's maximum transaction batch, independent of body size.
 pub const MAX_IMPORT_BATCH: usize = 250;
@@ -108,6 +150,9 @@ pub struct ImportMessage {
     pub source_path: String,
     pub source_sha256: String,
     pub offset: u64,
+    /// Bundle mboxrd framing descriptor; `None` keeps the plain
+    /// source reference unchanged (spec/09).
+    pub bundle_framing: Option<BundleFraming>,
     pub flags: ImportFlags,
     pub summary: ImportSummary,
 }
@@ -331,9 +376,13 @@ fn store_message(
     {
         return Err(invalid("invalid import source path, hash or EML offset"));
     }
-    let source_ref = json!({"mailbox": mailbox, "offset": message.offset,
-        "path": message.source_path, "sha256": message.source_sha256})
-    .to_string();
+    let mut source_ref = json!({"mailbox": mailbox, "offset": message.offset,
+        "path": message.source_path, "sha256": message.source_sha256});
+    if let Some(framing) = message.bundle_framing {
+        let identity = bundle_framing_identity(&message.source_sha256, &framing)?;
+        source_ref["bundle_framing"] = json!(identity);
+    }
+    let source_ref = source_ref.to_string();
     let previous: Option<String> = tx
         .query_row(
             FIND_IMPORT_SOURCE,
