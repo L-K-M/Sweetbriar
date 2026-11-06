@@ -59,7 +59,8 @@ pub use seen::{ReceivedCommit, ReceivedPreparation, ReceivedRevisions, ReceivedS
 pub use acquire::{AcquiredMessage, FlagExtraction, SourceAcquisition, SourcePosition};
 pub use import::{
     BundleFormat, ImportInventory, ImportInventoryOutcome, ImportProblem, ImportProblemKind,
-    ImportProgress, ManifestDescriptor, ManifestProof, SourceBundle, SourceInventory, SourceKind,
+    ImportProgress, ManifestDescriptor, ManifestProof, ManifestProofRegistry, SourceBundle,
+    SourceInventory, SourceKind,
 };
 pub use import_jobs::{
     ImportJobBatch, ImportJobCheckpoint, ImportJobRecord, ImportTotals, LISTED_PROBLEMS,

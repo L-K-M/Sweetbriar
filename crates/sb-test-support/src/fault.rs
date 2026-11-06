@@ -40,6 +40,8 @@ pub enum FsOp {
     Open,
     /// `read` on a read handle the wrapper handed out.
     Read,
+    /// `seek` on a read handle the wrapper handed out.
+    Seek,
 }
 
 /// The shape of the injected failure.
@@ -77,6 +79,7 @@ struct Counts {
     remove: u64,
     open: u64,
     read: u64,
+    seek: u64,
 }
 
 impl Counts {
@@ -96,6 +99,7 @@ impl Counts {
             FsOp::Remove => &mut self.remove,
             FsOp::Open => &mut self.open,
             FsOp::Read => &mut self.read,
+            FsOp::Seek => &mut self.seek,
         }
     }
 }
@@ -452,6 +456,9 @@ impl io::Read for FaultRead {
 
 impl io::Seek for FaultRead {
     fn seek(&mut self, position: io::SeekFrom) -> io::Result<u64> {
+        if let Some(kind) = self.plan.fire(FsOp::Seek) {
+            return Err(fault_error(kind));
+        }
         self.inner.seek(position)
     }
 }
