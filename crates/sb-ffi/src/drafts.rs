@@ -422,8 +422,9 @@ pub struct DraftAttachmentPublish {
 /// A published draft attachment (spec/02): the opaque handle a later
 /// save spends. It wraps the service's publication and keeps its
 /// one-shot reservation, so a caller cannot rebuild one from an
-/// identity — only [`Core::publish_draft_attachment`] makes one, and
-/// the getters report only what was published.
+/// identity. Only [`Core::publish_draft_attachment`] and
+/// [`Core::republish_draft_attachment`] create one; the getters report
+/// only what was published.
 #[derive(Debug, uniffi::Object)]
 pub struct DraftAttachmentObject {
     /// The service-owned publication and the reservation a save

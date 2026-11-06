@@ -2172,8 +2172,9 @@ public func FfiConverterTypeCore_lower(_ value: Core) -> UInt64 {
  * A published draft attachment (spec/02): the opaque handle a later
  * save spends. It wraps the service's publication and keeps its
  * one-shot reservation, so a caller cannot rebuild one from an
- * identity — only [`Core::publish_draft_attachment`] makes one, and
- * the getters report only what was published.
+ * identity. Only [`Core::publish_draft_attachment`] and
+ * [`Core::republish_draft_attachment`] create one; the getters report
+ * only what was published.
  */
 public protocol DraftAttachmentObjectProtocol: AnyObject, Sendable {
     
@@ -2192,8 +2193,9 @@ public protocol DraftAttachmentObjectProtocol: AnyObject, Sendable {
  * A published draft attachment (spec/02): the opaque handle a later
  * save spends. It wraps the service's publication and keeps its
  * one-shot reservation, so a caller cannot rebuild one from an
- * identity — only [`Core::publish_draft_attachment`] makes one, and
- * the getters report only what was published.
+ * identity. Only [`Core::publish_draft_attachment`] and
+ * [`Core::republish_draft_attachment`] create one; the getters report
+ * only what was published.
  */
 open class DraftAttachmentObject: DraftAttachmentObjectProtocol, @unchecked Sendable {
     fileprivate let handle: UInt64
