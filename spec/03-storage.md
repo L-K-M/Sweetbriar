@@ -612,9 +612,11 @@ Rows inherited from another incarnation never authorize cleanup.
 The snapshot reference walker pages physical rows of acquisitions, send
 attempts and all draft revisions, and streams each attachment list without a
 corpus-sized set or total reference limit. It emits every occurrence, including
-duplicates, with its stored size where available. A caller discards all emitted
-references after cancellation or any failure. The walk alone does not prove
-that the references match a manifest.
+duplicates, with its stored size where available. Table scans retain their
+cursors across bounded batches, without keyset seeks or trusting indexes in
+the image; an invalid physical rowid order rejects the image. A caller discards
+all emitted references after cancellation or any failure. The walk alone does
+not prove that the references match a manifest.
 
 The verifier retains manifest object hashes and unsigned lengths in the
 trusted store's disk-backed ledger, keyed by the scratch owner. Duplicate
