@@ -86,6 +86,19 @@ the provider policies (`proton_bridge`, `generic_imap`) live in
 
 #### M2.2b Read operations — L, linux
 
+- **Split before implementation (2026-11-07):** retain the complete read
+  artifact as four bounded PRs. **b0 Strict mailbox-name codec (M)** supplies
+  private Unicode/modified-UTF-7 conversion with RFC 3501 section 5.1.3
+  vectors, lossless round trips, and rejection of malformed/noncanonical
+  encodings instead of replacement characters or aliases. It opens no socket
+  and yields no read observation. **b1 Mailbox observations (L)** adds LIST
+  and EXAMINE with decoded UTF-8 names and checked epoch fields; **b2 Header,
+  UID-set and flag observations (L)** adds the corresponding reads; **b3 Body
+  streams (L)** adds bounded literal streaming under the full message budget.
+  Every read must correlate its first tagged completion, fail closed on
+  malformed/cancelled exchanges, and keep the fake-server and Dovecot
+  acceptance below. b1-b3 consume the preceding merged contracts; no provider
+  policy or store writes enter this leaf.
 - **Goal:** the dialect-free command interface returns the read
   observations.
 - Body streaming must support spec/10's 100 MB message budget without
