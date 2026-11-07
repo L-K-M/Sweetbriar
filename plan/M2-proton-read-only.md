@@ -127,6 +127,20 @@ the provider policies (`proton_bridge`, `generic_imap`) live in
   in-flight epoch data as well as buffered frames, without CLOSE or EXPUNGE.
   Conflicting epochs and decreasing UIDNEXT are refused. A metadata exchange
   has a bounded response budget; the separate b3 streaming contract is kept.
+- **b2 split before implementation (2026-11-07):** **b2a UID inventory and
+  flags (L)** precedes **b2b Header observations (L)** so their independent
+  wire and coverage proofs stay within the artifact limit. b2a requires an
+  explicit UID SEARCH ALL response, distinguishing an empty set from missing
+  evidence. Its flag sweep pairs that inventory with UID FETCH 1:* (UID FLAGS),
+  keyed only by the UID item, never the FETCH sequence number. Missing flags
+  remain unknown; mismatched inventories, unkeyed or repeated FETCH updates
+  and mailbox-change hints produce explicit incomplete coverage. These are
+  observations, never authority to delete rows. Contradictory or malformed
+  epoch evidence closes the session. Buffered data remains a notice under
+  the established selection. b2b retains every header-field/literal
+  deliverable; b3 retains the full body budget and streaming requirement.
+  Both b2 artifacts keep the first-tag, cancellation, fake Bridge profile
+  and actual pinned Dovecot checks, with no provider policy or store writes.
 - **Goal:** the dialect-free command interface returns the read
   observations.
 - Body streaming must support spec/10's 100 MB message budget without
