@@ -8,10 +8,16 @@
 
 use std::collections::VecDeque;
 
-use io_imap::codec::{GreetingCodec, ResponseCodec, fragmentizer::Fragmentizer};
+use io_imap::codec::{
+    GreetingCodec, ResponseCodec,
+    fragmentizer::{FragmentInfo, Fragmentizer},
+};
 use tokio::io::{AsyncRead, AsyncReadExt};
 
 use crate::error::ImapError;
+
+#[cfg(test)]
+mod limits;
 
 pub(crate) const MAX_MESSAGE_SIZE: u32 = 50 * 1024 * 1024;
 
@@ -30,6 +36,12 @@ pub(crate) struct Frame {
     pub(crate) kind: FrameKind,
 }
 
+#[derive(Clone, Copy)]
+enum GateFault {
+    Malformed,
+    FrameLimit,
+}
+
 pub(crate) struct Gate {
     fragmentizer: Fragmentizer,
     codec: ResponseCodec,
@@ -39,7 +51,7 @@ pub(crate) struct Gate {
     pending: usize,
     wire_buf: Box<[u8; READ_CHUNK]>,
     eof: bool,
-    poisoned: bool,
+    fault: Option<GateFault>,
 }
 
 impl Gate {
@@ -52,18 +64,18 @@ impl Gate {
             pending: 0,
             wire_buf: Box::new([0; READ_CHUNK]),
             eof: false,
-            poisoned: false,
+            fault: None,
         }
     }
 
     pub(crate) fn poisoned(&self) -> bool {
-        self.poisoned
+        self.fault.is_some()
     }
 
     /// A following command may inherit ordinary unsolicited data, but
     /// never a completion, continuation or BYE buffered after its predecessor.
     pub(crate) fn reusable(&self) -> bool {
-        !self.poisoned
+        !self.poisoned()
             && self
                 .released
                 .iter()
@@ -76,7 +88,7 @@ impl Gate {
     /// or a decode fault ([`Self::poisoned`]). STARTTLS refuses to
     /// upgrade with any of these, so no plaintext crosses into TLS.
     pub(crate) fn has_plaintext_residual(&self) -> bool {
-        self.poisoned || self.has_buffered()
+        self.poisoned() || self.has_buffered()
     }
 
     /// Bytes already received belong to the previous command boundary,
@@ -86,7 +98,8 @@ impl Gate {
     }
 
     /// Reads one complete validated response. `Ok(empty)` is EOF; a
-    /// poisoned gate fails with [`ImapError::Malformed`]. Keeping the
+    /// syntax fault fails with [`ImapError::Malformed`]; an exceeded frame
+    /// limit reports [`ImapError::FrameBudgetExceeded`]. Keeping the
     /// boundary prevents a coroutine from replacing one tagged reply
     /// with a later reply in the same socket read.
     pub(crate) async fn read(
@@ -104,10 +117,13 @@ impl Gate {
         wire: &mut (impl AsyncRead + Unpin),
     ) -> Result<Option<Frame>, ImapError> {
         loop {
+            if matches!(self.fault, Some(GateFault::FrameLimit)) {
+                return Err(ImapError::FrameBudgetExceeded);
+            }
             if let Some(frame) = self.released.pop_front() {
                 return Ok(Some(frame));
             }
-            if self.poisoned {
+            if self.poisoned() {
                 return Err(ImapError::Malformed);
             }
             if self.eof {
@@ -119,7 +135,31 @@ impl Gate {
 
     async fn fill(&mut self, wire: &mut (impl AsyncRead + Unpin)) -> Result<(), ImapError> {
         loop {
-            while let Some(_fragment) = self.fragmentizer.progress() {
+            loop {
+                let fragment = self.fragmentizer.progress();
+                let announced_over_limit = match &fragment {
+                    Some(FragmentInfo::Line {
+                        announcement: Some(literal),
+                        ..
+                    }) => {
+                        self.fragmentizer.message_bytes().len() as u64 + u64::from(literal.length)
+                            > u64::from(MAX_MESSAGE_SIZE)
+                    }
+                    _ => false,
+                };
+                // progress() can consume an unfinished line/literal and
+                // return None. Check its limit before asking for more bytes,
+                // as well as declarations that already cannot fit the frame.
+                if self.fragmentizer.is_max_message_size_exceeded() || announced_over_limit {
+                    self.fault = Some(GateFault::FrameLimit);
+                    self.released.clear();
+                    self.pending = 0;
+                    self.fragmentizer = Fragmentizer::new(MAX_MESSAGE_SIZE);
+                    return Err(ImapError::FrameBudgetExceeded);
+                }
+                if fragment.is_none() {
+                    break;
+                }
                 if !self.fragmentizer.is_message_complete() {
                     continue;
                 }
@@ -144,7 +184,7 @@ impl Gate {
                 };
                 let Ok(kind) = kind else {
                     // Drain released messages before reporting the fault.
-                    self.poisoned = true;
+                    self.fault = Some(GateFault::Malformed);
                     return Ok(());
                 };
                 self.expects_greeting = false;
@@ -155,7 +195,7 @@ impl Gate {
                     kind,
                 });
             }
-            if !self.released.is_empty() || self.eof || self.poisoned {
+            if !self.released.is_empty() || self.eof || self.poisoned() {
                 return Ok(());
             }
             let read = wire
@@ -164,7 +204,9 @@ impl Gate {
                 .map_err(ImapError::from_io)?;
             if read == 0 {
                 self.eof = self.pending == 0;
-                self.poisoned = !self.eof;
+                if !self.eof {
+                    self.fault = Some(GateFault::Malformed);
+                }
             } else {
                 self.pending += read;
                 self.fragmentizer.enqueue_bytes(&self.wire_buf[..read]);

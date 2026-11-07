@@ -487,6 +487,35 @@ async fn cancelling_either_uid_phase_closes_before_another_command() {
 }
 
 #[tokio::test]
+async fn oversized_metadata_closes_either_uid_phase_before_the_literal_arrives() {
+    for phase in ["UID SEARCH", "UID FETCH"] {
+        let mut steps = Vec::new();
+        if phase == "UID FETCH" {
+            steps.push(search("7"));
+        }
+        steps.push(Step::on(
+            Expect::command(phase),
+            vec![Reply::Raw(
+                format!("* 1 FETCH (UID 7 BODY[] {{{}}}\r\n", 50 * 1024 * 1024 + 1).into_bytes(),
+            )],
+        ));
+        let (server, mut client) = selected(steps).await;
+        let result = tokio::time::timeout(Duration::from_secs(2), client.flag_sweep())
+            .await
+            .expect("the frame limit must fail without literal bytes or EOF");
+        assert!(matches!(result, Err(ImapError::FrameBudgetExceeded)));
+        assert!(matches!(
+            client.uid_inventory().await,
+            Err(ImapError::Closed)
+        ));
+        assert_eq!(
+            server.received().len(),
+            if phase == "UID SEARCH" { 6 } else { 7 }
+        );
+    }
+}
+
+#[tokio::test]
 async fn a_read_requires_selection_without_closing_an_authenticated_session() {
     let (server, mut client) =
         connected(vec![Step::on(Expect::command("EXAMINE"), examine())]).await;

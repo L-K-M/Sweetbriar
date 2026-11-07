@@ -37,6 +37,15 @@ pub enum ImapError {
     /// The strict gate found an undecodable response. The connection
     /// is closed and unusable; nothing after the fault was delivered.
     Malformed,
+    /// One response exceeded the metadata frame budget. The failed
+    /// exchange closes; callers may choose a smaller or bounded request.
+    FrameBudgetExceeded,
+    /// Individually valid frames exceeded one metadata command's total
+    /// response budget. No partial observation is returned.
+    ResponseBudgetExceeded {
+        /// The metadata command whose response exceeded its budget.
+        operation: &'static str,
+    },
     /// A tagged completion did not belong to the command being run,
     /// or was buffered outside an exchange. The session is closed.
     UnexpectedCompletion,
@@ -98,6 +107,12 @@ impl fmt::Display for ImapError {
                 f.write_str("plaintext followed the STARTTLS response; refusing the upgrade")
             }
             Self::Malformed => write!(f, "an undecodable response closed the connection"),
+            Self::FrameBudgetExceeded => {
+                f.write_str("an IMAP response exceeded the metadata frame budget")
+            }
+            Self::ResponseBudgetExceeded { operation } => {
+                write!(f, "IMAP {operation} exceeded the metadata response budget")
+            }
             Self::UnexpectedCompletion => {
                 f.write_str("an unexpected command completion closed the connection")
             }

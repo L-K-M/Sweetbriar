@@ -374,9 +374,12 @@ where
 }
 
 fn charge(remaining: &mut usize, frame: &Frame, kind: ReadKind) -> Result<(), ImapError> {
-    *remaining = remaining
-        .checked_sub(frame.bytes.len())
-        .ok_or_else(|| ImapError::command(kind.operation(), "metadata response budget exceeded"))?;
+    *remaining =
+        remaining
+            .checked_sub(frame.bytes.len())
+            .ok_or(ImapError::ResponseBudgetExceeded {
+                operation: kind.operation(),
+            })?;
     Ok(())
 }
 
@@ -487,9 +490,10 @@ mod tests {
                 |_| Ok(()),
             )
             .await;
-            assert!(
-                matches!(result, Err(ImapError::Command { operation: "LIST", ref message }) if message.contains("budget"))
-            );
+            assert!(matches!(
+                result,
+                Err(ImapError::ResponseBudgetExceeded { operation: "LIST" })
+            ));
         };
         let peer = async {
             let mut server = BufReader::new(server);
