@@ -7,17 +7,15 @@
 
 use std::cell::Cell;
 use std::ffi::OsString;
-use std::io::{self, Read, Write};
+use std::io::{self, Read};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use sha2::{Digest, Sha256};
 
+use super::stage_copy::{cancelled, copy_verified, io_error};
 use super::*;
-
-/// One bounded copy buffer: 64 KiB, as the publication protocol uses.
-const CHUNK: usize = 64 * 1024;
 
 /// Metadata a caller declares about the selected generation. Every field
 /// is revalidated against the manifest bytes read from the verified
@@ -107,23 +105,6 @@ pub(crate) enum StagePhase {
     ObjectsCopied,
     /// The manifest itself was copied into the stage.
     ManifestCopied,
-}
-
-fn io_error(context: &str, error: io::Error) -> StoreError {
-    if error.kind() == io::ErrorKind::InvalidData {
-        StoreError::corrupt(format!(
-            "invalid restore staging input while {context}: {error}"
-        ))
-    } else {
-        StoreError::unavailable_io(
-            format!("restore staging I/O while {context}: {error}"),
-            error.kind(),
-        )
-    }
-}
-
-fn cancelled() -> StoreError {
-    StoreError::unavailable("restore staging cancelled")
 }
 
 fn interrupted() -> io::Error {
@@ -252,62 +233,6 @@ fn ensure_child_dir(
         )
     })?;
     Ok(dir)
-}
-
-/// Stream `from` below `source` into a fresh file `to` below
-/// `dest_parent`, checking cancellation per chunk and verifying the
-/// exact bytes against `expected_sha` and `expected_bytes`. Memory stays
-/// bounded by [`CHUNK`]; a failure leaves unqualified evidence behind.
-fn copy_verified(
-    source: &dyn sb_types::fs::ConfinedDir,
-    from: &Path,
-    dest_parent: &dyn sb_types::fs::ConfinedDir,
-    to: &Path,
-    expected_sha: [u8; 32],
-    expected_bytes: u64,
-    cancel: &AtomicBool,
-) -> Result<(), StoreError> {
-    let (mut input, _) = source
-        .open_regular(from)
-        .map_err(|error| io_error(&format!("reading {}", from.display()), error))?;
-    let mut output = dest_parent
-        .create(to)
-        .map_err(|error| io_error(&format!("creating {}", to.display()), error))?;
-    let mut hash = Sha256::new();
-    let mut length = 0u64;
-    let mut buffer = [0u8; CHUNK];
-    loop {
-        if cancel.load(Ordering::Acquire) {
-            return Err(cancelled());
-        }
-        let n = input
-            .read(&mut buffer)
-            .map_err(|error| io_error(&format!("reading {}", from.display()), error))?;
-        if n == 0 {
-            break;
-        }
-        length = length
-            .checked_add(n as u64)
-            .ok_or_else(|| StoreError::corrupt("restore staging length overflow"))?;
-        if length > expected_bytes {
-            return Err(StoreError::corrupt(
-                "restore source is longer than its manifest declares",
-            ));
-        }
-        output
-            .write_all(&buffer[..n])
-            .map_err(|error| io_error(&format!("writing {}", to.display()), error))?;
-        hash.update(&buffer[..n]);
-    }
-    if length != expected_bytes || hash.finalize().as_slice() != expected_sha {
-        return Err(StoreError::corrupt(
-            "restore source digest or length does not match the manifest",
-        ));
-    }
-    output
-        .sync_all()
-        .map_err(|error| io_error(&format!("flushing {}", to.display()), error))?;
-    Ok(())
 }
 
 /// Copy one manifest object through the confined capabilities, creating

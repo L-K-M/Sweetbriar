@@ -24,6 +24,7 @@ mod references;
 pub use external::VerifiedExternalBackup;
 pub use image::BackupImageInspection;
 mod scratch;
+mod stage_copy;
 mod staging;
 pub use staging::{PreparedRestoreStage, RestoreMetadata};
 
