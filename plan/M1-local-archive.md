@@ -1245,6 +1245,19 @@ local drafts. No network yet.
       an old handle for a missing attachment, preserve receipt replay and other
       pin kinds, leave the source handle valid, and accept fresh publications.
       Keep the change atomic with the other quarantine transformations.
+  - **M1.8e3b0 Verified file-copy primitive (M):** an independently
+    tested, private streaming copier over retained confined source and
+    destination handles. Require exclusive output creation, fixed 64 KiB
+    buffers, checked length/SHA-256 at EOF, refusal before excess bytes
+    are written, cancellation per chunk and propagated file-sync errors.
+    Native proof covers empty and multi-chunk input, wrong hash,
+    truncation/growth, symlinks/existing output, cancellation and reached
+    read/write/flush faults. The caller still owns directory flushes and
+    stage eligibility. The private-copy coordinator consumes this for
+    the database, objects and manifest; it bounds the manifest copy by
+    the exact byte length authenticated by the first parse. Split before
+    integrating growth and fault-proof regressions into the 1,450-line
+    coordinator artifact; retain every original e3b acceptance below.
   - **M1.8e3b Quarantined restore staging (L):** verify and copy the chosen
     generation into `<data root>.restoring-<inc>` with publication flushes,
     then run the staging quarantine transaction: new incarnation, all

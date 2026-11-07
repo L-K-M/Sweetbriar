@@ -24,6 +24,8 @@ mod references;
 pub use external::VerifiedExternalBackup;
 pub use image::BackupImageInspection;
 mod scratch;
+#[allow(dead_code)] // The M1.8e3b staging integration consumes this prerequisite.
+mod stage_copy;
 
 pub(crate) fn recover_scratch(
     conn: &rusqlite::Connection,
