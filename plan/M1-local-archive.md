@@ -1270,6 +1270,45 @@ local drafts. No network yet.
     injected I/O, SQL and flush failures; retry and wrong generation or
     incarnation; crash cuts leave the live store untouched and no
     unquarantined stage eligible for publication.
+    Split 2026-11-07 (the complete artifact measured over this milestone's
+    1,450 gross-line budget; the split keeps every acceptance check above
+    and assigns each to one half):
+    - **b1 Verified private copy (L):** consume the retained selection,
+      reopen the supplied locator through confined handles, identity-match
+      it, reverify the manifest digest, object count and byte total, and
+      copy the database, every referenced object and the manifest again
+      with exact declared length and hash checks into an exclusive
+      `<data root>.restoring-<inc>` sibling. Fixed 64 KiB streaming
+      buffers, per-chunk cancellation, file/directory/parent flushes, no
+      symlink fallback, no stage reuse or recursive deletion, and the
+      operation Arc lease retained in the returned opaque
+      `PreparedRestoreStage` through later qualification and swap.
+      Acceptance: exact bytes for internal and external sources and for a
+      hash referenced twice; metadata digest/count/total and negative-value
+      rejection; wrong generation leaf, identity replacement, stale locator,
+      changed manifest/database/object bytes and length, and symlink
+      substitution refusal; fresh, existing, invalid-new and live-incarnation
+      refusal; pre-copy and mid-copy cancellation never return a prepared
+      stage; injected CreatePrivateDir/Create/Read/Write/SyncFile/SyncDir
+      failures; crash cuts leave the live store and source untouched and
+      retain unqualified evidence; the live store and source are unchanged;
+      the held lease blocks a backup retention pass and releases on Drop.
+      No source SQL, schema inspection or quarantine transaction here.
+    - **b2 Bounded quarantine qualification (L):** inspect the staged
+      schema with bounded reads, then run the reviewed quarantine
+      transaction on a fresh staging connection, checkpoint and close,
+      consuming the held operation lease rather than reserving again.
+      Acceptance: the e3b row-state, location-semantics, substitution,
+      cancellation, injected-failure, retry and crash-cut checks, with
+      bounded inherited location/generation and schema reads (an observed
+      RED regression for huge inherited location and column-name/type
+      values before the bounded fix, and no blind global 1 MiB limit that
+      rejects valid large archive request or blob data), every inherited
+      cleanup authority row, and fail-closed handling of historical schema
+      22 (no verifier 23/24 tables) until a separate compatible migration
+      artifact exists; never execute arbitrary inherited programs.
+      `completed_at` is caller-asserted bookkeeping absent from the
+      manifest: document it as provenance, never as a verified timestamp.
   - **M1.8f Durable swap and startup recovery (L):** the restore-pending
     marker (new incarnation, generation id and path), both renames with
     their flushes, the startup handling of all three marker states, the
