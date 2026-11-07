@@ -8,17 +8,27 @@ rust-version.workspace = true
 
 [dependencies]
 sb-types = { version = "0.0.1", path = "../sb-types" }
-# The workspace's TLS crate (spec/01); 0.23.46 carries the
-# RUSTSEC-2026-0346..0349 fixes.
-rustls = { version = "=0.23.46", default-features = false, features = ["ring", "std", "logging", "tls12"] }
-# The pinned-certificate hash (spec/10).
-sha2 = { version = "=0.11.1", default-features = false }
-
-[dev-dependencies]
 # M2.1's chosen IMAP client (spec/01's Crates table). `client` is the
-# std-blocking pump the committed spike test drives.
+# std-blocking pump the committed spike test drives; M2.2 drives the
+# I/O-free coroutines directly over its own transport.
 io-imap = { version = "=0.7.1", default-features = false, features = ["client"] }
 # `nom`'s alloc feature is what imap-codec alpha.9 forgets to ask
 # for, so a direct pin supplies it by unification.
 nom = { version = "=7.1.3", features = ["alloc"] }
+# The workspace's TLS crate (spec/01); 0.23.46 carries the
+# RUSTSEC-2026-0346..0349 fixes.
+rustls = { version = "=0.23.46", default-features = false, features = ["ring", "std", "logging", "tls12"] }
+# The async transport (spec/01): no default features, just what the
+# ring provider needs, matching the rustls features above.
+tokio = { version = "=1.54.1", default-features = false, features = ["net", "io-util", "time"] }
+tokio-rustls = { version = "=0.26.6", default-features = false, features = ["ring", "logging", "tls12"] }
+# The pinned-certificate hash (spec/10).
+sha2 = { version = "=0.11.1", default-features = false }
+# io-imap logs raw replies at TRACE, which can include echoed credentials.
+# Feature unification disables log TRACE diagnostics process-wide.
+log = { version = "=0.4.34", features = ["max_level_debug"] }
+
+[dev-dependencies]
 sb-test-support = { version = "0.0.1", path = "../sb-test-support" }
+# `#[tokio::test]`'s current-thread runtime and macro.
+tokio = { version = "=1.54.1", default-features = false, features = ["macros", "rt"] }

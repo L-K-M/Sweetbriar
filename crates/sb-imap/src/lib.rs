@@ -2,10 +2,17 @@
 //! Returns observations (mailbox lists, UID sets, fetched headers and
 //! bodies); it never writes the store or parses MIME.
 
-#[allow(dead_code)] // M2.2a1 sends credentials only after pinned TLS setup.
+mod connection;
+mod error;
+mod gate;
 mod secret;
-#[allow(dead_code)] // M2.2a1 consumes the private client configuration.
 mod tls;
 
+pub use connection::{ConnectOptions, Connection, HostPolicy};
+pub use error::ImapError;
 pub use secret::Password;
 pub use tls::CertificatePin;
+
+// A unified release_max_level_trace feature must not re-enable the
+// dependency's credential-bearing wire traces in release builds.
+const _: () = assert!(log::STATIC_MAX_LEVEL as usize <= log::LevelFilter::Debug as usize);
