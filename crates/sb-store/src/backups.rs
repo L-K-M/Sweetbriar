@@ -5,6 +5,7 @@
 //! then releases pins and marks the generation complete.
 
 mod attachments;
+mod external;
 mod image;
 mod image_inspect;
 #[allow(dead_code)] // Used by the snapshot walker and manifest parser.
@@ -18,6 +19,7 @@ mod manifest;
 mod reconciliation;
 mod recorded;
 mod references;
+pub use external::VerifiedExternalBackup;
 pub use image::BackupImageInspection;
 mod scratch;
 
@@ -192,6 +194,21 @@ pub(crate) struct Backups {
     /// The copy-timing barriers a test may arm (spec/03).
     #[cfg(test)]
     pauses: Mutex<Pauses>,
+}
+
+impl Backups {
+    fn reserve_operation(&self) -> Result<Arc<()>, StoreError> {
+        let token = Arc::new(());
+        let mut active = self
+            .active
+            .try_lock()
+            .map_err(|_| StoreError::conflict("backup operation is already running"))?;
+        if active.as_ref().and_then(Weak::upgrade).is_some() {
+            return Err(StoreError::conflict("backup operation is already running"));
+        }
+        *active = Some(Arc::downgrade(&token));
+        Ok(token)
+    }
 }
 
 impl Backups {
