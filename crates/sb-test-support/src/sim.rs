@@ -15,8 +15,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use sb_types::fs::{
-    ConfinedDir, DirectoryIdentity, FileKind, Fs, Lease, Location, LockError, Metadata, ReadFile,
-    WriteFile,
+    ConfinedDir, DirectoryIdentity, FileIdentity, FileKind, Fs, Lease, Location, LockError,
+    Metadata, ReadFile, ReadWriteFile, WriteFile,
 };
 
 /// An in-memory filesystem whose only ground truth is what was
@@ -71,10 +71,23 @@ enum Child {
 /// A file: its live bytes, and the bytes its last `sync_all` froze.
 /// Open write handles hold the node, so writes after a rename still
 /// land in it.
-#[derive(Default)]
 struct SimFile {
+    identity: u64,
     live: Vec<u8>,
     durable: Vec<u8>,
+}
+
+impl Default for SimFile {
+    fn default() -> Self {
+        static NEXT_FILE_ID: AtomicU64 = AtomicU64::new(1);
+        Self {
+            identity: NEXT_FILE_ID
+                .try_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
+                .expect("sim file identities exhausted"),
+            live: Vec::new(),
+            durable: Vec::new(),
+        }
+    }
 }
 
 impl SimFs {
@@ -342,6 +355,17 @@ impl ConfinedDir for SimConfinedDir {
         let node = Arc::new(Mutex::new(SimFile::default()));
         dir.live.insert(name, Child::File(node.clone()));
         Ok(Box::new(SimWriteFile { node }))
+    }
+    fn create_read_write(&self, name: &Path) -> io::Result<Box<dyn ReadWriteFile>> {
+        let name = confined_name(name)?;
+        let _op = self.ops.lock().expect("sim operation lock");
+        let mut dir = self.dir.lock().expect("sim tree lock");
+        if dir.live.contains_key(&name) {
+            return Err(io::ErrorKind::AlreadyExists.into());
+        }
+        let node = Arc::new(Mutex::new(SimFile::default()));
+        dir.live.insert(name, Child::File(node.clone()));
+        Ok(Box::new(SimReadWriteFile { node }))
     }
     fn remove_file(&self, name: &Path) -> io::Result<()> {
         let name = confined_name(name)?;
@@ -739,6 +763,64 @@ impl Drop for SimLease {
 
 /// A write handle to a sim file; it holds the node, not the path, so
 /// writes after a rename still land in the file.
+struct SimReadWriteFile {
+    node: Arc<Mutex<SimFile>>,
+}
+
+impl ReadWriteFile for SimReadWriteFile {
+    fn read_at(&self, bytes: &mut [u8], offset: u64) -> io::Result<usize> {
+        let offset = usize::try_from(offset).map_err(|_| io::ErrorKind::InvalidInput)?;
+        let file = self.node.lock().expect("sim file lock");
+        let source = file.live.get(offset..).unwrap_or_default();
+        let len = bytes.len().min(source.len());
+        bytes[..len].copy_from_slice(&source[..len]);
+        Ok(len)
+    }
+    fn write_at(&self, bytes: &[u8], offset: u64) -> io::Result<usize> {
+        if bytes.is_empty() {
+            return Ok(0);
+        }
+        let offset = usize::try_from(offset).map_err(|_| io::ErrorKind::InvalidInput)?;
+        let end = offset
+            .checked_add(bytes.len())
+            .ok_or(io::ErrorKind::InvalidInput)?;
+        let mut file = self.node.lock().expect("sim file lock");
+        if end > file.live.len() {
+            let additional = end - file.live.len();
+            file.live
+                .try_reserve(additional)
+                .map_err(|_| io::ErrorKind::OutOfMemory)?;
+            file.live.resize(end, 0);
+        }
+        file.live[offset..end].copy_from_slice(bytes);
+        Ok(bytes.len())
+    }
+    fn set_len(&self, len: u64) -> io::Result<()> {
+        let len = usize::try_from(len).map_err(|_| io::ErrorKind::InvalidInput)?;
+        let mut file = self.node.lock().expect("sim file lock");
+        let additional = len.saturating_sub(file.live.len());
+        file.live
+            .try_reserve(additional)
+            .map_err(|_| io::ErrorKind::OutOfMemory)?;
+        file.live.resize(len, 0);
+        Ok(())
+    }
+    fn len(&self) -> io::Result<u64> {
+        Ok(self.node.lock().expect("sim file lock").live.len() as u64)
+    }
+    fn sync_all(&self) -> io::Result<()> {
+        let mut file = self.node.lock().expect("sim file lock");
+        file.durable = file.live.clone();
+        Ok(())
+    }
+    fn identity(&self) -> io::Result<FileIdentity> {
+        Ok(FileIdentity {
+            device: 0,
+            inode: self.node.lock().expect("sim file lock").identity,
+        })
+    }
+}
+
 struct SimWriteFile {
     node: Arc<Mutex<SimFile>>,
 }

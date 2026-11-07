@@ -1323,6 +1323,18 @@ local drafts. No network yet.
       inherited programs, retained-reader identity, sidecar refusal, I/O
       failures and reader cleanup. It cannot quarantine, migrate or
       certify a stage's eligibility, integrity or full application schema.
+    - **M1.8e3b2b0 Retained staging file capability (M):** exclusively
+      create an owner-only direct child of a confined directory with retained
+      read/write authority. Positioned reads/writes, truncation, length,
+      file identity and durable flush must never reopen a pathname. Existing
+      entries and symlinks are refused with no fallback. Native tests prove
+      confinement, zero-filled growth and file/directory replacement safety;
+      simulated power cuts distinguish file and directory flushes, and fault
+      and crash-cut adapters cover every new operation. This prerequisite
+      grants no existing-file writes, SQLite access or stage eligibility.
+      The following qualification step still needs a capability-backed writable
+      SQLite VFS, staged-byte re-verification and full schema/integrity checks
+      before it can expose a qualified stage.
     - **M1.8e3b2b Staging qualification (L):** consume the private copy
       and schema inspection, recheck the coordinator, live root/incarnation
       and verified metadata, run the current quarantine transaction,

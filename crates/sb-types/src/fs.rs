@@ -82,7 +82,7 @@ pub trait Fs: Send + Sync {
     fn location(&self, path: &Path) -> io::Result<Location>;
 }
 
-/// A directory capability for race-safe, no-symlink descendant reads.
+/// A directory capability for race-safe, no-symlink descendant operations.
 pub trait ConfinedDir: Send + Sync {
     /// Visit direct child names with bounded memory, in unspecified order.
     /// Names are untrusted and may change during or after the visit. Opening
@@ -121,6 +121,15 @@ pub trait ConfinedDir: Send + Sync {
     fn create(&self, _name: &Path) -> io::Result<Box<dyn WriteFile>> {
         Err(io::ErrorKind::Unsupported.into())
     }
+    /// Exclusively create an owner-only regular file as a direct child and
+    /// retain read/write authority to that file. Reject existing entries
+    /// (including symlinks), absolute paths and parent components. The handle
+    /// stays bound to the created file across pathname replacement or rename.
+    /// No operation on the returned handle may resolve a pathname again.
+    /// Unsupported adapters fail closed; there is no existing-file fallback.
+    fn create_read_write(&self, _name: &Path) -> io::Result<Box<dyn ReadWriteFile>> {
+        Err(io::ErrorKind::Unsupported.into())
+    }
     /// Remove a direct child file without following links.
     fn remove_file(&self, _name: &Path) -> io::Result<()> {
         Err(io::ErrorKind::Unsupported.into())
@@ -146,6 +155,41 @@ pub struct DirectoryIdentity {
     pub device: u64,
     /// Directory inode identifier.
     pub inode: u64,
+}
+
+/// Filesystem-local identity of a retained regular file. It is stable while
+/// the handle is alive, but does not certify the file's bytes are unchanged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FileIdentity {
+    /// Filesystem device identifier.
+    pub device: u64,
+    /// File inode identifier.
+    pub inode: u64,
+}
+
+/// A newly created file retained for positioned I/O. Operations have no shared
+/// cursor. Reads and writes may be short and callers must handle interruptions;
+/// unwritten gaps and extensions read as zero. Concurrent overlapping writes or
+/// truncation need caller synchronization. Holding this capability preserves
+/// identity, not immutability against another process with filesystem access.
+pub trait ReadWriteFile: Send + Sync {
+    /// Read at `offset`, returning zero at or beyond EOF.
+    fn read_at(&self, bytes: &mut [u8], offset: u64) -> io::Result<usize>;
+    /// Write at `offset`, extending the file when needed.
+    fn write_at(&self, bytes: &[u8], offset: u64) -> io::Result<usize>;
+    /// Change the file length, discarding truncated bytes or zero-filling growth.
+    fn set_len(&self, len: u64) -> io::Result<()>;
+    /// Current length of this retained file.
+    fn len(&self) -> io::Result<u64>;
+    /// Whether this retained file is empty.
+    fn is_empty(&self) -> io::Result<bool> {
+        self.len().map(|len| len == 0)
+    }
+    /// Flush this retained file to stable storage, without reopening its name.
+    /// Directory entry durability remains the directory capability's job.
+    fn sync_all(&self) -> io::Result<()>;
+    /// Identity of the file actually created and still retained.
+    fn identity(&self) -> io::Result<FileIdentity>;
 }
 
 /// A file open for writing through the `Fs` seam.

@@ -10,13 +10,16 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use sb_types::fs::{
-    ConfinedDir, DirectoryIdentity, Fs, Lease, Location, LockError, Metadata, ReadFile, WriteFile,
+    ConfinedDir, DirectoryIdentity, FileIdentity, Fs, Lease, Location, LockError, Metadata,
+    ReadFile, ReadWriteFile, WriteFile,
 };
 
 /// The filesystem operations `FaultFs` can count and fail, named after
 /// the `Fs` (or write-handle) method they wrap.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FsOp {
+    /// Change the length of a retained read/write file.
+    Truncate,
     CreatePrivateDir,
     RestrictDir,
     RemoveDirAll,
@@ -65,6 +68,7 @@ pub enum FaultKind {
 /// How many calls of each operation have gone through, per kind.
 #[derive(Default)]
 struct Counts {
+    truncate: u64,
     create_private_dir: u64,
     restrict_dir: u64,
     remove_dir_all: u64,
@@ -85,6 +89,7 @@ struct Counts {
 impl Counts {
     fn slot(&mut self, op: FsOp) -> &mut u64 {
         match op {
+            FsOp::Truncate => &mut self.truncate,
             FsOp::CreatePrivateDir => &mut self.create_private_dir,
             FsOp::RestrictDir => &mut self.restrict_dir,
             FsOp::RemoveDirAll => &mut self.remove_dir_all,
@@ -237,6 +242,15 @@ impl ConfinedDir for FaultConfinedDir {
         }
         Ok(Box::new(FaultWrite {
             inner: self.inner.create(name)?,
+            plan: self.plan.clone(),
+        }))
+    }
+    fn create_read_write(&self, name: &Path) -> io::Result<Box<dyn ReadWriteFile>> {
+        if let Some(kind) = self.plan.fire(FsOp::Create) {
+            return Err(fault_error(kind));
+        }
+        Ok(Box::new(FaultReadWrite {
+            inner: self.inner.create_read_write(name)?,
             plan: self.plan.clone(),
         }))
     }
@@ -416,6 +430,57 @@ impl Fs for FaultFs {
 
 /// A write handle whose `write` and `sync_all` count (and can fail)
 /// like any other operation.
+struct FaultReadWrite {
+    inner: Box<dyn ReadWriteFile>,
+    plan: Arc<FaultPlan>,
+}
+
+impl ReadWriteFile for FaultReadWrite {
+    fn read_at(&self, bytes: &mut [u8], offset: u64) -> io::Result<usize> {
+        if let Some(kind) = self.plan.fire(FsOp::Read) {
+            return Err(fault_error(kind));
+        }
+        self.inner.read_at(bytes, offset)
+    }
+    fn write_at(&self, bytes: &[u8], offset: u64) -> io::Result<usize> {
+        match self.plan.fire(FsOp::Write) {
+            Some(FaultKind::ShortWrite) => {
+                let len = bytes.len().div_ceil(2);
+                if len > 0 {
+                    self.inner.write_at(&bytes[..len], offset)?;
+                }
+                Err(fault_error(FaultKind::ShortWrite))
+            }
+            Some(kind) => Err(fault_error(kind)),
+            None => self.inner.write_at(bytes, offset),
+        }
+    }
+    fn set_len(&self, len: u64) -> io::Result<()> {
+        if let Some(kind) = self.plan.fire(FsOp::Truncate) {
+            return Err(fault_error(kind));
+        }
+        self.inner.set_len(len)
+    }
+    fn len(&self) -> io::Result<u64> {
+        if let Some(kind) = self.plan.fire(FsOp::Read) {
+            return Err(fault_error(kind));
+        }
+        self.inner.len()
+    }
+    fn sync_all(&self) -> io::Result<()> {
+        if let Some(kind) = self.plan.fire(FsOp::SyncFile) {
+            return Err(fault_error(kind));
+        }
+        self.inner.sync_all()
+    }
+    fn identity(&self) -> io::Result<FileIdentity> {
+        if let Some(kind) = self.plan.fire(FsOp::Open) {
+            return Err(fault_error(kind));
+        }
+        self.inner.identity()
+    }
+}
+
 struct FaultWrite {
     inner: Box<dyn WriteFile>,
     plan: Arc<FaultPlan>,
