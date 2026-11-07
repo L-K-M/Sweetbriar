@@ -4478,6 +4478,7 @@ mod stage_tests {
             StagePhase::DatabaseCopied => "00000000-0000-4000-8000-0000000000d2",
             StagePhase::ManifestCopied => "00000000-0000-4000-8000-0000000000d3",
             StagePhase::ObjectsCopied => "00000000-0000-4000-8000-0000000000d4",
+            StagePhase::HandlesRetained => "00000000-0000-4000-8000-0000000000d5",
         };
         let selection = source.select_with(&source.store);
         let cancelled = AtomicBool::new(false);
@@ -4774,6 +4775,8 @@ mod stage_tests {
         assert!(stage_cancel_at(&source, StagePhase::DatabaseCopied).is_err());
         source.assert_untouched();
         assert!(stage_cancel_at(&source, StagePhase::ManifestCopied).is_err());
+        source.assert_untouched();
+        assert!(stage_cancel_at(&source, StagePhase::HandlesRetained).is_err());
         source.assert_untouched();
     }
 

@@ -110,6 +110,8 @@ pub(crate) enum StagePhase {
     ObjectsCopied,
     /// The manifest itself was copied into the stage.
     ManifestCopied,
+    /// The created file and directory identities are retained.
+    HandlesRetained,
 }
 
 fn interrupted() -> io::Error {
@@ -525,14 +527,19 @@ impl Backups {
             .parent()
             .expect("a data root has a parent")
             .join(&stage_name);
+        let files = StageFiles::new(
+            stage,
+            database,
+            manifest.database.sha256,
+            manifest.database.bytes,
+        )
+        .map_err(|error| io_error("retaining the staging file identities", error))?;
+        progress(StagePhase::HandlesRetained);
+        if cancel.load(Ordering::Acquire) {
+            return Err(cancelled());
+        }
         Ok(PreparedRestoreStage {
-            files: StageFiles::new(
-                stage,
-                database,
-                manifest.database.sha256,
-                manifest.database.bytes,
-            )
-            .map_err(|error| io_error("retaining the staging file identities", error))?,
+            files,
             path: stage_path,
             incarnation: new_incarnation.to_owned(),
             generation_id: generation.to_owned(),
