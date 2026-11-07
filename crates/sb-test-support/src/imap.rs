@@ -124,6 +124,9 @@ pub struct Script {
     pub steps: Vec<Step>,
     /// Responses for a command no step matches (tagged BAD by default).
     pub fallback: Vec<Reply>,
+    /// Wraps the connection in TLS before the greeting (implicit TLS),
+    /// the other half of [`Reply::UpgradeTls`].
+    pub implicit_tls: bool,
 }
 
 impl Script {
@@ -135,12 +138,20 @@ impl Script {
             fallback: vec![Reply::TaggedBad(
                 "no scripted answer for this command".to_string(),
             )],
+            implicit_tls: false,
         }
     }
 
     /// Overrides the greeting line (CRLF included).
     pub fn greeting(mut self, line: impl Into<String>) -> Self {
         self.greeting = line.into();
+        self
+    }
+
+    /// Wraps the connection in TLS before the greeting, for a client
+    /// that connects with implicit TLS.
+    pub fn implicit_tls(mut self) -> Self {
+        self.implicit_tls = true;
         self
     }
 }
@@ -156,6 +167,7 @@ pub struct ReceivedCommand {
 struct Shared {
     received: Mutex<Vec<ReceivedCommand>>,
     unexpected: AtomicUsize,
+    disconnected: AtomicUsize,
 }
 
 /// The listening server: `serve` starts it, `Drop` joins its threads.
@@ -205,7 +217,8 @@ impl FakeImapServer {
                         .clone();
                     let (shutdown, shared) = (shutdown.clone(), shared.clone());
                     let conn = thread::spawn(move || {
-                        let _ = run_connection(stream, script, shared, shutdown, index);
+                        let _ = run_connection(stream, script, shared.clone(), shutdown, index);
+                        shared.disconnected.fetch_add(1, Ordering::Relaxed);
                     });
                     conns.lock().expect("conns").push(conn);
                     index += 1;
@@ -236,6 +249,11 @@ impl FakeImapServer {
     /// test asserts as zero.
     pub fn unexpected_count(&self) -> usize {
         self.shared.unexpected.load(Ordering::Relaxed)
+    }
+
+    /// Connections whose server-side handler has ended.
+    pub fn disconnected_count(&self) -> usize {
+        self.shared.disconnected.load(Ordering::Relaxed)
     }
 
     /// Stops accepting and drops live connections without `Drop`.
@@ -370,12 +388,16 @@ fn run_connection(
     shutdown: Arc<AtomicBool>,
     index: usize,
 ) -> io::Result<()> {
+    let implicit_tls = script.implicit_tls;
     let mut conn = Conn {
         wire: Wire::Plain(stream),
         fragmentizer: Fragmentizer::new(MAX_MESSAGE_SIZE),
         last_tag: None,
     };
     conn.wire.set_poll_timeout()?;
+    if implicit_tls {
+        conn.wire = conn.wire.upgrade_tls(&shutdown)?;
+    }
     conn.wire.write_all(script.greeting.as_bytes())?;
 
     let mut steps = script.steps;

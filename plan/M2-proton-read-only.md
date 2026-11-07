@@ -45,24 +45,71 @@ signed in, with its TLS certificate exported.
 - **Spec:** 04 (Structure, Connections), 10 (TLS and the Bridge
   certificate).
 - **Depends on:** M2.1b.
-- **Deliverables:**
-  - `sb-imap::Connection`: connect to `127.0.0.1`, STARTTLS or implicit
-    TLS, a pinned-cert verifier that does full handshake verification
-    plus a leaf-hash check, LOGIN, capability refresh, ID;
-  - read operations returning observations (mailbox list, epoch, UID
-    sets, header literals, flags, body literals as streams);
-  - an IDLE watcher;
-  - timeouts and backoff;
-  - a dialect-free command interface. The provider policies
-    (`proton_bridge`, `generic_imap`) live in `sb-engine` (module `policy`)
-    (04) and arrive in M2.4.
-- **Acceptance**, against the fake server and Dovecot:
+- **Prerequisite split (2026-11-07):** extract **M2.2a0 Pinned TLS and
+  secret primitives (M)** before integrating the connection artifact.
+  This keeps its cancellation regression and all existing proof within
+  the 1,450-line limit. a0 provides the exact DER SHA-256 pin, the private
+  rustls verifier/configuration with validity and handshake-signature
+  checks, and the non-cloning redacted password wrapper. Native tests
+  cover exact pins, mismatch evidence, validity and secret formatting.
+  No socket, credential exchange or complete transport is exposed by a0;
+  the following connection, STARTTLS, read and lifecycle artifacts retain
+  every deliverable and acceptance check below.
+
+The whole is larger than the size limit, so it runs as four steps,
+each with its own PR. Every deliverable and acceptance item is kept;
+the provider policies (`proton_bridge`, `generic_imap`) live in
+`sb-engine` (module `policy`) (04) and arrive in M2.4.
+
+#### M2.2a1 Implicit pinned-TLS connection — L, linux
+
+- **Goal:** `sb-imap::Connection` sets up an implicit pinned-TLS session.
+- **Deliverables:** loopback policy, SHA-256 leaf pin and validity and
+  handshake signature checks, strict response gate, greeting, CAPABILITY,
+  LOGINDISABLED refusal, LOGIN, post-login CAPABILITY, ID, best-effort
+  LOGOUT, typed errors and redacted credentials.
+- **Acceptance**, against the fake server:
   - a wrong pin is rejected before LOGIN;
-  - a missing STARTTLS is rejected;
   - a non-loopback host is rejected for the Bridge preset;
+  - a malformed response closes the connection and nothing after it is
+    delivered;
+  - credentials never appear in formatted output (the log-scan test).
+
+#### M2.2a2 STARTTLS and Dovecot setup — L, linux
+
+- **Deliverables:** STARTTLS capability, command and pinned upgrade;
+  refusal of trailing plaintext; Dovecot setup wiring.
+- **Acceptance**, against the fake server and Dovecot:
+  - a missing STARTTLS is rejected before credentials;
+  - plaintext injected after the tagged OK is refused;
+  - setup, ID and best-effort LOGOUT succeed against Dovecot.
+
+#### M2.2b Read operations — L, linux
+
+- **Goal:** the dialect-free command interface returns the read
+  observations.
+- Body streaming must support spec/10's 100 MB message budget without
+  inheriting setup's 50 MiB response-framing cap; oversized MIME still
+  needs partial-parse/coverage evidence, not an endless reconnect loop.
+- **Deliverables:**
+  - a dialect-free command interface;
+  - read operations returning observations (mailbox list, epoch, UID
+    sets, header literals, flags, body literals as streams).
+- **Acceptance**, against the fake server and Dovecot:
+  - each observation is returned from the fake server's Bridge profile
+    and from the container.
+
+#### M2.2c IDLE, timeouts and reconnect — L, linux
+
+- **Goal:** the connection stays live and recovers.
+- **Deliverables:**
+  - an IDLE watcher (renewed at 25 min);
+  - timeouts and backoff (30 s per command, 120 s per body fetch,
+    scaled for large literals; reconnects back off exponentially, 1 s
+    to 5 min).
+- **Acceptance**, against the fake server and Dovecot:
   - command timeouts trigger a reconnect;
-  - IDLE is renewed at 25 min (virtual clock);
-  - credentials never appear in logs (a log-scan test).
+  - IDLE is renewed at 25 min (virtual clock).
 
 ### M2.3 Bridge account setup and secrets — M, linux + macos-ci + owner
 

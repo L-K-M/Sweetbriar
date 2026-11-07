@@ -1245,6 +1245,19 @@ local drafts. No network yet.
       an old handle for a missing attachment, preserve receipt replay and other
       pin kinds, leave the source handle valid, and accept fresh publications.
       Keep the change atomic with the other quarantine transformations.
+  - **M1.8e3b0 Verified file-copy primitive (M):** an independently
+    tested, private streaming copier over retained confined source and
+    destination handles. Require exclusive output creation, fixed 64 KiB
+    buffers, checked length/SHA-256 at EOF, refusal before excess bytes
+    are written, cancellation per chunk and propagated file-sync errors.
+    Native proof covers empty and multi-chunk input, wrong hash,
+    truncation/growth, symlinks/existing output, cancellation and reached
+    read/write/flush faults. The caller still owns directory flushes and
+    stage eligibility. The private-copy coordinator consumes this for
+    the database, objects and manifest; it bounds the manifest copy by
+    the exact byte length authenticated by the first parse. Split before
+    integrating growth and fault-proof regressions into the 1,450-line
+    coordinator artifact; retain every original e3b acceptance below.
   - **M1.8e3b Quarantined restore staging (L):** verify and copy the chosen
     generation into `<data root>.restoring-<inc>` with publication flushes,
     then run the staging quarantine transaction: new incarnation, all
@@ -1257,7 +1270,46 @@ local drafts. No network yet.
     injected I/O, SQL and flush failures; retry and wrong generation or
     incarnation; crash cuts leave the live store untouched and no
     unquarantined stage eligible for publication.
-    Qualification is split before integration to retain its native proof
+    Split 2026-11-07 (the complete artifact measured over this milestone's
+    1,450 gross-line budget; the split keeps every acceptance check above
+    and assigns each to one half):
+    - **b1 Verified private copy (L):** consume the retained selection,
+      reopen the supplied locator through confined handles, identity-match
+      it, reverify the manifest digest, object count and byte total, and
+      copy the database, every referenced object and the manifest again
+      with exact declared length and hash checks into an exclusive
+      `<data root>.restoring-<inc>` sibling. Fixed 64 KiB streaming
+      buffers, per-chunk cancellation, file/directory/parent flushes, no
+      symlink fallback, no stage reuse or recursive deletion, and the
+      operation Arc lease retained in the returned opaque
+      `PreparedRestoreStage` through later qualification and swap.
+      Acceptance: exact bytes for internal and external sources and for a
+      hash referenced twice; metadata digest/count/total and negative-value
+      rejection; wrong generation leaf, identity replacement, stale locator,
+      changed manifest/database/object bytes and length, and symlink
+      substitution refusal; fresh, existing, invalid-new and live-incarnation
+      refusal; pre-copy and mid-copy cancellation never return a prepared
+      stage; injected CreatePrivateDir/Create/Read/Write/SyncFile/SyncDir
+      failures; crash cuts leave the live store and source untouched and
+      retain unqualified evidence; the live store and source are unchanged;
+      the held lease blocks a backup retention pass and releases on Drop.
+      No source SQL, schema inspection or quarantine transaction here.
+    - **b2 Bounded quarantine qualification (L):** inspect the staged
+      schema with bounded reads, then run the reviewed quarantine
+      transaction on a fresh staging connection, checkpoint and close,
+      consuming the held operation lease rather than reserving again.
+      Acceptance: the e3b row-state, location-semantics, substitution,
+      cancellation, injected-failure, retry and crash-cut checks, with
+      bounded inherited location/generation and schema reads (an observed
+      RED regression for huge inherited location and column-name/type
+      values before the bounded fix, and no blind global 1 MiB limit that
+      rejects valid large archive request or blob data), every inherited
+      cleanup authority row, and fail-closed handling of historical schema
+      22 (no verifier 23/24 tables) until a separate compatible migration
+      artifact exists; never execute arbitrary inherited programs.
+      `completed_at` is caller-asserted bookkeeping absent from the
+      manifest: document it as provenance, never as a verified timestamp.
+    Qualification is split further before integration to retain its native proof
     within the 1,450-line limit:
     - **M1.8e3b2a Quarantine-schema inspection (L):** a private,
       read-only prerequisite over a retained database reader. Require the
