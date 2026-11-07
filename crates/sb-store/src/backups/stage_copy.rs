@@ -7,6 +7,7 @@
 
 use std::io::{self, Read};
 use std::path::Path;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use sha2::{Digest, Sha256};
@@ -61,6 +62,64 @@ pub(super) fn copy_verified(
         expected_bytes,
         cancel,
     )
+}
+
+/// Copy a database into a newly created read/write capability, retaining the
+/// exact file that received the verified bytes. Never reopen its pathname.
+pub(super) fn copy_retained(
+    source: &dyn sb_types::fs::ConfinedDir,
+    from: &Path,
+    dest_parent: &dyn sb_types::fs::ConfinedDir,
+    to: &Path,
+    expected_sha: [u8; 32],
+    expected_bytes: u64,
+    cancel: &AtomicBool,
+) -> Result<Arc<dyn sb_types::fs::ReadWriteFile>, StoreError> {
+    let (mut input, _) = source
+        .open_regular(from)
+        .map_err(|error| io_error(&format!("reading {}", from.display()), error))?;
+    let output = dest_parent
+        .create_read_write(to)
+        .map_err(|error| io_error(&format!("creating {}", to.display()), error))?;
+    let mut writer = PositionedWriter {
+        file: output.as_ref(),
+        position: 0,
+    };
+    copy_stream(
+        &mut *input,
+        &mut writer,
+        from,
+        to,
+        expected_sha,
+        expected_bytes,
+        cancel,
+    )?;
+    Ok(output.into())
+}
+
+struct PositionedWriter<'a> {
+    file: &'a dyn sb_types::fs::ReadWriteFile,
+    position: u64,
+}
+
+impl io::Write for PositionedWriter<'_> {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        let written = self.file.write_at(bytes, self.position)?;
+        self.position = self
+            .position
+            .checked_add(written as u64)
+            .ok_or(io::ErrorKind::InvalidData)?;
+        Ok(written)
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+impl sb_types::fs::WriteFile for PositionedWriter<'_> {
+    fn sync_all(&mut self) -> io::Result<()> {
+        self.file.sync_all()
+    }
 }
 
 /// The streaming half of [`copy_verified`], split out so a test can
@@ -173,6 +232,72 @@ mod tests {
 
     fn sha256(bytes: &[u8]) -> [u8; 32] {
         Sha256::digest(bytes).into()
+    }
+
+    #[test]
+    fn retained_copy_refuses_an_adapter_without_read_write_creation() {
+        struct Legacy;
+        impl ConfinedDir for Legacy {
+            fn create(&self, _: &Path) -> io::Result<Box<dyn sb_types::fs::WriteFile>> {
+                panic!("ordinary write creation must not be a fallback");
+            }
+            fn open_regular(
+                &self,
+                _: &Path,
+            ) -> io::Result<(Box<dyn sb_types::fs::ReadFile>, sb_types::fs::Metadata)> {
+                panic!("must not reopen the destination for reading");
+            }
+        }
+        let fix = Fixture::new("stage-copy-no-retained-fallback");
+        fix.write_source("file", b"verified");
+        let source = fix.confined(&fix.source);
+        let error = copy_retained(
+            source.as_ref(),
+            Path::new("file"),
+            &Legacy,
+            Path::new("db"),
+            sha256(b"verified"),
+            8,
+            &AtomicBool::new(false),
+        )
+        .err()
+        .unwrap();
+        assert_eq!(error.io_kind(), Some(io::ErrorKind::Unsupported));
+    }
+
+    #[test]
+    fn retained_copy_handles_empty_and_multi_chunk_files() {
+        for content in [Vec::new(), vec![42; CHUNK * 3 + 17]] {
+            let fix = Fixture::new("stage-copy-retained");
+            fix.write_source("file", &content);
+            let source = fix.confined(&fix.source);
+            let dest = fix.confined(&fix.dest);
+            let retained = copy_retained(
+                source.as_ref(),
+                Path::new("file"),
+                dest.as_ref(),
+                Path::new("copy"),
+                sha256(&content),
+                content.len() as u64,
+                &AtomicBool::new(false),
+            )
+            .unwrap();
+            assert_eq!(retained.len().unwrap(), content.len() as u64);
+            assert_eq!(fix.dest_bytes("copy"), content);
+            assert!(
+                copy_retained(
+                    source.as_ref(),
+                    Path::new("file"),
+                    dest.as_ref(),
+                    Path::new("copy"),
+                    sha256(&content),
+                    content.len() as u64,
+                    &AtomicBool::new(false)
+                )
+                .is_err(),
+                "must not reopen an existing output"
+            );
+        }
     }
 
     #[test]

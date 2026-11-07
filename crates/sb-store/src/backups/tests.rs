@@ -4374,6 +4374,77 @@ mod stage_tests {
             .unwrap()
     }
 
+    #[test]
+    fn prepared_stage_retains_the_created_directory_and_database() {
+        use std::io::{Read, Seek, SeekFrom};
+        let source = staging_source("staging-retained-handles");
+        let stage = prepare(
+            &source.store,
+            source.select_with(&source.store),
+            source.receipt.location(),
+            source.metadata,
+        );
+        let original = std::fs::read(stage.path().join("state.sqlite")).unwrap();
+        assert_eq!(stage.files.database_bytes, original.len() as u64);
+        assert_eq!(
+            stage.files.database_sha256,
+            <[u8; 32]>::from(Sha256::digest(&original))
+        );
+        let original_path = stage.path().to_path_buf();
+        let moved = original_path.with_extension("retained");
+        std::fs::rename(&original_path, &moved).unwrap();
+        std::fs::create_dir(&original_path).unwrap();
+        std::fs::write(original_path.join("state.sqlite"), b"replacement root").unwrap();
+        std::fs::rename(moved.join("state.sqlite"), moved.join("retained.sqlite")).unwrap();
+        std::fs::write(moved.join("state.sqlite"), b"replacement file").unwrap();
+        assert_eq!(
+            stage.files.root.identity().unwrap(),
+            stage.files.root_identity
+        );
+        assert_eq!(
+            stage.files.database.identity().unwrap(),
+            stage.files.database_identity
+        );
+        let replacement_root = real_fs().open_confined_dir(&original_path).unwrap();
+        assert_ne!(
+            replacement_root.identity().unwrap(),
+            stage.files.root_identity
+        );
+        let mut reader = stage.files.database_reader();
+        let mut bytes = Vec::new();
+        reader.read_to_end(&mut bytes).unwrap();
+        assert_eq!(bytes, original);
+        reader.seek(SeekFrom::Start(0)).unwrap();
+        let mut another = stage.files.database_reader();
+        let mut magic = [0; 16];
+        another.read_exact(&mut magic).unwrap();
+        assert_eq!(&magic, b"SQLite format 3\0");
+        reader.read_exact(&mut magic).unwrap();
+        assert_eq!(&magic, b"SQLite format 3\0");
+
+        // Even later writes stay on the created file. The now-modified image
+        // is unqualified; retaining a handle never grants swap authority.
+        stage
+            .files
+            .database
+            .write_at(b"unqualified", original.len() as u64)
+            .unwrap();
+        stage.files.database.sync_all().unwrap();
+        assert_eq!(
+            std::fs::read(moved.join("retained.sqlite")).unwrap(),
+            [original.as_slice(), b"unqualified"].concat()
+        );
+        assert_eq!(
+            std::fs::read(moved.join("state.sqlite")).unwrap(),
+            b"replacement file"
+        );
+        assert_eq!(
+            std::fs::read(original_path.join("state.sqlite")).unwrap(),
+            b"replacement root"
+        );
+        assert_eq!(std::fs::read(source.receipt.state_db()).unwrap(), original);
+    }
+
     /// How many generation rows the live store holds.
     fn generation_count(store: &Store) -> i64 {
         reading(store, |tx| {
@@ -4407,6 +4478,7 @@ mod stage_tests {
             StagePhase::DatabaseCopied => "00000000-0000-4000-8000-0000000000d2",
             StagePhase::ManifestCopied => "00000000-0000-4000-8000-0000000000d3",
             StagePhase::ObjectsCopied => "00000000-0000-4000-8000-0000000000d4",
+            StagePhase::HandlesRetained => "00000000-0000-4000-8000-0000000000d5",
         };
         let selection = source.select_with(&source.store);
         let cancelled = AtomicBool::new(false);
@@ -4703,6 +4775,8 @@ mod stage_tests {
         assert!(stage_cancel_at(&source, StagePhase::DatabaseCopied).is_err());
         source.assert_untouched();
         assert!(stage_cancel_at(&source, StagePhase::ManifestCopied).is_err());
+        source.assert_untouched();
+        assert!(stage_cancel_at(&source, StagePhase::HandlesRetained).is_err());
         source.assert_untouched();
     }
 
