@@ -1449,6 +1449,7 @@ dependencies = [
  "rustls",
  "sb-test-support",
  "sb-types",
+ "sha2",
 ]
 
 [[package]]
