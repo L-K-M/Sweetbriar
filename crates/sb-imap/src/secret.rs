@@ -31,3 +31,16 @@ impl fmt::Display for Password {
         f.write_str("[redacted]")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn formatting_never_exposes_the_credential() {
+        let password = Password::new("synthetic-bridge-password");
+        assert_eq!(format!("{password}"), "[redacted]");
+        assert_eq!(format!("{password:?}"), "[redacted]");
+        assert_eq!(password.as_str(), "synthetic-bridge-password");
+    }
+}

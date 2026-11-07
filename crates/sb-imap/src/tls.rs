@@ -152,6 +152,45 @@ mod tests {
     use std::time::Duration;
 
     #[test]
+    fn pin_is_the_sha256_of_exact_der_bytes() {
+        let cert = sb_test_support::cert_der();
+        let pin = CertificatePin::of_der(cert.as_ref());
+        assert_eq!(
+            pin.hex(),
+            "f921c0432dab5a70401266a0216f46e6f6f795de47868447e9fde159771a24d1"
+        );
+        assert_eq!(CertificatePin::from_bytes(*pin.as_bytes()), pin);
+    }
+
+    #[test]
+    fn exact_pin_accepts_a_valid_certificate_but_a_wrong_pin_reports_the_presented_hash() {
+        let cert = sb_test_support::cert_der();
+        let mut verifier = CertPinVerifier {
+            pin: CertificatePin::of_der(cert.as_ref()),
+            algs: rustls::crypto::ring::default_provider().signature_verification_algorithms,
+            presented: Arc::new(Mutex::new(None)),
+        };
+        let name = ServerName::try_from("127.0.0.1").unwrap();
+        assert!(
+            verifier
+                .verify_server_cert(&cert, &[], &name, &[], UnixTime::now())
+                .is_ok()
+        );
+        assert!(verifier.presented.lock().unwrap().is_none());
+        verifier.pin = CertificatePin::from_bytes([0; 32]);
+        assert!(matches!(
+            verifier.verify_server_cert(&cert, &[], &name, &[], UnixTime::now()),
+            Err(rustls::Error::InvalidCertificate(
+                CertificateError::UnknownIssuer
+            ))
+        ));
+        assert_eq!(
+            verifier.presented.lock().unwrap().as_deref(),
+            Some("f921c0432dab5a70401266a0216f46e6f6f795de47868447e9fde159771a24d1")
+        );
+    }
+
+    #[test]
     fn matching_pin_does_not_bypass_certificate_validity() {
         let cert = sb_test_support::cert_der();
         let verifier = CertPinVerifier {
