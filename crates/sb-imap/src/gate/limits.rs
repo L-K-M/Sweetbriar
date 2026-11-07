@@ -82,3 +82,44 @@ async fn a_complete_response_exactly_at_the_frame_limit_is_valid() {
     assert!(!gate.poisoned());
     assert!(gate.read(&mut wire).await.unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn the_default_frame_limit_admits_an_exact_fifty_mib_literal_response() {
+    let (mut client, mut peer) = tokio::io::duplex(8192);
+    let reader = async move {
+        let mut gate = Gate::new();
+        assert_eq!(gate.read(&mut client).await.unwrap(), b"* OK ready\r\n");
+        client.write_all(b"g").await.unwrap();
+        let frame = gate.read(&mut client).await.unwrap();
+        assert_eq!(frame.len(), MAX_MESSAGE_SIZE as usize);
+        assert!(frame.ends_with(b")\r\n"));
+        assert!(!gate.poisoned());
+    };
+    let sender = async move {
+        peer.write_all(b"* OK ready\r\n").await.unwrap();
+        peer.read_exact(&mut [0]).await.unwrap();
+        let total = MAX_MESSAGE_SIZE as usize;
+        let mut literal_len = total;
+        let prefix = loop {
+            let prefix = format!("* 1 FETCH (BODY[] {{{literal_len}}}\r\n");
+            let adjusted = total - prefix.len() - 3;
+            if adjusted == literal_len {
+                break prefix;
+            }
+            literal_len = adjusted;
+        };
+        peer.write_all(prefix.as_bytes()).await.unwrap();
+        let chunk = [b'x'; 8192];
+        while literal_len > 0 {
+            let size = literal_len.min(chunk.len());
+            peer.write_all(&chunk[..size]).await.unwrap();
+            literal_len -= size;
+        }
+        peer.write_all(b")\r\n").await.unwrap();
+    };
+    tokio::time::timeout(Duration::from_secs(30), async {
+        tokio::join!(reader, sender);
+    })
+    .await
+    .expect("a valid frame at the production limit completes");
+}
