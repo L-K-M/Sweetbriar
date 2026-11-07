@@ -293,3 +293,156 @@ func callsAfterShutdownAnswerUnavailable() async throws {
         }
     }
 }
+
+@Test(.timeLimit(.minutes(1)))
+func republishMapsTheFullReferenceAndSavesACopy() async throws {
+    let (dir, bridge) = try await openedBridge()
+    defer { try? FileManager.default.removeItem(at: dir) }
+
+    let source = try await bridge.createDraft(idempotencyKey: UUID().uuidString, source: .new)
+    let bytes = Data("attachment-bytes".utf8)
+    let published = try await bridge.publishDraftAttachment(bytes: bytes)
+    let saved = try await bridge.saveDraft(
+        idempotencyKey: UUID().uuidString, draftId: source.draftId, baseRevisionId: nil,
+        content: content(attachments: [
+            .new(object: published, filename: "a.txt", mediaType: "text/plain")
+        ])
+    )
+    let reference = try #require(try await bridge.draft(id: source.draftId).revision?.attachments.first)
+
+    // Advance the head; the older revision still authorizes a copy.
+    _ = try await bridge.saveDraft(
+        idempotencyKey: UUID().uuidString, draftId: source.draftId,
+        baseRevisionId: saved.revisionId, content: content(subject: "Advanced")
+    )
+    let copy = try await bridge.republishDraftAttachment(
+        draftId: source.draftId, revisionId: saved.revisionId, reference: reference
+    )
+    #expect(copy.objectSha256 == reference.objectSha256)
+    #expect(copy.byteLength == reference.size)
+
+    // The copy spends into a fresh draft; the stored reference equals
+    // the source's field for field.
+    let target = try await bridge.createDraft(idempotencyKey: UUID().uuidString, source: .new)
+    _ = try await bridge.saveDraft(
+        idempotencyKey: UUID().uuidString, draftId: target.draftId, baseRevisionId: nil,
+        content: content(subject: "Copy", attachments: [
+            .new(object: copy, filename: reference.filename, mediaType: reference.mediaType)
+        ])
+    )
+    let stored = try #require(try await bridge.draft(id: target.draftId).revision?.attachments)
+    #expect(stored == [reference])
+
+    // The source head stayed advanced and untouched.
+    let after = try #require(try await bridge.draft(id: source.draftId).revision)
+    #expect(after.subject == "Advanced" && after.attachments.isEmpty)
+
+    await bridge.shutdown()
+}
+
+@Test(.timeLimit(.minutes(1)))
+func republishDeniesWrongSourceTyped() async throws {
+    let (dir, bridge) = try await openedBridge()
+    defer { try? FileManager.default.removeItem(at: dir) }
+
+    let source = try await bridge.createDraft(idempotencyKey: UUID().uuidString, source: .new)
+    let published = try await bridge.publishDraftAttachment(bytes: Data("bytes".utf8))
+    let saved = try await bridge.saveDraft(
+        idempotencyKey: UUID().uuidString, draftId: source.draftId, baseRevisionId: nil,
+        content: content(attachments: [
+            .new(object: published, filename: "b.txt", mediaType: "text/plain")
+        ])
+    )
+    let reference = try #require(try await bridge.draft(id: source.draftId).revision?.attachments.first)
+
+    // A draft or revision that does not own the source is notFound.
+    let other = try await bridge.createDraft(idempotencyKey: UUID().uuidString, source: .new)
+    for (draftId, revisionId) in [
+        ("missing", saved.revisionId),
+        (other.draftId, saved.revisionId),
+        (source.draftId, "missing"),
+    ] {
+        do {
+            _ = try await bridge.republishDraftAttachment(
+                draftId: draftId, revisionId: revisionId, reference: reference
+            )
+            Issue.record("\(draftId)/\(revisionId) must throw notFound")
+        } catch let failure as CoreFailure {
+            guard case .notFound = failure else {
+                Issue.record("expected .notFound, got \(failure)")
+                continue
+            }
+        }
+    }
+
+    // A reference that differs in any field is conflict.
+    var wrong = reference
+    wrong.filename = "other.txt"
+    do {
+        _ = try await bridge.republishDraftAttachment(
+            draftId: source.draftId, revisionId: saved.revisionId, reference: wrong
+        )
+        Issue.record("a non-member reference must throw")
+    } catch let failure as CoreFailure {
+        guard case .conflict = failure else {
+            Issue.record("expected .conflict, got \(failure)")
+            return
+        }
+    }
+
+    await bridge.shutdown()
+}
+
+@Test(.timeLimit(.minutes(1)))
+func republishedHandlesAreIndependentAndOneShot() async throws {
+    let (dir, bridge) = try await openedBridge()
+    defer { try? FileManager.default.removeItem(at: dir) }
+
+    let source = try await bridge.createDraft(idempotencyKey: UUID().uuidString, source: .new)
+    let published = try await bridge.publishDraftAttachment(bytes: Data("same".utf8))
+    let saved = try await bridge.saveDraft(
+        idempotencyKey: UUID().uuidString, draftId: source.draftId, baseRevisionId: nil,
+        content: content(attachments: [
+            .new(object: published, filename: "c.txt", mediaType: "text/plain")
+        ])
+    )
+    let reference = try #require(try await bridge.draft(id: source.draftId).revision?.attachments.first)
+
+    // Two calls on one stored reference: one object identity, a
+    // fresh reservation each.
+    let first = try await bridge.republishDraftAttachment(
+        draftId: source.draftId, revisionId: saved.revisionId, reference: reference)
+    let second = try await bridge.republishDraftAttachment(
+        draftId: source.draftId, revisionId: saved.revisionId, reference: reference)
+    #expect(first == second)
+
+    // Each handle spends exactly once into its own fresh draft.
+    for copy in [first, second] {
+        let target = try await bridge.createDraft(idempotencyKey: UUID().uuidString, source: .new)
+        _ = try await bridge.saveDraft(
+            idempotencyKey: UUID().uuidString, draftId: target.draftId, baseRevisionId: nil,
+            content: content(attachments: [
+                .new(object: copy, filename: "copy.txt", mediaType: "text/plain")
+            ])
+        )
+    }
+
+    // The spent handle refuses a fresh save.
+    let another = try await bridge.createDraft(idempotencyKey: UUID().uuidString, source: .new)
+    do {
+        _ = try await bridge.saveDraft(
+            idempotencyKey: UUID().uuidString, draftId: another.draftId, baseRevisionId: nil,
+            content: content(attachments: [
+                .new(object: first, filename: "spent.txt", mediaType: "text/plain")
+            ])
+        )
+        Issue.record("a spent republished handle must conflict")
+    } catch let failure as CoreFailure {
+        guard case .conflict = failure else {
+            Issue.record("expected .conflict, got \(failure)")
+            return
+        }
+    }
+
+    await bridge.shutdown()
+}

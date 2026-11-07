@@ -313,6 +313,11 @@ uint64_t uniffi_sb_ffi_fn_method_core_drafts(uint64_t ptr, uint64_t token
 uint64_t uniffi_sb_ffi_fn_method_core_publish_draft_attachment(uint64_t ptr, uint64_t token, RustBuffer input
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_REPUBLISH_DRAFT_ATTACHMENT
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_REPUBLISH_DRAFT_ATTACHMENT
+uint64_t uniffi_sb_ffi_fn_method_core_republish_draft_attachment(uint64_t ptr, uint64_t token, RustBuffer draft_id, RustBuffer revision_id, RustBuffer reference
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_SAVE_DRAFT
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_SAVE_DRAFT
 uint64_t uniffi_sb_ffi_fn_method_core_save_draft(uint64_t ptr, uint64_t token, RustBuffer idempotency_key, RustBuffer draft_id, RustBuffer base_revision_id, RustBuffer content
@@ -878,6 +883,12 @@ uint16_t uniffi_sb_ffi_checksum_method_core_drafts(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_PUBLISH_DRAFT_ATTACHMENT
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_PUBLISH_DRAFT_ATTACHMENT
 uint16_t uniffi_sb_ffi_checksum_method_core_publish_draft_attachment(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_REPUBLISH_DRAFT_ATTACHMENT
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_REPUBLISH_DRAFT_ATTACHMENT
+uint16_t uniffi_sb_ffi_checksum_method_core_republish_draft_attachment(void
     
 );
 #endif
