@@ -144,6 +144,17 @@ the provider policies (`proton_bridge`, `generic_imap`) live in
   While selected, CAPABILITY refreshes use the same epoch checks and retain
   reconciliation notices for the next read; a refresh cannot hide an epoch
   change from a later UID observation or leave the capability cache stale.
+- **b2b prerequisite split (2026-11-07):** **b2b0 Typed metadata limits
+  (M)** precedes **b2b1 Header observations (L)**. A valid header batch can
+  exceed the metadata budget; callers need a typed resource cause for
+  adaptive batching instead of parsing error text or treating it as malformed
+  mail. Distinguish frame and aggregate limits, stop on an oversized literal
+  announcement or unfinished frame without waiting for its end, and close
+  the failed exchange without returning partial observations. Keep the
+  existing 50 MiB metadata limits, all tag/cancellation checks and b3's
+  separate 100 MB body-stream budget. Native regressions must prove early
+  refusal without EOF, persistent failure and the exact size boundary;
+  full local CI and the actual pinned Dovecot suites remain required.
 - **Goal:** the dialect-free command interface returns the read
   observations.
 - Body streaming must support spec/10's 100 MB message budget without

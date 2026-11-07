@@ -78,6 +78,26 @@ fn flags(rows: &[&str]) -> Step {
 }
 
 #[tokio::test]
+async fn brace_counts_in_status_text_do_not_interrupt_a_uid_inventory() {
+    let (server, mut client) = selected(vec![Step::on(
+        Expect::command("UID SEARCH ALL"),
+        vec![
+            Reply::untagged("OK [ALERT] notice {52428801}"),
+            Reply::untagged("SEARCH 7"),
+            Reply::ok("searched {1}"),
+        ],
+    )])
+    .await;
+    let read = tokio::time::timeout(Duration::from_secs(2), client.uid_inventory())
+        .await
+        .expect("complete status text cannot wait for literal bytes")
+        .unwrap();
+    assert_eq!(read.observation.uids[0].get(), 7);
+    assert_eq!(read.notices, [MailboxNotice::Alert]);
+    assert_eq!(server.unexpected_count(), 0);
+}
+
+#[tokio::test]
 async fn bridge_profile_pairs_uid_inventory_with_uid_keyed_flags() {
     let p = Profile::bridge();
     let (server, mut client) = selected(vec![
@@ -483,6 +503,35 @@ async fn cancelling_either_uid_phase_closes_before_another_command() {
             Err(ImapError::Closed)
         ));
         assert_eq!(server.received().len(), count);
+    }
+}
+
+#[tokio::test]
+async fn oversized_metadata_closes_either_uid_phase_before_the_literal_arrives() {
+    for phase in ["UID SEARCH", "UID FETCH"] {
+        let mut steps = Vec::new();
+        if phase == "UID FETCH" {
+            steps.push(search("7"));
+        }
+        steps.push(Step::on(
+            Expect::command(phase),
+            vec![Reply::Raw(
+                format!("* 1 FETCH (UID 7 BODY[] {{{}}}\r\n", 50 * 1024 * 1024 + 1).into_bytes(),
+            )],
+        ));
+        let (server, mut client) = selected(steps).await;
+        let result = tokio::time::timeout(Duration::from_secs(2), client.flag_sweep())
+            .await
+            .expect("the frame limit must fail without literal bytes or EOF");
+        assert!(matches!(result, Err(ImapError::FrameBudgetExceeded)));
+        assert!(matches!(
+            client.uid_inventory().await,
+            Err(ImapError::Closed)
+        ));
+        assert_eq!(
+            server.received().len(),
+            if phase == "UID SEARCH" { 6 } else { 7 }
+        );
     }
 }
 
