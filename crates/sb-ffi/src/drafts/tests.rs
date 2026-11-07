@@ -1563,3 +1563,422 @@ fn save_failures_are_typed_and_name_their_fields() {
     ));
     block_on(core.shutdown());
 }
+
+/// The stored reference of a draft's current revision attachment.
+fn stored_attachment_ref(core: &Core, draft_id: &str) -> DraftAttachmentRef {
+    block_on(core.draft(CancelToken::new(), draft_id.to_owned()))
+        .unwrap()
+        .revision
+        .unwrap()
+        .attachments[0]
+        .clone()
+}
+
+/// `republish_draft_attachment` (spec/07): an older revision's stored
+/// reference and a terminal draft's alike authorize a fresh copy. The
+/// bytes already sit under the data root, so the proof is the fresh
+/// reservation each call mints and the save that spends it; the stored
+/// reference equals the source's field for field, and the source draft
+/// never moves.
+#[test]
+fn republished_copies_spend_from_old_and_terminal_sources() {
+    let (_scratch, core, state) = scratch_core_and_state("ffi-draft-republish-copies");
+    let source = create_draft(&core, "create-1");
+    let object = publish(&core, b"the file");
+    let sha = object.object_sha256();
+    let saved = try_save(
+        &core,
+        "save-1",
+        &source,
+        None,
+        with_attachment("first", object),
+    )
+    .unwrap();
+    let reference = stored_attachment_ref(&core, &source);
+    assert_eq!(reference.object_sha256, sha);
+    assert_eq!(reference.filename, "file.txt");
+    assert_eq!(reference.media_type, "text/plain");
+    assert_eq!(reference.size, 8);
+    assert_eq!(round_trip(reference.clone()), reference);
+
+    // The head advances; the saved revision is immutable history but
+    // still authorizes a copy.
+    try_save(
+        &core,
+        "save-2",
+        &source,
+        Some(saved.revision_id.clone()),
+        content("second"),
+    )
+    .unwrap();
+    assert_eq!(pin_count(&state, &sha), 0);
+    let from_old = block_on(core.republish_draft_attachment(
+        CancelToken::new(),
+        source.clone(),
+        saved.revision_id.clone(),
+        reference.clone(),
+    ))
+    .unwrap();
+    assert_eq!(from_old.object_sha256(), reference.object_sha256);
+    assert_eq!(from_old.byte_length(), reference.size);
+    assert_eq!(
+        pin_count(&state, &sha),
+        1,
+        "the copy minted its own reservation"
+    );
+
+    // A terminal source draft is just as valid a source: the copy is
+    // a new publication, never a mutation of that draft.
+    block_on(core.discard_draft(CancelToken::new(), "discard-1".into(), source.clone())).unwrap();
+    let from_terminal = block_on(core.republish_draft_attachment(
+        CancelToken::new(),
+        source.clone(),
+        saved.revision_id.clone(),
+        reference.clone(),
+    ))
+    .unwrap();
+    assert_eq!(pin_count(&state, &sha), 2);
+
+    // Each copy spends its reservation into a fresh draft, and the
+    // stored reference equals the source's field for field.
+    for (key, copy) in [("create-2", from_old), ("create-3", from_terminal)] {
+        let target = create_draft(&core, key);
+        try_save(
+            &core,
+            &format!("{key}-save"),
+            &target,
+            None,
+            with_attachment("copy", copy),
+        )
+        .unwrap();
+        assert_eq!(stored_attachment_ref(&core, &target), reference);
+    }
+    assert_eq!(pin_count(&state, &sha), 0, "both copies spent their pins");
+
+    // The source draft's state and head never moved.
+    let after = block_on(core.draft(CancelToken::new(), source)).unwrap();
+    assert_eq!(after.state, DraftState::Discarded);
+    let head = after.revision.unwrap();
+    assert_eq!(head.subject, "second");
+    assert!(head.attachments.is_empty());
+    block_on(core.shutdown());
+}
+
+/// Two republishes of one stored reference mint independent
+/// reservations: the pin count rises per call, each handle spends its
+/// own exactly once, and a clone of a spent handle is `Conflict` under
+/// a fresh key on any draft (spec/02, spec/03).
+#[test]
+fn republished_reservations_are_independent_and_one_shot() {
+    let (_scratch, core, state) = scratch_core_and_state("ffi-draft-republish-reservations");
+    let source = create_draft(&core, "create-1");
+    let object = publish(&core, b"same");
+    let sha = object.object_sha256();
+    let saved = try_save(
+        &core,
+        "save-1",
+        &source,
+        None,
+        with_attachment("source", object),
+    )
+    .unwrap();
+    let reference = stored_attachment_ref(&core, &source);
+
+    let first = block_on(core.republish_draft_attachment(
+        CancelToken::new(),
+        source.clone(),
+        saved.revision_id.clone(),
+        reference.clone(),
+    ))
+    .unwrap();
+    let second = block_on(core.republish_draft_attachment(
+        CancelToken::new(),
+        source.clone(),
+        saved.revision_id.clone(),
+        reference,
+    ))
+    .unwrap();
+    assert_eq!(
+        (first.object_sha256(), first.byte_length()),
+        (second.object_sha256(), second.byte_length()),
+        "the same bytes carry one object identity"
+    );
+    assert_eq!(
+        pin_count(&state, &sha),
+        2,
+        "each call reserved independently"
+    );
+
+    // Each handle spends its own reservation into a fresh draft.
+    let first_draft = create_draft(&core, "create-2");
+    let first_save = try_save(
+        &core,
+        "save-2",
+        &first_draft,
+        None,
+        with_attachment("first copy", first.clone()),
+    )
+    .unwrap();
+    assert_eq!(pin_count(&state, &sha), 1);
+    let second_draft = create_draft(&core, "create-3");
+    try_save(
+        &core,
+        "save-3",
+        &second_draft,
+        None,
+        with_attachment("second copy", second),
+    )
+    .unwrap();
+    assert_eq!(pin_count(&state, &sha), 0);
+
+    // A clone of the spent handle is `Conflict` under a fresh key, on
+    // the draft that spent it and on another draft alike.
+    let third = create_draft(&core, "create-4");
+    for (key, draft_id, base) in [
+        (
+            "save-4",
+            first_draft.as_str(),
+            Some(first_save.revision_id.clone()),
+        ),
+        ("save-5", third.as_str(), None),
+    ] {
+        assert!(
+            matches!(
+                try_save(
+                    &core,
+                    key,
+                    draft_id,
+                    base,
+                    with_attachment("spent", first.clone()),
+                ),
+                Err(CoreError::Conflict { .. })
+            ),
+            "a spent republished handle must be Conflict"
+        );
+    }
+    assert_eq!(
+        revision_count(&state, &first_draft),
+        1,
+        "the refused saves inserted a revision"
+    );
+    block_on(core.shutdown());
+}
+
+/// Wrong draft, revision or reference metadata denies typed
+/// (spec/07): a revision the draft does not have is `NotFound`, a
+/// reference that is not a member of the revision is `Conflict`
+/// whichever field differs, and nothing reserves.
+#[test]
+fn republish_denies_wrong_source_typed() {
+    let (_scratch, core, state) = scratch_core_and_state("ffi-draft-republish-denied");
+    let source = create_draft(&core, "create-1");
+    let object = publish(&core, b"file");
+    let sha = object.object_sha256();
+    let saved = try_save(
+        &core,
+        "save-1",
+        &source,
+        None,
+        with_attachment("source", object),
+    )
+    .unwrap();
+    let reference = stored_attachment_ref(&core, &source);
+    let other = create_draft(&core, "create-2");
+    let other_saved = try_save(&core, "save-2", &other, None, content("other")).unwrap();
+
+    for (draft_id, revision_id) in [
+        ("no-such-draft".to_owned(), saved.revision_id.clone()),
+        (other.clone(), saved.revision_id.clone()),
+        (source.clone(), other_saved.revision_id),
+        (source.clone(), "never-saved".to_owned()),
+    ] {
+        match block_on(core.republish_draft_attachment(
+            CancelToken::new(),
+            draft_id.clone(),
+            revision_id.clone(),
+            reference.clone(),
+        )) {
+            Err(CoreError::NotFound { .. }) => {}
+            result => panic!("{draft_id}/{revision_id} must be NotFound: {result:?}"),
+        }
+    }
+
+    for wrong in [
+        DraftAttachmentRef {
+            object_sha256: "0".repeat(64),
+            ..reference.clone()
+        },
+        DraftAttachmentRef {
+            size: reference.size + 1,
+            ..reference.clone()
+        },
+        DraftAttachmentRef {
+            filename: "other.txt".into(),
+            ..reference.clone()
+        },
+        DraftAttachmentRef {
+            media_type: "application/octet-stream".into(),
+            ..reference.clone()
+        },
+    ] {
+        match block_on(core.republish_draft_attachment(
+            CancelToken::new(),
+            source.clone(),
+            saved.revision_id.clone(),
+            wrong.clone(),
+        )) {
+            Err(CoreError::Conflict { .. }) => {}
+            result => panic!("{wrong:?} must be Conflict: {result:?}"),
+        }
+    }
+    assert_eq!(pin_count(&state, &sha), 0, "a denied call reserved nothing");
+    block_on(core.shutdown());
+}
+
+/// A token cancelled before the republish begins answers `Cancelled`
+/// and mints no reservation; the call works afterwards (spec/07).
+#[test]
+fn republish_pre_cancelled_reserves_nothing() {
+    let (_scratch, core, state) = scratch_core_and_state("ffi-draft-republish-precancel");
+    let source = create_draft(&core, "create-1");
+    let object = publish(&core, b"file");
+    let sha = object.object_sha256();
+    let saved = try_save(
+        &core,
+        "save-1",
+        &source,
+        None,
+        with_attachment("source", object),
+    )
+    .unwrap();
+    let reference = stored_attachment_ref(&core, &source);
+
+    let token = CancelToken::new();
+    token.cancel();
+    let err = block_on(core.republish_draft_attachment(
+        token,
+        source.clone(),
+        saved.revision_id.clone(),
+        reference.clone(),
+    ))
+    .unwrap_err();
+    assert!(matches!(err, CoreError::Cancelled), "{err}");
+    assert_eq!(pin_count(&state, &sha), 0, "a cancelled republish reserved");
+
+    let copy = block_on(core.republish_draft_attachment(
+        CancelToken::new(),
+        source,
+        saved.revision_id,
+        reference,
+    ))
+    .unwrap();
+    assert_eq!(copy.object_sha256(), sha);
+    assert_eq!(pin_count(&state, &sha), 1);
+    block_on(core.shutdown());
+}
+
+/// A republish the core has begun ignores a cancel: the reservation
+/// lands and its handle still spends (spec/07).
+#[test]
+fn republish_begun_ignores_cancel_and_reserves() {
+    let (_scratch, core, state) = scratch_core_and_state("ffi-draft-republish-begun");
+    let source = create_draft(&core, "create-1");
+    let object = publish(&core, b"file");
+    let sha = object.object_sha256();
+    let saved = try_save(
+        &core,
+        "save-1",
+        &source,
+        None,
+        with_attachment("source", object),
+    )
+    .unwrap();
+    let reference = stored_attachment_ref(&core, &source);
+
+    let token = CancelToken::new();
+    let mut begun = Box::pin(core.republish_draft_attachment(
+        token.clone(),
+        source.clone(),
+        saved.revision_id.clone(),
+        reference,
+    ));
+    with_sqlite_write_lock(&state, || {
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(begun.as_mut().poll(&mut cx).is_pending());
+        token.cancel();
+    });
+    let copy = block_on(begun.as_mut()).expect("a begun republish runs to completion");
+    assert_eq!(copy.object_sha256(), sha);
+    assert_eq!(pin_count(&state, &sha), 1);
+
+    // The minted reservation is spendable.
+    let target = create_draft(&core, "create-2");
+    try_save(
+        &core,
+        "save-2",
+        &target,
+        None,
+        with_attachment("copy", copy),
+    )
+    .unwrap();
+    assert_eq!(pin_count(&state, &sha), 0);
+    block_on(core.shutdown());
+}
+
+/// A caller dropped after the republish began still gets its
+/// reservation: the accepted work commits, `shutdown` waits for it,
+/// and the durable pin outlives the close (spec/03, spec/07).
+#[test]
+fn republish_dropped_caller_reserves_and_shutdown_drains() {
+    let (_scratch, core, state) = scratch_core_and_state("ffi-draft-republish-drop");
+    let source = create_draft(&core, "create-1");
+    let object = publish(&core, b"file");
+    let sha = object.object_sha256();
+    let saved = try_save(
+        &core,
+        "save-1",
+        &source,
+        None,
+        with_attachment("source", object),
+    )
+    .unwrap();
+    let reference = stored_attachment_ref(&core, &source);
+
+    let mut future = Box::pin(core.republish_draft_attachment(
+        CancelToken::new(),
+        source,
+        saved.revision_id,
+        reference,
+    ));
+    with_sqlite_write_lock(&state, || {
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(future.as_mut().poll(&mut cx).is_pending());
+        drop(future);
+    });
+    block_on(core.shutdown());
+    assert_eq!(
+        pin_count(&state, &sha),
+        1,
+        "the dropped republish committed its reservation"
+    );
+}
+
+/// A republish after `shutdown` is `Unavailable` (spec/07).
+#[test]
+fn republish_after_shutdown_is_unavailable() {
+    let (_scratch, core) = scratch_core("ffi-draft-republish-shutdown");
+    block_on(core.shutdown());
+    let err = block_on(core.republish_draft_attachment(
+        CancelToken::new(),
+        "draft".into(),
+        "revision".into(),
+        DraftAttachmentRef {
+            object_sha256: "0".repeat(64),
+            filename: "f".into(),
+            media_type: "text/plain".into(),
+            size: 1,
+        },
+    ))
+    .unwrap_err();
+    assert!(matches!(err, CoreError::Unavailable { .. }), "{err}");
+}

@@ -133,8 +133,8 @@ pub use sb_store::threads::{
 pub use sb_store::{
     AppearanceObserver, ExportMetadata, ImportSourceSnapshot, ListObserver, PublishedObject,
     ReadStop, Receipt, Scoped, SearchObserver, StoreError, Timestamp, Transaction, Uuid,
-    WriteFuture, WritePriority, encode_job_receipt, export_occurrence_metadata, receipt_job_id,
-    run_once,
+    WriteFuture, WritePriority, await_write, encode_job_receipt, export_occurrence_metadata,
+    receipt_job_id, run_once,
 };
 
 #[cfg(feature = "test-seams")]
@@ -346,7 +346,7 @@ impl Resources {
     /// reopened. `position` is `START` or the source's one finished
     /// message. `progress` cancels the first proof production before the
     /// session exists. EML and mboxrd sources are dispatched on the
-    /// bundle's declared format; a plain source
+    /// bundle's declared format; a bundle source
     /// never falls back to the plain path.
     pub fn open_bundle_acquisition(
         &self,

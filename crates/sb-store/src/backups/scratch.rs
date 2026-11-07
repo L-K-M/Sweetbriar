@@ -123,6 +123,7 @@ pub(super) fn cleanup(
             return Err(mismatch());
         }
         absent_ok(scratch.remove_file(Path::new(IMAGE)))?;
+        absent_ok(scratch.remove_file(Path::new("manifest.json")))?;
         scratch.sync()?;
         // POSIX cannot combine this identity check with unlinkat. The caller
         // excludes concurrent same-UID directory renames during this interval.

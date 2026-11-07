@@ -16,6 +16,7 @@ use super::*;
 use crate::engine::Spawn;
 
 mod acceptance;
+mod bundles;
 mod exports;
 
 /// How long a test waits for a worker before failing.
@@ -865,7 +866,15 @@ fn discovered_bundle_cancellation_removes_shared_snapshots() {
     assert_eq!(status(&engine, &failed).sources().len(), 2);
     confirm(&engine, &failed, vec![]).unwrap();
     let failed = settle(&engine, &failed, ImportJobState::Failed);
-    assert!(failed.checkpoint().failure().unwrap().contains("M1.7d2"));
+    assert!(
+        failed
+            .checkpoint()
+            .failure()
+            .unwrap()
+            .contains("does not match its captured bytes"),
+        "{:?}",
+        failed.checkpoint().failure()
+    );
     assert_eq!(failed.checkpoint().totals().processed, 0);
     assert_eq!(snapshots(&root), 3);
     block_on(engine.shutdown()).unwrap();
@@ -1161,7 +1170,7 @@ fn bundle_resume_verifies_manifest_and_refuses_unverified_ingest() {
         let failed = settle(&engine, &id, ImportJobState::Failed);
         let failure = failed.checkpoint().failure().unwrap();
         if damage == "none" {
-            assert!(failure.contains("M1.7d2"), "{failure}");
+            assert!(failure.contains("manifest"), "{failure}");
         } else {
             assert!(failure.contains(&token), "{failure}");
         }

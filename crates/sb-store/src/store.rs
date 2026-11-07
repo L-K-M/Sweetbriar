@@ -166,6 +166,45 @@ impl Store {
             .inspect_image(generation, sha256, bytes, cancelled, progress)
     }
 
+    /// Verify a recorded complete generation at the time of this call.
+    /// An absent generation, database, manifest or object is `NotFound`; an
+    /// unfinished/failed generation is `Conflict`, not store damage.
+    /// Malformed manifests and incomplete metadata on a complete row
+    /// are `Corrupt`; filesystem failures retain their native I/O kind.
+    /// A same-UID process can still mutate it; this is not an immutable
+    /// restore handoff. Restore staging must verify the bytes it copies again.
+    pub fn verify_recorded_backup(
+        &self,
+        generation: &str,
+        cancelled: &std::sync::atomic::AtomicBool,
+    ) -> Result<crate::BackupImageInspection, StoreError> {
+        self.backups.verify_recorded(generation, cancelled)
+    }
+
+    /// Verify an external generation for a point-in-time restore handoff.
+    /// Staging must verify the actual bytes it copies again. `None` means cancelled.
+    pub fn verify_external_backup(
+        &self,
+        parent: &Path,
+        generation: &str,
+        cancelled: &std::sync::atomic::AtomicBool,
+    ) -> Result<Option<crate::VerifiedExternalBackup>, StoreError> {
+        self.backups.verify_external(parent, generation, cancelled)
+    }
+
+    /// Visit verified external generations with bounded memory. Identified
+    /// invalid or incomplete source candidates are skipped. Other failures,
+    /// including errors without source provenance, propagate.
+    /// The visitor can stop early. Cancellation also returns `Break`.
+    pub fn discover_external_backups(
+        &self,
+        parent: &Path,
+        cancelled: &std::sync::atomic::AtomicBool,
+        visitor: impl FnMut(crate::VerifiedExternalBackup) -> std::ops::ControlFlow<()>,
+    ) -> Result<std::ops::ControlFlow<()>, StoreError> {
+        self.backups.discover_external(parent, cancelled, visitor)
+    }
+
     /// Stream a full capture through bounded writer turns. Blocking;
     /// finish explicitly and release read transactions before writing.
     pub fn export_chunk_writer(

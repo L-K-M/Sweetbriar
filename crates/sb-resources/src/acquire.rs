@@ -151,15 +151,14 @@ pub(crate) fn open(
     position: SourcePosition,
 ) -> Result<SourceAcquisition, StoreError> {
     // A bundle source ingests only through manifest-verified
-    // acquisition, which M1.7d2 adds; it never falls back to the plain
-    // path (spec/09 "Export bundles"). Its manifest snapshot verifies
-    // exactly like a source's, so a missing or corrupt copy fails the
-    // job the same way.
+    // acquisition (`open_bundle`); it never falls back to the plain
+    // path (spec/09 "Export bundles"). Verifying its manifest snapshot
+    // first means a missing or corrupt copy fails the job the same way.
     if let Some(bundle) = source.bundle() {
         store.open_import_source(bundle.manifest())?;
         return Err(StoreError::Unavailable {
             reason: format!(
-                "{} is an export bundle member; manifest-verified ingest arrives with M1.7d2",
+                "{} is an export bundle member; it needs manifest-verified acquisition",
                 source.path().display()
             ),
             io_kind: None,

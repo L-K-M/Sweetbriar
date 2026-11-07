@@ -626,5 +626,5 @@ fn verified_bundle_manifest_refuses_unverified_ingest() {
         .open_import_acquisition(&bundle, None, SourcePosition::START)
         .unwrap_err();
     assert!(matches!(error, StoreError::Unavailable { .. }));
-    assert!(error.to_string().contains("M1.7d2"));
+    assert!(error.to_string().contains("manifest-verified"));
 }

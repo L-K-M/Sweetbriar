@@ -5,6 +5,7 @@
 //! then releases pins and marks the generation complete.
 
 mod attachments;
+mod external;
 mod image;
 mod image_inspect;
 #[allow(dead_code)] // Used by the snapshot walker and manifest parser.
@@ -18,7 +19,9 @@ mod manifest;
 mod quarantine;
 #[allow(dead_code)] // The recorded-generation verifier consumes this seam in M1.8e1d.
 mod reconciliation;
+mod recorded;
 mod references;
+pub use external::VerifiedExternalBackup;
 pub use image::BackupImageInspection;
 mod scratch;
 
@@ -56,6 +59,16 @@ const PIN_KIND: &str = "backup_in_progress";
 /// The snapshot's file name inside the generation's directory (spec/03).
 const SNAPSHOT_FILE: &str = "state.sqlite";
 const OWNER_FILE: &str = ".sweetbriar-owner";
+
+// A missing required source file is an absent entity, not transient I/O.
+// Scratch/environment failures keep their ordinary typed I/O path.
+fn source_open_error(error: io::Error, what: impl Into<String>) -> StoreError {
+    if error.kind() == io::ErrorKind::NotFound {
+        StoreError::not_found(what)
+    } else {
+        StoreError::unavailable_io(format!("backup source I/O failed: {error}"), error.kind())
+    }
+}
 
 /// Source pages one `sqlite3_backup_step` copies at most: bounded so
 /// other reader work interleaves, large enough that calls don't
@@ -183,6 +196,21 @@ pub(crate) struct Backups {
     /// The copy-timing barriers a test may arm (spec/03).
     #[cfg(test)]
     pauses: Mutex<Pauses>,
+}
+
+impl Backups {
+    fn reserve_operation(&self) -> Result<Arc<()>, StoreError> {
+        let token = Arc::new(());
+        let mut active = self
+            .active
+            .try_lock()
+            .map_err(|_| StoreError::conflict("backup operation is already running"))?;
+        if active.as_ref().and_then(Weak::upgrade).is_some() {
+            return Err(StoreError::conflict("backup operation is already running"));
+        }
+        *active = Some(Arc::downgrade(&token));
+        Ok(token)
+    }
 }
 
 impl Backups {
