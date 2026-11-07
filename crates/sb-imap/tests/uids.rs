@@ -78,6 +78,26 @@ fn flags(rows: &[&str]) -> Step {
 }
 
 #[tokio::test]
+async fn brace_counts_in_status_text_do_not_interrupt_a_uid_inventory() {
+    let (server, mut client) = selected(vec![Step::on(
+        Expect::command("UID SEARCH ALL"),
+        vec![
+            Reply::untagged("OK [ALERT] notice {52428801}"),
+            Reply::untagged("SEARCH 7"),
+            Reply::ok("searched {1}"),
+        ],
+    )])
+    .await;
+    let read = tokio::time::timeout(Duration::from_secs(2), client.uid_inventory())
+        .await
+        .expect("complete status text cannot wait for literal bytes")
+        .unwrap();
+    assert_eq!(read.observation.uids[0].get(), 7);
+    assert_eq!(read.notices, [MailboxNotice::Alert]);
+    assert_eq!(server.unexpected_count(), 0);
+}
+
+#[tokio::test]
 async fn bridge_profile_pairs_uid_inventory_with_uid_keyed_flags() {
     let p = Profile::bridge();
     let (server, mut client) = selected(vec![

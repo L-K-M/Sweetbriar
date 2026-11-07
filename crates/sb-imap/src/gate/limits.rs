@@ -64,6 +64,16 @@ async fn a_budget_failure_cannot_release_a_preceding_buffered_completion() {
 }
 
 #[tokio::test]
+async fn a_later_literal_is_bounded_after_the_first_payload() {
+    let payload = format!(
+        "* 1 FETCH (BODY[1] {{5}}\r\nhello BODY[2] {{{}}}\r\n",
+        u64::from(MAX_MESSAGE_SIZE) + 1
+    )
+    .into_bytes();
+    refuses_without_eof(payload, None).await;
+}
+
+#[tokio::test]
 async fn an_unfinished_line_fails_when_progress_returns_none() {
     let payload = format!("* OK {}", "x".repeat(65)).into_bytes();
     refuses_without_eof(payload, Some(64)).await;
@@ -81,6 +91,39 @@ async fn a_complete_response_exactly_at_the_frame_limit_is_valid() {
     assert_eq!(gate.read(&mut wire).await.unwrap(), line.as_bytes());
     assert!(!gate.poisoned());
     assert!(gate.read(&mut wire).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn brace_counts_in_response_text_are_not_literals() {
+    // The codec, rather than the context-free line fragmentizer,
+    // establishes that each of these lines is a complete response.
+    let lines: &[&[u8]] = &[
+        b"* OK ready {52428801}\r\n",
+        b"* OK [ALERT] notice {1}\r\n",
+        b"* NO warning {0}\r\n",
+        b"* BAD warning {52428801}\r\n",
+        b"+ continue {52428801}\r\n",
+        b"* 1 FETCH (BODY[] {5}\r\nhello)\r\n",
+        b"A OK done {52428801}\r\n",
+        b"* BYE closed {1}\r\n",
+    ];
+    let (mut wire, mut peer) = tokio::io::duplex(8192);
+    let reader = async move {
+        let mut gate = Gate::new();
+        for line in lines {
+            assert_eq!(gate.read(&mut wire).await.unwrap(), *line);
+        }
+        assert!(!gate.poisoned());
+    };
+    let sender = async move {
+        peer.write_all(&lines.concat()).await.unwrap();
+        assert_eq!(peer.read(&mut [0]).await.unwrap(), 0);
+    };
+    tokio::time::timeout(Duration::from_secs(2), async {
+        tokio::join!(reader, sender);
+    })
+    .await
+    .expect("complete response text never waits for literal bytes or EOF");
 }
 
 #[tokio::test]

@@ -137,16 +137,30 @@ impl Gate {
         loop {
             loop {
                 let fragment = self.fragmentizer.progress();
-                let announced_over_limit = match &fragment {
+                // A status/greeting/continuation can legally end in `{n}`.
+                // Probe only the first line, and require a complete codec
+                // decode before overriding the context-free literal guess.
+                // Later literal boundaries never reparse a growing FETCH.
+                let complete_text = matches!(
+                    fragment,
                     Some(FragmentInfo::Line {
-                        announcement: Some(literal),
+                        start: 0,
+                        announcement: Some(_),
                         ..
-                    }) => {
-                        self.fragmentizer.message_bytes().len() as u64 + u64::from(literal.length)
-                            > u64::from(MAX_MESSAGE_SIZE)
-                    }
-                    _ => false,
-                };
+                    })
+                ) && self.decode_kind().is_ok();
+                let announced_over_limit = !complete_text
+                    && match &fragment {
+                        Some(FragmentInfo::Line {
+                            announcement: Some(literal),
+                            ..
+                        }) => {
+                            self.fragmentizer.message_bytes().len() as u64
+                                + u64::from(literal.length)
+                                > u64::from(MAX_MESSAGE_SIZE)
+                        }
+                        _ => false,
+                    };
                 // progress() can consume an unfinished line/literal and
                 // return None. Check its limit before asking for more bytes,
                 // as well as declarations that already cannot fit the frame.
@@ -160,28 +174,10 @@ impl Gate {
                 if fragment.is_none() {
                     break;
                 }
-                if !self.fragmentizer.is_message_complete() {
+                if !complete_text && !self.fragmentizer.is_message_complete() {
                     continue;
                 }
-                let kind = if self.expects_greeting {
-                    self.fragmentizer
-                        .decode_message(&GreetingCodec::new())
-                        .map(|_| FrameKind::Greeting)
-                        .map_err(|_| ())
-                } else {
-                    use io_imap::types::response::{Response, Status};
-                    self.fragmentizer
-                        .decode_message(&self.codec)
-                        .map(|response| match response {
-                            Response::Status(Status::Tagged(reply)) => {
-                                FrameKind::Completion(reply.tag.inner().as_bytes().to_vec())
-                            }
-                            Response::Status(Status::Bye(_)) => FrameKind::Bye,
-                            Response::CommandContinuationRequest(_) => FrameKind::Continuation,
-                            _ => FrameKind::Untagged,
-                        })
-                        .map_err(|_| ())
-                };
+                let kind = self.decode_kind();
                 let Ok(kind) = kind else {
                     // Drain released messages before reporting the fault.
                     self.fault = Some(GateFault::Malformed);
@@ -194,6 +190,12 @@ impl Gate {
                     bytes: bytes.to_vec(),
                     kind,
                 });
+                if complete_text {
+                    // The full codec proof above establishes the boundary:
+                    // there is no literal to skip. Preserve enqueued bytes
+                    // of following responses, including real literals.
+                    self.fragmentizer.skip_message();
+                }
             }
             if !self.released.is_empty() || self.eof || self.poisoned() {
                 return Ok(());
@@ -211,6 +213,28 @@ impl Gate {
                 self.pending += read;
                 self.fragmentizer.enqueue_bytes(&self.wire_buf[..read]);
             }
+        }
+    }
+
+    fn decode_kind(&self) -> Result<FrameKind, ()> {
+        if self.expects_greeting {
+            self.fragmentizer
+                .decode_message(&GreetingCodec::new())
+                .map(|_| FrameKind::Greeting)
+                .map_err(|_| ())
+        } else {
+            use io_imap::types::response::{Response, Status};
+            self.fragmentizer
+                .decode_message(&self.codec)
+                .map(|response| match response {
+                    Response::Status(Status::Tagged(reply)) => {
+                        FrameKind::Completion(reply.tag.inner().as_bytes().to_vec())
+                    }
+                    Response::Status(Status::Bye(_)) => FrameKind::Bye,
+                    Response::CommandContinuationRequest(_) => FrameKind::Continuation,
+                    _ => FrameKind::Untagged,
+                })
+                .map_err(|_| ())
         }
     }
 }
