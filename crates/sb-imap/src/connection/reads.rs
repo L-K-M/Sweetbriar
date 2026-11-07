@@ -2,10 +2,13 @@
 //! not used: LIST must not apply their lossy name conversion, and a new
 //! selection cannot inherit buffered values from an older mailbox.
 
+mod uids;
+
 use std::collections::BTreeSet;
 use std::num::NonZeroU32;
 
 use io_imap::codec::{CommandCodec, ResponseCodec, decode::Decoder, encode::Encoder};
+use io_imap::types::ToStatic;
 use io_imap::types::command::{Command, CommandBody};
 use io_imap::types::core::TagGenerator;
 use io_imap::types::response::{Capability, Code, Data, Response, Status, StatusKind};
@@ -63,6 +66,9 @@ enum ReadKind {
     List,
     Examine,
     Unselect,
+    UidSearch,
+    FlagSweep,
+    SelectedCapability,
 }
 
 impl ReadKind {
@@ -71,11 +77,55 @@ impl ReadKind {
             Self::List => "LIST",
             Self::Examine => "EXAMINE",
             Self::Unselect => "UNSELECT",
+            Self::UidSearch => "UID SEARCH",
+            Self::FlagSweep => "UID FETCH",
+            Self::SelectedCapability => "CAPABILITY",
         }
+    }
+
+    fn needs_selection(self) -> bool {
+        matches!(
+            self,
+            Self::UidSearch | Self::FlagSweep | Self::SelectedCapability
+        )
     }
 }
 
 impl Connection {
+    pub(super) async fn selected_capability(
+        &mut self,
+    ) -> Result<Vec<Capability<'static>>, ImapError> {
+        let mut capabilities = None;
+        let notices = self
+            .read_metadata(
+                CommandBody::Capability,
+                ReadKind::SelectedCapability,
+                |response| {
+                    if let Response::Data(Data::Capability(values)) = response {
+                        if capabilities.is_some() {
+                            return Err(ImapError::command(
+                                "CAPABILITY",
+                                "duplicate capability response",
+                            ));
+                        }
+                        capabilities =
+                            Some(values.as_ref().iter().map(ToStatic::to_static).collect());
+                    }
+                    Ok(())
+                },
+            )
+            .await?;
+        let Some(capabilities) = capabilities else {
+            self.wire = None;
+            return Err(ImapError::command(
+                "CAPABILITY",
+                "missing capability response",
+            ));
+        };
+        self.pending_notices = notices;
+        Ok(capabilities)
+    }
+
     /// LIST all mailbox names. No provider roles are interpreted here.
     pub async fn list_mailboxes(
         &mut self,
@@ -185,7 +235,8 @@ impl Connection {
         // The future owns the socket, including while completing an old
         // partial frame and before the first write. Cancel closes it.
         let mut wire = self.wire.take().ok_or(ImapError::Closed)?;
-        let notices = metadata_exchange(
+        let mut notices = std::mem::take(&mut self.pending_notices);
+        let observed = metadata_exchange(
             &mut self.gate,
             &mut self.selection,
             &mut wire,
@@ -194,6 +245,11 @@ impl Connection {
             collect,
         )
         .await?;
+        for notice in observed {
+            if !notices.contains(&notice) {
+                notices.push(notice);
+            }
+        }
         self.wire = Some(wire);
         Ok(notices)
     }
@@ -232,6 +288,7 @@ where
         let (_, response) = codec
             .decode(&frame.bytes)
             .map_err(|_| ImapError::Malformed)?;
+        check_selected_epoch(&response, selection.as_ref(), kind)?;
         notice(&response, selection.as_ref(), &mut notices)?;
     }
     if matches!(kind, ReadKind::Examine) {
@@ -262,6 +319,7 @@ where
         let (_, response) = codec
             .decode(&frame.bytes)
             .map_err(|_| ImapError::Malformed)?;
+        check_selected_epoch(&response, selection.as_ref(), kind)?;
         match &response {
             Response::Status(Status::Tagged(reply)) => {
                 if reply.tag.inner() != command.tag.inner() {
@@ -286,6 +344,9 @@ where
                 collect(&response)?;
                 let owned = match (&kind, &response) {
                     (ReadKind::List, Response::Data(Data::List { .. })) => true,
+                    (ReadKind::UidSearch, Response::Data(Data::Search(..))) => true,
+                    (ReadKind::FlagSweep, Response::Data(Data::Fetch { .. })) => true,
+                    (ReadKind::SelectedCapability, Response::Data(Data::Capability(_))) => true,
                     (
                         ReadKind::Examine,
                         Response::Data(Data::Flags(_) | Data::Exists(_) | Data::Recent(_)),
@@ -317,6 +378,40 @@ fn charge(remaining: &mut usize, frame: &Frame, kind: ReadKind) -> Result<(), Im
         .checked_sub(frame.bytes.len())
         .ok_or_else(|| ImapError::command(kind.operation(), "metadata response budget exceeded"))?;
     Ok(())
+}
+
+fn check_selected_epoch(
+    response: &Response<'_>,
+    selection: Option<&MailboxContext>,
+    kind: ReadKind,
+) -> Result<(), ImapError> {
+    // UNSELECT/EXAMINE establish a new boundary with fresh epoch evidence.
+    // Reads that retain a selection, including LIST, cannot hide a change
+    // from a later UID read on this connection.
+    if matches!(kind, ReadKind::Unselect | ReadKind::Examine) {
+        return Ok(());
+    }
+    let Some(selection) = selection else {
+        return if kind.needs_selection() {
+            Err(ImapError::NotSelected)
+        } else {
+            Ok(())
+        };
+    };
+    let code = match response {
+        Response::Status(Status::Tagged(reply)) => reply.body.code.as_ref(),
+        Response::Status(Status::Untagged(body)) => body.code.as_ref(),
+        _ => None,
+    };
+    match code {
+        Some(Code::UidValidity(epoch)) if *epoch != selection.uid_validity => {
+            Err(ImapError::SelectionInvalidated)
+        }
+        Some(Code::Closed | Code::ReadWrite) => Err(ImapError::SelectionInvalidated),
+        Some(Code::Other(code)) => crate::mailbox::check_other_selection_code(code.inner())
+            .map_err(|message| ImapError::command(kind.operation(), message)),
+        _ => Ok(()),
+    }
 }
 
 fn notice(

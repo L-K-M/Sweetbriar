@@ -78,6 +78,7 @@ pub struct Connection {
     fragmentizer: Fragmentizer,
     capabilities: Vec<Capability<'static>>,
     selection: Option<MailboxContext>,
+    pending_notices: Vec<MailboxNotice>,
 }
 
 impl fmt::Debug for Connection {
@@ -121,6 +122,7 @@ impl Connection {
             fragmentizer: Fragmentizer::new(MAX_MESSAGE_SIZE),
             capabilities: Vec::new(),
             selection: None,
+            pending_notices: Vec::new(),
         };
         connection.setup(&options).await?;
         Ok(connection)
@@ -182,6 +184,7 @@ impl Connection {
             fragmentizer,
             capabilities: Vec::new(),
             selection: None,
+            pending_notices: Vec::new(),
         };
         connection.setup_authenticated(&options).await?;
         Ok(connection)
@@ -225,8 +228,16 @@ impl Connection {
         Ok(())
     }
 
+    /// Refresh capabilities. While selected, epoch changes fail closed
+    /// and reconciliation notices are retained for the next read.
     pub async fn capability(&mut self) -> Result<Vec<Capability<'static>>, ImapError> {
-        self.run(ImapCapabilityGet::new()).await
+        let capabilities = if self.selection.is_some() {
+            self.selected_capability().await?
+        } else {
+            self.run(ImapCapabilityGet::new()).await?
+        };
+        self.capabilities = capabilities.clone();
+        Ok(capabilities)
     }
 
     async fn login(

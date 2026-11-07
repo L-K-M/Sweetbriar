@@ -115,30 +115,7 @@ impl ExamineBuilder {
                     }
                     Some(Code::Unseen(value)) => self.unseen = Some(*value),
                     Some(Code::Other(code)) => {
-                        // The codec can route malformed known codes through its
-                        // extension fallback. A zero/overflow UID must not vanish
-                        // into "unknown", especially after an earlier valid value.
-                        let keyword = code
-                            .inner()
-                            .split(|byte| *byte == b' ')
-                            .next()
-                            .unwrap_or_default();
-                        // A response-code keyword is an atom, not arbitrary
-                        // fallback bytes. Reject empty/prefixed/control-byte
-                        // tokens rather than repairing them into extensions.
-                        Atom::try_from(keyword)
-                            .map_err(|_| invalid("invalid response code keyword"))?;
-                        if [
-                            b"UIDVALIDITY".as_slice(),
-                            b"UIDNEXT",
-                            b"UNSEEN",
-                            b"PERMANENTFLAGS",
-                        ]
-                        .iter()
-                        .any(|known| keyword.eq_ignore_ascii_case(known))
-                        {
-                            return Err(invalid("invalid selection response code"));
-                        }
+                        check_other_selection_code(code.inner()).map_err(invalid)?;
                     }
                     _ => {}
                 }
@@ -169,6 +146,28 @@ impl ExamineBuilder {
 
 fn invalid(message: &'static str) -> ImapError {
     ImapError::command("EXAMINE", message)
+}
+
+/// The pinned codec sends malformed known codes through its extension
+/// fallback. Both EXAMINE and later UID reads must refuse those bytes.
+pub(crate) fn check_other_selection_code(code: &[u8]) -> Result<(), &'static str> {
+    let keyword = code.split(|byte| *byte == b' ').next().unwrap_or_default();
+    Atom::try_from(keyword).map_err(|_| "invalid response code keyword")?;
+    if [
+        b"UIDVALIDITY".as_slice(),
+        b"UIDNEXT",
+        b"UNSEEN",
+        b"PERMANENTFLAGS",
+        b"CLOSED",
+        b"READ-ONLY",
+        b"READ-WRITE",
+    ]
+    .iter()
+    .any(|known| keyword.eq_ignore_ascii_case(known))
+    {
+        return Err("invalid selection response code");
+    }
+    Ok(())
 }
 
 #[cfg(test)]

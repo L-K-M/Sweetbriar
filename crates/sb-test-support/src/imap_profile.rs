@@ -128,6 +128,24 @@ impl Profile {
         )
     }
 
+    /// `UID SEARCH ALL`, including an explicit SEARCH frame when empty.
+    pub fn uid_search_step(&self, mailbox: &str) -> Step {
+        let uids = memberships(mailbox)
+            .iter()
+            .map(|(_, uid, _)| uid.to_string())
+            .collect::<Vec<_>>()
+            .join(" ");
+        let row = if uids.is_empty() {
+            "SEARCH".to_string()
+        } else {
+            format!("SEARCH {uids}")
+        };
+        Step::on(
+            Expect::command("UID SEARCH ALL"),
+            vec![Reply::untagged(row), Reply::ok("UID SEARCH completed")],
+        )
+    }
+
     /// `UID FETCH … (UID FLAGS)` for the mailbox's memberships.
     pub fn fetch_flags_step(&self, mailbox: &str) -> Step {
         let mut sends: Vec<Reply> = Vec::new();
