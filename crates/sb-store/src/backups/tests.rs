@@ -4406,6 +4406,7 @@ mod stage_tests {
             StagePhase::Located => "00000000-0000-4000-8000-0000000000d1",
             StagePhase::DatabaseCopied => "00000000-0000-4000-8000-0000000000d2",
             StagePhase::ManifestCopied => "00000000-0000-4000-8000-0000000000d3",
+            StagePhase::ObjectsCopied => "00000000-0000-4000-8000-0000000000d4",
         };
         let selection = source.select_with(&source.store);
         let cancelled = AtomicBool::new(false);
@@ -4641,6 +4642,45 @@ mod stage_tests {
             .unwrap();
         assert_stage_objects(&stage, &source.payloads);
     }
+    #[test]
+    fn a_growing_manifest_cannot_fill_staging_beyond_its_verified_length() {
+        let source = staging_source("staging-growing-manifest");
+        let selected = source.select_with(&source.store);
+        let manifest = source.receipt.location().join("manifest.json");
+        let original = std::fs::read(&manifest).unwrap();
+        let incarnation = "00000000-0000-4000-8000-0000000000d5";
+        let result = source.store.backups.stage_into(
+            &selected,
+            source.receipt.location(),
+            source.metadata,
+            incarnation,
+            &AtomicBool::new(false),
+            |phase| {
+                if phase == StagePhase::ObjectsCopied {
+                    std::fs::write(
+                        &manifest,
+                        [original.as_slice(), &vec![b' '; 128 * 1024]].concat(),
+                    )
+                    .unwrap();
+                }
+            },
+        );
+        assert!(matches!(result, Err(StoreError::Corrupt { .. })));
+        let staged = source
+            .paths
+            .data_root()
+            .with_file_name(format!("store.restoring-{incarnation}"));
+        assert!(
+            std::fs::metadata(staged.join("manifest.json"))
+                .unwrap()
+                .len()
+                <= original.len() as u64,
+            "changed manifest bytes must not consume unverified staging space"
+        );
+        std::fs::write(&manifest, original).unwrap();
+        source.assert_untouched();
+    }
+
     #[test]
     fn staging_pre_and_mid_cancellation_never_prepare() {
         let source = staging_source("staging-cancel");

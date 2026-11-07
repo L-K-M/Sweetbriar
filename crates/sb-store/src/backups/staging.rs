@@ -103,6 +103,8 @@ pub(crate) enum StagePhase {
     Located,
     /// The database was copied and its hash checked.
     DatabaseCopied,
+    /// The object-copy pass finished against the selected manifest.
+    ObjectsCopied,
     /// The manifest itself was copied into the stage.
     ManifestCopied,
 }
@@ -159,29 +161,34 @@ fn sibling_name(root: &Path, suffix: &str, id: &str) -> OsString {
 struct HashReader<R> {
     input: R,
     hash: Sha256,
+    bytes: u64,
 }
 impl<R: Read> Read for HashReader<R> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         let n = self.input.read(buf)?;
+        self.bytes = self.bytes.checked_add(n as u64).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidData, "manifest length overflow")
+        })?;
         self.hash.update(&buf[..n]);
         Ok(n)
     }
 }
 
 /// Parse the source manifest once, hashing the exact bytes and handing
-/// each object record to `sink`; returns the manifest, digest, count and
-/// object-byte total.
+/// each object record to `sink`; returns its metadata, digest, object
+/// count, object-byte total and exact manifest byte length.
 fn parse_manifest(
     source: &dyn sb_types::fs::ConfinedDir,
     cancel: &AtomicBool,
     mut sink: impl FnMut(manifest::Entry) -> Result<(), StoreError>,
-) -> Result<(manifest::Manifest, [u8; 32], u64, u64), StoreError> {
+) -> Result<(manifest::Manifest, [u8; 32], u64, u64, u64), StoreError> {
     let (file, _) = source
         .open_regular(Path::new("manifest.json"))
         .map_err(|error| io_error("reading the selected manifest", error))?;
     let mut input = HashReader {
         input: file,
         hash: Sha256::new(),
+        bytes: 0,
     };
     let mut count = 0u64;
     let mut object_bytes = 0u64;
@@ -216,7 +223,7 @@ fn parse_manifest(
         return Err(error);
     }
     let manifest = parsed.map_err(|error| io_error("parsing the selected manifest", error))?;
-    Ok((manifest, digest, count, object_bytes))
+    Ok((manifest, digest, count, object_bytes, input.bytes))
 }
 
 /// Create `name` below `parent` when absent, open it, and flush the
@@ -461,7 +468,7 @@ impl Backups {
 
         // Step 1: reverify the exact selected manifest bytes and the
         // caller's metadata against what the source serves now.
-        let (manifest, digest, count, object_bytes) =
+        let (manifest, digest, count, object_bytes, manifest_bytes) =
             parse_manifest(source.as_ref(), cancel, |_| Ok(()))?;
         if reconciliation::uuid(manifest.generation_id) != generation {
             return Err(StoreError::corrupt(
@@ -541,7 +548,7 @@ impl Backups {
         // Copy exactly the referenced objects in bounded memory: the
         // streaming parser hands each record to the sink as it arrives.
         let copied = Cell::new(0u64);
-        let (_, copied_digest, _, _) = parse_manifest(source.as_ref(), cancel, |entry| {
+        let (_, copied_digest, _, _, _) = parse_manifest(source.as_ref(), cancel, |entry| {
             copy_object(source.as_ref(), sha_root.as_ref(), &entry, cancel)?;
             copied.set(copied.get() + 1);
             Ok(())
@@ -557,40 +564,19 @@ impl Backups {
             ));
         }
 
-        // The manifest itself is copied last, from a fresh read of the
-        // source so the staged bytes are checked against the exact
-        // selected digest once more.
-        let (mut manifest_file, _) = source
-            .open_regular(Path::new("manifest.json"))
-            .map_err(|error| io_error("rereading the selected manifest for copying", error))?;
-        let mut staged_manifest = stage
-            .create(Path::new("manifest.json"))
-            .map_err(|error| io_error("creating the staged manifest", error))?;
-        let mut staged_hash = Sha256::new();
-        let mut buffer = [0u8; CHUNK];
-        loop {
-            if cancel.load(Ordering::Acquire) {
-                return Err(cancelled());
-            }
-            let n = manifest_file
-                .read(&mut buffer)
-                .map_err(|error| io_error("rereading the selected manifest for copying", error))?;
-            if n == 0 {
-                break;
-            }
-            staged_manifest
-                .write_all(&buffer[..n])
-                .map_err(|error| io_error("writing the staged manifest", error))?;
-            staged_hash.update(&buffer[..n]);
-        }
-        if staged_hash.finalize().as_slice() != digest {
-            return Err(StoreError::corrupt(
-                "the selected manifest changed during staging",
-            ));
-        }
-        staged_manifest
-            .sync_all()
-            .map_err(|error| io_error("flushing the staged manifest", error))?;
+        progress(StagePhase::ObjectsCopied);
+
+        // Reuse the verified copier for the manifest too: its exact first-pass
+        // length stops a growing source before it can fill unverified disk space.
+        copy_verified(
+            source.as_ref(),
+            Path::new("manifest.json"),
+            stage.as_ref(),
+            Path::new("manifest.json"),
+            digest,
+            manifest_bytes,
+            cancel,
+        )?;
         sha_root
             .sync()
             .map_err(|error| io_error("flushing the staged object hash root", error))?;
