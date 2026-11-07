@@ -72,7 +72,6 @@ pub struct Connection {
     gate: Gate,
     fragmentizer: Fragmentizer,
     capabilities: Vec<Capability<'static>>,
-    closed: bool,
 }
 
 impl fmt::Debug for Connection {
@@ -80,7 +79,7 @@ impl fmt::Debug for Connection {
         f.debug_struct("Connection")
             .field("host", &self.host)
             .field("port", &self.port)
-            .field("closed", &self.closed)
+            .field("closed", &self.wire.is_none())
             .field("capabilities", &self.capabilities)
             .finish()
     }
@@ -115,7 +114,6 @@ impl Connection {
             gate: Gate::new(),
             fragmentizer: Fragmentizer::new(MAX_MESSAGE_SIZE),
             capabilities: Vec::new(),
-            closed: false,
         };
         connection.setup(&options).await?;
         Ok(connection)
@@ -188,7 +186,7 @@ impl Connection {
     /// at BYE with `MissingTagged`, which is a success for a logout.
     pub async fn logout(&mut self) -> Result<(), ImapError> {
         let result = self.run_raw(ImapLogout::new()).await;
-        self.close().await;
+        self.wire = None;
         match result? {
             Ok(()) | Err(ImapLogoutError::MissingTagged) => Ok(()),
             Err(err) => Err(err.into()),
@@ -216,46 +214,30 @@ impl Connection {
     where
         C: ImapCoroutine<Yield = ImapYield, Return = Result<T, E>>,
     {
-        if self.closed {
-            return Err(ImapError::Closed);
-        }
+        // The future owns the socket during an exchange. Dropping it at
+        // any await closes the transport, including after a partial write;
+        // no later coroutine can consume the abandoned command's reply.
+        let mut wire = self.wire.take().ok_or(ImapError::Closed)?;
         let mut coroutine = coroutine;
         let mut arg: Option<Vec<u8>> = None;
         loop {
             match coroutine.resume(&mut self.fragmentizer, arg.as_deref()) {
                 ImapCoroutineState::Complete(result) => {
-                    if self.gate.poisoned() {
-                        self.close().await;
+                    if !self.gate.poisoned() {
+                        self.wire = Some(wire);
                     }
                     return Ok(result);
                 }
                 ImapCoroutineState::Yielded(ImapYield::WantsRead) => {
-                    let wire = self.wire.as_mut().ok_or(ImapError::Closed)?;
-                    let bytes = match self.gate.read(wire).await {
-                        Ok(bytes) => bytes,
-                        Err(err) => {
-                            self.close().await;
-                            return Err(err);
-                        }
-                    };
-                    arg = Some(bytes);
+                    arg = Some(self.gate.read(&mut wire).await?);
                 }
                 ImapCoroutineState::Yielded(ImapYield::WantsWrite(bytes)) => {
-                    let wire = self.wire.as_mut().ok_or(ImapError::Closed)?;
-                    if let Err(err) = write_command(wire, &bytes).await {
-                        self.close().await;
-                        return Err(ImapError::from_io(err));
-                    }
+                    write_command(&mut wire, &bytes)
+                        .await
+                        .map_err(ImapError::from_io)?;
                     arg = None;
                 }
             }
-        }
-    }
-
-    async fn close(&mut self) {
-        self.closed = true;
-        if let Some(wire) = self.wire.as_mut() {
-            let _ = wire.shutdown().await;
         }
     }
 }

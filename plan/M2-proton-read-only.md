@@ -78,6 +78,9 @@ the provider policies (`proton_bridge`, `generic_imap`) live in
 
 - **Goal:** the dialect-free command interface returns the read
   observations.
+- Body streaming must support spec/10's 100 MB message budget without
+  inheriting setup's 50 MiB response-framing cap; oversized MIME still
+  needs partial-parse/coverage evidence, not an endless reconnect loop.
 - **Deliverables:**
   - a dialect-free command interface;
   - read operations returning observations (mailbox list, epoch, UID

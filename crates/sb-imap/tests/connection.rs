@@ -195,6 +195,42 @@ async fn malformed_response_closes_the_connection() {
 }
 
 #[tokio::test]
+async fn cancelling_a_sent_command_closes_the_connection() {
+    let mut script = setup_script(&Profile::bridge());
+    script.steps.push(Step::on(
+        Expect::command("CAPABILITY"),
+        vec![
+            Reply::Delay(Duration::from_millis(500)),
+            Reply::untagged("CAPABILITY IMAP4rev1 IDLE"),
+            Reply::ok("CAPABILITY completed"),
+        ],
+    ));
+    let server = FakeImapServer::serve(vec![script]).expect("serve");
+    let mut connection = Connection::connect(options(localhost(), server.port()))
+        .await
+        .expect("setup");
+    let mut command = Box::pin(connection.capability());
+    tokio::select! {
+        result = &mut command => panic!("command completed before cancellation: {result:?}"),
+        observed = tokio::time::timeout(Duration::from_secs(2), async {
+            while server.received().len() != 5 {
+                tokio::task::yield_now().await;
+            }
+        }) => observed.expect("the peer received the command"),
+    }
+    drop(command);
+    assert!(
+        matches!(connection.capability().await, Err(ImapError::Closed)),
+        "a cancelled exchange must not lend its response to another command"
+    );
+    assert_eq!(
+        received_commands(&server).len(),
+        5,
+        "no command after cancellation"
+    );
+}
+
+#[tokio::test]
 async fn credentials_never_appear_in_formatted_output() {
     let password = "a-password-no-formatted-output-may-carry";
     let mut opts = options(localhost(), 1143);
