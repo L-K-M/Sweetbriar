@@ -1335,6 +1335,15 @@ local drafts. No network yet.
       The following qualification step still needs a capability-backed writable
       SQLite VFS, staged-byte re-verification and full schema/integrity checks
       before it can expose a qualified stage.
+    - **M1.8e3b2b1 Retained private-stage copy (M):** copy the database
+      through the exclusive read/write capability, retaining that exact file
+      and the staging directory with their identities in the opaque prepared
+      stage. Keep original database length/hash evidence and independent
+      read-only cursors for the later inspector. Native proof replaces both
+      directory and database names and confirms reads, writes and flushes stay
+      on the created file, with all prior copy, cancellation, fault and crash
+      proofs retained. This grants no SQLite write connection, quarantine or
+      stage eligibility; the qualifier must still reverify bytes and bindings.
     - **M1.8e3b2b Staging qualification (L):** consume the private copy
       and schema inspection, recheck the coordinator, live root/incarnation
       and verified metadata, run the current quarantine transaction,
