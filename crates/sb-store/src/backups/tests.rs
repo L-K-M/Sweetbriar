@@ -33,7 +33,7 @@ const REVISION: &str = "00000000-0000-4000-8000-0000000000a4";
 const PAYLOAD: &[u8] = b"Subject: keep me\r\n\r\nthe archived bytes\r\n";
 
 /// The common prelude: a scratch store over the real filesystem.
-fn open(label: &str) -> (ScratchDir, StorePaths, Store) {
+pub(super) fn open(label: &str) -> (ScratchDir, StorePaths, Store) {
     let (scratch, paths) = scratch_paths(label);
     let store = crate::open(&paths, &test_seams(real_fs())).unwrap();
     (scratch, paths, store)
@@ -42,13 +42,13 @@ fn open(label: &str) -> (ScratchDir, StorePaths, Store) {
 // --- the fixture rows spec/03 names, written through the writer ---
 
 /// One batch in one writer commit; values are synthetic literals.
-fn sql(store: &Store, statement: String) {
+pub(super) fn sql(store: &Store, statement: String) {
     writing(store, move |tx| tx.execute_batch(&statement).map_err(bug));
 }
 
 /// The account, identity and one draft revision every fixture hangs
 /// on (the schema seeds its own `local_archive` account).
-fn draft_rows(store: &Store) {
+pub(super) fn draft_rows(store: &Store) {
     let s = format!(
         "INSERT OR IGNORE INTO accounts
          (account_id, kind, provider, display_name, state, sort_order, created_at)

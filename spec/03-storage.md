@@ -647,6 +647,12 @@ The process holds `<data root>.lock` throughout.
    - mark unfinished import jobs `failed`, preserving requests and
      checkpoints. Recovery source copies are outside backup generations;
      the user starts a fresh inventory rather than resuming original paths;
+   - delete inherited publication `reservation` pins. Their process-held
+     handles belong to the old incarnation; a backup copies referenced
+     objects, not pending publications. Preserve other pin kinds and command
+     receipts. A recorded receipt still replays before fresh-command
+     validation; fresh references require a new publication in the restored
+     store;
    - mark every `pending`, `in_flight` or `parked` intent `quarantined`
      with `quarantine_reason='restore'`;
    - mark every send attempt in `held`, `queued` or `submitting` as

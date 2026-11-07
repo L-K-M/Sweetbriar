@@ -1224,7 +1224,28 @@ local drafts. No network yet.
     Recalibrated before integration fixes on 2026-11-06: the artifact
     measured 880 gross changed lines including provenance/cleanup tests,
     within L's 1,450-line limit rather than M's 800-line estimate.
-  - **M1.8e3 Quarantined restore staging (L):** verify and copy the chosen
+  - **M1.8e3a Quarantine transaction prerequisite (L):** implement and test
+    the atomic staging-database transformation, including inherited cleanup
+    authority and component-aware location rewriting. It cannot qualify or
+    publish a staging directory. The caller must supply the verified source
+    location and manifest metadata; this prerequisite does not validate them.
+    Consolidated before publication (2026-11-06): the core and its bounded
+    metadata/publication-authority hardening total about 1,435 gross lines,
+    within one L artifact. The a1/a2 labels below remain acceptance clauses,
+    not separate PRs; no obsolete unbounded intermediate is published.
+    - **M1.8e3a1 Bounded inherited metadata reads:** bound SQLite values
+      while reading inherited generation identifiers and locations, before
+      allocating owned strings. Reject oversized metadata atomically without
+      leaving connection limits on unrelated archive rows. Preserve large
+      requests and checkpoints. Schema inspection bounds remain part of e3b's
+      qualification prerequisite; this step qualifies no staging directory.
+    - **M1.8e3a2 Inherited publication authority:** revoke copied
+      publication reservation pins in the quarantine transaction. Native proof
+      through a real completed backup and a fresh restored store must reject
+      an old handle for a missing attachment, preserve receipt replay and other
+      pin kinds, leave the source handle valid, and accept fresh publications.
+      Keep the change atomic with the other quarantine transformations.
+  - **M1.8e3b Quarantined restore staging (L):** verify and copy the chosen
     generation into `<data root>.restoring-<inc>` with publication flushes,
     then run the staging quarantine transaction: new incarnation, all
     accounts paused, unfinished import jobs failed with requests and
