@@ -280,6 +280,26 @@ fn fault_knobs_fallback_no_and_drop_in_both_positions() {
 }
 
 #[test]
+fn bridge_uid_search_reports_the_selected_membership_or_explicit_empty_set() {
+    for (mailbox, expected) in [
+        ("INBOX", "* SEARCH 7"),
+        ("Folders/Travel", "* SEARCH 3"),
+        ("Archive", "* SEARCH"),
+    ] {
+        let profile = Profile::bridge();
+        let (server, mut client) = started(vec![Script::new(vec![
+            profile.examine_step(mailbox),
+            profile.uid_search_step(mailbox),
+        ])]);
+        ask(&mut client, &format!("a1 EXAMINE {mailbox}"));
+        let (rows, completion) = ask(&mut client, "a2 UID SEARCH ALL");
+        assert_eq!(rows, [expected]);
+        assert_eq!(completion, "a2 OK UID SEARCH completed");
+        assert_eq!(server.unexpected_count(), 0);
+    }
+}
+
+#[test]
 fn uidvalidity_changes_between_sessions() {
     // Each connection takes the next script, so the second EXAMINE
     // advertises the epoch a repair reassigned (spec/11 knob).

@@ -372,6 +372,30 @@ fn step_dovecot(root: &Path) -> bool {
         return false;
     }
 
+    // A fresh container has an empty INBOX. Exercise the required empty
+    // SEARCH receipt before the spike appends its known Seen message.
+    let mut empty_uids = cargo(
+        root,
+        &[
+            "test",
+            "-p",
+            "sb-imap",
+            "--test",
+            "uids",
+            "dovecot_empty_uid_observations",
+            "--",
+            "--exact",
+            "--nocapture",
+        ],
+    );
+    empty_uids
+        .env("SB_IMAP_DOVECOT", addr)
+        .env("SB_IMAP_DOVECOT_USER", "spike")
+        .env("SB_IMAP_DOVECOT_PASSWORD", DOVECOT_PASSWORD);
+    if !run(&mut empty_uids) {
+        return false;
+    }
+
     let mut suite = cargo(
         root,
         &[
@@ -435,7 +459,27 @@ fn step_dovecot(root: &Path) -> bool {
         .env("SB_IMAP_DOVECOT", addr)
         .env("SB_IMAP_DOVECOT_USER", "spike")
         .env("SB_IMAP_DOVECOT_PASSWORD", DOVECOT_PASSWORD);
-    run(&mut mailboxes)
+    if !run(&mut mailboxes) {
+        return false;
+    }
+    let mut uids = cargo(
+        root,
+        &[
+            "test",
+            "-p",
+            "sb-imap",
+            "--test",
+            "uids",
+            "dovecot_uid_observations",
+            "--",
+            "--exact",
+            "--nocapture",
+        ],
+    );
+    uids.env("SB_IMAP_DOVECOT", addr)
+        .env("SB_IMAP_DOVECOT_USER", "spike")
+        .env("SB_IMAP_DOVECOT_PASSWORD", DOVECOT_PASSWORD);
+    run(&mut uids)
 }
 
 /// Docker's port proxy accepts a connection before the container's

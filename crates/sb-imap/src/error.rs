@@ -43,6 +43,12 @@ pub enum ImapError {
     /// Selecting again needs a fresh connection because the server did not
     /// advertise UNSELECT. No CLOSE or EXPUNGE fallback is permitted.
     FreshConnectionRequired,
+    /// A UID read requires an established read-only selection. This local
+    /// precondition failure does not close an authenticated connection.
+    NotSelected,
+    /// The server contradicted the selected epoch or reported that the
+    /// selection closed. The session is closed; select again after reconnecting.
+    SelectionInvalidated,
     /// The connection is closed; no further command can run.
     Closed,
     /// An I/O failure, with its native kind.
@@ -98,6 +104,8 @@ impl fmt::Display for ImapError {
             Self::FreshConnectionRequired => {
                 f.write_str("open a fresh connection before selecting again")
             }
+            Self::NotSelected => f.write_str("establish a read-only selection before reading UIDs"),
+            Self::SelectionInvalidated => f.write_str("the established mailbox selection changed"),
             Self::Closed => f.write_str("the IMAP connection is closed"),
             Self::Io { kind, message } => write!(f, "IMAP I/O error ({kind:?}): {message}"),
             Self::Command { operation, message } => {
