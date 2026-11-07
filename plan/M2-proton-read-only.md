@@ -45,6 +45,16 @@ signed in, with its TLS certificate exported.
 - **Spec:** 04 (Structure, Connections), 10 (TLS and the Bridge
   certificate).
 - **Depends on:** M2.1b.
+- **Prerequisite split (2026-11-07):** extract **M2.2a0 Pinned TLS and
+  secret primitives (M)** before integrating the connection artifact.
+  This keeps its cancellation regression and all existing proof within
+  the 1,450-line limit. a0 provides the exact DER SHA-256 pin, the private
+  rustls verifier/configuration with validity and handshake-signature
+  checks, and the non-cloning redacted password wrapper. Native tests
+  cover exact pins, mismatch evidence, validity and secret formatting.
+  No socket, credential exchange or complete transport is exposed by a0;
+  the following connection, STARTTLS, read and lifecycle artifacts retain
+  every deliverable and acceptance check below.
 - **Deliverables:**
   - `sb-imap::Connection`: connect to `127.0.0.1`, STARTTLS or implicit
     TLS, a pinned-cert verifier that does full handshake verification
