@@ -9,7 +9,6 @@ use io_imap::rfc3501::capability::ImapCapabilityGetError;
 use io_imap::rfc3501::greeting::ImapGreetingGetError;
 use io_imap::rfc3501::login::ImapLoginError;
 use io_imap::rfc3501::logout::ImapLogoutError;
-use io_imap::send::ImapSendError;
 
 /// A connection or command failure. No variant carries a credential.
 #[derive(Debug)]
@@ -130,11 +129,5 @@ impl From<ImapServerIdError> for ImapError {
 impl From<ImapLogoutError> for ImapError {
     fn from(_err: ImapLogoutError) -> Self {
         Self::command("LOGOUT", "server exchange failed")
-    }
-}
-
-impl From<ImapSendError> for ImapError {
-    fn from(_err: ImapSendError) -> Self {
-        Self::command("STARTTLS", "server exchange failed")
     }
 }

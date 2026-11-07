@@ -136,3 +136,47 @@ async fn starttls_checks_host_policy_before_opening_a_socket() {
     ));
     assert!(matches!(listener.accept(), Err(err) if err.kind() == std::io::ErrorKind::WouldBlock));
 }
+
+#[tokio::test]
+async fn only_the_first_tagged_starttls_completion_can_authorize_tls() {
+    let mut incorrectly_accepted = Vec::new();
+    for (label, first) in [
+        ("duplicate OK", Reply::ok("first completion")),
+        ("NO then OK", Reply::TaggedNo("refused".into())),
+        ("BAD then OK", Reply::TaggedBad("refused".into())),
+        (
+            "wrong tag then OK",
+            Reply::Raw(b"WRONG OK invalid tag\r\n".to_vec()),
+        ),
+    ] {
+        let profile = Profile::bridge().with_capabilities(&["IMAP4rev1", "STARTTLS", "ID"]);
+        let script = Script::new(vec![
+            profile.capability_step(),
+            Step::on(
+                Expect::command("STARTTLS"),
+                vec![first, Reply::ok("last completion"), Reply::UpgradeTls],
+            ),
+            profile.capability_step(),
+            Step::on(Expect::command("LOGIN"), vec![Reply::ok("authenticated")]),
+            profile.capability_step(),
+            Step::on(
+                Expect::command("ID"),
+                vec![Reply::untagged("ID NIL"), Reply::ok("identified")],
+            ),
+        ]);
+        let server = FakeImapServer::serve(vec![script]).unwrap();
+        let result = Connection::connect_starttls(options(server.port())).await;
+        let expected = if label == "duplicate OK" {
+            matches!(result, Err(ImapError::StartTlsInjection))
+        } else {
+            matches!(result, Err(ImapError::StartTlsRefused))
+        };
+        if !expected || server.received().len() > 2 {
+            incorrectly_accepted.push(label);
+        }
+    }
+    assert!(
+        incorrectly_accepted.is_empty(),
+        "later matching OK hid prior completion: {incorrectly_accepted:?}"
+    );
+}
