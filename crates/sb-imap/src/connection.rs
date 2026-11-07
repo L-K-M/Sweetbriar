@@ -1,5 +1,5 @@
 //! `Connection`: the IMAP setup (spec/04 "Connections") and the
-//! coroutine pump over the strict gate. Setup order: greeting over
+//! decoded setup exchanges over the strict gate. Setup order: greeting over
 //! implicit TLS, CAPABILITY;
 //! refuse LOGIN when `LOGINDISABLED`; LOGIN; CAPABILITY unless the
 //! tagged OK carried it; ID. No credential is sent before TLS. LOGOUT
@@ -11,16 +11,8 @@ pub use reads::{MailboxContext, MailboxNotice, ReadObservation};
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr};
 
-use io_imap::codec::{CommandCodec, ResponseCodec, encode::Encoder, fragmentizer::Fragmentizer};
-use io_imap::coroutine::{ImapCoroutine, ImapYield};
-use io_imap::rfc2971::id::{ImapServerId, ImapServerIdOptions};
-use io_imap::rfc3501::capability::ImapCapabilityGet;
-use io_imap::rfc3501::greeting::{ImapGreetingGet, ImapGreetingGetOptions};
-use io_imap::rfc3501::login::{ImapLogin, ImapLoginOptions};
-use io_imap::rfc3501::logout::{ImapLogout, ImapLogoutError};
-use io_imap::types::command::{Command, CommandBody};
-use io_imap::types::core::TagGenerator;
-use io_imap::types::response::{Capability, Response, Status, StatusKind};
+use io_imap::types::command::CommandBody;
+use io_imap::types::response::{Capability, Code};
 use rustls::pki_types::ServerName;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -28,7 +20,8 @@ use tokio_rustls::TlsConnector;
 use tokio_rustls::client::TlsStream;
 
 use crate::error::ImapError;
-use crate::gate::{Gate, MAX_MESSAGE_SIZE};
+use crate::exchange::{self, Authentication, Reply};
+use crate::gate::Gate;
 use crate::secret::Password;
 use crate::tls::{CertificatePin, pinned_client_config};
 
@@ -75,7 +68,6 @@ pub struct Connection {
     port: u16,
     wire: Option<Wire>,
     gate: Gate,
-    fragmentizer: Fragmentizer,
     capabilities: Vec<Capability<'static>>,
     selection: Option<MailboxContext>,
     pending_notices: Vec<MailboxNotice>,
@@ -119,7 +111,6 @@ impl Connection {
             port: options.port,
             wire: Some(wire),
             gate: Gate::new(),
-            fragmentizer: Fragmentizer::new(MAX_MESSAGE_SIZE),
             capabilities: Vec::new(),
             selection: None,
             pending_notices: Vec::new(),
@@ -148,32 +139,20 @@ impl Connection {
             .await
             .map_err(ImapError::from_io)?;
         let mut gate = Gate::new();
-        let mut fragmentizer = Fragmentizer::new(MAX_MESSAGE_SIZE);
-
-        run_plain(
-            &mut gate,
-            &mut fragmentizer,
-            &mut tcp,
-            ImapGreetingGet::new(ImapGreetingGetOptions {
-                ensure_capabilities: false,
-            }),
-        )
-        .await?;
-
-        // Pre-TLS LOGINDISABLED is normal; only STARTTLS must be
-        // advertised before the upgrade (spec/04).
-        let pre_tls = run_plain(
-            &mut gate,
-            &mut fragmentizer,
-            &mut tcp,
-            ImapCapabilityGet::new(),
-        )
-        .await?;
-        if !advertises(&pre_tls, |cap| matches!(cap, Capability::StartTls)) {
+        if exchange::greeting(&mut gate, &mut tcp).await? != Authentication::Required {
+            return Err(ImapError::StartTlsRefused);
+        }
+        let pre_tls = exchange::capability(&mut gate, &mut tcp).await?;
+        if gate.poisoned() {
+            return Err(ImapError::Malformed);
+        }
+        if !pre_tls.reusable {
+            return Err(ImapError::Closed);
+        }
+        if !advertises(&pre_tls.result, |cap| matches!(cap, Capability::StartTls)) {
             return Err(ImapError::StartTlsMissing);
         }
-
-        request_starttls(&mut gate, &mut fragmentizer, &mut tcp).await?;
+        request_starttls(&mut gate, &mut tcp).await?;
 
         let wire = connect_tls(tcp, options.pin, options.host).await?;
         let mut connection = Self {
@@ -181,51 +160,58 @@ impl Connection {
             port: options.port,
             wire: Some(wire),
             gate,
-            fragmentizer,
             capabilities: Vec::new(),
             selection: None,
             pending_notices: Vec::new(),
         };
-        connection.setup_authenticated(&options).await?;
+        connection
+            .setup_authenticated(&options, Authentication::Required)
+            .await?;
         Ok(connection)
     }
 
     async fn setup(&mut self, options: &ConnectOptions) -> Result<(), ImapError> {
-        self.greeting().await?;
-        self.setup_authenticated(options).await
+        let authentication = self.greeting().await?;
+        self.setup_authenticated(options, authentication).await
     }
 
     /// The setup after the greeting (implicit TLS) or after the
     /// upgrade (STARTTLS): refresh capabilities, refuse a server that
     /// still disables LOGIN, LOGIN, refresh again unless the tagged OK
     /// carried capabilities, then ID. No second greeting is read.
-    async fn setup_authenticated(&mut self, options: &ConnectOptions) -> Result<(), ImapError> {
+    async fn setup_authenticated(
+        &mut self,
+        options: &ConnectOptions,
+        authentication: Authentication,
+    ) -> Result<(), ImapError> {
         self.capabilities = self.capability().await?;
-        if advertises(&self.capabilities, |cap| {
-            matches!(cap, Capability::LoginDisabled)
-        }) {
-            return Err(ImapError::LoginDisabled);
+        if authentication == Authentication::Required {
+            if advertises(&self.capabilities, |cap| {
+                matches!(cap, Capability::LoginDisabled)
+            }) {
+                return Err(ImapError::LoginDisabled);
+            }
+
+            // The login's tagged OK may carry the capabilities; only a
+            // round-trip is skipped when it did (spec/04).
+            let login_capabilities = self.login(&options.user, &options.password).await?;
+            self.capabilities = if login_capabilities.is_empty() {
+                self.capability().await?
+            } else {
+                login_capabilities
+            };
         }
-
-        // The login's tagged OK may carry the capabilities; only a
-        // round-trip is skipped when it did (spec/04).
-        let login_capabilities = self.login(&options.user, &options.password).await?;
-        self.capabilities = if login_capabilities.is_empty() {
-            self.capability().await?
-        } else {
-            login_capabilities
-        };
-
         self.id().await?;
         Ok(())
     }
 
-    async fn greeting(&mut self) -> Result<(), ImapError> {
-        self.run(ImapGreetingGet::new(ImapGreetingGetOptions {
-            ensure_capabilities: false,
-        }))
-        .await?;
-        Ok(())
+    async fn greeting(&mut self) -> Result<Authentication, ImapError> {
+        let mut wire = self.wire.take().ok_or(ImapError::Closed)?;
+        let authentication = exchange::greeting(&mut self.gate, &mut wire).await?;
+        if self.gate.reusable() {
+            self.wire = Some(wire);
+        }
+        Ok(authentication)
     }
 
     /// Refresh capabilities. While selected, epoch changes fail closed
@@ -234,7 +220,12 @@ impl Connection {
         let capabilities = if self.selection.is_some() {
             self.selected_capability().await?
         } else {
-            self.run(ImapCapabilityGet::new()).await?
+            let mut wire = self.wire.take().ok_or(ImapError::Closed)?;
+            let outcome = exchange::capability(&mut self.gate, &mut wire).await?;
+            if outcome.reusable {
+                self.wire = Some(wire);
+            }
+            outcome.result
         };
         self.capabilities = capabilities.clone();
         Ok(capabilities)
@@ -245,9 +236,17 @@ impl Connection {
         user: &str,
         password: &Password,
     ) -> Result<Vec<Capability<'static>>, ImapError> {
-        let coroutine = ImapLogin::new(user, password.as_str(), ImapLoginOptions::default())
+        let body = CommandBody::login(user.to_string(), password.as_str().to_string())
             .map_err(|_| ImapError::command("LOGIN", "invalid credentials"))?;
-        self.run(coroutine).await
+        match self.run_setup(body, "LOGIN").await? {
+            Reply::Tagged(reply) if reply.body.kind == io_imap::types::response::StatusKind::Ok => {
+                match reply.body.code {
+                    Some(Code::Capability(values)) => Ok(values.into_inner()),
+                    _ => Ok(Vec::new()),
+                }
+            }
+            _ => Err(ImapError::LoginRefused),
+        }
     }
 
     async fn id(&mut self) -> Result<(), ImapError> {
@@ -261,21 +260,25 @@ impl Connection {
                 env!("CARGO_PKG_VERSION").try_into().expect("id value"),
             ),
         ];
-        self.run(ImapServerId::new(ImapServerIdOptions {
-            parameters: Some(parameters),
-        }))
-        .await?;
+        self.run_setup(
+            CommandBody::Id {
+                parameters: Some(parameters),
+            },
+            "ID",
+        )
+        .await?
+        .ok("ID")?;
         Ok(())
     }
 
-    /// `LOGOUT`, best effort (the M2.1b decision): `ImapLogout` stops
-    /// at BYE with `MissingTagged`, which is a success for a logout.
+    /// `LOGOUT`, best effort (the M2.1b decision): a valid BYE is
+    /// sufficient even when the peer closes before its tagged reply.
     pub async fn logout(&mut self) -> Result<(), ImapError> {
-        let result = self.run_raw(ImapLogout::new()).await;
+        let result = self.run_setup(CommandBody::Logout, "LOGOUT").await;
         self.wire = None;
         match result? {
-            Ok(()) | Err(ImapLogoutError::MissingTagged) => Ok(()),
-            Err(err) => Err(err.into()),
+            Reply::Bye => Ok(()),
+            _ => Err(ImapError::command("LOGOUT", "server did not report BYE")),
         }
     }
 
@@ -284,32 +287,16 @@ impl Connection {
         &self.capabilities
     }
 
-    /// Runs a single-command coroutine (or the greeting) over the gate.
-    /// Multi-command flows are split at the call sites so each exchange
-    /// has one expected tag, including across synchronizing literals.
-    /// A poisoned gate fails the read with [`ImapError::Malformed`] and
-    /// closes the connection; later runs report [`ImapError::Closed`]. A
-    /// completed result before poison in the same fill is returned first.
-    async fn run<C, T, E>(&mut self, coroutine: C) -> Result<T, ImapError>
-    where
-        C: ImapCoroutine<Yield = ImapYield, Return = Result<T, E>>,
-        E: Into<ImapError>,
-    {
-        self.run_raw(coroutine).await?.map_err(Into::into)
-    }
-
-    async fn run_raw<C, T, E>(&mut self, coroutine: C) -> Result<Result<T, E>, ImapError>
-    where
-        C: ImapCoroutine<Yield = ImapYield, Return = Result<T, E>>,
-    {
-        // The future owns the socket during an exchange. Dropping it at
-        // any await closes the transport, including after a partial write;
-        // no later coroutine can consume the abandoned command's reply.
+    async fn run_setup(
+        &mut self,
+        body: CommandBody<'static>,
+        operation: &'static str,
+    ) -> Result<Reply, ImapError> {
+        // This future owns the socket across all writes and reads. Errors
+        // and cancellation cannot leave a reply for a following command.
         let mut wire = self.wire.take().ok_or(ImapError::Closed)?;
-        let outcome =
-            crate::exchange::run(&mut self.gate, &mut self.fragmentizer, &mut wire, coroutine)
-                .await?;
-        if outcome.reusable {
+        let outcome = exchange::run(&mut self.gate, &mut wire, body, operation, |_| Ok(())).await?;
+        if outcome.result.succeeded() && outcome.reusable {
             self.wire = Some(wire);
         }
         Ok(outcome.result)
@@ -324,99 +311,27 @@ pub(crate) async fn write_command(
     wire.flush().await
 }
 
-/// Read STARTTLS responses only until the first tagged completion. ImapSend
-/// consumes every coalesced response and retains only its last tagged status;
-/// that would let an extra OK hide a refusal, mismatched tag or duplicate reply.
+/// Exactly one matched completion authorizes TLS, and every byte already
+/// received after it remains plaintext and prevents the upgrade.
 async fn request_starttls(
     gate: &mut Gate,
-    fragmentizer: &mut Fragmentizer,
     wire: &mut (impl AsyncRead + AsyncWrite + Unpin),
 ) -> Result<(), ImapError> {
-    let tag = TagGenerator::new().generate();
-    let command = Command {
-        tag: tag.clone(),
-        body: CommandBody::StartTLS,
-    };
-    let bytes = CommandCodec::new().encode(&command).dump();
-    write_command(wire, &bytes)
-        .await
-        .map_err(ImapError::from_io)?;
-    let codec = ResponseCodec::new();
-    loop {
-        let bytes = gate.read(wire).await?;
-        if gate.poisoned() {
-            return Err(ImapError::Malformed);
-        }
-        if bytes.is_empty() {
-            return Err(ImapError::command(
-                "STARTTLS",
-                "connection ended before completion",
-            ));
-        }
-        fragmentizer.enqueue_bytes(&bytes);
-        while fragmentizer.progress().is_some() {
-            if !fragmentizer.is_message_complete() {
-                continue;
-            }
-            let response = fragmentizer
-                .decode_message(&codec)
-                .map_err(|_| ImapError::Malformed)?;
-            match response {
-                Response::Status(Status::Tagged(reply)) => {
-                    if reply.tag.inner() != tag.inner() || reply.body.kind != StatusKind::Ok {
-                        return Err(ImapError::StartTlsRefused);
-                    }
-                    if gate.has_plaintext_residual() || fragmentizer_has_residual(fragmentizer) {
-                        return Err(ImapError::StartTlsInjection);
-                    }
-                    return Ok(());
-                }
-                Response::Status(Status::Bye(_)) | Response::CommandContinuationRequest(_) => {
-                    return Err(ImapError::StartTlsRefused);
-                }
-                // Unsolicited data before the completion grants no authority.
-                // All pre-TLS capabilities are discarded after the handshake.
-                _ => {}
-            }
-        }
+    let outcome =
+        match exchange::run(gate, wire, CommandBody::StartTLS, "STARTTLS", |_| Ok(())).await {
+            Err(ImapError::UnexpectedCompletion) => return Err(ImapError::StartTlsRefused),
+            other => other?,
+        };
+    if !outcome.result.succeeded() {
+        return Err(ImapError::StartTlsRefused);
     }
-}
-
-/// Runs one coroutine to completion over the gate while borrowing the
-/// plain socket, mirroring [`Connection::run_raw`] without taking
-/// ownership: the socket stays owned by the STARTTLS setup future, so
-/// a cancel closes it. Used only before the TLS upgrade.
-async fn run_plain<W, C, T, E>(
-    gate: &mut Gate,
-    fragmentizer: &mut Fragmentizer,
-    wire: &mut W,
-    coroutine: C,
-) -> Result<T, ImapError>
-where
-    W: AsyncRead + AsyncWrite + Unpin,
-    C: ImapCoroutine<Yield = ImapYield, Return = Result<T, E>>,
-    E: Into<ImapError>,
-{
-    let outcome = crate::exchange::run(gate, fragmentizer, wire, coroutine).await?;
     if gate.poisoned() {
         return Err(ImapError::Malformed);
     }
-    let result = outcome.result.map_err(Into::into)?;
-    if !outcome.reusable {
-        return Err(ImapError::Closed);
+    if gate.has_plaintext_residual() {
+        return Err(ImapError::StartTlsInjection);
     }
-    Ok(result)
-}
-
-/// True when `fragmentizer` still holds bytes a completed coroutine
-/// did not consume: a partial frame or unparsed bytes. Draining
-/// `progress` is safe: a clean fragmentizer ends with an empty message
-/// buffer, ready for the next command.
-fn fragmentizer_has_residual(fragmentizer: &mut Fragmentizer) -> bool {
-    if fragmentizer.progress().is_some() {
-        return true;
-    }
-    !fragmentizer.message_bytes().is_empty()
+    Ok(())
 }
 
 fn advertises(

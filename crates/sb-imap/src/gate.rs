@@ -26,7 +26,7 @@ const READ_CHUNK: usize = 8192;
 pub(crate) enum FrameKind {
     Greeting,
     Untagged,
-    Completion(Vec<u8>),
+    Completion,
     Continuation,
     Bye,
 }
@@ -102,6 +102,7 @@ impl Gate {
     /// limit reports [`ImapError::FrameBudgetExceeded`]. Keeping the
     /// boundary prevents a coroutine from replacing one tagged reply
     /// with a later reply in the same socket read.
+    #[cfg(test)]
     pub(crate) async fn read(
         &mut self,
         wire: &mut (impl AsyncRead + Unpin),
@@ -227,9 +228,7 @@ impl Gate {
             self.fragmentizer
                 .decode_message(&self.codec)
                 .map(|response| match response {
-                    Response::Status(Status::Tagged(reply)) => {
-                        FrameKind::Completion(reply.tag.inner().as_bytes().to_vec())
-                    }
+                    Response::Status(Status::Tagged(_)) => FrameKind::Completion,
                     Response::Status(Status::Bye(_)) => FrameKind::Bye,
                     Response::CommandContinuationRequest(_) => FrameKind::Continuation,
                     _ => FrameKind::Untagged,
