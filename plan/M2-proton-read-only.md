@@ -141,6 +141,9 @@ the provider policies (`proton_bridge`, `generic_imap`) live in
   deliverable; b3 retains the full body budget and streaming requirement.
   Both b2 artifacts keep the first-tag, cancellation, fake Bridge profile
   and actual pinned Dovecot checks, with no provider policy or store writes.
+  While selected, CAPABILITY refreshes use the same epoch checks and retain
+  reconciliation notices for the next read; a refresh cannot hide an epoch
+  change from a later UID observation or leave the capability cache stale.
 - **Goal:** the dialect-free command interface returns the read
   observations.
 - Body streaming must support spec/10's 100 MB message budget without
