@@ -24,6 +24,8 @@ mod references;
 pub use external::VerifiedExternalBackup;
 pub use image::BackupImageInspection;
 mod scratch;
+#[allow(dead_code)] // The staging qualifier consumes this read-only prerequisite.
+mod stage_schema;
 
 pub(crate) fn recover_scratch(
     conn: &rusqlite::Connection,
