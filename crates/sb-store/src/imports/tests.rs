@@ -42,6 +42,7 @@ fn message(store: &Store, path: &str, offset: u64, bytes: &[u8]) -> ImportMessag
         source_path: path.to_owned(),
         source_sha256: SOURCE_HASH.to_owned(),
         offset,
+        bundle_framing: None,
         flags: ImportFlags::default(),
         summary: ImportSummary {
             parser_version: 1,
@@ -418,6 +419,42 @@ fn job_inventory_is_immutable_and_requires_confirmation() {
     .unwrap_err();
     assert!(matches!(error, StoreError::Conflict { .. }));
     assert_eq!(reading(&store, recoverable_import_jobs).len(), 1);
+}
+
+/// Bundle members record version-2 source JSON (spec/09 Export bundles);
+/// requests and checkpoints stay at version 1.
+#[test]
+fn source_rows_accept_version_two_but_jobs_do_not() {
+    let (_scratch, paths) = scratch_paths("import-source-v2");
+    let store = crate::open(&paths, &test_seams(real_fs())).unwrap();
+    writing(&store, |tx| {
+        create_import_job(tx, JOB, "{ \"v\":1, \"paths\": [] }", now())?;
+        record_import_source(tx, JOB, 0, "{\"v\":2,\"path\":\"a\",\"bundle\":{}}")?;
+        record_import_source(tx, JOB, 0, "{\"bundle\":{},\"path\":\"a\",\"v\":2}")
+    });
+    let error = block_on(store.write(WritePriority::User, |tx| {
+        record_import_source(tx, JOB, 1, "{\"v\":3,\"path\":\"b\"}")
+    }))
+    .unwrap_err();
+    assert!(matches!(error, StoreError::InvalidInput { .. }));
+    let error = block_on(store.write(WritePriority::User, |tx| {
+        advance_import_job(
+            tx,
+            JOB,
+            1,
+            ImportJobState::AwaitingConfirmation,
+            "{\"v\":2}",
+            now(),
+        )
+        .map(|_| ())
+    }))
+    .unwrap_err();
+    assert!(matches!(error, StoreError::InvalidInput { .. }));
+    assert_eq!(
+        reading(&store, |tx| import_job_source(tx, JOB, 0)).source_json(),
+        "{\"bundle\":{},\"path\":\"a\",\"v\":2}"
+    );
+    store.close().unwrap();
 }
 
 #[test]

@@ -147,6 +147,7 @@ fn commit(store: &Store, clock: &TestClock, revision: i64, object: PublishedObje
                     source_path: path,
                     source_sha256: SOURCE_HASH.to_owned(),
                     offset: 0,
+                    bundle_framing: None,
                     flags: ImportFlags::default(),
                     summary: ImportSummary::default(),
                 }],
@@ -594,6 +595,7 @@ fn an_unlink_first_lets_the_republished_reservation_install_anew() {
     store.objects().set_pauses(Pauses {
         before_reservation: Some(Arc::clone(&reservation_gate)),
         before_unlink: Some(Arc::clone(&unlink_gate)),
+        ..Default::default()
     });
     let on_thread = Arc::clone(&store);
     let pass = std::thread::spawn(move || on_thread.collect_garbage(GC_GRACE_PERIOD));

@@ -88,21 +88,40 @@ impl MboxRecord {
     /// truncated inside the range yields `UnexpectedEof`, never success.
     pub fn reader<R: Read + Seek>(
         &self,
-        mut source: R,
+        source: R,
         variant: MboxVariant,
     ) -> io::Result<MboxReader<R>> {
-        source.seek(SeekFrom::Start(self.start))?;
-        Ok(MboxReader {
-            source: BufReader::new(source.take(self.end - self.start)),
-            variant,
-            line_start: true,
-            quotes: 0,
-            prefix: [0; FROM_PREFIX.len()],
-            prefix_start: 0,
-            prefix_end: 0,
-            failed: None,
-        })
+        unquote_range(source, self.start, self.end, variant)
     }
+}
+
+/// Unquote `[start, end)` as one mbox record body, using the same decoder
+/// as [`MboxRecord::reader`]. Inverted ranges return `InvalidInput`.
+/// The caller validates source identity and bounds against its inventory;
+/// truncation inside the range returns `UnexpectedEof`, never success.
+pub fn unquote_range<R: Read + Seek>(
+    mut source: R,
+    start: u64,
+    end: u64,
+    variant: MboxVariant,
+) -> io::Result<MboxReader<R>> {
+    let Some(bytes) = end.checked_sub(start) else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "mbox record range ends before it starts",
+        ));
+    };
+    source.seek(SeekFrom::Start(start))?;
+    Ok(MboxReader {
+        source: BufReader::new(source.take(bytes)),
+        variant,
+        line_start: true,
+        quotes: 0,
+        prefix: [0; FROM_PREFIX.len()],
+        prefix_start: 0,
+        prefix_end: 0,
+        failed: None,
+    })
 }
 
 /// A scan failure, retaining the source offset for the import report.
@@ -446,6 +465,11 @@ impl MboxrdRecordInfo {
     }
 }
 
+/// The conventional fixed envelope an mboxrd record starts with
+/// (spec/09 "Export formats and scopes"). Its timestamp is transport
+/// framing, not message metadata.
+pub const MBOXRD_ENVELOPE: &[u8] = b"From MAILER-DAEMON Thu Jan  1 00:00:00 1970\n";
+
 /// Fixed I/O buffers keep memory independent of message and line length.
 const ENCODE_READ_CAP: usize = 8192;
 
@@ -462,15 +486,13 @@ const QUOTE_BLOCK: [u8; ENCODE_WRITE_CAP] = [b'>'; ENCODE_WRITE_CAP];
 /// Read interruption ends the record so a cancelled acquisition stream
 /// cannot be retried indefinitely. The caller owns sync and publication.
 pub fn write_mboxrd_record(input: impl Read, output: impl Write) -> io::Result<MboxrdRecordInfo> {
-    const ENVELOPE: &[u8] = b"From MAILER-DAEMON Thu Jan  1 00:00:00 1970\n";
-
     let mut buf_in = BufReader::with_capacity(ENCODE_READ_CAP, input);
     let mut buf_out = BufWriter::with_capacity(ENCODE_WRITE_CAP, output);
 
-    buf_out.write_all(ENVELOPE)?;
+    buf_out.write_all(MBOXRD_ENVELOPE)?;
 
     let mut original_bytes: u64 = 0;
-    let mut encoded_bytes: u64 = ENVELOPE.len() as u64;
+    let mut encoded_bytes: u64 = MBOXRD_ENVELOPE.len() as u64;
     let mut framing_lf_added = false;
     let mut input_empty = true;
     let mut at_line_start = true;

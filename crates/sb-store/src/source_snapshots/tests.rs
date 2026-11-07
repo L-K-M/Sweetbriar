@@ -141,6 +141,44 @@ fn capture_copies_exact_bytes_and_reopen_is_seekable() {
 }
 
 #[test]
+fn verified_open_can_cancel_without_removing_either_snapshot() {
+    let (_scratch, recovery, sources) = real_dirs("snapshot-open-cancel");
+    let source = sources.join("source");
+    let bytes = vec![42; STREAM_CHUNK * 2 + 1];
+    std::fs::write(&source, &bytes).unwrap();
+    let snaps = capturer(real_fs(), &recovery, 4);
+    let snapshot = captured(&snaps, &source);
+    let other = captured(&snaps, &source);
+
+    for limit in [0, STREAM_CHUNK as u64] {
+        assert!(matches!(
+            snaps
+                .open_cancellable(&snapshot, |done| {
+                    if done >= limit {
+                        ControlFlow::Break(())
+                    } else {
+                        ControlFlow::Continue(())
+                    }
+                })
+                .unwrap(),
+            crate::Scoped::Stopped
+        ));
+        assert_eq!(read_all(&snaps, &snapshot), bytes);
+        assert_eq!(read_all(&snaps, &other), bytes);
+    }
+    let mut file = match snaps
+        .open_cancellable(&snapshot, |_| ControlFlow::Continue(()))
+        .unwrap()
+    {
+        crate::Scoped::Done(file) => file,
+        crate::Scoped::Stopped => panic!("unexpected cancellation"),
+    };
+    let mut actual = Vec::new();
+    file.read_to_end(&mut actual).unwrap();
+    assert_eq!(actual, bytes);
+}
+
+#[test]
 fn store_reopens_its_private_snapshot_after_shutdown() {
     use crate::ObjectStore;
     let (_scratch, paths) = crate::testing::scratch_paths("snapshot-store");

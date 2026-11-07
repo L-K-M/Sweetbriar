@@ -13,7 +13,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use sb_types::fs::{Fs, Lease, Location, LockError, Metadata, WriteFile};
+use sb_types::fs::{
+    ConfinedDir, DirectoryIdentity, Fs, Lease, Location, LockError, Metadata, ReadFile, WriteFile,
+};
 
 /// Give up after this many cut points: a run that never survives either
 /// fails on its first operation every time or does not use the `Fs`
@@ -72,7 +74,100 @@ impl CutFs {
     }
 }
 
+struct CutConfinedDir {
+    inner: Box<dyn ConfinedDir>,
+    count: Arc<AtomicU64>,
+    nth: u64,
+}
+
+impl CutConfinedDir {
+    fn trip(&self) {
+        let n = self.count.fetch_add(1, Ordering::SeqCst) + 1;
+        if n == self.nth {
+            // SAFETY: killing this process is the crash-cut harness contract.
+            unsafe {
+                libc::kill(libc::getpid(), libc::SIGKILL);
+            }
+            panic!("SIGKILL at cut point {n} did not kill the process");
+        }
+    }
+}
+
+impl ConfinedDir for CutConfinedDir {
+    fn visit_children(
+        &self,
+        visitor: &mut dyn FnMut(&Path) -> std::io::Result<std::ops::ControlFlow<()>>,
+    ) -> std::io::Result<std::ops::ControlFlow<()>> {
+        self.trip();
+        self.inner.visit_children(&mut |name| {
+            self.trip();
+            visitor(name)
+        })
+    }
+    fn set_ownership(&self, bytes: &[u8]) -> std::io::Result<()> {
+        self.trip();
+        self.inner.set_ownership(bytes)
+    }
+    fn ownership(&self) -> std::io::Result<Vec<u8>> {
+        self.trip();
+        self.inner.ownership()
+    }
+    fn identity(&self) -> std::io::Result<DirectoryIdentity> {
+        self.trip();
+        self.inner.identity()
+    }
+    fn open_dir(&self, name: &Path) -> std::io::Result<Box<dyn ConfinedDir>> {
+        self.trip();
+        Ok(Box::new(Self {
+            inner: self.inner.open_dir(name)?,
+            count: self.count.clone(),
+            nth: self.nth,
+        }))
+    }
+    fn create_private_dir(&self, name: &Path) -> std::io::Result<()> {
+        self.trip();
+        self.inner.create_private_dir(name)
+    }
+    fn create(&self, name: &Path) -> std::io::Result<Box<dyn WriteFile>> {
+        self.trip();
+        Ok(Box::new(CutWrite {
+            inner: self.inner.create(name)?,
+            count: self.count.clone(),
+            nth: self.nth,
+        }))
+    }
+    fn remove_file(&self, name: &Path) -> std::io::Result<()> {
+        self.trip();
+        self.inner.remove_file(name)
+    }
+    fn remove_empty_dir(&self, name: &Path) -> std::io::Result<()> {
+        self.trip();
+        self.inner.remove_empty_dir(name)
+    }
+    fn sync(&self) -> std::io::Result<()> {
+        self.trip();
+        self.inner.sync()
+    }
+    fn open_regular(&self, path: &Path) -> std::io::Result<(Box<dyn ReadFile>, Metadata)> {
+        self.trip();
+        self.inner.open_regular(path)
+    }
+}
+
 impl Fs for CutFs {
+    fn open_confined_dir(&self, path: &Path) -> std::io::Result<Box<dyn ConfinedDir>> {
+        self.trip();
+        Ok(Box::new(CutConfinedDir {
+            inner: self.inner.open_confined_dir(path)?,
+            count: self.count.clone(),
+            nth: self.nth,
+        }))
+    }
+
+    fn open_no_follow(&self, path: &Path) -> std::io::Result<Box<dyn sb_types::fs::ReadFile>> {
+        self.trip();
+        self.inner.open_no_follow(path)
+    }
     fn create(&self, path: &Path) -> std::io::Result<Box<dyn WriteFile>> {
         self.trip();
         let inner = self.inner.create(path)?;
@@ -316,6 +411,23 @@ mod tests {
     use std::io::Write as _;
 
     use super::*;
+
+    #[test]
+    fn confined_enumeration_counts_each_cut_point() {
+        use std::ops::ControlFlow;
+        let inner = Arc::new(crate::SimFs::new());
+        inner.create_dir(Path::new("/root")).unwrap();
+        inner.create(Path::new("/root/a")).unwrap();
+        inner.create(Path::new("/root/b")).unwrap();
+        let fs = CutFs::new(inner, u64::MAX);
+        let root = fs.open_confined_dir(Path::new("/root")).unwrap();
+        assert_eq!(
+            root.visit_children(&mut |_| Ok(ControlFlow::Continue(())))
+                .unwrap(),
+            ControlFlow::Continue(())
+        );
+        assert_eq!(fs.operations(), 4);
+    }
 
     /// The env vars the operation child reads: which operation, and
     /// the directory it works in.

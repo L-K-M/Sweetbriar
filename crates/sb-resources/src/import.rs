@@ -2,17 +2,29 @@
 //! Counts and quoting requirements describe private snapshots (spec/03),
 //! so later changes to originals cannot change an inventoried source.
 
+use std::cell::Cell;
 use std::collections::HashSet;
-use std::io::{self, BufReader, Read};
+use std::io::{self, BufReader, Read, Seek, SeekFrom};
 use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use sb_mime::{MboxError, MboxInventory, MboxQuoting, inventory_mbox};
 use sb_store::imports::MAX_IMPORT_CHANGES_BYTES;
 use sb_store::{FileKind, Fs, ImportSourceCapture, ImportSourceSnapshot, Store, StoreError};
 
-/// The metadata object's format version (spec/09).
+pub(crate) mod bundle;
+mod json_syntax;
+mod offset_sort;
+mod proof;
+pub use bundle::{BundleFormat, SourceBundle};
+pub(crate) use proof::DescriptorCursor;
+pub use proof::{ManifestDescriptor, ManifestProof, ManifestProofRegistry};
+
+/// The metadata object's format version (spec/09). A bundle source
+/// records version 2: the version-1 fields plus its `bundle` object.
 const FORMAT_VERSION: u64 = 1;
+const BUNDLE_FORMAT_VERSION: u64 = 2;
 const MBOX_SEPARATOR_MIN_BYTES: u64 = b"From ".len() as u64;
 
 /// What a discovered source's bytes are.
@@ -41,7 +53,7 @@ pub enum ImportProgress<'a> {
     Checking { path: &'a Path },
     /// `bytes` of `path` have been copied into its private snapshot.
     Capturing { path: &'a Path, bytes: u64 },
-    /// `bytes` read from `path`'s snapshot for separator scanning.
+    /// `bytes` read from `path`'s snapshot for inventory scanning.
     Scanning { path: &'a Path, bytes: u64 },
 }
 
@@ -120,6 +132,7 @@ pub struct SourceInventory {
     snapshot: ImportSourceSnapshot,
     messages: u64,
     quoting: MboxQuoting,
+    bundle: Option<SourceBundle>,
 }
 
 impl SourceInventory {
@@ -152,14 +165,34 @@ impl SourceInventory {
         self.quoting
     }
 
-    /// Version-1 `import_job_sources.source_json`, with sorted keys.
+    /// For a bundle source, the manifest it verified against (spec/09
+    /// "Export bundles"); a plain source has none.
+    pub fn bundle(&self) -> Option<&SourceBundle> {
+        self.bundle.as_ref()
+    }
+
+    /// Every snapshot this source's inventory references: its own
+    /// copy, plus the shared manifest's for a bundle source. Members
+    /// of one bundle share that capture, so callers removing the
+    /// snapshots dedupe by token.
+    pub fn snapshots(&self) -> impl Iterator<Item = &ImportSourceSnapshot> + '_ {
+        std::iter::once(&self.snapshot).chain(self.bundle.iter().map(|b| b.manifest()))
+    }
+
+    /// Version-1 `import_job_sources.source_json` for a plain source,
+    /// or version 2 — the same fields plus `bundle` — for a bundle
+    /// source, with sorted keys (spec/09).
     pub fn to_json(&self) -> String {
         let quoting = match self.quoting {
             MboxQuoting::Equivalent => "equivalent",
             MboxQuoting::Ambiguous => "ambiguous",
         };
-        serde_json::json!({
-            "v": FORMAT_VERSION,
+        let mut value = serde_json::json!({
+            "v": if self.bundle.is_some() {
+                BUNDLE_FORMAT_VERSION
+            } else {
+                FORMAT_VERSION
+            },
             "path": self.path.to_str().expect("source paths are UTF-8"),
             "mailbox": self.mailbox,
             "kind": self.kind.name(),
@@ -170,12 +203,27 @@ impl SourceInventory {
             },
             "messages": self.messages,
             "quoting": quoting,
-        })
-        .to_string()
+        });
+        if let Some(bundle) = &self.bundle {
+            value["bundle"] = serde_json::json!({
+                "manifest": {
+                    "token": bundle.manifest().token(),
+                    "sha256": bundle.manifest().sha256_hex(),
+                    "byte_length": bundle.manifest().byte_length(),
+                },
+                "format": bundle.format().name(),
+            });
+            if let Some(ordinal) = bundle.file_ordinal() {
+                value["bundle"]["file_ordinal"] = ordinal.into();
+            }
+        }
+        value.to_string()
     }
 
-    /// Rebuild validated v1 metadata. Oversized JSON is refused before
-    /// parsing; malformed fields and inconsistent counts are `InvalidInput`.
+    /// Rebuild validated metadata. Version 1 is a plain source; version 2
+    /// adds the required `bundle` object (spec/09 "Export bundles").
+    /// Oversized JSON is refused before parsing; malformed fields and
+    /// inconsistent counts are `InvalidInput`.
     pub fn from_json(json: &str) -> Result<Self, StoreError> {
         if json.len() > MAX_IMPORT_CHANGES_BYTES {
             return Err(invalid("import source metadata exceeds the write budget"));
@@ -185,9 +233,16 @@ impl SourceInventory {
         let object = value
             .as_object()
             .ok_or_else(|| invalid("import source metadata is not an object"))?;
-        if field(object, "v")?.as_u64() != Some(FORMAT_VERSION) {
-            return Err(invalid("import source metadata must have v: 1"));
-        }
+        let bundle = match field(object, "v")?.as_u64() {
+            Some(FORMAT_VERSION) => {
+                if object.contains_key("bundle") {
+                    return Err(invalid("a version-1 import source carries no bundle"));
+                }
+                None
+            }
+            Some(BUNDLE_FORMAT_VERSION) => Some(bundle_field(object)?),
+            _ => return Err(invalid("import source metadata must have v: 1 or 2")),
+        };
         let path = required_str(object, "path")?;
         if path.is_empty() || path.contains('\0') || !Path::new(path).is_absolute() {
             return Err(invalid(
@@ -211,17 +266,7 @@ impl SourceInventory {
             other => return Err(invalid(format!("unknown import quoting {other:?}"))),
         };
         let messages = required_u64(object, "messages")?;
-        let snapshot = object
-            .get("snapshot")
-            .and_then(serde_json::Value::as_object)
-            .ok_or_else(|| invalid("an import source snapshot must be an object"))?;
-        let sha256 = sha256_from_hex(required_str(snapshot, "sha256")?)
-            .ok_or_else(|| invalid("an import source sha256 is 64 lowercase hex digits"))?;
-        let snapshot = ImportSourceSnapshot::from_metadata(
-            required_str(snapshot, "token")?,
-            sha256,
-            required_u64(snapshot, "byte_length")?,
-        )?;
+        let snapshot = snapshot_field(object, "snapshot")?;
         match kind {
             // One file is one candidate; no `From ` unquoting applies.
             SourceKind::Eml if messages != 1 || quoting != MboxQuoting::Equivalent => {
@@ -240,6 +285,18 @@ impl SourceInventory {
             }
             _ => (),
         }
+        if let Some(bundle) = &bundle {
+            if bundle.format().source_kind() != kind {
+                return Err(invalid("a bundle source's format must match its kind"));
+            }
+            // The manifest fixes mboxrd unquoting, so a bundle source
+            // never carries a variant question (spec/09).
+            if quoting != MboxQuoting::Equivalent {
+                return Err(invalid(
+                    "a bundle source's quoting is decided by its manifest",
+                ));
+            }
+        }
         Ok(Self {
             path: PathBuf::from(path),
             kind,
@@ -247,6 +304,7 @@ impl SourceInventory {
             snapshot,
             messages,
             quoting,
+            bundle,
         })
     }
 }
@@ -309,16 +367,30 @@ pub(crate) fn inventory(
         pending: roots
             .iter()
             .rev()
-            .map(|path| (path.clone(), Origin::Chosen))
+            .map(|path| Work::Visit(path.clone(), Origin::Chosen))
             .collect(),
     };
-    while let Some((path, origin)) = walker.pending.pop() {
-        if walker.check(&path) {
-            break;
+    while let Some(work) = walker.pending.pop() {
+        match work {
+            Work::Visit(path, origin) => {
+                if !walker.check(&path) {
+                    walker.visit(path, origin);
+                }
+            }
+            Work::Child(path, format, bytes, records, ordinal, owner) => {
+                if !walker.check(&path) {
+                    walker.check_bundle_child(&path, format, bytes, records, ordinal, &owner);
+                }
+            }
+            Work::Finish(owner) => walker.finish_bundle(&owner),
         }
-        walker.visit(path, origin);
         if walker.cancelled {
             break;
+        }
+    }
+    while let Some(work) = walker.pending.pop() {
+        if let Work::Finish(owner) = work {
+            walker.finish_bundle(&owner);
         }
     }
     if walker.cancelled {
@@ -339,7 +411,18 @@ struct Walker<'a> {
     seen_files: HashSet<PathBuf>,
     inventory: ImportInventory,
     cancelled: bool,
-    pending: Vec<(PathBuf, Origin)>,
+    pending: Vec<Work>,
+}
+
+struct BundleOwner {
+    snapshot: ImportSourceSnapshot,
+    retained: Cell<bool>,
+}
+
+enum Work {
+    Visit(PathBuf, Origin),
+    Child(PathBuf, BundleFormat, u64, u64, u64, Rc<BundleOwner>),
+    Finish(Rc<BundleOwner>),
 }
 
 #[derive(Clone, Copy)]
@@ -358,7 +441,8 @@ enum Scan {
 }
 
 impl Walker<'_> {
-    /// The shared progress check; a break latches so the walk stops.
+    /// The shared progress check; a break latches so the walk stops. This
+    /// only probes cancellation — the dedup sets are not touched here.
     fn check(&mut self, path: &Path) -> bool {
         self.cancelled =
             self.cancelled || (self.progress)(ImportProgress::Checking { path }).is_break();
@@ -384,6 +468,20 @@ impl Walker<'_> {
         let eml = has_extension(&named, "eml");
         match self.classify(&canonical) {
             Ok(FileKind::File) => {
+                if matches!(origin, Origin::Chosen)
+                    && (named
+                        .file_name()
+                        .is_some_and(|name| name == crate::export_files::MANIFEST_NAME)
+                        || canonical
+                            .file_name()
+                            .is_some_and(|name| name == crate::export_files::MANIFEST_NAME))
+                {
+                    return self.problem(
+                        &canonical,
+                        ImportProblemKind::Unsupported,
+                        "select the export bundle directory, not its manifest",
+                    );
+                }
                 if matches!(origin, Origin::Listed) && !eml && !has_extension(&named, "mbox") {
                     return;
                 }
@@ -407,6 +505,14 @@ impl Walker<'_> {
                 if !self.seen_dirs.insert(canonical.clone()) {
                     return;
                 }
+                let manifest = canonical.join(crate::export_files::MANIFEST_NAME);
+                match self.fs.metadata(&manifest) {
+                    Ok(Some(md)) if md.kind() == FileKind::File => {
+                        return self.bundle(&canonical, &manifest);
+                    }
+                    Ok(_) => {}
+                    Err(error) => return self.problem_io(&manifest, error),
+                }
                 if has_extension(&named, "mbox") || has_extension(&canonical, "mbox") {
                     return self.package(&canonical, &named);
                 }
@@ -421,6 +527,303 @@ impl Walker<'_> {
         }
     }
 
+    /// Validate the manifest and merge its sorted declarations with the directory.
+    fn bundle(&mut self, dir: &Path, manifest: &Path) {
+        let entries = match self.fs.read_dir(dir) {
+            Ok(entries) => entries,
+            Err(error) => return self.problem_io(dir, error),
+        };
+        let mut children: Vec<_> = entries.into_iter().map(|path| (path, None)).collect();
+        // Fs returns sorted paths; UTF-8 byte order agrees with decoded
+        // scalar order. Non-UTF-8 names are skipped by the merge and
+        // reported. The child callback fires per declaration group in
+        // the relationship sort's ascending order — declaration order
+        // in the manifest itself is irrelevant — so the two sequences
+        // merge in one pass.
+        let mut cursor = 0;
+        let mut missing = Vec::new();
+        let mut missing_overflow = 0u64;
+        let captured = self.store.capture_import_source(manifest, |bytes| {
+            (self.progress)(ImportProgress::Capturing {
+                path: manifest,
+                bytes,
+            })
+        });
+        let snapshot = match captured {
+            Ok(ImportSourceCapture::Captured { snapshot, .. }) => snapshot,
+            Ok(ImportSourceCapture::Cancelled) => {
+                self.cancelled = true;
+                return;
+            }
+            Err(error) => return self.failed(dir, error),
+        };
+        let result = match self
+            .store
+            .open_import_source_cancellable(&snapshot, |bytes| {
+                (self.progress)(ImportProgress::Scanning {
+                    path: manifest,
+                    bytes,
+                })
+            }) {
+            Ok(sb_store::Scoped::Stopped) => {
+                self.cancelled = true;
+                None
+            }
+            Ok(sb_store::Scoped::Done(file)) => {
+                let mut reader = BufReader::new(ScanReader {
+                    inner: file,
+                    path: manifest,
+                    scanned: 0,
+                    cancelled: false,
+                    progress: &mut *self.progress,
+                });
+                let result = json_syntax::validate_envelope(&mut reader).and_then(|table| {
+                    let scratch = self.store.import_validation_scratch().map_err(|e| {
+                        io::Error::new(e.io_kind().unwrap_or(io::ErrorKind::Other), e)
+                    })?;
+                    json_syntax::validate_messages_with_children(
+                        &mut reader,
+                        &table,
+                        &scratch,
+                        &mut |reader, offset, bytes, records, ordinal| {
+                            while cursor < children.len() {
+                                let Some(name) =
+                                    children[cursor].0.file_name().and_then(|n| n.to_str())
+                                else {
+                                    cursor += 1;
+                                    continue;
+                                };
+                                match json_syntax::compare_child(reader, offset, name)? {
+                                    std::cmp::Ordering::Greater => cursor += 1,
+                                    std::cmp::Ordering::Equal => {
+                                        children[cursor].1 = Some((bytes, records, ordinal));
+                                        cursor += 1;
+                                        return Ok(());
+                                    }
+                                    std::cmp::Ordering::Less => break,
+                                }
+                            }
+                            if missing.len() < 64 {
+                                missing.push(json_syntax::child_prefix(reader, offset)?);
+                            } else {
+                                missing_overflow = missing_overflow.saturating_add(1);
+                            }
+                            Ok(())
+                        },
+                    )?;
+                    scratch.finish().map_err(|e| {
+                        io::Error::new(e.io_kind().unwrap_or(io::ErrorKind::Other), e)
+                    })?;
+                    Ok(table.format())
+                });
+                if reader.get_ref().cancelled {
+                    self.cancelled = true;
+                    None
+                } else {
+                    Some(result.map_err(|error| error.to_string()))
+                }
+            }
+            Err(error) => Some(Err(error.to_string())),
+        };
+        match result {
+            None => self.discard(&snapshot),
+            Some(Err(error)) => {
+                self.discard(&snapshot);
+                self.failed(dir, error);
+            }
+            Some(Ok(format)) => {
+                let owner = Rc::new(BundleOwner {
+                    snapshot,
+                    retained: Cell::new(false),
+                });
+                for (name, truncated) in missing {
+                    let path = if truncated {
+                        dir.to_path_buf()
+                    } else {
+                        dir.join(&name)
+                    };
+                    self.failed(
+                        &path,
+                        format!(
+                            "missing declared child {name:?}{}",
+                            if truncated { " (truncated)" } else { "" }
+                        ),
+                    );
+                }
+                if missing_overflow > 0 {
+                    self.failed(
+                        dir,
+                        format!("{missing_overflow} more declared children are missing"),
+                    );
+                }
+                let mut pending = Vec::new();
+                for (path, declaration) in children {
+                    if self.check(&path) {
+                        self.finish_bundle(&owner);
+                        return;
+                    }
+                    if path.to_str().is_none() {
+                        self.problem(&path, ImportProblemKind::NonUtf8, "the path is not UTF-8");
+                    } else if let Some((bytes, records, ordinal)) = declaration {
+                        // The declaration wins: a child named in the manifest is
+                        // checked as a file even when a directory occupies its
+                        // path, so its entries are not hoisted as real sources.
+                        pending.push(Work::Child(
+                            path.clone(),
+                            format,
+                            bytes,
+                            records,
+                            ordinal,
+                            owner.clone(),
+                        ));
+                    } else if has_extension(&path, "eml") || has_extension(&path, "mbox") {
+                        match self.fs.metadata(&path) {
+                            Ok(Some(md)) if md.kind() == FileKind::File => {
+                                self.failed(&path, "bundle file is not listed in the manifest");
+                            }
+                            Err(error) => {
+                                self.failed(&path, error);
+                            }
+                            Ok(None) => {
+                                self.failed(&path, "bundle child disappeared during discovery");
+                            }
+                            Ok(Some(md)) if md.kind() == FileKind::Directory => {
+                                pending.push(Work::Visit(path, Origin::Listed))
+                            }
+                            _ => {}
+                        }
+                    } else {
+                        pending.push(Work::Visit(path, Origin::Listed));
+                    }
+                }
+                self.pending.push(Work::Finish(owner));
+                self.pending.extend(pending.into_iter().rev());
+            }
+        }
+    }
+
+    fn check_bundle_child(
+        &mut self,
+        path: &Path,
+        format: BundleFormat,
+        bytes: u64,
+        records: u64,
+        ordinal: u64,
+        owner: &BundleOwner,
+    ) {
+        let extension = match format {
+            BundleFormat::Eml => "eml",
+            BundleFormat::Mboxrd => "mbox",
+        };
+        if !has_extension(path, extension) {
+            self.failed(path, "bundle child format does not match the manifest");
+            return;
+        }
+        let capture = self.store.capture_import_source(path, |bytes| {
+            (self.progress)(ImportProgress::Capturing { path, bytes })
+        });
+        let (source_path, snapshot) = match capture {
+            Ok(ImportSourceCapture::Captured {
+                source_path,
+                snapshot,
+            }) => (source_path, snapshot),
+            Ok(ImportSourceCapture::Cancelled) => {
+                self.cancelled = true;
+                return;
+            }
+            Err(error) => {
+                self.failed(path, error);
+                return;
+            }
+        };
+        let result = if snapshot.byte_length() != bytes {
+            Err("bundle child byte length differs from the manifest".to_owned())
+        } else {
+            match self
+                .store
+                .open_import_source_cancellable(&snapshot, |bytes| {
+                    (self.progress)(ImportProgress::Scanning { path, bytes })
+                }) {
+                Ok(sb_store::Scoped::Stopped) => {
+                    self.cancelled = true;
+                    Ok(())
+                }
+                Ok(sb_store::Scoped::Done(_)) if format == BundleFormat::Eml && records == 1 => {
+                    Ok(())
+                }
+                Ok(sb_store::Scoped::Done(_)) if format == BundleFormat::Eml => {
+                    Err("bundle child record count differs from the manifest".to_owned())
+                }
+                Ok(sb_store::Scoped::Done(file)) => match scan_snapshot(
+                    path,
+                    file.take(bytes.saturating_add(1)),
+                    &mut *self.progress,
+                ) {
+                    Scan::Counted(inventory)
+                        if inventory.source_bytes() == bytes && inventory.messages() == records =>
+                    {
+                        Ok(())
+                    }
+                    Scan::Counted(_) => Err(
+                        "bundle child record count or length differs from the manifest".to_owned(),
+                    ),
+                    Scan::Cancelled => {
+                        self.cancelled = true;
+                        Ok(())
+                    }
+                    Scan::Failed(error) => Err(error.to_string()),
+                },
+                Err(error) => Err(error.to_string()),
+            }
+        };
+        if let Err(error) = result {
+            self.discard(&snapshot);
+            self.failed(path, error);
+            return;
+        }
+        if self.cancelled || self.seen_files.contains(&source_path) {
+            self.discard(&snapshot);
+            return;
+        }
+        // The stored path is canonicalized, so the mailbox label is
+        // derived from it rather than the possibly-aliased declared path.
+        let mailbox = match format {
+            BundleFormat::Eml => folder_name(&source_path),
+            BundleFormat::Mboxrd => stem(&source_path),
+        };
+        let Some(mailbox) = mailbox else {
+            self.discard(&snapshot);
+            self.name_problem(&source_path);
+            return;
+        };
+        if source_path.to_str().is_none() {
+            self.discard(&snapshot);
+            self.name_problem(&source_path);
+            return;
+        }
+        self.seen_files.insert(source_path.clone());
+        self.inventory.sources.push(SourceInventory {
+            path: source_path,
+            kind: format.source_kind(),
+            mailbox,
+            snapshot,
+            messages: records,
+            quoting: MboxQuoting::Equivalent,
+            bundle: Some(SourceBundle::new(
+                owner.snapshot.clone(),
+                format,
+                Some(ordinal),
+            )),
+        });
+        owner.retained.set(true);
+    }
+
+    fn finish_bundle(&self, owner: &BundleOwner) {
+        if !owner.retained.get() {
+            self.discard(&owner.snapshot);
+        }
+    }
+
     /// A directory contributes its sorted entries once; canonical
     /// dedupe ends symlink cycles and overlapping roots.
     fn walk_dir(&mut self, dir: &Path) {
@@ -428,8 +831,12 @@ impl Walker<'_> {
             Ok(entries) => entries,
             Err(error) => return self.problem_io(dir, error),
         };
-        self.pending
-            .extend(entries.into_iter().rev().map(|path| (path, Origin::Listed)));
+        self.pending.extend(
+            entries
+                .into_iter()
+                .rev()
+                .map(|path| Work::Visit(path, Origin::Listed)),
+        );
     }
 
     /// An Apple-style package contributes only its `mbox` file;
@@ -541,6 +948,7 @@ impl Walker<'_> {
             snapshot,
             messages,
             quoting,
+            bundle: None,
         });
     }
 
@@ -658,6 +1066,22 @@ impl<R: Read> Read for ScanReader<'_, R> {
     }
 }
 
+impl<R: Seek> Seek for ScanReader<'_, R> {
+    fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+        if self.cancelled
+            || (self.progress)(ImportProgress::Scanning {
+                path: self.path,
+                bytes: self.scanned,
+            })
+            .is_break()
+        {
+            self.cancelled = true;
+            return Err(io::Error::other("import inventory cancelled"));
+        }
+        self.inner.seek(pos)
+    }
+}
+
 /// Whether `path`'s extension equals `wanted`, case-insensitively
 /// (spec/09); non-UTF-8 extensions match nothing.
 fn has_extension(path: &Path, wanted: &str) -> bool {
@@ -709,6 +1133,45 @@ pub(crate) fn required_u64(
             "import source {name} must be a nonnegative integer"
         ))
     })
+}
+
+/// A `{token, sha256, byte_length}` snapshot reference.
+fn snapshot_field(
+    object: &serde_json::Map<String, serde_json::Value>,
+    name: &str,
+) -> Result<ImportSourceSnapshot, StoreError> {
+    let snapshot = object
+        .get(name)
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(|| invalid(format!("an import source {name} must be an object")))?;
+    let sha256 = sha256_from_hex(required_str(snapshot, "sha256")?).ok_or_else(|| {
+        invalid(format!(
+            "an import source {name} sha256 is 64 lowercase hex digits"
+        ))
+    })?;
+    ImportSourceSnapshot::from_metadata(
+        required_str(snapshot, "token")?,
+        sha256,
+        required_u64(snapshot, "byte_length")?,
+    )
+}
+
+/// The required `bundle` object of a version-2 source: its manifest
+/// snapshot reference, declared format and optional legacy binding (spec/09).
+fn bundle_field(
+    object: &serde_json::Map<String, serde_json::Value>,
+) -> Result<SourceBundle, StoreError> {
+    let bundle = field(object, "bundle")?
+        .as_object()
+        .ok_or_else(|| invalid("an import source bundle must be an object"))?;
+    let manifest = snapshot_field(bundle, "manifest")?;
+    let format = BundleFormat::from_name(required_str(bundle, "format")?)
+        .ok_or_else(|| invalid("an import source bundle's format is eml or mboxrd"))?;
+    let file_ordinal = bundle
+        .get("file_ordinal")
+        .map(|_| required_u64(bundle, "file_ordinal"))
+        .transpose()?;
+    Ok(SourceBundle::new(manifest, format, file_ordinal))
 }
 
 fn sha256_from_hex(text: &str) -> Option<[u8; 32]> {

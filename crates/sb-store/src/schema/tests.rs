@@ -557,6 +557,15 @@ fn a_supported_version_without_identity_is_corrupt_and_untouched() {
                UPDATE store_meta SET value = 'rewritten' WHERE key = 'last_migrated_by';
              END;"
         ),
+        // More objects than the canonical schema can hold: the
+        // equality scan must still see objects past a fixed bound.
+        format!(
+            "CREATE TABLE store_meta (\n  key   TEXT PRIMARY KEY,\n  value TEXT NOT NULL\n) STRICT;
+             INSERT INTO store_meta VALUES {IDENTITY_ROWS};
+             CREATE TRIGGER a_extra AFTER INSERT ON store_meta BEGIN SELECT 1; END;
+             CREATE TRIGGER m_extra AFTER UPDATE ON store_meta BEGIN SELECT 1; END;
+             CREATE TRIGGER z_extra AFTER DELETE ON store_meta BEGIN SELECT 1; END;"
+        ),
     ] {
         let (_scratch, paths) = closed_store("schema-no-identity");
         replace_state_db(
@@ -1019,4 +1028,50 @@ fn sqlite_environment_failures_carry_their_io_kind() {
         classify(misleading, "a test write").io_kind(),
         Some(io::ErrorKind::Other)
     );
+}
+
+#[test]
+fn migration_20_indexes_existing_backup_pins() {
+    let (_scratch, paths) = scratch_paths("schema-pin-index-upgrade");
+    let seams = test_seams(real_fs());
+    let store = crate::store::open_with(
+        &paths,
+        &seams,
+        WRITER_PRAGMAS,
+        crate::store::READER_PRAGMAS,
+        &PINNED_SQLITE,
+        &MIGRATIONS[..19],
+    )
+    .unwrap();
+    crate::testing::writing(&store, |tx| {
+        tx.execute(
+            "INSERT INTO object_pins VALUES ('abc', 'backup_in_progress', 'gen', 1)",
+            [],
+        )
+        .map_err(bug)?;
+        Ok(())
+    });
+    store.close().unwrap();
+    let upgraded = crate::open(&paths, &seams).unwrap();
+    reading(&upgraded, |tx| {
+        assert_eq!(
+            one_int(tx, "PRAGMA user_version"),
+            i64::from(LATEST_SCHEMA_VERSION)
+        );
+        assert_eq!(
+            one_int(
+                tx,
+                "SELECT count(*) FROM object_pins WHERE object_sha256='abc'"
+            ),
+            1
+        );
+        assert_eq!(
+            one_int(
+                tx,
+                "SELECT count(*) FROM sqlite_schema WHERE type='index' AND name='object_pins_by_owner'"
+            ),
+            1
+        );
+        Ok(())
+    });
 }

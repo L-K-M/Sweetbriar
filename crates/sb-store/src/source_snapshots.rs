@@ -222,6 +222,20 @@ impl ImportSourceSnapshots {
         &self,
         snapshot: &ImportSourceSnapshot,
     ) -> Result<Box<dyn ReadFile>, StoreError> {
+        match self.open_cancellable(snapshot, |_| ControlFlow::Continue(()))? {
+            crate::Scoped::Done(file) => Ok(file),
+            crate::Scoped::Stopped => unreachable!("the callback never cancels"),
+        }
+    }
+
+    pub(crate) fn open_cancellable(
+        &self,
+        snapshot: &ImportSourceSnapshot,
+        mut progress: impl FnMut(u64) -> ControlFlow<()>,
+    ) -> Result<crate::Scoped<Box<dyn ReadFile>>, StoreError> {
+        if progress(0).is_break() {
+            return Ok(crate::Scoped::Stopped);
+        }
         let path = self.private_path(&snapshot.token);
         let step = format!("open the import source snapshot {}", snapshot.token);
         let unavailable = |e: io::Error| StoreError::unavailable(format!("cannot {step}: {e}"));
@@ -257,9 +271,11 @@ impl ImportSourceSnapshots {
                 snapshot.byte_length()
             )));
         }
-        verify(&mut file, snapshot)?;
+        if verify(&mut file, snapshot, &mut progress)?.is_break() {
+            return Ok(crate::Scoped::Stopped);
+        }
         file.seek(SeekFrom::Start(0)).map_err(unavailable)?;
-        Ok(file)
+        Ok(crate::Scoped::Done(file))
     }
 
     /// Remove finished jobs' copies, then flush `recovery/` once
@@ -398,7 +414,11 @@ fn copy_bounded(
 /// is caught without hashing it unboundedly. Every mismatch is
 /// `Corrupt` and the file stays where it lies — it is evidence, not
 /// garbage.
-fn verify(file: &mut dyn Read, snapshot: &ImportSourceSnapshot) -> Result<(), StoreError> {
+fn verify(
+    file: &mut dyn Read,
+    snapshot: &ImportSourceSnapshot,
+    progress: &mut impl FnMut(u64) -> ControlFlow<()>,
+) -> Result<ControlFlow<()>, StoreError> {
     let token = &snapshot.token;
     let expected = snapshot.byte_length();
     let mut hasher = Sha256::new();
@@ -418,6 +438,9 @@ fn verify(file: &mut dyn Read, snapshot: &ImportSourceSnapshot) -> Result<(), St
         }
         hasher.update(&chunk[..n]);
         consumed += n as u64;
+        if progress(consumed).is_break() {
+            return Ok(ControlFlow::Break(()));
+        }
     }
     let mut detection = [0u8; 1];
     let extra = retry_interrupted(|| file.read(&mut detection)).map_err(|e| {
@@ -436,7 +459,7 @@ fn verify(file: &mut dyn Read, snapshot: &ImportSourceSnapshot) -> Result<(), St
             "import source snapshot {token} failed its hash check"
         )));
     }
-    Ok(())
+    Ok(ControlFlow::Continue(()))
 }
 
 /// Whether `token` is exactly 32 lowercase hex digits — the whole

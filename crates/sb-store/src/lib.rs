@@ -1,7 +1,7 @@
 //! `sb-store` — L5. SQLite, migrations, object store, backups, FTS5,
 //! query AST + SQL. Doesn't know about IMAP; reaches platform services
 //! only through `sb-types` seam traits.
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 
 pub mod activation;
 mod address_keys;
@@ -13,6 +13,8 @@ mod error;
 mod export_metadata;
 pub mod exports;
 mod gc;
+#[allow(unsafe_code)]
+mod image_vfs;
 mod import_reports;
 pub mod imports;
 pub mod index;
@@ -35,13 +37,14 @@ mod store;
 #[cfg(test)]
 mod testing;
 pub mod threads;
+mod validation_scratch;
 mod writer;
 
 // The seam vocabulary sb-types owns (spec/01 rules 2 and 3), re-exported
 // by item so the layer above — which cannot name sb-types directly —
 // reaches it through this crate, one layer at a time.
 pub use sb_types::appearance::ACCOUNT_PALETTE_V1;
-pub use sb_types::fs::{FileKind, Fs, ReadFile};
+pub use sb_types::fs::{FileKind, Fs, ReadFile, WriteFile};
 pub use sb_types::id::Uuid;
 pub use sb_types::random::Random;
 pub use sb_types::time::{Clock, Timestamp};
@@ -51,7 +54,9 @@ pub use sb_types::time::{Clock, Timestamp};
 // dependency of its own.
 pub use rusqlite::Transaction;
 
-pub use backups::{BackupDestination, BackupSnapshot};
+pub use backups::{
+    BackupDestination, BackupImageInspection, BackupReceipt, BackupSnapshot, VerifiedExternalBackup,
+};
 pub use error::StoreError;
 pub use export_metadata::{ExportMetadata, export_occurrence_metadata};
 pub use gc::{GC_GRACE_PERIOD, GcGate, GcReport};
@@ -65,6 +70,7 @@ pub use receipts::{Receipt, encode_job_receipt, receipt_job_id, run_once};
 pub use settings::{StoredSetting, read_all, upsert};
 pub use source_snapshots::{ImportSourceCapture, ImportSourceSnapshot};
 pub use store::{ReadOnlyStore, Seams, Store, await_write, open, open_read_only};
+pub use validation_scratch::{RegistryFile, ValidationFile, ValidationScratch, ValidationTape};
 
 #[cfg(feature = "test-seams")]
 pub use list_rows::refresh_list_rows;

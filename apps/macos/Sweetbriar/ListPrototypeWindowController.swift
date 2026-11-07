@@ -189,15 +189,15 @@ final class ListPrototypeWindowController: NSWindowController {
         let list: any PrototypeList
         switch implementation {
         case .appkit:
-            list = AppKitPrototypeList(model: model, formatter: formatter) {
+            list = AppKitPrototypeList(model: model, formatter: formatter, onIndexChange: {
                 [weak self] in
                 self?.updateStatus()
-            }
+            })
         case .swiftui:
-            list = SwiftUIPrototypeList(model: model, formatter: formatter) {
+            list = SwiftUIPrototypeList(model: model, formatter: formatter, onIndexChange: {
                 [weak self] in
                 self?.updateStatus()
-            }
+            })
         }
         let view: NSView = list
         view.frame = content.bounds

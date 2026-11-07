@@ -4,19 +4,20 @@
 //! the stored receipt and a dropped caller cannot strand an accepted
 //! write — and the `drafts()`/`draft()` queries the sidebar's Drafts
 //! (local) list reads. Attachment bytes publish through
-//! [`Engine::publish_draft_attachment`] on the blocking pool, before
-//! the revision that references them: no file I/O ever runs inside a
-//! write transaction.
+//! [`Engine::publish_draft_attachment`], or republish from a stored
+//! revision through [`Engine::republish_draft_attachment`], on the
+//! blocking pool, before the revision that references them: no file
+//! I/O ever runs inside a write transaction.
 
-#[cfg(test)]
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use sb_resources::{
-    ComposeFormat, DraftAttachment, DraftRecipient, DraftSource, DraftSummary, PublishedObject,
-    Receipt, RevisionInput, StoredDraft, WritePriority, create_draft, discard_draft, draft, drafts,
-    run_once, save_draft,
+    AttachmentRef, ComposeFormat, DraftAttachment, DraftRecipient, DraftSource, DraftSummary,
+    PublishedObject, Receipt, RevisionInput, StoreError, StoredDraft, WritePriority, create_draft,
+    discard_draft, draft, drafts, run_once, save_draft,
 };
 
+use crate::engine::validate_idempotency_key;
 use crate::{Engine, EngineError};
 
 /// The commands' names in `command_receipts` (spec/07).
@@ -132,6 +133,7 @@ impl Engine {
         idempotency_key: &str,
         context: DraftSource,
     ) -> Result<DraftCreated, EngineError> {
+        validate_idempotency_key(idempotency_key)?;
         let draft_id = self.resources().new_uuid_string();
         let now = self.resources().now();
         let key = idempotency_key.to_owned();
@@ -184,7 +186,7 @@ impl Engine {
         base_revision_id: Option<&str>,
         content: DraftContent,
     ) -> Result<DraftSaved, EngineError> {
-        validate_draft(draft_id, base_revision_id, &content)?;
+        validate_idempotency_key(idempotency_key)?;
         let revision_id = self.resources().new_uuid_string();
         let now = self.resources().now();
         let (key, id, base) = (
@@ -200,10 +202,16 @@ impl Engine {
             #[cfg(test)]
             let write_hook = hook.clone();
             let revision = revision_id.clone();
+            let validation = Arc::new(Mutex::new(None));
+            let write_validation = Arc::clone(&validation);
             let receipt = worker
                 .resources()
                 .write(WritePriority::User, move |tx| {
                     let receipt = run_once(tx, &key, SAVE_DRAFT, now, |tx| {
+                        record_validation(
+                            &write_validation,
+                            validate_draft(&id, base.as_deref(), &content),
+                        )?;
                         #[cfg(test)]
                         draft_write_point(&write_hook, DraftWritePoint::InsideBeforeEffect);
                         let result = encode_receipt_id("revision_id", &revision);
@@ -233,7 +241,8 @@ impl Engine {
                     draft_write_point(&write_hook, DraftWritePoint::InsideBeforeCommit);
                     Ok(receipt)
                 })
-                .await?;
+                .await;
+            let receipt = finish_validation(receipt, &validation)?;
             #[cfg(test)]
             draft_write_point(&hook, DraftWritePoint::AfterWrite);
             Ok(DraftSaved {
@@ -254,12 +263,7 @@ impl Engine {
         idempotency_key: &str,
         draft_id: &str,
     ) -> Result<Receipt, EngineError> {
-        if draft_id.is_empty() {
-            return Err(EngineError::invalid_input(
-                "draft_id",
-                "a draft id is required",
-            ));
-        }
+        validate_idempotency_key(idempotency_key)?;
         let now = self.resources().now();
         let (key, id) = (idempotency_key.to_owned(), draft_id.to_owned());
         #[cfg(test)]
@@ -269,10 +273,13 @@ impl Engine {
             draft_write_point(&hook, DraftWritePoint::BeforeWrite);
             #[cfg(test)]
             let write_hook = hook.clone();
+            let validation = Arc::new(Mutex::new(None));
+            let write_validation = Arc::clone(&validation);
             let receipt = worker
                 .resources()
                 .write(WritePriority::User, move |tx| {
                     let receipt = run_once(tx, &key, DISCARD_DRAFT, now, |tx| {
+                        record_validation(&write_validation, validate_draft_id(&id))?;
                         #[cfg(test)]
                         draft_write_point(&write_hook, DraftWritePoint::InsideBeforeEffect);
                         discard_draft(tx, &id, now)?;
@@ -284,7 +291,8 @@ impl Engine {
                     draft_write_point(&write_hook, DraftWritePoint::InsideBeforeCommit);
                     Ok(receipt)
                 })
-                .await?;
+                .await;
+            let receipt = finish_validation(receipt, &validation)?;
             #[cfg(test)]
             draft_write_point(&hook, DraftWritePoint::AfterWrite);
             receipt_id(&receipt, "draft_id")?;
@@ -306,6 +314,33 @@ impl Engine {
     ) -> Result<PublishedObject, EngineError> {
         self.read_through(move |resources| resources.publish_draft_attachment(bytes))
             .await
+    }
+
+    /// `republish_draft_attachment(draft_id, revision_id, reference)`
+    /// (spec/07): re-publish one stored attachment reference from an
+    /// exact immutable draft revision. An older revision, or one from
+    /// a terminal draft, remains valid because this creates a new
+    /// publication, never a mutation of that draft.
+    /// `reference` must match one of that revision's stored
+    /// attachments in hash, size, filename and media type: a revision
+    /// the draft does not have is `NotFound`, a reference that is not
+    /// a member is `Conflict`. The returned [`PublishedObject`]
+    /// carries a fresh reservation a following save spends once, and
+    /// each call reserves independently. No idempotency key and no
+    /// receipt: only the publication and its reservation are written.
+    /// Blocking file I/O on the blocking pool, like
+    /// [`Engine::publish_draft_attachment`].
+    pub async fn republish_draft_attachment(
+        &self,
+        draft_id: &str,
+        revision_id: &str,
+        reference: AttachmentRef,
+    ) -> Result<PublishedObject, EngineError> {
+        let (draft_id, revision_id) = (draft_id.to_owned(), revision_id.to_owned());
+        self.read_through(move |resources| {
+            resources.republish_draft_attachment(&draft_id, &revision_id, &reference)
+        })
+        .await
     }
 
     /// `drafts()` (spec/07): every `editing` or `queued` draft, newest
@@ -337,7 +372,7 @@ impl Engine {
     }
 }
 
-/// `save_draft`'s synchronous validation: the fields the store would
+/// `save_draft`'s fresh-command validation: the fields the store would
 /// otherwise report under `data_root` (its only invalid-input field),
 /// named for the caller instead.
 fn validate_draft(
@@ -345,12 +380,7 @@ fn validate_draft(
     base_revision_id: Option<&str>,
     content: &DraftContent,
 ) -> Result<(), EngineError> {
-    if draft_id.is_empty() {
-        return Err(EngineError::invalid_input(
-            "draft_id",
-            "a draft id is required",
-        ));
-    }
+    validate_draft_id(draft_id)?;
     if let Some("") = base_revision_id {
         return Err(EngineError::invalid_input(
             "base_revision_id",
@@ -375,17 +405,61 @@ fn validate_draft(
             ));
         }
     }
-    if content
-        .attachments
-        .iter()
-        .any(|a| a.filename.is_empty() || a.media_type.is_empty())
-    {
+    if content.attachments.iter().any(|a| match a {
+        DraftAttachment::New {
+            filename,
+            media_type,
+            ..
+        } => filename.is_empty() || media_type.is_empty(),
+        DraftAttachment::Retained(reference) => {
+            reference.filename.is_empty() || reference.media_type.is_empty()
+        }
+    }) {
         return Err(EngineError::invalid_input(
             "attachments",
             "a draft attachment needs a filename and media type",
         ));
     }
     Ok(())
+}
+
+fn validate_draft_id(draft_id: &str) -> Result<(), EngineError> {
+    if draft_id.is_empty() {
+        return Err(EngineError::invalid_input(
+            "draft_id",
+            "a draft id is required",
+        ));
+    }
+    Ok(())
+}
+
+// Return a Store error to roll back, retaining the typed field for the caller.
+const VALIDATION_ROLLBACK: &str = "draft validation rejected the command";
+
+fn record_validation(
+    slot: &Mutex<Option<EngineError>>,
+    result: Result<(), EngineError>,
+) -> Result<(), StoreError> {
+    if let Err(error) = result {
+        *slot.lock().expect("draft validation lock poisoned") = Some(error);
+        // The writer returns a closure error unchanged and never retries it.
+        // This private marker only rolls back; `finish_validation` recovers
+        // the caller-facing error from `slot` before it can escape.
+        return Err(StoreError::internal(VALIDATION_ROLLBACK));
+    }
+    Ok(())
+}
+
+fn finish_validation(
+    result: Result<Receipt, StoreError>,
+    slot: &Mutex<Option<EngineError>>,
+) -> Result<Receipt, EngineError> {
+    let recorded = slot.lock().expect("draft validation lock poisoned").take();
+    match (result, recorded) {
+        (Ok(receipt), None) => Ok(receipt),
+        (Err(error), None) => Err(error.into()),
+        (_, Some(error)) => Err(error),
+    }
 }
 
 /// `{"<field>":"<id>"}`: the receipt's body (spec/07). The id is

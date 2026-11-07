@@ -1,24 +1,50 @@
-//! Backup generations (spec/03 "Backup generations"), procedure steps
-//! 1–3: the `in_progress` row whose existence freezes GC, the
-//! consistent `state.sqlite` snapshot taken through SQLite's online
-//! backup API — bounded steps on a read-only source, so the writer
-//! never waits on the copy — and the `backup_in_progress` pins the
-//! snapshot's own references produce. The object copy, `manifest.json`
-//! and `complete` are the procedure's later steps, not this code's.
+//! Backup generations (spec/03 "Backup generations"): an in-progress
+//! row freezes GC, SQLite's online API takes a consistent snapshot,
+//! and its references are pinned. Publication copies and verifies the
+//! pinned objects, flushes the generation and writes the manifest last,
+//! then releases pins and marks the generation complete.
+
+mod attachments;
+mod external;
+mod image;
+mod image_inspect;
+#[allow(dead_code)] // Used by the snapshot walker and manifest parser.
+mod json;
+#[allow(dead_code)] // Used by the next verifier slice.
+mod ledger;
+// The next restore slice attaches this parser to the verification ledger.
+#[allow(dead_code)]
+mod manifest;
+#[allow(dead_code)] // The staging integration consumes this prerequisite.
+mod quarantine;
+#[allow(dead_code)] // The recorded-generation verifier consumes this seam in M1.8e1d.
+mod reconciliation;
+mod recorded;
+mod references;
+pub use external::VerifiedExternalBackup;
+pub use image::BackupImageInspection;
+mod scratch;
+
+pub(crate) fn recover_scratch(
+    conn: &rusqlite::Connection,
+    fs: &dyn sb_types::fs::Fs,
+    root: &std::path::Path,
+    has_ledger: bool,
+) -> Result<(), crate::StoreError> {
+    scratch::recover(conn, fs, root, has_ledger)
+}
 
 use std::collections::BTreeSet;
 use std::ffi::c_int;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-#[cfg(test)]
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
 use rusqlite::backup::{Backup, StepResult};
 use rusqlite::{Connection, params};
 
-use sb_types::fs::{FileKind, Fs};
+use sb_types::fs::{FileKind, Fs, WriteFile};
 use sb_types::random::Random;
 use sb_types::time::Clock;
 
@@ -32,6 +58,17 @@ const PIN_KIND: &str = "backup_in_progress";
 
 /// The snapshot's file name inside the generation's directory (spec/03).
 const SNAPSHOT_FILE: &str = "state.sqlite";
+const OWNER_FILE: &str = ".sweetbriar-owner";
+
+// A missing required source file is an absent entity, not transient I/O.
+// Scratch/environment failures keep their ordinary typed I/O path.
+fn source_open_error(error: io::Error, what: impl Into<String>) -> StoreError {
+    if error.kind() == io::ErrorKind::NotFound {
+        StoreError::not_found(what)
+    } else {
+        StoreError::unavailable_io(format!("backup source I/O failed: {error}"), error.kind())
+    }
+}
 
 /// Source pages one `sqlite3_backup_step` copies at most: bounded so
 /// other reader work interleaves, large enough that calls don't
@@ -45,6 +82,11 @@ const SNAPSHOT_BUSY_PAUSE: Duration = Duration::from_millis(10);
 /// The pin rows one write transaction applies at most, as GC's pin
 /// edits are bounded (spec/03 "bounded transactions").
 const PIN_BATCH: usize = 200;
+
+// Charge the table row, primary key and partial owner index, including
+// generous framing, for a 64-byte hash and UUID generation reference.
+const PIN_IMAGE_BYTES: usize = 3 * (64 + PIN_KIND.len() + 36) + 192;
+const _: () = assert!(PIN_BATCH * PIN_IMAGE_BYTES <= crate::imports::MAX_IMPORT_CHANGES_BYTES);
 
 /// Where a generation's directory goes (spec/03).
 pub enum BackupDestination {
@@ -60,7 +102,7 @@ pub enum BackupDestination {
 /// in the generation's directory, and a `backup_in_progress` pin on
 /// every object the snapshot references — everything the object copy
 /// and manifest steps need to finish the generation.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct BackupSnapshot {
     /// The `backup_generations.generation_id` (a UUID's text form).
     generation_id: String,
@@ -69,7 +111,19 @@ pub struct BackupSnapshot {
     location: PathBuf,
     /// Every object hash the snapshot references — the pin set, and
     /// the copy step's work list — sorted and deduplicated.
-    referenced: Vec<String>,
+    referenced: Arc<[String]>,
+    snapshot_handle: Arc<std::sync::Mutex<Box<dyn WriteFile>>>,
+    active: Arc<()>,
+}
+
+impl std::fmt::Debug for BackupSnapshot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BackupSnapshot")
+            .field("generation_id", &self.generation_id)
+            .field("location", &self.location)
+            .field("referenced", &self.referenced)
+            .finish_non_exhaustive()
+    }
 }
 
 impl BackupSnapshot {
@@ -98,6 +152,33 @@ impl BackupSnapshot {
     }
 }
 
+/// A completed generation whose manifest and directory chain are durable.
+#[derive(Debug, Clone)]
+pub struct BackupReceipt {
+    generation_id: String,
+    location: PathBuf,
+    manifest_sha256: String,
+}
+
+impl BackupReceipt {
+    /// The completed generation's identifier.
+    pub fn generation_id(&self) -> &str {
+        &self.generation_id
+    }
+    /// The generation directory recorded in the store.
+    pub fn location(&self) -> &Path {
+        &self.location
+    }
+    /// The generation's database snapshot.
+    pub fn state_db(&self) -> PathBuf {
+        self.location.join(SNAPSHOT_FILE)
+    }
+    /// SHA-256 of the exact published manifest bytes.
+    pub fn manifest_sha256(&self) -> &str {
+        &self.manifest_sha256
+    }
+}
+
 /// The backup coordinator: the seams and paths the snapshot procedure
 /// needs, built at open like the import coordinators (spec/03).
 pub(crate) struct Backups {
@@ -109,9 +190,27 @@ pub(crate) struct Backups {
     state_db: PathBuf,
     /// The default destination: the layout's `backups/`.
     backups_dir: PathBuf,
+    objects: Arc<crate::objects::FileObjectStore>,
+    active: Mutex<Option<Weak<()>>>,
+    image_lock: Mutex<()>,
     /// The copy-timing barriers a test may arm (spec/03).
     #[cfg(test)]
     pauses: Mutex<Pauses>,
+}
+
+impl Backups {
+    fn reserve_operation(&self) -> Result<Arc<()>, StoreError> {
+        let token = Arc::new(());
+        let mut active = self
+            .active
+            .try_lock()
+            .map_err(|_| StoreError::conflict("backup operation is already running"))?;
+        if active.as_ref().and_then(Weak::upgrade).is_some() {
+            return Err(StoreError::conflict("backup operation is already running"));
+        }
+        *active = Some(Arc::downgrade(&token));
+        Ok(token)
+    }
 }
 
 impl Backups {
@@ -125,6 +224,7 @@ impl Backups {
         writer: Arc<Writer>,
         state_db: PathBuf,
         backups_dir: PathBuf,
+        objects: Arc<crate::objects::FileObjectStore>,
     ) -> Self {
         Self {
             fs,
@@ -133,6 +233,9 @@ impl Backups {
             writer,
             state_db,
             backups_dir,
+            objects,
+            active: Mutex::new(None),
+            image_lock: Mutex::new(()),
             #[cfg(test)]
             pauses: Mutex::new(Pauses::default()),
         }
@@ -172,7 +275,20 @@ impl Backups {
         &self,
         destination: BackupDestination,
     ) -> Result<BackupSnapshot, StoreError> {
+        let mut active = self
+            .active
+            .try_lock()
+            .map_err(|_| StoreError::conflict("a backup operation is already running"))?;
+        if active.as_ref().and_then(Weak::upgrade).is_some() {
+            return Err(StoreError::conflict(
+                "a backup generation is already in progress",
+            ));
+        }
+        self.recover()?;
+        self.retain()?;
+        let token = Arc::new(());
         let generation_id = Uuid::from_random_bytes(self.draw_id()?).to_string();
+        let owner_token = Uuid::from_random_bytes(self.draw_id()?).to_string();
         let root = self.destination_root(&destination)?;
         let location = root.join(&generation_id);
         let location_text = location
@@ -187,6 +303,7 @@ impl Backups {
         // transaction keeps generations one-at-a-time.
         let started_at = self.clock.now().as_millis();
         let id = generation_id.clone();
+        let stored_token = owner_token.clone();
         await_write(self.writer.submit(WritePriority::Index, move |tx| {
             let running: bool = tx
                 .query_row(
@@ -208,16 +325,24 @@ impl Backups {
                 params![id, started_at, location_text],
             )
             .map_err(|e| classify(e, "insert the backup generation"))?;
+            tx.execute(
+                "INSERT INTO backup_ownership VALUES (?1, ?2)",
+                params![id, stored_token],
+            )
+            .map_err(|e| classify(e, "record backup directory ownership"))?;
             Ok(())
         }))?;
 
-        self.write_snapshot(&location)?;
+        let snapshot_handle = self.write_snapshot(&location, &owner_token)?;
         let referenced = self.referenced_objects(&location)?;
         self.pin_references(&generation_id, &referenced)?;
+        *active = Some(Arc::downgrade(&token));
         Ok(BackupSnapshot {
+            active: token,
             generation_id,
             location,
-            referenced,
+            referenced: referenced.into(),
+            snapshot_handle: Arc::new(std::sync::Mutex::new(snapshot_handle)),
         })
     }
 
@@ -226,7 +351,7 @@ impl Backups {
     /// canonicalized so the row's `location` names one spelling.
     fn destination_root(&self, destination: &BackupDestination) -> Result<PathBuf, StoreError> {
         match destination {
-            BackupDestination::DataRoot => Ok(self.backups_dir.clone()),
+            BackupDestination::DataRoot => self.ensure_destination(&self.backups_dir),
             BackupDestination::Directory(root) => self.ensure_destination(root),
         }
     }
@@ -294,16 +419,42 @@ impl Backups {
     /// its handle stays for the end-of-copy fsync — then the online
     /// backup copy, the file flush and the directory flush, in the
     /// publication protocol's order (spec/03).
-    fn write_snapshot(&self, location: &Path) -> Result<(), StoreError> {
+    fn write_snapshot(
+        &self,
+        location: &Path,
+        owner_token: &str,
+    ) -> Result<Box<dyn WriteFile>, StoreError> {
         let failed = |e: io::Error| {
             StoreError::unavailable_io(format!("cannot write the backup snapshot: {e}"), e.kind())
         };
         let root = location
             .parent()
             .expect("a generation directory always has a parent");
+        // A pre-existing entry is never ours, even when its name matches
+        // the newly drawn id. Fail before creating deletion authority.
+        if self.fs.metadata(location).map_err(failed)?.is_some() {
+            return Err(StoreError::conflict(
+                "backup generation directory already exists",
+            ));
+        }
+        #[cfg(test)]
+        retention::cut("owner-before-create");
+        let mut owner = self.fs.create(&owner_path(location)).map_err(failed)?;
+        #[cfg(test)]
+        retention::cut("owner-create");
+        use std::io::Write as _;
+        owner.write_all(owner_token.as_bytes()).map_err(failed)?;
+        #[cfg(test)]
+        retention::cut("owner-write");
+        owner.sync_all().map_err(failed)?;
+        #[cfg(test)]
+        retention::cut("owner-sync");
+        self.fs.sync_dir(root).map_err(failed)?;
+        #[cfg(test)]
+        retention::cut("owner-dir-sync");
         self.fs.create_dir(location).map_err(failed)?;
-        // Persist the generation's entry into its parent before a file
-        // lands inside, as objects publish into their chains.
+        #[cfg(test)]
+        retention::cut("owner-dir");
         self.fs.sync_dir(root).map_err(failed)?;
 
         let file = location.join(SNAPSHOT_FILE);
@@ -313,9 +464,10 @@ impl Backups {
             self.pause(|p| &p.after_snapshot_file);
             self.pause(|p| &p.after_snapshot_file);
         }
-        self.copy_database(&file)
-            .and_then(|()| handle.sync_all().map_err(failed))
-            .and_then(|()| self.fs.sync_dir(location).map_err(failed))
+        self.copy_database(&file)?;
+        handle.sync_all().map_err(failed)?;
+        self.fs.sync_dir(location).map_err(failed)?;
+        Ok(handle)
     }
 
     /// The online-backup step loop: a dedicated read-only source —
@@ -435,6 +587,20 @@ pub(crate) struct Pauses {
     /// Waited on twice: park, then release to the snapshot read — a
     /// test lands a live-only reference in between.
     pub(crate) before_referenced_read: Option<Arc<std::sync::Barrier>>,
+    pub(crate) during_pin_validation: Option<Arc<std::sync::Barrier>>,
+    pub(crate) before_pin_release: Option<Arc<std::sync::Barrier>>,
+}
+
+// The sibling survives a partially successful recursive directory removal.
+fn owner_path(location: &Path) -> PathBuf {
+    let id = location
+        .file_name()
+        .expect("generation has a leaf")
+        .to_string_lossy();
+    location
+        .parent()
+        .expect("generation has a parent")
+        .join(format!(".{id}{OWNER_FILE}"))
 }
 
 /// A finished snapshot opened for reads. The copy marks it WAL (it
@@ -500,3 +666,7 @@ fn collect_attachments(conn: &Connection, shas: &mut BTreeSet<String>) -> Result
 
 #[cfg(test)]
 mod tests;
+
+mod publication;
+
+mod retention;

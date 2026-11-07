@@ -381,8 +381,8 @@ fn an_attachment_is_published_before_the_revision_references_it() {
     let bytes = b"attachment one".as_slice();
     let object = block_on(engine.publish_draft_attachment(Cursor::new(bytes))).unwrap();
     let mut with_file = content("with file");
-    with_file.attachments = vec![DraftAttachment {
-        object,
+    with_file.attachments = vec![DraftAttachment::New {
+        object: std::sync::Arc::new(object),
         filename: "one.txt".to_owned(),
         media_type: "text/plain".to_owned(),
     }];
@@ -411,8 +411,8 @@ fn an_attachment_is_published_before_the_revision_references_it() {
     let (_other_scratch, other) = scratch_engine("engine-draft-foreign");
     let foreign = block_on(other.publish_draft_attachment(Cursor::new(bytes))).unwrap();
     let mut bad = content("foreign");
-    bad.attachments = vec![DraftAttachment {
-        object: foreign,
+    bad.attachments = vec![DraftAttachment::New {
+        object: std::sync::Arc::new(foreign),
         filename: "foreign.txt".to_owned(),
         media_type: "text/plain".to_owned(),
     }];
@@ -425,6 +425,116 @@ fn an_attachment_is_published_before_the_revision_references_it() {
     assert_eq!(revision.revision_id, saved.revision_id());
     assert_eq!(revision_ids(&engine, &draft_id).len(), 1);
     block_on(other.shutdown()).unwrap();
+    block_on(engine.shutdown()).unwrap();
+}
+
+#[test]
+fn shared_publication_replays_but_cannot_fund_a_fresh_save() {
+    let (_scratch, engine) = scratch_engine("engine-shared-draft-publication");
+    let draft = create(&engine, DraftSource::New);
+    let object = Arc::new(block_on(engine.publish_draft_attachment(Cursor::new(b"file"))).unwrap());
+    let request = || {
+        let mut request = content("file");
+        request.attachments.push(DraftAttachment::New {
+            object: Arc::clone(&object),
+            filename: "file.txt".into(),
+            media_type: "text/plain".into(),
+        });
+        request
+    };
+    let key = engine.new_idempotency_key();
+    let first = block_on(engine.save_draft(&key, draft.draft_id(), None, request())).unwrap();
+    let replay = block_on(engine.save_draft(&key, draft.draft_id(), None, request())).unwrap();
+    assert_eq!(first.receipt(), replay.receipt());
+    assert_eq!(first.revision_id(), replay.revision_id());
+    assert!(matches!(
+        block_on(engine.save_draft(
+            &engine.new_idempotency_key(),
+            draft.draft_id(),
+            Some(first.revision_id()),
+            request()
+        )),
+        Err(EngineError::Conflict { .. })
+    ));
+    assert_eq!(revision_ids(&engine, draft.draft_id()).len(), 1);
+    block_on(engine.shutdown()).unwrap();
+}
+
+/// `republish_draft_attachment` (spec/07): a stored reference from an
+/// older, noncurrent revision republishes through the counted
+/// blocking path as a fresh publication whose own reservation a fresh
+/// draft's save spends once. Wrong metadata denies typed: a revision
+/// the draft does not have is `NotFound`, a reference that is not a
+/// member is `Conflict`.
+#[test]
+fn an_old_revision_republishes_into_a_fresh_draft() {
+    let (_scratch, engine) = scratch_engine("engine-draft-republish");
+    let source = create(&engine, DraftSource::New);
+    let object = block_on(engine.publish_draft_attachment(Cursor::new(b"file"))).unwrap();
+    let sha = object.id().sha256_hex();
+    let mut first = content("first");
+    first.attachments = vec![DraftAttachment::New {
+        object: Arc::new(object),
+        filename: "file.txt".to_owned(),
+        media_type: "text/plain".to_owned(),
+    }];
+    let saved = save(&engine, source.draft_id(), None, first);
+    let reference = block_on(engine.draft(source.draft_id()))
+        .unwrap()
+        .revision
+        .unwrap()
+        .attachments[0]
+        .clone();
+
+    // The head advances; the saved revision is immutable history but
+    // still authorizes a copy.
+    save(
+        &engine,
+        source.draft_id(),
+        Some(saved.revision_id()),
+        content("second"),
+    );
+    let copy = block_on(engine.republish_draft_attachment(
+        source.draft_id(),
+        saved.revision_id(),
+        reference.clone(),
+    ))
+    .unwrap();
+    assert_eq!(copy.id().sha256_hex(), sha);
+    assert_eq!(copy.id().byte_length(), 4);
+
+    // The fresh publication's own reservation spends once into a new draft.
+    let target = create(&engine, DraftSource::New);
+    let mut with_copy = content("copy");
+    with_copy.attachments = vec![DraftAttachment::New {
+        object: Arc::new(copy),
+        filename: "file.txt".to_owned(),
+        media_type: "text/plain".to_owned(),
+    }];
+    let copied = save(&engine, target.draft_id(), None, with_copy);
+    let stored = block_on(engine.draft(target.draft_id()))
+        .unwrap()
+        .revision
+        .unwrap()
+        .attachments;
+    assert_eq!(stored.len(), 1);
+    assert_eq!(stored[0], reference);
+
+    match block_on(engine.republish_draft_attachment(
+        source.draft_id(),
+        copied.revision_id(),
+        reference.clone(),
+    )) {
+        Err(EngineError::NotFound { .. }) => {}
+        other => panic!("a foreign revision must be NotFound: {other:?}"),
+    }
+    let mut wrong = reference.clone();
+    wrong.filename = "other.txt".to_owned();
+    match block_on(engine.republish_draft_attachment(source.draft_id(), saved.revision_id(), wrong))
+    {
+        Err(EngineError::Conflict { .. }) => {}
+        other => panic!("a non-member reference must be Conflict: {other:?}"),
+    }
     block_on(engine.shutdown()).unwrap();
 }
 
@@ -603,7 +713,7 @@ fn unknown_and_empty_ids_fail_precisely() {
     block_on(engine.shutdown()).unwrap();
 }
 
-/// `save_draft`'s synchronous validation names the caller's field:
+/// `save_draft`'s fresh-command validation names the caller's field:
 /// the store would otherwise report them under `data_root`.
 #[test]
 fn invalid_content_names_its_field() {
@@ -635,11 +745,11 @@ fn invalid_content_names_its_field() {
     }
 
     // Attachment metadata comes from the caller; an empty filename or
-    // media type is invalid before any store contact.
+    // media type is invalid before any domain mutation.
     let object = block_on(engine.publish_draft_attachment(Cursor::new(b"x".as_slice()))).unwrap();
     let mut bad = content("x");
-    bad.attachments = vec![DraftAttachment {
-        object,
+    bad.attachments = vec![DraftAttachment::New {
+        object: std::sync::Arc::new(object),
         filename: String::new(),
         media_type: "text/plain".to_owned(),
     }];
@@ -701,7 +811,9 @@ fn malformed_stored_data_is_corrupt() {
         "receipt-nonstring",
         "receipt-empty-id",
     ] {
-        match block_on(engine.discard_draft(key, "d-bad")) {
+        // The empty id is invalid, but replay precedence returns the stored
+        // receipt first, so its malformed result remains visible as Corrupt.
+        match block_on(engine.discard_draft(key, "")) {
             Err(EngineError::Corrupt { .. }) => {}
             other => panic!("a malformed stored receipt must be Corrupt: {other:?}"),
         }
@@ -781,8 +893,8 @@ fn drive_cut_sequence(engine: &Engine) {
     .unwrap();
     let object = block_on(engine.publish_draft_attachment(Cursor::new(CHILD_ATTACHMENT))).unwrap();
     let mut second = content("second");
-    second.attachments = vec![DraftAttachment {
-        object,
+    second.attachments = vec![DraftAttachment::New {
+        object: std::sync::Arc::new(object),
         filename: "note.txt".to_owned(),
         media_type: "text/plain".to_owned(),
     }];
@@ -968,4 +1080,169 @@ fn assert_consistent_after_cut(root: &Path) -> bool {
     }
     block_on(engine.shutdown()).unwrap();
     committed == ORDER.len()
+}
+
+fn draft_counts(engine: &Engine) -> (i64, i64, i64, i64) {
+    engine
+        .resources()
+        .read(|tx| {
+            tx.query_row(
+                "SELECT (SELECT count(*) FROM drafts), (SELECT count(*) FROM draft_revisions), \
+             (SELECT count(*) FROM object_pins WHERE pin_kind = 'reservation'), \
+             (SELECT count(*) FROM command_receipts)",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .map_err(|e| StoreError::internal(e.to_string()))
+        })
+        .unwrap()
+}
+
+#[test]
+fn draft_receipts_precede_replacement_validation() {
+    let (_scratch, engine) = scratch_engine("draft-receipt-precedence");
+    let draft_id = create(&engine, DraftSource::New).draft_id().to_owned();
+    let key = engine.new_idempotency_key();
+    let saved = block_on(engine.save_draft(&key, &draft_id, None, content("original"))).unwrap();
+    for field in [
+        "draft_id",
+        "base_revision_id",
+        "identity_id",
+        "to",
+        "cc",
+        "bcc",
+        "filename",
+        "media_type",
+    ] {
+        let mut replacement = content("replacement");
+        let mut id = draft_id.as_str();
+        let mut base = None;
+        match field {
+            "draft_id" => id = "",
+            "base_revision_id" => base = Some(""),
+            "identity_id" => replacement.identity_id = Some(String::new()),
+            "to" | "cc" | "bcc" => {
+                let recipient = DraftRecipient {
+                    address: String::new(),
+                    name: None,
+                };
+                match field {
+                    "to" => replacement.to = vec![recipient],
+                    "cc" => replacement.cc.push(recipient),
+                    _ => replacement.bcc.push(recipient),
+                }
+            }
+            _ => {
+                let object =
+                    block_on(engine.publish_draft_attachment(Cursor::new(b"replay".as_slice())))
+                        .unwrap();
+                replacement.attachments.push(DraftAttachment::New {
+                    object: Arc::new(object),
+                    filename: if field == "filename" { "" } else { "a" }.into(),
+                    media_type: if field == "media_type" {
+                        ""
+                    } else {
+                        "text/plain"
+                    }
+                    .into(),
+                });
+            }
+        }
+        let before = draft_counts(&engine);
+        let replay = block_on(engine.save_draft(&key, id, base, replacement)).unwrap();
+        assert_eq!(replay.receipt(), saved.receipt(), "{field}");
+        assert_eq!(replay.revision_id(), saved.revision_id(), "{field}");
+        assert_eq!(draft_counts(&engine), before, "{field}");
+    }
+    assert!(matches!(
+        block_on(engine.discard_draft(&key, "")),
+        Err(EngineError::Conflict { .. })
+    ));
+    let discard_key = engine.new_idempotency_key();
+    let discarded = block_on(engine.discard_draft(&discard_key, &draft_id)).unwrap();
+    let before = draft_counts(&engine);
+    assert_eq!(
+        block_on(engine.discard_draft(&discard_key, "")).unwrap(),
+        discarded
+    );
+    assert!(matches!(
+        block_on(engine.save_draft(&discard_key, "", Some(""), content("bad"))),
+        Err(EngineError::Conflict { .. })
+    ));
+    assert_eq!(draft_counts(&engine), before);
+    block_on(engine.shutdown()).unwrap();
+}
+
+#[test]
+fn fresh_draft_validation_preserves_fields_and_retry() {
+    let (_scratch, engine) = scratch_engine("draft-fresh-validation");
+    let id = create(&engine, DraftSource::New).draft_id().to_owned();
+    let key = engine.new_idempotency_key();
+    for field in [
+        "draft_id",
+        "base_revision_id",
+        "identity_id",
+        "to",
+        "cc",
+        "bcc",
+        "filename",
+        "media_type",
+    ] {
+        let mut bad = content("bad");
+        let mut draft_id = id.as_str();
+        let mut base = None;
+        match field {
+            "draft_id" => draft_id = "",
+            "base_revision_id" => base = Some(""),
+            "identity_id" => bad.identity_id = Some(String::new()),
+            "to" | "cc" | "bcc" => {
+                let recipient = DraftRecipient {
+                    address: String::new(),
+                    name: None,
+                };
+                match field {
+                    "to" => bad.to = vec![recipient],
+                    "cc" => bad.cc.push(recipient),
+                    _ => bad.bcc.push(recipient),
+                }
+            }
+            _ => {
+                let object =
+                    block_on(engine.publish_draft_attachment(Cursor::new(b"fresh".as_slice())))
+                        .unwrap();
+                bad.attachments.push(DraftAttachment::New {
+                    object: Arc::new(object),
+                    filename: if field == "filename" { "" } else { "a" }.into(),
+                    media_type: if field == "media_type" {
+                        ""
+                    } else {
+                        "text/plain"
+                    }
+                    .into(),
+                });
+            }
+        }
+        let before = draft_counts(&engine);
+        match block_on(engine.save_draft(&key, draft_id, base, bad)) {
+            Err(EngineError::InvalidInput { field: actual, .. }) => assert_eq!(
+                actual,
+                if field == "filename" || field == "media_type" {
+                    "attachments"
+                } else {
+                    field
+                }
+            ),
+            other => panic!("{field}: {other:?}"),
+        }
+        assert_eq!(draft_counts(&engine), before, "{field}");
+    }
+    block_on(engine.save_draft(&key, &id, None, content("corrected"))).unwrap();
+    let discard_key = engine.new_idempotency_key();
+    let before = draft_counts(&engine);
+    assert!(
+        matches!(block_on(engine.discard_draft(&discard_key, "")), Err(EngineError::InvalidInput { field, .. }) if field == "draft_id")
+    );
+    assert_eq!(draft_counts(&engine), before);
+    block_on(engine.discard_draft(&discard_key, &id)).unwrap();
+    block_on(engine.shutdown()).unwrap();
 }

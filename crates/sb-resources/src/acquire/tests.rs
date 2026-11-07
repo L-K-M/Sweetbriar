@@ -567,6 +567,9 @@ fn failing(kind: SourceKind, bytes: Vec<u8>, total: u64, fail_at: u64) -> Source
         sha256: "0".repeat(64),
         total,
         position: SourcePosition::START,
+        verification: None,
+        descriptors: None,
+        next_offset: 0,
     }
 }
 
@@ -602,4 +605,26 @@ fn unreadable_regions_name_their_offset_and_store_nothing() {
         "{reason}"
     );
     assert_eq!(eml.position(), SourcePosition::START);
+}
+
+#[test]
+fn verified_bundle_manifest_refuses_unverified_ingest() {
+    let (scratch, res) = resources("bundle-acquire-guard");
+    let path = scratch.path().join("message.eml");
+    let manifest = scratch.path().join("manifest.eml");
+    fs::write(&path, RICH).unwrap();
+    fs::write(&manifest, b"synthetic manifest").unwrap();
+    let plain = source(&res, &path);
+    let captured_manifest = source(&res, &manifest);
+    let mut json: serde_json::Value = serde_json::from_str(&plain.to_json()).unwrap();
+    let manifest_json: serde_json::Value =
+        serde_json::from_str(&captured_manifest.to_json()).unwrap();
+    json["v"] = 2.into();
+    json["bundle"] = serde_json::json!({"manifest": manifest_json["snapshot"], "format": "eml"});
+    let bundle = SourceInventory::from_json(&json.to_string()).unwrap();
+    let error = res
+        .open_import_acquisition(&bundle, None, SourcePosition::START)
+        .unwrap_err();
+    assert!(matches!(error, StoreError::Unavailable { .. }));
+    assert!(error.to_string().contains("manifest-verified"));
 }

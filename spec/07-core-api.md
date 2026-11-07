@@ -10,8 +10,10 @@ macOS and directly in Rust for Linux and the CLI.
 - **Commands** change state. Each takes an `idempotency_key` (a UUID made
   by the shell) and returns a `Receipt`. Repeating a key returns the
   stored receipt and does nothing else (02 `command_receipts`); a key
-  reused for a different command is `Conflict`. A shell without its own
-  UUID source (the CLI) asks the service for a new key.
+  reused for a different command is `Conflict`. An empty key, or one
+  longer than 128 UTF-8 bytes, is `InvalidInput` on field
+  `idempotency_key`. A shell without its own UUID source (the CLI) asks
+  the service for a new key.
 - **Queries** read state as **windows**: a bounded page of rows plus a
   generation. A **subscription** tells the shell when its window is
   stale.
@@ -90,6 +92,19 @@ async fn Core::shutdown(self);   // flush writer, release the lease
   the Proton policy forbids (04). `undo(token)` creates compensating
   intents, or inverse local commands for local effects. Undo is the inverse
   command, never a rollback of history.
+- **Attachment republication:** `republish_draft_attachment(draft_id,
+  revision_id, reference)` re-publishes one stored attachment reference
+  from an exact immutable draft revision. The revision must belong to the
+  draft, and `reference` must match one of that revision's stored
+  attachments in hash, size, filename and media type. An older revision
+  — including one in a noncurrent or terminal source draft — is a valid
+  source: this creates a new publication, never a mutation of that
+  draft. The bytes are read
+  through the ordinary verifying object reader and published through the
+  real object store, so the result is a fresh `PublishedObject` with its
+  own reservation, which a following `save_draft` spends once. It takes
+  no idempotency key, returns no receipt, and writes no revision or
+  draft row.
 
 ## Queries
 
