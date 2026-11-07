@@ -2,6 +2,7 @@
 //! defaults to zero, and raw names pass through the strict private codec.
 use std::num::NonZeroU32;
 
+use io_imap::types::core::Atom;
 use io_imap::types::flag::FlagPerm;
 use io_imap::types::mailbox::Mailbox;
 use io_imap::types::response::{Code, Data, Response, Status, StatusKind};
@@ -119,9 +120,14 @@ impl ExamineBuilder {
                         // into "unknown", especially after an earlier valid value.
                         let keyword = code
                             .inner()
-                            .split(u8::is_ascii_whitespace)
+                            .split(|byte| *byte == b' ')
                             .next()
                             .unwrap_or_default();
+                        // A response-code keyword is an atom, not arbitrary
+                        // fallback bytes. Reject empty/prefixed/control-byte
+                        // tokens rather than repairing them into extensions.
+                        Atom::try_from(keyword)
+                            .map_err(|_| invalid("invalid response code keyword"))?;
                         if [
                             b"UIDVALIDITY".as_slice(),
                             b"UIDNEXT",
@@ -222,6 +228,11 @@ mod tests {
             "UIDNEXT bogus",
             "UNSEEN 0",
             "PERMANENTFLAGS bogus",
+            " UIDVALIDITY 42",
+            "\tUIDVALIDITY 0",
+            "UIDNEXT\u{000b}0",
+            "UIDVALIDITY\0 42",
+            "UIDVALIDITYé 42",
         ] {
             let line = format!("* OK [{code}] invalid\r\n");
             let mut lines = BASE.to_vec();

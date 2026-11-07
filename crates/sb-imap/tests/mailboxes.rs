@@ -403,6 +403,26 @@ async fn missing_selection_evidence_closes_the_connection_but_optional_codes_sta
 }
 
 #[tokio::test]
+async fn malformed_epoch_keywords_never_qualify_a_selection() {
+    for code in [
+        " UIDVALIDITY 42",
+        "\tUIDVALIDITY 0",
+        "UIDNEXT\u{000b}0",
+        "UIDVALIDITY\0 42",
+    ] {
+        let mut replies = examined(4100, 1);
+        replies.insert(5, Reply::untagged(format!("OK [{code}] invalid")));
+        let (_server, mut client) =
+            connected(vec![Step::on(Expect::command("EXAMINE"), replies)]).await;
+        assert!(client.examine("INBOX").await.is_err());
+        assert!(matches!(
+            client.list_mailboxes().await,
+            Err(ImapError::Closed)
+        ));
+    }
+}
+
+#[tokio::test]
 async fn cancelling_a_read_closes_it_before_another_command() {
     let (server, mut client) = connected(vec![Step::on(
         Expect::command("LIST"),
