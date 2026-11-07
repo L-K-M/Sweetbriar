@@ -40,6 +40,36 @@ async fn malformed_plaintext_greeting_cannot_start_another_exchange() {
 }
 
 #[tokio::test]
+async fn a_second_capability_completion_cannot_authorize_starttls() {
+    for first in [
+        Reply::TaggedNo("refused".into()),
+        Reply::TaggedBad("refused".into()),
+        Reply::Raw(b"WRONG OK unrelated completion\r\n".to_vec()),
+    ] {
+        let server = FakeImapServer::serve(vec![Script::new(vec![Step::on(
+            Expect::command("CAPABILITY"),
+            vec![
+                Reply::untagged("CAPABILITY IMAP4rev1 STARTTLS"),
+                first,
+                Reply::ok("later completion"),
+            ],
+        )])])
+        .unwrap();
+        assert!(
+            Connection::connect_starttls(options(server.port()))
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            server.received().len(),
+            1,
+            "no STARTTLS or credentials after refusal"
+        );
+        assert_eq!(server.unexpected_count(), 0);
+    }
+}
+
+#[tokio::test]
 async fn bye_or_continuation_after_tagged_ok_cannot_cross_into_tls() {
     for trailing in [
         Reply::untagged("BYE injected"),

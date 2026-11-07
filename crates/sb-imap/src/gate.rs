@@ -17,11 +17,24 @@ pub(crate) const MAX_MESSAGE_SIZE: u32 = 50 * 1024 * 1024;
 
 const READ_CHUNK: usize = 8192;
 
+pub(crate) enum FrameKind {
+    Greeting,
+    Untagged,
+    Completion(Vec<u8>),
+    Continuation,
+    Bye,
+}
+
+pub(crate) struct Frame {
+    pub(crate) bytes: Vec<u8>,
+    pub(crate) kind: FrameKind,
+}
+
 pub(crate) struct Gate {
     fragmentizer: Fragmentizer,
     codec: ResponseCodec,
     expects_greeting: bool,
-    released: VecDeque<u8>,
+    released: VecDeque<Frame>,
     /// Received bytes not yet released as complete messages.
     pending: usize,
     wire_buf: Box<[u8; READ_CHUNK]>,
@@ -47,6 +60,16 @@ impl Gate {
         self.poisoned
     }
 
+    /// A following command may inherit ordinary unsolicited data, but
+    /// never a completion, continuation or BYE buffered after its predecessor.
+    pub(crate) fn reusable(&self) -> bool {
+        !self.poisoned
+            && self
+                .released
+                .iter()
+                .all(|frame| matches!(frame.kind, FrameKind::Untagged))
+    }
+
     /// True when bytes read from the wire are still buffered and were
     /// not handed to the coroutine: complete messages past the read
     /// chunk ([`Self::released`]), a partial frame ([`Self::pending`]),
@@ -56,22 +79,33 @@ impl Gate {
         self.poisoned || !self.released.is_empty() || self.pending > 0
     }
 
-    /// Reads the next released bytes. `Ok(empty)` is EOF; a poisoned
-    /// gate fails with [`ImapError::Malformed`].
+    /// Reads one complete validated response. `Ok(empty)` is EOF; a
+    /// poisoned gate fails with [`ImapError::Malformed`]. Keeping the
+    /// boundary prevents a coroutine from replacing one tagged reply
+    /// with a later reply in the same socket read.
     pub(crate) async fn read(
         &mut self,
         wire: &mut (impl AsyncRead + Unpin),
     ) -> Result<Vec<u8>, ImapError> {
+        Ok(self
+            .read_frame(wire)
+            .await?
+            .map_or_else(Vec::new, |frame| frame.bytes))
+    }
+
+    pub(crate) async fn read_frame(
+        &mut self,
+        wire: &mut (impl AsyncRead + Unpin),
+    ) -> Result<Option<Frame>, ImapError> {
         loop {
-            if !self.released.is_empty() {
-                let end = self.released.len().min(READ_CHUNK);
-                return Ok(self.released.drain(..end).collect());
+            if let Some(frame) = self.released.pop_front() {
+                return Ok(Some(frame));
             }
             if self.poisoned {
                 return Err(ImapError::Malformed);
             }
             if self.eof {
-                return Ok(Vec::new());
+                return Ok(None);
             }
             self.fill(wire).await?;
         }
@@ -83,22 +117,37 @@ impl Gate {
                 if !self.fragmentizer.is_message_complete() {
                     continue;
                 }
-                let valid = if self.expects_greeting {
+                let kind = if self.expects_greeting {
                     self.fragmentizer
                         .decode_message(&GreetingCodec::new())
-                        .is_ok()
+                        .map(|_| FrameKind::Greeting)
+                        .map_err(|_| ())
                 } else {
-                    self.fragmentizer.decode_message(&self.codec).is_ok()
+                    use io_imap::types::response::{Response, Status};
+                    self.fragmentizer
+                        .decode_message(&self.codec)
+                        .map(|response| match response {
+                            Response::Status(Status::Tagged(reply)) => {
+                                FrameKind::Completion(reply.tag.inner().as_bytes().to_vec())
+                            }
+                            Response::Status(Status::Bye(_)) => FrameKind::Bye,
+                            Response::CommandContinuationRequest(_) => FrameKind::Continuation,
+                            _ => FrameKind::Untagged,
+                        })
+                        .map_err(|_| ())
                 };
-                if !valid {
+                let Ok(kind) = kind else {
                     // Drain released messages before reporting the fault.
                     self.poisoned = true;
                     return Ok(());
-                }
+                };
                 self.expects_greeting = false;
                 let bytes = self.fragmentizer.message_bytes();
                 self.pending -= bytes.len();
-                self.released.extend(bytes.iter().copied());
+                self.released.push_back(Frame {
+                    bytes: bytes.to_vec(),
+                    kind,
+                });
             }
             if !self.released.is_empty() || self.eof || self.poisoned {
                 return Ok(());
@@ -136,7 +185,8 @@ mod tests {
         let mut gate = Gate::new();
         let bytes = [wire_bytes(), partial].concat();
         let mut wire = bytes.as_slice();
-        assert_eq!(gate.read(&mut wire).await.unwrap(), wire_bytes());
+        assert_eq!(gate.read(&mut wire).await.unwrap(), b"* OK first\r\n");
+        assert_eq!(gate.read(&mut wire).await.unwrap(), b"* OK second\r\n");
         assert!(matches!(
             gate.read(&mut wire).await,
             Err(ImapError::Malformed)
@@ -147,7 +197,8 @@ mod tests {
     async fn eof_after_complete_responses_is_clean() {
         let mut gate = Gate::new();
         let mut wire = b"* OK first\r\n* OK second\r\n".as_slice();
-        assert_eq!(gate.read(&mut wire).await.unwrap(), wire_bytes());
+        assert_eq!(gate.read(&mut wire).await.unwrap(), b"* OK first\r\n");
+        assert_eq!(gate.read(&mut wire).await.unwrap(), b"* OK second\r\n");
         assert!(gate.read(&mut wire).await.unwrap().is_empty());
     }
 
@@ -157,9 +208,10 @@ mod tests {
         let mut wire = b"* O"
             .as_slice()
             .chain(b"K ready\r\n* 1 FETCH (BODY[] {5}\r\nhello)\r\n".as_slice());
+        assert_eq!(gate.read(&mut wire).await.unwrap(), b"* OK ready\r\n");
         assert_eq!(
             gate.read(&mut wire).await.unwrap(),
-            b"* OK ready\r\n* 1 FETCH (BODY[] {5}\r\nhello)\r\n"
+            b"* 1 FETCH (BODY[] {5}\r\nhello)\r\n"
         );
         assert!(gate.read(&mut wire).await.unwrap().is_empty());
     }

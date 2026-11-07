@@ -231,6 +231,138 @@ async fn cancelling_a_sent_command_closes_the_connection() {
 }
 
 #[tokio::test]
+async fn capability_cannot_replace_its_first_tagged_completion() {
+    for first in [
+        Reply::TaggedNo("refused".into()),
+        Reply::TaggedBad("refused".into()),
+        Reply::Raw(b"WRONG OK unrelated completion\r\n".to_vec()),
+    ] {
+        let mut script = setup_script(&Profile::bridge());
+        script.steps.push(Step::on(
+            Expect::command("CAPABILITY"),
+            vec![
+                Reply::untagged("CAPABILITY IMAP4rev1"),
+                first,
+                Reply::ok("later matching completion"),
+            ],
+        ));
+        let server = FakeImapServer::serve(vec![script]).unwrap();
+        let mut connection = Connection::connect(options(localhost(), server.port()))
+            .await
+            .unwrap();
+        assert!(
+            connection.capability().await.is_err(),
+            "a later OK must not hide the first completion"
+        );
+        assert!(matches!(
+            connection.capability().await,
+            Err(ImapError::Closed)
+        ));
+        assert_eq!(
+            server.received().len(),
+            5,
+            "no command after invalid completion"
+        );
+    }
+}
+
+#[tokio::test]
+async fn login_cannot_replace_its_refusal_with_a_later_ok() {
+    let profile = Profile::bridge();
+    let mut script = setup_script(&profile);
+    script.steps[1].send = vec![
+        Reply::TaggedNo("credentials refused".into()),
+        Reply::ok("later matching completion"),
+    ];
+    let server = FakeImapServer::serve(vec![script]).unwrap();
+    let result = Connection::connect(options(localhost(), server.port())).await;
+    assert!(matches!(result, Err(ImapError::LoginRefused)), "{result:?}");
+    assert_eq!(server.received().len(), 2, "no command after refused LOGIN");
+}
+
+#[tokio::test]
+async fn an_extra_completion_or_bye_cannot_authorize_another_command() {
+    for trailing in [
+        Reply::ok("duplicate completion"),
+        Reply::untagged("BYE closing"),
+    ] {
+        let mut script = setup_script(&Profile::bridge());
+        script.steps.push(Step::on(
+            Expect::command("CAPABILITY"),
+            vec![
+                Reply::untagged("CAPABILITY IMAP4rev1"),
+                Reply::ok("first completion"),
+                trailing,
+            ],
+        ));
+        let server = FakeImapServer::serve(vec![script]).unwrap();
+        let mut connection = Connection::connect(options(localhost(), server.port()))
+            .await
+            .unwrap();
+        connection
+            .capability()
+            .await
+            .expect("the completed observation precedes the fault");
+        assert!(matches!(
+            connection.capability().await,
+            Err(ImapError::Closed)
+        ));
+        assert_eq!(
+            server.received().len(),
+            5,
+            "no command after buffered terminal response"
+        );
+    }
+}
+
+#[tokio::test]
+async fn ordinary_unsolicited_updates_do_not_close_the_session() {
+    let profile = Profile::bridge();
+    let mut script = setup_script(&profile);
+    script.steps.push(Step::on(
+        Expect::command("CAPABILITY"),
+        vec![
+            Reply::untagged("CAPABILITY IMAP4rev1"),
+            Reply::ok("first completion"),
+            Reply::untagged("OK [ALERT] synthetic status"),
+            Reply::untagged("3 EXISTS"),
+        ],
+    ));
+    script.steps.push(profile.capability_step());
+    let server = FakeImapServer::serve(vec![script]).unwrap();
+    let mut connection = Connection::connect(options(localhost(), server.port()))
+        .await
+        .unwrap();
+    assert_eq!(
+        connection.capability().await.unwrap(),
+        [Capability::Imap4Rev1]
+    );
+    assert!(
+        connection
+            .capability()
+            .await
+            .unwrap()
+            .contains(&Capability::Idle)
+    );
+    assert_eq!(server.received().len(), 6);
+    assert_eq!(server.unexpected_count(), 0);
+}
+
+#[tokio::test]
+async fn login_literals_keep_the_command_tag_across_continuations() {
+    let server = FakeImapServer::serve(vec![setup_script(&Profile::bridge())]).unwrap();
+    let mut opts = options(localhost(), server.port());
+    opts.user = "synthetic-user-界".into();
+    opts.password = Password::new("synthetic-password-密");
+    let connection = Connection::connect(opts)
+        .await
+        .expect("LOGIN synchronizing literals");
+    assert_eq!(server.received().len(), 4);
+    assert_eq!(server.unexpected_count(), 0);
+    drop(connection);
+}
+
+#[tokio::test]
 async fn credentials_never_appear_in_formatted_output() {
     let password = "a-password-no-formatted-output-may-carry";
     let mut opts = options(localhost(), 1143);
