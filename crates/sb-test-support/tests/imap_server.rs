@@ -342,7 +342,12 @@ fn expunge_and_move_arrive_behind_the_clients_back() {
 
     // Before: the provider id sits at UID 9 in All Mail.
     let (untagged, _) = ask(&mut client, "a1 EXAMINE \"All Mail\"");
-    assert_eq!(untagged[0], "* 1 EXISTS");
+    assert_eq!(
+        untagged[0],
+        "* FLAGS (\\Seen \\Answered \\Flagged \\Deleted \\Draft)"
+    );
+    assert_eq!(untagged[1], "* 1 EXISTS");
+    assert_eq!(untagged[2], "* 0 RECENT");
     let before = fetch_id(&mut client, "a2", 9);
     assert!(before.contains("X-Pm-Internal-Id: pm-7f3a9c21"), "{before}");
 
@@ -360,7 +365,7 @@ fn expunge_and_move_arrive_behind_the_clients_back() {
     let (untagged, _) = ask(&mut client, "a4 EXAMINE \"All Mail\"");
     assert_eq!(untagged[0], "* 0 EXISTS");
     let (untagged, _) = ask(&mut client, "a5 EXAMINE Labels/Receipts");
-    assert_eq!(untagged[0], "* 1 EXISTS");
+    assert_eq!(untagged[1], "* 1 EXISTS");
     let after = fetch_id(&mut client, "a6", 5);
     assert_eq!(before, after, "the same provider id moved mailboxes");
     assert_eq!(server.unexpected_count(), 0);
@@ -473,9 +478,16 @@ fn the_bridge_profile_answers_a_sync_conversation() {
     );
 
     let (untagged, ok) = ask(&mut client, "a3 EXAMINE \"All Mail\"");
-    assert_eq!(untagged[0], "* 1 EXISTS");
-    assert_eq!(untagged[1], "* OK [UIDVALIDITY 4100] UIDs valid");
-    assert_eq!(untagged[2], "* OK [UIDNEXT 10] Predicted next UID");
+    assert_eq!(
+        untagged,
+        [
+            "* FLAGS (\\Seen \\Answered \\Flagged \\Deleted \\Draft)",
+            "* 1 EXISTS",
+            "* 0 RECENT",
+            "* OK [UIDVALIDITY 4100] UIDs valid",
+            "* OK [UIDNEXT 10] Predicted next UID",
+        ]
+    );
     assert_eq!(ok, "a3 OK [READ-ONLY] EXAMINE completed");
 
     let (untagged, _) = ask(&mut client, "a4 UID FETCH 1:* (FLAGS)");
@@ -488,7 +500,7 @@ fn the_bridge_profile_answers_a_sync_conversation() {
     assert!(text.contains("X-Pm-Internal-Id: pm-7f3a9c21"), "{text}");
 
     let (untagged, _) = ask(&mut client, "a6 EXAMINE \"Labels/Receipts\"");
-    assert_eq!(untagged[2], "* OK [UIDNEXT 6] Predicted next UID");
+    assert_eq!(untagged[4], "* OK [UIDNEXT 6] Predicted next UID");
     let again = fetch_id(&mut client, "a7", 5);
     assert_eq!(again, text, "same message, other mailbox");
 

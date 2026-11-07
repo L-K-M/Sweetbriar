@@ -40,6 +40,9 @@ pub enum ImapError {
     /// A tagged completion did not belong to the command being run,
     /// or was buffered outside an exchange. The session is closed.
     UnexpectedCompletion,
+    /// Selecting again needs a fresh connection because the server did not
+    /// advertise UNSELECT. No CLOSE or EXPUNGE fallback is permitted.
+    FreshConnectionRequired,
     /// The connection is closed; no further command can run.
     Closed,
     /// An I/O failure, with its native kind.
@@ -91,6 +94,9 @@ impl fmt::Display for ImapError {
             Self::Malformed => write!(f, "an undecodable response closed the connection"),
             Self::UnexpectedCompletion => {
                 f.write_str("an unexpected command completion closed the connection")
+            }
+            Self::FreshConnectionRequired => {
+                f.write_str("open a fresh connection before selecting again")
             }
             Self::Closed => f.write_str("the IMAP connection is closed"),
             Self::Io { kind, message } => write!(f, "IMAP I/O error ({kind:?}): {message}"),

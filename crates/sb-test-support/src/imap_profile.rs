@@ -118,7 +118,9 @@ impl Profile {
         Step::on(
             Expect::command(format!("EXAMINE {mailbox}")),
             vec![
+                Reply::untagged("FLAGS (\\Seen \\Answered \\Flagged \\Deleted \\Draft)"),
                 Reply::untagged(format!("{} EXISTS", members.len())),
+                Reply::untagged("0 RECENT"),
                 Reply::untagged(format!("OK [UIDVALIDITY {UIDVALIDITY}] UIDs valid")),
                 Reply::untagged(format!("OK [UIDNEXT {uidnext}] Predicted next UID")),
                 Reply::ok("[READ-ONLY] EXAMINE completed"),

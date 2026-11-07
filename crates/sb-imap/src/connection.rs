@@ -5,6 +5,9 @@
 //! tagged OK carried it; ID. No credential is sent before TLS. LOGOUT
 //! is best effort.
 
+mod reads;
+pub use reads::{MailboxContext, MailboxNotice, ReadObservation};
+
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr};
 
@@ -74,6 +77,7 @@ pub struct Connection {
     gate: Gate,
     fragmentizer: Fragmentizer,
     capabilities: Vec<Capability<'static>>,
+    selection: Option<MailboxContext>,
 }
 
 impl fmt::Debug for Connection {
@@ -116,6 +120,7 @@ impl Connection {
             gate: Gate::new(),
             fragmentizer: Fragmentizer::new(MAX_MESSAGE_SIZE),
             capabilities: Vec::new(),
+            selection: None,
         };
         connection.setup(&options).await?;
         Ok(connection)
@@ -176,6 +181,7 @@ impl Connection {
             gate,
             fragmentizer,
             capabilities: Vec::new(),
+            selection: None,
         };
         connection.setup_authenticated(&options).await?;
         Ok(connection)
