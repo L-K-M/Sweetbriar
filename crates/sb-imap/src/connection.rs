@@ -202,6 +202,9 @@ impl Connection {
             };
         }
         self.id().await?;
+        if self.wire.is_none() {
+            return Err(ImapError::Closed);
+        }
         Ok(())
     }
 
