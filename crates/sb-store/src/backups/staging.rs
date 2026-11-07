@@ -14,7 +14,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use sha2::{Digest, Sha256};
 
-use super::stage_copy::{cancelled, copy_verified, io_error};
+use super::stage_copy::{cancelled, copy_retained, copy_verified, io_error};
+use super::stage_files::StageFiles;
 use super::*;
 
 /// Metadata a caller declares about the selected generation. Every field
@@ -40,6 +41,10 @@ pub struct RestoreMetadata {
 /// a qualified stage. The operation Arc lease is held until drop.
 #[derive(Debug)]
 pub struct PreparedRestoreStage {
+    /// These capabilities are unqualified. A future qualifier must reverify
+    /// bytes and compare their identities to the current names before writing.
+    #[allow(dead_code)]
+    pub(super) files: StageFiles,
     path: PathBuf,
     incarnation: String,
     generation_id: String,
@@ -456,7 +461,7 @@ impl Backups {
         ensure_child_dir(stage.as_ref(), "backups")?;
         ensure_child_dir(stage.as_ref(), "recovery")?;
 
-        copy_verified(
+        let database = copy_retained(
             source.as_ref(),
             Path::new(SNAPSHOT_FILE),
             stage.as_ref(),
@@ -521,6 +526,13 @@ impl Backups {
             .expect("a data root has a parent")
             .join(&stage_name);
         Ok(PreparedRestoreStage {
+            files: StageFiles::new(
+                stage,
+                database,
+                manifest.database.sha256,
+                manifest.database.bytes,
+            )
+            .map_err(|error| io_error("retaining the staging file identities", error))?,
             path: stage_path,
             incarnation: new_incarnation.to_owned(),
             generation_id: generation.to_owned(),
