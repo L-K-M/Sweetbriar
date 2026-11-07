@@ -52,7 +52,7 @@ fn child_name(path: &Path) -> io::Result<std::ffi::CString> {
 }
 
 #[cfg(target_os = "macos")]
-const OWNER_ATTRIBUTE: &std::ffi::CStr = c"com.sweetbriar.verifier-owner";
+const OWNER_ATTRIBUTE: &std::ffi::CStr = c"ch.lkmc.sweetbriar.verifier-owner";
 #[cfg(target_os = "linux")]
 const OWNER_ATTRIBUTE: &std::ffi::CStr = c"user.sweetbriar.verifier-owner";
 
