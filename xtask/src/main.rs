@@ -265,6 +265,18 @@ fn step_dovecot(root: &Path) -> bool {
                 ssl_dir.join("tls.key"),
             )
         });
+    // These are public, committed test fixtures. The image runs as vmail,
+    // while files copied through the Docker API are owned by root. Make the
+    // staged fixtures readable independently of the client's checkout mode.
+    #[cfg(unix)]
+    let staged = staged.and_then(|_| {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&ssl_dir, std::fs::Permissions::from_mode(0o755))?;
+        for name in ["tls.crt", "tls.key"] {
+            std::fs::set_permissions(ssl_dir.join(name), std::fs::Permissions::from_mode(0o644))?;
+        }
+        Ok(())
+    });
     if let Err(err) = staged {
         eprintln!(
             "dovecot: cannot stage TLS material in {}: {err}",
@@ -274,26 +286,38 @@ fn step_dovecot(root: &Path) -> bool {
     }
 
     let mut docker_run = Command::new("docker");
-    let started = run(docker_run
-        .arg("run")
-        .arg("-d")
+    // Copy through the Docker API instead of bind-mounting a client path:
+    // Docker Desktop/Colima and remote daemons cannot see every host temp dir.
+    let created = run(docker_run
+        .arg("create")
         .arg("--name")
         .arg(&name)
         .arg("-e")
         .arg(format!("USER_PASSWORD={{PLAIN}}{DOVECOT_PASSWORD}"))
-        .arg("-v")
-        .arg(format!("{}:/etc/dovecot/ssl:ro", ssl_dir.display()))
         .arg("-p")
         .arg(format!("127.0.0.1::{DOVECOT_CONTAINER_PORT}"))
         .arg(DOVECOT_IMAGE));
-    if !started {
+    if !created {
         let _ = std::fs::remove_dir_all(&ssl_dir);
         return false;
     }
-    let _guard = ContainerGuard {
+    let guard = ContainerGuard {
         name: name.clone(),
         ssl_dir,
     };
+
+    let mut copy = Command::new("docker");
+    if !run(copy
+        .arg("cp")
+        .arg(guard.ssl_dir.join("."))
+        .arg(format!("{name}:/etc/dovecot/ssl")))
+    {
+        return false;
+    }
+    let mut start = Command::new("docker");
+    if !run(start.arg("start").arg(&name)) {
+        return false;
+    }
 
     let mut docker_port = Command::new("docker");
     let port_output = docker_port
@@ -366,7 +390,31 @@ fn step_dovecot(root: &Path) -> bool {
         .env("SB_IMAP_DOVECOT", addr)
         .env("SB_IMAP_DOVECOT_USER", "spike")
         .env("SB_IMAP_DOVECOT_PASSWORD", DOVECOT_PASSWORD);
-    run(&mut suite)
+    if !run(&mut suite) {
+        return false;
+    }
+
+    // M2.2a2's STARTTLS transport: setup, ID and best-effort LOGOUT
+    // through `Connection::connect_starttls`.
+    let mut setup = cargo(
+        root,
+        &[
+            "test",
+            "-p",
+            "sb-imap",
+            "--test",
+            "connection",
+            "dovecot_starttls_setup_id_logout",
+            "--",
+            "--exact",
+            "--nocapture",
+        ],
+    );
+    setup
+        .env("SB_IMAP_DOVECOT", addr)
+        .env("SB_IMAP_DOVECOT_USER", "spike")
+        .env("SB_IMAP_DOVECOT_PASSWORD", DOVECOT_PASSWORD);
+    run(&mut setup)
 }
 
 /// Docker's port proxy accepts a connection before the container's

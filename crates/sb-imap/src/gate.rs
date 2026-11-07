@@ -47,6 +47,15 @@ impl Gate {
         self.poisoned
     }
 
+    /// True when bytes read from the wire are still buffered and were
+    /// not handed to the coroutine: complete messages past the read
+    /// chunk ([`Self::released`]), a partial frame ([`Self::pending`]),
+    /// or a decode fault ([`Self::poisoned`]). STARTTLS refuses to
+    /// upgrade with any of these, so no plaintext crosses into TLS.
+    pub(crate) fn has_plaintext_residual(&self) -> bool {
+        self.poisoned || !self.released.is_empty() || self.pending > 0
+    }
+
     /// Reads the next released bytes. `Ok(empty)` is EOF; a poisoned
     /// gate fails with [`ImapError::Malformed`].
     pub(crate) async fn read(
