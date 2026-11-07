@@ -1,0 +1,168 @@
+//! Fixed-wire budget regressions. Peers deliberately keep the response
+//! unfinished and the socket open: EOF cannot stand in for limit detection.
+use super::*;
+use std::time::Duration;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+async fn refuses_without_eof(payload: Vec<u8>, small_limit: Option<u32>) {
+    let (mut client, mut peer) = tokio::io::duplex(8192);
+    let reader = async move {
+        let mut gate = Gate::new();
+        if let Some(limit) = small_limit {
+            gate.fragmentizer = Fragmentizer::new(limit);
+        }
+        assert_eq!(gate.read(&mut client).await.unwrap(), b"* OK ready\r\n");
+        client.write_all(b"g").await.unwrap();
+        for _ in 0..2 {
+            assert!(matches!(
+                gate.read(&mut client).await,
+                Err(ImapError::FrameBudgetExceeded)
+            ));
+            assert!(gate.poisoned());
+            assert!(!gate.reusable());
+            assert!(gate.has_plaintext_residual());
+        }
+    };
+    let sender = async move {
+        peer.write_all(b"* OK ready\r\n").await.unwrap();
+        let mut ack = [0];
+        peer.read_exact(&mut ack).await.unwrap();
+        assert_eq!(ack, *b"g");
+        peer.write_all(&payload).await.unwrap();
+        let mut byte = [0];
+        assert_eq!(
+            peer.read(&mut byte).await.unwrap(),
+            0,
+            "reader closes without a response end or EOF"
+        );
+    };
+    tokio::time::timeout(Duration::from_secs(30), async {
+        tokio::join!(reader, sender);
+    })
+    .await
+    .expect("budget detection cannot wait for an unfinished frame");
+}
+
+#[tokio::test]
+async fn an_oversized_literal_announcement_fails_before_any_literal_bytes() {
+    let payload = format!(
+        "* 1 FETCH (BODY[] {{{}}}\r\n",
+        u64::from(MAX_MESSAGE_SIZE) + 1
+    )
+    .into_bytes();
+    refuses_without_eof(payload, None).await;
+}
+
+#[tokio::test]
+async fn a_budget_failure_cannot_release_a_preceding_buffered_completion() {
+    let payload = format!(
+        "A OK completed\r\n* 1 FETCH (BODY[] {{{}}}\r\n",
+        u64::from(MAX_MESSAGE_SIZE) + 1
+    )
+    .into_bytes();
+    refuses_without_eof(payload, None).await;
+}
+
+#[tokio::test]
+async fn a_later_literal_is_bounded_after_the_first_payload() {
+    let payload = format!(
+        "* 1 FETCH (BODY[1] {{5}}\r\nhello BODY[2] {{{}}}\r\n",
+        u64::from(MAX_MESSAGE_SIZE) + 1
+    )
+    .into_bytes();
+    refuses_without_eof(payload, None).await;
+}
+
+#[tokio::test]
+async fn an_unfinished_line_fails_when_progress_returns_none() {
+    let payload = format!("* OK {}", "x".repeat(65)).into_bytes();
+    refuses_without_eof(payload, Some(64)).await;
+}
+
+#[tokio::test]
+async fn a_complete_response_exactly_at_the_frame_limit_is_valid() {
+    let mut gate = Gate::new();
+    gate.fragmentizer = Fragmentizer::new(64);
+    let line = format!("* OK {}\r\n", "x".repeat(57));
+    assert_eq!(line.len(), 64);
+    let bytes = [b"* OK ready\r\n".as_slice(), line.as_bytes()].concat();
+    let mut wire = bytes.as_slice();
+    assert_eq!(gate.read(&mut wire).await.unwrap(), b"* OK ready\r\n");
+    assert_eq!(gate.read(&mut wire).await.unwrap(), line.as_bytes());
+    assert!(!gate.poisoned());
+    assert!(gate.read(&mut wire).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn brace_counts_in_response_text_are_not_literals() {
+    // The codec, rather than the context-free line fragmentizer,
+    // establishes that each of these lines is a complete response.
+    let lines: &[&[u8]] = &[
+        b"* OK ready {52428801}\r\n",
+        b"* OK [ALERT] notice {1}\r\n",
+        b"* NO warning {0}\r\n",
+        b"* BAD warning {52428801}\r\n",
+        b"+ continue {52428801}\r\n",
+        b"* 1 FETCH (BODY[] {5}\r\nhello)\r\n",
+        b"A OK done {52428801}\r\n",
+        b"* BYE closed {1}\r\n",
+    ];
+    let (mut wire, mut peer) = tokio::io::duplex(8192);
+    let reader = async move {
+        let mut gate = Gate::new();
+        for line in lines {
+            assert_eq!(gate.read(&mut wire).await.unwrap(), *line);
+        }
+        assert!(!gate.poisoned());
+    };
+    let sender = async move {
+        peer.write_all(&lines.concat()).await.unwrap();
+        assert_eq!(peer.read(&mut [0]).await.unwrap(), 0);
+    };
+    tokio::time::timeout(Duration::from_secs(2), async {
+        tokio::join!(reader, sender);
+    })
+    .await
+    .expect("complete response text never waits for literal bytes or EOF");
+}
+
+#[tokio::test]
+async fn the_default_frame_limit_admits_an_exact_fifty_mib_literal_response() {
+    let (mut client, mut peer) = tokio::io::duplex(8192);
+    let reader = async move {
+        let mut gate = Gate::new();
+        assert_eq!(gate.read(&mut client).await.unwrap(), b"* OK ready\r\n");
+        client.write_all(b"g").await.unwrap();
+        let frame = gate.read(&mut client).await.unwrap();
+        assert_eq!(frame.len(), MAX_MESSAGE_SIZE as usize);
+        assert!(frame.ends_with(b")\r\n"));
+        assert!(!gate.poisoned());
+    };
+    let sender = async move {
+        peer.write_all(b"* OK ready\r\n").await.unwrap();
+        peer.read_exact(&mut [0]).await.unwrap();
+        let total = MAX_MESSAGE_SIZE as usize;
+        let mut literal_len = total;
+        let prefix = loop {
+            let prefix = format!("* 1 FETCH (BODY[] {{{literal_len}}}\r\n");
+            let adjusted = total - prefix.len() - 3;
+            if adjusted == literal_len {
+                break prefix;
+            }
+            literal_len = adjusted;
+        };
+        peer.write_all(prefix.as_bytes()).await.unwrap();
+        let chunk = [b'x'; 8192];
+        while literal_len > 0 {
+            let size = literal_len.min(chunk.len());
+            peer.write_all(&chunk[..size]).await.unwrap();
+            literal_len -= size;
+        }
+        peer.write_all(b")\r\n").await.unwrap();
+    };
+    tokio::time::timeout(Duration::from_secs(30), async {
+        tokio::join!(reader, sender);
+    })
+    .await
+    .expect("a valid frame at the production limit completes");
+}
