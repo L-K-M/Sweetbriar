@@ -14,7 +14,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use sb_types::fs::{
-    ConfinedDir, DirectoryIdentity, Fs, Lease, Location, LockError, Metadata, ReadFile, WriteFile,
+    ConfinedDir, DirectoryIdentity, FileIdentity, Fs, Lease, Location, LockError, Metadata,
+    ReadFile, ReadWriteFile, WriteFile,
 };
 
 /// Give up after this many cut points: a run that never survives either
@@ -132,6 +133,14 @@ impl ConfinedDir for CutConfinedDir {
         self.trip();
         Ok(Box::new(CutWrite {
             inner: self.inner.create(name)?,
+            count: self.count.clone(),
+            nth: self.nth,
+        }))
+    }
+    fn create_read_write(&self, name: &Path) -> std::io::Result<Box<dyn ReadWriteFile>> {
+        self.trip();
+        Ok(Box::new(CutReadWrite {
+            inner: self.inner.create_read_write(name)?,
             count: self.count.clone(),
             nth: self.nth,
         }))
@@ -259,6 +268,52 @@ impl Fs for CutFs {
 
 /// A write handle whose writes and flushes pass through the cut
 /// counter.
+struct CutReadWrite {
+    inner: Box<dyn ReadWriteFile>,
+    count: Arc<AtomicU64>,
+    nth: u64,
+}
+
+impl CutReadWrite {
+    fn trip(&self) {
+        let n = self.count.fetch_add(1, Ordering::SeqCst) + 1;
+        if n == self.nth {
+            // SAFETY: killing this process is the crash-cut harness contract.
+            unsafe {
+                libc::kill(libc::getpid(), libc::SIGKILL);
+            }
+            panic!("SIGKILL at cut point {n} did not kill the process");
+        }
+    }
+}
+
+impl ReadWriteFile for CutReadWrite {
+    fn read_at(&self, bytes: &mut [u8], offset: u64) -> std::io::Result<usize> {
+        self.trip();
+        self.inner.read_at(bytes, offset)
+    }
+    fn write_at(&self, bytes: &[u8], offset: u64) -> std::io::Result<usize> {
+        self.trip();
+        self.inner.write_at(bytes, offset)
+    }
+    fn set_len(&self, len: u64) -> std::io::Result<()> {
+        self.trip();
+        self.inner.set_len(len)
+    }
+    fn len(&self) -> std::io::Result<u64> {
+        self.trip();
+        self.inner.len()
+    }
+    fn sync_all(&self) -> std::io::Result<()> {
+        self.trip();
+        self.inner.sync_all()
+    }
+    fn identity(&self) -> std::io::Result<FileIdentity> {
+        self.trip();
+        self.inner.identity()
+    }
+}
+
 struct CutWrite {
     inner: Box<dyn WriteFile>,
     count: Arc<AtomicU64>,
@@ -435,7 +490,14 @@ mod tests {
     const ROOT_ENV: &str = "SB_CUT_TEST_ROOT";
 
     /// Every operation `CutFs` counts, by the name the child takes.
-    const OPS: [&str; 18] = [
+    const OPS: [&str; 25] = [
+        "create_rw",
+        "read_at",
+        "write_at",
+        "set_len",
+        "rw_len",
+        "rw_identity",
+        "rw_sync",
         "create",
         "write",
         "sync_all",
@@ -476,12 +538,30 @@ mod tests {
         // `write` and `sync_all` act on a handle, so the cut point is
         // the operation after `create`.
         let nth = match op.as_str() {
+            "create_rw" => 2,
+            "read_at" | "write_at" | "set_len" | "rw_len" | "rw_identity" | "rw_sync" => 3,
             "write" => 2,
             "sync_all" => 3,
             _ => 1,
         };
         let cut = CutFs::new(real, nth);
         let _ = match op.as_str() {
+            "create_rw" | "read_at" | "write_at" | "set_len" | "rw_len" | "rw_identity"
+            | "rw_sync" => {
+                let dir = cut
+                    .open_confined_dir(&root.canonicalize().unwrap())
+                    .unwrap();
+                let handle = dir.create_read_write(Path::new("new")).unwrap();
+                match op.as_str() {
+                    "read_at" => handle.read_at(&mut [0; 1], 0).map(drop),
+                    "write_at" => handle.write_at(b"after", 0).map(drop),
+                    "set_len" => handle.set_len(3),
+                    "rw_len" => handle.len().map(drop),
+                    "rw_identity" => handle.identity().map(drop),
+                    "rw_sync" => handle.sync_all(),
+                    _ => panic!("create_read_write ran past cut point"),
+                }
+            }
             "create" => cut.create(&root.join("new")).map(drop),
             "write" | "sync_all" => {
                 let mut handle = cut.create(&root.join("new")).unwrap();
@@ -551,7 +631,8 @@ mod tests {
             }
             let new = root.join("new");
             match op {
-                "create" => assert!(!new.exists(), "create ran"),
+                "create" | "create_rw" => assert!(!new.exists(), "create ran"),
+                "write_at" | "set_len" => assert_eq!(fs::read(&new).unwrap(), b"", "{op} ran"),
                 "write" => assert_eq!(fs::read(&new).unwrap(), b"", "write ran"),
                 _ => {}
             }

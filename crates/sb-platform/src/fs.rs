@@ -6,12 +6,12 @@ use std::fs::{File, OpenOptions, TryLockError};
 use std::io;
 use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, FileExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
 
 use sb_types::fs::{
-    ConfinedDir, DirectoryIdentity, FileKind, Fs, Lease, Location, LockError, Metadata, ReadFile,
-    WriteFile,
+    ConfinedDir, DirectoryIdentity, FileIdentity, FileKind, Fs, Lease, Location, LockError,
+    Metadata, ReadFile, ReadWriteFile, WriteFile,
 };
 
 use crate::location;
@@ -228,6 +228,26 @@ impl ConfinedDir for RealConfinedDir {
         }
         // SAFETY: openat returned a fresh owned descriptor.
         Ok(Box::new(RealWriteFile(unsafe { File::from_raw_fd(fd) })))
+    }
+    fn create_read_write(&self, name: &Path) -> io::Result<Box<dyn ReadWriteFile>> {
+        let name = child_name(name)?;
+        // SAFETY: the live directory descriptor and C string remain valid.
+        // O_EXCL refuses every existing entry, including symlinks and devices.
+        let fd = unsafe {
+            libc::openat(
+                self.0.as_raw_fd(),
+                name.as_ptr(),
+                libc::O_RDWR | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                0o600,
+            )
+        };
+        if fd < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: openat returned a fresh owned regular-file descriptor.
+        Ok(Box::new(RealReadWriteFile(unsafe {
+            File::from_raw_fd(fd)
+        })))
     }
     fn remove_file(&self, name: &Path) -> io::Result<()> {
         self.unlink(name, 0)
@@ -516,6 +536,33 @@ impl Drop for LockGuard {
 /// can't land on `File` itself.
 struct RealWriteFile(File);
 
+struct RealReadWriteFile(File);
+
+impl ReadWriteFile for RealReadWriteFile {
+    fn read_at(&self, bytes: &mut [u8], offset: u64) -> io::Result<usize> {
+        self.0.read_at(bytes, offset)
+    }
+    fn write_at(&self, bytes: &[u8], offset: u64) -> io::Result<usize> {
+        self.0.write_at(bytes, offset)
+    }
+    fn set_len(&self, len: u64) -> io::Result<()> {
+        self.0.set_len(len)
+    }
+    fn len(&self) -> io::Result<u64> {
+        self.0.metadata().map(|meta| meta.len())
+    }
+    fn sync_all(&self) -> io::Result<()> {
+        flush_durably(&self.0)
+    }
+    fn identity(&self) -> io::Result<FileIdentity> {
+        let meta = self.0.metadata()?;
+        Ok(FileIdentity {
+            device: meta.dev(),
+            inode: meta.ino(),
+        })
+    }
+}
+
 impl io::Write for RealWriteFile {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         self.0.write(buf)
@@ -561,6 +608,151 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn retained_read_write_file_uses_positioned_io_and_zero_filled_growth() {
+        let scratch = Scratch::new("positioned-file");
+        let root = RealFs
+            .open_confined_dir(&scratch.0.canonicalize().unwrap())
+            .unwrap();
+        let file = root.create_read_write(Path::new("state.sqlite")).unwrap();
+        assert!(file.is_empty().unwrap());
+        assert_eq!(file.write_at(b"abc", 3).unwrap(), 3);
+        assert_eq!(file.write_at(b"xy", 0).unwrap(), 2);
+        let mut bytes = [9; 8];
+        assert_eq!(file.read_at(&mut bytes, 0).unwrap(), 6);
+        assert_eq!(&bytes[..6], b"xy\0abc");
+        assert_eq!(file.read_at(&mut bytes, 6).unwrap(), 0);
+        file.set_len(2).unwrap();
+        file.set_len(6).unwrap();
+        assert_eq!(file.read_at(&mut bytes, 0).unwrap(), 6);
+        assert_eq!(&bytes[..6], b"xy\0\0\0\0");
+        file.sync_all().unwrap();
+        root.sync().unwrap();
+        assert_eq!(
+            std::fs::read(scratch.0.join("state.sqlite")).unwrap(),
+            b"xy\0\0\0\0"
+        );
+        let metadata = std::fs::metadata(scratch.0.join("state.sqlite")).unwrap();
+        assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
+        assert_eq!(
+            file.identity().unwrap(),
+            FileIdentity {
+                device: metadata.dev(),
+                inode: metadata.ino()
+            }
+        );
+    }
+
+    #[test]
+    fn retained_read_write_file_refuses_existing_entries_and_path_escape() {
+        use std::os::unix::fs::symlink;
+        let scratch = Scratch::new("positioned-refusal");
+        let root = RealFs
+            .open_confined_dir(&scratch.0.canonicalize().unwrap())
+            .unwrap();
+        std::fs::write(scratch.0.join("existing"), b"preserve").unwrap();
+        symlink("existing", scratch.0.join("link")).unwrap();
+        std::fs::create_dir(scratch.0.join("directory")).unwrap();
+        let fifo = CString::new(scratch.0.join("fifo").as_os_str().as_bytes()).unwrap();
+        // SAFETY: the NUL-terminated path is valid for the call.
+        assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+        for name in ["existing", "link", "directory", "fifo"] {
+            assert_eq!(
+                root.create_read_write(Path::new(name))
+                    .err()
+                    .unwrap()
+                    .kind(),
+                io::ErrorKind::AlreadyExists
+            );
+        }
+        for name in [
+            "",
+            ".",
+            "..",
+            "../escaped",
+            "/absolute",
+            "directory/file",
+            "nul\0name",
+        ] {
+            assert_eq!(
+                root.create_read_write(Path::new(name))
+                    .err()
+                    .unwrap()
+                    .kind(),
+                io::ErrorKind::InvalidInput
+            );
+        }
+        assert_eq!(
+            std::fs::read(scratch.0.join("existing")).unwrap(),
+            b"preserve"
+        );
+    }
+
+    #[test]
+    fn retained_read_write_file_has_no_shared_cursor_between_threads() {
+        let scratch = Scratch::new("positioned-concurrent");
+        let root = RealFs
+            .open_confined_dir(&scratch.0.canonicalize().unwrap())
+            .unwrap();
+        let file: std::sync::Arc<dyn ReadWriteFile> =
+            root.create_read_write(Path::new("db")).unwrap().into();
+        std::thread::scope(|scope| {
+            for offset in 0..8 {
+                let file = &file;
+                scope.spawn(move || {
+                    let expected = [offset as u8 + 1];
+                    for _ in 0..256 {
+                        assert_eq!(file.write_at(&expected, offset).unwrap(), 1);
+                        let mut actual = [0];
+                        assert_eq!(file.read_at(&mut actual, offset).unwrap(), 1);
+                        assert_eq!(actual, expected);
+                    }
+                });
+            }
+        });
+        let mut bytes = [0; 8];
+        assert_eq!(file.read_at(&mut bytes, 0).unwrap(), 8);
+        assert_eq!(bytes, [1, 2, 3, 4, 5, 6, 7, 8]);
+    }
+
+    #[test]
+    fn retained_read_write_file_never_reopens_replaced_names() {
+        let scratch = Scratch::new("positioned-rename");
+        let original = scratch.0.join("stage");
+        std::fs::create_dir(&original).unwrap();
+        let root = RealFs
+            .open_confined_dir(&original.canonicalize().unwrap())
+            .unwrap();
+        let directory_id = root.identity().unwrap();
+        let file = root.create_read_write(Path::new("state.sqlite")).unwrap();
+        let file_id = file.identity().unwrap();
+        let moved = scratch.0.join("moved");
+        std::fs::rename(&original, &moved).unwrap();
+        std::fs::create_dir(&original).unwrap();
+        std::fs::write(original.join("state.sqlite"), b"other root").unwrap();
+        std::fs::rename(moved.join("state.sqlite"), moved.join("retained")).unwrap();
+        std::fs::write(moved.join("state.sqlite"), b"other file").unwrap();
+        file.write_at(b"safe", 0).unwrap();
+        file.set_len(4).unwrap();
+        file.sync_all().unwrap();
+        root.sync().unwrap();
+        assert_eq!(file.identity().unwrap(), file_id);
+        assert_eq!(root.identity().unwrap(), directory_id);
+        assert_eq!(std::fs::read(moved.join("retained")).unwrap(), b"safe");
+        assert_eq!(
+            std::fs::read(moved.join("state.sqlite")).unwrap(),
+            b"other file"
+        );
+        assert_eq!(
+            std::fs::read(original.join("state.sqlite")).unwrap(),
+            b"other root"
+        );
+        let another = root.create_read_write(Path::new("new")).unwrap();
+        assert_ne!(another.identity().unwrap(), file_id);
+        assert!(moved.join("new").exists());
+        assert!(!original.join("new").exists());
     }
 
     #[test]
