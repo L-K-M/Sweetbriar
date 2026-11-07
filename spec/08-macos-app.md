@@ -316,7 +316,7 @@ and the undo toast offers **Undo** for 10 s.
 ## Menus and commands
 
 - **Every action is a command** with a stable identifier, in the
-  `com.sweetbriar.cmd.*` namespace, wired to the menus and the responder
+  `ch.lkmc.Sweetbriar.cmd.*` namespace, wired to the menus and the responder
   chain.
 - **Versioning:** the persisted intent and query formats are versioned
   now (research debate/04, resolution change 15). The scripting surfaces (AppleScript, App Intents, a CLI) are

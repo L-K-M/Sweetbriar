@@ -9,7 +9,7 @@
 name: Sweetbriar
 
 options:
-  bundleIdPrefix: com.sweetbriar
+  bundleIdPrefix: ch.lkmc
   deploymentTarget:
     macOS: "26.0"
 
@@ -45,7 +45,7 @@ targets:
         product: SweetbriarCore
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.sweetbriar.SweetbriarBridge
+        PRODUCT_BUNDLE_IDENTIFIER: ch.lkmc.SweetbriarBridge
         # Signing needs an Info.plist; the framework's carries nothing
         # of its own, so Xcode generates it.
         GENERATE_INFOPLIST_FILE: YES
@@ -108,7 +108,7 @@ targets:
         product: SweetbriarCore
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.sweetbriar.SweetbriarCoreTests
+        PRODUCT_BUNDLE_IDENTIFIER: ch.lkmc.SweetbriarCoreTests
         GENERATE_INFOPLIST_FILE: YES
 
   SweetbriarBridgeTests:
@@ -120,7 +120,7 @@ targets:
       - target: SweetbriarBridge
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.sweetbriar.SweetbriarBridgeTests
+        PRODUCT_BUNDLE_IDENTIFIER: ch.lkmc.SweetbriarBridgeTests
         GENERATE_INFOPLIST_FILE: YES
 
   # The app-hosted bundle (plan M0.10): `@testable import Sweetbriar`
@@ -135,7 +135,7 @@ targets:
       - target: Sweetbriar
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.sweetbriar.SweetbriarTests
+        PRODUCT_BUNDLE_IDENTIFIER: ch.lkmc.SweetbriarTests
         GENERATE_INFOPLIST_FILE: YES
         TEST_HOST: $(BUILT_PRODUCTS_DIR)/Sweetbriar.app/Contents/MacOS/Sweetbriar
         BUNDLE_LOADER: $(TEST_HOST)
@@ -152,7 +152,7 @@ targets:
       - target: Sweetbriar
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.sweetbriar.SweetbriarUITests
+        PRODUCT_BUNDLE_IDENTIFIER: ch.lkmc.SweetbriarUITests
         GENERATE_INFOPLIST_FILE: YES
         TEST_TARGET_NAME: Sweetbriar
         # The runner inherits these: the reader canary needs loopback.

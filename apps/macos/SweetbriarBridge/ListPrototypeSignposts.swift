@@ -1,5 +1,5 @@
 // The list prototype's signposts (plan M0.10): one `OSSignposter`,
-// subsystem `com.sweetbriar`, category `ListPrototype`, marking
+// subsystem `ch.lkmc.Sweetbriar`, category `ListPrototype`, marking
 // "input" (the harness), "queue" (a read's request → completion),
 // "ffi" (the bridge call) and "apply" (page delivery handling) so an
 // Instruments run can break one update down. `os` exists only on
@@ -25,7 +25,7 @@ public enum ListPrototypeSignposts {
     /// The one signposter every prototype interval runs through
     /// (plan M0.10).
     public static let signposter = OSSignposter(
-        subsystem: "com.sweetbriar",
+        subsystem: "ch.lkmc.Sweetbriar",
         category: "ListPrototype"
     )
 
