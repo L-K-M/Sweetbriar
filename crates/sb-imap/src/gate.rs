@@ -76,7 +76,13 @@ impl Gate {
     /// or a decode fault ([`Self::poisoned`]). STARTTLS refuses to
     /// upgrade with any of these, so no plaintext crosses into TLS.
     pub(crate) fn has_plaintext_residual(&self) -> bool {
-        self.poisoned || !self.released.is_empty() || self.pending > 0
+        self.poisoned || self.has_buffered()
+    }
+
+    /// Bytes already received belong to the previous command boundary,
+    /// including an incomplete unsolicited frame that needs another read.
+    pub(crate) fn has_buffered(&self) -> bool {
+        !self.released.is_empty() || self.pending > 0
     }
 
     /// Reads one complete validated response. `Ok(empty)` is EOF; a

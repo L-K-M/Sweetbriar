@@ -115,6 +115,18 @@ the provider policies (`proton_bridge`, `generic_imap`) live in
   malformed/cancelled exchanges, and keep the fake-server and Dovecot
   acceptance below. b1-b3 consume the preceding merged contracts; no provider
   policy or store writes enter this leaf.
+- **b1 contract:** `list_mailboxes` and `examine` return owned observations
+  together with coalesced reconciliation notices. Buffered pre-command data,
+  including a partially received frame, stays under its previous selection
+  context and cannot supply a new selection's epoch. Unsolicited data is
+  preserved as invalidation evidence, not applied as a row journal. Each new
+  selection must supply FLAGS, EXISTS, RECENT, UIDVALIDITY and the tagged
+  READ-ONLY code; absent newer optional codes remain explicitly unknown.
+  Selection switches first use a correlated UNSELECT barrier when advertised;
+  otherwise the transport requires a fresh connection. This excludes old
+  in-flight epoch data as well as buffered frames, without CLOSE or EXPUNGE.
+  Conflicting epochs and decreasing UIDNEXT are refused. A metadata exchange
+  has a bounded response budget; the separate b3 streaming contract is kept.
 - **Goal:** the dialect-free command interface returns the read
   observations.
 - Body streaming must support spec/10's 100 MB message budget without
