@@ -51,6 +51,7 @@ fn child_name(path: &Path) -> io::Result<std::ffi::CString> {
     std::ffi::CString::new(name.as_bytes()).map_err(|_| io::ErrorKind::InvalidInput.into())
 }
 
+// Lowercase `sweetbriar` mirrors the Linux user.* name, not the bundle id.
 #[cfg(target_os = "macos")]
 const OWNER_ATTRIBUTE: &std::ffi::CStr = c"ch.lkmc.sweetbriar.verifier-owner";
 #[cfg(target_os = "linux")]
