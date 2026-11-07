@@ -78,13 +78,16 @@ where
                 }
             }
             ImapCoroutineState::Yielded(ImapYield::WantsWrite(bytes)) => {
+                // The gate may have observed a fault after the valid
+                // continuation it just released. Check every write,
+                // including literal payloads, before touching the socket.
+                if gate.poisoned() {
+                    return Err(ImapError::Malformed);
+                }
+                if !gate.reusable() {
+                    return Err(ImapError::UnexpectedCompletion);
+                }
                 if tag.is_none() {
-                    if gate.poisoned() {
-                        return Err(ImapError::Malformed);
-                    }
-                    if !gate.reusable() {
-                        return Err(ImapError::UnexpectedCompletion);
-                    }
                     // Trusted CommandCodec output: its first write starts
                     // with the tag. Further writes can be synchronizing
                     // literal continuations and retain that same tag.
@@ -166,6 +169,47 @@ mod tests {
                 .write_all(format!("{tag} OK authenticated\r\n").as_bytes())
                 .await
                 .unwrap();
+        };
+        tokio::join!(exchange, peer);
+    }
+
+    #[tokio::test]
+    async fn a_known_malformed_frame_prevents_a_literal_write() {
+        let (mut client, server) = tokio::io::duplex(1024);
+        let exchange = async move {
+            let mut gate = Gate::new();
+            gate.read(&mut client).await.unwrap();
+            let mut fragmentizer = Fragmentizer::new(MAX_MESSAGE_SIZE);
+            let result = run(
+                &mut gate,
+                &mut fragmentizer,
+                &mut client,
+                ImapLogin::new("synthetic-界", "password", ImapLoginOptions::default()).unwrap(),
+            )
+            .await;
+            assert!(matches!(result, Err(ImapError::Malformed)));
+        };
+        let peer = async {
+            let mut server = BufReader::new(server);
+            server.write_all(b"* OK ready\r\n").await.unwrap();
+            let mut line = String::new();
+            server.read_line(&mut line).await.unwrap();
+            assert!(line.ends_with("{13}\r\n"));
+            // Both messages are in the same read, so the gate knows the
+            // fault before it releases the valid continuation response.
+            server
+                .write_all(b"+ continue\r\nnot an IMAP response\r\n")
+                .await
+                .unwrap();
+            let mut byte = [0];
+            let count = tokio::time::timeout(Duration::from_secs(2), server.read(&mut byte))
+                .await
+                .expect("session closes")
+                .unwrap();
+            assert_eq!(
+                count, 0,
+                "literal bytes were sent after a known framing fault"
+            );
         };
         tokio::join!(exchange, peer);
     }
