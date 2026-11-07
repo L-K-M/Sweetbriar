@@ -4,6 +4,7 @@
 
 mod connection;
 mod error;
+mod exchange;
 mod gate;
 // M2.2b0: strict RFC 3501 section 5.1.3 mailbox-name codec. M2.2b1
 // consumes it for LIST/EXAMINE names; the allow stays until it lands.

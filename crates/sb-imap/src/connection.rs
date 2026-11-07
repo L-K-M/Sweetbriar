@@ -9,7 +9,7 @@ use std::fmt;
 use std::net::{IpAddr, Ipv4Addr};
 
 use io_imap::codec::{CommandCodec, ResponseCodec, encode::Encoder, fragmentizer::Fragmentizer};
-use io_imap::coroutine::{ImapCoroutine, ImapCoroutineState, ImapYield};
+use io_imap::coroutine::{ImapCoroutine, ImapYield};
 use io_imap::rfc2971::id::{ImapServerId, ImapServerIdOptions};
 use io_imap::rfc3501::capability::ImapCapabilityGet;
 use io_imap::rfc3501::greeting::{ImapGreetingGet, ImapGreetingGetOptions};
@@ -267,7 +267,9 @@ impl Connection {
         &self.capabilities
     }
 
-    /// Runs one standard-shape coroutine to completion over the gate.
+    /// Runs a single-command coroutine (or the greeting) over the gate.
+    /// Multi-command flows are split at the call sites so each exchange
+    /// has one expected tag, including across synchronizing literals.
     /// A poisoned gate fails the read with [`ImapError::Malformed`] and
     /// closes the connection; later runs report [`ImapError::Closed`]. A
     /// completed result before poison in the same fill is returned first.
@@ -287,31 +289,20 @@ impl Connection {
         // any await closes the transport, including after a partial write;
         // no later coroutine can consume the abandoned command's reply.
         let mut wire = self.wire.take().ok_or(ImapError::Closed)?;
-        let mut coroutine = coroutine;
-        let mut arg: Option<Vec<u8>> = None;
-        loop {
-            match coroutine.resume(&mut self.fragmentizer, arg.as_deref()) {
-                ImapCoroutineState::Complete(result) => {
-                    if !self.gate.poisoned() {
-                        self.wire = Some(wire);
-                    }
-                    return Ok(result);
-                }
-                ImapCoroutineState::Yielded(ImapYield::WantsRead) => {
-                    arg = Some(self.gate.read(&mut wire).await?);
-                }
-                ImapCoroutineState::Yielded(ImapYield::WantsWrite(bytes)) => {
-                    write_command(&mut wire, &bytes)
-                        .await
-                        .map_err(ImapError::from_io)?;
-                    arg = None;
-                }
-            }
+        let outcome =
+            crate::exchange::run(&mut self.gate, &mut self.fragmentizer, &mut wire, coroutine)
+                .await?;
+        if outcome.reusable {
+            self.wire = Some(wire);
         }
+        Ok(outcome.result)
     }
 }
 
-async fn write_command(wire: &mut (impl AsyncWrite + Unpin), bytes: &[u8]) -> std::io::Result<()> {
+pub(crate) async fn write_command(
+    wire: &mut (impl AsyncWrite + Unpin),
+    bytes: &[u8],
+) -> std::io::Result<()> {
     wire.write_all(bytes).await?;
     wire.flush().await
 }
@@ -382,33 +373,22 @@ async fn run_plain<W, C, T, E>(
     gate: &mut Gate,
     fragmentizer: &mut Fragmentizer,
     wire: &mut W,
-    mut coroutine: C,
+    coroutine: C,
 ) -> Result<T, ImapError>
 where
     W: AsyncRead + AsyncWrite + Unpin,
     C: ImapCoroutine<Yield = ImapYield, Return = Result<T, E>>,
     E: Into<ImapError>,
 {
-    let mut arg: Option<Vec<u8>> = None;
-    loop {
-        match coroutine.resume(fragmentizer, arg.as_deref()) {
-            ImapCoroutineState::Complete(result) => {
-                if gate.poisoned() {
-                    return Err(ImapError::Malformed);
-                }
-                return result.map_err(Into::into);
-            }
-            ImapCoroutineState::Yielded(ImapYield::WantsRead) => {
-                arg = Some(gate.read(wire).await?);
-            }
-            ImapCoroutineState::Yielded(ImapYield::WantsWrite(bytes)) => {
-                write_command(wire, &bytes)
-                    .await
-                    .map_err(ImapError::from_io)?;
-                arg = None;
-            }
-        }
+    let outcome = crate::exchange::run(gate, fragmentizer, wire, coroutine).await?;
+    if gate.poisoned() {
+        return Err(ImapError::Malformed);
     }
+    let result = outcome.result.map_err(Into::into)?;
+    if !outcome.reusable {
+        return Err(ImapError::Closed);
+    }
+    Ok(result)
 }
 
 /// True when `fragmentizer` still holds bytes a completed coroutine

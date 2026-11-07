@@ -37,6 +37,9 @@ pub enum ImapError {
     /// The strict gate found an undecodable response. The connection
     /// is closed and unusable; nothing after the fault was delivered.
     Malformed,
+    /// A tagged completion did not belong to the command being run,
+    /// or was buffered outside an exchange. The session is closed.
+    UnexpectedCompletion,
     /// The connection is closed; no further command can run.
     Closed,
     /// An I/O failure, with its native kind.
@@ -86,6 +89,9 @@ impl fmt::Display for ImapError {
                 f.write_str("plaintext followed the STARTTLS response; refusing the upgrade")
             }
             Self::Malformed => write!(f, "an undecodable response closed the connection"),
+            Self::UnexpectedCompletion => {
+                f.write_str("an unexpected command completion closed the connection")
+            }
             Self::Closed => f.write_str("the IMAP connection is closed"),
             Self::Io { kind, message } => write!(f, "IMAP I/O error ({kind:?}): {message}"),
             Self::Command { operation, message } => {
