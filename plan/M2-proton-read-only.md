@@ -84,6 +84,22 @@ the provider policies (`proton_bridge`, `generic_imap`) live in
   - plaintext injected after the tagged OK is refused;
   - setup, ID and best-effort LOGOUT succeed against Dovecot.
 
+#### M2.2a3 Correlated setup exchanges — M, linux
+
+- **Correctness prerequisite (2026-11-07):** native regressions show the
+  pinned sender can replace a LOGIN or CAPABILITY refusal with a later
+  tagged OK, and does not check the tag. Before b1, feed setup coroutines
+  one complete response at a time and correlate the first tagged reply
+  with the encoded command. Keep synchronizing literals, legitimate
+  unsolicited updates, cancellation ownership and STARTTLS's stricter
+  plaintext boundary. This adds no read observations or provider policy.
+- **Acceptance:** native tests reproduce refusal replacement before the
+  fix, reject mismatched completions and prevent buffered extra tagged
+  replies from authorizing a following command; implicit TLS, STARTTLS,
+  LOGIN literals, ID and best-effort LOGOUT still pass the fake server
+  and pinned Dovecot suite. Malformed replies and cancelled futures close
+  the connection. Run the full local gate and Dovecot suite.
+
 #### M2.2b Read operations — L, linux
 
 - **Split before implementation (2026-11-07):** retain the complete read
