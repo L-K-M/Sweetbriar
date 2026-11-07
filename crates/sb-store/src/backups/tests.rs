@@ -4746,7 +4746,6 @@ mod stage_tests {
     #[test]
     fn staging_io_failures_never_prepare() {
         let source = staging_source("staging-io-faults");
-        let (_scratch, fresh_paths, fresh) = open("staging-io-faults-fresh");
         let cancel = AtomicBool::new(false);
         for (op, nth, kind) in [
             (FsOp::CreatePrivateDir, 1, FaultKind::Eio),
@@ -4756,9 +4755,10 @@ mod stage_tests {
             (FsOp::SyncFile, 1, FaultKind::Eio),
             (FsOp::SyncDir, 1, FaultKind::Eio),
         ] {
+            let (_scratch, fresh_paths, fresh) = open("staging-io-faults-fresh");
             let selection = source.select_with(&fresh);
-            let fs: Arc<dyn Fs> = Arc::new(FaultFs::new(real_fs(), op, nth, kind));
-            let backups = faulty_backups_seeded(&fresh, &fresh_paths, fs, 7);
+            let fs = Arc::new(FaultFs::new(real_fs(), op, nth, kind));
+            let backups = faulty_backups_seeded(&fresh, &fresh_paths, fs.clone(), 7);
             assert!(
                 backups
                     .stage_restore(
@@ -4769,6 +4769,7 @@ mod stage_tests {
                     )
                     .is_err()
             );
+            assert!(fs.calls(op) >= nth, "{op:?} was not reached");
             source.assert_untouched();
         }
     }
