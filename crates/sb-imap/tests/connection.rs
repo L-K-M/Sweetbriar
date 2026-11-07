@@ -425,3 +425,328 @@ async fn logout_reports_transport_failure() {
         Err(ImapError::Closed)
     ));
 }
+
+// M2.2a2: STARTTLS against the fake Bridge profile.
+
+/// The Bridge profile plus STARTTLS, for the pre-TLS capability check.
+fn starttls_profile() -> Profile {
+    Profile::bridge().with_capabilities(&[
+        "IMAP4rev1",
+        "STARTTLS",
+        "IDLE",
+        "UIDPLUS",
+        "MOVE",
+        "UNSELECT",
+        "ID",
+    ])
+}
+
+/// The full STARTTLS setup conversation: pre-TLS CAPABILITY, the
+/// upgrade, then the post-TLS setup (spec/04).
+fn starttls_script(profile: &Profile) -> Script {
+    Script::new(vec![
+        profile.capability_step(),
+        Step::on(
+            Expect::command("STARTTLS"),
+            vec![Reply::ok("Begin TLS negotiation now"), Reply::UpgradeTls],
+        ),
+        profile.capability_step(),
+        Step::on(Expect::command("LOGIN"), vec![Reply::ok("LOGIN completed")]),
+        profile.capability_step(),
+        Step::on(
+            Expect::command("ID"),
+            vec![
+                Reply::untagged("ID (\"name\" \"Proton Mail Bridge\" \"version\" \"3.27.1\")"),
+                Reply::ok("ID completed"),
+            ],
+        ),
+    ])
+}
+
+/// A script whose STARTTLS step sends `reply`, for the refusal and
+/// injection cases.
+fn starttls_reply_script(reply: Vec<Reply>) -> Script {
+    let profile = starttls_profile();
+    Script::new(vec![
+        profile.capability_step(),
+        Step::on(Expect::command("STARTTLS"), reply),
+    ])
+}
+
+#[tokio::test]
+async fn starttls_setup_and_logout() {
+    let profile = starttls_profile();
+    let mut script = starttls_script(&profile);
+    script.steps.push(Step::on(
+        Expect::command("LOGOUT"),
+        vec![
+            Reply::untagged("BYE signing off"),
+            Reply::ok("LOGOUT completed"),
+        ],
+    ));
+    let server = FakeImapServer::serve(vec![script]).expect("serve");
+    let mut connection = Connection::connect_starttls(options(localhost(), server.port()))
+        .await
+        .expect("STARTTLS setup succeeds");
+
+    assert_eq!(
+        received_commands(&server),
+        [
+            "T1 CAPABILITY",
+            "T2 STARTTLS",
+            "T3 CAPABILITY",
+            "T4 LOGIN owner@example.org bridge-password",
+            "T5 CAPABILITY",
+            "T6 ID (\"name Sweetbriar version 0.0.1\")",
+        ],
+        "greeting, pre-TLS CAPABILITY, upgrade, post-TLS setup; no second greeting"
+    );
+    assert_eq!(server.unexpected_count(), 0, "no fallback answers");
+
+    connection.logout().await.expect("logout");
+    assert_eq!(received_commands(&server).last().unwrap(), "T7 LOGOUT");
+    assert_eq!(server.unexpected_count(), 0, "no fallback answers");
+}
+
+#[tokio::test]
+async fn starttls_missing_capability_is_rejected_before_credentials() {
+    let profile = Profile::bridge().with_capabilities(&["IMAP4rev1", "IDLE"]);
+    let server = FakeImapServer::serve(vec![starttls_script(&profile)]).expect("serve");
+
+    let err = Connection::connect_starttls(options(localhost(), server.port()))
+        .await
+        .expect_err("a server without STARTTLS is refused");
+    assert!(matches!(err, ImapError::StartTlsMissing), "got {err:?}");
+    assert_eq!(received_commands(&server), ["T1 CAPABILITY"]);
+    assert_eq!(server.unexpected_count(), 0, "no fallback answers");
+}
+
+#[tokio::test]
+async fn starttls_refusal_statuses_are_rejected_before_credentials() {
+    let refusals = vec![
+        Reply::TaggedNo("STARTTLS disabled".into()),
+        Reply::TaggedBad("unknown command".into()),
+        Reply::untagged("BYE going away"),
+        Reply::Continuation("send more".into()),
+        Reply::Raw(b"wrong-tag OK mismatched\r\n".to_vec()),
+    ];
+    for reply in refusals {
+        let server =
+            FakeImapServer::serve(vec![starttls_reply_script(vec![reply])]).expect("serve");
+        let err = Connection::connect_starttls(options(localhost(), server.port()))
+            .await
+            .expect_err("a refused STARTTLS is an error");
+        assert!(matches!(err, ImapError::StartTlsRefused), "got {err:?}");
+        assert_eq!(
+            received_commands(&server),
+            ["T1 CAPABILITY", "T2 STARTTLS"],
+            "no credential is sent after a refusal"
+        );
+        assert_eq!(server.unexpected_count(), 0, "no fallback answers");
+    }
+}
+
+#[tokio::test]
+async fn starttls_wrong_pin_is_rejected_before_login() {
+    let profile = starttls_profile();
+    let server = FakeImapServer::serve(vec![starttls_script(&profile)]).expect("serve");
+
+    let mut opts = options(localhost(), server.port());
+    let mut wrong = *opts.pin.as_bytes();
+    wrong[0] ^= 0xFF;
+    opts.pin = CertificatePin::from_bytes(wrong);
+
+    let err = Connection::connect_starttls(opts)
+        .await
+        .expect_err("a certificate off the pin must be refused");
+    let ImapError::PinMismatch { presented_sha256 } = err else {
+        panic!("expected a pin mismatch, got {err:?}");
+    };
+    assert_eq!(
+        presented_sha256, "f921c0432dab5a70401266a0216f46e6f6f795de47868447e9fde159771a24d1",
+        "the presented certificate's hash is reported"
+    );
+    assert_eq!(
+        received_commands(&server),
+        ["T1 CAPABILITY", "T2 STARTTLS"],
+        "the handshake failed before LOGIN"
+    );
+    assert_eq!(server.unexpected_count(), 0, "no fallback answers");
+}
+
+#[tokio::test]
+async fn starttls_login_refusal_is_reported() {
+    let profile = starttls_profile();
+    let script = Script::new(vec![
+        profile.capability_step(),
+        Step::on(
+            Expect::command("STARTTLS"),
+            vec![Reply::ok("Begin TLS negotiation now"), Reply::UpgradeTls],
+        ),
+        profile.capability_step(),
+        Step::on(
+            Expect::command("LOGIN"),
+            vec![Reply::TaggedNo("authentication failed".into())],
+        ),
+    ]);
+    let server = FakeImapServer::serve(vec![script]).expect("serve");
+
+    let err = Connection::connect_starttls(options(localhost(), server.port()))
+        .await
+        .expect_err("a refused LOGIN is an error");
+    assert!(matches!(err, ImapError::LoginRefused), "got {err:?}");
+    assert_eq!(
+        received_commands(&server),
+        [
+            "T1 CAPABILITY",
+            "T2 STARTTLS",
+            "T3 CAPABILITY",
+            "T4 LOGIN owner@example.org bridge-password",
+        ]
+    );
+    assert_eq!(server.unexpected_count(), 0, "no fallback answers");
+}
+
+#[tokio::test]
+async fn starttls_coalesced_complete_plaintext_is_refused() {
+    let server = FakeImapServer::serve(vec![starttls_reply_script(vec![
+        Reply::ok("Begin TLS negotiation now"),
+        Reply::Raw(b"* OK injected\r\n".to_vec()),
+        Reply::UpgradeTls,
+    ])])
+    .expect("serve");
+
+    let err = Connection::connect_starttls(options(localhost(), server.port()))
+        .await
+        .expect_err("trailing plaintext is refused");
+    assert!(matches!(err, ImapError::StartTlsInjection), "got {err:?}");
+    assert_eq!(
+        received_commands(&server),
+        ["T1 CAPABILITY", "T2 STARTTLS"],
+        "no credential is sent after an injection"
+    );
+    assert_eq!(server.unexpected_count(), 0, "no fallback answers");
+}
+
+#[tokio::test]
+async fn starttls_coalesced_partial_plaintext_is_refused() {
+    let server = FakeImapServer::serve(vec![starttls_reply_script(vec![
+        Reply::ok("Begin TLS negotiation now"),
+        Reply::Raw(b"* 1 FETCH (BODY[] {5}\r\nhel".to_vec()),
+        Reply::UpgradeTls,
+    ])])
+    .expect("serve");
+
+    let err = Connection::connect_starttls(options(localhost(), server.port()))
+        .await
+        .expect_err("a partial trailing frame is refused");
+    assert!(matches!(err, ImapError::StartTlsInjection), "got {err:?}");
+    assert_eq!(received_commands(&server), ["T1 CAPABILITY", "T2 STARTTLS"]);
+    assert_eq!(server.unexpected_count(), 0, "no fallback answers");
+}
+
+#[tokio::test]
+async fn starttls_plaintext_past_the_read_chunk_is_refused() {
+    let mut trailing = b"* OK ".to_vec();
+    trailing.extend(std::iter::repeat_n(b'x', 9000));
+    trailing.extend_from_slice(b"\r\n");
+    let server = FakeImapServer::serve(vec![starttls_reply_script(vec![
+        Reply::ok("Begin TLS negotiation now"),
+        Reply::Raw(trailing),
+        Reply::UpgradeTls,
+    ])])
+    .expect("serve");
+
+    let err = Connection::connect_starttls(options(localhost(), server.port()))
+        .await
+        .expect_err("trailing plaintext past the read chunk is refused");
+    assert!(matches!(err, ImapError::StartTlsInjection), "got {err:?}");
+    assert_eq!(received_commands(&server), ["T1 CAPABILITY", "T2 STARTTLS"]);
+    assert_eq!(server.unexpected_count(), 0, "no fallback answers");
+}
+
+#[tokio::test]
+async fn starttls_delayed_plaintext_fails_the_tls_handshake() {
+    let server = FakeImapServer::serve(vec![starttls_reply_script(vec![
+        Reply::ok("Begin TLS negotiation now"),
+        Reply::Delay(Duration::from_millis(250)),
+        Reply::Raw(b"* OK injected\r\n".to_vec()),
+        Reply::UpgradeTls,
+    ])])
+    .expect("serve");
+
+    let err = Connection::connect_starttls(options(localhost(), server.port()))
+        .await
+        .expect_err("later plaintext must fail the handshake");
+    assert!(matches!(err, ImapError::Io { .. }), "got {err:?}");
+    assert_eq!(
+        received_commands(&server),
+        ["T1 CAPABILITY", "T2 STARTTLS"],
+        "no credential is sent after a failed handshake"
+    );
+    assert_eq!(server.unexpected_count(), 0, "no fallback answers");
+}
+
+#[tokio::test]
+async fn cancelling_starttls_setup_closes_the_plain_socket() {
+    let script = Script::new(vec![Step::on(
+        Expect::command("CAPABILITY"),
+        vec![
+            Reply::Delay(Duration::from_millis(500)),
+            Reply::untagged("CAPABILITY IMAP4rev1 STARTTLS"),
+            Reply::ok("CAPABILITY completed"),
+        ],
+    )]);
+    let server = FakeImapServer::serve(vec![script]).expect("serve");
+
+    let mut setup = Box::pin(Connection::connect_starttls(options(
+        localhost(),
+        server.port(),
+    )));
+    tokio::select! {
+        result = &mut setup => {
+            panic!("setup completed before cancellation: {result:?}")
+        }
+        observed = tokio::time::timeout(Duration::from_secs(2), async {
+            while server.received().len() != 1 {
+                tokio::task::yield_now().await;
+            }
+        }) => observed.expect("the peer received CAPABILITY"),
+    }
+    drop(setup);
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while server.disconnected_count() == 0 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the plain socket is closed");
+    assert_eq!(received_commands(&server), ["T1 CAPABILITY"]);
+}
+
+/// spec/11's Dovecot suite for the STARTTLS transport: setup (which
+/// includes ID) and best-effort LOGOUT against the pinned container.
+/// `cargo xtask dovecot` sets `SB_IMAP_DOVECOT`; unset, the test is a
+/// no-op locally.
+#[tokio::test]
+async fn dovecot_starttls_setup_id_logout() {
+    let Ok(addr) = std::env::var("SB_IMAP_DOVECOT") else {
+        eprintln!("SB_IMAP_DOVECOT unset; not asked to run the Dovecot suite");
+        return;
+    };
+    let user = std::env::var("SB_IMAP_DOVECOT_USER").unwrap_or_else(|_| "spike".to_string());
+    let password =
+        std::env::var("SB_IMAP_DOVECOT_PASSWORD").unwrap_or_else(|_| "dovecot".to_string());
+    let (host, port) = addr.split_once(':').expect("SB_IMAP_DOVECOT is host:port");
+    let mut opts = options(
+        host.parse().expect("SB_IMAP_DOVECOT host"),
+        port.parse().expect("SB_IMAP_DOVECOT port"),
+    );
+    opts.user = user;
+    opts.password = Password::new(&password);
+
+    let mut connection = Connection::connect_starttls(opts)
+        .await
+        .expect("STARTTLS setup against Dovecot");
+    connection.logout().await.expect("best-effort LOGOUT");
+}

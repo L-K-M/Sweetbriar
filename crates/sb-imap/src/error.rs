@@ -9,6 +9,7 @@ use io_imap::rfc3501::capability::ImapCapabilityGetError;
 use io_imap::rfc3501::greeting::ImapGreetingGetError;
 use io_imap::rfc3501::login::ImapLoginError;
 use io_imap::rfc3501::logout::ImapLogoutError;
+use io_imap::send::ImapSendError;
 
 /// A connection or command failure. No variant carries a credential.
 #[derive(Debug)]
@@ -21,6 +22,17 @@ pub enum ImapError {
     NotLoopback,
     /// The server advertised `LOGINDISABLED`.
     LoginDisabled,
+    /// The server did not advertise STARTTLS in its pre-TLS
+    /// capabilities, so no upgrade is possible (spec/04).
+    StartTlsMissing,
+    /// STARTTLS was refused: a NO, BAD or BYE status, a continuation
+    /// request, or a tagged reply whose tag did not match the command.
+    StartTlsRefused,
+    /// Plaintext was already buffered past the STARTTLS tagged OK (in
+    /// the gate or the command fragmentizer), so the upgrade is
+    /// refused rather than letting those bytes cross into TLS
+    /// (RFC 3501 §6.2.1).
+    StartTlsInjection,
     /// The server refused LOGIN (NO, BAD or BYE).
     LoginRefused,
     /// The strict gate found an undecodable response. The connection
@@ -69,6 +81,11 @@ impl fmt::Display for ImapError {
             Self::NotLoopback => f.write_str("the host policy allows only the literal 127.0.0.1"),
             Self::LoginDisabled => f.write_str("the server advertises LOGINDISABLED"),
             Self::LoginRefused => f.write_str("the server refused LOGIN"),
+            Self::StartTlsMissing => f.write_str("the server does not advertise STARTTLS"),
+            Self::StartTlsRefused => f.write_str("the server refused STARTTLS"),
+            Self::StartTlsInjection => {
+                f.write_str("plaintext followed the STARTTLS response; refusing the upgrade")
+            }
             Self::Malformed => write!(f, "an undecodable response closed the connection"),
             Self::Closed => f.write_str("the IMAP connection is closed"),
             Self::Io { kind, message } => write!(f, "IMAP I/O error ({kind:?}): {message}"),
@@ -113,5 +130,11 @@ impl From<ImapServerIdError> for ImapError {
 impl From<ImapLogoutError> for ImapError {
     fn from(_err: ImapLogoutError) -> Self {
         Self::command("LOGOUT", "server exchange failed")
+    }
+}
+
+impl From<ImapSendError> for ImapError {
+    fn from(_err: ImapSendError) -> Self {
+        Self::command("STARTTLS", "server exchange failed")
     }
 }
