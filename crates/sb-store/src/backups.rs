@@ -25,6 +25,8 @@ pub use external::VerifiedExternalBackup;
 pub use image::BackupImageInspection;
 mod scratch;
 mod stage_copy;
+#[allow(dead_code)] // The staging qualifier consumes this read-only prerequisite.
+mod stage_schema;
 mod staging;
 pub use staging::{PreparedRestoreStage, RestoreMetadata};
 

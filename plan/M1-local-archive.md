@@ -1309,6 +1309,28 @@ local drafts. No network yet.
       artifact exists; never execute arbitrary inherited programs.
       `completed_at` is caller-asserted bookkeeping absent from the
       manifest: document it as provenance, never as a verified timestamp.
+    Qualification is split further before integration to retain its native proof
+    within the 1,450-line limit:
+    - **M1.8e3b2a Quarantine-schema inspection (L):** a private,
+      read-only prerequisite over a retained database reader. Require the
+      current schema version and the quarantine transaction's real STRICT
+      tables, ordinary named columns/types and physical rowid shapes.
+      Bound values, SQL text, columns and SQLite work before schema
+      materialization, with cancellation throughout. Native proof covers
+      views, virtual/non-STRICT tables, missing or generated columns,
+      rowid alias shadowing (including generated aliases), historical and
+      future versions, oversized metadata, large unrelated archive values,
+      inherited programs, retained-reader identity, sidecar refusal, I/O
+      failures and reader cleanup. It cannot quarantine, migrate or
+      certify a stage's eligibility, integrity or full application schema.
+    - **M1.8e3b2b Staging qualification (L):** consume the private copy
+      and schema inspection, recheck the coordinator, live root/incarnation
+      and verified metadata, run the current quarantine transaction,
+      checkpoint and close the staged connection and flush the database,
+      directories and parent before exposing a qualified capability.
+      Preserve all e3b row-state, binding, cancellation, SQL/I/O/flush,
+      wrong-generation/incarnation and crash acceptance above. A shape
+      inspection alone is never sufficient authority to swap a database.
   - **M1.8f Durable swap and startup recovery (L):** the restore-pending
     marker (new incarnation, generation id and path), both renames with
     their flushes, the startup handling of all three marker states, the

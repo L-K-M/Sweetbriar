@@ -8,7 +8,7 @@ use std::time::Duration;
 
 const PROGRESS_OPS: i32 = 1_000;
 pub(super) const MAX_PROGRESS_CALLS: u32 = 2_000;
-const MAX_SQLITE_VALUE: i32 = 1_048_576;
+pub(super) const MAX_SQLITE_VALUE: i32 = 1_048_576;
 
 /// Result of inspecting a retained image; cancellation carries no identity.
 #[derive(Debug, PartialEq, Eq)]
