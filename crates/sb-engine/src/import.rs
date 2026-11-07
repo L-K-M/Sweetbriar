@@ -24,16 +24,18 @@ use sb_resources::{
     AcquiredMessage, ExportCaptureRequest, ExportFormat, ExportJob, ExportJobState, ExportScope,
     ExportSearchSort, FlagExtraction, ImportInventory, ImportInventoryOutcome, ImportJobBatch,
     ImportJobCheckpoint, ImportJobRecord, ImportJobState, ImportMessage, JobKind, MAX_IMPORT_BATCH,
-    MAX_IMPORT_CHANGES_BYTES, MboxVariant, RebuildPhase, Receipt, Resources, Scoped,
-    SourceAcquisition, SourceInventory, SourcePosition, StoreError, UserPause, WritePriority,
-    advance_export_job, advance_import_job, commit_import_job_batch, create_export_job,
-    create_import_job, encode_job_receipt, export_job, finished_import_jobs, import_job,
-    import_job_source, import_job_sources, import_report, job_kind, rebuild_job, receipt_job_id,
-    record_import_sources, recorded_import_job_sources, recoverable_export_jobs,
+    MAX_IMPORT_CHANGES_BYTES, ManifestProofRegistry, MboxVariant, RebuildPhase, Receipt, Resources,
+    Scoped, SourceAcquisition, SourceInventory, SourcePosition, StoreError, UserPause,
+    WritePriority, advance_export_job, advance_import_job, await_write, commit_import_job_batch,
+    create_export_job, create_import_job, encode_job_receipt, export_job, finished_import_jobs,
+    import_job, import_job_source, import_job_sources, import_report, job_kind, rebuild_job,
+    receipt_job_id, record_import_sources, recorded_import_job_sources, recoverable_export_jobs,
     recoverable_import_jobs, run_once, set_user_pause,
 };
 
 use crate::engine::{Spawn, Worker, validate_idempotency_key};
+use crate::index::IndexJobs;
+use crate::received::ReceivedJobs;
 use crate::threads::{ThreadRebuilds, schedule_threads};
 use crate::windows::SelectionId;
 use crate::{Engine, EngineError, SearchSort, SearchSpec};
@@ -153,14 +155,6 @@ impl Claim {
             id: id.to_owned(),
             held: true,
         })
-    }
-
-    /// Whether `cancel_job` reached this job.
-    fn cancelled(&self) -> bool {
-        self.jobs
-            .lock()
-            .get(&self.id)
-            .is_some_and(|live| live.cancelled)
     }
 
     /// A check blocking work polls: cancelled, or shutting down.
@@ -939,9 +933,27 @@ fn all_snapshots<'a>(
     snapshots
 }
 
-/// Whether the job left this worker's hands: no longer at `revision`
-/// (`None`: no longer in inventory), as a cancel leaves it. Any other
-/// `Conflict` is a real one and fails the job.
+/// Whether `current` shows the job left this worker's hands: no longer
+/// at `revision` (`None`: no longer in inventory), as a cancel leaves
+/// it. Any other `Conflict` is a real one and fails the job.
+fn moved_on_check(current: &ImportJobRecord, revision: Option<i64>) -> bool {
+    match revision {
+        None => current.state() != ImportJobState::Inventory,
+        Some(revision) => {
+            current.state() != ImportJobState::Running || current.revision() != revision
+        }
+    }
+}
+
+/// `moved_on_check` on the caller's own blocking read (the ingest turn).
+fn moved_on_now(resources: &Resources, id: &str, revision: Option<i64>) -> bool {
+    resources
+        .read(|tx| import_job(tx, id))
+        .map(|current| moved_on_check(&current, revision))
+        .unwrap_or(false)
+}
+
+/// `moved_on_check` on the blocking pool, for the async inventory path.
 async fn moved_on(worker: &Worker, id: &str, revision: Option<i64>) -> bool {
     let job = id.to_owned();
     let current = worker
@@ -950,12 +962,7 @@ async fn moved_on(worker: &Worker, id: &str, revision: Option<i64>) -> bool {
     let Ok(Ok(current)) = current else {
         return false;
     };
-    match revision {
-        None => current.state() != ImportJobState::Inventory,
-        Some(revision) => {
-            current.state() != ImportJobState::Running || current.revision() != revision
-        }
-    }
+    moved_on_check(&current, revision)
 }
 
 /// Record the sources in budget-sized transactions while the job is in
@@ -1024,47 +1031,112 @@ struct Gathered {
 
 /// Every source from the checkpoint's next, in order; then `completed`.
 /// `Ok` also covers a pause at shutdown and a cancelled job.
+///
+/// The whole turn is one counted blocking task (M1.7d2c3): the manifest
+/// proof registry bundle sources verify against is created lazily on
+/// that task's stack and lives for the whole mixed plain/bundle turn,
+/// so no session outlives it and no manifest is re-validated per source.
 async fn run_ingest(worker: &Worker, claim: &Claim) -> Result<(), String> {
     let id = claim.id.clone();
-    let read = id.clone();
-    let job = worker
-        .blocking(move |resources| resources.read(|tx| import_job(tx, &read)))
+    let stop = claim.stop_check(worker);
+    let indexer = Arc::clone(worker.indexer());
+    let received = Arc::clone(worker.received());
+    worker
+        .blocking(move |resources| ingest_turn(resources, &id, &stop, &indexer, &received))
         .await
         .map_err(|e| e.to_string())?
+}
+
+struct IngestCompletion {
+    revision: i64,
+    checkpoint: ImportJobCheckpoint,
+}
+
+/// Finish the registry after every acquisition/cursor drops, before
+/// acknowledging completion. Cleanup failure must remain observable
+/// on the unfinished job and must not erase a primary ingest failure.
+fn ingest_turn(
+    resources: &Resources,
+    id: &str,
+    stop: &(dyn Fn() -> bool + Send + Sync),
+    indexer: &IndexJobs,
+    received: &ReceivedJobs,
+) -> Result<(), String> {
+    let mut registry = None;
+    let primary = ingest_sources(resources, id, stop, indexer, received, &mut registry);
+    let cleanup = registry.map(ManifestProofRegistry::finish);
+    let completion = match (primary, cleanup) {
+        (Err(primary), Some(Err(cleanup))) => Err(format!(
+            "{primary}; manifest proof registry cleanup failed: {cleanup}"
+        )),
+        (Err(primary), _) => Err(primary),
+        (Ok(_), Some(Err(cleanup))) => {
+            Err(format!("manifest proof registry cleanup failed: {cleanup}"))
+        }
+        (Ok(completion), _) => Ok(completion),
+    }?;
+    let Scoped::Done(IngestCompletion {
+        revision,
+        checkpoint,
+    }) = completion
+    else {
+        return Ok(());
+    };
+    let now = resources.now();
+    let job = id.to_owned();
+    match await_write(resources.write(PRIORITY, move |tx| {
+        let state = ImportJobState::Completed;
+        advance_import_job(tx, &job, revision, state, &checkpoint, now).map(drop)
+    })) {
+        Ok(()) => Ok(()),
+        Err(StoreError::Conflict { .. }) if moved_on_now(resources, id, Some(revision)) => Ok(()),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+/// The ingest loop itself: sources in the checkpoint's order, batches
+/// committed on the writer and waited for on this blocking thread
+/// (`await_write` parks it, like the report writer's own waits). Indexer
+/// and received wakeups fire only after a commit, as before.
+fn ingest_sources<'a>(
+    resources: &'a Resources,
+    id: &str,
+    stop: &(dyn Fn() -> bool + Send + Sync),
+    indexer: &IndexJobs,
+    received: &ReceivedJobs,
+    registry: &mut Option<ManifestProofRegistry<'a>>,
+) -> Result<Scoped<IngestCompletion>, String> {
+    let job = resources
+        .read(|tx| import_job(tx, id))
         .map_err(|e| e.to_string())?;
     if job.state() != ImportJobState::Running {
-        return Ok(());
+        return Ok(Scoped::Stopped);
     }
     let mut revision = job.revision();
     let mut checkpoint = job.checkpoint().clone();
     while checkpoint.next() < checkpoint.sources() {
         let ordinal = checkpoint.next();
         let variant = checkpoint.variant(ordinal);
-        let job = id.clone();
-        let (source, mut position, mut acquisition) = worker
-            .blocking(move |resources| open(resources, &job, ordinal, variant))
-            .await
-            .map_err(|e| e.to_string())?
+        let (source, mut position) = resources
+            .read(|tx| import_job_source(tx, id, ordinal))
             .map_err(|e| e.to_string())?;
+        let mut acquisition = match open(resources, registry, &source, position, variant, stop)
+            .map_err(|e| e.to_string())?
+        {
+            Scoped::Done(acquisition) => acquisition,
+            // A stop during manifest proof production pauses the job.
+            Scoped::Stopped => return Ok(Scoped::Stopped),
+        };
         let mut carry = None;
         loop {
             let used = source.mailbox().len() * 2 + checkpoint.to_json().len() + CHECKPOINT_SLACK;
             let budget = MAX_IMPORT_CHANGES_BYTES.saturating_sub(used);
-            let stop = claim.stop_check(worker);
-            let (back, gathered) = worker
-                .blocking(move |resources| {
-                    let gathered =
-                        gather(resources, &mut acquisition, position, carry, budget, &stop);
-                    (acquisition, gathered)
-                })
-                .await
-                .map_err(|e| e.to_string())?;
-            acquisition = back;
+            let gathered = gather(resources, &mut acquisition, position, carry, budget, stop);
             carry = gathered.carry;
             let finished = gathered.position.messages() == source.message_count();
             if !gathered.messages.is_empty() || finished {
                 let batch = Batch {
-                    job: id.clone(),
+                    job: id.to_owned(),
                     revision,
                     ordinal,
                     mailbox: source.mailbox().to_owned(),
@@ -1072,17 +1144,19 @@ async fn run_ingest(worker: &Worker, claim: &Claim) -> Result<(), String> {
                     position: gathered.position,
                     flags_incomplete: gathered.flags_incomplete,
                 };
-                match commit(worker, batch).await {
+                match commit(resources, batch) {
                     Ok(committed) => {
                         checkpoint = committed.checkpoint().clone();
                         revision = committed.revision();
                         position = gathered.position;
+                        indexer.wake();
+                        received.wake();
                     }
                     // Cancelled since the last commit: the batch goes.
                     Err(StoreError::Conflict { .. })
-                        if moved_on(worker, &id, Some(revision)).await =>
+                        if moved_on_now(resources, id, Some(revision)) =>
                     {
-                        return Ok(());
+                        return Ok(Scoped::Stopped);
                     }
                     Err(error) => return Err(error.to_string()),
                 }
@@ -1090,40 +1164,48 @@ async fn run_ingest(worker: &Worker, claim: &Claim) -> Result<(), String> {
             if let Some(error) = gathered.error {
                 return Err(error.to_string());
             }
-            if gathered.stopped || claim.cancelled() {
-                return Ok(());
+            if gathered.stopped || stop() {
+                return Ok(Scoped::Stopped);
             }
             if finished {
                 break;
             }
         }
     }
-    let now = worker.resources().now();
-    let job = id.clone();
-    match worker
-        .resources()
-        .write(PRIORITY, move |tx| {
-            let state = ImportJobState::Completed;
-            advance_import_job(tx, &job, revision, state, &checkpoint, now).map(drop)
-        })
-        .await
-    {
-        Ok(()) => Ok(()),
-        Err(StoreError::Conflict { .. }) if moved_on(worker, &id, Some(revision)).await => Ok(()),
-        Err(error) => Err(error.to_string()),
-    }
+    Ok(Scoped::Done(IngestCompletion {
+        revision,
+        checkpoint,
+    }))
 }
 
-/// Load a source row and open its verified snapshot at its position.
-fn open(
-    resources: &Resources,
-    job: &str,
-    ordinal: u64,
+/// Open a source's acquisition at its position (spec/09): bundle members
+/// only through the turn's manifest-verified session, creating the
+/// registry on the first one; plain sources use the verified snapshot.
+/// No bundle ever falls back to the plain path.
+fn open<'a>(
+    resources: &'a Resources,
+    registry: &mut Option<ManifestProofRegistry<'a>>,
+    source: &SourceInventory,
+    position: SourcePosition,
     variant: Option<MboxVariant>,
-) -> Result<(SourceInventory, SourcePosition, SourceAcquisition), StoreError> {
-    let (source, position) = resources.read(|tx| import_job_source(tx, job, ordinal))?;
-    let acquisition = resources.open_import_acquisition(&source, variant, position)?;
-    Ok((source, position, acquisition))
+    stop: &dyn Fn() -> bool,
+) -> Result<Scoped<SourceAcquisition>, StoreError> {
+    if source.bundle().is_none() {
+        return resources
+            .open_import_acquisition(source, variant, position)
+            .map(Scoped::Done);
+    }
+    let registry = match registry {
+        Some(registry) => registry,
+        slot @ None => slot.insert(resources.manifest_proof_registry()?),
+    };
+    resources.open_bundle_acquisition(registry, source, position, |_| {
+        if stop() {
+            ControlFlow::Break(())
+        } else {
+            ControlFlow::Continue(())
+        }
+    })
 }
 
 /// Acquire up to one batch: 250 messages within `budget` bytes of
@@ -1187,26 +1269,23 @@ struct Batch {
     flags_incomplete: u64,
 }
 
-async fn commit(worker: &Worker, batch: Batch) -> Result<ImportJobRecord, StoreError> {
-    let now = worker.resources().now();
-    let committed = worker
-        .resources()
-        .write(PRIORITY, move |tx| {
-            let rows = ImportJobBatch {
-                job_id: &batch.job,
-                revision: batch.revision,
-                ordinal: batch.ordinal,
-                mailbox: &batch.mailbox,
-                messages: &batch.messages,
-                position: batch.position,
-                flags_incomplete: batch.flags_incomplete,
-            };
-            commit_import_job_batch(tx, &rows, now)
-        })
-        .await?;
-    worker.indexer().wake();
-    worker.received().wake();
-    Ok(committed)
+/// Commit one batch on the writer; the caller's blocking thread parks on
+/// the write future until the commit resolves (spec/03's writer stays
+/// the only one writing).
+fn commit(resources: &Resources, batch: Batch) -> Result<ImportJobRecord, StoreError> {
+    let now = resources.now();
+    await_write(resources.write(PRIORITY, move |tx| {
+        let rows = ImportJobBatch {
+            job_id: &batch.job,
+            revision: batch.revision,
+            ordinal: batch.ordinal,
+            mailbox: &batch.mailbox,
+            messages: &batch.messages,
+            position: batch.position,
+            flags_incomplete: batch.flags_incomplete,
+        };
+        commit_import_job_batch(tx, &rows, now)
+    }))
 }
 
 /// A worker's export turn (spec/09): seal the capture when the job is

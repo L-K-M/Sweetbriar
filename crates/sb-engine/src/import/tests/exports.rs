@@ -12,7 +12,7 @@ use super::*;
 use crate::{Anchor, ExportScopeInput, SelectionInput, WindowSpec};
 
 /// Import `Inbox.mbox` to completion so an export has mail to stream.
-fn import_inbox(engine: &Engine) {
+pub(super) fn import_inbox(engine: &Engine) {
     let id = start(engine, &[fixtures().join("Inbox.mbox")]);
     settle(engine, &id, ImportJobState::AwaitingConfirmation);
     confirm(engine, &id, vec![]).unwrap();
@@ -22,7 +22,7 @@ fn import_inbox(engine: &Engine) {
 /// The imported mailbox's id and the list generation once it stops
 /// moving: post-ingest work (thread rebuilds) still writes after the
 /// import job completes, and the capture fences on its generation.
-fn mailbox(engine: &Engine) -> (i64, u64) {
+pub(super) fn mailbox(engine: &Engine) -> (i64, u64) {
     let id = engine
         .resources()
         .read(|tx| {
@@ -85,14 +85,14 @@ fn seal(engine: &Engine, id: &str, mailbox_id: i64, generation: u64, dest: &Path
     }
 }
 
-fn start_export(engine: &Engine, key: &str, dest: &Path, scope: ExportScopeInput) -> ExportStarted {
-    block_on(engine.start_export(
-        key,
-        scope,
-        ExportFormat::Mboxrd,
-        dest.to_string_lossy().to_string(),
-    ))
-    .unwrap()
+fn start_export(
+    engine: &Engine,
+    key: &str,
+    dest: &Path,
+    scope: ExportScopeInput,
+    format: ExportFormat,
+) -> ExportStarted {
+    block_on(engine.start_export(key, scope, format, dest.to_string_lossy().to_string())).unwrap()
 }
 
 fn export_status(engine: &Engine, id: &str) -> ExportJobStatus {
@@ -101,7 +101,12 @@ fn export_status(engine: &Engine, id: &str) -> ExportJobStatus {
 
 /// Start a mailbox export and wait for it to finish; a stale-generation
 /// failure just means the fence moved — retry with a fresh one.
-fn complete_export(engine: &Engine, mailbox_id: i64, dest: &Path) -> ExportJobStatus {
+pub(super) fn complete_export(
+    engine: &Engine,
+    mailbox_id: i64,
+    dest: &Path,
+    format: ExportFormat,
+) -> ExportJobStatus {
     for _ in 0..3 {
         let (_, generation) = mailbox(engine);
         let key = engine.new_idempotency_key();
@@ -113,6 +118,7 @@ fn complete_export(engine: &Engine, mailbox_id: i64, dest: &Path) -> ExportJobSt
                 mailbox_id,
                 generation,
             },
+            format,
         );
         let job = settle_export_deadline(engine, started.job_id(), Duration::from_secs(60));
         if job.state() == ExportJobState::Failed && job.checkpoint_json().contains("stale") {
@@ -131,7 +137,11 @@ fn complete_export(engine: &Engine, mailbox_id: i64, dest: &Path) -> ExportJobSt
 
 /// Bounded wait: returns the last status even if the state never
 /// reached `state` (the caller decides what to assert on it).
-fn settle_export_deadline(engine: &Engine, id: &str, budget: Duration) -> ExportJobStatus {
+pub(super) fn settle_export_deadline(
+    engine: &Engine,
+    id: &str,
+    budget: Duration,
+) -> ExportJobStatus {
     let deadline = Instant::now() + budget;
     loop {
         let live = engine.imports().lock().contains_key(id);
@@ -166,7 +176,7 @@ fn settle_export(engine: &Engine, id: &str, state: ExportJobState) -> ExportJobS
 
 /// Published entry names in `dir`: the manifest, claim and lock are
 /// the job's bookkeeping, not output.
-fn published(dest: &Path) -> Vec<String> {
+pub(super) fn published(dest: &Path) -> Vec<String> {
     let mut names = fs::read_dir(dest)
         .unwrap()
         .map(|entry| entry.unwrap().file_name().to_string_lossy().to_string())
@@ -177,7 +187,7 @@ fn published(dest: &Path) -> Vec<String> {
 }
 
 /// Acquisition hashes in the store, for comparing runs.
-fn hashes(engine: &Engine) -> Vec<String> {
+pub(super) fn hashes(engine: &Engine) -> Vec<String> {
     let mut hashes = engine
         .resources()
         .read(|tx| {
@@ -284,7 +294,7 @@ fn an_export_captures_and_publishes_to_completion() {
     let occurrences = count(&engine, "SELECT COUNT(*) FROM occurrences");
     let dest = scratch.path().join("out");
 
-    let done = complete_export(&engine, mailbox_id, &dest);
+    let done = complete_export(&engine, mailbox_id, &dest, ExportFormat::Mboxrd);
     assert!(
         !done.checkpoint_json().is_empty() && done.captured_chunks() > 0,
         "a completed export keeps its capture and output checkpoints"
@@ -327,8 +337,8 @@ fn the_export_request_replays_its_receipt_without_a_second_job() {
     };
 
     let key = engine.new_idempotency_key();
-    let first = start_export(&engine, &key, &dest, scope.clone());
-    let again = start_export(&engine, &key, &dest, scope.clone());
+    let first = start_export(&engine, &key, &dest, scope.clone(), ExportFormat::Mboxrd);
+    let again = start_export(&engine, &key, &dest, scope.clone(), ExportFormat::Mboxrd);
     assert_eq!(first.job_id(), again.job_id());
     assert_eq!(
         first.receipt().result_json(),
@@ -340,6 +350,7 @@ fn the_export_request_replays_its_receipt_without_a_second_job() {
         &engine.new_idempotency_key(),
         &scratch.path().join("other"),
         scope,
+        ExportFormat::Mboxrd,
     );
     assert_ne!(replay.job_id(), first.job_id());
     for job_id in [first.job_id(), replay.job_id()] {
@@ -420,6 +431,7 @@ fn an_export_against_a_stale_generation_fails_instead_of_capturing() {
             mailbox_id,
             generation: generation + 1,
         },
+        ExportFormat::Mboxrd,
     );
     let failed = settle_export(&engine, started.job_id(), ExportJobState::Failed);
     assert!(
@@ -483,7 +495,7 @@ fn an_exported_mbox_reimports_byte_identical_acquisitions() {
     let (mailbox_id, _) = mailbox(&engine);
     let dest = scratch.path().join("out");
 
-    complete_export(&engine, mailbox_id, &dest);
+    complete_export(&engine, mailbox_id, &dest, ExportFormat::Mboxrd);
     let paths = fs::read_dir(&dest)
         .unwrap()
         .map(|entry| entry.unwrap().path())
@@ -528,6 +540,7 @@ fn a_frozen_selection_exports_exactly_its_membership() {
         &key,
         &dest,
         ExportScopeInput::Selection(snapshot.selection_id().clone()),
+        ExportFormat::Mboxrd,
     );
     let done = settle_export(&engine, started.job_id(), ExportJobState::Completed);
     assert!(done.captured_chunks() > 0, "the capture sealed chunks");
@@ -553,6 +566,7 @@ fn an_export_job_query_reports_the_durable_record() {
             mailbox_id,
             generation,
         },
+        ExportFormat::Mboxrd,
     );
     let job = export_status(&engine, started.job_id());
     assert!(

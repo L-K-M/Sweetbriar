@@ -140,7 +140,7 @@ fn counts(engine: &Engine) -> Counts {
 
 /// spec/11 invariants: SQLite is intact and every acquisition's object
 /// is published (spec/03 layout `objects/sha256/ab/cd/<hash>`).
-fn assert_intact(engine: &Engine, root: &Path) {
+pub(super) fn assert_intact(engine: &Engine, root: &Path) {
     assert_eq!(strings(engine, "PRAGMA integrity_check"), ["ok"]);
     let dangling = strings(engine, "PRAGMA foreign_key_check");
     assert!(dangling.is_empty(), "{dangling:?}");
@@ -234,7 +234,7 @@ fn the_same_file_decodes_by_its_chosen_variant_and_the_job_asks_first() {
 
 /// 50 distinct cut points in `first..=last`, drawn by splitmix64 from
 /// a fixed seed so a failure replays exactly.
-fn cut_points(first: u64, last: u64) -> Vec<u64> {
+pub(super) fn cut_points(first: u64, last: u64) -> Vec<u64> {
     assert!(
         first <= last,
         "no import operations were measured after startup: is the filesystem seam connected?"
@@ -258,7 +258,7 @@ fn cut_points(first: u64, last: u64) -> Vec<u64> {
 
 /// Each job's state as the cut left it, read through the store before
 /// the engine's recovery can change it.
-fn states_before_recovery(root: &Path) -> Vec<(String, ImportJobState)> {
+pub(super) fn states_before_recovery(root: &Path) -> Vec<(String, ImportJobState)> {
     let resources = Resources::open(root).unwrap();
     let jobs = resources
         .read(|tx| {
@@ -279,7 +279,7 @@ fn states_before_recovery(root: &Path) -> Vec<(String, ImportJobState)> {
 /// After a cut and the engine's recovery, finish the job the cut left,
 /// under its own id (spec/09). Only an interrupted inventory, which
 /// recovery fails, or a cut before the job existed may start again.
-fn finish_after_cut(
+pub(super) fn finish_after_cut(
     engine: &Engine,
     before: &[(String, ImportJobState)],
     paths: &[PathBuf],
@@ -301,12 +301,12 @@ fn finish_after_cut(
 
 /// What a completed job says about itself, beyond the store's rows.
 #[derive(Debug, PartialEq, Eq)]
-struct Outcome {
-    totals: ImportTotals,
-    positions: Vec<SourcePosition>,
+pub(super) struct Outcome {
+    pub(super) totals: ImportTotals,
+    pub(super) positions: Vec<SourcePosition>,
 }
 
-fn outcome(job: &ImportJobStatus) -> Outcome {
+pub(super) fn outcome(job: &ImportJobStatus) -> Outcome {
     Outcome {
         totals: job.checkpoint().totals(),
         positions: job
