@@ -4,6 +4,8 @@
 
 mod body;
 mod headers;
+mod idle;
+pub use idle::IdleEvent;
 mod uids;
 
 use std::collections::BTreeSet;
@@ -73,6 +75,7 @@ enum ReadKind {
     HeaderFetch,
     BodyFetch,
     SelectedCapability,
+    Idle,
 }
 
 impl ReadKind {
@@ -86,6 +89,7 @@ impl ReadKind {
             Self::HeaderFetch => "UID FETCH",
             Self::BodyFetch => "UID FETCH",
             Self::SelectedCapability => "CAPABILITY",
+            Self::Idle => "IDLE",
         }
     }
 
@@ -97,6 +101,7 @@ impl ReadKind {
                 | Self::HeaderFetch
                 | Self::BodyFetch
                 | Self::SelectedCapability
+                | Self::Idle
         )
     }
 }
@@ -437,7 +442,7 @@ fn notice(
     response: &Response<'_>,
     context: Option<&MailboxContext>,
     notices: &mut Vec<MailboxNotice>,
-) -> Result<(), ImapError> {
+) -> Result<Option<usize>, ImapError> {
     let item = match response {
         Response::Data(Data::List { .. }) => {
             if let Response::Data(data) = response {
@@ -459,30 +464,37 @@ fn notice(
                 ),
                 _,
             ) => {
-                changed(context, notices);
-                return Ok(());
+                return Ok(Some(changed(context, notices)));
             }
-            _ => return Ok(()),
+            _ => return Ok(None),
         },
         Response::Data(_) => {
-            changed(context, notices);
-            return Ok(());
+            return Ok(Some(changed(context, notices)));
         }
         _ => return Err(ImapError::UnexpectedCompletion),
     };
-    if !notices.contains(&item) {
-        notices.push(item);
-    }
-    Ok(())
+    let index = match notices.iter().position(|existing| existing == &item) {
+        Some(index) => index,
+        None => {
+            notices.push(item);
+            notices.len() - 1
+        }
+    };
+    Ok(Some(index))
 }
 
-fn changed(context: Option<&MailboxContext>, notices: &mut Vec<MailboxNotice>) {
-    // One exchange has at most its previous selection and an unattributed
-    // switch window. Coalesce before cloning a possibly long mailbox name;
-    // a flood of tiny updates must not repeatedly copy that name.
-    if !notices.iter().any(|item| matches!(item, MailboxNotice::Changed { mailbox } if mailbox.is_some() == context.is_some())) {
-        notices.push(MailboxNotice::Changed { mailbox: context.cloned() });
+fn changed(context: Option<&MailboxContext>, notices: &mut Vec<MailboxNotice>) -> usize {
+    // One metadata exchange has at most its previous selection and an
+    // unattributed switch window. An IDLE watch keeps one fixed selection.
+    // Coalesce before cloning a potentially long name; repeated IDLE triggers
+    // borrow the cached notice rather than comparing/copying the whole name.
+    if let Some(index) = notices.iter().position(|item| matches!(item, MailboxNotice::Changed { mailbox } if mailbox.is_some() == context.is_some())) {
+        return index;
     }
+    notices.push(MailboxNotice::Changed {
+        mailbox: context.cloned(),
+    });
+    notices.len() - 1
 }
 
 #[cfg(test)]

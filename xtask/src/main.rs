@@ -552,7 +552,27 @@ fn step_dovecot(root: &Path) -> bool {
         .env("SB_IMAP_DOVECOT", addr)
         .env("SB_IMAP_DOVECOT_USER", "spike")
         .env("SB_IMAP_DOVECOT_PASSWORD", DOVECOT_PASSWORD);
-    run(&mut deadlines)
+    if !run(&mut deadlines) {
+        return false;
+    }
+    let mut idle = cargo(
+        root,
+        &[
+            "test",
+            "-p",
+            "sb-imap",
+            "--test",
+            "idle_dovecot",
+            "dovecot_idle_renews_stops_and_keeps_the_message_unseen",
+            "--",
+            "--exact",
+            "--nocapture",
+        ],
+    );
+    idle.env("SB_IMAP_DOVECOT", addr)
+        .env("SB_IMAP_DOVECOT_USER", "spike")
+        .env("SB_IMAP_DOVECOT_PASSWORD", DOVECOT_PASSWORD);
+    run(&mut idle)
 }
 
 /// Docker's port proxy accepts a connection before the container's
