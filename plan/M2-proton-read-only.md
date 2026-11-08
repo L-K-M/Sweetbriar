@@ -276,7 +276,16 @@ the provider policies (`proton_bridge`, `generic_imap`) live in
   completion and cancellation. Append an actual Dovecot timeout/reconnect
   witness after the unchanged seven suites, retaining unseen PEEK behavior.
   This slice closes timed-out sessions; reconnection policy follows in c3.
-  **c2 Correlated IDLE watcher (L)** consumes c1, retaining epoch, tag,
+  **c2a Bounded notice and received-frame primitives (S)** precedes the
+  watcher after the complete c2 implementation and proof measured 1,454
+  gross lines. Return stable indices into the existing bounded per-exchange
+  notice cache so repeated triggers can borrow one mailbox name. Expose
+  the Gate's complete received unsolicited queue without waiting on a
+  partial tail, sharing the checks with the existing body-tail handoff.
+  Include native long-name cache and complete/partial queue proof plus all
+  existing malformed/illegal-tail cases. No public watcher or protocol
+  authority is introduced here; no proof is cut to fit.
+  **c2b Correlated IDLE watcher (L)** consumes c1/c2a, retaining epoch, tag,
   received-tail and cancellation checks through continuation, DONE and
   matched completion; renew at 25 min with virtual-clock and actual
   Dovecot proof. **c3 Reconnect/backoff (L)** consumes c1/c2 through an
