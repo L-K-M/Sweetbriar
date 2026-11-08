@@ -39,6 +39,7 @@ struct Probe {
     max_len: AtomicUsize,
     syncs: AtomicUsize,
     fail_writes: AtomicBool,
+    fail_truncate: AtomicBool,
     fail_reads: AtomicBool,
     fail_sync: AtomicBool,
     short_reads: AtomicBool,
@@ -53,6 +54,7 @@ impl Probe {
             max_len: AtomicUsize::new(0),
             syncs: AtomicUsize::new(0),
             fail_writes: AtomicBool::new(false),
+            fail_truncate: AtomicBool::new(false),
             fail_reads: AtomicBool::new(false),
             fail_sync: AtomicBool::new(false),
             short_reads: AtomicBool::new(false),
@@ -88,6 +90,9 @@ impl ReadWriteFile for Probe {
         Ok(written)
     }
     fn set_len(&self, len: u64) -> io::Result<()> {
+        if self.fail_truncate.swap(false, Ordering::SeqCst) {
+            return Err(io::Error::other("injected truncate failure"));
+        }
         self.inner.set_len(len)
     }
     fn len(&self) -> io::Result<u64> {
@@ -157,8 +162,8 @@ fn statement_journal_spills_and_statement_rollback_keeps_previous_statement() {
     let recorder: Arc<dyn ReadWriteFile> = recording.clone();
     let conn = ConfinedSqlite::open(Arc::clone(&main), Arc::clone(&journal), recorder).unwrap();
     let db = conn.connection();
-    // The bundled SQLite defaults to memory temp storage. Select FILE
-    // for this proof so a >64 KiB statement journal reaches our VFS.
+    // Select FILE explicitly so a >64 KiB statement journal reaches
+    // our VFS regardless of the bundled build's temp-storage default.
     db.execute_batch("PRAGMA temp_store=FILE;").unwrap();
     db.execute_batch(
         "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT CHECK(length(v) < 200)); \
@@ -659,3 +664,5 @@ fn refuses_readonly_and_unconfined_file_types() {
     }
     conn.close().unwrap();
 }
+
+mod wal_regression;
