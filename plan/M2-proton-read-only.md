@@ -179,6 +179,8 @@ the provider policies (`proton_bridge`, `generic_imap`) live in
 - **b2b1 implementation split (2026-11-08):** **b2b1a Header request
   and row validation (L)** supplies the private validated request/command
   factory and pure FETCH-frame builder with complete native codec tests.
+  Preserve numeric UID 4294967295 through the pinned codec's automatic
+  sequence normalization; the header driver must consume the exact encoder.
   **b2b1b Header command integration (L)** consumes that merged boundary,
   exposes the owned observations through Connection, and owns all fake-server
   and actual Dovecot, epoch/cancellation/old-data and unseen-PEEK proofs below.

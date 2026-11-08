@@ -5,6 +5,7 @@ use io_imap::types::{
     command::CommandBody,
     core::{AString, Vec1},
     fetch::{MessageDataItemName, Section},
+    sequence::{SeqOrUid, Sequence},
 };
 use std::fmt;
 use std::num::NonZeroU32;
@@ -110,8 +111,15 @@ impl HeaderRequest {
             HeaderFetchMode::Full => None,
             HeaderFetchMode::Prefix { max_bytes } => Some((0, max_bytes)),
         };
+        // The pinned codec maps NonZeroU32::MAX's convenience conversion
+        // to '*'. Explicit Value preserves the actual requested UID.
+        let sequence: Vec<Sequence> = self
+            .uids
+            .iter()
+            .map(|uid| Sequence::Single(SeqOrUid::Value(*uid)))
+            .collect();
         CommandBody::fetch(
-            self.uids.clone(),
+            sequence,
             vec![
                 MessageDataItemName::Uid,
                 MessageDataItemName::Flags,
@@ -199,3 +207,10 @@ pub struct HeaderBatch {
     /// Full only when all requested full sections were observed unambiguously.
     pub coverage: HeaderCoverage,
 }
+
+mod builder;
+#[cfg(test)]
+use builder::HeaderBuilder;
+
+#[cfg(test)]
+mod tests;

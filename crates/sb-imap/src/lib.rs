@@ -27,3 +27,7 @@ pub use uid_observations::{FlagCoverage, FlagSweep, UidFlags, UidInventory};
 // A unified release_max_level_trace feature must not re-enable the
 // dependency's credential-bearing wire traces in release builds.
 const _: () = assert!(log::STATIC_MAX_LEVEL as usize <= log::LevelFilter::Debug as usize);
+
+// Consumed by the header driver after the private validation prerequisite.
+#[allow(dead_code)]
+mod metadata_encoding;
