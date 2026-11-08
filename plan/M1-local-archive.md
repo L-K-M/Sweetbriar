@@ -1469,7 +1469,21 @@ local drafts. No network yet.
       hook cleanup/retry, preserves cancellation and every existing row-state
       proof, and verifies mutable borrowing requires a fresh checkpoint before
       eligible close. No qualified stage is returned by this prerequisite.
-      **b6b Qualifier (L)** consumes these inputs, b6b0 and the merged inspectors
+      **b6b1 Writable-input budgets (M)** bounds physical reads from before
+      the confined writable connection opens. A retained-file wrapper preserves
+      identity and every native I/O cause, shares a non-renewable 2 MiB catalog
+      allowance, and permits one explicit data-phase allowance of 64 times the
+      measured authenticated file length plus 2 MiB. Seeking and short or
+      interrupted reads cannot renew or spuriously spend the allowance.
+      Exhaustion is sticky; cancellation or a real I/O fault cannot promote a
+      failed catalog phase. Consume it through a bounded confined-writer entry
+      point, retaining the original unbounded primitive for its existing tests.
+      Native proof must fire eager-schema exhaustion through real SQLite,
+      preserve large valid data after promotion, verify exact/short/EOF/error
+      accounting and concurrent reads, and retain confinement, identity and
+      close cleanup. Budget 700 gross: adapter/entry 220, native proof 360,
+      plan/reserve 120; split before exceeding 1,450 with all proof.
+      **b6b Qualifier (L)** consumes these inputs, b6b0/b6b1 and the merged inspectors
       and confined WAL writer, revalidating bytes, manifest metadata and
       every binding before fresh guarded quarantine and after checkpoint,
       close and required flushes. Only that complete handoff may expose a
