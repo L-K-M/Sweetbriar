@@ -1427,6 +1427,19 @@ local drafts. No network yet.
       work budget, without the metadata phase's value cap. Native physical
       rowid, index and page corruptions, large values, cancellation and faults
       must pass before the staging qualifier can consume both observations.
+    - **b5b integrity contract (2026-11-08):** consume the exact catalog
+      check on the same retained read-only SQLite connection. Only after it
+      succeeds, lift the catalog-only value/input limits for full
+      `integrity_check` and foreign-key checking. Scale independent read and
+      SQLite-work allowances from the actual retained file length, never the
+      untrusted page-count header. Keep cancellation and query-only/zero-ATTACH
+      confinement throughout; no raw findings or image-supplied names enter
+      diagnostics. Require exactly one integrity `ok` and no FK violations.
+      Native proof includes canonical images with large values, rowid/index/
+      page corruption that passes catalog equality, FK and FTS damage, fired
+      work/input limits and I/O/cancellation paths with close/drop cleanup.
+      These are observations at inspection time, with no byte-stability,
+      quarantine, publication, stage or swap authority.
     - **M1.8e3b2b Staging qualification (L):** consume the private copy
       and schema inspection, recheck the coordinator, live root/incarnation
       and verified metadata, run the current quarantine transaction,
