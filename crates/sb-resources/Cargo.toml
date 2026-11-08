@@ -26,3 +26,5 @@ test-seams = ["sb-store/test-seams"]
 [dev-dependencies]
 sb-store = { version = "0.0.1", path = "../sb-store", features = ["test-seams"] }
 sb-test-support = { version = "0.0.1", path = "../sb-test-support" }
+# The account-setup proof connects through the real transport.
+tokio = { version = "=1.54.1", default-features = false, features = ["macros", "rt"] }

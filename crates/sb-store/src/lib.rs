@@ -3,6 +3,7 @@
 //! only through `sb-types` seam traits.
 #![deny(unsafe_code)]
 
+pub mod accounts;
 pub mod activation;
 mod address_keys;
 pub mod appearance;
