@@ -1344,6 +1344,19 @@ local drafts. No network yet.
       on the created file, with all prior copy, cancellation, fault and crash
       proofs retained. This grants no SQLite write connection, quarantine or
       stage eligibility; the qualifier must still reverify bytes and bindings.
+    - **M1.8e3b2b2 Retained SQLite I/O (M):** translate the retained
+      file capability's positioned operations into SQLite's exact read,
+      write, truncate, size and sync outcomes. Handle short/interrupted
+      operations, zero-fill short reads, reject invalid/overflowing offsets,
+      and contain injected panics before any later C callback boundary.
+      Native tests cover byte preservation, EOF, partial I/O, all operation
+      failures, durable flush and retained-file identity across pathname
+      replacement. This private adapter is consumed by the upcoming confined
+      writable VFS; it registers no VFS, opens no SQL connection or pathname,
+      changes no journal mode and grants no stage eligibility. The next VFS
+      slice must separately own single-connection locking, journal and
+      statement-journal lifetimes, sidecar refusal and crash recovery; WAL
+      snapshots need separately checked normalization before writable use.
     - **M1.8e3b2b Staging qualification (L):** consume the private copy
       and schema inspection, recheck the coordinator, live root/incarnation
       and verified metadata, run the current quarantine transaction,
