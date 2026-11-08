@@ -151,7 +151,7 @@ impl<S: AsyncWrite + Unpin> BodyReader<S> {
                         Err(ImapError::Malformed)
                     };
                 };
-                if byte == b'"' && !quoted && full_body_prefix(&meta.bytes)? {
+                if byte == b'"' && !quoted && full_body_prefix(&meta.bytes, line_start)? {
                     if streamed.is_some() || self.observed {
                         return Err(body_error("repeated body"));
                     }
@@ -208,7 +208,7 @@ impl<S: AsyncWrite + Unpin> BodyReader<S> {
                 .rposition(|b| *b == b'{')
                 .map(|at| at + line_start)
                 .ok_or(ImapError::Malformed)?;
-            if full_body_prefix(&meta.bytes[..marker])? {
+            if full_body_prefix(&meta.bytes[..marker], line_start)? {
                 if streamed.is_some() || self.observed {
                     return Err(body_error("repeated body"));
                 }
@@ -369,8 +369,12 @@ impl<S: AsyncWrite + Unpin> BodyReader<S> {
     }
 }
 
-fn full_body_prefix(prefix: &[u8]) -> Result<bool, ImapError> {
-    if prefix.len() < 7 || !prefix[prefix.len() - 7..].eq_ignore_ascii_case(b"BODY[] ") {
+fn full_body_prefix(prefix: &[u8], line_start: usize) -> Result<bool, ImapError> {
+    // Literal payload retained as metadata is opaque: a suffix in those
+    // bytes cannot combine with a following framing space to form a token.
+    if prefix.len().saturating_sub(line_start) < 7
+        || !prefix[prefix.len() - 7..].eq_ignore_ascii_case(b"BODY[] ")
+    {
         return Ok(false);
     }
     // Classify the fixed-size FETCH head before any whole-prefix probe.

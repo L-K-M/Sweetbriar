@@ -157,6 +157,25 @@ async fn ordinary_metadata_literals_and_status_braces_are_not_body_data() {
     assert!(reader.into_parts().unwrap().0.is_empty());
 }
 
+#[tokio::test]
+async fn body_like_metadata_literal_suffix_cannot_become_a_body_candidate() {
+    for message_id in [&b"\"message-id\""[..], &b"{10}\r\nmessage-id"[..]] {
+        let mut wire =
+            b"* 1 FETCH (ENVELOPE (\"date\" \"subject\" NIL NIL NIL NIL NIL NIL {6}\r\nBODY[] "
+                .to_vec();
+        wire.extend_from_slice(message_id);
+        wire.extend_from_slice(b") UID 7 BODY[] {4}\r\nmail)\r\n");
+        assert!(
+            decode(&wire).is_ok(),
+            "the metadata fixture must be codec-valid"
+        );
+        let mut reader = reader();
+        let frame = reader.next(&mut wire.as_slice()).await.unwrap().unwrap();
+        assert_eq!(frame.body, Some(BodyEvidence::Bytes(4)));
+        assert_eq!(reader.into_parts().unwrap().0, b"mail");
+    }
+}
+
 async fn refuses(mut wire: &[u8]) {
     let mut reader = reader();
     assert!(reader.next(&mut wire).await.is_err(), "accepted {wire:?}");
