@@ -1543,6 +1543,7 @@ dependencies = [
  "sb-test-support",
  "serde_json",
  "sha2",
+ "tokio",
 ]
 
 [[package]]
@@ -1593,6 +1594,7 @@ name = "sb-types"
 version = "0.0.1"
 dependencies = [
  "secrecy",
+ "zeroize",
 ]
 
 [[package]]

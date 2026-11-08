@@ -117,8 +117,12 @@ impl SecretStore for FakeSecrets {
     fn delete(&self, credential_ref: &str) -> Result<(), SecretError> {
         let mut inner = self.inner.lock().expect("fake secrets lock poisoned");
         Self::record(&mut inner, SecretOp::Delete, credential_ref)?;
-        inner.items.remove(credential_ref);
-        Ok(())
+        match inner.items.remove(credential_ref) {
+            // Deleting an absent reference is `NotFound`, like the
+            // platform stores' `NoEntry`.
+            Some(_) => Ok(()),
+            None => Err(SecretError::NotFound),
+        }
     }
 }
 
@@ -184,5 +188,24 @@ mod tests {
         assert!(matches!(store.get(REF), Err(SecretError::NotFound)));
         assert_eq!(store.calls(SecretOp::Set), 2);
         assert_eq!(store.calls(SecretOp::Delete), 1);
+    }
+
+    /// A faulted write or delete must leave the stored state untouched
+    /// — the trait's failed-update contract, not just the `Get` path.
+    #[test]
+    fn set_and_delete_faults_preserve_state() {
+        let store = FakeSecrets::new();
+        store.set(REF, &Secret::new(b"first".to_vec())).unwrap();
+        store.fail_next(SecretOp::Set, SecretError::Unavailable);
+        assert!(matches!(
+            store.set(REF, &Secret::new(b"second".to_vec())),
+            Err(SecretError::Unavailable)
+        ));
+        assert_eq!(store.get(REF).unwrap().expose(), b"first");
+        store.fail_next(SecretOp::Delete, SecretError::Refused);
+        assert!(matches!(store.delete(REF), Err(SecretError::Refused)));
+        assert_eq!(store.get(REF).unwrap().expose(), b"first");
+        store.delete(REF).unwrap();
+        assert!(matches!(store.get(REF), Err(SecretError::NotFound)));
     }
 }

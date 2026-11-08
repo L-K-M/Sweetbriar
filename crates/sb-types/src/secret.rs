@@ -1,22 +1,32 @@
 //! The `SecretStore` seam (spec/10 "Credentials"): the platform-protected
-//! credential store — the data-protection Keychain on macOS, Secret
-//! Service on Linux. `sb-platform` implements the real stores; the
+//! credential store — the data-protection Keychain on macOS; on Linux
+//! the pinned Secret Service backend is being resolved. `sb-platform`
+//! implements the real stores; the
 //! database only ever holds an opaque `credential_ref` (spec/02), never
 //! the secret itself.
 
 use std::fmt;
 
 use secrecy::{ExposeSecret, SecretBox};
+use zeroize::Zeroize;
 
 /// The longest `credential_ref` a store must accept. Refs name a stored
 /// item, e.g. `account/<uuid>/bridge-password`; they are not secrets.
 pub const MAX_CREDENTIAL_REF_LEN: usize = 128;
 
 /// A `credential_ref` is a bounded ASCII locator: alphanumerics, `-`,
-/// `_`, `/` and `.` — never empty, never the secret.
+/// `_`, `/` and `.` — never empty, never the secret. Path shapes are
+/// refused too: no leading or trailing `/`, no empty segments and no
+/// `.`/`..` segments, so a backend that maps refs to storage locations
+/// gets no traversal or aliasing ambiguity.
 pub fn valid_credential_ref(credential_ref: &str) -> bool {
     !credential_ref.is_empty()
         && credential_ref.len() <= MAX_CREDENTIAL_REF_LEN
+        && !credential_ref.starts_with('/')
+        && !credential_ref.ends_with('/')
+        && !credential_ref
+            .split('/')
+            .any(|seg| seg.is_empty() || seg == "." || seg == "..")
         && credential_ref
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'/' | b'.'))
@@ -29,9 +39,18 @@ pub struct Secret(SecretBox<[u8]>);
 
 impl Secret {
     /// Wraps owned bytes. Construct it as soon as a credential enters
-    /// the process so the raw copy can be discarded early.
-    pub fn new(bytes: impl Into<Vec<u8>>) -> Self {
-        Self(SecretBox::new(bytes.into().into_boxed_slice()))
+    /// the process so the raw copy can be discarded early. The incoming
+    /// buffer is moved in and its initialized bytes are zeroized after
+    /// the exact-capacity copy. Spare capacity and any earlier
+    /// reallocations of that buffer are out of reach, so hand over an
+    /// exact-capacity `Vec`. A borrowed input cannot compile — the
+    /// caller owns its own scrubbing.
+    pub fn new(bytes: Vec<u8>) -> Self {
+        let mut input = bytes;
+        let mut exact = vec![0u8; input.len()];
+        exact.copy_from_slice(&input);
+        input.zeroize();
+        Self(SecretBox::new(exact.into_boxed_slice()))
     }
 
     /// The secret bytes, for the one consumer that must send or store
@@ -72,6 +91,19 @@ pub enum SecretError {
     InvalidRef,
 }
 
+impl fmt::Display for SecretError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::NotFound => "credential not found",
+            Self::Unavailable => "the credential store is unavailable",
+            Self::Refused => "the credential store refused the operation",
+            Self::InvalidRef => "invalid credential_ref",
+        })
+    }
+}
+
+impl std::error::Error for SecretError {}
+
 /// The protected credential store (spec/10). Implementations map native
 /// statuses onto `SecretError` without leaking identifiers or bytes.
 pub trait SecretStore: Send + Sync {
@@ -85,7 +117,8 @@ pub trait SecretStore: Send + Sync {
     fn set(&self, credential_ref: &str, secret: &Secret) -> Result<(), SecretError>;
 
     /// Delete the credential. Only an explicit, authorized disconnect
-    /// calls this — never a read error or auth failure.
+    /// calls this — never a read error or auth failure. Deleting an
+    /// absent reference answers `NotFound`.
     fn delete(&self, credential_ref: &str) -> Result<(), SecretError>;
 }
 
@@ -107,6 +140,13 @@ mod tests {
             "non-ascii-ö",
             "nul\0byte",
             "trailing\n",
+            "/absolute/path",
+            "trailing/",
+            "a//empty",
+            "dot/./seg",
+            "dotdot/../seg",
+            "..",
+            ".",
         ] {
             assert!(!valid_credential_ref(bad), "{bad:?}");
         }

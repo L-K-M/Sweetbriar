@@ -10,3 +10,5 @@ rust-version.workspace = true
 # Zeroizing in-memory secret box for the SecretStore seam (spec/01,
 # spec/10). Pinned to the version rustls/io-sasl already carry.
 secrecy = "=0.10.3"
+# Zeroize the input buffer Secret::new replaces (spec/10); lock-pinned.
+zeroize = "=1.9.1"
