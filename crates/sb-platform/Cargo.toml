@@ -11,3 +11,22 @@ sb-types = { version = "0.0.1", path = "../sb-types" }
 # fcntl(F_FULLFSYNC), statfs and the network-filesystem magic numbers
 # behind `Fs::location`; pinned exactly per spec/01's version rule.
 libc = "=0.2.190"
+# Explicit credential-store API for the SecretStore seam (spec/01 pins,
+# spec/10); no global default store is ever installed.
+keyring-core = "=1.0.0"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# Data-protection Keychain only (`protected`); the file-based `keychain`
+# fallback stays disabled — spec/10's pilot fallback is a separate,
+# explicitly flagged flow, not a silent runtime choice.
+apple-native-keyring-store = { version = "=1.0.2", default-features = false, features = [
+    "protected",
+] }
+
+# Linux's Secret Service backend is intentionally not depended on yet:
+# the spec/01 pin zbus-secret-service-keyring-store 1.0.1 transitively
+# requires unmaintained zvariant 5 / zbus_names 4 (RUSTSEC-2026-0370
+# ..0372, merged into zbus 6) and no maintained store release exists.
+# The pin needs an owner decision before the dep lands; until then the
+# Linux platform_store reports typed unavailability instead of calling
+# passed (see secret.rs).

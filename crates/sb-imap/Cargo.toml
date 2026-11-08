@@ -27,6 +27,9 @@ tokio = { version = "=1.54.1", default-features = false, features = ["net", "io-
 tokio-rustls = { version = "=0.26.6", default-features = false, features = ["ring", "logging", "tls12"] }
 # The pinned-certificate hash (spec/10).
 sha2 = { version = "=0.11.1", default-features = false }
+# Zeroizing in-memory credential box (spec/01 pin, spec/10); the LOGIN
+# password's lifetime ends with its drop.
+secrecy = "=0.10.3"
 # io-imap logs raw replies at TRACE, which can include echoed credentials.
 # Feature unification disables log TRACE diagnostics process-wide.
 log = { version = "=0.4.34", features = ["max_level_debug"] }
