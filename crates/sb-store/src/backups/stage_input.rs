@@ -63,11 +63,15 @@ impl InputBudget {
             }),
             cancel,
         });
-        let wrapped = Arc::new(LimitedFile {
+        let budget = Self { state, data_bytes };
+        Ok((budget.track(file), budget))
+    }
+
+    fn track(&self, file: Arc<dyn ReadWriteFile>) -> Arc<dyn ReadWriteFile> {
+        Arc::new(LimitedFile {
             file,
-            state: Arc::clone(&state),
-        });
-        Ok((wrapped, Self { state, data_bytes }))
+            state: Arc::clone(&self.state),
+        })
     }
 
     /// Call once, only after bounded catalog verification succeeds. A failed
@@ -228,7 +232,13 @@ pub(super) fn open_bounded(
     cancel: Arc<AtomicBool>,
 ) -> Result<(ConfinedSqlite, InputBudget), StoreError> {
     let (main, budget) = InputBudget::wrap(main, verified_bytes, cancel)?;
-    let writer = ConfinedSqlite::open_wal(main, journal, statement, wal).map_err(|error| {
+    let writer = ConfinedSqlite::open_wal(
+        main,
+        budget.track(journal),
+        budget.track(statement),
+        budget.track(wal),
+    )
+    .map_err(|error| {
         budget
             .error()
             .unwrap_or_else(|| inspection_error(error, "open bounded staging writer"))

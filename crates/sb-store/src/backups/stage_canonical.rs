@@ -149,6 +149,64 @@ pub(super) fn inspect_then(
     )
 }
 
+/// Observe the exact catalog on a fresh confined writer whose physical
+/// input guard was installed before open. Only the later isolated quarantine
+/// flow may lift query-only and the value limit; this grants no eligibility.
+pub(super) fn inspect_writer(
+    connection: &rusqlite::Connection,
+    seams: &Seams,
+    cancel: &AtomicBool,
+) -> Result<Option<(Inspection, i32)>, StoreError> {
+    if cancel.load(Ordering::Acquire) {
+        return Ok(None);
+    }
+    let expected = catalog::reference(seams)?;
+    let limit = expected.metadata_limit()?;
+    guarded(connection, cancel, MAX_PROGRESS_CALLS, |connection| {
+        check_catalog(connection, &expected, limit)
+    })
+}
+
+fn check_catalog(
+    connection: &rusqlite::Connection,
+    expected: &catalog::Catalog,
+    metadata_limit: i32,
+) -> Result<(Inspection, i32), StoreError> {
+    let mut value_limit = 0;
+    for limit in [Limit::SQLITE_LIMIT_LENGTH, Limit::SQLITE_LIMIT_SQL_LENGTH] {
+        let previous = connection
+            .set_limit(limit, metadata_limit)
+            .map_err(|error| inspection_error(error, "bound catalog metadata"))?;
+        if matches!(limit, Limit::SQLITE_LIMIT_LENGTH) {
+            value_limit = previous;
+        }
+    }
+    connection
+        .set_limit(Limit::SQLITE_LIMIT_COLUMN, MAX_COLUMNS)
+        .map_err(|error| inspection_error(error, "bound catalog columns"))?;
+    connection
+        .set_limit(Limit::SQLITE_LIMIT_ATTACHED, 0)
+        .map_err(|error| inspection_error(error, "confine catalog inspection"))?;
+    connection
+        .execute_batch("PRAGMA trusted_schema=OFF; PRAGMA query_only=ON; PRAGMA temp_store=MEMORY;")
+        .map_err(|error| inspection_error(error, "harden catalog inspection"))?;
+    let version: i64 = connection
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .map_err(|error| inspection_error(error, "read canonical catalog version"))?;
+    if version != i64::from(schema::LATEST_SCHEMA_VERSION) {
+        return Err(StoreError::corrupt(
+            "catalog is not at the current schema version",
+        ));
+    }
+    catalog::compare(connection, expected)?;
+    Ok((
+        Inspection {
+            schema_version: version,
+        },
+        value_limit,
+    ))
+}
+
 fn inspect_inner<F>(
     file: Box<dyn ReadFile>,
     seams: &Seams,
@@ -191,43 +249,12 @@ where
             }));
         }
     };
-    let mut value_limit = 0;
     let mut integrity_phase = false;
     let result = (|| {
         let catalog = guarded(&connection, cancel, work_budget, |connection| {
-            for limit in [Limit::SQLITE_LIMIT_LENGTH, Limit::SQLITE_LIMIT_SQL_LENGTH] {
-                let previous = connection
-                    .set_limit(limit, metadata_limit)
-                    .map_err(|error| inspection_error(error, "bound catalog metadata"))?;
-                if matches!(limit, Limit::SQLITE_LIMIT_LENGTH) {
-                    value_limit = previous;
-                }
-            }
-            connection
-                .set_limit(Limit::SQLITE_LIMIT_COLUMN, MAX_COLUMNS)
-                .map_err(|error| inspection_error(error, "bound catalog columns"))?;
-            connection
-                .set_limit(Limit::SQLITE_LIMIT_ATTACHED, 0)
-                .map_err(|error| inspection_error(error, "confine catalog inspection"))?;
-            connection
-                .execute_batch(
-                    "PRAGMA trusted_schema=OFF; PRAGMA query_only=ON; PRAGMA temp_store=MEMORY;",
-                )
-                .map_err(|error| inspection_error(error, "harden catalog inspection"))?;
-            let version: i64 = connection
-                .query_row("PRAGMA user_version", [], |row| row.get(0))
-                .map_err(|error| inspection_error(error, "read canonical catalog version"))?;
-            if version != i64::from(schema::LATEST_SCHEMA_VERSION) {
-                return Err(StoreError::corrupt(
-                    "catalog is not at the current schema version",
-                ));
-            }
-            catalog::compare(connection, &expected)?;
-            Ok(Inspection {
-                schema_version: version,
-            })
+            check_catalog(connection, &expected, metadata_limit)
         })?;
-        let Some(catalog) = catalog else {
+        let Some((catalog, value_limit)) = catalog else {
             return Ok(None);
         };
         if let Some((budget, check)) = after_catalog {

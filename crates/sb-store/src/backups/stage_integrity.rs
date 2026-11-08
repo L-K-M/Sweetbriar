@@ -56,11 +56,32 @@ pub(super) fn inspect(
     inspect_with_budgets(file, seams, cancel, None)
 }
 
+/// Continue on the same catalog/physical/FK-checked read-only image.
+/// The extra observation shares its finite work, input and cancellation guard.
+pub(super) fn inspect_after(
+    file: Box<dyn ReadFile>,
+    seams: &Seams,
+    cancel: &AtomicBool,
+    after: impl FnOnce(&Connection) -> Result<(), StoreError>,
+) -> Result<Option<Inspection>, StoreError> {
+    inspect_complete(file, seams, cancel, None, after)
+}
+
 fn inspect_with_budgets(
+    file: Box<dyn ReadFile>,
+    seams: &Seams,
+    cancel: &AtomicBool,
+    budgets: Option<Budgets>,
+) -> Result<Option<Inspection>, StoreError> {
+    inspect_complete(file, seams, cancel, budgets, |_| Ok(()))
+}
+
+fn inspect_complete(
     mut file: Box<dyn ReadFile>,
     seams: &Seams,
     cancel: &AtomicBool,
     budgets: Option<Budgets>,
+    after: impl FnOnce(&Connection) -> Result<(), StoreError>,
 ) -> Result<Option<Inspection>, StoreError> {
     if cancel.load(Ordering::Acquire) {
         return Ok(None);
@@ -83,7 +104,10 @@ fn inspect_with_budgets(
     };
     let catalog =
         stage_canonical::inspect_then(file, seams, cancel, budgets.input, |connection| {
-            guarded(connection, cancel, budgets.work, check)
+            guarded(connection, cancel, budgets.work, |connection| {
+                check(connection)?;
+                after(connection)
+            })
         })?;
     Ok(catalog.map(|catalog| Inspection {
         schema_version: catalog.schema_version,

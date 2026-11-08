@@ -385,6 +385,53 @@ fn harden(connection: &Connection) {
 }
 
 #[test]
+fn a_real_sidecar_write_fault_keeps_its_native_cause() {
+    let (_scratch, bytes) = source(false);
+    let inner = Arc::new(SimFs::new());
+    let main = file(inner.as_ref(), &bytes);
+    let fs = FaultFs::new(
+        inner,
+        FsOp::Write,
+        1,
+        FaultKind::Kind(io::ErrorKind::PermissionDenied),
+    );
+    let root = fs.open_confined_dir(Path::new("/stage")).unwrap();
+    let (writer, mut budget) = open_bounded(
+        main,
+        root.create_read_write(Path::new("journal")).unwrap().into(),
+        root.create_read_write(Path::new("statement"))
+            .unwrap()
+            .into(),
+        root.create_read_write(Path::new("wal")).unwrap().into(),
+        bytes.len() as u64,
+        Arc::new(AtomicBool::new(false)),
+    )
+    .unwrap();
+    harden(writer.connection());
+    let _: i64 = writer
+        .connection()
+        .query_row("SELECT count(*) FROM proof", [], |row| row.get(0))
+        .unwrap();
+    budget.begin_data_phase().unwrap();
+    assert_eq!(fs.calls(FsOp::Write), 0);
+    assert!(
+        writer
+            .connection()
+            .execute("INSERT INTO proof VALUES (?1)", [vec![9u8; 3]])
+            .is_err()
+    );
+    assert!(
+        fs.calls(FsOp::Write) >= 1,
+        "the selected sidecar fault fired"
+    );
+    assert_eq!(
+        budget.error().and_then(|error| error.io_kind()),
+        Some(io::ErrorKind::PermissionDenied)
+    );
+    assert!(writer.close().is_err());
+}
+
+#[test]
 fn real_sqlite_eager_schema_loading_hits_the_fixed_catalog_input_limit() {
     let (scratch, bytes) = source(true);
     let (writer, mut budget, main) = writer(&bytes);

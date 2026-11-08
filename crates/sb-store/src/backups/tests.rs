@@ -4376,6 +4376,76 @@ mod stage_tests {
     }
 
     #[test]
+    fn quarantined_image_executes_on_the_real_prepared_copy() {
+        use super::super::{quarantine, stage_quarantine};
+        let source = staging_source("quarantined-image-smoke");
+        let old_incarnation = source.live_incarnation();
+        let expected_uuid: String = reading(&source.store, |tx| {
+            tx.query_row(
+                "SELECT value FROM store_meta WHERE key='store_uuid'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(bug)
+        });
+        let prepared = prepare(
+            &source.store,
+            source.select_with(&source.store),
+            source.receipt.location(),
+            source.metadata,
+        );
+        let cancel = Arc::new(AtomicBool::new(false));
+        let input = quarantine::Quarantine {
+            new_incarnation: prepared.incarnation(),
+            generation: prepared.generation_id(),
+            source_location: prepared.source_location().to_str().unwrap(),
+            current_root: &prepared.data_root,
+            preserved_root: prepared.preserved_root(),
+            manifest_sha256: prepared.manifest_sha256(),
+            object_count: prepared.metadata.object_count,
+            total_bytes: prepared.metadata.total_bytes,
+            completed_at: prepared.metadata.completed_at,
+            cancel: &cancel,
+            max_work_calls: quarantine::work_allowance(prepared.files.database_bytes),
+        };
+        let mut phases = Vec::new();
+        let image = stage_quarantine::run(
+            &prepared.files,
+            &test_seams(real_fs()),
+            &input,
+            &expected_uuid,
+            |phase| phases.push(phase),
+        )
+        .unwrap();
+        assert_eq!(phases.len(), 7);
+        assert_eq!(image.root_identity, prepared.files.root_identity);
+        assert_eq!(image.database_identity, prepared.files.database_identity);
+        let bytes = std::fs::read(prepared.path().join("state.sqlite")).unwrap();
+        assert_eq!(image.bytes, bytes.len() as u64);
+        assert_eq!(image.sha256, <[u8; 32]>::from(Sha256::digest(&bytes)));
+        assert_eq!(
+            image.schema_version,
+            i64::from(crate::schema::LATEST_SCHEMA_VERSION)
+        );
+        let observed = Connection::open_with_flags(
+            prepared.path().join("state.sqlite"),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .unwrap();
+        let incarnation: String = observed
+            .query_row(
+                "SELECT value FROM store_meta WHERE key='incarnation'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(incarnation, prepared.incarnation());
+        observed.close().unwrap();
+        assert_eq!(source.live_incarnation(), old_incarnation);
+        source.assert_untouched();
+    }
+
+    #[test]
     fn prepared_stage_retains_the_created_directory_and_database() {
         use std::io::{Read, Seek, SeekFrom};
         let source = staging_source("staging-retained-handles");
