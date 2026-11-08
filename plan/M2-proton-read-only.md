@@ -184,6 +184,10 @@ the provider policies (`proton_bridge`, `generic_imap`) live in
   **b2b1b Header command integration (L)** consumes that merged boundary,
   exposes the owned observations through Connection, and owns all fake-server
   and actual Dovecot, epoch/cancellation/old-data and unseen-PEEK proofs below.
+  b2b1a code merged in #285; connection and protocol qualification remain.
+  The driver must use the exact UID encoder and report reconciliation for
+  missing, unavailable or ambiguous rows, without treating a requested
+  prefix alone as a mailbox change.
   No wire acceptance is waived; the first artifact opens no socket and its
   types remain private until the connection driver provides their consumer.
 - **b2b1 Header-observation contract (2026-11-08):** accept a validated,

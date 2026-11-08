@@ -73,7 +73,7 @@ impl Connection {
         })
     }
 
-    fn uid_context(&self) -> Result<MailboxContext, ImapError> {
+    pub(super) fn uid_context(&self) -> Result<MailboxContext, ImapError> {
         if self.wire.is_none() {
             return Err(ImapError::Closed);
         }
