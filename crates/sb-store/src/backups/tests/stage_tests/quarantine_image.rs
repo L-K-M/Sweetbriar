@@ -154,6 +154,18 @@ fn a_fresh_target_preserves_large_rows_and_quarantines_real_backup_state() {
             .unwrap(),
         1_200_000
     );
+    // Existence, not vacuity: the fixture account must still be there,
+    // paused — a delete would satisfy a bare `state<>'paused'` count.
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT count(*) FROM accounts WHERE provider='generic_imap' AND state='paused'",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+        1
+    );
     for sql in [
         "SELECT count(*) FROM accounts WHERE state<>'paused'",
         "SELECT count(*) FROM verifier_scratch",
@@ -213,7 +225,10 @@ fn every_phase_observes_cancellation_without_an_image_handoff() {
                 cancel.store(true, Ordering::Release);
             }
         });
-        assert!(result.is_err(), "cancel at {point:?}");
+        assert!(
+            matches!(result, Err(StoreError::Unavailable { .. })),
+            "cancel at {point:?}: {result:?}"
+        );
         assert_eq!(seen.last(), Some(&point));
         assert!(stage.path().is_dir());
         assert!(!stage.preserved_root().exists());
@@ -674,7 +689,12 @@ fn the_first_schema_load_has_a_total_physical_input_bound() {
             }
         },
     );
-    assert!(result.is_err());
+    // The physical input budget itself must reject the image, not some
+    // incidental failure a short-circuit could also produce.
+    assert!(
+        matches!(result, Err(StoreError::Corrupt { .. })),
+        "{result:?}"
+    );
     let actual = reads.load(Ordering::SeqCst);
     assert!(actual > 0, "the actual SQLite schema read path must run");
     assert!(
