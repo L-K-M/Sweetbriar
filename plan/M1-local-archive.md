@@ -1459,7 +1459,17 @@ local drafts. No network yet.
       changed names refused at recheck, symlinks, unsupported identity and
       fired I/O failures with cleanup. This adds no existing-file write
       authority, source/live store-UUID equality rule or stage eligibility.
-      **b6b Qualifier (L)** consumes these inputs and the merged inspectors
+      **b6b0 Bounded writable quarantine (M)** first gives the confined
+      writer a mutable connection borrow which invalidates any checkpoint
+      marker, so the reviewed quarantine keeps its normal exclusive mutable
+      transaction API. Compose finite work and cancellation in quarantine's
+      own progress hook; an outer hook would otherwise be replaced. Derive
+      the allowance from verified retained bytes, never an inherited header.
+      Native proof fires the work limit during real SQL, checks rollback and
+      hook cleanup/retry, preserves cancellation and every existing row-state
+      proof, and verifies mutable borrowing requires a fresh checkpoint before
+      eligible close. No qualified stage is returned by this prerequisite.
+      **b6b Qualifier (L)** consumes these inputs, b6b0 and the merged inspectors
       and confined WAL writer, revalidating bytes, manifest metadata and
       every binding before fresh guarded quarantine and after checkpoint,
       close and required flushes. Only that complete handoff may expose a
