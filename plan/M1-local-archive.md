@@ -1440,6 +1440,24 @@ local drafts. No network yet.
       work/input limits and I/O/cancellation paths with close/drop cleanup.
       These are observations at inspection time, with no byte-stability,
       quarantine, publication, stage or swap authority.
+    - **b6 qualification split before implementation (2026-11-08):**
+      **b6a Retained binding inputs (M)** extends the opaque prepared copy
+      with retained source-generation and live-root/database read handles,
+      their filesystem identities, and the original manifest byte length.
+      Capture live handles before reading its incarnation; check current
+      namespace identities around that read and before handing off the copy.
+      Retaining handles prevents identity reuse after pathname replacement.
+      Native proof covers retained bytes and identities after replacements,
+      changed names refused at recheck, symlinks, unsupported identity and
+      fired I/O failures with cleanup. This adds no existing-file write
+      authority, source/live store-UUID equality rule or stage eligibility.
+      **b6b Qualifier (L)** consumes these inputs and the merged inspectors
+      and confined WAL writer, revalidating bytes, manifest metadata and
+      every binding before fresh guarded quarantine and after checkpoint,
+      close and required flushes. Only that complete handoff may expose a
+      qualified stage. Keep all original binding, row-state, cancellation,
+      SQL/I/O/durability and crash acceptance below; split the qualifier
+      again before exceeding 1,450 changed lines with its complete proof.
     - **M1.8e3b2b Staging qualification (L):** consume the private copy
       and schema inspection, recheck the coordinator, live root/incarnation
       and verified metadata, run the current quarantine transaction,
