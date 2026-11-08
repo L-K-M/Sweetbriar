@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use rusqlite::Connection;
 
-use super::super::image_inspect::inspection_error;
+use super::inspection_error;
 use crate::{Seams, StoreError, schema};
 
 #[derive(Debug, PartialEq, Eq)]
