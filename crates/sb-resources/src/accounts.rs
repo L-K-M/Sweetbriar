@@ -70,9 +70,10 @@ pub struct BridgeIdentity {
 pub struct AddedAccount {
     pub account_id: String,
     /// `Some(pause)` when the rows committed but the credential could
-    /// not be persisted — the account is `needs_attention` with
-    /// `pause.reason()` and [`Resources::store_account_credential`]
-    /// retries by the stored reference.
+    /// not be persisted: the pause the account actually holds (the
+    /// precise one, or `NotStored` when recording it failed), and
+    /// [`Resources::store_account_credential`] retries by the stored
+    /// reference.
     pub needs_attention: Option<CredentialPause>,
 }
 
@@ -87,8 +88,9 @@ pub enum BridgeAccountError {
     /// The endpoint probe failed before anything was stored: socket,
     /// pin, login or protocol — the typed `ImapError` carries it.
     Probe(ImapError),
-    /// The credential store refused the retry's `set`; the account
-    /// stays `needs_attention` (spec/10's kinds only).
+    /// The retry's `set` failed, with any `SecretError` kind; the
+    /// account keeps its credential pause unchanged (spec/10's kinds
+    /// only).
     SecretStore(SecretError),
     /// A durable write failed.
     Store(StoreError),
@@ -307,15 +309,20 @@ impl Resources {
                 let paused_id = account_id.clone();
                 // The account is already paused as NotStored; this write
                 // only records the precise reason. If it fails, NotStored
-                // stands and the retry path still lifts it.
-                let _ = self
+                // stands, is what the caller is told, and the retry path
+                // still lifts it.
+                let recorded = match self
                     .write(WritePriority::User, move |tx| {
                         pause_for_credential(tx, &paused_id, pause)
                     })
-                    .await;
+                    .await
+                {
+                    Ok(()) => pause,
+                    Err(_) => CredentialPause::NotStored,
+                };
                 Ok(AddedAccount {
                     account_id,
-                    needs_attention: Some(pause),
+                    needs_attention: Some(recorded),
                 })
             }
         }
@@ -326,10 +333,15 @@ impl Resources {
     /// reference, never a recreated item — and reactivates the account
     /// on success. An account that is active or paused for another
     /// reason (spec/04's connection pauses) is refused before the secret
-    /// store is touched, so a working credential is never replaced
-    /// unverified; the reactivation re-checks the pause in its own
-    /// statement. `store_secret` as for
-    /// [`add_bridge_account`](Self::add_bridge_account).
+    /// store is touched, and the reactivation re-checks the pause in its
+    /// own statement, so a connection pause is never cleared here.
+    /// `store_secret` as for [`add_bridge_account`](Self::add_bridge_account).
+    ///
+    /// The secret is not probed here: the account's next connect logs in
+    /// with it, and spec/04 pauses a rejected login. Retries for one
+    /// account are the caller's to run one at a time — two racing
+    /// retries both pass the check across the secret-store await, and
+    /// the later secret is the one stored.
     pub async fn store_account_credential<S, F>(
         &self,
         account_id: &str,

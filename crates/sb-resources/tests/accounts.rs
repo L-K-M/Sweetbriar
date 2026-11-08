@@ -469,8 +469,9 @@ async fn a_credential_retry_never_lifts_a_connection_pause() {
     // The working credential was not replaced.
     assert_eq!(secrets.calls(SecretOp::Set), 1);
 
-    // The reactivation's own guard holds even past the caller's check
-    // (a pause recorded between the check and the flip).
+    // The guard sits in the flip's own statement, not only in the
+    // caller's earlier check, so a connection pause recorded after that
+    // check still blocks the reactivation.
     let checked_id = added.account_id.clone();
     let error = res
         .write(WritePriority::User, move |tx| {
