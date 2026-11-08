@@ -62,7 +62,12 @@ async fn an_active_idle_flood_hits_the_original_round_budget_without_done_or_eof
     let mut gate = Gate::new();
     gate.read_frame(&mut client).await.unwrap().unwrap();
     let mut stop = std::pin::pin!(std::future::pending());
-    let mut notify = |_: IdleEvent<'_>| {};
+    let mut delivered = 0;
+    let mut notify = |event: IdleEvent<'_>| {
+        if matches!(event, IdleEvent::Notice(MailboxNotice::Changed { .. })) {
+            delivered += 1;
+        }
+    };
     let result = tokio::time::timeout(
         Duration::from_secs(2),
         watch(
@@ -80,6 +85,10 @@ async fn an_active_idle_flood_hits_the_original_round_budget_without_done_or_eof
         result,
         Err(ImapError::ResponseBudgetExceeded { operation: "IDLE" })
     ));
+    assert!(
+        delivered >= 4,
+        "active-wait frames must deliver repeated hints"
+    );
     peer.abort();
 }
 
