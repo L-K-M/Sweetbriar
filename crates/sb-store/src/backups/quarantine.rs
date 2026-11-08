@@ -16,6 +16,17 @@ const LOCATION_SCAN: &str =
 // comfortably; archive requests and attachment blobs are outside this read.
 const MAX_LOCATION_ROW_BYTES: i32 = 1_048_576;
 
+/// Callers measure the authenticated retained file, never an image header.
+/// Each callback represents 1,000 SQLite VM operations. The fixed allowance
+/// covers catalog setup; the remainder scales with physical input size.
+pub(super) fn work_allowance(verified_bytes: u64) -> u32 {
+    verified_bytes
+        .div_ceil(4096)
+        .saturating_mul(64)
+        .saturating_add(2_000)
+        .min(u64::from(u32::MAX)) as u32
+}
+
 #[derive(Clone, Copy)]
 pub(super) struct Quarantine<'a> {
     pub new_incarnation: &'a str,
@@ -28,18 +39,42 @@ pub(super) struct Quarantine<'a> {
     pub total_bytes: i64,
     pub completed_at: i64,
     pub cancel: &'a Arc<AtomicBool>,
+    /// Finite SQLite progress callbacks, scaled from verified retained bytes.
+    pub max_work_calls: u32,
 }
 
 // The caller supplies a fresh, exclusively owned connection without hooks or
 // cached statements or progress handler. Both hooks are removed after commit or
-// rollback. Trigger and view programs cannot participate. Work is proportional
-// to inherited rows, with cancellation checked inside SQLite and between pages;
+// rollback. Trigger and view programs cannot participate. A finite work limit
+// composes with cancellation inside SQLite and cancellation between pages;
 // the future handoff must also check cancellation before qualifying the stage.
 pub(super) fn apply(conn: &mut Connection, input: &Quarantine<'_>) -> Result<(), StoreError> {
+    if input.max_work_calls == 0 {
+        return Err(StoreError::corrupt(
+            "restore quarantine work limit exceeded",
+        ));
+    }
     conn.authorizer(Some(authorize))
         .map_err(|e| classify(e, "install restore authorizer"))?;
+    let exhausted = Arc::new(AtomicBool::new(false));
+    let progress_exhausted = Arc::clone(&exhausted);
+    let budget = input.max_work_calls;
+    let mut calls = 0u32;
     let cancel = Arc::clone(input.cancel);
-    if let Err(error) = conn.progress_handler(1000, Some(move || cancel.load(Ordering::Acquire))) {
+    if let Err(error) = conn.progress_handler(
+        1000,
+        Some(move || {
+            if cancel.load(Ordering::Acquire) {
+                return true;
+            }
+            calls = calls.saturating_add(1);
+            if calls >= budget {
+                progress_exhausted.store(true, Ordering::Release);
+                return true;
+            }
+            false
+        }),
+    ) {
         conn.authorizer(None::<fn(AuthContext<'_>) -> Authorization>)
             .map_err(|e| classify(e, "remove restore authorizer"))?;
         return Err(classify(error, "install restore cancellation"));
@@ -49,6 +84,11 @@ pub(super) fn apply(conn: &mut Connection, input: &Quarantine<'_>) -> Result<(),
     let authorizer = conn.authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
     progress.map_err(|e| classify(e, "remove restore cancellation"))?;
     authorizer.map_err(|e| classify(e, "remove restore authorizer"))?;
+    if exhausted.load(Ordering::Acquire) {
+        return Err(StoreError::corrupt(
+            "restore quarantine work limit exceeded",
+        ));
+    }
     result
 }
 
@@ -326,6 +366,86 @@ mod tests {
     use rusqlite::Connection;
 
     #[test]
+    fn the_work_limit_rolls_back_and_leaves_hooks_clear_for_retry() {
+        let (_scratch, paths, store) = open("restore-quarantine-work-limit");
+        let snapshot = store.backup_snapshot(BackupDestination::DataRoot).unwrap();
+        let path = paths.data_root().with_extension("work-limit.sqlite");
+        std::fs::copy(snapshot.state_db(), &path).unwrap();
+        let mut conn = Connection::open(&path).unwrap();
+        conn.execute_batch("WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<10000) INSERT INTO import_jobs SELECT 'job-'||i,'running','request','checkpoint',1,0,0 FROM n;").unwrap();
+        let before: String = conn
+            .query_row(
+                "SELECT value FROM store_meta WHERE key='incarnation'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let input = Quarantine {
+            new_incarnation: "00000000-0000-4000-8000-0000000000e1",
+            generation: snapshot.generation_id(),
+            source_location: "/external/source",
+            current_root: paths.data_root(),
+            preserved_root: Path::new("/preserved"),
+            manifest_sha256: "manifest",
+            object_count: 0,
+            total_bytes: 0,
+            completed_at: 1,
+            cancel: &cancel,
+            max_work_calls: 1,
+        };
+        for max_work_calls in [0, 1] {
+            let result = apply(
+                &mut conn,
+                &Quarantine {
+                    max_work_calls,
+                    ..input
+                },
+            );
+            assert!(
+                matches!(result, Err(StoreError::Corrupt { .. })),
+                "{result:?}"
+            );
+            assert!(conn.is_autocommit(), "work interruption must roll back");
+            let after: String = conn
+                .query_row(
+                    "SELECT value FROM store_meta WHERE key='incarnation'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(before, after);
+            let running: i64 = conn
+                .query_row(
+                    "SELECT count(*) FROM import_jobs WHERE state='running'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(running, 10000);
+            // Both operations would be denied or interrupted by leaked hooks.
+            conn.execute_batch("CREATE TABLE hook_cleanup(v); WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<10000) INSERT INTO hook_cleanup SELECT i FROM n;").unwrap();
+            conn.execute_batch("DROP TABLE hook_cleanup").unwrap();
+        }
+        apply(
+            &mut conn,
+            &Quarantine {
+                max_work_calls: work_allowance(std::fs::metadata(&path).unwrap().len()),
+                ..input
+            },
+        )
+        .unwrap();
+        let running: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM import_jobs WHERE state='running'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(running, 0);
+    }
+
+    #[test]
     fn quarantine_snapshot_preserves_requests_and_rewrites_locations() {
         let (_scratch, paths, store) = open("restore-quarantine");
         draft_rows(&store);
@@ -368,6 +488,7 @@ mod tests {
             total_bytes: 12,
             completed_at: 1,
             cancel: &cancel,
+            max_work_calls: 2_000,
         };
         cancel.store(true, Ordering::Release);
         assert!(apply(&mut conn, &input).is_err());
@@ -542,6 +663,7 @@ mod tests {
             total_bytes: 0,
             completed_at: 1,
             cancel: &cancel,
+            max_work_calls: 2_000,
         };
         for inherited_state in ["complete", "in_progress"] {
             for (id, location) in [
@@ -653,6 +775,7 @@ mod tests {
             total_bytes: 0,
             completed_at: 1,
             cancel: &cancel,
+            max_work_calls: 2_000,
         };
         // The oversized fixture must have registered, proving telemetry is on.
         let largest = crate::image_vfs::largest_allocation(true).unwrap();
@@ -686,6 +809,7 @@ mod tests {
             total_bytes: 0,
             completed_at: 1,
             cancel: &cancel,
+            max_work_calls: 2_000,
         };
         assert!(apply(&mut conn, &input).is_err());
         let state: String = conn
@@ -720,6 +844,7 @@ mod tests {
             total_bytes: 0,
             completed_at: 1,
             cancel: &cancel,
+            max_work_calls: 2_000,
         };
         assert!(apply(&mut conn, &input).is_err());
         let (state, location): (String, String) = conn
@@ -768,6 +893,7 @@ mod tests {
             total_bytes: 0,
             completed_at: 1,
             cancel: &cancel,
+            max_work_calls: 2_000,
         };
         assert!(apply(&mut conn, &input).is_err(), "{policy} must abort");
         let after: Vec<(String, String)> = conn
@@ -879,6 +1005,7 @@ mod tests {
             total_bytes: 0,
             completed_at: 1,
             cancel: &cancel,
+            max_work_calls: 2_000,
         };
         apply(&mut conn, &input).unwrap();
         for state in [

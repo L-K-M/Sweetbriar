@@ -104,6 +104,7 @@ fn restored_publications_cannot_spend_inherited_reservations() {
             total_bytes: metadata.2,
             completed_at: metadata.3,
             cancel: &Arc::new(AtomicBool::new(false)),
+            max_work_calls: 2_000,
         },
     )
     .unwrap();

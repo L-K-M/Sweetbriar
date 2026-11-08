@@ -292,6 +292,13 @@ impl ConfinedSqlite {
         self.connection.as_ref().expect("connection is open")
     }
 
+    /// Borrow exclusively for a normal transaction. Like the shared borrow,
+    /// this invalidates any earlier explicit checkpoint certification.
+    pub(crate) fn connection_mut(&mut self) -> &mut Connection {
+        self.checkpoint.set(Checkpoint::Required);
+        self.connection.as_mut().expect("connection is open")
+    }
+
     /// Run under the qualifier's SQL limits/cancellation guard: both
     /// journal_mode and wal_checkpoint can load schema. Call last, then
     /// close without borrowing the connection again. This state grants no
