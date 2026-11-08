@@ -232,6 +232,22 @@ the provider policies (`proton_bridge`, `generic_imap`) live in
   failure semantics, with fake Bridge and actual Dovecot unseen-PEEK proof.
   No partial UID chunk fetch, provider policy, Store or MIME parsing enters
   either artifact; later body acquisition owns publication and coverage.
+- **b3b command contract (2026-11-08):** fetch one explicit nonzero UID
+  with UID and BODY.PEEK[] through the exact numeric encoder. Return the
+  mailbox epoch and UID with complete byte-counted sink evidence, including
+  a real empty body, or explicit missing-frame/NIL unavailability; drop an
+  unused or failed sink. It must start private and unpublished, and transport
+  completion grants no storage durability or publication authority. Keep
+  the socket and sink owned by the command future through predecessor drain,
+  first matching tagged OK, every epoch check and received-tail validation.
+  Charge original framing bytes to the aggregate 50 MiB metadata budget.
+  Complete received tail frames supply notices only and must be checked before
+  returning the sink; preserve a partial tail for the next predecessor drain.
+  Native proof includes fake Bridge exchanges, a payload above 50 MiB,
+  exact MAX UID, absence/empty distinctions, early bounds, sink/I/O faults,
+  cancellation, tag/epoch/tail and old-data boundaries. Append a seventh
+  actual Dovecot suite after the unchanged six: full raw body bytes and
+  an unseen message remaining unseen before, after and across reconnect.
 - **Goal:** the dialect-free command interface returns the read
   observations.
 - Body streaming must support spec/10's 100 MB message budget without
