@@ -33,5 +33,5 @@ log = { version = "=0.4.34", features = ["max_level_debug"] }
 
 [dev-dependencies]
 sb-test-support = { version = "0.0.1", path = "../sb-test-support" }
-# `#[tokio::test]`'s current-thread runtime and macro.
-tokio = { version = "=1.54.1", default-features = false, features = ["macros", "rt"] }
+# Current-thread async tests and deterministic operation-deadline clocks.
+tokio = { version = "=1.54.1", default-features = false, features = ["macros", "rt", "test-util"] }
