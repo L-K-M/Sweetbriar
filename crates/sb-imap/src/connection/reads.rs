@@ -502,6 +502,42 @@ mod tests {
     use super::*;
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
+    #[test]
+    fn repeated_notice_indices_borrow_one_long_name_per_exchange_context() {
+        let context = MailboxContext {
+            name: "m".repeat(100_000),
+            uid_validity: std::num::NonZeroU32::new(4100).unwrap(),
+        };
+        let codec = ResponseCodec::new();
+        let (_, response) = codec.decode(b"* 2 EXISTS\r\n").unwrap();
+        let mut cache = Vec::new();
+        let mut pointer = None;
+        for _ in 0..1_000 {
+            let index = notice(&response, Some(&context), &mut cache)
+                .unwrap()
+                .unwrap();
+            assert_eq!(index, 0);
+            let MailboxNotice::Changed {
+                mailbox: Some(mailbox),
+            } = &cache[index]
+            else {
+                panic!("selected update must keep its context");
+            };
+            let address = mailbox.name.as_ptr();
+            assert_eq!(*pointer.get_or_insert(address), address);
+            assert_eq!(mailbox.name.len(), 100_000);
+        }
+        let index = notice(&response, None, &mut cache).unwrap().unwrap();
+        assert_eq!(index, 1);
+        assert_eq!(cache[index], MailboxNotice::Changed { mailbox: None });
+        assert_eq!(
+            notice(&response, Some(&context), &mut cache).unwrap(),
+            Some(0)
+        );
+        assert_eq!(notice(&response, None, &mut cache).unwrap(), Some(1));
+        assert_eq!(cache.len(), 2);
+    }
+
     #[tokio::test]
     async fn a_metadata_flood_reaches_the_budget_without_a_partial_observation() {
         let (mut client, server) = tokio::io::duplex(8192);
