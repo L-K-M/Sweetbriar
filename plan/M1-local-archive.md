@@ -1357,6 +1357,26 @@ local drafts. No network yet.
       slice must separately own single-connection locking, journal and
       statement-journal lifetimes, sidecar refusal and crash recovery; WAL
       snapshots need separately checked normalization before writable use.
+    - **M1.8e3b2b3 Confined writable SQLite VFS (L):** use three distinct
+      retained private file capabilities for the database, rollback journal
+      and statement journal. Accept rollback-format images only; WAL-format
+      normalization remains a separately checked prerequisite. Register one
+      private VFS per connection context, preserving inherited non-file
+      callback state and resolving every file operation to its retained
+      capability. Named/NULL temporary files, WAL/shm, ATTACH file targets and
+      other paths are refused; only the expected statement-journal NULL
+      open is allowed. Enforce one main connection per context, real flushes,
+      durable logical journal deletion, bounded-memory positioned I/O and
+      callback panic containment. No default-VFS file fallback. Keep VFS and
+      callback ownership alive through SQLite close, including failed opens
+      and close errors; no ignored I/O fault can become a successful close.
+      Native proof covers real rollback/commit, statement-journal spill and
+      statement rollback, disallowed opens, WAL rejection, aliased roles,
+      file/directory replacement, injected faults/panics and resource cleanup.
+      This private writer opens no source pathname and grants no eligibility.
+      The qualifier still owns SQL limits/cancellation, canonical schema and
+      integrity, journal-mode policy, staged-byte and namespace re-verification,
+      quarantine receipt and all publication/directory flush boundaries.
     - **M1.8e3b2b Staging qualification (L):** consume the private copy
       and schema inspection, recheck the coordinator, live root/incarnation
       and verified metadata, run the current quarantine transaction,
