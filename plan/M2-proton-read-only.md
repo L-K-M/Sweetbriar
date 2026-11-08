@@ -176,6 +176,35 @@ the provider policies (`proton_bridge`, `generic_imap`) live in
   separate 100 MB body-stream budget. Native regressions must prove early
   refusal without EOF, persistent failure and the exact size boundary;
   full local CI and the actual pinned Dovecot suites remain required.
+- **b2b1 implementation split (2026-11-08):** **b2b1a Header request
+  and row validation (L)** supplies the private validated request/command
+  factory and pure FETCH-frame builder with complete native codec tests.
+  **b2b1b Header command integration (L)** consumes that merged boundary,
+  exposes the owned observations through Connection, and owns all fake-server
+  and actual Dovecot, epoch/cancellation/old-data and unseen-PEEK proofs below.
+  No wire acceptance is waived; the first artifact opens no socket and its
+  types remain private until the connection driver provides their consumer.
+- **b2b1 Header-observation contract (2026-11-08):** accept a validated,
+  nonempty explicit UID batch of at most 250 and caller-supplied ASCII header
+  field names. Fetch UID, FLAGS, INTERNALDATE, RFC822.SIZE and the exact
+  BODY.PEEK[HEADER.FIELDS (...)] literal together; no ENVELOPE or provider
+  policy enters this leaf. Each row takes all required attributes from one
+  FETCH frame, keyed by its UID item even when UID follows the literal.
+  Validate the echoed field set (case/order may vary), section and origin.
+  Duplicate attributes or wrong echoes fail the exchange without partial
+  results. Missing, repeated, unkeyed and unrelated updates produce explicit
+  incomplete coverage; never stitch rows across frames. Preserve raw bytes,
+  flags, UTC milliseconds and size, distinguishing NIL from real empty bytes.
+  Full reads and bounded first-prefix reads return distinct evidence; prefixes
+  never imply complete headers and cannot be persisted as complete raw_fields
+  by the later Engine. Requested prefixes alone do not imply a mailbox change.
+  Keep the selected epoch, first-tag, predecessor-data, cancellation and typed
+  50 MiB metadata guards. Full body streams retain their separate 100 MB budget.
+  Native proof must include Bridge-profile and actual Dovecot observations,
+  correct PEEK encoding and an unseen message remaining unseen after the read,
+  UID-after-literal, echo/attribute failures, NIL/empty/prefix, local request
+  validation, incomplete batches, epoch/tag/fault/cancellation and old-data
+  boundaries. No store writes or checkpoint/deletion authority are added.
 - **Goal:** the dialect-free command interface returns the read
   observations.
 - Body streaming must support spec/10's 100 MB message budget without
