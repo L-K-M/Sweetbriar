@@ -11,6 +11,7 @@ mod identified_reads;
 mod imap;
 mod imap_cert;
 mod imap_profile;
+mod secret;
 mod sim;
 mod sqlite;
 #[cfg(target_os = "linux")]
@@ -34,6 +35,7 @@ pub use fault::{FaultFs, FaultKind, FsOp};
 pub use imap::{Expect, FakeImapServer, ReceivedCommand, Reply, Script, Step};
 pub use imap_cert::{TlsIo, cert_der, client_stream, client_stream_with};
 pub use imap_profile::{Profile, RAW_UTF8_ENVELOPE};
+pub use secret::{FakeSecrets, SecretOp};
 pub use sim::SimFs;
 pub use sqlite::{execute_sql, store_meta_value, with_sqlite_write_lock};
 #[cfg(target_os = "linux")]

@@ -7,3 +7,6 @@ publish.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+# Zeroizing in-memory secret box for the SecretStore seam (spec/01,
+# spec/10). Pinned to the version rustls/io-sasl already carry.
+secrecy = "=0.10.3"

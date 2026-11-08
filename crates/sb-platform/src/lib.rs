@@ -12,11 +12,13 @@ mod fs;
 mod location;
 mod random;
 mod roots;
+mod secret;
 
 pub use clock::SystemClock;
 pub use fs::RealFs;
 pub use random::OsRandom;
 pub use roots::{default_cache_root, default_data_root};
+pub use secret::PlatformSecrets;
 
 // Adjacent item exports let resources compose platform seams without a store.
 pub use sb_types::fs::{Fs, Lease, Location, LockError, Metadata, ReadFile, WriteFile};

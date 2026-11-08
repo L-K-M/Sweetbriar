@@ -8,4 +8,5 @@ pub mod appearance;
 pub mod fs;
 pub mod id;
 pub mod random;
+pub mod secret;
 pub mod time;
