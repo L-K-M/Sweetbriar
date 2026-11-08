@@ -123,7 +123,7 @@ impl Reconnector {
             cancellable(stop.as_mut(), tokio::time::sleep(delay)).await?;
             // The scoped future releases its mutable connector borrow, socket
             // and credentials before another wait or attempt can begin.
-            let result = cancellable(stop.as_mut(), connector.connect()).await?;
+            let result = cancellable(stop.as_mut(), async { connector.connect().await }).await?;
             match result {
                 Ok(connection) => {
                     self.next_delay = FIRST_DELAY;

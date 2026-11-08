@@ -1005,33 +1005,39 @@ async fn real_c1_timeout_reconnects_to_a_fresh_usable_session() {
     assert_eq!(server.unexpected_count(), 0);
 }
 
-/// A stop already sent before the retry future's first poll opens nothing.
-#[tokio::test]
-async fn cancel_before_first_poll_leaves_no_attempt_or_overlap() {
+/// A stop becoming ready between the wait and attempt skips the factory.
+#[tokio::test(start_paused = true)]
+async fn stop_at_the_attempt_boundary_never_enters_the_factory() {
     let calls = Arc::new(AtomicUsize::new(0));
     let releases = Arc::new(AtomicUsize::new(0));
+    let (provider, lookups) = CredentialProvider::new();
     let mut connector = LeakyConnector {
-        provider: Arc::new(CredentialProvider::new().0),
+        provider: Arc::new(provider),
         calls: calls.clone(),
         releases: releases.clone(),
     };
-    let (stop_tx, stop_rx) = oneshot::channel();
-    stop_tx.send(()).expect("stop ready");
+    let mut polls = 0;
+    let stop = poll_fn(move |_| {
+        polls += 1;
+        // Loop entry, pending wait and completed wait still see Pending.
+        // The attempt-boundary check is the first to observe cancellation.
+        if polls >= 4 {
+            Poll::Ready(())
+        } else {
+            Poll::Pending
+        }
+    });
     let mut reconnector = Reconnector::new();
-    let result = reconnector
-        .retry(
-            ImapError::Closed,
-            &mut connector,
-            async {
-                let _ = stop_rx.await;
-            },
-            |_: ReconnectWait<'_>| {},
-        )
-        .await;
-    assert!(
-        matches!(result, Err(ReconnectError::Cancelled)),
-        "pre-attempt stop cancels"
-    );
+    let mut retry = Box::pin(reconnector.retry(
+        ImapError::Closed,
+        &mut connector,
+        stop,
+        |_: ReconnectWait<'_>| {},
+    ));
+    assert!(poll_fn(|cx| Poll::Ready(retry.as_mut().poll(cx).is_pending())).await);
+    advance(Duration::from_secs(1)).await;
+    assert!(matches!(retry.await, Err(ReconnectError::Cancelled)));
     assert_eq!(calls.load(Ordering::SeqCst), 0, "no connector entry");
+    assert_eq!(lookups.load(Ordering::SeqCst), 0, "no credential lookup");
     assert_eq!(releases.load(Ordering::SeqCst), 0, "no attempt resource");
 }
