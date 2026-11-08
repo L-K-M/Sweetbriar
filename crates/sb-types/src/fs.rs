@@ -146,6 +146,17 @@ pub trait ConfinedDir: Send + Sync {
     /// parent components, symlinks and non-regular files. Resolution stays
     /// anchored to the opened directory even if its pathname is replaced.
     fn open_regular(&self, relative: &Path) -> io::Result<(Box<dyn ReadFile>, Metadata)>;
+    /// Open a regular descendant for reading, returning metadata and identity
+    /// from that same open file. Reject symlinks, traversal and non-files as
+    /// for `open_regular`. Identity remains stable while the handle is held;
+    /// it does not certify immutable bytes. No write authority is granted.
+    /// Unsupported adapters fail closed, without a pathname-based fallback.
+    fn open_regular_identified(
+        &self,
+        _relative: &Path,
+    ) -> io::Result<(Box<dyn ReadFile>, Metadata, FileIdentity)> {
+        Err(io::ErrorKind::Unsupported.into())
+    }
 }
 
 /// Filesystem-local identity of an open directory.
@@ -283,4 +294,32 @@ pub enum FileKind {
     /// Neither file nor directory: fifo, socket, device, symlink target
     /// of another kind.
     Other,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn identified_reads_default_to_unsupported_without_an_unidentified_fallback() {
+        struct Legacy(AtomicUsize);
+        impl ConfinedDir for Legacy {
+            fn open_regular(&self, _: &Path) -> io::Result<(Box<dyn ReadFile>, Metadata)> {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                Ok((
+                    Box::new(io::Cursor::new(b"legacy".to_vec())),
+                    Metadata::new(FileKind::File, 6),
+                ))
+            }
+        }
+        let legacy = Legacy(AtomicUsize::new(0));
+        let error = legacy
+            .open_regular_identified(Path::new("file"))
+            .err()
+            .unwrap();
+        assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+        assert_eq!(legacy.0.load(Ordering::SeqCst), 0);
+        assert_eq!(legacy.open_regular(Path::new("file")).unwrap().1.len(), 6);
+    }
 }

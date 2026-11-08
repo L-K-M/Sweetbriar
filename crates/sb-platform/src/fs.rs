@@ -260,6 +260,14 @@ impl ConfinedDir for RealConfinedDir {
         flush_durably(&self.0)
     }
     fn open_regular(&self, relative: &Path) -> io::Result<(Box<dyn ReadFile>, Metadata)> {
+        self.open_regular_identified(relative)
+            .map(|(file, metadata, _)| (file, metadata))
+    }
+
+    fn open_regular_identified(
+        &self,
+        relative: &Path,
+    ) -> io::Result<(Box<dyn ReadFile>, Metadata, FileIdentity)> {
         let parts: Vec<_> = relative
             .components()
             .map(|part| match part {
@@ -277,7 +285,15 @@ impl ConfinedDir for RealConfinedDir {
         if !md.is_file() {
             return Err(not_regular(relative));
         }
-        Ok((Box::new(file), Metadata::new(FileKind::File, md.len())))
+        let identity = FileIdentity {
+            device: md.dev(),
+            inode: md.ino(),
+        };
+        Ok((
+            Box::new(file),
+            Metadata::new(FileKind::File, md.len()),
+            identity,
+        ))
     }
 }
 
@@ -582,6 +598,7 @@ impl WriteFile for RealWriteFile {
 
 #[cfg(test)]
 mod tests {
+    mod identified_read;
     use std::env;
     use std::ffi::CString;
     use std::io::{Read, Seek, SeekFrom, Write};
