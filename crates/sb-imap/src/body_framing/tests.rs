@@ -129,6 +129,21 @@ async fn nil_empty_literal_and_empty_quote_are_different_evidence() {
 }
 
 #[tokio::test]
+async fn metadata_cost_preserves_original_literal_digits_and_mode() {
+    for announcement in ["{123}", "{123+}"] {
+        let prefix = format!("* 1 FETCH (BODY[] {announcement}\r\n");
+        let suffix = b" UID 7)\r\n";
+        let payload = vec![b'x'; 123];
+        let wire = [prefix.as_bytes(), &payload, suffix].concat();
+        let mut reader = reader();
+        let frame = reader.next(&mut wire.as_slice()).await.unwrap().unwrap();
+        assert_eq!(frame.metadata_bytes, prefix.len() + suffix.len());
+        assert!(frame.metadata_bytes > frame.frame.bytes.len());
+        assert_eq!(reader.into_parts().unwrap().0, payload);
+    }
+}
+
+#[tokio::test]
 async fn ordinary_metadata_literals_and_status_braces_are_not_body_data() {
     for wire in [
         &b"* LIST () \"/\" {4}\r\nTest\r\n"[..],

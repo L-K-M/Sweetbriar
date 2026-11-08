@@ -2,6 +2,7 @@
 //! not used: LIST must not apply their lossy name conversion, and a new
 //! selection cannot inherit buffered values from an older mailbox.
 
+mod body;
 mod headers;
 mod uids;
 
@@ -17,7 +18,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 
 use super::{Connection, write_command};
 use crate::error::ImapError;
-use crate::gate::{Frame, FrameKind, Gate};
+use crate::gate::{FrameKind, Gate};
 use crate::mailbox::{ExamineBuilder, MailboxSelection, MailboxSummary, list_row};
 
 // Metadata remains bounded independently of b3's larger body-literal budget.
@@ -70,6 +71,7 @@ enum ReadKind {
     UidSearch,
     FlagSweep,
     HeaderFetch,
+    BodyFetch,
     SelectedCapability,
 }
 
@@ -82,6 +84,7 @@ impl ReadKind {
             Self::UidSearch => "UID SEARCH",
             Self::FlagSweep => "UID FETCH",
             Self::HeaderFetch => "UID FETCH",
+            Self::BodyFetch => "UID FETCH",
             Self::SelectedCapability => "CAPABILITY",
         }
     }
@@ -89,7 +92,11 @@ impl ReadKind {
     fn needs_selection(self) -> bool {
         matches!(
             self,
-            Self::UidSearch | Self::FlagSweep | Self::HeaderFetch | Self::SelectedCapability
+            Self::UidSearch
+                | Self::FlagSweep
+                | Self::HeaderFetch
+                | Self::BodyFetch
+                | Self::SelectedCapability
         )
     }
 }
@@ -284,7 +291,7 @@ where
         if gate.poisoned() {
             return Err(ImapError::Malformed);
         }
-        charge(&mut remaining, &frame, kind)?;
+        charge(&mut remaining, frame.bytes.len(), kind)?;
         if !matches!(frame.kind, FrameKind::Untagged) {
             return Err(ImapError::UnexpectedCompletion);
         }
@@ -321,7 +328,7 @@ where
         if gate.poisoned() {
             return Err(ImapError::Malformed);
         }
-        charge(&mut remaining, &frame, kind)?;
+        charge(&mut remaining, frame.bytes.len(), kind)?;
         let (_, response) = codec
             .decode(&frame.bytes)
             .map_err(|_| ImapError::Malformed)?;
@@ -380,13 +387,12 @@ where
     }
 }
 
-fn charge(remaining: &mut usize, frame: &Frame, kind: ReadKind) -> Result<(), ImapError> {
-    *remaining =
-        remaining
-            .checked_sub(frame.bytes.len())
-            .ok_or(ImapError::ResponseBudgetExceeded {
-                operation: kind.operation(),
-            })?;
+fn charge(remaining: &mut usize, bytes: usize, kind: ReadKind) -> Result<(), ImapError> {
+    *remaining = remaining
+        .checked_sub(bytes)
+        .ok_or(ImapError::ResponseBudgetExceeded {
+            operation: kind.operation(),
+        })?;
     Ok(())
 }
 
