@@ -31,6 +31,9 @@ mod stage_files;
 mod stage_io;
 #[allow(dead_code)] // The staging qualifier consumes this read-only prerequisite.
 mod stage_schema;
+#[allow(dead_code)] // The staging qualifier consumes this confined writer (M1.8e3b2b3).
+#[allow(unsafe_code)]
+mod stage_vfs;
 mod staging;
 pub use staging::{PreparedRestoreStage, RestoreMetadata};
 
