@@ -33,6 +33,8 @@ mod stage_copy;
 #[allow(dead_code)] // Retained handles are consumed by the upcoming qualifier.
 mod stage_files;
 #[allow(dead_code)] // Consumed by the following staging qualifier.
+mod stage_input;
+#[allow(dead_code)] // Consumed by the following staging qualifier.
 mod stage_integrity;
 #[allow(dead_code)] // The confined writable VFS consumes this adapter (M1.8e3b2b2).
 mod stage_io;
