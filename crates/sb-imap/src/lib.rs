@@ -2,6 +2,8 @@
 //! Returns observations (mailbox lists, UID sets, fetched headers and
 //! bodies); it never writes the store or parses MIME.
 
+#[allow(dead_code)] // The following body-command driver consumes this private reader.
+mod body_framing;
 mod connection;
 mod error;
 mod exchange;
