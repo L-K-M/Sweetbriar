@@ -40,6 +40,9 @@ pub enum ImapError {
     /// One response exceeded the metadata frame budget. The failed
     /// exchange closes; callers may choose a smaller or bounded request.
     FrameBudgetExceeded,
+    /// A body exceeded the decimal message budget, by announcement or
+    /// decoded quoted bytes. No completed body is returned.
+    BodyBudgetExceeded { bytes: u64, limit: u64 },
     /// Individually valid frames exceeded one metadata command's total
     /// response budget. No partial observation is returned.
     ResponseBudgetExceeded {
@@ -109,6 +112,12 @@ impl fmt::Display for ImapError {
             Self::Malformed => write!(f, "an undecodable response closed the connection"),
             Self::FrameBudgetExceeded => {
                 f.write_str("an IMAP response exceeded the metadata frame budget")
+            }
+            Self::BodyBudgetExceeded { bytes, limit } => {
+                write!(
+                    f,
+                    "an IMAP body of {bytes} bytes exceeded the {limit}-byte message budget"
+                )
             }
             Self::ResponseBudgetExceeded { operation } => {
                 write!(f, "IMAP {operation} exceeded the metadata response budget")

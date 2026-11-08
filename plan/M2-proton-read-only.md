@@ -211,6 +211,27 @@ the provider policies (`proton_bridge`, `generic_imap`) live in
   UID-after-literal, echo/attribute failures, NIL/empty/prefix, local request
   validation, incomplete batches, epoch/tag/fault/cancellation and old-data
   boundaries. No store writes or checkpoint/deletion authority are added.
+- **b3 split before implementation (2026-11-08):** **b3a Bounded body
+  response framing (L)** adds a private reader that streams one full
+  BODY[] value into an owned unpublished sink, retaining only bounded
+  metadata and fixed I/O buffers. Support the exact 100,000,000-byte
+  message budget for literal and quoted/escaped UTF-8 values; preserve NIL
+  versus empty bytes, reject oversized announcements before payload reads,
+  and validate the complete codec-decoded FETCH frame, including a UID
+  after its body, the full section, absent origin and duplicate attributes.
+  Never interpret body bytes as response framing. Preserve coalesced bytes
+  after a frame, retain the 50 MiB metadata bound, and make failure or a
+  cancelled read permanently unusable. Native proof includes exact budgets,
+  payloads above 50 MiB with bounded writes, fragmentation, UID/echo/tail
+  failures, quoting/UTF-8, NIL/empty, I/O/cancellation and coalesced data.
+  This prerequisite opens no connection and yields no completed command or
+  acquisition authority. **b3b Body command integration (L)** consumes it
+  and owns the unpublished sink until the first matching tagged OK and all
+  received tail validation succeed. Retain the selected epoch, predecessor
+  drain, reconciliation notices, cancellation/socket ownership and typed
+  failure semantics, with fake Bridge and actual Dovecot unseen-PEEK proof.
+  No partial UID chunk fetch, provider policy, Store or MIME parsing enters
+  either artifact; later body acquisition owns publication and coverage.
 - **Goal:** the dialect-free command interface returns the read
   observations.
 - Body streaming must support spec/10's 100 MB message budget without
