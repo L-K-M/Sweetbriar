@@ -102,9 +102,12 @@ impl Connection {
             return Err(ImapError::NotLoopback);
         }
 
-        let tcp = TcpStream::connect((options.host, options.port))
-            .await
-            .map_err(ImapError::from_io)?;
+        let tcp = crate::timeout::command("connect", async {
+            TcpStream::connect((options.host, options.port))
+                .await
+                .map_err(ImapError::from_io)
+        })
+        .await?;
         let wire = connect_tls(tcp, options.pin, options.host).await?;
         let mut connection = Self {
             host: options.host,
@@ -135,9 +138,12 @@ impl Connection {
         // The plain socket is owned by this future: an error or a
         // cancel at any await drops it, so no half-open peer is left
         // holding a command.
-        let mut tcp = TcpStream::connect((options.host, options.port))
-            .await
-            .map_err(ImapError::from_io)?;
+        let mut tcp = crate::timeout::command("connect", async {
+            TcpStream::connect((options.host, options.port))
+                .await
+                .map_err(ImapError::from_io)
+        })
+        .await?;
         let mut gate = Gate::new();
         if exchange::greeting(&mut gate, &mut tcp).await? != Authentication::Required {
             return Err(ImapError::StartTlsRefused);
@@ -348,15 +354,18 @@ async fn connect_tls(tcp: TcpStream, pin: CertificatePin, host: IpAddr) -> Resul
     let (config, presented) = pinned_client_config(pin);
     let server = ServerName::try_from(host.to_string())
         .map_err(|_| ImapError::command("TLS", "invalid server name"))?;
-    match TlsConnector::from(config).connect(server, tcp).await {
-        Ok(tls) => Ok(tls),
-        Err(err) => {
-            if let Some(presented_sha256) = presented.lock().expect("verifier mutex").take() {
-                return Err(ImapError::PinMismatch { presented_sha256 });
+    crate::timeout::command("TLS", async {
+        match TlsConnector::from(config).connect(server, tcp).await {
+            Ok(tls) => Ok(tls),
+            Err(err) => {
+                if let Some(presented_sha256) = presented.lock().expect("verifier mutex").take() {
+                    return Err(ImapError::PinMismatch { presented_sha256 });
+                }
+                Err(ImapError::from_io(err))
             }
-            Err(ImapError::from_io(err))
         }
-    }
+    })
+    .await
 }
 
 #[cfg(test)]

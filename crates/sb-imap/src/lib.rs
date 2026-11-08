@@ -12,6 +12,7 @@ mod header_observations;
 mod mailbox;
 mod mailbox_codec;
 mod secret;
+mod timeout;
 mod tls;
 mod uid_observations;
 

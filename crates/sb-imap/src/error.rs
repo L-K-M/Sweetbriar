@@ -63,6 +63,12 @@ pub enum ImapError {
     SelectionInvalidated,
     /// The connection is closed; no further command can run.
     Closed,
+    /// The operation exceeded its deadline. The owned session is closed;
+    /// callers must open a fresh connection before trying another command.
+    TimedOut {
+        /// Static operation name; never server text or message content.
+        operation: &'static str,
+    },
     /// An I/O failure, with its native kind.
     Io {
         /// The native kind of the failure.
@@ -131,6 +137,7 @@ impl fmt::Display for ImapError {
             Self::NotSelected => f.write_str("establish a read-only selection before reading UIDs"),
             Self::SelectionInvalidated => f.write_str("the established mailbox selection changed"),
             Self::Closed => f.write_str("the IMAP connection is closed"),
+            Self::TimedOut { operation } => write!(f, "IMAP {operation} timed out"),
             Self::Io { kind, message } => write!(f, "IMAP I/O error ({kind:?}): {message}"),
             Self::Command { operation, message } => {
                 write!(f, "IMAP {operation} failed: {message}")

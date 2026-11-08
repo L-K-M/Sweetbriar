@@ -52,6 +52,13 @@ pub(crate) async fn greeting<W: AsyncRead + Unpin>(
     gate: &mut Gate,
     wire: &mut W,
 ) -> Result<Authentication, ImapError> {
+    crate::timeout::command("greeting", read_greeting(gate, wire)).await
+}
+
+async fn read_greeting<W: AsyncRead + Unpin>(
+    gate: &mut Gate,
+    wire: &mut W,
+) -> Result<Authentication, ImapError> {
     let frame = gate
         .read_frame(wire)
         .await?
@@ -106,6 +113,20 @@ pub(crate) async fn capability<W: AsyncRead + AsyncWrite + Unpin>(
 }
 
 pub(crate) async fn run<W, F>(
+    gate: &mut Gate,
+    wire: &mut W,
+    body: CommandBody<'static>,
+    operation: &'static str,
+    observe: F,
+) -> Result<Outcome<Reply>, ImapError>
+where
+    W: AsyncRead + AsyncWrite + Unpin,
+    F: FnMut(&Response<'_>) -> Result<(), ImapError>,
+{
+    crate::timeout::command(operation, run_inner(gate, wire, body, operation, observe)).await
+}
+
+async fn run_inner<W, F>(
     gate: &mut Gate,
     wire: &mut W,
     body: CommandBody<'static>,
@@ -243,6 +264,42 @@ mod tests {
     use super::*;
     use std::time::Duration;
     use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+
+    #[tokio::test(start_paused = true)]
+    async fn silent_greeting_and_literal_continuation_have_command_deadlines() {
+        let (mut client, _silent_peer) = tokio::io::duplex(1024);
+        let mut gate = Gate::new();
+        let result = greeting(&mut gate, &mut client).await;
+        assert!(matches!(
+            result,
+            Err(ImapError::TimedOut {
+                operation: "greeting"
+            })
+        ));
+
+        let (mut client, peer) = tokio::io::duplex(1024);
+        let server = tokio::spawn(async move {
+            let mut peer = BufReader::new(peer);
+            let mut line = String::new();
+            peer.read_line(&mut line).await.unwrap();
+            assert!(line.ends_with("{13}\r\n"));
+            // Hold the connection open without permission to send the literal.
+            std::future::pending::<()>().await;
+        });
+        let result = run(
+            &mut Gate::new(),
+            &mut client,
+            CommandBody::login("synthetic-界".to_string(), "password".to_string()).unwrap(),
+            "LOGIN",
+            |_| Ok(()),
+        )
+        .await;
+        assert!(matches!(
+            result,
+            Err(ImapError::TimedOut { operation: "LOGIN" })
+        ));
+        server.abort();
+    }
 
     #[tokio::test]
     async fn an_untagged_notice_cannot_release_a_synchronizing_literal() {
