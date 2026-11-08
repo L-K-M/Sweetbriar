@@ -402,6 +402,14 @@ impl ConfinedDir for SimConfinedDir {
         Ok(())
     }
     fn open_regular(&self, relative: &Path) -> io::Result<(Box<dyn ReadFile>, Metadata)> {
+        self.open_regular_identified(relative)
+            .map(|(file, metadata, _)| (file, metadata))
+    }
+
+    fn open_regular_identified(
+        &self,
+        relative: &Path,
+    ) -> io::Result<(Box<dyn ReadFile>, Metadata, FileIdentity)> {
         let _op = self
             .ops
             .lock()
@@ -435,14 +443,20 @@ impl ConfinedDir for SimConfinedDir {
             .cloned();
         match child {
             Some(Child::File(node)) => {
-                let len = node
-                    .lock()
-                    .expect("a panicking thread held a sim file")
-                    .live
-                    .len() as u64;
+                let (len, identity) = {
+                    let file = node.lock().expect("a panicking thread held a sim file");
+                    (
+                        file.live.len() as u64,
+                        FileIdentity {
+                            device: 0,
+                            inode: file.identity,
+                        },
+                    )
+                };
                 Ok((
                     Box::new(SimReadFile { node, pos: 0 }),
                     Metadata::new(FileKind::File, len),
+                    identity,
                 ))
             }
             Some(Child::Dir(_)) => Err(not_regular(relative)),

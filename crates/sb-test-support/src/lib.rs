@@ -6,6 +6,8 @@
 
 mod cut;
 mod fault;
+#[cfg(test)]
+mod identified_reads;
 mod imap;
 mod imap_cert;
 mod imap_profile;
