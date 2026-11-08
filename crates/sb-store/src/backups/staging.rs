@@ -14,6 +14,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use sha2::{Digest, Sha256};
 
+use super::stage_bindings::{LiveBinding, StageBindings};
 use super::stage_copy::{cancelled, copy_retained, copy_verified, io_error};
 use super::stage_files::StageFiles;
 use super::*;
@@ -45,6 +46,10 @@ pub struct PreparedRestoreStage {
     /// bytes and compare their identities to the current names before writing.
     #[allow(dead_code)]
     pub(super) files: StageFiles,
+    #[allow(dead_code)] // Revalidated by the qualifier before it grants stage eligibility.
+    pub(super) bindings: StageBindings,
+    #[allow(dead_code)] // The qualifier bounds and authenticates this exact manifest length.
+    pub(super) manifest_bytes: u64,
     path: PathBuf,
     incarnation: String,
     generation_id: String,
@@ -104,6 +109,10 @@ impl PreparedRestoreStage {
 pub(crate) enum StagePhase {
     /// The supplied locator reopened the verified generation directory.
     Located,
+    /// The live root and database have retained read-only identity leases.
+    LiveBound,
+    /// The normal WAL-aware live-incarnation read closed.
+    LiveRead,
     /// The database was copied and its hash checked.
     DatabaseCopied,
     /// The object-copy pass finished against the selected manifest.
@@ -364,6 +373,9 @@ impl Backups {
             ));
         }
         progress(StagePhase::Located);
+        if cancel.load(Ordering::Acquire) {
+            return Err(cancelled());
+        }
 
         // The future preserved-root suffix comes from the live store's
         // incarnation, never from the source database's copy.
@@ -372,6 +384,12 @@ impl Backups {
             .parent()
             .expect("the state database has a parent")
             .to_path_buf();
+        let live = LiveBinding::capture(self.fs.as_ref(), &data_root)?;
+        progress(StagePhase::LiveBound);
+        if cancel.load(Ordering::Acquire) {
+            return Err(cancelled());
+        }
+        live.recheck(self.fs.as_ref(), &data_root)?;
         let conn = open_connection(&self.state_db, Access::ReadOnly, READER_PRAGMAS)?;
         let current: String = conn
             .query_row(
@@ -388,6 +406,11 @@ impl Backups {
         }
         conn.close()
             .map_err(|(_, error)| classify(error, "close the live store incarnation read"))?;
+        progress(StagePhase::LiveRead);
+        if cancel.load(Ordering::Acquire) {
+            return Err(cancelled());
+        }
+        live.recheck(self.fs.as_ref(), &data_root)?;
         if current == new_incarnation {
             return Err(StoreError::conflict(
                 "the restore incarnation reuses the live store incarnation",
@@ -534,12 +557,20 @@ impl Backups {
             manifest.database.bytes,
         )
         .map_err(|error| io_error("retaining the staging file identities", error))?;
+        let bindings = StageBindings {
+            source,
+            source_identity: selection.identity,
+            live,
+        };
         progress(StagePhase::HandlesRetained);
         if cancel.load(Ordering::Acquire) {
             return Err(cancelled());
         }
+        bindings.recheck(self.fs.as_ref(), source_location, &data_root)?;
         Ok(PreparedRestoreStage {
             files,
+            bindings,
+            manifest_bytes,
             path: stage_path,
             incarnation: new_incarnation.to_owned(),
             generation_id: generation.to_owned(),
