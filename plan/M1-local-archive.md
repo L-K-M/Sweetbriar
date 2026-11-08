@@ -1483,7 +1483,22 @@ local drafts. No network yet.
       accounting and concurrent reads, and retain confinement, identity and
       close cleanup. Budget 700 gross: adapter/entry 220, native proof 360,
       plan/reserve 120; split before exceeding 1,450 with all proof.
-      **b6b Qualifier (L)** consumes these inputs, b6b0/b6b1 and the merged inspectors
+      **b6b2 Quarantined image execution (L)** consumes the retained-file,
+      bounded-input, catalog/integrity and finite-quarantine primitives. Verify
+      the original retained bytes, inspect shape/physical integrity, and check
+      the exact catalog and source UUID again on the fresh confined writer
+      under metadata/input/work limits before lifting only the data value cap.
+      Preserve native causes from every sidecar as well as the main file.
+      Run quarantine, guarded checkpoint, close and flush before returning a
+      private post-quarantine hash/length/identity observation. No connection
+      survives and no source/live namespace or swap eligibility is certified.
+      Native proof retains all row-state/large-value/hostile-schema acceptance,
+      fresh-connection checks, cancellation, fired sidecar causes, close/flush
+      failure and process-cut evidence. Budget 1,390 gross: execution/catalog
+      sharing 440, native proof 800, prose/reserve 150. Split before exceeding
+      1,450 with complete proof. The final binding handoff remains mandatory.
+      **b6b3 Qualified binding handoff (L)** consumes these inputs, b6b0/b6b1/
+      b6b2 and the merged inspectors
       and confined WAL writer, revalidating bytes, manifest metadata and
       every binding before fresh guarded quarantine and after checkpoint,
       close and required flushes. Only that complete handoff may expose a
