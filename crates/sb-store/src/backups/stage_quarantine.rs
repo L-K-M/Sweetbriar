@@ -15,7 +15,7 @@ use super::{
     stage_canonical::{self, inspection_error},
     stage_copy::{cancelled, io_error},
     stage_files::StageFiles,
-    stage_input, stage_integrity, stage_schema,
+    stage_input, stage_integrity,
     stage_vfs::CloseError,
 };
 use crate::{Seams, StoreError};
@@ -155,7 +155,8 @@ pub(super) fn run(
         ));
     }
     phase(ImagePhase::BytesVerified)?;
-    stage_schema::inspect(files.database_reader(), cancel)?.ok_or_else(cancelled)?;
+    // Exact current-catalog equality also establishes the required shape.
+    // Enter its physical-input guard before any eager schema materialization.
     stage_integrity::inspect(files.database_reader(), seams, cancel)?.ok_or_else(cancelled)?;
     phase(ImagePhase::ReadOnlyInspected)?;
     let create = |name| {
