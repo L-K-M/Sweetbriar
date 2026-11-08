@@ -1408,6 +1408,25 @@ local drafts. No network yet.
       Qualification still owns SQL hardening/budgets/cancellation, canonical
       schema/integrity, source/namespace rechecks and publication flushes.
       This private writer grants no eligibility or swap authority.
+    - **M1.8e3b2b5a Bounded canonical catalog (L):** inspect a retained
+      read-only image against the complete catalog produced by this app's
+      current migrations on the pinned SQLite. Compare all table, index,
+      trigger and view declarations, including implicit indexes and FTS
+      shadow tables, with exact current SQL and no inherited programs run.
+      Require the current version without migration. Bound physical catalog
+      input before schema materialization as well as individual values, SQL,
+      columns and SQLite work; cancellation and I/O failures return no proof.
+      Native proof covers valid current catalogs, forged/added/removed objects
+      and constraints, obsolete versions, eager schema-load input exhaustion,
+      oversized metadata, retained identity, sidecar refusal and cleanup.
+      Valid unrelated large archive values remain unread and accepted.
+      This establishes a declared-catalog observation only; it certifies no
+      physical data integrity, byte stability, quarantine or stage eligibility.
+      **b5b Integrity inspection (L)** follows with full integrity and foreign-key
+      checks over the retained image under cancellation and a verified-size
+      work budget, without the metadata phase's value cap. Native physical
+      rowid, index and page corruptions, large values, cancellation and faults
+      must pass before the staging qualifier can consume both observations.
     - **M1.8e3b2b Staging qualification (L):** consume the private copy
       and schema inspection, recheck the coordinator, live root/incarnation
       and verified metadata, run the current quarantine transaction,
