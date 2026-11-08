@@ -1356,11 +1356,13 @@ local drafts. No network yet.
       changes no journal mode and grants no stage eligibility. The next VFS
       slice must separately own single-connection locking, journal and
       statement-journal lifetimes, sidecar refusal and crash recovery; WAL
-      snapshots need separately checked normalization before writable use.
+      snapshots need separately checked normalization or the confined WAL2
+      writer below before writable use.
     - **M1.8e3b2b3 Confined writable SQLite VFS (L):** use three distinct
       retained private file capabilities for the database, rollback journal
       and statement journal. Accept rollback-format images or an empty new
-      destination; WAL-format normalization remains separately checked. Register one
+      destination; WAL-format use requires the separate WAL2 writer below.
+      Register one
       private VFS per connection context, preserving inherited non-file
       callback state and resolving every file operation to its retained
       capability. Named/NULL temporary files, WAL/shm, ATTACH file targets and
@@ -1377,6 +1379,35 @@ local drafts. No network yet.
       The qualifier still owns SQL limits/cancellation, canonical schema and
       integrity, journal-mode policy, staged-byte and namespace re-verification,
       quarantine receipt and all publication/directory flush boundaries.
+    - **M1.8e3b2b4 Confined WAL2 staging writer (L):** consume merged
+      b2b3 with a fourth distinct, empty retained WAL capability and a
+      nonempty WAL2 main image. Keep the rollback/empty entry unchanged.
+      Native control probes and pinned SQLite source show that EXCLUSIVE
+      locking permits a heap wal-index with version-1 file methods and no
+      host SHM. Verify EXCLUSIVE with the schema-free locking-mode pragma
+      during setup. journal_mode itself needs schema: its verification and
+      checkpoint must run inside the caller's SQL limits/cancellation guard.
+      No schema-loading SQL may run in construction, close or Drop.
+      Constrain WAL opens/access/delete to its exact retained role, keep
+      one main connection and the zero ATTACH limit, and never use a host
+      pathname or default-VFS file fallback. An explicit guarded checkpoint
+      verifies WAL mode and a zero busy/log/checkpoint TRUNCATE result.
+      Close requires that receipt and an empty WAL before SQLite close,
+      then flushes and requires empty journals/WAL and a WAL2 main header.
+      Subsequent borrowing invalidates the receipt; later writes through a
+      retained borrow must still be caught by the WAL-length/transaction
+      checks. A close without checkpoint cannot succeed via implicit close
+      checkpointing. Sticky faults or
+      cancellation cannot become qualified output; ordinary failures still
+      clean up, only actual SQLite close refusal may retain callbacks.
+      Native proof covers real WAL commit/checkpoint/reopen without SHM,
+      source preservation, mode/precondition/refusal and alias checks,
+      path replacement, fired WAL I/O/panic faults and resource lifetimes.
+      Direct WAL2 use avoids two format changes: backup copies retain WAL2
+      and the live constructor requires WAL2. No page-header patching.
+      Qualification still owns SQL hardening/budgets/cancellation, canonical
+      schema/integrity, source/namespace rechecks and publication flushes.
+      This private writer grants no eligibility or swap authority.
     - **M1.8e3b2b Staging qualification (L):** consume the private copy
       and schema inspection, recheck the coordinator, live root/incarnation
       and verified metadata, run the current quarantine transaction,
