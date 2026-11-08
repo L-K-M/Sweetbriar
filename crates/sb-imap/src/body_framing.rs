@@ -33,6 +33,8 @@ pub(crate) enum BodyEvidence {
 pub(crate) struct BodyFrame {
     pub(crate) frame: Frame,
     pub(crate) body: Option<BodyEvidence>,
+    /// Original framing cost; the body placeholder can be shorter.
+    pub(crate) metadata_bytes: usize,
 }
 
 /// The sink must remain private and unpublished. Cancellation of `next`
@@ -195,6 +197,7 @@ impl<S: AsyncWrite + Unpin> BodyReader<S> {
                     _ => FrameKind::Untagged,
                 };
                 return Ok(Some(BodyFrame {
+                    metadata_bytes: meta.charged,
                     frame: Frame {
                         bytes: meta.bytes,
                         kind,

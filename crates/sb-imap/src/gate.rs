@@ -136,68 +136,7 @@ impl Gate {
 
     async fn fill(&mut self, wire: &mut (impl AsyncRead + Unpin)) -> Result<(), ImapError> {
         loop {
-            loop {
-                let fragment = self.fragmentizer.progress();
-                // A status/greeting/continuation can legally end in `{n}`.
-                // Probe only the first line, and require a complete codec
-                // decode before overriding the context-free literal guess.
-                // Later literal boundaries never reparse a growing FETCH.
-                let complete_text = matches!(
-                    fragment,
-                    Some(FragmentInfo::Line {
-                        start: 0,
-                        announcement: Some(_),
-                        ..
-                    })
-                ) && self.decode_kind().is_ok();
-                let announced_over_limit = !complete_text
-                    && match &fragment {
-                        Some(FragmentInfo::Line {
-                            announcement: Some(literal),
-                            ..
-                        }) => {
-                            self.fragmentizer.message_bytes().len() as u64
-                                + u64::from(literal.length)
-                                > u64::from(MAX_MESSAGE_SIZE)
-                        }
-                        _ => false,
-                    };
-                // progress() can consume an unfinished line/literal and
-                // return None. Check its limit before asking for more bytes,
-                // as well as declarations that already cannot fit the frame.
-                if self.fragmentizer.is_max_message_size_exceeded() || announced_over_limit {
-                    self.fault = Some(GateFault::FrameLimit);
-                    self.released.clear();
-                    self.pending = 0;
-                    self.fragmentizer = Fragmentizer::new(MAX_MESSAGE_SIZE);
-                    return Err(ImapError::FrameBudgetExceeded);
-                }
-                if fragment.is_none() {
-                    break;
-                }
-                if !complete_text && !self.fragmentizer.is_message_complete() {
-                    continue;
-                }
-                let kind = self.decode_kind();
-                let Ok(kind) = kind else {
-                    // Drain released messages before reporting the fault.
-                    self.fault = Some(GateFault::Malformed);
-                    return Ok(());
-                };
-                self.expects_greeting = false;
-                let bytes = self.fragmentizer.message_bytes();
-                self.pending -= bytes.len();
-                self.released.push_back(Frame {
-                    bytes: bytes.to_vec(),
-                    kind,
-                });
-                if complete_text {
-                    // The full codec proof above establishes the boundary:
-                    // there is no literal to skip. Preserve enqueued bytes
-                    // of following responses, including real literals.
-                    self.fragmentizer.skip_message();
-                }
-            }
+            self.decode_available()?;
             if !self.released.is_empty() || self.eof || self.poisoned() {
                 return Ok(());
             }
@@ -215,6 +154,99 @@ impl Gate {
                 self.fragmentizer.enqueue_bytes(&self.wire_buf[..read]);
             }
         }
+    }
+
+    /// Ingest an already-received streaming-command tail without reading
+    /// the socket. Only an empty gate may accept this handoff. Known complete
+    /// frames must be ordinary unsolicited data; a partial frame stays under
+    /// the predecessor context for the next pre-command drain.
+    pub(crate) fn ingest_received(&mut self, bytes: &[u8]) -> Result<VecDeque<Frame>, ImapError> {
+        match self.fault {
+            Some(GateFault::FrameLimit) => return Err(ImapError::FrameBudgetExceeded),
+            Some(GateFault::Malformed) => return Err(ImapError::Malformed),
+            None => {}
+        }
+        if self.eof {
+            return Err(ImapError::Closed);
+        }
+        if self.has_buffered() {
+            return Err(ImapError::UnexpectedCompletion);
+        }
+        self.pending = bytes.len();
+        self.fragmentizer.enqueue_bytes(bytes);
+        self.decode_available()?;
+        if self.poisoned() {
+            return Err(ImapError::Malformed);
+        }
+        if !self.reusable() {
+            return Err(ImapError::UnexpectedCompletion);
+        }
+        Ok(std::mem::take(&mut self.released))
+    }
+
+    fn decode_available(&mut self) -> Result<(), ImapError> {
+        loop {
+            let fragment = self.fragmentizer.progress();
+            // A status/greeting/continuation can legally end in `{n}`.
+            // Probe only the first line, and require a complete codec
+            // decode before overriding the context-free literal guess.
+            // Later literal boundaries never reparse a growing FETCH.
+            let complete_text = matches!(
+                fragment,
+                Some(FragmentInfo::Line {
+                    start: 0,
+                    announcement: Some(_),
+                    ..
+                })
+            ) && self.decode_kind().is_ok();
+            let announced_over_limit = !complete_text
+                && match &fragment {
+                    Some(FragmentInfo::Line {
+                        announcement: Some(literal),
+                        ..
+                    }) => {
+                        self.fragmentizer.message_bytes().len() as u64 + u64::from(literal.length)
+                            > u64::from(MAX_MESSAGE_SIZE)
+                    }
+                    _ => false,
+                };
+            // progress() can consume an unfinished line/literal and
+            // return None. Check its limit before asking for more bytes,
+            // as well as declarations that already cannot fit the frame.
+            if self.fragmentizer.is_max_message_size_exceeded() || announced_over_limit {
+                self.fault = Some(GateFault::FrameLimit);
+                self.released.clear();
+                self.pending = 0;
+                self.fragmentizer = Fragmentizer::new(MAX_MESSAGE_SIZE);
+                return Err(ImapError::FrameBudgetExceeded);
+            }
+            if fragment.is_none() {
+                break;
+            }
+            if !complete_text && !self.fragmentizer.is_message_complete() {
+                continue;
+            }
+            let kind = self.decode_kind();
+            let Ok(kind) = kind else {
+                // Drain released messages before reporting the fault.
+                self.fault = Some(GateFault::Malformed);
+                return Ok(());
+            };
+            self.expects_greeting = false;
+            let bytes = self.fragmentizer.message_bytes();
+            self.pending -= bytes.len();
+            self.released.push_back(Frame {
+                bytes: bytes.to_vec(),
+                kind,
+            });
+            if complete_text {
+                // The full codec proof above establishes the boundary:
+                // there is no literal to skip. Preserve enqueued bytes
+                // of following responses, including real literals.
+                self.fragmentizer.skip_message();
+            }
+        }
+        Ok(())
     }
 
     fn decode_kind(&self) -> Result<FrameKind, ()> {
@@ -285,6 +317,87 @@ mod tests {
             b"* 1 FETCH (BODY[] {5}\r\nhello)\r\n"
         );
         assert!(gate.read(&mut wire).await.unwrap().is_empty());
+    }
+
+    async fn active_gate() -> Gate {
+        let mut gate = Gate::new();
+        assert_eq!(
+            gate.read(&mut b"* OK ready\r\n".as_slice()).await.unwrap(),
+            b"* OK ready\r\n"
+        );
+        gate
+    }
+
+    #[tokio::test]
+    async fn streaming_tail_releases_complete_data_and_retains_a_partial_frame() {
+        let mut gate = active_gate().await;
+        let frames = gate.ingest_received(b"* 9 EXISTS\r\n* 2 EX").unwrap();
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0].bytes, b"* 9 EXISTS\r\n");
+        assert!(matches!(frames[0].kind, FrameKind::Untagged));
+        assert!(gate.has_buffered());
+        assert!(gate.reusable());
+        assert_eq!(
+            gate.read(&mut b"PUNGE\r\n".as_slice()).await.unwrap(),
+            b"* 2 EXPUNGE\r\n"
+        );
+        assert!(!gate.has_buffered());
+    }
+
+    #[tokio::test]
+    async fn streaming_tail_refuses_known_completions_bye_and_malformed_data() {
+        for bytes in [
+            &b"X1 OK unexpected\r\n"[..],
+            b"* BYE closing\r\n",
+            b"+ continue\r\n",
+        ] {
+            let mut gate = active_gate().await;
+            assert!(matches!(
+                gate.ingest_received(bytes),
+                Err(ImapError::UnexpectedCompletion)
+            ));
+            assert!(!gate.reusable());
+        }
+        let mut gate = active_gate().await;
+        assert!(matches!(
+            gate.ingest_received(b"* 9 EXISTS\r\nnot a response\r\n"),
+            Err(ImapError::Malformed)
+        ));
+        assert!(gate.poisoned());
+    }
+
+    #[tokio::test]
+    async fn streaming_tail_keeps_early_typed_literal_limits_and_persistent_failure() {
+        let mut gate = active_gate().await;
+        let bytes = format!("* 1 FETCH (BODY[] {{{}}}\r\n", MAX_MESSAGE_SIZE + 1);
+        assert!(matches!(
+            gate.ingest_received(bytes.as_bytes()),
+            Err(ImapError::FrameBudgetExceeded)
+        ));
+        assert!(matches!(
+            gate.ingest_received(b"* OK ignored\r\n"),
+            Err(ImapError::FrameBudgetExceeded)
+        ));
+    }
+
+    #[tokio::test]
+    async fn streaming_tail_cannot_splice_buffered_predecessor_bytes_or_resurrect_eof() {
+        let mut gate = Gate::new();
+        let mut wire = b"* OK ready\r\n* 2 EX".as_slice();
+        gate.read(&mut wire).await.unwrap();
+        assert!(matches!(
+            gate.ingest_received(b"injected\r\n"),
+            Err(ImapError::UnexpectedCompletion)
+        ));
+        assert_eq!(
+            gate.read(&mut b"PUNGE\r\n".as_slice()).await.unwrap(),
+            b"* 2 EXPUNGE\r\n"
+        );
+        assert!(gate.read(&mut b"".as_slice()).await.unwrap().is_empty());
+        assert!(matches!(
+            gate.ingest_received(b"* OK too late\r\n"),
+            Err(ImapError::Closed)
+        ));
     }
 
     fn wire_bytes() -> &'static [u8] {

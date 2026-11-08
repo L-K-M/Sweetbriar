@@ -388,6 +388,10 @@ fn run_connection(
     shutdown: Arc<AtomicBool>,
     index: usize,
 ) -> io::Result<()> {
+    // BSD accepts inherit the listener's nonblocking flag. Each connection
+    // has its own thread and blocking TLS writer; bulk replies must wait
+    // for socket capacity rather than abort on WouldBlock.
+    stream.set_nonblocking(false)?;
     let implicit_tls = script.implicit_tls;
     let mut conn = Conn {
         wire: Wire::Plain(stream),
