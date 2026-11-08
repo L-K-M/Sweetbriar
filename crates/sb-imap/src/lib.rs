@@ -11,6 +11,7 @@ mod gate;
 mod header_observations;
 mod mailbox;
 mod mailbox_codec;
+mod reconnect;
 mod secret;
 mod timeout;
 mod tls;
@@ -28,6 +29,7 @@ pub use header_observations::{
     HeaderRow,
 };
 pub use mailbox::{MailboxSelection, MailboxSummary};
+pub use reconnect::{ConnectAttempt, Connector, ReconnectError, ReconnectWait, Reconnector};
 pub use secret::Password;
 pub use tls::CertificatePin;
 pub use uid_observations::{FlagCoverage, FlagSweep, UidFlags, UidInventory};

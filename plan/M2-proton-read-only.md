@@ -306,7 +306,21 @@ the provider policies (`proton_bridge`, `generic_imap`) live in
   **c3 Reconnect/backoff (L)** consumes c1/c2 through an
   owned connector boundary, with exponential 1 s to 5 min backoff,
   cancellation, reset on success and explicit retryable versus paused
-  failures. Do not retain or clone credentials for retries, silently accept
+  failures. The owned `Connector` returns a borrowing boxed Send future;
+  each attempt obtains fresh credentials and owns its socket until completion
+  or drop. `Reconnector::retry` consumes a failed operation, waits 1 s before
+  its first new attempt, doubles to 5 min, and resets only after success.
+  Retry closed sessions, deadlines and transient network I/O kinds; pause
+  certificate/authentication/configuration, protocol, resource and unknown
+  failures for caller action. A ready stop prevents even a connector call;
+  cancellation during a wait or connect drops the attempt before returning.
+  Report borrowed typed causes and delays without retaining credentials or
+  parsing error strings. Native proof owns the complete delay/cap/reset and
+  drop schedule, pause matrix, real TLS timeout-to-fresh-session path, and a
+  tenth actual Dovecot reconnect/PEEK/unseen witness after the unchanged nine.
+  Budget 1,250 gross: driver/API 220, native proof 720, Dovecot/runner 140,
+  prose/reserve 170; split before exceeding 1,450 with all proof.
+  Do not retain or clone credentials for retries, silently accept
   certificates or add provider mutation policy. Each artifact includes its
   complete native proof within 1,450 changed lines; split again before
   exceeding it. Account/worker integration remains in the following steps.
