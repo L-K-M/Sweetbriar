@@ -6,7 +6,7 @@
 //! is best effort.
 
 mod reads;
-pub use reads::{MailboxContext, MailboxNotice, ReadObservation};
+pub use reads::{IdleEvent, MailboxContext, MailboxNotice, ReadObservation};
 
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr};

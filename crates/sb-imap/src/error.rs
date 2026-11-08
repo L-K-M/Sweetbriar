@@ -58,6 +58,8 @@ pub enum ImapError {
     /// A UID read requires an established read-only selection. This local
     /// precondition failure does not close an authenticated connection.
     NotSelected,
+    /// The authenticated capabilities did not advertise IDLE. No command was sent.
+    IdleUnavailable,
     /// The server contradicted the selected epoch or reported that the
     /// selection closed. The session is closed; select again after reconnecting.
     SelectionInvalidated,
@@ -134,6 +136,7 @@ impl fmt::Display for ImapError {
             Self::FreshConnectionRequired => {
                 f.write_str("open a fresh connection before selecting again")
             }
+            Self::IdleUnavailable => f.write_str("the server does not advertise IDLE"),
             Self::NotSelected => f.write_str("establish a read-only selection before reading UIDs"),
             Self::SelectionInvalidated => f.write_str("the established mailbox selection changed"),
             Self::Closed => f.write_str("the IMAP connection is closed"),

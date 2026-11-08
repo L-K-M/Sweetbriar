@@ -4,6 +4,8 @@
 
 mod body;
 mod headers;
+mod idle;
+pub use idle::IdleEvent;
 mod uids;
 
 use std::collections::BTreeSet;
@@ -73,6 +75,7 @@ enum ReadKind {
     HeaderFetch,
     BodyFetch,
     SelectedCapability,
+    Idle,
 }
 
 impl ReadKind {
@@ -86,6 +89,7 @@ impl ReadKind {
             Self::HeaderFetch => "UID FETCH",
             Self::BodyFetch => "UID FETCH",
             Self::SelectedCapability => "CAPABILITY",
+            Self::Idle => "IDLE",
         }
     }
 
@@ -97,6 +101,7 @@ impl ReadKind {
                 | Self::HeaderFetch
                 | Self::BodyFetch
                 | Self::SelectedCapability
+                | Self::Idle
         )
     }
 }
