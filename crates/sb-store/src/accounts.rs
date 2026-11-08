@@ -62,6 +62,46 @@ impl AddressMode {
     }
 }
 
+/// Why an account waits for its credential (spec/10's retry path),
+/// shown as `state_reason` on the health surface (spec/04). Only these
+/// pauses are lifted by [`reactivate_after_credential`]: spec/04's
+/// connection pauses (Bridge not running, login rejected, certificate
+/// changed) need a successful connect, never a bare secret write.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CredentialPause {
+    /// Setup committed the rows; the secret is not stored yet.
+    NotStored,
+    /// The secret store could not be reached (locked or no access).
+    StoreUnavailable,
+    /// The secret store refused the item.
+    StoreRefused,
+    /// The secret store failed another way.
+    StoreFailed,
+}
+
+impl CredentialPause {
+    const ALL: [Self; 4] = [
+        Self::NotStored,
+        Self::StoreUnavailable,
+        Self::StoreRefused,
+        Self::StoreFailed,
+    ];
+
+    /// The `state_reason` text (spec/04's "User sees" column).
+    pub fn reason(self) -> &'static str {
+        match self {
+            Self::NotStored => "the credential is not yet stored",
+            Self::StoreUnavailable => "the credential store is unavailable",
+            Self::StoreRefused => "the credential store refused the password",
+            Self::StoreFailed => "the credential store could not keep the password",
+        }
+    }
+
+    fn from_reason(reason: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|pause| pause.reason() == reason)
+    }
+}
+
 /// One Bridge account's durable rows. Hosts are the literal
 /// `127.0.0.1` (spec/10 loopback only); `credential_ref` names the
 /// platform secret-store item and is the only credential material the
@@ -115,7 +155,7 @@ pub fn insert_bridge_account(
             new.display_name,
             next_account_sort_order(tx)?,
             now.as_millis(),
-            "the credential is not yet stored"
+            CredentialPause::NotStored.reason()
         ],
     )
     .map_err(|e| classify(e, "create the account"))?;
@@ -161,16 +201,19 @@ pub fn insert_bridge_account(
     Ok(())
 }
 
-/// Flip an account to `needs_attention` with `reason` (spec/04's
-/// health surface shows it). Never deletes the credential or any rows
-/// (spec/10).
-pub fn pause_account(tx: &Transaction, account_id: &str, reason: &str) -> Result<(), StoreError> {
+/// Pause an account for its credential: `needs_attention` with
+/// `pause`'s reason. Never deletes the credential or any rows (spec/10).
+pub fn pause_for_credential(
+    tx: &Transaction,
+    account_id: &str,
+    pause: CredentialPause,
+) -> Result<(), StoreError> {
     let changed = tx
         .execute(
             "UPDATE accounts
              SET state = 'needs_attention', state_reason = ?2, revision = revision + 1
              WHERE account_id = ?1",
-            params![account_id, reason],
+            params![account_id, pause.reason()],
         )
         .map_err(|e| classify(e, "pause the account"))?;
     if changed == 0 {
@@ -179,37 +222,35 @@ pub fn pause_account(tx: &Transaction, account_id: &str, reason: &str) -> Result
     Ok(())
 }
 
-/// Return a credential-paused account to `active` after the secret was
-/// stored by its retained `credential_ref` (spec/10's retry path).
-/// `Conflict` when the account is not `needs_attention`.
-pub fn reactivate_account(tx: &Transaction, account_id: &str) -> Result<(), StoreError> {
+/// Return a credential-paused account to `active` once its secret is
+/// stored by the retained `credential_ref` (spec/10's retry path). The
+/// guard sits in the same statement as the flip, so a pause recorded
+/// since the caller's check (spec/04's connection pauses, which need a
+/// successful connect) is never cleared here: `Conflict` when the
+/// account is not paused for its credential, `NotFound` when absent.
+pub fn reactivate_after_credential(tx: &Transaction, account_id: &str) -> Result<(), StoreError> {
+    let [not_stored, unavailable, refused, failed] =
+        CredentialPause::ALL.map(CredentialPause::reason);
     let changed = tx
         .execute(
             "UPDATE accounts
              SET state = 'active', state_reason = NULL, revision = revision + 1
-             WHERE account_id = ?1 AND state = 'needs_attention'",
-            params![account_id],
+             WHERE account_id = ?1 AND state = 'needs_attention'
+               AND state_reason IN (?2, ?3, ?4, ?5)",
+            params![account_id, not_stored, unavailable, refused, failed],
         )
         .map_err(|e| classify(e, "reactivate the account"))?;
     if changed == 0 {
-        let exists: bool = tx
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM accounts WHERE account_id = ?1)",
-                params![account_id],
-                |row| row.get(0),
-            )
-            .map_err(|e| classify(e, "check the account"))?;
-        return Err(if exists {
-            StoreError::conflict("the account is not awaiting its credential")
-        } else {
-            StoreError::not_found(format!("account {account_id}"))
-        });
+        credential_pause(tx, account_id)?;
+        return Err(StoreError::conflict(
+            "the account is not awaiting its credential",
+        ));
     }
     Ok(())
 }
 
 /// The sidebar slot after every existing account (`accounts.sort_order`).
-pub fn next_account_sort_order(tx: &Transaction) -> Result<i64, StoreError> {
+fn next_account_sort_order(tx: &Transaction) -> Result<i64, StoreError> {
     tx.query_row(
         "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM accounts",
         [],
@@ -218,19 +259,29 @@ pub fn next_account_sort_order(tx: &Transaction) -> Result<i64, StoreError> {
     .map_err(|e| classify(e, "read the account order"))
 }
 
-/// The account's current `state` (spec/02).
-pub fn account_state(tx: &Transaction, account_id: &str) -> Result<String, StoreError> {
-    tx.query_row(
-        "SELECT state FROM accounts WHERE account_id = ?1",
-        params![account_id],
-        |row| row.get(0),
-    )
-    .map_err(|e| match e {
-        rusqlite::Error::QueryReturnedNoRows => {
-            StoreError::not_found(format!("account {account_id}"))
-        }
-        other => classify(other, "read the account state"),
-    })
+/// The credential pause the account is in, or `None` when it is not
+/// waiting for its credential (active, or paused for another reason).
+/// `NotFound` when the account does not exist.
+pub fn credential_pause(
+    tx: &Transaction,
+    account_id: &str,
+) -> Result<Option<CredentialPause>, StoreError> {
+    let (state, reason): (String, Option<String>) = tx
+        .query_row(
+            "SELECT state, state_reason FROM accounts WHERE account_id = ?1",
+            params![account_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => {
+                StoreError::not_found(format!("account {account_id}"))
+            }
+            other => classify(other, "read the account state"),
+        })?;
+    if state != "needs_attention" {
+        return Ok(None);
+    }
+    Ok(reason.as_deref().and_then(CredentialPause::from_reason))
 }
 
 /// The account's stored `credential_ref` (spec/02): the retry path

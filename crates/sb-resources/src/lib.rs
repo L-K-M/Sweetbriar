@@ -19,7 +19,7 @@ use sb_store::StorePaths;
 
 mod accounts;
 pub use accounts::{AddedAccount, BridgeAccountError, BridgeAccountParams, BridgeIdentity};
-pub use sb_store::accounts::{AddressMode, EndpointSecurity, IdentitySendable};
+pub use sb_store::accounts::{AddressMode, CredentialPause, EndpointSecurity, IdentitySendable};
 mod bodies;
 pub use bodies::{AttachmentLease, BodyKind, BodyLease, PublishedAttachment, PublishedBody};
 pub use sb_mime::{RenderWarning, RenderWarningCode};

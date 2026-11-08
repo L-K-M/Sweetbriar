@@ -4,18 +4,26 @@
 //! nothing; a secret-store failure pauses the new account rather than
 //! deleting rows or credentials — the stored `credential_ref` is the
 //! retry path.
+//!
+//! The secret store is synchronous (spec/07: a sync callback interface)
+//! and can wait on keychain IPC or a Secret Service unlock prompt, so
+//! these async flows never call it on their own polling thread. The
+//! caller passes a `store_secret` step that runs `SecretStore::set`
+//! where blocking is allowed — the engine's counted blocking boundary
+//! (spec/01) — and the flow awaits it.
 
 use std::fmt;
+use std::future::Future;
 use std::net::{IpAddr, Ipv4Addr};
 
 use sb_imap::{
     CertificatePin, ConnectOptions, Connection, HostPolicy, ImapError, MailboxSummary, Password,
 };
-use sb_platform::{Secret, SecretError, SecretStore, valid_credential_ref};
+use sb_platform::{Secret, SecretError, valid_credential_ref};
 use sb_store::accounts::{
-    AddressMode, EndpointSecurity, IdentitySendable, NewBridgeAccount, NewIdentity,
-    NewImapEndpoint, account_state, credential_ref, insert_bridge_account, pause_account,
-    reactivate_account,
+    AddressMode, CredentialPause, EndpointSecurity, IdentitySendable, NewBridgeAccount,
+    NewIdentity, NewImapEndpoint, credential_pause, credential_ref, insert_bridge_account,
+    pause_for_credential, reactivate_after_credential,
 };
 use sb_store::{StoreError, WritePriority};
 
@@ -61,11 +69,11 @@ pub struct BridgeIdentity {
 #[derive(Debug)]
 pub struct AddedAccount {
     pub account_id: String,
-    /// `Some(reason)` when the rows committed but the credential could
-    /// not be persisted — the account is `needs_attention` and
-    /// [`Resources::store_account_credential`] retries by the stored
-    /// reference.
-    pub needs_attention: Option<&'static str>,
+    /// `Some(pause)` when the rows committed but the credential could
+    /// not be persisted — the account is `needs_attention` with
+    /// `pause.reason()` and [`Resources::store_account_credential`]
+    /// retries by the stored reference.
+    pub needs_attention: Option<CredentialPause>,
 }
 
 /// `add_bridge_account`'s typed failures. A `Secret` never appears in
@@ -105,7 +113,7 @@ impl fmt::Display for BridgeAccountError {
                 write!(
                     f,
                     "the credential store failed: {}",
-                    attention_reason(*error)
+                    pause_for(*error).reason()
                 )
             }
             Self::Store(error) => write!(f, "the account write failed: {error}"),
@@ -117,17 +125,24 @@ impl fmt::Display for BridgeAccountError {
     }
 }
 
-impl std::error::Error for BridgeAccountError {}
-
-/// The `needs_attention` reason for a `SecretError` kind (spec/10:
-/// kinds only, never vendor status text).
-fn attention_reason(error: SecretError) -> &'static str {
-    match error {
-        SecretError::Unavailable => "the credential store is unavailable",
-        SecretError::Refused => "the credential store refused the password",
-        SecretError::NotFound | SecretError::InvalidRef => {
-            "the credential store could not keep the password"
+impl std::error::Error for BridgeAccountError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Probe(error) => Some(error),
+            Self::SecretStore(error) => Some(error),
+            Self::Store(error) | Self::Committed { error, .. } => Some(error),
+            Self::InvalidInput(_) | Self::NotUtf8Credential => None,
         }
+    }
+}
+
+/// The credential pause for a `SecretError` kind (spec/10: kinds only,
+/// never vendor status text).
+fn pause_for(error: SecretError) -> CredentialPause {
+    match error {
+        SecretError::Unavailable => CredentialPause::StoreUnavailable,
+        SecretError::Refused => CredentialPause::StoreRefused,
+        SecretError::NotFound | SecretError::InvalidRef => CredentialPause::StoreFailed,
     }
 }
 
@@ -138,6 +153,11 @@ fn valid(params: &BridgeAccountParams) -> Result<(), BridgeAccountError> {
     }
     if params.username.trim().is_empty() {
         return invalid("a username is required");
+    }
+    // The SMTP endpoint is recorded, not probed: sending (and its probe)
+    // arrives with sb-smtp in M4.3. A zero port is still never valid.
+    if params.imap_port == 0 || params.smtp_port == 0 {
+        return invalid("the IMAP and SMTP ports must be nonzero");
     }
     if params.identities.is_empty() {
         return invalid("at least one identity is required");
@@ -207,11 +227,18 @@ impl Resources {
     /// account `needs_attention` with the reference kept for
     /// [`store_account_credential`](Self::store_account_credential) —
     /// never a delete or recreate.
-    pub async fn add_bridge_account(
+    ///
+    /// `store_secret(credential_ref, secret)` performs the blocking
+    /// `SecretStore::set` off this future's thread (module docs).
+    pub async fn add_bridge_account<S, F>(
         &self,
-        secrets: &dyn SecretStore,
         params: BridgeAccountParams,
-    ) -> Result<AddedAccount, BridgeAccountError> {
+        store_secret: S,
+    ) -> Result<AddedAccount, BridgeAccountError>
+    where
+        S: FnOnce(String, Secret) -> F,
+        F: Future<Output = Result<(), SecretError>>,
+    {
         valid(&params)?;
         let password = Password::from_secret(&params.password)
             .map_err(|_| BridgeAccountError::NotUtf8Credential)?;
@@ -228,7 +255,7 @@ impl Resources {
             .enumerate()
             .map(|(index, identity)| NewIdentity {
                 identity_id: self.new_uuid_string(),
-                email: identity.email.clone(),
+                email: identity.email.trim().to_owned(),
                 display_name: identity.display_name.clone(),
                 // None marked: the first becomes the From default.
                 is_default: identity.is_default
@@ -259,11 +286,11 @@ impl Resources {
         .await
         .map_err(BridgeAccountError::Store)?;
 
-        match secrets.set(&credential_ref, &params.password) {
+        match store_secret(credential_ref, params.password).await {
             Ok(()) => {
                 let activated_id = account_id.clone();
                 self.write(WritePriority::User, move |tx| {
-                    reactivate_account(tx, &activated_id)
+                    reactivate_after_credential(tx, &activated_id)
                 })
                 .await
                 .map_err(|error| BridgeAccountError::Committed {
@@ -276,55 +303,64 @@ impl Resources {
                 })
             }
             Err(error) => {
-                let reason = attention_reason(error);
+                let pause = pause_for(error);
                 let paused_id = account_id.clone();
-                // The account is already needs_attention; this write only
-                // records the precise reason. If it fails, the generic
-                // reason stands and the account is still recoverable.
+                // The account is already paused as NotStored; this write
+                // only records the precise reason. If it fails, NotStored
+                // stands and the retry path still lifts it.
                 let _ = self
                     .write(WritePriority::User, move |tx| {
-                        pause_account(tx, &paused_id, reason)
+                        pause_for_credential(tx, &paused_id, pause)
                     })
                     .await;
                 Ok(AddedAccount {
                     account_id,
-                    needs_attention: Some(reason),
+                    needs_attention: Some(pause),
                 })
             }
         }
     }
 
-    /// Retry credential persistence after a `needs_attention` pause
-    /// (spec/10): re-sets the secret by the row's stored
-    /// `credential_ref` — same reference, never a recreated item — and
-    /// reactivates the account on success.
-    pub async fn store_account_credential(
+    /// Retry credential persistence after a credential pause (spec/10):
+    /// re-sets the secret by the row's stored `credential_ref` — same
+    /// reference, never a recreated item — and reactivates the account
+    /// on success. An account that is active or paused for another
+    /// reason (spec/04's connection pauses) is refused before the secret
+    /// store is touched, so a working credential is never replaced
+    /// unverified; the reactivation re-checks the pause in its own
+    /// statement. `store_secret` as for
+    /// [`add_bridge_account`](Self::add_bridge_account).
+    pub async fn store_account_credential<S, F>(
         &self,
-        secrets: &dyn SecretStore,
         account_id: &str,
         password: Secret,
-    ) -> Result<(), BridgeAccountError> {
+        store_secret: S,
+    ) -> Result<(), BridgeAccountError>
+    where
+        S: FnOnce(String, Secret) -> F,
+        F: Future<Output = Result<(), SecretError>>,
+    {
         let owned_id = account_id.to_owned();
-        let (reference, state) = self
+        let (reference, pause) = self
             .write(WritePriority::User, move |tx| {
                 Ok((
                     credential_ref(tx, &owned_id)?,
-                    account_state(tx, &owned_id)?,
+                    credential_pause(tx, &owned_id)?,
                 ))
             })
             .await
             .map_err(BridgeAccountError::Store)?;
-        if state != "needs_attention" {
+        if pause.is_none() {
             return Err(BridgeAccountError::InvalidInput(
                 "the account is not awaiting its credential".to_owned(),
             ));
         }
-        secrets
-            .set(&reference, &password)
+        store_secret(reference, password)
+            .await
             .map_err(BridgeAccountError::SecretStore)?;
         let owned_id = account_id.to_owned();
         self.write(WritePriority::User, move |tx| {
-            reactivate_account(tx, &owned_id)
+            reactivate_after_credential(tx, &owned_id)
         })
         .await
         .map_err(BridgeAccountError::Store)
