@@ -18,7 +18,8 @@ mod uid_observations;
 
 pub use body_observations::{BodyUnavailableReason, BodyValue, FetchedBody};
 pub use connection::{
-    ConnectOptions, Connection, HostPolicy, MailboxContext, MailboxNotice, ReadObservation,
+    ConnectOptions, Connection, HostPolicy, IdleEvent, MailboxContext, MailboxNotice,
+    ReadObservation,
 };
 pub use error::ImapError;
 
