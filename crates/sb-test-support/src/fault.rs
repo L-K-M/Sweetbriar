@@ -285,6 +285,23 @@ impl ConfinedDir for FaultConfinedDir {
             metadata,
         ))
     }
+    fn open_regular_identified(
+        &self,
+        path: &Path,
+    ) -> io::Result<(Box<dyn ReadFile>, Metadata, FileIdentity)> {
+        if let Some(kind) = self.plan.fire(FsOp::Open) {
+            return Err(fault_error(kind));
+        }
+        let (inner, metadata, identity) = self.inner.open_regular_identified(path)?;
+        Ok((
+            Box::new(FaultRead {
+                inner,
+                plan: self.plan.clone(),
+            }),
+            metadata,
+            identity,
+        ))
+    }
 }
 
 impl Fs for FaultFs {

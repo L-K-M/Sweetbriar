@@ -161,6 +161,13 @@ impl ConfinedDir for CutConfinedDir {
         self.trip();
         self.inner.open_regular(path)
     }
+    fn open_regular_identified(
+        &self,
+        path: &Path,
+    ) -> std::io::Result<(Box<dyn ReadFile>, Metadata, FileIdentity)> {
+        self.trip();
+        self.inner.open_regular_identified(path)
+    }
 }
 
 impl Fs for CutFs {
@@ -490,7 +497,8 @@ mod tests {
     const ROOT_ENV: &str = "SB_CUT_TEST_ROOT";
 
     /// Every operation `CutFs` counts, by the name the child takes.
-    const OPS: [&str; 25] = [
+    const OPS: [&str; 26] = [
+        "identified_read",
         "create_rw",
         "read_at",
         "write_at",
@@ -538,7 +546,7 @@ mod tests {
         // `write` and `sync_all` act on a handle, so the cut point is
         // the operation after `create`.
         let nth = match op.as_str() {
-            "create_rw" => 2,
+            "create_rw" | "identified_read" => 2,
             "read_at" | "write_at" | "set_len" | "rw_len" | "rw_identity" | "rw_sync" => 3,
             "write" => 2,
             "sync_all" => 3,
@@ -546,6 +554,11 @@ mod tests {
         };
         let cut = CutFs::new(real, nth);
         let _ = match op.as_str() {
+            "identified_read" => cut
+                .open_confined_dir(&root.canonicalize().unwrap())
+                .unwrap()
+                .open_regular_identified(Path::new("file"))
+                .map(drop),
             "create_rw" | "read_at" | "write_at" | "set_len" | "rw_len" | "rw_identity"
             | "rw_sync" => {
                 let dir = cut
