@@ -100,6 +100,27 @@ the provider policies (`proton_bridge`, `generic_imap`) live in
   and pinned Dovecot suite. Malformed replies and cancelled futures close
   the connection. Run the full local gate and Dovecot suite.
 
+#### M2.2a4 Single decoded setup boundary — L, linux
+
+- **Correctness prerequisite (2026-11-08):** native public probes reproduce
+  setup stalls for legal brace-ending greeting text under both implicit TLS
+  and STARTTLS. The strict gate proves a complete response, but the pinned
+  setup coroutines independently misinterpret its text as a literal. Consume
+  validated gate frames directly with the pinned codecs, retaining the
+  encoder's actual literal fragments and original response bytes. No text
+  rewriting or speculative brace scanning. Preserve first-tag correlation,
+  refusals, cancellation-owned sockets, ID and best-effort BYE-first LOGOUT.
+  Implicit-TLS PREAUTH skips LOGIN; STARTTLS requires an unauthenticated
+  greeting. Every setup exchange retains the 50 MiB resource budget; buffered
+  predecessor data cannot supply the new command's response evidence.
+- **Acceptance:** native RED then GREEN for brace-ending greetings,
+  continuations and tagged setup replies, with coalesced following data kept;
+  multiple synchronizing credential literals each require permission. All
+  existing fake-server malformed/refusal/tag/cancellation/plaintext tests and
+  actual pinned Dovecot setup suites remain required. No credential is sent
+  before TLS or after a known fault, and STARTTLS rejects all buffered trailing
+  plaintext. Run the full local gate and actual pinned Dovecot suite.
+
 #### M2.2b Read operations — L, linux
 
 - **Split before implementation (2026-11-07):** retain the complete read
