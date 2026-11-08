@@ -161,8 +161,9 @@ fn input_budget_counts_actual_short_reads_and_cannot_be_renewed_by_seek() {
             inner: io::Cursor::new(b"123456789".to_vec()),
             interrupted: true,
         }),
-        remaining: 5,
+        remaining: Arc::new(AtomicU64::new(5)),
         exhausted: exhausted.clone(),
+        fault: Arc::new(Mutex::new(None)),
     };
     let mut bytes = [0; 5];
     reader.read_exact(&mut bytes).unwrap();
