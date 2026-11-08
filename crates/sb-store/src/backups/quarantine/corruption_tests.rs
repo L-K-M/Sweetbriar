@@ -22,6 +22,7 @@ fn staged(test: impl FnOnce(&mut Connection, &Quarantine<'_>)) {
         total_bytes: 0,
         completed_at: 1,
         cancel: &cancel,
+        max_work_calls: 2_000,
     };
     test(&mut conn, &input);
 }

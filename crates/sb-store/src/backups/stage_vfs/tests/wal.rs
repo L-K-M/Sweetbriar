@@ -192,6 +192,33 @@ fn rollback_source(tag: &str) -> Vec<u8> {
 }
 
 #[test]
+fn a_mutable_borrow_invalidates_the_checkpoint_even_without_writes() {
+    for checkpoint_again in [false, true] {
+        let (_scratch, source_bytes) = wal2_source("stage-wal-mutable-borrow");
+        let fs = SimFs::new();
+        let (main, journal, statement, wal) = caps4(&fs);
+        stage_main(main.as_ref(), &source_bytes);
+        let mut writer = ConfinedSqlite::open_wal(main, journal, statement, wal).unwrap();
+        // Use a normal exclusive mutable transaction, as quarantine requires.
+        let tx = writer.connection_mut().transaction().unwrap();
+        tx.execute("INSERT INTO proof VALUES('mutable')", [])
+            .unwrap();
+        tx.commit().unwrap();
+        writer.checkpoint_wal().unwrap();
+        assert!(writer.connection_mut().is_autocommit());
+        if checkpoint_again {
+            writer.checkpoint_wal().unwrap();
+            writer.close().unwrap();
+        } else {
+            assert!(matches!(
+                writer.close(),
+                Err(CloseError::WalNotCheckpointed)
+            ));
+        }
+    }
+}
+
+#[test]
 fn wal2_commit_checkpoint_close_and_reopen() {
     let (scratch, source_bytes) = wal2_source("stage-wal-commit");
     let fs = SimFs::new();
