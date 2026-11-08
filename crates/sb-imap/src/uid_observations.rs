@@ -197,7 +197,7 @@ fn fetch_error(message: &'static str) -> ImapError {
     ImapError::command("UID FETCH", message)
 }
 
-fn flag_name(flag: &FlagFetch<'_>) -> String {
+pub(crate) fn flag_name(flag: &FlagFetch<'_>) -> String {
     match flag {
         FlagFetch::Flag(flag) => flag.to_string(),
         FlagFetch::Recent => "\\Recent".to_string(),
