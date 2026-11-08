@@ -38,6 +38,8 @@ mod stage_input;
 mod stage_integrity;
 #[allow(dead_code)] // The confined writable VFS consumes this adapter (M1.8e3b2b2).
 mod stage_io;
+#[allow(dead_code)] // The final binding qualifier consumes this execution slice.
+mod stage_quarantine;
 #[allow(dead_code)] // The staging qualifier consumes this read-only prerequisite.
 mod stage_schema;
 #[allow(dead_code)] // The staging qualifier consumes this confined writer (M1.8e3b2b3).
