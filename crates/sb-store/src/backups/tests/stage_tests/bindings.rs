@@ -75,7 +75,7 @@ fn real_live_identities(paths: &StorePaths) -> (DirectoryIdentity, FileIdentity)
         .expect("open live root");
     let root_identity = root.identity().expect("live root identity");
     let (_, _, database_identity) = root
-        .open_regular_identified(live_db_relative(paths))
+        .open_regular_identified(&live_db_relative(paths))
         .expect("identified live database");
     (root_identity, database_identity)
 }
