@@ -1441,6 +1441,14 @@ local drafts. No network yet.
       These are observations at inspection time, with no byte-stability,
       quarantine, publication, stage or swap authority.
     - **b6 qualification split before implementation (2026-11-08):**
+      **b6a0 Identified confined reads (M)** first adds an atomic regular-file
+      read open with metadata and filesystem identity from that same handle.
+      Existing `ReadFile` is a blanket read/seek trait and `Metadata` carries
+      no file identity; do not invent identity evidence or reopen a pathname
+      to obtain it. Confined opens reject symlinks, traversal and non-files,
+      default to unsupported, and grant no write authority. Implement native,
+      simulated, fault and crash adapters with retained-handle replacement,
+      unsupported/fired-fault and confinement proof in this artifact.
       **b6a Retained binding inputs (M)** extends the opaque prepared copy
       with retained source-generation and live-root/database read handles,
       their filesystem identities, and the original manifest byte length.
