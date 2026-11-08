@@ -6,6 +6,8 @@ mod connection;
 mod error;
 mod exchange;
 mod gate;
+#[allow(dead_code)] // The b2b1b connection driver consumes this validated boundary.
+mod header_observations;
 mod mailbox;
 mod mailbox_codec;
 mod secret;
@@ -16,6 +18,7 @@ pub use connection::{
     ConnectOptions, Connection, HostPolicy, MailboxContext, MailboxNotice, ReadObservation,
 };
 pub use error::ImapError;
+
 pub use mailbox::{MailboxSelection, MailboxSummary};
 pub use secret::Password;
 pub use tls::CertificatePin;
