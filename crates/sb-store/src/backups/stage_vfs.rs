@@ -1,9 +1,8 @@
-//! Confined writable SQLite VFS over three retained private file
-//! capabilities (M1.8e3b2b3). The writer takes the database, rollback
-//! journal and statement journal capabilities directly: it opens no
-//! pathname, falls back to no default-VFS file and grants no stage
-//! eligibility. Every file operation resolves to one of the three
-//! retained inodes; the qualifier still owns SQL limits, cancellation,
+//! Confined writable SQLite VFS over retained private file capabilities
+//! (M1.8e3b2b3/b4). The rollback entry takes database and two journals;
+//! the WAL2 entry adds an empty WAL file and exclusive heap wal-index.
+//! File I/O resolves to retained inodes and grants no stage eligibility.
+//! The qualifier owns SQL limits, cancellation,
 //! schema and integrity checks, journal-mode policy and publication.
 //!
 //! One VFS is registered per connection context. Its `sqlite3_vfs` is
@@ -15,6 +14,7 @@
 //! until SQLite close succeeds. A live connection is preserved only
 //! when SQLite itself refuses to close, never for eligibility errors.
 
+use std::cell::Cell;
 use std::ffi::{CStr, CString, c_char, c_int, c_void};
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::Arc;
@@ -41,18 +41,34 @@ enum Role {
     Main,
     RollbackJournal,
     StatementJournal,
+    Wal,
+}
+
+struct Wal {
+    file: Arc<dyn ReadWriteFile>,
+    name: CString,
+    exists: AtomicBool,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Checkpoint {
+    Required,
+    Verified(u64),
 }
 
 struct Context {
     main_db: Arc<dyn ReadWriteFile>,
     rollback_journal: Arc<dyn ReadWriteFile>,
     statement_journal: Arc<dyn ReadWriteFile>,
+    wal: Option<Wal>,
     main_name: CString,
     journal_name: CString,
     /// One main connection ever; a second `MAIN_DB` open is refused.
     claimed: AtomicBool,
     /// An ordinary I/O failure or contained panic: close must not succeed.
     io_error: AtomicBool,
+    /// File mutations since open; a checkpoint covers one exact generation.
+    mutations: AtomicU64,
     /// Logical rollback-journal existence, for `xAccess`.
     journal_exists: AtomicBool,
     #[cfg(test)]
@@ -107,6 +123,7 @@ pub(crate) struct ConfinedSqlite {
     connection: Option<Connection>,
     vfs: Option<Box<Vfs>>,
     context: Arc<Context>,
+    checkpoint: Cell<Checkpoint>,
 }
 
 /// Why the private output is ineligible after close. Only a SQLite
@@ -115,6 +132,8 @@ pub(crate) struct ConfinedSqlite {
 pub(crate) enum CloseError {
     UncommittedTransaction,
     IoError,
+    WalNotCheckpointed,
+    InvalidWalState,
     Sqlite(rusqlite::Error),
 }
 
@@ -138,10 +157,43 @@ impl ConfinedSqlite {
         rollback_journal: Arc<dyn ReadWriteFile>,
         statement_journal: Arc<dyn ReadWriteFile>,
     ) -> rusqlite::Result<Self> {
+        Self::open_files(main_db, rollback_journal, statement_journal, None)
+    }
+
+    /// Open a standalone WAL2 copy over four distinct retained files.
+    /// Only the schema-free locking-mode pragma runs here. The qualifier
+    /// must install SQL hardening, limits and cancellation before any other
+    /// SQL, including journal-mode inspection and `checkpoint_wal`.
+    pub(crate) fn open_wal(
+        main_db: Arc<dyn ReadWriteFile>,
+        rollback_journal: Arc<dyn ReadWriteFile>,
+        statement_journal: Arc<dyn ReadWriteFile>,
+        wal: Arc<dyn ReadWriteFile>,
+    ) -> rusqlite::Result<Self> {
+        let writer = Self::open_files(main_db, rollback_journal, statement_journal, Some(wal))?;
+        // Unlike journal_mode, locking_mode has no PragFlg_NeedSchema in
+        // the pinned SQLite. Establish heap WAL-index mode before schema.
+        let mode: String =
+            writer
+                .connection()
+                .query_row("PRAGMA locking_mode=EXCLUSIVE", [], |row| row.get(0))?;
+        if mode != "exclusive" {
+            return Err(unsupported("exclusive WAL locking was not established"));
+        }
+        Ok(writer)
+    }
+
+    fn open_files(
+        main_db: Arc<dyn ReadWriteFile>,
+        rollback_journal: Arc<dyn ReadWriteFile>,
+        statement_journal: Arc<dyn ReadWriteFile>,
+        wal_file: Option<Arc<dyn ReadWriteFile>>,
+    ) -> rusqlite::Result<Self> {
         verify(
             main_db.as_ref(),
             rollback_journal.as_ref(),
             statement_journal.as_ref(),
+            wal_file.as_deref(),
         )?;
         let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
         let vfs_name = CString::new(format!("sweetbriar-stage-{id}"))
@@ -150,14 +202,26 @@ impl ConfinedSqlite {
             .map_err(|_| unsupported("database name is not representable"))?;
         let journal_name = CString::new(format!("sb-stage-{id}.db-journal"))
             .map_err(|_| unsupported("journal name is not representable"))?;
+        let wal = wal_file
+            .map(|file| -> rusqlite::Result<Wal> {
+                Ok(Wal {
+                    file,
+                    name: CString::new(format!("sb-stage-{id}.db-wal"))
+                        .map_err(|_| unsupported("WAL name is not representable"))?,
+                    exists: AtomicBool::new(true),
+                })
+            })
+            .transpose()?;
         let context = Arc::new(Context {
             main_db,
             rollback_journal,
             statement_journal,
+            wal,
             main_name,
             journal_name,
             claimed: AtomicBool::new(false),
             io_error: AtomicBool::new(false),
+            mutations: AtomicU64::new(0),
             journal_exists: AtomicBool::new(false),
             #[cfg(test)]
             opens: AtomicUsize::new(0),
@@ -202,6 +266,7 @@ impl ConfinedSqlite {
                     connection: Some(connection),
                     vfs: Some(vfs),
                     context,
+                    checkpoint: Cell::new(Checkpoint::Required),
                 };
                 // URI filenames can select another registered VFS and
                 // bypass ours. Refuse ATTACH (including VACUUM's internal
@@ -223,7 +288,67 @@ impl ConfinedSqlite {
     /// The borrowed connection, for the qualifier's limits and SQL.
     /// Keep SQLITE_LIMIT_ATTACHED at zero to preserve file confinement.
     pub(crate) fn connection(&self) -> &Connection {
+        self.checkpoint.set(Checkpoint::Required);
         self.connection.as_ref().expect("connection is open")
+    }
+
+    /// Run under the qualifier's SQL limits/cancellation guard: both
+    /// journal_mode and wal_checkpoint can load schema. Call last, then
+    /// close without borrowing the connection again. This state grants no
+    /// qualification; subsequent file mutations invalidate it, including
+    /// writes through a connection reference borrowed before checkpoint.
+    pub(crate) fn checkpoint_wal(&self) -> Result<(), CloseError> {
+        self.checkpoint.set(Checkpoint::Required);
+        let Some(wal) = &self.context.wal else {
+            return Err(CloseError::InvalidWalState);
+        };
+        let connection = self.connection.as_ref().expect("connection is open");
+        if !connection.is_autocommit() {
+            return Err(CloseError::UncommittedTransaction);
+        }
+        if self.context.io_error.load(Ordering::SeqCst) {
+            return Err(CloseError::IoError);
+        }
+        let mode: String = connection
+            .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+            .map_err(CloseError::Sqlite)?;
+        if mode != "wal" {
+            return Err(CloseError::InvalidWalState);
+        }
+        let result: (i64, i64, i64) = connection
+            .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })
+            .map_err(CloseError::Sqlite)?;
+        if result != (0, 0, 0) {
+            return Err(CloseError::WalNotCheckpointed);
+        }
+        let empty = self.empty(&[wal.file.as_ref()]);
+        if self.context.io_error.load(Ordering::SeqCst) {
+            return Err(CloseError::IoError);
+        }
+        if !empty {
+            return Err(CloseError::WalNotCheckpointed);
+        }
+        self.checkpoint.set(Checkpoint::Verified(
+            self.context.mutations.load(Ordering::SeqCst),
+        ));
+        Ok(())
+    }
+
+    fn empty(&self, files: &[&dyn ReadWriteFile]) -> bool {
+        let mut empty = true;
+        for file in files {
+            match file_size(*file) {
+                Ok(0) => {}
+                Ok(_) => empty = false,
+                Err(_) => {
+                    self.context.io_error.store(true, Ordering::SeqCst);
+                    empty = false;
+                }
+            }
+        }
+        empty
     }
 
     /// Close and flush retained files. An unfinished transaction is
@@ -238,6 +363,14 @@ impl ConfinedSqlite {
             return Ok(());
         };
         let uncommitted = !connection.is_autocommit();
+        // C close can checkpoint implicitly. Check the explicit checkpoint
+        // generation and zero WAL beforehand so it cannot conceal later
+        // writes, even if a retained borrow ran its own raw checkpoint.
+        let needs_checkpoint = self.context.wal.as_ref().is_some_and(|wal| {
+            self.checkpoint.get()
+                != Checkpoint::Verified(self.context.mutations.load(Ordering::SeqCst))
+                || !self.empty(&[wal.file.as_ref()])
+        });
         if let Err((connection, error)) = connection.close() {
             self.connection = Some(connection);
             return Err(CloseError::Sqlite(error));
@@ -249,9 +382,27 @@ impl ConfinedSqlite {
             &self.context.main_db,
             &self.context.rollback_journal,
             &self.context.statement_journal,
-        ] {
+        ]
+        .into_iter()
+        .chain(self.context.wal.iter().map(|wal| &wal.file))
+        {
             if io_sync(file.as_ref()) != ffi::SQLITE_OK {
                 self.context.io_error.store(true, Ordering::SeqCst);
+            }
+        }
+        let mut wal_valid = true;
+        if let Some(wal) = &self.context.wal {
+            wal_valid = self.empty(&[
+                wal.file.as_ref(),
+                self.context.rollback_journal.as_ref(),
+                self.context.statement_journal.as_ref(),
+            ]);
+            let mut header = [0; 20];
+            if io_read(self.context.main_db.as_ref(), &mut header, 0) != ffi::SQLITE_OK {
+                self.context.io_error.store(true, Ordering::SeqCst);
+                wal_valid = false;
+            } else {
+                wal_valid &= header[18..20] == [2, 2];
             }
         }
         if let Some(mut vfs) = self.vfs.take() {
@@ -263,6 +414,12 @@ impl ConfinedSqlite {
         }
         if uncommitted {
             return Err(CloseError::UncommittedTransaction);
+        }
+        if needs_checkpoint {
+            return Err(CloseError::WalNotCheckpointed);
+        }
+        if !wal_valid {
+            return Err(CloseError::InvalidWalState);
         }
         Ok(())
     }
@@ -347,13 +504,23 @@ fn verify(
     main_db: &dyn ReadWriteFile,
     rollback_journal: &dyn ReadWriteFile,
     statement_journal: &dyn ReadWriteFile,
+    wal: Option<&dyn ReadWriteFile>,
 ) -> rusqlite::Result<()> {
-    let main_id = identity(main_db)?;
-    let journal_id = identity(rollback_journal)?;
-    let statement_id = identity(statement_journal)?;
-    if main_id == journal_id || main_id == statement_id || journal_id == statement_id {
+    let mut identities = vec![
+        identity(main_db)?,
+        identity(rollback_journal)?,
+        identity(statement_journal)?,
+    ];
+    if let Some(wal) = wal {
+        identities.push(identity(wal)?);
+    }
+    if identities
+        .iter()
+        .enumerate()
+        .any(|(at, id)| identities[..at].contains(id))
+    {
         return Err(unsupported(
-            "database, rollback journal and statement journal must be distinct files",
+            "retained database and journal files must be distinct",
         ));
     }
     if len(rollback_journal)? != 0 {
@@ -362,9 +529,18 @@ fn verify(
     if len(statement_journal)? != 0 {
         return Err(unsupported("statement journal is not empty"));
     }
+    if let Some(wal) = wal
+        && len(wal)? != 0
+    {
+        return Err(unsupported("WAL is not empty"));
+    }
     let main_len = len(main_db)?;
     if main_len == 0 {
-        return Ok(());
+        return if wal.is_none() {
+            Ok(())
+        } else {
+            Err(unsupported("WAL2 main image is empty"))
+        };
     }
     if main_len < 20 {
         return Err(unsupported("database header is truncated"));
@@ -373,9 +549,16 @@ fn verify(
     if io_read(main_db, &mut header, 0) != ffi::SQLITE_OK {
         return Err(unsupported("cannot read the database header"));
     }
+    if wal.is_some() {
+        return if header[18..20] == [2, 2] {
+            Ok(())
+        } else {
+            Err(unsupported("database is not in WAL2 format"))
+        };
+    }
     if header[18] == 2 || header[19] == 2 {
         return Err(unsupported(
-            "WAL-format database requires separate normalization",
+            "WAL-format database requires the separate WAL writer",
         ));
     }
     if header[18] != 1 || header[19] != 1 {
@@ -389,6 +572,24 @@ fn capability(context: &Context, role: Role) -> &dyn ReadWriteFile {
         Role::Main => context.main_db.as_ref(),
         Role::RollbackJournal => context.rollback_journal.as_ref(),
         Role::StatementJournal => context.statement_journal.as_ref(),
+        Role::Wal => context
+            .wal
+            .as_ref()
+            .expect("WAL role has a retained file")
+            .file
+            .as_ref(),
+    }
+}
+
+fn record_mutation(context: &Context) {
+    if context
+        .mutations
+        .try_update(Ordering::SeqCst, Ordering::SeqCst, |generation| {
+            generation.checked_add(1)
+        })
+        .is_err()
+    {
+        context.io_error.store(true, Ordering::SeqCst);
     }
 }
 
@@ -450,6 +651,17 @@ unsafe extern "C" fn vfs_open(
                 }
                 Role::RollbackJournal
             }
+            ffi::SQLITE_OPEN_WAL => {
+                let Some(wal) = &context.wal else {
+                    return ffi::SQLITE_CANTOPEN;
+                };
+                if name.is_null()
+                    || unsafe { CStr::from_ptr(name) }.to_bytes() != wal.name.as_bytes()
+                {
+                    return ffi::SQLITE_CANTOPEN;
+                }
+                Role::Wal
+            }
             ffi::SQLITE_OPEN_SUBJOURNAL => {
                 if !name.is_null() {
                     return ffi::SQLITE_CANTOPEN;
@@ -479,6 +691,14 @@ unsafe extern "C" fn vfs_open(
         if role == Role::RollbackJournal && flags & ffi::SQLITE_OPEN_READWRITE != 0 {
             context.journal_exists.store(true, Ordering::Release);
         }
+        if role == Role::Wal {
+            context
+                .wal
+                .as_ref()
+                .expect("WAL role")
+                .exists
+                .store(true, Ordering::Release);
+        }
         #[cfg(test)]
         context.opens.fetch_add(1, Ordering::SeqCst);
         ffi::SQLITE_OK
@@ -501,22 +721,30 @@ unsafe extern "C" fn vfs_delete(
         let name = unsafe { CStr::from_ptr(name) };
         // SAFETY: the VFS owns the context and outlives every open file.
         let context = unsafe { &*context };
-        if name.to_bytes() != context.journal_name.as_bytes() {
+        let (file, exists) = if name.to_bytes() == context.journal_name.as_bytes() {
+            (context.rollback_journal.as_ref(), &context.journal_exists)
+        } else if let Some(wal) = context
+            .wal
+            .as_ref()
+            .filter(|wal| name.to_bytes() == wal.name.as_bytes())
+        {
+            (wal.file.as_ref(), &wal.exists)
+        } else {
             return ffi::SQLITE_IOERR_DELETE;
-        }
-        // Logical delete: truncate and really flush the retained journal.
-        // Never unlink or reopen a host pathname.
-        let rc = io_truncate(context.rollback_journal.as_ref(), 0);
+        };
+        record_mutation(context);
+        // Logical delete: never unlink or reopen a host pathname.
+        let rc = io_truncate(file, 0);
         if rc != ffi::SQLITE_OK {
             context.io_error.store(true, Ordering::SeqCst);
             return rc;
         }
-        let rc = io_sync(context.rollback_journal.as_ref());
+        let rc = io_sync(file);
         if rc != ffi::SQLITE_OK {
             context.io_error.store(true, Ordering::SeqCst);
             return rc;
         }
-        context.journal_exists.store(false, Ordering::Release);
+        exists.store(false, Ordering::Release);
         ffi::SQLITE_OK
     }));
     match result {
@@ -551,6 +779,12 @@ unsafe extern "C" fn vfs_access(
                 true
             } else if name.to_bytes() == context.journal_name.as_bytes() {
                 context.journal_exists.load(Ordering::Acquire)
+            } else if let Some(wal) = context
+                .wal
+                .as_ref()
+                .filter(|wal| name.to_bytes() == wal.name.as_bytes())
+            {
+                wal.exists.load(Ordering::Acquire)
             } else {
                 false
             }
@@ -600,6 +834,12 @@ unsafe fn file_call(
 ) -> c_int {
     let file = unsafe { &*file.cast::<StageFile>() };
     let context = unsafe { &*file.context };
+    if matches!(
+        panic_code,
+        ffi::SQLITE_IOERR_WRITE | ffi::SQLITE_IOERR_TRUNCATE
+    ) {
+        record_mutation(context);
+    }
     let rc = panic::catch_unwind(AssertUnwindSafe(|| action(file, context))).unwrap_or(panic_code);
     if rc != ffi::SQLITE_OK
         && !(panic_code == ffi::SQLITE_IOERR_READ && rc == ffi::SQLITE_IOERR_SHORT_READ)
@@ -735,7 +975,7 @@ unsafe extern "C" fn characteristics(file: *mut ffi::sqlite3_file) -> c_int {
         // The retained journal is never unlinked; the pinned pager
         // asserts this bit while a journal handle is open.
         Role::RollbackJournal => ffi::SQLITE_IOCAP_UNDELETABLE_WHEN_OPEN,
-        Role::Main | Role::StatementJournal => 0,
+        Role::Main | Role::StatementJournal | Role::Wal => 0,
     }
 }
 
