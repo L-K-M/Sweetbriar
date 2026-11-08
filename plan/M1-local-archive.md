@@ -1359,8 +1359,8 @@ local drafts. No network yet.
       snapshots need separately checked normalization before writable use.
     - **M1.8e3b2b3 Confined writable SQLite VFS (L):** use three distinct
       retained private file capabilities for the database, rollback journal
-      and statement journal. Accept rollback-format images only; WAL-format
-      normalization remains a separately checked prerequisite. Register one
+      and statement journal. Accept rollback-format images or an empty new
+      destination; WAL-format normalization remains separately checked. Register one
       private VFS per connection context, preserving inherited non-file
       callback state and resolving every file operation to its retained
       capability. Named/NULL temporary files, WAL/shm, ATTACH file targets and
