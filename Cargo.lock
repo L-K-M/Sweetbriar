@@ -1498,6 +1498,7 @@ dependencies = [
  "rustls",
  "sb-test-support",
  "sb-types",
+ "secrecy",
  "sha2",
  "tokio",
  "tokio-rustls",

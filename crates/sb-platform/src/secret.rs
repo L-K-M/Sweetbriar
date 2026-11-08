@@ -80,6 +80,7 @@ impl PlatformSecrets {
     /// Wrap an explicit store. Tests exercise the wrapper's ref
     /// validation, error mapping and entry lifecycle against the
     /// vendor's own in-memory store.
+    #[cfg(test)]
     fn from_store(store: Arc<dyn CredentialStoreApi + Send + Sync>) -> Self {
         Self {
             store,
