@@ -666,3 +666,5 @@ fn refuses_readonly_and_unconfined_file_types() {
 }
 
 mod wal_regression;
+
+mod wal;
