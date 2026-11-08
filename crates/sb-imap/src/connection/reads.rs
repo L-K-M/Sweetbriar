@@ -2,12 +2,13 @@
 //! not used: LIST must not apply their lossy name conversion, and a new
 //! selection cannot inherit buffered values from an older mailbox.
 
+mod headers;
 mod uids;
 
 use std::collections::BTreeSet;
 use std::num::NonZeroU32;
 
-use io_imap::codec::{CommandCodec, ResponseCodec, decode::Decoder, encode::Encoder};
+use io_imap::codec::{ResponseCodec, decode::Decoder};
 use io_imap::types::ToStatic;
 use io_imap::types::command::{Command, CommandBody};
 use io_imap::types::core::TagGenerator;
@@ -68,6 +69,7 @@ enum ReadKind {
     Unselect,
     UidSearch,
     FlagSweep,
+    HeaderFetch,
     SelectedCapability,
 }
 
@@ -79,6 +81,7 @@ impl ReadKind {
             Self::Unselect => "UNSELECT",
             Self::UidSearch => "UID SEARCH",
             Self::FlagSweep => "UID FETCH",
+            Self::HeaderFetch => "UID FETCH",
             Self::SelectedCapability => "CAPABILITY",
         }
     }
@@ -86,7 +89,7 @@ impl ReadKind {
     fn needs_selection(self) -> bool {
         matches!(
             self,
-            Self::UidSearch | Self::FlagSweep | Self::SelectedCapability
+            Self::UidSearch | Self::FlagSweep | Self::HeaderFetch | Self::SelectedCapability
         )
     }
 }
@@ -298,7 +301,10 @@ where
         tag: TagGenerator::new().generate(),
         body,
     };
-    let bytes = CommandCodec::new().encode(&command).dump();
+    // The exact encoder preserves a numeric `u32::MAX` UID that the
+    // codec's sequence normalization would rewrite as '*'. Non-FETCH
+    // commands delegate to the codec unchanged.
+    let bytes = crate::metadata_encoding::encode(&command)?;
     if bytes.len() > MAX_METADATA_BYTES {
         return Err(ImapError::command(
             kind.operation(),
@@ -346,6 +352,7 @@ where
                     (ReadKind::List, Response::Data(Data::List { .. })) => true,
                     (ReadKind::UidSearch, Response::Data(Data::Search(..))) => true,
                     (ReadKind::FlagSweep, Response::Data(Data::Fetch { .. })) => true,
+                    (ReadKind::HeaderFetch, Response::Data(Data::Fetch { .. })) => true,
                     (ReadKind::SelectedCapability, Response::Data(Data::Capability(_))) => true,
                     (
                         ReadKind::Examine,

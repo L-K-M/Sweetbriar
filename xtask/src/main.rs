@@ -479,7 +479,38 @@ fn step_dovecot(root: &Path) -> bool {
     uids.env("SB_IMAP_DOVECOT", addr)
         .env("SB_IMAP_DOVECOT_USER", "spike")
         .env("SB_IMAP_DOVECOT_PASSWORD", DOVECOT_PASSWORD);
-    run(&mut uids)
+    if !run(&mut uids) {
+        return false;
+    }
+    // Preserve the preceding five suites' Seen fixture. The PEEK witness
+    // must start unseen so any read that sets Seen fails the assertion.
+    // This admin command touches only this owned test container.
+    let mut unseen = Command::new("docker");
+    if !run(unseen.args([
+        "exec", "--user", "0", &name, "doveadm", "flags", "remove", "-u", "spike", "\\Seen",
+        "mailbox", "INBOX", "ALL",
+    ])) {
+        return false;
+    }
+    let mut headers = cargo(
+        root,
+        &[
+            "test",
+            "-p",
+            "sb-imap",
+            "--test",
+            "headers_dovecot",
+            "dovecot_header_peek_keeps_an_unseen_message_unseen",
+            "--",
+            "--exact",
+            "--nocapture",
+        ],
+    );
+    headers
+        .env("SB_IMAP_DOVECOT", addr)
+        .env("SB_IMAP_DOVECOT_USER", "spike")
+        .env("SB_IMAP_DOVECOT_PASSWORD", DOVECOT_PASSWORD);
+    run(&mut headers)
 }
 
 /// Docker's port proxy accepts a connection before the container's
