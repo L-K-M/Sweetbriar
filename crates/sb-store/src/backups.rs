@@ -24,6 +24,9 @@ mod references;
 pub use external::VerifiedExternalBackup;
 pub use image::BackupImageInspection;
 mod scratch;
+#[allow(dead_code)]
+// Canonical declarations are consumed by the following integrity/qualifier slices.
+mod stage_canonical;
 mod stage_copy;
 #[allow(dead_code)] // Retained handles are consumed by the upcoming qualifier.
 mod stage_files;
