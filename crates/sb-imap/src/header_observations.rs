@@ -111,8 +111,10 @@ impl HeaderRequest {
             HeaderFetchMode::Full => None,
             HeaderFetchMode::Prefix { max_bytes } => Some((0, max_bytes)),
         };
-        // The pinned codec maps NonZeroU32::MAX's convenience conversion
-        // to '*'. Explicit Value preserves the actual requested UID.
+        // The typed Value keeps NonZeroU32::MAX distinct from '*' for the
+        // builder and the exact encoder; the pinned codec alone would
+        // still normalize it, so the connection driver must encode the
+        // actual bytes with `crate::metadata_encoding`.
         let sequence: Vec<Sequence> = self
             .uids
             .iter()
@@ -209,8 +211,7 @@ pub struct HeaderBatch {
 }
 
 mod builder;
-#[cfg(test)]
-use builder::HeaderBuilder;
+pub(crate) use builder::HeaderBuilder;
 
 #[cfg(test)]
 mod tests;
