@@ -175,8 +175,16 @@ impl Gate {
         self.pending = bytes.len();
         self.fragmentizer.enqueue_bytes(bytes);
         self.decode_available()?;
-        if self.poisoned() {
-            return Err(ImapError::Malformed);
+        self.take_received()
+    }
+
+    /// Take complete received unsolicited frames without waiting for a partial
+    /// tail. Known faults, completions, continuations and BYE fail closed.
+    pub(crate) fn take_received(&mut self) -> Result<VecDeque<Frame>, ImapError> {
+        match self.fault {
+            Some(GateFault::FrameLimit) => return Err(ImapError::FrameBudgetExceeded),
+            Some(GateFault::Malformed) => return Err(ImapError::Malformed),
+            None => {}
         }
         if !self.reusable() {
             return Err(ImapError::UnexpectedCompletion);
@@ -273,6 +281,23 @@ impl Gate {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn taking_received_frames_keeps_the_partial_predecessor() {
+        let mut gate = Gate::new();
+        let mut wire = b"* OK ready\r\n* 9 EXISTS\r\n* 2 EX".as_slice();
+        gate.read_frame(&mut wire).await.unwrap().unwrap();
+        let frames = gate.take_received().unwrap();
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0].bytes, b"* 9 EXISTS\r\n");
+        assert!(matches!(frames[0].kind, FrameKind::Untagged));
+        assert!(gate.has_buffered(), "partial predecessor remains owned");
+        assert!(gate.take_received().unwrap().is_empty());
+        let mut rest = b"ISTS\r\n".as_slice();
+        let frame = gate.read_frame(&mut rest).await.unwrap().unwrap();
+        assert_eq!(frame.bytes, b"* 2 EXISTS\r\n");
+        assert!(!gate.has_buffered());
+    }
 
     #[tokio::test]
     async fn eof_after_partial_line_is_malformed() {

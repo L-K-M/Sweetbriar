@@ -437,7 +437,7 @@ fn notice(
     response: &Response<'_>,
     context: Option<&MailboxContext>,
     notices: &mut Vec<MailboxNotice>,
-) -> Result<(), ImapError> {
+) -> Result<Option<usize>, ImapError> {
     let item = match response {
         Response::Data(Data::List { .. }) => {
             if let Response::Data(data) = response {
@@ -459,36 +459,79 @@ fn notice(
                 ),
                 _,
             ) => {
-                changed(context, notices);
-                return Ok(());
+                return Ok(Some(changed(context, notices)));
             }
-            _ => return Ok(()),
+            _ => return Ok(None),
         },
         Response::Data(_) => {
-            changed(context, notices);
-            return Ok(());
+            return Ok(Some(changed(context, notices)));
         }
         _ => return Err(ImapError::UnexpectedCompletion),
     };
-    if !notices.contains(&item) {
-        notices.push(item);
-    }
-    Ok(())
+    let index = match notices.iter().position(|existing| existing == &item) {
+        Some(index) => index,
+        None => {
+            notices.push(item);
+            notices.len() - 1
+        }
+    };
+    Ok(Some(index))
 }
 
-fn changed(context: Option<&MailboxContext>, notices: &mut Vec<MailboxNotice>) {
-    // One exchange has at most its previous selection and an unattributed
-    // switch window. Coalesce before cloning a possibly long mailbox name;
-    // a flood of tiny updates must not repeatedly copy that name.
-    if !notices.iter().any(|item| matches!(item, MailboxNotice::Changed { mailbox } if mailbox.is_some() == context.is_some())) {
-        notices.push(MailboxNotice::Changed { mailbox: context.cloned() });
+fn changed(context: Option<&MailboxContext>, notices: &mut Vec<MailboxNotice>) -> usize {
+    // One metadata exchange has at most its previous selection and an
+    // unattributed switch window. An IDLE watch keeps one fixed selection.
+    // Coalesce before cloning a potentially long name; repeated IDLE triggers
+    // borrow the cached notice rather than comparing/copying the whole name.
+    if let Some(index) = notices.iter().position(|item| matches!(item, MailboxNotice::Changed { mailbox } if mailbox.is_some() == context.is_some())) {
+        return index;
     }
+    notices.push(MailboxNotice::Changed {
+        mailbox: context.cloned(),
+    });
+    notices.len() - 1
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+    #[test]
+    fn repeated_notice_indices_borrow_one_long_name_per_exchange_context() {
+        let context = MailboxContext {
+            name: "m".repeat(100_000),
+            uid_validity: std::num::NonZeroU32::new(4100).unwrap(),
+        };
+        let codec = ResponseCodec::new();
+        let (_, response) = codec.decode(b"* 2 EXISTS\r\n").unwrap();
+        let mut cache = Vec::new();
+        let mut pointer = None;
+        for _ in 0..1_000 {
+            let index = notice(&response, Some(&context), &mut cache)
+                .unwrap()
+                .unwrap();
+            assert_eq!(index, 0);
+            let MailboxNotice::Changed {
+                mailbox: Some(mailbox),
+            } = &cache[index]
+            else {
+                panic!("selected update must keep its context");
+            };
+            let address = mailbox.name.as_ptr();
+            assert_eq!(*pointer.get_or_insert(address), address);
+            assert_eq!(mailbox.name.len(), 100_000);
+        }
+        let index = notice(&response, None, &mut cache).unwrap().unwrap();
+        assert_eq!(index, 1);
+        assert_eq!(cache[index], MailboxNotice::Changed { mailbox: None });
+        assert_eq!(
+            notice(&response, Some(&context), &mut cache).unwrap(),
+            Some(0)
+        );
+        assert_eq!(notice(&response, None, &mut cache).unwrap(), Some(1));
+        assert_eq!(cache.len(), 2);
+    }
 
     #[tokio::test]
     async fn a_metadata_flood_reaches_the_budget_without_a_partial_observation() {
