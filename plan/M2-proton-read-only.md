@@ -279,7 +279,22 @@ the provider policies (`proton_bridge`, `generic_imap`) live in
   **c2 Correlated IDLE watcher (L)** consumes c1, retaining epoch, tag,
   received-tail and cancellation checks through continuation, DONE and
   matched completion; renew at 25 min with virtual-clock and actual
-  Dovecot proof. **c3 Reconnect/backoff (L)** consumes c1/c2 through an
+  Dovecot proof. The selected-only watcher owns its wire through all rounds,
+  emits borrowed ready/notice events, and retains only a bounded notice
+  cache, without cloning long mailbox names on every update. Readiness
+  follows a validated continuation and already-received tail. A graceful
+  stop sends DONE only after continuation, then awaits the matching OK;
+  dropping the watcher closes the wire. Entry and exit waits each use c1's
+  30 s deadline, including predecessor completion. Check all known frames
+  and epochs before new IDLE/DONE writes; retain incomplete post-OK tails
+  for the next pre-command drain. Reject unsupported IDLE locally. Keep
+  RFC 2177's continuation/DONE boundary and renew at 25 min, never the
+  dependency's 29-second default. Append a ninth actual Dovecot renewal,
+  graceful-stop, connection-reuse and unseen witness after the unchanged
+  eight suites. Fake/duplex proof includes wrong/early/duplicate tags and
+  continuations, before/after-DONE updates, epochs, partial predecessors,
+  both deadline waits, cancellation and bounded floods.
+  **c3 Reconnect/backoff (L)** consumes c1/c2 through an
   owned connector boundary, with exponential 1 s to 5 min backoff,
   cancellation, reset on success and explicit retryable versus paused
   failures. Do not retain or clone credentials for retries, silently accept
