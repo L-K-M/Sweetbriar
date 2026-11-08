@@ -170,23 +170,26 @@ async fn brace_ending_setup_replies_complete_in_order() {
 
 #[tokio::test]
 async fn an_alert_before_capability_does_not_hide_its_data() {
-    let profile = Profile::bridge();
-    let cap = capability_step(&profile, true);
-    let mut alert = cap.clone();
-    alert
+    let initial = Profile::bridge();
+    let final_profile = Profile::bridge().with_capabilities(&["IMAP4rev1", "ID"]);
+    let mut final_refresh = capability_step(&final_profile, true);
+    final_refresh
         .send
         .insert(0, Reply::untagged(format!("OK [ALERT] synthetic {BRACE}")));
-    let script = Script::new(vec![alert, login_step(true), cap, id_step(true)])
-        .implicit_tls()
-        .greeting(format!("* OK ready {BRACE}\r\n"));
+    let script = Script::new(vec![
+        capability_step(&initial, true),
+        login_step(true),
+        final_refresh,
+        id_step(true),
+    ])
+    .implicit_tls()
+    .greeting(format!("* OK ready {BRACE}\r\n"));
     let server = FakeImapServer::serve(vec![script]).unwrap();
     let connection = connect(false, server.port(), 3).await.unwrap();
-    assert!(
-        connection
-            .capabilities()
-            .iter()
-            .any(|c| matches!(c, Capability::Imap4Rev1))
-    );
+    let capabilities = connection.capabilities();
+    assert_eq!(capabilities.len(), 2);
+    assert!(capabilities.contains(&Capability::Imap4Rev1));
+    assert!(capabilities.contains(&Capability::Id));
     assert_eq!(
         command_names(&server),
         ["CAPABILITY", "LOGIN", "CAPABILITY", "ID"]
