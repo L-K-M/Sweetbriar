@@ -642,6 +642,8 @@ async fn an_incomplete_tail_after_the_done_ok_is_retained_for_the_next_command()
     timed_out(result, "UID SEARCH");
     drop(inventory);
     closed(client.list_mailboxes().await);
+    resume();
+    wait_disconnected(&server).await;
     let lines = trace(&server);
     let wrote_search = lines.iter().any(|l| l.contains("SEARCH"));
     assert!(!wrote_search, "no SEARCH was written: {lines:?}");

@@ -192,20 +192,6 @@ impl Gate {
         Ok(std::mem::take(&mut self.released))
     }
 
-    /// Take complete received unsolicited frames without waiting for a partial
-    /// tail. Known faults, completions, continuations and BYE fail closed.
-    pub(crate) fn take_received(&mut self) -> Result<VecDeque<Frame>, ImapError> {
-        match self.fault {
-            Some(GateFault::FrameLimit) => return Err(ImapError::FrameBudgetExceeded),
-            Some(GateFault::Malformed) => return Err(ImapError::Malformed),
-            None => {}
-        }
-        if !self.reusable() {
-            return Err(ImapError::UnexpectedCompletion);
-        }
-        Ok(std::mem::take(&mut self.released))
-    }
-
     fn decode_available(&mut self) -> Result<(), ImapError> {
         loop {
             let fragment = self.fragmentizer.progress();
