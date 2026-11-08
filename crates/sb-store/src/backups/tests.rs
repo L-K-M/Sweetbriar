@@ -4156,6 +4156,7 @@ fn verifier_image_crash_cuts_recover_owned_scratch() {
 }
 
 mod stage_tests {
+    mod bindings;
     use super::*;
     use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -4475,6 +4476,8 @@ mod stage_tests {
     ) -> Result<crate::PreparedRestoreStage, StoreError> {
         let incarnation = match phase {
             StagePhase::Located => "00000000-0000-4000-8000-0000000000d1",
+            StagePhase::LiveBound => "00000000-0000-4000-8000-0000000000d6",
+            StagePhase::LiveRead => "00000000-0000-4000-8000-0000000000d7",
             StagePhase::DatabaseCopied => "00000000-0000-4000-8000-0000000000d2",
             StagePhase::ManifestCopied => "00000000-0000-4000-8000-0000000000d3",
             StagePhase::ObjectsCopied => "00000000-0000-4000-8000-0000000000d4",
@@ -4771,6 +4774,8 @@ mod stage_tests {
         // Cancelled after the locator, after the database copy and after the
         // manifest copy: each returns no prepared capability.
         assert!(stage_cancel_at(&source, StagePhase::Located).is_err());
+        assert!(stage_cancel_at(&source, StagePhase::LiveBound).is_err());
+        assert!(stage_cancel_at(&source, StagePhase::LiveRead).is_err());
         assert_no_stage_dir(&source.paths);
         assert!(stage_cancel_at(&source, StagePhase::DatabaseCopied).is_err());
         source.assert_untouched();

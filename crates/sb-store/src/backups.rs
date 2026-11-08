@@ -24,6 +24,8 @@ mod references;
 pub use external::VerifiedExternalBackup;
 pub use image::BackupImageInspection;
 mod scratch;
+#[allow(dead_code)] // Retained identity leases are consumed by the following qualifier.
+mod stage_bindings;
 #[allow(dead_code)]
 // Canonical declarations are consumed by the following integrity/qualifier slices.
 mod stage_canonical;
