@@ -246,13 +246,16 @@ impl Connection {
         // partial frame and before the first write. Cancel closes it.
         let mut wire = self.wire.take().ok_or(ImapError::Closed)?;
         let mut notices = std::mem::take(&mut self.pending_notices);
-        let observed = metadata_exchange(
-            &mut self.gate,
-            &mut self.selection,
-            &mut wire,
-            body,
-            kind,
-            collect,
+        let observed = crate::timeout::command(
+            kind.operation(),
+            metadata_exchange(
+                &mut self.gate,
+                &mut self.selection,
+                &mut wire,
+                body,
+                kind,
+                collect,
+            ),
         )
         .await?;
         for notice in observed {

@@ -18,6 +18,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 use crate::ImapError;
 use crate::gate::{Frame, FrameKind, MAX_MESSAGE_SIZE};
+use crate::timeout::BodySizeHint;
 
 /// Decimal bytes, matching spec/10's message budget. This leaf has no MIME
 /// dependency; the later acquisition layer also applies its parsing limits.
@@ -48,6 +49,7 @@ pub(crate) struct BodyReader<S> {
     end: usize,
     failed: bool,
     observed: bool,
+    size_hint: BodySizeHint,
 }
 
 struct Metadata {
@@ -80,7 +82,14 @@ impl<S: AsyncWrite + Unpin> BodyReader<S> {
             end: 0,
             failed: false,
             observed: false,
+            size_hint: BodySizeHint::default(),
         }
+    }
+
+    pub(crate) fn with_size_hint(uid: NonZeroU32, sink: S, size_hint: BodySizeHint) -> Self {
+        let mut reader = Self::new(uid, sink);
+        reader.size_hint = size_hint;
+        reader
     }
 
     /// One complete codec-validated response. Body placeholders are never
@@ -216,6 +225,7 @@ impl<S: AsyncWrite + Unpin> BodyReader<S> {
                     return Err(body_error("repeated body"));
                 }
                 check_body_length(length)?;
+                self.size_hint.note(length);
                 meta.bytes.truncate(marker);
                 meta.bytes.extend_from_slice(b"{0}\r\n");
                 self.literal(wire, length, None).await?;
@@ -275,6 +285,7 @@ impl<S: AsyncWrite + Unpin> BodyReader<S> {
             let mut byte = self.byte(wire).await?.ok_or(ImapError::Malformed)?;
             if byte == b'"' {
                 std::str::from_utf8(&bytes[..used]).map_err(|_| ImapError::Malformed)?;
+                self.size_hint.note(total);
                 self.sink
                     .write_all(&bytes[..used])
                     .await
@@ -295,6 +306,7 @@ impl<S: AsyncWrite + Unpin> BodyReader<S> {
             bytes[used] = byte;
             used += 1;
             if used == CHUNK {
+                self.size_hint.note(total);
                 let valid = match std::str::from_utf8(&bytes) {
                     Ok(_) => used,
                     Err(error) if error.error_len().is_none() => error.valid_up_to(),

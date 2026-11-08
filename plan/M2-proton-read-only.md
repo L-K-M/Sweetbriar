@@ -263,6 +263,30 @@ the provider policies (`proton_bridge`, `generic_imap`) live in
 
 #### M2.2c IDLE, timeouts and reconnect — L, linux
 
+- **Split before implementation (2026-11-08):** **c1 Operation deadlines
+  (L)** bounds each TCP/TLS/greeting/setup/metadata exchange at 30 s and
+  each full-body command at 120 s, including predecessor drain and sink
+  writes. Large body deadlines extend from the original start using a
+  monotonic bounded size hint: 120 s through 1 MiB, plus one second per
+  additional 256 KiB, capped by the 100,000,000-byte body limit. Progress
+  never renews the start time. A timeout is typed, drops the owned socket
+  and unpublished sink, and returns no partial observation; local request
+  refusals remain local. Native virtual-clock and fake Bridge proofs cover
+  setup, selected commands, body scaling, pending sinks, predecessor waits,
+  completion and cancellation. Append an actual Dovecot timeout/reconnect
+  witness after the unchanged seven suites, retaining unseen PEEK behavior.
+  This slice closes timed-out sessions; reconnection policy follows in c3.
+  **c2 Correlated IDLE watcher (L)** consumes c1, retaining epoch, tag,
+  received-tail and cancellation checks through continuation, DONE and
+  matched completion; renew at 25 min with virtual-clock and actual
+  Dovecot proof. **c3 Reconnect/backoff (L)** consumes c1/c2 through an
+  owned connector boundary, with exponential 1 s to 5 min backoff,
+  cancellation, reset on success and explicit retryable versus paused
+  failures. Do not retain or clone credentials for retries, silently accept
+  certificates or add provider mutation policy. Each artifact includes its
+  complete native proof within 1,450 changed lines; split again before
+  exceeding it. Account/worker integration remains in the following steps.
+
 - **Goal:** the connection stays live and recovers.
 - **Deliverables:**
   - an IDLE watcher (renewed at 25 min);

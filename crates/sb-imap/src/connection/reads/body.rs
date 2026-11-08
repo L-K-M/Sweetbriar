@@ -7,6 +7,7 @@ use super::{
 };
 use crate::body_framing::{BodyEvidence, BodyReader};
 use crate::gate::{FrameKind, Gate};
+use crate::timeout::BodySizeHint;
 use crate::{BodyUnavailableReason, BodyValue, FetchedBody, ImapError};
 use io_imap::codec::{ResponseCodec, decode::Decoder};
 use io_imap::types::{
@@ -33,13 +34,18 @@ impl Connection {
         let context = self.uid_context()?;
         let mut wire = self.wire.take().ok_or(ImapError::Closed)?;
         let mut notices = std::mem::take(&mut self.pending_notices);
-        let (body, observed) = body_exchange(
-            &mut self.gate,
-            &context,
-            &mut wire,
-            uid,
-            sink,
-            MAX_METADATA_BYTES,
+        let size_hint = BodySizeHint::default();
+        let (body, observed) = crate::timeout::body(
+            size_hint.clone(),
+            body_exchange(
+                &mut self.gate,
+                &context,
+                &mut wire,
+                uid,
+                sink,
+                MAX_METADATA_BYTES,
+                size_hint,
+            ),
         )
         .await?;
         for notice in observed {
@@ -66,6 +72,7 @@ async fn body_exchange<W, S>(
     uid: NonZeroU32,
     sink: S,
     mut remaining: usize,
+    size_hint: BodySizeHint,
 ) -> Result<(BodyValue<S>, Vec<MailboxNotice>), ImapError>
 where
     W: AsyncRead + AsyncWrite + Unpin,
@@ -114,7 +121,7 @@ where
     write_command(wire, &bytes)
         .await
         .map_err(ImapError::from_io)?;
-    let mut reader = BodyReader::new(uid, sink);
+    let mut reader = BodyReader::with_size_hint(uid, sink, size_hint);
     let mut evidence = None;
     loop {
         let frame = reader.next(wire).await?.ok_or_else(|| {
@@ -218,6 +225,7 @@ mod tests {
                 NonZeroU32::new(7).unwrap(),
                 Vec::<u8>::new(),
                 budget,
+                BodySizeHint::default(),
             ),
         )
         .await;
