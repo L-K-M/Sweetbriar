@@ -143,11 +143,14 @@ impl fmt::Debug for BridgeAccountParams {
 
 impl BridgeAccountParams {
     fn into_engine(self) -> Result<sb_engine::BridgeAccountParams, CoreError> {
+        // Into the zeroizing secret first, so an early error below
+        // never drops the password unwiped.
+        let password = sb_engine::Secret::new(self.password);
         let pin = parse_sha256_hex(&self.certificate_sha256)?;
         Ok(sb_engine::BridgeAccountParams {
             display_name: self.display_name,
             username: self.username,
-            password: sb_engine::Secret::new(self.password),
+            password,
             imap_port: self.imap_port,
             imap_security: self.imap_security.into_engine(),
             smtp_port: self.smtp_port,
@@ -204,7 +207,9 @@ pub struct BridgeAccountAdded {
 impl Core {
     /// `add_bridge_account(params)` (spec/07 "Commands") under an
     /// idempotency key. A repeated key answers the stored receipt and
-    /// does nothing else. The probe runs first: a refused login is
+    /// does nothing else — once the request decodes: a malformed
+    /// `certificate_sha256` is `InvalidInput` even on a replay, since
+    /// the engine takes the pin as bytes. The probe runs first: a refused login is
     /// `InvalidInput` on `password`, a certificate that is not the
     /// confirmed one `InvalidInput` on `pin` (its message names the
     /// presented fingerprint), Bridge not answering `Unavailable` — and

@@ -422,8 +422,10 @@ impl Resources {
         let needs_attention = match store_secret(credential_ref, params.password).await {
             Ok(()) => {
                 let activated_id = account_id.clone();
-                // The receipt already committed; a failed activation
-                // leaves the NotStored pause the retry path lifts.
+                // The receipt already committed. A failed activation
+                // reports the pause the row actually holds (a guard
+                // refusal means it changed meanwhile); NotStored only
+                // when even that read fails, as the insert recorded it.
                 match self
                     .write(WritePriority::User, move |tx| {
                         reactivate_after_credential(tx, &activated_id)
@@ -431,7 +433,14 @@ impl Resources {
                     .await
                 {
                     Ok(()) => None,
-                    Err(_) => Some(CredentialPause::NotStored),
+                    Err(_) => {
+                        let paused_id = account_id.clone();
+                        self.write(WritePriority::User, move |tx| {
+                            credential_pause(tx, &paused_id)
+                        })
+                        .await
+                        .unwrap_or(Some(CredentialPause::NotStored))
+                    }
                 }
             }
             Err(error) => {

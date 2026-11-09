@@ -99,8 +99,9 @@ pub fn run_once(
 /// receipt when it ran, `Conflict` when the key was spent on another
 /// command, `None` when it is unspent. A command with effects outside
 /// SQLite (a network probe, a secret write) asks this before them, so a
-/// replay does nothing else; it still commits through [`run_once`],
-/// which settles a concurrent command under the same key.
+/// replay does nothing else. Such a command must still commit through
+/// [`run_once`], which checks the key again inside the commit and
+/// settles a concurrent command under the same key.
 pub fn replay(tx: &Transaction, key: &str, command: &str) -> Result<Option<Receipt>, StoreError> {
     match find(tx, key)? {
         Some(receipt) if receipt.command == command => Ok(Some(receipt)),

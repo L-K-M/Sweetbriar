@@ -29,8 +29,11 @@ impl Engine {
         self.command(move |worker| async move {
             let setter = worker.clone();
             let store_secret = move |credential_ref: String, secret: Secret| async move {
-                // A failed join is a store that did not keep the secret:
-                // the account keeps its pause and the retry path stays.
+                // A failed join (the store's call panicked, or the pool
+                // shut down) is a store that did not keep the secret: the
+                // committed account keeps its pause and the retry path
+                // stays. The engine has no logger yet (spec/07 lists one
+                // as a platform service), so nothing records the cause.
                 setter
                     .blocking(move |resources| resources.set_secret(&credential_ref, &secret))
                     .await

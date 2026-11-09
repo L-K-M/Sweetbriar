@@ -79,6 +79,38 @@ fn params(port: u16) -> BridgeAccountParams {
     }
 }
 
+/// A loopback port nothing listens on: one the OS just released, and
+/// that a connect then finds refused (another test may reuse it).
+fn refused_port() -> u16 {
+    (0..20)
+        .map(|_| {
+            std::net::TcpListener::bind("127.0.0.1:0")
+                .unwrap()
+                .local_addr()
+                .unwrap()
+                .port()
+        })
+        .find(|port| std::net::TcpStream::connect(("127.0.0.1", *port)).is_err())
+        .expect("a loopback port with nothing listening")
+}
+
+/// A secret store whose `set` panics, as a broken backend might.
+struct PanickingSecrets;
+
+impl SecretStore for PanickingSecrets {
+    fn get(&self, _credential_ref: &str) -> Result<Secret, SecretError> {
+        Err(SecretError::NotFound)
+    }
+
+    fn set(&self, _credential_ref: &str, _secret: &Secret) -> Result<(), SecretError> {
+        panic!("a broken secret store backend");
+    }
+
+    fn delete(&self, _credential_ref: &str) -> Result<(), SecretError> {
+        Err(SecretError::NotFound)
+    }
+}
+
 fn engine(label: &str, secrets: Arc<FakeSecrets>) -> (ScratchDir, Engine) {
     let scratch = ScratchDir::new(label);
     let store: Arc<dyn SecretStore> = secrets;
@@ -171,12 +203,7 @@ fn setup_failures_map_onto_core_errors() {
         "{error:?}"
     );
 
-    // Nothing listens on a port the OS just released.
-    let free_port = std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port();
+    let free_port = refused_port();
     let error = block_on(engine.add_bridge_account("unreachable", params(free_port)))
         .expect_err("nothing listening");
     assert!(
@@ -197,5 +224,33 @@ fn setup_failures_map_onto_core_errors() {
             .iter()
             .all(|account| account.display_name != "Owner Proton"),
         "a failed setup stored an account"
+    );
+}
+
+#[test]
+fn a_panicking_secret_store_still_commits_a_paused_account() {
+    let server = FakeImapServer::serve(vec![bridge_script(true)]).unwrap();
+    let scratch = ScratchDir::new("engine-account-panicking-store");
+    let store: Arc<dyn SecretStore> = Arc::new(PanickingSecrets);
+    let engine = block_on(Engine::open_with_secrets(
+        &scratch.path().join("store"),
+        store,
+    ))
+    .expect("the engine opens");
+
+    // The panic stays on the blocking pool: the command answers, with
+    // the account committed and waiting for its credential.
+    let added = block_on(engine.add_bridge_account("panicking-1", params(server.port())))
+        .expect("the rows still commit");
+    assert_eq!(
+        added.needs_attention,
+        Some(CredentialPause::StoreUnavailable)
+    );
+    let accounts = block_on(engine.accounts()).unwrap();
+    assert!(
+        accounts
+            .iter()
+            .any(|account| account.account_id == added.account_id),
+        "the account exists"
     );
 }

@@ -678,6 +678,10 @@ async fn a_key_spent_on_another_command_conflicts_before_the_probe() {
         ),
         "{error:?}"
     );
+    assert!(
+        server.received().is_empty(),
+        "the conflict is answered before the probe runs"
+    );
     assert_eq!(secrets.calls(SecretOp::Set), 0);
     assert_eq!(
         rows(
