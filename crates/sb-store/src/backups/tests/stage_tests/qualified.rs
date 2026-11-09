@@ -62,10 +62,12 @@ impl Evidence {
     /// The unqualified stage stays behind, nothing was preserved or
     /// swapped, and the live store keeps its incarnation.
     fn assert_kept(&self, source: &StagingSource) {
-        assert!(
-            self.stage.join("state.sqlite").is_file(),
-            "stage evidence kept"
-        );
+        for kept in ["state.sqlite", "manifest.json"] {
+            assert!(
+                self.stage.join(kept).is_file(),
+                "stage evidence {kept} kept"
+            );
+        }
         assert!(!self.preserved.exists(), "no preserved root");
         assert_eq!(source.live_incarnation(), self.incarnation);
     }
@@ -291,40 +293,148 @@ fn a_changed_live_incarnation_is_refused() {
     }
 }
 
-#[test]
-fn damaged_staged_evidence_is_refused_before_and_after_quarantine() {
-    for after_flush in [false, true] {
-        let source = staging_source("qualified-evidence");
-        let stage = candidate(&source);
-        let evidence = Evidence::of(&source, &stage);
-        let manifest = evidence.stage.join("manifest.json");
-        let damage = || {
-            let mut bytes = std::fs::read(&manifest).unwrap();
+/// One staged object file, the first by path.
+fn first_staged_object(stage: &Path) -> PathBuf {
+    let mut dir = stage.join("objects/sha256");
+    loop {
+        let mut entries: Vec<PathBuf> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect();
+        entries.sort();
+        let first = entries.remove(0);
+        if first.is_file() {
+            return first;
+        }
+        dir = first;
+    }
+}
+
+/// Ways the staged evidence can change under the qualifier.
+#[derive(Clone, Copy, Debug)]
+enum Damage {
+    FlippedManifest,
+    GrownManifest,
+    FlippedObject,
+    GrownObject,
+    RemovedObject,
+}
+
+fn damage(stage: &Path, how: Damage) {
+    let manifest = stage.join("manifest.json");
+    let object = first_staged_object(stage);
+    let rewrite = |path: &Path, change: &dyn Fn(&mut Vec<u8>)| {
+        let mut bytes = std::fs::read(path).unwrap();
+        change(&mut bytes);
+        std::fs::write(path, bytes).unwrap();
+    };
+    match how {
+        Damage::FlippedManifest => rewrite(&manifest, &|bytes| {
             let middle = bytes.len() / 2;
             bytes[middle] ^= 0x20;
-            std::fs::write(&manifest, bytes).unwrap();
-        };
-        if !after_flush {
-            damage();
-        }
-        let mut seen = Vec::new();
-
-        let result = qualify(&source, stage, |phase| {
-            seen.push(phase);
-            if after_flush && phase == QualifyPhase::Image(ImagePhase::Flushed) {
-                damage();
-            }
-        });
-
-        assert!(
-            matches!(result, Err(StoreError::Corrupt { .. })),
-            "after flush {after_flush}: {result:?}"
-        );
-        if !after_flush {
-            assert_eq!(seen, [QualifyPhase::BindingsChecked], "no quarantine ran");
-        }
-        evidence.assert_kept(&source);
+        }),
+        Damage::GrownManifest => rewrite(&manifest, &|bytes| bytes.push(b' ')),
+        Damage::FlippedObject => rewrite(&object, &|bytes| bytes[0] ^= 1),
+        Damage::GrownObject => rewrite(&object, &|bytes| bytes.push(0)),
+        Damage::RemovedObject => std::fs::remove_file(&object).unwrap(),
     }
+}
+
+#[test]
+fn damaged_staged_evidence_is_refused_before_and_after_quarantine() {
+    let cases = [
+        Damage::FlippedManifest,
+        Damage::GrownManifest,
+        Damage::FlippedObject,
+        Damage::GrownObject,
+        Damage::RemovedObject,
+    ];
+    for how in cases {
+        for after_flush in [false, true] {
+            let source = staging_source("qualified-evidence");
+            let stage = candidate(&source);
+            let evidence = Evidence::of(&source, &stage);
+            if !after_flush {
+                damage(&evidence.stage, how);
+            }
+            let mut seen = Vec::new();
+
+            let result = qualify(&source, stage, |phase| {
+                seen.push(phase);
+                if after_flush && phase == QualifyPhase::Image(ImagePhase::Flushed) {
+                    damage(&evidence.stage, how);
+                }
+            });
+
+            let case = format!("{how:?}, after flush {after_flush}");
+            match how {
+                // A missing object keeps its native cause.
+                Damage::RemovedObject => assert_eq!(
+                    result.unwrap_err().io_kind(),
+                    Some(io::ErrorKind::NotFound),
+                    "{case}"
+                ),
+                _ => assert!(
+                    matches!(result, Err(StoreError::Corrupt { .. })),
+                    "{case}: {result:?}"
+                ),
+            }
+            if after_flush {
+                assert_eq!(
+                    seen.last(),
+                    Some(&QualifyPhase::Image(ImagePhase::Flushed)),
+                    "{case}: the post-flush recheck refused"
+                );
+            } else {
+                assert_eq!(
+                    seen,
+                    [QualifyPhase::BindingsChecked],
+                    "{case}: no quarantine"
+                );
+            }
+            assert!(evidence.stage.join("state.sqlite").is_file(), "{case}");
+            assert!(!evidence.preserved.exists(), "{case}");
+            assert_eq!(source.live_incarnation(), evidence.incarnation, "{case}");
+        }
+    }
+}
+
+/// The coordinator and lease checks, each refusing on its own: a
+/// stage whose lease is not the running operation, and a stage whose
+/// recorded live incarnation equals its own new one.
+#[test]
+fn a_forged_lease_or_incarnation_is_refused_by_its_own_check() {
+    let detail = |result: Result<QualifiedStage, StoreError>| match result {
+        Err(StoreError::Conflict { detail }) => detail,
+        other => panic!("expected Conflict, got {other:?}"),
+    };
+
+    let source = staging_source("qualified-foreign-detail");
+    let other = staging_source("qualified-foreign-detail-other");
+    let stage = candidate(&source);
+    let cancel = Arc::new(AtomicBool::new(false));
+    assert!(
+        detail(other.store.backups.qualify_with(stage, &cancel, |_| {})).contains("another store")
+    );
+
+    // Same coordinator, but the lease is not the one running: the
+    // original lease is dropped, so no operation holds the slot.
+    let source = staging_source("qualified-forged-lease");
+    let mut stage = candidate(&source);
+    stage.operation = Arc::new(());
+    assert!(detail(qualify(&source, stage, |_| {})).contains("operation is not the running one"));
+
+    // The live store now carries the stage's own new incarnation, and
+    // the stage records it as the live one: the reuse check refuses.
+    let source = staging_source("qualified-reused-incarnation");
+    let mut stage = candidate(&source);
+    let reused = stage.incarnation().to_owned();
+    sql(
+        &source.store,
+        format!("UPDATE store_meta SET value='{reused}' WHERE key='incarnation'"),
+    );
+    stage.live_incarnation = reused;
+    assert!(detail(qualify(&source, stage, |_| {})).contains("reuses the live store"));
 }
 
 #[test]

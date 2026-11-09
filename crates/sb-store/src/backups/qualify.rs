@@ -218,7 +218,10 @@ impl Backups {
 
         // After the checkpoint, close and flushes: the image must be the
         // retained file, at the snapshot's schema version, and every
-        // binding and the evidence must still hold.
+        // binding and the evidence must still hold. `run` builds its
+        // image from these same handles and catalog today; the identity
+        // and schema comparisons keep that a checked fact, not an
+        // assumption, should it ever change.
         if image.root_identity != prepared.files.root_identity
             || image.database_identity != prepared.files.database_identity
         {
