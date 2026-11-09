@@ -1505,6 +1505,26 @@ local drafts. No network yet.
       qualified stage. Keep all original binding, row-state, cancellation,
       SQL/I/O/durability and crash acceptance below; split the qualifier
       again before exceeding 1,450 changed lines with its complete proof.
+    - **b6b3 split before implementation (2026-11-09):**
+      **b6b3a Staged evidence re-authentication (M)** re-reads the
+      prepared stage's manifest through the retained stage root, bounded
+      at its staged length plus one witness byte, and requires the exact
+      digest, generation, database entry, object count and byte total.
+      It then streams every object through confined
+      `objects/sha256/<aa>/<bb>` child directories derived from the
+      authenticated digests, each bounded at its declared length plus
+      one. No other name is opened and nothing is written or removed;
+      it is a point-in-time observation without quarantine, stage or
+      swap authority. Native proof covers flipped, grown, truncated and
+      removed manifests and objects, symlinked objects and hash
+      directories, declared facts that disagree, cancellation, and fired
+      open/read faults keeping their native cause.
+      **b6b3b Qualified binding handoff (L)** composes it with the
+      coordinator check, the source, live and stage-name bindings, the
+      live incarnation re-read and b6b2's execution, rechecking every
+      binding after the flushes, and alone returns the qualified stage.
+      It keeps every b6b3 acceptance item above, including cancellation
+      at each phase, fired faults and the crash cut before handoff.
     - **M1.8e3b2b Staging qualification (L):** consume the private copy
       and schema inspection, recheck the coordinator, live root/incarnation
       and verified metadata, run the current quarantine transaction,

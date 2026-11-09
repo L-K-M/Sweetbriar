@@ -127,7 +127,7 @@ fn interrupted() -> io::Error {
     io::Error::from(io::ErrorKind::Interrupted)
 }
 
-fn to_hex(bytes: &[u8]) -> String {
+pub(super) fn to_hex(bytes: &[u8]) -> String {
     use std::fmt::Write as _;
     let mut output = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
