@@ -134,10 +134,11 @@ public final class BridgeAccountSetupModel {
     /// (the core also refuses any file holding a private key), as is a
     /// file too large to be Bridge's certificate.
     public func importCertificate(fileAt url: URL) {
-        // Resolve links first, so a cert.pem linking to key.pem is
-        // still refused by name, unopened.
+        // Refuse key.pem by the name picked and, after resolving links,
+        // by the file it names: a cert.pem linking to key.pem, or a
+        // key.pem link anywhere, is refused unopened.
         let resolved = url.resolvingSymlinksInPath()
-        if resolved.lastPathComponent.lowercased() == "key.pem" {
+        if [url, resolved].contains(where: { $0.lastPathComponent.lowercased() == "key.pem" }) {
             certificateError = "That is Bridge's private key. Choose cert.pem instead; Sweetbriar never reads key.pem."
             return
         }
@@ -153,7 +154,16 @@ public final class BridgeAccountSetupModel {
                 certificateError = "That file is too large to be Bridge's cert.pem."
                 return
             }
-            importCertificate(pem: try Data(contentsOf: resolved))
+            // Read at most one byte past the limit: a file that grew
+            // since its size was checked is refused, never read whole.
+            let handle = try FileHandle(forReadingFrom: resolved)
+            defer { try? handle.close() }
+            let pem = try handle.read(upToCount: Self.maxCertificateFileBytes + 1) ?? Data()
+            guard pem.count <= Self.maxCertificateFileBytes else {
+                certificateError = "That file is too large to be Bridge's cert.pem."
+                return
+            }
+            importCertificate(pem: pem)
         } catch {
             certificateError = "The file couldn't be read: \(error.localizedDescription)"
         }

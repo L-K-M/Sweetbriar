@@ -288,6 +288,18 @@ func onlyARegularCertificateFileIsRead() throws {
     #expect(model.certificateError?.contains("never reads key.pem") == true)
     #expect(source.pemReads == 0, "neither file reached the parser")
     #expect(model.certificate == .none)
+
+    // A link named key.pem is refused by its own name too, even when
+    // it points at a harmless certificate.
+    let real = folder.appendingPathComponent("bridge-cert.pem")
+    try Data("-----BEGIN CERTIFICATE-----\n".utf8).write(to: real)
+    let named = folder.appendingPathComponent("key.pem.d")
+    try FileManager.default.createDirectory(at: named, withIntermediateDirectories: false)
+    let keyLink = named.appendingPathComponent("key.pem")
+    try FileManager.default.createSymbolicLink(at: keyLink, withDestinationURL: real)
+    model.importCertificate(fileAt: keyLink)
+    #expect(model.certificateError?.contains("never reads key.pem") == true)
+    #expect(source.pemReads == 0, "the linked certificate was not read either")
 }
 
 @MainActor
