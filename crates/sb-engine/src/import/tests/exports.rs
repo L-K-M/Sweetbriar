@@ -82,7 +82,12 @@ fn seal(engine: &Engine, id: &str, mailbox_id: i64, generation: u64, dest: &Path
             .resources()
             .capture_export(&job, &request, |_| ControlFlow::Continue(()))
         {
-            Err(StoreError::Conflict { detail }) if attempt < 2 && detail.contains("stale") => {
+            // Only a fence the list generation really moved past is
+            // retried; any other conflict fails the test.
+            Err(StoreError::Conflict { .. })
+                if attempt < 2
+                    && engine.resources().read(list_generation).unwrap() != generation =>
+            {
                 generation = engine.resources().read(list_generation).unwrap();
             }
             other => {
@@ -145,6 +150,11 @@ fn a_seal_after_the_generation_moved_starts_the_job_over() {
     let sealed = seal(&engine, "moved", mailbox_id, generation, &dest);
 
     assert_ne!(sealed, "moved", "the stale job is never sealed");
+    assert_eq!(
+        export_status(&engine, "moved").state(),
+        ExportJobState::Capturing,
+        "the stale job stays capturing"
+    );
     assert_eq!(
         export_status(&engine, &sealed).state(),
         ExportJobState::Ready
