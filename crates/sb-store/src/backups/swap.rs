@@ -10,6 +10,7 @@
 //! flush), and the marker removed. A crash anywhere is resolved by the
 //! next open (`restore_pending::recover`); nothing is deleted.
 
+use std::io;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -105,15 +106,20 @@ impl Backups {
             ));
         }
         // The old root is only ever renamed, never merged or replaced.
-        if self
+        // Only a missing name is free: a directory, a file, a link (even
+        // a dangling one, so the name is not followed) or an entry that
+        // cannot be inspected refuses while the store can be handed back.
+        let parent_dir = self
             .fs
-            .metadata(stage.preserved_root())
-            .map_err(|error| io_error("checking the preserved root's name", error))?
-            .is_some()
-        {
-            return Err(StoreError::conflict(
-                "the preserved root's name is already taken",
-            ));
+            .open_confined_dir(parent)
+            .map_err(|error| io_error("opening the data root's parent", error))?;
+        match parent_dir.open_dir(Path::new(&pending.preserved)) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            _ => {
+                return Err(StoreError::conflict(
+                    "the preserved root's name is already taken",
+                ));
+            }
         }
         active(cancel)?;
         Ok(pending)

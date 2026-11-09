@@ -129,9 +129,10 @@ fn assert_refused(
         stage_path.join("state.sqlite").is_file(),
         "{case}: the stage stays"
     );
+    // Only an entry the case itself put at the preserved name is there.
     assert_eq!(
-        preserved.exists(),
-        case == "the preserved name taken",
+        std::fs::symlink_metadata(preserved).is_ok(),
+        case.contains("preserved name"),
         "{case}: nothing renamed"
     );
     (*store, *stage)
@@ -140,7 +141,7 @@ fn assert_refused(
 #[test]
 fn every_check_before_closing_refuses_with_the_store_handed_back() {
     type Interfere = fn(&StagingSource, &QualifiedStage);
-    let cases: [(&str, Interfere); 4] = [
+    let cases: [(&str, Interfere); 6] = [
         ("a changed live incarnation", |source, _| {
             sql(
                 &source.store,
@@ -170,6 +171,12 @@ fn every_check_before_closing_refuses_with_the_store_handed_back() {
         }),
         ("the preserved name taken", |_, stage| {
             std::fs::create_dir(stage.preserved_root()).unwrap();
+        }),
+        ("a dangling link at the preserved name", |_, stage| {
+            std::os::unix::fs::symlink("/nonexistent-target", stage.preserved_root()).unwrap();
+        }),
+        ("a file at the preserved name", |_, stage| {
+            std::fs::write(stage.preserved_root(), b"not a root").unwrap();
         }),
     ];
     for (case, interfere) in cases {
