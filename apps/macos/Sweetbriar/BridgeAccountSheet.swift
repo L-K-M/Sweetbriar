@@ -93,7 +93,7 @@ struct BridgeAccountSetupView: View {
     /// Fields whose failures show inline rather than at the bottom.
     private static let inlineFields: Set<String> = [
         "display_name", "username", "password", "imap_port", "smtp_port",
-        "imap_security", "identities", "pin", "certificate_sha256",
+        "imap_security", "smtp_security", "identities", "pin", "certificate_sha256",
     ]
 
     var body: some View {
@@ -137,6 +137,7 @@ struct BridgeAccountSetupView: View {
                     inline("imap_security")
                     endpoint("SMTP", port: $model.smtpPort, security: $model.smtpSecurity)
                     inline("smtp_port")
+                    inline("smtp_security")
                 }
                 Section("Bridge's certificate") {
                     certificateRow
