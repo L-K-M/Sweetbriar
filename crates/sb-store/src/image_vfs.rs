@@ -79,8 +79,15 @@ static METHODS: ffi::sqlite3_io_methods = ffi::sqlite3_io_methods {
     xUnfetch: None,
 };
 
+/// The expression and CTE-nesting depth an untrusted image is read under:
+/// SQLite's own default, which the store's build raises for its generated
+/// search SQL (spec/03 `LIBSQLITE3_FLAGS`).
+pub(crate) const UNTRUSTED_EXPR_DEPTH: i32 = 1_000;
+
 /// Open only the supplied handle. SQLite cannot open any other file through
 /// this VFS, including a WAL, journal, temporary file or source pathname.
+/// The image's schema is parsed at `UNTRUSTED_EXPR_DEPTH` from the first
+/// statement on.
 pub(crate) fn open(file: Box<dyn ReadFile>) -> rusqlite::Result<Connection> {
     let rc = *REGISTERED.get_or_init(register);
     if rc != ffi::SQLITE_OK {
@@ -106,7 +113,12 @@ pub(crate) fn open(file: Box<dyn ReadFile>) -> rusqlite::Result<Connection> {
         );
         // xOpen owns its own Arc; this slot only transfers it during open.
         *opening.borrow_mut() = None;
-        result
+        let connection = result?;
+        connection.set_limit(
+            rusqlite::limits::Limit::SQLITE_LIMIT_EXPR_DEPTH,
+            UNTRUSTED_EXPR_DEPTH,
+        )?;
+        Ok(connection)
     })
 }
 
@@ -329,6 +341,27 @@ unsafe extern "C" fn full_path(
 mod tests {
     use super::*;
     use sb_test_support::ScratchDir;
+
+    #[test]
+    fn an_untrusted_image_opens_at_sqlites_default_depth() {
+        let scratch = ScratchDir::new("sqlite-image-depth");
+        let path = scratch.path().join("state.sqlite");
+        let store = Connection::open(&path).unwrap();
+        store
+            .execute_batch("CREATE TABLE proof (value TEXT);")
+            .unwrap();
+        let limit = rusqlite::limits::Limit::SQLITE_LIMIT_EXPR_DEPTH;
+        assert_eq!(
+            store.limit(limit).unwrap(),
+            2000,
+            "the store's raised depth"
+        );
+        store.close().unwrap();
+
+        let image = open(Box::new(std::fs::File::open(&path).unwrap())).unwrap();
+
+        assert_eq!(image.limit(limit).unwrap(), UNTRUSTED_EXPR_DEPTH);
+    }
 
     #[test]
     fn reads_retained_file_after_replacement_without_sidecars() {

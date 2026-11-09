@@ -112,9 +112,10 @@ against concurrent replacement.
     `SQLITE_MAX_EXPR_DEPTH=2000`, with FTS5 enabled. SQLite 3.54 bounds
     the cursors a statement may open while expanding CTEs by the
     expression depth (1000 by default); a 256-node relevance search
-    (06) opens about 1,250, so the store's own SQL gets 2000.
-    Connections inspecting an untrusted restore or verifier image set
-    the depth back to 1000;
+    (06) opens about 1,250, so the store's own SQL gets 2000; raise it
+    only together with 06's node cap (a test runs the largest relevance
+    search). Every connection over an untrusted restore or verifier
+    image opens at 1000 again, before it reads the image's schema;
   - **never the system SQLite.** Its version and build options aren't
     ours to pin, and Apple's build has been reported to map `fullfsync`
     to a weaker barrier (historical reports; unverified for macOS 27).

@@ -11,10 +11,9 @@ use super::scoped_progress::{WorkLimit, with_work_limit};
 const PROGRESS_OPS: i32 = 1_000;
 pub(super) const MAX_PROGRESS_CALLS: u32 = 2_000;
 pub(super) const MAX_SQLITE_VALUE: i32 = 1_048_576;
-/// The expression and CTE-nesting depth an untrusted image is inspected
-/// under: SQLite's own default, which the store's build raises for its
-/// generated search SQL (spec/03 `LIBSQLITE3_FLAGS`).
-pub(super) const INSPECTION_EXPR_DEPTH: i32 = 1_000;
+/// The depth an untrusted image is inspected under; `image_vfs` and the
+/// staging writer already open at it, and each inspection sets it again.
+pub(super) const INSPECTION_EXPR_DEPTH: i32 = crate::image_vfs::UNTRUSTED_EXPR_DEPTH;
 
 /// Result of inspecting a retained image; cancellation carries no identity.
 #[derive(Debug, PartialEq, Eq)]
