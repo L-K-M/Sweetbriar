@@ -667,7 +667,11 @@ fn qualification_cuts_leave_live_source_and_stage_evidence() {
             let report: serde_json::Value =
                 serde_json::from_slice(&std::fs::read(root.join("expected.json")).unwrap())
                     .unwrap();
-            phases.push(std::fs::read_to_string(root.join("phase.txt")).unwrap_or_default());
+            // Every run stages after the calibrated count of operations,
+            // so each cut lands where it was aimed.
+            assert_eq!(report["staged"].as_u64(), Some(staged), "the run drifted");
+            let phase = std::fs::read_to_string(root.join("phase.txt")).unwrap_or_default();
+            phases.push(phase.clone());
             for pair in report["hashes"].as_array().unwrap() {
                 let path = pair[0].as_str().unwrap();
                 assert_eq!(
@@ -695,7 +699,13 @@ fn qualification_cuts_leave_live_source_and_stage_evidence() {
                 .open_regular_identified(Path::new("state.sqlite"))
                 .unwrap();
             assert_eq!(format!("{id:?}"), report["live_id"].as_str().unwrap());
-            assert!(Path::new(report["stage"].as_str().unwrap()).is_dir());
+            let stage = Path::new(report["stage"].as_str().unwrap());
+            assert!(
+                stage.is_dir(),
+                "{root:?} after {phase:?}, finished: {}: {:?}",
+                root.join("counts.json").exists(),
+                std::fs::symlink_metadata(stage)
+            );
             assert!(!Path::new(report["preserved"].as_str().unwrap()).exists());
             drop(directory);
             let child_scratch = Path::new(report["scratch"].as_str().unwrap());
