@@ -8,6 +8,12 @@ use rusqlite::Transaction;
 use rusqlite::params;
 use sb_types::time::Timestamp;
 
+mod connection;
+pub use connection::{
+    ConnectionPause, ImapEndpoint, ImapProvider, clear_connection_pause, imap_endpoint,
+    pause_for_connection, syncable_accounts,
+};
+
 use crate::StoreError;
 use crate::appearance::initialize_account_appearance;
 use crate::schema::classify;

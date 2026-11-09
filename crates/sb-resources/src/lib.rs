@@ -24,7 +24,11 @@ pub use accounts::{
 };
 pub use sb_imap::CertificatePin;
 pub use sb_platform::{Secret, SecretError, SecretStore};
-pub use sb_store::accounts::{AddressMode, CredentialPause, EndpointSecurity, IdentitySendable};
+pub use sb_store::accounts::{
+    AddressMode, ConnectionPause, CredentialPause, EndpointSecurity, IdentitySendable,
+    ImapEndpoint, ImapProvider, clear_connection_pause, imap_endpoint, pause_for_connection,
+    syncable_accounts,
+};
 mod bodies;
 pub use bodies::{AttachmentLease, BodyKind, BodyLease, PublishedAttachment, PublishedBody};
 pub use sb_mime::{RenderWarning, RenderWarningCode};
@@ -266,6 +270,14 @@ impl Resources {
     /// runtime worker.
     pub fn set_secret(&self, credential_ref: &str, secret: &Secret) -> Result<(), SecretError> {
         self.secrets.set(credential_ref, secret)
+    }
+
+    /// Read the secret under `credential_ref` for a connection attempt
+    /// (spec/10): a sync worker fetches it fresh for each attempt and
+    /// never keeps it. `NotFound` when nothing is stored. Blocking, like
+    /// [`Resources::set_secret`].
+    pub fn get_secret(&self, credential_ref: &str) -> Result<Secret, SecretError> {
+        self.secrets.get(credential_ref)
     }
 
     /// Submit one write to the store's writer (spec/03 "Write
