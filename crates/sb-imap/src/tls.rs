@@ -35,6 +35,26 @@ impl CertificatePin {
         Self(bytes)
     }
 
+    /// The pin from its 64 hex digits (either case), as
+    /// `trusted_cert_sha256` stores it; anything else is no pin.
+    pub fn from_hex(text: &str) -> Option<Self> {
+        let bytes = text.as_bytes();
+        if bytes.len() != 64 {
+            return None;
+        }
+        let mut pin = [0u8; 32];
+        let (pairs, _) = bytes.as_chunks::<2>();
+        for (byte, [high, low]) in pin.iter_mut().zip(pairs) {
+            let digit = |ascii: u8| {
+                char::from(ascii)
+                    .to_digit(16)
+                    .and_then(|v| u8::try_from(v).ok())
+            };
+            *byte = digit(*high)? << 4 | digit(*low)?;
+        }
+        Some(Self(pin))
+    }
+
     /// The raw 32 bytes.
     pub fn as_bytes(&self) -> &[u8; 32] {
         &self.0
@@ -254,6 +274,25 @@ fn client_config(trust: Trust) -> (Arc<ClientConfig>, Arc<Mutex<Option<Certifica
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    fn a_pin_round_trips_through_its_hex() {
+        let pin = CertificatePin::of_der(sb_test_support::cert_der().as_ref());
+        assert_eq!(CertificatePin::from_hex(&pin.hex()), Some(pin));
+        assert_eq!(
+            CertificatePin::from_hex(&pin.hex().to_uppercase()),
+            Some(pin)
+        );
+        for bad in [
+            "",
+            "ab",
+            &"0".repeat(63),
+            &"g".repeat(64),
+            &"00:".repeat(21),
+        ] {
+            assert_eq!(CertificatePin::from_hex(bad), None, "{bad}");
+        }
+    }
 
     #[test]
     fn pin_is_the_sha256_of_exact_der_bytes() {

@@ -23,9 +23,9 @@ use sb_imap::{
 };
 use sb_platform::{Secret, SecretError, valid_credential_ref};
 use sb_store::accounts::{
-    AddressMode, CredentialPause, EndpointSecurity, IdentitySendable, NewBridgeAccount,
-    NewIdentity, NewImapEndpoint, credential_pause, credential_ref, insert_bridge_account,
-    pause_for_credential, reactivate_after_credential,
+    AddressMode, CredentialPause, EndpointSecurity, IdentitySendable, ImapEndpoint,
+    NewBridgeAccount, NewIdentity, NewImapEndpoint, credential_pause, credential_ref,
+    insert_bridge_account, pause_for_credential, reactivate_after_credential,
 };
 use sb_store::{Receipt, StoreError, Transaction, WritePriority, replay, run_once};
 
@@ -325,6 +325,31 @@ pub fn certificate_pin_from_pem(pem: &[u8]) -> Result<CertificatePin, BridgeAcco
         field: "certificate",
         message: error.to_string(),
     })
+}
+
+/// Open an authenticated session for an account's sync worker (spec/04
+/// "Connections"): the literal `127.0.0.1` under the loopback-only
+/// policy (spec/10), the account's pin, and a password the worker read
+/// fresh for this attempt. Implicit TLS or STARTTLS as the endpoint
+/// says. The pilot connects Bridge accounts only; the caller checks the
+/// provider.
+pub async fn connect_account(
+    endpoint: &ImapEndpoint,
+    pin: CertificatePin,
+    password: Password,
+) -> Result<Connection, ImapError> {
+    let options = ConnectOptions {
+        host: BRIDGE_HOST,
+        port: endpoint.port,
+        host_policy: HostPolicy::LoopbackOnly,
+        pin,
+        user: endpoint.username.clone(),
+        password,
+    };
+    match endpoint.security {
+        EndpointSecurity::Tls => Connection::connect(options).await,
+        EndpointSecurity::StartTls => Connection::connect_starttls(options).await,
+    }
 }
 
 impl Resources {

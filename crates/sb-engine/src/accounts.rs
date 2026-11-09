@@ -29,26 +29,33 @@ impl Engine {
     ) -> Result<AddedAccount, EngineError> {
         validate_idempotency_key(idempotency_key)?;
         let key = idempotency_key.to_owned();
-        self.command(move |worker| async move {
-            let setter = worker.clone();
-            let store_secret = move |credential_ref: String, secret: Secret| async move {
-                // A failed join (the store's call panicked, or the pool
-                // shut down) is a store that did not keep the secret: the
-                // committed account keeps its pause and the retry path
-                // stays. The engine has no logger yet (spec/07 lists one
-                // as a platform service), so nothing records the cause.
-                setter
-                    .blocking(move |resources| resources.set_secret(&credential_ref, &secret))
+        let added = self
+            .command(move |worker| async move {
+                let setter = worker.clone();
+                let store_secret = move |credential_ref: String, secret: Secret| async move {
+                    // A failed join (the store's call panicked, or the pool
+                    // shut down) is a store that did not keep the secret: the
+                    // committed account keeps its pause and the retry path
+                    // stays. The engine has no logger yet (spec/07 lists one
+                    // as a platform service), so nothing records the cause.
+                    setter
+                        .blocking(move |resources| resources.set_secret(&credential_ref, &secret))
+                        .await
+                        .unwrap_or(Err(SecretError::Unavailable))
+                };
+                worker
+                    .resources()
+                    .add_bridge_account(&key, params, store_secret)
                     .await
-                    .unwrap_or(Err(SecretError::Unavailable))
-            };
-            worker
-                .resources()
-                .add_bridge_account(&key, params, store_secret)
-                .await
-                .map_err(EngineError::from)
-        })
-        .await
+                    .map_err(EngineError::from)
+            })
+            .await?;
+        // The new account syncs from now on, once its credential is
+        // stored; a credential pause waits for the retry (spec/10).
+        if added.needs_attention.is_none() {
+            self.start_account(added.account_id.clone());
+        }
+        Ok(added)
     }
 }
 

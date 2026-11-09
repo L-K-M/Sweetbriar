@@ -20,14 +20,20 @@ use sb_store::StorePaths;
 mod accounts;
 pub use accounts::{
     ADD_BRIDGE_ACCOUNT, AddedAccount, BridgeAccountError, BridgeAccountParams, BridgeIdentity,
-    certificate_pin_from_pem,
+    certificate_pin_from_pem, connect_account,
 };
+// The transport items an account's sync worker drives (spec/01 rule 3):
+// the engine applies the observations through the store.
 pub use sb_imap::CertificatePin;
+pub use sb_imap::{
+    ConnectAttempt, Connection, Connector, ImapError, Password, ReconnectError, ReconnectWait,
+    Reconnector,
+};
 pub use sb_platform::{Secret, SecretError, SecretStore};
 pub use sb_store::accounts::{
     AddressMode, ConnectionPause, CredentialPause, EndpointSecurity, IdentitySendable,
     ImapEndpoint, ImapProvider, clear_connection_pause, imap_endpoint, pause_for_connection,
-    syncable_accounts,
+    pause_for_credential, syncable_accounts,
 };
 mod bodies;
 pub use bodies::{AttachmentLease, BodyKind, BodyLease, PublishedAttachment, PublishedBody};
