@@ -20,7 +20,7 @@ mod uid_observations;
 pub use body_observations::{BodyUnavailableReason, BodyValue, FetchedBody};
 pub use connection::{
     ConnectOptions, Connection, HostPolicy, IdleEvent, MailboxContext, MailboxNotice,
-    ReadObservation,
+    ReadObservation, presented_certificate, presented_certificate_starttls,
 };
 pub use error::ImapError;
 
@@ -31,7 +31,7 @@ pub use header_observations::{
 pub use mailbox::{MailboxSelection, MailboxSummary};
 pub use reconnect::{ConnectAttempt, Connector, ReconnectError, ReconnectWait, Reconnector};
 pub use secret::Password;
-pub use tls::CertificatePin;
+pub use tls::{CertificatePin, PemError};
 pub use uid_observations::{FlagCoverage, FlagSweep, UidFlags, UidInventory};
 
 // A unified release_max_level_trace feature must not re-enable the

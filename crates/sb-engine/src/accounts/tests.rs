@@ -8,8 +8,8 @@ use std::sync::Arc;
 
 use sb_resources::{SecretError, SecretStore};
 use sb_test_support::{
-    Expect, FakeImapServer, FakeSecrets, Profile, Reply, ScratchDir, Script, SecretOp, Step,
-    block_on, cert_der,
+    CERT_PEM, Expect, FakeImapServer, FakeSecrets, KEY_PEM, Profile, Reply, ScratchDir, Script,
+    SecretOp, Step, block_on, cert_der,
 };
 
 use crate::{
@@ -252,5 +252,64 @@ fn a_panicking_secret_store_still_commits_a_paused_account() {
             .iter()
             .any(|account| account.account_id == added.account_id),
         "the account exists"
+    );
+}
+
+#[test]
+fn the_presented_certificate_is_discovered_over_both_transports() {
+    let secrets = Arc::new(FakeSecrets::new());
+    let (_scratch, engine) = engine("engine-account-discovery", secrets);
+    let expected = CertificatePin::of_der(&cert_der());
+
+    let tls = FakeImapServer::serve(vec![Script::new(Vec::new()).implicit_tls()]).unwrap();
+    let pin = block_on(engine.bridge_certificate(tls.port(), EndpointSecurity::Tls))
+        .expect("implicit TLS");
+    assert_eq!(pin, expected);
+    assert!(tls.received().is_empty(), "nothing is sent");
+
+    let profile = Profile::bridge().with_capabilities(&["IMAP4rev1", "STARTTLS", "ID"]);
+    let starttls = FakeImapServer::serve(vec![Script::new(vec![
+        profile.capability_step(),
+        Step::on(
+            Expect::command("STARTTLS"),
+            vec![Reply::ok("Begin TLS negotiation now"), Reply::UpgradeTls],
+        ),
+    ])])
+    .unwrap();
+    let pin = block_on(engine.bridge_certificate(starttls.port(), EndpointSecurity::StartTls))
+        .expect("STARTTLS");
+    assert_eq!(pin, expected);
+    assert!(
+        starttls
+            .received()
+            .iter()
+            .all(|command| !command.line.contains("LOGIN")),
+        "no credential is involved"
+    );
+
+    let free_port = refused_port();
+    let error = block_on(engine.bridge_certificate(free_port, EndpointSecurity::Tls))
+        .expect_err("nothing listening");
+    assert!(
+        matches!(error, EngineError::Unavailable { .. }),
+        "{error:?}"
+    );
+    let error = block_on(engine.bridge_certificate(0, EndpointSecurity::Tls)).expect_err("port 0");
+    assert!(
+        matches!(&error, EngineError::InvalidInput { field, .. } if field == "imap_port"),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn cert_pem_yields_the_pin_and_key_pem_is_refused() {
+    let pin = Engine::certificate_pin_from_pem(CERT_PEM.as_bytes()).expect("cert.pem");
+    assert_eq!(pin, CertificatePin::of_der(&cert_der()));
+
+    let error = Engine::certificate_pin_from_pem(KEY_PEM.as_bytes()).expect_err("key.pem");
+    assert!(
+        matches!(&error, EngineError::InvalidInput { field, message }
+            if field == "certificate" && message.contains("cert.pem")),
+        "{error:?}"
     );
 }

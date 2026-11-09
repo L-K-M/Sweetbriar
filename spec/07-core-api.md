@@ -99,6 +99,20 @@ async fn Core::shutdown(self);   // flush writer, release the lease
   account `needs_attention` and its reason reported (10). The SMTP
   endpoint is recorded, not probed, until sending (M4.3). The credential
   retry has no command yet: it belongs to `update_account` (M2.7).
+- **Bridge certificate discovery (M2.3c2a):** two queries feed
+  `certificate_sha256`, one per spec/10 pin path, and neither stores
+  anything. `certificate_fingerprint_from_pem(bytes)` answers the DER
+  SHA-256 of the one certificate in Bridge's exported `cert.pem`. A file
+  holding a private key (`key.pem`, or a bundle with one) is refused from
+  its `BEGIN` line before anything is decoded (10: never read `key.pem`);
+  no certificate, several, or a damaged file is likewise `InvalidInput`
+  on `certificate`.
+  It parses the given bytes only, with no I/O. `bridge_certificate(port,
+  security)` reads the leaf Bridge presents in a TLS handshake this side
+  always refuses — after the checked STARTTLS prelude when `security` is
+  STARTTLS — so no session opens and no credential is sent. The sheet
+  shows that fingerprint for the user to confirm; it is never trusted on
+  its own. Bridge not answering is `Unavailable`.
 - **Local archive:** filing commands act locally, with no intent.
   `delete_to_trash` moves to the account's local Trash mailbox, created
   on first use; nothing is deleted. `add_label` doesn't apply.

@@ -20,6 +20,7 @@ use sb_store::StorePaths;
 mod accounts;
 pub use accounts::{
     ADD_BRIDGE_ACCOUNT, AddedAccount, BridgeAccountError, BridgeAccountParams, BridgeIdentity,
+    certificate_pin_from_pem,
 };
 pub use sb_imap::CertificatePin;
 pub use sb_platform::{Secret, SecretError, SecretStore};

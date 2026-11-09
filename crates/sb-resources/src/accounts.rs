@@ -19,6 +19,7 @@ use std::net::{IpAddr, Ipv4Addr};
 
 use sb_imap::{
     CertificatePin, ConnectOptions, Connection, HostPolicy, ImapError, MailboxSummary, Password,
+    presented_certificate, presented_certificate_starttls,
 };
 use sb_platform::{Secret, SecretError, valid_credential_ref};
 use sb_store::accounts::{
@@ -314,7 +315,44 @@ async fn probe_bridge(
     .to_string())
 }
 
+/// The pin of the one certificate in Bridge's exported `cert.pem`
+/// (spec/10's preferred path); anything else — `key.pem`, several
+/// certificates, a damaged file — is `InvalidInput` on `certificate`.
+/// Pure: no file is opened here, and the bytes are neither kept nor
+/// logged.
+pub fn certificate_pin_from_pem(pem: &[u8]) -> Result<CertificatePin, BridgeAccountError> {
+    CertificatePin::from_pem(pem).map_err(|error| BridgeAccountError::InvalidInput {
+        field: "certificate",
+        message: error.to_string(),
+    })
+}
+
 impl Resources {
+    /// spec/10's fingerprint fallback: the pin of the certificate
+    /// Bridge presents on `port`, read in a handshake this side refuses
+    /// — no session, no credential. The answer is for the user to
+    /// confirm before it becomes an account's pin, never trusted on its
+    /// own. Bridge not answering is `Unreachable`; STARTTLS missing on
+    /// a STARTTLS port is `InvalidInput` on `imap_security`.
+    pub async fn bridge_certificate(
+        &self,
+        port: u16,
+        security: EndpointSecurity,
+    ) -> Result<CertificatePin, BridgeAccountError> {
+        if port == 0 {
+            return Err(invalid("imap_port", "the IMAP port must be nonzero"));
+        }
+        let presented = match security {
+            EndpointSecurity::Tls => {
+                presented_certificate(BRIDGE_HOST, port, HostPolicy::LoopbackOnly).await
+            }
+            EndpointSecurity::StartTls => {
+                presented_certificate_starttls(BRIDGE_HOST, port, HostPolicy::LoopbackOnly).await
+            }
+        };
+        presented.map_err(classify_probe)
+    }
+
     /// spec/07's `add_bridge_account` for the Proton Bridge preset,
     /// under `idempotency_key`. Order (spec/10): a replayed key answers
     /// its stored receipt and does nothing else; otherwise the probe — a
