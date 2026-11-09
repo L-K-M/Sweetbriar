@@ -253,6 +253,16 @@ uint64_t uniffi_sb_ffi_fn_clone_core(uint64_t handle, RustCallStatus *_Nonnull o
 void uniffi_sb_ffi_fn_free_core(uint64_t handle, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_ADD_BRIDGE_ACCOUNT
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_ADD_BRIDGE_ACCOUNT
+uint64_t uniffi_sb_ffi_fn_method_core_add_bridge_account(uint64_t ptr, uint64_t token, RustBuffer idempotency_key, RustBuffer params
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_BRIDGE_CERTIFICATE
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_BRIDGE_CERTIFICATE
+uint64_t uniffi_sb_ffi_fn_method_core_bridge_certificate(uint64_t ptr, uint64_t token, uint16_t port, RustBuffer security
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_SET_SETTING
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_SET_SETTING
 uint64_t uniffi_sb_ffi_fn_method_core_set_setting(uint64_t ptr, uint64_t token, RustBuffer idempotency_key, RustBuffer key, RustBuffer value
@@ -517,6 +527,11 @@ void uniffi_sb_ffi_fn_free_subscription(uint64_t handle, RustCallStatus *_Nonnul
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_SUBSCRIPTION_NEXT
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_SUBSCRIPTION_NEXT
 uint64_t uniffi_sb_ffi_fn_method_subscription_next(uint64_t ptr, uint64_t token
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_FUNC_CERTIFICATE_FINGERPRINT_FROM_PEM
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_FUNC_CERTIFICATE_FINGERPRINT_FROM_PEM
+RustBuffer uniffi_sb_ffi_fn_func_certificate_fingerprint_from_pem(RustBuffer pem, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_FUNC_OPEN_CORE
@@ -796,6 +811,12 @@ void ffi_sb_ffi_rust_future_free_void(uint64_t handle
 void ffi_sb_ffi_rust_future_complete_void(uint64_t handle, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_FUNC_CERTIFICATE_FINGERPRINT_FROM_PEM
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_FUNC_CERTIFICATE_FINGERPRINT_FROM_PEM
+uint16_t uniffi_sb_ffi_checksum_func_certificate_fingerprint_from_pem(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_FUNC_OPEN_CORE
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_FUNC_OPEN_CORE
 uint16_t uniffi_sb_ffi_checksum_func_open_core(void
@@ -811,6 +832,18 @@ uint16_t uniffi_sb_ffi_checksum_func_platform_default_config(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_FUNC_PALETTE
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_FUNC_PALETTE
 uint16_t uniffi_sb_ffi_checksum_func_palette(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_ADD_BRIDGE_ACCOUNT
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_ADD_BRIDGE_ACCOUNT
+uint16_t uniffi_sb_ffi_checksum_method_core_add_bridge_account(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_BRIDGE_CERTIFICATE
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_BRIDGE_CERTIFICATE
+uint16_t uniffi_sb_ffi_checksum_method_core_bridge_certificate(void
     
 );
 #endif
