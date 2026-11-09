@@ -313,3 +313,21 @@ fn cert_pem_yields_the_pin_and_key_pem_is_refused() {
         "{error:?}"
     );
 }
+
+#[test]
+fn a_starttls_probe_without_starttls_names_the_security_field() {
+    // classify_probe's mapping the setup sheet branches on: a port that
+    // does not offer STARTTLS means the user picked the wrong security.
+    let secrets = Arc::new(FakeSecrets::new());
+    let (_scratch, engine) = engine("engine-account-no-starttls", secrets);
+    let plain = FakeImapServer::serve(vec![Script::new(vec![Profile::bridge().capability_step()])])
+        .unwrap();
+
+    let error = block_on(engine.bridge_certificate(plain.port(), EndpointSecurity::StartTls))
+        .expect_err("no STARTTLS offered");
+
+    assert!(
+        matches!(&error, EngineError::InvalidInput { field, .. } if field == "imap_security"),
+        "{error:?}"
+    );
+}
