@@ -33,6 +33,17 @@ pub enum MailboxKind {
     Virtual,
 }
 
+impl MailboxKind {
+    /// The kind as `mailboxes.kind` spells it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Folder => "folder",
+            Self::Label => "label",
+            Self::Virtual => "virtual",
+        }
+    }
+}
+
 /// One account as the sidebar lists it. Fields are public for the
 /// engine's and service's mapping.
 #[derive(Debug, Clone, PartialEq, Eq)]

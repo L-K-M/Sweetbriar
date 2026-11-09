@@ -35,6 +35,7 @@ pub mod settings;
 pub mod sidebar;
 mod source_snapshots;
 mod store;
+pub mod sync;
 #[cfg(test)]
 mod testing;
 pub mod threads;
