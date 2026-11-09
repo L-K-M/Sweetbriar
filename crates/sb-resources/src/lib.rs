@@ -26,8 +26,8 @@ pub use accounts::{
 // the engine applies the observations through the store.
 pub use sb_imap::CertificatePin;
 pub use sb_imap::{
-    ConnectAttempt, Connection, Connector, ImapError, Password, ReconnectError, ReconnectWait,
-    Reconnector,
+    ConnectAttempt, Connection, Connector, HeaderBytes, HeaderFetchMode, HeaderRequest, HeaderRow,
+    ImapError, Password, ReconnectError, ReconnectWait, Reconnector,
 };
 pub use sb_platform::{Secret, SecretError, SecretStore};
 pub use sb_store::accounts::{

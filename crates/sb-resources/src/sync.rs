@@ -1,14 +1,15 @@
 //! IMAP sync's composition (spec/04 "Sync loop"): the store's sync
-//! writes re-exported for the engine (spec/01 rule 3), and the mapping
-//! of one fetched header-fields literal onto `message_headers`
-//! columns through the MIME leaf, in the shapes the import path gives
-//! `d_message_summary` (one encoding for both).
+//! reads and writes re-exported for the engine (spec/01 rule 3), and
+//! the mapping of one fetched header-fields literal onto
+//! `message_headers` columns through the MIME leaf, in the shapes the
+//! import path gives `d_message_summary` (one encoding for both).
 
 use sb_mime::{Limits, MailboxAddress};
 pub use sb_store::sync::{
     EpochCheck, HeaderBatch, HeaderBatchStats, HeaderColumns, MAX_HEADER_BATCH,
-    MAX_HEADER_BATCH_BYTES, ObservedMailbox, Reconciled, SyncedFlags, SyncedHeader, check_epoch,
-    commit_header_batch, reconcile_mailboxes,
+    MAX_HEADER_BATCH_BYTES, MailboxCursor, ObservedMailbox, Reconciled, SyncTarget, SyncedFlags,
+    SyncedHeader, check_epoch, commit_header_batch, mailbox_cursor, reconcile_mailboxes,
+    sync_targets,
 };
 
 use crate::acquire::{addresses, strings};

@@ -1,9 +1,9 @@
-//! Mailbox discovery and the epoch check (spec/04 steps 1 and 2) over
-//! a real store: new rows, `gone` with occurrences kept, returning
-//! rows, changed roles, the generation advancing only on change, the
-//! local archive refused, epoch adoption and changes, and the
-//! schema's refusal of an occurrence that mixes two accounts (plan
-//! M2.4 acceptance).
+//! Mailbox discovery, the epoch check and the pass's reads (spec/04
+//! steps 1 to 3) over a real store: new rows, `gone` with occurrences
+//! kept, returning rows, changed roles, the generation advancing only
+//! on change, the local archive refused, epoch adoption and changes,
+//! the sync targets and the fetch cursor, and the schema's refusal of
+//! an occurrence that mixes two accounts (plan M2.4 acceptance).
 
 use rusqlite::params;
 
@@ -12,7 +12,7 @@ use crate::accounts::{
     EndpointSecurity, IdentitySendable, NewBridgeAccount, NewIdentity, NewImapEndpoint,
     insert_bridge_account,
 };
-use crate::testing::{scratch_paths, test_seams, writing};
+use crate::testing::{reading, scratch_paths, test_seams, writing};
 use crate::{Store, Timestamp, open};
 
 const NOW_MS: i64 = 1_735_689_600_000;
@@ -862,4 +862,210 @@ fn a_backfill_below_the_checkpoint_keeps_it_and_it_never_moves_back() {
         "{back:?}"
     );
     assert_eq!(checkpoint(&store, inbox).0, Some(5));
+}
+
+// The pass's reads (spec/04 steps 2 and 3): which mailboxes a pass
+// works through, and one mailbox's cursor for the header fetch.
+
+/// One occurrence of `mailbox_id` on account `a`, of any epoch, UID
+/// and state — the rows `insert_occurrence` cannot write.
+fn occurrence(store: &Store, mailbox_id: i64, uidvalidity: u32, uid: u32, state: &str) {
+    let state = state.to_owned();
+    sb_test_support::block_on(store.write(crate::WritePriority::User, move |tx| {
+        tx.execute(
+            "INSERT INTO logical_messages (account_id, created_at) VALUES ('a', ?1)",
+            params![NOW_MS],
+        )
+        .map_err(|e| classify(e, "insert a test message"))?;
+        let message_id = tx.last_insert_rowid();
+        tx.execute(
+            "INSERT INTO occurrences
+             (account_id, mailbox_id, uidvalidity, uid, message_id, state,
+              first_seen_at, last_seen_at)
+             VALUES ('a', ?1, ?2, ?3, ?4, ?5, ?6, ?6)",
+            params![
+                mailbox_id,
+                i64::from(uidvalidity),
+                i64::from(uid),
+                message_id,
+                state,
+                NOW_MS
+            ],
+        )
+        .map_err(|e| classify(e, "insert a test occurrence"))?;
+        Ok(())
+    }))
+    .unwrap();
+}
+
+fn targets(store: &Store, account: &str) -> Vec<SyncTarget> {
+    let account = account.to_owned();
+    reading(store, move |tx| sync_targets(tx, &account))
+}
+
+fn cursor(store: &Store, account: &str, mailbox: i64, uidvalidity: u32) -> MailboxCursor {
+    let account = account.to_owned();
+    reading(store, move |tx| {
+        mailbox_cursor(tx, &account, mailbox, uidvalidity)
+    })
+}
+
+#[test]
+fn the_pass_targets_the_inbox_first_then_each_selectable_by_name() {
+    // spec/04: "Sync every selectable mailbox", the pass starting at
+    // the INBOX. "Labels" is unselectable and never a target; a `gone`
+    // mailbox is none either.
+    let (_scratch, store) = scratch();
+    reconcile(&store, "a", bridge_listing());
+
+    let names = |store: &Store| {
+        targets(store, "a")
+            .into_iter()
+            .map(|target| target.remote_name)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(names(&store), ["INBOX", "All Mail", "Labels/Work", "Sent"]);
+    for target in targets(&store, "a") {
+        assert_eq!(
+            target.mailbox_id,
+            mailbox_id(&store, "a", &target.remote_name)
+        );
+    }
+
+    // A mailbox missing from the next LIST is `gone` and leaves the pass.
+    let without_sent: Vec<_> = bridge_listing()
+        .into_iter()
+        .filter(|mailbox| mailbox.remote_name != "Sent")
+        .collect();
+    reconcile(&store, "a", without_sent);
+    assert_eq!(names(&store), ["INBOX", "All Mail", "Labels/Work"]);
+}
+
+#[test]
+fn the_pass_refuses_a_non_imap_or_unknown_account() {
+    let (_scratch, store) = scratch();
+    let local: String = reading(&store, |tx| {
+        Ok(tx
+            .query_row(
+                "SELECT account_id FROM accounts WHERE kind = 'local'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap())
+    });
+    let refused = |account: String| {
+        sb_test_support::block_on(store.write(crate::WritePriority::User, move |tx| {
+            sync_targets(tx, &account)
+        }))
+    };
+
+    assert!(matches!(
+        refused(local),
+        Err(StoreError::InvalidInput { .. })
+    ));
+    assert!(matches!(
+        refused("missing".into()),
+        Err(StoreError::NotFound { .. })
+    ));
+}
+
+#[test]
+fn a_fresh_mailbox_has_an_empty_unsynced_cursor() {
+    let (_scratch, store) = scratch();
+    reconcile(&store, "a", bridge_listing());
+    let inbox = mailbox_id(&store, "a", "INBOX");
+
+    let cursor = cursor(&store, "a", inbox, EPOCH);
+
+    assert_eq!(
+        cursor,
+        MailboxCursor {
+            uidnext: None,
+            synced: false,
+            current_uids: vec![],
+        }
+    );
+}
+
+#[test]
+fn a_committed_batch_moves_the_cursor() {
+    let (_scratch, store) = scratch();
+    let (inbox, _) = syncing(&store);
+    commit(
+        &store,
+        inbox,
+        None,
+        3,
+        vec![
+            header(2, Some("pm-2"), "Second"),
+            header(1, Some("pm-1"), "First"),
+        ],
+    )
+    .unwrap();
+
+    let cursor = cursor(&store, "a", inbox, EPOCH);
+
+    assert_eq!(
+        cursor,
+        MailboxCursor {
+            uidnext: Some(3),
+            synced: true,
+            current_uids: vec![1, 2],
+        }
+    );
+}
+
+#[test]
+fn the_cursor_holds_only_the_epochs_current_uids() {
+    // The current set is `present` and `vanish_pending` of the
+    // mailbox's epoch (the occ_current_locator index's): another
+    // epoch's and the non-current UIDs stay out.
+    let (_scratch, store) = scratch();
+    let (inbox, _) = syncing(&store);
+    commit(&store, inbox, None, 2, vec![header(1, Some("pm-1"), "Old")]).unwrap();
+    // UID reuse: the first binding is superseded, the second current.
+    commit(
+        &store,
+        inbox,
+        Some(2),
+        2,
+        vec![header(1, Some("pm-9"), "New")],
+    )
+    .unwrap();
+    occurrence(&store, inbox, EPOCH, 9, "vanish_pending");
+    occurrence(&store, inbox, EPOCH + 1, 5, "present");
+    occurrence(&store, inbox, EPOCH, 6, "vanished");
+    occurrence(&store, inbox, EPOCH, 7, "epoch_stale");
+
+    let cursor = cursor(&store, "a", inbox, EPOCH);
+
+    assert_eq!(
+        cursor,
+        MailboxCursor {
+            uidnext: Some(2),
+            synced: true,
+            current_uids: vec![1, 9],
+        }
+    );
+}
+
+#[test]
+fn the_cursor_is_scoped_to_the_account_and_a_real_epoch() {
+    let (_scratch, store) = scratch();
+    let (inbox, _) = syncing(&store);
+
+    let other = sb_test_support::block_on(store.write(crate::WritePriority::User, move |tx| {
+        mailbox_cursor(tx, "b", inbox, EPOCH)
+    }));
+    assert!(
+        matches!(other, Err(StoreError::NotFound { .. })),
+        "another account's mailbox: {other:?}"
+    );
+    let zero = sb_test_support::block_on(store.write(crate::WritePriority::User, move |tx| {
+        mailbox_cursor(tx, "a", inbox, 0)
+    }));
+    assert!(
+        matches!(zero, Err(StoreError::InvalidInput { .. })),
+        "{zero:?}"
+    );
 }

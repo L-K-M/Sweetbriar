@@ -1,7 +1,8 @@
-//! IMAP sync writes (spec/04 "Sync loop", steps 1 to 3): the
+//! IMAP sync in the store (spec/04 "Sync loop", steps 1 to 3): the
 //! reconciliation of one LIST with an account's `mailboxes` rows, the
-//! epoch check after EXAMINE, and header batches with their
-//! checkpoints (`headers`). They run inside the caller's writer
+//! epoch check after EXAMINE, header batches with their checkpoints
+//! (`headers`), and the reads a pass plans from (`sync_targets`,
+//! `mailbox_cursor`). Writes run inside the caller's writer
 //! transaction; the engine maps LIST rows through its provider policy
 //! first, so these see `mailboxes` columns, never IMAP attributes.
 //!
@@ -68,6 +69,15 @@ impl Reconciled {
     }
 }
 
+/// One mailbox a sync pass works through (spec/04: "Sync every
+/// selectable mailbox"), in the pass's order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SyncTarget {
+    pub mailbox_id: i64,
+    /// The decoded (UTF-8) IMAP name, `mailboxes.remote_name`.
+    pub remote_name: String,
+}
+
 /// What EXAMINE's UIDVALIDITY means for a mailbox (spec/04 step 2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EpochCheck {
@@ -83,9 +93,27 @@ pub enum EpochCheck {
     Changed,
 }
 
+/// One mailbox's fetch cursor as a sync pass plans step 3 (spec/04
+/// "Sync loop").
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MailboxCursor {
+    /// The stored `uidnext` checkpoint fetching continues from;
+    /// `None` while no batch committed one, when the pass starts at
+    /// UID 1.
+    pub uidnext: Option<u32>,
+    /// Whether the mailbox is `synced`: its headers caught up.
+    pub synced: bool,
+    /// The UIDs of the mailbox's current occurrences in the epoch
+    /// (`present` and `vanish_pending`), ascending — the stored side
+    /// of the server's full UID list, for the backfill and the
+    /// inventory.
+    pub current_uids: Vec<u32>,
+}
+
 /// The `sync_state` spellings this module writes and compares.
 const STATE_NEW: &str = "new";
 const STATE_BACKFILLING: &str = "backfilling";
+const STATE_SYNCED: &str = "synced";
 const STATE_EPOCH_CHANGED: &str = "epoch_changed";
 const STATE_GONE: &str = "gone";
 
@@ -201,6 +229,35 @@ pub fn reconcile_mailboxes(
     Ok(reconciled)
 }
 
+/// The mailboxes one sync pass of `account_id` works through
+/// (spec/04: "Sync every selectable mailbox"): the selectable rows
+/// that aren't `gone`, INBOX first and the rest by `remote_name`
+/// (BINARY order). A `new` or `epoch_changed` mailbox is a target
+/// too; the epoch check sorts out what each needs.
+///
+/// `NotFound` for an unknown account; `InvalidInput` for a non-IMAP
+/// one (the local archive has no LIST).
+pub fn sync_targets(tx: &Transaction, account_id: &str) -> Result<Vec<SyncTarget>, StoreError> {
+    require_imap_account(tx, account_id)?;
+    let read = |e| classify(e, "read the account's sync targets");
+    let mut statement = tx
+        .prepare(
+            "SELECT mailbox_id, remote_name FROM mailboxes
+             WHERE account_id = ?1 AND selectable = 1 AND sync_state <> ?2
+             ORDER BY (remote_name = 'INBOX') DESC, remote_name",
+        )
+        .map_err(read)?;
+    let rows = statement
+        .query_map(params![account_id, STATE_GONE], |row| {
+            Ok(SyncTarget {
+                mailbox_id: row.get(0)?,
+                remote_name: row.get(1)?,
+            })
+        })
+        .map_err(read)?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(read)
+}
+
 /// Check one mailbox's epoch against EXAMINE's `uidvalidity` (spec/04
 /// step 2; RFC 3501 makes it nonzero). A NULL epoch is adopted only
 /// while the mailbox has no current occurrence; with occurrences
@@ -273,10 +330,84 @@ pub fn check_epoch(
     }
 }
 
+/// Read one mailbox's cursor for the fetch step (spec/04 step 3), in
+/// the epoch `uidvalidity`: the `uidnext` checkpoint new UIDs
+/// continue from (`None` until a batch committed one, when fetching
+/// starts at UID 1), whether the mailbox is `synced`, and the UIDs of
+/// its current occurrences in that epoch — the stored side the
+/// server's full UID list is compared against for the backfill and
+/// the inventory (step 6).
+///
+/// `NotFound` for a mailbox not of `account_id`; `InvalidInput` for a
+/// zero UIDVALIDITY; `Corrupt` for a stored `uidnext` or a current
+/// UID outside 1..=u32::MAX.
+pub fn mailbox_cursor(
+    tx: &Transaction,
+    account_id: &str,
+    mailbox_id: i64,
+    uidvalidity: u32,
+) -> Result<MailboxCursor, StoreError> {
+    if uidvalidity == 0 {
+        return Err(invalid("UIDVALIDITY is never zero"));
+    }
+    let (stored, state): (Option<i64>, String) = tx
+        .query_row(
+            "SELECT uidnext, sync_state FROM mailboxes
+             WHERE mailbox_id = ?1 AND account_id = ?2",
+            params![mailbox_id, account_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(|e| classify(e, "read a mailbox's cursor"))?
+        .ok_or_else(|| StoreError::not_found(format!("mailbox {mailbox_id}")))?;
+    let uidnext = stored
+        .map(|stored| {
+            uid32(stored).ok_or_else(|| {
+                StoreError::corrupt(format!("mailbox {mailbox_id} has uidnext {stored}"))
+            })
+        })
+        .transpose()?;
+
+    let read = |e| classify(e, "read a mailbox's current UIDs");
+    let mut statement = tx
+        .prepare(
+            "SELECT uid FROM occurrences
+             WHERE mailbox_id = ?1 AND uidvalidity = ?2
+               AND state IN ('present', 'vanish_pending')
+             ORDER BY uid",
+        )
+        .map_err(read)?;
+    let rows = statement
+        .query_map(params![mailbox_id, i64::from(uidvalidity)], |row| {
+            row.get::<_, Option<i64>>(0)
+        })
+        .map_err(read)?;
+    let mut current_uids = Vec::new();
+    for row in rows {
+        let stored = row.map_err(read)?;
+        current_uids.push(stored.and_then(uid32).ok_or_else(|| {
+            StoreError::corrupt(format!(
+                "a current occurrence of mailbox {mailbox_id} has uid {stored:?}"
+            ))
+        })?);
+    }
+    Ok(MailboxCursor {
+        uidnext,
+        synced: state == STATE_SYNCED,
+        current_uids,
+    })
+}
+
 fn invalid(message: &str) -> StoreError {
     StoreError::InvalidInput {
         message: message.to_owned(),
     }
+}
+
+/// A stored UID or `uidnext` column as u32: anything outside
+/// 1..=u32::MAX is `None`, and so corrupt for a sync read.
+fn uid32(stored: i64) -> Option<u32> {
+    u32::try_from(stored).ok().filter(|uid| *uid > 0)
 }
 
 /// The account must exist and sync over IMAP.

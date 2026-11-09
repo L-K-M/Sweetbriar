@@ -3,7 +3,8 @@
 //! account healthy; a refused connection shows "Bridge isn't running"
 //! while retries continue; a refused login, a changed certificate or a
 //! missing credential pauses the account and ends the worker; shutdown
-//! stops a worker even while it waits to retry.
+//! stops a worker even while it waits to retry. A live session's pass
+//! syncs every selectable mailbox's headers (spec/04 steps 1-3).
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -22,10 +23,36 @@ use crate::{
 const PASSWORD: &str = "bridge-worker-secret-5E1B";
 const DEADLINE: Duration = Duration::from_secs(20);
 
-/// The setup probe's conversation, then (for the worker) the same
-/// login sequence; `login_ok` false refuses LOGIN.
-fn bridge_script(login_ok: bool) -> Script {
-    let profile = Profile::bridge();
+/// The Bridge profile's selectable mailboxes in the order a pass
+/// visits them: INBOX, then by name.
+const SYNC_ORDER: [&str; 10] = [
+    "INBOX",
+    "All Mail",
+    "Archive",
+    "Drafts",
+    "Folders/Travel",
+    "Labels/Receipts",
+    "Sent",
+    "Spam",
+    "Starred",
+    "Trash",
+];
+
+/// Where the profile's one shared message appears: `(mailbox, uid,
+/// seen, flagged)`.
+const MEMBERS: [(&str, i64, bool, bool); 5] = [
+    ("All Mail", 9, true, true),
+    ("Folders/Travel", 3, false, false),
+    ("INBOX", 7, true, false),
+    ("Labels/Receipts", 5, true, true),
+    ("Starred", 2, false, true),
+];
+
+/// The shared message's `X-Pm-Internal-Id`.
+const PROVIDER_KEY: &str = "pm-7f3a9c21";
+
+/// Greeting to authenticated session; `login_ok` false refuses LOGIN.
+fn login_steps(profile: &Profile, login_ok: bool) -> Vec<Step> {
     let login = Step::on(
         Expect::command("LOGIN"),
         vec![if login_ok {
@@ -46,6 +73,16 @@ fn bridge_script(login_ok: bool) -> Script {
                 ],
             ),
             profile.capability_step(),
+        ]);
+    }
+    steps
+}
+
+/// The setup probe's conversation; `login_ok` false refuses LOGIN.
+fn bridge_script(login_ok: bool) -> Script {
+    let mut steps = login_steps(&Profile::bridge(), login_ok);
+    if login_ok {
+        steps.extend([
             Step::on(
                 Expect::command("LIST"),
                 vec![
@@ -60,6 +97,209 @@ fn bridge_script(login_ok: bool) -> Script {
         ]);
     }
     Script::new(steps).implicit_tls()
+}
+
+/// What INBOX shows a worker's session.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Inbox {
+    /// The shared message at UID 7.
+    Listed,
+    /// Bridge has not materialized it yet: no UIDs, UIDNEXT 8 all
+    /// the same.
+    Late,
+    /// Its header fetch stalls for `STALL` before answering.
+    Stalled,
+    /// A second message at UID 8 whose header section alone exceeds a
+    /// batch's write budget.
+    Oversized,
+}
+
+/// The header fields the sync loop asks for, as the server echoes them.
+const HEADER_FIELDS: &str = "DATE FROM REPLY-TO TO CC SUBJECT MESSAGE-ID IN-REPLY-TO \
+     REFERENCES LIST-ID DELIVERED-TO X-ORIGINAL-TO X-PM-INTERNAL-ID";
+
+/// INBOX's answers when it also holds the oversized message.
+fn oversized_inbox(profile: &Profile) -> Vec<Step> {
+    let mut references = String::from("References:");
+    while references.len() < 3 * 1024 * 1024 {
+        references.push_str(" <ref-0123456789abcdef@lists.example.org>\r\n");
+    }
+    let literal = format!(
+        "Subject: a very long thread\r\nMessage-ID: <long@example.org>\r\n{references}\
+         X-Pm-Internal-Id: pm-oversized\r\n\r\n"
+    );
+    let mut rows = profile.header_rows_step("INBOX");
+    let ok = rows.send.pop().expect("the tagged OK");
+    rows.send.push(Reply::UntaggedLiteral {
+        head: format!(
+            "2 FETCH (UID 8 FLAGS () INTERNALDATE \"02-Nov-2026 10:00:00 +0000\" \
+             RFC822.SIZE 4096 BODY[HEADER.FIELDS ({HEADER_FIELDS})]"
+        ),
+        bytes: literal.into_bytes(),
+        tail: ")".to_owned(),
+    });
+    rows.send.push(ok);
+    vec![
+        Step::on(
+            Expect::command("EXAMINE INBOX"),
+            vec![
+                Reply::untagged("FLAGS (\\Seen \\Answered \\Flagged \\Deleted \\Draft)"),
+                Reply::untagged("2 EXISTS"),
+                Reply::untagged("0 RECENT"),
+                Reply::untagged("OK [UIDVALIDITY 4100] UIDs valid"),
+                Reply::untagged("OK [UIDNEXT 9] Predicted next UID"),
+                Reply::ok("[READ-ONLY] EXAMINE completed"),
+            ],
+        ),
+        Step::on(
+            Expect::command("UID SEARCH ALL"),
+            vec![
+                Reply::untagged("SEARCH 7 8"),
+                Reply::ok("UID SEARCH completed"),
+            ],
+        ),
+        rows,
+    ]
+}
+
+const STALL: Duration = Duration::from_secs(8);
+
+/// A worker's session: login, then one pass over the Bridge profile
+/// (LIST, then EXAMINE, UID SEARCH and the header rows per mailbox in
+/// pass order, UNSELECT between selections).
+fn sync_script(inbox: Inbox) -> Script {
+    let profile = Profile::bridge();
+    let mut steps = login_steps(&profile, true);
+    steps.push(profile.list_step());
+    for (index, mailbox) in SYNC_ORDER.into_iter().enumerate() {
+        if index > 0 {
+            steps.push(Step::on(
+                Expect::command("UNSELECT"),
+                vec![Reply::ok("UNSELECT completed")],
+            ));
+        }
+        if mailbox == "INBOX" && inbox == Inbox::Oversized {
+            steps.extend(oversized_inbox(&profile));
+            continue;
+        }
+        steps.push(profile.examine_step(mailbox));
+        if mailbox == "INBOX" && inbox == Inbox::Late {
+            steps.push(Step::on(
+                Expect::command("UID SEARCH ALL"),
+                vec![Reply::untagged("SEARCH"), Reply::ok("UID SEARCH completed")],
+            ));
+            continue;
+        }
+        steps.push(profile.uid_search_step(mailbox));
+        if MEMBERS.iter().any(|member| member.0 == mailbox) {
+            let mut rows = profile.header_rows_step(mailbox);
+            if mailbox == "INBOX" && inbox == Inbox::Stalled {
+                rows.send.insert(0, Reply::Delay(STALL));
+            }
+            steps.push(rows);
+        }
+    }
+    Script::new(steps).implicit_tls()
+}
+
+/// `(remote_name, sync_state, uidnext)` of the account's mailboxes, by
+/// name.
+fn mailboxes(engine: &Engine, account: &str) -> Vec<(String, String, Option<i64>)> {
+    let account = account.to_owned();
+    engine
+        .resources()
+        .read(move |tx| {
+            let mut statement = tx
+                .prepare(
+                    "SELECT remote_name, sync_state, uidnext FROM mailboxes
+                     WHERE account_id = ?1 ORDER BY remote_name",
+                )
+                .unwrap();
+            let rows = statement
+                .query_map([account], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect();
+            Ok(rows)
+        })
+        .unwrap()
+}
+
+/// `(mailbox, uid, seen, flagged, provider_key)` of the account's
+/// current occurrences, by mailbox name.
+fn occurrences(engine: &Engine, account: &str) -> Vec<(String, i64, bool, bool, String)> {
+    let account = account.to_owned();
+    engine
+        .resources()
+        .read(move |tx| {
+            let mut statement = tx
+                .prepare(
+                    "SELECT m.remote_name, o.uid, o.f_seen, o.f_flagged, l.provider_key
+                     FROM occurrences o
+                     JOIN mailboxes m ON m.mailbox_id = o.mailbox_id
+                     JOIN logical_messages l ON l.message_id = o.message_id
+                     WHERE o.account_id = ?1 AND o.state = 'present'
+                     ORDER BY m.remote_name",
+                )
+                .unwrap();
+            let rows = statement
+                .query_map([account], |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                })
+                .unwrap()
+                .map(Result::unwrap)
+                .collect();
+            Ok(rows)
+        })
+        .unwrap()
+}
+
+/// The account's logical messages and stored header literals.
+fn messages(engine: &Engine, account: &str) -> (i64, i64) {
+    let account = account.to_owned();
+    engine
+        .resources()
+        .read(move |tx| {
+            Ok(tx
+                .query_row(
+                    "SELECT (SELECT count(*) FROM logical_messages WHERE account_id = ?1),
+                            (SELECT count(*) FROM message_headers h
+                             JOIN logical_messages l ON l.message_id = h.message_id
+                             WHERE l.account_id = ?1 AND h.subject = 'Re: boarding pass')",
+                    [account],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .unwrap())
+        })
+        .unwrap()
+}
+
+/// Whether every selectable mailbox finished its pass.
+fn all_synced(engine: &Engine, account: &str) -> bool {
+    mailboxes(engine, account)
+        .iter()
+        .filter(|(_, state, _)| state == "synced")
+        .count()
+        == SYNC_ORDER.len()
+}
+
+fn commands(server: &FakeImapServer, prefix: &str) -> usize {
+    server
+        .received()
+        .iter()
+        .filter(|command| {
+            command
+                .line
+                .split_once(' ')
+                .is_some_and(|(_, rest)| rest.starts_with(prefix))
+        })
+        .count()
 }
 
 fn params(port: u16) -> BridgeAccountParams {
@@ -137,17 +377,161 @@ fn logins(server: &FakeImapServer) -> usize {
 }
 
 #[test]
-fn an_added_account_s_worker_connects_and_stays_healthy() {
-    let scratch = ScratchDir::new("account-worker-healthy");
+fn an_added_account_s_pass_syncs_every_mailbox_into_one_logical_message() {
+    let scratch = ScratchDir::new("account-worker-pass");
     let secrets = Arc::new(FakeSecrets::new());
-    let server = FakeImapServer::serve(vec![bridge_script(true)]).unwrap();
+    let server =
+        FakeImapServer::serve(vec![bridge_script(true), sync_script(Inbox::Listed)]).unwrap();
     let engine = open(&scratch, &secrets);
 
     let account = add(&engine, server.port());
 
-    eventually("the worker logs in", || logins(&server) >= 2);
+    eventually("the first pass", || all_synced(&engine, &account));
     assert!(engine.account_jobs().running(&account));
     assert_eq!(state(&engine, &account), (AccountState::Active, None));
+    // Every selectable mailbox checkpoints at the server's UIDNEXT; the
+    // `\Noselect` parents are listed but never examined.
+    let expected: Vec<(String, String, Option<i64>)> = [
+        ("All Mail", "synced", Some(10)),
+        ("Archive", "synced", Some(1)),
+        ("Drafts", "synced", Some(1)),
+        ("Folders", "new", None),
+        ("Folders/Travel", "synced", Some(4)),
+        ("INBOX", "synced", Some(8)),
+        ("Labels", "new", None),
+        ("Labels/Receipts", "synced", Some(6)),
+        ("Sent", "synced", Some(1)),
+        ("Spam", "synced", Some(1)),
+        ("Starred", "synced", Some(3)),
+        ("Trash", "synced", Some(1)),
+    ]
+    .map(|(name, state, uidnext)| (name.to_owned(), state.to_owned(), uidnext))
+    .into();
+    assert_eq!(mailboxes(&engine, &account), expected);
+    // Five memberships, one logical message by X-Pm-Internal-Id, its
+    // headers stored once.
+    let expected: Vec<(String, i64, bool, bool, String)> = MEMBERS
+        .map(|(mailbox, uid, seen, flagged)| {
+            (
+                mailbox.to_owned(),
+                uid,
+                seen,
+                flagged,
+                PROVIDER_KEY.to_owned(),
+            )
+        })
+        .into();
+    assert_eq!(occurrences(&engine, &account), expected);
+    assert_eq!(messages(&engine, &account), (1, 1));
+    assert_eq!(server.unexpected_count(), 0);
+    shutdown_promptly(engine);
+}
+
+#[test]
+fn a_restarted_worker_resumes_from_its_checkpoints_without_duplicates() {
+    let scratch = ScratchDir::new("account-worker-resume");
+    let secrets = Arc::new(FakeSecrets::new());
+    let server =
+        FakeImapServer::serve(vec![bridge_script(true), sync_script(Inbox::Listed)]).unwrap();
+    let engine = open(&scratch, &secrets);
+    let account = add(&engine, server.port());
+    eventually("the first pass", || all_synced(&engine, &account));
+    shutdown_promptly(engine);
+
+    let engine = open(&scratch, &secrets);
+
+    eventually("the second pass", || {
+        commands(&server, "UID SEARCH") >= 2 * SYNC_ORDER.len()
+    });
+    // Nothing new: no header fetch, no second copy of anything.
+    assert_eq!(commands(&server, "UID FETCH"), MEMBERS.len());
+    assert_eq!(occurrences(&engine, &account).len(), MEMBERS.len());
+    assert_eq!(messages(&engine, &account), (1, 1));
+    assert!(all_synced(&engine, &account));
+    shutdown_promptly(engine);
+}
+
+#[test]
+fn a_message_bridge_materialized_late_is_backfilled_below_the_checkpoint() {
+    let scratch = ScratchDir::new("account-worker-backfill");
+    let secrets = Arc::new(FakeSecrets::new());
+    let server = FakeImapServer::serve(vec![
+        bridge_script(true),
+        sync_script(Inbox::Late),
+        sync_script(Inbox::Listed),
+    ])
+    .unwrap();
+    let engine = open(&scratch, &secrets);
+    let account = add(&engine, server.port());
+    eventually("the first pass", || all_synced(&engine, &account));
+    // INBOX checkpointed past UID 7 without it.
+    let inbox = |engine: &Engine| {
+        mailboxes(engine, &account)
+            .into_iter()
+            .find(|(name, _, _)| name == "INBOX")
+            .unwrap()
+    };
+    assert_eq!(inbox(&engine).2, Some(8));
+    assert_eq!(occurrences(&engine, &account).len(), MEMBERS.len() - 1);
+    shutdown_promptly(engine);
+
+    let engine = open(&scratch, &secrets);
+
+    eventually("the backfill", || {
+        occurrences(&engine, &account).len() == MEMBERS.len()
+    });
+    assert_eq!(
+        inbox(&engine),
+        ("INBOX".to_owned(), "synced".to_owned(), Some(8))
+    );
+    assert_eq!(messages(&engine, &account), (1, 1));
+    shutdown_promptly(engine);
+}
+
+#[test]
+fn a_header_too_large_for_any_batch_never_stalls_its_mailbox() {
+    let scratch = ScratchDir::new("account-worker-oversized");
+    let secrets = Arc::new(FakeSecrets::new());
+    let server =
+        FakeImapServer::serve(vec![bridge_script(true), sync_script(Inbox::Oversized)]).unwrap();
+    let engine = open(&scratch, &secrets);
+    let account = add(&engine, server.port());
+
+    // The batch of UIDs 7 and 8 is over budget: halved, 7 commits and
+    // 8 alone is left out, while the checkpoint still moves past it.
+    eventually("the first pass", || {
+        mailboxes(&engine, &account)
+            .iter()
+            .any(|row| *row == ("INBOX".to_owned(), "backfilling".to_owned(), Some(9)))
+    });
+    eventually("the rest of the pass", || {
+        mailboxes(&engine, &account)
+            .iter()
+            .filter(|(_, state, _)| state == "synced")
+            .count()
+            == SYNC_ORDER.len() - 1
+    });
+    let inbox: Vec<i64> = occurrences(&engine, &account)
+        .into_iter()
+        .filter(|row| row.0 == "INBOX")
+        .map(|row| row.1)
+        .collect();
+    assert_eq!(inbox, [7]);
+    assert_eq!(messages(&engine, &account), (1, 1));
+    shutdown_promptly(engine);
+}
+
+#[test]
+fn shutdown_interrupts_a_pass_waiting_on_the_server() {
+    let scratch = ScratchDir::new("account-worker-stall");
+    let secrets = Arc::new(FakeSecrets::new());
+    let server =
+        FakeImapServer::serve(vec![bridge_script(true), sync_script(Inbox::Stalled)]).unwrap();
+    let engine = open(&scratch, &secrets);
+    let _account = add(&engine, server.port());
+
+    eventually("the stalled fetch", || commands(&server, "UID FETCH") >= 1);
+
     shutdown_promptly(engine);
 }
 
@@ -175,7 +559,8 @@ fn a_refused_login_pauses_the_account_and_ends_the_worker() {
 fn a_changed_certificate_pauses_the_account() {
     let scratch = ScratchDir::new("account-worker-pin");
     let secrets = Arc::new(FakeSecrets::new());
-    let server = FakeImapServer::serve(vec![bridge_script(true)]).unwrap();
+    let server =
+        FakeImapServer::serve(vec![bridge_script(true), sync_script(Inbox::Listed)]).unwrap();
     let engine = open(&scratch, &secrets);
     let account = add(&engine, server.port());
     eventually("the first worker logs in", || logins(&server) >= 2);
@@ -207,7 +592,8 @@ fn a_changed_certificate_pauses_the_account() {
 fn bridge_not_running_shows_while_retries_continue_and_shutdown_still_stops() {
     let scratch = ScratchDir::new("account-worker-refused");
     let secrets = Arc::new(FakeSecrets::new());
-    let server = FakeImapServer::serve(vec![bridge_script(true)]).unwrap();
+    let server =
+        FakeImapServer::serve(vec![bridge_script(true), sync_script(Inbox::Listed)]).unwrap();
     let engine = open(&scratch, &secrets);
     let account = add(&engine, server.port());
     eventually("the first worker logs in", || logins(&server) >= 2);
@@ -231,7 +617,8 @@ fn bridge_not_running_shows_while_retries_continue_and_shutdown_still_stops() {
 fn a_missing_credential_pauses_the_account_for_its_credential() {
     let scratch = ScratchDir::new("account-worker-secret");
     let secrets = Arc::new(FakeSecrets::new());
-    let server = FakeImapServer::serve(vec![bridge_script(true)]).unwrap();
+    let server =
+        FakeImapServer::serve(vec![bridge_script(true), sync_script(Inbox::Listed)]).unwrap();
     let engine = open(&scratch, &secrets);
     let account = add(&engine, server.port());
     eventually("the first worker logs in", || logins(&server) >= 2);
