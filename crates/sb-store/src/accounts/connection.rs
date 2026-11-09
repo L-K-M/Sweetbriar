@@ -164,7 +164,7 @@ pub fn syncable_accounts(tx: &Transaction) -> Result<Vec<String>, StoreError> {
 }
 
 /// Record a connection pause (spec/04). Only an active or
-/// connection-paused account takes it: a credential pause, a user
+/// connection-paused IMAP account takes it: a credential pause, a user
 /// pause or a disconnect stays, so the account's real blocker is the
 /// one shown (`Conflict`). Repeating the current pause writes nothing.
 /// `NotFound` for an unknown account.
@@ -215,21 +215,25 @@ pub fn clear_connection_pause(tx: &Transaction, account_id: &str) -> Result<bool
 enum Current {
     Active,
     Connection(ConnectionPause),
-    /// A credential pause, a user pause, a disconnect, or an unknown
-    /// `needs_attention` reason.
+    /// A credential pause, a user pause, a disconnect, an unknown
+    /// `needs_attention` reason, or an account that is not IMAP (the
+    /// local archive), which has no connection to pause.
     Other,
 }
 
 fn current(tx: &Transaction, account_id: &str) -> Result<Current, StoreError> {
-    let (state, reason): (String, Option<String>) = tx
+    let (kind, state, reason): (String, String, Option<String>) = tx
         .query_row(
-            "SELECT state, state_reason FROM accounts WHERE account_id = ?1",
+            "SELECT kind, state, state_reason FROM accounts WHERE account_id = ?1",
             params![account_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .optional()
         .map_err(|e| classify(e, "read the account state"))?
         .ok_or_else(|| StoreError::not_found(format!("account {account_id}")))?;
+    if kind != "imap" {
+        return Ok(Current::Other);
+    }
     if state == "active" {
         return Ok(Current::Active);
     }

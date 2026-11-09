@@ -234,3 +234,39 @@ fn connection_transitions_never_cross_other_states() {
         Err(StoreError::NotFound { .. })
     ));
 }
+
+#[test]
+fn a_non_imap_account_takes_no_connection_transition() {
+    let (_scratch, store) = scratch();
+    let local: String = writing(&store, |tx| {
+        Ok(tx
+            .query_row(
+                "SELECT account_id FROM accounts WHERE kind = 'local'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap())
+    });
+    let before = state(&store, &local);
+    assert_eq!(before.0, "active");
+
+    assert!(matches!(
+        pause(&store, &local, ConnectionPause::BridgeNotRunning),
+        Err(StoreError::Conflict { .. })
+    ));
+    assert_eq!(state(&store, &local), before);
+
+    // Even a connection reason written onto it is not one to lift.
+    let id = local.clone();
+    writing(&store, move |tx| {
+        tx.execute(
+            "UPDATE accounts SET state = 'needs_attention', state_reason = ?2
+             WHERE account_id = ?1",
+            params![id, ConnectionPause::BridgeNotRunning.reason()],
+        )
+        .unwrap();
+        Ok(())
+    });
+    assert!(!clear(&store, &local));
+    assert_eq!(state(&store, &local).0, "needs_attention");
+}
