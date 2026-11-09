@@ -23,6 +23,8 @@ mod recorded;
 mod references;
 pub use external::VerifiedExternalBackup;
 pub use image::BackupImageInspection;
+#[allow(dead_code)] // The swap (M1.8f) consumes the qualified stage.
+mod qualify;
 mod scratch;
 // rusqlite 0.41 installs hooks through `&mut Connection` only; the bounded
 // inspections scope SQLite's progress handler to one borrowed read.
