@@ -222,21 +222,29 @@ impl Resources {
     }
 
     /// [`Resources::open`] on an injected secret store: setup suites use
-    /// the fake store and its fault injection (spec/11).
+    /// the fake store and its fault injection (spec/11). The platform
+    /// store is never built on this path.
     #[cfg(feature = "test-seams")]
     pub fn open_with_secrets(
         data_root: &Path,
         secrets: Arc<dyn SecretStore>,
     ) -> Result<Self, StoreError> {
-        let mut resources = Self::open(data_root)?;
-        resources.secrets = secrets;
-        Ok(resources)
+        Self::open_on_with_secrets(data_root, Arc::new(RealFs), Arc::new(SystemClock), secrets)
     }
 
     fn open_on(
         data_root: &Path,
         fs: Arc<dyn Fs>,
         clock: Arc<dyn Clock>,
+    ) -> Result<Self, StoreError> {
+        Self::open_on_with_secrets(data_root, fs, clock, platform_secrets())
+    }
+
+    fn open_on_with_secrets(
+        data_root: &Path,
+        fs: Arc<dyn Fs>,
+        clock: Arc<dyn Clock>,
+        secrets: Arc<dyn SecretStore>,
     ) -> Result<Self, StoreError> {
         let paths = StorePaths::new(data_root)?;
         let random: Arc<dyn Random> = Arc::new(OsRandom);
@@ -247,7 +255,7 @@ impl Resources {
             fs,
             clock,
             random,
-            secrets: platform_secrets(),
+            secrets,
         })
     }
 
