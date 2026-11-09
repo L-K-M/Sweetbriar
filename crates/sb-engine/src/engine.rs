@@ -16,7 +16,7 @@ use crate::EngineError;
 use crate::import::ImportJobs;
 use crate::index::IndexJobs;
 use crate::received::ReceivedJobs;
-use crate::windows::Windows;
+use crate::windows::{StoreGenerations, Windows};
 use sb_resources::{
     Resources, SEARCH_EXTRACTOR_VERSION, WritePriority, appearance_generation, list_generation,
     reconcile_search_target, search_generation, target_version,
@@ -129,9 +129,10 @@ impl Drop for OwnedRuntime {
 }
 
 /// The blocking tasks still running on the store, and whether shutdown
-/// has begun. A caller that stops awaiting a read doesn't stop its
-/// blocking task, so shutdown waits here until every one has finished
-/// and given its store handle back, and refuses new ones meanwhile.
+/// or a restore's quiesce has begun. A caller that stops awaiting a read
+/// doesn't stop its blocking task, so shutdown and the quiesce wait here
+/// until every one has finished and given its store handle back, and
+/// refuse new store work meanwhile. Only the quiesce ends, by resuming.
 #[derive(Default)]
 struct BlockingWork {
     state: Mutex<BlockingState>,
@@ -141,6 +142,9 @@ struct BlockingWork {
 #[derive(Default)]
 struct BlockingState {
     running: usize,
+    /// A restore's quiesce (plan M1.8g): no new store work until it
+    /// resumes; cleanup a dropped value owes still runs.
+    quiesced: bool,
     closing: bool,
 }
 
@@ -151,8 +155,23 @@ impl BlockingWork {
             .expect("a panicking thread held the engine's work lock")
     }
 
-    /// Count one more blocking task, unless shutdown has begun.
+    /// Count one more blocking task, unless shutdown or a quiesce has
+    /// begun.
     fn start(self: &Arc<Self>) -> Result<Running, EngineError> {
+        let mut state = self.state();
+        if state.closing {
+            return Err(EngineError::unavailable("the core is shutting down"));
+        }
+        if state.quiesced {
+            return Err(EngineError::unavailable("a restore is in progress"));
+        }
+        state.running += 1;
+        Ok(Running(Arc::clone(self)))
+    }
+
+    /// Count one more cleanup task, which never touches the store:
+    /// refused only once shutdown has begun, so a quiesce drops none.
+    fn start_cleanup(self: &Arc<Self>) -> Result<Running, EngineError> {
         let mut state = self.state();
         if state.closing {
             return Err(EngineError::unavailable("the core is shutting down"));
@@ -161,9 +180,30 @@ impl BlockingWork {
         Ok(Running(Arc::clone(self)))
     }
 
-    /// Whether shutdown has begun, for long work that pauses itself.
+    /// Whether long work must stop at its next safe point: shutdown, or
+    /// a restore's quiesce. Work stopped by a quiesce resumes from its
+    /// durable checkpoint when the engine resumes.
     fn closing(&self) -> bool {
-        self.state().closing
+        let state = self.state();
+        state.closing || state.quiesced
+    }
+
+    /// Refuse new store work and wait until the running tasks end: the
+    /// restore's quiesce. [`BlockingWork::resume`] ends it.
+    fn quiesce_and_wait(&self) {
+        let mut state = self.state();
+        state.quiesced = true;
+        while state.running > 0 {
+            state = self
+                .idle
+                .wait(state)
+                .expect("a panicking thread held the engine's work lock");
+        }
+    }
+
+    /// End a quiesce: store work is admitted again.
+    fn resume(&self) {
+        self.state().quiesced = false;
     }
 
     /// Refuse new blocking tasks and wait until the running ones end.
@@ -184,6 +224,7 @@ impl BlockingWork {
 /// foreign caller's included, where nothing may block (spec/07 "One
 /// runtime"). Counted like other blocking work, so shutdown waits for
 /// it; skipped once shutdown has begun, which drops everything anyway.
+/// A restore's quiesce still runs it: it never touches the store.
 pub(crate) struct Detached {
     handle: Handle,
     blocking: Arc<BlockingWork>,
@@ -192,7 +233,7 @@ pub(crate) struct Detached {
 impl Detached {
     /// Run `f` on the blocking pool, or not at all during shutdown.
     pub(crate) fn spawn(&self, f: impl FnOnce() + Send + 'static) {
-        let Ok(running) = self.blocking.start() else {
+        let Ok(running) = self.blocking.start_cleanup() else {
             return;
         };
         self.handle.spawn_blocking(move || {
@@ -320,6 +361,15 @@ where
     };
     handle.spawn(body(worker));
     Ok(())
+}
+
+/// Which store a job registry resumes on after a restore's quiesce.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StoreAfterRestore {
+    /// The swap was refused: the same store, as it was.
+    Same,
+    /// The restored store: nothing the replaced one recorded applies.
+    Replaced,
 }
 
 /// One counted blocking task; dropping it, at the task's end, counts it
@@ -465,41 +515,12 @@ impl Engine {
             let engine = open(&data_root)
                 .map_err(EngineError::from)
                 .and_then(|resources| {
-                    // Subscriptions hear every committed list generation
-                    // from here on, starting from the current one.
                     let windows = Arc::new(Windows::new());
-                    let announced = Arc::clone(&windows);
-                    resources.observe_list_generation(Arc::new(move |generation| {
-                        announced.store_moved(generation);
-                    }));
-                    windows.store_moved(resources.read(list_generation)?);
-                    let announced = Arc::clone(&windows);
-                    resources.observe_search_generation(Arc::new(move |generation| {
-                        announced.search_moved(generation);
-                    }));
-                    windows.search_moved(resources.read(|tx| {
-                        search_generation(tx)?.try_into().map_err(|_| {
-                            sb_resources::StoreError::Corrupt {
-                                detail: "negative search generation".into(),
-                            }
-                        })
-                    })?);
-                    // Appearance subscriptions hear every committed
-                    // appearance generation (spec/02); the observer
-                    // registers before the initial read so no commit
-                    // lands between them.
-                    let announced = Arc::clone(&windows);
-                    resources.observe_appearance_generation(Arc::new(move |generation| {
-                        announced.appearance_moved(generation);
-                    }));
-                    windows.appearance_moved(resources.read(appearance_generation)?);
                     let received: Arc<ReceivedJobs> = Arc::default();
-                    let maintenance = Arc::downgrade(&received);
-                    resources.observe_maintenance_inputs(Arc::new(move || {
-                        if let Some(worker) = maintenance.upgrade() {
-                            worker.wake();
-                        }
-                    }));
+                    let generations = observe_store(&resources, &windows, &received)?;
+                    windows.store_moved(generations.list);
+                    windows.search_moved(generations.search);
+                    windows.appearance_moved(generations.appearance);
                     Ok(Self {
                         resources: Some(Arc::new(resources)),
                         blocking: Arc::default(),
@@ -756,6 +777,51 @@ fn start_cleanup_worker() -> Result<std::sync::mpsc::Sender<Cleanup>, EngineErro
 
 /// Close the store through its last handle. Only the engine's
 /// shutdown, after every blocking task ended, calls this.
+/// Register the engine's observers on a store's writer and read the
+/// generations they start from: subscriptions hear every committed
+/// list, Search and appearance generation from here on (spec/07), and
+/// committed maintenance inputs wake the received worker. Each observer
+/// registers before its initial read, so no commit lands between them.
+/// At open and on the store a restore swapped in, whose writer is new.
+fn observe_store(
+    resources: &Resources,
+    windows: &Arc<Windows>,
+    received: &Arc<ReceivedJobs>,
+) -> Result<StoreGenerations, sb_resources::StoreError> {
+    let announced = Arc::clone(windows);
+    resources.observe_list_generation(Arc::new(move |generation| {
+        announced.store_moved(generation);
+    }));
+    let list = resources.read(list_generation)?;
+    let announced = Arc::clone(windows);
+    resources.observe_search_generation(Arc::new(move |generation| {
+        announced.search_moved(generation);
+    }));
+    let search = resources.read(|tx| {
+        search_generation(tx)?
+            .try_into()
+            .map_err(|_| sb_resources::StoreError::Corrupt {
+                detail: "negative search generation".into(),
+            })
+    })?;
+    let announced = Arc::clone(windows);
+    resources.observe_appearance_generation(Arc::new(move |generation| {
+        announced.appearance_moved(generation);
+    }));
+    let appearance = resources.read(appearance_generation)?;
+    let maintenance = Arc::downgrade(received);
+    resources.observe_maintenance_inputs(Arc::new(move || {
+        if let Some(worker) = maintenance.upgrade() {
+            worker.wake();
+        }
+    }));
+    Ok(StoreGenerations {
+        list,
+        search,
+        appearance,
+    })
+}
+
 fn close_resources(resources: Arc<Resources>) -> Result<(), sb_resources::StoreError> {
     match Arc::try_unwrap(resources) {
         Ok(resources) => resources.close(),
@@ -805,6 +871,9 @@ pub(crate) fn join_failed(what: &str, join: JoinError) -> EngineError {
     };
     EngineError::internal(format!("the task to {what} {why}: {join}"))
 }
+
+mod restore;
+pub use restore::RestoreError;
 
 #[cfg(test)]
 mod tests;
