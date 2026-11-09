@@ -13,7 +13,7 @@
 use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use sb_resources::{
     CertificatePin, ConnectAttempt, Connection, ConnectionPause, Connector, CredentialPause,
@@ -147,6 +147,9 @@ enum Served {
     Ended,
     /// The session failed; recovery reconnects.
     Failed(ImapError),
+    /// The server refused one mailbox's command and the session is
+    /// gone; the worker reconnects at once, leaving that mailbox out.
+    Refused,
 }
 
 /// How a recovery ended.
@@ -207,6 +210,7 @@ async fn run_account(worker: &Worker, account_id: &str, stop: watch::Receiver<bo
         setup_failure: None,
     };
     let mut reconnector = Reconnector::new();
+    let mut refusals = pass::Refusals::default();
     let mut failure: Option<ImapError> = None;
     loop {
         let recovery = match failure.take() {
@@ -234,15 +238,30 @@ async fn run_account(worker: &Worker, account_id: &str, stop: watch::Receiver<bo
             }
         };
         record(worker, account_id, Transition::Connected).await;
-        match serve(worker, account_id, policy, &mut connection, &stop).await {
+        // A healthy session restarts the backoff at its first step.
+        reconnector = Reconnector::new();
+        match serve(
+            worker,
+            account_id,
+            policy,
+            &mut connection,
+            &stop,
+            &mut refusals,
+        )
+        .await
+        {
             // A session stopped mid-command is unusable; dropping it
             // closes the socket.
             Served::Stopped => return,
             Served::Ended => {
-                let _ = connection.logout().await;
+                tokio::select! {
+                    _ = connection.logout() => {}
+                    () = stopped(stop.clone()) => {}
+                }
                 return;
             }
             Served::Failed(error) => failure = Some(error),
+            Served::Refused => {}
         }
     }
 }
@@ -275,17 +294,23 @@ async fn serve(
     policy: Policy,
     connection: &mut Connection,
     stop: &watch::Receiver<bool>,
+    refusals: &mut pass::Refusals,
 ) -> Served {
     loop {
         if !still_syncable(worker, account_id).await {
             return Served::Ended;
         }
         let passed = tokio::select! {
-            result = pass::run(worker, account_id, policy, connection) => result,
+            result = pass::run(worker, account_id, policy, connection, refusals) => result,
             () = stopped(stop.clone()) => return Served::Stopped,
         };
-        if let Err(error) = passed {
-            return Served::Failed(error);
+        match passed {
+            Ok(()) => {}
+            Err(pass::PassError::Session(error)) => return Served::Failed(error),
+            Err(pass::PassError::Refused { mailbox_id }) => {
+                refusals.refuse(mailbox_id, Instant::now());
+                return Served::Refused;
+            }
         }
         tokio::select! {
             () = tokio::time::sleep(POLL_INTERVAL) => {}

@@ -168,6 +168,12 @@ const STALL: Duration = Duration::from_secs(8);
 /// (LIST, then EXAMINE, UID SEARCH and the header rows per mailbox in
 /// pass order, UNSELECT between selections).
 fn sync_script(inbox: Inbox) -> Script {
+    refusing_script(inbox, None)
+}
+
+/// `sync_script`, but Bridge answers EXAMINE of `refused` with a tagged
+/// NO (a mailbox it cannot serve right now).
+fn refusing_script(inbox: Inbox, refused: Option<&str>) -> Script {
     let profile = Profile::bridge();
     let mut steps = login_steps(&profile, true);
     steps.push(profile.list_step());
@@ -177,6 +183,13 @@ fn sync_script(inbox: Inbox) -> Script {
                 Expect::command("UNSELECT"),
                 vec![Reply::ok("UNSELECT completed")],
             ));
+        }
+        if refused == Some(mailbox) {
+            steps.push(Step::on(
+                Expect::command(format!("EXAMINE {mailbox}")),
+                vec![Reply::TaggedNo("mailbox unavailable".to_owned())],
+            ));
+            continue;
         }
         if mailbox == "INBOX" && inbox == Inbox::Oversized {
             steps.extend(oversized_inbox(&profile));
@@ -518,6 +531,45 @@ fn a_header_too_large_for_any_batch_never_stalls_its_mailbox() {
         .collect();
     assert_eq!(inbox, [7]);
     assert_eq!(messages(&engine, &account), (1, 1));
+    shutdown_promptly(engine);
+}
+
+#[test]
+fn a_mailbox_bridge_refuses_is_left_out_while_the_rest_sync() {
+    let scratch = ScratchDir::new("account-worker-refused-mailbox");
+    let secrets = Arc::new(FakeSecrets::new());
+    let server = FakeImapServer::serve(vec![
+        bridge_script(true),
+        // INBOX, the first mailbox a pass visits: every later session
+        // then answers exactly as a fresh one.
+        refusing_script(Inbox::Listed, Some("INBOX")),
+    ])
+    .unwrap();
+    let engine = open(&scratch, &secrets);
+    let account = add(&engine, server.port());
+
+    // The refusal ends the session; the worker reconnects at once and
+    // its next pass leaves INBOX out instead of failing on it again.
+    eventually("the rest of the pass", || {
+        mailboxes(&engine, &account)
+            .iter()
+            .filter(|(_, state, _)| state == "synced")
+            .count()
+            == SYNC_ORDER.len() - 1
+    });
+    let inbox = mailboxes(&engine, &account)
+        .into_iter()
+        .find(|(name, _, _)| name == "INBOX")
+        .unwrap();
+    assert_eq!(inbox, ("INBOX".to_owned(), "new".to_owned(), None));
+    assert_eq!(commands(&server, "EXAMINE INBOX"), 1, "never asked again");
+    assert_eq!(
+        logins(&server),
+        3,
+        "the probe, the refused session, the next"
+    );
+    assert_eq!(occurrences(&engine, &account).len(), MEMBERS.len() - 1);
+    assert_eq!(state(&engine, &account), (AccountState::Active, None));
     shutdown_promptly(engine);
 }
 

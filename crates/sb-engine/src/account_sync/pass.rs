@@ -7,13 +7,18 @@
 //! committed with its `uidnext` checkpoint in one transaction.
 //!
 //! The transport's failures end the pass for the caller's reconnect
-//! path. A store failure only skips what it concerns: the next pass
-//! starts over from the committed checkpoints, so nothing is lost or
-//! stored twice.
+//! path. A command the server refuses for one mailbox (a tagged NO or
+//! BAD on its EXAMINE, UID SEARCH or UID FETCH) ends the session too,
+//! as sb-imap drops it, but names the mailbox: the caller skips it for
+//! a while and reconnects at once, so one refused mailbox never
+//! starves the rest. A store failure only skips what it concerns: the
+//! next pass starts over from the committed checkpoints, so nothing is
+//! lost or stored twice.
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::num::NonZeroU32;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use sb_resources::sync::{
     EpochCheck, HeaderBatch, MAX_HEADER_BATCH, ObservedMailbox, SyncTarget, SyncedFlags,
@@ -45,13 +50,52 @@ const HEADER_FIELDS: [&str; 13] = [
     "X-PM-INTERNAL-ID",
 ];
 
-/// Run one pass. `Err` is the session's failure; the caller reconnects.
+/// How long a mailbox the server refused is left out of passes.
+pub(super) const REFUSAL_COOLDOWN: Duration = Duration::from_secs(15 * 60);
+
+/// Why a pass ended early. Either way the session is gone.
+#[derive(Debug)]
+pub(super) enum PassError {
+    /// The session failed; the caller's recovery reconnects.
+    Session(ImapError),
+    /// The server refused a command for this mailbox only.
+    Refused { mailbox_id: i64 },
+}
+
+impl From<ImapError> for PassError {
+    fn from(error: ImapError) -> Self {
+        Self::Session(error)
+    }
+}
+
+/// Mailboxes the server refused, each left out until its cooldown ends.
+#[derive(Debug, Default)]
+pub(super) struct Refusals {
+    until: HashMap<i64, Instant>,
+}
+
+impl Refusals {
+    /// Leave `mailbox_id` out of passes for `REFUSAL_COOLDOWN` from `now`.
+    pub(super) fn refuse(&mut self, mailbox_id: i64, now: Instant) {
+        self.until.insert(mailbox_id, now + REFUSAL_COOLDOWN);
+    }
+
+    /// Whether `mailbox_id` is still left out at `now`; forgets expired
+    /// refusals.
+    fn skips(&mut self, mailbox_id: i64, now: Instant) -> bool {
+        self.until.retain(|_, until| now < *until);
+        self.until.contains_key(&mailbox_id)
+    }
+}
+
+/// Run one pass, leaving out the mailboxes in `refusals`.
 pub(super) async fn run(
     worker: &Worker,
     account_id: &str,
     policy: Policy,
     connection: &mut Connection,
-) -> Result<(), ImapError> {
+    refusals: &mut Refusals,
+) -> Result<(), PassError> {
     let listing = connection.list_mailboxes().await?.observation;
     let observed: Vec<ObservedMailbox> = listing
         .iter()
@@ -84,7 +128,17 @@ pub(super) async fn run(
         return Ok(());
     };
     for target in targets {
-        sync_mailbox(worker, account_id, policy, connection, &target).await?;
+        if refusals.skips(target.mailbox_id, Instant::now()) {
+            continue;
+        }
+        sync_mailbox(worker, account_id, policy, connection, &target)
+            .await
+            .map_err(|error| match error {
+                ImapError::Command { .. } => PassError::Refused {
+                    mailbox_id: target.mailbox_id,
+                },
+                error => PassError::Session(error),
+            })?;
     }
     Ok(())
 }

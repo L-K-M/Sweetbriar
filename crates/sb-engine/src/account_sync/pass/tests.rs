@@ -56,3 +56,16 @@ fn the_checkpoint_rises_above_each_batch_and_reaches_the_server_last() {
     // Never below the stored checkpoint, even if the server reports less.
     assert_eq!(checkpoint(Some(9), Some(5)).target(None, true), 9);
 }
+
+#[test]
+fn a_refused_mailbox_is_left_out_until_its_cooldown_ends() {
+    let start = Instant::now();
+    let mut refusals = Refusals::default();
+    refusals.refuse(7, start);
+
+    assert!(refusals.skips(7, start));
+    assert!(!refusals.skips(8, start), "only the refused mailbox");
+    assert!(refusals.skips(7, start + REFUSAL_COOLDOWN - Duration::from_secs(1)));
+    assert!(!refusals.skips(7, start + REFUSAL_COOLDOWN));
+    assert!(refusals.until.is_empty(), "an expired refusal is forgotten");
+}
