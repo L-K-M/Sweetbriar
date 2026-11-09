@@ -406,6 +406,17 @@ async fn bad_input_creates_nothing() {
         );
     }
 
+    let mut blank = params(server.port(), PASSWORD);
+    blank.identities[1].email = "   ".to_owned();
+    let error = res
+        .add_bridge_account(blank, inline(&secrets))
+        .await
+        .expect_err("blank after trimming");
+    assert!(
+        matches!(error, BridgeAccountError::InvalidInput(_)),
+        "{error:?}"
+    );
+
     let mut duplicate = params(server.port(), PASSWORD);
     duplicate.identities[1].email = " OWNER@example.org ".to_owned();
     let error = res
@@ -480,6 +491,69 @@ async fn a_credential_retry_never_lifts_a_connection_pause() {
         .await
         .expect_err("guarded");
     assert!(matches!(error, StoreError::Conflict { .. }), "{error:?}");
+    let state = rows(
+        &res,
+        "SELECT state, state_reason FROM accounts WHERE account_id = ?1",
+        &[added.account_id.as_str()],
+    );
+    assert_eq!(
+        state[0],
+        vec![
+            "needs_attention".to_owned(),
+            "Bridge's certificate changed".to_owned()
+        ]
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_pause_recorded_during_the_retry_is_kept() {
+    let server = FakeImapServer::serve(vec![bridge_script(true)]).unwrap();
+    let secrets = FakeSecrets::new();
+    secrets.fail_next(SecretOp::Set, SecretError::Unavailable);
+    let (_scratch, res) = resources("account-retry-race");
+    let added = res
+        .add_bridge_account(params(server.port(), PASSWORD), inline(&secrets))
+        .await
+        .expect("rows still committed");
+    assert_eq!(
+        added.needs_attention,
+        Some(CredentialPause::StoreUnavailable)
+    );
+
+    // The retry passes its check; then, while its secret write is in
+    // flight, a connect records spec/04's certificate pause. The
+    // reactivation must keep that pause and say why it refused.
+    let paused_id = added.account_id.clone();
+    let res_ref = &res;
+    let secrets_ref = &secrets;
+    let racing = move |reference: String, secret: Secret| async move {
+        res_ref
+            .write(WritePriority::User, move |tx| {
+                tx.execute(
+                    "UPDATE accounts SET state = 'needs_attention',
+                            state_reason = 'Bridge''s certificate changed'
+                     WHERE account_id = ?1",
+                    [&paused_id],
+                )
+                .unwrap();
+                Ok(())
+            })
+            .await
+            .unwrap();
+        secrets_ref.set(&reference, &secret)
+    };
+    let error = res
+        .store_account_credential(
+            &added.account_id,
+            Secret::new(PASSWORD.as_bytes().to_vec()),
+            racing,
+        )
+        .await
+        .expect_err("the pause changed during the retry");
+    assert!(
+        matches!(error, BridgeAccountError::InvalidInput(_)),
+        "{error:?}"
+    );
     let state = rows(
         &res,
         "SELECT state, state_reason FROM accounts WHERE account_id = ?1",

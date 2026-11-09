@@ -87,7 +87,10 @@ impl CredentialPause {
         Self::StoreFailed,
     ];
 
-    /// The `state_reason` text (spec/04's "User sees" column).
+    /// The `state_reason` text (spec/04's "User sees" column). It is
+    /// persisted (spec/02 stores the shown text) and matched back by the
+    /// reactivation guard, so rewording one needs a migration of the
+    /// stored rows; the tests pin the exact strings.
     pub fn reason(self) -> &'static str {
         match self {
             Self::NotStored => "the credential is not yet stored",
@@ -241,6 +244,8 @@ pub fn reactivate_after_credential(tx: &Transaction, account_id: &str) -> Result
         )
         .map_err(|e| classify(e, "reactivate the account"))?;
     if changed == 0 {
+        // Only for its NotFound: an absent account is NotFound, any
+        // existing one falls through to Conflict.
         credential_pause(tx, account_id)?;
         return Err(StoreError::conflict(
             "the account is not awaiting its credential",
@@ -298,4 +303,42 @@ pub fn credential_ref(tx: &Transaction, account_id: &str) -> Result<String, Stor
         }
         other => classify(other, "read the credential reference"),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The reasons are persisted and matched back, so they are frozen:
+    /// changing one strands rows written under the old text.
+    #[test]
+    fn credential_pause_reasons_are_frozen_and_round_trip() {
+        let pinned = [
+            (
+                CredentialPause::NotStored,
+                "the credential is not yet stored",
+            ),
+            (
+                CredentialPause::StoreUnavailable,
+                "the credential store is unavailable",
+            ),
+            (
+                CredentialPause::StoreRefused,
+                "the credential store refused the password",
+            ),
+            (
+                CredentialPause::StoreFailed,
+                "the credential store could not keep the password",
+            ),
+        ];
+        assert_eq!(pinned.len(), CredentialPause::ALL.len());
+        for (pause, text) in pinned {
+            assert_eq!(pause.reason(), text);
+            assert_eq!(CredentialPause::from_reason(text), Some(pause));
+        }
+        assert_eq!(
+            CredentialPause::from_reason("Bridge's certificate changed"),
+            None
+        );
+    }
 }

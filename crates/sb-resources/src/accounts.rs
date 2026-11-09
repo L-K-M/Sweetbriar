@@ -375,6 +375,13 @@ impl Resources {
             reactivate_after_credential(tx, &owned_id)
         })
         .await
-        .map_err(BridgeAccountError::Store)
+        .map_err(|error| match error {
+            // The guard refused: the pause changed during the
+            // secret-store await. A state mismatch, not a failed write.
+            StoreError::Conflict { .. } => BridgeAccountError::InvalidInput(
+                "the account is no longer awaiting its credential".to_owned(),
+            ),
+            error => BridgeAccountError::Store(error),
+        })
     }
 }
