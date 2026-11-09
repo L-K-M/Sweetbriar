@@ -114,7 +114,8 @@ fn a_restored_store_keeps_its_rows_and_objects_and_both_generations_resolve() {
         counts
     };
     let expected_objects = manifest_objects(external.location());
-    assert_eq!(expected_objects.len(), source.payloads.len());
+    let payloads: BTreeSet<String> = source.payloads.iter().map(|(sha, _)| sha.clone()).collect();
+    assert_eq!(expected_objects, payloads);
     let stage = qualify_from(&source.store, external.generation_id(), external.location());
     let preserved = stage.preserved_root().to_path_buf();
     let StagingSource {
@@ -314,15 +315,20 @@ fn resolve(paths: &StorePaths, stage: &Path, preserved: &Path, old: &str, new: &
         Resolved::Old
     } else {
         assert_eq!(incarnation, new, "neither the old nor the restored store");
-        let unpaused: i64 = reading(&store, |tx| {
+        let (accounts, paused): (i64, i64) = reading(&store, |tx| {
             tx.query_row(
-                "SELECT count(*) FROM accounts WHERE state <> 'paused'",
+                "SELECT count(*), count(*) FILTER (WHERE state = 'paused') FROM accounts",
                 [],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .map_err(bug)
         });
-        assert_eq!(unpaused, 0, "the restored store opens quarantined");
+        // The fixture's account and the seeded local archive.
+        assert_eq!(
+            (accounts, paused),
+            (2, 2),
+            "the restored store opens quarantined"
+        );
         assert_eq!(
             file_meta(&preserved.join("state.sqlite"), "incarnation"),
             old
@@ -406,6 +412,9 @@ fn process_cuts_leave_the_old_store_or_the_quarantined_restored_one() {
             let report: serde_json::Value =
                 serde_json::from_slice(&std::fs::read(report_root.join("expected.json")).unwrap())
                     .unwrap();
+            // Every run reaches the swap after the calibrated count of
+            // operations, so each cut lands where it was aimed.
+            assert_eq!(report["start"].as_u64(), Some(start), "the run drifted");
             let text = |key: &str| report[key].as_str().unwrap().to_owned();
             let paths = StorePaths::new(text("root")).unwrap();
             let child_scratch = PathBuf::from(text("scratch"));

@@ -212,7 +212,10 @@ fn a_power_cut_anywhere_in_the_commit_leaves_a_state_startup_resolves() {
         fs.power_cut();
         let root = sim_which(&fs, paths.data_root());
         match root.as_deref() {
-            Some("old") => assert_eq!(sim_which(&fs, &staging).as_deref(), Some("restored")),
+            Some("old") => {
+                assert_eq!(sim_which(&fs, &staging).as_deref(), Some("restored"));
+                assert!(fs.metadata(&preserved).unwrap().is_none(), "{cut:?}");
+            }
             Some("restored") => assert_eq!(sim_which(&fs, &preserved).as_deref(), Some("old")),
             other => panic!("{cut:?}: the data root holds {other:?}"),
         }
@@ -220,9 +223,13 @@ fn a_power_cut_anywhere_in_the_commit_leaves_a_state_startup_resolves() {
             fs.metadata(&marker_path(&paths)).unwrap().is_none(),
             "{cut:?}: {recovered:?} left the marker"
         );
-        assert!(stopped || root.as_deref() == Some("restored"));
+        if !stopped {
+            assert_eq!(root.as_deref(), Some("restored"));
+            continue;
+        }
         resolved.push(root.unwrap());
     }
+    // Cuts landed on both sides of the swap, the uncut run aside.
     assert!(resolved.iter().any(|root| root == "old"));
     assert!(resolved.iter().any(|root| root == "restored"));
 }
