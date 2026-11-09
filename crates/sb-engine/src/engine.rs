@@ -74,6 +74,8 @@ pub struct Engine {
     imports: Arc<ImportJobs>,
     index: Arc<IndexJobs>,
     received: Arc<ReceivedJobs>,
+    /// One sync worker per syncable IMAP account (spec/04).
+    accounts: Arc<crate::account_sync::AccountJobs>,
     leases: Arc<crate::bodies::Leases>,
     search_memo: Arc<crate::search::SearchMemo>,
     /// Fires each draft-write point inside a draft command's write,
@@ -506,6 +508,7 @@ impl Engine {
                         imports: Arc::default(),
                         index: Arc::default(),
                         received,
+                        accounts: Arc::default(),
                         leases: Arc::default(),
                         search_memo: Arc::default(),
                         #[cfg(test)]
@@ -525,7 +528,8 @@ impl Engine {
                 // get their threads in the background (spec/02).
                 .inspect(Engine::schedule_threads)
                 .inspect(Engine::schedule_index)
-                .inspect(Engine::schedule_received);
+                .inspect(Engine::schedule_received)
+                .inspect(Engine::schedule_accounts);
             // A caller that stopped waiting drops the engine here.
             let _ = opened.send(engine);
         }))
@@ -552,6 +556,11 @@ impl Engine {
     /// the call that made it returned.
     pub(crate) fn runtime_handle(&self) -> tokio::runtime::Handle {
         self.runtime.handle().clone()
+    }
+
+    /// The account worker registry; crate-visible for `account_sync`.
+    pub(crate) fn account_jobs(&self) -> &Arc<crate::account_sync::AccountJobs> {
+        &self.accounts
     }
 
     /// The import job registry; crate-visible for the `import` module.
@@ -616,6 +625,7 @@ impl Engine {
     /// `quick_check` is the safety net (spec/03).
     pub async fn shutdown(mut self) -> Result<(), EngineError> {
         self.windows.shut();
+        self.accounts.stop();
         self.index.stop();
         self.received.stop();
         let resources = self
@@ -764,6 +774,7 @@ impl Drop for Engine {
     /// the next open's `quick_check` covers (spec/03).
     fn drop(&mut self) {
         self.windows.shut();
+        self.accounts.stop();
         self.index.stop();
         self.received.stop();
         let Some(resources) = self.resources.take() else {

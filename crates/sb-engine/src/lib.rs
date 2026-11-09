@@ -9,6 +9,7 @@
 //! one query (`settings()`), end to end.
 #![forbid(unsafe_code)]
 
+mod account_sync;
 mod accounts;
 mod appearance;
 pub use appearance::{

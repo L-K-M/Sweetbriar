@@ -179,7 +179,7 @@ pub fn pause_for_connection(
         Current::Connection(_) => {}
         Current::Other => {
             return Err(StoreError::conflict(
-                "the account is paused for another reason",
+                "only an active or connection-paused IMAP account takes a connection pause",
             ));
         }
     }
