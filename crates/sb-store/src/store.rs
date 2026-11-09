@@ -525,6 +525,9 @@ pub(crate) fn open_with(
     create_missing_ancestors(fs, paths)?;
     let lease = take_lease(fs, paths.lock_file())?;
     // From here on an early return drops `lease`, releasing the lock.
+    // An interrupted restore swap is resolved before anything looks at
+    // (or would create) the data root (spec/03 "Restore").
+    crate::restore_pending::recover(fs, paths)?;
     ensure_layout(fs, paths)?;
     examine_existing(fs, paths, pinned, migrations)?;
     crate::validation_scratch::ScratchOwner::cleanup(fs, paths.objects_tmp())?;
@@ -734,6 +737,12 @@ pub(crate) fn open_read_only_with(
     let paths = &resolve_root(fs, paths)?;
     check_location(fs, paths.data_root())?;
     let lease = take_lease(fs, paths.lock_file())?;
+    // A pending restore swap needs a writable open to resolve it.
+    if crate::restore_pending::is_pending(fs, paths)? {
+        return Err(StoreError::unavailable(
+            "a restore swap is pending; a writable open finishes it",
+        ));
+    }
     // Again under the lease: it may have changed meanwhile.
     require_existing(fs, paths)?;
     examine_read_only(fs, paths, pinned, migrations)?;

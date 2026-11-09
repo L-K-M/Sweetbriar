@@ -685,15 +685,23 @@ The process holds `<data root>.lock` throughout.
      database file renamed while it's open.
    - Write a marker file `<data root>.restore-pending` naming the staging
      root and the preserved name. Flush it **and its parent directory**
-     before either rename.
+     before either rename. It is written to a temporary sibling, flushed
+     and renamed into place, so startup never reads a torn marker; a
+     marker that doesn't parse, or names other siblings, is `Corrupt`.
    - Rename the current data root to `<data root>.preserved-<old
      incarnation>`, then the staging root to `<data root>`. Flush the
      parent directory, then remove the marker.
    - **On startup, a marker means a swap was interrupted.** If the data
      root is missing and staging exists, finish the swap. If both the
-     data root and staging exist, the swap hadn't started: discard
-     staging and restart the restore on request. If the data root
+     data root and staging exist, the swap hadn't started: remove the
+     marker and discard staging, which is left in place as unqualified
+     evidence and never reused (a new restore stages under a new
+     incarnation); restart the restore on request. If the data root
      exists and staging doesn't, the swap finished: remove the marker.
+     If neither exists, refuse (`Corrupt`) rather than create a store.
+     The writable open resolves the marker under the lock before it
+     looks at the data root; the read-only open refuses (`Unavailable`)
+     while a marker exists.
    - Then open the restored store, with every account paused.
    - Nothing is deleted. The preserved root is listed in Settings →
      Backups until the user removes it.

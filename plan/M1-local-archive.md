@@ -1513,6 +1513,20 @@ local drafts. No network yet.
       Preserve all e3b row-state, binding, cancellation, SQL/I/O/flush,
       wrong-generation/incarnation and crash acceptance above. A shape
       inspection alone is never sufficient authority to swap a database.
+  - **M1.8f split before implementation (2026-11-09):** **f1
+    Restore-pending marker and startup recovery (M)**: the marker codec
+    (canonical UUIDs, sibling names derived and checked, bounded read),
+    its atomic durable write, and the writable open resolving all three
+    marker states plus the fourth (neither root: `Corrupt`, no store
+    created) under the lock, never following a link; the read-only open
+    refuses while a marker exists. Proof: codec refusals, power cuts
+    around the first rename (SimFs), fired faults resolved by the next
+    open, and the real open over staged stores. **f2 Swap and reopen
+    (L)**: reauthenticate the qualified stage, write the marker, both
+    renames with a parent flush after each, remove the marker and
+    reopen holding the lock. **f3 Acceptance proof (L)**: the crash and
+    power cuts, row counts and hashes, both generation locations, the
+    second-process lock and the back-up, restore, back-up round trip.
   - **M1.8f Durable swap and startup recovery (L):** the restore-pending
     marker (new incarnation, generation id and path), both renames with
     their flushes, the startup handling of all three marker states, the
