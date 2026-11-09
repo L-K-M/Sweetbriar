@@ -95,6 +95,17 @@ pub struct Store {
     seams: Seams,
 }
 
+/// The steps of [`Store::swap_restore`] a test may observe.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SwapPhase {
+    /// Every check passed with the store still open.
+    Checked,
+    /// Every connection closed; the lock still held.
+    Closed,
+    /// Both renames flushed and the marker removed.
+    Committed,
+}
+
 /// Why [`Store::swap_restore`] did not hand back a restored store.
 pub enum SwapRestoreError {
     /// A check before the store closed refused the swap. Nothing moved:
@@ -262,6 +273,17 @@ impl Store {
         stage: crate::QualifiedStage,
         cancelled: &std::sync::atomic::AtomicBool,
     ) -> Result<Store, SwapRestoreError> {
+        self.swap_restore_with(stage, cancelled, |_| {})
+    }
+
+    /// [`Store::swap_restore`], reporting each step it finished so a
+    /// test can look at the lock and the disk between them.
+    pub(crate) fn swap_restore_with(
+        self,
+        stage: crate::QualifiedStage,
+        cancelled: &std::sync::atomic::AtomicBool,
+        mut on_phase: impl FnMut(SwapPhase),
+    ) -> Result<Store, SwapRestoreError> {
         let pending = match self.backups.ready_to_swap(&stage, cancelled) {
             Ok(pending) => pending,
             Err(cause) => {
@@ -272,6 +294,7 @@ impl Store {
                 });
             }
         };
+        on_phase(SwapPhase::Checked);
         let paths = StorePaths::new(stage.data_root()).map_err(SwapRestoreError::Failed)?;
         let Self {
             readers,
@@ -300,6 +323,7 @@ impl Store {
             .and(readers_closed)
             .and(writer_closed)
             .map_err(SwapRestoreError::Failed)?;
+        on_phase(SwapPhase::Closed);
         crate::backups::swap::commit_swap(
             seams.fs(),
             &paths,
@@ -308,6 +332,7 @@ impl Store {
             &pending,
         )
         .map_err(SwapRestoreError::Failed)?;
+        on_phase(SwapPhase::Committed);
         // The stage's handles and the operation lease end with the swap.
         drop(stage);
         drop(backups);
