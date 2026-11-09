@@ -29,6 +29,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     private(set) var sidebar: SidebarViewController?
     private(set) var messageList: MessageListViewController?
     private var imports: ImportCoordinator?
+    private var accountSetup: BridgeAccountSheet?
     private var reader: ReaderViewController?
     private var closed = false
 
@@ -91,6 +92,11 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         reader?.select([])
     }
 
+    /// File → Add Proton Bridge Account…, once the core is up.
+    func beginBridgeAccountSetup() {
+        accountSetup?.begin()
+    }
+
     /// File → Import…, once the core is up.
     func beginImport() {
         guard let imports else { return }
@@ -134,11 +140,16 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         imports.onArchiveChanged = { [weak self] in
             self?.reloadSidebar()
         }
+        let accountSetup = BridgeAccountSheet(window: window, source: bridge)
+        accountSetup.onAdded = { [weak self] in
+            self?.reloadSidebar()
+        }
 
         self.sidebarModel = sidebarModel
         self.sidebar = sidebar
         self.messageList = messageList
         self.imports = imports
+        self.accountSetup = accountSetup
         Task { @MainActor in
             await sidebarModel.reload()
             sidebar.reloadSections()

@@ -653,6 +653,37 @@ extension Setting {
     }
 }
 
+/// Proton Bridge account setup (spec/07, spec/10); the types and their
+/// mapping live in `AccountSetup.swift`.
+extension CoreBridge: AccountSetupSource {
+    public func addBridgeAccount(
+        idempotencyKey: String, request: BridgeAccountRequest
+    ) async throws -> BridgeAccountAdded {
+        let token = SweetbriarCore.CancelToken()
+        let value = try await Self.withCancellation(token: token) {
+            try await self.core.addBridgeAccount(
+                token: token, idempotencyKey: idempotencyKey, params: request.generated
+            )
+        }
+        return BridgeAccountAdded(value)
+    }
+
+    public func bridgeCertificate(port: UInt16, security: EndpointSecurity) async throws -> String {
+        let token = SweetbriarCore.CancelToken()
+        return try await Self.withCancellation(token: token) {
+            try await self.core.bridgeCertificate(token: token, port: port, security: security.generated)
+        }
+    }
+
+    public func certificateFingerprint(pem: Data) throws -> String {
+        do {
+            return try SweetbriarCore.certificateFingerprintFromPem(pem: pem)
+        } catch let error as SweetbriarCore.CoreError {
+            throw CoreFailure(error)
+        }
+    }
+}
+
 extension Receipt {
     /// Map the generated record field by field.
     init(_ generated: SweetbriarCore.Receipt) {
