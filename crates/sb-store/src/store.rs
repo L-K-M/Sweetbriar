@@ -33,12 +33,12 @@ use crate::writer::{
     AppearanceObserver, ListObserver, SearchObserver, WriteFuture, WritePriority, Writer,
 };
 
-/// The SQLite build spec/01's crate table pins (rusqlite 0.40.2 →
-/// libsqlite3-sys 0.38.2 → SQLite 3.53.2); `open` refuses any other.
+/// The SQLite build spec/01's crate table pins (rusqlite 0.41.1 →
+/// libsqlite3-sys 0.39.1 → SQLite 3.54.1); `open` refuses any other.
 pub(crate) const PINNED_SQLITE: PinnedSqlite = PinnedSqlite {
-    version: "3.53.2",
-    version_number: 3_053_002,
-    source_id: "2026-06-03 19:12:13 d6e03d8c777cfa2d35e3b60d8ec3e0187f3e9f99d8e2ee9cac695fd6fcdf1a24",
+    version: "3.54.1",
+    version_number: 3_054_001,
+    source_id: "2026-10-16 14:45:20 555e07ef33f69a0957d24d8e555b702464a131d6f1607f4c3c1e4551e8e6ca76",
 };
 
 /// Acceptable-release bounds (spec/03), as `version_number()`

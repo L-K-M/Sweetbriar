@@ -324,7 +324,7 @@ fn native_sqlite_read_faults_are_contained_typed_and_never_close_eligible() {
             fault: Arc::clone(&fault),
         });
         let root = fs.open_confined_dir(Path::new("/stage")).unwrap();
-        let (writer, mut budget) = open_bounded(
+        let (mut writer, mut budget) = open_bounded(
             Arc::clone(&main),
             root.create_read_write(Path::new("journal")).unwrap().into(),
             root.create_read_write(Path::new("statement"))
@@ -335,7 +335,7 @@ fn native_sqlite_read_faults_are_contained_typed_and_never_close_eligible() {
             Arc::new(AtomicBool::new(false)),
         )
         .unwrap();
-        harden(writer.connection());
+        harden(writer.connection_mut());
         *fault.lock().unwrap() = Some(injected);
         let result = writer
             .connection()
@@ -362,7 +362,7 @@ fn native_sqlite_read_faults_are_contained_typed_and_never_close_eligible() {
     }
 }
 
-fn harden(connection: &Connection) {
+fn harden(connection: &mut Connection) {
     for limit in [Limit::SQLITE_LIMIT_LENGTH, Limit::SQLITE_LIMIT_SQL_LENGTH] {
         connection.set_limit(limit, 1_048_576).unwrap();
     }
@@ -396,7 +396,7 @@ fn a_real_sidecar_write_fault_keeps_its_native_cause() {
         FaultKind::Kind(io::ErrorKind::PermissionDenied),
     );
     let root = fs.open_confined_dir(Path::new("/stage")).unwrap();
-    let (writer, mut budget) = open_bounded(
+    let (mut writer, mut budget) = open_bounded(
         main,
         root.create_read_write(Path::new("journal")).unwrap().into(),
         root.create_read_write(Path::new("statement"))
@@ -407,7 +407,7 @@ fn a_real_sidecar_write_fault_keeps_its_native_cause() {
         Arc::new(AtomicBool::new(false)),
     )
     .unwrap();
-    harden(writer.connection());
+    harden(writer.connection_mut());
     let _: i64 = writer
         .connection()
         .query_row("SELECT count(*) FROM proof", [], |row| row.get(0))
@@ -434,9 +434,9 @@ fn a_real_sidecar_write_fault_keeps_its_native_cause() {
 #[test]
 fn real_sqlite_eager_schema_loading_hits_the_fixed_catalog_input_limit() {
     let (scratch, bytes) = source(true);
-    let (writer, mut budget, main) = writer(&bytes);
+    let (mut writer, mut budget, main) = writer(&bytes);
+    harden(writer.connection_mut());
     let connection = writer.connection();
-    harden(connection);
     // A header pragma alone need not load the catalog; preparing a table
     // read forces SQLite's eager schema load before it can inspect this row.
     let result = connection.query_row("SELECT count(*) FROM proof", [], |row| row.get::<_, i64>(0));
@@ -461,9 +461,9 @@ fn real_sqlite_eager_schema_loading_hits_the_fixed_catalog_input_limit() {
 #[test]
 fn promoted_real_sqlite_reads_large_valid_data_and_closes_after_checkpoint() {
     let (scratch, bytes) = source(false);
-    let (writer, mut budget, main) = writer(&bytes);
+    let (mut writer, mut budget, main) = writer(&bytes);
+    harden(writer.connection_mut());
     let connection = writer.connection();
-    harden(connection);
     let _: i64 = connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
