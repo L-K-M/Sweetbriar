@@ -9,6 +9,7 @@
 //! one query (`settings()`), end to end.
 #![forbid(unsafe_code)]
 
+mod accounts;
 mod appearance;
 pub use appearance::{
     AccountAppearance, AccountAppearanceChange, Appearance, AppearanceTokens, AppearanceVariant,
@@ -42,6 +43,10 @@ mod windows;
 // The engine's API types and the platform defaults the layer above
 // needs, re-exported by item through this layer (spec/01 rule 3;
 // `sb-service` itself re-exports nothing).
+pub use sb_resources::{
+    ADD_BRIDGE_ACCOUNT, AddedAccount, AddressMode, BridgeAccountParams, BridgeIdentity,
+    CertificatePin, CredentialPause, EndpointSecurity, IdentitySendable, Secret,
+};
 pub use sb_resources::{
     AccountColor, AccountKind, AccountState, AppearanceAssignment, ExportSelection,
     ImportJobCheckpoint, ImportJobState, ImportProblem, ImportProblemKind, ImportTotals,

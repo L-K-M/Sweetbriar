@@ -83,6 +83,22 @@ async fn Core::shutdown(self);   // flush writer, release the lease
   IDs separately from imports and Search rebuilds. Cancellation durably
   marks an unfinished capture `cancelled`; a terminal export is `Conflict`.
   No export worker or start/query endpoint is exposed by the ledger step.
+- **Bridge account setup (M2.3c1):** `add_bridge_account(params)` takes
+  the Proton Bridge preset's display name, username, Bridge password
+  (bytes, moved into the core's zeroizing secret), IMAP and SMTP ports
+  and security, the confirmed certificate's DER SHA-256 as 64 hex
+  digits, the address mode and at least one identity; the host is always
+  `127.0.0.1` (10). A repeated key answers the stored receipt
+  `{"account_id": ...}` before any probe or secret write. Otherwise the
+  probe logs in first: a refused login is `InvalidInput` on `password`,
+  a presented certificate that is not the pinned one `InvalidInput` on
+  `pin` (the message names the presented fingerprint), Bridge not
+  answering `Unavailable`, and none of these stores anything. The rows
+  and the receipt then commit together, paused until the credential is
+  stored; a secret-store failure still answers the receipt, with the
+  account `needs_attention` and its reason reported (10). The SMTP
+  endpoint is recorded, not probed, until sending (M4.3). The credential
+  retry has no command yet: it belongs to `update_account` (M2.7).
 - **Local archive:** filing commands act locally, with no intent.
   `delete_to_trash` moves to the account's local Trash mailbox, created
   on first use; nothing is deleted. `add_label` doesn't apply.

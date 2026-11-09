@@ -4,8 +4,13 @@
 //! it — L1 sees service DTOs only (spec/01 rules 1 and 3).
 #![forbid(unsafe_code)]
 
+mod accounts;
 mod appearance;
 mod bodies;
+pub use accounts::{
+    AddressMode, BridgeAccountAdded, BridgeAccountParams, BridgeIdentity, CredentialPause,
+    EndpointSecurity, IdentitySendable,
+};
 pub use appearance::{
     AccountAppearance, AccountAppearanceChange, AccountColor, Appearance, AppearanceAssignment,
     AppearanceEvent, AppearanceSubscription, AppearanceTokens, AppearanceVariant,
