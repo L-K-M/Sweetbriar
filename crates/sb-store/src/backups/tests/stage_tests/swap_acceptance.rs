@@ -124,13 +124,10 @@ fn a_restored_store_keeps_its_rows_and_objects_and_both_generations_resolve() {
 
     let restored = store.swap_restore(stage, &AtomicBool::new(false)).unwrap();
 
-    // Row for row the snapshot, but for the one row the quarantine
-    // removes: the ownership token of the generation the snapshot still
-    // held in progress, its own, which only interrupted-backup cleanup
-    // reads.
-    let mut expected_counts = snapshot_counts;
-    *expected_counts.get_mut("backup_ownership").unwrap() -= 1;
-    assert_eq!(reading(&restored, |tx| Ok(row_counts(tx))), expected_counts);
+    // Row for row the snapshot: the quarantine changes values, never
+    // the row counts. The restored generation keeps its own ownership
+    // token, which its directory's marker holds (spec/03 step 3).
+    assert_eq!(reading(&restored, |tx| Ok(row_counts(tx))), snapshot_counts);
     let own_token: i64 = reading(&restored, |tx| {
         tx.query_row(
             "SELECT count(*) FROM backup_ownership WHERE generation_id=?1",
@@ -139,7 +136,7 @@ fn a_restored_store_keeps_its_rows_and_objects_and_both_generations_resolve() {
         )
         .map_err(bug)
     });
-    assert_eq!(own_token, 0);
+    assert_eq!(own_token, 1);
     assert_eq!(object_hashes(paths.data_root()), expected_objects);
     // The generation inside the old data root moved with it; the
     // external one stayed where it was. Both verify there.
@@ -228,6 +225,56 @@ fn back_up_restore_restart_and_back_up_again_keeps_the_generation() {
     // Still restorable: G stages and qualifies again from where it is.
     drop(qualify_from(&reopened, &generation, &location));
     reopened.close().unwrap();
+}
+
+/// The restored generation keeps its ownership token, so once newer
+/// generations push it out of every retention bucket, retention
+/// removes its directory (now in the preserved root) like any other,
+/// and backups keep starting: a missing token would fail every later
+/// backup closed (spec/03 "Retention").
+#[test]
+fn retention_removes_the_restored_generation_once_it_expires() {
+    const WEEK: i64 = 7 * 24 * 3_600_000;
+    let source = staging_source("swap-retention");
+    let generation = source.receipt.generation_id().to_owned();
+    let newer_parent = std::fs::canonicalize(source._scratch.path())
+        .unwrap()
+        .join("newer");
+    std::fs::create_dir(&newer_parent).unwrap();
+    let stage = qualified(&source);
+    let StagingSource {
+        _scratch, store, ..
+    } = source;
+    let restored = store.swap_restore(stage, &AtomicBool::new(false)).unwrap();
+    let (_, location, started) = generation_row(&restored, &generation).unwrap();
+    let location = PathBuf::from(location);
+    assert!(location.is_dir(), "the generation is in the preserved root");
+    // Thirty owned generations a week apart: each its own hour, day and
+    // week, so the restored generation is in no bucket retention keeps.
+    for n in 1..=30u64 {
+        let (_, path) = seed_generation(
+            &restored,
+            &newer_parent,
+            n,
+            started + n as i64 * WEEK,
+            "complete",
+        );
+        std::fs::create_dir(&path).unwrap();
+        own_fixture(&restored, &path);
+    }
+
+    restored.backups.retain().unwrap();
+
+    assert!(
+        !location.exists(),
+        "the expired generation's directory is removed"
+    );
+    assert!(generation_row(&restored, &generation).is_none());
+    let snapshot = restored
+        .backup_snapshot(BackupDestination::DataRoot)
+        .unwrap();
+    restored.complete_backup(snapshot).unwrap();
+    restored.close().unwrap();
 }
 
 // --- process cuts through the swap and through the startup after it ---
