@@ -232,6 +232,36 @@ impl Core {
     }
 }
 
+impl Core {
+    /// spec/10's fingerprint fallback: the presented certificate's DER
+    /// SHA-256 on Bridge's `port`, as 64 lowercase hex digits — the form
+    /// `BridgeAccountParams::certificate_sha256` takes. A query: the
+    /// handshake is refused, nothing is sent or stored, and the sheet
+    /// shows the value for the user to confirm, never trusting it on its
+    /// own. Bridge not answering is `Unavailable`.
+    pub async fn bridge_certificate(
+        &self,
+        port: u16,
+        security: EndpointSecurity,
+    ) -> Result<String, CoreError> {
+        let pin = self
+            .engine()
+            .bridge_certificate(port, security.into_engine())
+            .await?;
+        Ok(pin.hex())
+    }
+}
+
+/// The DER SHA-256 of the one certificate in Bridge's exported
+/// `cert.pem` (spec/10's preferred path), as 64 lowercase hex digits —
+/// the form `BridgeAccountParams::certificate_sha256` takes. `key.pem`,
+/// several certificates or a damaged file is `InvalidInput` on
+/// `certificate`. Pure: no core and no I/O, and the bytes are neither
+/// kept nor logged.
+pub fn certificate_fingerprint_from_pem(pem: &[u8]) -> Result<String, CoreError> {
+    Ok(sb_engine::Engine::certificate_pin_from_pem(pem)?.hex())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -254,6 +284,22 @@ mod tests {
                 "{bad}"
             );
         }
+    }
+
+    #[test]
+    fn cert_pem_answers_the_lowercase_hex_fingerprint() {
+        let fingerprint =
+            certificate_fingerprint_from_pem(sb_test_support::CERT_PEM.as_bytes()).unwrap();
+        assert_eq!(
+            fingerprint,
+            "f921c0432dab5a70401266a0216f46e6f6f795de47868447e9fde159771a24d1"
+        );
+        // The answer round-trips into add_bridge_account's field.
+        assert!(parse_sha256_hex(&fingerprint).is_ok());
+        assert!(matches!(
+            certificate_fingerprint_from_pem(sb_test_support::KEY_PEM.as_bytes()),
+            Err(CoreError::InvalidInput { ref field, .. }) if field == "certificate"
+        ));
     }
 
     #[test]

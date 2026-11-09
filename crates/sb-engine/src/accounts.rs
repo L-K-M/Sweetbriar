@@ -6,7 +6,10 @@
 //! secret store blocks), and maps the setup failures onto spec/07's
 //! errors.
 
-use sb_resources::{AddedAccount, BridgeAccountError, BridgeAccountParams, Secret, SecretError};
+use sb_resources::{
+    AddedAccount, BridgeAccountError, BridgeAccountParams, CertificatePin, EndpointSecurity,
+    Secret, SecretError, certificate_pin_from_pem,
+};
 
 use crate::EngineError;
 use crate::engine::{Engine, validate_idempotency_key};
@@ -46,6 +49,34 @@ impl Engine {
                 .map_err(EngineError::from)
         })
         .await
+    }
+}
+
+impl Engine {
+    /// spec/10's fingerprint fallback: the pin of the certificate
+    /// Bridge presents on `port`, for the user to confirm. It runs on
+    /// the engine's runtime, where the probe's sockets live, and stores
+    /// nothing; Bridge not answering is `Unavailable`.
+    pub async fn bridge_certificate(
+        &self,
+        port: u16,
+        security: EndpointSecurity,
+    ) -> Result<CertificatePin, EngineError> {
+        self.command(move |worker| async move {
+            worker
+                .resources()
+                .bridge_certificate(port, security)
+                .await
+                .map_err(EngineError::from)
+        })
+        .await
+    }
+
+    /// The pin of the one certificate in Bridge's exported `cert.pem`
+    /// (spec/10's preferred path); any other file is `InvalidInput` on
+    /// `certificate`. Pure: parses the given bytes only.
+    pub fn certificate_pin_from_pem(pem: &[u8]) -> Result<CertificatePin, EngineError> {
+        certificate_pin_from_pem(pem).map_err(EngineError::from)
     }
 }
 

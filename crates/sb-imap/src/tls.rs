@@ -1,12 +1,15 @@
 //! The pinned-certificate verifier (spec/10). The pin is the identity:
 //! the server name is not checked, but the SHA-256 must equal the pin
-//! and the handshake signatures and validity are still verified.
+//! and the handshake signatures and validity are still verified. Setup
+//! also reads pins: from Bridge's exported `cert.pem`, or by observing
+//! the presented leaf in a handshake this side always refuses.
 
 use std::fmt;
 use std::sync::{Arc, Mutex};
 
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::crypto::{WebPkiSupportedAlgorithms, verify_tls12_signature, verify_tls13_signature};
+use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::server::ParsedCertificate;
 use rustls::{
@@ -41,7 +44,82 @@ impl CertificatePin {
     pub fn hex(&self) -> String {
         hex(&self.0)
     }
+
+    /// The pin of the one certificate in Bridge's exported `cert.pem`
+    /// (spec/10's preferred path). A file holding a private key (Bridge's
+    /// `key.pem`, or a bundle with one) is refused from its `BEGIN` line
+    /// alone, before anything in it is decoded: Sweetbriar never reads
+    /// the key. Otherwise exactly one certificate must decode and parse
+    /// as X.509, so a wrong file fails here rather than as a pin that
+    /// never matches.
+    pub fn from_pem(pem: &[u8]) -> Result<Self, PemError> {
+        if holds_private_key(pem) {
+            return Err(PemError::PrivateKey);
+        }
+        let mut certificates = CertificateDer::pem_slice_iter(pem);
+        let certificate = match certificates.next() {
+            None => return Err(PemError::NoCertificate),
+            Some(Err(_)) => return Err(PemError::Malformed),
+            Some(Ok(certificate)) => certificate,
+        };
+        match certificates.next() {
+            None => {}
+            Some(Ok(_)) => return Err(PemError::SeveralCertificates),
+            // One certificate, then a section that does not decode.
+            Some(Err(_)) => return Err(PemError::Malformed),
+        }
+        ParsedCertificate::try_from(&certificate).map_err(|_| PemError::Malformed)?;
+        Ok(Self::of_der(certificate.as_ref()))
+    }
 }
+
+/// Whether any line opens a private-key section (`PRIVATE KEY`,
+/// `RSA PRIVATE KEY`, `ENCRYPTED PRIVATE KEY`, ...). Only the
+/// boundary lines are inspected; no section body is touched.
+fn holds_private_key(pem: &[u8]) -> bool {
+    const BEGIN: &[u8] = b"-----BEGIN ";
+    const PRIVATE_KEY: &[u8] = b"PRIVATE KEY";
+    pem.split(|byte| *byte == b'\n' || *byte == b'\r')
+        .map(<[u8]>::trim_ascii)
+        .filter_map(|line| line.strip_prefix(BEGIN))
+        .any(|label| {
+            label
+                .windows(PRIVATE_KEY.len())
+                .any(|window| window == PRIVATE_KEY)
+        })
+}
+
+/// Why a picked file yields no pin. No variant carries file content.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PemError {
+    /// A private-key section: `key.pem`, or a bundle holding a key.
+    /// Refused unread.
+    PrivateKey,
+    /// No `CERTIFICATE` section: not a certificate file.
+    NoCertificate,
+    /// More than one certificate: Bridge exports exactly one leaf.
+    SeveralCertificates,
+    /// A section that does not decode, or a certificate that does not
+    /// parse as X.509 — including one certificate followed by damage.
+    Malformed,
+}
+
+impl fmt::Display for PemError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::PrivateKey => {
+                "the file holds a private key; choose the cert.pem Bridge exported, not key.pem"
+            }
+            Self::NoCertificate => {
+                "the file holds no certificate; choose the cert.pem Bridge exported"
+            }
+            Self::SeveralCertificates => "the file holds more than one certificate",
+            Self::Malformed => "the certificate file is damaged or not a certificate",
+        })
+    }
+}
+
+impl std::error::Error for PemError {}
 
 impl fmt::Debug for CertificatePin {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -53,18 +131,28 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-/// The verifier plus the cell a pin mismatch records the presented
-/// hash into, so the handshake failure can carry it (spec/10).
+/// What the verifier does with the presented leaf.
+#[derive(Clone, Copy, Debug)]
+enum Trust {
+    /// Accept only the pinned leaf, whose validity is still checked.
+    Pinned(CertificatePin),
+    /// Setup's fingerprint fallback (spec/10): record the presented
+    /// leaf and refuse, so no session is ever established.
+    Observe,
+}
+
+/// The verifier plus the cell it records the presented leaf's pin into
+/// on a refusal, so the handshake failure can carry it (spec/10).
 struct CertPinVerifier {
-    pin: CertificatePin,
+    trust: Trust,
     algs: WebPkiSupportedAlgorithms,
-    presented: Arc<Mutex<Option<String>>>,
+    presented: Arc<Mutex<Option<CertificatePin>>>,
 }
 
 impl fmt::Debug for CertPinVerifier {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("CertPinVerifier")
-            .field("pin", &self.pin)
+            .field("trust", &self.trust)
             .finish()
     }
 }
@@ -78,12 +166,16 @@ impl ServerCertVerifier for CertPinVerifier {
         _ocsp_response: &[u8],
         now: UnixTime,
     ) -> Result<ServerCertVerified, rustls::Error> {
-        let digest = Sha256::digest(end_entity.as_ref());
-        if digest.as_slice() != self.pin.as_bytes() {
+        let presented = CertificatePin::of_der(end_entity.as_ref());
+        let pinned = match self.trust {
+            Trust::Pinned(pin) => pin == presented,
+            Trust::Observe => false,
+        };
+        if !pinned {
             *self
                 .presented
                 .lock()
-                .expect("a panicking verifier held the mismatch cell") = Some(hex(&digest));
+                .expect("a panicking verifier held the mismatch cell") = Some(presented);
             return Err(CertificateError::UnknownIssuer.into());
         }
 
@@ -130,12 +222,24 @@ impl ServerCertVerifier for CertPinVerifier {
     }
 }
 
+/// A client config accepting only `pin`, and the cell a mismatch
+/// records the presented leaf's pin into.
 pub(crate) fn pinned_client_config(
     pin: CertificatePin,
-) -> (Arc<ClientConfig>, Arc<Mutex<Option<String>>>) {
+) -> (Arc<ClientConfig>, Arc<Mutex<Option<CertificatePin>>>) {
+    client_config(Trust::Pinned(pin))
+}
+
+/// A client config that records the presented leaf's pin and refuses
+/// every handshake (spec/10's fingerprint fallback).
+pub(crate) fn observing_client_config() -> (Arc<ClientConfig>, Arc<Mutex<Option<CertificatePin>>>) {
+    client_config(Trust::Observe)
+}
+
+fn client_config(trust: Trust) -> (Arc<ClientConfig>, Arc<Mutex<Option<CertificatePin>>>) {
     let presented = Arc::new(Mutex::new(None));
     let verifier = CertPinVerifier {
-        pin,
+        trust,
         algs: rustls::crypto::ring::default_provider().signature_verification_algorithms,
         presented: Arc::clone(&presented),
     };
@@ -166,7 +270,7 @@ mod tests {
     fn exact_pin_accepts_a_valid_certificate_but_a_wrong_pin_reports_the_presented_hash() {
         let cert = sb_test_support::cert_der();
         let mut verifier = CertPinVerifier {
-            pin: CertificatePin::of_der(cert.as_ref()),
+            trust: Trust::Pinned(CertificatePin::of_der(cert.as_ref())),
             algs: rustls::crypto::ring::default_provider().signature_verification_algorithms,
             presented: Arc::new(Mutex::new(None)),
         };
@@ -177,7 +281,7 @@ mod tests {
                 .is_ok()
         );
         assert!(verifier.presented.lock().unwrap().is_none());
-        verifier.pin = CertificatePin::from_bytes([0; 32]);
+        verifier.trust = Trust::Pinned(CertificatePin::from_bytes([0; 32]));
         assert!(matches!(
             verifier.verify_server_cert(&cert, &[], &name, &[], UnixTime::now()),
             Err(rustls::Error::InvalidCertificate(
@@ -185,8 +289,98 @@ mod tests {
             ))
         ));
         assert_eq!(
-            verifier.presented.lock().unwrap().as_deref(),
-            Some("f921c0432dab5a70401266a0216f46e6f6f795de47868447e9fde159771a24d1")
+            verifier.presented.lock().unwrap().map(|pin| pin.hex()),
+            Some("f921c0432dab5a70401266a0216f46e6f6f795de47868447e9fde159771a24d1".to_owned())
+        );
+    }
+
+    #[test]
+    fn the_observing_verifier_records_the_leaf_and_refuses() {
+        let cert = sb_test_support::cert_der();
+        let verifier = CertPinVerifier {
+            trust: Trust::Observe,
+            algs: rustls::crypto::ring::default_provider().signature_verification_algorithms,
+            presented: Arc::new(Mutex::new(None)),
+        };
+        let name = ServerName::try_from("127.0.0.1").unwrap();
+        assert!(matches!(
+            verifier.verify_server_cert(&cert, &[], &name, &[], UnixTime::now()),
+            Err(rustls::Error::InvalidCertificate(
+                CertificateError::UnknownIssuer
+            ))
+        ));
+        assert_eq!(
+            *verifier.presented.lock().unwrap(),
+            Some(CertificatePin::of_der(cert.as_ref()))
+        );
+    }
+
+    #[test]
+    fn cert_pem_yields_the_pin_of_its_one_certificate() {
+        let pin = CertificatePin::from_pem(sb_test_support::CERT_PEM.as_bytes()).unwrap();
+        assert_eq!(
+            pin,
+            CertificatePin::of_der(sb_test_support::cert_der().as_ref())
+        );
+    }
+
+    #[test]
+    fn files_that_are_not_one_certificate_yield_no_pin() {
+        let cert = sb_test_support::CERT_PEM;
+        let key = sb_test_support::KEY_PEM;
+        // key.pem, and any bundle holding a key, is refused unread.
+        assert_eq!(
+            CertificatePin::from_pem(key.as_bytes()),
+            Err(PemError::PrivateKey)
+        );
+        assert_eq!(
+            CertificatePin::from_pem(format!("{cert}{key}").as_bytes()),
+            Err(PemError::PrivateKey)
+        );
+        for label in ["RSA PRIVATE KEY", "EC PRIVATE KEY", "ENCRYPTED PRIVATE KEY"] {
+            let other = format!("{cert}-----BEGIN {label}-----\nAAAA\n-----END {label}-----\n");
+            assert_eq!(
+                CertificatePin::from_pem(other.as_bytes()),
+                Err(PemError::PrivateKey),
+                "{label}"
+            );
+        }
+        assert_eq!(CertificatePin::from_pem(b""), Err(PemError::NoCertificate));
+        assert_eq!(
+            CertificatePin::from_pem(b"just some text\n"),
+            Err(PemError::NoCertificate)
+        );
+        // One certificate, then a section that does not decode: damage,
+        // not a second certificate.
+        assert_eq!(
+            CertificatePin::from_pem(
+                format!("{cert}-----BEGIN CERTIFICATE-----\n!!\n-----END CERTIFICATE-----\n")
+                    .as_bytes()
+            ),
+            Err(PemError::Malformed)
+        );
+        assert_eq!(
+            CertificatePin::from_pem(
+                format!("{cert}-----BEGIN CERTIFICATE-----\nAAAA\n").as_bytes()
+            ),
+            Err(PemError::Malformed)
+        );
+        assert_eq!(
+            CertificatePin::from_pem(format!("{cert}{cert}").as_bytes()),
+            Err(PemError::SeveralCertificates)
+        );
+        assert_eq!(
+            CertificatePin::from_pem(
+                b"-----BEGIN CERTIFICATE-----\n!!not base64!!\n-----END CERTIFICATE-----\n"
+            ),
+            Err(PemError::Malformed)
+        );
+        // Valid base64, but the bytes are not an X.509 certificate.
+        assert_eq!(
+            CertificatePin::from_pem(
+                b"-----BEGIN CERTIFICATE-----\nAAECAwQFBgcICQ==\n-----END CERTIFICATE-----\n"
+            ),
+            Err(PemError::Malformed)
         );
     }
 
@@ -194,7 +388,7 @@ mod tests {
     fn matching_pin_does_not_bypass_certificate_validity() {
         let cert = sb_test_support::cert_der();
         let verifier = CertPinVerifier {
-            pin: CertificatePin::of_der(cert.as_ref()),
+            trust: Trust::Pinned(CertificatePin::of_der(cert.as_ref())),
             algs: rustls::crypto::ring::default_provider().signature_verification_algorithms,
             presented: Arc::new(Mutex::new(None)),
         };

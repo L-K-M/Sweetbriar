@@ -882,3 +882,69 @@ async fn dovecot_starttls_setup_id_logout() {
         .expect("STARTTLS setup against Dovecot");
     connection.logout().await.expect("best-effort LOGOUT");
 }
+
+// M2.3c2a: spec/10's fingerprint fallback, over both transports.
+
+#[tokio::test]
+async fn the_presented_certificate_is_read_without_a_session() {
+    let server =
+        FakeImapServer::serve(vec![Script::new(Vec::new()).implicit_tls()]).expect("serve");
+    let pin = sb_imap::presented_certificate(localhost(), server.port(), HostPolicy::LoopbackOnly)
+        .await
+        .expect("the presented leaf");
+
+    assert_eq!(pin, CertificatePin::of_der(cert_der().as_ref()));
+    assert!(
+        received_commands(&server).is_empty(),
+        "nothing is sent: the handshake is refused"
+    );
+}
+
+#[tokio::test]
+async fn the_presented_certificate_is_read_after_starttls() {
+    let profile = starttls_profile();
+    let script = Script::new(vec![
+        profile.capability_step(),
+        Step::on(
+            Expect::command("STARTTLS"),
+            vec![Reply::ok("Begin TLS negotiation now"), Reply::UpgradeTls],
+        ),
+    ]);
+    let server = FakeImapServer::serve(vec![script]).expect("serve");
+    let pin = sb_imap::presented_certificate_starttls(
+        localhost(),
+        server.port(),
+        HostPolicy::LoopbackOnly,
+    )
+    .await
+    .expect("the presented leaf");
+
+    assert_eq!(pin, CertificatePin::of_der(cert_der().as_ref()));
+    assert_eq!(
+        received_commands(&server),
+        ["T1 CAPABILITY", "T2 STARTTLS"],
+        "no LOGIN, nothing after the refused handshake"
+    );
+}
+
+#[tokio::test]
+async fn the_starttls_probe_keeps_the_connect_checks() {
+    let server =
+        FakeImapServer::serve(vec![Script::new(vec![Profile::bridge().capability_step()])])
+            .expect("serve");
+    assert!(matches!(
+        sb_imap::presented_certificate_starttls(
+            localhost(),
+            server.port(),
+            HostPolicy::LoopbackOnly
+        )
+        .await,
+        Err(ImapError::StartTlsMissing)
+    ));
+
+    assert!(matches!(
+        sb_imap::presented_certificate("10.0.0.1".parse().unwrap(), 143, HostPolicy::LoopbackOnly)
+            .await,
+        Err(ImapError::NotLoopback)
+    ));
+}

@@ -23,7 +23,7 @@ use crate::error::ImapError;
 use crate::exchange::{self, Authentication, Reply};
 use crate::gate::Gate;
 use crate::secret::Password;
-use crate::tls::{CertificatePin, pinned_client_config};
+use crate::tls::{CertificatePin, observing_client_config, pinned_client_config};
 
 /// Which peer addresses a connection may open.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -96,18 +96,7 @@ impl Connection {
     /// Opens the connection, checks the host policy, and runs the
     /// setup. The host policy is checked before any socket opens.
     pub async fn connect(options: ConnectOptions) -> Result<Self, ImapError> {
-        if options.host_policy == HostPolicy::LoopbackOnly
-            && options.host != IpAddr::V4(Ipv4Addr::LOCALHOST)
-        {
-            return Err(ImapError::NotLoopback);
-        }
-
-        let tcp = crate::timeout::command("connect", async {
-            TcpStream::connect((options.host, options.port))
-                .await
-                .map_err(ImapError::from_io)
-        })
-        .await?;
+        let tcp = open_socket(options.host, options.port, options.host_policy).await?;
         let wire = connect_tls(tcp, options.pin, options.host).await?;
         let mut connection = Self {
             host: options.host,
@@ -129,36 +118,12 @@ impl Connection {
     /// setup. No credential is sent before TLS, and no second greeting
     /// is read after the upgrade.
     pub async fn connect_starttls(options: ConnectOptions) -> Result<Self, ImapError> {
-        if options.host_policy == HostPolicy::LoopbackOnly
-            && options.host != IpAddr::V4(Ipv4Addr::LOCALHOST)
-        {
-            return Err(ImapError::NotLoopback);
-        }
-
         // The plain socket is owned by this future: an error or a
         // cancel at any await drops it, so no half-open peer is left
         // holding a command.
-        let mut tcp = crate::timeout::command("connect", async {
-            TcpStream::connect((options.host, options.port))
-                .await
-                .map_err(ImapError::from_io)
-        })
-        .await?;
+        let mut tcp = open_socket(options.host, options.port, options.host_policy).await?;
         let mut gate = Gate::new();
-        if exchange::greeting(&mut gate, &mut tcp).await? != Authentication::Required {
-            return Err(ImapError::StartTlsRefused);
-        }
-        let pre_tls = exchange::capability(&mut gate, &mut tcp).await?;
-        if gate.poisoned() {
-            return Err(ImapError::Malformed);
-        }
-        if !pre_tls.reusable {
-            return Err(ImapError::Closed);
-        }
-        if !advertises(&pre_tls.result, |cap| matches!(cap, Capability::StartTls)) {
-            return Err(ImapError::StartTlsMissing);
-        }
-        request_starttls(&mut gate, &mut tcp).await?;
+        starttls_prelude(&mut gate, &mut tcp).await?;
 
         let wire = connect_tls(tcp, options.pin, options.host).await?;
         let mut connection = Self {
@@ -320,6 +285,74 @@ pub(crate) async fn write_command(
     wire.flush().await
 }
 
+/// spec/10's fingerprint fallback over implicit TLS: the pin of the
+/// leaf the endpoint presents, read in a handshake this side always
+/// refuses. No session is established and nothing is sent, so no
+/// credential is involved. The host policy is checked before any
+/// socket opens. The pin is for the user to confirm, never to trust on
+/// its own.
+pub async fn presented_certificate(
+    host: IpAddr,
+    port: u16,
+    host_policy: HostPolicy,
+) -> Result<CertificatePin, ImapError> {
+    let tcp = open_socket(host, port, host_policy).await?;
+    observe_tls(tcp, host).await
+}
+
+/// [`presented_certificate`] over STARTTLS: the cleartext greeting,
+/// CAPABILITY and STARTTLS run with the same checks as
+/// [`Connection::connect_starttls`] (a missing STARTTLS, a refusal and
+/// injected plaintext all fail), then the refused handshake.
+pub async fn presented_certificate_starttls(
+    host: IpAddr,
+    port: u16,
+    host_policy: HostPolicy,
+) -> Result<CertificatePin, ImapError> {
+    let mut tcp = open_socket(host, port, host_policy).await?;
+    let mut gate = Gate::new();
+    starttls_prelude(&mut gate, &mut tcp).await?;
+    observe_tls(tcp, host).await
+}
+
+/// Check the host policy, then open the plain socket under the connect
+/// deadline. No socket opens for a refused address.
+async fn open_socket(
+    host: IpAddr,
+    port: u16,
+    host_policy: HostPolicy,
+) -> Result<TcpStream, ImapError> {
+    if host_policy == HostPolicy::LoopbackOnly && host != IpAddr::V4(Ipv4Addr::LOCALHOST) {
+        return Err(ImapError::NotLoopback);
+    }
+    crate::timeout::command("connect", async {
+        TcpStream::connect((host, port))
+            .await
+            .map_err(ImapError::from_io)
+    })
+    .await
+}
+
+/// The STARTTLS cleartext prelude (spec/04): the greeting must ask for
+/// authentication, the pre-TLS CAPABILITY must advertise STARTTLS, and
+/// the checked STARTTLS must leave no trailing plaintext.
+async fn starttls_prelude(gate: &mut Gate, tcp: &mut TcpStream) -> Result<(), ImapError> {
+    if exchange::greeting(gate, tcp).await? != Authentication::Required {
+        return Err(ImapError::StartTlsRefused);
+    }
+    let pre_tls = exchange::capability(gate, tcp).await?;
+    if gate.poisoned() {
+        return Err(ImapError::Malformed);
+    }
+    if !pre_tls.reusable {
+        return Err(ImapError::Closed);
+    }
+    if !advertises(&pre_tls.result, |cap| matches!(cap, Capability::StartTls)) {
+        return Err(ImapError::StartTlsMissing);
+    }
+    request_starttls(gate, tcp).await
+}
+
 /// Exactly one matched completion authorizes TLS, and every byte already
 /// received after it remains plaintext and prevents the upgrade.
 async fn request_starttls(
@@ -358,11 +391,38 @@ async fn connect_tls(tcp: TcpStream, pin: CertificatePin, host: IpAddr) -> Resul
         match TlsConnector::from(config).connect(server, tcp).await {
             Ok(tls) => Ok(tls),
             Err(err) => {
-                if let Some(presented_sha256) = presented.lock().expect("verifier mutex").take() {
-                    return Err(ImapError::PinMismatch { presented_sha256 });
+                if let Some(presented) = presented.lock().expect("verifier mutex").take() {
+                    return Err(ImapError::PinMismatch {
+                        presented_sha256: presented.hex(),
+                    });
                 }
                 Err(ImapError::from_io(err))
             }
+        }
+    })
+    .await
+}
+
+/// A handshake the observing verifier always refuses: its recorded pin
+/// is the answer. A handshake that fails before a certificate arrives
+/// is the transport's error.
+async fn observe_tls(tcp: TcpStream, host: IpAddr) -> Result<CertificatePin, ImapError> {
+    let (config, presented) = observing_client_config();
+    let server = ServerName::try_from(host.to_string())
+        .map_err(|_| ImapError::command("TLS", "invalid server name"))?;
+    crate::timeout::command("TLS", async {
+        let refused = TlsConnector::from(config).connect(server, tcp).await;
+        if let Some(pin) = presented.lock().expect("verifier mutex").take() {
+            return Ok(pin);
+        }
+        match refused {
+            Err(err) => Err(ImapError::from_io(err)),
+            // The observing verifier refuses every certificate, so a
+            // completed handshake cannot happen; treat it as a fault.
+            Ok(_) => Err(ImapError::command(
+                "TLS",
+                "the observing handshake unexpectedly completed",
+            )),
         }
     })
     .await
