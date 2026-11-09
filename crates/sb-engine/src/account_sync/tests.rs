@@ -250,3 +250,41 @@ fn a_missing_credential_pauses_the_account_for_its_credential() {
     });
     shutdown_promptly(engine);
 }
+
+/// A worker asked for an account that no longer syncs (a replayed
+/// setup, a pause that raced the start) ends without a session.
+#[test]
+fn a_paused_account_gets_no_session() {
+    let server = FakeImapServer::serve(vec![bridge_script(true)]).unwrap();
+    let secrets = Arc::new(FakeSecrets::new());
+    let scratch = ScratchDir::new("account-worker-paused");
+    let engine = open(&scratch, &secrets);
+    let account_id = add(&engine, server.port());
+    let id = account_id.clone();
+    block_on(engine.resources().write(WritePriority::User, move |tx| {
+        tx.execute(
+            "UPDATE accounts SET state = 'paused' WHERE account_id = ?1",
+            [&id],
+        )
+        .map(drop)
+        .map_err(|error| sb_resources::StoreError::internal(error.to_string()))
+    }))
+    .unwrap();
+    shutdown_promptly(engine);
+
+    // The reopened engine schedules no worker for the paused account;
+    // asking for one directly opens no session either.
+    let engine = open(&scratch, &secrets);
+    let sessions = |server: &FakeImapServer| {
+        let mut conns: Vec<usize> = server.received().iter().map(|c| c.conn).collect();
+        conns.dedup();
+        conns.len()
+    };
+    let before = sessions(&server);
+    engine.start_account(account_id.clone());
+    eventually("the worker ends", || {
+        !engine.account_jobs().running(&account_id)
+    });
+    assert_eq!(sessions(&server), before, "no new session");
+    shutdown_promptly(engine);
+}

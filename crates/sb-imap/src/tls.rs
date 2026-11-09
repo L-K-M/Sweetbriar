@@ -289,6 +289,8 @@ mod tests {
             &"0".repeat(63),
             &"g".repeat(64),
             &"00:".repeat(21),
+            // Full length, separators in place of digits.
+            &"0:".repeat(32),
         ] {
             assert_eq!(CertificatePin::from_hex(bad), None, "{bad}");
         }

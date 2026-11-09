@@ -13,9 +13,9 @@ sb-resources = { version = "0.0.1", path = "../sb-resources" }
 # `libm` without the defaults — no named colors, serde, rand or std.
 palette = { version = "=0.7.7", default-features = false, features = ["libm"] }
 # spec/01 crate table: the one async runtime, owned by the engine
-# (spec/01 "Process model"). Only the multi-thread scheduler: no I/O
-# driver, no timers, no macros — the core's futures are runtime-neutral
-# otherwise.
+# (spec/01 "Process model"). The multi-thread scheduler plus the timers
+# and select! the account workers need; still no I/O driver, so the
+# core's futures stay runtime-neutral otherwise.
 tokio = { version = "=1.54.1", default-features = false, features = ["rt-multi-thread", "sync", "time", "macros"] }
 # spec/07 command receipts are canonical JSON: caller-supplied draft ids
 # must be encoded, never pasted into a template.

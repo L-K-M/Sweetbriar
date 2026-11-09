@@ -146,7 +146,15 @@ enum SetupFailure {
 }
 
 async fn run_account(worker: &Worker, account_id: &str, stop: watch::Receiver<bool>) {
+    // However the worker was asked for (a replayed setup, a pause that
+    // raced the start), an account that no longer syncs gets no session.
     let id = account_id.to_owned();
+    let syncable = worker
+        .blocking(|resources| resources.read(syncable_accounts))
+        .await;
+    if !matches!(syncable, Ok(Ok(accounts)) if accounts.contains(&id)) {
+        return;
+    }
     let endpoint = worker
         .blocking(move |resources| resources.read(|tx| imap_endpoint(tx, &id)))
         .await;
@@ -268,6 +276,12 @@ async fn recover(
         Ok(connection) => Recovery::Connected(Box::new(connection)),
         Err(ReconnectError::Cancelled) => Recovery::Stopped,
         Err(ReconnectError::Paused { cause }) => {
+            // A stop that raced the attempt must not record a pause: a
+            // secret read cut short by the engine stopping would read
+            // as an unavailable secret store.
+            if *stop.borrow() {
+                return Recovery::Stopped;
+            }
             let Some(transition) = paused_transition(connector, &cause) else {
                 return Recovery::Restart;
             };
