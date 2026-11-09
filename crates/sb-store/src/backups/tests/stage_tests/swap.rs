@@ -243,3 +243,112 @@ fn every_check_before_closing_refuses_with_the_store_handed_back() {
     other_store.close().unwrap();
     drop(source);
 }
+
+/// The authority and name checks each refuse on their own: a stage
+/// whose lease is not the running operation, a replaced stage
+/// directory, and a replaced staged database.
+#[test]
+fn a_forged_lease_or_a_replaced_stage_name_is_refused() {
+    let replace = |path: &Path| {
+        let aside = path.with_extension("aside");
+        std::fs::rename(path, &aside).unwrap();
+        if aside.is_dir() {
+            std::fs::create_dir(path).unwrap();
+            for entry in std::fs::read_dir(&aside).unwrap() {
+                let entry = entry.unwrap();
+                if entry.path().is_file() {
+                    std::fs::copy(entry.path(), path.join(entry.file_name())).unwrap();
+                }
+            }
+        } else {
+            std::fs::copy(&aside, path).unwrap();
+        }
+    };
+    type Forge = fn(&mut QualifiedStage, &dyn Fn(&Path));
+    let cases: [(&str, &str, Forge); 3] = [
+        (
+            "a forged lease",
+            "operation is not the running one",
+            |stage, _| {
+                stage.operation = Arc::new(());
+            },
+        ),
+        (
+            "a replaced stage directory",
+            "restore stage was replaced",
+            |stage, replace| {
+                replace(stage.path());
+            },
+        ),
+        (
+            "a replaced staged database",
+            "staged database was replaced",
+            |stage, replace| {
+                replace(&stage.path().join("state.sqlite"));
+            },
+        ),
+    ];
+    for (case, detail, forge) in cases {
+        let source = staging_source("swap-forged");
+        let mut stage = qualified(&source);
+        let (stage_path, preserved) = (
+            stage.path().to_path_buf(),
+            stage.preserved_root().to_path_buf(),
+        );
+        let old_incarnation = source.live_incarnation();
+        forge(&mut stage, &replace);
+        let StagingSource {
+            _scratch, store, ..
+        } = source;
+
+        let result = store.swap_restore(stage, &AtomicBool::new(false));
+
+        let Err(SwapRestoreError::Refused { cause, store, .. }) = result else {
+            panic!("{case}: expected a refusal, got {result:?}");
+        };
+        assert!(
+            matches!(&cause, StoreError::Conflict { detail: found } if found.contains(detail)),
+            "{case}: {cause:?}"
+        );
+        assert_eq!(meta(&store, "incarnation"), old_incarnation, "{case}");
+        assert!(
+            stage_path.exists() && !preserved.exists(),
+            "{case}: nothing renamed"
+        );
+        store.close().unwrap();
+    }
+}
+
+/// A failure once the store has closed is `Failed`: here the marker
+/// cannot be written, so nothing moved, and the next open is the old
+/// store with the stage left as evidence.
+#[test]
+fn a_failure_after_closing_reports_failed_and_the_next_open_resolves_it() {
+    let source = staging_source("swap-failed");
+    let paths = StorePaths::new(source.paths.data_root()).unwrap();
+    let stage = qualified(&source);
+    let stage_path = stage.path().to_path_buf();
+    let old_incarnation = source.live_incarnation();
+    // A directory under the marker's temporary name: the marker write
+    // fails after the store closed.
+    let mut temporary = crate::restore_pending::marker_path(&paths).into_os_string();
+    temporary.push(".tmp");
+    std::fs::create_dir(PathBuf::from(&temporary)).unwrap();
+    let StagingSource {
+        _scratch, store, ..
+    } = source;
+
+    let result = store.swap_restore(stage, &AtomicBool::new(false));
+
+    assert!(
+        matches!(result, Err(SwapRestoreError::Failed(_))),
+        "{result:?}"
+    );
+    assert!(!crate::restore_pending::marker_path(&paths).exists());
+    assert!(stage_path.join("state.sqlite").is_file(), "the stage stays");
+    // The lock went with the failed swap; the old store opens.
+    std::fs::remove_dir(PathBuf::from(&temporary)).unwrap();
+    let reopened = open(&paths, &crate::testing::test_seams(real_fs())).unwrap();
+    assert_eq!(meta(&reopened, "incarnation"), old_incarnation);
+    reopened.close().unwrap();
+}
