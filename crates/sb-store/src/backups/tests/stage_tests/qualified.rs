@@ -85,10 +85,24 @@ fn assert_conflict<T: std::fmt::Debug>(result: Result<T, StoreError>, case: &str
 
 /// Swap `path` for a byte-identical copy under the same name: a new
 /// inode (and, for a directory, new children) with the same content.
+/// The original goes away entirely, so only the changed identity at
+/// the name can explain a refusal, never an extra entry beside it.
 fn replace_with_copy(path: &Path) {
-    let aside = path.with_extension("aside");
+    let mut aside = path.as_os_str().to_owned();
+    aside.push(".aside");
+    let aside = PathBuf::from(aside);
     std::fs::rename(path, &aside).unwrap();
     copy_tree(&aside, path);
+    if aside.is_dir() {
+        std::fs::remove_dir_all(&aside).unwrap();
+    } else {
+        std::fs::remove_file(&aside).unwrap();
+    }
+}
+
+/// Nothing at `path`, not even a link.
+fn absent(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_err()
 }
 
 fn copy_tree(from: &Path, to: &Path) {
@@ -155,7 +169,7 @@ fn a_prepared_stage_qualifies_to_its_quarantined_image() {
     // The live store and the source are untouched, nothing is preserved,
     // and the operation lease stays held by the qualified stage.
     assert_eq!(source.live_incarnation(), live);
-    assert!(!preserved.exists());
+    assert!(absent(&preserved));
     source.assert_untouched();
     assert!(
         source
@@ -292,7 +306,7 @@ fn a_changed_live_incarnation_is_refused() {
         });
 
         assert_conflict(result, &format!("after flush: {after_flush}"));
-        assert!(!preserved.exists());
+        assert!(absent(&preserved));
     }
 }
 
@@ -396,7 +410,7 @@ fn damaged_staged_evidence_is_refused_before_and_after_quarantine() {
                 );
             }
             assert!(evidence.stage.join("state.sqlite").is_file(), "{case}");
-            assert!(!evidence.preserved.exists(), "{case}");
+            assert!(absent(&evidence.preserved), "{case}");
             assert_eq!(source.live_incarnation(), evidence.incarnation, "{case}");
         }
     }
@@ -533,7 +547,7 @@ fn fired_open_faults_keep_their_native_cause() {
             Some(io::ErrorKind::PermissionDenied),
             "open #{nth} of {total}"
         );
-        assert!(!preserved.exists());
+        assert!(absent(&preserved));
         source.assert_untouched();
     }
 }
@@ -645,17 +659,19 @@ fn qualification_cuts_leave_live_source_and_stage_evidence() {
     let rechecked = counts[PHASES.len() - 1];
     assert!(counts[0] > staged, "the pre-checks do real I/O");
     assert!(rechecked > flushed, "the post-flush recheck does real I/O");
-    // The first operation of the pre-checks, of the evidence pass, of the
-    // quarantine, and the first, middle and last of the post-flush
-    // recheck: the last one is the final I/O before the handoff.
-    let mut points = vec![
-        staged + 1,
-        counts[0] + 1,
-        counts[1] + 1,
-        flushed + 1,
-        flushed + (rechecked - flushed).div_ceil(2),
+    assert_eq!(
+        counts[PHASES.len()],
         rechecked,
-    ];
+        "the recheck's last operation is the last before the handoff"
+    );
+    // The first operation after staging and after every phase but the
+    // last (the evidence pass, each step of the image's quarantine,
+    // checkpoint, close and flush, and the recheck), the recheck's
+    // middle, and its last: the final I/O before the handoff.
+    let mut points = vec![staged + 1];
+    points.extend(counts[..PHASES.len() - 1].iter().map(|count| count + 1));
+    points.extend([flushed + (rechecked - flushed).div_ceil(2), rechecked]);
+    points.sort_unstable();
     points.dedup();
     assert!(points.windows(2).all(|pair| pair[0] < pair[1]));
     let mut phases = Vec::new();
@@ -678,11 +694,14 @@ fn qualification_cuts_leave_live_source_and_stage_evidence() {
             assert_eq!(report["staged"].as_u64(), Some(staged), "the run drifted");
             let phase = std::fs::read_to_string(root.join("phase.txt")).unwrap_or_default();
             phases.push(phase.clone());
-            for pair in report["hashes"].as_array().unwrap() {
+            let hashes = report["hashes"].as_array().expect("the child's hashes");
+            assert!(!hashes.is_empty(), "the source's files are checked");
+            for pair in hashes {
                 let path = pair[0].as_str().unwrap();
                 assert_eq!(
                     sha256_hex(&std::fs::read(path).unwrap()),
-                    pair[1].as_str().unwrap()
+                    pair[1].as_str().unwrap(),
+                    "{path}"
                 );
             }
             let live = Path::new(report["live"].as_str().unwrap());
@@ -707,12 +726,12 @@ fn qualification_cuts_leave_live_source_and_stage_evidence() {
             assert_eq!(format!("{id:?}"), report["live_id"].as_str().unwrap());
             let stage = Path::new(report["stage"].as_str().unwrap());
             assert!(
-                stage.is_dir(),
+                std::fs::symlink_metadata(stage).is_ok_and(|metadata| metadata.is_dir()),
                 "{root:?} after {phase:?}, finished: {}: {:?}",
                 root.join("counts.json").exists(),
                 std::fs::symlink_metadata(stage)
             );
-            assert!(!Path::new(report["preserved"].as_str().unwrap()).exists());
+            assert!(absent(Path::new(report["preserved"].as_str().unwrap())));
             drop(directory);
             let child_scratch = Path::new(report["scratch"].as_str().unwrap());
             assert!(
