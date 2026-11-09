@@ -236,17 +236,21 @@ async fn watching(
 
 /// Polls `future` beside `probe` under a real wall timeout: the
 /// operation must stay pending while the wire reaches its stall point.
+/// The probe is polled first: once the stall point was reached, the
+/// operation may already be finishing (a stop requested there), and
+/// an unbiased select would then pick either at random.
 async fn drive<T: Debug, F: Future<Output = Result<T, ImapError>>, P: Future>(
     future: &mut Pin<Box<F>>,
     probe: P,
     label: &'static str,
 ) -> P::Output {
     tokio::select! {
-        result = future.as_mut() => {
-            panic!("{label} completed before its stall point: {result:?}")
-        }
+        biased;
         output = timeout(WALL, probe) => {
             output.unwrap_or_else(|_| panic!("{label} reached no stall point within {WALL:?}"))
+        }
+        result = future.as_mut() => {
+            panic!("{label} completed before its stall point: {result:?}")
         }
     }
 }
