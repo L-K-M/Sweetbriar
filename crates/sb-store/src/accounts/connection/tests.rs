@@ -270,3 +270,38 @@ fn a_non_imap_account_takes_no_connection_transition() {
     assert!(!clear(&store, &local));
     assert_eq!(state(&store, &local).0, "needs_attention");
 }
+
+#[test]
+fn a_credential_pause_never_replaces_a_user_pause_or_disconnect() {
+    let (_scratch, store) = scratch();
+    for user_state in ["paused", "disconnected"] {
+        writing(&store, move |tx| {
+            tx.execute(
+                "UPDATE accounts SET state = ?1, state_reason = NULL WHERE account_id = 'b'",
+                params![user_state],
+            )
+            .unwrap();
+            Ok(())
+        });
+        let before = state(&store, "b");
+        let refused = sb_test_support::block_on(store.write(crate::WritePriority::User, |tx| {
+            crate::accounts::pause_for_credential(tx, "b", CredentialPause::StoreUnavailable)
+        }));
+        assert!(
+            matches!(refused, Err(StoreError::Conflict { .. })),
+            "{user_state}: {refused:?}"
+        );
+        assert_eq!(state(&store, "b"), before, "{user_state}");
+    }
+
+    // A credential failure is the more basic blocker: it replaces a
+    // connection pause, and the credential retry later lifts it.
+    pause(&store, "a", ConnectionPause::BridgeNotRunning).unwrap();
+    writing(&store, |tx| {
+        crate::accounts::pause_for_credential(tx, "a", CredentialPause::StoreRefused)
+    });
+    assert_eq!(
+        writing(&store, |tx| credential_pause(tx, "a")),
+        Some(CredentialPause::StoreRefused)
+    );
+}

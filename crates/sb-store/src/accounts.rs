@@ -4,8 +4,7 @@
 //! ordering live in `sb-resources`; the credential itself never
 //! appears here, only its `credential_ref` (spec/10).
 
-use rusqlite::Transaction;
-use rusqlite::params;
+use rusqlite::{OptionalExtension, Transaction, params};
 use sb_types::time::Timestamp;
 
 mod connection;
@@ -211,24 +210,43 @@ pub fn insert_bridge_account(
 }
 
 /// Pause an account for its credential: `needs_attention` with
-/// `pause`'s reason. Never deletes the credential or any rows (spec/10).
+/// `pause`'s reason, replacing a connection pause (the credential is the
+/// more basic blocker). Never deletes the credential or any rows
+/// (spec/10). `Conflict` for an account the user paused or
+/// disconnected; `NotFound` for an unknown one.
 pub fn pause_for_credential(
     tx: &Transaction,
     account_id: &str,
     pause: CredentialPause,
 ) -> Result<(), StoreError> {
+    // The user's own pause or disconnect outranks it: only the user
+    // lifts those, so a sync worker's credential failure leaves them.
     let changed = tx
         .execute(
             "UPDATE accounts
              SET state = 'needs_attention', state_reason = ?2, revision = revision + 1
-             WHERE account_id = ?1",
+             WHERE account_id = ?1 AND state NOT IN ('paused', 'disconnected')",
             params![account_id, pause.reason()],
         )
         .map_err(|e| classify(e, "pause the account"))?;
-    if changed == 0 {
-        return Err(StoreError::not_found(format!("account {account_id}")));
+    if changed == 1 {
+        return Ok(());
     }
-    Ok(())
+    let exists = tx
+        .query_row(
+            "SELECT 1 FROM accounts WHERE account_id = ?1",
+            params![account_id],
+            |_| Ok(()),
+        )
+        .optional()
+        .map_err(|e| classify(e, "read the account"))?
+        .is_some();
+    if exists {
+        return Err(StoreError::conflict(
+            "the account is paused or disconnected by the user",
+        ));
+    }
+    Err(StoreError::not_found(format!("account {account_id}")))
 }
 
 /// Return a credential-paused account to `active` once its secret is
