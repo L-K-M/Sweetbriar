@@ -55,7 +55,7 @@ fn retained<T>(context: &str, call: impl FnOnce() -> io::Result<T>) -> Result<T,
         .map_err(|error| io_error(context, error))
 }
 
-fn fingerprint(
+pub(super) fn fingerprint(
     files: &StageFiles,
     bytes: u64,
     cancel: &AtomicBool,

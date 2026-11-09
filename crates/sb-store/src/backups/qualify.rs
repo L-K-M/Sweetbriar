@@ -48,7 +48,7 @@ pub(super) enum QualifyPhase {
 /// operation lease until dropped. Nothing publishes it, and it grants
 /// no swap: the swap reauthenticates bytes and names again.
 #[derive(Debug)]
-pub(crate) struct QualifiedStage {
+pub struct QualifiedStage {
     /// The retained stage handles the swap reauthenticates through.
     pub(super) files: StageFiles,
     /// The retained source and live identity leases.
@@ -75,36 +75,78 @@ pub(crate) struct QualifiedStage {
 impl QualifiedStage {
     /// The qualified staging root. Not published: only the swap may
     /// rename it, after reauthenticating it.
-    pub(crate) fn path(&self) -> &Path {
+    pub fn path(&self) -> &Path {
         &self.path
     }
     /// The incarnation the restored store carries.
-    pub(crate) fn incarnation(&self) -> &str {
+    pub fn incarnation(&self) -> &str {
         &self.incarnation
     }
     /// The restored-from generation.
-    pub(crate) fn generation_id(&self) -> &str {
+    pub fn generation_id(&self) -> &str {
         &self.generation_id
     }
     /// SHA-256 of the generation's exact manifest bytes.
-    pub(crate) fn manifest_sha256(&self) -> &str {
+    pub fn manifest_sha256(&self) -> &str {
         &self.manifest_sha256
     }
     /// The locator the generation was restored from.
-    pub(crate) fn source_location(&self) -> &Path {
+    pub fn source_location(&self) -> &Path {
         &self.source_location
     }
     /// The future `<data root>.preserved-<live incarnation>` root.
-    pub(crate) fn preserved_root(&self) -> &Path {
+    pub fn preserved_root(&self) -> &Path {
         &self.preserved_root
     }
     /// The quarantined image's SHA-256, lowercase hex.
-    pub(crate) fn image_sha256(&self) -> String {
+    pub fn image_sha256(&self) -> String {
         to_hex(&self.image_sha256)
     }
     /// The quarantined image's length.
-    pub(crate) fn image_bytes(&self) -> u64 {
+    pub fn image_bytes(&self) -> u64 {
         self.image_bytes
+    }
+    /// The live data root the stage replaces.
+    pub(crate) fn data_root(&self) -> &Path {
+        &self.data_root
+    }
+}
+
+/// What a stage is bound to, borrowed from a prepared or a qualified
+/// stage, so the swap reruns exactly the qualifier's checks.
+pub(super) struct Bound<'a> {
+    pub bindings: &'a StageBindings,
+    pub files: &'a StageFiles,
+    pub data_root: &'a Path,
+    pub live_incarnation: &'a str,
+    pub path: &'a Path,
+    pub incarnation: &'a str,
+    pub source_location: &'a Path,
+}
+
+impl<'a> Bound<'a> {
+    fn of_prepared(prepared: &'a PreparedRestoreStage, names: &'a Names) -> Self {
+        Self {
+            bindings: &prepared.bindings,
+            files: &prepared.files,
+            data_root: &prepared.data_root,
+            live_incarnation: &prepared.live_incarnation,
+            path: &names.path,
+            incarnation: &names.incarnation,
+            source_location: &names.source_location,
+        }
+    }
+
+    pub(super) fn of_qualified(stage: &'a QualifiedStage) -> Self {
+        Self {
+            bindings: &stage.bindings,
+            files: &stage.files,
+            data_root: &stage.data_root,
+            live_incarnation: &stage.live_incarnation,
+            path: &stage.path,
+            incarnation: &stage.incarnation,
+            source_location: &stage.source_location,
+        }
     }
 }
 
@@ -174,7 +216,7 @@ impl Backups {
         let total_bytes = u64::try_from(prepared.metadata.total_bytes)
             .map_err(|_| StoreError::corrupt("invalid restore byte total"))?;
 
-        self.check_bindings(&prepared, &names)?;
+        self.check_bindings(&Bound::of_prepared(&prepared, &names))?;
         progress(QualifyPhase::BindingsChecked);
         active(cancel)?;
 
@@ -234,7 +276,7 @@ impl Backups {
                 "the quarantined image's schema differs from the snapshot's",
             ));
         }
-        self.check_bindings(&prepared, &names)?;
+        self.check_bindings(&Bound::of_prepared(&prepared, &names))?;
         self.recheck_evidence(&prepared.files, &expected, &evidence, cancel)?;
         progress(QualifyPhase::Rechecked);
         active(cancel)?;
@@ -261,7 +303,7 @@ impl Backups {
     }
 
     /// The running operation lease must be the one the stage holds.
-    fn holds_operation(&self, operation: &Arc<()>) -> Result<(), StoreError> {
+    pub(super) fn holds_operation(&self, operation: &Arc<()>) -> Result<(), StoreError> {
         let running = self
             .active
             .lock()
@@ -279,16 +321,12 @@ impl Backups {
     /// The source and live bindings, the stage's own names, the retained
     /// handles' identities, and the live incarnation, read between two
     /// live rechecks as staging reads it.
-    fn check_bindings(
-        &self,
-        prepared: &PreparedRestoreStage,
-        names: &Names,
-    ) -> Result<(), StoreError> {
+    pub(super) fn check_bindings(&self, bound: &Bound<'_>) -> Result<(), StoreError> {
         let fs = self.fs.as_ref();
-        prepared
+        bound
             .bindings
-            .recheck(fs, &names.source_location, &prepared.data_root)?;
-        let files = &prepared.files;
+            .recheck(fs, bound.source_location, bound.data_root)?;
+        let files = bound.files;
         let retained_root = files
             .root
             .identity()
@@ -304,10 +342,10 @@ impl Backups {
         }
         // The stage's name must still open the retained directory and
         // database: a later swap renames by name.
-        let (parent, name) = names
+        let (parent, name) = bound
             .path
             .parent()
-            .zip(names.path.file_name())
+            .zip(bound.path.file_name())
             .ok_or_else(|| StoreError::corrupt("the restore stage path has no parent"))?;
         let stage = fs
             .open_confined_dir(parent)
@@ -327,13 +365,13 @@ impl Backups {
         }
 
         let current = read_live_incarnation(&self.state_db)?;
-        prepared.bindings.live.recheck(fs, &prepared.data_root)?;
-        if current != prepared.live_incarnation {
+        bound.bindings.live.recheck(fs, bound.data_root)?;
+        if current != bound.live_incarnation {
             return Err(StoreError::conflict(
                 "the live store changed incarnation since staging",
             ));
         }
-        if current == names.incarnation {
+        if current == bound.incarnation {
             return Err(StoreError::conflict(
                 "the restore incarnation reuses the live store incarnation",
             ));

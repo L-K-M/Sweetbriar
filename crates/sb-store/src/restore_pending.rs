@@ -33,7 +33,6 @@ const HEADER: &str = "sweetbriar-restore-pending 1";
 /// Far above any valid marker (four short lines); bounds the read.
 const MAX_MARKER_BYTES: u64 = 1024;
 /// Where the marker is written before its atomic rename.
-#[cfg_attr(not(test), allow(dead_code))] // The swap (M1.8f2) writes the marker.
 const TEMPORARY_SUFFIX: &str = ".tmp";
 
 /// An interrupted swap's record: the restored store's incarnation and
@@ -77,7 +76,6 @@ impl PendingRestore {
         })
     }
 
-    #[cfg_attr(not(test), allow(dead_code))] // The swap (M1.8f2) writes the marker.
     fn encode(&self) -> Vec<u8> {
         let name = |name: &OsStr| {
             name.to_str()
@@ -169,7 +167,6 @@ pub(crate) fn is_pending(fs: &dyn Fs, paths: &StorePaths) -> Result<bool, StoreE
 /// Write the marker atomically and durably: a temporary sibling is
 /// written and flushed, renamed over the marker name, and the parent
 /// flushed. Only then may the swap rename anything.
-#[cfg_attr(not(test), allow(dead_code))] // The swap (M1.8f2) writes the marker.
 pub(crate) fn write_marker(
     fs: &dyn Fs,
     paths: &StorePaths,

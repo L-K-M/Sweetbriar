@@ -696,8 +696,12 @@ The process holds `<data root>.lock` throughout.
      and renamed into place, so startup never reads a torn marker; a
      marker that doesn't parse, or names other siblings, is `Corrupt`.
    - Rename the current data root to `<data root>.preserved-<old
-     incarnation>`, then the staging root to `<data root>`. Flush the
-     parent directory, then remove the marker.
+     incarnation>` and flush the parent directory, then rename the
+     staging root to `<data root>` and flush the parent again, so the
+     renames persist in order; then remove the marker. The store lock
+     is held from before the marker through reopening the restored
+     store, and every binding and the staged bytes are checked again
+     while the old store is still open, so a refusal changes nothing.
    - **On startup, a marker means a swap was interrupted.** If the data
      root is missing and staging exists, finish the swap. If both the
      data root and staging exist, the swap hadn't started: remove the
