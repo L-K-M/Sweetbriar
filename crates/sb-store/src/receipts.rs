@@ -87,17 +87,28 @@ pub fn run_once(
     now: Timestamp,
     f: impl FnOnce(&Transaction) -> Result<String, StoreError>,
 ) -> Result<Receipt, StoreError> {
+    if let Some(receipt) = replay(tx, key, command)? {
+        return Ok(receipt);
+    }
+    let result_json = f(tx)?;
+    insert(tx, key, command, &result_json, now)?;
+    Ok(Receipt::new(command.to_owned(), result_json, now))
+}
+
+/// What `key` already answers for `command` (spec/07): the stored
+/// receipt when it ran, `Conflict` when the key was spent on another
+/// command, `None` when it is unspent. A command with effects outside
+/// SQLite (a network probe, a secret write) asks this before them, so a
+/// replay does nothing else; it still commits through [`run_once`],
+/// which settles a concurrent command under the same key.
+pub fn replay(tx: &Transaction, key: &str, command: &str) -> Result<Option<Receipt>, StoreError> {
     match find(tx, key)? {
-        Some(receipt) if receipt.command == command => Ok(receipt),
+        Some(receipt) if receipt.command == command => Ok(Some(receipt)),
         Some(receipt) => Err(StoreError::conflict(format!(
             "idempotency key '{key}' was already used for command '{}'",
             receipt.command
         ))),
-        None => {
-            let result_json = f(tx)?;
-            insert(tx, key, command, &result_json, now)?;
-            Ok(Receipt::new(command.to_owned(), result_json, now))
-        }
+        None => Ok(None),
     }
 }
 

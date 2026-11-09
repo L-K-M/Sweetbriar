@@ -14,11 +14,15 @@ use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use sb_platform::{OsRandom, RealFs, SystemClock};
+use sb_platform::{OsRandom, PlatformSecrets, RealFs, SystemClock};
 use sb_store::StorePaths;
 
 mod accounts;
-pub use accounts::{AddedAccount, BridgeAccountError, BridgeAccountParams, BridgeIdentity};
+pub use accounts::{
+    ADD_BRIDGE_ACCOUNT, AddedAccount, BridgeAccountError, BridgeAccountParams, BridgeIdentity,
+};
+pub use sb_imap::CertificatePin;
+pub use sb_platform::{Secret, SecretError, SecretStore};
 pub use sb_store::accounts::{AddressMode, CredentialPause, EndpointSecurity, IdentitySendable};
 mod bodies;
 pub use bodies::{AttachmentLease, BodyKind, BodyLease, PublishedAttachment, PublishedBody};
@@ -137,7 +141,7 @@ pub use sb_store::{
     AppearanceObserver, ExportMetadata, ImportSourceSnapshot, ListObserver, PublishedObject,
     ReadStop, Receipt, Scoped, SearchObserver, StoreError, Timestamp, Transaction, Uuid,
     WriteFuture, WritePriority, await_write, encode_job_receipt, export_occurrence_metadata,
-    receipt_job_id, run_once,
+    receipt_job_id, replay, run_once,
 };
 
 #[cfg(feature = "test-seams")]
@@ -156,6 +160,35 @@ pub struct Resources {
     fs: Arc<dyn Fs>,
     clock: Arc<dyn Clock>,
     random: Arc<dyn Random>,
+    secrets: Arc<dyn SecretStore>,
+}
+
+/// The secret store when the platform has none (spec/10): every call is
+/// a typed `Unavailable`, so setup reaches its pause path instead of
+/// failing open or the whole core failing to open.
+struct UnavailableSecrets;
+
+impl SecretStore for UnavailableSecrets {
+    fn get(&self, _credential_ref: &str) -> Result<Secret, SecretError> {
+        Err(SecretError::Unavailable)
+    }
+
+    fn set(&self, _credential_ref: &str, _secret: &Secret) -> Result<(), SecretError> {
+        Err(SecretError::Unavailable)
+    }
+
+    fn delete(&self, _credential_ref: &str) -> Result<(), SecretError> {
+        Err(SecretError::Unavailable)
+    }
+}
+
+/// The platform's protected secret store (spec/10), or
+/// [`UnavailableSecrets`] where it cannot be built (Linux today).
+fn platform_secrets() -> Arc<dyn SecretStore> {
+    match PlatformSecrets::new() {
+        Ok(store) => Arc::new(store),
+        Err(_) => Arc::new(UnavailableSecrets),
+    }
 }
 
 impl Resources {
@@ -187,6 +220,18 @@ impl Resources {
         Self::open_on(data_root, fs, clock)
     }
 
+    /// [`Resources::open`] on an injected secret store: setup suites use
+    /// the fake store and its fault injection (spec/11).
+    #[cfg(feature = "test-seams")]
+    pub fn open_with_secrets(
+        data_root: &Path,
+        secrets: Arc<dyn SecretStore>,
+    ) -> Result<Self, StoreError> {
+        let mut resources = Self::open(data_root)?;
+        resources.secrets = secrets;
+        Ok(resources)
+    }
+
     fn open_on(
         data_root: &Path,
         fs: Arc<dyn Fs>,
@@ -201,7 +246,16 @@ impl Resources {
             fs,
             clock,
             random,
+            secrets: platform_secrets(),
         })
+    }
+
+    /// Store `secret` under `credential_ref` in the platform secret store
+    /// (spec/10). Blocking — keychain IPC, or a Secret Service unlock
+    /// prompt — so callers run it on a blocking thread, never on a
+    /// runtime worker.
+    pub fn set_secret(&self, credential_ref: &str, secret: &Secret) -> Result<(), SecretError> {
+        self.secrets.set(credential_ref, secret)
     }
 
     /// Submit one write to the store's writer (spec/03 "Write

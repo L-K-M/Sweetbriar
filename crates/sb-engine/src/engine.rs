@@ -420,6 +420,16 @@ impl Engine {
         Self::open_on(data_root.as_ref(), spawn_open_thread, open).await
     }
 
+    /// [`Engine::open`] on an injected secret store, for setup suites.
+    #[cfg(test)]
+    pub(crate) async fn open_with_secrets(
+        data_root: &Path,
+        secrets: Arc<dyn sb_resources::SecretStore>,
+    ) -> Result<Self, EngineError> {
+        let open = Box::new(move |root: &Path| Resources::open_with_secrets(root, secrets));
+        Self::open_on(data_root, spawn_open_thread, open).await
+    }
+
     #[cfg(test)]
     pub(crate) async fn open_with_clock(
         root: &Path,

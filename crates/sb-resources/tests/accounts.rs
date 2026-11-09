@@ -6,11 +6,12 @@
 
 use std::future::{Ready, ready};
 
-use sb_imap::{CertificatePin, ImapError};
+use sb_imap::CertificatePin;
 use sb_platform::{Secret, SecretError, SecretStore};
 use sb_resources::{
-    AddressMode, BridgeAccountError, BridgeAccountParams, BridgeIdentity, CredentialPause,
-    EndpointSecurity, IdentitySendable, Resources, StoreError, WritePriority,
+    ADD_BRIDGE_ACCOUNT, AddressMode, BridgeAccountError, BridgeAccountParams, BridgeIdentity,
+    CredentialPause, EndpointSecurity, IdentitySendable, Resources, StoreError, WritePriority,
+    run_once,
 };
 use sb_store::accounts::reactivate_after_credential;
 use sb_test_support::{
@@ -19,6 +20,7 @@ use sb_test_support::{
 };
 
 const PASSWORD: &str = "bridge-setup-secret-7F3A";
+const OTHER_PASSWORD: &str = "bridge-setup-secret-other-2B9D";
 
 fn pin() -> CertificatePin {
     CertificatePin::of_der(&cert_der())
@@ -145,11 +147,20 @@ async fn setup_stores_rows_and_the_credential_by_reference() {
     let (scratch, res) = resources("account-setup");
 
     let added = res
-        .add_bridge_account(params(server.port(), PASSWORD), inline(&secrets))
+        .add_bridge_account(
+            "setup-key-1",
+            params(server.port(), PASSWORD),
+            inline(&secrets),
+        )
         .await
         .expect("setup");
 
     assert!(added.needs_attention.is_none());
+    assert_eq!(added.receipt.command(), ADD_BRIDGE_ACCOUNT);
+    assert_eq!(
+        added.receipt.result_json(),
+        format!("{{\"account_id\":\"{}\"}}", added.account_id)
+    );
     let credential_ref = format!("account/{}/bridge-password", added.account_id);
     let account = rows(
         &res,
@@ -269,11 +280,18 @@ async fn a_refused_login_stores_nothing() {
     let (_scratch, res) = resources("account-login-refused");
 
     let error = res
-        .add_bridge_account(params(server.port(), PASSWORD), inline(&secrets))
+        .add_bridge_account(
+            "setup-key-2",
+            params(server.port(), PASSWORD),
+            inline(&secrets),
+        )
         .await
         .expect_err("login refused");
 
-    assert!(matches!(error, BridgeAccountError::Probe(_)), "{error:?}");
+    assert!(
+        matches!(error, BridgeAccountError::LoginRefused),
+        "{error:?}"
+    );
     assert_eq!(
         rows(
             &res,
@@ -295,13 +313,13 @@ async fn a_pin_mismatch_stores_nothing() {
     let mut bad = params(server.port(), PASSWORD);
     bad.pin = CertificatePin::from_bytes([0xab; 32]);
     let error = res
-        .add_bridge_account(bad, inline(&secrets))
+        .add_bridge_account("setup-key-3", bad, inline(&secrets))
         .await
         .expect_err("pin mismatch");
 
     // The presented fingerprint surfaces, in the stored pin's hex form,
     // for the re-trust flow (spec/10).
-    let BridgeAccountError::Probe(ImapError::PinMismatch { presented_sha256 }) = error else {
+    let BridgeAccountError::PinMismatch { presented_sha256 } = error else {
         panic!("{error:?}");
     };
     assert_eq!(presented_sha256, pin().hex());
@@ -325,7 +343,11 @@ async fn a_secret_store_failure_pauses_and_the_retry_heals() {
     let (_scratch, res) = resources("account-secret-fails");
 
     let added = res
-        .add_bridge_account(params(server.port(), PASSWORD), inline(&secrets))
+        .add_bridge_account(
+            "setup-key-4",
+            params(server.port(), PASSWORD),
+            inline(&secrets),
+        )
         .await
         .expect("rows still committed");
 
@@ -379,29 +401,38 @@ async fn bad_input_creates_nothing() {
     let mut bad = params(server.port(), PASSWORD);
     bad.identities.clear();
     let error = res
-        .add_bridge_account(bad, inline(&secrets))
+        .add_bridge_account("setup-key-5", bad, inline(&secrets))
         .await
         .expect_err("no identities");
-    assert!(matches!(error, BridgeAccountError::InvalidInput(_)));
+    assert!(matches!(error, BridgeAccountError::InvalidInput { .. }));
 
     let mut non_utf8 = params(server.port(), PASSWORD);
     non_utf8.password = Secret::new(vec![0xff, 0x80, 0xfe]);
     let error = res
-        .add_bridge_account(non_utf8, inline(&secrets))
+        .add_bridge_account("setup-key-6", non_utf8, inline(&secrets))
         .await
         .expect_err("non-UTF-8 password");
-    assert!(matches!(error, BridgeAccountError::NotUtf8Credential));
+    assert!(
+        matches!(
+            error,
+            BridgeAccountError::InvalidInput {
+                field: "password",
+                ..
+            }
+        ),
+        "{error:?}"
+    );
 
     for (imap_port, smtp_port) in [(0, 1025), (server.port(), 0)] {
         let mut zero = params(server.port(), PASSWORD);
         zero.imap_port = imap_port;
         zero.smtp_port = smtp_port;
         let error = res
-            .add_bridge_account(zero, inline(&secrets))
+            .add_bridge_account("setup-key-7", zero, inline(&secrets))
             .await
             .expect_err("zero port");
         assert!(
-            matches!(error, BridgeAccountError::InvalidInput(_)),
+            matches!(error, BridgeAccountError::InvalidInput { .. }),
             "{error:?}"
         );
     }
@@ -409,22 +440,22 @@ async fn bad_input_creates_nothing() {
     let mut blank = params(server.port(), PASSWORD);
     blank.identities[1].email = "   ".to_owned();
     let error = res
-        .add_bridge_account(blank, inline(&secrets))
+        .add_bridge_account("setup-key-8", blank, inline(&secrets))
         .await
         .expect_err("blank after trimming");
     assert!(
-        matches!(error, BridgeAccountError::InvalidInput(_)),
+        matches!(error, BridgeAccountError::InvalidInput { .. }),
         "{error:?}"
     );
 
     let mut duplicate = params(server.port(), PASSWORD);
     duplicate.identities[1].email = " OWNER@example.org ".to_owned();
     let error = res
-        .add_bridge_account(duplicate, inline(&secrets))
+        .add_bridge_account("setup-key-9", duplicate, inline(&secrets))
         .await
         .expect_err("duplicate after trimming");
     assert!(
-        matches!(error, BridgeAccountError::InvalidInput(_)),
+        matches!(error, BridgeAccountError::InvalidInput { .. }),
         "{error:?}"
     );
     assert_eq!(
@@ -445,7 +476,11 @@ async fn a_credential_retry_never_lifts_a_connection_pause() {
     let secrets = FakeSecrets::new();
     let (_scratch, res) = resources("account-connection-pause");
     let added = res
-        .add_bridge_account(params(server.port(), PASSWORD), inline(&secrets))
+        .add_bridge_account(
+            "setup-key-10",
+            params(server.port(), PASSWORD),
+            inline(&secrets),
+        )
         .await
         .expect("setup");
 
@@ -474,7 +509,7 @@ async fn a_credential_retry_never_lifts_a_connection_pause() {
         .await
         .expect_err("not awaiting its credential");
     assert!(
-        matches!(error, BridgeAccountError::InvalidInput(_)),
+        matches!(error, BridgeAccountError::InvalidInput { .. }),
         "{error:?}"
     );
     // The working credential was not replaced.
@@ -512,7 +547,11 @@ async fn a_pause_recorded_during_the_retry_is_kept() {
     secrets.fail_next(SecretOp::Set, SecretError::Unavailable);
     let (_scratch, res) = resources("account-retry-race");
     let added = res
-        .add_bridge_account(params(server.port(), PASSWORD), inline(&secrets))
+        .add_bridge_account(
+            "setup-key-11",
+            params(server.port(), PASSWORD),
+            inline(&secrets),
+        )
         .await
         .expect("rows still committed");
     assert_eq!(
@@ -551,7 +590,7 @@ async fn a_pause_recorded_during_the_retry_is_kept() {
         .await
         .expect_err("the pause changed during the retry");
     assert!(
-        matches!(error, BridgeAccountError::InvalidInput(_)),
+        matches!(error, BridgeAccountError::InvalidInput { .. }),
         "{error:?}"
     );
     let state = rows(
@@ -565,5 +604,138 @@ async fn a_pause_recorded_during_the_retry_is_kept() {
             "needs_attention".to_owned(),
             "Bridge's certificate changed".to_owned()
         ]
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_replayed_key_answers_its_receipt_and_does_nothing_else() {
+    // One script: a second probe would find no server conversation.
+    let server = FakeImapServer::serve(vec![bridge_script(true)]).unwrap();
+    let secrets = FakeSecrets::new();
+    let (_scratch, res) = resources("account-replay");
+
+    let first = res
+        .add_bridge_account(
+            "replayed-key",
+            params(server.port(), PASSWORD),
+            inline(&secrets),
+        )
+        .await
+        .expect("setup");
+    let conversation = server.received().len();
+    // Different parameters, even invalid ones: a replay answers the
+    // stored receipt before validating, probing or storing anything.
+    let mut other = params(server.port(), "another-secret");
+    other.identities.clear();
+    let again = res
+        .add_bridge_account("replayed-key", other, inline(&secrets))
+        .await
+        .expect("replay");
+
+    assert_eq!(again.account_id, first.account_id);
+    assert_eq!(again.receipt, first.receipt);
+    assert!(again.needs_attention.is_none());
+    // The fake repeats its last script for a reconnect, so only its
+    // command log shows that the replay never probed.
+    assert_eq!(server.received().len(), conversation);
+    assert_eq!(secrets.calls(SecretOp::Set), 1);
+    assert_eq!(
+        rows(
+            &res,
+            "SELECT account_id FROM accounts WHERE kind = 'imap'",
+            &[]
+        )
+        .len(),
+        1
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_key_spent_on_another_command_conflicts_before_the_probe() {
+    let server = FakeImapServer::serve(vec![bridge_script(true)]).unwrap();
+    let secrets = FakeSecrets::new();
+    let (_scratch, res) = resources("account-key-conflict");
+    let now = res.now();
+    res.write(WritePriority::User, move |tx| {
+        run_once(tx, "spent-key", "set_setting", now, |_| Ok("{}".to_owned()))
+    })
+    .await
+    .unwrap();
+
+    let error = res
+        .add_bridge_account(
+            "spent-key",
+            params(server.port(), PASSWORD),
+            inline(&secrets),
+        )
+        .await
+        .expect_err("key spent elsewhere");
+
+    assert!(
+        matches!(
+            error,
+            BridgeAccountError::Store(StoreError::Conflict { .. })
+        ),
+        "{error:?}"
+    );
+    assert_eq!(secrets.calls(SecretOp::Set), 0);
+    assert_eq!(
+        rows(
+            &res,
+            "SELECT account_id FROM accounts WHERE kind = 'imap'",
+            &[]
+        )
+        .len(),
+        0
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn two_racing_calls_under_one_key_add_one_account() {
+    let server = FakeImapServer::serve(vec![bridge_script(true), bridge_script(true)]).unwrap();
+    let secrets = FakeSecrets::new();
+    let (_scratch, res) = resources("account-same-key-race");
+
+    // Both replay checks queue on the writer (FIFO within a priority)
+    // before either probe can finish, so both calls pass the check and
+    // the receipt race is settled inside the insert's run_once.
+    let (first, second) = tokio::join!(
+        res.add_bridge_account(
+            "racing-key",
+            params(server.port(), PASSWORD),
+            inline(&secrets),
+        ),
+        res.add_bridge_account(
+            "racing-key",
+            params(server.port(), OTHER_PASSWORD),
+            inline(&secrets),
+        ),
+    );
+    let (first, second) = (first.expect("first"), second.expect("second"));
+
+    let logins = server
+        .received()
+        .iter()
+        .filter(|command| command.line.contains("LOGIN"))
+        .count();
+    assert_eq!(logins, 2, "both calls passed the replay check and probed");
+    assert_eq!(first.account_id, second.account_id);
+    assert_eq!(first.receipt, second.receipt);
+    assert_eq!(
+        rows(
+            &res,
+            "SELECT account_id FROM accounts WHERE kind = 'imap'",
+            &[]
+        ),
+        vec![vec![first.account_id.clone()]]
+    );
+    // Either probe may finish first. Only the winner's secret was
+    // written; the loser's was dropped unwritten.
+    assert_eq!(secrets.calls(SecretOp::Set), 1);
+    let credential_ref = format!("account/{}/bridge-password", first.account_id);
+    let stored = secrets.get(&credential_ref).unwrap();
+    assert!(
+        [PASSWORD.as_bytes(), OTHER_PASSWORD.as_bytes()].contains(&stored.expose()),
+        "the stored secret is neither call's"
     );
 }
