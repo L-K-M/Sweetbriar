@@ -6,7 +6,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use rusqlite::{Connection, OptionalExtension, limits::Limit, params};
+use rusqlite::{Connection, OptionalExtension, limits::Limit};
 use sha2::{Digest, Sha256};
 
 use super::{
@@ -327,20 +327,6 @@ fn audit(
     {
         return Err(StoreError::corrupt(
             "quarantined generation metadata changed",
-        ));
-    }
-    if connection
-        .query_row(
-            "SELECT 1 FROM backup_ownership WHERE generation_id=?1",
-            params![input.generation],
-            |_| Ok(()),
-        )
-        .optional()
-        .map_err(|e| inspection_error(e, "audit restored generation ownership"))?
-        .is_some()
-    {
-        return Err(StoreError::corrupt(
-            "quarantined generation retains old ownership",
         ));
     }
     Ok(())
