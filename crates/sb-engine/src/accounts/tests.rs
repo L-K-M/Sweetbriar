@@ -143,7 +143,15 @@ fn setup_commits_with_a_receipt_and_a_replay_does_nothing_else() {
     );
 
     // The fake repeats its last script for a reconnect, so only its
-    // command log shows that a replay never probes.
+    // command log shows that a replay never probes. The new account's
+    // sync worker talks to the same fake: stop it, and wait until it
+    // has ended, before the log is counted.
+    engine.account_jobs().stop();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while engine.account_jobs().running(&added.account_id) {
+        assert!(std::time::Instant::now() < deadline, "the worker stops");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
     let conversation = server.received().len();
     let again =
         block_on(engine.add_bridge_account("setup-1", params(server.port()))).expect("replay");
