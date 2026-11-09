@@ -124,6 +124,7 @@ fn compile_options_show_the_spec_03_flags() {
         "DEFAULT_WAL_SYNCHRONOUS=2",
         "STRICT_SUBTYPE",
         "MAX_EXPR_DEPTH=2000",
+        "ENABLE_QPSG",
         "ENABLE_FTS5",
     ] {
         assert!(
@@ -136,6 +137,53 @@ fn compile_options_show_the_spec_03_flags() {
         conn.limit(rusqlite::limits::Limit::SQLITE_LIMIT_EXPR_DEPTH)
             .unwrap(),
         2000
+    );
+}
+
+/// SQLite 3.54 re-prepares a statement on its next step whenever a newly
+/// bound value might change the plan, which made a per-row statement such
+/// as the list-row pricing recompile on every row. The build's Query
+/// Planner Stability Guarantee (spec/03) keeps plans independent of bound
+/// values, so rebinding never re-prepares.
+#[test]
+fn rebinding_a_parameter_never_reprepares_a_statement() {
+    use rusqlite::StatementStatus;
+    use rusqlite::config::DbConfig;
+    let shaped = |conn: &Connection| {
+        conn.execute_batch(
+            "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+             INSERT INTO t VALUES (1, 'a'), (2, 'b'), (3, 'c');",
+        )
+        .unwrap();
+        let mut statement = conn
+            .prepare(
+                "WITH p AS (SELECT id, v FROM t WHERE id=?1)
+                 SELECT p.v FROM p LEFT JOIN t USING(id) LIMIT ?2",
+            )
+            .unwrap();
+        for (id, limit) in [(1, 1), (2, 0), (3, 5), (1, 0)] {
+            let _ = statement.query_row([id, limit], |row| row.get::<_, String>(0));
+        }
+        statement.get_status(StatementStatus::RePrepare)
+    };
+
+    let stable = Connection::open_in_memory().unwrap();
+    assert!(
+        stable
+            .db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_QPSG)
+            .unwrap()
+    );
+    assert_eq!(shaped(&stable), 0, "the build's default never re-prepares");
+
+    // Without the guarantee, the same statement recompiles on rebinding:
+    // the behaviour this setting exists to stop.
+    let unstable = Connection::open_in_memory().unwrap();
+    unstable
+        .set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_QPSG, false)
+        .unwrap();
+    assert!(
+        shaped(&unstable) > 0,
+        "3.54 re-prepares on a plan-relevant binding"
     );
 }
 

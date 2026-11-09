@@ -108,8 +108,13 @@ against concurrent replacement.
   - bundled SQLite through `rusqlite`'s `bundled` feature, pinned so the
     linked library is ≥ 3.51.3 and never the withdrawn 3.52.0;
   - compile options `SQLITE_DQS=0`, `SQLITE_DEFAULT_FOREIGN_KEYS=1`,
-    `SQLITE_DEFAULT_WAL_SYNCHRONOUS=2`, `SQLITE_STRICT_SUBTYPE=1` and
-    `SQLITE_MAX_EXPR_DEPTH=2000`, with FTS5 enabled. SQLite 3.54 bounds
+    `SQLITE_DEFAULT_WAL_SYNCHRONOUS=2`, `SQLITE_STRICT_SUBTYPE=1`,
+    `SQLITE_MAX_EXPR_DEPTH=2000` and `SQLITE_ENABLE_QPSG`, with FTS5
+    enabled. The query planner stability guarantee keeps plans
+    independent of bound values: SQLite 3.54 otherwise re-prepares a
+    statement whenever a new binding might change its plan, which made
+    per-row statements recompile on every row (no store query relies on
+    a value-dependent plan; STAT4 is off). SQLite 3.54 bounds
     the cursors a statement may open while expanding CTEs by the
     expression depth (1000 by default); a 256-node relevance search
     (06) opens about 1,250, so the store's own SQL gets 2000; raise it
