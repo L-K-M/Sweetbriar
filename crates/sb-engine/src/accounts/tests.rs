@@ -331,3 +331,25 @@ fn a_starttls_probe_without_starttls_names_the_security_field() {
         "{error:?}"
     );
 }
+
+#[test]
+fn a_stored_secret_reads_back_by_its_reference() {
+    // The account worker fetches its credential fresh per attempt
+    // (spec/10) through the same seam setup stores it with.
+    let secrets = Arc::new(FakeSecrets::new());
+    let (_scratch, engine) = engine("engine-account-get-secret", Arc::clone(&secrets));
+    let resources = engine.resources();
+    let reference = "account/acct/bridge-password";
+
+    assert!(matches!(
+        resources.get_secret(reference),
+        Err(SecretError::NotFound)
+    ));
+    resources
+        .set_secret(reference, &Secret::new(PASSWORD.as_bytes().to_vec()))
+        .unwrap();
+    assert_eq!(
+        resources.get_secret(reference).unwrap().expose(),
+        PASSWORD.as_bytes()
+    );
+}
