@@ -40,6 +40,23 @@ impl std::fmt::Debug for ResourcesSwapError {
     }
 }
 
+impl std::fmt::Display for ResourcesSwapError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Refused { cause, .. } => write!(f, "the restore swap was refused: {cause}"),
+            Self::Failed(cause) => write!(f, "the restore swap failed: {cause}"),
+        }
+    }
+}
+
+impl std::error::Error for ResourcesSwapError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Refused { cause, .. } | Self::Failed(cause) => Some(cause),
+        }
+    }
+}
+
 impl Resources {
     /// Steps 1–3 of a backup generation: its row, the snapshot and the
     /// object pins. First recovers interrupted generations and applies
