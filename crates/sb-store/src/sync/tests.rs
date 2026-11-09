@@ -403,3 +403,463 @@ fn an_occurrence_mixing_two_accounts_is_refused_by_the_schema() {
     );
     insert_occurrence(&store, "a", "a", inbox_a).expect("one account throughout");
 }
+
+// Header batches (spec/04 step 3).
+
+const EPOCH: u32 = 7;
+
+/// Account `a` listed and its INBOX and All Mail on epoch 7.
+fn syncing(store: &Store) -> (i64, i64) {
+    reconcile(store, "a", bridge_listing());
+    let inbox = mailbox_id(store, "a", "INBOX");
+    let all = mailbox_id(store, "a", "All Mail");
+    for mailbox in [inbox, all] {
+        writing(store, move |tx| check_epoch(tx, "a", mailbox, EPOCH));
+    }
+    (inbox, all)
+}
+
+fn header(uid: u32, key: Option<&str>, subject: &str) -> SyncedHeader {
+    let raw = format!(
+        "Subject: {subject}\r\nDelivered-To: owner@example.org\r\nX-Pm-Internal-Id: {}\r\n\r\n",
+        key.unwrap_or("-")
+    );
+    SyncedHeader {
+        uid,
+        flags: SyncedFlags::default(),
+        internal_date: Some(Timestamp::from_millis(NOW_MS - i64::from(uid))),
+        rfc822_size: Some(1000),
+        provider_key: key.map(str::to_owned),
+        raw_fields: raw.into_bytes(),
+        columns: HeaderColumns {
+            subject: Some(subject.to_owned()),
+            from_json: Some(r#"[{"address":"sender@example.org","name":"Sender"}]"#.to_owned()),
+            delivered_to_json: Some(r#"["owner@example.org"]"#.to_owned()),
+            ..HeaderColumns::default()
+        },
+    }
+}
+
+fn commit(
+    store: &Store,
+    mailbox: i64,
+    expected: Option<u32>,
+    next: u32,
+    headers: Vec<SyncedHeader>,
+) -> Result<HeaderBatchStats, StoreError> {
+    sb_test_support::block_on(store.write(crate::WritePriority::Sync, move |tx| {
+        commit_header_batch(
+            tx,
+            &HeaderBatch {
+                account_id: "a",
+                mailbox_id: mailbox,
+                uidvalidity: EPOCH,
+                expected_uidnext: expected,
+                next_uidnext: next,
+                caught_up: true,
+                headers: &headers,
+            },
+            Timestamp::from_millis(NOW_MS),
+        )
+    }))
+}
+
+/// `(uid, state, provider_key)` of a mailbox's occurrences by id.
+fn occurrences(store: &Store, mailbox: i64) -> Vec<(i64, String, Option<String>)> {
+    writing(store, move |tx| {
+        let mut statement = tx
+            .prepare(
+                "SELECT o.uid, o.state, lm.provider_key FROM occurrences o
+                 JOIN logical_messages lm ON lm.message_id = o.message_id
+                 WHERE o.mailbox_id = ?1 ORDER BY o.occurrence_id",
+            )
+            .unwrap();
+        let rows = statement
+            .query_map(params![mailbox], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        Ok(rows)
+    })
+}
+
+fn checkpoint(store: &Store, mailbox: i64) -> (Option<i64>, String) {
+    writing(store, move |tx| {
+        Ok(tx
+            .query_row(
+                "SELECT uidnext, sync_state FROM mailboxes WHERE mailbox_id = ?1",
+                params![mailbox],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap())
+    })
+}
+
+fn count(store: &Store, sql: &'static str) -> i64 {
+    writing(store, move |tx| {
+        Ok(tx.query_row(sql, [], |row| row.get(0)).unwrap())
+    })
+}
+
+#[test]
+fn a_batch_lands_headers_occurrences_and_its_checkpoint_together() {
+    let (_scratch, store) = scratch();
+    let (inbox, _) = syncing(&store);
+    let before = generation(&store);
+
+    let stats = commit(
+        &store,
+        inbox,
+        None,
+        3,
+        vec![
+            header(1, Some("pm-1"), "First"),
+            header(2, Some("pm-2"), "Second"),
+        ],
+    )
+    .unwrap();
+
+    assert_eq!(
+        stats,
+        HeaderBatchStats {
+            inserted: 2,
+            refreshed: 0,
+            superseded: 0,
+            new_messages: 2
+        }
+    );
+    assert_eq!(checkpoint(&store, inbox), (Some(3), "synced".to_owned()));
+    let (raw, delivered): (Vec<u8>, String) = writing(&store, |tx| {
+        Ok(tx
+            .query_row(
+                "SELECT h.raw_fields, h.delivered_to_json FROM message_headers h
+                 JOIN logical_messages lm ON lm.message_id = h.message_id
+                 WHERE lm.provider_key = 'pm-1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap())
+    });
+    assert!(
+        String::from_utf8(raw)
+            .unwrap()
+            .starts_with("Subject: First")
+    );
+    assert_eq!(delivered, r#"["owner@example.org"]"#);
+    assert_eq!(
+        count(
+            &store,
+            "SELECT COUNT(*) FROM d_list_rows WHERE subject IN ('First', 'Second')"
+        ),
+        2,
+        "the lists show the header-only rows"
+    );
+    assert!(generation(&store) > before);
+}
+
+#[test]
+fn one_provider_key_groups_occurrences_across_mailboxes() {
+    let (_scratch, store) = scratch();
+    let (inbox, all) = syncing(&store);
+
+    commit(
+        &store,
+        inbox,
+        None,
+        2,
+        vec![header(1, Some("pm-1"), "Shared")],
+    )
+    .unwrap();
+    let stats = commit(
+        &store,
+        all,
+        None,
+        10,
+        vec![header(9, Some("pm-1"), "Shared")],
+    )
+    .unwrap();
+
+    assert_eq!(stats.new_messages, 0, "the same Proton message");
+    assert_eq!(
+        count(
+            &store,
+            "SELECT COUNT(*) FROM logical_messages WHERE provider_key = 'pm-1'"
+        ),
+        1
+    );
+    assert_eq!(count(&store, "SELECT COUNT(*) FROM message_headers"), 1);
+    assert_eq!(occurrences(&store, all).len(), 1);
+}
+
+#[test]
+fn a_reused_uid_supersedes_the_old_binding() {
+    // plan M2.4: UID reuse marks the old occurrence superseded and
+    // inserts the new one.
+    let (_scratch, store) = scratch();
+    let (inbox, _) = syncing(&store);
+    commit(&store, inbox, None, 2, vec![header(1, Some("pm-1"), "Old")]).unwrap();
+
+    let stats = commit(
+        &store,
+        inbox,
+        Some(2),
+        2,
+        vec![header(1, Some("pm-9"), "New")],
+    )
+    .unwrap();
+
+    assert_eq!((stats.superseded, stats.inserted), (1, 1));
+    assert_eq!(
+        occurrences(&store, inbox),
+        vec![
+            (1, "superseded".to_owned(), Some("pm-1".to_owned())),
+            (1, "present".to_owned(), Some("pm-9".to_owned())),
+        ]
+    );
+    assert_eq!(
+        count(
+            &store,
+            "SELECT COUNT(*) FROM d_list_rows WHERE subject = 'Old'"
+        ),
+        0,
+        "the superseded row leaves the lists"
+    );
+}
+
+#[test]
+fn the_same_message_at_its_locator_only_refreshes_flags() {
+    let (_scratch, store) = scratch();
+    let (inbox, _) = syncing(&store);
+    commit(
+        &store,
+        inbox,
+        None,
+        2,
+        vec![header(1, Some("pm-1"), "Mail")],
+    )
+    .unwrap();
+
+    let mut seen = header(1, Some("pm-1"), "Mail");
+    seen.flags = SyncedFlags {
+        seen: true,
+        keywords: vec![
+            "$Forwarded".to_owned(),
+            "$Archived".to_owned(),
+            "$Forwarded".to_owned(),
+        ],
+        ..SyncedFlags::default()
+    };
+    let stats = commit(&store, inbox, Some(2), 2, vec![seen]).unwrap();
+
+    assert_eq!(
+        (stats.refreshed, stats.inserted, stats.new_messages),
+        (1, 0, 0)
+    );
+    let (f_seen, keywords): (bool, String) = writing(&store, move |tx| {
+        Ok(tx
+            .query_row(
+                "SELECT f_seen, keywords FROM occurrences WHERE mailbox_id = ?1",
+                params![inbox],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap())
+    });
+    assert!(f_seen);
+    assert_eq!(
+        keywords, r#"["$Archived","$Forwarded"]"#,
+        "sorted and deduplicated"
+    );
+}
+
+#[test]
+fn headers_without_a_provider_key_group_nothing() {
+    let (_scratch, store) = scratch();
+    let (inbox, _) = syncing(&store);
+
+    let stats = commit(
+        &store,
+        inbox,
+        None,
+        3,
+        vec![header(1, None, "A"), header(2, None, "B")],
+    )
+    .unwrap();
+
+    assert_eq!(stats.new_messages, 2);
+}
+
+#[test]
+fn a_stale_or_misplaced_batch_is_refused_and_writes_nothing() {
+    let (_scratch, store) = scratch();
+    let (inbox, _) = syncing(&store);
+    commit(
+        &store,
+        inbox,
+        None,
+        2,
+        vec![header(1, Some("pm-1"), "Mail")],
+    )
+    .unwrap();
+
+    // The checkpoint moved to 2 since this fetch was planned at NULL.
+    let stale = commit(
+        &store,
+        inbox,
+        None,
+        3,
+        vec![header(2, Some("pm-2"), "Late")],
+    );
+    assert!(
+        matches!(stale, Err(StoreError::Conflict { .. })),
+        "{stale:?}"
+    );
+
+    // A listed mailbox whose epoch was never adopted is not syncing.
+    let sent = mailbox_id(&store, "a", "Sent");
+    let unsynced = commit(&store, sent, None, 2, vec![header(1, Some("pm-3"), "Sent")]);
+    assert!(
+        matches!(unsynced, Err(StoreError::Conflict { .. })),
+        "{unsynced:?}"
+    );
+
+    // Another epoch's headers.
+    let epoch = sb_test_support::block_on(store.write(crate::WritePriority::Sync, move |tx| {
+        commit_header_batch(
+            tx,
+            &HeaderBatch {
+                account_id: "a",
+                mailbox_id: inbox,
+                uidvalidity: EPOCH + 1,
+                expected_uidnext: Some(2),
+                next_uidnext: 3,
+                caught_up: true,
+                headers: &[header(2, Some("pm-2"), "Other epoch")],
+            },
+            Timestamp::from_millis(NOW_MS),
+        )
+    }));
+    assert!(
+        matches!(epoch, Err(StoreError::Conflict { .. })),
+        "{epoch:?}"
+    );
+
+    assert_eq!(checkpoint(&store, inbox), (Some(2), "synced".to_owned()));
+    assert_eq!(occurrences(&store, inbox).len(), 1);
+}
+
+#[test]
+fn a_failure_mid_batch_rolls_the_whole_batch_back() {
+    // plan M2.4: a cut batch resumes without gaps or duplicates. The
+    // second header fails after the first was written; the
+    // transaction leaves neither it nor the checkpoint.
+    let (_scratch, store) = scratch();
+    let (inbox, _) = syncing(&store);
+    let mut broken = header(2, Some("pm-2"), "Broken");
+    broken.rfc822_size = Some(u64::MAX);
+
+    let failed = commit(
+        &store,
+        inbox,
+        None,
+        3,
+        vec![header(1, Some("pm-1"), "Fine"), broken],
+    );
+
+    assert!(
+        matches!(failed, Err(StoreError::InvalidInput { .. })),
+        "{failed:?}"
+    );
+    assert!(occurrences(&store, inbox).is_empty());
+    assert_eq!(
+        count(
+            &store,
+            "SELECT COUNT(*) FROM logical_messages WHERE provider_key IS NOT NULL"
+        ),
+        0
+    );
+    assert_eq!(checkpoint(&store, inbox), (None, "backfilling".to_owned()));
+
+    // The retried batch then lands once.
+    commit(
+        &store,
+        inbox,
+        None,
+        3,
+        vec![
+            header(1, Some("pm-1"), "Fine"),
+            header(2, Some("pm-2"), "Fixed"),
+        ],
+    )
+    .unwrap();
+    assert_eq!(occurrences(&store, inbox).len(), 2);
+}
+
+#[test]
+fn malformed_batches_are_refused_before_any_write() {
+    let (_scratch, store) = scratch();
+    let (inbox, _) = syncing(&store);
+    let refused = |headers: Vec<SyncedHeader>, next: u32| {
+        matches!(
+            commit(&store, inbox, None, next, headers),
+            Err(StoreError::InvalidInput { .. })
+        )
+    };
+
+    let too_many: Vec<_> = (1..=251).map(|uid| header(uid, None, "Bulk")).collect();
+    assert!(refused(too_many, 300), "more than 250 headers");
+    assert!(refused(vec![header(0, None, "Zero")], 2), "UID 0");
+    assert!(
+        refused(vec![header(1, None, "A"), header(1, None, "B")], 2),
+        "a repeated UID"
+    );
+    assert!(
+        refused(vec![header(5, None, "High")], 5),
+        "a UID at the checkpoint"
+    );
+    let mut huge = header(1, None, "Huge");
+    huge.raw_fields = vec![b'x'; MAX_HEADER_BATCH_BYTES];
+    assert!(refused(vec![huge], 2), "over the write budget");
+    assert!(occurrences(&store, inbox).is_empty());
+}
+
+#[test]
+fn a_backfill_below_the_checkpoint_keeps_it_and_it_never_moves_back() {
+    // spec/04: the fetch also backfills UIDs below `uidnext` that have
+    // no occurrence; the checkpoint stays where it is.
+    let (_scratch, store) = scratch();
+    let (inbox, _) = syncing(&store);
+    commit(
+        &store,
+        inbox,
+        None,
+        5,
+        vec![header(4, Some("pm-4"), "Four")],
+    )
+    .unwrap();
+
+    commit(
+        &store,
+        inbox,
+        Some(5),
+        5,
+        vec![header(2, Some("pm-2"), "Late")],
+    )
+    .unwrap();
+    assert_eq!(checkpoint(&store, inbox).0, Some(5));
+    assert_eq!(occurrences(&store, inbox).len(), 2);
+
+    let back = commit(
+        &store,
+        inbox,
+        Some(5),
+        3,
+        vec![header(1, Some("pm-1"), "Back")],
+    );
+    assert!(
+        matches!(back, Err(StoreError::InvalidInput { .. })),
+        "{back:?}"
+    );
+    assert_eq!(checkpoint(&store, inbox).0, Some(5));
+}
