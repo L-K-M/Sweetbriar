@@ -297,6 +297,7 @@ fn bad_listings_and_the_local_archive_are_refused() {
             reconcile_mailboxes(tx, &account, &listing)
         }))
     };
+    let before = generation(&store);
     assert!(matches!(
         refused(local, bridge_listing()),
         Err(StoreError::InvalidInput { .. })
@@ -318,6 +319,11 @@ fn bad_listings_and_the_local_archive_are_refused() {
     assert!(
         rows(&store, "a").is_empty(),
         "a refused listing writes nothing"
+    );
+    assert_eq!(
+        generation(&store),
+        before,
+        "a refused listing advances no generation"
     );
 }
 
@@ -346,6 +352,10 @@ fn the_first_epoch_is_adopted_and_a_moved_one_is_reported() {
         EpochCheck::Changed,
         "stays changed until resolved"
     );
+    // The server back on the stored epoch before the change was
+    // resolved: no change after all, and sync resumes.
+    assert_eq!(check(7), EpochCheck::Unchanged);
+    assert_eq!(state(), "backfilling");
 
     let refused = sb_test_support::block_on(store.write(crate::WritePriority::User, move |tx| {
         check_epoch(tx, "b", inbox, 7)

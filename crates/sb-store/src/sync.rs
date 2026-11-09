@@ -35,7 +35,8 @@ pub struct ObservedMailbox {
 }
 
 /// What one reconciliation changed, by `mailbox_id`, each in ascending
-/// order. Unchanged mailboxes appear nowhere.
+/// order. Unchanged mailboxes appear nowhere; a returning mailbox whose
+/// columns also changed appears in both `returned` and `changed`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Reconciled {
     /// Newly listed mailboxes, inserted as `new`.
@@ -75,7 +76,7 @@ pub enum EpochCheck {
     Changed,
 }
 
-/// The `sync_state` text a listed, returning mailbox resumes in.
+/// The `sync_state` spellings this module writes and compares.
 const STATE_NEW: &str = "new";
 const STATE_BACKFILLING: &str = "backfilling";
 const STATE_EPOCH_CHANGED: &str = "epoch_changed";
@@ -171,9 +172,9 @@ pub fn reconcile_mailboxes(
             continue;
         }
         tx.execute(
-            "UPDATE mailboxes SET sync_state = 'gone', revision = revision + 1
+            "UPDATE mailboxes SET sync_state = ?2, revision = revision + 1
              WHERE mailbox_id = ?1",
-            params![row.mailbox_id],
+            params![row.mailbox_id, STATE_GONE],
         )
         .map_err(|e| classify(e, "mark a mailbox gone"))?;
         reconciled.gone.push(row.mailbox_id);
@@ -227,13 +228,26 @@ pub fn check_epoch(
     }
     let observed = i64::from(uidvalidity);
     match stored {
-        Some(epoch) if epoch == observed => Ok(EpochCheck::Unchanged),
+        Some(epoch) if epoch == observed => {
+            // The server is back on the stored epoch before the
+            // epoch-change step acted: there was no change after all,
+            // so sync resumes rather than skipping the mailbox forever.
+            if state == STATE_EPOCH_CHANGED {
+                tx.execute(
+                    "UPDATE mailboxes SET sync_state = ?2, revision = revision + 1
+                     WHERE mailbox_id = ?1",
+                    params![mailbox_id, STATE_BACKFILLING],
+                )
+                .map_err(|e| classify(e, "clear a reverted epoch change"))?;
+            }
+            Ok(EpochCheck::Unchanged)
+        }
         None if !has_current_occurrences(tx, mailbox_id)? => {
             tx.execute(
-                "UPDATE mailboxes SET uidvalidity = ?2, sync_state = 'backfilling',
+                "UPDATE mailboxes SET uidvalidity = ?2, sync_state = ?3,
                      revision = revision + 1
                  WHERE mailbox_id = ?1",
-                params![mailbox_id, observed],
+                params![mailbox_id, observed, STATE_BACKFILLING],
             )
             .map_err(|e| classify(e, "adopt a mailbox epoch"))?;
             Ok(EpochCheck::Adopted)
@@ -241,9 +255,9 @@ pub fn check_epoch(
         _ => {
             if state != STATE_EPOCH_CHANGED {
                 tx.execute(
-                    "UPDATE mailboxes SET sync_state = 'epoch_changed', revision = revision + 1
+                    "UPDATE mailboxes SET sync_state = ?2, revision = revision + 1
                      WHERE mailbox_id = ?1",
-                    params![mailbox_id],
+                    params![mailbox_id, STATE_EPOCH_CHANGED],
                 )
                 .map_err(|e| classify(e, "mark a mailbox epoch changed"))?;
             }
