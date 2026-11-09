@@ -844,6 +844,17 @@ fn release_lease(lease_id: LeaseId);
   core (the secret store) are passed as synchronous callback interfaces,
   or implemented in Rust with platform crates.
 
+### Account setup FFI boundary (M2.3c2b)
+
+`Core::add_bridge_account(token, idempotency_key, params)` is a command and
+`Core::bridge_certificate(token, port, security)` a query, as above; the
+token counts as for any command or query. `certificate_fingerprint_from_pem
+(bytes)` is a free synchronous function with no I/O: the shell reads the
+file the user picked and passes its bytes. The password crosses as bytes
+into the core's zeroizing secret; the parameters record has no `Debug`
+and is not `Clone`. The secret store stays in Rust (`sb-platform`), so no
+callback crosses for it.
+
 ### Parser FFI boundary (M1.6l1)
 
 The FFI owns a `ParseContext { tz: String, clock: i64 }` record with required

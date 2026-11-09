@@ -481,6 +481,22 @@ fileprivate struct FfiConverterUInt8: FfiConverterPrimitive {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterUInt16: FfiConverterPrimitive {
+    typealias FfiType = UInt16
+    typealias SwiftType = UInt16
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> UInt16 {
+        return try lift(readInt(&buf))
+    }
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterUInt32: FfiConverterPrimitive {
     typealias FfiType = UInt32
     typealias SwiftType = UInt32
@@ -937,6 +953,23 @@ public func FfiConverterTypeCancelToken_lower(_ value: CancelToken) -> UInt64 {
 public protocol CoreProtocol: AnyObject, Sendable {
     
     /**
+     * `add_bridge_account(params)` (spec/07) under an idempotency key
+     * the shell made. A command: the token counts only until it holds
+     * the core; once begun it runs to completion. A repeated key
+     * answers the stored receipt and does nothing else.
+     */
+    func addBridgeAccount(token: CancelToken, idempotencyKey: String, params: BridgeAccountParams) async throws  -> BridgeAccountAdded
+    
+    /**
+     * `bridge_certificate(port, security)` (spec/10's fingerprint
+     * fallback): the presented certificate's DER SHA-256 as 64
+     * lowercase hex digits, read in a handshake the core refuses. A
+     * query: the token races every wait, and nothing is stored. Show
+     * it for the user to confirm; never trust it on its own.
+     */
+    func bridgeCertificate(token: CancelToken, port: UInt16, security: EndpointSecurity) async throws  -> String
+    
+    /**
      * `set_setting` (spec/07 "Commands"): one command under an
      * idempotency key the shell made (`UUID()` in Swift). The read
      * side of the shared lock is held for the call's duration, so a
@@ -1293,6 +1326,51 @@ open class Core: CoreProtocol, @unchecked Sendable {
 
     
 
+    
+    /**
+     * `add_bridge_account(params)` (spec/07) under an idempotency key
+     * the shell made. A command: the token counts only until it holds
+     * the core; once begun it runs to completion. A repeated key
+     * answers the stored receipt and does nothing else.
+     */
+open func addBridgeAccount(token: CancelToken, idempotencyKey: String, params: BridgeAccountParams)async throws  -> BridgeAccountAdded  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_add_bridge_account(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterString.lower(idempotencyKey),FfiConverterTypeBridgeAccountParams_lower(params)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeBridgeAccountAdded_lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * `bridge_certificate(port, security)` (spec/10's fingerprint
+     * fallback): the presented certificate's DER SHA-256 as 64
+     * lowercase hex digits, read in a handshake the core refuses. A
+     * query: the token races every wait, and nothing is stored. Show
+     * it for the user to confirm; never trust it on its own.
+     */
+open func bridgeCertificate(token: CancelToken, port: UInt16, security: EndpointSecurity)async throws  -> String  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_bridge_certificate(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterUInt16.lower(port),FfiConverterTypeEndpointSecurity_lower(security)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterString.lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
     
     /**
      * `set_setting` (spec/07 "Commands"): one command under an
@@ -3115,6 +3193,247 @@ public func FfiConverterTypeBodyLease_lift(_ buf: RustBuffer) throws -> BodyLeas
 #endif
 public func FfiConverterTypeBodyLease_lower(_ value: BodyLease) -> RustBuffer {
     return FfiConverterTypeBodyLease.lower(value)
+}
+
+
+/**
+ * The answer to `add_bridge_account`, first run or replay alike.
+ */
+public struct BridgeAccountAdded: Equatable, Hashable {
+    /**
+     * The stored receipt: `{"account_id": ...}`.
+     */
+    public var receipt: Receipt
+    public var accountId: String
+    /**
+     * `Some` when the account waits for its credential (spec/10).
+     */
+    public var needsAttention: CredentialPause?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * The stored receipt: `{"account_id": ...}`.
+         */receipt: Receipt, accountId: String, 
+        /**
+         * `Some` when the account waits for its credential (spec/10).
+         */needsAttention: CredentialPause?) {
+        self.receipt = receipt
+        self.accountId = accountId
+        self.needsAttention = needsAttention
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension BridgeAccountAdded: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeBridgeAccountAdded: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> BridgeAccountAdded {
+        return
+            try BridgeAccountAdded(
+                receipt: FfiConverterTypeReceipt.read(from: &buf), 
+                accountId: FfiConverterString.read(from: &buf), 
+                needsAttention: FfiConverterOptionTypeCredentialPause.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: BridgeAccountAdded, into buf: inout [UInt8]) {
+        FfiConverterTypeReceipt.write(value.receipt, into: &buf)
+        FfiConverterString.write(value.accountId, into: &buf)
+        FfiConverterOptionTypeCredentialPause.write(value.needsAttention, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBridgeAccountAdded_lift(_ buf: RustBuffer) throws -> BridgeAccountAdded {
+    return try FfiConverterTypeBridgeAccountAdded.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBridgeAccountAdded_lower(_ value: BridgeAccountAdded) -> RustBuffer {
+    return FfiConverterTypeBridgeAccountAdded.lower(value)
+}
+
+
+/**
+ * `add_bridge_account`'s parameters for the Proton Bridge preset; the
+ * host is always `127.0.0.1` (spec/10). No `Debug` or `Clone`: the
+ * password must neither print nor be copied.
+ */
+public struct BridgeAccountParams: Equatable, Hashable {
+    public var displayName: String
+    public var username: String
+    /**
+     * The Bridge-generated password as UTF-8 bytes.
+     */
+    public var password: Data
+    public var imapPort: UInt16
+    public var imapSecurity: EndpointSecurity
+    public var smtpPort: UInt16
+    public var smtpSecurity: EndpointSecurity
+    /**
+     * The confirmed certificate's DER SHA-256 as 64 hex digits.
+     */
+    public var certificateSha256: String
+    public var addressMode: AddressMode?
+    public var identities: [BridgeIdentity]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(displayName: String, username: String, 
+        /**
+         * The Bridge-generated password as UTF-8 bytes.
+         */password: Data, imapPort: UInt16, imapSecurity: EndpointSecurity, smtpPort: UInt16, smtpSecurity: EndpointSecurity, 
+        /**
+         * The confirmed certificate's DER SHA-256 as 64 hex digits.
+         */certificateSha256: String, addressMode: AddressMode?, identities: [BridgeIdentity]) {
+        self.displayName = displayName
+        self.username = username
+        self.password = password
+        self.imapPort = imapPort
+        self.imapSecurity = imapSecurity
+        self.smtpPort = smtpPort
+        self.smtpSecurity = smtpSecurity
+        self.certificateSha256 = certificateSha256
+        self.addressMode = addressMode
+        self.identities = identities
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension BridgeAccountParams: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeBridgeAccountParams: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> BridgeAccountParams {
+        return
+            try BridgeAccountParams(
+                displayName: FfiConverterString.read(from: &buf), 
+                username: FfiConverterString.read(from: &buf), 
+                password: FfiConverterData.read(from: &buf), 
+                imapPort: FfiConverterUInt16.read(from: &buf), 
+                imapSecurity: FfiConverterTypeEndpointSecurity.read(from: &buf), 
+                smtpPort: FfiConverterUInt16.read(from: &buf), 
+                smtpSecurity: FfiConverterTypeEndpointSecurity.read(from: &buf), 
+                certificateSha256: FfiConverterString.read(from: &buf), 
+                addressMode: FfiConverterOptionTypeAddressMode.read(from: &buf), 
+                identities: FfiConverterSequenceTypeBridgeIdentity.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: BridgeAccountParams, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.displayName, into: &buf)
+        FfiConverterString.write(value.username, into: &buf)
+        FfiConverterData.write(value.password, into: &buf)
+        FfiConverterUInt16.write(value.imapPort, into: &buf)
+        FfiConverterTypeEndpointSecurity.write(value.imapSecurity, into: &buf)
+        FfiConverterUInt16.write(value.smtpPort, into: &buf)
+        FfiConverterTypeEndpointSecurity.write(value.smtpSecurity, into: &buf)
+        FfiConverterString.write(value.certificateSha256, into: &buf)
+        FfiConverterOptionTypeAddressMode.write(value.addressMode, into: &buf)
+        FfiConverterSequenceTypeBridgeIdentity.write(value.identities, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBridgeAccountParams_lift(_ buf: RustBuffer) throws -> BridgeAccountParams {
+    return try FfiConverterTypeBridgeAccountParams.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBridgeAccountParams_lower(_ value: BridgeAccountParams) -> RustBuffer {
+    return FfiConverterTypeBridgeAccountParams.lower(value)
+}
+
+
+/**
+ * One from-address offered at setup (spec/02 `identities`).
+ */
+public struct BridgeIdentity: Equatable, Hashable {
+    public var email: String
+    public var displayName: String
+    public var isDefault: Bool
+    public var sendable: IdentitySendable
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(email: String, displayName: String, isDefault: Bool, sendable: IdentitySendable) {
+        self.email = email
+        self.displayName = displayName
+        self.isDefault = isDefault
+        self.sendable = sendable
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension BridgeIdentity: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeBridgeIdentity: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> BridgeIdentity {
+        return
+            try BridgeIdentity(
+                email: FfiConverterString.read(from: &buf), 
+                displayName: FfiConverterString.read(from: &buf), 
+                isDefault: FfiConverterBool.read(from: &buf), 
+                sendable: FfiConverterTypeIdentitySendable.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: BridgeIdentity, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.email, into: &buf)
+        FfiConverterString.write(value.displayName, into: &buf)
+        FfiConverterBool.write(value.isDefault, into: &buf)
+        FfiConverterTypeIdentitySendable.write(value.sendable, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBridgeIdentity_lift(_ buf: RustBuffer) throws -> BridgeIdentity {
+    return try FfiConverterTypeBridgeIdentity.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBridgeIdentity_lower(_ value: BridgeIdentity) -> RustBuffer {
+    return FfiConverterTypeBridgeIdentity.lower(value)
 }
 
 
@@ -6244,6 +6563,75 @@ public func FfiConverterTypeAccountState_lower(_ value: AccountState) -> RustBuf
 
 
 /**
+ * Bridge's address mode (spec/02 `imap_endpoints.address_mode`).
+ */
+
+public enum AddressMode: Equatable, Hashable {
+    
+    case combined
+    case split
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension AddressMode: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeAddressMode: FfiConverterRustBuffer {
+    typealias SwiftType = AddressMode
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> AddressMode {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .combined
+        
+        case 2: return .split
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: AddressMode, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .combined:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .split:
+            writeInt(&buf, Int32(2))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAddressMode_lift(_ buf: RustBuffer) throws -> AddressMode {
+    return try FfiConverterTypeAddressMode.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAddressMode_lower(_ value: AddressMode) -> RustBuffer {
+    return FfiConverterTypeAddressMode.lower(value)
+}
+
+
+
+/**
  * Where a window page read starts (spec/07 "Queries"). Cursors are
  * opaque strings minted by the core; the shell carries them
  * unchanged.
@@ -7108,6 +7496,89 @@ public func FfiConverterTypeCount_lower(_ value: Count) -> RustBuffer {
 
 
 /**
+ * Why an added account waits for its credential (spec/10).
+ */
+
+public enum CredentialPause: Equatable, Hashable {
+    
+    case notStored
+    case storeUnavailable
+    case storeRefused
+    case storeFailed
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension CredentialPause: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeCredentialPause: FfiConverterRustBuffer {
+    typealias SwiftType = CredentialPause
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> CredentialPause {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .notStored
+        
+        case 2: return .storeUnavailable
+        
+        case 3: return .storeRefused
+        
+        case 4: return .storeFailed
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: CredentialPause, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .notStored:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .storeUnavailable:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .storeRefused:
+            writeInt(&buf, Int32(3))
+        
+        
+        case .storeFailed:
+            writeInt(&buf, Int32(4))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeCredentialPause_lift(_ buf: RustBuffer) throws -> CredentialPause {
+    return try FfiConverterTypeCredentialPause.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeCredentialPause_lower(_ value: CredentialPause) -> RustBuffer {
+    return FfiConverterTypeCredentialPause.lower(value)
+}
+
+
+
+/**
  * A newly published object, or an unchanged reference from the base
  * revision. `New` carries the live [`DraftAttachmentObject`] handle
  * and spends its reservation in the save's transaction; `Retained`
@@ -7358,6 +7829,152 @@ public func FfiConverterTypeDraftState_lift(_ buf: RustBuffer) throws -> DraftSt
 #endif
 public func FfiConverterTypeDraftState_lower(_ value: DraftState) -> RustBuffer {
     return FfiConverterTypeDraftState.lower(value)
+}
+
+
+
+/**
+ * `imap_security` / `smtp_security`: `Tls` is Bridge's "SSL"
+ * (implicit TLS), `StartTls` its default (spec/04).
+ */
+
+public enum EndpointSecurity: Equatable, Hashable {
+    
+    case tls
+    case startTls
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension EndpointSecurity: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeEndpointSecurity: FfiConverterRustBuffer {
+    typealias SwiftType = EndpointSecurity
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> EndpointSecurity {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .tls
+        
+        case 2: return .startTls
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: EndpointSecurity, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .tls:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .startTls:
+            writeInt(&buf, Int32(2))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeEndpointSecurity_lift(_ buf: RustBuffer) throws -> EndpointSecurity {
+    return try FfiConverterTypeEndpointSecurity.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeEndpointSecurity_lower(_ value: EndpointSecurity) -> RustBuffer {
+    return FfiConverterTypeEndpointSecurity.lower(value)
+}
+
+
+
+/**
+ * What the From list may offer for an identity (spec/02).
+ */
+
+public enum IdentitySendable: Equatable, Hashable {
+    
+    case validated
+    case provisional
+    case unavailable
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension IdentitySendable: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeIdentitySendable: FfiConverterRustBuffer {
+    typealias SwiftType = IdentitySendable
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> IdentitySendable {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .validated
+        
+        case 2: return .provisional
+        
+        case 3: return .unavailable
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: IdentitySendable, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .validated:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .provisional:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .unavailable:
+            writeInt(&buf, Int32(3))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeIdentitySendable_lift(_ buf: RustBuffer) throws -> IdentitySendable {
+    return try FfiConverterTypeIdentitySendable.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeIdentitySendable_lower(_ value: IdentitySendable) -> RustBuffer {
+    return FfiConverterTypeIdentitySendable.lower(value)
 }
 
 
@@ -8992,6 +9609,54 @@ fileprivate struct FfiConverterOptionTypeSearchStatus: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionTypeAddressMode: FfiConverterRustBuffer {
+    typealias SwiftType = AddressMode?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeAddressMode.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeAddressMode.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionTypeCredentialPause: FfiConverterRustBuffer {
+    typealias SwiftType = CredentialPause?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeCredentialPause.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeCredentialPause.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionTypeMailboxRole: FfiConverterRustBuffer {
     typealias SwiftType = MailboxRole?
 
@@ -9132,6 +9797,31 @@ fileprivate struct FfiConverterSequenceTypeAccountAppearance: FfiConverterRustBu
         seq.reserveCapacity(Int(len))
         for _ in 0 ..< len {
             seq.append(try FfiConverterTypeAccountAppearance.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeBridgeIdentity: FfiConverterRustBuffer {
+    typealias SwiftType = [BridgeIdentity]
+
+    public static func write(_ value: [BridgeIdentity], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeBridgeIdentity.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [BridgeIdentity] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [BridgeIdentity]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeBridgeIdentity.read(from: &buf))
         }
         return seq
     }
@@ -9610,6 +10300,21 @@ fileprivate func uniffiFutureContinuationCallback(handle: UInt64, pollResult: In
     }
 }
 /**
+ * The DER SHA-256 of the one certificate in Bridge's exported
+ * `cert.pem` (spec/10's preferred path), as 64 lowercase hex digits.
+ * Synchronous and I/O-free (spec/07): the shell reads the file the
+ * user picked and passes its bytes. Anything but one certificate is
+ * `InvalidInput` on `certificate`.
+ */
+public func certificateFingerprintFromPem(pem: Data)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeCoreError_lift) {
+        uniffiCallStatus in
+    uniffi_sb_ffi_fn_func_certificate_fingerprint_from_pem(
+        FfiConverterData.lower(pem),uniffiCallStatus
+    )
+})
+}
+/**
  * Open the core (spec/07 "Lifecycle"): the shells' one entry point.
  * A failed open authorizes nothing; the caller shows the error. The
  * token is honoured only until the open starts: the engine's open
@@ -9671,6 +10376,9 @@ private let initializationResult: InitializationResult = {
     if bindings_contract_version != scaffolding_contract_version {
         return InitializationResult.contractVersionMismatch
     }
+    if (uniffi_sb_ffi_checksum_func_certificate_fingerprint_from_pem() != 37898) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_sb_ffi_checksum_func_open_core() != 57881) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -9678,6 +10386,12 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_func_palette() != 26715) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_add_bridge_account() != 847) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_bridge_certificate() != 46993) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_core_set_setting() != 25429) {

@@ -18,6 +18,7 @@
 //! UniFFI's scaffolding expands to `unsafe extern "C"` shims. It
 //! contains no hand-written `unsafe`.
 
+mod accounts;
 mod api;
 mod appearance;
 mod cancel;
@@ -30,6 +31,10 @@ mod sidebar;
 mod subscribe;
 mod windows;
 
+pub use accounts::{
+    AddressMode, BridgeAccountAdded, BridgeAccountParams, BridgeIdentity, CredentialPause,
+    EndpointSecurity, IdentitySendable, certificate_fingerprint_from_pem,
+};
 pub use api::{Core, CoreConfig, Receipt, Setting, open_core, platform_default_config};
 pub use appearance::{
     AccountAppearance, AccountAppearanceChange, AccountColor, Appearance, AppearanceAssignment,
