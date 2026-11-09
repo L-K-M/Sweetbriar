@@ -68,7 +68,10 @@ impl Evidence {
                 "stage evidence {kept} kept"
             );
         }
-        assert!(!self.preserved.exists(), "no preserved root");
+        assert!(
+            std::fs::symlink_metadata(&self.preserved).is_err(),
+            "no preserved root, not even a link"
+        );
         assert_eq!(source.live_incarnation(), self.incarnation);
     }
 }
@@ -227,7 +230,7 @@ fn a_replaced_name_before_the_handoff_is_refused() {
             ),
             "{case}: {result:?}"
         );
-        assert!(!evidence.preserved.exists(), "{case}");
+        evidence.assert_kept(&source);
     }
 }
 
@@ -261,7 +264,7 @@ fn a_replaced_name_after_the_flushes_is_refused() {
             Some(&QualifyPhase::Image(ImagePhase::Flushed)),
             "{case}: never rechecked"
         );
-        assert!(!evidence.preserved.exists(), "{case}");
+        evidence.assert_kept(&source);
     }
 }
 
@@ -521,7 +524,10 @@ fn fired_open_faults_keep_their_native_cause() {
         "the qualifier opens through the coordinator"
     );
     for nth in staged + 1..=total {
-        let (result, _, _, preserved, source) = stage_and_qualify(nth);
+        let (result, run_staged, _, preserved, source) = stage_and_qualify(nth);
+        // Each run stages with the calibrated count of opens, so the
+        // fault lands on the qualifier's open it was aimed at.
+        assert_eq!(run_staged, staged, "open #{nth}: the run drifted");
         assert_eq!(
             result.unwrap_err().io_kind(),
             Some(io::ErrorKind::PermissionDenied),
