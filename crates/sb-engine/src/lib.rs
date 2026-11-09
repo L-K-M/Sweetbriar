@@ -29,6 +29,10 @@ mod index;
 #[cfg(test)]
 mod index_tests;
 mod messages;
+// Nothing calls the policies yet; the account worker (the next M2.4
+// slice) is their caller.
+#[cfg_attr(not(test), allow(dead_code))]
+mod policy;
 mod rebuild;
 mod received;
 #[cfg(test)]
