@@ -172,7 +172,7 @@ fn preflight_location_sizes(tx: &Transaction<'_>, cancel: &AtomicBool) -> Result
     let columns = tx
         .prepare("SELECT * FROM backup_generations LIMIT 0")
         .map_err(location_error)?;
-    if columns.column_names().iter().any(|name| {
+    if columns.column_names().any(|name| {
         ["rowid", "_rowid_", "oid"]
             .iter()
             .any(|alias| name.eq_ignore_ascii_case(alias))

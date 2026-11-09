@@ -6,9 +6,14 @@ use std::sync::{
 };
 use std::time::Duration;
 
+use super::scoped_progress::{WorkLimit, with_work_limit};
+
 const PROGRESS_OPS: i32 = 1_000;
 pub(super) const MAX_PROGRESS_CALLS: u32 = 2_000;
 pub(super) const MAX_SQLITE_VALUE: i32 = 1_048_576;
+/// The depth an untrusted image is inspected under; `image_vfs` and the
+/// staging writer already open at it, and each inspection sets it again.
+pub(super) const INSPECTION_EXPR_DEPTH: i32 = crate::image_vfs::UNTRUSTED_EXPR_DEPTH;
 
 /// Result of inspecting a retained image; cancellation carries no identity.
 #[derive(Debug, PartialEq, Eq)]
@@ -30,15 +35,10 @@ impl Drop for StopMonitor {
         self.thread.unpark();
     }
 }
-struct ClearProgress<'a>(&'a Connection);
-impl Drop for ClearProgress<'_> {
-    fn drop(&mut self) {
-        let _ = self.0.progress_handler(0, None::<fn() -> bool>);
-    }
-}
-
-// The monitor borrows the caller's flag, while SQLite's 'static progress
-// callback owns a shared mirror. It also interrupts native SQLite work.
+// The monitor borrows the caller's flag and interrupts native SQLite
+// work; the scoped progress handler (rusqlite 0.41 needs `&mut` for its
+// own) stops the read once cancellation was observed or the work budget
+// ran out.
 pub(super) fn guarded<T>(
     conn: &Connection,
     cancelled: &AtomicBool,
@@ -48,12 +48,11 @@ pub(super) fn guarded<T>(
     if cancelled.load(Ordering::Acquire) {
         return Ok(None);
     }
-    let observed = Arc::new(AtomicBool::new(false));
-    let exhausted = Arc::new(AtomicBool::new(false));
+    let observed = AtomicBool::new(false);
     let done = Arc::new(AtomicBool::new(false));
     std::thread::scope(|scope| {
         let monitor_done = Arc::clone(&done);
-        let monitor_seen = Arc::clone(&observed);
+        let monitor_seen = &observed;
         let interrupt = conn.get_interrupt_handle();
         let watcher = std::thread::Builder::new()
             .name("verifier-cancel".into())
@@ -77,30 +76,12 @@ pub(super) fn guarded<T>(
             done,
             thread: watcher.thread().clone(),
         };
-        let progress_seen = Arc::clone(&observed);
-        let progress_exhausted = Arc::clone(&exhausted);
-        let mut calls = 0u32;
-        conn.progress_handler(
-            PROGRESS_OPS,
-            Some(move || {
-                if progress_seen.load(Ordering::Acquire) {
-                    return true;
-                }
-                calls = calls.saturating_add(1);
-                if calls >= budget {
-                    progress_exhausted.store(true, Ordering::Release);
-                    return true;
-                }
-                false
-            }),
-        )
-        .map_err(|e| crate::schema::classify(e, "install verifier progress handler"))?;
-        let _clear = ClearProgress(conn);
-        let outcome = read(conn);
+        let limit = WorkLimit::new(&observed, budget);
+        let outcome = with_work_limit(conn, PROGRESS_OPS, &limit, || read(conn));
         if cancelled.load(Ordering::Acquire) || observed.load(Ordering::Acquire) {
             return Ok(None);
         }
-        if exhausted.load(Ordering::Acquire) {
+        if limit.exhausted() {
             return Err(crate::StoreError::corrupt(
                 "verifier SQLite work limit exceeded",
             ));
@@ -144,6 +125,8 @@ pub(super) fn inspect(
             conn.set_limit(limit, MAX_SQLITE_VALUE)
                 .map_err(|e| crate::schema::classify(e, "bound verifier SQLite"))?;
         }
+        conn.set_limit(Limit::SQLITE_LIMIT_EXPR_DEPTH, INSPECTION_EXPR_DEPTH)
+            .map_err(|e| crate::schema::classify(e, "bound verifier SQLite depth"))?;
         conn.execute_batch(
             "PRAGMA trusted_schema=OFF; PRAGMA query_only=ON; PRAGMA temp_store=MEMORY;",
         )
@@ -260,6 +243,19 @@ mod tests {
             Err(crate::StoreError::Corrupt { .. })
         ));
         assert!(start.elapsed() < Duration::from_secs(3));
+    }
+
+    #[test]
+    fn an_inspected_image_keeps_sqlites_default_depth() {
+        // The store's build raises the depth for its own search SQL; an
+        // untrusted image is inspected under SQLite's default again.
+        let conn = Connection::open_in_memory().unwrap();
+        assert_eq!(conn.limit(Limit::SQLITE_LIMIT_EXPR_DEPTH).unwrap(), 2000);
+        let _ = inspect(&conn, &AtomicBool::new(false));
+        assert_eq!(
+            conn.limit(Limit::SQLITE_LIMIT_EXPR_DEPTH).unwrap(),
+            INSPECTION_EXPR_DEPTH
+        );
     }
 
     #[test]

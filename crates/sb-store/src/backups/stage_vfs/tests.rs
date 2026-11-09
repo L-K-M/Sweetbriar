@@ -122,6 +122,13 @@ fn commits_and_reopens_through_retained_files() {
             Arc::clone(&statement),
         )
         .unwrap();
+        // The staged image is untrusted: SQLite's default depth.
+        assert_eq!(
+            conn.connection()
+                .limit(rusqlite::limits::Limit::SQLITE_LIMIT_EXPR_DEPTH)
+                .unwrap(),
+            crate::image_vfs::UNTRUSTED_EXPR_DEPTH
+        );
         // Open runs no SQL: a fresh retained database is still empty.
         let tables: i64 = conn
             .connection()

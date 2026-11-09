@@ -274,6 +274,12 @@ impl ConfinedSqlite {
                 writer
                     .connection()
                     .set_limit(rusqlite::limits::Limit::SQLITE_LIMIT_ATTACHED, 0)?;
+                // The staged image is untrusted: its schema is parsed at
+                // SQLite's default depth, not the store's raised one.
+                writer.connection().set_limit(
+                    rusqlite::limits::Limit::SQLITE_LIMIT_EXPR_DEPTH,
+                    crate::image_vfs::UNTRUSTED_EXPR_DEPTH,
+                )?;
                 Ok(writer)
             }
             Err(error) => {

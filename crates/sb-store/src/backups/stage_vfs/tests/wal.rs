@@ -581,7 +581,7 @@ fn unfinished_transaction_and_cancelled_checkpoint_are_rejected() {
     let fs = SimFs::new();
     let (main, journal, statement, wal) = caps4(&fs);
     stage_main(main.as_ref(), &source_bytes);
-    let conn = ConfinedSqlite::open_wal(
+    let mut conn = ConfinedSqlite::open_wal(
         Arc::clone(&main),
         Arc::clone(&journal),
         Arc::clone(&statement),
@@ -591,14 +591,14 @@ fn unfinished_transaction_and_cancelled_checkpoint_are_rejected() {
     conn.connection()
         .execute_batch("INSERT INTO proof VALUES('kept');")
         .unwrap();
-    conn.connection()
+    conn.connection_mut()
         .progress_handler(1, Some(|| true))
         .unwrap();
     assert!(
         conn.checkpoint_wal().is_err(),
         "checkpoint ignored the caller's cancellation guard"
     );
-    conn.connection()
+    conn.connection_mut()
         .progress_handler(0, None::<fn() -> bool>)
         .unwrap();
     let context = Arc::clone(conn.context());

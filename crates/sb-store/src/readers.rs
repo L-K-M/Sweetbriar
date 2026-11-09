@@ -186,43 +186,58 @@ fn read_once<T>(
 }
 
 /// Preserve typed interruption so a raised stop cannot hide another failure.
+///
+/// rusqlite 0.41 installs a progress handler only through `&mut
+/// Connection`, so it is installed before the transaction and removed
+/// after it. It is armed only while `f` runs: BEGIN, COMMIT and the
+/// ROLLBACK of a dropped transaction are never interrupted, including
+/// during unwinding, so the reader is never left inside a transaction.
 fn read_once_scoped<T>(
     conn: &mut Connection,
     stop: &ReadStop,
     f: impl FnOnce(&Transaction) -> Result<T, StoreError>,
 ) -> Result<Scoped<T>, StoreError> {
-    let tx = conn
-        .transaction()
-        .map_err(|e| classify(e, "begin a read transaction"))?;
+    let armed = Arc::new(AtomicBool::new(false));
     let mark = {
         let flag = Arc::clone(&stop.0);
-        move || flag.load(Ordering::Acquire)
+        let armed = Arc::clone(&armed);
+        move || armed.load(Ordering::Acquire) && flag.load(Ordering::Acquire)
     };
-    tx.progress_handler(STOP_CHECK_OPS, Some(mark))
+    conn.progress_handler(STOP_CHECK_OPS, Some(mark))
         .map_err(|e| classify(e, "scope a read's stop signal"))?;
-    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(&tx)));
-    // Clear the handler before commit/rollback, including during unwinding.
-    let uninstalled = tx
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let tx = conn
+            .transaction()
+            .map_err(|e| classify(e, "begin a read transaction"))?;
+        armed.store(true, Ordering::Release);
+        let read = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(&tx)));
+        armed.store(false, Ordering::Release);
+        match read {
+            Err(panic) => {
+                drop(tx);
+                std::panic::resume_unwind(panic)
+            }
+            Ok(Err(StoreError::Interrupted { .. })) => Ok(Scoped::Stopped),
+            Ok(Err(error)) => Err(error),
+            Ok(Ok(value)) => {
+                tx.commit()
+                    .map_err(|e| classify(e, "end a read transaction"))?;
+                // A close after the last VM check still discards the result.
+                if stop.is_stopped() {
+                    return Ok(Scoped::Stopped);
+                }
+                Ok(Scoped::Done(value))
+            }
+        }
+    }));
+    let uninstalled = conn
         .progress_handler(0, None::<fn() -> bool>)
         .map_err(|e| classify(e, "unscope a read's stop signal"));
     match outcome {
         Err(panic) => std::panic::resume_unwind(panic),
-        Ok(Err(error)) => {
+        Ok(result) => {
             uninstalled?;
-            match error {
-                StoreError::Interrupted { .. } => Ok(Scoped::Stopped),
-                error => Err(error),
-            }
-        }
-        Ok(Ok(value)) => {
-            uninstalled?;
-            tx.commit()
-                .map_err(|e| classify(e, "end a read transaction"))?;
-            // A close after the last VM check still discards the result.
-            if stop.is_stopped() {
-                return Ok(Scoped::Stopped);
-            }
-            Ok(Scoped::Done(value))
+            result
         }
     }
 }
