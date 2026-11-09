@@ -7,10 +7,11 @@
 //!   writer commits g ─► Windows::store_moved(g) ─► versions ─┐
 //!   debug fill       ─► versions.synthetic                   ├─► wake every next
 //!   close / shutdown ─► versions.closes / shut                ┘
+//!   store swap (restore) ─► versions.restores ─► ResetRequired once
 //!   next: mark (window's last page) < source generation ? event : wait
 //! ```
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use tokio::runtime::Handle;
@@ -42,6 +43,8 @@ pub struct Subscription {
     /// page or id index the window's caller had received when
     /// subscribing. `None` for a window not open then.
     mark: Mutex<Option<u64>>,
+    /// The store swaps this subscription has answered.
+    restores: AtomicU64,
     waiting: AtomicBool,
 }
 
@@ -55,6 +58,7 @@ impl Engine {
             windows: Arc::clone(self.windows()),
             runtime: self.runtime_handle(),
             mark: Mutex::new(self.windows().seen(window_id)),
+            restores: AtomicU64::new(self.windows().restores()),
             waiting: AtomicBool::new(false),
         }
     }
@@ -76,6 +80,10 @@ impl Subscription {
             }
             let open = self.window().await?;
             let current = source_generation(&open.spec, seen);
+            if answered_restore(&self.restores, seen) {
+                *self.lock_mark() = Some(current);
+                return Ok(WindowEvent::ResetRequired);
+            }
             let mark = *self.lock_mark().get_or_insert(open.seen());
             if current > mark {
                 *self.lock_mark() = Some(current);
@@ -122,6 +130,8 @@ impl Subscription {
 pub struct AppearanceSubscription {
     windows: Arc<Windows>,
     mark: Mutex<u64>,
+    /// The store swaps this subscription has answered.
+    restores: AtomicU64,
     waiting: AtomicBool,
 }
 
@@ -133,6 +143,7 @@ impl Engine {
         AppearanceSubscription {
             windows: Arc::clone(self.windows()),
             mark: Mutex::new(generation),
+            restores: AtomicU64::new(self.windows().restores()),
             waiting: AtomicBool::new(false),
         }
     }
@@ -153,6 +164,10 @@ impl AppearanceSubscription {
                 return Err(shut_down());
             }
             let current = seen.appearance;
+            if answered_restore(&self.restores, seen) {
+                *self.lock_mark() = current;
+                return Ok(WindowEvent::ResetRequired);
+            }
             let mark = *self.lock_mark();
             if current > mark {
                 *self.lock_mark() = current;
@@ -173,6 +188,14 @@ impl AppearanceSubscription {
             .lock()
             .expect("a panicking thread held an appearance subscription's mark")
     }
+}
+
+/// Whether a store swap happened since this subscription last
+/// answered one, recording that it now has. The swapped-in store's
+/// generations may be lower than the mark, so a swap is never compared
+/// as a generation.
+fn answered_restore(restores: &AtomicU64, versions: Versions) -> bool {
+    restores.swap(versions.restores, Ordering::AcqRel) != versions.restores
 }
 
 /// The generation of the source `spec` lists.

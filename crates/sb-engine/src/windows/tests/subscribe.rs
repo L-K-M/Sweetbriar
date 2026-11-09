@@ -294,3 +294,75 @@ fn racing_fills_publish_the_newest_generation() {
     );
     block_on(engine.shutdown()).unwrap();
 }
+
+/// The replaced store's generations named by a restore's swap, lower
+/// than the ones the windows saw (plan M1.8g2).
+fn restored_at(engine: &Engine, list: u64) {
+    engine
+        .windows()
+        .store_replaced(crate::windows::StoreGenerations {
+            list,
+            search: 0,
+            appearance: 0,
+        });
+}
+
+/// A store swap wakes a waiting `next` with `ResetRequired` even though
+/// the swapped-in generation is lower than the mark; the subscription
+/// then follows the restored store's next change as usual.
+#[test]
+fn a_store_swap_answers_reset_required_once_then_follows_the_new_store() {
+    let (_scratch, engine, window) = listed("subscribe-restore");
+    toggle_flags(&engine, 3);
+    let subscription = engine.subscribe(window.window_id());
+    assert!(matches!(
+        block_on(subscription.next()).unwrap(),
+        WindowEvent::Invalidated { .. }
+    ));
+    let mut next = pin!(subscription.next());
+    let mut cx = Context::from_waker(Waker::noop());
+    for _ in 0..20 {
+        assert!(next.as_mut().poll(&mut cx).is_pending());
+        std::thread::sleep(Duration::from_millis(5));
+    }
+
+    restored_at(&engine, 1);
+
+    assert_eq!(finish(next.as_mut()).unwrap(), WindowEvent::ResetRequired);
+    // Once only: the next commit is an ordinary invalidation.
+    toggle_flags(&engine, 1);
+    assert!(matches!(
+        block_on(subscription.next()).unwrap(),
+        WindowEvent::Invalidated { .. }
+    ));
+    block_on(engine.shutdown()).unwrap();
+}
+
+/// A window's mark restarts with the swap: a subscription opened after
+/// it on that window reports the restored generation at once and owes
+/// no `ResetRequired`.
+#[test]
+fn a_subscription_after_a_swap_starts_from_the_restored_store() {
+    let (_scratch, engine, window) = listed("subscribe-after-restore");
+    toggle_flags(&engine, 2);
+    restored_at(&engine, 1);
+    let subscription = engine.subscribe(window.window_id());
+    assert_eq!(
+        block_on(subscription.next()).unwrap(),
+        WindowEvent::Invalidated { generation: 1 }
+    );
+    block_on(engine.shutdown()).unwrap();
+}
+
+/// Appearance subscriptions answer the swap the same way, from any mark.
+#[test]
+fn an_appearance_subscription_answers_a_store_swap() {
+    let (_scratch, engine, _window) = listed("subscribe-appearance-restore");
+    let subscription = engine.subscribe_appearance(u64::MAX);
+    restored_at(&engine, 1);
+    assert_eq!(
+        block_on(subscription.next()).unwrap(),
+        WindowEvent::ResetRequired
+    );
+    block_on(engine.shutdown()).unwrap();
+}

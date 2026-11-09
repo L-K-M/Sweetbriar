@@ -466,7 +466,20 @@ struct Versions {
     /// the list and Search sources.
     appearance: u64,
     closes: u64,
+    /// Store swaps so far (a restore, plan M1.8g): each answers every
+    /// subscription `ResetRequired` once, whatever the generations did.
+    restores: u64,
     shut: bool,
+}
+
+/// The generations a swapped-in store opened at: they replace the
+/// replaced store's, which may have been higher.
+#[allow(dead_code)] // Engine::restore (plan M1.8g3) builds it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct StoreGenerations {
+    pub(crate) list: u64,
+    pub(crate) search: u64,
+    pub(crate) appearance: u64,
 }
 
 /// An open window: its spec and the generation of the last page or id
@@ -579,6 +592,29 @@ impl Windows {
             versions.appearance = versions.appearance.max(generation);
             moved
         });
+    }
+
+    /// A restore swapped another store in (plan M1.8g): its
+    /// generations replace the old ones even where lower, every open
+    /// window's mark restarts, and every subscription answers
+    /// `ResetRequired` once. Called while the engine is quiesced, so no
+    /// read delivers a page of the replaced store meanwhile.
+    #[allow(dead_code)] // Engine::restore (plan M1.8g3) calls it.
+    pub(crate) fn store_replaced(&self, generations: StoreGenerations) {
+        for window in self.lock().open.values() {
+            window.seen.store(0, Ordering::Release);
+        }
+        self.versions.send_modify(|versions| {
+            versions.store = generations.list;
+            versions.search = generations.search;
+            versions.appearance = generations.appearance;
+            versions.restores += 1;
+        });
+    }
+
+    /// The store swaps so far, where a new subscription starts.
+    fn restores(&self) -> u64 {
+        self.versions.borrow().restores
     }
 
     /// The engine is shutting down: end every waiting `next`.
