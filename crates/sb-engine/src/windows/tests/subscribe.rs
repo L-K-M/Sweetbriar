@@ -366,3 +366,50 @@ fn an_appearance_subscription_answers_a_store_swap() {
     );
     block_on(engine.shutdown()).unwrap();
 }
+
+/// A read admitted before a swap that delivers after it raises the
+/// replaced mark, never the restarted one: a later subscription still
+/// starts from the restored store.
+#[test]
+fn a_delivery_from_before_a_swap_moves_no_restarted_mark() {
+    let (_scratch, engine, window) = listed("subscribe-late-delivery");
+    toggle_flags(&engine, 2);
+    let before = engine.windows().window(window.window_id()).unwrap();
+    restored_at(&engine, 1);
+    before.delivered(u64::MAX);
+    let subscription = engine.subscribe(window.window_id());
+    assert_eq!(
+        finish(pin!(subscription.next())).unwrap(),
+        WindowEvent::Invalidated { generation: 1 }
+    );
+    block_on(engine.shutdown()).unwrap();
+}
+
+/// A swap releases the selections, frozen ids of the replaced store,
+/// and leaves the debug source's windows and subscriptions alone.
+#[test]
+fn a_swap_releases_selections_and_leaves_the_debug_source() {
+    let (_scratch, engine, window) = listed("subscribe-restore-selection");
+    let index = block_on(engine.window_ids(window.window_id())).unwrap();
+    let selection = block_on(engine.open_selection(
+        window.window_id(),
+        index.generation(),
+        crate::SelectionInput::Ids(vec![index.ids()[0]]),
+    ))
+    .unwrap();
+    block_on(engine.debug_fill_synthetic(10)).unwrap();
+    let synthetic =
+        block_on(engine.open_window(WindowSpec::DebugSynthetic, Anchor::Top, 5)).unwrap();
+    let debug = engine.subscribe(synthetic.window_id());
+
+    restored_at(&engine, 1);
+
+    assert!(block_on(engine.selection_ids(selection.selection_id().clone(), 0, 10)).is_err());
+    let mut cx = Context::from_waker(Waker::noop());
+    let mut quiet = pin!(debug.next());
+    for _ in 0..20 {
+        assert!(quiet.as_mut().poll(&mut cx).is_pending());
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    block_on(engine.shutdown()).unwrap();
+}

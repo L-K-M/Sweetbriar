@@ -595,15 +595,24 @@ impl Windows {
     }
 
     /// A restore swapped another store in (plan M1.8g): its
-    /// generations replace the old ones even where lower, every open
-    /// window's mark restarts, and every subscription answers
-    /// `ResetRequired` once. Called while the engine is quiesced, so no
-    /// read delivers a page of the replaced store meanwhile.
+    /// generations replace the old ones even where lower, every store
+    /// window's mark restarts, the selections (frozen ids of the
+    /// replaced store) are released, and every store subscription
+    /// answers `ResetRequired` once. The debug source is untouched.
     #[allow(dead_code)] // Engine::restore (plan M1.8g3) calls it.
     pub(crate) fn store_replaced(&self, generations: StoreGenerations) {
-        for window in self.lock().open.values() {
-            window.seen.store(0, Ordering::Release);
+        // The table lock is held through the swap's count, so a new
+        // subscription reads a window's mark and the count from the same
+        // side of the swap.
+        let mut inner = self.lock();
+        for window in inner.open.values_mut() {
+            if !matches!(window.spec, WindowSpec::DebugSynthetic) {
+                // A fresh cell: a read admitted before the swap that
+                // delivers after it raises the old one, not this.
+                window.seen = Arc::new(AtomicU64::new(0));
+            }
         }
+        inner.selections.clear();
         self.versions.send_modify(|versions| {
             versions.store = generations.list;
             versions.search = generations.search;
@@ -612,7 +621,17 @@ impl Windows {
         });
     }
 
-    /// The store swaps so far, where a new subscription starts.
+    /// Where a subscription to `window_id` starts: the generation its
+    /// caller last received (`None` for a window not open) and the store
+    /// swaps so far, read together under the lock a swap holds. An
+    /// in-memory getter (spec/07).
+    fn subscription_start(&self, window_id: WindowId) -> (Option<u64>, u64) {
+        let inner = self.lock();
+        let mark = inner.open.get(&window_id).map(OpenWindow::seen);
+        (mark, self.versions.borrow().restores)
+    }
+
+    /// The store swaps so far, where an appearance subscription starts.
     fn restores(&self) -> u64 {
         self.versions.borrow().restores
     }
@@ -755,12 +774,6 @@ impl Windows {
             .ok_or_else(|| EngineError::NotFound {
                 what: format!("window {}", window_id.get()),
             })
-    }
-
-    /// The generation `window_id`'s caller last received, if it is open:
-    /// a subscription's starting mark. An in-memory getter (spec/07).
-    fn seen(&self, window_id: WindowId) -> Option<u64> {
-        self.lock().open.get(&window_id).map(OpenWindow::seen)
     }
 
     /// `open_selection`'s registration (spec/07 "Selection snapshots"):

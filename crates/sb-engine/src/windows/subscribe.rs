@@ -53,12 +53,13 @@ impl Engine {
     /// marked at the generation its caller last received. Only that
     /// in-memory mark is read here; no I/O.
     pub fn subscribe(&self, window_id: WindowId) -> Subscription {
+        let (mark, restores) = self.windows().subscription_start(window_id);
         Subscription {
             window_id,
             windows: Arc::clone(self.windows()),
             runtime: self.runtime_handle(),
-            mark: Mutex::new(self.windows().seen(window_id)),
-            restores: AtomicU64::new(self.windows().restores()),
+            mark: Mutex::new(mark),
+            restores: AtomicU64::new(restores),
             waiting: AtomicBool::new(false),
         }
     }
@@ -74,13 +75,22 @@ impl Subscription {
         let _waiting = Waiting::claim(&self.waiting)?;
         let mut versions = self.windows.versions.subscribe();
         loop {
-            let seen = *versions.borrow_and_update();
-            if seen.shut {
+            if versions.borrow_and_update().shut {
                 return Err(shut_down());
             }
             let open = self.window().await?;
+            // The versions as of after the window was read, so a swap
+            // meanwhile is answered rather than a replaced generation.
+            // Read without marking them seen: a change the window read
+            // predates (a close) still wakes the wait below.
+            let seen = *versions.borrow();
+            if seen.shut {
+                return Err(shut_down());
+            }
             let current = source_generation(&open.spec, seen);
-            if answered_restore(&self.restores, seen) {
+            let swapped = answered_restore(&self.restores, seen)
+                && !matches!(open.spec, WindowSpec::DebugSynthetic);
+            if swapped {
                 *self.lock_mark() = Some(current);
                 return Ok(WindowEvent::ResetRequired);
             }
