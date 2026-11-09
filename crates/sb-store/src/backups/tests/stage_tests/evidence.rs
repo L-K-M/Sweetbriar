@@ -354,3 +354,104 @@ fn fired_open_and_read_faults_keep_their_native_cause() {
     }
     source.assert_untouched();
 }
+
+/// Wraps the stage root so the `at`-th regular-file open (counting
+/// manifest and object opens across both passes) returns a reader that
+/// raises `cancel` after its first read: cancellation then arrives
+/// mid-stream, inside the parser or an object's copy loop.
+struct CancelMidRead {
+    inner: Box<dyn sb_types::fs::ConfinedDir>,
+    cancel: Arc<AtomicBool>,
+    opens: Arc<std::sync::atomic::AtomicU64>,
+    at: u64,
+}
+
+impl sb_types::fs::ConfinedDir for CancelMidRead {
+    fn identity(&self) -> io::Result<sb_types::fs::DirectoryIdentity> {
+        self.inner.identity()
+    }
+    fn open_dir(&self, name: &Path) -> io::Result<Box<dyn sb_types::fs::ConfinedDir>> {
+        Ok(Box::new(Self {
+            inner: self.inner.open_dir(name)?,
+            cancel: Arc::clone(&self.cancel),
+            opens: Arc::clone(&self.opens),
+            at: self.at,
+        }))
+    }
+    fn open_regular(
+        &self,
+        relative: &Path,
+    ) -> io::Result<(Box<dyn sb_types::fs::ReadFile>, sb_types::fs::Metadata)> {
+        let (file, metadata) = self.inner.open_regular(relative)?;
+        if self.opens.fetch_add(1, Ordering::SeqCst) + 1 != self.at {
+            return Ok((file, metadata));
+        }
+        let reader = CancelAfterRead {
+            inner: file,
+            cancel: Arc::clone(&self.cancel),
+        };
+        Ok((Box::new(reader), metadata))
+    }
+}
+
+struct CancelAfterRead {
+    inner: Box<dyn sb_types::fs::ReadFile>,
+    cancel: Arc<AtomicBool>,
+}
+
+impl io::Read for CancelAfterRead {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let read = self.inner.read(buf)?;
+        self.cancel.store(true, Ordering::Release);
+        Ok(read)
+    }
+}
+
+impl io::Seek for CancelAfterRead {
+    fn seek(&mut self, position: io::SeekFrom) -> io::Result<u64> {
+        self.inner.seek(position)
+    }
+}
+
+#[test]
+fn cancellation_mid_manifest_or_mid_object_stops_the_pass() {
+    let source = staging_source("evidence-cancel-mid-read");
+    let mut stage = candidate(&source);
+    let path = stage.path().to_path_buf();
+    let root = std::mem::replace(
+        &mut stage.files.root,
+        real_fs().open_confined_dir(&path).unwrap(),
+    );
+    // Two manifest reads, then one per object.
+    let opens = 2 + staged_objects(&stage).len() as u64;
+    for at in 1..=opens {
+        let cancel = Arc::new(AtomicBool::new(false));
+        let counted = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        stage.files.root = Box::new(CancelMidRead {
+            inner: real_fs().open_confined_dir(&path).unwrap(),
+            cancel: Arc::clone(&cancel),
+            opens: Arc::clone(&counted),
+            at,
+        });
+        let mut seen = Vec::new();
+        let result = reauthenticate(&stage, &expected(&stage), &cancel, |phase| seen.push(phase));
+        assert!(
+            matches!(result, Err(StoreError::Unavailable { io_kind: None, .. })),
+            "open #{at}: {result:?}"
+        );
+        assert_eq!(
+            counted.load(Ordering::SeqCst),
+            at,
+            "open #{at} stopped the pass"
+        );
+        let expected_phases: &[EvidencePhase] = if at == 1 {
+            &[]
+        } else {
+            &[EvidencePhase::ManifestAuthenticated]
+        };
+        assert_eq!(seen, expected_phases, "open #{at}");
+    }
+    stage.files.root = root;
+    quietly(&stage).unwrap();
+    source.assert_untouched();
+}
