@@ -56,11 +56,19 @@ pub(super) fn mailbox(engine: &Engine) -> (i64, u64) {
     }
 }
 
-/// Capture a job to `ready`; a stale-generation conflict just means
-/// something else committed meanwhile — rebuild the request and retry.
-fn seal(engine: &Engine, id: &str, mailbox_id: i64, generation: u64, dest: &Path) {
+/// Capture a job to `ready` and name the job that sealed. A
+/// stale-generation conflict just means post-ingest work committed
+/// after `mailbox` settled. A job keeps the request it was created
+/// with (and its history is retained), so a retry with a fresh fence
+/// goes to a new job id; the stale job stays capturing, never sealed.
+fn seal(engine: &Engine, id: &str, mailbox_id: i64, generation: u64, dest: &Path) -> String {
     let mut generation = generation;
     for attempt in 0..3 {
+        let job = if attempt == 0 {
+            id.to_owned()
+        } else {
+            format!("{id}-retry-{attempt}")
+        };
         let request = ExportCaptureRequest::new(
             ExportFormat::Mboxrd,
             dest.to_string_lossy().to_string(),
@@ -72,17 +80,86 @@ fn seal(engine: &Engine, id: &str, mailbox_id: i64, generation: u64, dest: &Path
         .unwrap();
         match engine
             .resources()
-            .capture_export(id, &request, |_| ControlFlow::Continue(()))
+            .capture_export(&job, &request, |_| ControlFlow::Continue(()))
         {
-            Err(StoreError::Conflict { .. }) if attempt < 2 => {
+            // Only a fence the list generation really moved past is
+            // retried; any other conflict fails the test.
+            Err(StoreError::Conflict { .. })
+                if attempt < 2
+                    && engine.resources().read(list_generation).unwrap() != generation =>
+            {
                 generation = engine.resources().read(list_generation).unwrap();
             }
             other => {
                 other.unwrap();
-                return;
+                return job;
             }
         }
     }
+    unreachable!("the last attempt returns or panics")
+}
+
+/// Commit a new list generation, as late post-ingest work would.
+fn move_generation(engine: &Engine) {
+    block_on(engine.resources().write(WritePriority::User, |tx| {
+        tx.execute("UPDATE occurrences SET f_flagged = 1 - f_flagged", [])
+            .map_err(|error| StoreError::internal(error.to_string()))?;
+        let ids: std::collections::BTreeSet<i64> = tx
+            .prepare("SELECT occurrence_id FROM occurrences")
+            .and_then(|mut statement| {
+                statement
+                    .query_map([], |row| row.get(0))?
+                    .collect::<Result<_, _>>()
+            })
+            .map_err(|error| StoreError::internal(error.to_string()))?;
+        sb_resources::refresh_list_rows(tx, &ids)
+    }))
+    .unwrap();
+}
+
+/// A job created at a generation that moved before its capture still
+/// seals: the test helper starts the job over at the current one.
+#[test]
+fn a_seal_after_the_generation_moved_starts_the_job_over() {
+    let scratch = ScratchDir::new("export-seal-moved");
+    let engine = open(&scratch.path().join("store"));
+    import_inbox(&engine);
+    let (mailbox_id, generation) = mailbox(&engine);
+    let dest = scratch.path().join("out");
+    let request = ExportCaptureRequest::new(
+        ExportFormat::Mboxrd,
+        dest.to_string_lossy().to_string(),
+        ExportScope::Mailbox {
+            mailbox_id,
+            expected_generation: generation,
+        },
+    )
+    .unwrap();
+    let now = engine.resources().now();
+    let request_json = request.request_json().to_owned();
+    block_on(engine.resources().write(WritePriority::User, move |tx| {
+        create_export_job(tx, "moved", &request_json, now)
+    }))
+    .unwrap();
+    move_generation(&engine);
+    assert_ne!(
+        engine.resources().read(list_generation).unwrap(),
+        generation
+    );
+
+    let sealed = seal(&engine, "moved", mailbox_id, generation, &dest);
+
+    assert_ne!(sealed, "moved", "the stale job is never sealed");
+    assert_eq!(
+        export_status(&engine, "moved").state(),
+        ExportJobState::Capturing,
+        "the stale job stays capturing"
+    );
+    assert_eq!(
+        export_status(&engine, &sealed).state(),
+        ExportJobState::Ready
+    );
+    block_on(engine.shutdown()).unwrap();
 }
 
 fn start_export(
@@ -383,11 +460,11 @@ fn a_sealed_export_resumes_at_open_and_completes_without_a_request() {
         create_export_job(tx, "sealed", &request_json, now)
     }))
     .unwrap();
-    seal(&engine, "sealed", mailbox_id, generation, &dest);
+    let sealed = seal(&engine, "sealed", mailbox_id, generation, &dest);
     block_on(engine.shutdown()).unwrap();
 
     let engine = open(&root);
-    settle_export(&engine, "sealed", ExportJobState::Completed);
+    settle_export(&engine, &sealed, ExportJobState::Completed);
     assert!(dest.join("sweetbriar-metadata.json").is_file());
     block_on(engine.shutdown()).unwrap();
 }
@@ -466,11 +543,11 @@ fn a_cancelled_export_stays_cancelled_across_reopen_and_publishes_nothing() {
         create_export_job(tx, "halt", &request_json, now)
     }))
     .unwrap();
-    seal(&engine, "halt", mailbox_id, generation, &dest);
+    let halt = seal(&engine, "halt", mailbox_id, generation, &dest);
 
-    block_on(engine.cancel_job(&engine.new_idempotency_key(), "halt")).unwrap();
+    block_on(engine.cancel_job(&engine.new_idempotency_key(), &halt)).unwrap();
     assert_eq!(
-        export_status(&engine, "halt").state(),
+        export_status(&engine, &halt).state(),
         ExportJobState::Cancelled
     );
     block_on(engine.shutdown()).unwrap();
@@ -478,7 +555,7 @@ fn a_cancelled_export_stays_cancelled_across_reopen_and_publishes_nothing() {
     let engine = open(&root);
     std::thread::sleep(Duration::from_millis(100));
     assert_eq!(
-        export_status(&engine, "halt").state(),
+        export_status(&engine, &halt).state(),
         ExportJobState::Cancelled,
         "a terminal export never resumes"
     );
