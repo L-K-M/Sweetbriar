@@ -29,6 +29,7 @@ pub mod query;
 mod readers;
 mod receipts;
 pub mod repair;
+mod restore_pending;
 mod schema;
 pub mod seen;
 pub mod settings;
