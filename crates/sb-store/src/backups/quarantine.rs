@@ -290,10 +290,15 @@ fn apply_inner(conn: &mut Connection, input: &Quarantine<'_>) -> Result<(), Stor
     if changed != 1 {
         return Err(StoreError::corrupt("missing or reused restore incarnation"));
     }
+    // The other inherited in-progress generations become `failed` and lose
+    // their tokens, so no cleanup in the restored store acts on them. The
+    // restored generation becomes `complete` and keeps its own: its
+    // directory's marker holds that token, and retention fails closed
+    // without it, which would stop every later backup once it expires.
     execute(
         &tx,
-        "DELETE FROM backup_ownership NOT INDEXED WHERE generation_id IN (SELECT generation_id FROM backup_generations NOT INDEXED WHERE state='in_progress')",
-        [],
+        "DELETE FROM backup_ownership NOT INDEXED WHERE generation_id<>?1 AND generation_id IN (SELECT generation_id FROM backup_generations NOT INDEXED WHERE state='in_progress')",
+        [input.generation],
     )?;
     let changed = execute(
         &tx,
@@ -473,6 +478,15 @@ mod tests {
         .unwrap();
         let prefix = format!("{}-elsewhere/backup", paths.data_root().display());
         conn.execute("INSERT INTO backup_generations (generation_id,started_at,state,location) VALUES ('prefix',0,'complete',?1)", [&prefix]).unwrap();
+        // The restored generation's own token, which the snapshot took
+        // while it was still in progress.
+        let restored_token: String = conn
+            .query_row(
+                "SELECT token FROM backup_ownership WHERE generation_id=?1",
+                [snapshot.generation_id()],
+                |r| r.get(0),
+            )
+            .unwrap();
         let current = paths.data_root();
         let preserved = current.with_extension("preserved");
         let selected = "/external/new-source";
@@ -619,14 +633,22 @@ mod tests {
                 .unwrap();
             assert_eq!(count, 0, "{table}");
         }
+        // Only the other in-progress row loses its token; the restored
+        // generation keeps its own, so retention can prove and remove its
+        // directory once it expires.
         let owners: Vec<(String, String)> = conn
-            .prepare("SELECT generation_id, token FROM backup_ownership")
+            .prepare("SELECT generation_id, token FROM backup_ownership ORDER BY generation_id")
             .unwrap()
             .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
             .unwrap()
             .map(Result::unwrap)
             .collect();
-        assert_eq!(owners, vec![("inside".into(), "retained-token".into())]);
+        let mut expected = vec![
+            ("inside".to_owned(), "retained-token".to_owned()),
+            (snapshot.generation_id().to_owned(), restored_token),
+        ];
+        expected.sort();
+        assert_eq!(owners, expected);
         let pin: String = conn
             .query_row("SELECT pin_kind FROM object_pins", [], |r| r.get(0))
             .unwrap();

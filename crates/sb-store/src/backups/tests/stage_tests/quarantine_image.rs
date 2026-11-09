@@ -4,6 +4,7 @@ use super::super::super::{
     stage_quarantine::{self, ImagePhase, QuarantinedImage},
 };
 use super::*;
+use rusqlite::OptionalExtension;
 use sb_types::fs::{FileIdentity, ReadWriteFile};
 use std::io;
 use std::sync::atomic::AtomicUsize;
@@ -191,16 +192,20 @@ fn a_fresh_target_preserves_large_rows_and_quarantines_real_backup_state() {
             stage.metadata.completed_at
         )
     );
-    assert_eq!(
-        connection
-            .query_row(
-                "SELECT count(*) FROM backup_ownership WHERE generation_id=?1",
-                [stage.generation_id()],
-                |r| r.get::<_, i64>(0)
-            )
-            .unwrap(),
-        0
-    );
+    // The restored generation keeps the ownership token it had when the
+    // snapshot was taken, the one its directory's marker holds.
+    let token = |tx: &Connection| -> Option<String> {
+        tx.query_row(
+            "SELECT token FROM backup_ownership WHERE generation_id=?1",
+            [stage.generation_id()],
+            |r| r.get(0),
+        )
+        .optional()
+        .unwrap()
+    };
+    let live_token = reading(&source.store, |tx| Ok(token(tx)));
+    assert!(live_token.is_some());
+    assert_eq!(token(&connection), live_token);
     connection.close().unwrap();
     let bytes = std::fs::read(stage.path().join("state.sqlite")).unwrap();
     assert_eq!(image.bytes, bytes.len() as u64);

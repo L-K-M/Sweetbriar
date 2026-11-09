@@ -675,8 +675,10 @@ The process holds `<data root>.lock` throughout.
    - fix the inherited backup rows. The snapshot holds its own
      generation's row as `in_progress`, since `complete` was written
      afterwards: mark the restored-from generation `complete`, with its
-     verified manifest data. Mark any other inherited `in_progress` row
-     `failed` and delete its `backup_in_progress` pins, without touching
+     verified manifest data, keeping its ownership token: its directory's
+     marker holds that token, and retention fails closed without it. Mark
+     any other inherited `in_progress` row `failed` and delete its
+     `backup_in_progress` pins and its ownership token, without touching
      its directory, so interrupted-job cleanup only ever acts on jobs
      started after the restore.
    - Then flush the staging root.
