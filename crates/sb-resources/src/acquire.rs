@@ -962,7 +962,7 @@ pub(super) fn summary(outcome: &ParseOutcome) -> ImportSummary {
 }
 
 /// `[{"address": …, "name": …}]`, missing parts `null`; empty is NULL.
-fn addresses(list: &[MailboxAddress]) -> Option<String> {
+pub(crate) fn addresses(list: &[MailboxAddress]) -> Option<String> {
     (!list.is_empty()).then(|| {
         list.iter()
             .map(|a| serde_json::json!({"address": a.address(), "name": a.name()}))
@@ -971,7 +971,7 @@ fn addresses(list: &[MailboxAddress]) -> Option<String> {
     })
 }
 
-fn strings(list: &[String]) -> Option<String> {
+pub(crate) fn strings(list: &[String]) -> Option<String> {
     (!list.is_empty()).then(|| serde_json::json!(list).to_string())
 }
 

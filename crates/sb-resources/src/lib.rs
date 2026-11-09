@@ -32,6 +32,7 @@ mod acquire;
 mod activation;
 mod catchup;
 mod drafts;
+pub mod sync;
 pub use activation::{
     ActivationCommit, ActivationPreparation, ActivationPrepared, ActivationStatus, ActivationWork,
     RecordedActivationDeferral,

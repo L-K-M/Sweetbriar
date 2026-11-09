@@ -1,6 +1,7 @@
-//! IMAP sync writes (spec/04 "Sync loop", steps 1 and 2): the
-//! reconciliation of one LIST with an account's `mailboxes` rows, and
-//! the epoch check after EXAMINE. They run inside the caller's writer
+//! IMAP sync writes (spec/04 "Sync loop", steps 1 to 3): the
+//! reconciliation of one LIST with an account's `mailboxes` rows, the
+//! epoch check after EXAMINE, and header batches with their
+//! checkpoints (`headers`). They run inside the caller's writer
 //! transaction; the engine maps LIST rows through its provider policy
 //! first, so these see `mailboxes` columns, never IMAP attributes.
 //!
@@ -13,6 +14,12 @@
 //!   one with occurrences (after a restore); the epoch-change step
 //!   resolves it (plan M2.5) and sync skips the mailbox until then;
 //! - `gone`: absent from the last LIST; its occurrences are kept.
+
+mod headers;
+pub use headers::{
+    HeaderBatch, HeaderBatchStats, HeaderColumns, MAX_HEADER_BATCH, MAX_HEADER_BATCH_BYTES,
+    SyncedFlags, SyncedHeader, commit_header_batch,
+};
 
 use std::collections::BTreeMap;
 
