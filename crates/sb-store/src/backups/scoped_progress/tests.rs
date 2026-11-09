@@ -82,3 +82,22 @@ fn a_statement_prepared_outside_runs_across_scoped_reads() {
     });
     assert_eq!(second.unwrap(), 1_000_000);
 }
+
+#[test]
+fn a_nested_scoped_read_is_refused_and_the_outer_still_bounded() {
+    let conn = Connection::open_in_memory().unwrap();
+    let stopped = AtomicBool::new(false);
+    let outer = WorkLimit::new(&stopped, 3);
+    let inner = WorkLimit::new(&stopped, u32::MAX);
+
+    let nested = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        with_work_limit(&conn, 1_000, &outer, || {
+            with_work_limit(&conn, 1_000, &inner, || heavy(&conn))
+        })
+    }));
+
+    assert!(nested.is_err(), "nesting must be refused");
+    // Both guards unwound: a fresh scoped read works and is bounded.
+    let result = with_work_limit(&conn, 1_000, &outer, || heavy(&conn));
+    assert!(interrupted(&result), "{result:?}");
+}

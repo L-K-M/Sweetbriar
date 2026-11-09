@@ -108,8 +108,13 @@ against concurrent replacement.
   - bundled SQLite through `rusqlite`'s `bundled` feature, pinned so the
     linked library is ≥ 3.51.3 and never the withdrawn 3.52.0;
   - compile options `SQLITE_DQS=0`, `SQLITE_DEFAULT_FOREIGN_KEYS=1`,
-    `SQLITE_DEFAULT_WAL_SYNCHRONOUS=2` and `SQLITE_STRICT_SUBTYPE=1`, with
-    FTS5 enabled;
+    `SQLITE_DEFAULT_WAL_SYNCHRONOUS=2`, `SQLITE_STRICT_SUBTYPE=1` and
+    `SQLITE_MAX_EXPR_DEPTH=2000`, with FTS5 enabled. SQLite 3.54 bounds
+    the cursors a statement may open while expanding CTEs by the
+    expression depth (1000 by default); a 256-node relevance search
+    (06) opens about 1,250, so the store's own SQL gets 2000.
+    Connections inspecting an untrusted restore or verifier image set
+    the depth back to 1000;
   - **never the system SQLite.** Its version and build options aren't
     ours to pin, and Apple's build has been reported to map `fullfsync`
     to a weaker barrier (historical reports; unverified for macOS 27).

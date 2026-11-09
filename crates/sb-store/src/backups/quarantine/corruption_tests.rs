@@ -157,10 +157,24 @@ fn incomplete_generation_index_cannot_preserve_in_progress_rows() {
 fn shadowed_rowid_cannot_redirect_location_updates() {
     for alias in ["rowid", "_rowid_", "oid"] {
         staged(|conn, input| {
+            // SQLite 3.54 refuses ALTER TABLE ... ADD COLUMN of a rowid
+            // alias, but a hostile image can still declare one: write it
+            // into the schema directly, as ADD COLUMN would (no row is
+            // rewritten), and reload.
             conn.execute_batch(&format!(
-                "ALTER TABLE backup_generations ADD COLUMN {alias} INTEGER DEFAULT 100"
+                "PRAGMA writable_schema=ON;
+                 UPDATE sqlite_schema
+                 SET sql=replace(sql, ') STRICT', ', {alias} INTEGER DEFAULT 100) STRICT')
+                 WHERE type='table' AND name='backup_generations';
+                 PRAGMA writable_schema=RESET;"
             ))
             .unwrap();
+            let shadowed = conn
+                .prepare("SELECT * FROM backup_generations")
+                .unwrap()
+                .column_names()
+                .any(|name| name == alias);
+            assert!(shadowed, "the fixture declares {alias}");
             assert!(apply(conn, input).is_err(), "accepted shadow alias {alias}");
         });
     }

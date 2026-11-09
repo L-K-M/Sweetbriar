@@ -10,7 +10,15 @@
 //! aliases mutable data and cannot unwind into SQLite. Nothing else
 //! may install a progress handler on the connection meanwhile: rusqlite
 //! needs `&mut` for that, which the shared borrow here excludes.
+//!
+//! Preconditions, both upheld by every caller: the connection carries
+//! no rusqlite progress handler on entry (this one takes SQLite's only
+//! slot and clears it afterwards, so a prior one would stay silenced),
+//! and scoped reads never nest on one thread (an inner one would clear
+//! the outer handler and leave the outer read unbounded). Nesting is
+//! refused with a panic rather than silently weakening the bound.
 
+use std::cell::Cell;
 use std::os::raw::{c_int, c_void};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
@@ -63,6 +71,11 @@ unsafe extern "C" fn tick(limit: *mut c_void) -> c_int {
     c_int::from(limit.tick())
 }
 
+thread_local! {
+    /// Whether this thread runs a scoped read now.
+    static SCOPED: Cell<bool> = const { Cell::new(false) };
+}
+
 /// Removes the handler when dropped, on every path out of the read.
 struct Installed(*mut ffi::sqlite3);
 
@@ -73,6 +86,7 @@ impl Drop for Installed {
         unsafe {
             ffi::sqlite3_progress_handler(self.0, 0, None, std::ptr::null_mut());
         }
+        SCOPED.with(|scoped| scoped.set(false));
     }
 }
 
@@ -84,6 +98,10 @@ pub(super) fn with_work_limit<T>(
     limit: &WorkLimit<'_>,
     read: impl FnOnce() -> T,
 ) -> T {
+    assert!(
+        !SCOPED.with(|scoped| scoped.replace(true)),
+        "a scoped SQLite read nested inside another would unbound the outer one"
+    );
     // SAFETY: the raw handle stays valid while `conn` is borrowed, which
     // outlives `installed`; `limit` is borrowed for the same span, so
     // the pointer SQLite holds never dangles.

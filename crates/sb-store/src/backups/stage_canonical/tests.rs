@@ -193,7 +193,13 @@ fn full_catalog_refuses_additions_removals_and_changes_outside_quarantine_tables
         "CREATE VIEW foreign_view AS WITH RECURSIVE x(n) AS (VALUES(0) UNION ALL SELECT n+1 FROM x) SELECT * FROM x",
         "CREATE VIRTUAL TABLE foreign_fts USING fts5(value)",
         "ALTER TABLE identities ADD COLUMN extra TEXT",
-        "ALTER TABLE identities ADD COLUMN rowid TEXT GENERATED ALWAYS AS ('shadow') VIRTUAL",
+        // SQLite 3.54 refuses ALTER TABLE ... ADD COLUMN of a rowid alias;
+        // a hostile image can still declare one in its schema.
+        "PRAGMA writable_schema=ON;
+         UPDATE sqlite_schema SET sql=replace(sql, ') STRICT',
+           ', rowid TEXT GENERATED ALWAYS AS (''shadow'') VIRTUAL) STRICT')
+         WHERE type='table' AND name='identities';
+         PRAGMA writable_schema=RESET;",
         "ALTER TABLE identities RENAME COLUMN display_name TO renamed_name",
         "ALTER TABLE identities RENAME TO old_identities; CREATE VIEW identities AS SELECT * FROM old_identities",
         "CREATE TRIGGER hostile AFTER UPDATE ON accounts BEGIN UPDATE accounts SET state='active'; END",

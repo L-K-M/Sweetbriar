@@ -42,6 +42,11 @@ fn inspect_connection(
         }
         conn.set_limit(Limit::SQLITE_LIMIT_COLUMN, MAX_COLUMNS)
             .map_err(|e| schema::classify(e, "bound restore schema columns"))?;
+        conn.set_limit(
+            Limit::SQLITE_LIMIT_EXPR_DEPTH,
+            super::image_inspect::INSPECTION_EXPR_DEPTH,
+        )
+        .map_err(|e| schema::classify(e, "bound restore schema depth"))?;
         conn.execute_batch(
             "PRAGMA trusted_schema=OFF; PRAGMA query_only=ON; PRAGMA temp_store=MEMORY;",
         )

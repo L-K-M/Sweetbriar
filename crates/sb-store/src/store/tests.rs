@@ -123,6 +123,7 @@ fn compile_options_show_the_spec_03_flags() {
         "DEFAULT_FOREIGN_KEYS",
         "DEFAULT_WAL_SYNCHRONOUS=2",
         "STRICT_SUBTYPE",
+        "MAX_EXPR_DEPTH=2000",
         "ENABLE_FTS5",
     ] {
         assert!(
@@ -130,6 +131,12 @@ fn compile_options_show_the_spec_03_flags() {
             "compile option {expected} missing from {options:?}"
         );
     }
+    // The raised depth is every connection's default limit.
+    assert_eq!(
+        conn.limit(rusqlite::limits::Limit::SQLITE_LIMIT_EXPR_DEPTH)
+            .unwrap(),
+        2000
+    );
 }
 
 /// After open, every setting reads back its spec/03 value — on the

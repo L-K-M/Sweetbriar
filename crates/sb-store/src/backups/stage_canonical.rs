@@ -188,6 +188,12 @@ fn check_catalog(
         .set_limit(Limit::SQLITE_LIMIT_ATTACHED, 0)
         .map_err(|error| inspection_error(error, "confine catalog inspection"))?;
     connection
+        .set_limit(
+            Limit::SQLITE_LIMIT_EXPR_DEPTH,
+            super::image_inspect::INSPECTION_EXPR_DEPTH,
+        )
+        .map_err(|error| inspection_error(error, "bound catalog depth"))?;
+    connection
         .execute_batch("PRAGMA trusted_schema=OFF; PRAGMA query_only=ON; PRAGMA temp_store=MEMORY;")
         .map_err(|error| inspection_error(error, "harden catalog inspection"))?;
     let version: i64 = connection

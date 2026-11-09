@@ -11,6 +11,10 @@ use super::scoped_progress::{WorkLimit, with_work_limit};
 const PROGRESS_OPS: i32 = 1_000;
 pub(super) const MAX_PROGRESS_CALLS: u32 = 2_000;
 pub(super) const MAX_SQLITE_VALUE: i32 = 1_048_576;
+/// The expression and CTE-nesting depth an untrusted image is inspected
+/// under: SQLite's own default, which the store's build raises for its
+/// generated search SQL (spec/03 `LIBSQLITE3_FLAGS`).
+pub(super) const INSPECTION_EXPR_DEPTH: i32 = 1_000;
 
 /// Result of inspecting a retained image; cancellation carries no identity.
 #[derive(Debug, PartialEq, Eq)]
@@ -122,6 +126,8 @@ pub(super) fn inspect(
             conn.set_limit(limit, MAX_SQLITE_VALUE)
                 .map_err(|e| crate::schema::classify(e, "bound verifier SQLite"))?;
         }
+        conn.set_limit(Limit::SQLITE_LIMIT_EXPR_DEPTH, INSPECTION_EXPR_DEPTH)
+            .map_err(|e| crate::schema::classify(e, "bound verifier SQLite depth"))?;
         conn.execute_batch(
             "PRAGMA trusted_schema=OFF; PRAGMA query_only=ON; PRAGMA temp_store=MEMORY;",
         )
@@ -238,6 +244,19 @@ mod tests {
             Err(crate::StoreError::Corrupt { .. })
         ));
         assert!(start.elapsed() < Duration::from_secs(3));
+    }
+
+    #[test]
+    fn an_inspected_image_keeps_sqlites_default_depth() {
+        // The store's build raises the depth for its own search SQL; an
+        // untrusted image is inspected under SQLite's default again.
+        let conn = Connection::open_in_memory().unwrap();
+        assert_eq!(conn.limit(Limit::SQLITE_LIMIT_EXPR_DEPTH).unwrap(), 2000);
+        let _ = inspect(&conn, &AtomicBool::new(false));
+        assert_eq!(
+            conn.limit(Limit::SQLITE_LIMIT_EXPR_DEPTH).unwrap(),
+            INSPECTION_EXPR_DEPTH
+        );
     }
 
     #[test]
