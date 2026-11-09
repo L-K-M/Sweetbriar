@@ -4157,6 +4157,7 @@ fn verifier_image_crash_cuts_recover_owned_scratch() {
 
 mod stage_tests {
     mod bindings;
+    mod evidence;
     mod quarantine_image;
     use super::*;
     use std::sync::atomic::{AtomicBool, Ordering};

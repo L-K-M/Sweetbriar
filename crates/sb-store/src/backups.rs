@@ -34,6 +34,8 @@ mod stage_bindings;
 // Canonical declarations are consumed by the following integrity/qualifier slices.
 mod stage_canonical;
 mod stage_copy;
+#[allow(dead_code)] // The binding qualifier (b6b3b) consumes this re-authentication.
+mod stage_evidence;
 #[allow(dead_code)] // Retained handles are consumed by the upcoming qualifier.
 mod stage_files;
 #[allow(dead_code)] // Consumed by the following staging qualifier.
