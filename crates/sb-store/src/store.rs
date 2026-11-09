@@ -731,6 +731,17 @@ pub(crate) fn open_read_only_with(
     migrations: &[Migration],
 ) -> Result<ReadOnlyStore, StoreError> {
     let fs = seams.fs();
+    // A pending restore swap needs a writable open to resolve it, even
+    // when its first rename already moved the data root away. The
+    // marker sits beside the resolved root, as the lock does; resolving
+    // creates nothing.
+    if let Ok(resolved) = resolve_root(fs, paths)
+        && crate::restore_pending::is_pending(fs, &resolved)?
+    {
+        return Err(StoreError::unavailable(
+            "a restore swap is pending; a writable open finishes it",
+        ));
+    }
     // No creation, not even the lock file: an absent store (or an
     // absent parent) is `NotFound` before anything is touched.
     require_existing(fs, paths)?;

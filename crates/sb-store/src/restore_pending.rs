@@ -121,7 +121,9 @@ impl PendingRestore {
         let generation_id = field(generation, "generation")?;
         let staging = field(staging, "staging")?;
         let preserved = field(preserved, "preserved")?;
-        let root = root_name(data_root)?;
+        // A marker under a root no restore could have written for is
+        // as foreign as an unparseable one.
+        let root = root_name(data_root).map_err(|_| invalid())?;
         let old_incarnation = preserved
             .strip_prefix(&format!("{root}.preserved-"))
             .ok_or_else(invalid)?;
@@ -221,6 +223,9 @@ pub(crate) fn recover(fs: &dyn Fs, paths: &StorePaths) -> Result<Recovered, Stor
     drop(parent);
     match (root_present, staging_present) {
         (false, true) => {
+            // Only a stage that still holds its database replaces the
+            // root: an emptied one would let the open create a store.
+            require_database(fs, &parent_path.join(&pending.staging))?;
             fs.rename(&parent_path.join(&pending.staging), paths.data_root())
                 .map_err(|error| io_error("finishing the restore swap", error))?;
             sync_parent(fs, paths)?;
@@ -241,11 +246,36 @@ pub(crate) fn recover(fs: &dyn Fs, paths: &StorePaths) -> Result<Recovered, Stor
     }
 }
 
+/// The stage's database must be a regular file before the stage may
+/// become the data root.
+fn require_database(fs: &dyn Fs, staging: &Path) -> Result<(), StoreError> {
+    match fs.open_regular(&staging.join("state.sqlite")) {
+        Ok(_) => Ok(()),
+        Err(error)
+            if matches!(
+                error.kind(),
+                io::ErrorKind::NotFound | io::ErrorKind::InvalidInput
+            ) =>
+        {
+            Err(StoreError::corrupt(
+                "an interrupted restore's staged copy has no database",
+            ))
+        }
+        Err(error) => Err(io_error("checking the staged database", error)),
+    }
+}
+
 /// The marker's bytes, bounded; `None` when there is no marker.
 fn read_marker(fs: &dyn Fs, marker: &Path) -> Result<Option<Vec<u8>>, StoreError> {
     let (file, _) = match fs.open_regular(marker) {
         Ok(opened) => opened,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        // A directory, fifo or other non-file under the marker's name.
+        Err(error) if error.kind() == io::ErrorKind::InvalidInput => {
+            return Err(StoreError::corrupt(
+                "the restore-pending marker is not a file",
+            ));
+        }
         Err(error) => return Err(io_error("reading the restore marker", error)),
     };
     let mut bytes = Vec::new();
@@ -286,13 +316,16 @@ fn parent(paths: &StorePaths) -> Result<&Path, StoreError> {
         .ok_or_else(|| StoreError::corrupt("the data root has no parent"))
 }
 
-/// The data root's final name; restore requires a UTF-8 one.
+/// The data root's final name; restore requires UTF-8 without control
+/// characters, so the marker's lines round-trip.
 fn root_name(data_root: &Path) -> Result<&str, StoreError> {
     data_root
         .file_name()
         .and_then(OsStr::to_str)
+        .filter(|name| !name.chars().any(char::is_control))
         .ok_or_else(|| StoreError::InvalidInput {
-            message: "a restore needs a data root with a UTF-8 name".to_owned(),
+            message: "a restore needs a data root named in UTF-8 without control characters"
+                .to_owned(),
         })
 }
 

@@ -146,6 +146,26 @@ fn writing_the_marker_is_atomic_and_durable() {
 }
 
 #[test]
+fn a_marker_that_is_no_file_or_under_an_unusable_root_is_corrupt() {
+    let (_scratch, paths) = scratch("pending-not-a-file");
+    std::fs::create_dir(marker_path(&paths)).unwrap();
+    assert_corrupt(recover(real_fs().as_ref(), &paths), "a directory marker");
+
+    // No restore writes a marker under a root it cannot name.
+    let (_scratch, paths) = scratch("pending-control-root");
+    let odd = StorePaths::new(paths.data_root().with_file_name("st\nore")).unwrap();
+    assert!(matches!(
+        PendingRestore::new(odd.data_root(), NEW, GENERATION, OLD),
+        Err(StoreError::InvalidInput { .. })
+    ));
+    let bytes = pending(&paths).encode();
+    assert_corrupt(
+        PendingRestore::decode(odd.data_root(), &bytes),
+        "a control character root",
+    );
+}
+
+#[test]
 fn an_oversized_marker_is_refused_unread_past_its_bound() {
     let (_scratch, paths) = scratch("pending-oversized");
     std::fs::create_dir(paths.data_root()).unwrap();
@@ -154,10 +174,12 @@ fn an_oversized_marker_is_refused_unread_past_its_bound() {
     assert!(marker_path(&paths).exists(), "a refused marker stays");
 }
 
-/// Directories standing in for the roots; each holds a file naming it.
+/// Directories standing in for the roots: each holds a file naming it
+/// and a `state.sqlite` stand-in.
 fn make_dir(path: &Path, label: &str) {
     std::fs::create_dir(path).unwrap();
     std::fs::write(path.join("which"), label).unwrap();
+    std::fs::write(path.join("state.sqlite"), label).unwrap();
 }
 
 fn which(path: &Path) -> String {
@@ -205,6 +227,18 @@ fn startup_resolves_every_marker_state() {
     assert_eq!(which(paths.data_root()), "restored");
     assert!(!marker_path(&paths).exists());
 
+    // A stage without its database never replaces the root.
+    let (_s5, paths) = scratch("pending-emptied");
+    let record = pending(&paths);
+    make_dir(&sibling_path(&paths, &record.staging), "emptied");
+    std::fs::remove_file(sibling_path(&paths, &record.staging).join("state.sqlite")).unwrap();
+    make_dir(&sibling_path(&paths, &record.preserved), "old");
+    write_marker(fs.as_ref(), &paths, &record).unwrap();
+    assert_corrupt(recover(fs.as_ref(), &paths), "an emptied stage");
+    assert!(!paths.data_root().exists());
+    assert!(sibling_path(&paths, &record.staging).is_dir());
+    assert!(marker_path(&paths).exists());
+
     // Neither root: refused, nothing created, the marker kept.
     let (_s4, paths) = scratch("pending-neither");
     let record = pending(&paths);
@@ -235,6 +269,16 @@ fn a_linked_swap_name_is_refused_unfollowed() {
     assert_eq!(which(&elsewhere), "elsewhere");
 }
 
+/// A durable `state.sqlite` stand-in inside a simulated stage.
+fn sim_stage(fs: &SimFs, staging: &Path) {
+    fs.create_dir_all(staging).unwrap();
+    let database = staging.join("state.sqlite");
+    let mut file = fs.create(&database).unwrap();
+    file.write_all(b"stage").unwrap();
+    file.sync_all().unwrap();
+    fs.sync_dir(staging).unwrap();
+}
+
 #[test]
 fn a_power_cut_after_an_unflushed_first_rename_still_finds_the_marker() {
     let fs = SimFs::new();
@@ -243,7 +287,7 @@ fn a_power_cut_after_an_unflushed_first_rename_still_finds_the_marker() {
     let staging = sibling_path(&paths, &record.staging);
     let preserved = sibling_path(&paths, &record.preserved);
     fs.create_dir_all(paths.data_root()).unwrap();
-    fs.create_dir_all(&staging).unwrap();
+    sim_stage(&fs, &staging);
 
     write_marker(&fs, &paths, &record).unwrap();
     fs.rename(paths.data_root(), &preserved).unwrap();
@@ -260,7 +304,7 @@ fn a_power_cut_after_an_unflushed_first_rename_still_finds_the_marker() {
     // Flushed, the same rename survives and startup finishes the swap.
     let fs = SimFs::new();
     fs.create_dir_all(paths.data_root()).unwrap();
-    fs.create_dir_all(&staging).unwrap();
+    sim_stage(&fs, &staging);
     write_marker(&fs, &paths, &record).unwrap();
     fs.rename(paths.data_root(), &preserved).unwrap();
     fs.sync_dir(Path::new("/data")).unwrap();
@@ -275,10 +319,22 @@ fn a_power_cut_after_an_unflushed_first_rename_still_finds_the_marker() {
     assert!(fs.metadata(&marker_path(&paths)).unwrap().is_none());
 }
 
-/// Every operation of a finishing recovery, failed in turn: the error
-/// keeps its cause, and a later recovery resolves what is left.
+/// A finishing recovery's state: stage and preserved root present.
+fn half_done(label: &str) -> (ScratchDir, StorePaths) {
+    let (scratch, paths) = scratch(label);
+    let record = pending(&paths);
+    make_dir(&sibling_path(&paths, &record.staging), "restored");
+    make_dir(&sibling_path(&paths, &record.preserved), "old");
+    write_marker(real_fs().as_ref(), &paths, &record).unwrap();
+    (scratch, paths)
+}
+
+/// Every operation of a finishing recovery, failed in turn (each count
+/// calibrated on a clean run): the error keeps its cause, and a later
+/// recovery resolves what is left.
 #[test]
 fn a_failed_recovery_step_is_resolved_by_the_next_open() {
+    let denied = FaultKind::Kind(io::ErrorKind::PermissionDenied);
     for operation in [
         FsOp::Open,
         FsOp::Read,
@@ -286,30 +342,25 @@ fn a_failed_recovery_step_is_resolved_by_the_next_open() {
         FsOp::SyncDir,
         FsOp::Remove,
     ] {
-        for nth in 1..=4 {
-            let (_scratch, paths) = scratch("pending-fault");
-            let record = pending(&paths);
-            make_dir(&sibling_path(&paths, &record.staging), "restored");
-            make_dir(&sibling_path(&paths, &record.preserved), "old");
-            write_marker(real_fs().as_ref(), &paths, &record).unwrap();
-            let fault = FaultFs::new(
-                real_fs(),
-                operation,
-                nth,
-                FaultKind::Kind(io::ErrorKind::PermissionDenied),
-            );
+        let (_calibration, paths) = half_done("pending-fault-count");
+        let counting = FaultFs::new(real_fs(), operation, u64::MAX, denied);
+        assert_eq!(recover(&counting, &paths).unwrap(), Recovered::Completed);
+        let total = counting.calls(operation);
+        assert!(total > 0, "{operation:?} occurs in a finishing recovery");
+        for nth in 1..=total {
+            let (_scratch, paths) = half_done("pending-fault");
+            let fault = FaultFs::new(real_fs(), operation, nth, denied);
 
             let first = recover(&fault, &paths);
 
-            if fault.calls(operation) >= nth {
-                assert_eq!(
-                    first.unwrap_err().io_kind(),
-                    Some(io::ErrorKind::PermissionDenied),
-                    "{operation:?} #{nth}"
-                );
-            }
+            assert_eq!(
+                first.unwrap_err().io_kind(),
+                Some(io::ErrorKind::PermissionDenied),
+                "{operation:?} #{nth} of {total}"
+            );
             let again = recover(real_fs().as_ref(), &paths).unwrap();
             assert!(
+                // A failed last flush comes after the marker went.
                 matches!(
                     again,
                     Recovered::Completed | Recovered::Finished | Recovered::Nothing
@@ -320,6 +371,20 @@ fn a_failed_recovery_step_is_resolved_by_the_next_open() {
             assert!(!marker_path(&paths).exists(), "{operation:?} #{nth}");
         }
     }
+
+    // The marker's own open, refused by the file system.
+    let (_scratch, paths) = half_done("pending-fault-marker");
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(marker_path(&paths), std::fs::Permissions::from_mode(0o000)).unwrap();
+    assert_eq!(
+        recover(real_fs().as_ref(), &paths).unwrap_err().io_kind(),
+        Some(io::ErrorKind::PermissionDenied)
+    );
+    std::fs::set_permissions(marker_path(&paths), std::fs::Permissions::from_mode(0o600)).unwrap();
+    assert_eq!(
+        recover(real_fs().as_ref(), &paths).unwrap(),
+        Recovered::Completed
+    );
 }
 
 /// The real open: a store staged beside the live one replaces it when
@@ -366,12 +431,22 @@ fn open_finishes_or_drops_an_interrupted_swap() {
     assert!(staging.is_dir());
     assert!(!marker_path(&paths).exists());
 
-    // Half done: the stage replaces the root, the old root is preserved.
+    // Half done: the stage replaces the root, the old root is preserved;
+    // the read-only open refuses even with the data root gone.
     write_marker(real_fs().as_ref(), &paths, &record).unwrap();
     std::fs::rename(paths.data_root(), &preserved).unwrap();
+    assert!(matches!(
+        open_read_only(&paths, &seams),
+        Err(StoreError::Unavailable { .. })
+    ));
     assert_eq!(store_uuid(&paths), staged_uuid);
     assert!(preserved.join("state.sqlite").is_file(), "nothing deleted");
     assert!(!staging.exists());
+    assert!(!marker_path(&paths).exists());
+
+    // Finished: only the marker remained; the restored store opens.
+    write_marker(real_fs().as_ref(), &paths, &record).unwrap();
+    assert_eq!(store_uuid(&paths), staged_uuid);
     assert!(!marker_path(&paths).exists());
 
     // Neither root: refused, and no empty store appears.
