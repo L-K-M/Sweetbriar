@@ -731,8 +731,12 @@ The process holds `<data root>.lock` throughout.
      workers, the outbox and maintenance jobs; drain the writer queue;
      run `wal_checkpoint(TRUNCATE)` and close every connection to the
      current and staging databases. The lock stays held. Open windows
-     and subscriptions get `ResetRequired`. SQLite must never see a
-     database file renamed while it's open.
+     and subscriptions get `ResetRequired` once the restored store is
+     in place; a refused swap moves none of them. An import's inventory
+     and an export's capture resume from no checkpoint, so a restore is
+     refused before anything stops while one runs, and none starts
+     until the restore ends. SQLite must never see a database file
+     renamed while it's open.
    - Write a marker file `<data root>.restore-pending` naming the staging
      root and the preserved name. Flush it **and its parent directory**
      before either rename. It is written to a temporary sibling, flushed

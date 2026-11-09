@@ -10,6 +10,7 @@
 //!   ├─ restored: observers on the new writer, windows ResetRequired,
 //!   │            memo cleared, jobs resumed fresh, open-time recovery
 //!   ├─ refused:  the same store and stage back, jobs resumed as they were
+//!   │            (no inventory or capture ran: the restore refused first)
 //!   └─ failed:   the engine ends; the next open resolves the marker
 //! ```
 
@@ -30,9 +31,9 @@ pub enum RestoreError {
         engine: Box<Engine>,
         stage: Box<QualifiedStage>,
     },
-    /// The store had closed, or the engine could not resume on the
-    /// restored store: this engine is gone, and the next open resolves
-    /// whatever the swap left (spec/03).
+    /// The store had closed, or the engine could not resume: this engine
+    /// is gone, with the stage, and the next open resolves whatever the
+    /// swap left (spec/03).
     Failed(EngineError),
 }
 
@@ -91,6 +92,32 @@ impl Engine {
         stage: QualifiedStage,
         cancelled: &AtomicBool,
     ) -> Result<Engine, RestoreError> {
+        // An import's inventory and an export's capture resume from no
+        // checkpoint, so the quiesce must not interrupt one: hold new
+        // ones off, and refuse while one is in flight, before anything
+        // stops. The hold lasts until the engine has resumed.
+        let _starts = self.imports.hold_starts();
+        match self.unresumable_jobs() {
+            Ok(false) => {}
+            Ok(true) => {
+                return Err(RestoreError::Refused {
+                    cause: EngineError::Conflict {
+                        detail: "an import's inventory or an export's capture is in progress; \
+                                 let it finish or cancel it, then restore"
+                            .into(),
+                    },
+                    engine: Box::new(self),
+                    stage: Box::new(stage),
+                });
+            }
+            Err(cause) => {
+                return Err(RestoreError::Refused {
+                    cause,
+                    engine: Box::new(self),
+                    stage: Box::new(stage),
+                });
+            }
+        }
         // The quiesce: long work stops at its next safe point, new store
         // work is refused, and every running task ends, so this engine
         // holds the store's only handle (spec/03).
@@ -138,6 +165,10 @@ impl Engine {
         self.resources = Some(Arc::new(restored));
         self.windows.store_replaced(generations);
         self.search_memo.clear();
+        self.imports.forget_reports();
+        // Body and attachment leases hold the replaced store's
+        // renditions: their holders republish from the restored one.
+        self.leases.close();
         self.resume(StoreAfterRestore::Replaced)
             .map(|()| self)
             .map_err(RestoreError::Failed)
