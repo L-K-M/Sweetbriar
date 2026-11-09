@@ -67,6 +67,7 @@ final class MainMenuBuilder: NSObject {
     private let isBenchmarkEnabled: @MainActor () -> Bool
     private let onShowComposerProbe: @MainActor () -> Void
     private let onImport: @MainActor () -> Void
+    private let onAddBridgeAccount: @MainActor () -> Void
     private let onSettings: @MainActor () -> Void
 
     /// `NSMenuItem.identifier`s that `validateMenuItem` treats
@@ -98,6 +99,8 @@ final class MainMenuBuilder: NSObject {
     ///   - onShowComposerProbe: open the Composer Probe window or
     ///     bring it forward (plan M0.11).
     ///   - onImport: File → Import… (spec/09 "In the app").
+    ///   - onAddBridgeAccount: File → Add Proton Bridge Account… (plan
+    ///     M2.3).
     init(
         onFillSynthetic: @escaping @MainActor () -> Void,
         onShowPrototype: @escaping @MainActor () -> Void,
@@ -108,6 +111,7 @@ final class MainMenuBuilder: NSObject {
         isBenchmarkEnabled: @escaping @MainActor () -> Bool,
         onShowComposerProbe: @escaping @MainActor () -> Void,
         onImport: @escaping @MainActor () -> Void,
+        onAddBridgeAccount: @escaping @MainActor () -> Void = {},
         onSettings: @escaping @MainActor () -> Void = {}
     ) {
         self.onFillSynthetic = onFillSynthetic
@@ -119,6 +123,7 @@ final class MainMenuBuilder: NSObject {
         self.isBenchmarkEnabled = isBenchmarkEnabled
         self.onShowComposerProbe = onShowComposerProbe
         self.onImport = onImport
+        self.onAddBridgeAccount = onAddBridgeAccount
         self.onSettings = onSettings
         super.init()
     }
@@ -176,10 +181,17 @@ final class MainMenuBuilder: NSObject {
 
     @objc private func showSettings(_ sender: Any?) { onSettings() }
 
-    /// File: Import… (spec/09 "In the app").
+    /// File: Add Proton Bridge Account… (plan M2.3) and Import…
+    /// (spec/09 "In the app").
     private func makeFileMenu() -> NSMenuItem {
         let item = NSMenuItem()
         let menu = NSMenu(title: "File")
+        menu.addItem(Self.item(
+            "Add Proton Bridge Account…",
+            action: #selector(addBridgeAccount(_:)),
+            key: "",
+            target: self
+        ))
         menu.addItem(Self.item(
             "Import…",
             action: #selector(importMail(_:)),
@@ -349,6 +361,11 @@ final class MainMenuBuilder: NSObject {
     @objc
     private func fillSyntheticRows(_ sender: NSMenuItem) {
         onFillSynthetic()
+    }
+
+    @objc
+    private func addBridgeAccount(_ sender: NSMenuItem) {
+        onAddBridgeAccount()
     }
 
     @objc

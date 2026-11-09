@@ -106,6 +106,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.mainWindow?.showWindow(nil)
                 self?.mainWindow?.beginImport()
             },
+            onAddBridgeAccount: { [weak self] in
+                self?.mainWindow?.showWindow(nil)
+                self?.mainWindow?.beginBridgeAccountSetup()
+            },
             onSettings: { [weak self] in self?.showSettings() }
         )
         NSApplication.shared.mainMenu = builder.makeMainMenu()
