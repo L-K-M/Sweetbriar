@@ -6,9 +6,10 @@
 //! a refused connection shows "Bridge isn't running" while retries
 //! continue, a refused login or a changed certificate pauses the
 //! account and ends the worker until the user acts, and a connect
-//! lifts a connection pause. A live session runs a sync pass
-//! (`pass`), then another after the poll interval, until the worker
-//! is stopped, the session fails, or the account stops syncing.
+//! lifts a connection pause. A live session runs sync passes (`pass`)
+//! on the schedule `idle` keeps, woken by the account's IDLE watcher,
+//! until the worker is stopped, the session fails, or the account
+//! stops syncing.
 
 use std::collections::HashMap;
 use std::io::ErrorKind;
@@ -27,17 +28,15 @@ use crate::Engine;
 use crate::engine::{Spawn, Worker};
 use crate::policy::Policy;
 
+mod idle;
 mod pass;
+
+use idle::{IdleState, Schedule};
 
 /// How long a worker waits before starting over after a failure the
 /// transport does not retry and no account state names (a protocol
 /// fault): the reconnect backoff's own ceiling.
 const RESTART_DELAY: Duration = Duration::from_secs(5 * 60);
-
-/// How long a live session rests between sync passes: spec/04 polls
-/// the inbox every 60 s while IDLE is unavailable, and the IDLE
-/// watcher (plan M2.4, next slice) is not running yet.
-const POLL_INTERVAL: Duration = Duration::from_secs(60);
 
 /// The live account workers. Each holds a stop signal; `stop` raises
 /// every one and refuses new workers (shutdown, and the restore
@@ -210,7 +209,13 @@ async fn run_account(worker: &Worker, account_id: &str, stop: watch::Receiver<bo
         setup_failure: None,
     };
     let mut reconnector = Reconnector::new();
-    let mut refusals = pass::Refusals::default();
+    let (watched_endpoint, watcher_stop) = (connector.endpoint.clone(), stop.clone());
+    let start_idle = move || start_watcher(worker, &watched_endpoint, pin, &watcher_stop);
+    let mut carried = Carried {
+        refusals: pass::Refusals::default(),
+        idle: None,
+        start_idle: &start_idle,
+    };
     let mut failure: Option<ImapError> = None;
     loop {
         let recovery = match failure.take() {
@@ -240,16 +245,16 @@ async fn run_account(worker: &Worker, account_id: &str, stop: watch::Receiver<bo
         record(worker, account_id, Transition::Connected).await;
         // A healthy session restarts the backoff at its first step.
         reconnector = Reconnector::new();
-        match serve(
+        let served = serve(
             worker,
             account_id,
             policy,
             &mut connection,
             &stop,
-            &mut refusals,
+            &mut carried,
         )
-        .await
-        {
+        .await;
+        match served {
             // A session stopped mid-command is unusable; dropping it
             // closes the socket.
             Served::Stopped => return,
@@ -264,6 +269,31 @@ async fn run_account(worker: &Worker, account_id: &str, stop: watch::Receiver<bo
             Served::Refused => {}
         }
     }
+}
+
+/// Start the account's IDLE watcher on its own session. It ends with
+/// the worker: on the stop signal, or once the returned receiver is
+/// dropped. If it cannot start, the receiver reports it gone and the
+/// worker polls.
+fn start_watcher(
+    worker: &Worker,
+    endpoint: &ImapEndpoint,
+    pin: CertificatePin,
+    stop: &watch::Receiver<bool>,
+) -> watch::Receiver<IdleState> {
+    let (state, idle) = watch::channel(IdleState::default());
+    let endpoint = endpoint.clone();
+    let stop = stop.clone();
+    let _ = worker.spawn_worker(move |worker| {
+        let connector = AccountConnector {
+            worker,
+            endpoint,
+            pin,
+            setup_failure: None,
+        };
+        idle::watch_inbox(connector, stop, state)
+    });
+    idle
 }
 
 /// The first attempt of a connection, raced against the stop signal,
@@ -285,38 +315,70 @@ async fn establish(
     }
 }
 
-/// Run sync passes on a live session, one per poll interval, while
-/// the account syncs. Each pass races the stop signal, so shutdown
-/// never waits for a long backfill.
+/// Run sync passes on a live session while the account syncs: a
+/// full pass first and on `Schedule`'s cadence, an INBOX pass on each
+/// IDLE hint or poll. Each pass races the stop signal, so shutdown
+/// never waits for a long backfill. The IDLE watcher starts after the
+/// first pass, so its session never competes with the initial sync.
 async fn serve(
     worker: &Worker,
     account_id: &str,
     policy: Policy,
     connection: &mut Connection,
     stop: &watch::Receiver<bool>,
-    refusals: &mut pass::Refusals,
+    carried: &mut Carried<'_>,
 ) -> Served {
+    let mut schedule = Schedule::new(Instant::now());
+    // The watcher may be gone (no IDLE, or it could not start); then
+    // its last state says nothing and the worker polls.
+    let mut watching = true;
     loop {
         if !still_syncable(worker, account_id).await {
             return Served::Ended;
         }
+        let seen = carried
+            .idle
+            .as_mut()
+            .map_or_else(IdleState::default, |idle| *idle.borrow_and_update());
+        let scope = schedule.scope(Instant::now(), seen);
         let passed = tokio::select! {
-            result = pass::run(worker, account_id, policy, connection, refusals) => result,
+            result = pass::run(worker, account_id, policy, connection, scope, &mut carried.refusals) => result,
             () = stopped(stop.clone()) => return Served::Stopped,
         };
         match passed {
             Ok(()) => {}
             Err(pass::PassError::Session(error)) => return Served::Failed(error),
             Err(pass::PassError::Refused { mailbox_id }) => {
-                refusals.refuse(mailbox_id, Instant::now());
+                carried.refusals.refuse(mailbox_id, Instant::now());
                 return Served::Refused;
             }
         }
-        tokio::select! {
-            () = tokio::time::sleep(POLL_INTERVAL) => {}
-            () = stopped(stop.clone()) => return Served::Stopped,
+        let idle = carried.idle.get_or_insert_with(carried.start_idle);
+        loop {
+            let live = watching && idle.borrow().live;
+            let rest = schedule.rest(Instant::now(), live);
+            tokio::select! {
+                () = tokio::time::sleep(rest) => break,
+                changed = idle.changed(), if watching => {
+                    if changed.is_err() {
+                        watching = false;
+                    } else if schedule.hinted(*idle.borrow()) {
+                        break;
+                    }
+                }
+                () = stopped(stop.clone()) => return Served::Stopped,
+            }
         }
     }
+}
+
+/// What outlives one session of an account's worker: the refused
+/// mailboxes' cooldowns, and the IDLE watcher, started once after the
+/// first pass.
+struct Carried<'a> {
+    refusals: pass::Refusals,
+    idle: Option<watch::Receiver<IdleState>>,
+    start_idle: &'a (dyn Fn() -> watch::Receiver<IdleState> + Sync),
 }
 
 /// Whether the account still syncs. A failed read keeps the worker
