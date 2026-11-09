@@ -735,25 +735,26 @@ pub(crate) fn open_read_only_with(
     // when its first rename already moved the data root away. The
     // marker sits beside the resolved root, as the lock does; resolving
     // creates nothing.
-    if let Ok(resolved) = resolve_root(fs, paths)
-        && crate::restore_pending::is_pending(fs, &resolved)?
-    {
-        return Err(StoreError::unavailable(
-            "a restore swap is pending; a writable open finishes it",
-        ));
-    }
+    let refuse_pending = |paths: &StorePaths| match resolve_root(fs, paths) {
+        Ok(resolved) if crate::restore_pending::is_pending(fs, &resolved)? => Err(
+            StoreError::unavailable("a restore swap is pending; a writable open finishes it"),
+        ),
+        _ => Ok(()),
+    };
+    refuse_pending(paths)?;
     // No creation, not even the lock file: an absent store (or an
-    // absent parent) is `NotFound` before anything is touched.
-    require_existing(fs, paths)?;
+    // absent parent) is `NotFound` before anything is touched. A swap
+    // that started since the check above may have moved the root
+    // away: that is still a pending swap, not an absent store.
+    if let Err(absent) = require_existing(fs, paths) {
+        refuse_pending(paths)?;
+        return Err(absent);
+    }
     let paths = &resolve_root(fs, paths)?;
     check_location(fs, paths.data_root())?;
     let lease = take_lease(fs, paths.lock_file())?;
-    // A pending restore swap needs a writable open to resolve it.
-    if crate::restore_pending::is_pending(fs, paths)? {
-        return Err(StoreError::unavailable(
-            "a restore swap is pending; a writable open finishes it",
-        ));
-    }
+    // Again under the lease, which a swap holds throughout.
+    refuse_pending(paths)?;
     // Again under the lease: it may have changed meanwhile.
     require_existing(fs, paths)?;
     examine_read_only(fs, paths, pinned, migrations)?;

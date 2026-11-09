@@ -694,8 +694,8 @@ The process holds `<data root>.lock` throughout.
    - **On startup, a marker means a swap was interrupted.** If the data
      root is missing and staging exists, finish the swap. If both the
      data root and staging exist, the swap hadn't started: remove the
-     marker and discard staging, which is left in place as unqualified
-     evidence and never reused (a new restore stages under a new
+     marker. Staging is not deleted: it stays in place as unqualified
+     evidence and is never reused (a new restore stages under a new
      incarnation); restart the restore on request. If the data root
      exists and staging doesn't, the swap finished: remove the marker.
      If neither exists, refuse (`Corrupt`) rather than create a store.
