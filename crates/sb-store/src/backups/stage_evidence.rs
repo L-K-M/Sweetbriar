@@ -1,6 +1,6 @@
 //! Staged evidence re-authentication (spec/03 "Restore", plan M1.8e3b
 //! b6b3a). Before the qualifier quarantines a prepared stage, the
-//! manifest and every object the stage holds are read again through the
+//! manifest and every object it names are read again through the
 //! stage's own retained root and authenticated against what staging
 //! verified: the exact manifest bytes (length bounded by a one-byte
 //! witness, then the digest), its generation and database entry, each
@@ -141,7 +141,14 @@ struct Hashed<R> {
 
 impl<R: Read> Read for Hashed<R> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        let n = self.input.read(buf)?;
+        // A signal mid-read is no fault of the manifest's: read again,
+        // as the object reads do.
+        let n = loop {
+            match self.input.read(buf) {
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                read => break read?,
+            }
+        };
         // `take` bounds the input at the expected length plus one, so
         // the count cannot overflow.
         self.bytes += n as u64;

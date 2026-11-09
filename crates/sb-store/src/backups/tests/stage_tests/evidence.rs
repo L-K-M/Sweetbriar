@@ -65,12 +65,37 @@ fn staged_objects(stage: &crate::PreparedRestoreStage) -> Vec<PathBuf> {
     found
 }
 
-/// Rewrite `path` in place for one case, then put the original back.
+/// Rewrite `path` in place for one case, then put the original back,
+/// even when the case's check panics.
 fn with_bytes(path: &Path, bytes: &[u8], check: impl FnOnce()) {
-    let original = std::fs::read(path).unwrap();
+    struct Restore<'a>(&'a Path, Vec<u8>);
+    impl Drop for Restore<'_> {
+        fn drop(&mut self) {
+            let _ = std::fs::write(self.0, &self.1);
+        }
+    }
+    let _restore = Restore(path, std::fs::read(path).unwrap());
     std::fs::write(path, bytes).unwrap();
     check();
-    std::fs::write(path, original).unwrap();
+}
+
+/// Every file under the stage with its bytes: what a read-only pass
+/// must leave exactly as it found it.
+fn stage_tree(stage: &crate::PreparedRestoreStage) -> Vec<(PathBuf, Vec<u8>)> {
+    fn walk(dir: &Path, found: &mut Vec<(PathBuf, Vec<u8>)>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                walk(&path, found);
+            } else {
+                found.push((path.clone(), std::fs::read(&path).unwrap()));
+            }
+        }
+    }
+    let mut found = Vec::new();
+    walk(stage.path(), &mut found);
+    found.sort();
+    found
 }
 
 fn flipped(mut bytes: Vec<u8>, at: usize) -> Vec<u8> {
@@ -91,6 +116,7 @@ fn a_prepared_stage_reauthenticates_to_its_snapshot_identity() {
         .map_err(bug)
     });
     let before = source.live_incarnation();
+    let tree = stage_tree(&stage);
 
     let mut seen = Vec::new();
     let evidence = reauthenticate(
@@ -115,8 +141,10 @@ fn a_prepared_stage_reauthenticates_to_its_snapshot_identity() {
         4,
         "the fixture's four objects"
     );
-    // Read-only: a second pass agrees, and nothing else moved.
+    // Read-only: a second pass agrees, the stage holds exactly the
+    // files and bytes it held before, and nothing else moved.
     assert_eq!(quietly(&stage).unwrap(), evidence);
+    assert_eq!(stage_tree(&stage), tree, "the stage is untouched");
     assert_eq!(source.live_incarnation(), before);
     source.assert_untouched();
 }
