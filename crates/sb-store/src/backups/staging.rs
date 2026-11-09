@@ -282,6 +282,29 @@ fn copy_object(
     Ok(())
 }
 
+/// The live store's incarnation through the normal WAL-aware read-only
+/// path, as a canonical UUID. The connection closes before returning;
+/// callers bracket the read with their binding rechecks.
+pub(super) fn read_live_incarnation(state_db: &Path) -> Result<String, StoreError> {
+    let conn = open_connection(state_db, Access::ReadOnly, READER_PRAGMAS)?;
+    let current: String = conn
+        .query_row(
+            "SELECT value FROM store_meta WHERE key='incarnation'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| classify(error, "read the live store incarnation"))?;
+    let parsed: Uuid = current
+        .parse()
+        .map_err(|_| StoreError::corrupt("the live store incarnation is invalid"))?;
+    if parsed.to_string() != current {
+        return Err(StoreError::corrupt("the live store incarnation is invalid"));
+    }
+    conn.close()
+        .map_err(|(_, error)| classify(error, "close the live store incarnation read"))?;
+    Ok(current)
+}
+
 impl Backups {
     /// Verify the selected external generation again and copy it into an
     /// exclusive sibling of this store's data root. Blocking file I/O;
@@ -390,22 +413,7 @@ impl Backups {
             return Err(cancelled());
         }
         live.recheck(self.fs.as_ref(), &data_root)?;
-        let conn = open_connection(&self.state_db, Access::ReadOnly, READER_PRAGMAS)?;
-        let current: String = conn
-            .query_row(
-                "SELECT value FROM store_meta WHERE key='incarnation'",
-                [],
-                |row| row.get(0),
-            )
-            .map_err(|error| classify(error, "read the live store incarnation"))?;
-        let parsed: Uuid = current
-            .parse()
-            .map_err(|_| StoreError::corrupt("the live store incarnation is invalid"))?;
-        if parsed.to_string() != current {
-            return Err(StoreError::corrupt("the live store incarnation is invalid"));
-        }
-        conn.close()
-            .map_err(|(_, error)| classify(error, "close the live store incarnation read"))?;
+        let current = read_live_incarnation(&self.state_db)?;
         progress(StagePhase::LiveRead);
         if cancel.load(Ordering::Acquire) {
             return Err(cancelled());
