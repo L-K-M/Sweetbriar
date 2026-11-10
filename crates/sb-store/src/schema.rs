@@ -220,6 +220,13 @@ fn delete_clean_shutdown_marker(tx: &Transaction) -> Result<(), StoreError> {
     Ok(())
 }
 
+/// Whether `conn`'s database is at the newest of `migrations`, so
+/// opening it would migrate nothing.
+pub(crate) fn is_current(conn: &Connection, migrations: &[Migration]) -> Result<bool, StoreError> {
+    let latest = check_ordered(migrations)?;
+    Ok(current_version(conn, latest)? == i64::from(latest))
+}
+
 /// Judge an existing database before anything writes to it: the
 /// checks of [`current_version`], on a connection of the caller's
 /// choosing (open uses a read-only one).

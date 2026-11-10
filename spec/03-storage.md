@@ -12,6 +12,7 @@ Rests on research [04-data-safety](../research/04-data-safety.md),
 <data root>/                      macOS: ~/Library/Application Support/Sweetbriar/
                                   Linux: $XDG_DATA_HOME/sweetbriar/
   state.sqlite (+ -wal, -shm)     the database (02)
+  integrity-latch.json            an integrity finding's read-only latch (below)
   objects/
     tmp/                          in-progress writes, same volume
       import-validation/<token>/  private disposable validation tapes
@@ -20,6 +21,7 @@ Rests on research [04-data-safety](../research/04-data-safety.md),
   recovery/                       preserved evidence: quarantined objects, pre-migration snapshots
     import-source-<32 hex>         private import source snapshots (09)
     import-report-<job id>.json    import job reports (09)
+    integrity-<ms>-<8 hex>/        an integrity finding's copy of the database files (below)
 <cache root>/                     macOS: ~/Library/Caches/Sweetbriar/   Linux: $XDG_CACHE_HOME/sweetbriar/
   previews/, thumbnails/          disposable
   renditions.lock                 held by the one core using renditions/
@@ -190,6 +192,42 @@ against concurrent replacement.
     nothing.
   - On failure: stop remote effects, keep the store read-only, copy the
     files to `recovery/`, and tell the user. Never repair by deleting.
+  - **The full check (M1.8h5a)** runs `PRAGMA integrity_check(16)` on a
+    read-only connection of its own and stops between steps when asked:
+    a stop that interrupts it records nothing, and a check that finished
+    acts on what it found. A finding is its first rows, or the
+    corruption error SQLite met first (opening the connection included),
+    cut to 1,024 bytes. A check on a store already latched, before or
+    during its run, is `Corrupt` and records nothing. A finding is
+    handled in this order:
+    1. The writer latches: queued writes fail `Corrupt` naming the
+       finding, new ones are refused, the job or idle checkpoint running
+       then finishes, and nothing checkpoints, at close neither, which
+       also writes no clean-shutdown marker. The database files stop
+       changing; reads go on. A writer whose thread has ended can't
+       latch; the result says so and the next two steps still run.
+    2. `integrity-latch.json` (the finding, its time and the copy's
+       name) is written to a temporary name, flushed, renamed into the
+       data root and the root flushed. A latch that can't be written is
+       reported; the store stays read-only in this process.
+    3. `state.sqlite`, then `-wal` and `-shm` where present, are copied
+       byte for byte, not through SQLite, into
+       `recovery/.integrity-<ms>-<hex>.tmp/`; a `manifest.json` of each
+       file's length and SHA-256 and the finding is written last, and
+       the directory is flushed, renamed to `integrity-<ms>-<hex>/` and
+       `recovery/` flushed.
+  - **A latched open.** A writable open reads the latch after resolving an
+    interrupted restore swap and before anything else touches the root.
+    With a latch, the store opens read-only: no layout is created, no
+    `quick_check`, migration, startup record, reservation expiry or
+    scratch cleanup runs, and the writer refuses every write. A latched
+    store that would need migrating, or whose database is missing or
+    empty, is `Corrupt`; nothing creates one. A latch that can't be
+    read is still a latch. A latch whose copy was never published makes
+    it again, over its own unfinished attempt. The latch lives inside
+    the data root: a restore swap preserves it with the damaged root,
+    and the restored store opens without it. Nothing in Sweetbriar
+    removes it.
 
 ### Export capture accounting (M1.7b2a)
 

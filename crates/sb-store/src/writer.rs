@@ -59,6 +59,9 @@ const PRIORITY_QUEUES: usize = 3;
 struct WriterShared {
     state: Mutex<WriterState>,
     ready: Condvar,
+    /// Wakes [`Writer::latch`] once the job running when it latched
+    /// has finished.
+    settled: Condvar,
     /// Refuse publication on this thread without touching the join-handle lock.
     thread: OnceLock<ThreadId>,
     /// Told each new `list_generation` after the job that made it
@@ -67,6 +70,9 @@ struct WriterShared {
     search_observer: Mutex<Option<SearchObserver>>,
     appearance_observer: Mutex<Option<AppearanceObserver>>,
     maintenance_observer: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
+    /// Holds the thread before its idle checkpoint (see `writer_loop`).
+    #[cfg(test)]
+    checkpoint_pause: Mutex<Option<Arc<std::sync::Barrier>>>,
 }
 
 /// What hears of each committed list generation. Called on the writer
@@ -90,6 +96,14 @@ struct WriterState {
     /// Set by `close`: no further jobs are accepted, the queued ones
     /// still run, then the thread ends.
     closed: bool,
+    /// Set by [`Writer::latch`] (spec/03 "Integrity"): the integrity
+    /// finding every write is refused with from then on. Nothing runs,
+    /// queued or new, the idle checkpoint stops, and the connection
+    /// closes without checkpointing, so the database files stop
+    /// changing.
+    latched: Option<Arc<str>>,
+    /// Whether the writer thread is running a job now.
+    running: bool,
 }
 
 impl WriterState {
@@ -122,8 +136,12 @@ impl WriterShared {
     /// [`Next::Done`] once closed and drained.
     fn next(&self) -> Next {
         let mut state = lock(&self.state);
+        // The previous job, if any, has finished.
+        state.running = false;
+        self.settled.notify_all();
         loop {
             if let Some(job) = state.pop() {
+                state.running = true;
                 return Next::Job(job);
             }
             if state.closed {
@@ -131,7 +149,12 @@ impl WriterShared {
             }
             if state.worked_since_drain {
                 state.worked_since_drain = false;
-                return Next::Drained;
+                // A latched database gets no checkpoint. The checkpoint
+                // runs as the thread's work, so a latch waits for it.
+                if state.latched.is_none() {
+                    state.running = true;
+                    return Next::Drained;
+                }
             }
             state = wait_for(&self.ready, state);
         }
@@ -141,6 +164,9 @@ impl WriterShared {
     /// wakes the thread.
     fn push(&self, priority: WritePriority, job: Box<dyn QueuedWrite>) -> Result<(), StoreError> {
         let mut state = lock(&self.state);
+        if let Some(detail) = &state.latched {
+            return Err(latched_error(detail));
+        }
         if state.closed {
             return Err(closed_error());
         }
@@ -157,6 +183,10 @@ impl WriterShared {
         let orphans: Vec<Box<dyn QueuedWrite>> = {
             let mut state = lock(&self.state);
             state.closed = true;
+            // A panic may have left a job marked running; nothing runs
+            // now, so a latch waiting for it goes on.
+            state.running = false;
+            self.settled.notify_all();
             state
                 .queues
                 .iter_mut()
@@ -172,6 +202,13 @@ impl WriterShared {
 /// The refusal a submit after close gets.
 fn closed_error() -> StoreError {
     StoreError::unavailable("the writer is closing; this write was not queued")
+}
+
+/// The refusal every write gets once the store is latched read-only.
+fn latched_error(detail: &str) -> StoreError {
+    StoreError::corrupt(format!(
+        "the store is read-only after an integrity finding: {detail}"
+    ))
 }
 
 /// Lock one of the writer's mutexes; only a panic while holding one
@@ -440,7 +477,14 @@ impl Writer {
     /// over for good: from here only the thread touches it. An OS that
     /// refuses the thread is `Unavailable`.
     pub(crate) fn new(conn: Connection) -> Result<Self, StoreError> {
-        Self::new_with(conn, spawn_os_thread)
+        Self::new_with(conn, spawn_os_thread, None)
+    }
+
+    /// [`Writer::new`] for a store latched read-only by an earlier
+    /// integrity finding (spec/03 "Integrity"): it refuses every write
+    /// from the start and never checkpoints.
+    pub(crate) fn new_latched(conn: Connection, detail: &str) -> Result<Self, StoreError> {
+        Self::new_with(conn, spawn_os_thread, Some(Arc::from(detail)))
     }
 
     /// Install the one observer of committed list generations,
@@ -465,7 +509,11 @@ impl Writer {
     /// refuses, `conn` is dropped here, still not checkpointing on
     /// close: only the running thread lifts that (spec/02: no
     /// checkpoint until open succeeds).
-    pub(crate) fn new_with(conn: Connection, spawn: Spawn) -> Result<Self, StoreError> {
+    pub(crate) fn new_with(
+        conn: Connection,
+        spawn: Spawn,
+        latched: Option<Arc<str>>,
+    ) -> Result<Self, StoreError> {
         let tracking = crate::corpus_tracking::Tracking::install(&conn)?;
         let counting =
             crate::schema::read_user_version(&conn)? >= i64::from(crate::changes::SCHEMA_VERSION);
@@ -474,13 +522,18 @@ impl Writer {
                 queues: [VecDeque::new(), VecDeque::new(), VecDeque::new()],
                 worked_since_drain: false,
                 closed: false,
+                latched,
+                running: false,
             }),
             ready: Condvar::new(),
+            settled: Condvar::new(),
             thread: OnceLock::new(),
             observer: Mutex::new(None),
             search_observer: Mutex::new(None),
             appearance_observer: Mutex::new(None),
             maintenance_observer: Mutex::new(None),
+            #[cfg(test)]
+            checkpoint_pause: Mutex::new(None),
         });
         let thread_shared = Arc::clone(&shared);
         let handle = spawn(Box::new(move || serve(conn, thread_shared)))
@@ -644,6 +697,56 @@ impl Writer {
     pub(crate) fn is_writer_thread(&self) -> bool {
         self.shared.thread.get() == Some(&std::thread::current().id())
     }
+
+    /// Latch the writer read-only after an integrity finding (spec/03
+    /// "Integrity"): every later write and every queued one resolves
+    /// `Corrupt` naming `detail`, the idle checkpoint stops, and the
+    /// connection will close without checkpointing. Returns once the
+    /// job or idle checkpoint running now, if any, has finished, so the
+    /// database files no longer change: `true` when this call latched,
+    /// `false` when an earlier one had (its detail stays). Never on the
+    /// writer thread, which would wait for its own job, and refused
+    /// once the thread has ended, whose close may already be
+    /// checkpointing.
+    pub(crate) fn latch(&self, detail: &str) -> Result<bool, StoreError> {
+        if self.is_writer_thread() {
+            return Err(StoreError::internal(
+                "the writer thread cannot latch its own queue",
+            ));
+        }
+        let (orphans, refusal, latched_now) = {
+            let mut state = lock(&self.shared.state);
+            let latched_now = state.latched.is_none();
+            // Checked under the lock the thread's end reads the latch
+            // under, so a latch either lands before it or is refused.
+            if latched_now && state.closed {
+                return Err(StoreError::unavailable(
+                    "the writer has stopped, so it can't be latched read-only",
+                ));
+            }
+            let detail = Arc::clone(state.latched.get_or_insert_with(|| Arc::from(detail)));
+            let orphans: Vec<Box<dyn QueuedWrite>> = state
+                .queues
+                .iter_mut()
+                .flat_map(|queue| queue.drain(..))
+                .collect();
+            (orphans, detail, latched_now)
+        };
+        // Resolved outside the lock: waking a caller may run anything.
+        for job in orphans {
+            job.abandon(latched_error(&refusal));
+        }
+        let mut state = lock(&self.shared.state);
+        while state.running {
+            state = wait_for(&self.shared.settled, state);
+        }
+        Ok(latched_now)
+    }
+
+    /// The finding the writer is latched with, if any.
+    pub(crate) fn latched(&self) -> Option<Arc<str>> {
+        lock(&self.shared.state).latched.clone()
+    }
 }
 
 #[cfg(test)]
@@ -699,8 +802,12 @@ fn serve(mut conn: Connection, shared: Arc<WriterShared>) -> Result<(), StoreErr
     // submitted from this thread would wait on its own queue.
     let _ = shared.thread.set(std::thread::current().id());
     // The thread runs, so open succeeded: from now on the writer owns
-    // checkpoints (spec/03), on close too.
-    if let Err(e) = conn.set_db_config(DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, false) {
+    // checkpoints (spec/03), on close too, unless the store is latched
+    // read-only (then the database files must not change).
+    let latched = lock(&shared.state).latched.is_some();
+    if !latched
+        && let Err(e) = conn.set_db_config(DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, false)
+    {
         shared.shut_down();
         let _ = conn.close();
         return Err(classify(e, "let the writer checkpoint on close"));
@@ -711,6 +818,20 @@ fn serve(mut conn: Connection, shared: Arc<WriterShared>) -> Result<(), StoreErr
     // The writer is gone: refuse later submits and resolve whatever a
     // panic left queued, rather than leave futures pending forever.
     shared.shut_down();
+    // Latched since the thread started: closing must not checkpoint the
+    // WAL into the damaged database or remove it. If SQLite refuses the
+    // setting, the connection is left open rather than closed with a
+    // checkpoint; the process ending releases it.
+    if lock(&shared.state).latched.is_some()
+        && conn
+            .set_db_config(DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, true)
+            .is_err()
+    {
+        std::mem::forget(conn);
+        return Err(StoreError::internal(
+            "a latched writer could not close without a checkpoint",
+        ));
+    }
     match served {
         Ok(()) => conn
             .close()
@@ -742,6 +863,18 @@ fn writer_loop(conn: &mut Connection, shared: &Arc<WriterShared>) {
                 job.run(conn, &mut |conn| announce(conn, shared, &mut announced));
             }
             Next::Drained => {
+                // A test holds the thread here: once to see it arrive,
+                // once to let it checkpoint.
+                #[cfg(test)]
+                {
+                    // Cloned out first: the lock must not be held
+                    // while the thread waits.
+                    let pause = lock(&shared.checkpoint_pause).clone();
+                    if let Some(pause) = pause {
+                        pause.wait();
+                        pause.wait();
+                    }
+                }
                 // The idle checkpoint (spec/03): with the queue drained
                 // after work, truncate the WAL so it never grows
                 // without bound between `wal_autocheckpoint`s. Nobody

@@ -92,7 +92,9 @@ pub struct Store {
     /// with, held from the seams the store opened with.
     pub(crate) clock: Arc<dyn Clock>,
     /// The seams the store opened with; a restore reopens through them.
-    seams: Seams,
+    pub(crate) seams: Seams,
+    /// The resolved layout the store opened.
+    pub(crate) paths: StorePaths,
 }
 
 /// The steps of [`Store::swap_restore`] a test may observe.
@@ -231,6 +233,26 @@ impl Store {
     /// order; a job that never ran has none.
     pub fn maintenance_runs(&self) -> Result<Vec<crate::MaintenanceRun>, StoreError> {
         self.read(|tx| crate::maintenance::runs(tx))
+    }
+
+    /// The full integrity check (spec/03 "Integrity"): `PRAGMA
+    /// integrity_check` on a connection of its own, stopping between
+    /// steps once `stop` is raised. A finding latches the store
+    /// read-only, now and at every later open, and copies the database
+    /// files to `recovery/`; see [`crate::IntegrityFinding`]. Blocking,
+    /// and it can take minutes on a large archive; never on the writer
+    /// thread. On a store already latched it's `Corrupt`.
+    pub fn check_integrity(
+        &self,
+        stop: &std::sync::atomic::AtomicBool,
+    ) -> Result<crate::IntegrityCheck, StoreError> {
+        crate::integrity::check(self, stop)
+    }
+
+    /// The integrity finding this store is read-only after, if any:
+    /// every write is refused `Corrupt` naming it.
+    pub fn integrity_latch(&self) -> Option<String> {
+        self.writer.latched().map(|detail| detail.to_string())
     }
 
     /// Steps 1–3 of spec/03 "Backup generations": the `in_progress`
@@ -396,6 +418,7 @@ impl Store {
             lease,
             clock,
             seams,
+            paths: _,
         } = self;
         // Close as `close` does, but keep the lease: no connection may
         // stay open on a root that is about to be renamed (spec/03).
@@ -637,6 +660,7 @@ impl Store {
             lease,
             clock,
             seams: _,
+            paths: _,
         } = self;
         // The marker goes in at the lowest priority, so anything
         // already queued commits first and the marker truly is the
@@ -783,26 +807,66 @@ pub(crate) fn open_under_lease(
     // An interrupted restore swap is resolved before anything looks at
     // (or would create) the data root (spec/03 "Restore").
     crate::restore_pending::recover(fs, paths)?;
-    ensure_layout(fs, paths)?;
+    // A store an integrity finding latched (spec/03 "Integrity") opens
+    // read-only: nothing below writes to its files, not even the
+    // layout, the startup records or the scratch cleanups.
+    let latch = crate::integrity::read_latch(fs, paths)?;
+    if let Some(latch) = &latch {
+        check_layout(fs, paths)?;
+        // The writable connection below would create a missing
+        // database; a latched one is evidence, never recreated.
+        let present = fs
+            .metadata(paths.state_db())
+            .map_err(fs_err("stat", paths))?
+            .is_some_and(|md| !md.is_empty());
+        if !present {
+            return Err(StoreError::corrupt(format!(
+                "the store is read-only after an integrity finding and its database is missing: {}",
+                latch.detail
+            )));
+        }
+    } else {
+        ensure_layout(fs, paths)?;
+    }
     examine_existing(fs, paths, pinned, migrations)?;
-    crate::validation_scratch::ScratchOwner::cleanup(fs, paths.objects_tmp())?;
+    if latch.is_none() {
+        crate::validation_scratch::ScratchOwner::cleanup(fs, paths.objects_tmp())?;
+    }
     let mut conn = open_connection(paths.state_db(), Access::ReadWrite, writer_pragmas)?;
     check_sqlite_version(&conn, pinned)?;
-    startup_quick_check(&conn)?;
-    run_migrations(&mut conn, seams, migrations)?;
-    // Finish startup writes before the writer's asynchronous idle checkpoint.
-    crate::objects::expire_reservations(&mut conn, seams.clock().now())?;
-    let schema_version = read_user_version(&conn)?;
-    if schema_version >= 23 {
-        crate::backups::recover_scratch(&conn, fs, paths.recovery(), schema_version >= 24)?;
+    if let Some(latch) = &latch {
+        // Migrating writes; a latched store at an older version can't
+        // be read by this app's queries either.
+        if !crate::schema::is_current(&conn, migrations)? {
+            return Err(StoreError::corrupt(format!(
+                "the store is read-only after an integrity finding and needs migrating: {}",
+                latch.detail
+            )));
+        }
+    } else {
+        startup_quick_check(&conn)?;
+        run_migrations(&mut conn, seams, migrations)?;
+        // Finish startup writes before the writer's asynchronous idle checkpoint.
+        crate::objects::expire_reservations(&mut conn, seams.clock().now())?;
+        let schema_version = read_user_version(&conn)?;
+        if schema_version >= 23 {
+            crate::backups::recover_scratch(&conn, fs, paths.recovery(), schema_version >= 24)?;
+        }
     }
     // The readers first, from the same constructor (spec/03): if one
     // fails, the writer connection still doesn't checkpoint on close.
     let readers = Readers::open(paths.state_db(), reader_pragmas)?;
     let activation = crate::activation::inputs::Owner::install(&conn)?;
     // The writer thread owns the connection from here (spec/01), and
-    // lets it checkpoint once it runs (spec/03).
-    let writer = Arc::new(Writer::new(conn)?);
+    // lets it checkpoint once it runs (spec/03), unless latched.
+    let writer = Arc::new(match &latch {
+        Some(latch) => Writer::new_latched(conn, &latch.detail)?,
+        None => Writer::new(conn)?,
+    });
+    // A latch whose copy never got published makes it now.
+    if let Some(latch) = &latch {
+        crate::integrity::ensure_copy(fs, paths, latch);
+    }
     // The layout exists: the object store can publish into it. Built
     // only now, so every publication reserves through the writer and
     // no earlier open step could publish unreserved (spec/03).
@@ -853,6 +917,7 @@ pub(crate) fn open_under_lease(
             Arc::clone(seams.clock_arc()),
             Arc::clone(seams.random_arc()),
         ),
+        paths: paths.clone(),
     })
 }
 
@@ -888,6 +953,11 @@ fn has_clean_shutdown_marker(conn: &Connection) -> Result<bool, StoreError> {
 /// decimal. A failure is reported by the caller after the rest of the
 /// close ran — the next open's `quick_check` is the safety net.
 fn record_clean_shutdown(writer: &Writer, clock: &dyn Clock) -> Result<(), StoreError> {
+    // A store latched by an integrity finding writes nothing, this
+    // marker included: its next open is latched and checks nothing.
+    if writer.latched().is_some() {
+        return Ok(());
+    }
     let at = clock.now();
     let future = writer.upkeep(WritePriority::Index, move |tx| {
         tx.execute(

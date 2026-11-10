@@ -1591,7 +1591,14 @@ local drafts. No network yet.
     generation. **h5 Weekly `integrity_check` (L)**: when idle, on an
     interruptible reader; a finding copies the files to `recovery/`,
     latches the store read-only across reopens and stops remote
-    effects. **h6 Acceptance proof (L)**: the recovery point over
+    effects. Split before implementation: **h5a** the store's check,
+    its latch (the writer's, then `integrity-latch.json`), the copy
+    and the latched open; **h5b** the engine and service on a latch,
+    stopping account workers, refusing writing commands, telling the
+    user, and a restore that works while latched; **h5c** the weekly
+    job in the scheduler. They land in that order: nothing runs the
+    check before h5c, so remote effects stop before any finding can
+    happen. **h6 Acceptance proof (L)**: the recovery point over
     simulated hours at the 5-minute setting, crash cuts through a
     scheduled backup, restore during each job. GC's daily cadence and
     the reading of "all objects referenced by backups" as each
