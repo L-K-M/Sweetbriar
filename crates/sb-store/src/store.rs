@@ -104,9 +104,30 @@ pub enum SwapRestoreError {
         store: Box<Store>,
         stage: Box<crate::QualifiedStage>,
     },
-    /// The store had closed: the swap committed or stopped part way, and
-    /// the next open resolves the marker it left (spec/03 "Restore").
+    /// The store had closed and isn't handed back. Either the swap
+    /// stopped before its renames finished, and the next open removes or
+    /// finishes it from the marker, or it committed and only the reopen
+    /// failed, and the next open finds the restored store (spec/03
+    /// "Restore"). Reopening resolves both; the reopened store's
+    /// incarnation says which.
     Failed(StoreError),
+}
+
+impl std::fmt::Display for SwapRestoreError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Refused { cause, .. } => write!(f, "the restore swap was refused: {cause}"),
+            Self::Failed(cause) => write!(f, "the restore swap failed: {cause}"),
+        }
+    }
+}
+
+impl std::error::Error for SwapRestoreError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Refused { cause, .. } | Self::Failed(cause) => Some(cause),
+        }
+    }
 }
 
 impl std::fmt::Debug for SwapRestoreError {
@@ -262,8 +283,13 @@ impl Store {
         stage: crate::QualifiedStage,
         cancelled: &std::sync::atomic::AtomicBool,
     ) -> Result<Store, SwapRestoreError> {
-        let pending = match self.backups.ready_to_swap(&stage, cancelled) {
-            Ok(pending) => pending,
+        // Every check before the store closes is a refusal.
+        let ready = self
+            .backups
+            .ready_to_swap(&stage, cancelled)
+            .and_then(|pending| Ok((pending, StorePaths::new(stage.data_root())?)));
+        let (pending, paths) = match ready {
+            Ok(ready) => ready,
             Err(cause) => {
                 return Err(SwapRestoreError::Refused {
                     cause,
@@ -272,7 +298,6 @@ impl Store {
                 });
             }
         };
-        let paths = StorePaths::new(stage.data_root()).map_err(SwapRestoreError::Failed)?;
         let Self {
             readers,
             writer,
@@ -300,6 +325,11 @@ impl Store {
             .and(readers_closed)
             .and(writer_closed)
             .map_err(SwapRestoreError::Failed)?;
+        // The stage keeps a directory and a plain file descriptor through
+        // the renames, never a SQLite connection: descriptors follow the
+        // moved inodes. It is dropped before SQLite opens the restored
+        // database, because closing any descriptor on a file drops the
+        // process's POSIX locks on it.
         crate::backups::swap::commit_swap(
             seams.fs(),
             &paths,
