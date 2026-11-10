@@ -7,6 +7,7 @@
 
 use std::env;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Barrier};
 
 use rusqlite::Connection;
@@ -716,7 +717,7 @@ fn publication_failures_leave_the_generation_in_progress() {
             let backups = faulty_backups(&store, &paths, fs);
             let result = backups
                 .snapshot(BackupDestination::DataRoot)
-                .and_then(|s| backups.complete(s));
+                .and_then(|s| backups.complete(s, &AtomicBool::new(false)));
             if result.is_ok() {
                 finished = true;
                 break;
@@ -789,7 +790,7 @@ fn publication_cut_child() {
     reference(&store, &id, "published");
     let backups = faulty_backups(&store, &paths, Arc::new(CutFs::new(real_fs(), nth)));
     let snapshot = backups.snapshot(BackupDestination::DataRoot).unwrap();
-    backups.complete(snapshot).unwrap();
+    backups.complete(snapshot, &AtomicBool::new(false)).unwrap();
 }
 
 #[test]
@@ -823,6 +824,11 @@ fn publication_crash_cuts_never_complete() {
 
 #[test]
 fn completion_receipt_survives_a_power_cut() {
+    completion_receipt_survives_a_power_cut_when(true);
+    completion_receipt_survives_a_power_cut_when(false);
+}
+
+fn completion_receipt_survives_a_power_cut_when(clone: bool) {
     use sb_test_support::SimFs;
     use sha2::{Digest, Sha256};
     use std::io::{Read, Write};
@@ -852,9 +858,23 @@ fn completion_receipt_survives_a_power_cut() {
     source_file.write_all(PAYLOAD).unwrap();
     source_file.sync_all().unwrap();
     sim.sync_dir(source.parent().unwrap()).unwrap();
-    let backups = faulty_backups(&store, &paths, sim.clone());
+    // The sim clones; refusing the first clone makes every object a
+    // copy, so both paths' flushes face the power cut.
+    let fs = Arc::new(FaultFs::new(
+        sim.clone(),
+        FsOp::CloneFile,
+        if clone { u64::MAX } else { 1 },
+        FaultKind::Kind(std::io::ErrorKind::Unsupported),
+    ));
+    let backups = faulty_backups(&store, &paths, fs.clone());
     *backups.active.lock().unwrap() = Some(Arc::downgrade(&snapshot.active));
-    let receipt = backups.complete(snapshot).unwrap();
+    let receipt = backups.complete(snapshot, &AtomicBool::new(false)).unwrap();
+    assert_eq!(fs.calls(FsOp::CloneFile), 1);
+    assert_eq!(
+        fs.calls(FsOp::Create) == 1,
+        clone,
+        "only the manifest is created when cloning"
+    );
     sim.power_cut();
     let mut data = Vec::new();
     sim.open(&receipt.location().join("manifest.json"))
@@ -4156,6 +4176,7 @@ fn verifier_image_crash_cuts_recover_owned_scratch() {
 }
 
 mod changes;
+mod clones;
 
 mod stage_tests {
     mod bindings;

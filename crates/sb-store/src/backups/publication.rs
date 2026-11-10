@@ -2,6 +2,7 @@
 
 use std::io::{self, Read, Write};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -144,7 +145,11 @@ fn check_generation(
 }
 
 impl Backups {
-    pub(crate) fn complete(&self, snapshot: BackupSnapshot) -> Result<BackupReceipt, StoreError> {
+    pub(crate) fn complete(
+        &self,
+        snapshot: BackupSnapshot,
+        cancelled: &AtomicBool,
+    ) -> Result<BackupReceipt, StoreError> {
         let mut active = self
             .active
             .try_lock()
@@ -218,7 +223,7 @@ impl Backups {
                 .0,
             None,
         )?;
-        let objects = self.copy_objects(&snapshot)?;
+        let objects = self.copy_objects(&snapshot, cancelled)?;
         let manifest = Manifest {
             format: 1,
             store_uuid,
@@ -322,20 +327,46 @@ impl Backups {
         Ok(())
     }
 
-    fn copy_objects(&self, snapshot: &BackupSnapshot) -> Result<Vec<Entry>, StoreError> {
+    fn copy_objects(
+        &self,
+        snapshot: &BackupSnapshot,
+        cancelled: &AtomicBool,
+    ) -> Result<Vec<Entry>, StoreError> {
         let root = snapshot.location.join("objects");
         let sha_root = root.join("sha256");
         self.fs.create_dir(&root).map_err(io_error)?;
         self.fs.create_dir(&sha_root).map_err(io_error)?;
         let mut entries = Vec::with_capacity(snapshot.referenced.len());
+        // Clone each object where the filesystem can (spec/03 step 4:
+        // APFS `clonefile`), so a generation costs no second copy of
+        // the object store; the first refusal of its kind means none
+        // will clone, and the rest are copied.
+        let mut cloning = true;
         for sha in snapshot.referenced.iter() {
-            // The object store validates the hash and provides its
-            // ordinary verifying, quarantining reader.
-            let input = self.objects.open_backup_reference(sha)?;
+            // Stop at the next object: the generation stays
+            // `in_progress` for the next run's recovery (spec/03).
+            if cancelled.load(Ordering::Acquire) {
+                return Err(StoreError::unavailable("the backup was cancelled"));
+            }
             let ab = sha_root.join(&sha[..2]);
             let cd = ab.join(&sha[2..4]);
             create_or_existing_dir(self.fs.as_ref(), &ab)?;
             create_or_existing_dir(self.fs.as_ref(), &cd)?;
+            if cloning {
+                match self.clone_object(sha, &cd.join(sha))? {
+                    Cloned::Verified(entry) => {
+                        self.fs.sync_dir(&cd).map_err(io_error)?;
+                        self.fs.sync_dir(&ab).map_err(io_error)?;
+                        entries.push(entry);
+                        continue;
+                    }
+                    Cloned::Unsupported => cloning = false,
+                    Cloned::Failed => {}
+                }
+            }
+            // The object store validates the hash and provides its
+            // ordinary verifying, quarantining reader.
+            let input = self.objects.open_backup_reference(sha)?;
             let mut output = self.fs.create(&cd.join(sha)).map_err(io_error)?;
             let entry = stream(input, Some(output.as_mut()))?;
             if entry.sha256 != *sha {
@@ -353,6 +384,53 @@ impl Backups {
         self.fs.sync_dir(&snapshot.location).map_err(io_error)?;
         Ok(entries)
     }
+
+    /// Clone one object into the generation, flushed, and hash what the
+    /// generation now holds, so the manifest names those exact bytes.
+    fn clone_object(&self, sha: &str, target: &Path) -> Result<Cloned, StoreError> {
+        let source = self
+            .objects
+            .object_path(&crate::objects::ObjectId::from_hex(sha, 0)?);
+        match self.fs.clone_file(&source, target) {
+            Ok(()) => {}
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    io::ErrorKind::Unsupported | io::ErrorKind::CrossesDevices
+                ) =>
+            {
+                return Ok(Cloned::Unsupported);
+            }
+            // A missing or unreadable source: the copy's verifying
+            // reader reports it as for any object.
+            Err(_) => return Ok(Cloned::Failed),
+        }
+        let (file, _) = self.fs.open_regular(target).map_err(io_error)?;
+        let entry = stream(file, None)?;
+        if entry.sha256 != sha {
+            // The clone shares the source's bytes: the source is
+            // damaged, and its verifying reader quarantines it.
+            let _ = self
+                .objects
+                .open_backup_reference(sha)
+                .and_then(|source| stream(source, None));
+            return Err(StoreError::corrupt(format!(
+                "backup source object {sha} failed hash verification"
+            )));
+        }
+        Ok(Cloned::Verified(entry))
+    }
+}
+
+/// What cloning one object did.
+enum Cloned {
+    /// Cloned, flushed and hashed to its name.
+    Verified(Entry),
+    /// This filesystem, or this pair of locations, can't clone: copy
+    /// this object and the rest.
+    Unsupported,
+    /// The clone failed otherwise: copy this object.
+    Failed,
 }
 
 fn create_or_existing_dir(fs: &dyn Fs, path: &Path) -> Result<(), StoreError> {

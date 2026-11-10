@@ -19,6 +19,16 @@ pub trait Fs: Send + Sync {
 
     /// Create a new file for writing; fails if `path` already exists.
     fn create(&self, path: &Path) -> io::Result<Box<dyn WriteFile>>;
+    /// Create `to`, which must not exist, as a clone of the regular file
+    /// `from`: the same bytes, sharing their storage (APFS `clonefile`),
+    /// with the clone's data and metadata flushed before it returns; the
+    /// caller flushes the parent directory. Anything but a regular file
+    /// at `from`, a link included, is refused, never followed or cloned.
+    /// `Unsupported` or `CrossesDevices` where the filesystem or this
+    /// pair of paths can't clone: the caller copies instead.
+    fn clone_file(&self, _from: &Path, _to: &Path) -> io::Result<()> {
+        Err(io::ErrorKind::Unsupported.into())
+    }
     /// Open an existing file for reading and seeking.
     fn open(&self, path: &Path) -> io::Result<Box<dyn ReadFile>>;
     /// Open a regular file without following its final symlink.
