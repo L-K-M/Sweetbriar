@@ -1560,6 +1560,26 @@ local drafts. No network yet.
     second process can't open the store during the swap (the lock is
     outside the data root); back up G, restore G, restart and back up
     again: G stays `complete`, intact and restorable.
+  - **M1.8g split before implementation (2026-11-09):** the swap keeps
+    the store lock from before its marker through reopening, so the
+    engine swaps in place rather than shutting down and reopening.
+    **g1 Restore through the resources (S)**: backup, staging,
+    qualification and the swap as `Resources` calls; the swap hands back
+    new resources around the restored store, or the same ones and the
+    stage on a refusal. The writer's closing checkpoint leaves no
+    write-ahead log on the root that moves. **g2 Windows across a store
+    swap (M)**: a restore epoch, so a lower restored generation answers
+    `ResetRequired` and never underflows a subscription's mark. **g3
+    Quiesce and swap (L)**: a reversible admission gate, the jobs and
+    account workers paused and resumed, `Engine::restore`, a refusal
+    resuming as before and a failure left as a reported terminal state.
+    **g4 Acceptance proof (L)**. **g5 Resume with cursor discard (M)**:
+    resuming an account discards its IMAP cursors in the same
+    transaction. **g6 Quarantined intent release (M)**: preview and
+    release, refused while an account's restored mailboxes still need
+    their reconcile. Reconciling occurrences against the server is M2.5's
+    epoch-change step: a restored mailbox's absent epoch with
+    occurrences is a changed epoch.
   - **M1.8g Engine quiescence (L):** the pre-swap quiesce — refuse new
     commands, let in-flight submissions finish, stop account workers, the
     outbox and maintenance jobs, drain the writer, checkpoint and close

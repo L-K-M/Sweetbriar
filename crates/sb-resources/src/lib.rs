@@ -27,7 +27,7 @@ pub use accounts::{
 pub use sb_imap::CertificatePin;
 pub use sb_imap::{
     ConnectAttempt, Connection, Connector, HeaderBytes, HeaderFetchMode, HeaderRequest, HeaderRow,
-    ImapError, Password, ReconnectError, ReconnectWait, Reconnector,
+    IdleEvent, ImapError, MailboxNotice, Password, ReconnectError, ReconnectWait, Reconnector,
 };
 pub use sb_platform::{Secret, SecretError, SecretStore};
 pub use sb_store::accounts::{
@@ -61,12 +61,18 @@ pub use index::{
 };
 mod renditions;
 mod repair;
+mod restore;
 mod search;
 mod seen;
 pub use renditions::{RenditionCache, RenditionError, RenditionFiles, RenditionProtection};
 pub use repair::{
     RepairCapture, RepairCommit, RepairDiagnosis, RepairPersist, RepairPreparation, RepairPrepared,
     RepairSources, RepairStatus, RepairTerminal, RepairTerminalKind,
+};
+pub use restore::ResourcesSwapError;
+pub use sb_store::{
+    BackupDestination, BackupReceipt, BackupSnapshot, PreparedRestoreStage, QualifiedStage,
+    RestoreMetadata, VerifiedExternalBackup,
 };
 pub use search::{CoverageCounts, read_search_coverage, read_search_coverage_reusing};
 pub use seen::{ReceivedCommit, ReceivedPreparation, ReceivedRevisions, ReceivedSweep};

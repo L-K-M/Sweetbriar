@@ -30,6 +30,7 @@ use sb_resources::{
     Timestamp, WritePriority,
 };
 
+use super::idle::{Scope, is_inbox};
 use crate::engine::Worker;
 use crate::policy::{ListedMailbox, Policy};
 
@@ -88,14 +89,56 @@ impl Refusals {
     }
 }
 
-/// Run one pass, leaving out the mailboxes in `refusals`.
+/// Run one pass over `scope`, leaving out the mailboxes in `refusals`.
 pub(super) async fn run(
     worker: &Worker,
     account_id: &str,
     policy: Policy,
     connection: &mut Connection,
+    scope: Scope,
     refusals: &mut Refusals,
 ) -> Result<(), PassError> {
+    let targets = match scope {
+        Scope::All => discover(worker, account_id, policy, connection).await?,
+        Scope::Inbox => {
+            let id = account_id.to_owned();
+            let targets = worker
+                .blocking(move |resources| resources.read(|tx| sync_targets(tx, &id)))
+                .await;
+            let Ok(Ok(targets)) = targets else {
+                return Ok(());
+            };
+            targets
+                .into_iter()
+                .filter(|target| is_inbox(&target.remote_name))
+                .collect()
+        }
+    };
+    for target in targets {
+        if refusals.skips(target.mailbox_id, Instant::now()) {
+            continue;
+        }
+        sync_mailbox(worker, account_id, policy, connection, &target)
+            .await
+            .map_err(|error| match error {
+                ImapError::Command { .. } => PassError::Refused {
+                    mailbox_id: target.mailbox_id,
+                },
+                error => PassError::Session(error),
+            })?;
+    }
+    Ok(())
+}
+
+/// Step 1: LIST, reconciled through the policy, then the mailboxes to
+/// sync. Without the reconciled rows there is nothing safe to fetch
+/// into; the next full pass lists again.
+async fn discover(
+    worker: &Worker,
+    account_id: &str,
+    policy: Policy,
+    connection: &mut Connection,
+) -> Result<Vec<SyncTarget>, ImapError> {
     let listing = connection.list_mailboxes().await?.observation;
     let observed: Vec<ObservedMailbox> = listing
         .iter()
@@ -125,23 +168,7 @@ pub(super) async fn run(
     // Without the reconciled mailboxes there is nothing safe to fetch
     // into. A store that failed the write ends the pass, not the
     // session: the next pass lists again.
-    let Ok(targets) = targets else {
-        return Ok(());
-    };
-    for target in targets {
-        if refusals.skips(target.mailbox_id, Instant::now()) {
-            continue;
-        }
-        sync_mailbox(worker, account_id, policy, connection, &target)
-            .await
-            .map_err(|error| match error {
-                ImapError::Command { .. } => PassError::Refused {
-                    mailbox_id: target.mailbox_id,
-                },
-                error => PassError::Session(error),
-            })?;
-    }
-    Ok(())
+    Ok(targets.unwrap_or_default())
 }
 
 /// Steps 2 and 3 for one mailbox.
