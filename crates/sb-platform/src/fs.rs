@@ -330,6 +330,52 @@ impl Fs for RealFs {
         Ok(Box::new(RealWriteFile(file)))
     }
 
+    #[cfg(target_os = "macos")]
+    fn clone_file(&self, from: &Path, to: &Path) -> io::Result<()> {
+        // Clone from the descriptor of the regular file actually opened,
+        // so a link, directory or device swapped in at `from` can't be
+        // cloned in its place.
+        let source = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_NOCTTY)
+            .open(from)?;
+        if !source.metadata()?.is_file() {
+            return Err(not_regular(from));
+        }
+        let target = std::ffi::CString::new(to.as_os_str().as_bytes())
+            .map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
+        // SAFETY: a live descriptor, and a C string that outlives the call.
+        if unsafe { libc::fclonefileat(source.as_raw_fd(), libc::AT_FDCWD, target.as_ptr(), 0) }
+            != 0
+        {
+            let error = io::Error::last_os_error();
+            return Err(match error.raw_os_error() {
+                Some(libc::ENOTSUP) => io::ErrorKind::Unsupported.into(),
+                Some(libc::EXDEV) => io::ErrorKind::CrossesDevices.into(),
+                _ => error,
+            });
+        }
+        // The clone shares durable blocks, but its own inode and extent
+        // records are new: flush them as a copy's would be. Opened
+        // without following a link or blocking on a fifo, so what is
+        // flushed is the regular file at `to`; a clone that can't be
+        // flushed is removed, so an error leaves no `to`.
+        let flushed = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_NOCTTY)
+            .open(to)
+            .and_then(|clone| {
+                if !clone.metadata()?.is_file() {
+                    return Err(not_regular(to));
+                }
+                flush_durably(&clone)
+            });
+        if flushed.is_err() {
+            let _ = std::fs::remove_file(to);
+        }
+        flushed
+    }
+
     fn open(&self, path: &Path) -> io::Result<Box<dyn sb_types::fs::ReadFile>> {
         Ok(Box::new(File::open(path)?))
     }
@@ -626,6 +672,38 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
+    }
+
+    /// `clone_file` on APFS: the clone holds the bytes and diverges on
+    /// write, an existing target is refused, and a link or directory at
+    /// the source is refused rather than cloned.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn clone_file_clones_only_a_regular_file() {
+        let scratch = Scratch::new("clone-file");
+        let source = scratch.0.join("source");
+        let clone = scratch.0.join("clone");
+        std::fs::write(&source, b"archived bytes").unwrap();
+
+        RealFs.clone_file(&source, &clone).unwrap();
+        assert_eq!(std::fs::read(&clone).unwrap(), b"archived bytes");
+        std::fs::write(&clone, b"changed").unwrap();
+        assert_eq!(std::fs::read(&source).unwrap(), b"archived bytes");
+
+        let taken = RealFs.clone_file(&source, &clone).unwrap_err();
+        assert_eq!(taken.kind(), io::ErrorKind::AlreadyExists);
+
+        let link = scratch.0.join("link");
+        std::os::unix::fs::symlink(&source, &link).unwrap();
+        let from_link = scratch.0.join("from-link");
+        assert!(RealFs.clone_file(&link, &from_link).is_err());
+        assert!(!from_link.exists() && from_link.symlink_metadata().is_err());
+
+        let dir = scratch.0.join("dir");
+        std::fs::create_dir(&dir).unwrap();
+        let from_dir = scratch.0.join("from-dir");
+        assert!(RealFs.clone_file(&dir, &from_dir).is_err());
+        assert!(from_dir.symlink_metadata().is_err());
     }
 
     #[test]

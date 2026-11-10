@@ -514,7 +514,13 @@ backups/<generation-id>/
 4. Copy (or clone on APFS, `clonefile`) each object, verifying its hash.
    Flush every copied object and the snapshot file (`F_FULLFSYNC` on
    macOS, `fsync` on Linux), and flush every newly created directory up
-   to the generation root.
+   to the generation root. A clone is taken from the regular file the
+   store opened, never through a link, and the generation's clone is
+   what is hashed; a filesystem or destination that can't clone gets
+   copies, and one failed clone copies that object. Without clones,
+   every retained generation would hold its own copy of the object
+   store. A cancelled backup stops before the next object; the
+   generation stays `in_progress` for the next run's recovery.
 5. Write `manifest.json`:
 
    ```json

@@ -263,12 +263,24 @@ impl Store {
         &self,
         snapshot: crate::backups::BackupSnapshot,
     ) -> Result<crate::backups::BackupReceipt, StoreError> {
+        self.complete_backup_with(snapshot, &std::sync::atomic::AtomicBool::new(false))
+    }
+
+    /// [`Store::complete_backup`], stopping at the next object once
+    /// `cancelled` is raised: `Unavailable`, with the generation left
+    /// `in_progress` for the next generation's recovery to mark
+    /// `failed` and remove (spec/03). Blocking, like it.
+    pub fn complete_backup_with(
+        &self,
+        snapshot: crate::backups::BackupSnapshot,
+        cancelled: &std::sync::atomic::AtomicBool,
+    ) -> Result<crate::backups::BackupReceipt, StoreError> {
         if self.writer.is_writer_thread() {
             return Err(StoreError::internal(
                 "the writer thread cannot back up through its own queue",
             ));
         }
-        self.backups.complete(snapshot)
+        self.backups.complete(snapshot, cancelled)
     }
 
     /// Inspect a private copy authenticated against a verified manifest.
