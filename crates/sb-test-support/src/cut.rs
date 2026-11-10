@@ -30,11 +30,57 @@ const CHILD_DEADLINE: Duration = Duration::from_secs(120);
 /// How often a waiting harness checks on its child.
 const CHILD_POLL: Duration = Duration::from_millis(10);
 
+/// How long a child waits for its own `SIGKILL` to end it.
+const KILL_PATIENCE: Duration = Duration::from_secs(30);
+
+/// The exit status of a child whose `SIGKILL` never ended it: not a
+/// signal, so its parent reports the run as abnormal.
+const KILL_REFUSED_EXIT: i32 = 86;
+
+/// Count one operation; cut the process at the `nth`.
+fn trip(count: &AtomicU64, nth: u64) {
+    let n = count.fetch_add(1, Ordering::SeqCst) + 1;
+    if n == nth {
+        // SAFETY: killing our own process takes no capability a child
+        // test does not have.
+        cut(
+            n,
+            || unsafe {
+                libc::kill(libc::getpid(), libc::SIGKILL);
+            },
+            KILL_PATIENCE,
+        );
+    }
+}
+
+/// End this process at cut point `n`, running nothing more on this
+/// thread.
+///
+/// `SIGKILL` can't be caught or blocked, but the process doesn't end
+/// before `kill` returns: the kernel ends it when one of its threads
+/// next takes the signal, and on a loaded machine the calling thread
+/// runs on for a while first. It must not return and must not unwind.
+/// An unwind runs the test's destructors, and a scratch directory's
+/// removes the very leftovers the parent is about to inspect, in a
+/// child that still dies of `SIGKILL` and so looks cleanly cut.
+///
+/// So the thread waits for its death. A kernel that refused the kill
+/// ends the wait after `patience`: the process exits without unwinding
+/// or running exit handlers, with a status that is no signal.
+fn cut(n: u64, kill: impl FnOnce(), patience: Duration) -> ! {
+    kill();
+    thread::sleep(patience);
+    eprintln!("SIGKILL at cut point {n} did not kill the process");
+    // SAFETY: `_exit` only ends the process; skipping destructors and
+    // exit handlers is the point.
+    unsafe { libc::_exit(KILL_REFUSED_EXIT) }
+}
+
 /// An `Fs` that kills the process, `SIGKILL`, immediately before its
-/// Nth operation (any kind) — the sharpest possible cut, with nothing
-/// running afterwards. Operations on handles it handed out (`write`,
-/// `sync_all`) count too; `flush` does nothing on a real file and is
-/// not counted.
+/// Nth operation (any kind). It is the sharpest possible cut: the
+/// thread that reached it runs nothing more, not even an unwind.
+/// Operations on handles it handed out (`write`, `sync_all`) count
+/// too; `flush` does nothing on a real file and is not counted.
 pub struct CutFs {
     inner: Arc<dyn Fs>,
     /// 1-based: die before this call, of any operation.
@@ -61,17 +107,7 @@ impl CutFs {
 
     /// Count one operation; kill the process if it is the cut point.
     fn trip(&self) {
-        let n = self.count.fetch_add(1, Ordering::SeqCst) + 1;
-        if n == self.nth {
-            // SIGKILL cannot be caught or blocked, so this never
-            // returns; the message is only for a kernel that refused.
-            // SAFETY: killing our own process takes no capability a
-            // child test does not have.
-            unsafe {
-                libc::kill(libc::getpid(), libc::SIGKILL);
-            }
-            panic!("SIGKILL at cut point {n} did not kill the process");
-        }
+        trip(&self.count, self.nth);
     }
 }
 
@@ -83,14 +119,7 @@ struct CutConfinedDir {
 
 impl CutConfinedDir {
     fn trip(&self) {
-        let n = self.count.fetch_add(1, Ordering::SeqCst) + 1;
-        if n == self.nth {
-            // SAFETY: killing this process is the crash-cut harness contract.
-            unsafe {
-                libc::kill(libc::getpid(), libc::SIGKILL);
-            }
-            panic!("SIGKILL at cut point {n} did not kill the process");
-        }
+        trip(&self.count, self.nth);
     }
 }
 
@@ -288,14 +317,7 @@ struct CutReadWrite {
 
 impl CutReadWrite {
     fn trip(&self) {
-        let n = self.count.fetch_add(1, Ordering::SeqCst) + 1;
-        if n == self.nth {
-            // SAFETY: killing this process is the crash-cut harness contract.
-            unsafe {
-                libc::kill(libc::getpid(), libc::SIGKILL);
-            }
-            panic!("SIGKILL at cut point {n} did not kill the process");
-        }
+        trip(&self.count, self.nth);
     }
 }
 
@@ -334,14 +356,7 @@ struct CutWrite {
 
 impl CutWrite {
     fn trip(&self) {
-        let n = self.count.fetch_add(1, Ordering::SeqCst) + 1;
-        if n == self.nth {
-            // SAFETY: as in `CutFs::trip`.
-            unsafe {
-                libc::kill(libc::getpid(), libc::SIGKILL);
-            }
-            panic!("SIGKILL at cut point {n} did not kill the process");
-        }
+        trip(&self.count, self.nth);
     }
 }
 
@@ -494,6 +509,91 @@ mod tests {
             ControlFlow::Continue(())
         );
         assert_eq!(fs.operations(), 4);
+    }
+
+    /// The env var the late- and refused-kill children read: the
+    /// directory they report in.
+    const REPORT_ENV: &str = "SB_CUT_TEST_REPORT";
+
+    /// Writes `unwound` into the report directory when dropped: what a
+    /// test's scratch directory does to its leftovers, made visible.
+    struct Unwound(PathBuf);
+
+    impl Drop for Unwound {
+        fn drop(&mut self) {
+            let _ = fs::write(self.0.join("unwound"), b"");
+        }
+    }
+
+    fn report_root() -> PathBuf {
+        PathBuf::from(env::var(REPORT_ENV).expect("report env"))
+    }
+
+    fn spawn_child(name: &str, report: &Path) -> Child {
+        Command::new(env::current_exe().unwrap())
+            .args(["--exact", name, "--ignored"])
+            .env(REPORT_ENV, report)
+            .spawn()
+            .unwrap()
+    }
+
+    /// A cut whose kill has not landed: it only reports that the cut
+    /// was reached, as a kernel under load leaves the thread running.
+    #[test]
+    #[ignore = "spawned by a_kill_that_lands_late_runs_no_destructor"]
+    fn late_kill_child() {
+        let root = report_root();
+        let _leftovers = Unwound(root.clone());
+        cut(
+            1,
+            || fs::write(root.join("cut"), b"").unwrap(),
+            Duration::from_secs(3600),
+        );
+    }
+
+    /// Until the kill lands, the cutting thread neither returns nor
+    /// unwinds: a destructor would remove the leftovers of a child
+    /// that then dies of `SIGKILL` and passes for cleanly cut.
+    #[test]
+    fn a_kill_that_lands_late_runs_no_destructor() {
+        let scratch = crate::ScratchDir::new("cut-late-kill");
+        let mut child = spawn_child("cut::tests::late_kill_child", scratch.path());
+        let started = Instant::now();
+        while !scratch.path().join("cut").exists() {
+            let ended = child.try_wait().unwrap();
+            assert!(ended.is_none(), "the child ended before its cut: {ended:?}");
+            assert!(started.elapsed() < CHILD_DEADLINE, "the child never cut");
+            thread::sleep(CHILD_POLL);
+        }
+        // An unwind would have run the destructor within microseconds.
+        thread::sleep(Duration::from_millis(300));
+        let ended = child.try_wait().unwrap();
+        let unwound = scratch.path().join("unwound").exists();
+        let _ = child.kill();
+        let _ = child.wait();
+
+        assert!(ended.is_none(), "the thread ran on past the cut: {ended:?}");
+        assert!(!unwound, "a destructor ran after the cut");
+    }
+
+    /// A cut whose kill never lands.
+    #[test]
+    #[ignore = "spawned by a_refused_kill_exits_without_unwinding"]
+    fn refused_kill_child() {
+        let _leftovers = Unwound(report_root());
+        cut(1, || {}, Duration::from_millis(50));
+    }
+
+    /// A kernel that refused the kill is reported by the exit status,
+    /// which is no signal, and still no destructor runs.
+    #[test]
+    fn a_refused_kill_exits_without_unwinding() {
+        let scratch = crate::ScratchDir::new("cut-refused-kill");
+        let child = spawn_child("cut::tests::refused_kill_child", scratch.path());
+        let status = wait_with_deadline(child, CHILD_DEADLINE);
+
+        assert_eq!(status.code(), Some(KILL_REFUSED_EXIT), "{status}");
+        assert!(!scratch.path().join("unwound").exists());
     }
 
     /// The env vars the operation child reads: which operation, and
