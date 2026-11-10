@@ -289,9 +289,12 @@ against concurrent replacement.
       another table) is refused `Corrupt`, as is a sibling that is no
       directory of its own: a file, or a link wherever it leads, since
       the sibling is opened without following one before its ledger
-      is. Neither is repaired or removed. An empty ledger file, which
-      is what a process that ended while creating it leaves, is made
-      again.
+      is. Neither is repaired or removed. The ledger and any existing
+      journal, WAL or SHM must be single-link regular files, checked
+      before SQLite opens; an unknown link count refuses too. These
+      metadata checks do not pin names against concurrent same-UID
+      replacement in the private home. An empty ledger file, which is
+      what a process that ended while creating it leaves, is made again.
     - Staging and qualification only read the data root, and the swap
       preserves it whole, its latch included. The sibling stays behind
       with an empty ledger.
