@@ -453,6 +453,46 @@ fn preserved(root: &Path) -> usize {
         .count()
 }
 
+/// A real swap refusal exits 1, not just a failed preparation. An
+/// occupied preserved-root name is left alone, as is the live store.
+#[test]
+fn a_refused_restore_exits_one_without_replacing_the_store() {
+    let (_scratch, root) = scratch("cli-restore-refused");
+    let cue = "appearance.compose_cue";
+    let set = |value| {
+        let out = cli(&root, &["settings", "set", cue, value]);
+        assert!(out.status.success(), "{}", stderr(&out));
+    };
+    set("strong");
+    let backup = cli(&root, &["backup"]);
+    assert!(backup.status.success(), "{}", stderr(&backup));
+    let line = stdout(&backup);
+    let id = line.split('\t').next().unwrap();
+    set("standard");
+
+    let db = root.join("state.sqlite");
+    let incarnation = sb_test_support::store_meta_value(&db, "incarnation").unwrap();
+    let occupied = root.with_file_name(format!("store.preserved-{incarnation}"));
+    std::fs::create_dir(&occupied).unwrap();
+    std::fs::write(occupied.join("kept"), b"not a restore target").unwrap();
+
+    let out = cli(&root, &["restore", id]);
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "");
+    assert!(stderr(&out).contains("refused"), "{}", stderr(&out));
+    assert_eq!(
+        std::fs::read(occupied.join("kept")).unwrap(),
+        b"not a restore target"
+    );
+    assert_eq!(
+        sb_test_support::store_meta_value(&db, "incarnation"),
+        Some(incarnation)
+    );
+    let got = cli(&root, &["settings", "get", cue]);
+    assert!(got.status.success(), "{}", stderr(&got));
+    assert_eq!(stdout(&got), format!("{cue}=standard\n"));
+}
+
 /// `restore <generation_id>` (plan M1.8i5) puts a recorded generation
 /// in the store's place. What was set since is gone, the replaced
 /// store is kept beside the data root, and the next process opens the
