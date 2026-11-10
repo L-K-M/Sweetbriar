@@ -106,6 +106,10 @@ private let offers: [(SearchIndexState, SearchRebuildPhase?, IndexControls)] = [
     (ioPause, nil, [.rebuild, .retryNow]),
     (.blockedNewerExtractor, nil, []),
     (.blockedNewerExtractor, .index, []),
+    // A read-only archive refuses every index command.
+    (.readOnly, nil, []),
+    (.readOnly, .reset, []),
+    (.readOnly, .index, []),
 ]
 
 @Test(arguments: offers)
@@ -123,6 +127,10 @@ func searchOpensUnlessResetEnqueueOrBlocked() {
     #expect(coverage(rebuild: .complete).searchCanOpen)
     #expect(coverage().searchCanOpen)
     #expect(!coverage(state: .blockedNewerExtractor).searchCanOpen)
+    // A read-only archive opens Search unless a rebuild stopped early.
+    #expect(coverage(state: .readOnly).searchCanOpen)
+    #expect(coverage(state: .readOnly, rebuild: .index).searchCanOpen)
+    #expect(!coverage(state: .readOnly, rebuild: .enqueue).searchCanOpen)
 }
 
 @MainActor

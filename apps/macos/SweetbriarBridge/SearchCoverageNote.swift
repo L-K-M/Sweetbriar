@@ -89,8 +89,9 @@ public struct SearchCoverageNote: Sendable, Equatable {
 
     /// The indexer's state, when it isn't idle: a rebuild's phase, a
     /// paused rebuild until Resume (also after relaunch), an I/O pause's
-    /// error and next automatic retry — never a spinner — and the app
-    /// update a blocked indexer needs (spec/08).
+    /// error and next automatic retry — never a spinner — the app
+    /// update a blocked indexer needs (spec/08), and a read-only
+    /// archive, where nothing indexes until a restore.
     private static func state(_ coverage: SearchCoverage, time: (Int64) -> String) -> String? {
         let job = coverage.activeRebuild
         switch coverage.indexState {
@@ -107,6 +108,10 @@ public struct SearchCoverageNote: Sendable, Equatable {
             return "Indexing paused: \(sentence) Next retry at \(time(retryAt))."
         case .blockedNewerExtractor:
             return "Search needs a newer version of Sweetbriar. Update the app to search this archive."
+        case .readOnly:
+            // The rebuild, if one was under way, stays where it stopped.
+            return job.map { "Rebuild stopped while \(phase($0.phase)): the archive is read-only" }
+                ?? "Indexing stopped: the archive is read-only"
         }
     }
 

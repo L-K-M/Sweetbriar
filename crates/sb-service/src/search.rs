@@ -125,6 +125,10 @@ pub enum SearchIndexState {
         retry_at: i64,
     },
     BlockedNewerExtractor,
+    /// The store is read-only after an integrity finding (spec/03
+    /// "Integrity"): nothing indexes, and no index command works,
+    /// until a restore.
+    ReadOnly,
 }
 
 impl SearchIndexState {
@@ -134,6 +138,7 @@ impl SearchIndexState {
             sb_engine::SearchIndexState::Running => Self::Running,
             sb_engine::SearchIndexState::PausedByUser => Self::PausedByUser,
             sb_engine::SearchIndexState::BlockedNewerExtractor => Self::BlockedNewerExtractor,
+            sb_engine::SearchIndexState::ReadOnly => Self::ReadOnly,
             sb_engine::SearchIndexState::PausedIo {
                 code,
                 message,

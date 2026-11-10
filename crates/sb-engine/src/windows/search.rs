@@ -280,10 +280,12 @@ impl Engine {
     {
         let index = Arc::clone(self.indexer());
         let memo = Arc::clone(self.search_memo());
+        let indexing = self.indexing();
         self.read_through(move |resources| {
             index.readable()?;
             let run = |tx: &Transaction| -> Result<(Coverage, T), StoreError> {
                 let (coverage, counts) = memo.coverage(tx, scope)?;
+                let coverage = indexing.applied(coverage);
                 if coverage.index_state == SearchIndexState::BlockedNewerExtractor {
                     return Err(StoreError::Unavailable {
                         reason: "Search needs a newer app for this index. Update Sweetbriar."

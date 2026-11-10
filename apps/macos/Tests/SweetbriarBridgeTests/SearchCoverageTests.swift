@@ -53,6 +53,7 @@ func coverageScopeAndClosedStateMappingsKeepTheirPayloads() {
         (SearchIndexState(.running), .running),
         (SearchIndexState(.pausedByUser), .pausedByUser),
         (SearchIndexState(.blockedNewerExtractor), .blockedNewerExtractor),
+        (SearchIndexState(.readOnly), .readOnly),
     ]
     for (actual, expected) in states { #expect(actual == expected) }
 
