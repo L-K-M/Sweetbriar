@@ -11,6 +11,13 @@
 //!    into `recovery/integrity-<millis>-<hex>/`, published by a rename
 //!    once a manifest of sizes and digests is written last.
 //!
+//! Step 1 begins with the store's own file work (M1.8h5b1). From the
+//! finding on, publishing, removing or quarantining an object, a
+//! backup generation's start, completion or removal, a backup's
+//! verification, an import's source copies, reports and scratch all
+//! refuse. Once the steps of that work in flight are done, the
+//! latch's observer hears; then the writer latches.
+//!
 //! A crash after step 1 and before step 2 leaves the store as it was
 //! (unlatched, its damage still there for the next check). Once step
 //! 2 is durable, every open is latched, and one whose copy is missing
@@ -22,8 +29,8 @@
 use std::io::{self, Read, Write};
 use std::os::raw::c_int;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 
 use rusqlite::ErrorCode;
 use serde::{Deserialize, Serialize};
@@ -33,6 +40,7 @@ use crate::backups::scoped_progress::{WorkLimit, with_work_limit};
 use crate::paths::StorePaths;
 use crate::store::{Access, READER_PRAGMAS, Store, open_connection};
 use crate::{Fs, Random, StoreError};
+use sb_types::time::Timestamp;
 
 /// The latch's name in the data root.
 pub(crate) const LATCH_FILE: &str = "integrity-latch.json";
@@ -84,6 +92,200 @@ pub struct IntegrityFinding {
     pub copy: Result<PathBuf, StoreError>,
 }
 
+/// The integrity finding a store is read-only after (spec/03
+/// "Integrity").
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IntegrityLatch {
+    /// The finding, or why the latch file couldn't be read.
+    pub detail: String,
+    /// When the check found it; `None` when the latch file couldn't be
+    /// read.
+    pub detected_at: Option<Timestamp>,
+    /// The published copy of the database files under `recovery/`,
+    /// once there is one.
+    pub copy: Option<PathBuf>,
+}
+
+/// Told once when a store latches; see [`RootLatch::observe`].
+pub(crate) type LatchObserver = Arc<dyn Fn() + Send + Sync>;
+
+/// The latch as the store's own file work sees it: set once, by a
+/// finding or a latched open, and never cleared (a restore swap
+/// replaces the whole store). Each step of the store's file work in
+/// the data root runs under a [`FileStep`], counted while it runs:
+/// work on other threads, and GC's removal of an object, which runs
+/// inside a writer job. Latching refuses new steps from that moment
+/// and then waits for the ones in flight, so once it returns no step
+/// is running and none starts.
+///
+/// A step holds no lock and never waits for the latch, so one may
+/// start inside another: a backup copies an object through its
+/// verifying reader, which quarantines on damage. Were a step to wait
+/// there, it and the latch waiting for the outer step would hold each
+/// other for good. A step covers bounded file work only, never a read
+/// from a caller's reader or a wait for the writer's queue, so the
+/// latch's wait is bounded too.
+#[derive(Default)]
+pub(crate) struct RootLatch {
+    state: Mutex<State>,
+    /// Signalled as the last step in flight ends.
+    idle: Condvar,
+    observed: Mutex<Observed>,
+}
+
+/// The finding and the file steps in flight.
+#[derive(Default)]
+struct State {
+    latch: Option<IntegrityLatch>,
+    steps: usize,
+}
+
+/// The observer and whether it has been told.
+#[derive(Default)]
+struct Observed {
+    observer: Option<LatchObserver>,
+    told: bool,
+}
+
+/// One step of file work in the data root, admitted while the store
+/// is unlatched; the latch waits for it to drop.
+pub(crate) struct FileStep<'a> {
+    latch: &'a RootLatch,
+}
+
+impl Drop for FileStep<'_> {
+    fn drop(&mut self) {
+        let mut state = lock(&self.latch.state);
+        state.steps -= 1;
+        if state.steps == 0 {
+            self.latch.idle.notify_all();
+        }
+    }
+}
+
+impl RootLatch {
+    /// As a store opens: latched when its data root holds a latch.
+    pub(crate) fn new(latch: Option<IntegrityLatch>) -> Self {
+        Self {
+            state: Mutex::new(State { latch, steps: 0 }),
+            idle: Condvar::new(),
+            observed: Mutex::new(Observed::default()),
+        }
+    }
+
+    /// The finding, if the store is latched. It shows from the moment
+    /// new steps are refused, while the latch may still be waiting for
+    /// the ones in flight.
+    pub(crate) fn get(&self) -> Option<IntegrityLatch> {
+        lock(&self.state).latch.clone()
+    }
+
+    /// Admit one step of file work, or `Corrupt` naming the finding
+    /// once latched: nothing may `what` in the data root then. Never
+    /// waits.
+    pub(crate) fn step(&self, what: &str) -> Result<FileStep<'_>, StoreError> {
+        let mut state = lock(&self.state);
+        if let Some(latch) = &state.latch {
+            return Err(StoreError::corrupt(format!(
+                "the store is read-only after an integrity finding, so it can't {what}: {}",
+                latch.detail
+            )));
+        }
+        state.steps += 1;
+        Ok(FileStep { latch: self })
+    }
+
+    /// [`RootLatch::step`] for work that only starts here: its later
+    /// steps fail on their own (at the writer) or are working files.
+    pub(crate) fn refuse(&self, what: &str) -> Result<(), StoreError> {
+        self.step(what).map(drop)
+    }
+
+    /// Install the one observer, replacing any earlier one. It is told
+    /// once that the store latched: at once, on this thread, if a
+    /// finding is already recorded (a store that opened latched
+    /// included, and one whose latch still waits for steps in flight),
+    /// else on the integrity check's thread as the store latches, once
+    /// those steps are done, before the writer latches and before the
+    /// latch file and the copy are written.
+    /// It must only signal (raise flags, wake waiters), never block,
+    /// join or write. A panic in it is caught; the latch stands.
+    pub(crate) fn observe(&self, observer: LatchObserver) {
+        {
+            let mut observed = lock(&self.observed);
+            observed.observer = Some(observer);
+            observed.told = false;
+        }
+        if self.get().is_some() {
+            self.tell();
+        }
+    }
+
+    /// Tell the observer, once, outside every lock.
+    fn tell(&self) {
+        let observer = {
+            let mut observed = lock(&self.observed);
+            match (&observed.observer, observed.told) {
+                (Some(observer), false) => {
+                    let observer = Arc::clone(observer);
+                    observed.told = true;
+                    observer
+                }
+                _ => return,
+            }
+        };
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| observer()));
+    }
+
+    /// Record a finding, which refuses new steps, wait for the steps
+    /// in flight, then tell the observer; `false` at once, telling no
+    /// one, when one was already recorded.
+    fn claim(&self, latch: IntegrityLatch) -> bool {
+        {
+            let mut state = lock(&self.state);
+            if state.latch.is_some() {
+                return false;
+            }
+            state.latch = Some(latch);
+            while state.steps > 0 {
+                state = self
+                    .idle
+                    .wait(state)
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+            }
+        }
+        self.tell();
+        true
+    }
+
+    /// The finding's copy, once published.
+    fn published(&self, copy: PathBuf) {
+        if let Some(latch) = lock(&self.state).latch.as_mut() {
+            latch.copy = Some(copy);
+        }
+    }
+
+    /// Latch only the store's file work, as a check does first: the
+    /// writer stays as it is.
+    #[cfg(test)]
+    pub(crate) fn latch_for_test(&self, detail: &str) {
+        assert!(self.claim(IntegrityLatch {
+            detail: detail.to_owned(),
+            detected_at: None,
+            copy: None,
+        }));
+    }
+}
+
+// The guarded values stay consistent under a panic: each critical
+// section is an assignment, a count or a clone, so a poisoned lock is
+// recovered.
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 /// The latch as stored.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -112,8 +314,8 @@ pub(crate) fn check(store: &Store, stop: &AtomicBool) -> Result<IntegrityCheck, 
             "the writer thread cannot check integrity through its own queue",
         ));
     }
-    if let Some(detail) = store.writer.latched() {
-        return Err(already_latched(&detail));
+    if let Some(latch) = store.latch.get() {
+        return Err(already_latched(&latch.detail));
     }
     let findings = match run(store.paths.state_db(), stop)? {
         Ran::Clean => return Ok(IntegrityCheck::Clean),
@@ -122,23 +324,30 @@ pub(crate) fn check(store: &Store, stop: &AtomicBool) -> Result<IntegrityCheck, 
     };
     let detail = crate::maintenance::bounded(&findings.join("; ")).to_owned();
 
-    // A writer that can't latch (its thread has ended) still gets the
-    // durable latch, so the next open is read-only; the result says so.
-    let writer = match store.writer.latch(&detail) {
-        Ok(true) => Ok(()),
-        // A concurrent check latched first and records its own finding.
-        Ok(false) => {
-            let first = store.writer.latched().unwrap_or_else(|| Arc::from(""));
-            return Err(already_latched(&first));
-        }
-        Err(e) => Err(e),
-    };
-    let detected_at = store.clock.now().as_millis();
+    let now = store.clock.now();
+    // The store latches first: its own file work stops once the steps
+    // in flight are done, and the observer hears. Of two concurrent
+    // checks, this claim picks the one that records its finding.
+    let claimed = store.latch.claim(IntegrityLatch {
+        detail: detail.clone(),
+        detected_at: Some(now),
+        copy: None,
+    });
+    if !claimed {
+        let first = store.latch.get().map(|latch| latch.detail);
+        return Err(already_latched(first.as_deref().unwrap_or("")));
+    }
+    // Then the writer. One that can't latch (its thread has ended)
+    // still gets the durable latch, so the next open is read-only; the
+    // result says so. One latched already (only a test latches the
+    // writer alone) is latched all the same.
+    let writer = store.writer.latch(&detail).map(drop);
+    let detected_at = now.as_millis();
     let record = LatchRecord {
         format: LATCH_FORMAT,
         detected_at,
         detail: detail.clone(),
-        // The writer has latched, so the record must still be written:
+        // The store has latched, so the record must still be written:
         // without randomness the copy takes a fixed suffix. One store
         // latches once, so its millisecond alone keeps the name apart.
         copy: copy_name(detected_at, store.seams.random())
@@ -148,6 +357,9 @@ pub(crate) fn check(store: &Store, stop: &AtomicBool) -> Result<IntegrityCheck, 
     // The disk's error first: it is the one the next open feels.
     let latch = write_latch(fs, store.seams.random(), &store.paths, &record).and(writer);
     let copy = make_copy(fs, &store.paths, &record);
+    if let Ok(published) = &copy {
+        store.latch.published(published.clone());
+    }
     Ok(IntegrityCheck::Finding(IntegrityFinding {
         detail,
         latch,
@@ -328,12 +540,16 @@ fn valid_copy_name(name: &str) -> bool {
             .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
-/// At a latched open: make the latch's copy if it was never published.
-/// Best effort, since a store that can't copy should still read: the
-/// copy's absence is visible in `recovery/`.
-pub(crate) fn ensure_copy(fs: &dyn Fs, paths: &StorePaths, latch: &Latch) {
-    if let Some(record) = &latch.record {
-        let _ = make_copy(fs, paths, record);
+/// At a latched open: make the latch's copy if it was never published,
+/// and the latch as the store reports it. Best effort, since a store
+/// that can't copy should still read: the copy's absence is visible in
+/// `recovery/` and the latch names none.
+pub(crate) fn ensure_copy(fs: &dyn Fs, paths: &StorePaths, latch: &Latch) -> IntegrityLatch {
+    let record = latch.record.as_ref();
+    IntegrityLatch {
+        detail: latch.detail.clone(),
+        detected_at: record.map(|record| Timestamp::from_millis(record.detected_at)),
+        copy: record.and_then(|record| make_copy(fs, paths, record).ok()),
     }
 }
 

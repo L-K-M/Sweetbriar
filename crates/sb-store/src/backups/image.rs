@@ -154,6 +154,9 @@ impl Backups {
         if self.writer.is_writer_thread() {
             return Err(StoreError::internal("writer cannot inspect a backup"));
         }
+        // Its scratch cleanup and ledger would remove and write in the
+        // data root; M1.8h5b4 keeps them off a latched store.
+        self.objects.latch().refuse("verify a backup")?;
         if cancelled.load(std::sync::atomic::Ordering::Acquire) {
             return Ok(BackupImageInspection::Cancelled);
         }

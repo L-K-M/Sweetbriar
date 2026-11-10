@@ -150,6 +150,9 @@ impl Backups {
         snapshot: BackupSnapshot,
         cancelled: &AtomicBool,
     ) -> Result<BackupReceipt, StoreError> {
+        self.objects
+            .latch()
+            .refuse("complete a backup generation")?;
         let mut active = self
             .active
             .try_lock()
@@ -251,16 +254,24 @@ impl Backups {
         let data = serde_json::to_vec(&manifest)
             .map_err(|e| StoreError::internal(format!("cannot serialize backup manifest: {e}")))?;
         let manifest_sha = hex(&Sha256::digest(&data));
-        let mut file = self
-            .fs
-            .create(&snapshot.location.join("manifest.json"))
-            .map_err(io_error)?;
-        file.write_all(&data).map_err(io_error)?;
-        file.sync_all().map_err(io_error)?;
-        self.fs.sync_dir(&snapshot.location).map_err(io_error)?;
-        self.fs
-            .sync_dir(snapshot.location.parent().expect("generation has parent"))
-            .map_err(io_error)?;
+        {
+            // The manifest is a step of its own: none on a latched
+            // store.
+            let _step = self
+                .objects
+                .latch()
+                .step("write a backup generation's manifest")?;
+            let mut file = self
+                .fs
+                .create(&snapshot.location.join("manifest.json"))
+                .map_err(io_error)?;
+            file.write_all(&data).map_err(io_error)?;
+            file.sync_all().map_err(io_error)?;
+            self.fs.sync_dir(&snapshot.location).map_err(io_error)?;
+            self.fs
+                .sync_dir(snapshot.location.parent().expect("generation has parent"))
+                .map_err(io_error)?;
+        }
 
         #[cfg(test)]
         {
@@ -347,6 +358,18 @@ impl Backups {
             // `in_progress` for the next run's recovery (spec/03).
             if cancelled.load(Ordering::Acquire) {
                 return Err(StoreError::unavailable("the backup was cancelled"));
+            }
+            // One object is one step of file work (spec/03
+            // "Integrity"): a latch waits for the object being copied
+            // and the copy stops here, its generation `in_progress`.
+            let _step = self
+                .objects
+                .latch()
+                .step("copy an object into a backup generation")?;
+            #[cfg(test)]
+            if entries.is_empty() {
+                self.pause(|p| &p.first_object_step);
+                self.pause(|p| &p.first_object_step);
             }
             let ab = sha_root.join(&sha[..2]);
             let cd = ab.join(&sha[2..4]);

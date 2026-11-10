@@ -11,8 +11,10 @@ use sha2::{Digest, Sha256};
 
 use super::*;
 use crate::schema::bug;
-use crate::testing::{extra_migration, reading, scratch_paths, test_seams, writing};
+use crate::testing::{FIXED_NOW_MS, extra_migration, reading, scratch_paths, test_seams, writing};
 use crate::{IntegrityCheck, WritePriority};
+
+mod frozen;
 
 /// A store holding a small indexed fixture table.
 fn open_with_probe(label: &str) -> (ScratchDir, StorePaths, Store) {
@@ -141,7 +143,12 @@ fn a_finding_latches_the_store_and_copies_its_files() {
             other => panic!("expected Corrupt, got {other:?}"),
         }
         assert_eq!(probe_rows(&store), 201);
-        assert_eq!(store.integrity_latch().as_deref(), Some(&*finding.detail));
+        let reported = IntegrityLatch {
+            detail: finding.detail.clone(),
+            detected_at: Some(Timestamp::from_millis(FIXED_NOW_MS)),
+            copy: Some(copy.clone()),
+        };
+        assert_eq!(store.integrity_latch().as_ref(), Some(&reported));
         assert!(matches!(
             store.check_integrity(&AtomicBool::new(false)),
             Err(StoreError::Corrupt { .. })
@@ -176,7 +183,7 @@ fn a_finding_latches_the_store_and_copies_its_files() {
         // and makes no second copy; it, its reads and its close leave
         // the database and its WAL as they were.
         let store = reopen(&paths);
-        assert_eq!(store.integrity_latch().as_deref(), Some(&*finding.detail));
+        assert_eq!(store.integrity_latch(), Some(reported));
         assert!(store.writer.is_read_only());
         assert!(matches!(try_write(&store), Err(StoreError::Corrupt { .. })));
         assert_eq!(probe_rows(&store), 201);
@@ -268,7 +275,8 @@ fn an_unreadable_latch_still_opens_read_only() {
         std::fs::write(latch_path(&paths), bytes).unwrap();
         let store = reopen(&paths);
         let latch = store.integrity_latch().unwrap();
-        assert!(latch.contains("can't be read"), "{latch}");
+        assert!(latch.detail.contains("can't be read"), "{latch:?}");
+        assert_eq!((latch.detected_at, latch.copy), (None, None));
         assert!(matches!(try_write(&store), Err(StoreError::Corrupt { .. })));
         store.close().unwrap();
         assert!(copies(&paths).is_empty());
@@ -300,6 +308,7 @@ fn a_latched_open_makes_a_missing_copy() {
     assert_eq!(copies(&paths), std::slice::from_ref(&copy));
     assert!(copy.join("manifest.json").is_file());
     assert!(!unfinished.exists());
+    assert_eq!(store.integrity_latch().unwrap().copy, Some(copy.clone()));
     store.close().unwrap();
 }
 
