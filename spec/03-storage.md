@@ -266,7 +266,10 @@ against concurrent replacement.
       failure: it records nothing, so Search and coverage stay open
       over what was committed;
     - commands are still admitted, and one that writes is `Corrupt`
-      naming the finding, from the store. `bridge_certificate`, which
+      naming the finding, from the store. A repeated idempotency key
+      is too: its receipt is read by the writer, which refuses, so a
+      command retried across the finding learns its outcome from the
+      stored state, not from its receipt. `bridge_certificate`, which
       writes nothing, is refused `Corrupt` before it connects;
     - queries, windows, Search over what is indexed and subscriptions
       go on; coverage's index state answers `ReadOnly` (07);
