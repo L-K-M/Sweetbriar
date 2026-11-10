@@ -212,7 +212,74 @@ fn refusing_script(inbox: Inbox, refused: Option<&str>) -> Script {
             steps.push(rows);
         }
     }
+    // The IDLE watcher's session, started after the pass, idles on
+    // INBOX without a hint.
+    steps.push(Step::on(
+        Expect::command("IDLE"),
+        vec![Reply::Continuation("idling".to_owned())],
+    ));
     Script::new(steps).implicit_tls()
+}
+
+/// How long the watcher's IDLE runs before Bridge reports news.
+const HINT_DELAY: Duration = Duration::from_millis(500);
+
+/// A session for either of the account's connections, as their order
+/// is not fixed: the pass, an IDLE that reports a second INBOX message
+/// after `HINT_DELAY`, and the INBOX pass that hint wakes.
+fn hinting_script() -> Script {
+    let mut script = sync_script(Inbox::Listed);
+    let idle = script.steps.pop().expect("the quiet IDLE");
+    assert_eq!(idle.send.len(), 1);
+    let literal = "Subject: gate change\r\nMessage-ID: <msg-8@example.org>\r\n\
+                   X-Pm-Internal-Id: pm-8b2d4e60\r\n\r\n";
+    script.steps.extend([
+        Step::on(
+            Expect::command("IDLE"),
+            vec![
+                Reply::Continuation("idling".to_owned()),
+                Reply::Delay(HINT_DELAY),
+                Reply::untagged("2 EXISTS"),
+            ],
+        ),
+        Step::on(
+            Expect::command("UNSELECT"),
+            vec![Reply::ok("UNSELECT completed")],
+        ),
+        Step::on(
+            Expect::command("EXAMINE INBOX"),
+            vec![
+                Reply::untagged("FLAGS (\\Seen \\Answered \\Flagged \\Deleted \\Draft)"),
+                Reply::untagged("2 EXISTS"),
+                Reply::untagged("0 RECENT"),
+                Reply::untagged("OK [UIDVALIDITY 4100] UIDs valid"),
+                Reply::untagged("OK [UIDNEXT 9] Predicted next UID"),
+                Reply::ok("[READ-ONLY] EXAMINE completed"),
+            ],
+        ),
+        Step::on(
+            Expect::command("UID SEARCH ALL"),
+            vec![
+                Reply::untagged("SEARCH 7 8"),
+                Reply::ok("UID SEARCH completed"),
+            ],
+        ),
+        Step::on(
+            Expect::command("UID FETCH"),
+            vec![
+                Reply::UntaggedLiteral {
+                    head: format!(
+                        "2 FETCH (UID 8 FLAGS () INTERNALDATE \"02-Nov-2026 10:00:00 +0000\" \
+                         RFC822.SIZE 1024 BODY[HEADER.FIELDS ({HEADER_FIELDS})]"
+                    ),
+                    bytes: literal.as_bytes().to_vec(),
+                    tail: ")".to_owned(),
+                },
+                Reply::ok("UID FETCH completed"),
+            ],
+        ),
+    ]);
+    script
 }
 
 /// `(remote_name, sync_state, uidnext)` of the account's mailboxes, by
@@ -568,12 +635,46 @@ fn a_mailbox_bridge_refuses_is_left_out_while_the_rest_sync() {
     assert_eq!(state(&engine, &account), (AccountState::Active, None));
     // Counted once the worker is gone, so no later session races it.
     shutdown_promptly(engine);
-    assert_eq!(commands(&server, "EXAMINE INBOX"), 1, "never asked again");
-    assert_eq!(
-        logins(&server),
-        3,
-        "the probe, the refused session, the next"
-    );
+    // The worker's sessions are the ones that LIST after the probe's;
+    // the IDLE watcher's own session also selects INBOX, refused too.
+    let received = server.received();
+    let worker_sessions: Vec<usize> = received
+        .iter()
+        .filter(|command| command.conn > 0 && command.line.contains(" LIST "))
+        .map(|command| command.conn)
+        .collect();
+    let inbox_selections = received
+        .iter()
+        .filter(|command| {
+            worker_sessions.contains(&command.conn) && command.line.ends_with("EXAMINE INBOX")
+        })
+        .count();
+    assert_eq!(worker_sessions.len(), 2, "the refused session and the next");
+    assert_eq!(inbox_selections, 1, "never asked again");
+}
+
+#[test]
+fn an_idle_hint_wakes_an_inbox_pass() {
+    let scratch = ScratchDir::new("account-worker-idle");
+    let secrets = Arc::new(FakeSecrets::new());
+    let server = FakeImapServer::serve(vec![bridge_script(true), hinting_script()]).unwrap();
+    let engine = open(&scratch, &secrets);
+    let account = add(&engine, server.port());
+
+    eventually("the hinted message", || {
+        occurrences(&engine, &account)
+            .iter()
+            .filter(|row| row.0 == "INBOX")
+            .count()
+            == 2
+    });
+    // The watcher idled on its own session; the hint woke INBOX alone
+    // (one LIST, one more INBOX selection).
+    assert!(commands(&server, "IDLE") >= 1);
+    assert_eq!(commands(&server, "LIST"), 2, "the probe's and the pass's");
+    let (logical, _) = messages(&engine, &account);
+    assert_eq!(logical, 2);
+    shutdown_promptly(engine);
 }
 
 #[test]
@@ -689,6 +790,10 @@ fn the_session_backoff_doubles_to_its_ceiling_and_a_completed_pass_resets_it() {
         .collect();
     assert_eq!(waits, [1, 2, 4, 8, 16, 32, 64, 128, 256, 300]);
     assert_eq!(backoff.after_failure(true), Duration::ZERO);
+    assert_eq!(backoff.after_failure(false), Duration::from_secs(1));
+    // A session that proved the account before a refusal resets it too.
+    backoff.after_failure(false);
+    backoff.proven();
     assert_eq!(backoff.after_failure(false), Duration::from_secs(1));
 }
 

@@ -1210,7 +1210,11 @@ CREATE TABLE backup_generations (
   location       TEXT NOT NULL,                    -- path of the generation directory; rewritten by restore (03)
   manifest_sha256 TEXT,
   object_count   INTEGER,
-  total_bytes    INTEGER
+  total_bytes    INTEGER,
+  verified_at    INTEGER,                          -- last weekly check (03, M1.8h4b)
+  verification   TEXT CHECK (
+    (verification IS NULL) = (verified_at IS NULL)
+    AND (verification IS NULL OR verification IN ('intact','damaged','missing')))
 ) STRICT;
 
 CREATE TABLE backup_cleanup_pending (            -- interrupted cleanup to resume (03)

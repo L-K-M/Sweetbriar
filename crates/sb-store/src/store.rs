@@ -95,6 +95,17 @@ pub struct Store {
     seams: Seams,
 }
 
+/// The steps of [`Store::swap_restore`] a test may observe.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SwapPhase {
+    /// Every check passed with the store still open.
+    Checked,
+    /// Every connection closed; the lock still held.
+    Closed,
+    /// Both renames flushed and the marker removed.
+    Committed,
+}
+
 /// Why [`Store::swap_restore`] did not hand back a restored store.
 pub enum SwapRestoreError {
     /// A check before the store closed refused the swap. Nothing moved:
@@ -193,6 +204,43 @@ impl Store {
         crate::verification::verify_sample(self, stop)
     }
 
+    /// The complete generations whose weekly check (spec/03 "Backup
+    /// generations") hasn't run this UTC week, never-checked first,
+    /// then the longest unchecked.
+    pub fn generations_to_verify(&self) -> Result<Vec<String>, StoreError> {
+        let week_start = week_start(self.clock.now().as_millis());
+        self.read(|tx| {
+            let what = "list the generations to check";
+            let mut statement = tx
+                .prepare(
+                    "SELECT generation_id FROM backup_generations
+                     WHERE state = 'complete' AND (verified_at IS NULL OR verified_at < ?1)
+                     ORDER BY verified_at IS NOT NULL, verified_at, started_at, generation_id",
+                )
+                .map_err(|e| crate::schema::classify(e, what))?;
+            let ids = statement
+                .query_map([week_start], |row| row.get::<_, String>(0))
+                .map_err(|e| crate::schema::classify(e, what))?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| crate::schema::classify(e, what))?;
+            Ok(ids)
+        })
+    }
+
+    /// Check one retained generation in place: its manifest against the
+    /// recorded digest, its database and every object copy against the
+    /// manifest, the verdict recorded on its row. Holds the backup
+    /// operation while it reads; stops between files and read chunks
+    /// once `stop` is raised, recording nothing. Blocking; never on the
+    /// writer thread.
+    pub fn verify_generation(
+        &self,
+        generation: &str,
+        stop: &std::sync::atomic::AtomicBool,
+    ) -> Result<crate::GenerationCheck, StoreError> {
+        self.backups.check_generation(generation, stop)
+    }
+
     /// Record `job`'s run as started now (spec/03 "Scheduled
     /// maintenance"), replacing its previous run's end; its last
     /// success stays. Bookkeeping: it never makes a backup due.
@@ -266,12 +314,24 @@ impl Store {
         &self,
         snapshot: crate::backups::BackupSnapshot,
     ) -> Result<crate::backups::BackupReceipt, StoreError> {
+        self.complete_backup_with(snapshot, &std::sync::atomic::AtomicBool::new(false))
+    }
+
+    /// [`Store::complete_backup`], stopping at the next object once
+    /// `cancelled` is raised: `Unavailable`, with the generation left
+    /// `in_progress` for the next generation's recovery to mark
+    /// `failed` and remove (spec/03). Blocking, like it.
+    pub fn complete_backup_with(
+        &self,
+        snapshot: crate::backups::BackupSnapshot,
+        cancelled: &std::sync::atomic::AtomicBool,
+    ) -> Result<crate::backups::BackupReceipt, StoreError> {
         if self.writer.is_writer_thread() {
             return Err(StoreError::internal(
                 "the writer thread cannot back up through its own queue",
             ));
         }
-        self.backups.complete(snapshot)
+        self.backups.complete(snapshot, cancelled)
     }
 
     /// Inspect a private copy authenticated against a verified manifest.
@@ -360,6 +420,17 @@ impl Store {
         stage: crate::QualifiedStage,
         cancelled: &std::sync::atomic::AtomicBool,
     ) -> Result<Store, SwapRestoreError> {
+        self.swap_restore_with(stage, cancelled, |_| {})
+    }
+
+    /// [`Store::swap_restore`], reporting each step it finished so a
+    /// test can look at the lock and the disk between them.
+    pub(crate) fn swap_restore_with(
+        self,
+        stage: crate::QualifiedStage,
+        cancelled: &std::sync::atomic::AtomicBool,
+        mut on_phase: impl FnMut(SwapPhase),
+    ) -> Result<Store, SwapRestoreError> {
         // Every check before the store closes is a refusal.
         let ready = self
             .backups
@@ -375,6 +446,7 @@ impl Store {
                 });
             }
         };
+        on_phase(SwapPhase::Checked);
         let Self {
             readers,
             writer,
@@ -402,6 +474,7 @@ impl Store {
             .and(readers_closed)
             .and(writer_closed)
             .map_err(SwapRestoreError::Failed)?;
+        on_phase(SwapPhase::Closed);
         // The stage keeps a directory and a plain file descriptor through
         // the renames, never a SQLite connection: descriptors follow the
         // moved inodes. It is dropped before SQLite opens the restored
@@ -415,6 +488,7 @@ impl Store {
             &pending,
         )
         .map_err(SwapRestoreError::Failed)?;
+        on_phase(SwapPhase::Committed);
         // The stage's handles and the operation lease end with the swap.
         drop(stage);
         drop(backups);
@@ -1642,3 +1716,12 @@ pub(crate) const READER_PRAGMAS: &[PragmaSpec] = &[
 
 #[cfg(test)]
 mod tests;
+
+/// The start of the UTC week (Monday 00:00) holding `millis`, as
+/// retention buckets weeks.
+fn week_start(millis: i64) -> i64 {
+    const DAY: i64 = 24 * 60 * 60 * 1000;
+    let day = millis.div_euclid(DAY);
+    // 1970-01-01 was a Thursday; Monday is three days earlier.
+    (day - (day + 3).rem_euclid(7)) * DAY
+}

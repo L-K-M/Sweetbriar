@@ -146,6 +146,10 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 26,
         run: migration_26,
     },
+    Migration {
+        version: 27,
+        run: migration_27,
+    },
 ];
 
 /// The `store_meta` keys every migrated store holds (spec/02): a
@@ -811,6 +815,18 @@ fn migration_26(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
         CHECK (finished_at IS NOT NULL OR detail IS NULL),
         CHECK (outcome IS NOT 'complete' OR succeeded_at IS finished_at)
     ) STRICT;",
+    )
+    .map_err(bug)
+}
+
+/// Version 27 records each generation's weekly check on its row
+/// (spec/03 "Backup generations", [`crate::backups`]'s `checked`).
+fn migration_27(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
+    tx.execute_batch(
+        "ALTER TABLE backup_generations ADD COLUMN verified_at INTEGER;
+         ALTER TABLE backup_generations ADD COLUMN verification TEXT CHECK (
+           (verification IS NULL) = (verified_at IS NULL)
+           AND (verification IS NULL OR verification IN ('intact','damaged','missing')));",
     )
     .map_err(bug)
 }

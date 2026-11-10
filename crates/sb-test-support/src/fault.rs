@@ -37,6 +37,8 @@ pub enum FsOp {
     CreateDir,
     /// `Fs::create`.
     Create,
+    /// `Fs::clone_file`.
+    CloneFile,
     /// `Fs::remove`.
     Remove,
     /// `Fs::open`.
@@ -80,6 +82,7 @@ struct Counts {
     rename: u64,
     create_dir: u64,
     create: u64,
+    clone_file: u64,
     remove: u64,
     open: u64,
     read: u64,
@@ -101,6 +104,7 @@ impl Counts {
             FsOp::Rename => &mut self.rename,
             FsOp::CreateDir => &mut self.create_dir,
             FsOp::Create => &mut self.create,
+            FsOp::CloneFile => &mut self.clone_file,
             FsOp::Remove => &mut self.remove,
             FsOp::Open => &mut self.open,
             FsOp::Read => &mut self.read,
@@ -333,6 +337,13 @@ impl Fs for FaultFs {
             inner,
             plan: self.plan.clone(),
         }))
+    }
+
+    fn clone_file(&self, from: &Path, to: &Path) -> io::Result<()> {
+        if let Some(kind) = self.plan.fire(FsOp::CloneFile) {
+            return Err(fault_error(kind));
+        }
+        self.inner.clone_file(from, to)
     }
 
     fn open(&self, path: &Path) -> io::Result<Box<dyn sb_types::fs::ReadFile>> {

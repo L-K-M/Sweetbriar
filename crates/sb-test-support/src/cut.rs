@@ -194,6 +194,11 @@ impl Fs for CutFs {
         }))
     }
 
+    fn clone_file(&self, from: &Path, to: &Path) -> std::io::Result<()> {
+        self.trip();
+        self.inner.clone_file(from, to)
+    }
+
     fn open(&self, path: &Path) -> std::io::Result<Box<dyn sb_types::fs::ReadFile>> {
         self.trip();
         self.inner.open(path)

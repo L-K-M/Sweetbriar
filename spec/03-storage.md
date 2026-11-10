@@ -537,7 +537,13 @@ backups/<generation-id>/
 4. Copy (or clone on APFS, `clonefile`) each object, verifying its hash.
    Flush every copied object and the snapshot file (`F_FULLFSYNC` on
    macOS, `fsync` on Linux), and flush every newly created directory up
-   to the generation root.
+   to the generation root. A clone is taken from the regular file the
+   store opened, never through a link, and the generation's clone is
+   what is hashed; a filesystem or destination that can't clone gets
+   copies, and one failed clone copies that object. Without clones,
+   every retained generation would hold its own copy of the object
+   store. A cancelled backup stops before the next object; the
+   generation stays `in_progress` for the next run's recovery.
 5. Write `manifest.json`:
 
    ```json
@@ -592,6 +598,24 @@ backups/<generation-id>/
   Missing or mismatched ownership proof on an existing directory fails
   closed, including for legacy generations. Validate the canonical parent
   and generation paths before removal.
+- **Weekly check (M1.8h4b):** every complete generation is checked in
+  place once a UTC week (weeks start Monday), never-checked ones first,
+  then the longest unchecked: `manifest.json` against the digest its row
+  recorded and its generation ID, then `state.sqlite` and every object
+  copy against the manifest's lengths and SHA-256s. The first problem
+  decides: an absent directory or file is `missing`, any other
+  difference `damaged` (a file where a directory belongs, or the
+  reverse, included), and so is a directory replaced while it was
+  read. A symlink in an entry's place is an I/O error, not a verdict.
+  The verdict and its time are recorded on the row (02
+  `verified_at`, `verification`) as bookkeeping. A destination directory
+  that isn't there (an unmounted volume) records nothing, and the next
+  run tries again. A check holds the backup operation, so it never
+  overlaps a backup or a restore (`Conflict`), and stops between files
+  and read chunks when asked; a stop raised at any point records
+  nothing. Unlike a restore's
+  verification it copies and reconciles nothing: it proves a
+  generation's bytes are still the ones it published.
 
 ### Scheduled maintenance
 

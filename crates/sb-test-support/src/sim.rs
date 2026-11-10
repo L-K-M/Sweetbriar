@@ -509,6 +509,37 @@ impl Fs for SimFs {
         }
     }
 
+    /// A clone is a new file holding the source's live bytes, flushed
+    /// as `clone_file` promises; only its directory entry waits for the
+    /// parent's flush, as a created file's does.
+    fn clone_file(&self, from: &Path, to: &Path) -> io::Result<()> {
+        let _op = self.op();
+        let from = normalise(from)?;
+        let to = normalise(to)?;
+        let bytes = match self.child(&from) {
+            Some(Child::File(node)) => node
+                .lock()
+                .expect("a panicking thread held a sim file")
+                .live
+                .clone(),
+            Some(Child::Dir(_)) => return Err(not_regular(&from)),
+            None => return Err(io::Error::from(io::ErrorKind::NotFound)),
+        };
+        let name = file_name(&to)?;
+        let node = Arc::new(Mutex::new(SimFile {
+            live: bytes.clone(),
+            durable: bytes,
+            ..SimFile::default()
+        }));
+        self.with_dir(to.parent().unwrap_or(Path::new("/")), |dir| {
+            if dir.live.contains_key(&name) {
+                return Err(io::Error::from(io::ErrorKind::AlreadyExists));
+            }
+            dir.live.insert(name, Child::File(node));
+            Ok(())
+        })
+    }
+
     fn open_regular(&self, path: &Path) -> io::Result<(Box<dyn sb_types::fs::ReadFile>, Metadata)> {
         // One op-lock hold resolves the node and reads its length, so
         // the handle and the metadata it reports are one atomic look,
