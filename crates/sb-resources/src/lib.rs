@@ -27,7 +27,7 @@ pub use accounts::{
 pub use sb_imap::CertificatePin;
 pub use sb_imap::{
     ConnectAttempt, Connection, Connector, HeaderBytes, HeaderFetchMode, HeaderRequest, HeaderRow,
-    ImapError, Password, ReconnectError, ReconnectWait, Reconnector,
+    IdleEvent, ImapError, MailboxNotice, Password, ReconnectError, ReconnectWait, Reconnector,
 };
 pub use sb_platform::{Secret, SecretError, SecretStore};
 pub use sb_store::accounts::{
