@@ -168,9 +168,11 @@ async fn Core::shutdown(self);   // flush writer, release the lease
     `start_restore`, is written in the restored store once it is
     open. It can't commit with the swap: a stage's bytes are fixed
     when it qualifies. A process that dies in between leaves a
-    restored store without the receipt, and its key restores again,
-    which deletes nothing. When the write itself fails, the answer
-    carries the restored core and the error.
+    restored store without the receipt, so replay isn't guaranteed.
+    Retrying an unspent key restores again, which deletes nothing; a
+    key the restored store already holds for another command is
+    refused instead. When the write itself fails, the answer carries
+    the restored core and the error.
   - A key the store already holds a restore's receipt for answers that
     receipt and moves nothing; the prepared restore is dropped unused.
     The key is looked up in the store about to be replaced, a

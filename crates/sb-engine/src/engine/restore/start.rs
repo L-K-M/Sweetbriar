@@ -10,8 +10,8 @@
 //! The receipt can't commit with the swap. A stage's bytes are fixed
 //! when it qualifies, and the swap itself is two renames. So it is
 //! written once the restored store is open. A process that dies in
-//! between leaves a restored store without the receipt, and its key
-//! restores again; a restore deletes nothing (spec/03).
+//! between leaves a restored store without the receipt, so a retry
+//! cannot rely on replay; a restore deletes nothing (spec/03).
 
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -28,7 +28,8 @@ pub struct Restored {
     pub engine: Engine,
     /// The command's stored receipt, `{"generation_id":...}`. An error
     /// means the store was restored and its receipt could not be
-    /// recorded: the same key would restore again.
+    /// recorded. A retry may restore again; a key the restored store
+    /// already holds for another command is refused instead.
     pub receipt: Result<Receipt, EngineError>,
 }
 

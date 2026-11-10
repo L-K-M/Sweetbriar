@@ -196,10 +196,10 @@ fn a_restore_whose_receipt_cannot_be_recorded_still_stands() {
             .map_err(sql_error)
     }))
     .unwrap();
-    let prepared = prepared(&engine, backup.generation_id());
+    let first = prepared(&engine, backup.generation_id());
 
     let Restored { engine, receipt } =
-        finish(engine.start_restore(&key, prepared, unflagged())).unwrap();
+        finish(engine.start_restore(&key, first, unflagged())).unwrap();
     assert!(
         matches!(receipt, Err(EngineError::Conflict { .. })),
         "{receipt:?}"
@@ -207,6 +207,21 @@ fn a_restore_whose_receipt_cannot_be_recorded_still_stands() {
     assert_eq!(settings(&engine), [KEPT]);
     assert_eq!((preserved(&root), count(&engine, RESTORES)), (1, 0));
     gated_read_works(&engine);
+
+    // A failed receipt does not promise that the same key restores
+    // again: this restored store holds it for the other command.
+    let again = prepared(&engine, backup.generation_id());
+    let Err(RestoreError::Refused {
+        cause,
+        engine,
+        stage,
+    }) = finish(engine.start_restore(&key, again, unflagged()))
+    else {
+        panic!("the restored key is still spent on another command");
+    };
+    assert!(matches!(cause, EngineError::Conflict { .. }), "{cause:?}");
+    assert_eq!(preserved(&root), 1);
+    drop(stage);
     block_on(engine.shutdown()).unwrap();
 }
 

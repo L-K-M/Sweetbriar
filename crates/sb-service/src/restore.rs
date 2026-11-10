@@ -74,7 +74,8 @@ pub struct Restored {
     pub core: Core,
     /// The command's stored receipt, `{"generation_id":...}`. An error
     /// means the store was restored and its receipt could not be
-    /// recorded: the same key would restore again.
+    /// recorded. A retry may restore again; a key the restored store
+    /// already holds for another command is refused instead.
     pub receipt: Result<Receipt, CoreError>,
 }
 
