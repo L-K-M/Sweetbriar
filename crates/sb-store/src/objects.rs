@@ -17,6 +17,7 @@ use sb_types::random::Random;
 use sb_types::time::Clock;
 use sha2::{Digest, Sha256};
 
+use crate::integrity::RootLatch;
 use crate::schema::classify;
 use crate::writer::{WritePriority, Writer};
 use crate::{StoreError, Timestamp};
@@ -436,6 +437,9 @@ pub(crate) struct Shelf {
     random: Arc<dyn Random>,
     recovery: PathBuf,
     removals: Mutex<HashMap<[u8; 32], u64>>,
+    /// The store's integrity latch: no publication, removal or
+    /// quarantine once it is set.
+    latch: Arc<RootLatch>,
     /// The republish-race proof's pause points (spec/03).
     #[cfg(test)]
     pauses: Mutex<Pauses>,
@@ -512,6 +516,12 @@ impl Shelf {
         source: &Path,
         removals_at_open: u64,
     ) -> Result<(), StoreError> {
+        // A latched store moves nothing (spec/03 "Integrity"): the
+        // damaged file stays where the read found it, as evidence, and
+        // every read of it reports it.
+        let Ok(_step) = self.latch.step("quarantine an object") else {
+            return Ok(());
+        };
         let step = "quarantine the object";
         let failed =
             |e: io::Error| StoreError::unavailable_io(format!("cannot {step}: {e}"), e.kind());
@@ -562,6 +572,7 @@ impl Shelf {
 
     /// Remove a published object (GC only), then flush its directory.
     pub(crate) fn remove(&self, id: &ObjectId, path: &Path) -> Result<(), StoreError> {
+        let _step = self.latch.step("remove an object")?;
         let step = "remove the object";
         let failed =
             |e: io::Error| StoreError::unavailable_io(format!("cannot {step}: {e}"), e.kind());
@@ -607,6 +618,7 @@ impl FileObjectStore {
         recovery: PathBuf,
         writer: Arc<Writer>,
         clock: Arc<dyn Clock>,
+        latch: Arc<RootLatch>,
     ) -> Self {
         Self {
             objects_tmp: objects.join("tmp"),
@@ -617,6 +629,7 @@ impl FileObjectStore {
                 random: Arc::clone(&random),
                 recovery,
                 removals: Mutex::new(HashMap::new()),
+                latch,
                 #[cfg(test)]
                 pauses: Mutex::new(Pauses::default()),
             }),
@@ -647,6 +660,7 @@ impl FileObjectStore {
                 random: Arc::clone(&random),
                 recovery,
                 removals: Mutex::new(HashMap::new()),
+                latch: Arc::new(RootLatch::default()),
                 pauses: Mutex::new(Pauses::default()),
             }),
             fs,
@@ -667,6 +681,12 @@ impl FileObjectStore {
         self.objects_sha256
             .join(hex(&sha256[..1]))
             .join(hex(&sha256[1..2]))
+    }
+
+    /// The store's integrity latch, which the backup coordinator asks
+    /// too.
+    pub(crate) fn latch(&self) -> &RootLatch {
+        &self.shelf.latch
     }
 
     /// The file an object lives at.
@@ -821,6 +841,12 @@ impl ObjectStore for FileObjectStore {
         // The writer thread can't wait on its own queue; refuse before
         // any file I/O (spec/03).
         self.reservations.refuse_own_thread()?;
+        // A latched store takes no new files: the temp file and the
+        // install are each a step the latch waits for, and neither
+        // starts after it; nothing is cleaned up after it either.
+        let latch = &self.shelf.latch;
+        let file_step = || latch.step("publish an object");
+        let held = file_step()?;
         // Step 1: the temp file, its name from the randomness seam. A
         // second draw is this call's reservation token, so a same-hash
         // publication gets a distinct lifetime.
@@ -840,6 +866,9 @@ impl ObjectStore for FileObjectStore {
             let _ = self.fs.remove(&tmp);
             return Err(e);
         }
+        // Never held across the writer: a latch waiting for this step
+        // would stop the writer's own file steps behind it.
+        drop(held);
         // The republish-race proof parks here: durable temp and chain,
         // reservation commit not yet submitted (spec/03).
         #[cfg(test)]
@@ -849,11 +878,14 @@ impl ObjectStore for FileObjectStore {
         // publication and install nothing (spec/03). A committed pin
         // an abandoned publication leaves behind expires at startup.
         if let Err(e) = self.reservations.commit(&id, reservation) {
-            let _ = self.fs.remove(&tmp);
+            if let Ok(_cleanup) = file_step() {
+                let _ = self.fs.remove(&tmp);
+            }
             return Err(e);
         }
         // Step 3: install. An existing final file means the same bytes
         // are already stored; the temp copy goes instead.
+        let _install = file_step()?;
         let final_path = self.object_path(&id);
         if let Err(e) = self.shelf.install(&tmp, &final_path) {
             let _ = self.fs.remove(&tmp);

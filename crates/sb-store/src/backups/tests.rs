@@ -453,6 +453,7 @@ fn faulty_backups_seeded(store: &Store, paths: &StorePaths, fs: Arc<dyn Fs>, see
         paths.recovery().to_path_buf(),
         Arc::clone(&store.writer),
         Arc::new(FixedClock::new(Timestamp::from_millis(FIXED_NOW_MS))),
+        Arc::clone(&store.latch),
     ));
     Backups::new(
         fs,
@@ -1500,6 +1501,36 @@ fn retention_keeps_bucket_union_and_deletes_oldest_first() {
     for n in 0..30 {
         let id = format!("00000000-0000-4000-8000-{n:012x}");
         assert_eq!(generation_row(&store, &id).is_some(), n >= 6, "{n}");
+    }
+}
+
+/// A latched store removes no generation (spec/03 "Integrity"): the
+/// generations are what a restore picks from. Only the store's file
+/// work is latched here, so the writer would still take the rows'
+/// removal.
+#[test]
+fn retention_removes_nothing_on_a_latched_store() {
+    let (_scratch, paths, store) = open("backup-retention-latched");
+    const HOUR: i64 = 3_600_000;
+    for n in 0..30 {
+        let (_, path) = seed_generation(&store, paths.backups(), n, n as i64 * HOUR, "complete");
+        std::fs::create_dir(&path).unwrap();
+        own_fixture(&store, &path);
+    }
+    store.latch.latch_for_test("a test finding");
+    for result in [
+        store.backups.retain(),
+        store.backup_snapshot(BackupDestination::DataRoot).map(drop),
+    ] {
+        match result {
+            Err(StoreError::Corrupt { detail }) => assert!(detail.contains("a test finding")),
+            other => panic!("expected Corrupt, got {other:?}"),
+        }
+    }
+    for n in 0..30 {
+        let id = format!("00000000-0000-4000-8000-{n:012x}");
+        assert!(generation_row(&store, &id).is_some(), "{n}");
+        assert!(paths.backups().join(&id).is_dir(), "{n}");
     }
 }
 

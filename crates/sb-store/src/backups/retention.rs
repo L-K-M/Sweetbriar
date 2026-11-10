@@ -220,6 +220,9 @@ impl Backups {
     }
 
     fn remove_generation(&self, generation: &Generation) -> Result<(), StoreError> {
+        // A latched store removes no generation: they are what a
+        // restore picks from (spec/03 "Integrity").
+        let _step = self.objects.latch().step("remove a backup generation")?;
         self.verify_ownership(generation)?;
         let path = checked_location(generation)?;
         let parent = path.parent().expect("validated generation has parent");

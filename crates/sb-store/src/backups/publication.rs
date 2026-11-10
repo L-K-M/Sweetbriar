@@ -150,6 +150,9 @@ impl Backups {
         snapshot: BackupSnapshot,
         cancelled: &AtomicBool,
     ) -> Result<BackupReceipt, StoreError> {
+        self.objects
+            .latch()
+            .refuse("complete a backup generation")?;
         let mut active = self
             .active
             .try_lock()

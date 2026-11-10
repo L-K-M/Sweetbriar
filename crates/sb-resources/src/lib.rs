@@ -54,6 +54,7 @@ mod export_files;
 mod import;
 mod import_jobs;
 mod index;
+mod integrity;
 pub use index::{
     IndexBlocked, IndexIoContext, IndexIoUpdate, IndexPreparation, IndexReadFailure,
     IndexReadStage, PreparedIndexBatch, index_retry_at, recover_index_io_failure,
@@ -74,6 +75,7 @@ pub use sb_store::{
     BackupDestination, BackupReceipt, BackupSnapshot, PreparedRestoreStage, QualifiedStage,
     RestoreMetadata, VerifiedExternalBackup,
 };
+pub use sb_store::{IntegrityCheck, IntegrityFinding, IntegrityLatch};
 pub use search::{CoverageCounts, read_search_coverage, read_search_coverage_reusing};
 pub use seen::{ReceivedCommit, ReceivedPreparation, ReceivedRevisions, ReceivedSweep};
 

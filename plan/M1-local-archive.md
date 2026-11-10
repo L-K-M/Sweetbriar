@@ -1619,7 +1619,14 @@ local drafts. No network yet.
     its latch (the writer's, then `integrity-latch.json`), the copy
     and the latched open; **h5b** the engine and service on a latch,
     stopping account workers, refusing writing commands, telling the
-    user, and a restore that works while latched; **h5c** the weekly
+    user, and a restore that works while latched, split again
+    (2026-11-10): **h5b1** the store's own file work refused on a
+    latch, which freezes the data root, and the latch's record and
+    observer; **h5b2** the engine read-only at open and on a latch,
+    its workers and claims stopped, Bridge refused and its statuses
+    read-only; **h5b3** the service's health query and its push to the
+    app; **h5b4** a restore while latched (after g3), its verification
+    scratch kept off the latched writer; **h5c** the weekly
     job in the scheduler. They land in that order: nothing runs the
     check before h5c, so remote effects stop before any finding can
     happen. **h6 Acceptance proof (L)**: the recovery point over

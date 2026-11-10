@@ -314,6 +314,9 @@ impl Backups {
         &self,
         destination: BackupDestination,
     ) -> Result<BackupSnapshot, StoreError> {
+        // Recovery and retention below remove files before the first
+        // write, and a damaged store's generation is no backup.
+        self.objects.latch().refuse("start a backup generation")?;
         let mut active = self
             .active
             .try_lock()
