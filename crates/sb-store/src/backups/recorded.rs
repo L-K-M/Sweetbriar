@@ -99,9 +99,10 @@ pub(super) fn verify_objects(
     })
 }
 
-struct HashReader<R> {
-    input: R,
-    hash: Sha256,
+/// A reader that hashes what passes through it.
+pub(super) struct HashReader<R> {
+    pub(super) input: R,
+    pub(super) hash: Sha256,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -117,7 +118,7 @@ impl<R: Read> Read for HashReader<R> {
     }
 }
 
-fn digest(text: &str) -> Result<[u8; 32], StoreError> {
+pub(super) fn digest(text: &str) -> Result<[u8; 32], StoreError> {
     if text.len() != 64
         || !text
             .bytes()

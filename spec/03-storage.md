@@ -569,6 +569,24 @@ backups/<generation-id>/
   Missing or mismatched ownership proof on an existing directory fails
   closed, including for legacy generations. Validate the canonical parent
   and generation paths before removal.
+- **Weekly check (M1.8h4b):** every complete generation is checked in
+  place once a UTC week (weeks start Monday), never-checked ones first,
+  then the longest unchecked: `manifest.json` against the digest its row
+  recorded and its generation ID, then `state.sqlite` and every object
+  copy against the manifest's lengths and SHA-256s. The first problem
+  decides: an absent directory or file is `missing`, any other
+  difference `damaged` (a file where a directory belongs, or the
+  reverse, included), and so is a directory replaced while it was
+  read. A symlink in an entry's place is an I/O error, not a verdict.
+  The verdict and its time are recorded on the row (02
+  `verified_at`, `verification`) as bookkeeping. A destination directory
+  that isn't there (an unmounted volume) records nothing, and the next
+  run tries again. A check holds the backup operation, so it never
+  overlaps a backup or a restore (`Conflict`), and stops between files
+  and read chunks when asked; a stop raised at any point records
+  nothing. Unlike a restore's
+  verification it copies and reconciles nothing: it proves a
+  generation's bytes are still the ones it published.
 
 ### Scheduled maintenance
 
