@@ -28,6 +28,7 @@ mod health;
 mod imports;
 mod messages;
 mod rebuild;
+mod restore;
 mod search;
 mod sidebar;
 mod windows;
@@ -50,6 +51,7 @@ pub use imports::{
     ImportSourceKind, ImportStarted, ImportTarget, ImportTotals, MboxVariant,
 };
 pub use rebuild::SearchRebuildStarted;
+pub use restore::PreparedRestore;
 pub use search::{
     Coverage, ParseContext, SearchIndexState, SearchIoCode, SearchLimitation, SearchRebuildPhase,
     SearchRebuildProgress, SearchScope, SearchSort, SearchSpec, SearchStatus,

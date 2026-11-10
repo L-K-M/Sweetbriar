@@ -122,6 +122,27 @@ async fn Core::shutdown(self);   // flush writer, release the lease
     complete generation.
   - `sb-cli backup` starts one under a fresh key, waits for the copy
     and prints the generation's line as `backup list` does.
+- **Preparing a restore (M1.8i4):** `prepare_restore(generation_id)`
+  does a restore's steps 1 to 3 (03 "Restore") for a recorded
+  generation: it verifies the generation where its row says it is,
+  against its manifest and the row's digest and counts, copies it
+  beside the data root and qualifies the copy. The core stays in use
+  throughout and its data doesn't change. It answers a prepared
+  restore, which the swap (M1.8i5) takes.
+  - It is no command: it has no key and stores no receipt. It can take
+    as long as copying the archive. The call has its own cancel flag;
+    a cancelled one answers `Cancelled`.
+  - `NotFound` for an id no generation has. `Conflict` for a
+    generation that isn't complete, and while a backup, a generation
+    check or another restore holds the backup operation. `Unavailable`
+    when the generation's directory can't be reached. `Corrupt` when
+    it no longer matches its manifest or its row.
+  - A prepared restore holds the backup operation until it is swapped
+    in or dropped. Dropping it deletes nothing, and so does a
+    cancelled or failed preparation: what was staged stays beside the
+    data root and is never used again (03). Listing and removing
+    those is M1.8j's.
+  - It works on a read-only core, where a restore is the way out.
 - **Bridge account setup (M2.3c1):** `add_bridge_account(params)` takes
   the Proton Bridge preset's display name, username, Bridge password
   (bytes, moved into the core's zeroizing secret), IMAP and SMTP ports

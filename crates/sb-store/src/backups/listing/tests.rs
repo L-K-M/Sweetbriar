@@ -247,3 +247,58 @@ fn a_malformed_row_that_is_not_listed_fails_nothing() {
         [("complete".to_owned(), BackupGenerationState::Complete)]
     );
 }
+
+/// One generation by its id (M1.8i4): any state, however old, and the
+/// row read in full, since a restore is about to trust it.
+#[test]
+fn a_generation_is_read_by_its_id_whatever_its_state() {
+    let (_scratch, store) = open("backup-by-id");
+    row(&store, "old-failed", "failed", 1);
+    row(&store, "complete", "complete", 2);
+    row(&store, "running", "in_progress", 3);
+
+    // The listing leaves the old failure out; the lookup doesn't.
+    assert!(
+        listed(&store)
+            .iter()
+            .all(|(generation_id, _)| generation_id != "old-failed")
+    );
+    for (id, state) in [
+        ("old-failed", BackupGenerationState::Failed),
+        ("complete", BackupGenerationState::Complete),
+        ("running", BackupGenerationState::InProgress),
+    ] {
+        let found = store.backup_generation(id).unwrap().expect("recorded");
+        assert_eq!(found.generation_id, id);
+        assert_eq!(found.state, state);
+        assert_eq!(found.location, std::path::Path::new("/backups").join(id));
+    }
+    assert_eq!(store.backup_generation("no-such-id").unwrap(), None);
+
+    // The same row the listing answers, field for field.
+    let from_list = store
+        .backup_generations()
+        .unwrap()
+        .into_iter()
+        .find(|generation| generation.generation_id == "complete")
+        .unwrap();
+    assert_eq!(
+        store.backup_generation("complete").unwrap(),
+        Some(from_list)
+    );
+
+    // A malformed row is `Corrupt` here even where the listing leaves
+    // it out.
+    writing(&store, |tx| {
+        tx.execute_batch(
+            "UPDATE backup_generations SET total_bytes = -1 WHERE generation_id = 'old-failed'",
+        )
+        .map_err(bug)
+    });
+    let error = store.backup_generation("old-failed").unwrap_err();
+    assert!(
+        matches!(&error, StoreError::Corrupt { .. }) && error.to_string().contains("old-failed"),
+        "{error:?}"
+    );
+    assert_eq!(listed(&store).len(), 2);
+}

@@ -27,10 +27,10 @@ mod references;
 pub use checked::{GenerationCheck, GenerationVerdict};
 pub use external::VerifiedExternalBackup;
 pub use image::BackupImageInspection;
-pub(crate) use listing::generations;
 pub use listing::{
     BackupGeneration, BackupGenerationState, FAILED_GENERATIONS_LISTED, GenerationVerification,
 };
+pub(crate) use listing::{generation, generations};
 mod qualify;
 pub use qualify::QualifiedStage;
 mod scratch;

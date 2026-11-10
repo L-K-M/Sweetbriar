@@ -968,7 +968,7 @@ pub(crate) fn join_failed(what: &str, join: JoinError) -> EngineError {
 }
 
 mod restore;
-pub use restore::RestoreError;
+pub use restore::{PreparedRestore, RestoreError};
 
 #[cfg(test)]
 mod tests;
