@@ -866,8 +866,8 @@ impl ObjectStore for FileObjectStore {
             let _ = self.fs.remove(&tmp);
             return Err(e);
         }
-        // Never held across the writer: a latch waiting for this step
-        // would stop the writer's own file steps behind it.
+        // Not held across the writer's queue: a latch would wait out
+        // the queue along with this step.
         drop(held);
         // The republish-race proof parks here: durable temp and chain,
         // reservation commit not yet submitted (spec/03).

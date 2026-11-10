@@ -301,11 +301,12 @@ impl Store {
     }
 
     /// Install the one observer of this store latching, replacing any
-    /// earlier one. It runs once, on the integrity check's thread,
-    /// after the writer latched and before the latch file and the copy
-    /// are written: it must only signal (raise flags, wake waiters),
-    /// never block, join or write. A store that opened latched never
-    /// calls it; read [`Store::integrity_latch`] then.
+    /// earlier one. It is told once: at once, on this thread, when the
+    /// store has latched already (one that opened latched included);
+    /// else on the integrity check's thread as the store latches, once
+    /// its file work has stopped and before the writer latches and the
+    /// latch file and the copy are written. It must only signal (raise
+    /// flags, wake waiters), never block, join or write.
     pub fn observe_integrity_latch(&self, observer: Arc<dyn Fn() + Send + Sync>) {
         self.latch.observe(observer);
     }

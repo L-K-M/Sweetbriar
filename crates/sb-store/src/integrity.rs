@@ -11,12 +11,12 @@
 //!    into `recovery/integrity-<millis>-<hex>/`, published by a rename
 //!    once a manifest of sizes and digests is written last.
 //!
-//! Step 1 begins with the store's own file work (M1.8h5b1): once the
-//! steps in flight are done, publishing, removing or quarantining an
-//! object, a backup generation's start, completion or removal, a
-//! backup's verification, an import's source copies, reports and
-//! scratch all refuse, and the latch's observer hears; then the
-//! writer latches.
+//! Step 1 begins with the store's own file work (M1.8h5b1). From the
+//! finding on, publishing, removing or quarantining an object, a
+//! backup generation's start, completion or removal, a backup's
+//! verification, an import's source copies, reports and scratch all
+//! refuse. Once the steps of that work in flight are done, the
+//! latch's observer hears; then the writer latches.
 //!
 //! A crash after step 1 and before step 2 leaves the store as it was
 //! (unlatched, its damage still there for the next check). Once step
@@ -30,7 +30,7 @@ use std::io::{self, Read, Write};
 use std::os::raw::c_int;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 
 use rusqlite::ErrorCode;
 use serde::{Deserialize, Serialize};
@@ -112,15 +112,29 @@ pub(crate) type LatchObserver = Arc<dyn Fn() + Send + Sync>;
 /// The latch as the store's own file work sees it: set once, by a
 /// finding or a latched open, and never cleared (a restore swap
 /// replaces the whole store). Each step of file work in the data root
-/// outside the writer runs under a [`FileStep`]: a shared hold on the
-/// latch, which latching takes exclusively, so a latch waits for the
-/// steps in flight and no step starts after it. A step never takes a
-/// second hold (nor calls [`RootLatch::get`]) and never waits for the
-/// writer: either could deadlock against a latch waiting for it.
+/// outside the writer runs under a [`FileStep`], counted while it
+/// runs. Latching refuses new steps from that moment and then waits
+/// for the ones in flight, so once it returns no step is running and
+/// none starts.
+///
+/// A step holds no lock and never waits for the latch, so one may
+/// start inside another: a publication reads its bytes through an
+/// object's verifying reader, which quarantines on damage. Were a
+/// step to wait there, it and the latch waiting for the outer step
+/// would hold each other for good.
 #[derive(Default)]
 pub(crate) struct RootLatch {
-    latch: RwLock<Option<IntegrityLatch>>,
+    state: Mutex<State>,
+    /// Signalled as the last step in flight ends.
+    idle: Condvar,
     observed: Mutex<Observed>,
+}
+
+/// The finding and the file steps in flight.
+#[derive(Default)]
+struct State {
+    latch: Option<IntegrityLatch>,
+    steps: usize,
 }
 
 /// The observer and whether it has been told.
@@ -133,34 +147,49 @@ struct Observed {
 /// One step of file work in the data root, admitted while the store
 /// is unlatched; the latch waits for it to drop.
 pub(crate) struct FileStep<'a> {
-    _held: RwLockReadGuard<'a, Option<IntegrityLatch>>,
+    latch: &'a RootLatch,
+}
+
+impl Drop for FileStep<'_> {
+    fn drop(&mut self) {
+        let mut state = lock(&self.latch.state);
+        state.steps -= 1;
+        if state.steps == 0 {
+            self.latch.idle.notify_all();
+        }
+    }
 }
 
 impl RootLatch {
     /// As a store opens: latched when its data root holds a latch.
     pub(crate) fn new(latch: Option<IntegrityLatch>) -> Self {
         Self {
-            latch: RwLock::new(latch),
+            state: Mutex::new(State { latch, steps: 0 }),
+            idle: Condvar::new(),
             observed: Mutex::new(Observed::default()),
         }
     }
 
-    /// The finding, if the store is latched.
+    /// The finding, if the store is latched. It shows from the moment
+    /// new steps are refused, while the latch may still be waiting for
+    /// the ones in flight.
     pub(crate) fn get(&self) -> Option<IntegrityLatch> {
-        read(&self.latch).clone()
+        lock(&self.state).latch.clone()
     }
 
     /// Admit one step of file work, or `Corrupt` naming the finding
-    /// once latched: nothing may `what` in the data root then.
+    /// once latched: nothing may `what` in the data root then. Never
+    /// waits.
     pub(crate) fn step(&self, what: &str) -> Result<FileStep<'_>, StoreError> {
-        let held = read(&self.latch);
-        if let Some(latch) = &*held {
+        let mut state = lock(&self.state);
+        if let Some(latch) = &state.latch {
             return Err(StoreError::corrupt(format!(
                 "the store is read-only after an integrity finding, so it can't {what}: {}",
                 latch.detail
             )));
         }
-        Ok(FileStep { _held: held })
+        state.steps += 1;
+        Ok(FileStep { latch: self })
     }
 
     /// [`RootLatch::step`] for work that only starts here: its later
@@ -203,16 +232,22 @@ impl RootLatch {
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| observer()));
     }
 
-    /// Record a finding once the steps in flight are done, then tell
-    /// the observer; `false`, telling no one, when one was already
-    /// recorded.
+    /// Record a finding, which refuses new steps, wait for the steps
+    /// in flight, then tell the observer; `false` at once, telling no
+    /// one, when one was already recorded.
     fn claim(&self, latch: IntegrityLatch) -> bool {
         {
-            let mut current = write(&self.latch);
-            if current.is_some() {
+            let mut state = lock(&self.state);
+            if state.latch.is_some() {
                 return false;
             }
-            *current = Some(latch);
+            state.latch = Some(latch);
+            while state.steps > 0 {
+                state = self
+                    .idle
+                    .wait(state)
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+            }
         }
         self.tell();
         true
@@ -220,7 +255,7 @@ impl RootLatch {
 
     /// The finding's copy, once published.
     fn published(&self, copy: PathBuf) {
-        if let Some(latch) = write(&self.latch).as_mut() {
+        if let Some(latch) = lock(&self.state).latch.as_mut() {
             latch.copy = Some(copy);
         }
     }
@@ -238,19 +273,11 @@ impl RootLatch {
 }
 
 // The guarded values stay consistent under a panic: each critical
-// section is one assignment or clone, so a poisoned lock is recovered.
+// section is an assignment, a count or a clone, so a poisoned lock is
+// recovered.
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-}
-
-fn read<T>(lock: &RwLock<T>) -> RwLockReadGuard<'_, T> {
-    lock.read().unwrap_or_else(|poisoned| poisoned.into_inner())
-}
-
-fn write<T>(lock: &RwLock<T>) -> RwLockWriteGuard<'_, T> {
-    lock.write()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 

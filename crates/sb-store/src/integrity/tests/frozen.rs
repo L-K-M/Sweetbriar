@@ -166,7 +166,7 @@ fn a_latched_store_leaves_a_damaged_object_where_it_is() {
 }
 
 /// A latch waits for a step of file work in flight, and no step starts
-/// after it.
+/// once it began waiting.
 #[test]
 fn a_latch_waits_for_the_file_step_in_flight() {
     let latch = Arc::new(RootLatch::default());
@@ -175,14 +175,69 @@ fn a_latch_waits_for_the_file_step_in_flight() {
         let latch = Arc::clone(&latch);
         move || latch.latch_for_test("a test finding")
     });
-    std::thread::sleep(std::time::Duration::from_millis(200));
+    // The finding shows once the latch refuses new steps; from then
+    // on it waits for `step`.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while latch.get().is_none() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the latch never began"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    let refused = |latch: &RootLatch| match latch.step("work") {
+        Err(StoreError::Corrupt { detail }) => assert!(detail.contains("a test finding")),
+        other => panic!("expected Corrupt, got {:?}", other.map(drop)),
+    };
+    refused(&latch);
     assert!(!latching.is_finished(), "the step is still in flight");
     drop(step);
     latching.join().unwrap();
-    match latch.step("work") {
+    refused(&latch);
+}
+
+/// A step inside a step while a latch waits for the outer one: a
+/// publication reads its bytes through an object's verifying reader,
+/// which quarantines on damage. The inner step is refused at once and
+/// the latch goes through. An inner step that waited for the latch
+/// would hold the two against each other for good.
+#[test]
+fn a_step_inside_a_step_is_refused_while_a_latch_waits() {
+    const PATIENCE: std::time::Duration = std::time::Duration::from_secs(20);
+    let latch = Arc::new(RootLatch::default());
+    let (held, holding) = std::sync::mpsc::channel();
+    let (answer, answered) = std::sync::mpsc::channel();
+    let (finish, finished) = std::sync::mpsc::channel::<()>();
+    let working = std::thread::spawn({
+        let latch = Arc::clone(&latch);
+        move || {
+            let _outer = latch.step("work").unwrap();
+            held.send(()).unwrap();
+            // Once the latch shows, it is waiting for `_outer`.
+            let deadline = std::time::Instant::now() + PATIENCE;
+            while latch.get().is_none() && std::time::Instant::now() < deadline {
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+            let _ = answer.send(latch.step("work inside").map(drop));
+            let _ = finished.recv();
+        }
+    });
+    holding.recv_timeout(PATIENCE).unwrap();
+    let latching = std::thread::spawn({
+        let latch = Arc::clone(&latch);
+        move || latch.latch_for_test("a test finding")
+    });
+    let inner = answered
+        .recv_timeout(PATIENCE)
+        .expect("the inner step never blocks");
+    match inner {
         Err(StoreError::Corrupt { detail }) => assert!(detail.contains("a test finding")),
-        other => panic!("expected Corrupt, got {:?}", other.map(drop)),
+        other => panic!("expected Corrupt, got {other:?}"),
     }
+    assert!(!latching.is_finished(), "the outer step is still in flight");
+    finish.send(()).unwrap();
+    working.join().unwrap();
+    latching.join().unwrap();
 }
 
 /// An observer installed once the store has latched, by a check or at

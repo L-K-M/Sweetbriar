@@ -226,9 +226,12 @@ against concurrent replacement.
        reader may still touch it while it is copied.
   - **The frozen root (M1.8h5b1).** Step 1 begins with the store's own
     file work outside the writer, then the writer latches. Each step of
-    that work holds the latch shared, and latching takes it
-    exclusively, so the latch waits for the steps in flight and none
-    starts after it. From then on, and in every latched open, each is
+    that work is counted while it runs. Latching refuses new steps at
+    once and then waits for the ones in flight, so none is running and
+    none starts once it returns. A step never waits for the latch, so
+    one may start inside another (a publication that reads through an
+    object's verifying reader). From the finding on, and in every
+    latched open, each is
     refused `Corrupt` naming the finding before it touches a file:
     publishing, installing or removing an object, starting, completing
     or removing (retention) a backup generation, verifying a backup,
