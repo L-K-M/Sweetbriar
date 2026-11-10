@@ -5,6 +5,7 @@
 //! then releases pins and marks the generation complete.
 
 mod attachments;
+mod checked;
 mod external;
 mod image;
 mod image_inspect;
@@ -21,6 +22,7 @@ mod quarantine;
 mod reconciliation;
 mod recorded;
 mod references;
+pub use checked::{GenerationCheck, GenerationVerdict};
 pub use external::VerifiedExternalBackup;
 pub use image::BackupImageInspection;
 mod qualify;
@@ -626,6 +628,9 @@ pub(crate) struct Pauses {
     pub(crate) before_referenced_read: Option<Arc<std::sync::Barrier>>,
     pub(crate) during_pin_validation: Option<Arc<std::sync::Barrier>>,
     pub(crate) before_pin_release: Option<Arc<std::sync::Barrier>>,
+    /// Waited on twice: park, then release to a generation check's
+    /// identity re-check — a test swaps the directory in between.
+    pub(crate) before_identity_recheck: Option<Arc<std::sync::Barrier>>,
 }
 
 // The sibling survives a partially successful recursive directory removal.

@@ -1608,7 +1608,11 @@ local drafts. No network yet.
     the 1/52 live sample by hash bucket with catch-up after missed
     weeks, `missing`/`quarantined` accounting, and every retained
     generation re-verified in place and its result recorded on the
-    generation. **h5 Weekly `integrity_check` (L)**: when idle, on an
+    generation. Split before implementation: **h4a** the live sample
+    and its accounting, **h4b** the generations, each checked against
+    its manifest and the result recorded, and **h4c** the weekly job in
+    the scheduler (with h3b, whichever lands second). **h5 Weekly
+    `integrity_check` (L)**: when idle, on an
     interruptible reader; a finding copies the files to `recovery/`,
     latches the store read-only across reopens and stops remote
     effects. Split before implementation: **h5a** the store's check,

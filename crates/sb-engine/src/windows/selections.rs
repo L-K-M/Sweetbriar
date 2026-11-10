@@ -199,6 +199,9 @@ impl Engine {
         input: SelectionInput,
     ) -> Result<SelectionSnapshot, EngineError> {
         let windows = Arc::clone(self.windows());
+        // Taken before the ids are read: a swap after this releases the
+        // selection the ids would make.
+        let restores = windows.restores();
         let lookup = Arc::clone(&windows);
         let open = self.compute(move || lookup.window(window_id)).await?;
         let (generation, index) = match open.spec.source() {
@@ -235,6 +238,7 @@ impl Engine {
                     selection_id.clone(),
                     generation,
                     selected,
+                    restores,
                 )?;
                 Ok(OpenedSelection {
                     snapshot: Some(SelectionSnapshot {

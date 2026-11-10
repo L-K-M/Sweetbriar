@@ -466,7 +466,20 @@ struct Versions {
     /// the list and Search sources.
     appearance: u64,
     closes: u64,
+    /// Store swaps so far (a restore, plan M1.8g): each answers every
+    /// subscription `ResetRequired` once, whatever the generations did.
+    restores: u64,
     shut: bool,
+}
+
+/// The generations a swapped-in store opened at: they replace the
+/// replaced store's, which may have been higher.
+#[allow(dead_code)] // Engine::restore (plan M1.8g3) builds it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct StoreGenerations {
+    pub(crate) list: u64,
+    pub(crate) search: u64,
+    pub(crate) appearance: u64,
 }
 
 /// An open window: its spec and the generation of the last page or id
@@ -579,6 +592,50 @@ impl Windows {
             versions.appearance = versions.appearance.max(generation);
             moved
         });
+    }
+
+    /// A restore swapped another store in (plan M1.8g): its
+    /// generations replace the old ones even where lower, every store
+    /// window's mark restarts, the selections (frozen ids of the
+    /// replaced store) are released, and every store subscription
+    /// answers `ResetRequired` once. The debug source is untouched.
+    #[allow(dead_code)] // Engine::restore (plan M1.8g3) calls it.
+    pub(crate) fn store_replaced(&self, generations: StoreGenerations) {
+        // The table lock is held through the swap's count, so a new
+        // subscription reads a window's mark and the count from the same
+        // side of the swap.
+        let mut inner = self.lock();
+        for window in inner.open.values_mut() {
+            if !matches!(window.spec, WindowSpec::DebugSynthetic) {
+                // A fresh cell: a read admitted before the swap that
+                // delivers after it raises the old one, not this.
+                window.seen = Arc::new(AtomicU64::new(0));
+            }
+        }
+        // Every selection is store-backed (`open_selection` refuses the
+        // debug source), so all of them held the replaced store's ids.
+        inner.selections.clear();
+        self.versions.send_modify(|versions| {
+            versions.store = generations.list;
+            versions.search = generations.search;
+            versions.appearance = generations.appearance;
+            versions.restores += 1;
+        });
+    }
+
+    /// Where a subscription to `window_id` starts: the generation its
+    /// caller last received (`None` for a window not open) and the store
+    /// swaps so far, read together under the lock a swap holds. An
+    /// in-memory getter (spec/07).
+    fn subscription_start(&self, window_id: WindowId) -> (Option<u64>, u64) {
+        let inner = self.lock();
+        let mark = inner.open.get(&window_id).map(OpenWindow::seen);
+        (mark, self.versions.borrow().restores)
+    }
+
+    /// The store swaps so far, where an appearance subscription starts.
+    fn restores(&self) -> u64 {
+        self.versions.borrow().restores
     }
 
     /// The engine is shutting down: end every waiting `next`.
@@ -721,22 +778,22 @@ impl Windows {
             })
     }
 
-    /// The generation `window_id`'s caller last received, if it is open:
-    /// a subscription's starting mark. An in-memory getter (spec/07).
-    fn seen(&self, window_id: WindowId) -> Option<u64> {
-        self.lock().open.get(&window_id).map(OpenWindow::seen)
-    }
-
     /// `open_selection`'s registration (spec/07 "Selection snapshots"):
     /// insert the frozen ids only while their source window is still
     /// open — a close that won the race is `NotFound`, a later one
     /// leaves the snapshot alone.
+    /// Register a selection whose ids were read while `restores` store
+    /// swaps had happened. The read and this registration are separate
+    /// tasks: a swap between them released every selection, so ids
+    /// read from the replaced store are refused, under the lock the
+    /// swap holds.
     fn register_selection(
         &self,
         window_id: WindowId,
         selection_id: SelectionId,
         generation: u64,
         ids: Vec<i64>,
+        restores: u64,
     ) -> Result<(), EngineError> {
         let ids: Arc<[i64]> = ids.into();
         let mut inner = self.lock();
@@ -745,6 +802,13 @@ impl Windows {
                 what: format!("window {}", window_id.get()),
             });
         }
+        let versions = self.versions.borrow();
+        if versions.restores != restores {
+            return Err(EngineError::ResetRequired {
+                generation: versions.store,
+            });
+        }
+        drop(versions);
         inner.selections.insert(
             selection_id,
             OpenSelection {
