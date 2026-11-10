@@ -25,7 +25,7 @@ func sdkCoverageWireKeepsAllClosedVariantsPayloadsAndFields() throws {
     for scope: SearchScope in [.all, .account(accountId: "RAW-é"), .mailbox(mailboxId: .min)] {
         #expect(try FfiConverterTypeSearchScope_lift(FfiConverterTypeSearchScope_lower(scope)) == scope)
     }
-    var states: [SearchIndexState] = [.ready, .running, .pausedByUser, .blockedNewerExtractor]
+    var states: [SearchIndexState] = [.ready, .running, .pausedByUser, .blockedNewerExtractor, .readOnly]
     for code: SearchIoCode in [.storageFull, .permissionDenied, .storageUnavailable, .otherIo] {
         for deadline: Int64 in [.min, .max] {
             states.append(.pausedIo(code: code, message: String(repeating: "é", count: 256), retryAt: deadline))

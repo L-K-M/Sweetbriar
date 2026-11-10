@@ -345,6 +345,7 @@ enum SearchIndexState {
     Ready, Running, PausedByUser,
     PausedIo { code: SearchIoCode, message: String, retry_at: i64 },
     BlockedNewerExtractor,
+    ReadOnly, // the store latched read-only (03 "Integrity"); never stored
 }
 // SearchIoCode: storage_full, permission_denied, storage_unavailable, other_io.
 struct SearchRebuildProgress {
@@ -451,6 +452,17 @@ steps; they do not add placeholder modes to this boundary.
   Operational state is global even for empty scopes. A blocked indexer
   reports its target version through standalone coverage; Search opens
   return `Unavailable` with an update-required explanation, not `NewerStore`.
+  On a read-only engine (03 "The read-only engine") every other state
+  answers `ReadOnly`, in standalone coverage and in a Search window's
+  status alike: the indexer is stopped and every index command would
+  be `Corrupt`, so a stored `Running`, pause or retry deadline would
+  promise work that can't happen. The counts and `rebuild` stay as
+  stored, so a rebuild the finding stopped still shows its phase, and
+  Search opens or not by that phase as before. `BlockedNewerExtractor`
+  keeps precedence: it is why Search can't open. No stored state reads
+  as `ReadOnly`; the engine answers it from the same flag as
+  `health()`. Turning read-only advances no `search_generation`, so a
+  shell reads coverage again when `subscribe_health` wakes (M1.8h5b3b).
 - `PausedIo` retains pending work and supplies a sanitized actionable
   error (for example, free disk space or restore access), error code and
   next automatic retry UTC-millisecond deadline. Retry uses bounded backoff;

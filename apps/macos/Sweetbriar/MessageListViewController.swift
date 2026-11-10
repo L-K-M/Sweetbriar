@@ -440,6 +440,9 @@ final class MessageListViewController: NSViewController {
         if case .pausedByUser = coverage.indexState {
             return "Search is unavailable while the rebuild is paused"
         }
+        if case .readOnly = coverage.indexState {
+            return "Search is unavailable: the archive became read-only during an index rebuild"
+        }
         return "Search is unavailable while the index is rebuilt"
     }
 

@@ -12,11 +12,12 @@ use std::task::{Context, Poll, Waker};
 use std::time::{Duration, Instant};
 
 use sb_resources::IntegrityCheck;
-use sb_test_support::{ScratchDir, block_on, cert_der, damage_an_index};
+use sb_test_support::{ScratchDir, block_on, cert_der, damage_an_index, execute_sql};
 
 use crate::{
-    AddressMode, BridgeAccountParams, BridgeIdentity, CertificatePin, EndpointSecurity, Engine,
-    EngineError, Health, IdentitySendable, Integrity, SearchScope, Secret,
+    AddressMode, Anchor, BridgeAccountParams, BridgeIdentity, CertificatePin, EndpointSecurity,
+    Engine, EngineError, Health, IdentitySendable, Integrity, SearchIndexState, SearchScope,
+    SearchSort, SearchSpec, Secret, WindowSpec,
 };
 
 const PATIENCE: Duration = Duration::from_secs(60);
@@ -252,4 +253,64 @@ fn shutdown_ends_a_health_subscription_s_wait() {
         finish(health.next()),
         Err(EngineError::Unavailable { .. })
     ));
+}
+
+fn index_state(engine: &Engine) -> SearchIndexState {
+    block_on(engine.coverage(SearchScope::All))
+        .unwrap()
+        .index_state
+}
+
+/// A Search window over everything, as the list opens one.
+fn open_search(engine: &Engine) -> Result<crate::Window, EngineError> {
+    let spec = SearchSpec::new(
+        r#"{"v":1,"q":{"and":[]}}"#.into(),
+        SearchScope::All,
+        SearchSort::Date,
+    );
+    block_on(engine.open_window(WindowSpec::Search(spec), Anchor::Top, 1))
+}
+
+/// Coverage on a read-only engine says the indexer is stopped,
+/// whatever state is stored, standalone and with a Search window's
+/// rows; a blocked extractor still says so, and Search refuses on it.
+#[test]
+fn coverage_reports_a_read_only_index() {
+    let scratch = ScratchDir::new("engine-health-coverage");
+    let root = data_root(&scratch);
+    let engine = open(&root);
+    // The first open's rebuild finishes, so Search can open below.
+    eventually("the index settles", || engine.indexer().waiting());
+    block_on(engine.shutdown()).unwrap();
+    damage_an_index(&root.join("state.sqlite"));
+    let engine = open(&root);
+    eventually("the index settles", || engine.indexer().waiting());
+    assert_eq!(index_state(&engine), SearchIndexState::Ready);
+
+    find_the_damage(&engine);
+
+    assert_eq!(index_state(&engine), SearchIndexState::ReadOnly);
+    let search = open_search(&engine).expect("Search opens over what is indexed");
+    assert_eq!(
+        search.search().unwrap().coverage().index_state,
+        SearchIndexState::ReadOnly
+    );
+    block_on(engine.shutdown()).unwrap();
+
+    // A target this build can't read, on the latched store.
+    execute_sql(
+        &root.join("state.sqlite"),
+        "UPDATE store_meta SET value='999' WHERE key='search_extractor_version'",
+    );
+    let engine = open(&root);
+    assert!(engine.read_only());
+    assert_eq!(
+        index_state(&engine),
+        SearchIndexState::BlockedNewerExtractor
+    );
+    assert!(matches!(
+        open_search(&engine),
+        Err(EngineError::Unavailable { .. })
+    ));
+    block_on(engine.shutdown()).unwrap();
 }

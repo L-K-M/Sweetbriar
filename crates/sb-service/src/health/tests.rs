@@ -82,7 +82,8 @@ fn a_finding_reaches_a_subscribed_shell_and_the_next_open() {
     // Queries go on, coverage among them; a command that writes names
     // the finding.
     block_on(core.settings()).unwrap();
-    block_on(core.coverage(crate::SearchScope::All)).unwrap();
+    let coverage = block_on(core.coverage(crate::SearchScope::All)).unwrap();
+    assert_eq!(coverage.index_state, crate::SearchIndexState::ReadOnly);
     match block_on(core.set_setting("after-the-finding", "appearance.compose_cue", "strong")) {
         Err(CoreError::Corrupt { detail }) => {
             assert!(detail.contains("integrity_probe_pad"), "{detail}");
@@ -95,7 +96,8 @@ fn a_finding_reaches_a_subscribed_shell_and_the_next_open() {
     let core = open(&scratch);
     assert_eq!(core.health(), found);
     block_on(core.settings()).unwrap();
-    block_on(core.coverage(crate::SearchScope::All)).unwrap();
+    let coverage = block_on(core.coverage(crate::SearchScope::All)).unwrap();
+    assert_eq!(coverage.index_state, crate::SearchIndexState::ReadOnly);
     block_on(core.shutdown());
 }
 

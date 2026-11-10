@@ -269,7 +269,7 @@ against concurrent replacement.
       naming the finding, from the store. `bridge_certificate`, which
       writes nothing, is refused `Corrupt` before it connects;
     - queries, windows, Search over what is indexed and subscriptions
-      go on;
+      go on; coverage's index state answers `ReadOnly` (07);
     - `health()` reports the finding and health subscriptions wake
       (07).
 

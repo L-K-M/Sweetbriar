@@ -88,6 +88,10 @@ fn coverage_maps_every_field_variant_and_real_wire_payload() {
             sb_service::SearchIndexState::BlockedNewerExtractor,
             SearchIndexState::BlockedNewerExtractor,
         ),
+        (
+            sb_service::SearchIndexState::ReadOnly,
+            SearchIndexState::ReadOnly,
+        ),
     ] {
         source.index_state = native;
         let actual = Coverage::from_service(&source);

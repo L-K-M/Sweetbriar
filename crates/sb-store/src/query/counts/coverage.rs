@@ -26,7 +26,8 @@ pub struct StoredSearchCoverage {
     pub limitations: Vec<SearchLimitation>,
 }
 
-/// The operational state; Resources supplies the runtime capability verdict.
+/// The operational state; Resources supplies the runtime capability
+/// verdict, and the engine the read-only one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SearchIndexState {
     Ready,
@@ -38,6 +39,10 @@ pub enum SearchIndexState {
         retry_at: i64,
     },
     BlockedNewerExtractor,
+    /// The store is read-only after an integrity finding (spec/03
+    /// "Integrity"): nothing indexes, whatever state is stored. No
+    /// stored state reads as this; the engine answers it.
+    ReadOnly,
 }
 
 /// Active or most-recently-completed progress, independent of coverage scope.

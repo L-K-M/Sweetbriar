@@ -9020,6 +9020,12 @@ public enum SearchIndexState: Equatable, Hashable {
     case pausedIo(code: SearchIoCode, message: String, retryAt: Int64
     )
     case blockedNewerExtractor
+    /**
+     * The store is read-only after an integrity finding (spec/03
+     * "Integrity"): nothing indexes, and no index command works,
+     * until a restore.
+     */
+    case readOnly
 
 
 
@@ -9052,6 +9058,8 @@ public struct FfiConverterTypeSearchIndexState: FfiConverterRustBuffer {
         
         case 5: return .blockedNewerExtractor
         
+        case 6: return .readOnly
+        
         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
@@ -9081,6 +9089,10 @@ public struct FfiConverterTypeSearchIndexState: FfiConverterRustBuffer {
         
         case .blockedNewerExtractor:
             writeInt(&buf, Int32(5))
+        
+        
+        case .readOnly:
+            writeInt(&buf, Int32(6))
         
         }
     }
