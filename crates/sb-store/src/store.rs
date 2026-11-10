@@ -190,6 +190,43 @@ impl Store {
         self.read(|tx| crate::changes::backup_due(tx))
     }
 
+    /// The complete generations whose weekly check (spec/03 "Backup
+    /// generations") hasn't run this UTC week, never-checked first,
+    /// then the longest unchecked.
+    pub fn generations_to_verify(&self) -> Result<Vec<String>, StoreError> {
+        let week_start = week_start(self.clock.now().as_millis());
+        self.read(|tx| {
+            let what = "list the generations to check";
+            let mut statement = tx
+                .prepare(
+                    "SELECT generation_id FROM backup_generations
+                     WHERE state = 'complete' AND (verified_at IS NULL OR verified_at < ?1)
+                     ORDER BY verified_at IS NOT NULL, verified_at, started_at, generation_id",
+                )
+                .map_err(|e| crate::schema::classify(e, what))?;
+            let ids = statement
+                .query_map([week_start], |row| row.get::<_, String>(0))
+                .map_err(|e| crate::schema::classify(e, what))?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| crate::schema::classify(e, what))?;
+            Ok(ids)
+        })
+    }
+
+    /// Check one retained generation in place: its manifest against the
+    /// recorded digest, its database and every object copy against the
+    /// manifest, the verdict recorded on its row. Holds the backup
+    /// operation while it reads; stops between files and read chunks
+    /// once `stop` is raised, recording nothing. Blocking; never on the
+    /// writer thread.
+    pub fn verify_generation(
+        &self,
+        generation: &str,
+        stop: &std::sync::atomic::AtomicBool,
+    ) -> Result<crate::GenerationCheck, StoreError> {
+        self.backups.check_generation(generation, stop)
+    }
+
     /// Record `job`'s run as started now (spec/03 "Scheduled
     /// maintenance"), replacing its previous run's end; its last
     /// success stays. Bookkeeping: it never makes a backup due.
@@ -1665,3 +1702,12 @@ pub(crate) const READER_PRAGMAS: &[PragmaSpec] = &[
 
 #[cfg(test)]
 mod tests;
+
+/// The start of the UTC week (Monday 00:00) holding `millis`, as
+/// retention buckets weeks.
+fn week_start(millis: i64) -> i64 {
+    const DAY: i64 = 24 * 60 * 60 * 1000;
+    let day = millis.div_euclid(DAY);
+    // 1970-01-01 was a Thursday; Monday is three days earlier.
+    (day - (day + 3).rem_euclid(7)) * DAY
+}

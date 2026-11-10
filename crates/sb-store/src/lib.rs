@@ -60,8 +60,9 @@ pub use sb_types::time::{Clock, Timestamp};
 pub use rusqlite::Transaction;
 
 pub use backups::{
-    BackupDestination, BackupImageInspection, BackupReceipt, BackupSnapshot, PreparedRestoreStage,
-    QualifiedStage, RestoreMetadata, VerifiedExternalBackup,
+    BackupDestination, BackupImageInspection, BackupReceipt, BackupSnapshot, GenerationCheck,
+    GenerationVerdict, PreparedRestoreStage, QualifiedStage, RestoreMetadata,
+    VerifiedExternalBackup,
 };
 pub use error::StoreError;
 pub use export_metadata::{ExportMetadata, export_occurrence_metadata};
