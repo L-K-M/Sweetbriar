@@ -61,7 +61,7 @@ fn trip(count: &AtomicU64, nth: u64) {
 /// next takes the signal, and on a loaded machine the calling thread
 /// runs on for a while first. It must not return and must not unwind.
 /// An unwind runs the test's destructors, and a scratch directory's
-/// removes the very leftovers the parent is about to inspect, in a
+/// `Drop` removes the very leftovers the parent is about to inspect, in a
 /// child that still dies of `SIGKILL` and so looks cleanly cut.
 ///
 /// So the thread waits for its death. A kernel that refused the kill
@@ -537,6 +537,24 @@ mod tests {
             .unwrap()
     }
 
+    /// A spawned child that is killed and reaped when its parent test
+    /// unwinds: `Child`'s own `Drop` does neither, so a test that
+    /// panics before its own `kill` would leave the process asleep.
+    struct KillOnDrop(Child);
+
+    impl KillOnDrop {
+        fn try_wait(&mut self) -> std::io::Result<Option<ExitStatus>> {
+            self.0.try_wait()
+        }
+    }
+
+    impl Drop for KillOnDrop {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
     /// A cut whose kill has not landed: it only reports that the cut
     /// was reached, as a kernel under load leaves the thread running.
     #[test]
@@ -547,7 +565,10 @@ mod tests {
         cut(
             1,
             || fs::write(root.join("cut"), b"").unwrap(),
-            Duration::from_secs(3600),
+            // Far longer than the parent's observation window, but
+            // bounded: a child orphaned by a failing parent still ends
+            // on its own (the parent's guard kills it first).
+            Duration::from_secs(60),
         );
     }
 
@@ -557,7 +578,7 @@ mod tests {
     #[test]
     fn a_kill_that_lands_late_runs_no_destructor() {
         let scratch = crate::ScratchDir::new("cut-late-kill");
-        let mut child = spawn_child("cut::tests::late_kill_child", scratch.path());
+        let mut child = KillOnDrop(spawn_child("cut::tests::late_kill_child", scratch.path()));
         let started = Instant::now();
         while !scratch.path().join("cut").exists() {
             let ended = child.try_wait().unwrap();
@@ -569,11 +590,54 @@ mod tests {
         thread::sleep(Duration::from_millis(300));
         let ended = child.try_wait().unwrap();
         let unwound = scratch.path().join("unwound").exists();
-        let _ = child.kill();
-        let _ = child.wait();
+        // A panic in either assert below unwinds through the guard,
+        // which kills and reaps the child before the test ends.
+        drop(child);
 
         assert!(ended.is_none(), "the thread ran on past the cut: {ended:?}");
         assert!(!unwound, "a destructor ran after the cut");
+    }
+
+    /// Dropping the guard ends a child that is still asleep: a parent
+    /// test that unwinds before its own `kill` must not leave the
+    /// process running.
+    #[test]
+    fn kill_on_drop_ends_a_sleeping_child() {
+        let scratch = crate::ScratchDir::new("cut-kill-on-drop");
+        let pid = {
+            let child = spawn_child("cut::tests::late_kill_child", scratch.path());
+            let pid = child.id() as libc::pid_t;
+            let guard = KillOnDrop(child);
+            // Let the child reach its cut and settle into its long sleep.
+            let started = Instant::now();
+            while !scratch.path().join("cut").exists() {
+                assert!(started.elapsed() < CHILD_DEADLINE, "the child never cut");
+                thread::sleep(CHILD_POLL);
+            }
+            let dropped = Instant::now();
+            drop(guard);
+            // The guard's `kill` ends the child at once; without it,
+            // `wait` would block until the child's own patience ran out.
+            assert!(
+                dropped.elapsed() < Duration::from_secs(5),
+                "dropping the guard took {:?}: the child was not killed",
+                dropped.elapsed()
+            );
+            pid
+        };
+        // The guard's `wait` reaped it, so a signal-0 probe finds no
+        // such process; it died of the guard's `SIGKILL`, not by
+        // unwinding.
+        let mut alive = true;
+        for _ in 0..100 {
+            if unsafe { libc::kill(pid, 0) } != 0 {
+                alive = false;
+                break;
+            }
+            thread::sleep(CHILD_POLL);
+        }
+        assert!(!alive, "the dropped child is still alive (pid {pid})");
+        assert!(!scratch.path().join("unwound").exists());
     }
 
     /// A cut whose kill never lands.
