@@ -5,7 +5,7 @@
 
 use sb_resources::{
     ExportCaptureRequest, ExportJobState, ExportScope, advance_export_job, create_export_job,
-    export_job, list_generation,
+    export_job, list_generation, thread_revisions,
 };
 
 use super::*;
@@ -20,8 +20,10 @@ pub(super) fn import_inbox(engine: &Engine) {
 }
 
 /// The imported mailbox's id and the list generation once it stops
-/// moving: post-ingest work (thread rebuilds) still writes after the
-/// import job completes, and the capture fences on its generation.
+/// moving: the thread rebuild still writes after the import job
+/// completes, and the capture fences on its generation. The rebuild's
+/// watermark says when it is done; the quiet reads after it only
+/// guard against a writer this helper doesn't know.
 pub(super) fn mailbox(engine: &Engine) -> (i64, u64) {
     let id = engine
         .resources()
@@ -33,6 +35,10 @@ pub(super) fn mailbox(engine: &Engine) -> (i64, u64) {
         })
         .unwrap();
     let deadline = Instant::now() + PATIENCE;
+    while engine.resources().read(thread_revisions).unwrap().stale() {
+        assert!(Instant::now() < deadline, "threads were never built");
+        std::thread::sleep(Duration::from_millis(5));
+    }
     let mut generation = engine.resources().read(list_generation).unwrap();
     let mut stable = 0;
     loop {
@@ -560,7 +566,12 @@ fn a_cancelled_export_stays_cancelled_across_reopen_and_publishes_nothing() {
     block_on(engine.shutdown()).unwrap();
 
     let engine = open(&root);
-    std::thread::sleep(Duration::from_millis(100));
+    // Recovery ran inside the open: a job it resumed has its worker
+    // registered by now, however late that worker's first write lands.
+    assert!(
+        !engine.imports().lock().contains_key(&halt),
+        "a terminal export gets no worker"
+    );
     assert_eq!(
         export_status(&engine, &halt).state(),
         ExportJobState::Cancelled,
