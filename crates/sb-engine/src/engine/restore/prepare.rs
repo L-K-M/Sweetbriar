@@ -114,26 +114,30 @@ fn prepare(
         });
     };
 
-    // What a step the flag ended answers. An I/O error under a raised
-    // flag is still that error.
-    let stopped = |error: StoreError| match error {
-        StoreError::Unavailable { io_kind: None, .. } if cancelled.load(Ordering::SeqCst) => {
-            Ok(None)
-        }
-        other => Err(other),
-    };
     let Some(selection) = resources.verify_external_backup(parent, generation_id, cancelled)?
     else {
         return Ok(None);
     };
+    let raised = || cancelled.load(Ordering::SeqCst);
     let prepared =
         match resources.stage_restore(selection, &generation.location, metadata, cancelled) {
             Ok(prepared) => prepared,
-            Err(error) => return stopped(error),
+            Err(error) => return ended_by_the_flag(error, raised()).map(|()| None),
         };
     match resources.qualify_restore(prepared, cancelled) {
         Ok(stage) => Ok(Some(stage)),
-        Err(error) => stopped(error),
+        Err(error) => ended_by_the_flag(error, raised()).map(|()| None),
+    }
+}
+
+/// Whether a step's error is the cancel flag ending it: what staging
+/// and qualifying answer at their next check once it is raised. An
+/// I/O error under a raised flag is still that error, and so is the
+/// same answer with no flag raised.
+pub(super) fn ended_by_the_flag(error: StoreError, raised: bool) -> Result<(), StoreError> {
+    match error {
+        StoreError::Unavailable { io_kind: None, .. } if raised => Ok(()),
+        other => Err(other),
     }
 }
 

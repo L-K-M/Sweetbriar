@@ -11,6 +11,37 @@ use sb_test_support::damage_an_index;
 use super::*;
 use crate::{BackupEnd, Integrity};
 
+/// Only the answer a raised flag produces counts as cancelled.
+#[test]
+fn a_step_s_error_is_a_cancellation_only_under_the_flag() {
+    use super::super::prepare::ended_by_the_flag;
+
+    let stopped = || StoreError::Unavailable {
+        reason: "restore staging cancelled".into(),
+        io_kind: None,
+    };
+    let full = || StoreError::Unavailable {
+        reason: "cannot copy an object: no space".into(),
+        io_kind: Some(std::io::ErrorKind::StorageFull),
+    };
+    assert!(ended_by_the_flag(stopped(), true).is_ok());
+    assert!(matches!(
+        ended_by_the_flag(stopped(), false),
+        Err(StoreError::Unavailable { io_kind: None, .. })
+    ));
+    assert!(matches!(
+        ended_by_the_flag(full(), true),
+        Err(StoreError::Unavailable {
+            io_kind: Some(std::io::ErrorKind::StorageFull),
+            ..
+        })
+    ));
+    assert!(matches!(
+        ended_by_the_flag(StoreError::internal("a bug"), true),
+        Err(StoreError::Internal { .. })
+    ));
+}
+
 fn unflagged() -> Arc<AtomicBool> {
     Arc::new(AtomicBool::new(false))
 }
