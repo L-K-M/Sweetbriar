@@ -1441,6 +1441,17 @@ pub(crate) fn open_connection(
         }
         Access::ReadOnly => OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     };
+    open_connection_with_flags(state_db, flags, pragmas)
+}
+
+/// The same connection settings, with caller-selected SQLite open flags.
+/// The verifier ledger also refuses links at SQLite's own open, rather
+/// than relying on a path check before the connection is created.
+pub(crate) fn open_connection_with_flags(
+    state_db: &Path,
+    flags: OpenFlags,
+    pragmas: &[PragmaSpec],
+) -> Result<Connection, StoreError> {
     let conn = Connection::open_with_flags(state_db, flags).map_err(sqlite_err)?;
     conn.set_prepared_statement_cache_capacity(PREPARED_STATEMENT_CACHE_CAPACITY);
     // Closing doesn't checkpoint until the caller lifts this (`open_with`
@@ -1645,10 +1656,15 @@ pub(crate) fn check_sqlite_version(
     )))
 }
 
-/// A `state.sqlite` SQLite can't read as a database is `Corrupt`
-/// (untouched); every other SQLite failure is `Unavailable`.
+/// An unreadable database or a link explicitly refused by the open is
+/// `Corrupt` (untouched); every other SQLite failure is `Unavailable`.
 fn sqlite_err(e: rusqlite::Error) -> StoreError {
     match e {
+        rusqlite::Error::SqliteFailure(ref err, _)
+            if err.extended_code == rusqlite::ffi::SQLITE_CANTOPEN_SYMLINK =>
+        {
+            StoreError::corrupt(format!("SQLite refused a symbolic link: {e}"))
+        }
         rusqlite::Error::SqliteFailure(ref err, _)
             if matches!(
                 err.code,

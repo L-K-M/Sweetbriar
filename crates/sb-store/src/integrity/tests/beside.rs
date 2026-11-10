@@ -102,6 +102,47 @@ fn a_latched_store_verifies_a_backup_beside_its_root() {
     store.close().unwrap();
 }
 
+/// A ledger symlink must not redirect SQLite's writes into the frozen
+/// root, even when the sibling itself is a genuine directory.
+#[test]
+fn a_symlinked_ledger_is_refused_without_touching_its_target() {
+    let (_scratch, paths, store, generation, _) = latched("integrity-beside-ledger-link");
+    std::fs::create_dir(beside(&paths)).unwrap();
+    let target = paths.recovery().join("linked-ledger.sqlite");
+    std::fs::write(&target, b"").unwrap();
+    let ledger = beside(&paths).join("ledger.sqlite");
+    std::os::unix::fs::symlink(&target, &ledger).unwrap();
+    let before = tree(&paths);
+
+    let checked = verify(&store, &generation);
+    assert!(
+        matches!(checked, Err(StoreError::Corrupt { .. })),
+        "{checked:?}"
+    );
+    assert_eq!(tree(&paths), before, "the ledger link wrote into the root");
+    assert!(ledger.is_symlink());
+    assert_eq!(scratch_entries(&paths), Vec::<String>::new());
+    store.close().unwrap();
+}
+
+/// Reusing a sibling applies the same owner-only access as creating it.
+#[test]
+fn an_existing_verifier_home_is_restricted_to_its_owner() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let (_scratch, paths, store, generation, _) = latched("integrity-beside-private");
+    let root = beside(&paths);
+    std::fs::create_dir(&root).unwrap();
+    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert_verified(&store, &generation);
+    assert_eq!(
+        std::fs::metadata(root).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+    store.close().unwrap();
+}
+
 /// A verification cut short leaves its scratch directory and its owner
 /// row in the sibling; the next one proves the directory its own,
 /// removes both and goes on.
