@@ -436,12 +436,12 @@ fn a_run_stopped_mid_bucket_keeps_what_it_read() {
     }
     set_week(&clock, week_for(bucket));
 
-    // An absent object asks once, before its open; the second ask is
-    // the next object's.
+    // The first ask is before the sample is collected; an absent object
+    // asks once, before its open, so the third ask is the next object's.
     let asked = std::cell::Cell::new(0);
     let report = super::verify_sample_with(&store, &|| {
         asked.set(asked.get() + 1);
-        asked.get() > 1
+        asked.get() > 2
     })
     .unwrap();
     assert!(report.stopped, "{report:?}");

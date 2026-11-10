@@ -464,8 +464,8 @@ orphan GC is about to remove. So:
 - **The live sample (M1.8h4a).** An object's bucket is the first eight
   bytes of its SHA-256, big-endian, modulo 52; week `w` (UTC weeks
   starting Monday, numbered from the epoch's) samples bucket `w mod
-  52`. `store_meta.verified_through_week` is the last week whose bucket
-  a run finished: a run covers every week since, at most the last 52,
+  52`. `store_meta.verified_through_week` is the highest week whose
+  bucket a run finished: a run covers every week since, at most the last 52,
   so missed weeks are caught up; a run in a week already finished reads
   nothing; without it, or with the clock behind it, a run covers its own
   week. It advances bucket by bucket and never moves back. A bucket's

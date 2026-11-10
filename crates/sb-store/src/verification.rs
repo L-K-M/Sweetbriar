@@ -6,8 +6,8 @@
 //! - An object's bucket is the first eight bytes of its SHA-256, big
 //!   endian, modulo 52. Week `w` (Monday-based UTC weeks since the
 //!   epoch, the arithmetic retention uses) samples bucket `w mod 52`.
-//! - `store_meta.verified_through_week` is the last week whose bucket a
-//!   run finished. A run covers every week after it, up to 52 (all
+//! - `store_meta.verified_through_week` is the highest week whose bucket
+//!   a run finished. A run covers every week after it, up to 52 (all
 //!   buckets), so missed weeks are caught up; without one, or with the
 //!   clock behind it, a run covers the current week. It moves forward
 //!   bucket by bucket and never back.
@@ -164,6 +164,12 @@ pub(crate) fn verify_sample_with(
     if weeks.is_empty() {
         return Ok(report);
     }
+    // Collecting the sample scans every reference and lists the object
+    // store: a stop raised already skips it.
+    if stopped() {
+        report.stopped = true;
+        return Ok(report);
+    }
     let mut targets = sample(store, &seen)?;
 
     for covered in weeks {
@@ -299,7 +305,6 @@ fn tally(
             return;
         }
         (Verdict::Absent, Target::Orphan { .. }) => report.gone += 1,
-        // A quarantined acquisition's file is in `recovery/`.
         // The state read with the sample may be stale by now: `record`
         // decides against the current row. A quarantined acquisition's
         // file is in `recovery/`, so absent is what it reads as.
