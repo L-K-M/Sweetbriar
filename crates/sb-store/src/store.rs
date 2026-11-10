@@ -91,6 +91,52 @@ pub struct Store {
     /// The clock [`Store::close`] stamps the clean-shutdown marker
     /// with, held from the seams the store opened with.
     pub(crate) clock: Arc<dyn Clock>,
+    /// The seams the store opened with; a restore reopens through them.
+    seams: Seams,
+}
+
+/// Why [`Store::swap_restore`] did not hand back a restored store.
+pub enum SwapRestoreError {
+    /// A check before the store closed refused the swap. Nothing moved:
+    /// the open store and the qualified stage come back as they were.
+    Refused {
+        cause: StoreError,
+        store: Box<Store>,
+        stage: Box<crate::QualifiedStage>,
+    },
+    /// The store had closed and isn't handed back. Either the swap
+    /// stopped before its renames finished, and the next open removes or
+    /// finishes it from the marker, or it committed and only the reopen
+    /// failed, and the next open finds the restored store (spec/03
+    /// "Restore"). Reopening resolves both; the reopened store's
+    /// incarnation says which.
+    Failed(StoreError),
+}
+
+impl std::fmt::Display for SwapRestoreError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Refused { cause, .. } => write!(f, "the restore swap was refused: {cause}"),
+            Self::Failed(cause) => write!(f, "the restore swap failed: {cause}"),
+        }
+    }
+}
+
+impl std::error::Error for SwapRestoreError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Refused { cause, .. } | Self::Failed(cause) => Some(cause),
+        }
+    }
+}
+
+impl std::fmt::Debug for SwapRestoreError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Refused { cause, .. } => f.debug_struct("Refused").field("cause", cause).finish(),
+            Self::Failed(cause) => f.debug_tuple("Failed").field(cause).finish(),
+        }
+    }
 }
 
 impl Store {
@@ -218,6 +264,102 @@ impl Store {
     ) -> Result<crate::PreparedRestoreStage, StoreError> {
         self.backups
             .stage_restore(selection, source_location, metadata, cancelled)
+    }
+
+    /// Qualify a prepared stage (spec/03 "Restore" step 3): rebind it,
+    /// re-authenticate its evidence, quarantine and flush it, and rebind
+    /// again. Blocking; never on the writer thread. The stage it returns
+    /// certifies a point in time; only [`Store::swap_restore`] uses it.
+    pub fn qualify_restore(
+        &self,
+        prepared: crate::PreparedRestoreStage,
+        cancelled: &Arc<std::sync::atomic::AtomicBool>,
+    ) -> Result<crate::QualifiedStage, StoreError> {
+        self.backups.qualify_restore(prepared, cancelled)
+    }
+
+    /// Swap a qualified stage in as this store (spec/03 "Restore" step
+    /// 4) and reopen it, keeping the store lock throughout so no other
+    /// process can open it meanwhile. The caller has quiesced everything
+    /// using the store (plan M1.8g). While the store is still open every
+    /// binding and the image are checked again; a refusal hands both
+    /// back unchanged. Then the store closes, the marker is written, the
+    /// old root is renamed to its preserved name and the stage into
+    /// place, each rename flushed, and the restored store opens with
+    /// every account paused. Nothing is deleted. Blocking.
+    pub fn swap_restore(
+        self,
+        stage: crate::QualifiedStage,
+        cancelled: &std::sync::atomic::AtomicBool,
+    ) -> Result<Store, SwapRestoreError> {
+        // Every check before the store closes is a refusal.
+        let ready = self
+            .backups
+            .ready_to_swap(&stage, cancelled)
+            .and_then(|pending| Ok((pending, StorePaths::new(stage.data_root())?)));
+        let (pending, paths) = match ready {
+            Ok(ready) => ready,
+            Err(cause) => {
+                return Err(SwapRestoreError::Refused {
+                    cause,
+                    store: Box::new(self),
+                    stage: Box::new(stage),
+                });
+            }
+        };
+        let Self {
+            readers,
+            writer,
+            activation,
+            objects,
+            source_snapshots,
+            import_reports,
+            validation_scratch,
+            backups,
+            lease,
+            clock,
+            seams,
+        } = self;
+        // Close as `close` does, but keep the lease: no connection may
+        // stay open on a root that is about to be renamed (spec/03).
+        let marker = record_clean_shutdown(&writer, clock.as_ref());
+        let readers_closed = readers.close();
+        let writer_closed = writer.close();
+        drop(activation);
+        drop(objects);
+        drop(source_snapshots);
+        drop(import_reports);
+        drop(validation_scratch);
+        marker
+            .and(readers_closed)
+            .and(writer_closed)
+            .map_err(SwapRestoreError::Failed)?;
+        // The stage keeps a directory and a plain file descriptor through
+        // the renames, never a SQLite connection: descriptors follow the
+        // moved inodes. It is dropped before SQLite opens the restored
+        // database, because closing any descriptor on a file drops the
+        // process's POSIX locks on it.
+        crate::backups::swap::commit_swap(
+            seams.fs(),
+            &paths,
+            stage.path(),
+            stage.preserved_root(),
+            &pending,
+        )
+        .map_err(SwapRestoreError::Failed)?;
+        // The stage's handles and the operation lease end with the swap.
+        drop(stage);
+        drop(backups);
+        open_under_lease(
+            &paths,
+            &seams,
+            lease,
+            WRITER_PRAGMAS,
+            READER_PRAGMAS,
+            &PINNED_SQLITE,
+            MIGRATIONS,
+        )
+        .map_err(SwapRestoreError::Failed)
     }
 
     /// Visit verified external generations with bounded memory. Identified
@@ -415,6 +557,7 @@ impl Store {
             backups,
             lease,
             clock,
+            seams: _,
         } = self;
         // The marker goes in at the lowest priority, so anything
         // already queued commits first and the marker truly is the
@@ -533,6 +676,30 @@ pub(crate) fn open_with(
     check_location(fs, paths.data_root())?;
     create_missing_ancestors(fs, paths)?;
     let lease = take_lease(fs, paths.lock_file())?;
+    open_under_lease(
+        paths,
+        seams,
+        lease,
+        writer_pragmas,
+        reader_pragmas,
+        pinned,
+        migrations,
+    )
+}
+
+/// Everything `open_with` does once the lease is held, for the restore
+/// swap to reopen under the lease it never released. `paths` are
+/// resolved.
+pub(crate) fn open_under_lease(
+    paths: &StorePaths,
+    seams: &Seams,
+    lease: Box<dyn Lease>,
+    writer_pragmas: &[PragmaSpec],
+    reader_pragmas: &[PragmaSpec],
+    pinned: &PinnedSqlite,
+    migrations: &[Migration],
+) -> Result<Store, StoreError> {
+    let fs = seams.fs();
     // From here on an early return drops `lease`, releasing the lock.
     // An interrupted restore swap is resolved before anything looks at
     // (or would create) the data root (spec/03 "Restore").
@@ -602,6 +769,11 @@ pub(crate) fn open_with(
         backups,
         lease,
         clock: Arc::clone(seams.clock_arc()),
+        seams: Seams::new(
+            Arc::clone(seams.fs_arc()),
+            Arc::clone(seams.clock_arc()),
+            Arc::clone(seams.random_arc()),
+        ),
     })
 }
 
