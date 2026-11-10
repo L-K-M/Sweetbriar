@@ -72,6 +72,10 @@ impl Engine {
     /// selections are released, and every account is paused. A refusal
     /// hands this engine back running as before, with the stage. Blocks
     /// on the engine's own blocking pool, never the caller's thread.
+    /// Await it to the end: the work doesn't stop when the future is
+    /// dropped, and the engine it would have returned (a refused one's
+    /// stage too) is dropped with its result. To cancel, raise
+    /// `cancelled` and keep awaiting.
     pub async fn restore(
         self,
         stage: QualifiedStage,
