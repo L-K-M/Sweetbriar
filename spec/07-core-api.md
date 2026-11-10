@@ -149,6 +149,38 @@ async fn Core::shutdown(self);   // flush writer, release the lease
     data root and is never used again (03). Listing and removing
     those is M1.8j's.
   - It works on a read-only core, where a restore is the way out.
+- **Restoring (M1.8i5):** `restore(prepared)` is the command half of
+  `start_restore`. It swaps a prepared restore in as the core's store
+  (03 "Restore" step 4) under an idempotency key. It consumes the core
+  and hands one back.
+  - On success the core runs on the restored store. Every window and
+    subscription opened before answers `ResetRequired` once,
+    selections are released and every account is paused. The replaced
+    store stays beside the data root under its preserved name.
+  - The receipt, `{"generation_id":...}` under the command name
+    `start_restore`, is written in the restored store once it is
+    open. It can't commit with the swap: a stage's bytes are fixed
+    when it qualifies. A process that dies in between leaves a
+    restored store without the receipt, and its key restores again,
+    which deletes nothing. When the write itself fails, the answer
+    carries the restored core and the error.
+  - A key the store already holds a restore's receipt for answers that
+    receipt and moves nothing; the prepared restore is dropped unused.
+    The key is looked up in the store about to be replaced, a
+    read-only one included.
+  - A refusal hands back the core, running as before, and the
+    prepared restore, and spends no key: a key spent on another
+    command (`Conflict`), an unusable key (`InvalidInput`), an
+    import's inventory or an export's capture in progress
+    (`Conflict`), a raised cancel flag (`Unavailable`), or a stage the
+    swap's own checks turn down.
+  - A failure after the store closed ends the core. It can't say
+    whether the swap went through: the next open settles what it left
+    (03). Nothing is deleted either way.
+  - `sb-cli restore <generation_id>` prepares and restores under a
+    fresh key and prints the id and `restored`.
+  - The FFI export comes with the UI (M1.8j): one call that prepares
+    under the read lock and swaps under the write lock.
 - **Bridge account setup (M2.3c1):** `add_bridge_account(params)` takes
   the Proton Bridge preset's display name, username, Bridge password
   (bytes, moved into the core's zeroizing secret), IMAP and SMTP ports

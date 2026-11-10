@@ -92,6 +92,17 @@ impl Core {
         &self.engine
     }
 
+    /// The engine itself, for the one call that consumes the core: a
+    /// restore, which hands an engine back for [`Core::around`].
+    pub(crate) fn into_engine(self) -> Engine {
+        self.engine
+    }
+
+    /// The core around `engine`.
+    pub(crate) fn around(engine: Engine) -> Self {
+        Self { engine }
+    }
+
     /// `set_setting` (spec/07 "Commands"): one command under an
     /// idempotency key, returning its receipt. A repeated key returns
     /// the stored receipt; an unknown key or value is `InvalidInput`.

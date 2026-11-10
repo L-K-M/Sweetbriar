@@ -51,7 +51,7 @@ pub use imports::{
     ImportSourceKind, ImportStarted, ImportTarget, ImportTotals, MboxVariant,
 };
 pub use rebuild::SearchRebuildStarted;
-pub use restore::PreparedRestore;
+pub use restore::{PreparedRestore, RestoreFailure, Restored};
 pub use search::{
     Coverage, ParseContext, SearchIndexState, SearchIoCode, SearchLimitation, SearchRebuildPhase,
     SearchRebuildProgress, SearchScope, SearchSort, SearchSpec, SearchStatus,

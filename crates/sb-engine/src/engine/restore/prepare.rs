@@ -34,8 +34,8 @@ use crate::{Engine, EngineError};
 /// used again (spec/03).
 #[derive(Debug)]
 pub struct PreparedRestore {
-    generation_id: String,
-    stage: QualifiedStage,
+    pub(super) generation_id: String,
+    pub(super) stage: QualifiedStage,
 }
 
 impl PreparedRestore {

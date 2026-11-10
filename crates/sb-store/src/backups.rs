@@ -144,6 +144,10 @@ pub enum BackupDestination {
 /// (spec/07 "Commands").
 pub const START_BACKUP: &str = "start_backup";
 
+/// The command a restore's receipt is recorded under (spec/07
+/// "Commands").
+pub const START_RESTORE: &str = "start_restore";
+
 /// What [`crate::Store::start_backup`] did under its idempotency key.
 #[derive(Debug)]
 pub enum StartedBackup {
