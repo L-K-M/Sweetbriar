@@ -489,11 +489,10 @@ fn verify(resources: &Resources, jobs: &MaintenanceJobs, stopped: &dyn Fn() -> b
     #[cfg(test)]
     jobs.event(Event::Running(MaintenanceJob::Verify));
     let sample = resources.verify_sample(&jobs.cancel);
-    // A stopped sample ends the run. A failed one doesn't keep the
-    // generations from their check: the two read different files.
-    let checks = match &sample {
-        Ok(report) if report.stopped => GenerationChecks::default(),
-        _ => check_generations(resources, &jobs.cancel),
+    let checks = if generations_follow(&sample) {
+        check_generations(resources, &jobs.cancel)
+    } else {
+        GenerationChecks::default()
     };
     let (outcome, detail) = verify_outcome(sample, &checks);
     finish(resources, jobs, MaintenanceJob::Verify, outcome, &detail);
@@ -518,24 +517,44 @@ pub(crate) struct GenerationChecks {
     pub(crate) stopped: bool,
 }
 
+/// Whether the generations are checked after this sample. A stopped
+/// sample ends the run. A failed one doesn't keep them from their
+/// check: the two read different files.
+pub(crate) fn generations_follow(sample: &Result<SampleReport, StoreError>) -> bool {
+    !matches!(sample, Ok(report) if report.stopped)
+}
+
 /// Check every generation the week still owes, never-checked first. An
 /// error on one doesn't keep the others from their check, except the
 /// held operation, which would refuse each of them.
 fn check_generations(resources: &Resources, stop: &AtomicBool) -> GenerationChecks {
+    tally_generations(resources.generations_to_verify(), stop, |generation| {
+        resources.verify_generation(generation, stop)
+    })
+}
+
+/// [`check_generations`] over the owed list as it was read, with the
+/// check itself supplied: the stop is looked at before each
+/// generation, and a list that couldn't be read is a failure.
+pub(crate) fn tally_generations(
+    owed: Result<Vec<String>, StoreError>,
+    stop: &AtomicBool,
+    mut check: impl FnMut(&str) -> Result<GenerationCheck, StoreError>,
+) -> GenerationChecks {
     let mut checks = GenerationChecks::default();
-    let owed = match resources.generations_to_verify() {
+    let owed = match owed {
         Ok(owed) => owed,
         Err(error) => {
             checks.failures.push(error.to_string());
             return checks;
         }
     };
-    for generation in owed {
+    for generation in &owed {
         if stop.load(Ordering::SeqCst) {
             checks.stopped = true;
             break;
         }
-        match resources.verify_generation(&generation, stop) {
+        match check(generation) {
             Ok(GenerationCheck::Recorded(GenerationVerdict::Intact)) => checks.intact += 1,
             Ok(GenerationCheck::Recorded(GenerationVerdict::Damaged)) => checks.damaged += 1,
             Ok(GenerationCheck::Recorded(GenerationVerdict::Missing)) => checks.missing += 1,

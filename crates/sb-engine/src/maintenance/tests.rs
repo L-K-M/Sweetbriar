@@ -2,20 +2,22 @@
 //! outcomes, stopping, and the safety gates.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
 use sb_resources::{
-    BackupDestination, GcGate, GcReport, IntegrityCheck, IntegrityFinding, MaintenanceFinish,
-    MaintenanceJob, MaintenanceOutcome, MaintenanceRun, SampleReport, StoreError, Timestamp,
+    BackupDestination, GcGate, GcReport, GenerationCheck, GenerationVerdict, IntegrityCheck,
+    IntegrityFinding, MaintenanceFinish, MaintenanceJob, MaintenanceOutcome, MaintenanceRun,
+    SampleReport, StoreError, Timestamp,
 };
 use sb_test_support::{ScratchDir, block_on, damage_an_index, real_fs};
 
 use super::{
     BACKUP_PERIOD, BACKUP_RETRY, Cadence, Event, GC_PERIOD, GC_RETRY, GenerationChecks, Host,
     INTEGRITY_PERIOD, POLL, SETTLE, VERIFY_PERIOD, VERIFY_RETRY, backup_outcome, check_integrity,
-    due_at, floor_at, gc_outcome, integrity_outcome, snapshot_outcome, verify_outcome,
+    due_at, floor_at, gc_outcome, generations_follow, integrity_outcome, snapshot_outcome,
+    tally_generations, verify_outcome,
 };
 use crate::index_tests::{TestClock, clocked, count, import, wait, write};
 use crate::{Engine, Integrity};
@@ -586,6 +588,36 @@ fn a_held_backup_operation_blocks_the_generation_checks() {
     block_on(engine.shutdown()).unwrap();
 }
 
+/// A destination that isn't there (an unmounted volume) is counted and
+/// fails nothing; the generation keeps the verdict it had.
+#[test]
+fn an_absent_destination_is_counted_and_fails_nothing() {
+    let scratch = ScratchDir::new("maintenance-verify-absent");
+    let (engine, clock) = scheduled(scratch.path(), MONDAY);
+    advance(&engine, &clock, SETTLE);
+    assert_eq!(verdicts(&engine), [Some("intact".to_owned())]);
+    let backups = scratch.path().join("backups");
+    std::fs::rename(&backups, scratch.path().join("backups.away")).unwrap();
+
+    advance(&engine, &clock, VERIFY_PERIOD);
+
+    let end = verified(&engine);
+    assert_eq!(
+        end.outcome,
+        MaintenanceOutcome::Complete,
+        "{:?}",
+        end.detail
+    );
+    let detail = end.detail.unwrap();
+    assert!(
+        detail.ends_with("generations: intact 0, damaged 0, missing 0, unreachable 1, failed 0"),
+        "{detail}"
+    );
+    assert_eq!(verdicts(&engine), [Some("intact".to_owned())]);
+    assert!(engine.resources().verification_due().unwrap());
+    block_on(engine.shutdown()).unwrap();
+}
+
 /// With nothing owed a due job records nothing, so a failed run's
 /// record stands until the next week brings work.
 #[test]
@@ -1029,6 +1061,96 @@ fn an_integrity_check_maps_to_one_outcome_or_none() {
         integrity_outcome(Ok(IntegrityCheck::Finding(finding))),
         None
     );
+}
+
+#[test]
+fn the_generations_are_tallied_until_a_stop_or_a_held_operation() {
+    let owed = |count: usize| -> Vec<String> { (1..=count).map(|n| format!("g{n}")).collect() };
+    let recorded = |verdict| Ok(GenerationCheck::Recorded(verdict));
+    let conflict = || StoreError::Conflict {
+        detail: "a backup operation is already running".into(),
+    };
+    let running = AtomicBool::new(false);
+
+    // Every verdict is counted, an error on one doesn't keep the next
+    // from its check, and a generation retention removed counts nowhere.
+    let mut asked = Vec::new();
+    let checks = tally_generations(Ok(owed(7)), &running, |generation| {
+        asked.push(generation.to_owned());
+        match generation {
+            "g1" | "g7" => recorded(GenerationVerdict::Intact),
+            "g2" => recorded(GenerationVerdict::Damaged),
+            "g3" => recorded(GenerationVerdict::Missing),
+            "g4" => Ok(GenerationCheck::DestinationAbsent),
+            "g5" => Ok(GenerationCheck::Gone),
+            _ => Err(StoreError::internal("input/output error")),
+        }
+    });
+    assert_eq!(asked, owed(7));
+    assert_eq!(
+        checks,
+        GenerationChecks {
+            intact: 2,
+            damaged: 1,
+            missing: 1,
+            unreachable: 1,
+            failures: vec![format!(
+                "generation g6: {}",
+                StoreError::internal("input/output error")
+            )],
+            blocked: None,
+            stopped: false,
+        }
+    );
+
+    // A held operation would refuse each of the rest: they wait.
+    let mut asked = 0;
+    let checks = tally_generations(Ok(owed(3)), &running, |generation| {
+        asked += 1;
+        match generation {
+            "g1" => recorded(GenerationVerdict::Intact),
+            _ => Err(conflict()),
+        }
+    });
+    assert_eq!(asked, 2);
+    assert_eq!(checks.intact, 1);
+    assert_eq!(checks.blocked, Some(conflict().to_string()));
+    assert!(checks.failures.is_empty() && !checks.stopped);
+
+    // A check the stop ended ends the run; so does a stop raised
+    // between two generations, before the next is read.
+    let mut asked = 0;
+    let checks = tally_generations(Ok(owed(3)), &running, |_| {
+        asked += 1;
+        Ok(GenerationCheck::Stopped)
+    });
+    assert_eq!((asked, checks.stopped), (1, true));
+    let stop = AtomicBool::new(false);
+    let mut asked = 0;
+    let checks = tally_generations(Ok(owed(3)), &stop, |_| {
+        asked += 1;
+        stop.store(true, Ordering::SeqCst);
+        recorded(GenerationVerdict::Intact)
+    });
+    assert_eq!((asked, checks.intact, checks.stopped), (1, 1, true));
+
+    // A list that couldn't be read is a failure, and nothing is checked.
+    let unread = tally_generations(Err(StoreError::internal("no reader")), &running, |_| {
+        panic!("no generation is known")
+    });
+    assert_eq!(
+        unread.failures,
+        [StoreError::internal("no reader").to_string()]
+    );
+
+    // The sample decides whether they are checked at all.
+    assert!(generations_follow(&Ok(SampleReport::default())));
+    assert!(generations_follow(&Err(StoreError::internal("no reader"))));
+    let stopped = SampleReport {
+        stopped: true,
+        ..SampleReport::default()
+    };
+    assert!(!generations_follow(&Ok(stopped)));
 }
 
 #[test]
