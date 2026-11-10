@@ -37,6 +37,12 @@ fn transaction_cut(point: &str) {
 }
 
 fn io_error(e: io::Error) -> StoreError {
+    if let Some(cause) = e
+        .get_ref()
+        .and_then(|cause| cause.downcast_ref::<StoreError>())
+    {
+        return cause.clone();
+    }
     StoreError::unavailable_io(format!("verifier scratch I/O failed: {e}"), e.kind())
 }
 fn paths(root: &Path, id: &str) -> (PathBuf, PathBuf) {
@@ -55,9 +61,8 @@ pub(super) struct Session<'a> {
 
 impl Backups {
     fn recover_images(&self, home: &Home) -> Result<(), StoreError> {
-        let root = self
-            .fs
-            .open_confined_dir(home.scratch_root())
+        let root = home
+            .directory(self.fs.as_ref(), &self.objects)
             .map_err(io_error)?;
         while let Some((id, token)) = home.pending()? {
             scratch::cleanup(root.as_ref(), &id, &token, None).map_err(io_error)?;
@@ -164,8 +169,8 @@ impl Backups {
         };
         // A latched store's root is frozen and its writer refuses, so
         // its verification lives beside it (spec/03 "Integrity"). The
-        // home is chosen once: a verification a latch catches fails at
-        // the writer and doesn't move.
+        // home is chosen once: its in-root file steps and writer both
+        // refuse after a latch; it never moves into the sibling.
         let home = match self.objects.latch().get() {
             None => self.store_home(),
             Some(_) => Home::beside(self.fs.as_ref(), &self.state_db)?,
@@ -177,7 +182,9 @@ impl Backups {
         let id = Uuid::from_random_bytes(self.draw_id()?).to_string();
         let token = Uuid::from_random_bytes(self.draw_id()?).to_string();
         let (dir, marker) = paths(Path::new(""), &id);
-        let root_dir = self.fs.open_confined_dir(&root).map_err(io_error)?;
+        let root_dir = home
+            .directory(self.fs.as_ref(), &self.objects)
+            .map_err(io_error)?;
         if self
             .fs
             .metadata(&root.join(&dir))

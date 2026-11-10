@@ -7,6 +7,7 @@
 mod attachments;
 mod checked;
 mod external;
+mod frozen_scratch;
 mod home;
 mod image;
 mod image_inspect;
