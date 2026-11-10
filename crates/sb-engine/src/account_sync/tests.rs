@@ -668,6 +668,57 @@ fn bridge_not_running_shows_while_retries_continue_and_shutdown_still_stops() {
     shutdown_promptly(engine);
 }
 
+/// Bridge accepts every login, then drops the connection at the pass's
+/// first command: sessions that never complete a pass.
+fn failing_session_script() -> Script {
+    let profile = Profile::bridge();
+    let mut steps = login_steps(&profile, true);
+    steps.push(Step::on(Expect::command("LIST"), vec![Reply::Drop]));
+    Script::new(steps).implicit_tls()
+}
+
+/// A session that fails before completing a pass doesn't reset the
+/// backoff: the waits between its reconnects keep growing (1 s and
+/// 1 s, then 2 s and 1 s) rather than restarting at 1 s forever. Load
+/// only lengthens the waits, so the lower bound holds on a busy host.
+#[test]
+fn the_session_backoff_doubles_to_its_ceiling_and_a_completed_pass_resets_it() {
+    let mut backoff = super::SessionBackoff::new();
+    let waits: Vec<u64> = (0..10)
+        .map(|_| backoff.after_failure(false).as_secs())
+        .collect();
+    assert_eq!(waits, [1, 2, 4, 8, 16, 32, 64, 128, 256, 300]);
+    assert_eq!(backoff.after_failure(true), Duration::ZERO);
+    assert_eq!(backoff.after_failure(false), Duration::from_secs(1));
+}
+
+#[test]
+fn sessions_that_never_complete_a_pass_back_off() {
+    let scratch = ScratchDir::new("account-worker-unproven");
+    let secrets = Arc::new(FakeSecrets::new());
+    let server =
+        FakeImapServer::serve(vec![bridge_script(true), failing_session_script()]).unwrap();
+    let engine = open(&scratch, &secrets);
+    add(&engine, server.port());
+
+    // The probe's login is the first; the worker's are the rest.
+    let mut seen = Vec::new();
+    let deadline = Instant::now() + DEADLINE;
+    while seen.len() < 3 && Instant::now() < deadline {
+        if logins(&server) > seen.len() + 1 {
+            seen.push(Instant::now());
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(seen.len(), 3, "three worker logins");
+    let spread = seen[2] - seen[0];
+    assert!(
+        spread >= Duration::from_millis(4_500),
+        "three failed sessions within {spread:?}: the backoff restarted"
+    );
+    shutdown_promptly(engine);
+}
+
 #[test]
 fn a_missing_credential_pauses_the_account_for_its_credential() {
     let scratch = ScratchDir::new("account-worker-secret");
