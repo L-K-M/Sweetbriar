@@ -25,7 +25,10 @@ pub trait Fs: Send + Sync {
     /// caller flushes the parent directory. Anything but a regular file
     /// at `from`, a link included, is refused, never followed or cloned.
     /// `Unsupported` or `CrossesDevices` where the filesystem or this
-    /// pair of paths can't clone: the caller copies instead.
+    /// pair of paths can't clone: the caller copies instead. A clone
+    /// that can't be flushed is removed, so an error leaves no `to`
+    /// unless that removal failed too; a caller that copies instead
+    /// clears the name first.
     fn clone_file(&self, _from: &Path, _to: &Path) -> io::Result<()> {
         Err(io::ErrorKind::Unsupported.into())
     }

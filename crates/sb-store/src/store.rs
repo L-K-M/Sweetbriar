@@ -152,13 +152,7 @@ impl Store {
         &self,
         snapshot: crate::backups::BackupSnapshot,
     ) -> Result<crate::backups::BackupReceipt, StoreError> {
-        if self.writer.is_writer_thread() {
-            return Err(StoreError::internal(
-                "the writer thread cannot back up through its own queue",
-            ));
-        }
-        self.backups
-            .complete(snapshot, &std::sync::atomic::AtomicBool::new(false))
+        self.complete_backup_with(snapshot, &std::sync::atomic::AtomicBool::new(false))
     }
 
     /// [`Store::complete_backup`], stopping at the next object once

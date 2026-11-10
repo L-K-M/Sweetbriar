@@ -356,8 +356,24 @@ impl Fs for RealFs {
             });
         }
         // The clone shares durable blocks, but its own inode and extent
-        // records are new: flush them as a copy's would be.
-        flush_durably(&File::open(to)?)
+        // records are new: flush them as a copy's would be. Opened
+        // without following a link or blocking on a fifo, so what is
+        // flushed is the regular file at `to`; a clone that can't be
+        // flushed is removed, so an error leaves no `to`.
+        let flushed = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_NOCTTY)
+            .open(to)
+            .and_then(|clone| {
+                if !clone.metadata()?.is_file() {
+                    return Err(not_regular(to));
+                }
+                flush_durably(&clone)
+            });
+        if flushed.is_err() {
+            let _ = std::fs::remove_file(to);
+        }
+        flushed
     }
 
     fn open(&self, path: &Path) -> io::Result<Box<dyn sb_types::fs::ReadFile>> {

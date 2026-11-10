@@ -187,3 +187,102 @@ fn a_cancelled_completion_stops_and_the_next_backup_recovers_it() {
     let gc = store.collect_garbage(GC_GRACE_PERIOD).unwrap();
     assert_eq!(gc.blocked, None, "{gc:?}");
 }
+
+/// The real filesystem, except that each clone leaves its target
+/// behind and then fails, as a clone whose flush failed would.
+struct LeftoverCloneFs(Arc<dyn Fs>);
+
+impl Fs for LeftoverCloneFs {
+    fn clone_file(&self, from: &Path, to: &Path) -> std::io::Result<()> {
+        let mut input = self.0.open(from)?;
+        let mut output = self.0.create(to)?;
+        std::io::copy(&mut input, &mut output)?;
+        Err(std::io::Error::other(
+            "injected flush failure after the clone",
+        ))
+    }
+    fn open_confined_dir(
+        &self,
+        path: &Path,
+    ) -> std::io::Result<Box<dyn sb_types::fs::ConfinedDir>> {
+        self.0.open_confined_dir(path)
+    }
+    fn create(&self, path: &Path) -> std::io::Result<Box<dyn sb_types::fs::WriteFile>> {
+        self.0.create(path)
+    }
+    fn open(&self, path: &Path) -> std::io::Result<Box<dyn sb_types::fs::ReadFile>> {
+        self.0.open(path)
+    }
+    fn open_no_follow(&self, path: &Path) -> std::io::Result<Box<dyn sb_types::fs::ReadFile>> {
+        self.0.open_no_follow(path)
+    }
+    fn open_regular(
+        &self,
+        path: &Path,
+    ) -> std::io::Result<(Box<dyn sb_types::fs::ReadFile>, sb_types::fs::Metadata)> {
+        self.0.open_regular(path)
+    }
+    fn metadata(&self, path: &Path) -> std::io::Result<Option<sb_types::fs::Metadata>> {
+        self.0.metadata(path)
+    }
+    fn read_dir(&self, path: &Path) -> std::io::Result<Vec<PathBuf>> {
+        self.0.read_dir(path)
+    }
+    fn create_dir(&self, path: &Path) -> std::io::Result<()> {
+        self.0.create_dir(path)
+    }
+    fn create_private_dir(&self, path: &Path) -> std::io::Result<()> {
+        self.0.create_private_dir(path)
+    }
+    fn restrict_dir(&self, path: &Path) -> std::io::Result<()> {
+        self.0.restrict_dir(path)
+    }
+    fn remove_dir_all(&self, path: &Path) -> std::io::Result<()> {
+        self.0.remove_dir_all(path)
+    }
+    fn quarantine(&self, path: &Path) -> std::io::Result<()> {
+        self.0.quarantine(path)
+    }
+    fn sync_dir(&self, path: &Path) -> std::io::Result<()> {
+        self.0.sync_dir(path)
+    }
+    fn rename(&self, from: &Path, to: &Path) -> std::io::Result<()> {
+        self.0.rename(from, to)
+    }
+    fn remove(&self, path: &Path) -> std::io::Result<()> {
+        self.0.remove(path)
+    }
+    fn canonicalize(&self, path: &Path) -> std::io::Result<PathBuf> {
+        self.0.canonicalize(path)
+    }
+    fn lock_exclusive(
+        &self,
+        path: &Path,
+    ) -> Result<Box<dyn sb_types::fs::Lease>, sb_types::fs::LockError> {
+        self.0.lock_exclusive(path)
+    }
+    fn location(&self, path: &Path) -> std::io::Result<sb_types::fs::Location> {
+        self.0.location(path)
+    }
+}
+
+/// A clone that fails after creating its target leaves the name to the
+/// copy: the generation completes with the copied object.
+#[test]
+fn a_clone_that_fails_after_creating_its_target_is_copied_over() {
+    let (_scratch, paths, store) = open("backup-clone-leftover");
+    let shas = objects(&store, 2);
+    let backups = faulty_backups(&store, &paths, Arc::new(LeftoverCloneFs(real_fs())));
+    let snapshot = backups.snapshot(BackupDestination::DataRoot).unwrap();
+    let receipt = backups.complete(snapshot, &AtomicBool::new(false)).unwrap();
+
+    store
+        .verify_recorded_backup(receipt.generation_id(), &AtomicBool::new(false))
+        .unwrap();
+    for (n, sha) in shas.iter().enumerate() {
+        assert_eq!(
+            generation_object(&receipt, sha),
+            format!("Subject: {n}\r\n\r\nbody {n}\r\n").as_bytes()
+        );
+    }
+}

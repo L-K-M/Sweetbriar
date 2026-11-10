@@ -402,8 +402,17 @@ impl Backups {
                 return Ok(Cloned::Unsupported);
             }
             // A missing or unreadable source: the copy's verifying
-            // reader reports it as for any object.
-            Err(_) => return Ok(Cloned::Failed),
+            // reader reports it as for any object. A clone can also fail
+            // after creating `target` (its flush is part of the clone):
+            // the copy's exclusive create needs the name free.
+            Err(_) => {
+                match self.fs.remove(target) {
+                    Ok(()) => {}
+                    Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                    Err(e) => return Err(io_error(e)),
+                }
+                return Ok(Cloned::Failed);
+            }
         }
         let (file, _) = self.fs.open_regular(target).map_err(io_error)?;
         let entry = stream(file, None)?;
