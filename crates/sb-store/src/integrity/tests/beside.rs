@@ -131,6 +131,17 @@ fn the_next_verification_cleans_up_one_cut_short_beside_the_root() {
     assert!(left[0].starts_with(".verifier-") && left[0].ends_with(".owner"));
     assert!(left[1].starts_with("verifier-"));
     assert_eq!(rows(&paths).0, 1);
+    // As a cut later in the verification leaves it: the ledger holds
+    // an object of the dead scratch.
+    let id = left[1].trim_start_matches("verifier-").to_owned();
+    Connection::open(beside(&paths).join("ledger.sqlite"))
+        .unwrap()
+        .execute(
+            "INSERT INTO verifier_objects (scratch_id, sha256, bytes) VALUES (?1, ?2, ?3)",
+            rusqlite::params![id, [7u8; 32], 9u64.to_be_bytes()],
+        )
+        .unwrap();
+    assert_eq!(rows(&paths), (1, 1));
 
     let before = tree(&paths);
     assert_verified(&store, &generation);
@@ -161,6 +172,36 @@ fn a_row_of_another_incarnation_authorizes_no_cleanup_beside_the_root() {
 
     assert!(directory.is_dir());
     assert_eq!(rows(&paths), (1, 0));
+    store.close().unwrap();
+}
+
+/// An empty ledger file, which is what a process that died creating
+/// it leaves (SQLite commits the first page or rolls it back), is made
+/// again, so a cut there never keeps a latched store from its restore.
+/// Bytes that are no database are refused under the ledger's name and
+/// stay.
+#[test]
+fn an_empty_ledger_is_made_again_and_one_that_is_no_database_refused() {
+    let (_scratch, paths, store, generation, _) = latched("integrity-beside-torn");
+    let ledger = beside(&paths).join("ledger.sqlite");
+    std::fs::create_dir_all(beside(&paths)).unwrap();
+    std::fs::write(&ledger, b"").unwrap();
+    assert_verified(&store, &generation);
+    assert_eq!(rows(&paths), (0, 0));
+
+    for foreign in [b"SQLite fo".to_vec(), vec![0x5a; 4096]] {
+        std::fs::remove_dir_all(beside(&paths)).unwrap();
+        std::fs::create_dir_all(beside(&paths)).unwrap();
+        std::fs::write(&ledger, &foreign).unwrap();
+        match verify(&store, &generation) {
+            Err(StoreError::Corrupt { detail }) => {
+                assert!(detail.contains("ledger.sqlite"), "{detail}");
+                assert!(detail.contains("is not a verifier ledger"), "{detail}");
+            }
+            other => panic!("expected Corrupt, got {other:?}"),
+        }
+        assert_eq!(std::fs::read(&ledger).unwrap(), foreign);
+    }
     store.close().unwrap();
 }
 
@@ -198,5 +239,21 @@ fn a_sibling_that_is_no_verifier_home_is_refused() {
         other => panic!("expected Corrupt, got {other:?}"),
     }
     assert_eq!(std::fs::read(beside(&paths)).unwrap(), b"not a directory");
+
+    // A symlink is no sibling of this store's, wherever it leads: the
+    // ledger is never opened through it, into the frozen root least of
+    // all.
+    std::fs::remove_file(beside(&paths)).unwrap();
+    let elsewhere = paths.data_root().join("recovery");
+    let before = tree(&paths);
+    std::os::unix::fs::symlink(&elsewhere, beside(&paths)).unwrap();
+    match verify(&store, &generation) {
+        Err(StoreError::Corrupt { detail }) => {
+            assert!(detail.contains("is not a directory"), "{detail}");
+        }
+        other => panic!("expected Corrupt, got {other:?}"),
+    }
+    assert_eq!(tree(&paths), before, "the link was followed into the root");
+    assert!(beside(&paths).is_symlink());
     store.close().unwrap();
 }
