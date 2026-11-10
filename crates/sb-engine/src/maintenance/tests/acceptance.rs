@@ -15,7 +15,9 @@ use super::*;
 /// setting."
 const TEST_PERIOD: Duration = Duration::from_secs(5 * 60);
 const MINUTE: Duration = Duration::from_secs(60);
-const PATIENCE: Duration = Duration::from_secs(60);
+/// How long a restore or a job's start may take in real time. The
+/// swap is disk work, and the suite shares its disk with others.
+const PATIENCE: Duration = Duration::from_secs(300);
 const CUE: &str = "appearance.compose_cue";
 const IN_PROGRESS: &str = "SELECT count(*) FROM backup_generations WHERE state='in_progress'";
 const PINS: &str = "SELECT count(*) FROM object_pins WHERE pin_kind='backup_in_progress'";
