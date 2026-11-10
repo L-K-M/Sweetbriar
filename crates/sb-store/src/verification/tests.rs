@@ -471,3 +471,36 @@ fn the_writer_thread_cannot_run_the_sample() {
     assert!(matches!(err, StoreError::Internal { .. }), "{err:?}");
     Arc::into_inner(store).unwrap().close().unwrap();
 }
+
+/// The weekly verification is owed while a week's bucket is unread or
+/// a complete generation is unchecked this week (plan M1.8h4c).
+#[test]
+fn verification_is_due_until_the_week_s_sample_and_generations_are_done() {
+    let (_scratch, store, clock) = open("verification-due");
+    let stop = AtomicBool::new(false);
+    assert!(store.verification_due().unwrap(), "the sample never ran");
+    run(&store);
+    assert!(!store.verification_due().unwrap());
+
+    // A generation completes: it has never been checked.
+    let snapshot = store
+        .backup_snapshot(crate::BackupDestination::DataRoot)
+        .unwrap();
+    let generation = store.complete_backup(snapshot).unwrap();
+    assert!(store.verification_due().unwrap());
+    store
+        .verify_generation(generation.generation_id(), &stop)
+        .unwrap();
+    assert!(!store.verification_due().unwrap());
+
+    // The next week owes both again.
+    set_week(&clock, week_of(FIXED_NOW_MS) + 1);
+    assert!(store.verification_due().unwrap());
+    run(&store);
+    assert!(store.verification_due().unwrap(), "the generation is owed");
+    store
+        .verify_generation(generation.generation_id(), &stop)
+        .unwrap();
+    assert!(!store.verification_due().unwrap());
+    store.close().unwrap();
+}

@@ -77,8 +77,8 @@ pub use sb_store::{
     RestoreMetadata, VerifiedExternalBackup,
 };
 pub use sb_store::{
-    GC_GRACE_PERIOD, GcGate, GcReport, MaintenanceFinish, MaintenanceJob, MaintenanceOutcome,
-    MaintenanceRun,
+    GC_GRACE_PERIOD, GcGate, GcReport, GenerationCheck, GenerationVerdict, MaintenanceFinish,
+    MaintenanceJob, MaintenanceOutcome, MaintenanceRun, SampleReport,
 };
 pub use sb_store::{IntegrityCheck, IntegrityFinding, IntegrityLatch};
 pub use search::{CoverageCounts, read_search_coverage, read_search_coverage_reusing};

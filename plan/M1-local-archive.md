@@ -1617,7 +1617,9 @@ local drafts. No network yet.
     generation. Split before implementation: **h4a** the live sample
     and its accounting, **h4b** the generations, each checked against
     its manifest and the result recorded, and **h4c** the weekly job in
-    the scheduler (with h3b, whichever lands second). **h5 Weekly
+    the scheduler (with h3b, whichever lands second): the sample, then
+    the generations the week still owes, run only while there is work
+    and recorded `complete` whatever it found. **h5 Weekly
     `integrity_check` (L)**: when idle, on an
     interruptible reader; a finding copies the files to `recovery/`,
     latches the store read-only across reopens and stops remote
