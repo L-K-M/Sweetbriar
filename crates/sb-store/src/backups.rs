@@ -251,13 +251,21 @@ enum Begun {
 
 /// Whether a generation's cleanup is owed (spec/03), which only the
 /// next generation does: a row is `in_progress`, or a failed one's
-/// removal stopped part way. Until then the row freezes GC and its
-/// pins hold their objects. A generation still being copied reads the
-/// same; [`Backups::generation_running`] tells them apart.
+/// removal stopped part way. Until then an `in_progress` row freezes
+/// GC, and either one's pins hold their objects. A generation still
+/// being copied reads the same; [`Backups::generation_running`] tells
+/// them apart.
+///
+/// These are the rows recovery acts on. A cleanup marker on a complete
+/// generation is damage recovery refuses, so it owes nothing here: it
+/// would keep the store due for a backup that can't clear it.
 pub(crate) fn cleanup_owed(tx: &Transaction) -> Result<bool, StoreError> {
     tx.query_row(
-        "SELECT EXISTS(SELECT 1 FROM backup_generations WHERE state = 'in_progress')
-                OR EXISTS(SELECT 1 FROM backup_cleanup_pending)",
+        "SELECT EXISTS(
+           SELECT 1 FROM backup_generations g
+           LEFT JOIN backup_cleanup_pending p ON p.generation_id = g.generation_id
+           WHERE g.state = 'in_progress'
+              OR (g.state = 'failed' AND p.generation_id IS NOT NULL))",
         [],
         |row| row.get(0),
     )
@@ -398,7 +406,8 @@ impl Backups {
     /// the answer that names it exist together or not at all. A key
     /// that started one already answers its receipt before anything
     /// else happens here: no recovery, no retention, and no `Conflict`
-    /// while that generation is still being copied.
+    /// while that generation is still being copied. (A latched store
+    /// answers no key: it refuses first.)
     pub(crate) fn start(
         &self,
         destination: BackupDestination,
@@ -447,15 +456,25 @@ impl Backups {
             self.pause(|p| &p.after_key_look);
             self.pause(|p| &p.after_key_look);
         }
-        let mut active = self
-            .active
-            .try_lock()
-            .map_err(|_| StoreError::conflict("a backup operation is already running"))?;
-        if active.as_ref().and_then(Weak::upgrade).is_some() {
-            return Err(StoreError::conflict(
-                "a backup generation is already in progress",
-            ));
-        }
+        let held = match self.active.try_lock() {
+            Ok(active) if active.as_ref().and_then(Weak::upgrade).is_none() => Ok(active),
+            Ok(_) => Err("a backup generation is already in progress"),
+            Err(_) => Err("a backup operation is already running"),
+        };
+        let mut active = match held {
+            Ok(active) => active,
+            Err(refusal) => {
+                // The operation is held, perhaps by the generation this
+                // key started since the look above: then the answer is
+                // its receipt, as for any later retry.
+                if let Some(key) = key
+                    && let Some(receipt) = self.spent(key)?
+                {
+                    return Ok(Begun::Replayed(receipt));
+                }
+                return Err(StoreError::conflict(refusal));
+            }
+        };
         self.recover()?;
         self.retain()?;
         let token = Arc::new(());
@@ -518,9 +537,8 @@ impl Backups {
                 None
             }
             // A command a caller waits on, like every other keyed one.
-            // The receipt is the store's bookkeeping, as the row is: it
-            // is in the snapshot taken next, and it makes no generation
-            // due.
+            // The receipt is the store's bookkeeping, as the row is,
+            // and it is in the snapshot taken next.
             Some(key) => Some(await_write(
                 self.writer.upkeep(WritePriority::User, move |tx| {
                     run_once(tx, &key, START_BACKUP, now, insert)

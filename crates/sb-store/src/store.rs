@@ -199,11 +199,11 @@ impl Store {
     /// A generation this process is still copying is not interrupted.
     pub fn backup_due(&self) -> Result<bool, StoreError> {
         // Asked before the read takes its snapshot. A generation that
-        // starts in between is then taken for interrupted, and the
-        // backup that answer starts finds the operation held:
-        // `Conflict`, nothing done. The other order could take one that
-        // completes in between for interrupted, and start a generation
-        // nothing owed.
+        // starts in between is then taken for interrupted. That answer
+        // is wrong for as long as its copy runs, and the backup it
+        // starts meanwhile finds the operation held (`Conflict`). The
+        // other order would be wrong every time a generation completes
+        // in between, and each time start one nothing owed.
         let copying = self.backups.generation_running();
         self.read(|tx| {
             Ok(crate::changes::backup_due(tx)? || (!copying && crate::backups::cleanup_owed(tx)?))
@@ -384,7 +384,8 @@ impl Store {
     /// the generation's `in_progress` row. A key that started a
     /// generation before answers that receipt and does nothing else,
     /// while that generation is still being copied too; a key spent on
-    /// another command is `Conflict`. A failure after the row commits
+    /// another command is `Conflict`. A latched store refuses before
+    /// it looks at the key. A failure after the row commits
     /// leaves the receipt naming a generation the next one's recovery
     /// marks `failed`. Blocking, like the snapshot.
     pub fn start_backup(
