@@ -26,7 +26,7 @@ use rusqlite::{Connection, ffi};
 
 /// The work a read may do before SQLite interrupts it: `budget`
 /// handler calls, or none at all once `stopped` is raised.
-pub(super) struct WorkLimit<'a> {
+pub(crate) struct WorkLimit<'a> {
     stopped: &'a AtomicBool,
     budget: u32,
     calls: AtomicU32,
@@ -34,7 +34,7 @@ pub(super) struct WorkLimit<'a> {
 }
 
 impl<'a> WorkLimit<'a> {
-    pub(super) fn new(stopped: &'a AtomicBool, budget: u32) -> Self {
+    pub(crate) fn new(stopped: &'a AtomicBool, budget: u32) -> Self {
         Self {
             stopped,
             budget,
@@ -44,7 +44,7 @@ impl<'a> WorkLimit<'a> {
     }
 
     /// Whether the read ran out of its budget.
-    pub(super) fn exhausted(&self) -> bool {
+    pub(crate) fn exhausted(&self) -> bool {
         self.exhausted.load(Ordering::Acquire)
     }
 
@@ -92,7 +92,7 @@ impl Drop for Installed {
 
 /// Run `read` with SQLite calling `limit` every `ops` virtual-machine
 /// instructions. The handler is removed before this returns.
-pub(super) fn with_work_limit<T>(
+pub(crate) fn with_work_limit<T>(
     conn: &Connection,
     ops: c_int,
     limit: &WorkLimit<'_>,
