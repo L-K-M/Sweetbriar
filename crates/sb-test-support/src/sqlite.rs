@@ -43,6 +43,34 @@ pub fn with_sqlite_write_lock(state_db: &Path, body: impl FnOnce()) {
     transaction.rollback().unwrap();
 }
 
+/// Damage a closed store's database the way only the full
+/// `integrity_check` sees (spec/03 "Integrity"): a fixture table's
+/// index is redefined over another column, so every entry its b-tree
+/// holds is one the table doesn't have. `quick_check` passes it, and
+/// nothing reads the fixture table, so the store opens and works as
+/// before until it runs the full check.
+pub fn damage_an_index(state_db: &Path) {
+    execute_sql(
+        state_db,
+        "CREATE TABLE integrity_probe (seq INTEGER PRIMARY KEY, pad TEXT NOT NULL);
+         CREATE INDEX integrity_probe_pad ON integrity_probe(pad);
+         INSERT INTO integrity_probe (seq, pad)
+         WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c WHERE x < 200)
+         SELECT x, printf('pad-%04d', x) FROM c;
+         PRAGMA writable_schema = ON;
+         UPDATE sqlite_schema SET sql = 'CREATE INDEX integrity_probe_pad ON integrity_probe(seq)'
+         WHERE name = 'integrity_probe_pad';
+         PRAGMA writable_schema = OFF;",
+    );
+    // A fresh connection reads the rewritten schema.
+    let conn = Connection::open_with_flags(state_db, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .unwrap_or_else(|e| panic!("cannot open {} read-only: {e}", state_db.display()));
+    let quick: String = conn
+        .query_row("PRAGMA quick_check", [], |row| row.get(0))
+        .unwrap_or_else(|e| panic!("cannot run quick_check: {e}"));
+    assert_eq!(quick, "ok", "the damage must be invisible to quick_check");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -80,32 +108,4 @@ mod tests {
             2
         );
     }
-}
-
-/// Damage a closed store's database the way only the full
-/// `integrity_check` sees (spec/03 "Integrity"): a fixture table's
-/// index is redefined over another column, so every entry its b-tree
-/// holds is one the table doesn't have. `quick_check` passes it, and
-/// nothing reads the fixture table, so the store opens and works as
-/// before until it runs the full check.
-pub fn damage_an_index(state_db: &Path) {
-    execute_sql(
-        state_db,
-        "CREATE TABLE integrity_probe (seq INTEGER PRIMARY KEY, pad TEXT NOT NULL);
-         CREATE INDEX integrity_probe_pad ON integrity_probe(pad);
-         INSERT INTO integrity_probe (seq, pad)
-         WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c WHERE x < 200)
-         SELECT x, printf('pad-%04d', x) FROM c;
-         PRAGMA writable_schema = ON;
-         UPDATE sqlite_schema SET sql = 'CREATE INDEX integrity_probe_pad ON integrity_probe(seq)'
-         WHERE name = 'integrity_probe_pad';
-         PRAGMA writable_schema = OFF;",
-    );
-    // A fresh connection reads the rewritten schema.
-    let conn = Connection::open_with_flags(state_db, OpenFlags::SQLITE_OPEN_READ_ONLY)
-        .unwrap_or_else(|e| panic!("cannot open {} read-only: {e}", state_db.display()));
-    let quick: String = conn
-        .query_row("PRAGMA quick_check", [], |row| row.get(0))
-        .unwrap_or_else(|e| panic!("cannot run quick_check: {e}"));
-    assert_eq!(quick, "ok", "the damage must be invisible to quick_check");
 }
