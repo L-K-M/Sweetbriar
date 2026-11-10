@@ -352,8 +352,9 @@ fn staged(engine: &Engine) -> QualifiedStage {
         .unwrap()
 }
 
-/// How `job`'s latest run ended in the root a swap preserved.
-fn preserved_outcome(root: &Path, job: &'static str) -> Option<String> {
+/// How `job`'s latest run ended in the root a swap preserved: its
+/// outcome and its detail.
+fn preserved_end(root: &Path, job: &'static str) -> (Option<String>, Option<String>) {
     let mut preserved: Vec<PathBuf> = std::fs::read_dir(root.parent().unwrap())
         .unwrap()
         .map(|entry| entry.unwrap().path())
@@ -364,25 +365,26 @@ fn preserved_outcome(root: &Path, job: &'static str) -> Option<String> {
         .collect();
     assert_eq!(preserved.len(), 1, "one preserved root: {preserved:?}");
     let resources = Resources::open(&preserved.remove(0)).unwrap();
-    let outcome = resources
+    let end = resources
         .read(move |tx| {
             tx.query_row(
-                "SELECT outcome FROM maintenance_jobs WHERE job = ?1",
+                "SELECT outcome, detail FROM maintenance_jobs WHERE job = ?1",
                 [job],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .map_err(sql_error)
         })
         .unwrap();
     resources.close().unwrap();
-    outcome
+    end
 }
 
 /// A restore started while `job` runs: the quiesce stops the job, which
-/// records `cancelled` in the store being replaced; the swap goes
-/// through; and the schedule runs again on the restored store, where
-/// the job completes.
-fn a_restore_during(job: MaintenanceJob, stored: &'static str) {
+/// records `cancelled` in the store being replaced, with a detail that
+/// starts with `stopped_early` (the stop ended it before any of its
+/// work); the swap goes through; and the schedule runs again on the
+/// restored store, where the job completes.
+fn a_restore_during(job: MaintenanceJob, stored: &'static str, stopped_early: &str) {
     let scratch = ScratchDir::new(&format!("maintenance-acceptance-restore-{stored}"));
     let root = std::fs::canonicalize(scratch.path()).unwrap().join("store");
     let (engine, clock) = scheduled(&root, MONDAY);
@@ -414,11 +416,10 @@ fn a_restore_during(job: MaintenanceJob, stored: &'static str) {
     let engine = finish(engine.restore(stage, Arc::new(AtomicBool::new(false))))
         .unwrap_or_else(|error| panic!("the restore during {stored} failed: {error:?}"));
 
-    assert_eq!(
-        preserved_outcome(&root, stored).as_deref(),
-        Some("cancelled"),
-        "{stored}"
-    );
+    let (outcome, detail) = preserved_end(&root, stored);
+    assert_eq!(outcome.as_deref(), Some("cancelled"), "{stored}");
+    let detail = detail.unwrap_or_default();
+    assert!(detail.starts_with(stopped_early), "{stored}: {detail}");
     let cue = block_on(engine.settings())
         .unwrap()
         .iter()
@@ -444,20 +445,28 @@ fn a_restore_during(job: MaintenanceJob, stored: &'static str) {
 
 #[test]
 fn a_restore_during_the_backup_swaps_and_the_schedule_goes_on() {
-    a_restore_during(MaintenanceJob::Backup, "backup");
+    a_restore_during(
+        MaintenanceJob::Backup,
+        "backup",
+        "stopped before the snapshot",
+    );
 }
 
 #[test]
 fn a_restore_during_gc_swaps_and_the_schedule_goes_on() {
-    a_restore_during(MaintenanceJob::Gc, "gc");
+    a_restore_during(MaintenanceJob::Gc, "gc", "stopped: scanned 0, ");
 }
 
 #[test]
 fn a_restore_during_the_verification_swaps_and_the_schedule_goes_on() {
-    a_restore_during(MaintenanceJob::Verify, "verify");
+    a_restore_during(
+        MaintenanceJob::Verify,
+        "verify",
+        "stopped: sample: buckets 0, ",
+    );
 }
 
 #[test]
 fn a_restore_during_the_integrity_check_swaps_and_the_schedule_goes_on() {
-    a_restore_during(MaintenanceJob::Integrity, "integrity");
+    a_restore_during(MaintenanceJob::Integrity, "integrity", "stopped");
 }
