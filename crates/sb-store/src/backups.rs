@@ -82,12 +82,15 @@ use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
 use rusqlite::backup::{Backup, StepResult};
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, Transaction, params};
 
 use sb_types::fs::{FileKind, Fs, WriteFile};
 use sb_types::random::Random;
 use sb_types::time::Clock;
 
+use crate::receipts::{
+    Receipt, encode_generation_receipt, receipt_generation_id, replay, run_once,
+};
 use crate::schema::classify;
 use crate::store::{Access, READER_PRAGMAS, await_write, open_connection};
 use crate::writer::{WritePriority, Writer};
@@ -135,6 +138,25 @@ pub enum BackupDestination {
     /// A user-chosen directory holding generation directories;
     /// missing ancestors are created and flushed.
     Directory(PathBuf),
+}
+
+/// The command a keyed generation's receipt is recorded under
+/// (spec/07 "Commands").
+pub const START_BACKUP: &str = "start_backup";
+
+/// What [`crate::Store::start_backup`] did under its idempotency key.
+#[derive(Debug)]
+pub enum StartedBackup {
+    /// The key was unspent. Its receipt committed with the
+    /// generation's `in_progress` row, and the snapshot is taken.
+    Started {
+        receipt: Receipt,
+        snapshot: BackupSnapshot,
+    },
+    /// The key had started a generation already, and nothing was done
+    /// now. The receipt names that generation, whatever became of it:
+    /// its row says.
+    Replayed(Receipt),
 }
 
 /// What `Store::backup_snapshot` produced (spec/03's steps 1–3): an
@@ -219,6 +241,36 @@ impl BackupReceipt {
     }
 }
 
+/// How steps 1–3 ended: a snapshot, with its receipt when a command's
+/// key started it, or the receipt of the generation the key started
+/// before.
+enum Begun {
+    Taken(BackupSnapshot, Option<Receipt>),
+    Replayed(Receipt),
+}
+
+/// Whether a generation's cleanup is owed (spec/03), which only the
+/// next generation does: a row is `in_progress`, or a failed one's
+/// removal stopped part way. Until then the row freezes GC and its
+/// pins hold their objects. A generation still being copied reads the
+/// same; [`Backups::generation_running`] tells them apart.
+pub(crate) fn cleanup_owed(tx: &Transaction) -> Result<bool, StoreError> {
+    tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM backup_generations WHERE state = 'in_progress')
+                OR EXISTS(SELECT 1 FROM backup_cleanup_pending)",
+        [],
+        |row| row.get(0),
+    )
+    .map_err(|e| classify(e, "look for an interrupted backup generation"))
+}
+
+fn lock_running(running: &Mutex<Weak<()>>) -> std::sync::MutexGuard<'_, Weak<()>> {
+    // The guarded value is one pointer, whole after any panic.
+    running
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 /// The backup coordinator: the seams and paths the snapshot procedure
 /// needs, built at open like the import coordinators (spec/03).
 pub(crate) struct Backups {
@@ -232,6 +284,12 @@ pub(crate) struct Backups {
     backups_dir: PathBuf,
     objects: Arc<crate::objects::FileObjectStore>,
     active: Mutex<Option<Weak<()>>>,
+    /// The generation this process is taking or copying, from before
+    /// its row commits until its last handle is dropped. A row that is
+    /// `in_progress` while this is dead was interrupted. Never held
+    /// across any work, so reading it can't refuse a starting backup
+    /// the way a held `active` would.
+    running: Mutex<Weak<()>>,
     /// This coordinator's identity. A prepared capability carries a
     /// clone; the b2 qualifier rechecks it so a capability from another
     /// coordinator or store is refused.
@@ -285,6 +343,7 @@ impl Backups {
             backups_dir,
             objects,
             active: Mutex::new(None),
+            running: Mutex::new(Weak::new()),
             coordinator: Arc::new(()),
             image_lock: Mutex::new(()),
             #[cfg(test)]
@@ -326,9 +385,68 @@ impl Backups {
         &self,
         destination: BackupDestination,
     ) -> Result<BackupSnapshot, StoreError> {
+        match self.begin(destination, None)? {
+            Begun::Taken(snapshot, _) => Ok(snapshot),
+            Begun::Replayed(_) => Err(StoreError::internal(
+                "a backup without a key answered a receipt",
+            )),
+        }
+    }
+
+    /// [`Backups::snapshot`] as the command `key` names (spec/07): the
+    /// key's receipt commits with step 1's row, so a generation and
+    /// the answer that names it exist together or not at all. A key
+    /// that started one already answers its receipt before anything
+    /// else happens here: no recovery, no retention, and no `Conflict`
+    /// while that generation is still being copied.
+    pub(crate) fn start(
+        &self,
+        destination: BackupDestination,
+        key: &str,
+    ) -> Result<StartedBackup, StoreError> {
+        match self.begin(destination, Some(key))? {
+            Begun::Taken(snapshot, Some(receipt)) => {
+                Ok(StartedBackup::Started { receipt, snapshot })
+            }
+            Begun::Taken(_, None) => {
+                Err(StoreError::internal("a keyed backup committed no receipt"))
+            }
+            Begun::Replayed(receipt) => Ok(StartedBackup::Replayed(receipt)),
+        }
+    }
+
+    /// What `key` already answers for [`START_BACKUP`], on a reader.
+    fn spent(&self, key: &str) -> Result<Option<Receipt>, StoreError> {
+        let mut conn = open_connection(&self.state_db, Access::ReadOnly, READER_PRAGMAS)?;
+        let tx = conn
+            .transaction()
+            .map_err(|e| classify(e, "read a command receipt"))?;
+        replay(&tx, key, START_BACKUP)
+    }
+
+    /// Whether this process is taking or copying a generation.
+    pub(crate) fn generation_running(&self) -> bool {
+        lock_running(&self.running).upgrade().is_some()
+    }
+
+    fn begin(
+        &self,
+        destination: BackupDestination,
+        key: Option<&str>,
+    ) -> Result<Begun, StoreError> {
         // Recovery and retention below remove files before the first
         // write, and a damaged store's generation is no backup.
         self.objects.latch().refuse("start a backup generation")?;
+        if let Some(key) = key
+            && let Some(receipt) = self.spent(key)?
+        {
+            return Ok(Begun::Replayed(receipt));
+        }
+        #[cfg(test)]
+        {
+            self.pause(|p| &p.after_key_look);
+            self.pause(|p| &p.after_key_look);
+        }
         let mut active = self
             .active
             .try_lock()
@@ -341,6 +459,10 @@ impl Backups {
         self.recover()?;
         self.retain()?;
         let token = Arc::new(());
+        // Before the row commits, so the row is never seen without its
+        // owner. A failure below drops the token and leaves the row to
+        // the next generation's recovery.
+        *lock_running(&self.running) = Arc::downgrade(&token);
         let generation_id = Uuid::from_random_bytes(self.draw_id()?).to_string();
         let owner_token = Uuid::from_random_bytes(self.draw_id()?).to_string();
         let root = self.destination_root(&destination)?;
@@ -355,10 +477,11 @@ impl Backups {
         // Step 1: the row commits before any file work so GC is frozen
         // for the copy's whole duration; the check-and-insert in one
         // transaction keeps generations one-at-a-time.
-        let started_at = self.clock.now().as_millis();
+        let now = self.clock.now();
+        let started_at = now.as_millis();
         let id = generation_id.clone();
         let stored_token = owner_token.clone();
-        await_write(self.writer.upkeep(WritePriority::Index, move |tx| {
+        let insert = move |tx: &Transaction| -> Result<String, StoreError> {
             let running: bool = tx
                 .query_row(
                     "SELECT EXISTS(SELECT 1 FROM backup_generations
@@ -384,8 +507,33 @@ impl Backups {
                 params![id, stored_token],
             )
             .map_err(|e| classify(e, "record backup directory ownership"))?;
-            Ok(())
-        }))?;
+            Ok(encode_generation_receipt(&id))
+        };
+        let receipt = match key.map(str::to_owned) {
+            None => {
+                await_write(
+                    self.writer
+                        .upkeep(WritePriority::Index, move |tx| insert(tx).map(drop)),
+                )?;
+                None
+            }
+            // A command a caller waits on, like every other keyed one.
+            // The receipt is the store's bookkeeping, as the row is: it
+            // is in the snapshot taken next, and it makes no generation
+            // due.
+            Some(key) => Some(await_write(
+                self.writer.upkeep(WritePriority::User, move |tx| {
+                    run_once(tx, &key, START_BACKUP, now, insert)
+                }),
+            )?),
+        };
+        if let Some(receipt) = receipt.as_ref()
+            && receipt_generation_id(receipt)? != generation_id
+        {
+            // The key committed a generation between the look above
+            // and this commit, which inserted nothing.
+            return Ok(Begun::Replayed(receipt.clone()));
+        }
 
         // A store that latched since this began starts no snapshot.
         // One being copied is not held as a step: it can't stop part
@@ -398,13 +546,16 @@ impl Backups {
         let referenced = self.referenced_objects(&location)?;
         self.pin_references(&generation_id, &referenced)?;
         *active = Some(Arc::downgrade(&token));
-        Ok(BackupSnapshot {
-            active: token,
-            generation_id,
-            location,
-            referenced: referenced.into(),
-            snapshot_handle: Arc::new(std::sync::Mutex::new(snapshot_handle)),
-        })
+        Ok(Begun::Taken(
+            BackupSnapshot {
+                active: token,
+                generation_id,
+                location,
+                referenced: referenced.into(),
+                snapshot_handle: Arc::new(std::sync::Mutex::new(snapshot_handle)),
+            },
+            receipt,
+        ))
     }
 
     /// Where this generation's directory goes: the layout's `backups/`
@@ -639,6 +790,10 @@ impl Backups {
 #[cfg(test)]
 #[derive(Default)]
 pub(crate) struct Pauses {
+    /// Waited on twice: park after a keyed start found its key
+    /// unspent, then release to the claim; a test spends the key in
+    /// between.
+    pub(crate) after_key_look: Option<Arc<std::sync::Barrier>>,
     /// Waited on twice: park, then release to the SQLite open — a
     /// fault test makes the write path fail in between.
     pub(crate) after_snapshot_file: Option<Arc<std::sync::Barrier>>,

@@ -434,9 +434,10 @@ fn after(at: Timestamp, period: Duration) -> Timestamp {
     Timestamp::from_millis(at.as_millis().saturating_add(millis))
 }
 
-/// The hourly generation, when there were changes: nothing is recorded
-/// when there weren't. A store that can't say is backed up, so the
-/// attempt and its failure are recorded.
+/// The hourly generation, when one is owed (there were changes, or an
+/// interrupted generation waits for its cleanup): nothing is recorded
+/// when none is. A store that can't say is backed up, so the attempt
+/// and its failure are recorded.
 fn back_up(
     resources: &Resources,
     jobs: &MaintenanceJobs,
