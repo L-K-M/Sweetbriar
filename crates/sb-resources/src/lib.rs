@@ -61,12 +61,18 @@ pub use index::{
 };
 mod renditions;
 mod repair;
+mod restore;
 mod search;
 mod seen;
 pub use renditions::{RenditionCache, RenditionError, RenditionFiles, RenditionProtection};
 pub use repair::{
     RepairCapture, RepairCommit, RepairDiagnosis, RepairPersist, RepairPreparation, RepairPrepared,
     RepairSources, RepairStatus, RepairTerminal, RepairTerminalKind,
+};
+pub use restore::ResourcesSwapError;
+pub use sb_store::{
+    BackupDestination, BackupReceipt, BackupSnapshot, PreparedRestoreStage, QualifiedStage,
+    RestoreMetadata, VerifiedExternalBackup,
 };
 pub use search::{CoverageCounts, read_search_coverage, read_search_coverage_reusing};
 pub use seen::{ReceivedCommit, ReceivedPreparation, ReceivedRevisions, ReceivedSweep};
