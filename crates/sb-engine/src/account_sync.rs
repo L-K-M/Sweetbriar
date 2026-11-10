@@ -38,6 +38,41 @@ use idle::{IdleState, Schedule};
 /// fault): the reconnect backoff's own ceiling.
 const RESTART_DELAY: Duration = Duration::from_secs(5 * 60);
 
+/// The first wait before reconnecting after a session that failed
+/// before completing a pass; it doubles up to [`RESTART_DELAY`], the
+/// reconnect backoff's own range (spec/04: 1 s to 5 min).
+const UNPROVEN_SESSION_DELAY: Duration = Duration::from_secs(1);
+
+/// The wait before reconnecting after a failed session. The transport's
+/// [`Reconnector`] restarts at its first step on every connect, so a
+/// server that accepts each login and then fails every pass would be
+/// retried each second forever; this backoff grows across such
+/// sessions and resets only once a session completes a pass.
+#[derive(Debug)]
+struct SessionBackoff {
+    next: Duration,
+}
+
+impl SessionBackoff {
+    fn new() -> Self {
+        Self {
+            next: UNPROVEN_SESSION_DELAY,
+        }
+    }
+
+    /// The wait after a failed session: none when it completed a pass
+    /// (and the backoff starts over), else the next step.
+    fn after_failure(&mut self, completed_a_pass: bool) -> Duration {
+        if completed_a_pass {
+            self.next = UNPROVEN_SESSION_DELAY;
+            return Duration::ZERO;
+        }
+        let wait = self.next;
+        self.next = wait.saturating_mul(2).min(RESTART_DELAY);
+        wait
+    }
+}
+
 /// The live account workers. Each holds a stop signal; `stop` raises
 /// every one and refuses new workers (shutdown, and the restore
 /// quiesce of plan M1.8g).
@@ -144,8 +179,12 @@ enum Served {
     Stopped,
     /// The account no longer syncs (paused, disconnected or removed).
     Ended,
-    /// The session failed; recovery reconnects.
-    Failed(ImapError),
+    /// The session failed; recovery reconnects. `completed_a_pass` says
+    /// whether it proved healthy first (see [`SessionBackoff`]).
+    Failed {
+        error: ImapError,
+        completed_a_pass: bool,
+    },
     /// The server refused one mailbox's command and the session is
     /// gone; the worker reconnects at once, leaving that mailbox out.
     Refused,
@@ -209,6 +248,7 @@ async fn run_account(worker: &Worker, account_id: &str, stop: watch::Receiver<bo
         setup_failure: None,
     };
     let mut reconnector = Reconnector::new();
+    let mut sessions = SessionBackoff::new();
     let (watched_endpoint, watcher_stop) = (connector.endpoint.clone(), stop.clone());
     let start_idle = move || start_watcher(worker, &watched_endpoint, pin, &watcher_stop);
     let mut carried = Carried {
@@ -243,8 +283,6 @@ async fn run_account(worker: &Worker, account_id: &str, stop: watch::Receiver<bo
             }
         };
         record(worker, account_id, Transition::Connected).await;
-        // A healthy session restarts the backoff at its first step.
-        reconnector = Reconnector::new();
         let served = serve(
             worker,
             account_id,
@@ -265,7 +303,19 @@ async fn run_account(worker: &Worker, account_id: &str, stop: watch::Receiver<bo
                 }
                 return;
             }
-            Served::Failed(error) => failure = Some(error),
+            Served::Failed {
+                error,
+                completed_a_pass,
+            } => {
+                let wait = sessions.after_failure(completed_a_pass);
+                if !wait.is_zero() {
+                    tokio::select! {
+                        () = tokio::time::sleep(wait) => {}
+                        () = stopped(stop.clone()) => return,
+                    }
+                }
+                failure = Some(error);
+            }
             Served::Refused => {}
         }
     }
@@ -332,6 +382,7 @@ async fn serve(
     // The watcher may be gone (no IDLE, or it could not start); then
     // its last state says nothing and the worker polls.
     let mut watching = true;
+    let mut completed_a_pass = false;
     loop {
         if !still_syncable(worker, account_id).await {
             return Served::Ended;
@@ -346,8 +397,13 @@ async fn serve(
             () = stopped(stop.clone()) => return Served::Stopped,
         };
         match passed {
-            Ok(()) => {}
-            Err(pass::PassError::Session(error)) => return Served::Failed(error),
+            Ok(()) => completed_a_pass = true,
+            Err(pass::PassError::Session(error)) => {
+                return Served::Failed {
+                    error,
+                    completed_a_pass,
+                };
+            }
             Err(pass::PassError::Refused { mailbox_id }) => {
                 carried.refusals.refuse(mailbox_id, Instant::now());
                 return Served::Refused;
