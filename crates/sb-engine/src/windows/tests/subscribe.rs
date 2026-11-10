@@ -433,9 +433,26 @@ fn a_swap_releases_selections_and_leaves_the_debug_source() {
         block_on(engine.open_window(WindowSpec::DebugSynthetic, Anchor::Top, 5)).unwrap();
     let debug = engine.subscribe(synthetic.window_id());
 
+    let before = engine.windows().restores();
     restored_at(&engine, 1);
 
     assert!(block_on(engine.selection_ids(selection.selection_id().clone(), 0, 10)).is_err());
+    // Ids read before the swap and registered after it are refused.
+    let register = |restores| {
+        engine.windows().register_selection(
+            window.window_id(),
+            selection.selection_id().clone(),
+            index.generation(),
+            vec![index.ids()[0]],
+            restores,
+        )
+    };
+    assert!(matches!(
+        register(before),
+        Err(EngineError::ResetRequired { generation: 1 })
+    ));
+    assert!(block_on(engine.selection_ids(selection.selection_id().clone(), 0, 10)).is_err());
+    register(before + 1).unwrap();
 
     let mut cx = Context::from_waker(Waker::noop());
     let mut quiet = pin!(debug.next());

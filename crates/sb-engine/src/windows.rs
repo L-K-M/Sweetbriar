@@ -782,12 +782,18 @@ impl Windows {
     /// insert the frozen ids only while their source window is still
     /// open — a close that won the race is `NotFound`, a later one
     /// leaves the snapshot alone.
+    /// Register a selection whose ids were read while `restores` store
+    /// swaps had happened. The read and this registration are separate
+    /// tasks: a swap between them released every selection, so ids
+    /// read from the replaced store are refused, under the lock the
+    /// swap holds.
     fn register_selection(
         &self,
         window_id: WindowId,
         selection_id: SelectionId,
         generation: u64,
         ids: Vec<i64>,
+        restores: u64,
     ) -> Result<(), EngineError> {
         let ids: Arc<[i64]> = ids.into();
         let mut inner = self.lock();
@@ -796,6 +802,13 @@ impl Windows {
                 what: format!("window {}", window_id.get()),
             });
         }
+        let versions = self.versions.borrow();
+        if versions.restores != restores {
+            return Err(EngineError::ResetRequired {
+                generation: versions.store,
+            });
+        }
+        drop(versions);
         inner.selections.insert(
             selection_id,
             OpenSelection {
