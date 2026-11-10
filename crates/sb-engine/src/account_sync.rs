@@ -60,11 +60,16 @@ impl SessionBackoff {
         }
     }
 
+    /// A session completed a pass: the backoff starts over.
+    fn proven(&mut self) {
+        self.next = UNPROVEN_SESSION_DELAY;
+    }
+
     /// The wait after a failed session: none when it completed a pass
     /// (and the backoff starts over), else the next step.
     fn after_failure(&mut self, completed_a_pass: bool) -> Duration {
         if completed_a_pass {
-            self.next = UNPROVEN_SESSION_DELAY;
+            self.proven();
             return Duration::ZERO;
         }
         let wait = self.next;
@@ -187,7 +192,8 @@ enum Served {
     },
     /// The server refused one mailbox's command and the session is
     /// gone; the worker reconnects at once, leaving that mailbox out.
-    Refused,
+    /// `completed_a_pass` as for `Failed`.
+    Refused { completed_a_pass: bool },
 }
 
 /// How a recovery ended.
@@ -316,7 +322,13 @@ async fn run_account(worker: &Worker, account_id: &str, stop: watch::Receiver<bo
                 }
                 failure = Some(error);
             }
-            Served::Refused => {}
+            // A refused mailbox ends a session that may have proved
+            // the account; the next session starts at once.
+            Served::Refused { completed_a_pass } => {
+                if completed_a_pass {
+                    sessions.proven();
+                }
+            }
         }
     }
 }
@@ -406,7 +418,7 @@ async fn serve(
             }
             Err(pass::PassError::Refused { mailbox_id }) => {
                 carried.refusals.refuse(mailbox_id, Instant::now());
-                return Served::Refused;
+                return Served::Refused { completed_a_pass };
             }
         }
         let idle = carried.idle.get_or_insert_with(carried.start_idle);

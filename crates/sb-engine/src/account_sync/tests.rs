@@ -791,6 +791,10 @@ fn the_session_backoff_doubles_to_its_ceiling_and_a_completed_pass_resets_it() {
     assert_eq!(waits, [1, 2, 4, 8, 16, 32, 64, 128, 256, 300]);
     assert_eq!(backoff.after_failure(true), Duration::ZERO);
     assert_eq!(backoff.after_failure(false), Duration::from_secs(1));
+    // A session that proved the account before a refusal resets it too.
+    backoff.after_failure(false);
+    backoff.proven();
+    assert_eq!(backoff.after_failure(false), Duration::from_secs(1));
 }
 
 #[test]
