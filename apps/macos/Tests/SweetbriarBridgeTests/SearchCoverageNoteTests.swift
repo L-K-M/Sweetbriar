@@ -2,8 +2,9 @@
 // with partial and failed as incomplete, unknown exclusions, an empty
 // scope without a percentage, the indexer's state — a rebuild's phase
 // and global progress, a paused rebuild, an I/O pause's error and next
-// retry, a blocked indexer's update — every count over its
-// denominator, and the limitations line even when complete.
+// retry, a blocked indexer's update, a read-only archive — every
+// count over its denominator, and the limitations line even when
+// complete.
 
 import Foundation
 import Testing
@@ -91,6 +92,7 @@ func anIoPauseMessageEndsBeforeTheRetryTime() {
 @Test(arguments: [
     (SearchIndexState.pausedByUser, "Indexing paused"),
     (.blockedNewerExtractor, "Search needs a newer version of Sweetbriar. Update the app to search this archive."),
+    (.readOnly, "Indexing stopped: the archive is read-only"),
 ])
 func theIndexerStateJoinsTheSummary(_ state: SearchIndexState, _ text: String) {
     let note = SearchCoverageNote(status: status(state: state), locale: english)
@@ -119,6 +121,8 @@ func anIoPauseShowsItsErrorAndNextRetry() {
     (.pausedByUser, .reset, "Rebuild paused while resetting; Resume to continue", "resetting"),
     (.pausedByUser, .enqueue, "Rebuild paused while queueing messages; Resume to continue", "queueing messages"),
     (.pausedByUser, .index, "Rebuild paused while indexing; Resume to continue", "indexing"),
+    (.readOnly, .enqueue, "Rebuild stopped while queueing messages: the archive is read-only", "queueing messages"),
+    (.readOnly, .index, "Rebuild stopped while indexing: the archive is read-only", "indexing"),
 ])
 func aRebuildShowsItsPhaseAndGlobalProgress(
     _ state: SearchIndexState, _ phase: SearchRebuildPhase, _ summary: String, _ named: String

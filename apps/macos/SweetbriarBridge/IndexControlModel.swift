@@ -29,7 +29,8 @@ extension CoreBridge: SearchIndexSource {}
 /// The controls one coverage snapshot offers (spec/08): Rebuild while
 /// no job is active, Cancel while one runs, Resume once the user paused
 /// it, Retry now during an I/O pause. A blocked indexer offers none: it
-/// needs a newer app, not a command.
+/// needs a newer app, not a command. Nor does a read-only archive,
+/// where every index command would fail.
 public struct IndexControls: OptionSet, Sendable, Hashable {
     public let rawValue: Int
 
@@ -45,7 +46,7 @@ public struct IndexControls: OptionSet, Sendable, Hashable {
     public init(coverage: SearchCoverage) {
         let active = coverage.activeRebuild != nil
         switch coverage.indexState {
-        case .blockedNewerExtractor:
+        case .blockedNewerExtractor, .readOnly:
             self = []
         case .pausedByUser:
             self = active ? .resume : .rebuild

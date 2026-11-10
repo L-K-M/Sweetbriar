@@ -456,6 +456,12 @@ fn find_the_damage(engine: &Engine) {
     );
 }
 
+fn index_state(engine: &Engine) -> crate::SearchIndexState {
+    block_on(engine.coverage(crate::SearchScope::All))
+        .unwrap()
+        .index_state
+}
+
 /// A restore decides whether read-only ends (plan M1.8h5b2): refused,
 /// the engine comes back read-only on the latched store with no worker;
 /// swapped, the restored store has no latch, the workers run again and
@@ -492,6 +498,7 @@ fn a_restore_ends_read_only_and_a_refused_one_keeps_it() {
     assert!(!engine.received().running());
     assert!(!engine.maintenance().running());
     assert_eq!(engine.imports().threads().starts(), rebuilds);
+    assert_eq!(index_state(&engine), crate::SearchIndexState::ReadOnly);
 
     let engine = finish(engine.restore(*stage, Arc::new(AtomicBool::new(false)))).unwrap();
 
@@ -506,5 +513,6 @@ fn a_restore_ends_read_only_and_a_refused_one_keeps_it() {
     // and thread rebuilds are asked for again.
     assert!(engine.maintenance().running());
     assert!(engine.imports().threads().starts() > rebuilds);
+    assert_ne!(index_state(&engine), crate::SearchIndexState::ReadOnly);
     block_on(engine.shutdown()).unwrap();
 }

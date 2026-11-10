@@ -177,7 +177,10 @@ restores its draft by `draft_id`.
   closing a window never cancels the job. When
   Search is unavailable because its extractor target is newer than the
   app supports, show standalone coverage's blocked state and the required
-  app update, rather than a queue that appears to run forever.
+  app update, rather than a queue that appears to run forever. On a
+  read-only archive (07's `ReadOnly` index state) say that indexing
+  stopped and why, with a stopped rebuild's phase, and offer no index
+  control: none can work until a restore.
 - Show "Attachment contents are not searched; CJK word search is limited"
   in search coverage details even with complete indexing. Empty scopes show
   zero messages, never a misleading incomplete percentage. No automatic

@@ -72,6 +72,9 @@ public enum SearchIndexState: Sendable, Equatable {
     /// `retryAt` is UTC milliseconds, not a sentinel or a duration.
     case pausedIo(code: SearchIoCode, message: String, retryAt: Int64)
     case blockedNewerExtractor
+    /// The archive is read-only after an integrity finding (spec/03):
+    /// nothing indexes, and no index command works, until a restore.
+    case readOnly
 
     init(_ value: SweetbriarCore.SearchIndexState) {
         switch value {
@@ -79,6 +82,7 @@ public enum SearchIndexState: Sendable, Equatable {
         case .running: self = .running
         case .pausedByUser: self = .pausedByUser
         case .blockedNewerExtractor: self = .blockedNewerExtractor
+        case .readOnly: self = .readOnly
         case .pausedIo(let code, let message, let retryAt):
             self = .pausedIo(code: SearchIoCode(code), message: message, retryAt: retryAt)
         }

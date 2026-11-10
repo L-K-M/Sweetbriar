@@ -197,6 +197,10 @@ fn every_scope_sort_and_operational_dto_field_is_preserved() {
             sb_engine::SearchIndexState::BlockedNewerExtractor,
             SearchIndexState::BlockedNewerExtractor,
         ),
+        (
+            sb_engine::SearchIndexState::ReadOnly,
+            SearchIndexState::ReadOnly,
+        ),
     ] {
         native.index_state = state;
         assert_eq!(Coverage::from_engine(&native).index_state, expected);

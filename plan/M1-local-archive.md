@@ -1635,15 +1635,20 @@ local drafts. No network yet.
     the app, split when it was built: **h5b3a** `health()` and
     `subscribe_health` through the Service, the binding and the
     bridge, and **h5b3b** coverage's index state on a latched store,
-    which today answers a stale `Running`, through to the index
-    controls; **h5b4** a restore while latched (after g3), its
+    answered `ReadOnly` by the engine in place of a stale `Running`,
+    through to the coverage note and the index controls, which offer
+    nothing there; **h5b4** a restore while latched (after g3), its
     verification scratch kept off the latched writer, and an inventory
     or capture left unfinished on a latched store no longer refusing
     it; **h5c** the weekly job in the scheduler, which announces
     health again once the check returns, so the copy's name reaches
-    the shell. They land in that order: nothing runs the check before
+    the shell, and which runs as counted engine work, so a restore's
+    quiesce waits for it (the resume after a swap reads the latch
+    once and relies on no check running meanwhile). They land in that order: nothing runs the check before
     h5c, so remote effects stop before any finding can happen. The
-    app's banner for a read-only store comes with M1.8j. **h6
+    app's banner for a read-only store comes with M1.8j, and with it
+    the app's health subscription, on whose events it reads coverage
+    again (turning read-only moves no Search generation). **h6
     Acceptance proof (L)**: the recovery point over simulated hours at
     the 5-minute setting, crash cuts through a scheduled backup,
     restore during each job. GC's daily cadence and the reading of "all

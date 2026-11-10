@@ -94,6 +94,9 @@ fn a_finding_at_runtime_reaches_the_subscription_and_the_record() {
         std::path::Path::new(&copy).join("manifest.json").is_file(),
         "{copy}"
     );
+    // Coverage says the indexer is stopped, not what it last stored.
+    let coverage = block_on(core.coverage(token(), crate::SearchScope::All)).unwrap();
+    assert_eq!(coverage.index_state, crate::SearchIndexState::ReadOnly);
     // A command that writes carries the finding to the shell.
     let refused = block_on(core.set_setting(
         token(),

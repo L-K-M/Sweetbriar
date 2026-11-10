@@ -8,7 +8,7 @@ use sb_resources::{
     UnknownCount, read_search_coverage_reusing,
 };
 
-use crate::{Coverage, Engine, EngineError, Timestamp};
+use crate::{Coverage, Engine, EngineError, SearchIndexState, Timestamp};
 
 /// Scopes, or queries per scope, the memo keeps at once; the oldest goes first.
 const MEMO_ENTRIES: usize = 16;
@@ -145,6 +145,41 @@ fn lock<T>(value: &Mutex<T>) -> MutexGuard<'_, T> {
         .expect("a panicking thread held the Search memo")
 }
 
+/// Whether the engine was read-only when a coverage read began
+/// (spec/03 "Integrity"). The stored index state then describes an
+/// indexer that no longer runs: it would promise work, a retry or a
+/// resume that never comes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Indexing {
+    Possible,
+    /// Read-only: coverage answers `ReadOnly`.
+    Stopped,
+}
+
+impl Indexing {
+    /// `coverage` as the shell gets it. A blocked extractor still says
+    /// so on a read-only store: Search refuses on it, and it names the
+    /// app update a restore won't replace.
+    pub(crate) fn applied(self, mut coverage: Coverage) -> Coverage {
+        if self == Self::Stopped && coverage.index_state != SearchIndexState::BlockedNewerExtractor
+        {
+            coverage.index_state = SearchIndexState::ReadOnly;
+        }
+        coverage
+    }
+}
+
+impl Engine {
+    /// The read-only verdict for a coverage read that starts now.
+    pub(crate) fn indexing(&self) -> Indexing {
+        if self.read_only() {
+            Indexing::Stopped
+        } else {
+            Indexing::Possible
+        }
+    }
+}
+
 /// An outer coverage scope; account strings are validated before store access.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SearchScope {
@@ -198,10 +233,13 @@ impl Engine {
         let scope = scope.stored()?;
         let index = Arc::clone(self.indexer());
         let memo = Arc::clone(self.search_memo());
+        let indexing = self.indexing();
         self.read_through(move |resources| {
             index.readable()?;
-            let result =
-                resources.read(|tx| memo.coverage(tx, scope).map(|(coverage, _)| coverage));
+            let result = resources.read(|tx| {
+                memo.coverage(tx, scope)
+                    .map(|(coverage, _)| indexing.applied(coverage))
+            });
             index.readable()?;
             result
         })
