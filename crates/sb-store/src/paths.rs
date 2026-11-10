@@ -7,7 +7,7 @@ use crate::StoreError;
 
 /// The paths a store owns: the sibling lock file, `state.sqlite` and
 /// the layout directories under the data root.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct StorePaths {
     data_root: PathBuf,
     lock_file: PathBuf,

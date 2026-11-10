@@ -31,7 +31,7 @@ mod scratch;
 // rusqlite 0.41 installs hooks through `&mut Connection` only; the bounded
 // inspections scope SQLite's progress handler to one borrowed read.
 #[allow(unsafe_code)]
-mod scoped_progress;
+pub(crate) mod scoped_progress;
 #[allow(dead_code)] // Retained identity leases are consumed by the following qualifier.
 mod stage_bindings;
 #[allow(dead_code)]
