@@ -90,6 +90,8 @@ pub(crate) struct AccountJobs {
 struct Jobs {
     stopping: bool,
     live: HashMap<String, watch::Sender<bool>>,
+    #[cfg(test)]
+    starts: usize,
 }
 
 impl AccountJobs {
@@ -122,6 +124,12 @@ impl AccountJobs {
         self.lock().live.contains_key(account_id)
     }
 
+    /// How many workers this registry has let start.
+    #[cfg(test)]
+    pub(crate) fn starts(&self) -> usize {
+        self.lock().starts
+    }
+
     /// Reserve the account's one worker, unless stopping or already
     /// running.
     fn claim(&self, account_id: &str) -> Option<watch::Receiver<bool>> {
@@ -131,6 +139,10 @@ impl AccountJobs {
         }
         let (stop, stopped) = watch::channel(false);
         jobs.live.insert(account_id.to_owned(), stop);
+        #[cfg(test)]
+        {
+            jobs.starts += 1;
+        }
         Some(stopped)
     }
 

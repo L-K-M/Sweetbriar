@@ -916,19 +916,22 @@ fn an_integrity_finding_ends_the_worker_and_no_other_starts() {
     eventually("the worker ends", || {
         !engine.account_jobs().running(&account)
     });
-    let sessions = logins(&server);
+    // Workers are counted where they are let start, not by the
+    // server's logins: the IDLE watcher's own login may still be on
+    // its way when the worker ends.
+    let jobs = Arc::clone(engine.account_jobs());
+    let started = jobs.starts();
     engine.start_account(account.clone());
-    assert!(!engine.account_jobs().running(&account));
     engine.schedule_accounts();
     // The account is as stored: nothing recorded a pause for it.
     assert_eq!(state(&engine, &account).0, AccountState::Active);
-    // Shutdown waits for whatever `schedule_accounts` started.
+    // Shutdown waits for the listing `schedule_accounts` started.
     shutdown_promptly(engine);
-    assert_eq!(logins(&server), sessions);
+    assert_eq!(jobs.starts(), started);
 
     let engine = open(&scratch, &secrets);
     assert!(engine.read_only());
-    assert!(!engine.account_jobs().running(&account));
+    let jobs = Arc::clone(engine.account_jobs());
     shutdown_promptly(engine);
-    assert_eq!(logins(&server), sessions);
+    assert_eq!(jobs.starts(), 0);
 }
