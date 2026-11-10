@@ -498,6 +498,14 @@ impl Backups {
                 return Err(StoreError::conflict(refusal));
             }
         };
+        // A prior start may have spent the key and released its snapshot
+        // since the first look. Once we hold the operation, no other
+        // backup can spend it: answer before recovery or retention acts.
+        if let Some(key) = key
+            && let Some(receipt) = self.spent(key)?
+        {
+            return Ok(Begun::Replayed(receipt));
+        }
         self.recover()?;
         self.retain()?;
         let token = Arc::new(());
