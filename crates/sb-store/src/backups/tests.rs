@@ -34,8 +34,13 @@ const PAYLOAD: &[u8] = b"Subject: keep me\r\n\r\nthe archived bytes\r\n";
 
 /// The common prelude: a scratch store over the real filesystem.
 pub(super) fn open(label: &str) -> (ScratchDir, StorePaths, Store) {
+    open_on(label, real_fs())
+}
+
+/// `open` over a chosen filesystem seam.
+pub(super) fn open_on(label: &str, fs: Arc<dyn Fs>) -> (ScratchDir, StorePaths, Store) {
     let (scratch, paths) = scratch_paths(label);
-    let store = crate::open(&paths, &test_seams(real_fs())).unwrap();
+    let store = crate::open(&paths, &test_seams(fs)).unwrap();
     (scratch, paths, store)
 }
 
@@ -4163,6 +4168,7 @@ mod stage_tests {
     mod qualified;
     mod quarantine_image;
     mod swap;
+    mod swap_acceptance;
     use super::*;
     use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -4233,7 +4239,12 @@ mod stage_tests {
     }
 
     fn staging_source(label: &str) -> StagingSource {
-        let (scratch, paths, store) = open(label);
+        staging_source_on(label, real_fs())
+    }
+
+    /// `staging_source` with the store over a chosen filesystem seam.
+    fn staging_source_on(label: &str, fs: Arc<dyn Fs>) -> StagingSource {
+        let (scratch, paths, store) = open_on(label, fs);
         draft_rows(&store);
         let mut payloads = Vec::new();
         for (index, payload) in [

@@ -1,10 +1,13 @@
-//! The swap's renames with every step failed in turn: whatever is left
-//! on disk, the next open's recovery resolves it to the old root or the
-//! restored one, never neither, and removes the marker.
+//! The swap's renames with every step failed in turn, or followed by a
+//! power cut: whatever is left on disk, the next open's recovery
+//! resolves it to the old root or the restored one, never neither, and
+//! removes the marker.
 
+use std::io::{self, Read, Write};
 use std::path::PathBuf;
+use std::sync::Arc;
 
-use sb_test_support::{FaultFs, FaultKind, FsOp, ScratchDir, real_fs};
+use sb_test_support::{FaultFs, FaultKind, FsOp, ScratchDir, SimFs, real_fs};
 
 use super::*;
 use crate::restore_pending::{Recovered, marker_path, recover};
@@ -120,4 +123,113 @@ fn a_failed_step_leaves_a_state_the_next_open_resolves() {
     }
 }
 
-use std::io;
+/// The same swap on a simulated disk, everything flushed.
+fn sim_swap() -> (Arc<SimFs>, StorePaths, PendingRestore) {
+    let fs = Arc::new(SimFs::new());
+    let paths = StorePaths::new("/data/store").unwrap();
+    let pending = PendingRestore::new(paths.data_root(), NEW, GENERATION, OLD).unwrap();
+    let parent = Path::new("/data");
+    for (dir, label) in [
+        (paths.data_root().to_path_buf(), "old"),
+        (parent.join(&pending.staging), "restored"),
+    ] {
+        fs.create_dir_all(&dir).unwrap();
+        for name in ["which", "state.sqlite"] {
+            let mut file = fs.create(&dir.join(name)).unwrap();
+            file.write_all(label.as_bytes()).unwrap();
+            file.sync_all().unwrap();
+        }
+        fs.sync_dir(&dir).unwrap();
+    }
+    fs.sync_dir(parent).unwrap();
+    (fs, paths, pending)
+}
+
+/// What a simulated directory names itself, if it exists.
+fn sim_which(fs: &SimFs, dir: &Path) -> Option<String> {
+    let mut text = String::new();
+    fs.open(&dir.join("which"))
+        .ok()?
+        .read_to_string(&mut text)
+        .unwrap();
+    Some(text)
+}
+
+/// Power lost before any one step of the commit, or after its last:
+/// what survives on disk is a state startup resolves to the old root
+/// with the stage kept, or to the restored root with the old one
+/// preserved, durably, and never to no root at all.
+#[test]
+fn a_power_cut_anywhere_in_the_commit_leaves_a_state_startup_resolves() {
+    let denied = FaultKind::Kind(io::ErrorKind::PermissionDenied);
+    let operations = [
+        FsOp::Remove,
+        FsOp::Create,
+        FsOp::Write,
+        FsOp::SyncFile,
+        FsOp::Rename,
+        FsOp::SyncDir,
+    ];
+    let mut cuts = vec![None];
+    for operation in operations {
+        let (fs, paths, pending) = sim_swap();
+        let counting = FaultFs::new(fs, operation, u64::MAX, denied);
+        let parent = Path::new("/data");
+        commit_swap(
+            &counting,
+            &paths,
+            &parent.join(&pending.staging),
+            &parent.join(&pending.preserved),
+            &pending,
+        )
+        .unwrap();
+        cuts.extend((1..=counting.calls(operation)).map(|nth| Some((operation, nth))));
+    }
+    let mut resolved = Vec::new();
+    for cut in cuts {
+        let (fs, paths, pending) = sim_swap();
+        let parent = Path::new("/data");
+        let (staging, preserved) = (
+            parent.join(&pending.staging),
+            parent.join(&pending.preserved),
+        );
+        let stopped = match cut {
+            // The commit stops before this step: the power goes then.
+            Some((operation, nth)) => {
+                let fault = FaultFs::new(Arc::clone(&fs) as Arc<dyn Fs>, operation, nth, denied);
+                commit_swap(&fault, &paths, &staging, &preserved, &pending).unwrap_err();
+                true
+            }
+            None => {
+                commit_swap(fs.as_ref(), &paths, &staging, &preserved, &pending).unwrap();
+                false
+            }
+        };
+        fs.power_cut();
+
+        let recovered = recover(fs.as_ref(), &paths).unwrap();
+        // Recovery's own steps are durable too.
+        fs.power_cut();
+        let root = sim_which(&fs, paths.data_root());
+        match root.as_deref() {
+            Some("old") => {
+                assert_eq!(sim_which(&fs, &staging).as_deref(), Some("restored"));
+                assert!(fs.metadata(&preserved).unwrap().is_none(), "{cut:?}");
+            }
+            Some("restored") => assert_eq!(sim_which(&fs, &preserved).as_deref(), Some("old")),
+            other => panic!("{cut:?}: the data root holds {other:?}"),
+        }
+        assert!(
+            fs.metadata(&marker_path(&paths)).unwrap().is_none(),
+            "{cut:?}: {recovered:?} left the marker"
+        );
+        if !stopped {
+            assert_eq!(root.as_deref(), Some("restored"));
+            continue;
+        }
+        resolved.push(root.unwrap());
+    }
+    // Cuts landed on both sides of the swap, the uncut run aside.
+    assert!(resolved.iter().any(|root| root == "old"));
+    assert!(resolved.iter().any(|root| root == "restored"));
+}
