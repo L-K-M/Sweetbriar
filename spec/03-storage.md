@@ -626,11 +626,12 @@ from the rows, so a restart or a restored store picks it up:
 - The worker's first look waits a minute after it starts, so the
   open's own work goes first and a process that ends within the
   minute (a CLI command) never starts a job its shutdown would
-  cancel. It parks at
-  most a minute at a time and reads the clock again, so a wall-clock
-  jump or a Mac waking from sleep is seen within a minute.
+  cancel. It parks at most a minute at a time and reads the clock
+  again, so a wall-clock jump or a Mac waking from sleep is seen
+  within a minute.
 - Shutdown and restore's quiesce (M1.8g3) stop it; a restore's resume
-  starts it again, and the restored store's rows decide its cadence.
+  starts it again, after a refusal too, and the store's rows (the
+  restored one's after a swap) decide its cadence.
   A parked worker ends at once; a GC pass stops at its next step and a
   backup's object copy at its next object, both recorded `cancelled`;
   a stop raised after a backup's start record and before its snapshot
@@ -777,7 +778,9 @@ The process holds `<data root>.lock` throughout.
      run `wal_checkpoint(TRUNCATE)` and close every connection to the
      current and staging databases. The lock stays held. Open windows
      and subscriptions get `ResetRequired` once the restored store is
-     in place; a refused swap moves none of them. An import's inventory
+     in place. The swap refuses only before anything closes, so a
+     refused one moves none of them: the engine resumes on the same
+     store, its workers and schedules started again. An import's inventory
      and an export's capture resume from no checkpoint, so a restore is
      refused before anything stops while one runs, and none starts
      until the restore ends. SQLite must never see a database file

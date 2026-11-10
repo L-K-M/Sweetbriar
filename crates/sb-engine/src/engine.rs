@@ -788,8 +788,6 @@ fn start_cleanup_worker() -> Result<std::sync::mpsc::Sender<Cleanup>, EngineErro
     Ok(cleanup)
 }
 
-/// Close the store through its last handle. Only the engine's
-/// shutdown, after every blocking task ended, calls this.
 /// Register the engine's observers on a store's writer and read the
 /// generations they start from: subscriptions hear every committed
 /// list, Search and appearance generation from here on (spec/07), and
@@ -835,6 +833,8 @@ fn observe_store(
     })
 }
 
+/// Close the store through its last handle. Only the engine's
+/// shutdown, after every blocking task ended, calls this.
 fn close_resources(resources: Arc<Resources>) -> Result<(), sb_resources::StoreError> {
     match Arc::try_unwrap(resources) {
         Ok(resources) => resources.close(),
