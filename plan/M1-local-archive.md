@@ -1642,7 +1642,9 @@ local drafts. No network yet.
     or capture left unfinished on a latched store no longer refusing
     it; **h5c** the weekly job in the scheduler, which announces
     health again once the check returns, so the copy's name reaches
-    the shell. They land in that order: nothing runs the check before
+    the shell, and which runs as counted engine work, so a restore's
+    quiesce waits for it (the resume after a swap reads the latch
+    once and relies on no check running meanwhile). They land in that order: nothing runs the check before
     h5c, so remote effects stop before any finding can happen. The
     app's banner for a read-only store comes with M1.8j, and with it
     the app's health subscription, on whose events it reads coverage
