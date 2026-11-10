@@ -277,10 +277,12 @@ against concurrent replacement.
     cleaned up by the next one there, which a restore always begins
     with.
     - A verification keeps its home: one that a latch catches fails at
-      the writer and never continues in the sibling. What it leaves in
-      the root (its owner row, and its scratch directory when the
-      process ended first) stays there, like everything in a frozen
-      root. The verifications that follow work beside the root and
+      its next in-root mutation or writer write and never continues in
+      the sibling. In-root scratch mutations, including writes through
+      open handles and cleanup, take bounded file steps. Source reads,
+      callbacks and writer waits hold no step. What it leaves in the
+      root (its owner row and scratch) stays there, like everything in
+      a frozen root. The verifications that follow work beside the root and
       never look for it.
     - The ledger decides whether a backup reconciles, so a database
       that holds anything but the two tables (a trigger, a view,
