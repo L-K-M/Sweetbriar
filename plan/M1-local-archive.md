@@ -1647,7 +1647,10 @@ local drafts. No network yet.
     health again once the check returns, so the copy's name reaches
     the shell, and which runs as counted engine work, so a restore's
     quiesce waits for it (the resume after a swap reads the latch
-    once and relies on no check running meanwhile). They land in that order: nothing runs the check before
+    once and relies on no check running meanwhile); it is the
+    scheduler's fourth job, started only while no import, export or
+    thread rebuild runs and the indexer is parked, and a finding's run
+    keeps its start and no end. They land in that order: nothing runs the check before
     h5c, so remote effects stop before any finding can happen. The
     app's banner for a read-only store comes with M1.8j, and with it
     the app's health subscription, on whose events it reads coverage

@@ -646,7 +646,7 @@ impl Windows {
     }
 
     /// The health changes so far, where a health subscription starts.
-    fn health_changes(&self) -> u64 {
+    pub(crate) fn health_changes(&self) -> u64 {
         self.versions.borrow().health
     }
 
