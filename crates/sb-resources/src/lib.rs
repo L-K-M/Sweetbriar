@@ -73,7 +73,8 @@ pub use repair::{
 };
 pub use restore::ResourcesSwapError;
 pub use sb_store::{
-    BackupDestination, BackupReceipt, BackupSnapshot, PreparedRestoreStage, QualifiedStage,
+    BackupDestination, BackupGeneration, BackupGenerationState, BackupReceipt, BackupSnapshot,
+    FAILED_GENERATIONS_LISTED, GenerationVerification, PreparedRestoreStage, QualifiedStage,
     RestoreMetadata, VerifiedExternalBackup,
 };
 pub use sb_store::{

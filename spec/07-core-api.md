@@ -83,6 +83,18 @@ async fn Core::shutdown(self);   // flush writer, release the lease
   IDs separately from imports and Search rebuilds. Cancellation durably
   marks an unfinished capture `cancelled`; a terminal export is `Conflict`.
   No export worker or start/query endpoint is exposed by the ledger step.
+- **Backups (M1.8i1):** `list_backups()` is a query. It answers the
+  recorded generations (03 "Backup generations"), newest first, each
+  with its id, state (`in_progress`, `complete` or `failed`), start and
+  completion times, directory, object count and total bytes, and the
+  weekly check's latest verdict with its time. Every complete and
+  in-progress generation is listed, and the failed ones started since
+  the newest complete one, at most 20: a failed row is kept for good,
+  and only the recent ones say anything about the backups now. The
+  answer is the rows as stored. No generation's directory is opened,
+  so one that went missing shows in the weekly check's verdict, or
+  when a restore verifies the generation it was given. A read-only
+  core answers like any other.
 - **Bridge account setup (M2.3c1):** `add_bridge_account(params)` takes
   the Proton Bridge preset's display name, username, Bridge password
   (bytes, moved into the core's zeroizing secret), IMAP and SMTP ports

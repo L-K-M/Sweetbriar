@@ -10,8 +10,8 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use sb_store::{
-    BackupDestination, BackupReceipt, BackupSnapshot, PreparedRestoreStage, QualifiedStage,
-    RestoreMetadata, StoreError, SwapRestoreError, VerifiedExternalBackup,
+    BackupDestination, BackupGeneration, BackupReceipt, BackupSnapshot, PreparedRestoreStage,
+    QualifiedStage, RestoreMetadata, StoreError, SwapRestoreError, VerifiedExternalBackup,
 };
 
 use crate::Resources;
@@ -58,6 +58,14 @@ impl std::error::Error for ResourcesSwapError {
 }
 
 impl Resources {
+    /// The recorded backup generations for `list_backups` (spec/07),
+    /// newest first, as their rows stand: every complete and
+    /// in-progress one, and the failed ones since the newest complete
+    /// one. No generation's directory is opened.
+    pub fn backup_generations(&self) -> Result<Vec<BackupGeneration>, StoreError> {
+        self.store.backup_generations()
+    }
+
     /// Steps 1–3 of a backup generation: its row, the snapshot and the
     /// object pins. First recovers interrupted generations and applies
     /// retention.

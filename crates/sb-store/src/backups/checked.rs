@@ -38,6 +38,15 @@ impl GenerationVerdict {
             Self::Missing => "missing",
         }
     }
+
+    pub(crate) fn parse(text: &str) -> Option<Self> {
+        match text {
+            "intact" => Some(Self::Intact),
+            "damaged" => Some(Self::Damaged),
+            "missing" => Some(Self::Missing),
+            _ => None,
+        }
+    }
 }
 
 /// What one check of a generation came to.

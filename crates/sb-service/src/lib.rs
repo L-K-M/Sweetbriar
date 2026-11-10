@@ -20,6 +20,7 @@ pub use bodies::{
     AttachmentLease, BodyKind, BodyLease, LeaseReleaser, RenderWarning, RenderWarningCode,
 };
 mod api;
+mod backups;
 mod drafts;
 mod error;
 mod exports;
@@ -32,6 +33,7 @@ mod sidebar;
 mod windows;
 
 pub use api::{Core, CoreConfig, Receipt, Setting, open_core};
+pub use backups::{BackupGeneration, BackupState, BackupVerdict, BackupVerification};
 pub use drafts::{
     AttemptState, ComposeFormat, Draft, DraftAttachment, DraftAttachmentObject, DraftAttachmentRef,
     DraftContent, DraftCreated, DraftRecipient, DraftRevision, DraftSaved, DraftSource, DraftState,

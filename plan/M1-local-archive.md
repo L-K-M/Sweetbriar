@@ -1675,6 +1675,26 @@ local drafts. No network yet.
     weekly object-verification job (the rotating 1/52 sample plus all
     backup-referenced objects, `missing`/`quarantined` accounting) and
     the weekly `integrity_check`, all emitting recovery-point evidence.
+  - **M1.8i split before implementation (2026-11-10):** spec/07 names
+    the three calls and nothing more, so each slice decides its call's
+    contract and records it there. **i1 List (M)**: `list_backups()`,
+    a query over the recorded rows, newest first, and `sb-cli backup
+    list`. **i2 Keyed generation (M)**: the store commits a
+    `start_backup` receipt with the generation's `in_progress` row, so
+    a repeated key starts nothing; and a generation is due while one
+    that a stopped copy left waits for its cleanup, so GC isn't held
+    for good on an archive nothing changes. **i3 Back up now (M)**:
+    `start_backup` answers with the generation's id once its snapshot
+    is taken; the copy goes on as counted engine work that a stop
+    ends; `sb-cli backup` waits for it. **i4 Prepare (M)**: verify,
+    stage and qualify a recorded complete generation under the call's
+    own cancel flag, on a latched store too. **i5 Swap (M)**: the
+    Service's core is consumed and handed back restored, or as it was
+    on a refusal, with the command's receipt written in the restored
+    store; `sb-cli restore`. The FFI exports come with the UI
+    (M1.8j), which also lists the preserved roots and the stages a
+    cancelled or failed restore left: a restore deletes nothing
+    (spec/03).
   - **M1.8i Backup/restore Service and CLI (L):** owned Service DTOs for
     generations, `start_backup`, `list_backups`, `start_restore` and
     `sb-cli backup|restore`, each with its native endpoint or CLI proof.
