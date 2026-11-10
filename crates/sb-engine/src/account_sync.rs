@@ -108,6 +108,14 @@ impl AccountJobs {
         }
     }
 
+    /// Undo [`AccountJobs::stop`] after a restore's quiesce, once every
+    /// worker has ended; the engine schedules them again.
+    pub(crate) fn resume(&self) {
+        let mut jobs = self.lock();
+        debug_assert!(jobs.live.is_empty(), "the quiesce waited for every worker");
+        jobs.stopping = false;
+    }
+
     /// Whether a worker runs for the account.
     #[cfg(test)]
     pub(crate) fn running(&self, account_id: &str) -> bool {

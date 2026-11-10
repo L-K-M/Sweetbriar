@@ -18,7 +18,7 @@
 use std::collections::{HashMap, HashSet};
 use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 
 use sb_resources::{
     AcquiredMessage, ExportCaptureRequest, ExportFormat, ExportJob, ExportJobState, ExportScope,
@@ -71,11 +71,48 @@ pub(crate) struct ImportJobs {
     reports: Mutex<HashSet<String>>,
     /// The thread rebuild each worker's turn may start (spec/02).
     threads: Arc<ThreadRebuilds>,
+    /// Starts of the work a restore cannot resume, and a restore
+    /// holding them off (see [`ImportJobs::hold_starts`]).
+    starts: Mutex<Starts>,
+    starts_idle: Condvar,
     /// A test's callback at a worker's task entry (spec/11): it may
     /// observe or block the real worker, never supply results. The
     /// callback receives the worker's real shutdown check.
     #[cfg(test)]
-    before_task: Mutex<Option<BeforeTask>>,
+    pub(crate) before_task: Mutex<Option<BeforeTask>>,
+}
+
+/// Inventory and capture starts in flight, and whether a restore holds
+/// new ones off. Neither phase resumes from a checkpoint (spec/09), so
+/// a restore's quiesce must never interrupt one: a refused restore
+/// would leave it to fail as interrupted.
+#[derive(Default)]
+struct Starts {
+    starting: usize,
+    held: bool,
+}
+
+/// One inventory or capture start, counted until its command ends.
+pub(crate) struct StartGuard(Arc<ImportJobs>);
+
+impl Drop for StartGuard {
+    fn drop(&mut self) {
+        let mut starts = self.0.starts();
+        starts.starting -= 1;
+        if starts.starting == 0 {
+            self.0.starts_idle.notify_all();
+        }
+    }
+}
+
+/// A restore's hold on new inventory and capture starts, released when
+/// dropped.
+pub(crate) struct StartsHeld(Arc<ImportJobs>);
+
+impl Drop for StartsHeld {
+    fn drop(&mut self) {
+        self.0.starts().held = false;
+    }
 }
 
 /// A test hook run once at a worker's task entry.
@@ -114,6 +151,46 @@ impl ImportJobs {
             .lock()
             .expect("a panicking thread held the import report registry")
             .contains(id)
+    }
+
+    fn starts(&self) -> MutexGuard<'_, Starts> {
+        self.starts
+            .lock()
+            .expect("a panicking thread held the import start gate")
+    }
+
+    /// Count an inventory or capture start, unless a restore holds them.
+    pub(crate) fn begin_start(self: &Arc<Self>) -> Result<StartGuard, EngineError> {
+        let mut starts = self.starts();
+        if starts.held {
+            return Err(EngineError::unavailable("a restore is in progress"));
+        }
+        starts.starting += 1;
+        Ok(StartGuard(Arc::clone(self)))
+    }
+
+    /// Hold new inventory and capture starts off and wait until the ones
+    /// in flight have committed their job, so the store shows every
+    /// inventory and capture that could run.
+    pub(crate) fn hold_starts(self: &Arc<Self>) -> StartsHeld {
+        let mut starts = self.starts();
+        starts.held = true;
+        while starts.starting > 0 {
+            starts = self
+                .starts_idle
+                .wait(starts)
+                .expect("a panicking thread held the import start gate");
+        }
+        StartsHeld(Arc::clone(self))
+    }
+
+    /// Forget the reports noted for the replaced store: a restored
+    /// store's are found again by its own recovery.
+    pub(crate) fn forget_reports(&self) {
+        self.reports
+            .lock()
+            .expect("a panicking thread held the import report registry")
+            .clear();
     }
 
     /// Tell a live worker its job was cancelled, so it stops early.
@@ -366,7 +443,10 @@ impl Engine {
         let fresh = encode_job_receipt(&id, None);
         let key = idempotency_key.to_owned();
         let jobs = Arc::clone(self.imports());
+        let start = jobs.begin_start()?;
         self.command(move |worker| async move {
+            // Counted until the inventory's worker is registered.
+            let start = start;
             let (job, requested, result) = (id.clone(), paths.clone(), fresh.clone());
             let receipt = worker
                 .resources()
@@ -382,6 +462,7 @@ impl Engine {
                 // and the next open fails it visibly.
                 spawn_job(&worker, &jobs, id, Task::Inventory(paths))?;
             }
+            drop(start);
             // A repeated key's receipt names the first job.
             let job_id = receipt_job_id(&receipt)?;
             Ok(ImportStarted { receipt, job_id })
@@ -540,7 +621,10 @@ impl Engine {
         let fresh = encode_job_receipt(&id, None);
         let key = idempotency_key.to_owned();
         let jobs = Arc::clone(self.imports());
+        let start = jobs.begin_start()?;
         self.command(move |worker| async move {
+            // Counted until the capture's worker is registered.
+            let start = start;
             let (job, request_json, result) =
                 (id.clone(), request.request_json().to_owned(), fresh.clone());
             let receipt = worker
@@ -557,6 +641,7 @@ impl Engine {
                 // and the next open fails it visibly.
                 spawn_job(&worker, &jobs, id, Task::Export(Some(request)))?;
             }
+            drop(start);
             let job_id = receipt_job_id(&receipt)?;
             Ok(ExportStarted { receipt, job_id })
         })
@@ -633,6 +718,24 @@ impl Engine {
                 .map(|json| ImportReport { path, json }))
         })
         .await
+    }
+
+    /// Whether an import's inventory or an export's capture is in the
+    /// store's current state: work neither resumes nor survives a
+    /// restore's quiesce (spec/09 fails it at the next open).
+    pub(crate) fn unresumable_jobs(&self) -> Result<bool, EngineError> {
+        let inventory = self
+            .resources()
+            .read(recoverable_import_jobs)?
+            .into_iter()
+            .flatten()
+            .any(|job| job.state() == ImportJobState::Inventory);
+        let capture = self
+            .resources()
+            .read(recoverable_export_jobs)?
+            .iter()
+            .any(|job| job.state() == ExportJobState::Capturing);
+        Ok(inventory || capture)
     }
 
     /// Recovery at open (spec/09): an interrupted inventory fails, a

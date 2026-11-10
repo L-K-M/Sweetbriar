@@ -114,6 +114,17 @@ impl ReceivedJobs {
         self.ready.notify_all();
     }
 
+    /// Undo [`ReceivedJobs::stop`] after a restore's quiesce; the engine
+    /// schedules the worker again. A swapped-in store also forgets the
+    /// replaced one's lane failures.
+    pub(crate) fn resume(&self, store: crate::engine::StoreAfterRestore) {
+        let mut state = self.lock();
+        state.stopping = false;
+        if store == crate::engine::StoreAfterRestore::Replaced {
+            state.failures = Default::default();
+        }
+    }
+
     pub(crate) fn stopped(&self) -> bool {
         self.lock().stopping
     }

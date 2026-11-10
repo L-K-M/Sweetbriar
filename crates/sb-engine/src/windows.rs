@@ -474,7 +474,6 @@ struct Versions {
 
 /// The generations a swapped-in store opened at: they replace the
 /// replaced store's, which may have been higher.
-#[allow(dead_code)] // Engine::restore (plan M1.8g3) builds it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct StoreGenerations {
     pub(crate) list: u64,
@@ -599,7 +598,6 @@ impl Windows {
     /// window's mark restarts, the selections (frozen ids of the
     /// replaced store) are released, and every store subscription
     /// answers `ResetRequired` once. The debug source is untouched.
-    #[allow(dead_code)] // Engine::restore (plan M1.8g3) calls it.
     pub(crate) fn store_replaced(&self, generations: StoreGenerations) {
         // The table lock is held through the swap's count, so a new
         // subscription reads a window's mark and the count from the same
