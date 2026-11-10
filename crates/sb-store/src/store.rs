@@ -17,7 +17,7 @@ use rusqlite::types::Value;
 use rusqlite::{Connection, OpenFlags};
 use sb_types::fs::{FileKind, Fs, Lease, Location, LockError};
 use sb_types::random::Random;
-use sb_types::time::Clock;
+use sb_types::time::{Clock, Timestamp};
 
 use crate::StoreError;
 use crate::StorePaths;
@@ -110,7 +110,18 @@ impl Store {
     /// through one serialized writer task each. Blocking (it awaits
     /// the writer), so never call it on the writer thread.
     pub fn collect_garbage(&self, grace: Duration) -> Result<crate::gc::GcReport, StoreError> {
-        crate::gc::collect_garbage(self, grace)
+        crate::gc::collect_garbage(self, grace, &std::sync::atomic::AtomicBool::new(false))
+    }
+
+    /// [`Store::collect_garbage`], stopping between its steps once `stop`
+    /// is raised: the report says so, and what the pass already did
+    /// stands (a grace pin, a removal). Blocking, like it.
+    pub fn collect_garbage_with(
+        &self,
+        grace: Duration,
+        stop: &std::sync::atomic::AtomicBool,
+    ) -> Result<crate::gc::GcReport, StoreError> {
+        crate::gc::collect_garbage(self, grace, stop)
     }
 
     /// Whether the store owes a backup generation (spec/03 "Backup
@@ -120,6 +131,49 @@ impl Store {
     /// store's own bookkeeping (backups, GC, close) never counts.
     pub fn backup_due(&self) -> Result<bool, StoreError> {
         self.read(|tx| crate::changes::backup_due(tx))
+    }
+
+    /// Record `job`'s run as started now (spec/03 "Scheduled
+    /// maintenance"), replacing its previous run's end; its last
+    /// success stays. Bookkeeping: it never makes a backup due.
+    /// Blocking (it awaits the writer).
+    pub fn start_maintenance(&self, job: crate::MaintenanceJob) -> Result<Timestamp, StoreError> {
+        self.refuse_writer_thread()?;
+        let at = self.clock.now();
+        crate::maintenance::start(&self.writer, job, at)?;
+        Ok(at)
+    }
+
+    /// Record the end of `job`'s run in flight, now, with an optional
+    /// detail cut to [`crate::MAINTENANCE_DETAIL_MAX`] bytes; a
+    /// complete run also becomes its last success. Without a run in
+    /// flight it's `Conflict`. Bookkeeping, like the start. Blocking.
+    /// The detail is stored evidence: never a secret (spec/10).
+    pub fn finish_maintenance(
+        &self,
+        job: crate::MaintenanceJob,
+        outcome: crate::MaintenanceOutcome,
+        detail: Option<&str>,
+    ) -> Result<(), StoreError> {
+        self.refuse_writer_thread()?;
+        crate::maintenance::finish(&self.writer, job, outcome, detail, self.clock.now())
+    }
+
+    /// A maintenance record awaits the writer, which can't await its own
+    /// queue: on the writer thread it would park forever.
+    fn refuse_writer_thread(&self) -> Result<(), StoreError> {
+        if self.writer.is_writer_thread() {
+            return Err(StoreError::internal(
+                "the writer thread cannot record maintenance through its own queue",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Every maintenance job's latest run, in [`crate::MaintenanceJob`]
+    /// order; a job that never ran has none.
+    pub fn maintenance_runs(&self) -> Result<Vec<crate::MaintenanceRun>, StoreError> {
+        self.read(|tx| crate::maintenance::runs(tx))
     }
 
     /// Steps 1–3 of spec/03 "Backup generations": the `in_progress`

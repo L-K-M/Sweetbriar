@@ -482,6 +482,10 @@ The removal task's re-check transaction deletes the `gc_grace` pins as
 it commits, so a crash between the commit and the unlink leaves no
 stale pin; the next pass starts the object's grace clock over.
 
+A pass stops between its steps when asked (restore's quiesce,
+shutdown): the grace pins and removals it already committed stand, and
+the objects it didn't reach wait for the next pass.
+
 GC never runs while **any** account has an `open` breaker event (04),
 or while integrity is in doubt: any `acquisitions` row not
 `published` means an object is already proved absent or damaged. A
@@ -565,6 +569,17 @@ backups/<generation-id>/
   Missing or mismatched ownership proof on an existing directory fails
   closed, including for legacy generations. Validate the canonical parent
   and generation paths before removal.
+
+### Scheduled maintenance
+
+The scheduled jobs are the backup, GC, the weekly object verification
+and the weekly `integrity_check`. Each job's latest run is one
+`maintenance_jobs` row (02 "Maintenance runs"): when it started, when
+and how it ended (`complete`, `blocked` by a safety gate, `cancelled`
+when asked to stop, or `failed` with a detail) and when it last
+completed. A row without an end that this process didn't start is an
+interrupted run. Recording runs is the store's bookkeeping, so running
+a job never makes a generation due.
 
 ## Restore
 
