@@ -222,8 +222,9 @@ impl Engine {
                 let shutting_down = worker.shutdown_check();
                 let registry = owner.clone();
                 // `running` clears inside the blocking task, before its
-                // count drops: whoever waits for the count (shutdown,
-                // restore's quiesce) can schedule a new worker at once.
+                // count drops: whoever waits for the count can schedule
+                // a new worker at once. `stop` is final here; restore's
+                // resume (M1.8g3) lifts it before scheduling again.
                 let finished = worker
                     .blocking(move |resources| {
                         run(resources, &registry, &shutting_down);
@@ -301,7 +302,8 @@ fn turn(
 /// When a job is due next, from its latest recorded run: at once when
 /// it never ran, its run never ended (interrupted) or was cancelled; a
 /// period after a complete run started; a retry after a blocked or
-/// failed one. A start in the future (a clock moved back) counts from
+/// failed one ended, so a long failing run can't follow itself at
+/// once. A start or end in the future (a clock moved back) counts from
 /// now, so the wait is never longer than the period or the retry.
 pub(crate) fn due_at(
     latest: Option<&MaintenanceRun>,
@@ -314,12 +316,13 @@ pub(crate) fn due_at(
     let Some(end) = &run.finished else {
         return now;
     };
-    let wait = match end.outcome {
-        MaintenanceOutcome::Cancelled => return now,
-        MaintenanceOutcome::Complete => cadence.period,
-        MaintenanceOutcome::Blocked | MaintenanceOutcome::Failed => cadence.retry,
-    };
-    after(run.started_at.min(now), wait)
+    match end.outcome {
+        MaintenanceOutcome::Cancelled => now,
+        MaintenanceOutcome::Complete => after(run.started_at.min(now), cadence.period),
+        MaintenanceOutcome::Blocked | MaintenanceOutcome::Failed => {
+            after(end.at.min(now), cadence.retry)
+        }
+    }
 }
 
 /// A job's in-memory floor as of `now`: never more than [`POLL`]

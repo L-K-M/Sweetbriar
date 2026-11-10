@@ -341,6 +341,8 @@ fn a_stopped_scheduler_does_not_start_again() {
     engine.schedule_maintenance();
     assert!(!engine.maintenance().lock().running);
     clock.0.fetch_add(ms(SETTLE), Ordering::SeqCst);
+    // A worker that somehow still ran would look now.
+    engine.maintenance().wake();
     std::thread::sleep(Duration::from_millis(50));
     assert!(engine.resources().maintenance_runs().unwrap().is_empty());
     block_on(engine.shutdown()).unwrap();
@@ -406,11 +408,15 @@ fn a_generation_in_progress_blocks_both_jobs() {
 // --- the pure rules ---
 
 fn run(started_at: i64, outcome: Option<MaintenanceOutcome>) -> MaintenanceRun {
+    ran(started_at, started_at + 1, outcome)
+}
+
+fn ran(started_at: i64, ended_at: i64, outcome: Option<MaintenanceOutcome>) -> MaintenanceRun {
     MaintenanceRun {
         job: MaintenanceJob::Backup,
         started_at: Timestamp::from_millis(started_at),
         finished: outcome.map(|outcome| MaintenanceFinish {
-            at: Timestamp::from_millis(started_at + 1),
+            at: Timestamp::from_millis(ended_at),
             outcome,
             detail: None,
         }),
@@ -435,9 +441,17 @@ fn a_job_is_due_a_period_after_its_last_start_unless_it_never_ended_well() {
     assert_eq!(due(Some(run(9 * hour, cancelled))), now);
     let complete = Some(MaintenanceOutcome::Complete);
     assert_eq!(due(Some(run(9 * hour, complete))), at(10 * hour));
+    // A retry counts from the run's end: one that failed after half an
+    // hour of work doesn't follow itself at once.
     for retried in [MaintenanceOutcome::Blocked, MaintenanceOutcome::Failed] {
-        let latest = Some(run(10 * hour - minute, Some(retried)));
+        let latest = Some(ran(
+            10 * hour - 30 * minute,
+            10 * hour - minute,
+            Some(retried),
+        ));
         assert_eq!(due(latest), at(10 * hour + 4 * minute), "{retried:?}");
+        let ahead = Some(ran(40 * hour, 40 * hour + 1, Some(retried)));
+        assert_eq!(due(ahead), at(10 * hour + 5 * minute), "{retried:?} ahead");
     }
     let ahead = Some(run(40 * hour, complete));
     assert_eq!(due(ahead), at(11 * hour), "a clock moved back");
