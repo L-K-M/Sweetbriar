@@ -610,8 +610,10 @@ time, the backup first, against the injected clock. Its cadence comes
 from the rows, so a restart or a restored store picks it up:
 - A job is due a period after its last complete run started: an hour
   for the backup, a day for GC. A run that was blocked or failed is
-  tried again sooner, after 5 minutes for the backup (so one bad
-  attempt stretches the recovery point by minutes) and an hour for GC.
+  tried again sooner, 5 minutes after it ended for the backup (so one
+  bad attempt stretches the recovery point by minutes) and an hour
+  after it ended for GC; counted from its end, a long failing run
+  can't follow itself at once.
   A job that never ran, or whose last run was interrupted or
   cancelled, is due at once. A start in the future (a clock moved
   back) counts from now.
@@ -622,24 +624,31 @@ from the rows, so a restart or a restored store picks it up:
   names another destination (M1.8j).
 - GC runs with the default grace period.
 - The worker's first look waits a minute after it starts, so the
-  open's own work goes first and a short-lived process (a CLI
-  command) never starts a job its shutdown would cancel. It parks at
+  open's own work goes first and a process that ends within the
+  minute (a CLI command) never starts a job its shutdown would
+  cancel. It parks at
   most a minute at a time and reads the clock again, so a wall-clock
   jump or a Mac waking from sleep is seen within a minute.
 - Shutdown and restore's quiesce (M1.8g3) stop it; a restore's resume
   starts it again, and the restored store's rows decide its cadence.
   A parked worker ends at once; a GC pass stops at its next step and a
   backup's object copy at its next object, both recorded `cancelled`;
-  a stop raised after a backup's start record ends it before the
-  snapshot, which can't stop part way. A failed record write leaves
-  the run interrupted, and the job is looked at again a minute later.
+  a stop raised after a backup's start record and before its snapshot
+  ends it there, recorded `cancelled` with nothing copied yet. A stop
+  raised during the snapshot, which can't stop part way, ends the run
+  at the copy's first object. The next open finds a cancelled or
+  interrupted run due at once.
+- A run whose end record can't be written stays interrupted; the
+  worker looks at its job again a minute later, and a store that
+  can't write records starts no run either.
 - Outcomes: a snapshot refused because another backup, a restore or a
   generation check holds the operation, or a generation is in
   progress, is `blocked`. A copy that the stop ended is `cancelled`.
   Any other backup error is `failed`, retention's after the generation
   completed included. A GC pass is `blocked` by its gates and
-  `cancelled` when it stopped. Failed removals make it `failed`, even
-  when it also stopped. A GC error is always `failed`.
+  `cancelled` when the stop ended it (a stop ends the pass with its
+  report, never an error). Failed removals make it `failed`, even when
+  it also stopped, and so does an error the pass returns.
 
 ## Restore
 
