@@ -32,8 +32,33 @@ pub(super) fn meta(store: &Store, key: &str) -> String {
 }
 
 pub(super) fn file_meta(path: &Path, key: &str) -> String {
-    let connection =
-        Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+    let connection = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .unwrap_or_else(|error| {
+            // Say what was there instead: a failure here is otherwise
+            // a bare open error with no path.
+            let listing = |dir: &Path| -> Vec<String> {
+                std::fs::read_dir(dir).map_or_else(
+                    |e| vec![format!("<{e}>")],
+                    |entries| {
+                        entries
+                            .map(|entry| {
+                                entry.map_or_else(
+                                    |e| format!("<{e}>"),
+                                    |entry| entry.file_name().to_string_lossy().into_owned(),
+                                )
+                            })
+                            .collect()
+                    },
+                )
+            };
+            let dir = path.parent().unwrap();
+            panic!(
+                "cannot open {}: {error}; it holds {:?}; its parent holds {:?}",
+                path.display(),
+                listing(dir),
+                listing(dir.parent().unwrap())
+            )
+        });
     let value = connection
         .query_row(
             "SELECT value FROM store_meta WHERE key = ?1",
