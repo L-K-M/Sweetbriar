@@ -292,6 +292,53 @@ fn disarming_the_key_look_hook_keeps_its_release() {
     assert!(kept_release, "disarming the hook lost the worker's release");
 }
 
+/// A late retry is still a pure replay when its first look missed a
+/// receipt and the earlier snapshot was dropped before it claimed the
+/// operation. It must not recover that key's interrupted generation.
+#[test]
+fn a_key_spent_before_the_claim_replays_without_recovery() {
+    use std::time::{Duration, Instant};
+
+    let (_scratch, _paths, store) = open("keyed-claim-replay");
+    let store = Arc::new(store);
+    let gate = Arc::new(Barrier::new(2));
+    store.backups.set_pauses(Pauses {
+        after_key_look: Some(Arc::clone(&gate)),
+        ..Pauses::default()
+    });
+    let late = {
+        let store = Arc::clone(&store);
+        std::thread::spawn(move || store.start_backup(BackupDestination::DataRoot, KEY))
+    };
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while Arc::strong_count(&gate) < 3 {
+        assert!(
+            Instant::now() < deadline,
+            "the retry never reached its hook"
+        );
+        std::thread::yield_now();
+    }
+    gate.wait();
+    store.backups.set_pauses(Pauses::default());
+    let (receipt, snapshot) = started(store.start_backup(BackupDestination::DataRoot, KEY));
+    let location = snapshot.location().to_path_buf();
+    drop(snapshot);
+    let before = generations(&store);
+    assert_eq!(before.len(), 1);
+    assert_eq!(before[0].1, "in_progress");
+    assert!(location.exists());
+
+    gate.wait();
+    let replay = replayed(late.join().unwrap());
+    assert_eq!(replay, receipt);
+    assert_eq!(generations(&store), before, "a replay ran recovery");
+    assert!(
+        location.exists(),
+        "a replay removed the interrupted snapshot"
+    );
+    Arc::try_unwrap(store).ok().unwrap().close().unwrap();
+}
+
 /// The key is asked again inside the commit. A start whose look found
 /// it unspent, and that then finds it spent on a whole generation,
 /// answers that receipt and inserts nothing.
