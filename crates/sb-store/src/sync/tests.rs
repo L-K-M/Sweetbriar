@@ -1068,4 +1068,13 @@ fn the_cursor_is_scoped_to_the_account_and_a_real_epoch() {
         matches!(zero, Err(StoreError::InvalidInput { .. })),
         "{zero:?}"
     );
+    // Another epoch than the stored one: its UIDs would pair with this
+    // epoch's checkpoint.
+    let stale = sb_test_support::block_on(store.write(crate::WritePriority::User, move |tx| {
+        mailbox_cursor(tx, "a", inbox, EPOCH + 1)
+    }));
+    assert!(
+        matches!(stale, Err(StoreError::InvalidInput { .. })),
+        "{stale:?}"
+    );
 }

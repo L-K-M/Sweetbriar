@@ -456,12 +456,14 @@ fn a_restarted_worker_resumes_from_its_checkpoints_without_duplicates() {
     eventually("the second pass", || {
         commands(&server, "UID SEARCH") >= 2 * SYNC_ORDER.len()
     });
-    // Nothing new: no header fetch, no second copy of anything.
-    assert_eq!(commands(&server, "UID FETCH"), MEMBERS.len());
+    // Nothing new: no second copy of anything, and (counted once the
+    // worker is gone, so no later pass races the count) no header
+    // fetch.
     assert_eq!(occurrences(&engine, &account).len(), MEMBERS.len());
     assert_eq!(messages(&engine, &account), (1, 1));
     assert!(all_synced(&engine, &account));
     shutdown_promptly(engine);
+    assert_eq!(commands(&server, "UID FETCH"), MEMBERS.len());
 }
 
 #[test]
@@ -562,15 +564,16 @@ fn a_mailbox_bridge_refuses_is_left_out_while_the_rest_sync() {
         .find(|(name, _, _)| name == "INBOX")
         .unwrap();
     assert_eq!(inbox, ("INBOX".to_owned(), "new".to_owned(), None));
+    assert_eq!(occurrences(&engine, &account).len(), MEMBERS.len() - 1);
+    assert_eq!(state(&engine, &account), (AccountState::Active, None));
+    // Counted once the worker is gone, so no later session races it.
+    shutdown_promptly(engine);
     assert_eq!(commands(&server, "EXAMINE INBOX"), 1, "never asked again");
     assert_eq!(
         logins(&server),
         3,
         "the probe, the refused session, the next"
     );
-    assert_eq!(occurrences(&engine, &account).len(), MEMBERS.len() - 1);
-    assert_eq!(state(&engine, &account), (AccountState::Active, None));
-    shutdown_promptly(engine);
 }
 
 #[test]

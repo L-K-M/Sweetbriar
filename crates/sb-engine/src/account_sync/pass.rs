@@ -123,7 +123,8 @@ pub(super) async fn run(
         })
         .await;
     // Without the reconciled mailboxes there is nothing safe to fetch
-    // into; the next pass lists again.
+    // into. A store that failed the write ends the pass, not the
+    // session: the next pass lists again.
     let Ok(targets) = targets else {
         return Ok(());
     };
@@ -171,8 +172,13 @@ async fn sync_mailbox(
             }
         })
         .await;
-    let Ok(Some(cursor)) = cursor else {
-        return Ok(());
+    let cursor = match cursor {
+        Ok(Some(cursor)) => cursor,
+        // A changed epoch waits for the epoch-change step.
+        Ok(None) => return Ok(()),
+        // The store failed: the mailbox keeps its stored checkpoint and
+        // the next pass plans it afresh. The session stays healthy.
+        Err(_) => return Ok(()),
     };
 
     let inventory = connection.uid_inventory().await?.observation;
@@ -202,6 +208,9 @@ async fn sync_mailbox(
         // Only the checkpoint moves: to the server's UIDNEXT, and the
         // mailbox becomes `synced` when nothing was left out.
         if Some(checkpoint.target(None, true)) != checkpoint.stored || cursor.synced != complete {
+            // Refused or failed, the stored checkpoint stays and the
+            // next pass moves it: nothing was fetched that could be
+            // lost.
             let _ = checkpoint
                 .commit(worker, None, true, complete, Arc::default())
                 .await;
