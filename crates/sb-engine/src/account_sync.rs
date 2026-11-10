@@ -6,13 +6,14 @@
 //! a refused connection shows "Bridge isn't running" while retries
 //! continue, a refused login or a changed certificate pauses the
 //! account and ends the worker until the user acts, and a connect
-//! lifts a connection pause. The sync pass that a live session then
-//! runs arrives with the next M2.4 slice.
+//! lifts a connection pause. A live session runs a sync pass
+//! (`pass`), then another after the poll interval, until the worker
+//! is stopped, the session fails, or the account stops syncing.
 
 use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use sb_resources::{
     CertificatePin, ConnectAttempt, Connection, ConnectionPause, Connector, CredentialPause,
@@ -24,11 +25,54 @@ use tokio::sync::watch;
 
 use crate::Engine;
 use crate::engine::{Spawn, Worker};
+use crate::policy::Policy;
+
+mod pass;
 
 /// How long a worker waits before starting over after a failure the
 /// transport does not retry and no account state names (a protocol
 /// fault): the reconnect backoff's own ceiling.
 const RESTART_DELAY: Duration = Duration::from_secs(5 * 60);
+
+/// How long a live session rests between sync passes: spec/04 polls
+/// the inbox every 60 s while IDLE is unavailable, and the IDLE
+/// watcher (plan M2.4, next slice) is not running yet.
+const POLL_INTERVAL: Duration = Duration::from_secs(60);
+
+/// The first wait before reconnecting after a session that failed
+/// before completing a pass; it doubles up to [`RESTART_DELAY`], the
+/// reconnect backoff's own range (spec/04: 1 s to 5 min).
+const UNPROVEN_SESSION_DELAY: Duration = Duration::from_secs(1);
+
+/// The wait before reconnecting after a failed session. The transport's
+/// [`Reconnector`] restarts at its first step on every connect, so a
+/// server that accepts each login and then fails every pass would be
+/// retried each second forever; this backoff grows across such
+/// sessions and resets only once a session completes a pass.
+#[derive(Debug)]
+struct SessionBackoff {
+    next: Duration,
+}
+
+impl SessionBackoff {
+    fn new() -> Self {
+        Self {
+            next: UNPROVEN_SESSION_DELAY,
+        }
+    }
+
+    /// The wait after a failed session: none when it completed a pass
+    /// (and the backoff starts over), else the next step.
+    fn after_failure(&mut self, completed_a_pass: bool) -> Duration {
+        if completed_a_pass {
+            self.next = UNPROVEN_SESSION_DELAY;
+            return Duration::ZERO;
+        }
+        let wait = self.next;
+        self.next = wait.saturating_mul(2).min(RESTART_DELAY);
+        wait
+    }
+}
 
 /// The live account workers. Each holds a stop signal; `stop` raises
 /// every one and refuses new workers (shutdown, and the restore
@@ -130,6 +174,23 @@ enum Transition {
     Credential(CredentialPause),
 }
 
+/// How a live session ended.
+enum Served {
+    /// The worker was told to stop.
+    Stopped,
+    /// The account no longer syncs (paused, disconnected or removed).
+    Ended,
+    /// The session failed; recovery reconnects. `completed_a_pass` says
+    /// whether it proved healthy first (see [`SessionBackoff`]).
+    Failed {
+        error: ImapError,
+        completed_a_pass: bool,
+    },
+    /// The server refused one mailbox's command and the session is
+    /// gone; the worker reconnects at once, leaving that mailbox out.
+    Refused,
+}
+
 /// How a recovery ended.
 enum Recovery {
     /// Boxed: a live session is large and moves once.
@@ -165,6 +226,7 @@ async fn run_account(worker: &Worker, account_id: &str, stop: watch::Receiver<bo
     if endpoint.provider != ImapProvider::ProtonBridge {
         return;
     }
+    let policy = Policy::ProtonBridge;
     // Without a usable pin there is nothing to trust: the re-trust
     // flow (spec/10) gives the account one.
     let Some(pin) = endpoint
@@ -187,18 +249,14 @@ async fn run_account(worker: &Worker, account_id: &str, stop: watch::Receiver<bo
         setup_failure: None,
     };
     let mut reconnector = Reconnector::new();
+    let mut sessions = SessionBackoff::new();
+    let mut refusals = pass::Refusals::default();
+    let mut failure: Option<ImapError> = None;
     loop {
-        if *stop.borrow() {
-            return;
-        }
-        let first = tokio::select! {
-            result = connector.connect() => result,
-            () = stopped(stop.clone()) => return,
-        };
-        let connection = match first {
-            Ok(connection) => connection,
-            Err(failure) => {
-                match recover(
+        let recovery = match failure.take() {
+            None => establish(worker, account_id, &mut reconnector, &mut connector, &stop).await,
+            Some(failure) => {
+                recover(
                     worker,
                     account_id,
                     &mut reconnector,
@@ -207,26 +265,127 @@ async fn run_account(worker: &Worker, account_id: &str, stop: watch::Receiver<bo
                     &stop,
                 )
                 .await
-                {
-                    Recovery::Connected(connection) => *connection,
-                    Recovery::Stopped => return,
-                    Recovery::Restart => {
-                        tokio::select! {
-                            () = tokio::time::sleep(RESTART_DELAY) => continue,
-                            () = stopped(stop.clone()) => return,
-                        }
-                    }
+            }
+        };
+        let mut connection = match recovery {
+            Recovery::Connected(connection) => *connection,
+            Recovery::Stopped => return,
+            Recovery::Restart => {
+                tokio::select! {
+                    () = tokio::time::sleep(RESTART_DELAY) => continue,
+                    () = stopped(stop.clone()) => return,
                 }
             }
         };
         record(worker, account_id, Transition::Connected).await;
-        // The sync pass (next M2.4 slice) runs here on the live session;
-        // until then the worker ends it and waits to be stopped.
-        let mut connection = connection;
-        let _ = connection.logout().await;
-        drop(connection);
-        stopped(stop.clone()).await;
-        return;
+        match serve(
+            worker,
+            account_id,
+            policy,
+            &mut connection,
+            &stop,
+            &mut refusals,
+        )
+        .await
+        {
+            // A session stopped mid-command is unusable; dropping it
+            // closes the socket.
+            Served::Stopped => return,
+            Served::Ended => {
+                tokio::select! {
+                    _ = connection.logout() => {}
+                    () = stopped(stop.clone()) => {}
+                }
+                return;
+            }
+            Served::Failed {
+                error,
+                completed_a_pass,
+            } => {
+                let wait = sessions.after_failure(completed_a_pass);
+                if !wait.is_zero() {
+                    tokio::select! {
+                        () = tokio::time::sleep(wait) => {}
+                        () = stopped(stop.clone()) => return,
+                    }
+                }
+                failure = Some(error);
+            }
+            Served::Refused => {}
+        }
+    }
+}
+
+/// The first attempt of a connection, raced against the stop signal,
+/// then the backoff's retries.
+async fn establish(
+    worker: &Worker,
+    account_id: &str,
+    reconnector: &mut Reconnector,
+    connector: &mut AccountConnector,
+    stop: &watch::Receiver<bool>,
+) -> Recovery {
+    let first = tokio::select! {
+        result = connector.connect() => result,
+        () = stopped(stop.clone()) => return Recovery::Stopped,
+    };
+    match first {
+        Ok(connection) => Recovery::Connected(Box::new(connection)),
+        Err(failure) => recover(worker, account_id, reconnector, connector, failure, stop).await,
+    }
+}
+
+/// Run sync passes on a live session, one per poll interval, while
+/// the account syncs. Each pass races the stop signal, so shutdown
+/// never waits for a long backfill.
+async fn serve(
+    worker: &Worker,
+    account_id: &str,
+    policy: Policy,
+    connection: &mut Connection,
+    stop: &watch::Receiver<bool>,
+    refusals: &mut pass::Refusals,
+) -> Served {
+    let mut completed_a_pass = false;
+    loop {
+        if !still_syncable(worker, account_id).await {
+            return Served::Ended;
+        }
+        let passed = tokio::select! {
+            result = pass::run(worker, account_id, policy, connection, refusals) => result,
+            () = stopped(stop.clone()) => return Served::Stopped,
+        };
+        match passed {
+            Ok(()) => completed_a_pass = true,
+            Err(pass::PassError::Session(error)) => {
+                return Served::Failed {
+                    error,
+                    completed_a_pass,
+                };
+            }
+            Err(pass::PassError::Refused { mailbox_id }) => {
+                refusals.refuse(mailbox_id, Instant::now());
+                return Served::Refused;
+            }
+        }
+        tokio::select! {
+            () = tokio::time::sleep(POLL_INTERVAL) => {}
+            () = stopped(stop.clone()) => return Served::Stopped,
+        }
+    }
+}
+
+/// Whether the account still syncs. A failed read keeps the worker
+/// going: the pass's own writes fail harmlessly, and the next check
+/// reads again.
+async fn still_syncable(worker: &Worker, account_id: &str) -> bool {
+    let id = account_id.to_owned();
+    match worker
+        .blocking(|resources| resources.read(syncable_accounts))
+        .await
+    {
+        Ok(Ok(accounts)) => accounts.contains(&id),
+        _ => true,
     }
 }
 

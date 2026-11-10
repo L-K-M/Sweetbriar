@@ -50,6 +50,10 @@ const HEADERS: &str = concat!(
     "\r\n",
 );
 
+/// The shared message's INTERNALDATE and RFC822.SIZE.
+const INTERNALDATE: &str = "02-Nov-2026 09:15:02 +0000";
+const RFC822_SIZE: u32 = 2048;
+
 /// `(mailbox, uid, flags)`: where the shared message appears.
 const MEMBERSHIPS: &[(&str, u32, &str)] = &[
     ("INBOX", 7, "\\Seen"),
@@ -165,6 +169,26 @@ impl Profile {
         for (seq, uid, _) in memberships(mailbox) {
             sends.push(Reply::UntaggedLiteral {
                 head: format!("{seq} FETCH (UID {uid} BODY[HEADER.FIELDS ({HEADER_FIELDS})]"),
+                bytes: HEADERS.as_bytes().to_vec(),
+                tail: ")".to_string(),
+            });
+        }
+        sends.push(Reply::ok("UID FETCH completed"));
+        Step::on(Expect::command("UID FETCH"), sends)
+    }
+
+    /// `UID FETCH … (UID FLAGS INTERNALDATE RFC822.SIZE
+    /// BODY.PEEK[HEADER.FIELDS (…)])` as the sync loop asks it
+    /// (spec/04 step 3): one complete row per membership, each with
+    /// its flags and the same reconstructed header bytes.
+    pub fn header_rows_step(&self, mailbox: &str) -> Step {
+        let mut sends: Vec<Reply> = Vec::new();
+        for (seq, uid, flags) in memberships(mailbox) {
+            sends.push(Reply::UntaggedLiteral {
+                head: format!(
+                    "{seq} FETCH (UID {uid} FLAGS ({flags}) INTERNALDATE \"{INTERNALDATE}\" \
+                     RFC822.SIZE {RFC822_SIZE} BODY[HEADER.FIELDS ({HEADER_FIELDS})]"
+                ),
                 bytes: HEADERS.as_bytes().to_vec(),
                 tail: ")".to_string(),
             });
