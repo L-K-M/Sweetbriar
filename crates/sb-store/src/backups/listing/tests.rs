@@ -11,12 +11,17 @@ use super::{
 use crate::backups::BackupDestination;
 use crate::schema::bug;
 use crate::testing::{FIXED_NOW_MS, scratch_paths, test_seams, writing};
-use crate::{GenerationCheck, GenerationVerdict, Store, StoreError};
+use crate::{GenerationCheck, GenerationVerdict, Store, StoreError, StorePaths};
 
 fn open(label: &str) -> (sb_test_support::ScratchDir, Store) {
+    let (scratch, _, store) = open_at(label);
+    (scratch, store)
+}
+
+fn open_at(label: &str) -> (sb_test_support::ScratchDir, StorePaths, Store) {
     let (scratch, paths) = scratch_paths(label);
     let store = crate::open(&paths, &test_seams(real_fs())).unwrap();
-    (scratch, store)
+    (scratch, paths, store)
 }
 
 /// A row as a past run left it: `state` at `started_at`, nothing else.
@@ -185,4 +190,60 @@ fn a_count_no_generation_can_have_is_corrupt() {
             "{column}: {error:?}"
         );
     }
+}
+
+/// The schema's checks keep these rows out, so one that holds them
+/// came from a damaged file or from another program. A connection
+/// that skips the checks, as none of the store's does, writes each.
+#[test]
+fn a_row_the_schema_s_checks_forbid_is_corrupt() {
+    for (case, change) in [
+        ("an unknown state", "state = 'paused'"),
+        ("a verdict without its time", "verification = 'intact'"),
+        ("a time without its verdict", "verified_at = 5"),
+        (
+            "an unknown verdict",
+            "verification = 'fine', verified_at = 5",
+        ),
+    ] {
+        let (_scratch, paths, store) = open_at("backup-list-forbidden");
+        row(&store, "sound", "complete", 1);
+        row(&store, "malformed", "complete", 2);
+        assert_eq!(store.backup_generations().unwrap().len(), 2);
+        let outside = rusqlite::Connection::open(paths.state_db()).unwrap();
+        outside
+            .execute_batch(&format!(
+                "PRAGMA ignore_check_constraints = ON;
+                 UPDATE backup_generations SET {change} WHERE generation_id = 'malformed'"
+            ))
+            .unwrap();
+        drop(outside);
+
+        let error = store.backup_generations().unwrap_err();
+        assert!(
+            matches!(&error, StoreError::Corrupt { .. }) && error.to_string().contains("malformed"),
+            "{case}: {error:?}"
+        );
+    }
+}
+
+/// A failed row the listing leaves out is not read past its state:
+/// the list is how a generation is chosen for a restore, and a row it
+/// wouldn't show must not take that away.
+#[test]
+fn a_malformed_row_that_is_not_listed_fails_nothing() {
+    let (_scratch, store) = open("backup-list-unlisted-malformed");
+    row(&store, "old-failed", "failed", 1);
+    row(&store, "complete", "complete", 2);
+    writing(&store, |tx| {
+        tx.execute_batch(
+            "UPDATE backup_generations SET object_count = -1 WHERE generation_id = 'old-failed'",
+        )
+        .map_err(bug)
+    });
+
+    assert_eq!(
+        listed(&store),
+        [("complete".to_owned(), BackupGenerationState::Complete)]
+    );
 }

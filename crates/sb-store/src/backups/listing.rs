@@ -104,6 +104,9 @@ pub(crate) fn generations(conn: &Connection) -> Result<Vec<BackupGeneration>, St
             BackupGenerationState::Complete => complete_seen = true,
             BackupGenerationState::InProgress => {}
             BackupGenerationState::Failed => {
+                // Left out before the rest of the row is read: a row
+                // the list doesn't show can't make it `Corrupt`, and
+                // the list is how a restore's generation is chosen.
                 if complete_seen || failed == FAILED_GENERATIONS_LISTED {
                     continue;
                 }
