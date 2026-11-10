@@ -567,10 +567,33 @@ orphan GC is about to remove. So:
   sets `acquisitions.object_state='quarantined'` and notifies the UI. An
   absent file is `NotFound`, and the engine sets `'missing'`.
 - Publishing the same bytes again (a re-fetch, a re-import) restores
-  `'published'`.
+  `'published'`, and so does the weekly sample reading them intact.
 - A weekly verification job re-hashes a rotating sample of objects (1/52
   of them each week, so every object yearly), and all objects referenced
   by backups.
+- **The live sample (M1.8h4a).** An object's bucket is the first eight
+  bytes of its SHA-256, big-endian, modulo 52; week `w` (UTC weeks
+  starting Monday, numbered from the epoch's) samples bucket `w mod
+  52`. `store_meta.verified_through_week` is the highest week whose
+  bucket a run finished: a run covers every week since, at most the last 52,
+  so missed weeks are caught up; a run in a week already finished reads
+  nothing; without it, or with the clock behind it, a run covers its own
+  week. It advances bucket by bucket and never moves back. A bucket's
+  sample is every object it holds that a row references (acquisitions,
+  send attempts, draft attachments) or that is on disk, each read
+  through the verifying reader. On an
+  acquisition, absent turns `published` into `missing` and damaged
+  turns `published` into `quarantined`, each with an index `delete`;
+  damaged turns `missing` into `quarantined` with none (a `missing` row
+  is out of the index already); and intact turns `missing` or
+  `quarantined` back into `published` with a `reextract`. Each change
+  is in the transaction that records the verdict, against the row as it
+  is then; a file present again by then is a republish, and the
+  absent or damaged verdict is dropped. Other references have no state
+  and are counted. I/O failures are reported, not retried within the
+  run, and don't hold the checkpoint. A run stops between objects and
+  read chunks when asked, keeping what it recorded; its unfinished
+  bucket waits for the next run.
 
 ### Garbage collection
 

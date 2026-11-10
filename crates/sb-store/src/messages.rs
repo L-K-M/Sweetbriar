@@ -285,7 +285,7 @@ pub(crate) fn check_availability(acquisition: &StoredAcquisition) -> Result<(), 
 }
 
 /// The outcome of one verification pass over an open object.
-enum Streamed {
+pub(crate) enum Streamed {
     /// Read to EOF; the hash and length matched the id.
     Verified,
     /// Stopped at a chunk boundary; nothing was verified.
@@ -297,7 +297,7 @@ enum Streamed {
 /// `sink` retains the bytes; `None` verifies without retaining.
 /// `cancelled` is polled before every chunk; a stop reports
 /// `Streamed::Cancelled` with no verification claim.
-fn drain_object(
+pub(crate) fn drain_object(
     reader: &mut ObjectReader,
     mut sink: Option<&mut Vec<u8>>,
     cancelled: &dyn Fn() -> bool,

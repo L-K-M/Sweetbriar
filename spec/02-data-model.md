@@ -61,6 +61,9 @@ CREATE TABLE store_meta (
 -- generation so index-only writes leave ordinary list windows alone.
 -- Migration 25: 'content_changes' and 'backed_up_changes' (03 "Backup
 -- generations"), integers in decimal digits; see "Backup change counters".
+-- Written at runtime, no migration: 'verified_through_week' (03 "Reads and
+-- verification", M1.8h4a), the highest week number whose live-sample bucket
+-- a run has finished, decimal digits; absent until the first run finishes one.
 -- The schema version is PRAGMA user_version, owned by the migration runner;
 -- it is not duplicated here.
 ```
