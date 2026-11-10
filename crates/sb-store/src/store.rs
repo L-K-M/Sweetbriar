@@ -81,7 +81,7 @@ pub(crate) const CLEAN_SHUTDOWN_KEY: &str = "clean_shutdown_at";
 pub struct Store {
     readers: Readers,
     pub(crate) writer: Arc<Writer>,
-    objects: Arc<FileObjectStore>,
+    pub(crate) objects: Arc<FileObjectStore>,
     pub(crate) backups: crate::backups::Backups,
     pub(crate) activation: crate::activation::inputs::Owner,
     source_snapshots: ImportSourceSnapshots,
@@ -120,6 +120,20 @@ impl Store {
     /// store's own bookkeeping (backups, GC, close) never counts.
     pub fn backup_due(&self) -> Result<bool, StoreError> {
         self.read(|tx| crate::changes::backup_due(tx))
+    }
+
+    /// The weekly live sample (spec/03 "Reads and verification"): the
+    /// hash buckets due since the last finished week, each read through
+    /// the verifying reader, with acquisitions marked `missing`,
+    /// `quarantined` or `published` again as the bytes show. Stops
+    /// between objects and read chunks once `stop` is raised, keeping
+    /// what it recorded; the unfinished bucket waits for the next run.
+    /// Blocking (file I/O and the writer); never on the writer thread.
+    pub fn verify_sample(
+        &self,
+        stop: &std::sync::atomic::AtomicBool,
+    ) -> Result<crate::SampleReport, StoreError> {
+        crate::verification::verify_sample(self, stop)
     }
 
     /// Steps 1–3 of spec/03 "Backup generations": the `in_progress`
