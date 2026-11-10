@@ -456,9 +456,21 @@ impl Backups {
             return Ok(Begun::Replayed(receipt));
         }
         #[cfg(test)]
-        {
-            self.pause(|p| &p.after_key_look);
-            self.pause(|p| &p.after_key_look);
+        if key.is_some() {
+            // Capture both rendezvous together: the test disarms the
+            // hook after the first, spends the key, then releases this
+            // start at the second. Re-reading the hook could lose that
+            // release and strand the test at its barrier.
+            let gate = self
+                .pauses
+                .lock()
+                .expect("a panicking thread held the pauses")
+                .after_key_look
+                .clone();
+            if let Some(gate) = gate {
+                gate.wait();
+                gate.wait();
+            }
         }
         let held = match self.active.try_lock() {
             Ok(active) if active.as_ref().and_then(Weak::upgrade).is_none() => Ok(active),

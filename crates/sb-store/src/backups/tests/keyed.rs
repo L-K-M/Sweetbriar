@@ -239,6 +239,59 @@ fn a_failure_after_the_row_leaves_the_receipt_naming_it() {
     assert_eq!(generations(&store), rows, "nothing was recovered or begun");
 }
 
+/// Disarming the hook while its first rendezvous is held must not
+/// discard the second rendezvous that releases that same operation.
+#[test]
+fn disarming_the_key_look_hook_keeps_its_release() {
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
+    let (_scratch, _paths, store) = open("keyed-disarm-hook");
+    let store = Arc::new(store);
+    let gate = Arc::new(Barrier::new(2));
+    store.backups.set_pauses(Pauses {
+        after_key_look: Some(gate.clone()),
+        ..Pauses::default()
+    });
+    let working = {
+        let store = Arc::clone(&store);
+        std::thread::spawn(move || store.start_backup(BackupDestination::DataRoot, KEY))
+    };
+    // The test and the armed hook own two references. The third proves
+    // the worker captured its gate before we lock the hook registry.
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while Arc::strong_count(&gate) < 3 {
+        assert!(
+            Instant::now() < deadline,
+            "the worker never reached its hook"
+        );
+        std::thread::yield_now();
+    }
+    let mut pauses = store.backups.pauses.lock().unwrap();
+    gate.wait();
+    *pauses = Pauses::default();
+    drop(pauses);
+
+    let (released, done) = mpsc::channel();
+    let release = std::thread::spawn({
+        let gate = Arc::clone(&gate);
+        move || {
+            gate.wait();
+            released.send(()).unwrap();
+        }
+    });
+    let kept_release = done.recv_timeout(Duration::from_secs(5)).is_ok();
+    if !kept_release {
+        // A broken worker skipped its release. Free the helper before
+        // failing, rather than leaving a test thread blocked forever.
+        gate.wait();
+    }
+    release.join().unwrap();
+    drop(started(working.join().unwrap()));
+    Arc::try_unwrap(store).ok().unwrap().close().unwrap();
+    assert!(kept_release, "disarming the hook lost the worker's release");
+}
+
 /// The key is asked again inside the commit. A start whose look found
 /// it unspent, and that then finds it spent on a whole generation,
 /// answers that receipt and inserts nothing.
