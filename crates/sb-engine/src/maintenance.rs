@@ -136,6 +136,10 @@ pub(crate) struct MaintenanceJobs {
     cancel: AtomicBool,
     #[cfg(test)]
     pub(crate) hook: Mutex<Option<Hook>>,
+    /// A test's period for the backup in place of [`BACKUP_PERIOD`]:
+    /// spec/03's "5 minutes is the test setting".
+    #[cfg(test)]
+    pub(crate) backup_period: Mutex<Option<Duration>>,
 }
 
 #[derive(Default)]
@@ -215,6 +219,15 @@ impl MaintenanceJobs {
     pub(crate) fn waiting(&self) -> bool {
         let state = self.lock();
         state.waiting && !state.again
+    }
+
+    /// `cadence`, with a test's backup period in its place.
+    #[cfg(test)]
+    fn test_cadence(&self, job: MaintenanceJob, cadence: Cadence) -> Cadence {
+        match *self.backup_period.lock().unwrap() {
+            Some(period) if job == MaintenanceJob::Backup => Cadence { period, ..cadence },
+            _ => cadence,
+        }
     }
 
     #[cfg(test)]
@@ -369,6 +382,8 @@ fn turn(
     };
     let mut next: Option<Timestamp> = None;
     for (slot, (job, cadence, run_job)) in SCHEDULE.into_iter().enumerate() {
+        #[cfg(test)]
+        let cadence = jobs.test_cadence(job, cadence);
         let latest = runs.iter().find(|run| run.job == job);
         let due = due_at(latest, cadence, now).max(floor_at(not_before[slot], now));
         if due > now {
