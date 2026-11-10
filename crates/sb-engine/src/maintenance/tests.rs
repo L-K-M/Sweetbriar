@@ -813,6 +813,19 @@ fn a_finding_turns_the_engine_read_only_and_announces_the_copy() {
         outcome_of(&engine, MaintenanceJob::Gc),
         Some(MaintenanceOutcome::Complete)
     );
+    let found = engine.health();
+    block_on(engine.shutdown()).unwrap();
+
+    // The latch is durable: the next open is read-only with the same
+    // finding and copy, and its schedule starts nothing.
+    let (engine, _) = clocked(&root, real_fs(), MONDAY + ms(SETTLE));
+    assert!(engine.read_only());
+    assert_eq!(engine.health(), found);
+    engine.schedule_maintenance();
+    assert!(!engine.maintenance().running());
+    let stored = run_of(&engine, MaintenanceJob::Integrity).unwrap();
+    assert_eq!(stored.started_at, run.started_at);
+    assert!(stored.finished.is_none(), "{:?}", stored.finished);
     block_on(engine.shutdown()).unwrap();
 }
 
