@@ -79,8 +79,10 @@ fn a_finding_reaches_a_subscribed_shell_and_the_next_open() {
     assert!(detected_at_ms.is_some());
     let copy = copy.as_ref().expect("the copy is published");
     assert!(copy.join("manifest.json").is_file(), "{}", copy.display());
-    // Queries go on; a command that writes names the finding.
+    // Queries go on, coverage among them; a command that writes names
+    // the finding.
     block_on(core.settings()).unwrap();
+    block_on(core.coverage(crate::SearchScope::All)).unwrap();
     match block_on(core.set_setting("after-the-finding", "appearance.compose_cue", "strong")) {
         Err(CoreError::Corrupt { detail }) => {
             assert!(detail.contains("integrity_probe_pad"), "{detail}");
