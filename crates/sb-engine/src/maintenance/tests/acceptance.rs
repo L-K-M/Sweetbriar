@@ -89,6 +89,23 @@ fn assert_complete_generations_intact(engine: &Engine) -> usize {
     complete.len()
 }
 
+/// The counter of an acknowledged write, or the highest snapshot
+/// counter held by a complete generation. Newer writes can keep
+/// `backup_due()` true after an older write is already covered.
+fn content_mark(engine: &Engine, key: &'static str) -> i64 {
+    engine
+        .resources()
+        .read(|tx| {
+            tx.query_row(
+                "SELECT CAST(value AS INTEGER) FROM store_meta WHERE key=?1",
+                [key],
+                |row| row.get(0),
+            )
+            .map_err(sql_error)
+        })
+        .unwrap()
+}
+
 // --- the recovery point ---
 
 /// Six simulated hours at the 5-minute setting, a minute at a time,
@@ -107,8 +124,9 @@ fn the_recovery_point_holds_over_simulated_hours() {
 
     let mut seed: u64 = 0x5EED;
     let mut writes = 0;
-    // When the oldest write no complete generation holds was committed.
-    let mut uncovered_since: Option<i64> = Some(now(&engine));
+    // Each acknowledged write's time and counter. A completed snapshot
+    // clears only the writes it actually holds, not newer ones.
+    let mut uncovered = vec![(now(&engine), content_mark(&engine, "content_changes"))];
     let mut oldest = 0;
     let mut waited = 0;
     for minute in 0..HOURS * 60 {
@@ -119,15 +137,14 @@ fn the_recovery_point_holds_over_simulated_hours() {
         if after_quiet || (!QUIET.contains(&minute) && (seed >> 60) < 5) {
             toggle(&engine, writes);
             writes += 1;
-            uncovered_since.get_or_insert(now(&engine));
+            uncovered.push((now(&engine), content_mark(&engine, "content_changes")));
         }
 
         advance(&engine, &clock, MINUTE);
 
-        if !engine.resources().backup_due().unwrap() {
-            uncovered_since = None;
-        }
-        if let Some(since) = uncovered_since {
+        let backed_up = content_mark(&engine, "backed_up_changes");
+        uncovered.retain(|(_, mark)| *mark > backed_up);
+        if let Some(&(since, _)) = uncovered.first() {
             let age = now(&engine) - since;
             assert!(
                 age < ms(TEST_PERIOD),
@@ -138,12 +155,12 @@ fn the_recovery_point_holds_over_simulated_hours() {
         }
         if after_quiet {
             assert!(
-                uncovered_since.is_none(),
+                uncovered.is_empty(),
                 "the first write after a quiet hour waits for no period"
             );
         }
         if QUIET.contains(&minute) && minute >= QUIET.start + 5 {
-            assert!(uncovered_since.is_none(), "minute {minute}");
+            assert!(uncovered.is_empty(), "minute {minute}");
         }
     }
 
@@ -406,7 +423,12 @@ fn a_restore_during(job: MaintenanceJob, stored: &'static str, stopped_early: &s
     hook(&engine, move |event| {
         if event == Event::Running(job) && !held.swap(true, Ordering::SeqCst) {
             entered.lock().unwrap().send(()).unwrap();
+            let deadline = Instant::now() + PATIENCE;
             while !jobs.stopped() {
+                assert!(
+                    Instant::now() < deadline,
+                    "restore never stopped the schedule"
+                );
                 std::thread::yield_now();
             }
         }
