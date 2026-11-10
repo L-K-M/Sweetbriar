@@ -59,6 +59,8 @@ CREATE TABLE store_meta (
 -- Migration 5: 'index_inputs', 'search_extractor_version' (06) and
 -- 'search_generation' (07), integers in decimal digits; search has its own
 -- generation so index-only writes leave ordinary list windows alone.
+-- Migration 25: 'content_changes' and 'backed_up_changes' (03 "Backup
+-- generations"), integers in decimal digits; see "Backup change counters".
 -- The schema version is PRAGMA user_version, owned by the migration runner;
 -- it is not duplicated here.
 ```
@@ -1248,6 +1250,38 @@ alone does not authorize cleanup. Ownership tokens match the separately
 flushed marker beside each generation directory; retention removes the
 ownership row with an expired complete generation. Legacy rows can lack
 ownership evidence.
+
+### Backup change counters (M1.8h1)
+
+Migration 25 seeds the counters behind "a generation every hour while
+there were changes" (03). A store migrating in has unknown changes since
+its last generation, so it starts one change ahead:
+
+```sql
+INSERT INTO store_meta (key, value) VALUES ('content_changes', '1');
+INSERT INTO store_meta (key, value) VALUES ('backed_up_changes', '0');
+```
+
+- `content_changes` gains one in each committed write transaction that
+  inserted, updated or deleted a row, except the store's own bookkeeping:
+  backup generations, their ownership, pins, cleanup and retention; GC's
+  grace pins and removals; verifier scratch; an export's streamed
+  chunks; a publication's reservation pin; and the clean-shutdown
+  marker. Everything else counts, job state and derived data included:
+  a write wrongly counted costs one extra generation, never a recovery
+  point. A write that touched no row, or rolled back, leaves it alone.
+- Completing a generation sets `backed_up_changes` to the
+  `content_changes` its snapshot holds, unless that is lower. A commit
+  after the snapshot point therefore still makes the next generation
+  due.
+- A store is due for a generation while `content_changes` exceeds
+  `backed_up_changes`, or while it has no `complete` generation.
+- Restore's quarantine (03) sets `backed_up_changes` to 0: no
+  generation holds the quarantined store with its new incarnation, so
+  it owes the next one.
+- Both are nonnegative decimal integers through 9,223,372,036,854,775,807.
+  A missing or malformed counter, or advancement past that maximum, is
+  `Corrupt`; the write that needed it rolls back.
 
 ## Derived tables
 

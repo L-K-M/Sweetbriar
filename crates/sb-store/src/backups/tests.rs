@@ -4155,6 +4155,8 @@ fn verifier_image_crash_cuts_recover_owned_scratch() {
     assert!(cuts > 0);
 }
 
+mod changes;
+
 mod stage_tests {
     mod bindings;
     mod evidence;

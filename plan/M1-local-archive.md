@@ -1568,6 +1568,30 @@ local drafts. No network yet.
     reconcile occurrences, release quarantined intents). Acceptance: a
     pending write and a running engine job both stop before the swap and
     no connection stays open on the replaced root.
+  - **M1.8h split before implementation (2026-11-10):** **h1 Change
+    counter (M)**: `store_meta.content_changes` counts committed data
+    writes, never the store's own bookkeeping; a generation records its
+    snapshot's count; `Store::backup_due`. **h2 Cloned and cancellable
+    generations (M)**: `clonefile` on APFS when the destination shares
+    the volume (spec/03 step 4), a stream copy otherwise; the object
+    copy stops on request and the next run recovers the generation.
+    Hourly generations kept by retention would otherwise each copy the
+    whole object store. **h3 Maintenance scheduler (L)**: one engine
+    worker against the injected clock; the hourly backup while due and
+    a daily GC pass; each job's latest run recorded (`maintenance_jobs`,
+    one row per job with its checkpoint); stopped by restore's quiesce
+    and shutdown, re-armed on resume. **h4 Weekly verification (L)**:
+    the 1/52 live sample by hash bucket with catch-up after missed
+    weeks, `missing`/`quarantined` accounting, and every retained
+    generation re-verified in place and its result recorded on the
+    generation. **h5 Weekly `integrity_check` (L)**: when idle, on an
+    interruptible reader; a finding copies the files to `recovery/`,
+    latches the store read-only across reopens and stops remote
+    effects. **h6 Acceptance proof (L)**: the recovery point over
+    simulated hours at the 5-minute setting, crash cuts through a
+    scheduled backup, restore during each job. GC's daily cadence and
+    the reading of "all objects referenced by backups" as each
+    generation's copies are recorded in spec/03 with their slices.
   - **M1.8h Scheduled GC, verification and integrity checks (L):** the
     hourly-generation-while-there-were-changes and GC schedules, the
     weekly object-verification job (the rotating 1/52 sample plus all

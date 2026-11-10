@@ -24,6 +24,7 @@ use rusqlite::config::DbConfig;
 use rusqlite::{Connection, OptionalExtension};
 
 use crate::StoreError;
+use crate::changes::Changes;
 use crate::list_rows;
 use crate::schema::classify;
 
@@ -404,6 +405,9 @@ impl<T> fmt::Debug for WriteFuture<T> {
 /// and removes the WAL.
 pub struct Writer {
     tracking: Arc<crate::corpus_tracking::Tracking>,
+    /// Whether the schema has the content-change counter (migration
+    /// 25): a store a test migrated only part way has none to bump.
+    counting: bool,
     shared: Arc<WriterShared>,
     /// The writer thread until `close` joins it. `close` holds this
     /// lock while joining, so a concurrent second `close` returns only
@@ -463,6 +467,8 @@ impl Writer {
     /// checkpoint until open succeeds).
     pub(crate) fn new_with(conn: Connection, spawn: Spawn) -> Result<Self, StoreError> {
         let tracking = crate::corpus_tracking::Tracking::install(&conn)?;
+        let counting =
+            crate::schema::read_user_version(&conn)? >= i64::from(crate::changes::SCHEMA_VERSION);
         let shared = Arc::new(WriterShared {
             state: Mutex::new(WriterState {
                 queues: [VecDeque::new(), VecDeque::new(), VecDeque::new()],
@@ -481,6 +487,7 @@ impl Writer {
             .map_err(|e| StoreError::unavailable(format!("cannot start the writer thread: {e}")))?;
         Ok(Self {
             tracking,
+            counting,
             shared,
             handle: Mutex::new(Some(handle)),
             #[cfg(test)]
@@ -499,7 +506,29 @@ impl Writer {
         T: Send + 'static,
         F: FnOnce(&Transaction) -> Result<T, StoreError> + Send + 'static,
     {
-        self.submit_scoped(priority, crate::corpus_tracking::Scope::Observe, closure)
+        self.submit_scoped(
+            priority,
+            crate::corpus_tracking::Scope::Observe,
+            Changes::Count,
+            closure,
+        )
+    }
+
+    /// [`Writer::submit`] for the store's upkeep: its records about
+    /// itself (backups, retention, GC pins, reservations, the
+    /// clean-shutdown marker), which never make a backup generation
+    /// due (see [`crate::changes`]).
+    pub(crate) fn upkeep<T, F>(&self, priority: WritePriority, closure: F) -> WriteFuture<T>
+    where
+        T: Send + 'static,
+        F: FnOnce(&Transaction) -> Result<T, StoreError> + Send + 'static,
+    {
+        self.submit_scoped(
+            priority,
+            crate::corpus_tracking::Scope::Observe,
+            Changes::Bookkeeping,
+            closure,
+        )
     }
 
     pub(crate) fn submit_activation<T, F>(&self, closure: F) -> WriteFuture<T>
@@ -510,6 +539,7 @@ impl Writer {
         self.submit_scoped(
             WritePriority::Index,
             crate::corpus_tracking::Scope::Activation,
+            Changes::Count,
             closure,
         )
     }
@@ -518,6 +548,7 @@ impl Writer {
         &self,
         priority: WritePriority,
         scope: crate::corpus_tracking::Scope,
+        changes: Changes,
         closure: F,
     ) -> WriteFuture<T>
     where
@@ -525,10 +556,22 @@ impl Writer {
         F: FnOnce(&Transaction) -> Result<T, StoreError> + Send + 'static,
     {
         let tracking = self.tracking.clone();
+        let counting = self.counting && changes == Changes::Count;
         let closure = move |tx: &Transaction| {
             tracking.begin(scope);
+            // Rows the closure's statements inserted, updated or
+            // deleted, its triggers' included: a write that touched
+            // none leaves the counter alone (spec/03 "while there were
+            // changes"). An update to identical values, or work an
+            // inner savepoint rolled back, still counts: at worst one
+            // extra generation, never a missed one.
+            let before = tx.total_changes();
             let value = closure(tx)?;
+            let changed = tx.total_changes() != before;
             crate::corpus_tracking::flush(tx)?;
+            if counting && changed {
+                crate::changes::bump(tx)?;
+            }
             Ok(value)
         };
         let slot = Arc::new(Slot::new());

@@ -91,7 +91,7 @@ impl<'a> ExportChunkWriter<'a> {
         let id = self.job.id().to_owned();
         let revision = self.job.revision();
         let cursor = self.cursor;
-        crate::store::await_write(self.writer.submit(WritePriority::Index, move |tx| {
+        crate::store::await_write(self.writer.upkeep(WritePriority::Index, move |tx| {
             let job = export_job(tx, &id)?;
             if job.revision() != revision
                 || job.state() != ExportJobState::Capturing
@@ -166,7 +166,7 @@ impl<'a> ExportChunkWriter<'a> {
         let revision = self.job.revision();
         let from = self.cursor;
         let now = self.clock.now();
-        let job = crate::store::await_write(self.writer.submit(WritePriority::Index, move |tx| {
+        let job = crate::store::await_write(self.writer.upkeep(WritePriority::Index, move |tx| {
             append_export_chunks(tx, &id, revision, from, &batch, now)
         }))?;
         self.cursor += submitted;

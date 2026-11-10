@@ -8,6 +8,7 @@ pub mod activation;
 mod address_keys;
 pub mod appearance;
 mod backups;
+mod changes;
 mod corpus_tracking;
 pub mod drafts;
 mod error;

@@ -290,6 +290,16 @@ fn apply_inner(conn: &mut Connection, input: &Quarantine<'_>) -> Result<(), Stor
     if changed != 1 {
         return Err(StoreError::corrupt("missing or reused restore incarnation"));
     }
+    // No generation holds the restored store as it will be: this
+    // quarantine and the new incarnation. Back up nothing of it yet, so
+    // it owes the next generation (spec/02 "Backup change counters").
+    // A snapshot older than the counters has no row; migration 25 seeds
+    // it due at the reopen.
+    execute(
+        &tx,
+        "UPDATE OR ABORT store_meta NOT INDEXED SET value='0' WHERE key='backed_up_changes'",
+        [],
+    )?;
     // The other inherited in-progress generations become `failed` and lose
     // their tokens, so no cleanup in the restored store acts on them. The
     // restored generation becomes `complete` and keeps its own: its
@@ -448,6 +458,45 @@ mod tests {
             )
             .unwrap();
         assert_eq!(running, 0);
+    }
+
+    /// A restored store holds what no generation does: its quarantine
+    /// and its new incarnation. Even restored from a generation taken
+    /// with nothing changed, it owes a generation (spec/02 "Backup
+    /// change counters").
+    #[test]
+    fn the_restored_store_owes_a_generation() {
+        let (_scratch, paths, store) = open("restore-quarantine-due");
+        let first = store.backup_snapshot(BackupDestination::DataRoot).unwrap();
+        store.complete_backup(first).unwrap();
+        assert!(!store.backup_due().unwrap());
+        // A generation of the unchanged store: its snapshot is not due.
+        let snapshot = store.backup_snapshot(BackupDestination::DataRoot).unwrap();
+        let stage = paths.data_root().with_extension("quarantine-due.sqlite");
+        std::fs::copy(snapshot.state_db(), &stage).unwrap();
+        let mut conn = Connection::open(stage).unwrap();
+        assert!(!crate::changes::backup_due(&conn).unwrap());
+
+        let cancel = Arc::new(AtomicBool::new(false));
+        let preserved = paths.data_root().with_extension("preserved");
+        apply(
+            &mut conn,
+            &Quarantine {
+                new_incarnation: "00000000-0000-4000-8000-000000000001",
+                generation: snapshot.generation_id(),
+                source_location: "/external/new-source",
+                current_root: paths.data_root(),
+                preserved_root: &preserved,
+                manifest_sha256: "manifest",
+                object_count: 0,
+                total_bytes: 12,
+                completed_at: 1,
+                cancel: &cancel,
+                max_work_calls: 2_000,
+            },
+        )
+        .unwrap();
+        assert!(crate::changes::backup_due(&conn).unwrap());
     }
 
     #[test]

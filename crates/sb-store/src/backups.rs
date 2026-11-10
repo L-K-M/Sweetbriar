@@ -338,7 +338,7 @@ impl Backups {
         let started_at = self.clock.now().as_millis();
         let id = generation_id.clone();
         let stored_token = owner_token.clone();
-        await_write(self.writer.submit(WritePriority::Index, move |tx| {
+        await_write(self.writer.upkeep(WritePriority::Index, move |tx| {
             let running: bool = tx
                 .query_row(
                     "SELECT EXISTS(SELECT 1 FROM backup_generations
@@ -578,7 +578,7 @@ impl Backups {
         for chunk in shas.chunks(PIN_BATCH) {
             let chunk = chunk.to_vec();
             let generation = generation_id.to_owned();
-            let future = self.writer.submit(WritePriority::Index, move |tx| {
+            let future = self.writer.upkeep(WritePriority::Index, move |tx| {
                 for sha in &chunk {
                     tx.execute(
                         "INSERT OR IGNORE INTO object_pins

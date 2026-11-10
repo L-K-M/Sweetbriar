@@ -23,7 +23,7 @@ fn bounded(len: usize) -> Result<(), StoreError> {
 
 pub(super) fn insert(writer: &Writer, id: String, entries: Vec<Entry>) -> Result<(), StoreError> {
     bounded(entries.len())?;
-    await_write(writer.submit(WritePriority::Index, move |tx| {
+    await_write(writer.upkeep(WritePriority::Index, move |tx| {
         for entry in entries {
             let count = tx.execute(
                 "INSERT INTO verifier_objects(scratch_id,sha256,bytes) VALUES (?1,?2,?3) ON CONFLICT(scratch_id,sha256) DO NOTHING",
@@ -55,7 +55,7 @@ pub(super) fn reference_sized(
     hashes: Vec<([u8; 32], Option<u64>)>,
 ) -> Result<(), StoreError> {
     bounded(hashes.len())?;
-    await_write(writer.submit(WritePriority::Index, move |tx| {
+    await_write(writer.upkeep(WritePriority::Index, move |tx| {
         for (hash, size) in hashes {
             let count = tx
                 .execute(
@@ -112,7 +112,7 @@ pub(super) fn purge(writer: &Writer, id: &str) -> Result<(), StoreError> {
     loop {
         let id = id.to_owned();
         let count =
-            await_write(writer.submit(WritePriority::Index, move |tx| purge_batch(tx, &id)))?;
+            await_write(writer.upkeep(WritePriority::Index, move |tx| purge_batch(tx, &id)))?;
         if count == 0 {
             return Ok(());
         }

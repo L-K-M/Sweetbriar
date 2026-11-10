@@ -536,7 +536,11 @@ backups/<generation-id>/
   data root, for the pilot.
 - A generation is taken every hour while there were changes, so the
   recovery point is ≤ 1 hour. The research's 5 minutes is the test
-  setting.
+  setting. "Changes" are committed writes to the archive's data,
+  counted durably in `store_meta.content_changes`; the store's own
+  bookkeeping (backups, retention, GC, reservations, close) never
+  counts, so backing up, collecting garbage or restarting never makes
+  a generation due by itself (02 "Backup change counters").
 - **Retention:** keep the union of the newest complete generation in each
   of the last 24 occupied UTC hour buckets, 7 occupied UTC day buckets,
   and 4 occupied UTC week buckets (weeks start Monday). Break timestamp
