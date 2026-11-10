@@ -259,9 +259,12 @@ against concurrent replacement.
     From the finding on, and from the open of a latched store:
     - long work (an import, an export, the thread rebuild) stops at its
       next safe point, as for shutdown, and its durable state stays as
-      it was;
+      it was; no thread rebuild starts;
     - the account, index, received-address and maintenance workers
-      stop and none starts, so no remote effect follows the finding;
+      stop and none starts, so no remote effect follows the finding. A
+      write of the index worker that the latch refuses is not an index
+      failure: it records nothing, so Search and coverage stay open
+      over what was committed;
     - commands are still admitted, and one that writes is `Corrupt`
       naming the finding, from the store. `bridge_certificate`, which
       writes nothing, is refused `Corrupt` before it connects;
@@ -277,7 +280,9 @@ against concurrent replacement.
     what says nothing runs. A restore whose swap is refused resumes
     read-only on the same store. One that swaps a store in ends
     read-only mode, since the latch stays with the replaced root: the
-    workers start as at an open and health subscriptions wake again.
+    workers start as at an open, the maintenance schedule included
+    even when the engine opened read-only and never ran it, and health
+    subscriptions wake again.
   - **A latched open.** A writable open reads the latch after resolving an
     interrupted restore swap and before anything else touches the root.
     With a latch, the store opens read-only, the writer's connection

@@ -55,7 +55,8 @@ fn a_turn_the_latch_fails_parks_without_fencing_search() {
 
     // A worker of its own, not yet told to stop, as one is between the
     // latch and its observer: its turn drives the store's unfinished
-    // rebuild into the refused writer. It stops once it parks.
+    // rebuild into the refused writer, and it parks. Parking is what
+    // stops it here.
     let jobs = Arc::new(IndexJobs::default());
     let parked = Arc::downgrade(&jobs);
     *jobs.hook.lock().unwrap() = Some(Arc::new(move |event| {
