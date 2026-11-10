@@ -337,6 +337,45 @@ fn a_read_only_engine_starts_no_backup() {
     block_on(engine.shutdown()).unwrap();
 }
 
+/// A store that latches under a copy refuses its next step, then
+/// raises the stop. Whichever the copy met, its end is the finding.
+#[test]
+fn a_store_that_latched_under_a_copy_fails_it_with_the_finding() {
+    let scratch = ScratchDir::new("engine-start-backup-latched");
+    let root = std::fs::canonicalize(scratch.path()).unwrap().join("store");
+    let engine = block_on(Engine::open(&root)).unwrap();
+    block_on(engine.shutdown()).unwrap();
+    damage_an_index(&root.join("state.sqlite"));
+    let engine = block_on(Engine::open(&root)).unwrap();
+    let resources = engine.resources();
+    let stop = || {
+        Err(StoreError::Unavailable {
+            reason: "the backup was cancelled".into(),
+            io_kind: None,
+        })
+    };
+    // Until the check finds the damage, the stop is a shutdown's.
+    assert_eq!(copy_end(resources, "gen", stop(), true), BackupEnd::Stopped);
+
+    let check = resources.check_integrity(&AtomicBool::new(false)).unwrap();
+    assert!(matches!(check, IntegrityCheck::Finding(_)), "{check:?}");
+    let finding = resources.integrity_latch().unwrap().detail;
+    let refused = resources
+        .backup_snapshot(BackupDestination::DataRoot)
+        .unwrap_err();
+    assert!(matches!(refused, StoreError::Corrupt { .. }), "{refused:?}");
+    for result in [stop(), Err(refused)] {
+        match copy_end(resources, "gen", result, true) {
+            BackupEnd::Failed(detail) => {
+                assert!(detail.contains("read-only"), "{detail}");
+                assert!(detail.contains(&finding), "{detail}");
+            }
+            other => panic!("expected Failed, got {other:?}"),
+        }
+    }
+    block_on(engine.shutdown()).unwrap();
+}
+
 /// The copy's result, the stop and the row decide the end. A complete
 /// row outranks the error: completion commits before retention runs.
 #[test]

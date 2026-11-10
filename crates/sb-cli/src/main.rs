@@ -102,7 +102,7 @@ const USAGE: &str = "usage: sb-cli [--data-root <path>] settings get [<key>]
        sb-cli [--data-root <path>] export account <account_id> <destination> [--format eml|mboxrd]
        sb-cli [--data-root <path>] export status <job_id>
        sb-cli [--data-root <path>] export cancel <job_id>
-       sb-cli [--data-root <path>] backup\n\
+       sb-cli [--data-root <path>] backup
        sb-cli [--data-root <path>] backup list";
 
 /// Parse the arguments after the program name: options, then exactly
@@ -580,8 +580,9 @@ fn backup(core: &Core) -> Result<(), u8> {
         .find(|generation| generation.generation_id == id)
     {
         Some(generation) => println!("{}", backup_line(generation)),
-        // Retention keeps the generation just completed.
-        None => println!("{id}\tcomplete"),
+        // Its own retention pass keeps it; a later backup's may not.
+        // Half a line would mislead whatever reads these.
+        None => eprintln!("sb-cli: backup {id} is complete; a later backup has removed it since"),
     }
     Ok(())
 }
@@ -749,6 +750,15 @@ mod tests {
 
     fn command(args: &[&str]) -> Result<Command, String> {
         parse(args.iter().map(|arg| (*arg).to_owned())).map(|invocation| invocation.command)
+    }
+
+    #[test]
+    fn every_usage_line_names_the_program_at_one_indent() {
+        let mut lines = USAGE.lines();
+        assert!(lines.next().unwrap().starts_with("usage: sb-cli "));
+        for line in lines {
+            assert!(line.starts_with("       sb-cli "), "{line:?}");
+        }
     }
 
     #[test]
