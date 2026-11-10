@@ -277,11 +277,19 @@ against concurrent replacement.
     cleaned up by the next one there, which a restore always begins
     with.
     - A verification keeps its home: one that a latch catches fails at
-      the writer and never continues in the sibling.
+      the writer and never continues in the sibling. What it leaves in
+      the root (its owner row, and its scratch directory when the
+      process ended first) stays there, like everything in a frozen
+      root. The verifications that follow work beside the root and
+      never look for it.
     - The ledger decides whether a backup reconciles, so a database
       that holds anything but the two tables (a trigger, a view,
       another table) is refused `Corrupt`, as is a sibling that is no
-      directory. Neither is repaired or removed.
+      directory of its own: a file, or a link wherever it leads, since
+      the sibling is opened without following one before its ledger
+      is. Neither is repaired or removed. An empty ledger file, which
+      is what a process that ended while creating it leaves, is made
+      again.
     - Staging and qualification only read the data root, and the swap
       preserves it whole, its latch included. The sibling stays behind
       with an empty ledger.
