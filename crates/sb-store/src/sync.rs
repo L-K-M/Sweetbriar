@@ -339,8 +339,10 @@ pub fn check_epoch(
 /// the inventory (step 6).
 ///
 /// `NotFound` for a mailbox not of `account_id`; `InvalidInput` for a
-/// zero UIDVALIDITY; `Corrupt` for a stored `uidnext` or a current
-/// UID outside 1..=u32::MAX.
+/// zero UIDVALIDITY or one other than the mailbox's stored epoch (the
+/// checkpoint belongs to that epoch alone; [`check_epoch`] adopts a new
+/// one first); `Corrupt` for a stored `uidnext` or a current UID
+/// outside 1..=u32::MAX.
 pub fn mailbox_cursor(
     tx: &Transaction,
     account_id: &str,
@@ -350,16 +352,21 @@ pub fn mailbox_cursor(
     if uidvalidity == 0 {
         return Err(invalid("UIDVALIDITY is never zero"));
     }
-    let (stored, state): (Option<i64>, String) = tx
+    let (stored, state, epoch): (Option<i64>, String, Option<i64>) = tx
         .query_row(
-            "SELECT uidnext, sync_state FROM mailboxes
+            "SELECT uidnext, sync_state, uidvalidity FROM mailboxes
              WHERE mailbox_id = ?1 AND account_id = ?2",
             params![mailbox_id, account_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .optional()
         .map_err(|e| classify(e, "read a mailbox's cursor"))?
         .ok_or_else(|| StoreError::not_found(format!("mailbox {mailbox_id}")))?;
+    // One epoch's checkpoint with another's UIDs would misplan the
+    // backfill and the inventory.
+    if epoch.is_some_and(|epoch| epoch != i64::from(uidvalidity)) {
+        return Err(invalid("not the mailbox's current epoch"));
+    }
     let uidnext = stored
         .map(|stored| {
             uid32(stored).ok_or_else(|| {
