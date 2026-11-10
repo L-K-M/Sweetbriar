@@ -469,6 +469,9 @@ struct Versions {
     /// Store swaps so far (a restore, plan M1.8g): each answers every
     /// subscription `ResetRequired` once, whatever the generations did.
     restores: u64,
+    /// Changes of the engine's health so far (plan M1.8h5b2): the store
+    /// latching read-only, or a restore ending that.
+    health: u64,
     shut: bool,
 }
 
@@ -634,6 +637,17 @@ impl Windows {
     /// The store swaps so far, where an appearance subscription starts.
     fn restores(&self) -> u64 {
         self.versions.borrow().restores
+    }
+
+    /// What `health()` answers changed: wake health subscriptions.
+    /// Signal only; the store's latch observer calls it.
+    pub(crate) fn health_moved(&self) {
+        self.versions.send_modify(|versions| versions.health += 1);
+    }
+
+    /// The health changes so far, where a health subscription starts.
+    fn health_changes(&self) -> u64 {
+        self.versions.borrow().health
     }
 
     /// The engine is shutting down: end every waiting `next`.
@@ -1413,7 +1427,7 @@ mod subscribe;
 pub use search::{SearchSort, SearchSpec, SearchStatus};
 pub use selections::{SelectionId, SelectionInput, SelectionSnapshot};
 
-pub use subscribe::{AppearanceSubscription, Subscription, WindowEvent};
+pub use subscribe::{AppearanceSubscription, HealthSubscription, Subscription, WindowEvent};
 
 #[cfg(test)]
 mod tests;

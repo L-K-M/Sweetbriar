@@ -37,8 +37,9 @@ const MAX_CHANGES: usize = 250;
 /// What a change costs the write budget beyond any subject it stores.
 const CHANGE_BYTES: usize = 128;
 
-/// The one rebuild worker: whether it runs, and whether it was asked
-/// to run again meanwhile.
+/// The one rebuild worker: whether it runs, whether it was asked to
+/// run again meanwhile, and whether none may start (a read-only store,
+/// spec/03 "Integrity").
 #[derive(Default)]
 pub(crate) struct ThreadRebuilds {
     state: Mutex<RebuildState>,
@@ -48,8 +49,11 @@ pub(crate) struct ThreadRebuilds {
 struct RebuildState {
     running: bool,
     again: bool,
+    stopping: bool,
     #[cfg(test)]
     requests: usize,
+    #[cfg(test)]
+    starts: usize,
 }
 
 impl ThreadRebuilds {
@@ -59,18 +63,40 @@ impl ThreadRebuilds {
             .expect("a panicking thread held the thread rebuild state")
     }
 
-    /// Take the worker's slot, or ask the running worker to go again.
+    /// Start no more rebuilds: the store is read-only. Shutdown and a
+    /// restore's quiesce need no flag, since they refuse the worker
+    /// itself; a read-only engine still admits workers. A rebuild under
+    /// way ends at its next stop check.
+    pub(crate) fn stop(&self) {
+        self.lock().stopping = true;
+    }
+
+    /// Undo [`ThreadRebuilds::stop`] once a restore swapped in a store
+    /// without a latch.
+    pub(crate) fn resume(&self) {
+        self.lock().stopping = false;
+    }
+
+    /// Take the worker's slot, or ask the running worker to go again;
+    /// neither once stopped.
     fn claim(&self) -> bool {
         let mut state = self.lock();
         #[cfg(test)]
         {
             state.requests += 1;
         }
+        if state.stopping {
+            return false;
+        }
         if state.running {
             state.again = true;
             return false;
         }
         state.running = true;
+        #[cfg(test)]
+        {
+            state.starts += 1;
+        }
         true
     }
 
@@ -92,6 +118,12 @@ impl ThreadRebuilds {
     #[cfg(test)]
     pub(crate) fn requests(&self) -> usize {
         self.lock().requests
+    }
+
+    /// How many requests took the worker's slot.
+    #[cfg(test)]
+    pub(crate) fn starts(&self) -> usize {
+        self.lock().starts
     }
 }
 

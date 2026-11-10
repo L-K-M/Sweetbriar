@@ -226,15 +226,17 @@ impl MaintenanceJobs {
 
 impl Engine {
     /// Start the scheduler's worker unless it runs or was stopped.
+    /// Asking arms the schedule either way: a stopped one starts when
+    /// a restore resumes on a store that isn't read-only.
     pub(crate) fn schedule_maintenance(&self) {
         let jobs = self.maintenance().clone();
         {
             let mut state = jobs.lock();
+            state.armed = true;
             if state.running || state.stopping {
                 return;
             }
             state.running = true;
-            state.armed = true;
         }
         let owner = jobs.clone();
         if self

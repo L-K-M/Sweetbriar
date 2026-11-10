@@ -129,6 +129,12 @@ impl ReceivedJobs {
         self.lock().stopping
     }
 
+    /// Whether the worker holds its slot (parked or working).
+    #[cfg(test)]
+    pub(crate) fn running(&self) -> bool {
+        self.lock().running
+    }
+
     #[cfg(test)]
     pub(crate) fn failure(&self) -> Option<Failure> {
         self.lock().failures.iter().find_map(Clone::clone)

@@ -18,6 +18,7 @@ use crate::engine::Spawn;
 mod acceptance;
 mod bundles;
 mod exports;
+mod read_only;
 
 /// How long a test waits for a worker before failing.
 // Generous: ingest shares the disk with crash-cut children in CI.
