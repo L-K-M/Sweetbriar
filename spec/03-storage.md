@@ -687,7 +687,9 @@ backups/<generation-id>/
    at all. A key that started a generation answers that receipt before
    anything else is done, recovery and retention included, and while
    that generation is still being copied too. The key is asked again
-   inside the commit. A failure after this step leaves the receipt
+   when the backup operation turns out to be held, and inside the
+   commit. A latched store refuses before it looks at the key, like
+   every command there. A failure after this step leaves the receipt
    naming a generation the next run marks `failed`.
 2. Take a snapshot of the database with the online backup API.
 3. From the snapshot, list every referenced object. Insert
@@ -736,9 +738,9 @@ backups/<generation-id>/
 - A generation is owed too while an interrupted one waits for its
   cleanup: a row left `in_progress` that this process is not copying,
   or a failed one whose removal stopped part way. Only the next run
-  cleans up, and until it does the row freezes GC and its pins hold
-  their objects. A copy stopped on an archive nothing changes would
-  otherwise wait for a change that never comes.
+  cleans up. Until it does an `in_progress` row freezes GC, and either
+  one's pins hold their objects. A copy stopped on an archive nothing
+  changes would otherwise wait for a change that never comes.
 - **Retention:** keep the union of the newest complete generation in each
   of the last 24 occupied UTC hour buckets, 7 occupied UTC day buckets,
   and 4 occupied UTC week buckets (weeks start Monday). Break timestamp

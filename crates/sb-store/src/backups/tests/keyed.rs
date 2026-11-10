@@ -275,6 +275,45 @@ fn a_key_spent_between_the_look_and_the_commit_is_replayed() {
     assert_eq!(directories, 1);
 }
 
+/// The same look, and the key's generation still being copied when
+/// the late start goes on: the operation is held, and the answer is
+/// the receipt all the same, never `Conflict`.
+#[test]
+fn a_key_spent_after_the_look_is_replayed_while_its_copy_runs() {
+    let (_scratch, _paths, store) = open("keyed-race-copying");
+    let store = Arc::new(store);
+    let gate = Arc::new(Barrier::new(2));
+    store.backups.set_pauses(Pauses {
+        after_key_look: Some(gate.clone()),
+        ..Pauses::default()
+    });
+    let late = {
+        let store = Arc::clone(&store);
+        std::thread::spawn(move || store.start_backup(BackupDestination::DataRoot, KEY))
+    };
+    gate.wait();
+    store.backups.set_pauses(Pauses::default());
+    let (receipt, snapshot) = started(store.start_backup(BackupDestination::DataRoot, KEY));
+    gate.wait();
+
+    let answered = replayed(late.join().unwrap());
+    assert_eq!(answered, receipt);
+    assert_eq!(
+        generations(&store),
+        [(
+            snapshot.generation_id().to_owned(),
+            "in_progress".to_owned()
+        )]
+    );
+    // Another key is refused there, as before, and spends nothing.
+    let err = store
+        .start_backup(BackupDestination::DataRoot, OTHER_KEY)
+        .unwrap_err();
+    assert!(matches!(err, StoreError::Conflict { .. }), "{err:?}");
+    assert_eq!(receipts(&store).len(), 1);
+    store.complete_backup(snapshot).unwrap();
+}
+
 /// The same race against another command: the key is refused inside
 /// the commit, and the generation's row rolls back with it.
 #[test]
@@ -461,6 +500,34 @@ fn a_cleanup_that_stopped_part_way_makes_the_store_due() {
     bookkeeping(
         &store,
         format!("INSERT INTO backup_cleanup_pending VALUES ('{inherited}')"),
+    );
+    assert!(due(&store));
+
+    // A marker on a complete generation is damage no backup clears
+    // (recovery refuses it): it owes nothing, so it can't keep the
+    // store due for good.
+    let complete: String = reading(&store, |tx| {
+        tx.query_row(
+            "SELECT generation_id FROM backup_generations WHERE state = 'complete'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(bug)
+    });
+    bookkeeping(
+        &store,
+        format!(
+            "DELETE FROM backup_cleanup_pending;
+             INSERT INTO backup_cleanup_pending VALUES ('{complete}')"
+        ),
+    );
+    assert!(!due(&store), "a marker recovery can't act on owes nothing");
+    bookkeeping(
+        &store,
+        format!(
+            "DELETE FROM backup_cleanup_pending;
+             INSERT INTO backup_cleanup_pending VALUES ('{inherited}')"
+        ),
     );
     assert!(due(&store));
 
