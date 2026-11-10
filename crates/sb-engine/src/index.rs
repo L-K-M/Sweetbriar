@@ -21,6 +21,8 @@ use crate::Engine;
 use crate::engine::Spawn;
 
 #[cfg(test)]
+mod latch_tests;
+#[cfg(test)]
 mod stop_tests;
 
 #[derive(Default)]
@@ -154,6 +156,12 @@ impl IndexJobs {
         let result =
             tokio::runtime::Handle::current().block_on(resources.write(WritePriority::Index, body));
         if let Err(error) = &result {
+            // A latched store refuses every write (spec/03 "Integrity").
+            // That is no index failure: readers keep the index as
+            // committed, and the worker is being stopped.
+            if resources.integrity_latch().is_some() {
+                return result;
+            }
             let mut state = self.lock();
             let attempts = match state.failure {
                 Some(ReadFailure::Writer(attempts)) => attempts.saturating_add(1),
@@ -273,6 +281,9 @@ fn run(resources: &Resources, index: &IndexJobs, shutting_down: &dyn Fn() -> boo
                 Some(ReadFailure::Writer(attempts)) => {
                     Next::Park(Some(index_retry_at(resources.now(), attempts)))
                 }
+                // The latch's refusal fences nothing; the stop that
+                // follows the latch ends this park.
+                _ if resources.integrity_latch().is_some() => Next::Park(None),
                 _ => {
                     index.lock().failure = Some(ReadFailure::Invariant(error));
                     Next::Park(None)

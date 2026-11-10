@@ -689,7 +689,8 @@ impl Engine {
     /// before the latch file is written, so it only raises flags:
     ///
     /// - long work (imports, exports, the thread rebuild) stops at its
-    ///   next safe point, as for shutdown;
+    ///   next safe point, as for shutdown, and no thread rebuild
+    ///   starts;
     /// - the account, index, received and maintenance workers stop and
     ///   none starts, so no remote effect follows the finding;
     /// - health subscriptions wake.
@@ -701,9 +702,11 @@ impl Engine {
         let index = Arc::clone(&self.index);
         let received = Arc::clone(&self.received);
         let maintenance = Arc::clone(&self.maintenance);
+        let threads = Arc::clone(self.imports.threads());
         let windows = Arc::clone(&self.windows);
         self.resources().observe_integrity_latch(Arc::new(move || {
             blocking.set_read_only(true);
+            threads.stop();
             accounts.stop();
             index.stop();
             received.stop();
@@ -721,6 +724,12 @@ impl Engine {
     /// Start the workers an open starts. A read-only engine starts
     /// none: each would stop at its first look.
     fn schedule_at_open(&self) {
+        // First, so a read-only engine still arms its schedule: it
+        // starts nothing there, and a restore that ends read-only mode
+        // starts it.
+        if crate::maintenance::SCHEDULED_AT_OPEN {
+            self.schedule_maintenance();
+        }
         if self.read_only() {
             return;
         }
@@ -730,9 +739,6 @@ impl Engine {
         self.schedule_index();
         self.schedule_received();
         self.schedule_accounts();
-        if crate::maintenance::SCHEDULED_AT_OPEN {
-            self.schedule_maintenance();
-        }
     }
 
     /// Durable target reconciliation at open (spec/06): an older
