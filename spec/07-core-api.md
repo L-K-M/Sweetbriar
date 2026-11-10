@@ -137,12 +137,19 @@ async fn Core::shutdown(self);   // flush writer, release the lease
   restore, which the swap (M1.8i5) takes.
   - It is no command: it has no key and stores no receipt. It can take
     as long as copying the archive. The call has its own cancel flag;
-    a cancelled one answers `Cancelled`.
+    a cancelled one answers `Cancelled`. The store marks a step the
+    flag ended as `Unavailable` without an I/O kind and nothing more,
+    so a failure of that shape while the flag is up also answers
+    `Cancelled`; every other error is reported under a raised flag.
   - `NotFound` for an id no generation has. `Conflict` for a
     generation that isn't complete, and while a backup, a generation
     check or another restore holds the backup operation. `Unavailable`
     when the generation's directory can't be reached. `Corrupt` when
     it no longer matches its manifest or its row.
+  - The backup operation is taken for the verification and again for
+    the copy. A backup that runs between the two can remove the
+    generation by its retention; the copy then fails `Unavailable`
+    and stages nothing wrong.
   - A prepared restore holds the backup operation until it is swapped
     in or dropped. Dropping it deletes nothing, and so does a
     cancelled or failed preparation: what was staged stays beside the
