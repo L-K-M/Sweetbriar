@@ -104,6 +104,15 @@ fn a_read_only_engine_still_lists_them() {
 fn with_a_message(scratch: &ScratchDir) -> Engine {
     let engine = block_on(Engine::open(scratch.path().join("store"))).unwrap();
     import(&engine, &scratch.path().join("one.eml"), RAW);
+    // Import completion can precede its index, received-data repair
+    // and thread writes. Establish a quiet baseline before asserting
+    // that only the backup changes anything after its snapshot.
+    wait(|| {
+        !engine.imports().any_live()
+            && !engine.imports().threads().running()
+            && engine.indexer().waiting()
+            && engine.received().waiting()
+    });
     engine
 }
 

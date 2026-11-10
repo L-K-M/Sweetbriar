@@ -20,12 +20,15 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
-use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, Transaction, TransactionBehavior};
 use sb_types::fs::{FileKind, Fs};
 
 use crate::StoreError;
 use crate::schema::{VERIFIER_OBJECTS_TABLE, VERIFIER_SCRATCH_TABLE, classify};
-use crate::store::{Access, READER_PRAGMAS, WRITER_PRAGMAS, await_write, open_connection};
+use crate::store::{
+    Access, READER_PRAGMAS, WRITER_PRAGMAS, await_write, open_connection,
+    open_connection_with_flags,
+};
 use crate::writer::{WritePriority, Writer};
 
 /// The sibling's name after the data root's: `<data root>.verifier`.
@@ -103,15 +106,15 @@ impl<'a> Home<'a> {
             }
             Err(error) => return Err(io_error("create", &root, &error)),
         }
+        fs.restrict_dir(&root)
+            .map_err(|e| io_error("restrict", &root, &e))?;
         let db = root.join(LEDGER_DB);
-        // The open's `Corrupt` names the store's database; here the
-        // bytes that are no database are the ledger's.
-        let mut conn = open_connection(&db, Access::ReadWrite, WRITER_PRAGMAS).map_err(
-            |error| match error {
-                StoreError::Corrupt { .. } => not_a_ledger(&db),
-                other => other,
-            },
-        )?;
+        // The directory check does not cover a ledger symlink. SQLite
+        // must refuse links itself, before opening or configuring the
+        // database; a preflight metadata check would race its open.
+        // As for the store layout, private ancestors are trusted not
+        // to be replaced during file work (spec/03).
+        let mut conn = ledger_connection(&db, Access::ReadWrite)?;
         ensure_tables(&mut conn, &db)?;
         Ok(Self {
             state_db,
@@ -152,11 +155,10 @@ impl<'a> Home<'a> {
 
     /// A read-only connection to the home's rows.
     pub(super) fn reader(&self) -> Result<Connection, StoreError> {
-        let db = match &self.rows {
-            Rows::Store(_) => self.state_db,
-            Rows::Sibling { db, .. } => db,
-        };
-        open_connection(db, Access::ReadOnly, READER_PRAGMAS)
+        match &self.rows {
+            Rows::Store(_) => open_connection(self.state_db, Access::ReadOnly, READER_PRAGMAS),
+            Rows::Sibling { db, .. } => ledger_connection(db, Access::ReadOnly),
+        }
     }
 
     /// The incarnation an owner row is recorded under when the store's
@@ -207,6 +209,27 @@ fn not_a_directory(root: &Path, refused: Option<&io::Error>) -> StoreError {
     ))
 }
 
+/// Both ledger connections refuse links in the filename at SQLite's
+/// own open. Keep the usual connection configuration and error policy.
+fn ledger_connection(db: &Path, access: Access) -> Result<Connection, StoreError> {
+    let (flags, pragmas) = match access {
+        Access::ReadWrite => (
+            OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE,
+            WRITER_PRAGMAS,
+        ),
+        Access::ReadOnly => (OpenFlags::SQLITE_OPEN_READ_ONLY, READER_PRAGMAS),
+    };
+    open_connection_with_flags(
+        db,
+        flags | OpenFlags::SQLITE_OPEN_NO_MUTEX | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+        pragmas,
+    )
+    .map_err(|error| match error {
+        StoreError::Corrupt { .. } => not_a_ledger(db),
+        other => other,
+    })
+}
+
 /// Whether an open failed for the machine's state, not for what the
 /// name holds. The refusal of a link has no stable kind to match
 /// (`ELOOP` on Linux, `ENOTDIR` on macOS), so it is told by exclusion.
@@ -214,6 +237,7 @@ fn environmental(kind: io::ErrorKind) -> bool {
     matches!(
         kind,
         io::ErrorKind::PermissionDenied
+            | io::ErrorKind::NotFound
             | io::ErrorKind::Interrupted
             | io::ErrorKind::TimedOut
             | io::ErrorKind::OutOfMemory
