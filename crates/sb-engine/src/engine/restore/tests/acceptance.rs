@@ -36,17 +36,40 @@ fn preserved_count(preserved: &Path, sql: &'static str) -> i64 {
     count
 }
 
-/// Every file this process has open, as `lsof` names it.
+/// Every file this process has open, under its current name:
+/// `/proc/self/fd` on Linux, which runners may lack `lsof` for, and
+/// `lsof` elsewhere.
 fn open_files() -> Vec<PathBuf> {
+    if cfg!(target_os = "linux") {
+        return std::fs::read_dir("/proc/self/fd")
+            .expect("/proc/self/fd lists")
+            .filter_map(|entry| std::fs::read_link(entry.ok()?.path()).ok())
+            .collect();
+    }
     let output = std::process::Command::new("lsof")
         .args(["-p", &std::process::id().to_string(), "-Fn"])
         .output()
         .expect("lsof runs");
+    assert!(output.status.success(), "lsof failed: {output:?}");
     String::from_utf8_lossy(&output.stdout)
         .lines()
         .filter_map(|line| line.strip_prefix('n'))
         .map(PathBuf::from)
         .collect()
+}
+
+/// No file of the replaced root stays open, while the listing does see
+/// the restored store's, so an empty listing can't pass.
+fn assert_only_restored_open(root: &Path, preserved: &Path) {
+    let open = open_files();
+    assert!(
+        open.iter().any(|file| file.starts_with(root)),
+        "the restored store's files are open: {open:?}"
+    );
+    assert!(
+        open.iter().all(|file| !file.starts_with(preserved)),
+        "no file of the replaced root stays open: {open:?}"
+    );
 }
 
 /// A draft write held inside its transaction when the restore begins:
@@ -91,12 +114,7 @@ fn a_write_in_progress_commits_to_the_replaced_store_before_the_swap() {
     // The write landed in the replaced store, which the restore
     // preserved; the restored store is the generation, without it.
     let preserved = preserved_root(&root);
-    assert!(
-        open_files()
-            .iter()
-            .all(|file| !file.starts_with(&preserved)),
-        "no file of the replaced root stays open"
-    );
+    assert_only_restored_open(&root, &preserved);
     let drafts: i64 = engine
         .resources()
         .read(|tx| {
@@ -163,12 +181,7 @@ fn a_running_job_stops_before_the_swap_and_keeps_its_checkpoint() {
         .expect("the restore succeeds");
 
     let preserved = preserved_root(&root);
-    assert!(
-        open_files()
-            .iter()
-            .all(|file| !file.starts_with(&preserved)),
-        "no file of the replaced root stays open"
-    );
+    assert_only_restored_open(&root, &preserved);
     block_on(engine.shutdown()).unwrap();
     assert_eq!(
         preserved_count(
