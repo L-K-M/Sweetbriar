@@ -631,7 +631,9 @@ impl Store {
     /// Durably replace `job`'s report in `recovery/` (spec/03, 09).
     /// Blocking.
     pub fn write_import_report(&self, job: &str, report: &[u8]) -> Result<(), StoreError> {
-        self.latch.refuse("write an import report")?;
+        // Reports live inside the root: a latch waits through the
+        // final rename and directory flush, not just the entry check.
+        let _step = self.latch.step("write an import report")?;
         self.import_reports.write(job, report)
     }
 
