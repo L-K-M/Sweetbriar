@@ -498,6 +498,13 @@ fn an_export_against_a_stale_generation_fails_instead_of_capturing() {
     import_inbox(&engine);
     let (mailbox_id, generation) = mailbox(&engine);
     let dest = scratch.path().join("out");
+    // A generation the list has left. Post-ingest work can still move
+    // the list forward after `mailbox` settles, never back, so this
+    // fence stays stale however late that work commits. A later one
+    // (`generation + 1`) would turn current on the next such write.
+    let stale = generation
+        .checked_sub(1)
+        .expect("the import moved the list generation");
 
     let key = engine.new_idempotency_key();
     let started = start_export(
@@ -506,7 +513,7 @@ fn an_export_against_a_stale_generation_fails_instead_of_capturing() {
         &dest,
         ExportScopeInput::Mailbox {
             mailbox_id,
-            generation: generation + 1,
+            generation: stale,
         },
         ExportFormat::Mboxrd,
     );
