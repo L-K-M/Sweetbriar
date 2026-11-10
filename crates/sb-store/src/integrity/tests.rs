@@ -423,16 +423,21 @@ fn a_header_the_check_cannot_open_is_a_finding() {
     // header from it, not from the WAL.
     let raw = Connection::open(paths.state_db()).unwrap();
     raw.busy_timeout(std::time::Duration::from_secs(5)).unwrap();
-    let checkpointed = (0..100).any(|_| {
+    // The store's writer truncates the WAL itself once its queue has
+    // drained, and SQLite refuses a second checkpoint at once while
+    // that one runs. Its flush can take seconds on a busy disk, so
+    // this waits by the clock, not by a count of tries.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    loop {
         let busy: i64 = raw
             .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| row.get(0))
             .unwrap();
-        busy == 0 || {
-            std::thread::sleep(std::time::Duration::from_millis(20));
-            false
+        if busy == 0 {
+            break;
         }
-    });
-    assert!(checkpointed, "the WAL stayed busy");
+        assert!(std::time::Instant::now() < deadline, "the WAL stayed busy");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
     drop(raw);
     let mut bytes = std::fs::read(paths.state_db()).unwrap();
     bytes[..16].copy_from_slice(b"not a database!\0");
