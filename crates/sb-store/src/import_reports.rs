@@ -123,6 +123,9 @@ impl ImportReports {
     /// before the rename removes the temporary file, best-effort, and
     /// keeps the old report; a failed final directory flush leaves the
     /// new report in place but not proven durable.
+    ///
+    /// Store callers hold a counted latch step across this call, including
+    /// its error cleanup, so latching waits for every in-flight write.
     pub(crate) fn write(&self, job: &str, bytes: &[u8]) -> Result<(), StoreError> {
         let path = self.path(job)?;
         #[cfg(test)]
