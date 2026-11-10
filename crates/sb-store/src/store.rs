@@ -87,6 +87,9 @@ pub struct Store {
     source_snapshots: ImportSourceSnapshots,
     import_reports: ImportReports,
     validation_scratch: crate::validation_scratch::ScratchOwner,
+    /// The integrity latch the store's own file work asks first
+    /// (spec/03 "Integrity"), shared with `objects` and `backups`.
+    pub(crate) latch: Arc<crate::integrity::RootLatch>,
     lease: Box<dyn Lease>,
     /// The clock [`Store::close`] stamps the clean-shutdown marker
     /// with, held from the seams the store opened with.
@@ -155,6 +158,7 @@ impl std::fmt::Debug for SwapRestoreError {
 impl Store {
     /// Lease disposable workspace for bounded import validation.
     pub fn import_validation_scratch(&self) -> Result<crate::ValidationScratch<'_>, StoreError> {
+        self.latch.refuse("lease import validation scratch")?;
         self.validation_scratch.lease()
     }
     /// The store's object store (spec/03): publishing objects through
@@ -290,9 +294,23 @@ impl Store {
     }
 
     /// The integrity finding this store is read-only after, if any:
-    /// every write is refused `Corrupt` naming it.
-    pub fn integrity_latch(&self) -> Option<String> {
-        self.writer.latched().map(|detail| detail.to_string())
+    /// every write and the store's own file work are refused `Corrupt`
+    /// naming it (spec/03 "Integrity").
+    pub fn integrity_latch(&self) -> Option<crate::IntegrityLatch> {
+        self.latch.get()
+    }
+
+    /// Install the one observer of this store latching, replacing any
+    /// earlier one. It is told once: at once, on this thread, when a
+    /// finding is already recorded (a store that opened latched
+    /// included, and one whose latch still waits for file work in
+    /// flight); else on the integrity check's thread as the store
+    /// latches, once its file work has stopped and before the writer
+    /// latches and the latch file and the copy are written. It must
+    /// only signal (raise flags, wake waiters), never block, join or
+    /// write.
+    pub fn observe_integrity_latch(&self, observer: Arc<dyn Fn() + Send + Sync>) {
+        self.latch.observe(observer);
     }
 
     /// Steps 1–3 of spec/03 "Backup generations": the `in_progress`
@@ -467,6 +485,7 @@ impl Store {
             import_reports,
             validation_scratch,
             backups,
+            latch: _,
             lease,
             clock,
             seams,
@@ -562,6 +581,7 @@ impl Store {
         source: &Path,
         progress: impl FnMut(u64) -> std::ops::ControlFlow<()>,
     ) -> Result<crate::ImportSourceCapture, StoreError> {
+        self.latch.refuse("copy an import source")?;
         self.source_snapshots.capture(source, progress)
     }
 
@@ -590,12 +610,14 @@ impl Store {
         &self,
         snapshots: &[crate::ImportSourceSnapshot],
     ) -> Result<(), StoreError> {
+        self.latch.refuse("remove import source copies")?;
         self.source_snapshots.remove(snapshots)
     }
 
     /// Durably replace `job`'s report in `recovery/` (spec/03, 09).
     /// Blocking.
     pub fn write_import_report(&self, job: &str, report: &[u8]) -> Result<(), StoreError> {
+        self.latch.refuse("write an import report")?;
         self.import_reports.write(job, report)
     }
 
@@ -709,6 +731,7 @@ impl Store {
             import_reports,
             validation_scratch,
             backups,
+            latch: _,
             lease,
             clock,
             seams: _,
@@ -923,9 +946,11 @@ pub(crate) fn open_under_lease(
         None => Writer::new(conn)?,
     });
     // A latch whose copy never got published makes it now.
-    if let Some(latch) = &latch {
-        crate::integrity::ensure_copy(fs, paths, latch);
-    }
+    let latch = Arc::new(crate::integrity::RootLatch::new(
+        latch
+            .as_ref()
+            .map(|latch| crate::integrity::ensure_copy(fs, paths, latch)),
+    ));
     // The layout exists: the object store can publish into it. Built
     // only now, so every publication reserves through the writer and
     // no earlier open step could publish unreserved (spec/03).
@@ -936,6 +961,7 @@ pub(crate) fn open_under_lease(
         paths.recovery().to_path_buf(),
         Arc::clone(&writer),
         Arc::clone(seams.clock_arc()),
+        Arc::clone(&latch),
     ));
     // The backup coordinator snapshots through its own connection, so
     // the copy never holds the writer (spec/03 "Backup generations").
@@ -969,6 +995,7 @@ pub(crate) fn open_under_lease(
             paths.objects_tmp(),
         ),
         backups,
+        latch,
         lease,
         clock: Arc::clone(seams.clock_arc()),
         seams: Seams::new(
