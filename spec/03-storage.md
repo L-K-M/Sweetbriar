@@ -229,8 +229,11 @@ against concurrent replacement.
     that work is counted while it runs. Latching refuses new steps at
     once and then waits for the ones in flight, so none is running and
     none starts once it returns. A step never waits for the latch, so
-    one may start inside another (a publication that reads through an
-    object's verifying reader). From the finding on, and in every
+    one may start inside another (a backup copying an object through
+    its verifying reader, which quarantines on damage). A step covers
+    bounded file work only: a publication takes one per chunk it
+    writes and none while it reads from its caller, so a slow reader
+    never delays the latch. From the finding on, and in every
     latched open, each is refused `Corrupt` naming the finding before it
     touches a file:
     publishing, installing or removing an object, starting, completing

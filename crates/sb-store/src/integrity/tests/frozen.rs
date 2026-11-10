@@ -190,6 +190,9 @@ fn a_latch_waits_for_the_file_step_in_flight() {
         other => panic!("expected Corrupt, got {:?}", other.map(drop)),
     };
     refused(&latch);
+    // The latch is still waiting a moment later, not merely slow to
+    // return.
+    std::thread::sleep(std::time::Duration::from_millis(100));
     assert!(!latching.is_finished(), "the step is still in flight");
     drop(step);
     latching.join().unwrap();
@@ -238,6 +241,88 @@ fn a_step_inside_a_step_is_refused_while_a_latch_waits() {
     finish.send(()).unwrap();
     working.join().unwrap();
     latching.join().unwrap();
+}
+
+/// A reader that yields one chunk, then parks until released.
+struct ParkedReader {
+    reads: usize,
+    parked: std::sync::mpsc::Sender<()>,
+    release: std::sync::mpsc::Receiver<()>,
+}
+
+impl std::io::Read for ParkedReader {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.reads += 1;
+        match self.reads {
+            1 => {
+                buf[..3].copy_from_slice(b"one");
+                Ok(3)
+            }
+            2 => {
+                let _ = self.parked.send(());
+                let _ = self.release.recv();
+                buf[..3].copy_from_slice(b"two");
+                Ok(3)
+            }
+            _ => Ok(0),
+        }
+    }
+}
+
+/// A latch doesn't wait for a publication's reader, which may be slow:
+/// it goes through while the reader is parked, and the publication
+/// ends at its next chunk with its temp file left as it was.
+#[test]
+fn a_latch_does_not_wait_for_a_publication_s_reader() {
+    const PATIENCE: std::time::Duration = std::time::Duration::from_secs(20);
+    let (_scratch, paths, store) = open_with_probe("integrity-parked-reader");
+    let store = Arc::new(store);
+    let (parked, reached) = std::sync::mpsc::channel();
+    let (release, released) = std::sync::mpsc::channel();
+    let publishing = std::thread::spawn({
+        let store = Arc::clone(&store);
+        move || {
+            store
+                .objects()
+                .publish(ParkedReader {
+                    reads: 0,
+                    parked,
+                    release: released,
+                })
+                .map(drop)
+        }
+    });
+    reached.recv_timeout(PATIENCE).unwrap();
+
+    let (latched, done) = std::sync::mpsc::channel();
+    std::thread::spawn({
+        let store = Arc::clone(&store);
+        move || {
+            store.latch.latch_for_test("a test finding");
+            let _ = latched.send(());
+        }
+    });
+    done.recv_timeout(PATIENCE)
+        .expect("the latch went through while the reader was parked");
+
+    release.send(()).unwrap();
+    match publishing.join().unwrap() {
+        Err(StoreError::Corrupt { detail }) => assert!(detail.contains("a test finding")),
+        other => panic!("expected Corrupt, got {other:?}"),
+    }
+    let temps: Vec<_> = std::fs::read_dir(paths.objects_tmp())
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    assert_eq!(temps.len(), 1, "the temp file stays: {temps:?}");
+    assert_eq!(std::fs::read(&temps[0]).unwrap(), b"one");
+    assert!(
+        std::fs::read_dir(paths.objects_sha256())
+            .unwrap()
+            .next()
+            .is_none(),
+        "nothing was installed"
+    );
 }
 
 /// An observer installed once the store has latched, by a check or at

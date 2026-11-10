@@ -111,17 +111,20 @@ pub(crate) type LatchObserver = Arc<dyn Fn() + Send + Sync>;
 
 /// The latch as the store's own file work sees it: set once, by a
 /// finding or a latched open, and never cleared (a restore swap
-/// replaces the whole store). Each step of file work in the data root
-/// outside the writer runs under a [`FileStep`], counted while it
-/// runs. Latching refuses new steps from that moment and then waits
-/// for the ones in flight, so once it returns no step is running and
-/// none starts.
+/// replaces the whole store). Each step of the store's file work in
+/// the data root runs under a [`FileStep`], counted while it runs:
+/// work on other threads, and GC's removal of an object, which runs
+/// inside a writer job. Latching refuses new steps from that moment
+/// and then waits for the ones in flight, so once it returns no step
+/// is running and none starts.
 ///
 /// A step holds no lock and never waits for the latch, so one may
-/// start inside another: a publication reads its bytes through an
-/// object's verifying reader, which quarantines on damage. Were a
-/// step to wait there, it and the latch waiting for the outer step
-/// would hold each other for good.
+/// start inside another: a backup copies an object through its
+/// verifying reader, which quarantines on damage. Were a step to wait
+/// there, it and the latch waiting for the outer step would hold each
+/// other for good. A step covers bounded file work only, never a read
+/// from a caller's reader or a wait for the writer's queue, so the
+/// latch's wait is bounded too.
 #[derive(Default)]
 pub(crate) struct RootLatch {
     state: Mutex<State>,
@@ -199,10 +202,12 @@ impl RootLatch {
     }
 
     /// Install the one observer, replacing any earlier one. It is told
-    /// once that the store latched: at once, on this thread, if it
-    /// already has (a store that opened latched included), else on
-    /// the integrity check's thread as the store latches, before the
-    /// writer does and before the latch file and the copy are written.
+    /// once that the store latched: at once, on this thread, if a
+    /// finding is already recorded (a store that opened latched
+    /// included, and one whose latch still waits for steps in flight),
+    /// else on the integrity check's thread as the store latches, once
+    /// those steps are done, before the writer latches and before the
+    /// latch file and the copy are written.
     /// It must only signal (raise flags, wake waiters), never block,
     /// join or write. A panic in it is caught; the latch stands.
     pub(crate) fn observe(&self, observer: LatchObserver) {

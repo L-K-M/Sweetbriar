@@ -742,11 +742,25 @@ impl FileObjectStore {
     /// On failure after the file exists, it tries to remove it; a
     /// failed `create` removes nothing, since the name may be another
     /// publisher's live temp file.
+    ///
+    /// The file's creation, each chunk written and the flush are file
+    /// steps of their own (spec/03 "Integrity"), never held while
+    /// `bytes` is read: the caller's reader may be slow, and a latch
+    /// waits for steps, so it must not wait for a reader. A latch
+    /// between two chunks ends the publication at the next one, and
+    /// the temp file stays as it is.
     fn write_temp(&self, tmp: &Path, bytes: &mut dyn Read) -> Result<ObjectId, StoreError> {
         let failed = |e: io::Error| {
             StoreError::unavailable_io(format!("cannot write the temp object: {e}"), e.kind())
         };
-        let mut file = self.fs.create(tmp).map_err(failed)?;
+        let latch = &self.shelf.latch;
+        // A refusal travels through the `io::Error` path like a
+        // verifying reader's typed failure does.
+        let file_step = || latch.step("publish an object").map_err(io::Error::other);
+        let mut file = {
+            let _step = latch.step("publish an object")?;
+            self.fs.create(tmp).map_err(failed)?
+        };
         let mut streamed = || -> io::Result<ObjectId> {
             let mut hasher = Sha256::new();
             let mut chunk = vec![0u8; STREAM_CHUNK];
@@ -756,16 +770,21 @@ impl FileObjectStore {
                 if n == 0 {
                     break;
                 }
+                let _step = file_step()?;
                 io::Write::write_all(&mut file, &chunk[..n])?;
                 hasher.update(&chunk[..n]);
                 len += n as u64;
             }
+            let _step = file_step()?;
             file.sync_all()?;
             Ok(ObjectId::from_parts(hasher.finalize().into(), len))
         };
         streamed().map_err(|e| {
-            // Best effort: the real error is the one reported.
-            let _ = self.fs.remove(tmp);
+            // Best effort: the real error is the one reported. Nothing
+            // is removed once the store has latched.
+            if let Ok(_cleanup) = latch.step("publish an object") {
+                let _ = self.fs.remove(tmp);
+            }
             // A verifying reader reports its own typed failure (a hash
             // mismatch, a quarantine that could not move the file);
             // propagate that rather than wrapping it as a generic I/O
@@ -841,12 +860,15 @@ impl ObjectStore for FileObjectStore {
         // The writer thread can't wait on its own queue; refuse before
         // any file I/O (spec/03).
         self.reservations.refuse_own_thread()?;
-        // A latched store takes no new files: the temp file and the
-        // install are each a step the latch waits for, and neither
-        // starts after it; nothing is cleaned up after it either.
+        // A latched store takes no new files: the temp file's writes,
+        // the chain directories and the install are each a step the
+        // latch waits for, and none starts after it; nothing is
+        // cleaned up after it either. No step is held across the
+        // caller's reader or the writer's queue: a latch would wait
+        // out either along with it.
         let latch = &self.shelf.latch;
         let file_step = || latch.step("publish an object");
-        let held = file_step()?;
+        latch.refuse("publish an object")?;
         // Step 1: the temp file, its name from the randomness seam. A
         // second draw is this call's reservation token, so a same-hash
         // publication gets a distinct lifetime.
@@ -862,13 +884,13 @@ impl ObjectStore for FileObjectStore {
         // Later errors try to remove the temp file; that best-effort
         // cleanup never hides the real one.
         let id = self.write_temp(&tmp, &mut bytes)?;
-        if let Err(e) = self.ensure_chain_durable(&id.sha256) {
-            let _ = self.fs.remove(&tmp);
-            return Err(e);
+        {
+            let _chain = file_step()?;
+            if let Err(e) = self.ensure_chain_durable(&id.sha256) {
+                let _ = self.fs.remove(&tmp);
+                return Err(e);
+            }
         }
-        // Not held across the writer's queue: a latch would wait out
-        // the queue along with this step.
-        drop(held);
         // The republish-race proof parks here: durable temp and chain,
         // reservation commit not yet submitted (spec/03).
         #[cfg(test)]
