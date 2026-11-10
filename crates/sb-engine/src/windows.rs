@@ -612,6 +612,8 @@ impl Windows {
                 window.seen = Arc::new(AtomicU64::new(0));
             }
         }
+        // Every selection is store-backed (`open_selection` refuses the
+        // debug source), so all of them held the replaced store's ids.
         inner.selections.clear();
         self.versions.send_modify(|versions| {
             versions.store = generations.list;

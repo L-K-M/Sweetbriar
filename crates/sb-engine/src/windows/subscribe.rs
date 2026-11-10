@@ -88,9 +88,10 @@ impl Subscription {
                 return Err(shut_down());
             }
             let current = source_generation(&open.spec, seen);
-            let swapped = answered_restore(&self.restores, seen)
-                && !matches!(open.spec, WindowSpec::DebugSynthetic);
-            if swapped {
+            // Every subscription takes the swap as answered; only a store
+            // window owes a reset for it (the debug source is untouched).
+            let swapped = answered_restore(&self.restores, seen);
+            if swapped && !matches!(open.spec, WindowSpec::DebugSynthetic) {
                 *self.lock_mark() = Some(current);
                 return Ok(WindowEvent::ResetRequired);
             }
@@ -175,6 +176,13 @@ impl AppearanceSubscription {
             }
             let current = seen.appearance;
             if answered_restore(&self.restores, seen) {
+                *self.lock_mark() = current;
+                return Ok(WindowEvent::ResetRequired);
+            }
+            // A store's appearance generation never goes back, so a mark
+            // past it was read from a store a swap replaced, even one
+            // that swapped before this subscription began counting.
+            if current < *self.lock_mark() {
                 *self.lock_mark() = current;
                 return Ok(WindowEvent::ResetRequired);
             }

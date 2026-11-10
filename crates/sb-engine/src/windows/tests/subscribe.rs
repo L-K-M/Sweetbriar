@@ -354,15 +354,46 @@ fn a_subscription_after_a_swap_starts_from_the_restored_store() {
     block_on(engine.shutdown()).unwrap();
 }
 
-/// Appearance subscriptions answer the swap the same way, from any mark.
+/// Appearance subscriptions answer the swap the same way, even where
+/// the restored generation is one ordinary step past the mark.
 #[test]
 fn an_appearance_subscription_answers_a_store_swap() {
     let (_scratch, engine, _window) = listed("subscribe-appearance-restore");
-    let subscription = engine.subscribe_appearance(u64::MAX);
-    restored_at(&engine, 1);
+    let mark = engine.windows().versions.borrow().appearance;
+    let subscription = engine.subscribe_appearance(mark);
+    engine
+        .windows()
+        .store_replaced(crate::windows::StoreGenerations {
+            list: 1,
+            search: 0,
+            appearance: mark + 1,
+        });
     assert_eq!(
         block_on(subscription.next()).unwrap(),
         WindowEvent::ResetRequired
+    );
+    block_on(engine.shutdown()).unwrap();
+}
+
+/// A mark read from the replaced store, subscribed after the swap:
+/// the swap count began after it, but the mark is past anything the
+/// restored store has said, so it answers `ResetRequired`, then follows
+/// the restored store.
+#[test]
+fn an_appearance_mark_from_the_replaced_store_answers_reset_required() {
+    let (_scratch, engine, _window) = listed("subscribe-appearance-stale");
+    let mark = engine.windows().versions.borrow().appearance + 10;
+    engine.windows().appearance_moved(mark);
+    restored_at(&engine, 1);
+    let subscription = engine.subscribe_appearance(mark);
+    assert_eq!(
+        finish(pin!(subscription.next())).unwrap(),
+        WindowEvent::ResetRequired
+    );
+    engine.windows().appearance_moved(1);
+    assert_eq!(
+        block_on(subscription.next()).unwrap(),
+        WindowEvent::Invalidated { generation: 1 }
     );
     block_on(engine.shutdown()).unwrap();
 }
@@ -405,6 +436,7 @@ fn a_swap_releases_selections_and_leaves_the_debug_source() {
     restored_at(&engine, 1);
 
     assert!(block_on(engine.selection_ids(selection.selection_id().clone(), 0, 10)).is_err());
+
     let mut cx = Context::from_waker(Waker::noop());
     let mut quiet = pin!(debug.next());
     for _ in 0..20 {
