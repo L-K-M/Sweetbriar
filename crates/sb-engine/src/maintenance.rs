@@ -102,6 +102,9 @@ pub(crate) struct MaintenanceJobs {
 struct State {
     running: bool,
     stopping: bool,
+    /// The engine started the scheduler (at open, or a test): a resume
+    /// after restore's quiesce starts it again.
+    armed: bool,
     #[cfg(test)]
     again: bool,
     #[cfg(test)]
@@ -142,6 +145,22 @@ impl MaintenanceJobs {
 
     fn stopped(&self) -> bool {
         self.lock().stopping
+    }
+
+    /// Lift a stop, as restore's resume does (M1.8g3); the engine then
+    /// starts the worker again if it had been started.
+    pub(crate) fn resume(&self) {
+        self.cancel.store(false, Ordering::SeqCst);
+        self.lock().stopping = false;
+    }
+
+    pub(crate) fn armed(&self) -> bool {
+        self.lock().armed
+    }
+
+    #[cfg(test)]
+    pub(crate) fn running(&self) -> bool {
+        self.lock().running
     }
 
     /// Look again now, as a test does after moving its clock.
@@ -215,6 +234,7 @@ impl Engine {
                 return;
             }
             state.running = true;
+            state.armed = true;
         }
         let owner = jobs.clone();
         if self

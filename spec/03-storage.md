@@ -626,8 +626,9 @@ from the rows, so a restart or a restored store picks it up:
   command) never starts a job its shutdown would cancel. It parks at
   most a minute at a time and reads the clock again, so a wall-clock
   jump or a Mac waking from sleep is seen within a minute.
-- Shutdown stops it, and restore's quiesce will (M1.8g3): a parked
-  worker ends at once; a GC pass stops at its next step and a
+- Shutdown and restore's quiesce (M1.8g3) stop it; a restore's resume
+  starts it again, and the restored store's rows decide its cadence.
+  A parked worker ends at once; a GC pass stops at its next step and a
   backup's object copy at its next object, both recorded `cancelled`;
   a stop raised after a backup's start record ends it before the
   snapshot, which can't stop part way. A failed record write leaves

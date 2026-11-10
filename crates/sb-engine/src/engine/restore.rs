@@ -124,6 +124,9 @@ impl Engine {
         self.accounts.stop();
         self.index.stop();
         self.received.stop();
+        // The backup and GC schedule stops at its next step (h3b); a
+        // backup's snapshot, which can't stop part way, finishes first.
+        self.maintenance.stop();
         self.blocking.quiesce_and_wait();
         let shared = self
             .resources
@@ -198,6 +201,7 @@ impl Engine {
         self.accounts.resume();
         self.index.resume(store);
         self.received.resume(store);
+        self.maintenance.resume();
         self.blocking.resume();
         self.recover_imports()?;
         self.reconcile_index()?;
@@ -205,6 +209,10 @@ impl Engine {
         self.schedule_index();
         self.schedule_received();
         self.schedule_accounts();
+        // The restored store's records decide its cadence.
+        if self.maintenance.armed() {
+            self.schedule_maintenance();
+        }
         Ok(())
     }
 }

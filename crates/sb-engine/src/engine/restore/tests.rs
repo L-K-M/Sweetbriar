@@ -233,6 +233,38 @@ fn a_restore_swaps_the_generation_in_and_resets_subscriptions() {
     block_on(reopened.shutdown()).unwrap();
 }
 
+/// The quiesce stops a running maintenance schedule at once (a parked
+/// worker would otherwise hold it until its next look, a minute on)
+/// and the resume starts it again on the restored store; a schedule
+/// never started stays off.
+#[test]
+fn a_restore_stops_the_maintenance_schedule_and_starts_it_again() {
+    let scratch = ScratchDir::new("engine-restore-maintenance");
+    let root = data_root(&scratch);
+    let (engine, receipt) = backed_up(&root);
+    engine.schedule_maintenance();
+    let stage = qualified(&engine, &receipt);
+
+    let started = Instant::now();
+    let engine = finish(engine.restore(stage, Arc::new(AtomicBool::new(false)))).unwrap();
+    assert!(
+        started.elapsed() < crate::maintenance::POLL / 2,
+        "{:?}",
+        started.elapsed()
+    );
+    assert!(engine.maintenance().running());
+    let started = Instant::now();
+    block_on(engine.shutdown()).unwrap();
+    assert!(started.elapsed() < Duration::from_secs(30));
+
+    let unscheduled = ScratchDir::new("engine-restore-unscheduled");
+    let (engine, receipt) = backed_up(&data_root(&unscheduled));
+    let stage = qualified(&engine, &receipt);
+    let engine = finish(engine.restore(stage, Arc::new(AtomicBool::new(false)))).unwrap();
+    assert!(!engine.maintenance().running());
+    block_on(engine.shutdown()).unwrap();
+}
+
 #[test]
 fn a_refused_restore_hands_back_a_working_engine_and_a_stage_that_swaps_on_retry() {
     let scratch = ScratchDir::new("engine-restore-refused");
