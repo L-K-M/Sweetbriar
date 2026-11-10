@@ -429,7 +429,7 @@ fn a_refused_writer_thread_is_unavailable_and_checkpoints_nothing() {
 
     let conn = open_connection(paths.state_db(), Access::ReadWrite, WRITER_PRAGMAS).unwrap();
     assert!(matches!(
-        Writer::new_with(conn, refuse),
+        Writer::new_with(conn, refuse, None),
         Err(StoreError::Unavailable { .. })
     ));
     assert_eq!(
@@ -438,4 +438,54 @@ fn a_refused_writer_thread_is_unavailable_and_checkpoints_nothing() {
         "the unstarted writer's connection checkpointed"
     );
     drop(scratch);
+}
+
+/// A latch waits for an idle checkpoint the thread already started,
+/// which changes the database files as a job does (spec/03
+/// "Integrity").
+#[test]
+fn a_latch_waits_for_a_running_idle_checkpoint() {
+    let (_scratch, store) = store_with_probe("latch-checkpoint");
+    let pause = Arc::new(std::sync::Barrier::new(2));
+    *lock(&store.writer.shared.checkpoint_pause) = Some(Arc::clone(&pause));
+    // Work for the queue to drain after; whichever checkpoint comes
+    // first stops at the pause.
+    let write = store.write(WritePriority::User, |tx| {
+        tx.execute("UPDATE writer_probe SET n = n + 1", [])
+            .map_err(bug)?;
+        Ok(())
+    });
+    pause.wait();
+    *lock(&store.writer.shared.checkpoint_pause) = None;
+
+    thread::scope(|scope| {
+        let latching = scope.spawn(|| store.writer.latch("a test finding"));
+        thread::sleep(Duration::from_millis(50));
+        assert!(!latching.is_finished(), "the checkpoint is still running");
+        pause.wait();
+        assert!(latching.join().unwrap().unwrap(), "this call latched");
+    });
+    let _ = block_on(write);
+    assert!(!store.writer.latch("a later finding").unwrap());
+    assert_eq!(store.writer.latched().as_deref(), Some("a test finding"));
+    store.close().unwrap();
+}
+
+/// A thread that ended with a job marked running (a panic outside the
+/// job's own catch) doesn't leave a latch waiting forever: the latch is
+/// refused, since the thread's close may already be checkpointing.
+#[test]
+fn a_latch_after_the_thread_ended_is_refused_at_once() {
+    let (_scratch, store) = store_with_probe("latch-ended");
+    lock(&store.writer.shared.state).running = true;
+    store.writer.shared.shut_down();
+    let started = std::time::Instant::now();
+    assert!(matches!(
+        store.writer.latch("a test finding"),
+        Err(StoreError::Unavailable { .. })
+    ));
+    assert!(started.elapsed() < Duration::from_secs(5));
+    assert_eq!(store.writer.latched(), None);
+    // The clean-shutdown record is refused by the ended writer.
+    let _ = store.close();
 }

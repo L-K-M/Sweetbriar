@@ -12,6 +12,7 @@ Rests on research [04-data-safety](../research/04-data-safety.md),
 <data root>/                      macOS: ~/Library/Application Support/Sweetbriar/
                                   Linux: $XDG_DATA_HOME/sweetbriar/
   state.sqlite (+ -wal, -shm)     the database (02)
+  integrity-latch.json            an integrity finding's read-only latch (below)
   objects/
     tmp/                          in-progress writes, same volume
       import-validation/<token>/  private disposable validation tapes
@@ -20,6 +21,7 @@ Rests on research [04-data-safety](../research/04-data-safety.md),
   recovery/                       preserved evidence: quarantined objects, pre-migration snapshots
     import-source-<32 hex>         private import source snapshots (09)
     import-report-<job id>.json    import job reports (09)
+    integrity-<ms>-<8 hex>/        an integrity finding's copy of the database files (below)
 <cache root>/                     macOS: ~/Library/Caches/Sweetbriar/   Linux: $XDG_CACHE_HOME/sweetbriar/
   previews/, thumbnails/          disposable
   renditions.lock                 held by the one core using renditions/
@@ -190,6 +192,51 @@ against concurrent replacement.
     nothing.
   - On failure: stop remote effects, keep the store read-only, copy the
     files to `recovery/`, and tell the user. Never repair by deleting.
+  - **The full check (M1.8h5a)** runs `PRAGMA integrity_check(16)` on a
+    read-only connection of its own and stops when asked, its progress
+    handler looking between batches of SQLite steps: a stop that
+    interrupts it records nothing, and a check that finished acts on
+    what it found. A finding is its first rows, or the corruption error
+    SQLite met first (opening the connection included), cut to 1,024
+    bytes at a character boundary. Other open errors are the check's
+    own failure, not a finding. A check on a store already latched,
+    before or during its run, is `Corrupt` and records nothing: the
+    writer takes the latch under its lock, so of two concurrent checks
+    one records its finding. A finding is handled in this order:
+    1. The writer latches: queued writes fail `Corrupt` naming the
+       finding, new ones are refused, the job or idle checkpoint running
+       then finishes before the latch returns (a stop doesn't cut that
+       wait short), and nothing checkpoints, at close neither, which
+       also writes no clean-shutdown marker. The database files stop
+       changing; reads go on. A writer whose thread has ended can't
+       latch; the result says so and the next two steps still run.
+    2. `integrity-latch.json` (the finding, its time and the copy's
+       name) is written to a temporary name, flushed, renamed into the
+       data root and the root flushed. A latch that can't be written is
+       reported; the store stays read-only in this process, and step 3
+       still runs. Without randomness for the copy's name, its suffix
+       is `00000000`.
+    3. `state.sqlite`, then `-wal` and `-shm` where present, are copied
+       byte for byte, not through SQLite, into
+       `recovery/.integrity-<ms>-<hex>.tmp/`; a `manifest.json` of each
+       file's length and SHA-256 and the finding is written last, and
+       the directory is flushed, renamed to `integrity-<ms>-<hex>/` and
+       `recovery/` flushed. The `-shm` file is volatile evidence: a
+       reader may still touch it while it is copied.
+  - **A latched open.** A writable open reads the latch after resolving an
+    interrupted restore swap and before anything else touches the root.
+    With a latch, the store opens read-only, the writer's connection
+    opened read-only too: no layout is created, no
+    `quick_check`, migration, startup record, reservation expiry or
+    scratch cleanup runs, and the writer refuses every write. A latched
+    store that would need migrating, or whose database is missing or
+    empty, is `Corrupt`; nothing creates one. A latch that can't be
+    read is still a latch. A latch whose copy was never published makes
+    it again: its unfinished attempt's directory is removed, and the
+    files as they are now are copied, with a manifest of their own. The
+    latch lives inside the data root: a restore swap moves it aside
+    with the damaged root, and the restored store opens without it.
+    Nothing in Sweetbriar deletes it.
 
 ### Export capture accounting (M1.7b2a)
 
@@ -610,8 +657,10 @@ time, the backup first, against the injected clock. Its cadence comes
 from the rows, so a restart or a restored store picks it up:
 - A job is due a period after its last complete run started: an hour
   for the backup, a day for GC. A run that was blocked or failed is
-  tried again sooner, after 5 minutes for the backup (so one bad
-  attempt stretches the recovery point by minutes) and an hour for GC.
+  tried again sooner, 5 minutes after it ended for the backup (so one
+  bad attempt stretches the recovery point by minutes) and an hour
+  after it ended for GC; counted from its end, a long failing run
+  can't follow itself at once.
   A job that never ran, or whose last run was interrupted or
   cancelled, is due at once. A start in the future (a clock moved
   back) counts from now.
@@ -622,24 +671,32 @@ from the rows, so a restart or a restored store picks it up:
   names another destination (M1.8j).
 - GC runs with the default grace period.
 - The worker's first look waits a minute after it starts, so the
-  open's own work goes first and a short-lived process (a CLI
-  command) never starts a job its shutdown would cancel. It parks at
-  most a minute at a time and reads the clock again, so a wall-clock
-  jump or a Mac waking from sleep is seen within a minute.
+  open's own work goes first and a process that ends within the
+  minute (a CLI command) never starts a job its shutdown would
+  cancel. It parks at most a minute at a time and reads the clock
+  again, so a wall-clock jump or a Mac waking from sleep is seen
+  within a minute.
 - Shutdown and restore's quiesce (M1.8g3) stop it; a restore's resume
-  starts it again, and the restored store's rows decide its cadence.
+  starts it again, after a refusal too, and the store's rows (the
+  restored one's after a swap) decide its cadence.
   A parked worker ends at once; a GC pass stops at its next step and a
   backup's object copy at its next object, both recorded `cancelled`;
-  a stop raised after a backup's start record ends it before the
-  snapshot, which can't stop part way. A failed record write leaves
-  the run interrupted, and the job is looked at again a minute later.
+  a stop raised after a backup's start record and before its snapshot
+  ends it there, recorded `cancelled` with nothing copied yet. A stop
+  raised during the snapshot, which can't stop part way, ends the run
+  at the copy's first object. The next open finds a cancelled or
+  interrupted run due at once.
+- A run whose end record can't be written stays interrupted; the
+  worker looks at its job again a minute later, and a store that
+  can't write records starts no run either.
 - Outcomes: a snapshot refused because another backup, a restore or a
   generation check holds the operation, or a generation is in
   progress, is `blocked`. A copy that the stop ended is `cancelled`.
   Any other backup error is `failed`, retention's after the generation
   completed included. A GC pass is `blocked` by its gates and
-  `cancelled` when it stopped. Failed removals make it `failed`, even
-  when it also stopped. A GC error is always `failed`.
+  `cancelled` when the stop ended it (a stop ends the pass with its
+  report, never an error). Failed removals make it `failed`, even when
+  it also stopped, and so does an error the pass returns.
 
 ## Restore
 
@@ -768,7 +825,9 @@ The process holds `<data root>.lock` throughout.
      run `wal_checkpoint(TRUNCATE)` and close every connection to the
      current and staging databases. The lock stays held. Open windows
      and subscriptions get `ResetRequired` once the restored store is
-     in place; a refused swap moves none of them. An import's inventory
+     in place. The swap refuses only before anything closes, so a
+     refused one moves none of them: the engine resumes on the same
+     store, its workers and schedules started again. An import's inventory
      and an export's capture resume from no checkpoint, so a restore is
      refused before anything stops while one runs, and none starts
      until the restore ends. SQLite must never see a database file

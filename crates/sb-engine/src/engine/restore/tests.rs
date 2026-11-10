@@ -325,7 +325,9 @@ fn the_quiesce_refuses_store_work_admits_cleanup_and_resumes() {
         let work = Arc::clone(&work);
         std::thread::spawn(move || work.quiesce_and_wait())
     };
+    let deadline = Instant::now() + PATIENCE;
     while !work.closing() {
+        assert!(Instant::now() < deadline, "the quiesce never began");
         std::thread::yield_now();
     }
     assert!(matches!(work.start(), Err(EngineError::Unavailable { .. })));

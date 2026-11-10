@@ -207,7 +207,7 @@ pub(crate) fn runs(conn: &Connection) -> Result<Vec<MaintenanceRun>, StoreError>
 
 /// `text` cut to at most [`MAINTENANCE_DETAIL_MAX`] bytes at a
 /// character boundary.
-fn bounded(text: &str) -> &str {
+pub(crate) fn bounded(text: &str) -> &str {
     if text.len() <= MAINTENANCE_DETAIL_MAX {
         return text;
     }

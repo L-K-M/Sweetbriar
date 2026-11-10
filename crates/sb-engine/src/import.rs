@@ -446,7 +446,7 @@ impl Engine {
         let start = jobs.begin_start()?;
         self.command(move |worker| async move {
             // Counted until the inventory's worker is registered.
-            let _start = start;
+            let start = start;
             let (job, requested, result) = (id.clone(), paths.clone(), fresh.clone());
             let receipt = worker
                 .resources()
@@ -462,6 +462,7 @@ impl Engine {
                 // and the next open fails it visibly.
                 spawn_job(&worker, &jobs, id, Task::Inventory(paths))?;
             }
+            drop(start);
             // A repeated key's receipt names the first job.
             let job_id = receipt_job_id(&receipt)?;
             Ok(ImportStarted { receipt, job_id })
@@ -623,7 +624,7 @@ impl Engine {
         let start = jobs.begin_start()?;
         self.command(move |worker| async move {
             // Counted until the capture's worker is registered.
-            let _start = start;
+            let start = start;
             let (job, request_json, result) =
                 (id.clone(), request.request_json().to_owned(), fresh.clone());
             let receipt = worker
@@ -640,6 +641,7 @@ impl Engine {
                 // and the next open fails it visibly.
                 spawn_job(&worker, &jobs, id, Task::Export(Some(request)))?;
             }
+            drop(start);
             let job_id = receipt_job_id(&receipt)?;
             Ok(ExportStarted { receipt, job_id })
         })
@@ -718,12 +720,6 @@ impl Engine {
         .await
     }
 
-    /// Recovery at open (spec/09): an interrupted inventory fails, a
-    /// waiting job keeps waiting, a running job resumes, and a finished
-    /// job without a report gets its cleanup again. A job whose row no
-    /// longer decodes stays as stored, as evidence: its query reports
-    /// `Corrupt`, and the rest of the store opens. Runs on the open
-    /// thread, which may block. Cleanup failures wait for the next open.
     /// Whether an import's inventory or an export's capture is in the
     /// store's current state: work neither resumes nor survives a
     /// restore's quiesce (spec/09 fails it at the next open).
@@ -742,6 +738,12 @@ impl Engine {
         Ok(inventory || capture)
     }
 
+    /// Recovery at open (spec/09): an interrupted inventory fails, a
+    /// waiting job keeps waiting, a running job resumes, and a finished
+    /// job without a report gets its cleanup again. A job whose row no
+    /// longer decodes stays as stored, as evidence: its query reports
+    /// `Corrupt`, and the rest of the store opens. Runs on the open
+    /// thread, which may block. Cleanup failures wait for the next open.
     pub(crate) fn recover_imports(&self) -> Result<(), EngineError> {
         for job in self
             .resources()
