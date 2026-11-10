@@ -201,9 +201,10 @@ against concurrent replacement.
     bytes at a character boundary. Other open errors are the check's
     own failure, not a finding. A check on a store already latched,
     before or during its run, is `Corrupt` and records nothing: the
-    writer takes the latch under its lock, so of two concurrent checks
+    store takes the latch under its lock, so of two concurrent checks
     one records its finding. A finding is handled in this order:
-    1. The writer latches: queued writes fail `Corrupt` naming the
+    1. The store's own file work stops (the frozen root, below), then
+       the writer latches: queued writes fail `Corrupt` naming the
        finding, new ones are refused, the job or idle checkpoint running
        then finishes before the latch returns (a stop doesn't cut that
        wait short), and nothing checkpoints, at close neither, which
@@ -223,6 +224,37 @@ against concurrent replacement.
        the directory is flushed, renamed to `integrity-<ms>-<hex>/` and
        `recovery/` flushed. The `-shm` file is volatile evidence: a
        reader may still touch it while it is copied.
+  - **The frozen root (M1.8h5b1).** Step 1 begins with the store's own
+    file work outside the writer, then the writer latches. Each step of
+    that work is counted while it runs. Latching refuses new steps at
+    once and then waits for the ones in flight, so none is running and
+    none starts once it returns. A step never waits for the latch, so
+    one may start inside another (a backup copying an object through
+    its verifying reader, which quarantines on damage). A step covers
+    bounded file work only: a publication takes one per chunk it
+    writes and none while it reads from its caller, so a slow reader
+    never delays the latch. From the finding on, and in every
+    latched open, each is refused `Corrupt` naming the finding before it
+    touches a file:
+    publishing, installing or removing an object, starting, completing
+    or removing (retention) a backup generation, verifying a backup,
+    copying or removing an import's sources, writing an import report
+    and leasing validation scratch. A read that finds an object damaged
+    reports it `Corrupt` and leaves the file where it is, unquarantined.
+    Work already past its first step fails at its next one, and nothing
+    cleans up after the latch. A backup generation being copied stops at
+    its next object, each object and the manifest being a step, and
+    stays `in_progress`; a snapshot being copied finishes its one file,
+    since it can't stop part way and a latch doesn't wait for it. An
+    import's source copy, a leased validation scratch and a backup
+    verification's scratch in flight are working files outside the
+    archive, so they finish or fail on their own; the engine stops
+    their jobs (M1.8h5b2). Backup verification, which a restore starts
+    with, stays refused until M1.8h5b4 keeps its scratch ledger off the
+    latched writer. The store reports the latch (the finding, its time and the
+    published copy) and tells one observer once: as the store latches,
+    or at once when it is installed on a store already latched. It only
+    signals, and a panic in it is caught.
   - **A latched open.** A writable open reads the latch after resolving an
     interrupted restore swap and before anything else touches the root.
     With a latch, the store opens read-only, the writer's connection
