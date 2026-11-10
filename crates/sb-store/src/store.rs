@@ -416,7 +416,10 @@ impl Store {
     /// generation in progress for interrupted-generation recovery. Once
     /// complete, retention runs before returning and preserves this generation
     /// for the receipt. Its error is reported even though the new generation
-    /// may already be complete. Later retention applies the usual policy.
+    /// may already be complete. A retained clone's
+    /// [`BackupSnapshot::completion_committed`](crate::BackupSnapshot::completion_committed)
+    /// distinguishes that outcome without another store read. Later
+    /// retention applies the usual policy.
     pub fn complete_backup(
         &self,
         snapshot: crate::backups::BackupSnapshot,

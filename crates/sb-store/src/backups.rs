@@ -79,6 +79,7 @@ use std::collections::BTreeSet;
 use std::ffi::c_int;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
@@ -181,6 +182,7 @@ pub struct BackupSnapshot {
     referenced: Arc<[String]>,
     snapshot_handle: Arc<std::sync::Mutex<Box<dyn WriteFile>>>,
     active: Arc<()>,
+    completed: Arc<AtomicBool>,
 }
 
 impl std::fmt::Debug for BackupSnapshot {
@@ -209,6 +211,14 @@ impl BackupSnapshot {
     /// generation's directory.
     pub fn state_db(&self) -> PathBuf {
         self.location.join(SNAPSHOT_FILE)
+    }
+
+    /// Whether this snapshot's completion commit was acknowledged.
+    /// Shared by clones and set before retention, so a caller can retain
+    /// this fact even when completion returns a retention error. It does
+    /// not say whether a later retention pass has removed the generation.
+    pub fn completion_committed(&self) -> bool {
+        self.completed.load(Ordering::Acquire)
     }
 
     /// Every object hash the snapshot references, sorted — the set
@@ -588,6 +598,7 @@ impl Backups {
                 location,
                 referenced: referenced.into(),
                 snapshot_handle: Arc::new(std::sync::Mutex::new(snapshot_handle)),
+                completed: Arc::new(AtomicBool::new(false)),
             },
             receipt,
         ))
