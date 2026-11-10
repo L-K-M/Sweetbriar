@@ -13,23 +13,23 @@
 //! stage, under the same ownership protocol ([`super::scratch`]): the
 //! same two tables, the row before the directory, the cleanup before
 //! the row goes. A verification keeps the home it started in, so one
-//! that a latch catches fails at the writer and never continues in the
-//! sibling.
+//! that a latch catches stops at its next in-root mutation or writer
+//! write, and never continues in the sibling.
 
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use rusqlite::{Connection, OpenFlags, OptionalExtension, Transaction, TransactionBehavior};
-use sb_types::fs::{FileKind, Fs};
+use sb_types::fs::{ConfinedDir, FileKind, Fs};
 
-use crate::StoreError;
 use crate::schema::{VERIFIER_OBJECTS_TABLE, VERIFIER_SCRATCH_TABLE, classify};
 use crate::store::{
     Access, READER_PRAGMAS, WRITER_PRAGMAS, await_write, open_connection,
     open_connection_with_flags,
 };
 use crate::writer::{WritePriority, Writer};
+use crate::{FileObjectStore, StoreError};
 
 /// The sibling's name after the data root's: `<data root>.verifier`.
 const SIBLING_SUFFIX: &str = ".verifier";
@@ -129,6 +129,20 @@ impl<'a> Home<'a> {
     /// The directory the scratch directory and its marker are made in.
     pub(super) fn scratch_root(&self) -> &Path {
         &self.scratch_root
+    }
+
+    /// Scratch mutations in the data root take bounded latch steps;
+    /// the sibling is outside that frozen root and remains writable.
+    pub(super) fn directory(
+        &self,
+        fs: &dyn Fs,
+        objects: &Arc<FileObjectStore>,
+    ) -> io::Result<Box<dyn ConfinedDir>> {
+        let inner = fs.open_confined_dir(&self.scratch_root)?;
+        Ok(match &self.rows {
+            Rows::Store(_) => super::frozen_scratch::protect(inner, objects),
+            Rows::Sibling { .. } => inner,
+        })
     }
 
     /// Run `work` in one committed transaction on the home's rows.
