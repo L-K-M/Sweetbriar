@@ -605,6 +605,41 @@ completed. A row without an end that this process didn't start is an
 interrupted run. Recording runs is the store's bookkeeping, so running
 a job never makes a generation due.
 
+**The schedule (M1.8h3b).** One engine worker runs the jobs one at a
+time, the backup first, against the injected clock. Its cadence comes
+from the rows, so a restart or a restored store picks it up:
+- A job is due a period after its last complete run started: an hour
+  for the backup, a day for GC. A run that was blocked or failed is
+  tried again sooner, after 5 minutes for the backup (so one bad
+  attempt stretches the recovery point by minutes) and an hour for GC.
+  A job that never ran, or whose last run was interrupted or
+  cancelled, is due at once. A start in the future (a clock moved
+  back) counts from now.
+- A due backup runs only while there were changes (`backup_due`);
+  otherwise nothing is recorded and it is looked at again a minute
+  later, so after an idle hour a change is backed up within a minute.
+  Generations go to the data root's `backups/` until a Backups setting
+  names another destination (M1.8j).
+- GC runs with the default grace period.
+- The worker's first look waits a minute after it starts, so the
+  open's own work goes first and a short-lived process (a CLI
+  command) never starts a job its shutdown would cancel. It parks at
+  most a minute at a time and reads the clock again, so a wall-clock
+  jump or a Mac waking from sleep is seen within a minute.
+- Shutdown stops it, and restore's quiesce will (M1.8g3): a parked
+  worker ends at once; a GC pass stops at its next step and a
+  backup's object copy at its next object, both recorded `cancelled`;
+  a stop raised after a backup's start record ends it before the
+  snapshot, which can't stop part way. A failed record write leaves
+  the run interrupted, and the job is looked at again a minute later.
+- Outcomes: a snapshot refused because another backup, a restore or a
+  generation check holds the operation, or a generation is in
+  progress, is `blocked`. A copy that the stop ended is `cancelled`.
+  Any other backup error is `failed`, retention's after the generation
+  completed included. A GC pass is `blocked` by its gates and
+  `cancelled` when it stopped. Failed removals make it `failed`, even
+  when it also stopped. A GC error is always `failed`.
+
 ## Restore
 
 The format-1 manifest reader streams records to its caller without a total

@@ -59,6 +59,7 @@ pub use index::{
     IndexReadStage, PreparedIndexBatch, index_retry_at, recover_index_io_failure,
     report_index_io_failure, search_io_code, search_io_message,
 };
+mod maintenance;
 mod renditions;
 mod repair;
 mod restore;
@@ -73,6 +74,10 @@ pub use restore::ResourcesSwapError;
 pub use sb_store::{
     BackupDestination, BackupReceipt, BackupSnapshot, PreparedRestoreStage, QualifiedStage,
     RestoreMetadata, VerifiedExternalBackup,
+};
+pub use sb_store::{
+    GC_GRACE_PERIOD, GcGate, GcReport, MaintenanceFinish, MaintenanceJob, MaintenanceOutcome,
+    MaintenanceRun,
 };
 pub use search::{CoverageCounts, read_search_coverage, read_search_coverage_reusing};
 pub use seen::{ReceivedCommit, ReceivedPreparation, ReceivedRevisions, ReceivedSweep};
