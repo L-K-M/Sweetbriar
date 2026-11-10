@@ -536,10 +536,33 @@ orphan GC is about to remove. So:
   sets `acquisitions.object_state='quarantined'` and notifies the UI. An
   absent file is `NotFound`, and the engine sets `'missing'`.
 - Publishing the same bytes again (a re-fetch, a re-import) restores
-  `'published'`.
+  `'published'`, and so does the weekly sample reading them intact.
 - A weekly verification job re-hashes a rotating sample of objects (1/52
   of them each week, so every object yearly), and all objects referenced
   by backups.
+- **The live sample (M1.8h4a).** An object's bucket is the first eight
+  bytes of its SHA-256, big-endian, modulo 52; week `w` (UTC weeks
+  starting Monday, numbered from the epoch's) samples bucket `w mod
+  52`. `store_meta.verified_through_week` is the highest week whose
+  bucket a run finished: a run covers every week since, at most the last 52,
+  so missed weeks are caught up; a run in a week already finished reads
+  nothing; without it, or with the clock behind it, a run covers its own
+  week. It advances bucket by bucket and never moves back. A bucket's
+  sample is every object it holds that a row references (acquisitions,
+  send attempts, draft attachments) or that is on disk, each read
+  through the verifying reader. On an
+  acquisition, absent turns `published` into `missing` and damaged
+  turns `published` into `quarantined`, each with an index `delete`;
+  damaged turns `missing` into `quarantined` with none (a `missing` row
+  is out of the index already); and intact turns `missing` or
+  `quarantined` back into `published` with a `reextract`. Each change
+  is in the transaction that records the verdict, against the row as it
+  is then; a file present again by then is a republish, and the
+  absent or damaged verdict is dropped. Other references have no state
+  and are counted. I/O failures are reported, not retried within the
+  run, and don't hold the checkpoint. A run stops between objects and
+  read chunks when asked, keeping what it recorded; its unfinished
+  bucket waits for the next run.
 
 ### Garbage collection
 
@@ -684,6 +707,52 @@ completed. A row without an end that this process didn't start is an
 interrupted run. Recording runs is the store's bookkeeping, so running
 a job never makes a generation due.
 
+**The schedule (M1.8h3b).** One engine worker runs the jobs one at a
+time, the backup first, against the injected clock. Its cadence comes
+from the rows, so a restart or a restored store picks it up:
+- A job is due a period after its last complete run started: an hour
+  for the backup, a day for GC. A run that was blocked or failed is
+  tried again sooner, 5 minutes after it ended for the backup (so one
+  bad attempt stretches the recovery point by minutes) and an hour
+  after it ended for GC; counted from its end, a long failing run
+  can't follow itself at once.
+  A job that never ran, or whose last run was interrupted or
+  cancelled, is due at once. A start in the future (a clock moved
+  back) counts from now.
+- A due backup runs only while there were changes (`backup_due`);
+  otherwise nothing is recorded and it is looked at again a minute
+  later, so after an idle hour a change is backed up within a minute.
+  Generations go to the data root's `backups/` until a Backups setting
+  names another destination (M1.8j).
+- GC runs with the default grace period.
+- The worker's first look waits a minute after it starts, so the
+  open's own work goes first and a process that ends within the
+  minute (a CLI command) never starts a job its shutdown would
+  cancel. It parks at most a minute at a time and reads the clock
+  again, so a wall-clock jump or a Mac waking from sleep is seen
+  within a minute.
+- Shutdown and restore's quiesce (M1.8g3) stop it; a restore's resume
+  starts it again, after a refusal too, and the store's rows (the
+  restored one's after a swap) decide its cadence.
+  A parked worker ends at once; a GC pass stops at its next step and a
+  backup's object copy at its next object, both recorded `cancelled`;
+  a stop raised after a backup's start record and before its snapshot
+  ends it there, recorded `cancelled` with nothing copied yet. A stop
+  raised during the snapshot, which can't stop part way, ends the run
+  at the copy's first object. The next open finds a cancelled or
+  interrupted run due at once.
+- A run whose end record can't be written stays interrupted; the
+  worker looks at its job again a minute later, and a store that
+  can't write records starts no run either.
+- Outcomes: a snapshot refused because another backup, a restore or a
+  generation check holds the operation, or a generation is in
+  progress, is `blocked`. A copy that the stop ended is `cancelled`.
+  Any other backup error is `failed`, retention's after the generation
+  completed included. A GC pass is `blocked` by its gates and
+  `cancelled` when the stop ended it (a stop ends the pass with its
+  report, never an error). Failed removals make it `failed`, even when
+  it also stopped, and so does an error the pass returns.
+
 ## Restore
 
 The format-1 manifest reader streams records to its caller without a total
@@ -810,8 +879,14 @@ The process holds `<data root>.lock` throughout.
      workers, the outbox and maintenance jobs; drain the writer queue;
      run `wal_checkpoint(TRUNCATE)` and close every connection to the
      current and staging databases. The lock stays held. Open windows
-     and subscriptions get `ResetRequired`. SQLite must never see a
-     database file renamed while it's open.
+     and subscriptions get `ResetRequired` once the restored store is
+     in place. The swap refuses only before anything closes, so a
+     refused one moves none of them: the engine resumes on the same
+     store, its workers and schedules started again. An import's inventory
+     and an export's capture resume from no checkpoint, so a restore is
+     refused before anything stops while one runs, and none starts
+     until the restore ends. SQLite must never see a database file
+     renamed while it's open.
    - Write a marker file `<data root>.restore-pending` naming the staging
      root and the preserved name. Flush it **and its parent directory**
      before either rename. It is written to a temporary sibling, flushed

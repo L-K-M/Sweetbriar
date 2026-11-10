@@ -29,6 +29,7 @@ mod import;
 mod index;
 #[cfg(test)]
 mod index_tests;
+mod maintenance;
 mod messages;
 // Nothing calls the policies yet; the account worker (the next M2.4
 // slice) is their caller.
@@ -61,7 +62,7 @@ pub use sb_resources::{
 };
 
 pub use drafts::{DraftContent, DraftCreated, DraftSaved};
-pub use engine::Engine;
+pub use engine::{Engine, RestoreError};
 pub use error::EngineError;
 pub use import::{
     ExportJobStatus, ExportScopeInput, ExportStarted, ImportJobStatus, ImportReport,
@@ -69,6 +70,7 @@ pub use import::{
 };
 pub use rebuild::SearchRebuildStarted;
 pub use sb_resources::ParseCode as SearchParseCode;
+pub use sb_resources::QualifiedStage;
 pub use sb_resources::{
     Coverage, RebuildPhase as SearchRebuildPhase, SearchIndexState, SearchIoCode, SearchLimitation,
     SearchRebuildProgress,

@@ -44,6 +44,7 @@ pub mod sync;
 mod testing;
 pub mod threads;
 mod validation_scratch;
+mod verification;
 mod writer;
 
 // The seam vocabulary sb-types owns (spec/01 rules 2 and 3), re-exported
@@ -84,6 +85,7 @@ pub use source_snapshots::{ImportSourceCapture, ImportSourceSnapshot};
 pub use store::SwapRestoreError;
 pub use store::{ReadOnlyStore, Seams, Store, await_write, open, open_read_only};
 pub use validation_scratch::{RegistryFile, ValidationFile, ValidationScratch, ValidationTape};
+pub use verification::{SAMPLE_BUCKETS, SampleReport};
 
 #[cfg(feature = "test-seams")]
 pub use list_rows::refresh_list_rows;

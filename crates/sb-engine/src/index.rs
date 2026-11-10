@@ -95,6 +95,17 @@ impl IndexJobs {
         self.ready.notify_all();
     }
 
+    /// Undo [`IndexJobs::stop`] after a restore's quiesce; the engine
+    /// schedules the worker again. A swapped-in store also forgets the
+    /// replaced one's read failure.
+    pub(crate) fn resume(&self, store: crate::engine::StoreAfterRestore) {
+        let mut state = self.lock();
+        state.stopping = false;
+        if store == crate::engine::StoreAfterRestore::Replaced {
+            state.failure = None;
+        }
+    }
+
     pub(super) fn stopped(&self) -> bool {
         self.lock().stopping
     }

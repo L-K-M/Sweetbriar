@@ -1571,13 +1571,19 @@ local drafts. No network yet.
     swap (M)**: a restore epoch, so a lower restored generation answers
     `ResetRequired` and never underflows a subscription's mark. **g3
     Quiesce and swap (L)**: a reversible admission gate, the jobs and
-    account workers paused and resumed, `Engine::restore`, a refusal
-    resuming as before and a failure left as a reported terminal state.
-    **g4 Acceptance proof (L)**. **g5 Resume with cursor discard (M)**:
+    account workers paused and resumed, `Engine::restore` consuming the
+    engine: a refusal hands it back resuming as before, a failure ends
+    it and the next open resolves the marker. `ResetRequired` goes out
+    once the restored store is in place, so a refusal moves no window.
+    A restore is refused while an import's inventory or an export's
+    capture runs (neither resumes from a checkpoint), and none starts
+    until it ends. **g4 Acceptance proof (L)**. **g5 Resume with cursor discard (M)**:
     resuming an account discards its IMAP cursors in the same
-    transaction. **g6 Quarantined intent release (M)**: preview and
-    release, refused while an account's restored mailboxes still need
-    their reconcile. Reconciling occurrences against the server is M2.5's
+    transaction; the command itself is M2.7's `resume_account`, and
+    how it knows an account came from a restore is decided there.
+    **g6 Quarantined intent release (M)**: preview and release, refused
+    while an account's restored mailboxes still need their reconcile;
+    the command is M3's `release_intents`. Reconciling occurrences against the server is M2.5's
     epoch-change step: a restored mailbox's absent epoch with
     occurrences is a changed epoch.
   - **M1.8g Engine quiescence (L):** the pre-swap quiesce — refuse new
