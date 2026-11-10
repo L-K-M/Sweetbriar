@@ -1,8 +1,8 @@
-//! Thread rebuilds (spec/02 "Threads"): after an import's turn and at
-//! open, while imports added messages since the last complete rebuild,
-//! one background worker reads every message's threading fields,
-//! groups them (`threading`) and publishes the changed memberships in
-//! bounded writes.
+//! Thread rebuilds (spec/02 "Threads"): after an import's turn, after
+//! an account's sync pass and at open, while messages were added since
+//! the last complete rebuild, one background worker reads every
+//! message's threading fields, groups them (`threading`) and publishes
+//! the changed memberships in bounded writes.
 //!
 //! ```text
 //!   schedule ─► claim? ─yes─► worker: read sources ─► group ─► plan ─► publish
@@ -154,7 +154,7 @@ async fn run(worker: Worker, rebuilds: Arc<ThreadRebuilds>) {
     let stop = worker.shutdown_check();
     loop {
         // A failed pass leaves the watermark behind; the next import's
-        // turn or the next open retries it.
+        // turn, the next account pass or the next open retries it.
         let _ = rebuild(&worker).await;
         // Once shutdown begins, the next open does any pass still owed.
         if stop() {
