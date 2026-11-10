@@ -209,6 +209,7 @@ impl Engine {
             self.blocking.set_read_only(false);
             self.windows.health_moved();
         }
+        self.imports.threads().resume();
         self.accounts.resume();
         self.index.resume(store);
         self.received.resume(store);

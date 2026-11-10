@@ -470,6 +470,11 @@ fn a_restore_ends_read_only_and_a_refused_one_keeps_it() {
     let stage = qualified(&engine, &receipt);
     find_the_damage(&engine);
     assert!(engine.read_only());
+    // Asked for on a read-only engine, as a latched open asks: the
+    // schedule is armed and starts nothing.
+    engine.schedule_maintenance();
+    assert!(!engine.maintenance().running());
+    let rebuilds = engine.imports().threads().starts();
     let health = engine.subscribe_health();
 
     let Err(RestoreError::Refused { engine, stage, .. }) =
@@ -485,6 +490,8 @@ fn a_restore_ends_read_only_and_a_refused_one_keeps_it() {
     assert!(engine.received().stopped());
     assert!(!engine.indexer().running());
     assert!(!engine.received().running());
+    assert!(!engine.maintenance().running());
+    assert_eq!(engine.imports().threads().starts(), rebuilds);
 
     let engine = finish(engine.restore(*stage, Arc::new(AtomicBool::new(false)))).unwrap();
 
@@ -495,5 +502,9 @@ fn a_restore_ends_read_only_and_a_refused_one_keeps_it() {
     add_setting(&engine, "test.restore.after");
     assert!(engine.indexer().running());
     assert!(engine.received().running());
+    // The schedule the read-only engine could only arm starts now,
+    // and thread rebuilds are asked for again.
+    assert!(engine.maintenance().running());
+    assert!(engine.imports().threads().starts() > rebuilds);
     block_on(engine.shutdown()).unwrap();
 }

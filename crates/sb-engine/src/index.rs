@@ -21,6 +21,8 @@ use crate::Engine;
 use crate::engine::Spawn;
 
 #[cfg(test)]
+mod latch_tests;
+#[cfg(test)]
 mod stop_tests;
 
 #[derive(Default)]
@@ -154,12 +156,11 @@ impl IndexJobs {
         let result =
             tokio::runtime::Handle::current().block_on(resources.write(WritePriority::Index, body));
         if let Err(error) = &result {
-            let mut state = self.lock();
-            let attempts = match state.failure {
-                Some(ReadFailure::Writer(attempts)) => attempts.saturating_add(1),
-                _ => 1,
-            };
-            state.failure = Some(
+            self.fence(resources, |earlier| {
+                let attempts = match earlier {
+                    Some(ReadFailure::Writer(attempts)) => attempts.saturating_add(1),
+                    _ => 1,
+                };
                 if matches!(
                     error,
                     StoreError::Unavailable { .. } | StoreError::Internal { .. }
@@ -167,10 +168,27 @@ impl IndexJobs {
                     ReadFailure::Writer(attempts)
                 } else {
                     ReadFailure::Invariant(error.clone())
-                },
-            );
+                }
+            });
         }
         result
+    }
+
+    /// Fence readers after a failed index write or turn, given the
+    /// failure recorded before it. A latched store's refusals fence
+    /// nothing (spec/03 "Integrity"): they are no index failure, so
+    /// readers keep the index as committed, and the worker is being
+    /// stopped.
+    fn fence(
+        &self,
+        resources: &Resources,
+        failure: impl FnOnce(Option<&ReadFailure>) -> ReadFailure,
+    ) {
+        if resources.integrity_latch().is_some() {
+            return;
+        }
+        let mut state = self.lock();
+        state.failure = Some(failure(state.failure.as_ref()));
     }
 
     // Called only after an actual successful publication/history commit,
@@ -273,8 +291,10 @@ fn run(resources: &Resources, index: &IndexJobs, shutting_down: &dyn Fn() -> boo
                 Some(ReadFailure::Writer(attempts)) => {
                     Next::Park(Some(index_retry_at(resources.now(), attempts)))
                 }
+                // On a latched store nothing is fenced, and the stop
+                // that follows the latch ends this park.
                 _ => {
-                    index.lock().failure = Some(ReadFailure::Invariant(error));
+                    index.fence(resources, |_| ReadFailure::Invariant(error));
                     Next::Park(None)
                 }
             },

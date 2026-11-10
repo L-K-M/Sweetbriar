@@ -16,7 +16,7 @@ use sb_test_support::{ScratchDir, block_on, cert_der, damage_an_index};
 
 use crate::{
     AddressMode, BridgeAccountParams, BridgeIdentity, CertificatePin, EndpointSecurity, Engine,
-    EngineError, Health, IdentitySendable, Integrity, Secret,
+    EngineError, Health, IdentitySendable, Integrity, SearchScope, Secret,
 };
 
 const PATIENCE: Duration = Duration::from_secs(60);
@@ -136,8 +136,11 @@ fn assert_read_only(engine: &Engine) {
     let copy = copy.expect("the copy is named once it is published");
     assert!(copy.join("manifest.json").is_file(), "{}", copy.display());
 
-    // Queries go on; a command that writes names the finding.
+    // Queries go on, Search's coverage among them: the index worker,
+    // which the finding may have caught mid-write, fenced nothing.
     assert_eq!(cue(engine), "strong");
+    block_on(engine.coverage(SearchScope::All)).expect("coverage still answers");
+    // A command that writes names the finding.
     match set_cue(engine, "standard") {
         Err(EngineError::Corrupt { detail }) => {
             assert!(detail.contains("integrity_probe_pad"), "{detail}");
@@ -146,12 +149,15 @@ fn assert_read_only(engine: &Engine) {
     }
     assert_eq!(cue(engine), "strong");
 
-    // No worker runs, and none starts.
+    // No worker runs, and none starts, a thread rebuild included.
     eventually("the workers end", || workers_running(engine) == [false; 3]);
+    let rebuilds = engine.imports().threads().starts();
     engine.schedule_index();
     engine.schedule_received();
     engine.schedule_maintenance();
+    engine.schedule_threads();
     assert_eq!(workers_running(engine), [false; 3]);
+    assert_eq!(engine.imports().threads().starts(), rebuilds);
 
     // Bridge is asked for neither its certificate nor a login: both
     // are refused before anything connects.
