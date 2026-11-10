@@ -87,17 +87,31 @@ impl<'a> Home<'a> {
                     .metadata(&root)
                     .map_err(|e| io_error("read", &root, &e))?;
                 if found.map(|found| found.kind()) != Some(FileKind::Directory) {
-                    return Err(StoreError::corrupt(format!(
-                        "{} is not a directory, so a backup can't be verified beside the \
-                         read-only store",
-                        root.display()
-                    )));
+                    return Err(not_a_directory(&root, None));
+                }
+                // `metadata` follows a link, and so would the ledger's
+                // open. A symlink is no sibling of this store's,
+                // wherever it leads (into the frozen root, for one), so
+                // the directory is opened once without following.
+                if let Err(error) = fs.open_confined_dir(&root) {
+                    return Err(if environmental(error.kind()) {
+                        io_error("open", &root, &error)
+                    } else {
+                        not_a_directory(&root, Some(&error))
+                    });
                 }
             }
             Err(error) => return Err(io_error("create", &root, &error)),
         }
         let db = root.join(LEDGER_DB);
-        let mut conn = open_connection(&db, Access::ReadWrite, WRITER_PRAGMAS)?;
+        // The open's `Corrupt` names the store's database; here the
+        // bytes that are no database are the ledger's.
+        let mut conn = open_connection(&db, Access::ReadWrite, WRITER_PRAGMAS).map_err(
+            |error| match error {
+                StoreError::Corrupt { .. } => not_a_ledger(&db),
+                other => other,
+            },
+        )?;
         ensure_tables(&mut conn, &db)?;
         Ok(Self {
             state_db,
@@ -180,6 +194,33 @@ impl<'a> Home<'a> {
     }
 }
 
+/// The sibling's name is taken by something that is no directory of
+/// this store's: a file, or a link, which `refused` names.
+fn not_a_directory(root: &Path, refused: Option<&io::Error>) -> StoreError {
+    let refused = refused.map_or_else(String::new, |error| {
+        format!(" that opens without following a link ({error})")
+    });
+    StoreError::corrupt(format!(
+        "{} is not a directory{refused}, so a backup can't be verified beside the read-only \
+         store",
+        root.display()
+    ))
+}
+
+/// Whether an open failed for the machine's state, not for what the
+/// name holds. The refusal of a link has no stable kind to match
+/// (`ELOOP` on Linux, `ENOTDIR` on macOS), so it is told by exclusion.
+fn environmental(kind: io::ErrorKind) -> bool {
+    matches!(
+        kind,
+        io::ErrorKind::PermissionDenied
+            | io::ErrorKind::Interrupted
+            | io::ErrorKind::TimedOut
+            | io::ErrorKind::OutOfMemory
+            | io::ErrorKind::ResourceBusy
+    )
+}
+
 fn data_root(state_db: &Path) -> &Path {
     state_db.parent().expect("the state database has a parent")
 }
@@ -245,11 +286,14 @@ fn ensure_tables(conn: &mut Connection, db: &Path) -> Result<(), StoreError> {
         .and_then(|model| model.execute_batch(&tables).map(|()| model))
         .map_err(|e| classify(e, "model the verifier ledger"))?;
     if found != schema_of(&model)? {
-        return Err(StoreError::corrupt(format!(
-            "{} is not a verifier ledger, so a backup can't be verified beside the read-only \
-             store",
-            db.display()
-        )));
+        return Err(not_a_ledger(db));
     }
     Ok(())
+}
+
+fn not_a_ledger(db: &Path) -> StoreError {
+    StoreError::corrupt(format!(
+        "{} is not a verifier ledger, so a backup can't be verified beside the read-only store",
+        db.display()
+    ))
 }
