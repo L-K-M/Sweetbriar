@@ -37,7 +37,7 @@ pub use imap_cert::{CERT_PEM, KEY_PEM, TlsIo, cert_der, client_stream, client_st
 pub use imap_profile::{Profile, RAW_UTF8_ENVELOPE};
 pub use secret::{FakeSecrets, SecretOp};
 pub use sim::SimFs;
-pub use sqlite::{execute_sql, store_meta_value, with_sqlite_write_lock};
+pub use sqlite::{damage_an_index, execute_sql, store_meta_value, with_sqlite_write_lock};
 #[cfg(target_os = "linux")]
 pub use threads::with_new_threads_refused;
 

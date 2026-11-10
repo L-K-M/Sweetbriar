@@ -738,13 +738,36 @@ impl Engine {
         Ok(inventory || capture)
     }
 
+    /// A read-only store's share of recovery: which finished jobs have
+    /// their report. Best-effort throughout: the database is damaged,
+    /// and a job table that can't be read must not keep the store
+    /// closed; each job's own query reports what it can't read.
+    fn note_existing_reports(&self) {
+        let Ok(finished) = self.resources().read(finished_import_jobs) else {
+            return;
+        };
+        for job in finished.into_iter().flatten() {
+            if matches!(self.resources().import_report_exists(job.id()), Ok(true)) {
+                self.imports().note_report(job.id());
+            }
+        }
+    }
+
     /// Recovery at open (spec/09): an interrupted inventory fails, a
     /// waiting job keeps waiting, a running job resumes, and a finished
     /// job without a report gets its cleanup again. A job whose row no
     /// longer decodes stays as stored, as evidence: its query reports
     /// `Corrupt`, and the rest of the store opens. Runs on the open
     /// thread, which may block. Cleanup failures wait for the next open.
+    ///
+    /// A read-only store (spec/03 "Integrity") only learns which
+    /// reports exist: no job is failed, cleaned up or resumed, and
+    /// every row stays as stored.
     pub(crate) fn recover_imports(&self) -> Result<(), EngineError> {
+        if self.read_only() {
+            self.note_existing_reports();
+            return Ok(());
+        }
         for job in self
             .resources()
             .read(finished_import_jobs)?

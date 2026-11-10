@@ -306,7 +306,13 @@ a receipt or file-export command; Service/FFI exposure remains M1.7e/f.
     revision that is absent only when no record exists. A missing
     stored record or malformed value is `Corrupt`, never defaulted
     (02);
-  - `coverage(scope)`, `health()`;
+  - `coverage(scope)`;
+  - `health()` → whether the store is read-only after an integrity
+    finding (03 "Integrity"): the finding, when the check found it and
+    the copy under `recovery/` once it is published, or that there is
+    none. The time is absent when the latch's record can't be read.
+    Answered from memory, without I/O. The engine answers it from
+    M1.8h5b2; the Service DTO and its binding are M1.8h5b3;
   - `out_box()`;
   - `drafts()` → local drafts with state, route, subject, recipients,
     update time and any live attempt's state (the sidebar's Drafts
@@ -679,6 +685,12 @@ impl AppearanceSubscription {
     async fn next(&self) -> Result<AppearanceEvent, CoreError>;
 }
 enum AppearanceEvent { Invalidated { generation: u64 }, ResetRequired }
+
+fn subscribe_health() -> HealthSubscription;
+impl HealthSubscription {
+    /// Returns when `health()` changed since this subscription's last answer.
+    async fn next(&self) -> Result<(), CoreError>;
+}
 ```
 
 - **Pull, not push.** The shell asks for the next event, then re-reads
@@ -719,6 +731,17 @@ enum AppearanceEvent { Invalidated { generation: u64 }, ResetRequired }
   same rule as the window sources: only after the commit (02
   "Committed appearance revisions"), so no-op setters, replay,
   rollback and failed commits invalidate nothing. In-memory only.
+- **Health:** `subscribe_health` tells when the answer of `health()`
+  changed: the store latched read-only on an integrity finding (03), or
+  a restore swapped in a store without one. An event names nothing; the
+  shell reads `health()` again. It starts at the changes so far, so a
+  shell that subscribes first and reads `health()` after misses none.
+  Several changes are one event. As for a window's subscription, a
+  second `next` while one waits is `InvalidInput`, a cancelled one
+  moves nothing, and shutdown ends a wait with `Unavailable`. The
+  finding's event comes before its copy is published; the job that runs
+  the check (M1.8h5c) announces again once the check returns. In-memory
+  only.
 - **Snapshot isolation:** a window is not a held read transaction. Each
   read is a short transaction, and `generation` ties the rows to one
   committed state.

@@ -19,7 +19,7 @@ use std::sync::atomic::AtomicBool;
 
 use sb_resources::{QualifiedStage, Resources, ResourcesSwapError};
 
-use super::{Engine, StoreAfterRestore, join_failed, observe_store};
+use super::{Engine, StoreAfterRestore, join_failed};
 use crate::EngineError;
 
 /// Why [`Engine::restore`] did not hand back a restored engine.
@@ -158,14 +158,10 @@ impl Engine {
     /// register again; the windows learn the store was replaced; nothing
     /// kept from the replaced store survives; then the engine resumes.
     fn install_restored(mut self, restored: Resources) -> Result<Engine, RestoreError> {
-        let generations = match observe_store(&restored, &self.windows, &self.received) {
-            Ok(generations) => generations,
-            Err(error) => {
-                self.resources = Some(Arc::new(restored));
-                return Err(RestoreError::Failed(error.into()));
-            }
-        };
         self.resources = Some(Arc::new(restored));
+        let generations = self
+            .observe_store()
+            .map_err(|error| RestoreError::Failed(error.into()))?;
         self.windows.store_replaced(generations);
         self.search_memo.clear();
         self.imports.forget_reports();
@@ -197,7 +193,22 @@ impl Engine {
     /// End the quiesce and run what an open runs: import recovery, the
     /// index target's reconciliation and every scheduler. Account workers
     /// start only for accounts that sync; a restored store's are paused.
+    ///
+    /// On a latched store (the same one after a refusal: a swap leaves
+    /// the latch behind with the replaced root) the engine stays
+    /// read-only: only reads and commands are admitted again, and the
+    /// workers stay stopped. A swapped-in store without a latch ends
+    /// read-only mode. No check runs during a quiesce, so the latch
+    /// read here can't change before the workers start.
     fn resume(&mut self, store: StoreAfterRestore) -> Result<(), EngineError> {
+        if self.resources().integrity_latch().is_some() {
+            self.blocking.resume();
+            return self.recover_imports();
+        }
+        if self.read_only() {
+            self.blocking.set_read_only(false);
+            self.windows.health_moved();
+        }
         self.accounts.resume();
         self.index.resume(store);
         self.received.resume(store);

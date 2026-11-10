@@ -63,13 +63,25 @@ impl Engine {
     /// spec/10's fingerprint fallback: the pin of the certificate
     /// Bridge presents on `port`, for the user to confirm. It runs on
     /// the engine's runtime, where the probe's sockets live, and stores
-    /// nothing; Bridge not answering is `Unavailable`.
+    /// nothing; Bridge not answering is `Unavailable`. A read-only
+    /// store is `Corrupt` before any connection: no remote effect
+    /// follows an integrity finding (spec/03), and no account can be
+    /// added with the answer.
     pub async fn bridge_certificate(
         &self,
         port: u16,
         security: EndpointSecurity,
     ) -> Result<CertificatePin, EngineError> {
         self.command(move |worker| async move {
+            if let Some(latch) = worker.resources().integrity_latch() {
+                return Err(EngineError::Corrupt {
+                    detail: format!(
+                        "the store is read-only after an integrity finding, \
+                         so it can't ask Bridge for its certificate: {}",
+                        latch.detail
+                    ),
+                });
+            }
             worker
                 .resources()
                 .bridge_certificate(port, security)

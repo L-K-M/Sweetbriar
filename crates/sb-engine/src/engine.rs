@@ -135,6 +135,8 @@ impl Drop for OwnedRuntime {
 /// doesn't stop its blocking task, so shutdown and the quiesce wait here
 /// until every one has finished and given its store handle back, and
 /// refuse new store work meanwhile. Only the quiesce ends, by resuming.
+/// It also holds whether the engine is read-only (plan M1.8h5b2), which
+/// stops long work the same way but refuses nothing here.
 #[derive(Default)]
 struct BlockingWork {
     state: Mutex<BlockingState>,
@@ -147,6 +149,11 @@ struct BlockingState {
     /// A restore's quiesce (plan M1.8g): no new store work until it
     /// resumes; cleanup a dropped value owes still runs.
     quiesced: bool,
+    /// The store latched on an integrity finding (spec/03 "Integrity"):
+    /// long work stops at its next safe point and none restarts. Reads
+    /// and commands are still admitted; the store refuses their writes.
+    /// Only a restore that swaps an unlatched store in clears it.
+    read_only: bool,
     closing: bool,
 }
 
@@ -182,12 +189,21 @@ impl BlockingWork {
         Ok(Running(Arc::clone(self)))
     }
 
-    /// Whether long work must stop at its next safe point: shutdown, or
-    /// a restore's quiesce. Work stopped by a quiesce resumes from its
-    /// durable checkpoint when the engine resumes.
+    /// Whether long work must stop at its next safe point: shutdown, a
+    /// restore's quiesce, or a read-only store. Work stopped by a
+    /// quiesce resumes from its durable checkpoint when the engine
+    /// resumes; on a read-only store it stays where it stopped.
     fn closing(&self) -> bool {
         let state = self.state();
-        state.closing || state.quiesced
+        state.closing || state.quiesced || state.read_only
+    }
+
+    fn read_only(&self) -> bool {
+        self.state().read_only
+    }
+
+    fn set_read_only(&self, read_only: bool) {
+        self.state().read_only = read_only;
     }
 
     /// Refuse new store work and wait until the running tasks end: the
@@ -272,7 +288,8 @@ impl Worker {
         &self.resources
     }
 
-    /// A check that blocking work can poll: has shutdown begun?
+    /// A check that blocking work can poll: must it stop (shutdown, a
+    /// restore's quiesce, or a read-only store)?
     pub(crate) fn shutdown_check(&self) -> impl Fn() -> bool + Send + Sync + 'static {
         let blocking = Arc::clone(&self.blocking);
         move || blocking.closing()
@@ -517,20 +534,14 @@ impl Engine {
             let engine = open(&data_root)
                 .map_err(EngineError::from)
                 .and_then(|resources| {
-                    let windows = Arc::new(Windows::new());
-                    let received: Arc<ReceivedJobs> = Arc::default();
-                    let generations = observe_store(&resources, &windows, &received)?;
-                    windows.store_moved(generations.list);
-                    windows.search_moved(generations.search);
-                    windows.appearance_moved(generations.appearance);
                     Ok(Self {
                         resources: Some(Arc::new(resources)),
                         blocking: Arc::default(),
                         runtime,
-                        windows,
+                        windows: Arc::new(Windows::new()),
                         imports: Arc::default(),
                         index: Arc::default(),
-                        received,
+                        received: Arc::default(),
                         maintenance: Arc::default(),
                         accounts: Arc::default(),
                         leases: Arc::default(),
@@ -542,23 +553,23 @@ impl Engine {
                         cleanup: start_cleanup_worker()?,
                     })
                 })
+                // A store that opened latched says so here, so everything
+                // below already sees a read-only engine (spec/03
+                // "Integrity").
+                .and_then(|engine| {
+                    let generations = engine.observe_store()?;
+                    engine.windows.store_moved(generations.list);
+                    engine.windows.search_moved(generations.search);
+                    engine.windows.appearance_moved(generations.appearance);
+                    Ok(engine)
+                })
                 // Recovery runs here, off the caller's thread, before
                 // the engine is handed out (spec/09).
                 .and_then(|engine| engine.recover_imports().map(|()| engine))
                 // The stored extractor target reconciles before any
                 // scheduling (spec/06 "Runtime rebuild driver").
                 .and_then(|engine| engine.reconcile_index().map(|()| engine))
-                // Messages imported before the last complete rebuild
-                // get their threads in the background (spec/02).
-                .inspect(Engine::schedule_threads)
-                .inspect(Engine::schedule_index)
-                .inspect(Engine::schedule_received)
-                .inspect(Engine::schedule_accounts)
-                .inspect(|engine| {
-                    if crate::maintenance::SCHEDULED_AT_OPEN {
-                        engine.schedule_maintenance();
-                    }
-                });
+                .inspect(Engine::schedule_at_open);
             // A caller that stopped waiting drops the engine here.
             let _ = opened.send(engine);
         }))
@@ -626,12 +637,114 @@ impl Engine {
         self.runtime.handle().block_on(future)
     }
 
+    /// Register the engine's observers on its store and read the
+    /// generations they start from: subscriptions hear every committed
+    /// list, Search and appearance generation from here on (spec/07),
+    /// committed maintenance inputs wake the received worker, and an
+    /// integrity finding turns the engine read-only. Each generation's
+    /// observer registers before its initial read, so no commit lands
+    /// between them. At open and on the store a restore swapped in,
+    /// whose writer and latch are new.
+    fn observe_store(&self) -> Result<StoreGenerations, sb_resources::StoreError> {
+        let resources = self.resources();
+        let announced = Arc::clone(&self.windows);
+        resources.observe_list_generation(Arc::new(move |generation| {
+            announced.store_moved(generation);
+        }));
+        let list = resources.read(list_generation)?;
+        let announced = Arc::clone(&self.windows);
+        resources.observe_search_generation(Arc::new(move |generation| {
+            announced.search_moved(generation);
+        }));
+        let search = resources.read(|tx| {
+            search_generation(tx)?
+                .try_into()
+                .map_err(|_| sb_resources::StoreError::Corrupt {
+                    detail: "negative search generation".into(),
+                })
+        })?;
+        let announced = Arc::clone(&self.windows);
+        resources.observe_appearance_generation(Arc::new(move |generation| {
+            announced.appearance_moved(generation);
+        }));
+        let appearance = resources.read(appearance_generation)?;
+        let maintenance = Arc::downgrade(&self.received);
+        resources.observe_maintenance_inputs(Arc::new(move || {
+            if let Some(worker) = maintenance.upgrade() {
+                worker.wake();
+            }
+        }));
+        self.watch_integrity();
+        Ok(StoreGenerations {
+            list,
+            search,
+            appearance,
+        })
+    }
+
+    /// Turn read-only when the store latches on an integrity finding
+    /// (spec/03 "Integrity", plan M1.8h5b2). The store tells its one
+    /// observer once: as it latches, or during this call when it
+    /// opened latched. The observer runs on the thread that latched,
+    /// before the latch file is written, so it only raises flags:
+    ///
+    /// - long work (imports, exports, the thread rebuild) stops at its
+    ///   next safe point, as for shutdown;
+    /// - the account, index, received and maintenance workers stop and
+    ///   none starts, so no remote effect follows the finding;
+    /// - health subscriptions wake.
+    ///
+    /// It holds the registries, never the store, which owns it.
+    fn watch_integrity(&self) {
+        let blocking = Arc::clone(&self.blocking);
+        let accounts = Arc::clone(&self.accounts);
+        let index = Arc::clone(&self.index);
+        let received = Arc::clone(&self.received);
+        let maintenance = Arc::clone(&self.maintenance);
+        let windows = Arc::clone(&self.windows);
+        self.resources().observe_integrity_latch(Arc::new(move || {
+            blocking.set_read_only(true);
+            accounts.stop();
+            index.stop();
+            received.stop();
+            maintenance.stop();
+            windows.health_moved();
+        }));
+    }
+
+    /// Whether the store latched on an integrity finding: nothing
+    /// writes, and no background worker runs (spec/03 "Integrity").
+    pub(crate) fn read_only(&self) -> bool {
+        self.blocking.read_only()
+    }
+
+    /// Start the workers an open starts. A read-only engine starts
+    /// none: each would stop at its first look.
+    fn schedule_at_open(&self) {
+        if self.read_only() {
+            return;
+        }
+        // Messages imported before the last complete rebuild get their
+        // threads in the background (spec/02).
+        self.schedule_threads();
+        self.schedule_index();
+        self.schedule_received();
+        self.schedule_accounts();
+        if crate::maintenance::SCHEDULED_AT_OPEN {
+            self.schedule_maintenance();
+        }
+    }
+
     /// Durable target reconciliation at open (spec/06): an older
     /// stored target starts or reuses the reset job; a same-or-newer
     /// target and a stored job's phase, cursors and holds are left
-    /// exactly as committed. Runs on the open thread, outside the
-    /// runtime, so it blocks on the engine's own handle.
+    /// exactly as committed. A read-only store keeps its target as
+    /// stored: nothing rebuilds there. Runs on the open thread, outside
+    /// the runtime, so it blocks on the engine's own handle.
     fn reconcile_index(&self) -> Result<(), EngineError> {
+        if self.read_only() {
+            return Ok(());
+        }
         // Even a no-op writer job starts the asynchronous idle checkpoint.
         if self.resources().read(|tx| target_version(tx))? >= SEARCH_EXTRACTOR_VERSION {
             return Ok(());
@@ -786,51 +899,6 @@ fn start_cleanup_worker() -> Result<std::sync::mpsc::Sender<Cleanup>, EngineErro
         })
         .map_err(|e| EngineError::unavailable(format!("cannot start the cleanup worker: {e}")))?;
     Ok(cleanup)
-}
-
-/// Register the engine's observers on a store's writer and read the
-/// generations they start from: subscriptions hear every committed
-/// list, Search and appearance generation from here on (spec/07), and
-/// committed maintenance inputs wake the received worker. Each observer
-/// registers before its initial read, so no commit lands between them.
-/// At open and on the store a restore swapped in, whose writer is new.
-fn observe_store(
-    resources: &Resources,
-    windows: &Arc<Windows>,
-    received: &Arc<ReceivedJobs>,
-) -> Result<StoreGenerations, sb_resources::StoreError> {
-    let announced = Arc::clone(windows);
-    resources.observe_list_generation(Arc::new(move |generation| {
-        announced.store_moved(generation);
-    }));
-    let list = resources.read(list_generation)?;
-    let announced = Arc::clone(windows);
-    resources.observe_search_generation(Arc::new(move |generation| {
-        announced.search_moved(generation);
-    }));
-    let search = resources.read(|tx| {
-        search_generation(tx)?
-            .try_into()
-            .map_err(|_| sb_resources::StoreError::Corrupt {
-                detail: "negative search generation".into(),
-            })
-    })?;
-    let announced = Arc::clone(windows);
-    resources.observe_appearance_generation(Arc::new(move |generation| {
-        announced.appearance_moved(generation);
-    }));
-    let appearance = resources.read(appearance_generation)?;
-    let maintenance = Arc::downgrade(received);
-    resources.observe_maintenance_inputs(Arc::new(move || {
-        if let Some(worker) = maintenance.upgrade() {
-            worker.wake();
-        }
-    }));
-    Ok(StoreGenerations {
-        list,
-        search,
-        appearance,
-    })
 }
 
 /// Close the store through its last handle. Only the engine's

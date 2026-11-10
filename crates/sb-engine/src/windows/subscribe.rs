@@ -8,6 +8,7 @@
 //!   debug fill       ─► versions.synthetic                   ├─► wake every next
 //!   close / shutdown ─► versions.closes / shut                ┘
 //!   store swap (restore) ─► versions.restores ─► ResetRequired once
+//!   store latch / its end ─► versions.health ─► wake health subscriptions
 //!   next: mark (window's last page) < source generation ? event : wait
 //! ```
 
@@ -205,6 +206,52 @@ impl AppearanceSubscription {
         self.mark
             .lock()
             .expect("a panicking thread held an appearance subscription's mark")
+    }
+}
+
+/// Tells when the answer of `health()` changed (spec/07): the store
+/// latched read-only on an integrity finding (spec/03 "Integrity"), or
+/// a restore swapped in a store without one. The same pull contract as
+/// the other subscriptions, except an event names nothing: the caller
+/// reads `health()` again.
+pub struct HealthSubscription {
+    windows: Arc<Windows>,
+    /// The health changes this subscription has answered.
+    answered: AtomicU64,
+    waiting: AtomicBool,
+}
+
+impl Engine {
+    /// `subscribe_health` (spec/07), starting at the changes so far:
+    /// subscribe first, then read `health()`, and no change is missed.
+    /// In-memory only.
+    pub fn subscribe_health(&self) -> HealthSubscription {
+        HealthSubscription {
+            windows: Arc::clone(self.windows()),
+            answered: AtomicU64::new(self.windows().health_changes()),
+            waiting: AtomicBool::new(false),
+        }
+    }
+}
+
+impl HealthSubscription {
+    /// Wait until health changed since this subscription's last
+    /// answer; several changes are one answer. One call at a time; a
+    /// cancelled call moves nothing; shutdown ends a wait with
+    /// `Unavailable`.
+    pub async fn next(&self) -> Result<(), EngineError> {
+        let _waiting = Waiting::claim(&self.waiting)?;
+        let mut versions = self.windows.versions.subscribe();
+        loop {
+            let seen = *versions.borrow_and_update();
+            if seen.shut {
+                return Err(shut_down());
+            }
+            if self.answered.swap(seen.health, Ordering::AcqRel) != seen.health {
+                return Ok(());
+            }
+            versions.changed().await.map_err(|_| shut_down())?;
+        }
     }
 }
 

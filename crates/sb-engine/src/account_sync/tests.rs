@@ -7,12 +7,13 @@
 //! syncs every selectable mailbox's headers (spec/04 steps 1-3).
 
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 
-use sb_resources::{SecretStore, WritePriority};
+use sb_resources::{IntegrityCheck, SecretStore, WritePriority};
 use sb_test_support::{
     Expect, FakeImapServer, FakeSecrets, Profile, Reply, ScratchDir, Script, Step, block_on,
-    cert_der,
+    cert_der, damage_an_index,
 };
 
 use crate::{
@@ -885,4 +886,49 @@ fn a_paused_account_gets_no_session() {
     });
     assert_eq!(sessions(&server), before, "no new session");
     shutdown_promptly(engine);
+}
+
+/// An integrity finding stops remote effects (spec/03 "Integrity"):
+/// the account's worker ends, no other starts while the engine runs,
+/// and the latched store's next open starts none either.
+#[test]
+fn an_integrity_finding_ends_the_worker_and_no_other_starts() {
+    let scratch = ScratchDir::new("account-worker-finding");
+    let secrets = Arc::new(FakeSecrets::new());
+    let server =
+        FakeImapServer::serve(vec![bridge_script(true), sync_script(Inbox::Listed)]).unwrap();
+    let engine = open(&scratch, &secrets);
+    let account = add(&engine, server.port());
+    eventually("the first pass", || all_synced(&engine, &account));
+    shutdown_promptly(engine);
+    let earlier = logins(&server);
+    damage_an_index(&scratch.path().join("store").join("state.sqlite"));
+    let engine = open(&scratch, &secrets);
+    eventually("this engine's worker logs in", || logins(&server) > earlier);
+    assert!(engine.account_jobs().running(&account));
+
+    let found = engine
+        .resources()
+        .check_integrity(&AtomicBool::new(false))
+        .unwrap();
+    assert!(matches!(found, IntegrityCheck::Finding(_)), "{found:?}");
+
+    eventually("the worker ends", || {
+        !engine.account_jobs().running(&account)
+    });
+    let sessions = logins(&server);
+    engine.start_account(account.clone());
+    assert!(!engine.account_jobs().running(&account));
+    engine.schedule_accounts();
+    // The account is as stored: nothing recorded a pause for it.
+    assert_eq!(state(&engine, &account).0, AccountState::Active);
+    // Shutdown waits for whatever `schedule_accounts` started.
+    shutdown_promptly(engine);
+    assert_eq!(logins(&server), sessions);
+
+    let engine = open(&scratch, &secrets);
+    assert!(engine.read_only());
+    assert!(!engine.account_jobs().running(&account));
+    shutdown_promptly(engine);
+    assert_eq!(logins(&server), sessions);
 }

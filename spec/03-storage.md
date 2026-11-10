@@ -255,6 +255,29 @@ against concurrent replacement.
     published copy) and tells one observer once: as the store latches,
     or at once when it is installed on a store already latched. It only
     signals, and a panic in it is caught.
+  - **The read-only engine (M1.8h5b2).** The engine is that observer.
+    From the finding on, and from the open of a latched store:
+    - long work (an import, an export, the thread rebuild) stops at its
+      next safe point, as for shutdown, and its durable state stays as
+      it was;
+    - the account, index, received-address and maintenance workers
+      stop and none starts, so no remote effect follows the finding;
+    - commands are still admitted, and one that writes is `Corrupt`
+      naming the finding, from the store. `bridge_certificate`, which
+      writes nothing, is refused `Corrupt` before it connects;
+    - queries, windows, Search over what is indexed and subscriptions
+      go on;
+    - `health()` reports the finding and health subscriptions wake
+      (07).
+
+    A latched open recovers nothing: an interrupted inventory is not
+    failed, a running job gets no worker, a finished job's cleanup is
+    not redone, and an older extractor target starts no rebuild. Job
+    and account statuses therefore show what was stored; `health()` is
+    what says nothing runs. A restore whose swap is refused resumes
+    read-only on the same store. One that swaps a store in ends
+    read-only mode, since the latch stays with the replaced root: the
+    workers start as at an open and health subscriptions wake again.
   - **A latched open.** A writable open reads the latch after resolving an
     interrupted restore swap and before anything else touches the root.
     With a latch, the store opens read-only, the writer's connection

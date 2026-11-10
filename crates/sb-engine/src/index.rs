@@ -111,6 +111,12 @@ impl IndexJobs {
     }
 
     /// Observe a real Condvar wait with no outstanding producer wake.
+    /// Whether the worker holds its slot (parked or working).
+    #[cfg(test)]
+    pub(crate) fn running(&self) -> bool {
+        self.lock().running
+    }
+
     #[cfg(test)]
     pub(crate) fn waiting(&self) -> bool {
         let state = self.lock();

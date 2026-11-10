@@ -435,3 +435,65 @@ fn a_held_start_is_refused_before_it_writes() {
 }
 
 mod acceptance;
+
+/// An engine like `backed_up`'s whose store also holds damage only the
+/// full check finds; the generation was taken before the damage.
+fn backed_up_then_damaged(root: &Path) -> (Engine, BackupReceipt) {
+    let (engine, receipt) = backed_up(root);
+    block_on(engine.shutdown()).unwrap();
+    sb_test_support::damage_an_index(&root.join("state.sqlite"));
+    (open(root), receipt)
+}
+
+fn find_the_damage(engine: &Engine) {
+    let found = engine
+        .resources()
+        .check_integrity(&AtomicBool::new(false))
+        .unwrap();
+    assert!(
+        matches!(found, sb_resources::IntegrityCheck::Finding(_)),
+        "{found:?}"
+    );
+}
+
+/// A restore decides whether read-only ends (plan M1.8h5b2): refused,
+/// the engine comes back read-only on the latched store with no worker;
+/// swapped, the restored store has no latch, the workers run again and
+/// health subscriptions hear of it.
+#[test]
+fn a_restore_ends_read_only_and_a_refused_one_keeps_it() {
+    let scratch = ScratchDir::new("engine-restore-read-only");
+    let root = data_root(&scratch);
+    let (engine, receipt) = backed_up_then_damaged(&root);
+    // Staged before the finding: verification is refused after it
+    // until M1.8h5b4.
+    let stage = qualified(&engine, &receipt);
+    find_the_damage(&engine);
+    assert!(engine.read_only());
+    let health = engine.subscribe_health();
+
+    let Err(RestoreError::Refused { engine, stage, .. }) =
+        block_on(engine.restore(stage, Arc::new(AtomicBool::new(true))))
+    else {
+        panic!("a cancelled restore is refused");
+    };
+    assert!(engine.read_only());
+    gated_read_works(&engine);
+    assert_eq!(settings(&engine), [KEPT, LATER]);
+    // The workers were not resumed: each is still told to stop.
+    assert!(engine.indexer().stopped());
+    assert!(engine.received().stopped());
+    assert!(!engine.indexer().running());
+    assert!(!engine.received().running());
+
+    let engine = finish(engine.restore(*stage, Arc::new(AtomicBool::new(false)))).unwrap();
+
+    assert!(!engine.read_only());
+    assert_eq!(engine.health().integrity, crate::Integrity::Sound);
+    finish(health.next()).expect("the end of read-only wakes the subscription");
+    assert_eq!(settings(&engine), [KEPT]);
+    add_setting(&engine, "test.restore.after");
+    assert!(engine.indexer().running());
+    assert!(engine.received().running());
+    block_on(engine.shutdown()).unwrap();
+}

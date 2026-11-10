@@ -23,6 +23,7 @@ pub use bodies::{
 mod drafts;
 mod engine;
 mod error;
+mod health;
 #[cfg(test)]
 mod idempotency_tests;
 mod import;
@@ -64,6 +65,7 @@ pub use sb_resources::{
 pub use drafts::{DraftContent, DraftCreated, DraftSaved};
 pub use engine::{Engine, RestoreError};
 pub use error::EngineError;
+pub use health::{Health, Integrity};
 pub use import::{
     ExportJobStatus, ExportScopeInput, ExportStarted, ImportJobStatus, ImportReport,
     ImportSourceStatus, ImportStarted,
@@ -79,9 +81,9 @@ pub use sb_resources::{ExportFormat, ExportJobState};
 pub use search::SearchScope;
 pub use settings::Setting;
 pub use windows::{
-    Anchor, AppearanceSubscription, Count, Cursor, ListRow, SearchSort, SearchSpec, SearchStatus,
-    SelectionId, SelectionInput, SelectionSnapshot, Subscription, Window, WindowEvent, WindowId,
-    WindowIds, WindowSpec,
+    Anchor, AppearanceSubscription, Count, Cursor, HealthSubscription, ListRow, SearchSort,
+    SearchSpec, SearchStatus, SelectionId, SelectionInput, SelectionSnapshot, Subscription, Window,
+    WindowEvent, WindowId, WindowIds, WindowSpec,
 };
 
 pub use sb_resources::{

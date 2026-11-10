@@ -1628,14 +1628,18 @@ local drafts. No network yet.
     user, and a restore that works while latched, split again
     (2026-11-10): **h5b1** the store's own file work refused on a
     latch, which freezes the data root, and the latch's record and
-    observer; **h5b2** the engine read-only at open and on a latch,
-    its workers and claims stopped, Bridge refused and its statuses
-    read-only; **h5b3** the service's health query and its push to the
-    app; **h5b4** a restore while latched (after g3), its verification
-    scratch kept off the latched writer; **h5c** the weekly
-    job in the scheduler. They land in that order: nothing runs the
-    check before h5c, so remote effects stop before any finding can
-    happen. **h6 Acceptance proof (L)**: the recovery point over
+    observer; **h5b2** the engine read-only at open and on a latch:
+    its workers and long jobs stopped, open-time recovery skipped, the
+    Bridge certificate probe refused, and `health()` with its
+    subscription; **h5b3** the service's health query and its push to
+    the app, and coverage's index state on a latched store; **h5b4** a
+    restore while latched (after g3), its verification scratch kept off
+    the latched writer, and an inventory or capture left unfinished on
+    a latched store no longer refusing it; **h5c** the weekly job in
+    the scheduler, which announces health again once the check
+    returns, so the copy's name reaches the shell. They land in that
+    order: nothing runs the check before h5c, so remote effects stop
+    before any finding can happen. **h6 Acceptance proof (L)**: the recovery point over
     simulated hours at the 5-minute setting, crash cuts through a
     scheduled backup, restore during each job. GC's daily cadence and
     the reading of "all objects referenced by backups" as each
