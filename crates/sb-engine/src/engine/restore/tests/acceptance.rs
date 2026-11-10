@@ -9,12 +9,13 @@ use super::*;
 use crate::drafts::{DraftWriteHook, DraftWritePoint};
 use crate::{DraftSource, MboxVariant};
 
-/// The preserved root a swap renamed the old data root to.
+/// The preserved root a swap renamed the old data root to: exactly
+/// one, so the assertions can't read another swap's.
 fn preserved_root(root: &Path) -> PathBuf {
-    std::fs::read_dir(root.parent().unwrap())
+    let mut preserved: Vec<PathBuf> = std::fs::read_dir(root.parent().unwrap())
         .unwrap()
         .map(|entry| entry.unwrap().path())
-        .find(|path| {
+        .filter(|path| {
             path.is_dir()
                 && path
                     .file_name()
@@ -23,7 +24,9 @@ fn preserved_root(root: &Path) -> PathBuf {
                     .unwrap()
                     .starts_with("store.preserved-")
         })
-        .expect("the old root is preserved")
+        .collect();
+    assert_eq!(preserved.len(), 1, "one preserved root: {preserved:?}");
+    preserved.remove(0)
 }
 
 /// Count rows in the preserved store, opened on its own.
@@ -86,7 +89,9 @@ fn a_write_in_progress_commits_to_the_replaced_store_before_the_swap() {
     let released = Mutex::new(released);
     let hook: DraftWriteHook = Arc::new(move |point| {
         if point == DraftWritePoint::InsideBeforeCommit {
-            inside.send(()).unwrap();
+            // A test that already failed has dropped its ends: the
+            // worker must not panic over that.
+            let _ = inside.send(());
             let _ = released.lock().unwrap().recv();
         }
     });
@@ -101,13 +106,18 @@ fn a_write_in_progress_commits_to_the_replaced_store_before_the_swap() {
     }
     entered.recv_timeout(PATIENCE).unwrap();
 
-    let restoring = std::thread::spawn(move || {
-        block_on(engine.restore(stage, Arc::new(AtomicBool::new(false))))
-    });
-    // The quiesce waits for the write: the swap cannot happen yet.
-    std::thread::sleep(Duration::from_millis(300));
-    assert!(!restoring.is_finished(), "the swap waited for the write");
-    assert!(!root.with_extension("restore-pending").exists());
+    // `finish` bounds the restore, so one that never returns fails
+    // the join below instead of hanging the suite.
+    let restoring =
+        std::thread::spawn(move || finish(engine.restore(stage, Arc::new(AtomicBool::new(false)))));
+    // The quiesce waits for the write: the swap cannot happen yet,
+    // however early in the window it would have.
+    let held = Instant::now() + Duration::from_millis(300);
+    while Instant::now() < held {
+        assert!(!restoring.is_finished(), "the swap waited for the write");
+        assert!(!root.with_extension("restore-pending").exists());
+        std::thread::sleep(Duration::from_millis(20));
+    }
     release.send(()).unwrap();
     let engine = restoring.join().unwrap().expect("the restore succeeds");
 
@@ -164,7 +174,7 @@ fn a_running_job_stops_before_the_swap_and_keeps_its_checkpoint() {
         .lock()
         .expect("a panicking thread held the import job registry") =
         Some(Arc::new(move |stopping| {
-            entered.lock().unwrap().send(()).unwrap();
+            let _ = entered.lock().unwrap().send(());
             while !stopping() {
                 std::thread::yield_now();
             }
