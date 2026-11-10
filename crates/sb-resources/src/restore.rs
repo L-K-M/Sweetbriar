@@ -11,7 +11,8 @@ use std::sync::atomic::AtomicBool;
 
 use sb_store::{
     BackupDestination, BackupGeneration, BackupReceipt, BackupSnapshot, PreparedRestoreStage,
-    QualifiedStage, RestoreMetadata, StoreError, SwapRestoreError, VerifiedExternalBackup,
+    QualifiedStage, RestoreMetadata, StartedBackup, StoreError, SwapRestoreError,
+    VerifiedExternalBackup,
 };
 
 use crate::Resources;
@@ -74,6 +75,18 @@ impl Resources {
         destination: BackupDestination,
     ) -> Result<BackupSnapshot, StoreError> {
         self.store.backup_snapshot(destination)
+    }
+
+    /// [`Resources::backup_snapshot`] as the command `idempotency_key`
+    /// names: the key's receipt commits with the generation's row, and
+    /// a key that started a generation before answers its receipt and
+    /// does nothing else.
+    pub fn start_backup(
+        &self,
+        destination: BackupDestination,
+        idempotency_key: &str,
+    ) -> Result<StartedBackup, StoreError> {
+        self.store.start_backup(destination, idempotency_key)
     }
 
     /// Copy, verify and publish a snapshot as a complete generation.

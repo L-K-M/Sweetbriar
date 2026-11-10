@@ -33,7 +33,10 @@ mod sidebar;
 mod windows;
 
 pub use api::{Core, CoreConfig, Receipt, Setting, open_core};
-pub use backups::{BackupGeneration, BackupState, BackupVerdict, BackupVerification};
+pub use backups::{
+    BackupCopy, BackupEnd, BackupGeneration, BackupStarted, BackupState, BackupVerdict,
+    BackupVerification,
+};
 pub use drafts::{
     AttemptState, ComposeFormat, Draft, DraftAttachment, DraftAttachmentObject, DraftAttachmentRef,
     DraftContent, DraftCreated, DraftRecipient, DraftRevision, DraftSaved, DraftSource, DraftState,

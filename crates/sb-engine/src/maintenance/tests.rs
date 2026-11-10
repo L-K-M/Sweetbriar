@@ -822,6 +822,18 @@ fn the_engine_is_busy_while_long_work_runs() {
     assert!((host.busy)());
     drop(release);
     wait(|| !(host.busy)());
+
+    // A backup a command started, held before its first object.
+    let (release, held) = mpsc::channel::<()>();
+    let held = Mutex::new(held);
+    *engine.backup_copies().before_copy.lock().unwrap() = Some(Arc::new(move || {
+        let _ = held.lock().unwrap().recv();
+    }));
+    let started = block_on(engine.start_backup(&engine.new_idempotency_key())).unwrap();
+    assert!((host.busy)());
+    drop(release);
+    block_on(started.into_copy().unwrap().finished());
+    wait(|| !(host.busy)());
     block_on(engine.shutdown()).unwrap();
 }
 

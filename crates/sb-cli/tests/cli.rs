@@ -402,12 +402,42 @@ fn backup_list_prints_the_recorded_generations() {
     );
     assert_eq!(stderr(&out), "");
 
-    for args in [
-        &["backup"][..],
-        &["backup", "lst"],
-        &["backup", "list", "extra"],
-    ] {
+    for args in [&["backup", "lst"][..], &["backup", "list", "extra"]] {
         let out = cli(&root, args);
         assert_eq!(out.status.code(), Some(2), "args {args:?} must be usage");
     }
+}
+
+/// `backup` (plan M1.8i3) takes a generation now, waits for its copy
+/// and prints its line. `backup list` in a new process prints the
+/// same line, and the generation's directory holds its manifest.
+#[test]
+fn backup_takes_a_generation_and_prints_its_line() {
+    let (_scratch, root) = scratch("cli-backup");
+    let out = cli(&root, &["backup"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stderr(&out), "");
+    let printed = stdout(&out);
+    let fields: Vec<&str> = printed.trim_end_matches('\n').split('\t').collect();
+    assert_eq!(fields.len(), 6, "{printed:?}");
+    assert_eq!(fields[1], "complete");
+    assert!(fields[3].ends_with(" bytes in 0 objects"), "{printed:?}");
+    assert_eq!(fields[4], "not checked");
+    let directory = Path::new(fields[5]);
+    assert!(directory.ends_with(fields[0]), "{printed:?}");
+    assert!(directory.join("manifest.json").is_file());
+    assert!(directory.join("state.sqlite").is_file());
+
+    let listed = cli(&root, &["backup", "list"]);
+    assert!(listed.status.success(), "{}", stderr(&listed));
+    assert_eq!(stdout(&listed), printed);
+
+    // A second one is a new generation, listed first. (Retention then
+    // keeps one of the two when both started in the same hour.)
+    let again = cli(&root, &["backup"]);
+    assert!(again.status.success(), "{}", stderr(&again));
+    let second = stdout(&again);
+    assert_ne!(second, printed);
+    let listed = cli(&root, &["backup", "list"]);
+    assert!(stdout(&listed).starts_with(&second), "{}", stdout(&listed));
 }

@@ -1,11 +1,12 @@
-//! `list_backups` through the service (plan M1.8i1).
+//! `list_backups` and `start_backup` through the service (plan
+//! M1.8i1, M1.8i3).
 
 use std::path::PathBuf;
 
 use sb_test_support::{ScratchDir, block_on};
 
-use super::{BackupGeneration, BackupState, BackupVerdict, BackupVerification};
-use crate::{CoreConfig, open_core};
+use super::{BackupEnd, BackupGeneration, BackupState, BackupVerdict, BackupVerification};
+use crate::{CoreConfig, CoreError, open_core};
 
 fn recorded(state: sb_engine::BackupGenerationState) -> sb_engine::BackupGeneration {
     sb_engine::BackupGeneration {
@@ -85,5 +86,71 @@ fn every_field_and_variant_is_carried_over() {
                 checked_at_ms: 3_000,
             })
         );
+    }
+}
+
+#[test]
+fn a_started_backup_completes_and_its_key_starts_no_second() {
+    let scratch = ScratchDir::new("service-start-backup");
+    let core = block_on(open_core(CoreConfig {
+        data_root: scratch.path().join("store"),
+        cache_root: scratch.path().join("cache"),
+    }))
+    .unwrap();
+
+    let key = "00000000-0000-4000-8000-0000000000c1";
+    let started = block_on(core.start_backup(key)).unwrap();
+    let id = started.generation_id.clone();
+    assert_eq!(started.receipt.command, "start_backup");
+    assert_eq!(
+        started.receipt.result_json,
+        format!(r#"{{"generation_id":"{id}"}}"#)
+    );
+    let copy = started.copy.expect("this call started the copy");
+    assert_eq!(
+        block_on(copy.finished()),
+        BackupEnd::Complete { after: None }
+    );
+
+    let listed = block_on(core.list_backups()).unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].generation_id, id);
+    assert_eq!(listed[0].state, BackupState::Complete);
+
+    let again = block_on(core.start_backup(key)).unwrap();
+    assert_eq!(again.receipt, started.receipt);
+    assert_eq!(again.generation_id, id);
+    assert!(again.copy.is_none());
+    assert_eq!(block_on(core.list_backups()).unwrap().len(), 1);
+
+    match block_on(core.start_backup("")) {
+        Err(CoreError::InvalidInput { field, .. }) => assert_eq!(field, "idempotency_key"),
+        other => panic!("expected InvalidInput, got {other:?}"),
+    }
+    block_on(core.shutdown());
+}
+
+#[test]
+fn every_end_is_carried_over() {
+    for (engine, shown) in [
+        (
+            sb_engine::BackupEnd::Complete { after: None },
+            BackupEnd::Complete { after: None },
+        ),
+        (
+            sb_engine::BackupEnd::Complete {
+                after: Some("retention failed".to_owned()),
+            },
+            BackupEnd::Complete {
+                after: Some("retention failed".to_owned()),
+            },
+        ),
+        (sb_engine::BackupEnd::Stopped, BackupEnd::Stopped),
+        (
+            sb_engine::BackupEnd::Failed("no space".to_owned()),
+            BackupEnd::Failed("no space".to_owned()),
+        ),
+    ] {
+        assert_eq!(BackupEnd::from_engine(engine), shown);
     }
 }
