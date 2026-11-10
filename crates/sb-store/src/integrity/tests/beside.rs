@@ -125,6 +125,32 @@ fn a_symlinked_ledger_is_refused_without_touching_its_target() {
     store.close().unwrap();
 }
 
+/// No ledger or sidecar may write through a second name for a frozen file.
+#[test]
+fn a_hard_linked_ledger_is_refused_without_touching_its_target() {
+    for suffix in ["", "-journal", "-wal", "-shm"] {
+        let (_scratch, paths, store, generation, _) = latched("integrity-beside-hard-link");
+        std::fs::create_dir(beside(&paths)).unwrap();
+        let target = paths.recovery().join("linked-ledger.sqlite");
+        std::fs::write(&target, b"").unwrap();
+        let linked = beside(&paths).join(format!("ledger.sqlite{suffix}"));
+        std::fs::hard_link(&target, &linked).unwrap();
+        let before = tree(&paths);
+
+        let checked = verify(&store, &generation);
+        assert_eq!(
+            tree(&paths),
+            before,
+            "{suffix}: the link wrote into the root"
+        );
+        assert!(
+            matches!(checked, Err(StoreError::Corrupt { .. })),
+            "{suffix}: {checked:?}"
+        );
+        store.close().unwrap();
+    }
+}
+
 /// Reusing a sibling applies the same owner-only access as creating it.
 #[test]
 fn an_existing_verifier_home_is_restricted_to_its_owner() {
