@@ -55,7 +55,8 @@ CREATE TABLE store_meta (
 -- 'clean_shutdown_at' (03 Integrity: present only between a clean shutdown and the next open),
 -- 'list_generation' (an integer in decimal digits; the d_list_rows generation, from migration 3),
 -- 'thread_inputs' and 'threads_built' (integers in decimal digits, from migration 4): how often
--- imports added logical messages, and how many of those the last complete thread rebuild read.
+-- imports and account sync added logical messages, and how many of those the last complete
+-- thread rebuild read.
 -- Migration 5: 'index_inputs', 'search_extractor_version' (06) and
 -- 'search_generation' (07), integers in decimal digits; search has its own
 -- generation so index-only writes leave ordinary list windows alone.
@@ -1495,7 +1496,8 @@ CREATE INDEX d_message_bindings_by_assembly ON d_message_bindings(acquisition_id
     base subject joins nothing. Unrelated messages with one subject
     share a thread too: the cost of JWZ's heuristic.
   - Membership is rebuilt from all logical messages after each import
-    job's turn ends, and at open, whenever imports added messages
+    job's turn ends, after each pass of an account's sync ends
+    (however it ended), and at open, whenever messages were added
     since the last complete rebuild (`thread_inputs` above
     `threads_built`). A message stored since then has no thread yet.
   - A rebuild publishes changed memberships in transactions within the
