@@ -433,3 +433,5 @@ fn a_held_start_is_refused_before_it_writes() {
     block_on(engine.start_import(&engine.new_idempotency_key(), vec![path])).unwrap();
     block_on(engine.shutdown()).unwrap();
 }
+
+mod acceptance;

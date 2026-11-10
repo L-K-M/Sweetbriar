@@ -1,0 +1,204 @@
+//! M1.8g's acceptance (plan M1.8g4): a write in progress and a running
+//! engine job both stop before the swap, the write committed to the
+//! replaced store, the job left to resume there; and once the restored
+//! store is in place no file of the replaced root stays open.
+
+use sb_resources::Resources;
+
+use super::*;
+use crate::drafts::{DraftWriteHook, DraftWritePoint};
+use crate::{DraftSource, MboxVariant};
+
+/// The preserved root a swap renamed the old data root to: exactly
+/// one, so the assertions can't read another swap's.
+fn preserved_root(root: &Path) -> PathBuf {
+    let mut preserved: Vec<PathBuf> = std::fs::read_dir(root.parent().unwrap())
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| {
+            path.is_dir()
+                && path
+                    .file_name()
+                    .unwrap()
+                    .to_str()
+                    .unwrap()
+                    .starts_with("store.preserved-")
+        })
+        .collect();
+    assert_eq!(preserved.len(), 1, "one preserved root: {preserved:?}");
+    preserved.remove(0)
+}
+
+/// Count rows in the preserved store, opened on its own.
+fn preserved_count(preserved: &Path, sql: &'static str) -> i64 {
+    let resources = Resources::open(preserved).unwrap();
+    let count = resources
+        .read(|tx| tx.query_row(sql, [], |row| row.get(0)).map_err(sql_error))
+        .unwrap();
+    resources.close().unwrap();
+    count
+}
+
+/// Every file this process has open, under its current name:
+/// `/proc/self/fd` on Linux, which runners may lack `lsof` for, and
+/// `lsof` elsewhere.
+fn open_files() -> Vec<PathBuf> {
+    if cfg!(target_os = "linux") {
+        return std::fs::read_dir("/proc/self/fd")
+            .expect("/proc/self/fd lists")
+            .filter_map(|entry| std::fs::read_link(entry.ok()?.path()).ok())
+            .collect();
+    }
+    let output = std::process::Command::new("lsof")
+        .args(["-p", &std::process::id().to_string(), "-Fn"])
+        .output()
+        .expect("lsof runs");
+    assert!(output.status.success(), "lsof failed: {output:?}");
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| line.strip_prefix('n'))
+        .map(PathBuf::from)
+        .collect()
+}
+
+/// No file of the replaced root stays open, while the listing does see
+/// the restored store's, so an empty listing can't pass.
+fn assert_only_restored_open(root: &Path, preserved: &Path) {
+    let open = open_files();
+    assert!(
+        open.iter().any(|file| file.starts_with(root)),
+        "the restored store's files are open: {open:?}"
+    );
+    assert!(
+        open.iter().all(|file| !file.starts_with(preserved)),
+        "no file of the replaced root stays open: {open:?}"
+    );
+}
+
+/// A draft write held inside its transaction when the restore begins:
+/// the quiesce waits for it, it commits to the replaced store, and the
+/// swap happens only after. No file of the replaced root stays open.
+#[test]
+fn a_write_in_progress_commits_to_the_replaced_store_before_the_swap() {
+    let scratch = ScratchDir::new("engine-restore-pending-write");
+    let root = data_root(&scratch);
+    let (engine, receipt) = backed_up(&root);
+    let stage = qualified(&engine, &receipt);
+    let (inside, entered) = mpsc::channel();
+    let (release, released) = mpsc::channel::<()>();
+    let released = Mutex::new(released);
+    let hook: DraftWriteHook = Arc::new(move |point| {
+        if point == DraftWritePoint::InsideBeforeCommit {
+            // A test that already failed has dropped its ends: the
+            // worker must not panic over that.
+            let _ = inside.send(());
+            let _ = released.lock().unwrap().recv();
+        }
+    });
+    *engine.drafts_hook.lock().unwrap() = Some(hook);
+    // Accept the command, then stop waiting for it: an accepted command
+    // runs to completion without its caller (spec/07).
+    {
+        let key = engine.new_idempotency_key();
+        let mut created = pin!(engine.create_draft(&key, DraftSource::New));
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(created.as_mut().poll(&mut cx).is_pending());
+    }
+    entered.recv_timeout(PATIENCE).unwrap();
+
+    // `finish` bounds the restore, so one that never returns fails
+    // the join below instead of hanging the suite.
+    let restoring =
+        std::thread::spawn(move || finish(engine.restore(stage, Arc::new(AtomicBool::new(false)))));
+    // The quiesce waits for the write: the swap cannot happen yet,
+    // however early in the window it would have.
+    let held = Instant::now() + Duration::from_millis(300);
+    while Instant::now() < held {
+        assert!(!restoring.is_finished(), "the swap waited for the write");
+        assert!(!root.with_extension("restore-pending").exists());
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    release.send(()).unwrap();
+    let engine = restoring.join().unwrap().expect("the restore succeeds");
+
+    // The write landed in the replaced store, which the restore
+    // preserved; the restored store is the generation, without it.
+    let preserved = preserved_root(&root);
+    assert_only_restored_open(&root, &preserved);
+    let drafts: i64 = engine
+        .resources()
+        .read(|tx| {
+            tx.query_row("SELECT count(*) FROM drafts", [], |row| row.get(0))
+                .map_err(sql_error)
+        })
+        .unwrap();
+    assert_eq!(drafts, 0);
+    block_on(engine.shutdown()).unwrap();
+    assert_eq!(
+        preserved_count(&preserved, "SELECT count(*) FROM drafts"),
+        1
+    );
+}
+
+/// An import's ingest running when the restore begins stops at its next
+/// safe point; the swap follows, and the replaced store keeps the job
+/// running from its checkpoint, never failed.
+#[test]
+fn a_running_job_stops_before_the_swap_and_keeps_its_checkpoint() {
+    let scratch = ScratchDir::new("engine-restore-running-job");
+    let root = data_root(&scratch);
+    let (engine, receipt) = backed_up(&root);
+    let stage = qualified(&engine, &receipt);
+    let path = scratch.path().join("One.mbox");
+    std::fs::write(
+        &path,
+        "From sender@example.test Sat Oct 17 12:00:00 2026\nSubject: one\n\nbody\n",
+    )
+    .unwrap();
+    let started = block_on(engine.start_import(&engine.new_idempotency_key(), vec![path])).unwrap();
+    let deadline = Instant::now() + PATIENCE;
+    while block_on(engine.import_job(started.job_id()))
+        .unwrap()
+        .state()
+        != ImportJobState::AwaitingConfirmation
+    {
+        assert!(Instant::now() < deadline, "the inventory never finished");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    // The ingest worker spins at its entry until told to stop.
+    let (entered, reached) = mpsc::channel();
+    let entered = Mutex::new(entered);
+    *engine
+        .imports()
+        .before_task
+        .lock()
+        .expect("a panicking thread held the import job registry") =
+        Some(Arc::new(move |stopping| {
+            let _ = entered.lock().unwrap().send(());
+            while !stopping() {
+                std::thread::yield_now();
+            }
+        }));
+    block_on(engine.confirm_import(
+        &engine.new_idempotency_key(),
+        started.job_id(),
+        Vec::<(u64, MboxVariant)>::new(),
+    ))
+    .unwrap();
+    reached.recv_timeout(PATIENCE).unwrap();
+
+    let engine = finish(engine.restore(stage, Arc::new(AtomicBool::new(false))))
+        .expect("the restore succeeds");
+
+    let preserved = preserved_root(&root);
+    assert_only_restored_open(&root, &preserved);
+    block_on(engine.shutdown()).unwrap();
+    assert_eq!(
+        preserved_count(
+            &preserved,
+            "SELECT count(*) FROM import_jobs WHERE state = 'running'"
+        ),
+        1,
+        "the interrupted ingest keeps its job, never failed"
+    );
+}
