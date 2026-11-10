@@ -15,7 +15,8 @@ pub struct BackupStarted {
     pub generation_id: String,
     /// The copy this call started, to wait on. `None` when the key had
     /// started its generation before: nothing was started now, and
-    /// `list_backups` says what became of that one.
+    /// `list_backups` says what became of that one unless retention
+    /// has since removed its row.
     pub copy: Option<BackupCopy>,
 }
 
@@ -171,7 +172,8 @@ impl Core {
     /// A repeated key answers its receipt and starts nothing.
     /// `Conflict` while another backup, a generation check or a
     /// restore is under way; `Corrupt` on a read-only core, which
-    /// refuses before it looks at the key.
+    /// refuses before it looks at the key; `Unavailable` while the
+    /// core is shutting down. A refusal answers no key.
     pub async fn start_backup(&self, idempotency_key: &str) -> Result<BackupStarted, CoreError> {
         let started: sb_engine::BackupStarted = self.engine().start_backup(idempotency_key).await?;
         Ok(BackupStarted {
