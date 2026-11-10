@@ -333,6 +333,16 @@ uint64_t uniffi_sb_ffi_fn_method_core_republish_draft_attachment(uint64_t ptr, u
 uint64_t uniffi_sb_ffi_fn_method_core_save_draft(uint64_t ptr, uint64_t token, RustBuffer idempotency_key, RustBuffer draft_id, RustBuffer base_revision_id, RustBuffer content
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_HEALTH
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_HEALTH
+uint64_t uniffi_sb_ffi_fn_method_core_health(uint64_t ptr, uint64_t token
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_SUBSCRIBE_HEALTH
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_SUBSCRIBE_HEALTH
+uint64_t uniffi_sb_ffi_fn_method_core_subscribe_health(uint64_t ptr, uint64_t token
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_CANCEL_JOB
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_CANCEL_JOB
 uint64_t uniffi_sb_ffi_fn_method_core_cancel_job(uint64_t ptr, uint64_t token, RustBuffer idempotency_key, RustBuffer job_id
@@ -512,6 +522,21 @@ uint64_t uniffi_sb_ffi_fn_method_draftattachmentobject_byte_length(uint64_t ptr,
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_DRAFTATTACHMENTOBJECT_OBJECT_SHA256
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_DRAFTATTACHMENTOBJECT_OBJECT_SHA256
 RustBuffer uniffi_sb_ffi_fn_method_draftattachmentobject_object_sha256(uint64_t ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_CLONE_HEALTHSUBSCRIPTION
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_CLONE_HEALTHSUBSCRIPTION
+uint64_t uniffi_sb_ffi_fn_clone_healthsubscription(uint64_t handle, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_FREE_HEALTHSUBSCRIPTION
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_FREE_HEALTHSUBSCRIPTION
+void uniffi_sb_ffi_fn_free_healthsubscription(uint64_t handle, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_HEALTHSUBSCRIPTION_NEXT
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_HEALTHSUBSCRIPTION_NEXT
+uint64_t uniffi_sb_ffi_fn_method_healthsubscription_next(uint64_t ptr, uint64_t token
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_CLONE_SUBSCRIPTION
@@ -931,6 +956,18 @@ uint16_t uniffi_sb_ffi_checksum_method_core_save_draft(void
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_HEALTH
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_HEALTH
+uint16_t uniffi_sb_ffi_checksum_method_core_health(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_SUBSCRIBE_HEALTH
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_SUBSCRIBE_HEALTH
+uint16_t uniffi_sb_ffi_checksum_method_core_subscribe_health(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_CANCEL_JOB
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_CANCEL_JOB
 uint16_t uniffi_sb_ffi_checksum_method_core_cancel_job(void
@@ -1102,6 +1139,12 @@ uint16_t uniffi_sb_ffi_checksum_method_draftattachmentobject_byte_length(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_DRAFTATTACHMENTOBJECT_OBJECT_SHA256
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_DRAFTATTACHMENTOBJECT_OBJECT_SHA256
 uint16_t uniffi_sb_ffi_checksum_method_draftattachmentobject_object_sha256(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_HEALTHSUBSCRIPTION_NEXT
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_HEALTHSUBSCRIPTION_NEXT
+uint16_t uniffi_sb_ffi_checksum_method_healthsubscription_next(void
     
 );
 #endif

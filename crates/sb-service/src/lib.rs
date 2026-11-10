@@ -23,6 +23,7 @@ mod api;
 mod drafts;
 mod error;
 mod exports;
+mod health;
 mod imports;
 mod messages;
 mod rebuild;
@@ -38,6 +39,7 @@ pub use drafts::{
 };
 pub use error::{CoreError, SearchParseCode};
 pub use exports::{ExportFormat, ExportJob, ExportJobState, ExportScopeInput, ExportStarted};
+pub use health::{Health, HealthSubscription, Integrity};
 pub use imports::{
     ImportJob, ImportJobState, ImportProblem, ImportProblemKind, ImportReport, ImportSource,
     ImportSourceKind, ImportStarted, ImportTarget, ImportTotals, MboxVariant,

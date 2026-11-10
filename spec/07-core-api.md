@@ -311,8 +311,12 @@ a receipt or file-export command; Service/FFI exposure remains M1.7e/f.
     finding (03 "Integrity"): the finding, when the check found it and
     the copy under `recovery/` once it is published, or that there is
     none. The time is absent when the latch's record can't be read.
-    Answered from memory, without I/O. The engine answers it from
-    M1.8h5b2; the Service DTO and its binding are M1.8h5b3;
+    Answered from memory, without I/O (M1.8h5b2). The Service and the
+    binding carry it as `Health { integrity }`, where `integrity` is
+    `Sound` or `ReadOnly { detail, detected_at_ms, copy_path }`: the
+    time in milliseconds since the epoch, the path a string for
+    display (M1.8h5b3). Over FFI it is a query under a token like any
+    other;
   - `out_box()`;
   - `drafts()` → local drafts with state, route, subject, recipients,
     update time and any live attempt's state (the sidebar's Drafts
@@ -741,7 +745,10 @@ impl HealthSubscription {
   moves nothing, and shutdown ends a wait with `Unavailable`. The
   finding's event comes before its copy is published; the job that runs
   the check (M1.8h5c) announces again once the check returns. In-memory
-  only.
+  only. Over FFI, `subscribe_health` is a query that hands back a
+  Rust-owned object, pulled with `next` under a fresh token per call,
+  as for windows ("Subscriptions over FFI"); a cancelled `next` is
+  `Cancelled` and the next call still sees what it missed (M1.8h5b3).
 - **Snapshot isolation:** a window is not a held read transaction. Each
   read is a short transaction, and `generation` ties the rows to one
   committed state.

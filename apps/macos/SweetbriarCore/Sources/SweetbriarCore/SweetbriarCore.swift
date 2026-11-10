@@ -1114,6 +1114,21 @@ public protocol CoreProtocol: AnyObject, Sendable {
     func saveDraft(token: CancelToken, idempotencyKey: String, draftId: String, baseRevisionId: String?, content: DraftContent) async throws  -> DraftSaved
     
     /**
+     * `health()` (spec/07 "Queries"): whether the store is read-only
+     * after an integrity finding, with the finding, its time and its
+     * copy. Answered from memory. A query: the token races the
+     * core's lock.
+     */
+    func health(token: CancelToken) async throws  -> Health
+    
+    /**
+     * `subscribe_health` (spec/07 "Subscriptions"): changes of
+     * `health()` from now on. Subscribe first, then read `health()`,
+     * and none is missed. A query: the token races the core's lock.
+     */
+    func subscribeHealth(token: CancelToken) async throws  -> HealthSubscription
+    
+    /**
      * Cancel an import or durably pause Search index work; committed work stays.
      * Completed imports are Conflict; completed rebuilds are no-ops.
      * An index user hold survives reopen until resume_search_rebuild.
@@ -1709,6 +1724,49 @@ open func saveDraft(token: CancelToken, idempotencyKey: String, draftId: String,
             completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
             freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
             liftFunc: FfiConverterTypeDraftSaved_lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * `health()` (spec/07 "Queries"): whether the store is read-only
+     * after an integrity finding, with the finding, its time and its
+     * copy. Answered from memory. A query: the token races the
+     * core's lock.
+     */
+open func health(token: CancelToken)async throws  -> Health  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_health(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeHealth_lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * `subscribe_health` (spec/07 "Subscriptions"): changes of
+     * `health()` from now on. Subscribe first, then read `health()`,
+     * and none is missed. A query: the token races the core's lock.
+     */
+open func subscribeHealth(token: CancelToken)async throws  -> HealthSubscription  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_subscribe_health(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_u64,
+            completeFunc: ffi_sb_ffi_rust_future_complete_u64,
+            freeFunc: ffi_sb_ffi_rust_future_free_u64,
+            liftFunc: FfiConverterTypeHealthSubscription_lift,
             errorHandler: FfiConverterTypeCoreError_lift
         )
 }
@@ -2395,6 +2453,154 @@ public func FfiConverterTypeDraftAttachmentObject_lift(_ handle: UInt64) throws 
 #endif
 public func FfiConverterTypeDraftAttachmentObject_lower(_ value: DraftAttachmentObject) -> UInt64 {
     return FfiConverterTypeDraftAttachmentObject.lower(value)
+}
+
+
+
+
+
+
+/**
+ * The health stream (spec/07 "Subscriptions"): one in-flight `next`
+ * at a time, in-memory only.
+ */
+public protocol HealthSubscriptionProtocol: AnyObject, Sendable {
+    
+    /**
+     * Wait until `health()` changed since this subscription's last
+     * answer; the shell then reads `health()` again. One call at a
+     * time: a second concurrent call is `InvalidInput`. A cancelled
+     * call answers `Cancelled` and moves nothing, so the next call
+     * still sees what it missed. Shutdown ends a wait with
+     * `Unavailable`.
+     */
+    func next(token: CancelToken) async throws 
+    
+}
+/**
+ * The health stream (spec/07 "Subscriptions"): one in-flight `next`
+ * at a time, in-memory only.
+ */
+open class HealthSubscription: HealthSubscriptionProtocol, @unchecked Sendable {
+    fileprivate let handle: UInt64
+
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoHandle {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noHandle: NoHandle) {
+        self.handle = 0
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_sb_ffi_fn_clone_healthsubscription(self.handle, $0) }
+    }
+    // No primary constructor declared for this class.
+
+    deinit {
+        if handle == 0 {
+            // Mock objects have handle=0 don't try to free them
+            return
+        }
+
+        try! rustCall { uniffi_sb_ffi_fn_free_healthsubscription(handle, $0) }
+    }
+
+    
+
+    
+    /**
+     * Wait until `health()` changed since this subscription's last
+     * answer; the shell then reads `health()` again. One call at a
+     * time: a second concurrent call is `InvalidInput`. A cancelled
+     * call answers `Cancelled` and moves nothing, so the next call
+     * still sees what it missed. Shutdown ends a wait with
+     * `Unavailable`.
+     */
+open func next(token: CancelToken)async throws   {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_healthsubscription_next(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_void,
+            completeFunc: ffi_sb_ffi_rust_future_complete_void,
+            freeFunc: ffi_sb_ffi_rust_future_free_void,
+            liftFunc: { $0 },
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+
+    
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeHealthSubscription: FfiConverter {
+    typealias FfiType = UInt64
+    typealias SwiftType = HealthSubscription
+
+    public static func lift(_ handle: UInt64) throws -> HealthSubscription {
+        return HealthSubscription(unsafeFromHandle: handle)
+    }
+
+    public static func lower(_ value: HealthSubscription) -> UInt64 {
+        return value.uniffiCloneHandle()
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> HealthSubscription {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+    public static func write(_ value: HealthSubscription, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeHealthSubscription_lift(_ handle: UInt64) throws -> HealthSubscription {
+    return try FfiConverterTypeHealthSubscription.lift(handle)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeHealthSubscription_lower(_ value: HealthSubscription) -> UInt64 {
+    return FfiConverterTypeHealthSubscription.lower(value)
 }
 
 
@@ -4271,6 +4477,59 @@ public func FfiConverterTypeDraftSummary_lift(_ buf: RustBuffer) throws -> Draft
 #endif
 public func FfiConverterTypeDraftSummary_lower(_ value: DraftSummary) -> RustBuffer {
     return FfiConverterTypeDraftSummary.lower(value)
+}
+
+
+/**
+ * The store's health as the shell shows it (spec/07).
+ */
+public struct Health: Equatable, Hashable {
+    public var integrity: Integrity
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(integrity: Integrity) {
+        self.integrity = integrity
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension Health: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeHealth: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Health {
+        return
+            try Health(
+                integrity: FfiConverterTypeIntegrity.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: Health, into buf: inout [UInt8]) {
+        FfiConverterTypeIntegrity.write(value.integrity, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeHealth_lift(_ buf: RustBuffer) throws -> Health {
+    return try FfiConverterTypeHealth.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeHealth_lower(_ value: Health) -> RustBuffer {
+    return FfiConverterTypeHealth.lower(value)
 }
 
 
@@ -8291,6 +8550,101 @@ public func FfiConverterTypeImportTarget_lower(_ value: ImportTarget) -> RustBuf
 
 
 /**
+ * Whether an integrity check found the database damaged (spec/03
+ * "Integrity").
+ */
+
+public enum Integrity: Equatable, Hashable {
+    
+    /**
+     * No finding is recorded.
+     */
+    case sound
+    /**
+     * A finding latched the store. Queries go on; every command that
+     * writes is `Corrupt`; no account syncs and no background job
+     * runs. Only a restore ends it.
+     */
+    case readOnly(
+        /**
+         * The finding, or why its record can't be read.
+         */detail: String, 
+        /**
+         * When the check found it, milliseconds since the epoch;
+         * absent when the record can't be read.
+         */detectedAtMs: Int64?, 
+        /**
+         * The copy of the database files under `recovery/`, once it
+         * is published. A string for display: paths don't cross FFI
+         * (spec/07 "DTOs").
+         */copyPath: String?
+    )
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension Integrity: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeIntegrity: FfiConverterRustBuffer {
+    typealias SwiftType = Integrity
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Integrity {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .sound
+        
+        case 2: return .readOnly(detail: try FfiConverterString.read(from: &buf), detectedAtMs: try FfiConverterOptionInt64.read(from: &buf), copyPath: try FfiConverterOptionString.read(from: &buf)
+        )
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: Integrity, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .sound:
+            writeInt(&buf, Int32(1))
+        
+        
+        case let .readOnly(detail,detectedAtMs,copyPath):
+            writeInt(&buf, Int32(2))
+            FfiConverterString.write(detail, into: &buf)
+            FfiConverterOptionInt64.write(detectedAtMs, into: &buf)
+            FfiConverterOptionString.write(copyPath, into: &buf)
+            
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeIntegrity_lift(_ buf: RustBuffer) throws -> Integrity {
+    return try FfiConverterTypeIntegrity.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeIntegrity_lower(_ value: Integrity) -> RustBuffer {
+    return FfiConverterTypeIntegrity.lower(value)
+}
+
+
+
+/**
  * What a mailbox is.
  */
 
@@ -10436,6 +10790,12 @@ private let initializationResult: InitializationResult = {
     if (uniffi_sb_ffi_checksum_method_core_save_draft() != 24235) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_sb_ffi_checksum_method_core_health() != 35765) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_subscribe_health() != 26524) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_sb_ffi_checksum_method_core_cancel_job() != 65113) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -10521,6 +10881,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_draftattachmentobject_object_sha256() != 50977) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_healthsubscription_next() != 45174) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_subscription_next() != 14648) {

@@ -1632,18 +1632,23 @@ local drafts. No network yet.
     its workers and long jobs stopped, open-time recovery skipped, the
     Bridge certificate probe refused, and `health()` with its
     subscription; **h5b3** the service's health query and its push to
-    the app, and coverage's index state on a latched store; **h5b4** a
-    restore while latched (after g3), its verification scratch kept off
-    the latched writer, and an inventory or capture left unfinished on
-    a latched store no longer refusing it; **h5c** the weekly job in
-    the scheduler, which announces health again once the check
-    returns, so the copy's name reaches the shell. They land in that
-    order: nothing runs the check before h5c, so remote effects stop
-    before any finding can happen. **h6 Acceptance proof (L)**: the recovery point over
-    simulated hours at the 5-minute setting, crash cuts through a
-    scheduled backup, restore during each job. GC's daily cadence and
-    the reading of "all objects referenced by backups" as each
-    generation's copies are recorded in spec/03 with their slices.
+    the app, split when it was built: **h5b3a** `health()` and
+    `subscribe_health` through the Service, the binding and the
+    bridge, and **h5b3b** coverage's index state on a latched store,
+    which today answers a stale `Running`, through to the index
+    controls; **h5b4** a restore while latched (after g3), its
+    verification scratch kept off the latched writer, and an inventory
+    or capture left unfinished on a latched store no longer refusing
+    it; **h5c** the weekly job in the scheduler, which announces
+    health again once the check returns, so the copy's name reaches
+    the shell. They land in that order: nothing runs the check before
+    h5c, so remote effects stop before any finding can happen. The
+    app's banner for a read-only store comes with M1.8j. **h6
+    Acceptance proof (L)**: the recovery point over simulated hours at
+    the 5-minute setting, crash cuts through a scheduled backup,
+    restore during each job. GC's daily cadence and the reading of "all
+    objects referenced by backups" as each generation's copies are
+    recorded in spec/03 with their slices.
   - **M1.8h Scheduled GC, verification and integrity checks (L):** the
     hourly-generation-while-there-were-changes and GC schedules, the
     weekly object-verification job (the rotating 1/52 sample plus all

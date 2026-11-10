@@ -24,6 +24,7 @@ mod appearance;
 mod cancel;
 mod drafts;
 mod error;
+mod health;
 mod imports;
 mod messages;
 mod search;
@@ -48,6 +49,7 @@ pub use drafts::{
     DraftRevision, DraftSaved, DraftSource, DraftState, DraftSummary, LiveAttempt,
 };
 pub use error::{CoreError, SearchParseCode};
+pub use health::{Health, HealthSubscription, Integrity};
 pub use imports::{
     ImportJob, ImportJobState, ImportProblem, ImportProblemKind, ImportReport, ImportSource,
     ImportSourceKind, ImportStarted, ImportTarget, ImportTotals, MboxVariant, VariantChoice,

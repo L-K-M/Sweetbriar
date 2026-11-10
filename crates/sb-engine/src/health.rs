@@ -58,6 +58,21 @@ impl Engine {
         };
         Health { integrity }
     }
+
+    /// Run the store's full integrity check now (the `test-seams`
+    /// feature), answering whether it found damage and latched the
+    /// store. Nothing runs the check before the weekly job (M1.8h5c),
+    /// so the layers above use this to prove what they answer once a
+    /// finding lands at runtime.
+    #[cfg(feature = "test-seams")]
+    pub async fn check_integrity_now(&self) -> Result<bool, crate::EngineError> {
+        self.read_through(|resources| {
+            let stop = std::sync::atomic::AtomicBool::new(false);
+            let check = resources.check_integrity(&stop)?;
+            Ok(matches!(check, sb_resources::IntegrityCheck::Finding(_)))
+        })
+        .await
+    }
 }
 
 #[cfg(test)]
