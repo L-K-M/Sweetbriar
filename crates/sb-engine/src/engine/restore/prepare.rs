@@ -131,9 +131,12 @@ fn prepare(
 }
 
 /// Whether a step's error is the cancel flag ending it: what staging
-/// and qualifying answer at their next check once it is raised. An
-/// I/O error under a raised flag is still that error, and so is the
-/// same answer with no flag raised.
+/// and qualifying answer at their next check once it is raised. The
+/// store marks that answer by its shape alone, `Unavailable` without
+/// an I/O kind, so a failure of that shape in the moment the flag is
+/// up reads as the cancellation the caller asked for. An error with
+/// an I/O kind, or of any other class, is still that error under a
+/// raised flag, and so is the same shape with no flag raised.
 pub(super) fn ended_by_the_flag(error: StoreError, raised: bool) -> Result<(), StoreError> {
     match error {
         StoreError::Unavailable { io_kind: None, .. } if raised => Ok(()),
@@ -155,6 +158,12 @@ impl Engine {
     /// `Corrupt` for one that no longer matches its manifest or its
     /// row. A cancelled or failed preparation leaves what it staged
     /// beside the data root: a restore deletes nothing.
+    ///
+    /// The backup operation is taken twice, for the verification and
+    /// again for the copy, which then keeps it. A backup can run in
+    /// between. If its retention removes the generation, the copy
+    /// fails `Unavailable`; nothing wrong is staged, since the copy
+    /// verifies every byte again.
     ///
     /// It runs as counted work on the engine's blocking pool, and can
     /// take as long as copying the archive. The work doesn't stop when
