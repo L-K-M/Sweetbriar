@@ -480,6 +480,27 @@ fn a_refused_restore_exits_one_without_replacing_the_store() {
     assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
     assert_eq!(stdout(&out), "");
     assert!(stderr(&out).contains("refused"), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("store is unchanged"),
+        "{}",
+        stderr(&out)
+    );
+    assert!(stderr(&out).contains("prepared copy"), "{}", stderr(&out));
+    let staged = std::fs::read_dir(root.parent().unwrap())
+        .unwrap()
+        .filter(|entry| {
+            entry
+                .as_ref()
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .contains(".restoring-")
+        })
+        .count();
+    assert_eq!(
+        staged, 1,
+        "the refused preparation remains beside the store"
+    );
     assert_eq!(
         std::fs::read(occupied.join("kept")).unwrap(),
         b"not a restore target"

@@ -625,9 +625,10 @@ fn backup_report(id: &str, end: BackupEnd) -> Result<Option<String>, String> {
 
 /// `restore <generation_id>`: verify the recorded generation, copy it
 /// beside the data root and swap the copy in as the store. It prints
-/// the generation's id and `restored`. The replaced store is kept
-/// beside the data root and nothing is deleted. A refusal changes
-/// nothing and exits with an error.
+/// the generation's id and `restored`, even if recording the receipt
+/// failed (reported on stderr). The replaced store is kept beside the
+/// data root and nothing is deleted. A refusal leaves the store unchanged
+/// and the prepared copy beside it, and exits with an error.
 fn restore(core: Core, generation_id: &str) -> Result<(), u8> {
     // Nothing raises it: the CLI has no way to cancel.
     let cancelled = Arc::new(AtomicBool::new(false));
@@ -698,7 +699,8 @@ fn restore_report(id: &str, end: RestoreEnd) -> Result<Option<String>, String> {
              {error}"
         ))),
         RestoreEnd::Refused(cause) => Err(format!(
-            "restoring {id} was refused, and nothing changed: {cause}"
+            "restoring {id} was refused, and the store is unchanged; \
+             the prepared copy is kept beside the data root: {cause}"
         )),
         RestoreEnd::Failed(cause) => Err(format!(
             "restoring {id} failed part way: {cause}. Nothing was deleted; the next command \
@@ -922,7 +924,8 @@ mod tests {
         assert!(warned.contains("no space"), "{warned}");
 
         let refused = restore_report("gen", RestoreEnd::Refused(unavailable())).unwrap_err();
-        assert!(refused.contains("nothing changed"), "{refused}");
+        assert!(refused.contains("store is unchanged"), "{refused}");
+        assert!(refused.contains("prepared copy"), "{refused}");
         assert!(refused.contains("no space"), "{refused}");
         let failed = restore_report("gen", RestoreEnd::Failed(unavailable())).unwrap_err();
         assert!(failed.contains("failed part way"), "{failed}");

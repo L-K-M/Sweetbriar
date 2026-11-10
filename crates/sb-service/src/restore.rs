@@ -72,8 +72,9 @@ pub struct Restored {
     /// The core on the restored store, or as it was when the key had
     /// already run a restore.
     pub core: Core,
-    /// The command's stored receipt, `{"generation_id":...}`. An error
-    /// means the store was restored and its receipt could not be
+    /// The command's stored receipt, `{"generation_id":...}`. Check
+    /// this result even when `restore` answers `Ok`: an error means
+    /// the store was restored and its receipt could not be
     /// recorded. A retry may restore again; a key the restored store
     /// already holds for another command is refused instead.
     pub receipt: Result<Receipt, CoreError>,
@@ -132,9 +133,10 @@ impl Core {
     /// export's capture in progress (`Conflict`), a raised `cancelled`
     /// (`Unavailable`) and a stage the swap's own checks turn down.
     ///
-    /// Await it to the end. Dropping the future stops nothing and
-    /// drops the core it would have answered with. To cancel, raise
-    /// `cancelled` and keep awaiting.
+    /// Await it to the end; do not wrap it in a timeout or drop it from
+    /// a `select!` branch. Dropping the future stops nothing and drops
+    /// the core it would have answered with, without orderly shutdown.
+    /// To cancel, raise `cancelled` and keep awaiting.
     pub async fn restore(
         self,
         idempotency_key: &str,
