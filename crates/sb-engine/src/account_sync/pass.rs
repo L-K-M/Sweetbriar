@@ -30,7 +30,7 @@ use sb_resources::{
     Timestamp, WritePriority,
 };
 
-use super::idle::{INBOX, Scope};
+use super::idle::{Scope, is_inbox};
 use crate::engine::Worker;
 use crate::policy::{ListedMailbox, Policy};
 
@@ -110,7 +110,7 @@ pub(super) async fn run(
             };
             targets
                 .into_iter()
-                .filter(|target| target.remote_name == INBOX)
+                .filter(|target| is_inbox(&target.remote_name))
                 .collect()
         }
     };

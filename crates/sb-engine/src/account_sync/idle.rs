@@ -16,6 +16,13 @@ use super::{AccountConnector, stopped};
 /// The mailbox the watcher idles on (spec/04: one IDLE on INBOX).
 pub(super) const INBOX: &str = "INBOX";
 
+/// Whether a stored mailbox name is INBOX, which IMAP matches
+/// case-insensitively (RFC 9051 section 5.1): a server may list it as
+/// `Inbox`, and the policy gives that name the inbox role.
+pub(super) fn is_inbox(remote_name: &str) -> bool {
+    remote_name.eq_ignore_ascii_case(INBOX)
+}
+
 /// How long a live session rests between INBOX passes while IDLE is
 /// not running (spec/04 "Pace").
 pub(super) const POLL_INTERVAL: Duration = Duration::from_secs(60);

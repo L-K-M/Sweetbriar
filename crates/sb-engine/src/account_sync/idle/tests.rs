@@ -61,3 +61,13 @@ fn only_hints_wake_a_pass_and_idle_s_state_sets_the_rest() {
         Duration::ZERO
     );
 }
+
+#[test]
+fn inbox_is_matched_case_insensitively() {
+    for name in ["INBOX", "Inbox", "inbox"] {
+        assert!(is_inbox(name), "{name}");
+    }
+    for name in ["INBOX/Sub", "INBOX.Sub", "Archive", "INBOXES", ""] {
+        assert!(!is_inbox(name), "{name}");
+    }
+}
