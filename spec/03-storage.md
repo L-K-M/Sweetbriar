@@ -698,7 +698,8 @@ The process holds `<data root>.lock` throughout.
    - Rename the current data root to `<data root>.preserved-<old
      incarnation>` and flush the parent directory, then rename the
      staging root to `<data root>` and flush the parent again, so the
-     renames persist in order; then remove the marker. The store lock
+     renames persist in order; then remove the marker and flush the
+     parent once more. The store lock
      is held from before the marker through reopening the restored
      store, and every binding and the staged bytes are checked again
      while the old store is still open, so a refusal changes nothing.
