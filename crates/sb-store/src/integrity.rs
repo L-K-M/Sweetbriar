@@ -53,6 +53,9 @@ const DATABASE_FILES: [&str; 3] = ["state.sqlite", "state.sqlite-wal", "state.sq
 /// The copy's manifest, written last.
 const MANIFEST: &str = "manifest.json";
 
+/// A copy name's suffix when no random one can be drawn.
+const FALLBACK_NONCE: &str = "00000000";
+
 /// What one integrity check came to.
 #[derive(Debug)]
 pub enum IntegrityCheck {
@@ -70,8 +73,12 @@ pub struct IntegrityFinding {
     /// The check's first findings, cut to
     /// [`crate::MAINTENANCE_DETAIL_MAX`] bytes.
     pub detail: String,
-    /// Whether the latch reached the disk. On an error the store is
-    /// still read-only in this process, but the next open isn't.
+    /// Whether the latch took: `Ok` once the writer latched and the
+    /// latch reached the disk. Otherwise the error of the disk, if the
+    /// latch didn't reach it: the store is still read-only in this
+    /// process, but the next open isn't. Else the writer's, whose
+    /// thread had already ended: this process writes nothing either
+    /// way, and the next open is read-only.
     pub latch: Result<(), StoreError>,
     /// The published copy of the database files, or why there is none.
     pub copy: Result<PathBuf, StoreError>,
@@ -131,10 +138,15 @@ pub(crate) fn check(store: &Store, stop: &AtomicBool) -> Result<IntegrityCheck, 
         format: LATCH_FORMAT,
         detected_at,
         detail: detail.clone(),
-        copy: copy_name(detected_at, store.seams.random())?,
+        // The writer has latched, so the record must still be written:
+        // without randomness the copy takes a fixed suffix. One store
+        // latches once, so its millisecond alone keeps the name apart.
+        copy: copy_name(detected_at, store.seams.random())
+            .unwrap_or_else(|_| format!("integrity-{detected_at}-{FALLBACK_NONCE}")),
     };
     let fs = store.seams.fs();
-    let latch = writer.and(write_latch(fs, store.seams.random(), &store.paths, &record));
+    // The disk's error first: it is the one the next open feels.
+    let latch = write_latch(fs, store.seams.random(), &store.paths, &record).and(writer);
     let copy = make_copy(fs, &store.paths, &record);
     Ok(IntegrityCheck::Finding(IntegrityFinding {
         detail,

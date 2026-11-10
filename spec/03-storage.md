@@ -193,41 +193,50 @@ against concurrent replacement.
   - On failure: stop remote effects, keep the store read-only, copy the
     files to `recovery/`, and tell the user. Never repair by deleting.
   - **The full check (M1.8h5a)** runs `PRAGMA integrity_check(16)` on a
-    read-only connection of its own and stops between steps when asked:
-    a stop that interrupts it records nothing, and a check that finished
-    acts on what it found. A finding is its first rows, or the
-    corruption error SQLite met first (opening the connection included),
-    cut to 1,024 bytes. A check on a store already latched, before or
-    during its run, is `Corrupt` and records nothing. A finding is
-    handled in this order:
+    read-only connection of its own and stops when asked, its progress
+    handler looking between batches of SQLite steps: a stop that
+    interrupts it records nothing, and a check that finished acts on
+    what it found. A finding is its first rows, or the corruption error
+    SQLite met first (opening the connection included), cut to 1,024
+    bytes at a character boundary. Other open errors are the check's
+    own failure, not a finding. A check on a store already latched,
+    before or during its run, is `Corrupt` and records nothing: the
+    writer takes the latch under its lock, so of two concurrent checks
+    one records its finding. A finding is handled in this order:
     1. The writer latches: queued writes fail `Corrupt` naming the
        finding, new ones are refused, the job or idle checkpoint running
-       then finishes, and nothing checkpoints, at close neither, which
+       then finishes before the latch returns (a stop doesn't cut that
+       wait short), and nothing checkpoints, at close neither, which
        also writes no clean-shutdown marker. The database files stop
        changing; reads go on. A writer whose thread has ended can't
        latch; the result says so and the next two steps still run.
     2. `integrity-latch.json` (the finding, its time and the copy's
        name) is written to a temporary name, flushed, renamed into the
        data root and the root flushed. A latch that can't be written is
-       reported; the store stays read-only in this process.
+       reported; the store stays read-only in this process, and step 3
+       still runs. Without randomness for the copy's name, its suffix
+       is `00000000`.
     3. `state.sqlite`, then `-wal` and `-shm` where present, are copied
        byte for byte, not through SQLite, into
        `recovery/.integrity-<ms>-<hex>.tmp/`; a `manifest.json` of each
        file's length and SHA-256 and the finding is written last, and
        the directory is flushed, renamed to `integrity-<ms>-<hex>/` and
-       `recovery/` flushed.
+       `recovery/` flushed. The `-shm` file is volatile evidence: a
+       reader may still touch it while it is copied.
   - **A latched open.** A writable open reads the latch after resolving an
     interrupted restore swap and before anything else touches the root.
-    With a latch, the store opens read-only: no layout is created, no
+    With a latch, the store opens read-only, the writer's connection
+    opened read-only too: no layout is created, no
     `quick_check`, migration, startup record, reservation expiry or
     scratch cleanup runs, and the writer refuses every write. A latched
     store that would need migrating, or whose database is missing or
     empty, is `Corrupt`; nothing creates one. A latch that can't be
     read is still a latch. A latch whose copy was never published makes
-    it again, over its own unfinished attempt. The latch lives inside
-    the data root: a restore swap preserves it with the damaged root,
-    and the restored store opens without it. Nothing in Sweetbriar
-    removes it.
+    it again: its unfinished attempt's directory is removed, and the
+    files as they are now are copied, with a manifest of their own. The
+    latch lives inside the data root: a restore swap moves it aside
+    with the damaged root, and the restored store opens without it.
+    Nothing in Sweetbriar deletes it.
 
 ### Export capture accounting (M1.7b2a)
 

@@ -237,9 +237,12 @@ impl Store {
 
     /// The full integrity check (spec/03 "Integrity"): `PRAGMA
     /// integrity_check` on a connection of its own, stopping between
-    /// steps once `stop` is raised. A finding latches the store
-    /// read-only, now and at every later open, and copies the database
-    /// files to `recovery/`; see [`crate::IntegrityFinding`]. Blocking,
+    /// batches of the pragma's steps once `stop` is raised (the latch
+    /// still waits for the writer's running job). A finding latches
+    /// the store read-only, now and at every later open of this data
+    /// root, and copies the database files to `recovery/`; see
+    /// [`crate::IntegrityFinding`]. A restore swap moves the latch
+    /// aside with the damaged root (spec/03 "Integrity"). Blocking,
     /// and it can take minutes on a large archive; never on the writer
     /// thread. On a store already latched it's `Corrupt`.
     pub fn check_integrity(
@@ -825,15 +828,15 @@ pub(crate) fn open_under_lease(
     let latch = crate::integrity::read_latch(fs, paths)?;
     if let Some(latch) = &latch {
         check_layout(fs, paths)?;
-        // The writable connection below would create a missing
-        // database; a latched one is evidence, never recreated.
+        // A latched database is evidence, never recreated; an empty
+        // one has nothing to read.
         let present = fs
             .metadata(paths.state_db())
             .map_err(fs_err("stat", paths))?
             .is_some_and(|md| !md.is_empty());
         if !present {
             return Err(StoreError::corrupt(format!(
-                "the store is read-only after an integrity finding and its database is missing: {}",
+                "the store is read-only after an integrity finding and its database is missing or empty: {}",
                 latch.detail
             )));
         }
@@ -844,7 +847,14 @@ pub(crate) fn open_under_lease(
     if latch.is_none() {
         crate::validation_scratch::ScratchOwner::cleanup(fs, paths.objects_tmp())?;
     }
-    let mut conn = open_connection(paths.state_db(), Access::ReadWrite, writer_pragmas)?;
+    // A latched store's writer connection is read-only too: the latch
+    // refuses every write before it reaches the connection, and SQLite
+    // refuses one that somehow did.
+    let access = match &latch {
+        Some(_) => Access::ReadOnly,
+        None => Access::ReadWrite,
+    };
+    let mut conn = open_connection(paths.state_db(), access, writer_pragmas)?;
     check_sqlite_version(&conn, pinned)?;
     if let Some(latch) = &latch {
         // Migrating writes; a latched store at an older version can't

@@ -123,6 +123,7 @@ fn a_finding_latches_the_store_and_copies_its_files() {
         store.close().unwrap();
         damage_the_index(&paths, keep_clean_marker);
         let store = reopen(&paths);
+        assert!(!store.writer.is_read_only());
         try_write(&store).unwrap();
 
         let IntegrityCheck::Finding(finding) = check(&store) else {
@@ -171,14 +172,18 @@ fn a_finding_latches_the_store_and_copies_its_files() {
         let after = (sha256(paths.state_db()), wal.exists().then(|| sha256(&wal)));
         assert_eq!(before, after);
 
-        // A reopen is latched too, and makes no second copy.
+        // A reopen is latched too, on a connection that can't write,
+        // and makes no second copy; it, its reads and its close leave
+        // the database and its WAL as they were.
         let store = reopen(&paths);
         assert_eq!(store.integrity_latch().as_deref(), Some(&*finding.detail));
+        assert!(store.writer.is_read_only());
         assert!(matches!(try_write(&store), Err(StoreError::Corrupt { .. })));
         assert_eq!(probe_rows(&store), 201);
         assert_eq!(copies(&paths), [copy]);
         store.close().unwrap();
-        assert_eq!(sha256(paths.state_db()), after.0);
+        let reopened = (sha256(paths.state_db()), wal.exists().then(|| sha256(&wal)));
+        assert_eq!(reopened, after);
     }
 }
 
@@ -401,7 +406,7 @@ fn a_latched_store_without_its_database_does_not_open() {
     }
     match crate::open(&paths, &test_seams(real_fs())) {
         Err(StoreError::Corrupt { detail }) => {
-            assert!(detail.contains("database is missing"), "{detail}");
+            assert!(detail.contains("database is missing or empty"), "{detail}");
             assert!(detail.contains("an old finding"), "{detail}");
         }
         other => panic!("expected Corrupt, got {:?}", other.map(|_| ())),
@@ -446,4 +451,48 @@ fn a_header_the_check_cannot_open_is_a_finding() {
     finding.copy.unwrap();
     assert!(latch_path(&paths).exists());
     assert!(matches!(try_write(&store), Err(StoreError::Corrupt { .. })));
+    store.close().unwrap();
+}
+
+/// Randomness that runs out once `.0` is raised.
+struct Exhaustible(Arc<AtomicBool>);
+
+impl crate::Random for Exhaustible {
+    fn fill(&self, dest: &mut [u8]) -> io::Result<()> {
+        if self.0.load(Ordering::SeqCst) {
+            return Err(io::Error::other("no entropy"));
+        }
+        dest.fill(7);
+        Ok(())
+    }
+}
+
+/// Randomness running out after the writer latched still records the
+/// finding: the copy takes the fixed suffix, and the latch file,
+/// whose temporary name needs randomness, is reported unwritten.
+#[test]
+fn a_finding_without_randomness_still_latches_and_copies() {
+    let (_scratch, paths, store) = open_with_probe("integrity-no-entropy");
+    store.close().unwrap();
+    damage_the_index(&paths, true);
+    let exhausted = Arc::new(AtomicBool::new(false));
+    let base = test_seams(real_fs());
+    let seams = crate::Seams::new(
+        Arc::clone(base.fs_arc()),
+        Arc::clone(base.clock_arc()),
+        Arc::new(Exhaustible(Arc::clone(&exhausted))),
+    );
+    let store = crate::open(&paths, &seams).unwrap();
+    exhausted.store(true, Ordering::SeqCst);
+
+    let IntegrityCheck::Finding(finding) = check(&store) else {
+        panic!("no finding");
+    };
+    assert!(finding.latch.is_err(), "{:?}", finding.latch);
+    let copy = finding.copy.unwrap();
+    let name = copy.file_name().unwrap().to_str().unwrap();
+    assert!(name.ends_with(&format!("-{FALLBACK_NONCE}")), "{name}");
+    assert!(valid_copy_name(name), "{name}");
+    assert!(matches!(try_write(&store), Err(StoreError::Corrupt { .. })));
+    store.close().unwrap();
 }

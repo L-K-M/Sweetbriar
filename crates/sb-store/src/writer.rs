@@ -453,6 +453,9 @@ pub struct Writer {
     /// Told when a `close` is about to join, with the handle lock held.
     #[cfg(test)]
     joining: Mutex<Option<std::sync::mpsc::Sender<()>>>,
+    /// Whether SQLite opened the connection read-only.
+    #[cfg(test)]
+    read_only: bool,
 }
 
 /// The writer thread's body, as handed to a [`Spawn`].
@@ -535,6 +538,8 @@ impl Writer {
             #[cfg(test)]
             checkpoint_pause: Mutex::new(None),
         });
+        #[cfg(test)]
+        let read_only = conn.is_readonly("main").map_err(crate::schema::bug)?;
         let thread_shared = Arc::clone(&shared);
         let handle = spawn(Box::new(move || serve(conn, thread_shared)))
             .map_err(|e| StoreError::unavailable(format!("cannot start the writer thread: {e}")))?;
@@ -545,6 +550,8 @@ impl Writer {
             handle: Mutex::new(Some(handle)),
             #[cfg(test)]
             joining: Mutex::new(None),
+            #[cfg(test)]
+            read_only,
         })
     }
 
@@ -755,6 +762,11 @@ impl Writer {
     /// ended.
     pub(crate) fn is_closed(&self) -> bool {
         lock(&self.shared.state).closed
+    }
+
+    /// Whether the thread's connection was opened read-only.
+    pub(crate) fn is_read_only(&self) -> bool {
+        self.read_only
     }
 
     /// Pending jobs in `priority`'s queue (a parked task can't pop them).
