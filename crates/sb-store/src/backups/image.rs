@@ -1,6 +1,6 @@
 //! Authentication and isolated inspection of a backup database image.
+use super::home::Home;
 use super::*;
-use rusqlite::OptionalExtension;
 use sha2::{Digest, Sha256};
 use std::io::{Read, Write};
 use std::ops::ControlFlow;
@@ -45,37 +45,30 @@ fn paths(root: &Path, id: &str) -> (PathBuf, PathBuf) {
         root.join(format!(".verifier-{id}.owner")),
     )
 }
-fn incarnation(conn: &Connection) -> Result<String, StoreError> {
-    conn.query_row(
-        "SELECT value FROM store_meta WHERE key='incarnation'",
-        [],
-        |r| r.get(0),
-    )
-    .map_err(|e| classify(e, "read verifier incarnation"))
+
+/// A running verification as its work sees it: the scratch owner's id
+/// and the home its rows live in.
+pub(super) struct Session<'a> {
+    pub id: &'a str,
+    pub home: &'a Home<'a>,
 }
 
 impl Backups {
-    fn recover_images(&self, path: &Path) -> Result<(), StoreError> {
-        let root = self.fs.open_confined_dir(path).map_err(io_error)?;
-        loop {
-            let conn = open_connection(&self.state_db, Access::ReadOnly, READER_PRAGMAS)?;
-            let current = incarnation(&conn)?;
-            let pending: Option<(String, String)> = conn.query_row(
-                "SELECT id, token FROM verifier_scratch WHERE incarnation=?1 ORDER BY id LIMIT 1", [&current],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            ).optional().map_err(|e| classify(e, "read verifier cleanup"))?;
-            drop(conn);
-            let Some((id, token)) = pending else {
-                return Ok(());
-            };
+    fn recover_images(&self, home: &Home) -> Result<(), StoreError> {
+        let root = self
+            .fs
+            .open_confined_dir(home.scratch_root())
+            .map_err(io_error)?;
+        while let Some((id, token)) = home.pending()? {
             scratch::cleanup(root.as_ref(), &id, &token, None).map_err(io_error)?;
-            super::ledger::purge(&self.writer, &id)?;
-            await_write(self.writer.upkeep(WritePriority::Index, move |tx| {
+            super::ledger::purge(home, &id)?;
+            home.write(move |tx| {
                 tx.execute("DELETE FROM verifier_scratch WHERE id=?1", [&id])
                     .map_err(|e| classify(e, "finish verifier cleanup"))?;
                 Ok(())
-            }))?;
+            })?;
         }
+        Ok(())
     }
 
     pub(crate) fn inspect_image(
@@ -111,7 +104,7 @@ impl Backups {
             cancelled,
             progress,
             |_| Ok((expected, length)),
-            |conn, id, _| callback(conn, id),
+            |conn, session, _| callback(conn, session.id),
         )
     }
 
@@ -123,7 +116,7 @@ impl Backups {
         prepare: impl FnOnce(&dyn sb_types::fs::ConfinedDir) -> Result<([u8; 32], u64), StoreError>,
         callback: impl FnOnce(
             &Connection,
-            &str,
+            &Session<'_>,
             &dyn sb_types::fs::ConfinedDir,
         ) -> Result<ControlFlow<()>, StoreError>,
     ) -> Result<BackupImageInspection, StoreError> {
@@ -145,7 +138,7 @@ impl Backups {
         prepare: impl FnOnce(&dyn sb_types::fs::ConfinedDir) -> Result<([u8; 32], u64), StoreError>,
         callback: impl FnOnce(
             &Connection,
-            &str,
+            &Session<'_>,
             &dyn sb_types::fs::ConfinedDir,
         ) -> Result<ControlFlow<()>, StoreError>,
         status: &SessionStatus,
@@ -154,9 +147,6 @@ impl Backups {
         if self.writer.is_writer_thread() {
             return Err(StoreError::internal("writer cannot inspect a backup"));
         }
-        // Its scratch cleanup and ledger would remove and write in the
-        // data root; M1.8h5b4 keeps them off a latched store.
-        self.objects.latch().refuse("verify a backup")?;
         if cancelled.load(std::sync::atomic::Ordering::Acquire) {
             return Ok(BackupImageInspection::Cancelled);
         }
@@ -172,14 +162,18 @@ impl Backups {
             // lock is safe to recover from.
             Err(std::sync::TryLockError::Poisoned(e)) => e.into_inner(),
         };
-        let root = self
-            .state_db
-            .parent()
-            .expect("state database has parent")
-            .join("recovery");
+        // A latched store's root is frozen and its writer refuses, so
+        // its verification lives beside it (spec/03 "Integrity"). The
+        // home is chosen once: a verification a latch catches fails at
+        // the writer and doesn't move.
+        let home = match self.objects.latch().get() {
+            None => self.store_home(),
+            Some(_) => Home::beside(self.fs.as_ref(), &self.state_db)?,
+        };
+        let root = home.scratch_root().to_path_buf();
         // Cleanup from an earlier failed or cancelled call remains
         // durable and must be retried before creating another image.
-        self.recover_images(&root)?;
+        self.recover_images(&home)?;
         let id = Uuid::from_random_bytes(self.draw_id()?).to_string();
         let token = Uuid::from_random_bytes(self.draw_id()?).to_string();
         let (dir, marker) = paths(Path::new(""), &id);
@@ -199,14 +193,27 @@ impl Backups {
         }
         let row_id = id.clone();
         let row_token = token.clone();
-        await_write(self.writer.upkeep(WritePriority::Index, move |tx| {
-            let inserted = tx.execute("INSERT INTO verifier_scratch SELECT ?1, ?2, value FROM store_meta WHERE key='incarnation'", params![row_id, row_token])
-                .map_err(|e| classify(e, "record verifier scratch"))?;
-            if inserted != 1 { return Err(StoreError::corrupt("verifier incarnation is absent")); }
+        let bound = home.bound_incarnation()?;
+        home.write(move |tx| {
+            let inserted = match &bound {
+                // The store's own transaction reads its incarnation.
+                None => tx.execute(
+                    "INSERT INTO verifier_scratch SELECT ?1, ?2, value FROM store_meta WHERE key='incarnation'",
+                    params![row_id, row_token],
+                ),
+                Some(incarnation) => tx.execute(
+                    "INSERT INTO verifier_scratch VALUES (?1, ?2, ?3)",
+                    params![row_id, row_token, incarnation],
+                ),
+            }
+            .map_err(|e| classify(e, "record verifier scratch"))?;
+            if inserted != 1 {
+                return Err(StoreError::corrupt("verifier incarnation is absent"));
+            }
             #[cfg(test)]
             transaction_cut("insert-before-commit");
             Ok(())
-        }))?;
+        })?;
         #[cfg(test)]
         transaction_cut("insert-after-commit");
         let mut retained = None;
@@ -313,7 +320,14 @@ impl Backups {
                 }
                 match inspected {
                     image_inspect::Inspection::Cancelled => Ok(inspected),
-                    _ => match callback(&conn, &id, scratch.as_ref())? {
+                    _ => match callback(
+                        &conn,
+                        &Session {
+                            id: &id,
+                            home: &home,
+                        },
+                        scratch.as_ref(),
+                    )? {
                         ControlFlow::Continue(()) => Ok(inspected),
                         ControlFlow::Break(()) => Ok(image_inspect::Inspection::Cancelled),
                     },
@@ -355,16 +369,16 @@ impl Backups {
         #[cfg(test)]
         transaction_cut("before-cleanup");
         scratch::cleanup(root_dir.as_ref(), &id, &token, retained.as_deref()).map_err(io_error)?;
-        super::ledger::purge(&self.writer, &id)?;
+        super::ledger::purge(&home, &id)?;
         #[cfg(test)]
         transaction_cut("after-cleanup");
-        await_write(self.writer.upkeep(WritePriority::Index, move |tx| {
+        home.write(move |tx| {
             tx.execute("DELETE FROM verifier_scratch WHERE id=?1", [&id])
                 .map_err(|e| classify(e, "finish verifier cleanup"))?;
             #[cfg(test)]
             transaction_cut("delete-before-commit");
             Ok(())
-        }))?;
+        })?;
         status.cleaned.set(true);
         #[cfg(test)]
         transaction_cut("delete-after-commit");

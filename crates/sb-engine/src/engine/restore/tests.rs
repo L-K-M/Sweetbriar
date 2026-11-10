@@ -408,6 +408,59 @@ fn a_restore_waits_for_no_inventory_and_refuses_while_one_runs() {
     block_on(engine.shutdown()).unwrap();
 }
 
+/// On a latched store an inventory can neither finish nor be
+/// cancelled: its writes are refused. The row it leaves must not
+/// refuse the restore, which is the only way out (plan M1.8h5b4).
+#[test]
+fn a_latched_store_restores_past_an_inventory_it_can_t_finish() {
+    let scratch = ScratchDir::new("engine-restore-latched-inventory");
+    let root = data_root(&scratch);
+    let (engine, receipt) = backed_up_then_damaged(&root);
+    let (entered, reached) = mpsc::channel();
+    let (release, released) = mpsc::channel::<()>();
+    let released = Mutex::new(released);
+    *engine
+        .imports()
+        .before_task
+        .lock()
+        .expect("a panicking thread held the import job registry") = Some(Arc::new(move |_| {
+        entered.send(()).unwrap();
+        let _ = released.lock().unwrap().recv();
+    }));
+    let started = block_on(engine.start_import(
+        &engine.new_idempotency_key(),
+        vec![mbox_file(scratch.path())],
+    ))
+    .unwrap();
+    reached.recv_timeout(PATIENCE).unwrap();
+
+    // The finding lands while the inventory is parked: the row stays
+    // `inventory`, and cancelling it is refused like any write.
+    find_the_damage(&engine);
+    release.send(()).unwrap();
+    let job = block_on(engine.import_job(started.job_id())).unwrap();
+    assert_eq!(job.state(), ImportJobState::Inventory);
+    let cancelled = block_on(engine.cancel_job(&engine.new_idempotency_key(), started.job_id()));
+    assert!(
+        matches!(cancelled, Err(EngineError::Corrupt { .. })),
+        "{cancelled:?}"
+    );
+    let stage = qualified(&engine, &receipt);
+
+    let engine = finish(engine.restore(stage, Arc::new(AtomicBool::new(false)))).unwrap();
+
+    assert!(!engine.read_only());
+    assert_eq!(engine.health().integrity, crate::Integrity::Sound);
+    // The generation predates the import: the restored store has no
+    // such job, and it takes writes again.
+    assert!(matches!(
+        block_on(engine.import_job(started.job_id())),
+        Err(EngineError::NotFound { .. })
+    ));
+    add_setting(&engine, "test.restore.after");
+    block_on(engine.shutdown()).unwrap();
+}
+
 /// While a restore holds starts, a new inventory is refused before any
 /// write; once released, it starts.
 #[test]
@@ -471,11 +524,11 @@ fn a_restore_ends_read_only_and_a_refused_one_keeps_it() {
     let scratch = ScratchDir::new("engine-restore-read-only");
     let root = data_root(&scratch);
     let (engine, receipt) = backed_up_then_damaged(&root);
-    // Staged before the finding: verification is refused after it
-    // until M1.8h5b4.
-    let stage = qualified(&engine, &receipt);
     find_the_damage(&engine);
     assert!(engine.read_only());
+    // Verified, staged and qualified on the latched store, beside its
+    // root (M1.8h5b4).
+    let stage = qualified(&engine, &receipt);
     // Asked for on a read-only engine, as a latched open asks: the
     // schedule is armed and starts nothing.
     engine.schedule_maintenance();

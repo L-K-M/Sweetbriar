@@ -307,9 +307,10 @@ impl Store {
         crate::integrity::check(self, stop)
     }
 
-    /// The integrity finding this store is read-only after, if any:
-    /// every write and the store's own file work are refused `Corrupt`
-    /// naming it (spec/03 "Integrity").
+    /// The integrity finding this store is read-only after, if any
+    /// (spec/03 "Integrity"). The store's own file work is refused
+    /// `Corrupt` naming it from the moment this shows; the writer
+    /// refuses once the file work in flight has ended.
     pub fn integrity_latch(&self) -> Option<crate::IntegrityLatch> {
         self.latch.get()
     }

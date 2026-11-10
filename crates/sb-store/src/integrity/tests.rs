@@ -14,6 +14,7 @@ use crate::schema::bug;
 use crate::testing::{FIXED_NOW_MS, extra_migration, reading, scratch_paths, test_seams, writing};
 use crate::{IntegrityCheck, WritePriority};
 
+mod beside;
 mod frozen;
 
 /// A store holding a small indexed fixture table.

@@ -227,8 +227,8 @@ against concurrent replacement.
   - **The frozen root (M1.8h5b1).** Step 1 begins with the store's own
     file work outside the writer, then the writer latches. Each step of
     that work is counted while it runs. Latching refuses new steps at
-    once and then waits for the ones in flight, so none is running and
-    none starts once it returns. A step never waits for the latch, so
+    once and then waits for the ones in flight, so no step is running
+    and none starts once it returns. A step never waits for the latch, so
     one may start inside another (a backup copying an object through
     its verifying reader, which quarantines on damage). A step covers
     bounded file work only: a publication takes one per chunk it
@@ -237,9 +237,10 @@ against concurrent replacement.
     latched open, each is refused `Corrupt` naming the finding before it
     touches a file:
     publishing, installing or removing an object, starting, completing
-    or removing (retention) a backup generation, verifying a backup,
-    copying or removing an import's sources, writing an import report
-    and leasing validation scratch. A read that finds an object damaged
+    or removing (retention) a backup generation, recording a
+    generation's weekly check, copying or removing an import's sources,
+    writing an import report and leasing validation scratch. A read
+    that finds an object damaged
     reports it `Corrupt` and leaves the file where it is, unquarantined.
     Work already past its first step fails at its next one, and nothing
     cleans up after the latch. A backup generation being copied stops at
@@ -249,12 +250,45 @@ against concurrent replacement.
     import's source copy, a leased validation scratch and a backup
     verification's scratch in flight are working files outside the
     archive, so they finish or fail on their own; the engine stops
-    their jobs (M1.8h5b2). Backup verification, which a restore starts
-    with, stays refused until M1.8h5b4 keeps its scratch ledger off the
-    latched writer. The store reports the latch (the finding, its time and the
-    published copy) and tells one observer once: as the store latches,
-    or at once when it is installed on a store already latched. It only
-    signals, and a panic in it is caught.
+    their jobs (M1.8h5b2). The store reports the latch (the finding, its
+    time and the published copy) and tells one observer once: as the
+    store latches, or at once when it is installed on a store already
+    latched. It only signals, and a panic in it is caught. The latch
+    shows from the moment new steps are refused; the writer refuses
+    once the steps in flight have ended.
+  - **Verifying beside the root (M1.8h5b4).** A restore starts with a
+    verification, so a latched store still verifies a backup, and it
+    does so without changing a file in its root. A verification's
+    scratch directory, its owner row and its object ledger have a
+    home, chosen as the verification starts:
+
+    | the store | rows                                 | scratch root           |
+    |-----------|--------------------------------------|------------------------|
+    | sound     | `state.sqlite`, through the writer   | `<data root>/recovery` |
+    | latched   | `<data root>.verifier/ledger.sqlite` | `<data root>.verifier` |
+
+    The sibling is a private directory next to the data root, like a
+    restore's stage. Its database holds the two verifier tables and
+    nothing else, and the ownership protocol is the one "Restore"
+    describes for a sound store: the row before the directory, the
+    cleanup before the row goes, a row of another incarnation
+    authorizing nothing. The incarnation is the latched store's, read
+    from its database. So a verification cut short beside the root is
+    cleaned up by the next one there, which a restore always begins
+    with.
+    - A verification keeps its home: one that a latch catches fails at
+      the writer and never continues in the sibling.
+    - The ledger decides whether a backup reconciles, so a database
+      that holds anything but the two tables (a trigger, a view,
+      another table) is refused `Corrupt`, as is a sibling that is no
+      directory. Neither is repaired or removed.
+    - Staging and qualification only read the data root, and the swap
+      preserves it whole, its latch included. The sibling stays behind
+      with an empty ledger.
+    - The engine doesn't refuse this restore for an import's inventory
+      or an export's capture left unfinished ("Restore" step 4): on a
+      read-only store neither can finish or be cancelled, and the
+      restore is the only way out.
   - **The read-only engine (M1.8h5b2).** The engine is that observer.
     From the finding on, and from the open of a latched store:
     - long work (an import, an export, the thread rebuild) stops at its
@@ -852,7 +886,8 @@ all emitted references after cancellation or any failure. The walk alone does
 not prove that the references match a manifest.
 
 The verifier retains manifest object hashes and unsigned lengths in the
-trusted store's disk-backed ledger, keyed by the scratch owner. Duplicate
+trusted store's disk-backed ledger, keyed by the scratch owner (a latched
+store's ledger and scratch are beside its root: "Integrity"). Duplicate
 hashes are rejected. Reconciliation marks references and pages through the
 ledger without holding the corpus in memory. Ledger writes and deletion use
 bounded batches of at most 200 rows. Cleanup removes the ledger in batches
@@ -916,7 +951,11 @@ The process holds `<data root>.lock` throughout.
      store, its workers and schedules started again. An import's inventory
      and an export's capture resume from no checkpoint, so a restore is
      refused before anything stops while one runs, and none starts
-     until the restore ends. SQLite must never see a database file
+     until the restore ends. A store latched read-only ("Integrity")
+     differs in two ways: a row left in one of those states refuses
+     nothing, since it can't finish there, and the latched writer
+     closes without a checkpoint, so the root is preserved as the
+     finding left it. SQLite must never see a database file
      renamed while it's open.
    - Write a marker file `<data root>.restore-pending` naming the staging
      root and the preserved name. Flush it **and its parent directory**

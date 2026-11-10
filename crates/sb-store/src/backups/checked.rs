@@ -115,6 +115,11 @@ impl Backups {
                 "the writer thread cannot check a backup through its own queue",
             ));
         }
+        // The verdict is a write, which a latched store refuses: say
+        // so before reading the generation, not after.
+        self.objects
+            .latch()
+            .refuse("record a backup generation's check")?;
         let token = self.reserve_operation()?;
         let inspected = self.inspect_in_place(generation, cancel);
         drop(token);

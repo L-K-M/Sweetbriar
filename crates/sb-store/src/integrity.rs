@@ -149,6 +149,7 @@ struct Observed {
 
 /// One step of file work in the data root, admitted while the store
 /// is unlatched; the latch waits for it to drop.
+#[must_use = "the latch counts the step only while this guard is alive"]
 pub(crate) struct FileStep<'a> {
     latch: &'a RootLatch,
 }

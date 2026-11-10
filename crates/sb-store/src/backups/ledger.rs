@@ -1,8 +1,9 @@
-//! Bounded trusted-store scratch for later manifest reconciliation.
+//! Bounded disk-backed scratch for later manifest reconciliation, in
+//! the verification's home: the trusted store, or the sibling of a
+//! latched one ([`super::home`]).
+use super::home::Home;
 use super::{classify, manifest::Entry};
 use crate::StoreError;
-use crate::store::await_write;
-use crate::writer::{WritePriority, Writer};
 use rusqlite::{Connection, params};
 
 pub(super) const BATCH: usize = 200;
@@ -21,9 +22,9 @@ fn bounded(len: usize) -> Result<(), StoreError> {
     Ok(())
 }
 
-pub(super) fn insert(writer: &Writer, id: String, entries: Vec<Entry>) -> Result<(), StoreError> {
+pub(super) fn insert(home: &Home, id: String, entries: Vec<Entry>) -> Result<(), StoreError> {
     bounded(entries.len())?;
-    await_write(writer.upkeep(WritePriority::Index, move |tx| {
+    home.write(move |tx| {
         for entry in entries {
             let count = tx.execute(
                 "INSERT INTO verifier_objects(scratch_id,sha256,bytes) VALUES (?1,?2,?3) ON CONFLICT(scratch_id,sha256) DO NOTHING",
@@ -34,28 +35,24 @@ pub(super) fn insert(writer: &Writer, id: String, entries: Vec<Entry>) -> Result
             }
         }
         Ok(())
-    }))
+    })
 }
 
-pub(super) fn reference(
-    writer: &Writer,
-    id: String,
-    hashes: Vec<[u8; 32]>,
-) -> Result<(), StoreError> {
+pub(super) fn reference(home: &Home, id: String, hashes: Vec<[u8; 32]>) -> Result<(), StoreError> {
     reference_sized(
-        writer,
+        home,
         id,
         hashes.into_iter().map(|hash| (hash, None)).collect(),
     )
 }
 
 pub(super) fn reference_sized(
-    writer: &Writer,
+    home: &Home,
     id: String,
     hashes: Vec<([u8; 32], Option<u64>)>,
 ) -> Result<(), StoreError> {
     bounded(hashes.len())?;
-    await_write(writer.upkeep(WritePriority::Index, move |tx| {
+    home.write(move |tx| {
         for (hash, size) in hashes {
             let count = tx
                 .execute(
@@ -70,7 +67,7 @@ pub(super) fn reference_sized(
             }
         }
         Ok(())
-    }))
+    })
 }
 
 pub(super) fn page(
@@ -108,11 +105,10 @@ pub(super) fn purge_batch(conn: &Connection, id: &str) -> Result<usize, StoreErr
         .map_err(|e| classify(e, "purge verifier ledger"))
 }
 
-pub(super) fn purge(writer: &Writer, id: &str) -> Result<(), StoreError> {
+pub(super) fn purge(home: &Home, id: &str) -> Result<(), StoreError> {
     loop {
         let id = id.to_owned();
-        let count =
-            await_write(writer.upkeep(WritePriority::Index, move |tx| purge_batch(tx, &id)))?;
+        let count = home.write(move |tx| purge_batch(tx, &id))?;
         if count == 0 {
             return Ok(());
         }
