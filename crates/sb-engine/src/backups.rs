@@ -8,8 +8,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use sb_resources::{
-    BackupDestination, BackupGeneration, BackupGenerationState, BackupReceipt, Receipt, Resources,
-    StartedBackup, StoreError, receipt_generation_id,
+    BackupDestination, BackupGeneration, BackupReceipt, Receipt, Resources, StartedBackup,
+    StoreError, receipt_generation_id,
 };
 use tokio::sync::oneshot;
 
@@ -37,7 +37,8 @@ impl BackupStarted {
 
     /// The copy this call started, to wait on. `None` when the key had
     /// started its generation before: nothing was started now, and
-    /// `list_backups` says what became of that one.
+    /// `list_backups` says what became of that one unless retention
+    /// has since removed its row.
     pub fn into_copy(self) -> Option<BackupCopy> {
         self.copy
     }
@@ -111,27 +112,21 @@ impl Drop for Copying {
 }
 
 /// How the copy ended, from its result, the stop flag as it returned
-/// and the generation's row.
+/// and the acknowledged completion fact, without another store read.
 fn copy_end(
     resources: &Resources,
-    generation_id: &str,
     result: Result<BackupReceipt, StoreError>,
     stopped: bool,
+    completion_committed: bool,
 ) -> BackupEnd {
     let error = match result {
         Ok(_) => return BackupEnd::Complete { after: None },
         Err(error) => error,
     };
     // Completion commits before retention runs, and retention's error
-    // comes back through the same result. The row says which it was; a
-    // row that can't be read leaves the error to speak for itself.
-    let complete = resources.backup_generations().is_ok_and(|generations| {
-        generations.iter().any(|generation| {
-            generation.generation_id == generation_id
-                && generation.state == BackupGenerationState::Complete
-        })
-    });
-    if complete {
+    // comes back through the same result. The snapshot retains that
+    // acknowledged fact even if the store cannot be read afterwards.
+    if completion_committed {
         return BackupEnd::Complete {
             after: Some(error.to_string()),
         };
@@ -212,7 +207,7 @@ impl Engine {
             let (end, ended) = oneshot::channel();
             let _ = answer.send(Ok(BackupStarted {
                 receipt,
-                generation_id: generation_id.clone(),
+                generation_id,
                 copy: Some(BackupCopy { ended }),
             }));
             let copied = worker
@@ -225,12 +220,13 @@ impl Engine {
                         }
                     }
                     let stop = maintenance.stop_flag();
+                    let completion = snapshot.clone();
                     let result = resources.complete_backup_with(snapshot, stop);
                     copy_end(
                         resources,
-                        &generation_id,
                         result,
                         stop.load(Ordering::SeqCst),
+                        completion.completion_committed(),
                     )
                 })
                 .await;

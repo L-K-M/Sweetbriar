@@ -302,6 +302,7 @@ impl Backups {
             tx_cut("before-completion-commit");
             Ok(())
         }))?;
+        snapshot.completed.store(true, Ordering::Release);
         #[cfg(test)]
         tx_cut("after-completion-commit");
         *active = None;

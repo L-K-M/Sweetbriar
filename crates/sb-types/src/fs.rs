@@ -278,11 +278,28 @@ pub enum Location {
 pub struct Metadata {
     kind: FileKind,
     len: u64,
+    link_count: Option<u64>,
 }
 
 impl Metadata {
     pub fn new(kind: FileKind, len: u64) -> Self {
-        Self { kind, len }
+        Self {
+            kind,
+            len,
+            link_count: None,
+        }
+    }
+
+    /// Add the hard-link count observed with this metadata.
+    pub fn with_link_count(mut self, count: u64) -> Self {
+        self.link_count = Some(count);
+        self
+    }
+
+    /// Names of this inode at observation time, or `None` when the
+    /// adapter cannot report it. This is not a retained-file guarantee.
+    pub fn link_count(&self) -> Option<u64> {
+        self.link_count
     }
 
     pub fn kind(&self) -> FileKind {
@@ -313,6 +330,13 @@ pub enum FileKind {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn legacy_metadata_does_not_claim_a_link_count() {
+        let metadata = Metadata::new(FileKind::File, 0);
+        assert_eq!(metadata.link_count(), None);
+        assert_eq!(metadata.with_link_count(2).link_count(), Some(2));
+    }
 
     #[test]
     fn identified_reads_default_to_unsupported_without_an_unidentified_fallback() {

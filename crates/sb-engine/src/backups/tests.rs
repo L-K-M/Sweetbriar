@@ -364,7 +364,7 @@ fn a_store_that_latched_under_a_copy_fails_it_with_the_finding() {
         })
     };
     // Until the check finds the damage, the stop is a shutdown's.
-    assert_eq!(copy_end(resources, "gen", stop(), true), BackupEnd::Stopped);
+    assert_eq!(copy_end(resources, stop(), true, false), BackupEnd::Stopped);
 
     let check = resources.check_integrity(&AtomicBool::new(false)).unwrap();
     assert!(matches!(check, IntegrityCheck::Finding(_)), "{check:?}");
@@ -374,7 +374,7 @@ fn a_store_that_latched_under_a_copy_fails_it_with_the_finding() {
         .unwrap_err();
     assert!(matches!(refused, StoreError::Corrupt { .. }), "{refused:?}");
     for result in [stop(), Err(refused)] {
-        match copy_end(resources, "gen", result, true) {
+        match copy_end(resources, result, true, false) {
             BackupEnd::Failed(detail) => {
                 assert!(detail.contains("read-only"), "{detail}");
                 assert!(detail.contains(&finding), "{detail}");
@@ -385,18 +385,48 @@ fn a_store_that_latched_under_a_copy_fails_it_with_the_finding() {
     block_on(engine.shutdown()).unwrap();
 }
 
-/// The copy's result, the stop and the row decide the end. A complete
-/// row outranks the error: completion commits before retention runs.
+/// A retention failure after completion stays a completion even when
+/// the next read cannot list generations.
 #[test]
-fn a_copy_s_end_is_read_from_its_result_the_stop_and_the_row() {
-    let scratch = ScratchDir::new("engine-start-backup-end");
+fn a_completed_copy_does_not_depend_on_a_second_store_read() {
+    let scratch = ScratchDir::new("engine-start-backup-unreadable-end");
     let engine = block_on(Engine::open(scratch.path().join("store"))).unwrap();
-    let complete = back_up(&engine);
     let resources = engine.resources();
     let snapshot = resources
         .backup_snapshot(BackupDestination::DataRoot)
         .unwrap();
-    let unfinished = snapshot.generation_id().to_owned();
+    let completion = snapshot.clone();
+    resources.complete_backup(snapshot).unwrap();
+    block_on(resources.write(sb_resources::WritePriority::User, |tx| {
+        tx.execute_batch("ALTER TABLE backup_generations RENAME TO hidden_generations")
+            .map_err(|error| StoreError::Internal {
+                detail: error.to_string(),
+            })
+    }))
+    .unwrap();
+    assert!(resources.backup_generations().is_err());
+    let result = Err(StoreError::Unavailable {
+        reason: "retention could not flush".into(),
+        io_kind: Some(std::io::ErrorKind::StorageFull),
+    });
+    assert!(matches!(
+        copy_end(resources, result, false, completion.completion_committed()),
+        BackupEnd::Complete { after: Some(_) }
+    ));
+    block_on(engine.shutdown()).unwrap();
+}
+
+/// The copy's result, the stop and the acknowledged commit decide the
+/// end. Completion outranks the error: it commits before retention runs.
+#[test]
+fn a_copy_s_end_is_read_from_its_result_the_stop_and_the_commit() {
+    let scratch = ScratchDir::new("engine-start-backup-end");
+    let engine = block_on(Engine::open(scratch.path().join("store"))).unwrap();
+    back_up(&engine);
+    let resources = engine.resources();
+    let snapshot = resources
+        .backup_snapshot(BackupDestination::DataRoot)
+        .unwrap();
     let stop = || {
         Err(StoreError::Unavailable {
             reason: "the backup was cancelled".into(),
@@ -410,20 +440,17 @@ fn a_copy_s_end_is_read_from_its_result_the_stop_and_the_row() {
         })
     };
 
-    assert_eq!(
-        copy_end(resources, &unfinished, stop(), true),
-        BackupEnd::Stopped
-    );
+    assert_eq!(copy_end(resources, stop(), true, false), BackupEnd::Stopped);
     // The same error with no stop raised, and an I/O error under one,
     // are failures.
     for (result, stopped) in [(stop(), false), (full(), true), (full(), false)] {
-        match copy_end(resources, &unfinished, result, stopped) {
+        match copy_end(resources, result, stopped, false) {
             BackupEnd::Failed(detail) => assert!(!detail.is_empty()),
             other => panic!("expected Failed, got {other:?}"),
         }
     }
     // Retention's error after the completion committed.
-    match copy_end(resources, &complete, full(), false) {
+    match copy_end(resources, full(), false, true) {
         BackupEnd::Complete {
             after: Some(detail),
         } => {
@@ -432,14 +459,14 @@ fn a_copy_s_end_is_read_from_its_result_the_stop_and_the_row() {
         other => panic!("expected Complete, got {other:?}"),
     }
     assert_eq!(
-        copy_end(resources, &complete, stop(), true),
+        copy_end(resources, stop(), true, true),
         BackupEnd::Complete {
             after: Some(stop().unwrap_err().to_string())
         }
     );
     let receipt = resources.complete_backup(snapshot).unwrap();
     assert_eq!(
-        copy_end(resources, &unfinished, Ok(receipt), false),
+        copy_end(resources, Ok(receipt), false, true),
         BackupEnd::Complete { after: None }
     );
     block_on(engine.shutdown()).unwrap();
