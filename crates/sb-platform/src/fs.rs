@@ -291,7 +291,7 @@ impl ConfinedDir for RealConfinedDir {
         };
         Ok((
             Box::new(file),
-            Metadata::new(FileKind::File, md.len()),
+            Metadata::new(FileKind::File, md.len()).with_link_count(md.nlink()),
             identity,
         ))
     }
@@ -406,12 +406,17 @@ impl Fs for RealFs {
         if !md.is_file() {
             return Err(not_regular(path));
         }
-        Ok((Box::new(file), Metadata::new(file_kind(&md), md.len())))
+        Ok((
+            Box::new(file),
+            Metadata::new(file_kind(&md), md.len()).with_link_count(md.nlink()),
+        ))
     }
 
     fn metadata(&self, path: &Path) -> io::Result<Option<Metadata>> {
         match std::fs::metadata(path) {
-            Ok(md) => Ok(Some(Metadata::new(file_kind(&md), md.len()))),
+            Ok(md) => Ok(Some(
+                Metadata::new(file_kind(&md), md.len()).with_link_count(md.nlink()),
+            )),
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
             Err(e) => Err(e),
         }
@@ -1166,6 +1171,11 @@ mod tests {
         let (mut handle, md) = fs.open_regular(&file).unwrap();
         assert_eq!(md.kind(), FileKind::File);
         assert_eq!(md.len(), 5);
+        assert_eq!(md.link_count(), Some(1));
+        std::fs::hard_link(&file, scratch.0.join("another-name")).unwrap();
+        assert_eq!(fs.metadata(&file).unwrap().unwrap().link_count(), Some(2));
+        assert_eq!(fs.open_regular(&file).unwrap().1.link_count(), Some(2));
+        assert_eq!(md.link_count(), Some(1), "metadata is an observation");
         let mut read = String::new();
         handle.seek(SeekFrom::Start(1)).unwrap();
         handle.read_to_string(&mut read).unwrap();
