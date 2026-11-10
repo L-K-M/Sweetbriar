@@ -77,13 +77,15 @@ fn refuse_all_file_work(
     });
     // The weekly check records a verdict, so it is refused up front,
     // by the store and not by the writer after reading the generation.
-    let checked = store.verify_generation(generation, &AtomicBool::new(false));
-    assert!(
-        matches!(&checked, Err(StoreError::Corrupt { detail })
-            if detail.contains("can't record a backup generation's check")),
-        "{checked:?}"
-    );
-    assert_frozen(paths, "check", || checked.map(drop));
+    assert_frozen(paths, "check", || {
+        let checked = store.verify_generation(generation, &AtomicBool::new(false));
+        assert!(
+            matches!(&checked, Err(StoreError::Corrupt { detail })
+                if detail.contains("can't record a backup generation's check")),
+            "{checked:?}"
+        );
+        checked.map(drop)
+    });
 }
 
 /// From the finding on, and after a latched reopen, the store's own
