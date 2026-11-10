@@ -23,10 +23,11 @@ impl Resources {
         self.store.integrity_latch()
     }
 
-    /// Install the one observer of the store latching. It runs once,
-    /// on the check's thread, before the latch file and the copy are
-    /// written: signal only, never block, join or write. A store that
-    /// opened latched never calls it; read [`Self::integrity_latch`].
+    /// Install the one observer of the store latching. It is told
+    /// once: at once, on this thread, when a finding is already
+    /// recorded (a store that opened latched included), else on the
+    /// check's thread as the store latches, before the latch file and
+    /// the copy are written. Signal only: never block, join or write.
     pub fn observe_integrity_latch(&self, observer: Arc<dyn Fn() + Send + Sync>) {
         self.store.observe_integrity_latch(observer);
     }
