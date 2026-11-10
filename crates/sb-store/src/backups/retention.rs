@@ -53,7 +53,7 @@ impl Backups {
             #[cfg(test)]
             cut("before-mark");
             let id = generation.id.clone();
-            await_write(self.writer.submit(WritePriority::Index, move |tx| {
+            await_write(self.writer.upkeep(WritePriority::Index, move |tx| {
                 tx.execute("UPDATE backup_generations SET state='failed' WHERE generation_id=?1 AND state='in_progress'", [&id])
                     .map_err(|e| classify(e, "mark interrupted backup failed"))?;
                 tx.execute("INSERT OR IGNORE INTO backup_cleanup_pending VALUES (?1)", [&id])
@@ -69,7 +69,7 @@ impl Backups {
             cut("removed");
             loop {
                 let id = generation.id.clone();
-                let removed = await_write(self.writer.submit(WritePriority::Index, move |tx| {
+                let removed = await_write(self.writer.upkeep(WritePriority::Index, move |tx| {
                     tx.execute("DELETE FROM object_pins WHERE rowid IN (SELECT rowid FROM object_pins WHERE pin_kind=?1 AND pin_ref=?2 LIMIT ?3)", params![PIN_KIND, id, PIN_BATCH as i64])
                         .map_err(|e| classify(e, "remove interrupted backup pins"))
                 }))?;
@@ -82,7 +82,7 @@ impl Backups {
             #[cfg(test)]
             cut("before-finish");
             let id = generation.id;
-            await_write(self.writer.submit(WritePriority::Index, move |tx| {
+            await_write(self.writer.upkeep(WritePriority::Index, move |tx| {
                 tx.execute(
                     "DELETE FROM backup_cleanup_pending WHERE generation_id=?1",
                     [&id],
@@ -140,7 +140,7 @@ impl Backups {
             #[cfg(test)]
             cut("retention-removed");
             let id = generation.id;
-            await_write(self.writer.submit(WritePriority::Index, move |tx| {
+            await_write(self.writer.upkeep(WritePriority::Index, move |tx| {
                 tx.execute("DELETE FROM backup_ownership WHERE generation_id=?1", [&id])
                     .map_err(|e| classify(e, "remove backup ownership evidence"))?;
                 tx.execute(

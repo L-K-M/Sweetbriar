@@ -138,6 +138,10 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 24,
         run: migration_24,
     },
+    Migration {
+        version: 25,
+        run: migration_25,
+    },
 ];
 
 /// The `store_meta` keys every migrated store holds (spec/02): a
@@ -772,6 +776,18 @@ fn migration_24(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
         referenced INTEGER NOT NULL DEFAULT 0 CHECK(referenced IN (0,1)),
         PRIMARY KEY(scratch_id, sha256)
     ) STRICT, WITHOUT ROWID;",
+    )
+    .map_err(bug)
+}
+
+/// Version 25 seeds the content-change counters behind scheduled
+/// backups (spec/03 "Backup generations", [`crate::changes`]). A store
+/// migrating in has unknown changes since its last generation, so it
+/// starts due: one change ahead of nothing backed up.
+fn migration_25(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
+    tx.execute_batch(
+        "INSERT INTO store_meta (key, value) VALUES ('content_changes', '1');
+         INSERT INTO store_meta (key, value) VALUES ('backed_up_changes', '0');",
     )
     .map_err(bug)
 }

@@ -70,7 +70,7 @@ impl Backups {
             };
             scratch::cleanup(root.as_ref(), &id, &token, None).map_err(io_error)?;
             super::ledger::purge(&self.writer, &id)?;
-            await_write(self.writer.submit(WritePriority::Index, move |tx| {
+            await_write(self.writer.upkeep(WritePriority::Index, move |tx| {
                 tx.execute("DELETE FROM verifier_scratch WHERE id=?1", [&id])
                     .map_err(|e| classify(e, "finish verifier cleanup"))?;
                 Ok(())
@@ -196,7 +196,7 @@ impl Backups {
         }
         let row_id = id.clone();
         let row_token = token.clone();
-        await_write(self.writer.submit(WritePriority::Index, move |tx| {
+        await_write(self.writer.upkeep(WritePriority::Index, move |tx| {
             let inserted = tx.execute("INSERT INTO verifier_scratch SELECT ?1, ?2, value FROM store_meta WHERE key='incarnation'", params![row_id, row_token])
                 .map_err(|e| classify(e, "record verifier scratch"))?;
             if inserted != 1 { return Err(StoreError::corrupt("verifier incarnation is absent")); }
@@ -355,7 +355,7 @@ impl Backups {
         super::ledger::purge(&self.writer, &id)?;
         #[cfg(test)]
         transaction_cut("after-cleanup");
-        await_write(self.writer.submit(WritePriority::Index, move |tx| {
+        await_write(self.writer.upkeep(WritePriority::Index, move |tx| {
             tx.execute("DELETE FROM verifier_scratch WHERE id=?1", [&id])
                 .map_err(|e| classify(e, "finish verifier cleanup"))?;
             #[cfg(test)]

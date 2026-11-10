@@ -193,6 +193,16 @@ impl Backups {
                 |r| r.get(0),
             )
             .map_err(|e| classify(e, "read backup creation time"))?;
+        // The changes this generation holds: a commit after the
+        // snapshot keeps the store due for the next one (spec/03).
+        let backed_up = if schema_version >= i64::from(crate::changes::SCHEMA_VERSION) {
+            Some(crate::changes::read(
+                &conn,
+                crate::changes::CONTENT_CHANGES,
+            )?)
+        } else {
+            None
+        };
         conn.close()
             .map_err(|(_, e)| classify(e, "close backup snapshot"))?;
         snapshot
@@ -262,13 +272,16 @@ impl Backups {
             manifest_sha256: manifest_sha.clone(),
         };
         let check = snapshot.clone();
-        await_write(self.writer.submit(WritePriority::Index, move |tx| {
+        await_write(self.writer.upkeep(WritePriority::Index, move |tx| {
             check_generation(tx, &check)?;
             let remaining: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM object_pins WHERE pin_kind='backup_in_progress' AND pin_ref=?1)", [&check.generation_id], |r| r.get(0))
                 .map_err(|e| classify(e, "check remaining backup pins"))?;
             if remaining { return Err(StoreError::corrupt("backup pins remain during completion")); }
             tx.execute("UPDATE backup_generations SET state='complete', completed_at=?2, manifest_sha256=?3, object_count=?4, total_bytes=?5 WHERE generation_id=?1", params![check.generation_id, completed_at, manifest_sha, count, total])
                 .map_err(|e| classify(e, "complete backup generation"))?;
+            if let Some(mark) = backed_up {
+                crate::changes::record_backed_up(tx, mark)?;
+            }
             #[cfg(test)]
             tx_cut("before-completion-commit");
             Ok(())
@@ -286,7 +299,7 @@ impl Backups {
             tx_cut(&format!("before-batch-{batch}"));
             let chunk = chunk.to_vec();
             let check = snapshot.clone();
-            await_write(self.writer.submit(WritePriority::Index, move |tx| {
+            await_write(self.writer.upkeep(WritePriority::Index, move |tx| {
                 check_generation(tx, &check)?;
                 for (offset, sha) in chunk.into_iter().enumerate() {
                     let removed = tx.execute("DELETE FROM object_pins WHERE pin_kind=?1 AND pin_ref=?2 AND object_sha256=?3", params![PIN_KIND, check.generation_id, sha])

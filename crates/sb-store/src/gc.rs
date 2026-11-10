@@ -179,7 +179,7 @@ fn apply_pin_edits(store: &Store, edits: &[PinEdit], now: i64) -> Result<(), Sto
         let future =
             store
                 .writer
-                .submit(WritePriority::Index, move |tx| -> Result<(), StoreError> {
+                .upkeep(WritePriority::Index, move |tx| -> Result<(), StoreError> {
                     for edit in &chunk {
                         match edit {
                             PinEdit::Start(sha) => tx.execute(

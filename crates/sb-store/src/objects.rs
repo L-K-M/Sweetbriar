@@ -346,7 +346,7 @@ impl WriterReservations {
         let sha256 = id.sha256_hex();
         let pin_ref = hex(&token);
         let created_at = self.clock.now().as_millis();
-        let future = self.writer.submit(WritePriority::Index, move |tx| {
+        let future = self.writer.upkeep(WritePriority::Index, move |tx| {
             tx.execute(
                 "INSERT INTO object_pins (object_sha256, pin_kind, pin_ref, created_at)
                  VALUES (?1, ?2, ?3, ?4)",

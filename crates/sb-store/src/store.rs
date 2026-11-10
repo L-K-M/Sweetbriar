@@ -113,6 +113,15 @@ impl Store {
         crate::gc::collect_garbage(self, grace)
     }
 
+    /// Whether the store owes a backup generation (spec/03 "Backup
+    /// generations": one every hour while there were changes): a write
+    /// changed the archive's data since the newest complete
+    /// generation's snapshot, or there is no complete generation. The
+    /// store's own bookkeeping (backups, GC, close) never counts.
+    pub fn backup_due(&self) -> Result<bool, StoreError> {
+        self.read(|tx| crate::changes::backup_due(tx))
+    }
+
     /// Steps 1–3 of spec/03 "Backup generations": the `in_progress`
     /// row whose commit freezes GC, a consistent `state.sqlite`
     /// snapshot in the generation's directory — the copy never holds
@@ -629,7 +638,7 @@ fn has_clean_shutdown_marker(conn: &Connection) -> Result<bool, StoreError> {
 /// close ran — the next open's `quick_check` is the safety net.
 fn record_clean_shutdown(writer: &Writer, clock: &dyn Clock) -> Result<(), StoreError> {
     let at = clock.now();
-    let future = writer.submit(WritePriority::Index, move |tx| {
+    let future = writer.upkeep(WritePriority::Index, move |tx| {
         tx.execute(
             "INSERT INTO store_meta (key, value) VALUES (?1, ?2)
              ON CONFLICT(key) DO UPDATE SET value = excluded.value",
