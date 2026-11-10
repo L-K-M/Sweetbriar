@@ -1580,7 +1580,11 @@ local drafts. No network yet.
     worker against the injected clock; the hourly backup while due and
     a daily GC pass; each job's latest run recorded (`maintenance_jobs`,
     one row per job with its checkpoint); stopped by restore's quiesce
-    and shutdown, re-armed on resume. **h4 Weekly verification (L)**:
+    and shutdown, re-armed on resume. Split again before implementation:
+    **h3a** the store's records (`maintenance_jobs`, its Store API, a
+    GC pass that stops when asked; the checkpoint waits for h4, its
+    only user) and **h3b** the scheduler in sb-resources and
+    sb-engine, after M1.8g1. **h4 Weekly verification (L)**:
     the 1/52 live sample by hash bucket with catch-up after missed
     weeks, `missing`/`quarantined` accounting, and every retained
     generation re-verified in place and its result recorded on the

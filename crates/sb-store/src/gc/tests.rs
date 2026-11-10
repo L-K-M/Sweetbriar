@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 use std::io::Read as _;
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, Barrier};
 use std::time::Duration;
 
@@ -627,6 +627,72 @@ fn an_unlink_first_lets_the_republished_reservation_install_anew() {
     commit(&store, &clock, revision, publication, "/gc/race.mbox");
     assert!(exists(&store, &id));
     assert_eq!(pins(&store, &sha, ""), 0);
+    Arc::into_inner(store).unwrap().close().unwrap();
+}
+
+// --- stopping (M1.8h3: restore's quiesce and shutdown stop a pass) ---
+
+/// Raised before the pass, the stop leaves everything to the next one.
+#[test]
+fn a_pass_stopped_before_it_starts_changes_nothing() {
+    let (_scratch, store, _clock) = open("gc-stopped-early");
+    let (id, sha) = orphan(&store, PAYLOAD);
+
+    let report = store
+        .collect_garbage_with(GC_GRACE_PERIOD, &AtomicBool::new(true))
+        .unwrap();
+    assert_eq!(
+        report,
+        GcReport {
+            scanned: 1,
+            stopped: true,
+            ..GcReport::default()
+        }
+    );
+    assert_eq!(pins(&store, &sha, "gc_grace"), 0, "no grace clock started");
+
+    let report = store.collect_garbage(GC_GRACE_PERIOD).unwrap();
+    assert_eq!((report.grace_started, report.stopped), (1, false));
+    assert!(exists(&store, &id));
+}
+
+/// Raised mid-pass, the stop ends it before the next removal: the
+/// removal in flight completes, the other orphan waits for the next
+/// pass.
+#[test]
+fn a_pass_stops_between_removals() {
+    let (_scratch, store, clock) = open("gc-stopped-between");
+    let store = Arc::new(store);
+    let first = orphan(&store, PAYLOAD);
+    let second = orphan(&store, b"Subject: and me\r\n\r\nmore orphan bytes\r\n");
+    let report = store.collect_garbage(GC_GRACE_PERIOD).unwrap();
+    assert_eq!(report.grace_started, 2, "{report:?}");
+    clock.set(FIXED_NOW_MS + grace_ms() + 1);
+
+    let unlink_gate = Arc::new(Barrier::new(2));
+    store.objects().set_pauses(Pauses {
+        before_unlink: Some(Arc::clone(&unlink_gate)),
+        ..Default::default()
+    });
+    let stop = Arc::new(AtomicBool::new(false));
+    let (on_thread, flag) = (Arc::clone(&store), Arc::clone(&stop));
+    let pass = std::thread::spawn(move || on_thread.collect_garbage_with(GC_GRACE_PERIOD, &flag));
+    unlink_gate.wait(); // the first removal parked before its unlink
+    stop.store(true, Ordering::Release);
+    unlink_gate.wait();
+    let report = pass.join().unwrap().unwrap();
+    store.objects().set_pauses(Pauses::default());
+
+    assert_eq!((report.removed, report.stopped), (1, true), "{report:?}");
+    let left = [&first, &second]
+        .into_iter()
+        .filter(|(id, _)| exists(&store, id))
+        .count();
+    assert_eq!(left, 1, "one orphan waits for the next pass");
+
+    let report = store.collect_garbage(GC_GRACE_PERIOD).unwrap();
+    assert_eq!((report.removed, report.stopped), (1, false), "{report:?}");
+    assert!(!exists(&store, &first.0) && !exists(&store, &second.0));
     Arc::into_inner(store).unwrap().close().unwrap();
 }
 

@@ -234,6 +234,7 @@ fn a_store_migrating_in_starts_due() {
     edit_closed(
         &paths,
         "DELETE FROM store_meta WHERE key IN ('content_changes', 'backed_up_changes');
+         DROP TABLE maintenance_jobs;
          PRAGMA user_version = 24;",
     );
 
