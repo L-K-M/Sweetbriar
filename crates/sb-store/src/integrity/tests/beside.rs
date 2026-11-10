@@ -143,6 +143,79 @@ fn an_existing_verifier_home_is_restricted_to_its_owner() {
     store.close().unwrap();
 }
 
+/// A verification that began in the root stops mutating its scratch
+/// when a finding freezes that root, during copying or before cleanup.
+#[test]
+fn a_latch_during_verification_freezes_its_in_root_scratch() {
+    #[derive(Debug)]
+    enum Phase {
+        Copy,
+        Cleanup,
+    }
+
+    for phase in [Phase::Copy, Phase::Cleanup] {
+        let label = format!("integrity-verifier-latch-{phase:?}");
+        let (_scratch, paths, store) = open_with_probe(&label);
+        let snapshot = store.backup_snapshot(BackupDestination::DataRoot).unwrap();
+        let backup = store.complete_backup(snapshot).unwrap();
+        let source = backup.location().to_path_buf();
+        let bytes = std::fs::read(source.join("state.sqlite")).unwrap();
+        let digest: [u8; 32] = Sha256::digest(&bytes).into();
+        store.close().unwrap();
+        damage_the_index(&paths, true);
+        let store = reopen(&paths);
+        let before = std::cell::RefCell::new(None);
+        let freeze = || {
+            let IntegrityCheck::Finding(finding) = check(&store) else {
+                panic!("no finding")
+            };
+            finding.latch.unwrap();
+            finding.copy.unwrap();
+            before.replace(Some(tree(&paths)));
+        };
+        let result = store.backups.inspect_image_with(
+            &source,
+            digest,
+            bytes.len() as u64,
+            &AtomicBool::new(false),
+            |copied| {
+                if matches!(phase, Phase::Copy) && copied == 0 {
+                    freeze();
+                }
+                ControlFlow::Continue(())
+            },
+            |_, _| {
+                if matches!(phase, Phase::Cleanup) {
+                    freeze();
+                }
+                Ok(ControlFlow::Continue(()))
+            },
+        );
+        assert!(
+            matches!(result, Err(StoreError::Corrupt { .. })),
+            "{phase:?}: {result:?}"
+        );
+        assert_eq!(
+            tree(&paths),
+            before.into_inner().expect("latched"),
+            "{phase:?}: scratch changed after the latch"
+        );
+        let owners: i64 = store
+            .read(|tx| {
+                tx.query_row("SELECT count(*) FROM verifier_scratch", [], |row| {
+                    row.get(0)
+                })
+                .map_err(|e| StoreError::internal(e.to_string()))
+            })
+            .unwrap();
+        assert_eq!(
+            owners, 1,
+            "the frozen scratch retains its ownership evidence"
+        );
+        store.close().unwrap();
+    }
+}
+
 /// A verification cut short leaves its scratch directory and its owner
 /// row in the sibling; the next one proves the directory its own,
 /// removes both and goes on.
