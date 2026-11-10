@@ -231,20 +231,24 @@ against concurrent replacement.
     none starts once it returns. A step never waits for the latch, so
     one may start inside another (a publication that reads through an
     object's verifying reader). From the finding on, and in every
-    latched open, each is
-    refused `Corrupt` naming the finding before it touches a file:
+    latched open, each is refused `Corrupt` naming the finding before it
+    touches a file:
     publishing, installing or removing an object, starting, completing
     or removing (retention) a backup generation, verifying a backup,
     copying or removing an import's sources, writing an import report
     and leasing validation scratch. A read that finds an object damaged
     reports it `Corrupt` and leaves the file where it is, unquarantined.
     Work already past its first step fails at its next one, and nothing
-    cleans up after the latch. An import's source copy and a leased
-    validation scratch in flight are working files outside the archive,
-    so they finish or fail on their own; the engine stops their jobs
-    (M1.8h5b2). Backup verification, which a restore starts with, stays
-    refused until M1.8h5b4 keeps its scratch ledger off the latched
-    writer. The store reports the latch (the finding, its time and the
+    cleans up after the latch. A backup generation being copied stops at
+    its next object, each object and the manifest being a step, and
+    stays `in_progress`; a snapshot being copied finishes its one file,
+    since it can't stop part way and a latch doesn't wait for it. An
+    import's source copy, a leased validation scratch and a backup
+    verification's scratch in flight are working files outside the
+    archive, so they finish or fail on their own; the engine stops
+    their jobs (M1.8h5b2). Backup verification, which a restore starts
+    with, stays refused until M1.8h5b4 keeps its scratch ledger off the
+    latched writer. The store reports the latch (the finding, its time and the
     published copy) and tells one observer once: as the store latches,
     or at once when it is installed on a store already latched. It only
     signals, and a panic in it is caught.

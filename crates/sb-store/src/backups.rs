@@ -375,6 +375,13 @@ impl Backups {
             Ok(())
         }))?;
 
+        // A store that latched since this began starts no snapshot.
+        // One being copied is not held as a step: it can't stop part
+        // way, and a latch must not wait out a whole database copy. It
+        // finishes its file, and the pins below fail at the writer.
+        self.objects
+            .latch()
+            .refuse("write a backup generation's snapshot")?;
         let snapshot_handle = self.write_snapshot(&location, &owner_token)?;
         let referenced = self.referenced_objects(&location)?;
         self.pin_references(&generation_id, &referenced)?;
@@ -631,6 +638,10 @@ pub(crate) struct Pauses {
     pub(crate) before_referenced_read: Option<Arc<std::sync::Barrier>>,
     pub(crate) during_pin_validation: Option<Arc<std::sync::Barrier>>,
     pub(crate) before_pin_release: Option<Arc<std::sync::Barrier>>,
+    /// Waited on twice, by the first object only: park holding its
+    /// file step, then release to its copy; a test latches the store
+    /// in between.
+    pub(crate) first_object_step: Option<Arc<std::sync::Barrier>>,
     /// Waited on twice: park, then release to a generation check's
     /// identity re-check — a test swaps the directory in between.
     pub(crate) before_identity_recheck: Option<Arc<std::sync::Barrier>>,

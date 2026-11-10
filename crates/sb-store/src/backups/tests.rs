@@ -1534,6 +1534,67 @@ fn retention_removes_nothing_on_a_latched_store() {
     }
 }
 
+/// A latch that lands while a generation's objects are being copied:
+/// the latch waits for the object in flight, and no other object and
+/// no manifest follow. Only the file work is latched here, so the
+/// writer would still have taken the completion.
+#[test]
+fn a_latch_stops_a_backup_s_copy_at_the_next_object() {
+    let (_scratch, _paths, store) = open("backup-copy-latched");
+    for payload in [&b"one"[..], b"two", b"three"] {
+        let (id, _) = object(&store, payload);
+        reference(&store, &id, "published");
+    }
+    let snapshot = store.backup_snapshot(BackupDestination::DataRoot).unwrap();
+    let location = snapshot.location().to_owned();
+    let gate = Arc::new(Barrier::new(2));
+    store.backups.set_pauses(Pauses {
+        first_object_step: Some(gate.clone()),
+        ..Default::default()
+    });
+    let store = Arc::new(store);
+    let worker = {
+        let store = store.clone();
+        std::thread::spawn(move || store.complete_backup(snapshot).map(drop))
+    };
+    // The copy holds its first object's step.
+    gate.wait();
+    let latching = {
+        let store = store.clone();
+        std::thread::spawn(move || store.latch.latch_for_test("a test finding"))
+    };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while store.latch.get().is_none() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the latch never began"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    assert!(!latching.is_finished(), "the latch waits for the object");
+    gate.wait();
+    match worker.join().unwrap() {
+        Err(StoreError::Corrupt { detail }) => assert!(detail.contains("a test finding")),
+        other => panic!("expected Corrupt, got {other:?}"),
+    }
+    latching.join().unwrap();
+
+    let mut copied = 0;
+    let mut pending = vec![location.join("objects")];
+    while let Some(dir) = pending.pop() {
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                pending.push(path);
+            } else {
+                copied += 1;
+            }
+        }
+    }
+    assert_eq!(copied, 1, "only the object in flight was copied");
+    assert!(!location.join("manifest.json").exists());
+}
+
 #[test]
 #[ignore = "spawned by recovery_crash_boundaries"]
 fn recovery_cut_child() {
