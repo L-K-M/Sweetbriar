@@ -456,6 +456,47 @@ fn logins(server: &FakeImapServer) -> usize {
         .count()
 }
 
+/// How many logical messages have a thread.
+fn threaded(engine: &Engine) -> i64 {
+    engine
+        .resources()
+        .read(|tx| {
+            Ok(tx
+                .query_row("SELECT count(*) FROM d_thread_members", [], |row| {
+                    row.get(0)
+                })
+                .unwrap())
+        })
+        .unwrap()
+}
+
+/// A pass that stored messages leaves them threaded within the
+/// session: the worker asks for a rebuild when its pass ends (spec/02
+/// "Threads"), where an import asks at the end of its turn.
+#[test]
+fn a_pass_that_stores_messages_rebuilds_the_threads() {
+    let scratch = ScratchDir::new("account-worker-threads");
+    let secrets = Arc::new(FakeSecrets::new());
+    let server =
+        FakeImapServer::serve(vec![bridge_script(true), sync_script(Inbox::Listed)]).unwrap();
+    let engine = open(&scratch, &secrets);
+    assert_eq!(threaded(&engine), 0);
+
+    let account = add(&engine, server.port());
+
+    eventually("the first pass", || all_synced(&engine, &account));
+    eventually("the thread rebuild", || {
+        !engine
+            .resources()
+            .read(sb_resources::thread_revisions)
+            .unwrap()
+            .stale()
+    });
+    assert_eq!(messages(&engine, &account), (1, 1));
+    assert_eq!(threaded(&engine), 1, "the synced message has its thread");
+    shutdown_promptly(engine);
+}
+
 #[test]
 fn an_added_account_s_pass_syncs_every_mailbox_into_one_logical_message() {
     let scratch = ScratchDir::new("account-worker-pass");

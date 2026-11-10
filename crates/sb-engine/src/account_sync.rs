@@ -27,6 +27,7 @@ use tokio::sync::watch;
 use crate::Engine;
 use crate::engine::{Spawn, Worker};
 use crate::policy::Policy;
+use crate::threads::{ThreadRebuilds, schedule_threads};
 
 mod idle;
 mod pass;
@@ -144,6 +145,7 @@ impl Engine {
     /// caller's thread.
     pub(crate) fn schedule_accounts(&self) {
         let jobs = Arc::clone(self.account_jobs());
+        let threads = Arc::clone(self.imports().threads());
         let _ = self.spawn_worker(move |worker| async move {
             let accounts = worker
                 .blocking(|resources| resources.read(syncable_accounts))
@@ -152,7 +154,7 @@ impl Engine {
                 return;
             };
             for account_id in accounts {
-                start_account(&worker, &jobs, account_id);
+                start_account(&worker, &jobs, &threads, account_id);
             }
         });
     }
@@ -160,18 +162,29 @@ impl Engine {
     /// Start the account's worker unless one runs (a newly added
     /// account).
     pub(crate) fn start_account(&self, account_id: String) {
-        start_account(self, self.account_jobs(), account_id);
+        start_account(
+            self,
+            self.account_jobs(),
+            self.imports().threads(),
+            account_id,
+        );
     }
 }
 
-fn start_account(spawner: &impl Spawn, jobs: &Arc<AccountJobs>, account_id: String) {
+fn start_account(
+    spawner: &impl Spawn,
+    jobs: &Arc<AccountJobs>,
+    threads: &Arc<ThreadRebuilds>,
+    account_id: String,
+) {
     let Some(stop) = jobs.claim(&account_id) else {
         return;
     };
     let owner = Arc::clone(jobs);
+    let threads = Arc::clone(threads);
     let id = account_id.clone();
     let spawned = spawner.spawn_worker(move |worker| async move {
-        run_account(&worker, &id, stop).await;
+        run_account(&worker, &id, stop, &threads).await;
         owner.release(&id);
     });
     if spawned.is_err() {
@@ -219,7 +232,12 @@ enum SetupFailure {
     UnusableSecret,
 }
 
-async fn run_account(worker: &Worker, account_id: &str, stop: watch::Receiver<bool>) {
+async fn run_account(
+    worker: &Worker,
+    account_id: &str,
+    stop: watch::Receiver<bool>,
+    threads: &Arc<ThreadRebuilds>,
+) {
     // However the worker was asked for (a replayed setup, a pause that
     // raced the start), an account that no longer syncs gets no session.
     let id = account_id.to_owned();
@@ -269,6 +287,7 @@ async fn run_account(worker: &Worker, account_id: &str, stop: watch::Receiver<bo
         refusals: pass::Refusals::default(),
         idle: None,
         start_idle: &start_idle,
+        threads,
     };
     let mut failure: Option<ImapError> = None;
     loop {
@@ -416,6 +435,11 @@ async fn serve(
             result = pass::run(worker, account_id, policy, connection, scope, &mut carried.refusals) => result,
             () = stopped(stop.clone()) => return Served::Stopped,
         };
+        // The pass has ended, however it ended: messages it stored get
+        // their threads now (spec/02 "Threads"), not at the next open.
+        // The rebuild does nothing when no batch stored a new message,
+        // and a refusal means shutdown began.
+        schedule_threads(worker, carried.threads);
         match passed {
             Ok(()) => completed_a_pass = true,
             Err(pass::PassError::Session(error)) => {
@@ -455,6 +479,8 @@ struct Carried<'a> {
     refusals: pass::Refusals,
     idle: Option<watch::Receiver<IdleState>>,
     start_idle: &'a (dyn Fn() -> watch::Receiver<IdleState> + Sync),
+    /// The engine's thread rebuilds, asked for after each pass.
+    threads: &'a Arc<ThreadRebuilds>,
 }
 
 /// Whether the account still syncs. A failed read keeps the worker
