@@ -40,12 +40,13 @@ pub enum BackupEnd {
     /// that follows completion (retention): the generation stands, and
     /// the next backup tries that work again.
     Complete { after: Option<String> },
-    /// The core stopped the copy: a shutdown, a restore, or a store
-    /// turned read-only. The generation stays in progress until the
-    /// next backup marks it failed and removes what it left.
+    /// A shutdown stopped the copy at its next object. The generation
+    /// stays in progress until the next backup marks it failed and
+    /// removes what it left.
     Stopped,
-    /// The copy failed, with the error's text. The generation is left
-    /// like a stopped one's.
+    /// The copy failed, with the error's text. A core that turned
+    /// read-only under the copy fails it, and the text names the
+    /// finding. The generation is left like a stopped one's.
     Failed(String),
 }
 
@@ -169,7 +170,8 @@ impl Core {
     ///
     /// A repeated key answers its receipt and starts nothing.
     /// `Conflict` while another backup, a generation check or a
-    /// restore is under way; `Corrupt` on a read-only core.
+    /// restore is under way; `Corrupt` on a read-only core, which
+    /// refuses before it looks at the key.
     pub async fn start_backup(&self, idempotency_key: &str) -> Result<BackupStarted, CoreError> {
         let started: sb_engine::BackupStarted = self.engine().start_backup(idempotency_key).await?;
         Ok(BackupStarted {

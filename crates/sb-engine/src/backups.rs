@@ -66,12 +66,16 @@ pub enum BackupEnd {
     /// that follows completion (retention): the generation stands, and
     /// the next backup tries that work again.
     Complete { after: Option<String> },
-    /// The engine stopped the copy: a shutdown, a restore, or a store
-    /// turned read-only. The generation stays in progress until the
-    /// next backup marks it failed and removes what it left.
+    /// A shutdown stopped the copy at its next object. The generation
+    /// stays in progress until the next backup marks it failed and
+    /// removes what it left.
     Stopped,
-    /// The copy failed, with the error's text. The generation is left
-    /// like a stopped one's.
+    /// The copy failed, with the error's text. Only the stop's own
+    /// answer is a stop: an I/O error under one is a failure. So is a
+    /// store that turned read-only under the copy, whichever the copy
+    /// met first, the store's refusal or the stop its latch raises:
+    /// the text names the finding. The generation is left like a
+    /// stopped one's.
     Failed(String),
 }
 
@@ -133,8 +137,25 @@ fn copy_end(
         };
     }
     match error {
-        // What a copy the stop ended answers at its next object.
-        StoreError::Unavailable { io_kind: None, .. } if stopped => BackupEnd::Stopped,
+        // What a copy the stop ended answers at its next object. A
+        // store that latches raises the stop too, after it starts
+        // refusing: the copy meets either first, and the finding is
+        // the answer both ways.
+        StoreError::Unavailable { io_kind: None, .. } if stopped => {
+            match resources.integrity_latch() {
+                None => BackupEnd::Stopped,
+                Some(latch) => BackupEnd::Failed(
+                    StoreError::Corrupt {
+                        detail: format!(
+                            "the store is read-only after an integrity finding, so it can't \
+                             copy a backup generation: {}",
+                            latch.detail
+                        ),
+                    }
+                    .to_string(),
+                ),
+            }
+        }
         other => BackupEnd::Failed(other.to_string()),
     }
 }
@@ -146,9 +167,9 @@ impl Engine {
     /// It answers once the generation's snapshot is taken, with the
     /// receipt that committed with its row. The copy goes on in the
     /// engine as counted work: a caller that stops waiting strands
-    /// nothing, shutdown waits for it, and what stops the scheduler's
-    /// backups stops it at its next object (a shutdown, a restore, a
-    /// store turned read-only).
+    /// nothing, and shutdown waits for it and stops it at its next
+    /// object. A restore never meets one: a qualified stage holds the
+    /// backup operation, so no backup starts beside it.
     ///
     /// A repeated key answers its receipt and starts nothing, while
     /// its generation is still being copied too. `Conflict` while
