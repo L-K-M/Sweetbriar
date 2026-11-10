@@ -344,6 +344,28 @@ public final class CoreBridge: Sendable {
         return AppearanceSubscription(subscription)
     }
 
+    /// `health()` (spec/07 "Queries"): whether the store is read-only
+    /// after an integrity finding (spec/03), with the finding, its
+    /// time and its copy.
+    public func health() async throws -> Health {
+        let token = SweetbriarCore.CancelToken()
+        let value = try await Self.withCancellation(token: token) {
+            try await self.core.health(token: token)
+        }
+        return Health(value)
+    }
+
+    /// `subscribe_health` (spec/07 "Subscriptions"): changes of
+    /// `health()` from now on. Subscribe first, then read `health()`,
+    /// and none is missed.
+    public func subscribeHealth() async throws -> HealthSubscription {
+        let token = SweetbriarCore.CancelToken()
+        let subscription = try await Self.withCancellation(token: token) {
+            try await self.core.subscribeHealth(token: token)
+        }
+        return HealthSubscription(subscription)
+    }
+
     /// The v1 account palette (spec/02), a constant — the in-memory
     /// value spec/07's one synchronous getter kind allows.
     public func palette() -> [PaletteColor] {
@@ -619,6 +641,27 @@ public final class AppearanceSubscription: Sendable {
 }
 
 extension AppearanceSubscription: AppearanceEventSource {}
+
+/// The health stream (spec/07): one in-flight `next` at a time,
+/// in-memory only. Cancelling the calling task cancels the call, and
+/// a pending call ends with `unavailable` once the core shuts down.
+public final class HealthSubscription: Sendable {
+    private let subscription: SweetbriarCore.HealthSubscription
+
+    fileprivate init(_ subscription: SweetbriarCore.HealthSubscription) {
+        self.subscription = subscription
+    }
+
+    /// Returns once `health()` changed since this subscription's last
+    /// answer; read `health()` again then. Several changes are one
+    /// answer. A second concurrent call is `invalidInput`.
+    public func next() async throws {
+        let token = SweetbriarCore.CancelToken()
+        try await CoreBridge.withCancellation(token: token) {
+            try await self.subscription.next(token: token)
+        }
+    }
+}
 
 /// What `withCancellation` cancels when the calling task is
 /// cancelled: the core's `CancelToken`, or a test's stand-in.
