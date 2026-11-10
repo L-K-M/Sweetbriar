@@ -22,6 +22,7 @@ pub mod imports;
 pub mod index;
 mod list_rows;
 pub mod lists;
+mod maintenance;
 mod message_source;
 pub mod messages;
 mod objects;
@@ -61,11 +62,14 @@ pub use rusqlite::Transaction;
 
 pub use backups::{
     BackupDestination, BackupImageInspection, BackupReceipt, BackupSnapshot, PreparedRestoreStage,
-    RestoreMetadata, VerifiedExternalBackup,
+    QualifiedStage, RestoreMetadata, VerifiedExternalBackup,
 };
 pub use error::StoreError;
 pub use export_metadata::{ExportMetadata, export_occurrence_metadata};
 pub use gc::{GC_GRACE_PERIOD, GcGate, GcReport};
+pub use maintenance::{
+    MAINTENANCE_DETAIL_MAX, MaintenanceFinish, MaintenanceJob, MaintenanceOutcome, MaintenanceRun,
+};
 pub use objects::{
     FileObjectStore, ObjectId, ObjectIter, ObjectReader, ObjectStore, PublishedObject,
     read_error_as_store_error,
@@ -75,6 +79,7 @@ pub use readers::{ReadStop, Scoped};
 pub use receipts::{Receipt, encode_job_receipt, receipt_job_id, replay, run_once};
 pub use settings::{StoredSetting, read_all, upsert};
 pub use source_snapshots::{ImportSourceCapture, ImportSourceSnapshot};
+pub use store::SwapRestoreError;
 pub use store::{ReadOnlyStore, Seams, Store, await_write, open, open_read_only};
 pub use validation_scratch::{RegistryFile, ValidationFile, ValidationScratch, ValidationTape};
 pub use verification::{SAMPLE_BUCKETS, SampleReport};

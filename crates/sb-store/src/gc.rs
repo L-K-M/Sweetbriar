@@ -5,6 +5,7 @@
 //! unlink leaves no stale pin and the next pass restarts the clock.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use rusqlite::{Transaction, TransactionBehavior, params};
@@ -60,6 +61,9 @@ pub struct GcReport {
     pub failure_details: Vec<String>,
     /// Objects removed this pass.
     pub removed: u64,
+    /// The pass stopped early when asked: the objects it didn't reach
+    /// wait for the next pass, and nothing it did is undone.
+    pub stopped: bool,
 }
 
 /// One object's database state, read inside one transaction.
@@ -248,7 +252,11 @@ fn remove_object(store: &Store, id: &ObjectId, cutoff: Option<i64>) -> Outcome {
 
 /// One bounded GC pass (spec/03): enumerate, read the gates and every
 /// object in one transaction, write pins, then one task per removal.
-pub(crate) fn collect_garbage(store: &Store, grace: Duration) -> Result<GcReport, StoreError> {
+pub(crate) fn collect_garbage(
+    store: &Store,
+    grace: Duration,
+    stop: &AtomicBool,
+) -> Result<GcReport, StoreError> {
     // The pass awaits writer jobs; the writer thread can't await its own.
     if store.writer.is_writer_thread() {
         return Err(StoreError::internal(
@@ -265,6 +273,11 @@ pub(crate) fn collect_garbage(store: &Store, grace: Duration) -> Result<GcReport
         scanned: ids.len() as u64,
         ..GcReport::default()
     };
+    let stopped = || stop.load(Ordering::Acquire);
+    if stopped() {
+        report.stopped = true;
+        return Ok(report);
+    }
 
     let (blocked, seen) = store.read(|tx| {
         // A frozen pass runs no per-object queries.
@@ -279,6 +292,12 @@ pub(crate) fn collect_garbage(store: &Store, grace: Duration) -> Result<GcReport
     })?;
     if let Some(gate) = blocked {
         report.blocked = Some(gate);
+        return Ok(report);
+    }
+    // Last chance before writing: the decisions and the pin edits that
+    // record them run together, so the report counts only what landed.
+    if stopped() {
+        report.stopped = true;
         return Ok(report);
     }
 
@@ -301,6 +320,11 @@ pub(crate) fn collect_garbage(store: &Store, grace: Duration) -> Result<GcReport
     apply_pin_edits(store, &edits, now)?;
 
     for id in &removals {
+        // Between removals: each is its own writer task.
+        if stopped() {
+            report.stopped = true;
+            break;
+        }
         match remove_object(store, id, cutoff) {
             Outcome::Removed => report.removed += 1,
             Outcome::Skipped => report.skipped += 1,

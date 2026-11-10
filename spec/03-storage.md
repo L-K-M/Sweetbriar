@@ -505,6 +505,10 @@ The removal task's re-check transaction deletes the `gc_grace` pins as
 it commits, so a crash between the commit and the unlink leaves no
 stale pin; the next pass starts the object's grace clock over.
 
+A pass stops between its steps when asked (restore's quiesce,
+shutdown): the grace pins and removals it already committed stand, and
+the objects it didn't reach wait for the next pass.
+
 GC never runs while **any** account has an `open` breaker event (04),
 or while integrity is in doubt: any `acquisitions` row not
 `published` means an object is already proved absent or damaged. A
@@ -588,6 +592,17 @@ backups/<generation-id>/
   Missing or mismatched ownership proof on an existing directory fails
   closed, including for legacy generations. Validate the canonical parent
   and generation paths before removal.
+
+### Scheduled maintenance
+
+The scheduled jobs are the backup, GC, the weekly object verification
+and the weekly `integrity_check`. Each job's latest run is one
+`maintenance_jobs` row (02 "Maintenance runs"): when it started, when
+and how it ended (`complete`, `blocked` by a safety gate, `cancelled`
+when asked to stop, or `failed` with a detail) and when it last
+completed. A row without an end that this process didn't start is an
+interrupted run. Recording runs is the store's bookkeeping, so running
+a job never makes a generation due.
 
 ## Restore
 
@@ -723,8 +738,13 @@ The process holds `<data root>.lock` throughout.
      and renamed into place, so startup never reads a torn marker; a
      marker that doesn't parse, or names other siblings, is `Corrupt`.
    - Rename the current data root to `<data root>.preserved-<old
-     incarnation>`, then the staging root to `<data root>`. Flush the
-     parent directory, then remove the marker.
+     incarnation>` and flush the parent directory, then rename the
+     staging root to `<data root>` and flush the parent again, so the
+     renames persist in order; then remove the marker and flush the
+     parent once more. The store lock
+     is held from before the marker through reopening the restored
+     store, and every binding and the staged bytes are checked again
+     while the old store is still open, so a refusal changes nothing.
    - **On startup, a marker means a swap was interrupted.** If the data
      root is missing and staging exists, finish the swap. If both the
      data root and staging exist, the swap hadn't started: remove the

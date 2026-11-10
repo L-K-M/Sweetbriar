@@ -4160,7 +4160,9 @@ mod changes;
 mod stage_tests {
     mod bindings;
     mod evidence;
+    mod qualified;
     mod quarantine_image;
+    mod swap;
     use super::*;
     use std::sync::atomic::{AtomicBool, Ordering};
 

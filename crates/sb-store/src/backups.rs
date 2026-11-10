@@ -23,6 +23,8 @@ mod recorded;
 mod references;
 pub use external::VerifiedExternalBackup;
 pub use image::BackupImageInspection;
+mod qualify;
+pub use qualify::QualifiedStage;
 mod scratch;
 // rusqlite 0.41 installs hooks through `&mut Connection` only; the bounded
 // inspections scope SQLite's progress handler to one borrowed read.
@@ -52,6 +54,7 @@ mod stage_schema;
 #[allow(unsafe_code)]
 mod stage_vfs;
 mod staging;
+pub(crate) mod swap;
 pub use staging::{PreparedRestoreStage, RestoreMetadata};
 
 pub(crate) fn recover_scratch(

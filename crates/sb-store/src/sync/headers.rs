@@ -136,9 +136,10 @@ const SYNCING_STATES: [&str; 2] = ["backfilling", "synced"];
 /// `NotFound` for a mailbox not of the account; `Conflict` when the
 /// mailbox is not syncing (`new`, `epoch_changed`, `gone`), its epoch
 /// is not the batch's, or its checkpoint moved since the fetch was
-/// planned; `InvalidInput` for an oversized batch, a zero or repeated
-/// UID, a UID at or above `next_uidnext`, or a checkpoint that would
-/// move backwards.
+/// planned; `InvalidInput` for an oversized batch, a zero UIDVALIDITY,
+/// a zero or repeated UID, a UID at or above `next_uidnext`, an
+/// RFC822.SIZE beyond the store's integer range, or a checkpoint that
+/// would move backwards.
 pub fn commit_header_batch(
     tx: &Transaction,
     batch: &HeaderBatch<'_>,

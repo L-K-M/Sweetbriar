@@ -142,6 +142,10 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 25,
         run: migration_25,
     },
+    Migration {
+        version: 26,
+        run: migration_26,
+    },
 ];
 
 /// The `store_meta` keys every migrated store holds (spec/02): a
@@ -788,6 +792,25 @@ fn migration_25(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
     tx.execute_batch(
         "INSERT INTO store_meta (key, value) VALUES ('content_changes', '1');
          INSERT INTO store_meta (key, value) VALUES ('backed_up_changes', '0');",
+    )
+    .map_err(bug)
+}
+
+/// Version 26 records each scheduled maintenance job's latest run
+/// (spec/03 "Scheduled maintenance", [`crate::maintenance`]).
+fn migration_26(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
+    tx.execute_batch(
+        "CREATE TABLE maintenance_jobs (
+        job          TEXT PRIMARY KEY CHECK (job IN ('backup','gc','verify','integrity')),
+        started_at   INTEGER NOT NULL,
+        finished_at  INTEGER,
+        outcome      TEXT CHECK (outcome IN ('complete','blocked','cancelled','failed')),
+        detail       TEXT CHECK (length(CAST(detail AS BLOB)) <= 1024),
+        succeeded_at INTEGER,
+        CHECK ((finished_at IS NULL) = (outcome IS NULL)),
+        CHECK (finished_at IS NOT NULL OR detail IS NULL),
+        CHECK (outcome IS NOT 'complete' OR succeeded_at IS finished_at)
+    ) STRICT;",
     )
     .map_err(bug)
 }

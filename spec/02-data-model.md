@@ -1286,6 +1286,34 @@ INSERT INTO store_meta (key, value) VALUES ('backed_up_changes', '0');
   A missing or malformed counter, or advancement past that maximum, is
   `Corrupt`; the write that needed it rolls back.
 
+### Maintenance runs (M1.8h3)
+
+Migration 26 keeps each scheduled maintenance job's latest run (03
+"Scheduled maintenance"):
+
+```sql
+CREATE TABLE maintenance_jobs (                   -- each job's latest run (03)
+  job          TEXT PRIMARY KEY CHECK (job IN ('backup','gc','verify','integrity')),
+  started_at   INTEGER NOT NULL,
+  finished_at  INTEGER,                             -- NULL: in flight, or interrupted
+  outcome      TEXT CHECK (outcome IN ('complete','blocked','cancelled','failed')),
+  detail       TEXT CHECK (length(CAST(detail AS BLOB)) <= 1024),
+  succeeded_at INTEGER,                             -- the last 'complete' end
+  CHECK ((finished_at IS NULL) = (outcome IS NULL)),
+  CHECK (finished_at IS NOT NULL OR detail IS NULL),
+  CHECK (outcome IS NOT 'complete' OR succeeded_at IS finished_at)
+) STRICT;
+```
+
+- Starting a run sets `started_at` and clears the previous end and
+  detail; `succeeded_at` stays. Finishing needs a run in flight (else
+  `Conflict`), and a `complete` end also sets `succeeded_at`. A detail
+  longer than 1,024 bytes is cut at a character boundary.
+- A row whose run this process didn't start but which has no end is an
+  interrupted run.
+- These writes are the store's bookkeeping: they never bump
+  `content_changes`.
+
 ## Derived tables
 
 ```sql

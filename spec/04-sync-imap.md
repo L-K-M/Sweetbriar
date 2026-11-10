@@ -64,7 +64,10 @@ docs (checked 2026-10-12). They must be requalified on the owner's Mac
 - **Timeouts:**
   - 30 s per command, 120 s per body fetch, scaled for large literals;
   - IDLE is renewed every 25 min;
-  - reconnects back off exponentially (1 s to 5 min).
+  - reconnects back off exponentially (1 s to 5 min). A session that
+    fails before completing a sync pass doesn't end the backoff: the
+    wait before the next reconnect keeps growing until a session
+    completes a pass.
 - **Fault handling:** a malformed response (e.g. raw UTF-8 in an ENVELOPE,
   Gluon issue #498) closes the connection. Nothing parsed after the fault
   is applied. Header fields are read from `BODY.PEEK[HEADER.FIELDS (…)]`
