@@ -74,6 +74,8 @@ pub struct Engine {
     imports: Arc<ImportJobs>,
     index: Arc<IndexJobs>,
     received: Arc<ReceivedJobs>,
+    /// The backup and GC schedule (spec/03 "Scheduled maintenance").
+    maintenance: Arc<crate::maintenance::MaintenanceJobs>,
     /// One sync worker per syncable IMAP account (spec/04).
     accounts: Arc<crate::account_sync::AccountJobs>,
     leases: Arc<crate::bodies::Leases>,
@@ -508,6 +510,7 @@ impl Engine {
                         imports: Arc::default(),
                         index: Arc::default(),
                         received,
+                        maintenance: Arc::default(),
                         accounts: Arc::default(),
                         leases: Arc::default(),
                         search_memo: Arc::default(),
@@ -529,7 +532,12 @@ impl Engine {
                 .inspect(Engine::schedule_threads)
                 .inspect(Engine::schedule_index)
                 .inspect(Engine::schedule_received)
-                .inspect(Engine::schedule_accounts);
+                .inspect(Engine::schedule_accounts)
+                .inspect(|engine| {
+                    if crate::maintenance::SCHEDULED_AT_OPEN {
+                        engine.schedule_maintenance();
+                    }
+                });
             // A caller that stopped waiting drops the engine here.
             let _ = opened.send(engine);
         }))
@@ -574,6 +582,10 @@ impl Engine {
 
     pub(crate) fn received(&self) -> &Arc<ReceivedJobs> {
         &self.received
+    }
+
+    pub(crate) fn maintenance(&self) -> &Arc<crate::maintenance::MaintenanceJobs> {
+        &self.maintenance
     }
 
     pub(crate) fn search_memo(&self) -> &Arc<crate::search::SearchMemo> {
@@ -628,6 +640,7 @@ impl Engine {
         self.accounts.stop();
         self.index.stop();
         self.received.stop();
+        self.maintenance.stop();
         let resources = self
             .resources
             .take()
@@ -777,6 +790,7 @@ impl Drop for Engine {
         self.accounts.stop();
         self.index.stop();
         self.received.stop();
+        self.maintenance.stop();
         let Some(resources) = self.resources.take() else {
             return;
         };
