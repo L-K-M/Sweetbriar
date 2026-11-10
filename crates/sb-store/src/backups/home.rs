@@ -109,6 +109,30 @@ impl<'a> Home<'a> {
         fs.restrict_dir(&root)
             .map_err(|e| io_error("restrict", &root, &e))?;
         let db = root.join(LEDGER_DB);
+        // SQLite refuses symlinks, including sidecars, but only warns
+        // about hard links. Check existing private entries before any
+        // pragma can write through a second name for a frozen-root file.
+        for suffix in ["", "-journal", "-wal", "-shm"] {
+            let path = root.join(format!("{LEDGER_DB}{suffix}"));
+            let Some(metadata) = fs
+                .metadata(&path)
+                .map_err(|e| io_error("inspect", &path, &e))?
+            else {
+                continue;
+            };
+            if metadata.link_count().is_none() {
+                return Err(StoreError::unavailable_io(
+                    format!("cannot inspect hard links of {}", path.display()),
+                    io::ErrorKind::Unsupported,
+                ));
+            }
+            if metadata.kind() != FileKind::File || metadata.link_count() != Some(1) {
+                return Err(StoreError::corrupt(format!(
+                    "{} is not a single-link regular verifier file",
+                    path.display()
+                )));
+            }
+        }
         // The directory check does not cover a ledger symlink. SQLite
         // must refuse links itself, before opening or configuring the
         // database; a preflight metadata check would race its open.
