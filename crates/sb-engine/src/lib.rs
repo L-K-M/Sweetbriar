@@ -29,6 +29,7 @@ mod import;
 mod index;
 #[cfg(test)]
 mod index_tests;
+mod maintenance;
 mod messages;
 // Nothing calls the policies yet; the account worker (the next M2.4
 // slice) is their caller.
