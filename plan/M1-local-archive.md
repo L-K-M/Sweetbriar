@@ -1698,6 +1698,11 @@ local drafts. No network yet.
   - **M1.8i Backup/restore Service and CLI (L):** owned Service DTOs for
     generations, `start_backup`, `list_backups`, `start_restore` and
     `sb-cli backup|restore`, each with its native endpoint or CLI proof.
+  - **M1.8j3 FFI backup (L):** keyed start plus a Rust-owned copy
+    handle whose completion wait is cancellable without losing its
+    eventual answer. Generated bindings, bridge DTOs and native SDK
+    proofs accompany it. This uses merged i3 and may run in parallel
+    with j1's retained paths, j1b's destination setting and j2's listing.
   - **M1.8j The Backups UI (L):** Settings → Backups: list generations,
     back up now, restore and the preserved data roots, on the Service
     API.

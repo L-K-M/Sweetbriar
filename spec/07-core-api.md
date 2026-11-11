@@ -128,6 +128,18 @@ async fn Core::shutdown(self);   // flush writer, release the lease
     complete generation.
   - `sb-cli backup` starts one under a fresh key, waits for the copy
     and prints the generation's line as `backup list` does.
+  - The native export `start_backup(token, key)` follows command
+    cancellation rules: cancellation before acquiring the core stops
+    it; once begun, await its receipt even if the token is raised.
+    The answer includes the receipt, generation id and optional
+    Rust-owned copy handle. No handle is returned on replay.
+    `copy.finished(token)` is a cancellable wait, independent of the
+    core's lifecycle lock: shutdown can stop the engine's copy while
+    the caller waits. Cancelling a wait neither cancels the copy nor
+    consumes its eventual answer. Later/concurrent waits on that
+    handle see the same cached `BackupEnd`; dropping the handle stops
+    nothing in the core. A completion's retention warning is preserved,
+    never reclassified as a failed generation.
 - **Preparing a restore (M1.8i4):** `prepare_restore(generation_id)`
   does a restore's steps 1 to 3 (03 "Restore") for a recorded
   generation: it verifies the generation where its row says it is,
