@@ -39,7 +39,7 @@ struct State {
     again: bool,
     stopping: bool,
     failure: Option<ReadFailure>,
-    #[cfg(test)]
+    /// The worker is parked: it has no work it can do now.
     waiting: bool,
 }
 
@@ -125,6 +125,14 @@ impl IndexJobs {
         state.waiting && !state.again
     }
 
+    /// Whether the worker is off its park: indexing, or about to look.
+    /// A worker parked on a pause or a failure isn't working, however
+    /// much its queue holds.
+    pub(crate) fn working(&self) -> bool {
+        let state = self.lock();
+        state.running && !state.waiting
+    }
+
     fn failure(&self) -> Option<ReadFailure> {
         self.lock().failure.clone()
     }
@@ -207,25 +215,16 @@ impl IndexJobs {
                 if remaining <= 0 {
                     return;
                 }
-                #[cfg(test)]
-                {
-                    state.waiting = true;
-                }
+                state.waiting = true;
                 self.ready
                     .wait_timeout(state, Duration::from_millis(remaining as u64))
                     .expect("the index wait poisoned")
                     .0
             } else {
-                #[cfg(test)]
-                {
-                    state.waiting = true;
-                }
+                state.waiting = true;
                 self.ready.wait(state).expect("the index wait poisoned")
             };
-            #[cfg(test)]
-            {
-                state.waiting = false;
-            }
+            state.waiting = false;
         }
     }
 

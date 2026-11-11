@@ -786,16 +786,16 @@ interrupted run. Recording runs is the store's bookkeeping, so running
 a job never makes a generation due.
 
 **The schedule (M1.8h3b).** One engine worker runs the jobs one at a
-time, the backup first, then GC, then the verification, against the
-injected clock. Its cadence comes from the rows, so a restart or a
-restored store picks it up:
+time, the backup first, then GC, then the verification, then the
+integrity check, against the injected clock. Its cadence comes from
+the rows, so a restart or a restored store picks it up:
 - A job is due a period after its last complete run started: an hour
-  for the backup, a day for GC, a week for the verification. A run
-  that was blocked or failed is tried again sooner, 5 minutes after it
-  ended for the backup (so one bad attempt stretches the recovery
-  point by minutes) and an hour after it ended for GC and the
-  verification; counted from its end, a long failing run can't follow
-  itself at once.
+  for the backup, a day for GC, a week for the verification and for
+  the integrity check. A run that was blocked or failed is tried again
+  sooner, 5 minutes after it ended for the backup (so one bad attempt
+  stretches the recovery point by minutes) and an hour after it ended
+  for the others; counted from its end, a long failing run can't
+  follow itself at once.
   A job that never ran, or whose last run was interrupted or
   cancelled, is due at once. A start in the future (a clock moved
   back) counts from now.
@@ -815,6 +815,20 @@ restored store picks it up:
   until there is work again. A week's work is done once: a retry reads
   only what is still owed. A stopped sample ends the run; a sample that
   returned an error doesn't keep the generations from their check.
+- **The weekly integrity check (M1.8h5c)** runs the store's full check
+  ("Integrity") while the engine is idle: no import or export has a
+  worker, no thread rebuild runs, and the Search indexer is parked.
+  Account sync doesn't hold it back. A due check that finds long work
+  running records nothing and is looked at again a minute later. Once
+  started it runs to its end, whatever starts meanwhile; only a stop
+  ends it early.
+  A finding latches the store before the check returns ("Integrity").
+  The engine turns read-only as the store latches, which stops this
+  worker too, and the job announces health once more when the check
+  has returned: the first announcement comes before the copy is
+  published, the second after, so a shell that reads health on each
+  learns the copy's name. The run keeps its start and gets no end: a
+  read-only store records nothing, and the latch is the record.
 - The worker's first look waits a minute after it starts, so the
   open's own work goes first and a process that ends within the
   minute (a CLI command) never starts a job its shutdown would
@@ -824,8 +838,9 @@ restored store picks it up:
 - Shutdown and restore's quiesce (M1.8g3) stop it; a restore's resume
   starts it again, after a refusal too, and the store's rows (the
   restored one's after a swap) decide its cadence.
-  A parked worker ends at once; a GC pass stops at its next step and a
-  backup's object copy at its next object, both recorded `cancelled`;
+  A parked worker ends at once; a GC pass stops at its next step, a
+  backup's object copy at its next object and an integrity check
+  between batches of SQLite steps, all recorded `cancelled`;
   a stop raised after a backup's start record and before its snapshot
   ends it there, recorded `cancelled` with nothing copied yet. A stop
   raised during the snapshot, which can't stop part way, ends the run
@@ -850,7 +865,11 @@ restored store picks it up:
   backup operation a generation's check needs, the generations left
   waiting for the retry, and `cancelled` when the stop ended it.
   Failures outrank the gate, and the gate the stop. A generation whose
-  destination isn't there is counted and fails nothing.
+  destination isn't there is counted and fails nothing. An integrity
+  check that found nothing is `complete`, and one the stop ended is
+  `cancelled`. One that couldn't run (its connection didn't open, a
+  read failed for another reason than damage) is `failed`: it says
+  nothing about the store.
 
 ## Restore
 

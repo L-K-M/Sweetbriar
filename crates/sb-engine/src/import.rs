@@ -137,6 +137,11 @@ impl ImportJobs {
             .expect("a panicking thread held the import job registry")
     }
 
+    /// Whether an import or an export has a worker now.
+    pub(crate) fn any_live(&self) -> bool {
+        !self.lock().is_empty()
+    }
+
     /// Remember that `id`'s report is written.
     fn note_report(&self, id: &str) {
         self.reports

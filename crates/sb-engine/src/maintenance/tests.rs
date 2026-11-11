@@ -1,24 +1,26 @@
 //! The maintenance scheduler: its cadence from the records, the jobs'
 //! outcomes, stopping, and the safety gates.
 
-use std::path::Path;
-use std::sync::Arc;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
 use sb_resources::{
-    BackupDestination, GcGate, GcReport, GenerationCheck, GenerationVerdict, MaintenanceFinish,
-    MaintenanceJob, MaintenanceOutcome, MaintenanceRun, SampleReport, StoreError, Timestamp,
+    BackupDestination, GcGate, GcReport, GenerationCheck, GenerationVerdict, IntegrityCheck,
+    IntegrityFinding, MaintenanceFinish, MaintenanceJob, MaintenanceOutcome, MaintenanceRun,
+    SampleReport, StoreError, Timestamp,
 };
-use sb_test_support::{ScratchDir, block_on, real_fs};
+use sb_test_support::{ScratchDir, block_on, damage_an_index, real_fs};
 
 use super::{
-    BACKUP_PERIOD, BACKUP_RETRY, Cadence, Event, GC_PERIOD, GC_RETRY, GenerationChecks, POLL,
-    SETTLE, VERIFY_PERIOD, VERIFY_RETRY, backup_outcome, due_at, floor_at, gc_outcome,
-    generations_follow, snapshot_outcome, tally_generations, verify_outcome,
+    BACKUP_PERIOD, BACKUP_RETRY, Cadence, Event, GC_PERIOD, GC_RETRY, GenerationChecks, Host,
+    INTEGRITY_PERIOD, POLL, SETTLE, VERIFY_PERIOD, VERIFY_RETRY, backup_outcome, check_integrity,
+    due_at, floor_at, gc_outcome, generations_follow, integrity_outcome, snapshot_outcome,
+    tally_generations, verify_outcome,
 };
-use crate::Engine;
 use crate::index_tests::{TestClock, clocked, count, import, wait, write};
+use crate::{Engine, Integrity};
 
 /// A Monday, 2026-11-09 00:00 UTC.
 const MONDAY: i64 = 1_794_182_400_000;
@@ -652,6 +654,236 @@ fn a_verification_with_nothing_owed_records_nothing() {
     block_on(engine.shutdown()).unwrap();
 }
 
+// --- the weekly integrity check (M1.8h5c) ---
+
+/// The integrity check's recorded end.
+fn checked(engine: &Engine) -> MaintenanceFinish {
+    run_of(engine, MaintenanceJob::Integrity)
+        .unwrap()
+        .finished
+        .unwrap()
+}
+
+/// No long work runs: the open's own index and thread work is done.
+fn idle(engine: &Engine) {
+    let host = engine.maintenance_host();
+    wait(|| !(host.busy)());
+}
+
+#[test]
+fn the_store_s_integrity_is_checked_weekly() {
+    let scratch = ScratchDir::new("maintenance-integrity-weekly");
+    let (engine, clock) = scheduled(scratch.path(), MONDAY);
+    idle(&engine);
+
+    advance(&engine, &clock, SETTLE);
+    let end = checked(&engine);
+    assert_eq!(
+        end.outcome,
+        MaintenanceOutcome::Complete,
+        "{:?}",
+        end.detail
+    );
+    assert_eq!(end.detail.as_deref(), Some("ok"));
+    let first = started_of(&engine, MaintenanceJob::Integrity);
+    assert_eq!(first, MONDAY + ms(SETTLE));
+
+    // Not again before a week since that start.
+    advance(&engine, &clock, INTEGRITY_PERIOD - Duration::from_millis(1));
+    assert_eq!(started_of(&engine, MaintenanceJob::Integrity), first);
+    advance(&engine, &clock, Duration::from_millis(1));
+    assert_eq!(
+        started_of(&engine, MaintenanceJob::Integrity),
+        first + ms(INTEGRITY_PERIOD)
+    );
+    assert_eq!(checked(&engine).outcome, MaintenanceOutcome::Complete);
+    assert_eq!(engine.health().integrity, Integrity::Sound);
+    block_on(engine.shutdown()).unwrap();
+}
+
+/// A due check waits for long work to end: it records nothing while
+/// an import's worker runs, and runs at the next look once it ended.
+#[test]
+fn a_due_check_waits_while_an_import_runs() {
+    let scratch = ScratchDir::new("maintenance-integrity-busy");
+    let (engine, clock) = scheduled(scratch.path(), MONDAY);
+    idle(&engine);
+    // Park the import's worker at its entry until released.
+    let (release, held) = mpsc::channel::<()>();
+    let held = Mutex::new(held);
+    *engine.imports().before_task.lock().unwrap() = Some(Arc::new(move |_| {
+        let _ = held.lock().unwrap().recv();
+    }));
+    let path = scratch.path().join("held.eml");
+    std::fs::write(&path, RAW).unwrap();
+    block_on(engine.start_import(&engine.new_idempotency_key(), vec![path])).unwrap();
+
+    advance(&engine, &clock, SETTLE);
+    // The jobs before it ran; the check left no record.
+    assert!(run_of(&engine, MaintenanceJob::Gc).is_some());
+    assert!(run_of(&engine, MaintenanceJob::Integrity).is_none());
+    advance(&engine, &clock, POLL);
+    assert!(run_of(&engine, MaintenanceJob::Integrity).is_none());
+
+    drop(release);
+    idle(&engine);
+    advance(&engine, &clock, POLL);
+    assert_eq!(checked(&engine).outcome, MaintenanceOutcome::Complete);
+    block_on(engine.shutdown()).unwrap();
+}
+
+/// What counts as long work: an import or export with a worker, a
+/// thread rebuild, and the Search indexer off its park.
+#[test]
+fn the_engine_is_busy_while_long_work_runs() {
+    let scratch = ScratchDir::new("maintenance-integrity-host");
+    let (engine, _clock) = clocked(scratch.path(), real_fs(), MONDAY);
+    let host = engine.maintenance_host();
+    wait(|| !(host.busy)());
+
+    // A thread rebuild holds its slot.
+    assert!(engine.imports().threads().occupy());
+    assert!((host.busy)());
+    engine.imports().threads().vacate();
+    assert!(!(host.busy)());
+
+    // The indexer, held on its way to its park.
+    let (release, held) = mpsc::channel::<()>();
+    let (entered, reached) = mpsc::channel();
+    let held = Mutex::new(held);
+    *engine.indexer().hook.lock().unwrap() = Some(Arc::new(move |event| {
+        if event == crate::index::Event::Parked {
+            entered.send(()).unwrap();
+            let _ = held.lock().unwrap().recv();
+        }
+    }));
+    engine.indexer().wake();
+    reached.recv_timeout(Duration::from_secs(60)).unwrap();
+    assert!((host.busy)());
+    drop(release);
+    wait(|| !(host.busy)());
+
+    // An import's worker, parked at its entry.
+    let (release, held) = mpsc::channel::<()>();
+    let held = Mutex::new(held);
+    *engine.imports().before_task.lock().unwrap() = Some(Arc::new(move |_| {
+        let _ = held.lock().unwrap().recv();
+    }));
+    let path = scratch.path().join("held.eml");
+    std::fs::write(&path, RAW).unwrap();
+    block_on(engine.start_import(&engine.new_idempotency_key(), vec![path])).unwrap();
+    assert!((host.busy)());
+    drop(release);
+    wait(|| !(host.busy)());
+    block_on(engine.shutdown()).unwrap();
+}
+
+/// The scheduled check finds damage: the store latches, the engine
+/// turns read-only and its scheduler ends. Health is announced twice,
+/// as the store latches and once the check returned, so a shell that
+/// read health at the first event reads the copy's name at the second.
+/// The run has a start and no end: a read-only store records nothing.
+#[test]
+fn a_finding_turns_the_engine_read_only_and_announces_the_copy() {
+    let scratch = ScratchDir::new("maintenance-integrity-finding");
+    let root: PathBuf = scratch.path().to_owned();
+    let (engine, _) = clocked(&root, real_fs(), MONDAY);
+    block_on(engine.shutdown()).unwrap();
+    damage_an_index(&root.join("state.sqlite"));
+    let (engine, clock) = scheduled(&root, MONDAY);
+    idle(&engine);
+    let announced = engine.windows().health_changes();
+
+    clock.0.fetch_add(ms(SETTLE), Ordering::SeqCst);
+    engine.maintenance().wake();
+    wait(|| engine.read_only() && !engine.maintenance().running());
+
+    assert_eq!(engine.windows().health_changes(), announced + 2);
+    let Integrity::ReadOnly { detail, copy, .. } = engine.health().integrity else {
+        panic!("health reports no finding");
+    };
+    assert!(detail.contains("integrity_probe_pad"), "{detail}");
+    let copy = copy.expect("the copy is named once the check returned");
+    assert!(copy.join("manifest.json").is_file(), "{}", copy.display());
+    let run = run_of(&engine, MaintenanceJob::Integrity).unwrap();
+    assert_eq!(run.started_at.as_millis(), MONDAY + ms(SETTLE));
+    assert!(run.finished.is_none(), "{:?}", run.finished);
+    // The jobs before it ran on the sound store.
+    assert_eq!(
+        outcome_of(&engine, MaintenanceJob::Gc),
+        Some(MaintenanceOutcome::Complete)
+    );
+    let found = engine.health();
+    block_on(engine.shutdown()).unwrap();
+
+    // The latch is durable: the next open is read-only with the same
+    // finding and copy, and its schedule starts nothing.
+    let (engine, _) = clocked(&root, real_fs(), MONDAY + ms(SETTLE));
+    assert!(engine.read_only());
+    assert_eq!(engine.health(), found);
+    engine.schedule_maintenance();
+    assert!(!engine.maintenance().running());
+    let stored = run_of(&engine, MaintenanceJob::Integrity).unwrap();
+    assert_eq!(stored.started_at, run.started_at);
+    assert!(stored.finished.is_none(), "{:?}", stored.finished);
+    block_on(engine.shutdown()).unwrap();
+}
+
+#[test]
+fn a_stop_before_the_check_reads_records_it_cancelled() {
+    let scratch = ScratchDir::new("maintenance-integrity-stop");
+    let (engine, clock) = scheduled(scratch.path(), MONDAY);
+    idle(&engine);
+    let jobs = engine.maintenance().clone();
+    hook(&engine, move |event| {
+        if event == Event::Running(MaintenanceJob::Integrity) {
+            jobs.stop();
+        }
+    });
+    clock.0.fetch_add(ms(SETTLE), Ordering::SeqCst);
+    engine.maintenance().wake();
+    wait(|| outcome_of(&engine, MaintenanceJob::Integrity).is_some());
+
+    let end = checked(&engine);
+    assert_eq!(
+        end.outcome,
+        MaintenanceOutcome::Cancelled,
+        "{:?}",
+        end.detail
+    );
+    assert_eq!(engine.health().integrity, Integrity::Sound);
+    block_on(engine.shutdown()).unwrap();
+}
+
+/// The job itself: a busy engine keeps it from starting, and nothing
+/// is announced unless something was found.
+#[test]
+fn a_busy_engine_starts_no_check() {
+    let scratch = ScratchDir::new("maintenance-integrity-deferred");
+    let (engine, _clock) = clocked(scratch.path(), real_fs(), MONDAY);
+    let host = |busy: bool| Host {
+        busy: Box::new(move || busy),
+        health_moved: Box::new(|| panic!("nothing was found")),
+    };
+    let running = || false;
+
+    check_integrity(
+        engine.resources(),
+        engine.maintenance(),
+        &running,
+        &host(true),
+    );
+    assert!(run_of(&engine, MaintenanceJob::Integrity).is_none());
+    check_integrity(
+        engine.resources(),
+        engine.maintenance(),
+        &running,
+        &host(false),
+    );
+    assert_eq!(checked(&engine).outcome, MaintenanceOutcome::Complete);
+    block_on(engine.shutdown()).unwrap();
+}
+
 // --- the pure rules ---
 
 fn run(started_at: i64, outcome: Option<MaintenanceOutcome>) -> MaintenanceRun {
@@ -811,6 +1043,36 @@ fn a_gc_report_maps_to_one_outcome() {
         gc_outcome(error).0,
         MaintenanceOutcome::Failed,
         "a stop is never an error"
+    );
+}
+
+#[test]
+fn an_integrity_check_maps_to_one_outcome_or_none() {
+    assert_eq!(
+        integrity_outcome(Ok(IntegrityCheck::Clean)),
+        Some((MaintenanceOutcome::Complete, "ok".to_owned()))
+    );
+    assert_eq!(
+        integrity_outcome(Ok(IntegrityCheck::Stopped)),
+        Some((MaintenanceOutcome::Cancelled, "stopped".to_owned()))
+    );
+    // A check that couldn't run says nothing about the store.
+    let (outcome, detail) = integrity_outcome(Err(StoreError::Unavailable {
+        reason: "cannot open state.sqlite: disk I/O error".into(),
+        io_kind: None,
+    }))
+    .unwrap();
+    assert_eq!(outcome, MaintenanceOutcome::Failed);
+    assert!(detail.contains("disk I/O error"), "{detail}");
+    // A finding leaves a read-only store, which records nothing.
+    let finding = IntegrityFinding {
+        detail: "row 3 missing from index messages_by_date".into(),
+        latch: Ok(()),
+        copy: Ok(PathBuf::from("recovery/integrity-1-00000000")),
+    };
+    assert_eq!(
+        integrity_outcome(Ok(IntegrityCheck::Finding(finding))),
+        None
     );
 }
 

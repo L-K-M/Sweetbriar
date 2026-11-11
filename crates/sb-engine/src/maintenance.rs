@@ -1,8 +1,9 @@
 //! The maintenance scheduler (spec/03 "Scheduled maintenance", plan
 //! M1.8h3b): one engine worker that takes a backup generation every
-//! hour while there were changes, runs a GC pass daily and verifies
-//! the objects weekly (M1.8h4c), against the injected clock, and
-//! records each run in `maintenance_jobs`.
+//! hour while there were changes, runs a GC pass daily, verifies the
+//! objects weekly (M1.8h4c) and runs the store's full integrity check
+//! weekly while the engine is idle (M1.8h5c), against the injected
+//! clock, and records each run in `maintenance_jobs`.
 //!
 //! The cadence lives in the records, not in memory: a job is due a
 //! period after its last complete run started, sooner after one that
@@ -10,7 +11,6 @@
 //! interrupted or was cancelled. A restart, or a restored store, picks
 //! it up from there. Jobs run one at a time, the backup first.
 
-#[cfg(test)]
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Condvar, Mutex, MutexGuard};
@@ -18,8 +18,8 @@ use std::time::Duration;
 
 use sb_resources::{
     BackupDestination, BackupReceipt, GC_GRACE_PERIOD, GcGate, GcReport, GenerationCheck,
-    GenerationVerdict, MaintenanceJob, MaintenanceOutcome, MaintenanceRun, Resources, SampleReport,
-    StoreError, Timestamp,
+    GenerationVerdict, IntegrityCheck, MaintenanceJob, MaintenanceOutcome, MaintenanceRun,
+    Resources, SampleReport, StoreError, Timestamp,
 };
 
 use crate::Engine;
@@ -44,6 +44,11 @@ pub(crate) const VERIFY_PERIOD: Duration = Duration::from_secs(7 * 24 * 60 * 60)
 /// operation a generation's check needs) or failed is tried again this
 /// soon. The retry reads only what the week still owes.
 pub(crate) const VERIFY_RETRY: Duration = Duration::from_secs(60 * 60);
+/// The store's full integrity check runs weekly (spec/03 "Integrity").
+pub(crate) const INTEGRITY_PERIOD: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+/// A check that couldn't run (its connection didn't open, a read
+/// failed) is tried again this soon.
+pub(crate) const INTEGRITY_RETRY: Duration = Duration::from_secs(60 * 60);
 /// The scheduler's first look waits this long after it starts: the
 /// open's own work goes first, and a short-lived process (a CLI
 /// command) never starts a job its shutdown would cancel at once.
@@ -62,7 +67,18 @@ pub(crate) const POLL: Duration = Duration::from_secs(60);
 pub(crate) const SCHEDULED_AT_OPEN: bool = !cfg!(test);
 
 /// One run of a scheduled job.
-type RunJob = fn(&Resources, &MaintenanceJobs, &dyn Fn() -> bool);
+type RunJob = fn(&Resources, &MaintenanceJobs, &dyn Fn() -> bool, &Host);
+
+/// What the scheduler asks of the engine it runs in. Only the
+/// integrity check looks outside the store: it waits for an idle
+/// engine, and it announces what it found.
+pub(crate) struct Host {
+    /// Whether long work runs now: an import or an export, a thread
+    /// rebuild, or the Search indexer off its park.
+    pub(crate) busy: Box<dyn Fn() -> bool + Send>,
+    /// Wake health subscriptions: what `health()` answers changed.
+    pub(crate) health_moved: Box<dyn Fn() + Send>,
+}
 
 /// When a job runs again after its last run ended.
 #[derive(Clone, Copy, Debug)]
@@ -74,7 +90,7 @@ pub(crate) struct Cadence {
 }
 
 /// The scheduled jobs in the order a turn considers them.
-const SCHEDULE: [(MaintenanceJob, Cadence, RunJob); 3] = [
+const SCHEDULE: [(MaintenanceJob, Cadence, RunJob); 4] = [
     (
         MaintenanceJob::Backup,
         Cadence {
@@ -98,6 +114,14 @@ const SCHEDULE: [(MaintenanceJob, Cadence, RunJob); 3] = [
             retry: VERIFY_RETRY,
         },
         verify,
+    ),
+    (
+        MaintenanceJob::Integrity,
+        Cadence {
+            period: INTEGRITY_PERIOD,
+            retry: INTEGRITY_RETRY,
+        },
+        check_integrity,
     ),
 ];
 
@@ -255,6 +279,7 @@ impl Engine {
             state.running = true;
         }
         let owner = jobs.clone();
+        let host = self.maintenance_host();
         if self
             .spawn_worker(move |worker| async move {
                 let shutting_down = worker.shutdown_check();
@@ -265,7 +290,7 @@ impl Engine {
                 // resume (M1.8g3) lifts it before scheduling again.
                 let finished = worker
                     .blocking(move |resources| {
-                        run(resources, &registry, &shutting_down);
+                        run(resources, &registry, &shutting_down, &host);
                         registry.lock().running = false;
                     })
                     .await;
@@ -280,11 +305,30 @@ impl Engine {
             jobs.lock().running = false;
         }
     }
+
+    /// The scheduler's view of this engine. It holds the registries,
+    /// never the engine, which outlives no worker.
+    fn maintenance_host(&self) -> Host {
+        let imports = Arc::clone(self.imports());
+        let index = Arc::clone(self.indexer());
+        let windows = Arc::clone(self.windows());
+        Host {
+            busy: Box::new(move || {
+                imports.any_live() || imports.threads().running() || index.working()
+            }),
+            health_moved: Box::new(move || windows.health_moved()),
+        }
+    }
 }
 
 /// The worker's loop: settle, then one job per turn while any is due,
 /// parking until the next one is.
-fn run(resources: &Resources, jobs: &MaintenanceJobs, shutting_down: &dyn Fn() -> bool) {
+fn run(
+    resources: &Resources,
+    jobs: &MaintenanceJobs,
+    shutting_down: &dyn Fn() -> bool,
+    host: &Host,
+) {
     let stopped = || jobs.stopped() || shutting_down();
     let settled_at = after(resources.now(), SETTLE);
     // A job isn't looked at again before this, whatever its record says.
@@ -294,7 +338,7 @@ fn run(resources: &Resources, jobs: &MaintenanceJobs, shutting_down: &dyn Fn() -
         let until = if now < settled_at {
             settled_at
         } else {
-            match turn(resources, jobs, &stopped, &mut not_before, now) {
+            match turn(resources, jobs, &stopped, host, &mut not_before, now) {
                 Turn::Ran => continue,
                 Turn::Idle(until) => until,
             }
@@ -316,6 +360,7 @@ fn turn(
     resources: &Resources,
     jobs: &MaintenanceJobs,
     stopped: &dyn Fn() -> bool,
+    host: &Host,
     not_before: &mut [Option<Timestamp>; SCHEDULE.len()],
     now: Timestamp,
 ) -> Turn {
@@ -331,7 +376,7 @@ fn turn(
             continue;
         }
         not_before[slot] = Some(after(now, POLL));
-        run_job(resources, jobs, stopped);
+        run_job(resources, jobs, stopped, host);
         return Turn::Ran;
     }
     Turn::Idle(next.unwrap_or_else(|| after(now, POLL)))
@@ -377,7 +422,12 @@ fn after(at: Timestamp, period: Duration) -> Timestamp {
 /// The hourly generation, when there were changes: nothing is recorded
 /// when there weren't. A store that can't say is backed up, so the
 /// attempt and its failure are recorded.
-fn back_up(resources: &Resources, jobs: &MaintenanceJobs, stopped: &dyn Fn() -> bool) {
+fn back_up(
+    resources: &Resources,
+    jobs: &MaintenanceJobs,
+    stopped: &dyn Fn() -> bool,
+    _host: &Host,
+) {
     if matches!(resources.backup_due(), Ok(false)) || stopped() {
         return;
     }
@@ -408,7 +458,12 @@ fn back_up(resources: &Resources, jobs: &MaintenanceJobs, stopped: &dyn Fn() -> 
 }
 
 /// The daily GC pass with the default grace period.
-fn collect_garbage(resources: &Resources, jobs: &MaintenanceJobs, stopped: &dyn Fn() -> bool) {
+fn collect_garbage(
+    resources: &Resources,
+    jobs: &MaintenanceJobs,
+    stopped: &dyn Fn() -> bool,
+    _host: &Host,
+) {
     if stopped() || resources.start_maintenance(MaintenanceJob::Gc).is_err() {
         return;
     }
@@ -424,7 +479,7 @@ fn collect_garbage(resources: &Resources, jobs: &MaintenanceJobs, stopped: &dyn 
 /// is recorded when nothing is owed, so the last run's record, its
 /// failures included, stands until there is work again. A store that
 /// can't say is verified, so the attempt and its failure are recorded.
-fn verify(resources: &Resources, jobs: &MaintenanceJobs, stopped: &dyn Fn() -> bool) {
+fn verify(resources: &Resources, jobs: &MaintenanceJobs, stopped: &dyn Fn() -> bool, _host: &Host) {
     if matches!(resources.verification_due(), Ok(false)) || stopped() {
         return;
     }
@@ -576,6 +631,55 @@ pub(crate) fn verify_outcome(
         return (MaintenanceOutcome::Cancelled, format!("stopped: {counts}"));
     }
     (MaintenanceOutcome::Complete, counts)
+}
+
+/// The weekly integrity check, while the engine is idle: a due check
+/// that finds long work running records nothing and is looked at again
+/// after [`POLL`]. Once started it runs to its end, whatever starts
+/// meanwhile; only the stop ends it early.
+///
+/// A finding latches the store before the check returns, and the
+/// store's observer has stopped this scheduler by then. Its run gets
+/// no end: the store takes no write, and the latch is the record.
+/// Health is announced again, since the observer heard before the
+/// copy was published.
+fn check_integrity(
+    resources: &Resources,
+    jobs: &MaintenanceJobs,
+    stopped: &dyn Fn() -> bool,
+    host: &Host,
+) {
+    if stopped() || (host.busy)() {
+        return;
+    }
+    if resources
+        .start_maintenance(MaintenanceJob::Integrity)
+        .is_err()
+    {
+        return;
+    }
+    #[cfg(test)]
+    jobs.event(Event::Running(MaintenanceJob::Integrity));
+    match integrity_outcome(resources.check_integrity(&jobs.cancel)) {
+        Some((outcome, detail)) => {
+            finish(resources, jobs, MaintenanceJob::Integrity, outcome, &detail);
+        }
+        None => (host.health_moved)(),
+    }
+}
+
+/// How an integrity check ended, or `None` after a finding, which
+/// leaves a read-only store and no record. A check that couldn't run
+/// is `failed`: it says nothing about the store.
+pub(crate) fn integrity_outcome(
+    check: Result<IntegrityCheck, StoreError>,
+) -> Option<(MaintenanceOutcome, String)> {
+    match check {
+        Ok(IntegrityCheck::Clean) => Some((MaintenanceOutcome::Complete, "ok".to_owned())),
+        Ok(IntegrityCheck::Stopped) => Some((MaintenanceOutcome::Cancelled, "stopped".to_owned())),
+        Ok(IntegrityCheck::Finding(_)) => None,
+        Err(error) => Some((MaintenanceOutcome::Failed, error.to_string())),
+    }
 }
 
 /// Record a run's end. A record that can't be written leaves the run

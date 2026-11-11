@@ -115,6 +115,24 @@ impl ThreadRebuilds {
         self.lock().running = false;
     }
 
+    /// Whether a rebuild holds the worker's slot.
+    pub(crate) fn running(&self) -> bool {
+        self.lock().running
+    }
+
+    /// Hold the worker's slot as a rebuild does, for a test of what
+    /// watches it; `false` when a rebuild has it.
+    #[cfg(test)]
+    pub(crate) fn occupy(&self) -> bool {
+        self.claim()
+    }
+
+    /// Give back the slot [`ThreadRebuilds::occupy`] took.
+    #[cfg(test)]
+    pub(crate) fn vacate(&self) {
+        self.release();
+    }
+
     #[cfg(test)]
     pub(crate) fn requests(&self) -> usize {
         self.lock().requests
