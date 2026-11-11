@@ -1709,8 +1709,11 @@ local drafts. No network yet.
     volume. Independent of j1, this may run in parallel with it.
     **j2 FFI listing (L):** generation and retained-path DTOs and queries,
     generated bindings, bridge types and native endpoint tests.
-    **j3 FFI backup (L):** keyed start and its copy's completion handle,
-    with cancellation/lifetime tests and a native endpoint proof.
+    **j3 FFI backup (L):** keyed start and its Rust-owned copy handle,
+    with a cancellable wait that retains its answer. Cancellation/lifetime
+    tests, generated bindings, bridge DTOs and native endpoint proof
+    accompany it. This uses merged i3 and may run in parallel with
+    j1, j1b and j2.
     **j4 FFI restore (L):** prepare under the shared core's read lock,
     swap under its write lock, cancellation by flag while awaiting to
     the end, explicit receipt/refusal/closed-core results, and a native

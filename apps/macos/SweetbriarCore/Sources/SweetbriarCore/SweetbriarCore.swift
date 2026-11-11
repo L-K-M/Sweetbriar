@@ -780,6 +780,148 @@ public func FfiConverterTypeAppearanceSubscription_lower(_ value: AppearanceSubs
 
 
 /**
+ * A shared completion answer, not ownership of the engine's running copy.
+ * It holds no core lifecycle lock, so shutdown can stop a copy being awaited.
+ */
+public protocol BackupCopyProtocol: AnyObject, Sendable {
+    
+    /**
+     * Cancel only this wait, retaining the future for the next waiter.
+     * Completed answers are cached, including retention warnings. Concurrent
+     * callers serialize on the handle, never on the core's lifecycle lock.
+     */
+    func finished(token: CancelToken) async throws  -> BackupEnd
+    
+}
+/**
+ * A shared completion answer, not ownership of the engine's running copy.
+ * It holds no core lifecycle lock, so shutdown can stop a copy being awaited.
+ */
+open class BackupCopy: BackupCopyProtocol, @unchecked Sendable {
+    fileprivate let handle: UInt64
+
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoHandle {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noHandle: NoHandle) {
+        self.handle = 0
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_sb_ffi_fn_clone_backupcopy(self.handle, $0) }
+    }
+    // No primary constructor declared for this class.
+
+    deinit {
+        if handle == 0 {
+            // Mock objects have handle=0 don't try to free them
+            return
+        }
+
+        try! rustCall { uniffi_sb_ffi_fn_free_backupcopy(handle, $0) }
+    }
+
+    
+
+    
+    /**
+     * Cancel only this wait, retaining the future for the next waiter.
+     * Completed answers are cached, including retention warnings. Concurrent
+     * callers serialize on the handle, never on the core's lifecycle lock.
+     */
+open func finished(token: CancelToken)async throws  -> BackupEnd  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_backupcopy_finished(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeBackupEnd_lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+
+    
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeBackupCopy: FfiConverter {
+    typealias FfiType = UInt64
+    typealias SwiftType = BackupCopy
+
+    public static func lift(_ handle: UInt64) throws -> BackupCopy {
+        return BackupCopy(unsafeFromHandle: handle)
+    }
+
+    public static func lower(_ value: BackupCopy) -> UInt64 {
+        return value.uniffiCloneHandle()
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> BackupCopy {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+    public static func write(_ value: BackupCopy, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBackupCopy_lift(_ handle: UInt64) throws -> BackupCopy {
+    return try FfiConverterTypeBackupCopy.lift(handle)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBackupCopy_lower(_ value: BackupCopy) -> UInt64 {
+    return FfiConverterTypeBackupCopy.lower(value)
+}
+
+
+
+
+
+
+/**
  * A `CancelToken` (spec/07): the FFI object the adapter makes per
  * call and cancels when the surrounding Swift task is cancelled.
  * The flag is the truth; the `Notify` wakes whoever is already
@@ -1033,6 +1175,12 @@ public protocol CoreProtocol: AnyObject, Sendable {
      * the token races the core's lock.
      */
     func subscribeAppearance(token: CancelToken, generation: UInt64) async throws  -> AppearanceSubscription
+    
+    /**
+     * Start under a caller-made key; once begun, await the receipt despite
+     * cancellation. Dropping the returned handle never stops the engine copy.
+     */
+    func startBackup(token: CancelToken, idempotencyKey: String) async throws  -> BackupStarted
     
     /**
      * `create_draft(context)` (spec/07 "Commands"): a new `editing`
@@ -1547,6 +1695,26 @@ open func subscribeAppearance(token: CancelToken, generation: UInt64)async throw
             completeFunc: ffi_sb_ffi_rust_future_complete_u64,
             freeFunc: ffi_sb_ffi_rust_future_free_u64,
             liftFunc: FfiConverterTypeAppearanceSubscription_lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * Start under a caller-made key; once begun, await the receipt despite
+     * cancellation. Dropping the returned handle never stops the engine copy.
+     */
+open func startBackup(token: CancelToken, idempotencyKey: String)async throws  -> BackupStarted  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_start_backup(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterString.lower(idempotencyKey)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeBackupStarted_lift,
             errorHandler: FfiConverterTypeCoreError_lift
         )
 }
@@ -3325,6 +3493,67 @@ public func FfiConverterTypeAttachmentLease_lift(_ buf: RustBuffer) throws -> At
 #endif
 public func FfiConverterTypeAttachmentLease_lower(_ value: AttachmentLease) -> RustBuffer {
     return FfiConverterTypeAttachmentLease.lower(value)
+}
+
+
+/**
+ * A command's receipt and the copy started now; replay returns no copy.
+ */
+public struct BackupStarted {
+    public var receipt: Receipt
+    public var generationId: String
+    public var copy: BackupCopy?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(receipt: Receipt, generationId: String, copy: BackupCopy?) {
+        self.receipt = receipt
+        self.generationId = generationId
+        self.copy = copy
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension BackupStarted: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeBackupStarted: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> BackupStarted {
+        return
+            try BackupStarted(
+                receipt: FfiConverterTypeReceipt.read(from: &buf), 
+                generationId: FfiConverterString.read(from: &buf), 
+                copy: FfiConverterOptionTypeBackupCopy.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: BackupStarted, into buf: inout [UInt8]) {
+        FfiConverterTypeReceipt.write(value.receipt, into: &buf)
+        FfiConverterString.write(value.generationId, into: &buf)
+        FfiConverterOptionTypeBackupCopy.write(value.copy, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBackupStarted_lift(_ buf: RustBuffer) throws -> BackupStarted {
+    return try FfiConverterTypeBackupStarted.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBackupStarted_lower(_ value: BackupStarted) -> RustBuffer {
+    return FfiConverterTypeBackupStarted.lower(value)
 }
 
 
@@ -7255,6 +7484,91 @@ public func FfiConverterTypeAttemptState_lower(_ value: AttemptState) -> RustBuf
 
 
 
+/**
+ * The copy's eventual result, independent of the generation's later retention.
+ */
+
+public enum BackupEnd: Equatable, Hashable {
+    
+    /**
+     * Published, even when the following retention has a warning.
+     */
+    case complete(after: String?
+    )
+    case stopped
+    case failed(detail: String
+    )
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension BackupEnd: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeBackupEnd: FfiConverterRustBuffer {
+    typealias SwiftType = BackupEnd
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> BackupEnd {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .complete(after: try FfiConverterOptionString.read(from: &buf)
+        )
+        
+        case 2: return .stopped
+        
+        case 3: return .failed(detail: try FfiConverterString.read(from: &buf)
+        )
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: BackupEnd, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case let .complete(after):
+            writeInt(&buf, Int32(1))
+            FfiConverterOptionString.write(after, into: &buf)
+            
+        
+        case .stopped:
+            writeInt(&buf, Int32(2))
+        
+        
+        case let .failed(detail):
+            writeInt(&buf, Int32(3))
+            FfiConverterString.write(detail, into: &buf)
+            
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBackupEnd_lift(_ buf: RustBuffer) throws -> BackupEnd {
+    return try FfiConverterTypeBackupEnd.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBackupEnd_lower(_ value: BackupEnd) -> RustBuffer {
+    return FfiConverterTypeBackupEnd.lower(value)
+}
+
+
+
 
 public enum BodyAvailability: Equatable, Hashable {
     
@@ -9855,6 +10169,30 @@ fileprivate struct FfiConverterOptionString: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionTypeBackupCopy: FfiConverterRustBuffer {
+    typealias SwiftType = BackupCopy?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeBackupCopy.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeBackupCopy.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionTypeDraftRevision: FfiConverterRustBuffer {
     typealias SwiftType = DraftRevision?
 
@@ -10781,6 +11119,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_sb_ffi_checksum_method_core_subscribe_appearance() != 19997) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_sb_ffi_checksum_method_core_start_backup() != 41231) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_sb_ffi_checksum_method_core_create_draft() != 12088) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -10881,6 +11222,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_appearancesubscription_next() != 28873) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_backupcopy_finished() != 7658) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_canceltoken_cancel() != 7688) {
