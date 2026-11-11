@@ -366,6 +366,16 @@ public final class CoreBridge: Sendable {
         return HealthSubscription(subscription)
     }
 
+    /// Take a generation under a caller-made key. Once begun, cancellation
+    /// cannot hide its receipt. Await the optional copy handle separately.
+    public func startBackup(idempotencyKey: String) async throws -> BackupStarted {
+        let token = SweetbriarCore.CancelToken()
+        let started = try await Self.withCancellation(token: token) {
+            try await self.core.startBackup(token: token, idempotencyKey: idempotencyKey)
+        }
+        return BackupStarted(started)
+    }
+
     /// The v1 account palette (spec/02), a constant — the in-memory
     /// value spec/07's one synchronous getter kind allows.
     public func palette() -> [PaletteColor] {
