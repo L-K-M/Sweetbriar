@@ -1657,7 +1657,17 @@ local drafts. No network yet.
     again (turning read-only moves no Search generation). **h6
     Acceptance proof (L)**: the recovery point over simulated hours at
     the 5-minute setting, crash cuts through a scheduled backup,
-    restore during each job. GC's daily cadence and the reading of "all
+    restore during each job. As tests of the engine's scheduler: six
+    simulated hours a minute at a time, where no committed write is
+    as old as the period with no complete generation holding it (the
+    5-minute period is one only a test can set; the app's is the
+    hour); a process killed at seeded points of the scheduler's first
+    pass, through all four jobs, after which no generation is
+    `complete` and less than intact and the next open's pass fails
+    the one left in progress and takes a complete one; and a restore
+    started while each of the four jobs runs, which leaves the job
+    `cancelled` in the preserved root and sees it complete on the
+    restored store. GC's daily cadence and the reading of "all
     objects referenced by backups" as each generation's copies are
     recorded in spec/03 with their slices.
   - **M1.8h Scheduled GC, verification and integrity checks (L):** the

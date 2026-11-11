@@ -22,6 +22,8 @@ use super::{
 use crate::index_tests::{TestClock, clocked, count, import, wait, write};
 use crate::{Engine, Integrity};
 
+mod acceptance;
+
 /// A Monday, 2026-11-09 00:00 UTC.
 const MONDAY: i64 = 1_794_182_400_000;
 const RAW: &[u8] = b"From: Sender <sender@example.test>\r\nTo: other@example.test\r\nSubject: kept\r\n\r\nbody\r\n";
