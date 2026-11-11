@@ -11,7 +11,7 @@ use std::sync::atomic::AtomicBool;
 
 use sb_store::{
     BackupDestination, BackupGeneration, BackupReceipt, BackupSnapshot, PreparedRestoreStage,
-    QualifiedStage, RestoreMetadata, StartedBackup, StoreError, SwapRestoreError,
+    QualifiedStage, Receipt, RestoreMetadata, StartedBackup, StoreError, SwapRestoreError,
     VerifiedExternalBackup,
 };
 
@@ -174,5 +174,21 @@ impl Resources {
             }),
             Err(SwapRestoreError::Failed(cause)) => Err(ResourcesSwapError::Failed(cause)),
         }
+    }
+
+    /// What `idempotency_key` already answers for a restore: its
+    /// stored receipt, or `None` for a key unspent in this store.
+    pub fn restore_receipt(&self, idempotency_key: &str) -> Result<Option<Receipt>, StoreError> {
+        self.store.restore_receipt(idempotency_key)
+    }
+
+    /// Record, in this restored store, that the restore under
+    /// `idempotency_key` put it in place from `generation_id`.
+    pub fn record_restore(
+        &self,
+        idempotency_key: &str,
+        generation_id: &str,
+    ) -> Result<Receipt, StoreError> {
+        self.store.record_restore(idempotency_key, generation_id)
     }
 }

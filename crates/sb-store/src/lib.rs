@@ -65,7 +65,7 @@ pub use backups::{
     BackupDestination, BackupGeneration, BackupGenerationState, BackupImageInspection,
     BackupReceipt, BackupSnapshot, FAILED_GENERATIONS_LISTED, GenerationCheck, GenerationVerdict,
     GenerationVerification, PreparedRestoreStage, QualifiedStage, RestoreMetadata, START_BACKUP,
-    StartedBackup, VerifiedExternalBackup,
+    START_RESTORE, StartedBackup, VerifiedExternalBackup,
 };
 pub use error::StoreError;
 pub use export_metadata::{ExportMetadata, export_occurrence_metadata};

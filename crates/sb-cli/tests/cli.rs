@@ -441,3 +441,124 @@ fn backup_takes_a_generation_and_prints_its_line() {
     let listed = cli(&root, &["backup", "list"]);
     assert!(stdout(&listed).starts_with(&second), "{}", stdout(&listed));
 }
+
+/// The roots earlier restores preserved beside the data root.
+fn preserved(root: &Path) -> usize {
+    std::fs::read_dir(root.parent().unwrap())
+        .unwrap()
+        .filter(|entry| {
+            let name = entry.as_ref().unwrap().file_name();
+            name.to_string_lossy().contains(".preserved-")
+        })
+        .count()
+}
+
+/// A real swap refusal exits 1, not just a failed preparation. An
+/// occupied preserved-root name is left alone, as is the live store.
+#[test]
+fn a_refused_restore_exits_one_without_replacing_the_store() {
+    let (_scratch, root) = scratch("cli-restore-refused");
+    let cue = "appearance.compose_cue";
+    let set = |value| {
+        let out = cli(&root, &["settings", "set", cue, value]);
+        assert!(out.status.success(), "{}", stderr(&out));
+    };
+    set("strong");
+    let backup = cli(&root, &["backup"]);
+    assert!(backup.status.success(), "{}", stderr(&backup));
+    let line = stdout(&backup);
+    let id = line.split('\t').next().unwrap();
+    set("standard");
+
+    let db = root.join("state.sqlite");
+    let incarnation = sb_test_support::store_meta_value(&db, "incarnation").unwrap();
+    let occupied = root.with_file_name(format!("store.preserved-{incarnation}"));
+    std::fs::create_dir(&occupied).unwrap();
+    std::fs::write(occupied.join("kept"), b"not a restore target").unwrap();
+
+    let out = cli(&root, &["restore", id]);
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "");
+    assert!(stderr(&out).contains("refused"), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("store is unchanged"),
+        "{}",
+        stderr(&out)
+    );
+    assert!(stderr(&out).contains("prepared copy"), "{}", stderr(&out));
+    let staged = std::fs::read_dir(root.parent().unwrap())
+        .unwrap()
+        .filter(|entry| {
+            entry
+                .as_ref()
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .contains(".restoring-")
+        })
+        .count();
+    assert_eq!(
+        staged, 1,
+        "the refused preparation remains beside the store"
+    );
+    assert_eq!(
+        std::fs::read(occupied.join("kept")).unwrap(),
+        b"not a restore target"
+    );
+    assert_eq!(
+        sb_test_support::store_meta_value(&db, "incarnation"),
+        Some(incarnation)
+    );
+    let got = cli(&root, &["settings", "get", cue]);
+    assert!(got.status.success(), "{}", stderr(&got));
+    assert_eq!(stdout(&got), format!("{cue}=standard\n"));
+}
+
+/// `restore <generation_id>` (plan M1.8i5) puts a recorded generation
+/// in the store's place. What was set since is gone, the replaced
+/// store is kept beside the data root, and the next process opens the
+/// restored one, where the generation is still listed.
+#[test]
+fn restore_puts_a_recorded_generation_in_the_store_s_place() {
+    let (_scratch, root) = scratch("cli-restore");
+    let cue = "appearance.compose_cue";
+    let set = |value| {
+        let out = cli(&root, &["settings", "set", cue, value]);
+        assert!(out.status.success(), "{}", stderr(&out));
+    };
+    set("strong");
+    let backup = cli(&root, &["backup"]);
+    assert!(backup.status.success(), "{}", stderr(&backup));
+    let line = stdout(&backup);
+    let id = line.split('\t').next().unwrap();
+    set("standard");
+
+    let out = cli(&root, &["restore", id]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), format!("{id}\trestored\n"));
+    assert!(stderr(&out).contains("kept beside the data root"));
+    assert_eq!(preserved(&root), 1);
+
+    let got = cli(&root, &["settings", "get", cue]);
+    assert_eq!(stdout(&got), format!("{cue}=strong\n"));
+    let listed = cli(&root, &["backup", "list"]);
+    assert!(listed.status.success(), "{}", stderr(&listed));
+    assert!(
+        stdout(&listed).starts_with(&format!("{id}\tcomplete\t")),
+        "{}",
+        stdout(&listed)
+    );
+
+    // An id no generation has is an error, and nothing moves.
+    let out = cli(&root, &["restore", "no-such-generation"]);
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "");
+    assert!(
+        stderr(&out).contains("no-such-generation"),
+        "{}",
+        stderr(&out)
+    );
+    assert_eq!(preserved(&root), 1);
+    let got = cli(&root, &["settings", "get", cue]);
+    assert_eq!(stdout(&got), format!("{cue}=strong\n"));
+}

@@ -616,6 +616,45 @@ impl Store {
         .map_err(SwapRestoreError::Failed)
     }
 
+    /// What `idempotency_key` already answers for a restore (spec/07
+    /// `start_restore`): the receipt [`Store::record_restore`] wrote in
+    /// this store, `None` for a key that is unspent here, `Conflict`
+    /// for one spent on another command. A restore asks before it
+    /// stops or moves anything. A read, so a latched store answers.
+    pub fn restore_receipt(
+        &self,
+        idempotency_key: &str,
+    ) -> Result<Option<crate::Receipt>, StoreError> {
+        self.read(|tx| crate::receipts::replay(tx, idempotency_key, crate::START_RESTORE))
+    }
+
+    /// Record that the restore under `idempotency_key` put this store
+    /// in place from the generation `generation_id`: the receipt
+    /// `{"generation_id":...}`. It is written here, in the restored
+    /// store, because the swap can't carry it: the stage's bytes are
+    /// fixed when it qualifies. A key already recorded for a restore
+    /// answers its stored receipt, and one spent on another command is
+    /// `Conflict`. Bookkeeping about the store, so it makes no
+    /// generation due. Blocking; never on the writer thread.
+    pub fn record_restore(
+        &self,
+        idempotency_key: &str,
+        generation_id: &str,
+    ) -> Result<crate::Receipt, StoreError> {
+        if self.writer.is_writer_thread() {
+            return Err(StoreError::internal(
+                "the writer thread cannot record a restore through its own queue",
+            ));
+        }
+        let (key, generation_id) = (idempotency_key.to_owned(), generation_id.to_owned());
+        let now = self.clock.now();
+        await_write(self.writer.upkeep(WritePriority::User, move |tx| {
+            crate::receipts::run_once(tx, &key, crate::START_RESTORE, now, |_| {
+                Ok(crate::receipts::encode_generation_receipt(&generation_id))
+            })
+        }))
+    }
+
     /// Visit verified external generations with bounded memory. Identified
     /// invalid or incomplete source candidates are skipped. Other failures,
     /// including errors without source provenance, propagate.

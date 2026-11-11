@@ -5,7 +5,7 @@
 //! (spec/03 "Backup generations").
 
 use super::*;
-use crate::backups::{START_BACKUP, StartedBackup};
+use crate::backups::{START_BACKUP, START_RESTORE, StartedBackup};
 use crate::receipts::{Receipt, receipt_generation_id, run_once};
 
 const KEY: &str = "00000000-0000-4000-8000-00000000b001";
@@ -728,4 +728,90 @@ fn crash_cuts_leave_the_receipt_and_the_row_together() {
         with_receipt > 0 && without > 0,
         "cuts fell on both sides of the commit: {with_receipt} after, {without} before"
     );
+}
+
+// --- start_restore's receipt (M1.8i5) ---
+
+/// A restore's receipt is written in the store its swap put in place,
+/// and the key answers it from then on. It is bookkeeping: no
+/// generation is owed for it.
+#[test]
+fn a_restore_s_receipt_is_recorded_once_and_owes_no_generation() {
+    let (_scratch, _paths, store) = open("keyed-restore");
+    let (_, snapshot) = started(store.start_backup(BackupDestination::DataRoot, KEY));
+    store.complete_backup(snapshot).unwrap();
+    assert!(!due(&store));
+    assert_eq!(store.restore_receipt(OTHER_KEY).unwrap(), None);
+
+    let receipt = store.record_restore(OTHER_KEY, "gen-restored").unwrap();
+    assert_eq!(receipt.command(), START_RESTORE);
+    assert_eq!(receipt.result_json(), r#"{"generation_id":"gen-restored"}"#);
+    assert_eq!(
+        store.restore_receipt(OTHER_KEY).unwrap(),
+        Some(receipt.clone())
+    );
+    assert!(!due(&store), "a receipt is no change to back up");
+
+    // Recorded again, whatever the generation, it answers what it
+    // stored.
+    assert_eq!(
+        store.record_restore(OTHER_KEY, "gen-other").unwrap(),
+        receipt
+    );
+    assert_eq!(receipts(&store).len(), 2);
+}
+
+/// A key belongs to one command: a backup's runs no restore, and a
+/// restore's starts no backup.
+#[test]
+fn a_restore_s_key_and_a_backup_s_conflict_both_ways() {
+    let (_scratch, _paths, store) = open("keyed-restore-conflict");
+    let (_, snapshot) = started(store.start_backup(BackupDestination::DataRoot, KEY));
+    store.complete_backup(snapshot).unwrap();
+
+    let asked = store.restore_receipt(KEY).map(drop);
+    let recorded = store.record_restore(KEY, "gen").map(drop);
+    for refused in [asked, recorded] {
+        let err = refused.unwrap_err();
+        assert!(
+            matches!(err, StoreError::Conflict { ref detail } if detail.contains(START_BACKUP)),
+            "{err:?}"
+        );
+    }
+
+    store.record_restore(OTHER_KEY, "gen").unwrap();
+    let err = store
+        .start_backup(BackupDestination::DataRoot, OTHER_KEY)
+        .unwrap_err();
+    assert!(
+        matches!(err, StoreError::Conflict { ref detail } if detail.contains(START_RESTORE)),
+        "{err:?}"
+    );
+    assert_eq!(generations(&store).len(), 1);
+    assert_eq!(receipts(&store).len(), 2);
+}
+
+/// A read-only store still says what a key answers: the restore that
+/// is its way out asks before it moves anything.
+#[test]
+fn a_latched_store_still_answers_a_restore_s_key() {
+    let (_scratch, _paths, store) = open("keyed-restore-latched");
+    let receipt = store.record_restore(KEY, "gen").unwrap();
+    store.latch.latch_for_test("a test finding");
+
+    assert_eq!(store.restore_receipt(KEY).unwrap(), Some(receipt));
+    assert_eq!(store.restore_receipt(OTHER_KEY).unwrap(), None);
+}
+
+#[test]
+fn the_writer_thread_cannot_record_a_restore_through_its_own_queue() {
+    let (_scratch, _paths, store) = open("keyed-restore-on-writer");
+    let store = Arc::new(store);
+    let inner = Arc::clone(&store);
+    let err = block_on(store.write(crate::WritePriority::User, move |_| {
+        Ok(inner.record_restore(KEY, "gen").unwrap_err())
+    }))
+    .unwrap();
+    assert!(matches!(err, StoreError::Internal { .. }), "{err:?}");
+    assert!(receipts(&store).is_empty());
 }

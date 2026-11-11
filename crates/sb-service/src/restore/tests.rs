@@ -1,11 +1,12 @@
-//! `prepare_restore` through the service (plan M1.8i4).
+//! `prepare_restore` and `restore` through the service (plan M1.8i4,
+//! M1.8i5).
 
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use sb_test_support::{ScratchDir, block_on};
 
-use crate::{BackupEnd, Core, CoreConfig, CoreError, open_core};
+use crate::{BackupEnd, Core, CoreConfig, CoreError, RestoreFailure, Restored, open_core};
 
 fn open(scratch: &ScratchDir) -> Core {
     // Staging opens the data root's parent without following links
@@ -71,5 +72,92 @@ fn a_raised_flag_is_cancelled_and_an_unknown_generation_not_found() {
     let prepared = block_on(core.prepare_restore(&id, unflagged())).unwrap();
     assert_eq!(prepared.generation_id(), id);
     drop(prepared);
+    block_on(core.shutdown());
+}
+
+const CUE: &str = "appearance.compose_cue";
+
+fn cue(core: &Core) -> String {
+    let settings = block_on(core.settings()).unwrap();
+    settings
+        .into_iter()
+        .find(|setting| setting.key == CUE)
+        .unwrap()
+        .value
+}
+
+fn set_cue(core: &Core, value: &str) {
+    block_on(core.set_setting(&core.new_idempotency_key(), CUE, value)).unwrap();
+}
+
+#[test]
+fn a_prepared_generation_is_restored_under_a_key_once() {
+    let scratch = ScratchDir::new("service-restore");
+    let core = open(&scratch);
+    set_cue(&core, "strong");
+    let id = back_up(&core, "00000000-0000-4000-8000-0000000000e1");
+    set_cue(&core, "standard");
+
+    let key = "00000000-0000-4000-8000-0000000000e2";
+    let prepared = block_on(core.prepare_restore(&id, unflagged())).unwrap();
+    let Restored { core, receipt } = block_on(core.restore(key, prepared, unflagged())).unwrap();
+    let receipt = receipt.unwrap();
+    assert_eq!(receipt.command, "start_restore");
+    assert_eq!(
+        receipt.result_json,
+        format!(r#"{{"generation_id":"{id}"}}"#)
+    );
+    assert_eq!(cue(&core), "strong");
+
+    // The same key again: its receipt, and the store stays as it is.
+    set_cue(&core, "standard");
+    let prepared = block_on(core.prepare_restore(&id, unflagged())).unwrap();
+    let Restored {
+        core,
+        receipt: replayed,
+    } = block_on(core.restore(key, prepared, unflagged())).unwrap();
+    assert_eq!(replayed.unwrap(), receipt);
+    assert_eq!(cue(&core), "standard");
+    block_on(core.shutdown());
+}
+
+#[test]
+fn a_refused_restore_hands_the_core_and_the_preparation_back() {
+    let scratch = ScratchDir::new("service-restore-refused");
+    let core = open(&scratch);
+    set_cue(&core, "strong");
+    let id = back_up(&core, "00000000-0000-4000-8000-0000000000e3");
+    set_cue(&core, "standard");
+    let key = "00000000-0000-4000-8000-0000000000e4";
+    let prepared = block_on(core.prepare_restore(&id, unflagged())).unwrap();
+
+    // A raised flag, then no key at all.
+    let raised = Arc::new(AtomicBool::new(true));
+    let Err(RestoreFailure::Refused {
+        cause,
+        core,
+        prepared,
+    }) = block_on(core.restore(key, prepared, raised))
+    else {
+        panic!("a cancelled restore is refused");
+    };
+    assert!(matches!(cause, CoreError::Unavailable { .. }), "{cause:?}");
+    let Err(RestoreFailure::Refused {
+        cause,
+        core,
+        prepared,
+    }) = block_on(core.restore("", *prepared, unflagged()))
+    else {
+        panic!("an empty key is refused");
+    };
+    assert!(matches!(cause, CoreError::InvalidInput { .. }), "{cause:?}");
+
+    // The core runs on the same store, and what came back swaps in
+    // under the key the refusal didn't spend.
+    assert_eq!(cue(&core), "standard");
+    assert_eq!(prepared.generation_id(), id);
+    let Restored { core, receipt } = block_on(core.restore(key, *prepared, unflagged())).unwrap();
+    receipt.unwrap();
+    assert_eq!(cue(&core), "strong");
     block_on(core.shutdown());
 }

@@ -5,12 +5,14 @@
 
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 
 use sb_service::{
     Anchor, BackupEnd, BackupGeneration, BackupState, BackupVerdict, Core, CoreConfig, CoreError,
     ExportFormat, ExportJobState, ExportScopeInput, ImportJob, ImportJobState, ImportTarget,
-    MboxVariant, WindowSpec, open_core,
+    MboxVariant, RestoreFailure, Restored, WindowSpec, open_core,
 };
 
 /// How a usage failure exits: everything the user mistyped (plan M0.7).
@@ -86,6 +88,11 @@ enum Command {
     Backup,
     /// `backup list`: the recorded backup generations, newest first.
     BackupList,
+    /// `restore <generation_id>`: put a recorded generation in the
+    /// store's place.
+    Restore {
+        generation_id: String,
+    },
 }
 
 /// The scope word after `export`, with the id it names.
@@ -103,7 +110,8 @@ const USAGE: &str = "usage: sb-cli [--data-root <path>] settings get [<key>]
        sb-cli [--data-root <path>] export status <job_id>
        sb-cli [--data-root <path>] export cancel <job_id>
        sb-cli [--data-root <path>] backup
-       sb-cli [--data-root <path>] backup list";
+       sb-cli [--data-root <path>] backup list
+       sb-cli [--data-root <path>] restore <generation_id>";
 
 /// Parse the arguments after the program name: options, then exactly
 /// one command with its fixed shape. Anything else is a usage error
@@ -143,6 +151,9 @@ fn command_from(word: String, args: &mut impl Iterator<Item = String>) -> Result
     if word == "backup" {
         return backup_from(args);
     }
+    if word == "restore" {
+        return restore_from(args);
+    }
     if word != "settings" {
         return Err(format!("unknown command '{word}'"));
     }
@@ -178,6 +189,14 @@ fn backup_from(args: &mut impl Iterator<Item = String>) -> Result<Command, Strin
         return Err("backup list takes no arguments".to_owned());
     }
     Ok(Command::BackupList)
+}
+
+/// `restore`'s arguments: one generation id and nothing after it.
+fn restore_from(args: &mut impl Iterator<Item = String>) -> Result<Command, String> {
+    let (Some(generation_id), None) = (args.next(), args.next()) else {
+        return Err("restore takes <generation_id>".to_owned());
+    };
+    Ok(Command::Restore { generation_id })
 }
 
 /// `import`'s arguments: an optional `--variant`, then at least one path.
@@ -296,6 +315,9 @@ fn run(invocation: Invocation) -> Result<(), u8> {
         Err(err) => return failed(err),
     };
     let outcome = match &invocation.command {
+        // A restore consumes the core, and shuts down the one it gets
+        // back.
+        Command::Restore { generation_id } => return restore(core, generation_id),
         Command::SettingsGet { key } => get(&core, key.as_deref()),
         Command::SettingsSet { key, value } => set(&core, key, value),
         Command::Import { variant, paths } => import(&core, *variant, paths),
@@ -601,6 +623,92 @@ fn backup_report(id: &str, end: BackupEnd) -> Result<Option<String>, String> {
     }
 }
 
+/// `restore <generation_id>`: verify the recorded generation, copy it
+/// beside the data root and swap the copy in as the store. It prints
+/// the generation's id and `restored`, even if recording the receipt
+/// failed (reported on stderr). The replaced store is kept beside the
+/// data root and nothing is deleted. A refusal leaves the store unchanged
+/// and the prepared copy beside it, and exits with an error.
+fn restore(core: Core, generation_id: &str) -> Result<(), u8> {
+    // Nothing raises it: the CLI has no way to cancel.
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let prepared = match block_on(core.prepare_restore(generation_id, Arc::clone(&cancelled))) {
+        Ok(prepared) => prepared,
+        Err(err) => {
+            block_on(core.shutdown());
+            return failed(err);
+        }
+    };
+    let key = core.new_idempotency_key();
+    let (core, end) = match block_on(core.restore(&key, prepared, cancelled)) {
+        Ok(Restored { core, receipt }) => (
+            Some(core),
+            RestoreEnd::Restored {
+                unrecorded: receipt.err(),
+            },
+        ),
+        Err(RestoreFailure::Refused { cause, core, .. }) => {
+            (Some(*core), RestoreEnd::Refused(cause))
+        }
+        Err(RestoreFailure::Failed(cause)) => (None, RestoreEnd::Failed(cause)),
+    };
+    if let Some(core) = core {
+        block_on(core.shutdown());
+    }
+    match restore_report(generation_id, end) {
+        Ok(warning) => {
+            println!("{generation_id}\trestored");
+            eprintln!(
+                "sb-cli: the replaced store is kept beside the data root, and every account \
+                 is paused"
+            );
+            if let Some(warning) = warning {
+                eprintln!("sb-cli: {warning}");
+            }
+            Ok(())
+        }
+        Err(problem) => {
+            eprintln!("sb-cli: {problem}");
+            Err(ERROR_EXIT)
+        }
+    }
+}
+
+/// How a restore ended, as its report needs it.
+enum RestoreEnd {
+    /// The store was replaced. `unrecorded` is why the command's
+    /// receipt could not be written in the restored store, if it
+    /// couldn't.
+    Restored {
+        unrecorded: Option<CoreError>,
+    },
+    Refused(CoreError),
+    Failed(CoreError),
+}
+
+/// A restore's end in words: `Ok` for a replaced store, with a
+/// warning when its receipt wasn't recorded, and `Err` for one that
+/// was refused or failed part way.
+fn restore_report(id: &str, end: RestoreEnd) -> Result<Option<String>, String> {
+    match end {
+        RestoreEnd::Restored { unrecorded: None } => Ok(None),
+        RestoreEnd::Restored {
+            unrecorded: Some(error),
+        } => Ok(Some(format!(
+            "the store was restored from {id}, but the command's receipt was not recorded: \
+             {error}"
+        ))),
+        RestoreEnd::Refused(cause) => Err(format!(
+            "restoring {id} was refused, and the store is unchanged; \
+             the prepared copy is kept beside the data root: {cause}"
+        )),
+        RestoreEnd::Failed(cause) => Err(format!(
+            "restoring {id} failed part way: {cause}. Nothing was deleted; the next command \
+             finds out whether the store was replaced"
+        )),
+    }
+}
+
 /// `backup list`: one line per recorded generation, newest first. A
 /// store without any prints nothing and says so on stderr.
 fn backup_list(core: &Core) -> Result<(), u8> {
@@ -776,6 +884,52 @@ mod tests {
             command(&["backup", "list", "extra"]).err().as_deref(),
             Some("backup list takes no arguments")
         );
+    }
+
+    #[test]
+    fn restore_takes_exactly_one_generation() {
+        match command(&["restore", "gen-1"]) {
+            Ok(Command::Restore { generation_id }) => assert_eq!(generation_id, "gen-1"),
+            _ => panic!("expected a restore"),
+        }
+        for args in [&["restore"][..], &["restore", "gen-1", "gen-2"]] {
+            assert_eq!(
+                command(args).err().as_deref(),
+                Some("restore takes <generation_id>")
+            );
+        }
+    }
+
+    #[test]
+    fn a_restore_s_end_is_success_only_when_the_store_was_replaced() {
+        let unavailable = || CoreError::Unavailable {
+            reason: "no space".to_owned(),
+        };
+        assert_eq!(
+            restore_report("gen", RestoreEnd::Restored { unrecorded: None }),
+            Ok(None)
+        );
+        let warned = restore_report(
+            "gen",
+            RestoreEnd::Restored {
+                unrecorded: Some(unavailable()),
+            },
+        )
+        .unwrap()
+        .unwrap();
+        assert!(
+            warned.starts_with("the store was restored from gen, but"),
+            "{warned}"
+        );
+        assert!(warned.contains("no space"), "{warned}");
+
+        let refused = restore_report("gen", RestoreEnd::Refused(unavailable())).unwrap_err();
+        assert!(refused.contains("store is unchanged"), "{refused}");
+        assert!(refused.contains("prepared copy"), "{refused}");
+        assert!(refused.contains("no space"), "{refused}");
+        let failed = restore_report("gen", RestoreEnd::Failed(unavailable())).unwrap_err();
+        assert!(failed.contains("failed part way"), "{failed}");
+        assert!(failed.contains("no space"), "{failed}");
     }
 
     #[test]

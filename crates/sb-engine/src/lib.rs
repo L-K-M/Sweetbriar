@@ -65,7 +65,7 @@ pub use sb_resources::{
 };
 
 pub use drafts::{DraftContent, DraftCreated, DraftSaved};
-pub use engine::{Engine, PreparedRestore, RestoreError};
+pub use engine::{Engine, PreparedRestore, RestoreError, Restored};
 pub use error::EngineError;
 pub use health::{Health, Integrity};
 pub use import::{
