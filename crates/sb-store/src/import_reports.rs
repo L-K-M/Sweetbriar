@@ -4,8 +4,12 @@
 //! readers see the old report or the new one, never a torn file.
 
 use std::io::{self, Read, Write};
+#[cfg(test)]
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+#[cfg(test)]
+use std::sync::Mutex;
 
 use sb_types::fs::{FileKind, Fs};
 use sb_types::random::Random;
@@ -22,10 +26,18 @@ const NAME_ATTEMPTS: usize = 8;
 /// The longest job id a report is named after; ids are UUIDs.
 const MAX_JOB_ID: usize = 64;
 
+/// Test-only: a hook run before each report write, with the final path
+/// and the bytes about to be written. Cloned out of its mutex before
+/// it runs, so a hook that blocks holds no lock.
+#[cfg(test)]
+type BeforeWriteHook = Arc<dyn Fn(&Path, &[u8]) + Send + Sync>;
+
 pub(crate) struct ImportReports {
     fs: Arc<dyn Fs>,
     random: Arc<dyn Random>,
     recovery: PathBuf,
+    #[cfg(test)]
+    before_write: Mutex<Option<BeforeWriteHook>>,
 }
 
 impl ImportReports {
@@ -34,7 +46,20 @@ impl ImportReports {
             fs,
             random,
             recovery,
+            #[cfg(test)]
+            before_write: Mutex::new(None),
         }
+    }
+
+    /// Test-only: install the hook run before each report write,
+    /// replacing any earlier one. A dropped release sender releases a
+    /// hook waiting on one, so a panicking test cannot hang its writer.
+    #[cfg(test)]
+    pub(crate) fn set_before_write_hook(&self, hook: BeforeWriteHook) {
+        *self
+            .before_write
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(hook);
     }
 
     /// `recovery/import-report-<job>.json`. A job id is lowercase hex
@@ -98,8 +123,23 @@ impl ImportReports {
     /// before the rename removes the temporary file, best-effort, and
     /// keeps the old report; a failed final directory flush leaves the
     /// new report in place but not proven durable.
+    ///
+    /// Store callers hold a counted latch step across this call, including
+    /// its error cleanup, so latching waits for every in-flight write.
     pub(crate) fn write(&self, job: &str, bytes: &[u8]) -> Result<(), StoreError> {
         let path = self.path(job)?;
+        #[cfg(test)]
+        let before_write = {
+            let hook = self
+                .before_write
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            hook.as_ref().map(Arc::clone)
+        };
+        #[cfg(test)]
+        if let Some(hook) = before_write {
+            hook(&path, bytes);
+        }
         let failed = |e: io::Error| {
             StoreError::unavailable(format!("cannot write the import report {job}: {e}"))
         };

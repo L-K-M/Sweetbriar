@@ -1589,3 +1589,138 @@ fn a_dropped_store_still_applies_a_queued_activation_commit() {
     store.close().unwrap();
     drop(scratch);
 }
+
+/// The import-report latch race: `Store::write_import_report` must hold
+/// its latch step across the report write, so a latch claimed while the
+/// write runs waits for the complete report rather than returning into a
+/// pending write. The write is held open by the test-only before-write
+/// hook in `ImportReports`.
+mod import_report_latch {
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
+    use super::*;
+
+    /// A valid UUID job id, so the report path is accepted.
+    const JOB: &str = "123e4567-e89b-12d3-a456-426614174000";
+    /// Far above the test report.
+    const LIMIT: u64 = 1024;
+    /// How long the latch thread has to set the latch.
+    const LATCH_SET: Duration = Duration::from_secs(20);
+    /// Longer than latch startup, so a slow startup cannot release the
+    /// held write before the test does.
+    const HOOK_WAIT: Duration = Duration::from_secs(60);
+    /// How long each thread has to finish once released.
+    const FINISH: Duration = Duration::from_secs(20);
+
+    /// What the latch thread saw once `latch_for_test` returned.
+    struct LatchSighting {
+        returned_at: Instant,
+        bytes: Option<Vec<u8>>,
+    }
+
+    #[test]
+    fn latch_waits_for_the_import_report_write() {
+        let (_scratch, _paths, store) = open_scratch("import-report-latch");
+        let store = Arc::new(store);
+        let report = br#"{"v":1,"state":"done"}"#;
+
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel::<()>();
+        // The receiver is !Sync, so the hook (which must be Sync) parks
+        // it in a mutex; the sender stays with the test, so dropping it
+        // on unwind releases the hook.
+        let release_rx = std::sync::Mutex::new(release_rx);
+        store
+            .import_reports
+            .set_before_write_hook(Arc::new(move |_path: &Path, _bytes: &[u8]| {
+                let _ = entered_tx.send(());
+                let release = release_rx
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                let _ = release.recv_timeout(HOOK_WAIT);
+            }));
+
+        let writer_store = Arc::clone(&store);
+        let (write_tx, write_rx) = mpsc::channel();
+        let write_thread = std::thread::spawn(move || {
+            let result = writer_store.write_import_report(JOB, report);
+            let _ = write_tx.send(result);
+        });
+
+        entered_rx
+            .recv_timeout(LATCH_SET)
+            .expect("the report write did not reach the before-write hook");
+
+        // This is the only operation in flight. Checking its counted
+        // step makes the regression deterministic even if the latch
+        // thread is descheduled after returning but before reporting.
+        let counted_steps = store.latch.file_steps_for_test();
+        let latch_store = Arc::clone(&store);
+        let (latch_tx, latch_rx) = mpsc::channel();
+        let latch_thread = std::thread::spawn(move || {
+            latch_store.latch.latch_for_test("a test finding");
+            let returned_at = Instant::now();
+            let bytes = latch_store
+                .read_import_report(JOB, LIMIT)
+                .ok()
+                .flatten()
+                .map(String::into_bytes);
+            let _ = latch_tx.send(LatchSighting { returned_at, bytes });
+        });
+
+        let deadline = Instant::now() + LATCH_SET;
+        while store.latch.get().is_none() {
+            assert!(
+                Instant::now() < deadline,
+                "the latch thread did not set the latch within {LATCH_SET:?}"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+
+        // Release the writer; both threads then finish. Record the
+        // release before it can unblock the write and then the latch.
+        let released_at = Instant::now();
+        drop(release_tx);
+
+        let write_result = write_rx
+            .recv_timeout(FINISH)
+            .expect("the report write did not finish after release");
+        let sighting = latch_rx
+            .recv_timeout(FINISH)
+            .expect("the latch thread did not finish after release");
+
+        write_thread
+            .join()
+            .expect("the report write thread panicked");
+        latch_thread.join().expect("the latch thread panicked");
+
+        assert_eq!(
+            counted_steps, 1,
+            "report-step-missing: the held report write must be counted"
+        );
+        assert!(
+            sighting.returned_at >= released_at,
+            "latch-returned-early: the latch returned at {:?}, before the \
+             held report write was released at {released_at:?}",
+            sighting.returned_at
+        );
+        assert!(
+            write_result.is_ok(),
+            "the report write failed: {write_result:?}"
+        );
+        assert_eq!(
+            sighting.bytes.as_deref(),
+            Some(&report[..]),
+            "the latch's post-latch read must see the complete report"
+        );
+        // A later report write after the latch refuses Corrupt.
+        let error = store
+            .write_import_report(JOB, b"{\"v\":2}")
+            .expect_err("a report write after the latch must refuse");
+        assert!(
+            matches!(error, StoreError::Corrupt { .. }),
+            "a report write after the latch must be Corrupt, got {error:?}"
+        );
+    }
+}
