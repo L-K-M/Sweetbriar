@@ -90,6 +90,8 @@ pub async fn open_core(
     Ok(Arc::new(Core {
         lease_releaser: service.lease_releaser(),
         service: RwLock::new(Some(service)),
+        #[cfg(test)]
+        restore_probe: Default::default(),
     }))
 }
 
@@ -102,10 +104,12 @@ pub async fn open_core(
 pub struct Core {
     /// Independent of the lifecycle lock so synchronous release never waits on I/O.
     pub(crate) lease_releaser: sb_service::LeaseReleaser,
-    /// The live service core; `None` once `shutdown` took it.
+    /// The live service core; `None` after shutdown or a closed restore failure.
     /// Crate-visible so each domain module (`windows`) can implement
     /// its share of the exported `Core` methods.
     pub(crate) service: RwLock<Option<sb_service::Core>>,
+    #[cfg(test)]
+    pub(crate) restore_probe: crate::restore::probe::RestoreProbe,
 }
 
 /// What a call after `shutdown` always answers (spec/07: "any call

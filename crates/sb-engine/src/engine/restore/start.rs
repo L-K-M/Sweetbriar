@@ -55,10 +55,7 @@ impl Engine {
         prepared: PreparedRestore,
         cancelled: Arc<AtomicBool>,
     ) -> Result<Restored, RestoreError<PreparedRestore>> {
-        let spent = match validate_idempotency_key(idempotency_key) {
-            Ok(()) => self.restore_receipt(idempotency_key).await,
-            Err(unusable) => Err(unusable),
-        };
+        let spent = self.restore_receipt(idempotency_key).await;
         match spent {
             Ok(None) => {}
             Ok(Some(receipt)) => {
@@ -112,8 +109,11 @@ impl Engine {
         Ok(Restored { engine, receipt })
     }
 
-    /// What `key` already answers for a restore in this store.
-    async fn restore_receipt(&self, key: &str) -> Result<Option<Receipt>, EngineError> {
+    /// What a valid `key` already answers for a restore in this store.
+    /// A key spent on another command is `Conflict`. Read-only stores
+    /// answer too; the native facade calls this before preparing.
+    pub async fn restore_receipt(&self, key: &str) -> Result<Option<Receipt>, EngineError> {
+        validate_idempotency_key(key)?;
         let key = key.to_owned();
         self.read_through(move |resources| resources.restore_receipt(&key))
             .await

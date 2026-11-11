@@ -408,6 +408,11 @@ uint64_t uniffi_sb_ffi_fn_method_core_open_body(uint64_t ptr, uint64_t token, in
 void uniffi_sb_ffi_fn_method_core_release_lease(uint64_t ptr, RustBuffer lease_id, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_START_RESTORE
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_START_RESTORE
+uint64_t uniffi_sb_ffi_fn_method_core_start_restore(uint64_t ptr, uint64_t token, RustBuffer idempotency_key, RustBuffer generation_id
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_FORMAT_SEARCH
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_FORMAT_SEARCH
 uint64_t uniffi_sb_ffi_fn_method_core_format_search(uint64_t ptr, uint64_t token, RustBuffer query_json
@@ -1073,6 +1078,12 @@ uint16_t uniffi_sb_ffi_checksum_method_core_open_body(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_RELEASE_LEASE
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_RELEASE_LEASE
 uint16_t uniffi_sb_ffi_checksum_method_core_release_lease(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_START_RESTORE
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_START_RESTORE
+uint16_t uniffi_sb_ffi_checksum_method_core_start_restore(void
     
 );
 #endif

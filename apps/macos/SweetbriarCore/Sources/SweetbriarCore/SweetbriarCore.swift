@@ -1349,6 +1349,13 @@ public protocol CoreProtocol: AnyObject, Sendable {
     func releaseLease(leaseId: String) 
     
     /**
+     * Replay before preparation; otherwise verify/stage with the core usable,
+     * then exclusively consume and reinstall it. Cancel by flag, not by
+     * dropping either begun operation. Retained stages are never reused.
+     */
+    func startRestore(token: CancelToken, idempotencyKey: String, generationId: String) async throws  -> RestoreOutcome
+    
+    /**
      * Validate JSON then format canonical text with explicit date context.
      */
     func formatSearch(token: CancelToken, queryJson: String) async throws  -> String
@@ -2182,6 +2189,27 @@ open func releaseLease(leaseId: String)  {try! rustCall() {
         FfiConverterString.lower(leaseId),uniffiCallStatus
     )
 }
+}
+    
+    /**
+     * Replay before preparation; otherwise verify/stage with the core usable,
+     * then exclusively consume and reinstall it. Cancel by flag, not by
+     * dropping either begun operation. Retained stages are never reused.
+     */
+open func startRestore(token: CancelToken, idempotencyKey: String, generationId: String)async throws  -> RestoreOutcome  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_start_restore(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterString.lower(idempotencyKey),FfiConverterString.lower(generationId)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeRestoreOutcome_lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
 }
     
     /**
@@ -9778,6 +9806,111 @@ public func FfiConverterTypeRestoreArtifactKind_lower(_ value: RestoreArtifactKi
 
 
 
+/**
+ * A receipt error does not undo a swap. Only Closed leaves no usable core.
+ */
+
+public enum RestoreOutcome: Equatable, Hashable {
+    
+    case restored(receipt: Receipt
+    )
+    case replayed(receipt: Receipt
+    )
+    case receiptUnrecorded(cause: CoreError
+    )
+    case refused(cause: CoreError
+    )
+    case closed(cause: CoreError
+    )
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension RestoreOutcome: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeRestoreOutcome: FfiConverterRustBuffer {
+    typealias SwiftType = RestoreOutcome
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> RestoreOutcome {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .restored(receipt: try FfiConverterTypeReceipt.read(from: &buf)
+        )
+        
+        case 2: return .replayed(receipt: try FfiConverterTypeReceipt.read(from: &buf)
+        )
+        
+        case 3: return .receiptUnrecorded(cause: try FfiConverterTypeCoreError.read(from: &buf)
+        )
+        
+        case 4: return .refused(cause: try FfiConverterTypeCoreError.read(from: &buf)
+        )
+        
+        case 5: return .closed(cause: try FfiConverterTypeCoreError.read(from: &buf)
+        )
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: RestoreOutcome, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case let .restored(receipt):
+            writeInt(&buf, Int32(1))
+            FfiConverterTypeReceipt.write(receipt, into: &buf)
+            
+        
+        case let .replayed(receipt):
+            writeInt(&buf, Int32(2))
+            FfiConverterTypeReceipt.write(receipt, into: &buf)
+            
+        
+        case let .receiptUnrecorded(cause):
+            writeInt(&buf, Int32(3))
+            FfiConverterTypeCoreError.write(cause, into: &buf)
+            
+        
+        case let .refused(cause):
+            writeInt(&buf, Int32(4))
+            FfiConverterTypeCoreError.write(cause, into: &buf)
+            
+        
+        case let .closed(cause):
+            writeInt(&buf, Int32(5))
+            FfiConverterTypeCoreError.write(cause, into: &buf)
+            
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeRestoreOutcome_lift(_ buf: RustBuffer) throws -> RestoreOutcome {
+    return try FfiConverterTypeRestoreOutcome.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeRestoreOutcome_lower(_ value: RestoreOutcome) -> RustBuffer {
+    return FfiConverterTypeRestoreOutcome.lower(value)
+}
+
+
+
 
 public enum SearchIndexState: Equatable, Hashable {
     
@@ -11734,6 +11867,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_core_release_lease() != 61314) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_start_restore() != 32123) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_core_format_search() != 59705) {
