@@ -298,6 +298,11 @@ uint64_t uniffi_sb_ffi_fn_method_core_set_identity_appearance(uint64_t ptr, uint
 uint64_t uniffi_sb_ffi_fn_method_core_subscribe_appearance(uint64_t ptr, uint64_t token, uint64_t generation
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_START_BACKUP
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_START_BACKUP
+uint64_t uniffi_sb_ffi_fn_method_core_start_backup(uint64_t ptr, uint64_t token, RustBuffer idempotency_key
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_CREATE_DRAFT
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_CREATE_DRAFT
 uint64_t uniffi_sb_ffi_fn_method_core_create_draft(uint64_t ptr, uint64_t token, RustBuffer idempotency_key, RustBuffer context
@@ -476,6 +481,21 @@ void uniffi_sb_ffi_fn_free_appearancesubscription(uint64_t handle, RustCallStatu
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_APPEARANCESUBSCRIPTION_NEXT
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_APPEARANCESUBSCRIPTION_NEXT
 uint64_t uniffi_sb_ffi_fn_method_appearancesubscription_next(uint64_t ptr, uint64_t token
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_CLONE_BACKUPCOPY
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_CLONE_BACKUPCOPY
+uint64_t uniffi_sb_ffi_fn_clone_backupcopy(uint64_t handle, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_FREE_BACKUPCOPY
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_FREE_BACKUPCOPY
+void uniffi_sb_ffi_fn_free_backupcopy(uint64_t handle, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_BACKUPCOPY_FINISHED
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_BACKUPCOPY_FINISHED
+uint64_t uniffi_sb_ffi_fn_method_backupcopy_finished(uint64_t ptr, uint64_t token
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_CLONE_CANCELTOKEN
@@ -914,6 +934,12 @@ uint16_t uniffi_sb_ffi_checksum_method_core_subscribe_appearance(void
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_START_BACKUP
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_START_BACKUP
+uint16_t uniffi_sb_ffi_checksum_method_core_start_backup(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_CREATE_DRAFT
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_CREATE_DRAFT
 uint16_t uniffi_sb_ffi_checksum_method_core_create_draft(void
@@ -1115,6 +1141,12 @@ uint16_t uniffi_sb_ffi_checksum_method_core_window_ids(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_APPEARANCESUBSCRIPTION_NEXT
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_APPEARANCESUBSCRIPTION_NEXT
 uint16_t uniffi_sb_ffi_checksum_method_appearancesubscription_next(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_BACKUPCOPY_FINISHED
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_BACKUPCOPY_FINISHED
+uint16_t uniffi_sb_ffi_checksum_method_backupcopy_finished(void
     
 );
 #endif
