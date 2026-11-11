@@ -75,6 +75,48 @@ fn a_raised_flag_is_cancelled_and_an_unknown_generation_not_found() {
     block_on(core.shutdown());
 }
 
+#[test]
+fn retained_restore_paths_survive_a_swap_and_restart_without_cleanup() {
+    use crate::RestoreArtifactKind::{Preserved, Staged};
+
+    let scratch = ScratchDir::new("service-restore-artifacts");
+    let core = open(&scratch);
+    assert!(block_on(core.list_restore_artifacts()).unwrap().is_empty());
+    let id = back_up(&core, "00000000-0000-4000-8000-0000000000f1");
+    let abandoned = block_on(core.prepare_restore(&id, unflagged())).unwrap();
+    let paths = block_on(core.list_restore_artifacts()).unwrap();
+    assert_eq!(paths.len(), 1);
+    assert_eq!(paths[0].kind, Staged);
+    let abandoned_path = paths[0].path.clone();
+    assert!(abandoned_path.is_dir());
+    drop(abandoned);
+    assert_eq!(block_on(core.list_restore_artifacts()).unwrap(), paths);
+
+    let prepared = block_on(core.prepare_restore(&id, unflagged())).unwrap();
+    assert_eq!(block_on(core.list_restore_artifacts()).unwrap().len(), 2);
+    let Restored { core, receipt } = block_on(core.restore(
+        "00000000-0000-4000-8000-0000000000f2",
+        prepared,
+        unflagged(),
+    ))
+    .unwrap();
+    receipt.unwrap();
+    let paths = block_on(core.list_restore_artifacts()).unwrap();
+    assert_eq!(paths.len(), 2, "one abandoned stage, one preserved root");
+    assert_eq!(paths[0].kind, Preserved);
+    assert_eq!(paths[1].kind, Staged);
+    assert_eq!(paths[1].path, abandoned_path);
+    assert!(paths.iter().all(|artifact| artifact.path.is_dir()));
+    block_on(core.shutdown());
+
+    let core = open(&scratch);
+    assert_eq!(block_on(core.list_restore_artifacts()).unwrap(), paths);
+    // This test acts as the user: a later refresh reflects manual removal.
+    std::fs::remove_dir_all(&abandoned_path).unwrap();
+    assert_eq!(block_on(core.list_restore_artifacts()).unwrap(), paths[..1]);
+    block_on(core.shutdown());
+}
+
 const CUE: &str = "appearance.compose_cue";
 
 fn cue(core: &Core) -> String {

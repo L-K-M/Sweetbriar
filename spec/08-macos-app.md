@@ -35,6 +35,46 @@ Rests on research [08-macos-ui](../research/08-macos-ui.md),
 State restoration uses AppKit window restoration. A compose window
 restores its draft by `draft_id`.
 
+## Backups settings (M1.8j)
+
+Settings → Backups uses only the Service API through the hand-written
+bridge. It lists the recorded generations with their state, dates, size
+and latest verification verdict (or “Not checked”), and the retained
+restore paths (07). Listing a generation is not verification of its
+bytes; every restore verifies again.
+
+Back up now starts a keyed generation and shows its copy's eventual
+result. A complete generation with a retention warning remains complete;
+a stopped or failed copy is never presented as a usable recovery point.
+The destination defaults to the data root's `backups/`, with a choice of
+another directory. An unavailable chosen volume is an error, not a reason
+to fall back to the default.
+
+Restoring requires explicit confirmation naming the generation and its
+date. Explain that it replaces the live archive with that recovery point,
+keeps the replaced root intact, pauses every account and quarantines
+pending work. Nothing is sent, moved or deleted automatically. Preparation
+is cancellable while the live archive stays usable; after requesting a
+cancel, keep awaiting the call's outcome. A failed receipt after a swap
+is reported as “restored, receipt not recorded”, not as a rollback or a
+reason to retry automatically. A closed-core failure requires reopening
+the app to settle the restore marker. Open content is invalidated after
+a swap; no replaced-store content may be saved back automatically.
+
+Preserved roots and stages remain listed, including after relaunch. Show
+their paths for deliberate manual filesystem removal, with a warning that
+preserved roots can hold the listed backup generations and a stage may
+still be in use. Their names do not prove ownership, completeness or
+readiness to restore. Refreshing settings deletes nothing and never reuses
+a stage.
+
+A read-only integrity finding is shown in the main window with its detail,
+time and evidence-copy path when available, and an action to open Backups.
+Subscribe to health before reading it and read again after each event,
+including the event publishing the copy path. Back up now and other writes
+are unavailable, but listing and restore remain available. After a restore,
+read health and Search coverage again; do not leave a stale read-only note.
+
 ## Sidebar
 
 - **Unified section:** Inbox (`Unified(inbox)`), Flagged (`Flagged`),
