@@ -157,7 +157,7 @@ fn copy_end(
 
 impl Engine {
     /// `start_backup()` (spec/07): take a backup generation now, in the
-    /// data root's `backups/`.
+    /// configured destination, defaulting to the data root's `backups/`.
     ///
     /// It answers once the generation's snapshot is taken, with the
     /// receipt that committed with its row. The copy goes on in the
@@ -185,7 +185,7 @@ impl Engine {
             let copying = copying;
             let started = worker
                 .blocking(move |resources| {
-                    resources.start_backup(BackupDestination::DataRoot, &key)
+                    resources.start_backup(BackupDestination::Configured, &key)
                 })
                 .await;
             let (receipt, snapshot) = match started {

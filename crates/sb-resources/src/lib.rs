@@ -73,9 +73,10 @@ pub use repair::{
 };
 pub use restore::ResourcesSwapError;
 pub use sb_store::{
-    BackupDestination, BackupGeneration, BackupGenerationState, BackupReceipt, BackupSnapshot,
-    FAILED_GENERATIONS_LISTED, GenerationVerification, PreparedRestoreStage, QualifiedStage,
-    RestoreMetadata, StartedBackup, VerifiedExternalBackup, receipt_generation_id,
+    BACKUP_DESTINATION_SETTING, BackupDestination, BackupGeneration, BackupGenerationState,
+    BackupReceipt, BackupSnapshot, FAILED_GENERATIONS_LISTED, GenerationVerification,
+    PreparedRestoreStage, QualifiedStage, RestoreMetadata, StartedBackup, VerifiedExternalBackup,
+    receipt_generation_id, valid_backup_destination,
 };
 pub use sb_store::{
     GC_GRACE_PERIOD, GcGate, GcReport, GenerationCheck, GenerationVerdict, MaintenanceFinish,

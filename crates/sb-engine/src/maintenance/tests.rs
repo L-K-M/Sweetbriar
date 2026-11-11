@@ -273,6 +273,48 @@ fn a_backup_that_outlasts_its_period_lets_the_next_job_run() {
     block_on(engine.shutdown()).unwrap();
 }
 
+#[test]
+fn scheduled_backups_use_the_chosen_directory_and_do_not_recreate_a_missing_volume() {
+    let scratch = ScratchDir::new("maintenance-destination");
+    let parent = std::fs::canonicalize(scratch.path()).unwrap();
+    let root = parent.join("store");
+    let volume = parent.join("volume");
+    let selected = volume.join("backups");
+    std::fs::create_dir_all(&selected).unwrap();
+    let (engine, clock) = scheduled(&root, MONDAY);
+    block_on(engine.set_setting(
+        &engine.new_idempotency_key(),
+        sb_resources::BACKUP_DESTINATION_SETTING,
+        selected.to_str().unwrap(),
+    ))
+    .unwrap();
+    advance(&engine, &clock, SETTLE);
+    assert_eq!(
+        outcome_of(&engine, MaintenanceJob::Backup),
+        Some(MaintenanceOutcome::Complete)
+    );
+    let generations = block_on(engine.list_backups()).unwrap();
+    assert_eq!(generations.len(), 1);
+    assert_eq!(generations[0].location.parent().unwrap(), selected);
+    assert_eq!(std::fs::read_dir(root.join("backups")).unwrap().count(), 0);
+
+    std::fs::remove_dir_all(&volume).unwrap();
+    change(&engine);
+    advance(&engine, &clock, BACKUP_PERIOD);
+    assert_eq!(
+        outcome_of(&engine, MaintenanceJob::Backup),
+        Some(MaintenanceOutcome::Failed)
+    );
+    assert_eq!(count(&engine, GENERATIONS), 1, "no fallback generation");
+    assert!(
+        engine.resources().backup_due().unwrap(),
+        "a failed copy still owes a backup"
+    );
+    assert!(!volume.exists(), "an absent mount is never recreated");
+    assert_eq!(std::fs::read_dir(root.join("backups")).unwrap().count(), 0);
+    block_on(engine.shutdown()).unwrap();
+}
+
 // --- stopping ---
 
 #[test]
