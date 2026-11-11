@@ -778,21 +778,25 @@ fn migration_22(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
     tx.execute_batch("CREATE TABLE backup_ownership (generation_id TEXT PRIMARY KEY REFERENCES backup_generations(generation_id), token TEXT NOT NULL) STRICT;").map_err(bug)
 }
 
-fn migration_23(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
-    tx.execute_batch("CREATE TABLE verifier_scratch (id TEXT PRIMARY KEY, token TEXT NOT NULL, incarnation TEXT NOT NULL) STRICT;").map_err(bug)
-}
+/// A backup verification's owner rows. A latched store keeps the same
+/// table beside its data root (`backups::home`), so the text is shared.
+pub(crate) const VERIFIER_SCRATCH_TABLE: &str = "CREATE TABLE verifier_scratch (id TEXT PRIMARY KEY, token TEXT NOT NULL, incarnation TEXT NOT NULL) STRICT;";
 
-fn migration_24(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
-    tx.execute_batch(
-        "CREATE TABLE verifier_objects (
+/// A backup verification's object ledger, shared like its owner rows.
+pub(crate) const VERIFIER_OBJECTS_TABLE: &str = "CREATE TABLE verifier_objects (
         scratch_id TEXT NOT NULL REFERENCES verifier_scratch(id),
         sha256 BLOB NOT NULL CHECK(length(sha256) = 32),
         bytes BLOB NOT NULL CHECK(length(bytes) = 8),
         referenced INTEGER NOT NULL DEFAULT 0 CHECK(referenced IN (0,1)),
         PRIMARY KEY(scratch_id, sha256)
-    ) STRICT, WITHOUT ROWID;",
-    )
-    .map_err(bug)
+    ) STRICT, WITHOUT ROWID;";
+
+fn migration_23(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
+    tx.execute_batch(VERIFIER_SCRATCH_TABLE).map_err(bug)
+}
+
+fn migration_24(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
+    tx.execute_batch(VERIFIER_OBJECTS_TABLE).map_err(bug)
 }
 
 /// Version 25 seeds the content-change counters behind scheduled

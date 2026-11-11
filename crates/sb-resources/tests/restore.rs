@@ -2,17 +2,19 @@
 //! back up, stage, qualify and swap, then the restored store under the
 //! same resources; a refused swap hands back resources that still read
 //! and write and a stage that swaps on retry; a failure after closing
-//! leaves a state the next open resolves.
+//! leaves a state the next open resolves. A store that latched
+//! read-only restores the same way (plan M1.8h5b4).
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use sb_resources::{
-    BackupDestination, BackupReceipt, QualifiedStage, Resources, ResourcesSwapError,
-    RestoreMetadata, StoreError, WritePriority,
+    BackupDestination, BackupReceipt, IntegrityCheck, QualifiedStage, Resources,
+    ResourcesSwapError, RestoreMetadata, StoreError, WritePriority,
 };
-use sb_test_support::{ScratchDir, block_on};
+use sb_test_support::{ScratchDir, block_on, damage_an_index};
 
 const KEPT: &str = "00000000-0000-4000-8000-00000000a001";
 const LATER: &str = "00000000-0000-4000-8000-00000000a002";
@@ -233,4 +235,92 @@ fn a_failure_after_closing_is_failed_and_the_next_open_resolves_it() {
     assert_eq!(incarnation(&reopened), old);
     assert_eq!(accounts(&reopened).len(), 2);
     reopened.close().unwrap();
+}
+
+/// Every directory under `root`, and every file but SQLite's volatile
+/// `-shm` with its bytes.
+fn tree(root: &Path) -> BTreeMap<PathBuf, Option<Vec<u8>>> {
+    let mut found = BTreeMap::new();
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(dir) = pending.pop() {
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            let relative = path.strip_prefix(root).unwrap().to_path_buf();
+            if path.is_dir() {
+                pending.push(path);
+                found.insert(relative, None);
+            } else if !relative.ends_with("state.sqlite-shm") {
+                found.insert(relative, Some(std::fs::read(&path).unwrap()));
+            }
+        }
+    }
+    found
+}
+
+/// The backed-up store, damaged where only the full check looks and
+/// latched by it; reopened latched when `reopened`.
+fn latched(scratch: &ScratchDir, reopened: bool) -> (Resources, BackupReceipt) {
+    let root = data_root(scratch);
+    let (resources, receipt) = backed_up(scratch);
+    resources.close().unwrap();
+    damage_an_index(&root.join("state.sqlite"));
+    let resources = Resources::open(&root).unwrap();
+    let found = resources.check_integrity(&AtomicBool::new(false)).unwrap();
+    assert!(matches!(found, IntegrityCheck::Finding(_)), "{found:?}");
+    if !reopened {
+        return (resources, receipt);
+    }
+    resources.close().unwrap();
+    let resources = Resources::open(&root).unwrap();
+    assert!(resources.integrity_latch().is_some());
+    (resources, receipt)
+}
+
+/// A latched store verifies, stages and qualifies a generation without
+/// changing a file in its root, then swaps it in: the restored store
+/// is sound and writable, and the damaged root is preserved with its
+/// latch. The same from the finding on and after a latched reopen.
+#[test]
+fn a_latched_store_restores_and_leaves_its_root_as_it_was() {
+    for reopened in [false, true] {
+        let scratch = ScratchDir::new("resources-restore-latched");
+        let root = data_root(&scratch);
+        let (resources, receipt) = latched(&scratch, reopened);
+        let old = incarnation(&resources);
+        let damaged = tree(&root);
+
+        let stage = qualified(&resources, &receipt);
+
+        assert_eq!(tree(&root), damaged, "the restore's preparation wrote");
+        // The verification worked beside the root and cleaned up.
+        let beside = sibling(&root, "store.verifier").expect("the verifier's sibling");
+        let left: Vec<_> = std::fs::read_dir(&beside)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .filter(|name| !name.starts_with("ledger.sqlite"))
+            .collect();
+        assert_eq!(left, Vec::<String>::new());
+
+        let restored = resources
+            .swap_restore(stage, &AtomicBool::new(false))
+            .unwrap();
+
+        assert!(restored.integrity_latch().is_none());
+        assert_ne!(incarnation(&restored), old);
+        assert_eq!(
+            accounts(&restored),
+            [(KEPT.to_owned(), "paused".to_owned())]
+        );
+        add_account(&restored, LATER);
+        restored.close().unwrap();
+        // The damaged root went aside whole, its latch with it.
+        let preserved = sibling(&root, "store.preserved-").expect("the old root is preserved");
+        assert_eq!(tree(&preserved), damaged);
+        assert!(preserved.join("integrity-latch.json").is_file());
+        // The next open is the restored store, with no latch.
+        let reopened = Resources::open(&root).unwrap();
+        assert!(reopened.integrity_latch().is_none());
+        assert_eq!(accounts(&reopened).len(), 2);
+        reopened.close().unwrap();
+    }
 }

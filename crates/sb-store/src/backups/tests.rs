@@ -2256,7 +2256,7 @@ fn startup_retries_proved_verifier_scratch() {
     );
     for chunk in (0u16..401).collect::<Vec<_>>().chunks(200) {
         super::ledger::insert(
-            &store.backups.writer,
+            &store.backups.store_home(),
             id.to_owned(),
             chunk
                 .iter()
@@ -2306,19 +2306,23 @@ fn verifier_ledger_batches_reconcile_and_reject_duplicates() {
     };
     for start in [0, 200, 400] {
         super::ledger::insert(
-            &store.backups.writer,
+            &store.backups.store_home(),
             id.into(),
             (start..(start + 200).min(401)).map(entry).collect(),
         )
         .unwrap();
     }
     assert!(
-        super::ledger::insert(&store.backups.writer, id.into(), vec![entry(500), entry(1)])
-            .is_err()
+        super::ledger::insert(
+            &store.backups.store_home(),
+            id.into(),
+            vec![entry(500), entry(1)]
+        )
+        .is_err()
     );
     assert!(
         super::ledger::insert(
-            &store.backups.writer,
+            &store.backups.store_home(),
             id.into(),
             (500..701).map(entry).collect()
         )
@@ -2327,7 +2331,7 @@ fn verifier_ledger_batches_reconcile_and_reject_duplicates() {
     let conn = Connection::open(paths.state_db()).unwrap();
     assert!(
         super::ledger::reference(
-            &store.backups.writer,
+            &store.backups.store_home(),
             id.into(),
             (0..201).map(|n| entry(n).sha256).collect()
         )
@@ -2342,14 +2346,14 @@ fn verifier_ledger_batches_reconcile_and_reject_duplicates() {
     let hash = entry(1).sha256;
     assert!(
         super::ledger::reference(
-            &store.backups.writer,
+            &store.backups.store_home(),
             id.into(),
             vec![hash, entry(500).sha256]
         )
         .is_err()
     );
     assert!(!super::ledger::page(&conn, id, None).unwrap()[1].referenced);
-    super::ledger::reference(&store.backups.writer, id.into(), vec![hash, hash]).unwrap();
+    super::ledger::reference(&store.backups.store_home(), id.into(), vec![hash, hash]).unwrap();
     let first = super::ledger::page(&conn, id, None).unwrap();
     assert_eq!(first.len(), 200);
     assert_eq!(first[0].entry.bytes, u64::MAX);
@@ -2359,7 +2363,7 @@ fn verifier_ledger_batches_reconcile_and_reject_duplicates() {
     let third = super::ledger::page(&conn, id, Some(second.last().unwrap().entry.sha256)).unwrap();
     assert_eq!(third.len(), 1);
     assert_eq!(third[0].entry.sha256, entry(400).sha256);
-    super::ledger::purge(&store.backups.writer, id).unwrap();
+    super::ledger::purge(&store.backups.store_home(), id).unwrap();
     assert!(super::ledger::page(&conn, id, None).unwrap().is_empty());
 }
 
@@ -3481,7 +3485,7 @@ fn startup_ledger_purge_failure_retains_owner_for_retry() {
     );
     for start in [0u16, 200] {
         super::ledger::insert(
-            &store.backups.writer,
+            &store.backups.store_home(),
             id.into(),
             (start..start + 200)
                 .map(|n| {
@@ -3550,7 +3554,7 @@ fn retained_image_callback_outcomes_clean_owned_evidence() {
                         .map_err(bug)
                 });
                 super::ledger::insert(
-                    &store.writer,
+                    &store.backups.store_home(),
                     id,
                     vec![super::manifest::Entry {
                         sha256: [1; 32],
@@ -3676,7 +3680,7 @@ fn retained_image_callback_cleanup_failure_retains_evidence_for_retry() {
                     .map_err(bug)
             });
             super::ledger::insert(
-                &store.writer,
+                &store.backups.store_home(),
                 id,
                 vec![super::manifest::Entry {
                     sha256: [2; 32],

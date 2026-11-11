@@ -7,6 +7,8 @@
 mod attachments;
 mod checked;
 mod external;
+mod frozen_scratch;
+mod home;
 mod image;
 mod image_inspect;
 #[allow(dead_code)] // Used by the snapshot walker and manifest parser.
@@ -237,6 +239,12 @@ pub(crate) struct Backups {
 }
 
 impl Backups {
+    /// A verification's home in this store while it is sound (see
+    /// [`home`]).
+    fn store_home(&self) -> home::Home<'_> {
+        home::Home::in_store(&self.writer, &self.state_db)
+    }
+
     fn reserve_operation(&self) -> Result<Arc<()>, StoreError> {
         let token = Arc::new(());
         let mut active = self

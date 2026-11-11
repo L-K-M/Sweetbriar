@@ -8,12 +8,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use rusqlite::Connection;
 
 use super::{
-    BackupImageInspection, Backups, attachments::Hash, image_inspect, ledger, manifest, references,
+    BackupImageInspection, Backups, attachments::Hash, home::Home, image_inspect, ledger, manifest,
+    references,
 };
-use crate::{
-    StoreError,
-    store::{Access, READER_PRAGMAS, open_connection},
-};
+use crate::StoreError;
 
 #[cfg(test)]
 mod tests;
@@ -261,12 +259,22 @@ pub(super) fn run(
     expected: Expected,
     cancelled: &AtomicBool,
 ) -> Result<ControlFlow<()>, StoreError> {
-    run_checked(conn, backups, id, input, expected, cancelled, None)
+    run_checked(
+        conn,
+        &backups.store_home(),
+        id,
+        input,
+        expected,
+        cancelled,
+        None,
+    )
 }
 
+/// Reconcile in `home`, the running verification's: its ledger holds
+/// the manifest's objects under `id`.
 pub(super) fn run_checked(
     conn: &Connection,
-    backups: &Backups,
+    home: &Home,
     id: &str,
     input: impl Read,
     expected: Expected,
@@ -300,7 +308,7 @@ pub(super) fn run_checked(
                     .ok_or_else(|| StoreError::corrupt("manifest total overflow"))?;
                 entries.push(entry);
                 if entries.len() == ledger::BATCH {
-                    ledger::insert(&backups.writer, id.to_owned(), std::mem::take(&mut entries))?;
+                    ledger::insert(home, id.to_owned(), std::mem::take(&mut entries))?;
                 }
                 Ok::<_, StoreError>(())
             })();
@@ -338,7 +346,7 @@ pub(super) fn run_checked(
             "manifest identity differs from selected generation",
         ));
     }
-    ledger::insert(&backups.writer, id.to_owned(), entries)?;
+    ledger::insert(home, id.to_owned(), entries)?;
     let total = total
         .checked_add(manifest.database.bytes)
         .ok_or_else(|| StoreError::corrupt("manifest total overflow"))?;
@@ -365,15 +373,15 @@ pub(super) fn run_checked(
     let walked = references::walk(conn, cancelled, |reference| {
         refs.push((reference_hash(reference.hash)?, reference.size));
         if refs.len() == ledger::BATCH {
-            ledger::reference_sized(&backups.writer, id.to_owned(), std::mem::take(&mut refs))?;
+            ledger::reference_sized(home, id.to_owned(), std::mem::take(&mut refs))?;
         }
         Ok(())
     })?;
     if walked.is_break() || cancelled.load(Ordering::Acquire) {
         return Ok(ControlFlow::Break(()));
     }
-    ledger::reference_sized(&backups.writer, id.to_owned(), refs)?;
-    let ledger_conn = open_connection(&backups.state_db, Access::ReadOnly, READER_PRAGMAS)?;
+    ledger::reference_sized(home, id.to_owned(), refs)?;
+    let ledger_conn = home.reader()?;
     let mut after = None;
     loop {
         if cancelled.load(Ordering::Acquire) {

@@ -216,7 +216,7 @@ impl Backups {
                     source_failure.set(bad_candidate(e));
                 })
             },
-            |image, id, _| {
+            |image, session, _| {
                 let mut state = prepared.borrow_mut();
                 let state = state.as_mut().expect("prepared manifest");
                 state.file.seek(SeekFrom::Start(0)).map_err(io_error)?;
@@ -235,8 +235,8 @@ impl Backups {
                 let store = reconciliation::uuid(state.manifest.store_uuid);
                 let result = reconciliation::run_checked(
                     image,
-                    self,
-                    id,
+                    session.home,
+                    session.id,
                     &mut input,
                     expected,
                     cancel,
@@ -249,9 +249,9 @@ impl Backups {
                     return Err(StoreError::corrupt("manifest changed during verification"));
                 }
                 if recorded::verify_objects(
-                    self,
+                    session.home,
                     source.as_ref(),
-                    id,
+                    session.id,
                     cancel,
                     || {},
                     |e| source_failure.set(bad_candidate(e)),

@@ -26,14 +26,14 @@ fn cancelled(cancel: &AtomicBool) -> bool {
 }
 
 pub(super) fn verify_objects(
-    backups: &Backups,
+    home: &home::Home,
     source: &dyn sb_types::fs::ConfinedDir,
     id: &str,
     cancel: &AtomicBool,
     mut progress: impl FnMut(),
     mut source_error: impl FnMut(&StoreError),
 ) -> Result<ControlFlow<()>, StoreError> {
-    let conn = open_connection(&backups.state_db, Access::ReadOnly, READER_PRAGMAS)?;
+    let conn = home.reader()?;
     let mut after = None;
     loop {
         if cancelled(cancel) {
@@ -285,7 +285,7 @@ impl Backups {
                 *database.borrow_mut() = Some(manifest.database);
                 Ok(result)
             },
-            |image, id, scratch| {
+            |image, session, scratch| {
                 let (input, _) = scratch
                     .open_regular(Path::new("manifest.json"))
                     .map_err(io_error)?;
@@ -300,8 +300,8 @@ impl Backups {
                 };
                 let result = reconciliation::run_checked(
                     image,
-                    self,
-                    id,
+                    session.home,
+                    session.id,
                     &mut input,
                     expected,
                     cancel,
@@ -314,9 +314,9 @@ impl Backups {
                     return Err(StoreError::corrupt("manifest digest mismatch"));
                 }
                 if verify_objects(
-                    self,
+                    session.home,
                     source.as_ref(),
-                    id,
+                    session.id,
                     cancel,
                     || progress.borrow_mut()(StreamPhase::Object),
                     |_| {},

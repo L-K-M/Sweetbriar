@@ -10,7 +10,8 @@
 //!   ├─ restored: observers on the new writer, windows ResetRequired,
 //!   │            memo cleared, jobs resumed fresh, open-time recovery
 //!   ├─ refused:  the same store and stage back, jobs resumed as they were
-//!   │            (no inventory or capture ran: the restore refused first)
+//!   │            (no inventory or capture ran: the restore refused first,
+//!   │            except on a read-only engine, where none can finish)
 //!   └─ failed:   the engine ends; the next open resolves the marker
 //! ```
 
@@ -71,6 +72,10 @@ impl Engine {
     /// selections are released, and every account is paused. A refusal
     /// hands this engine back running as before, with the stage. Blocks
     /// on the engine's own blocking pool, never the caller's thread.
+    /// Await it to the end: the work doesn't stop when the future is
+    /// dropped, and the engine it would have returned (a refused one's
+    /// stage too) is dropped with its result. To cancel, raise
+    /// `cancelled` and keep awaiting.
     pub async fn restore(
         self,
         stage: QualifiedStage,
@@ -97,7 +102,17 @@ impl Engine {
         // ones off, and refuse while one is in flight, before anything
         // stops. The hold lasts until the engine has resumed.
         let _starts = self.imports.hold_starts();
-        match self.unresumable_jobs() {
+        // A read-only engine is the exception (spec/03 "Integrity"):
+        // there an inventory or a capture can neither finish nor be
+        // cancelled, its writes being refused, and the restore is the
+        // only way out. A worker still on its way to its stop check
+        // ends in the quiesce below.
+        let unresumable = if self.read_only() {
+            Ok(false)
+        } else {
+            self.unresumable_jobs()
+        };
+        match unresumable {
             Ok(false) => {}
             Ok(true) => {
                 return Err(RestoreError::Refused {

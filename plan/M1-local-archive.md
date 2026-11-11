@@ -1637,10 +1637,11 @@ local drafts. No network yet.
     bridge, and **h5b3b** coverage's index state on a latched store,
     answered `ReadOnly` by the engine in place of a stale `Running`,
     through to the coverage note and the index controls, which offer
-    nothing there; **h5b4** a restore while latched (after g3), its
-    verification scratch kept off the latched writer, and an inventory
-    or capture left unfinished on a latched store no longer refusing
-    it; **h5c** the weekly job in the scheduler, which announces
+    nothing there; **h5b4** a restore while latched (after g3): a
+    verification's scratch, owner row and ledger live in
+    `<data root>.verifier`, beside the frozen root, and an inventory
+    or capture left unfinished on a latched store no longer refuses
+    the restore; **h5c** the weekly job in the scheduler, which announces
     health again once the check returns, so the copy's name reaches
     the shell, and which runs as counted engine work, so a restore's
     quiesce waits for it (the resume after a swap reads the latch

@@ -11,7 +11,7 @@ use crate::{ObjectId, ObjectStore};
 
 /// Every directory under the data root, and every file but the
 /// volatile `-shm` with its digest.
-fn tree(paths: &StorePaths) -> BTreeMap<PathBuf, Option<String>> {
+pub(super) fn tree(paths: &StorePaths) -> BTreeMap<PathBuf, Option<String>> {
     let mut found = BTreeMap::new();
     let mut pending = vec![paths.data_root().to_path_buf()];
     while let Some(dir) = pending.pop() {
@@ -47,7 +47,8 @@ fn assert_frozen<T: std::fmt::Debug>(
 }
 
 /// Everything that would create, write, move or remove a file in the
-/// data root outside the writer.
+/// data root outside the writer. Verifying a backup is not among
+/// them: it works beside the root (`tests/beside.rs`).
 fn refuse_all_file_work(
     store: &Store,
     paths: &StorePaths,
@@ -74,10 +75,16 @@ fn refuse_all_file_work(
     assert_frozen(paths, "scratch", || {
         store.import_validation_scratch().map(drop)
     });
-    assert_frozen(paths, "verify", || {
-        store
-            .verify_recorded_backup(generation, &AtomicBool::new(false))
-            .map(drop)
+    // The weekly check records a verdict, so it is refused up front,
+    // by the store and not by the writer after reading the generation.
+    assert_frozen(paths, "check", || {
+        let checked = store.verify_generation(generation, &AtomicBool::new(false));
+        assert!(
+            matches!(&checked, Err(StoreError::Corrupt { detail })
+                if detail.contains("can't record a backup generation's check")),
+            "{checked:?}"
+        );
+        checked.map(drop)
     });
 }
 
