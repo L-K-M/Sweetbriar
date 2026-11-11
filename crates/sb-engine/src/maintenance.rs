@@ -53,10 +53,11 @@ pub(crate) const INTEGRITY_RETRY: Duration = Duration::from_secs(60 * 60);
 /// open's own work goes first, and a short-lived process (a CLI
 /// command) never starts a job its shutdown would cancel at once.
 pub(crate) const SETTLE: Duration = Duration::from_secs(60);
-/// How soon a job is looked at again after a look that ran nothing (no
-/// changes to back up, a record that couldn't be written), and the
-/// longest park: the injected clock is read again at least this often,
-/// so a wall-clock jump or a Mac waking from sleep is seen within it.
+/// How soon a job is looked at again after a look ended, whether it
+/// ran or recorded nothing (no changes to back up, a record that
+/// couldn't be written), and the longest park: the injected clock is
+/// read again at least this often, so a wall-clock jump or a Mac
+/// waking from sleep is seen within it.
 pub(crate) const POLL: Duration = Duration::from_secs(60);
 
 /// Whether an engine starts the scheduler at open. sb-engine's own unit
@@ -356,7 +357,8 @@ fn run(
 ) {
     let stopped = || jobs.stopped() || shutting_down();
     let settled_at = after(resources.now(), SETTLE);
-    // A job isn't looked at again before this, whatever its record says.
+    // A job isn't looked at again before this, whatever its record
+    // says: a minute after its last look ended.
     let mut not_before = [None; SCHEDULE.len()];
     while !stopped() {
         let now = resources.now();
@@ -402,8 +404,11 @@ fn turn(
             next = Some(next.map_or(due, |next| next.min(due)));
             continue;
         }
-        not_before[slot] = Some(after(now, POLL));
         run_job(resources, jobs, stopped, host);
+        // Counted from the run's end. A backup that outlasted its hour
+        // with changes waiting is due again by its record as it ends;
+        // the jobs after it take their turn before it is looked at.
+        not_before[slot] = Some(after(resources.now(), POLL));
         return Turn::Ran;
     }
     Turn::Idle(next.unwrap_or_else(|| after(now, POLL)))

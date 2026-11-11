@@ -814,6 +814,10 @@ the rows, so a restart or a restored store picks it up:
   A job that never ran, or whose last run was interrupted or
   cancelled, is due at once. A start in the future (a clock moved
   back) counts from now.
+- Whatever its record says, a job is looked at again no sooner than a
+  minute after its last look ended. A backup that outlasted its hour
+  with changes waiting is due again as it ends; the jobs after it
+  take their turn first, and it follows them.
 - A due backup runs only while a generation is owed (`backup_due`:
   there were changes, or an interrupted generation waits for its
   cleanup); otherwise nothing is recorded and it is looked at again a

@@ -222,6 +222,57 @@ fn a_reopen_picks_the_cadence_up_from_the_records() {
     block_on(engine.shutdown()).unwrap();
 }
 
+#[test]
+fn a_backup_that_outlasts_its_period_lets_the_next_job_run() {
+    let scratch = ScratchDir::new("maintenance-long-backup");
+    let (engine, clock) = scheduled(scratch.path(), MONDAY);
+    let (entered, reached) = mpsc::channel();
+    let (release, held) = mpsc::channel::<()>();
+    let (entered, held) = (Mutex::new(entered), Mutex::new(held));
+    let order = Arc::new(Mutex::new(Vec::new()));
+    let (seen, first) = (order.clone(), AtomicBool::new(true));
+    hook(&engine, move |event| match event {
+        Event::Running(job) => seen.lock().unwrap().push(job),
+        Event::Snapshotted if first.swap(false, Ordering::SeqCst) => {
+            entered.lock().unwrap().send(()).unwrap();
+            held.lock().unwrap().recv().unwrap();
+        }
+        _ => {}
+    });
+
+    // The first backup's copy runs for over an hour, and a change
+    // commits meanwhile: by its record it is due again as it ends.
+    clock.0.fetch_add(ms(SETTLE), Ordering::SeqCst);
+    engine.maintenance().wake();
+    reached.recv_timeout(Duration::from_secs(60)).unwrap();
+    let long = BACKUP_PERIOD + Duration::from_secs(60);
+    clock.0.fetch_add(ms(long), Ordering::SeqCst);
+    change(&engine);
+    release.send(()).unwrap();
+    parked(&engine);
+
+    // The jobs after it took their turn first, and the change waits.
+    let ran = order.lock().unwrap().clone();
+    assert_eq!(
+        ran[..2],
+        [MaintenanceJob::Backup, MaintenanceJob::Gc],
+        "{ran:?}"
+    );
+    assert_eq!(count(&engine, COMPLETE), 1, "{ran:?}");
+    assert!(engine.resources().backup_due().unwrap());
+
+    // It is looked at again a minute after its run ended.
+    advance(&engine, &clock, POLL - Duration::from_millis(1));
+    assert_eq!(count(&engine, COMPLETE), 1);
+    advance(&engine, &clock, Duration::from_millis(1));
+    assert_eq!(count(&engine, COMPLETE), 2);
+    assert_eq!(
+        started_of(&engine, MaintenanceJob::Backup),
+        MONDAY + ms(SETTLE) + ms(long) + ms(POLL)
+    );
+    block_on(engine.shutdown()).unwrap();
+}
+
 // --- stopping ---
 
 #[test]
