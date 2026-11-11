@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import SweetbriarCore
 import Testing
@@ -41,13 +42,23 @@ struct BackupListingSDKTests {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(
             "backup-list-sdk-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
-        let core = try await openCore(
-            token: CancelToken(),
-            config: CoreConfig(
-                dataRoot: root.appendingPathComponent("data").path,
-                cacheRoot: root.appendingPathComponent("cache").path))
+        let config = CoreConfig(
+            dataRoot: root.appendingPathComponent("data").path,
+            cacheRoot: root.appendingPathComponent("cache").path)
+        var core = try await openCore(token: CancelToken(), config: config)
         do {
             #expect(try await core.listBackups(token: CancelToken()).isEmpty)
+            let started = try await core.startBackup(token: CancelToken(), idempotencyKey: UUID().uuidString)
+            let copy = try #require(started.copy)
+            #expect(try await copy.finished(token: CancelToken()) == .complete(after: nil))
+            let generations = try await core.listBackups(token: CancelToken())
+            #expect(generations.count == 1)
+            let generation = try #require(generations.first)
+            #expect(generation.generationId == started.generationId)
+            #expect(generation.state == .complete && generation.completedAtMs != nil)
+            #expect(generation.objectCount == 0)
+            #expect(try #require(generation.totalBytes) > 0)
+            #expect(FileManager.default.fileExists(atPath: generation.location))
             let preserved = root.appendingPathComponent("data.preserved-00000000-0000-4000-8000-000000000031")
             let staged = root.appendingPathComponent("data.restoring-00000000-0000-4000-8000-000000000032")
             try Data("not a directory or proof of readiness".utf8).write(to: preserved)
@@ -55,8 +66,8 @@ struct BackupListingSDKTests {
             let names = try await core.listRestoreArtifacts(token: CancelToken())
             #expect(
                 names == [
-                    RestoreArtifact(path: preserved.resolvingSymlinksInPath().path, kind: .preserved),
-                    RestoreArtifact(path: staged.resolvingSymlinksInPath().path, kind: .staged),
+                    RestoreArtifact(path: try canonicalListingPath(preserved), kind: .preserved),
+                    RestoreArtifact(path: try canonicalListingPath(staged), kind: .staged),
                 ])
             let cancelled = CancelToken()
             cancelled.cancel()
@@ -82,9 +93,24 @@ struct BackupListingSDKTests {
             } catch let failure as CoreError {
                 guard case .Unavailable = failure else { throw failure }
             }
+            try Data("not json".utf8).write(to: root.appendingPathComponent("data/integrity-latch.json"))
+            core = try await openCore(token: CancelToken(), config: config)
+            let health = try await core.health(token: CancelToken())
+            if case .readOnly = health.integrity {} else { Issue.record("expected a read-only fixture") }
+            #expect(try await core.listBackups(token: CancelToken()) == generations)
+            #expect(try await core.listRestoreArtifacts(token: CancelToken()) == names)
+            await core.shutdown()
         } catch {
             await core.shutdown()
             throw error
         }
     }
+}
+
+// Foundation's URL resolver can spell /private/var as /var. The core uses
+// POSIX canonical paths, so the fixture oracle must use realpath too.
+private func canonicalListingPath(_ url: URL) throws -> String {
+    let path = try #require(realpath(url.path, nil))
+    defer { free(path) }
+    return String(cString: path)
 }
