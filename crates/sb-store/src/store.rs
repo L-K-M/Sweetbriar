@@ -192,8 +192,22 @@ impl Store {
     /// changed the archive's data since the newest complete
     /// generation's snapshot, or there is no complete generation. The
     /// store's own bookkeeping (backups, GC, close) never counts.
+    ///
+    /// One is owed too while an interrupted generation waits for its
+    /// cleanup, which only the next generation does: a stopped copy on
+    /// an archive nothing changes would otherwise freeze GC for good.
+    /// A generation this process is still copying is not interrupted.
     pub fn backup_due(&self) -> Result<bool, StoreError> {
-        self.read(|tx| crate::changes::backup_due(tx))
+        // Asked before the read takes its snapshot. A generation that
+        // starts in between is then taken for interrupted. That answer
+        // is wrong for as long as its copy runs, and the backup it
+        // starts meanwhile finds the operation held (`Conflict`). The
+        // other order would be wrong every time a generation completes
+        // in between, and each time start one nothing owed.
+        let copying = self.backups.generation_running();
+        self.read(|tx| {
+            Ok(crate::changes::backup_due(tx)? || (!copying && crate::backups::cleanup_owed(tx)?))
+        })
     }
 
     /// The weekly live sample (spec/03 "Reads and verification"): the
@@ -208,6 +222,25 @@ impl Store {
         stop: &std::sync::atomic::AtomicBool,
     ) -> Result<crate::SampleReport, StoreError> {
         crate::verification::verify_sample(self, stop)
+    }
+
+    /// The recorded backup generations for `list_backups` (spec/07),
+    /// newest first: every complete and in-progress one, and the
+    /// failed ones started since the newest complete one, at most
+    /// [`crate::FAILED_GENERATIONS_LISTED`]. The rows as stored: no
+    /// generation's directory is opened.
+    pub fn backup_generations(&self) -> Result<Vec<crate::BackupGeneration>, StoreError> {
+        self.read(|tx| crate::backups::generations(tx))
+    }
+
+    /// The one recorded generation `generation_id` names, whatever its
+    /// state and however old; `None` when no row has that id. The row
+    /// as stored, like the listing's.
+    pub fn backup_generation(
+        &self,
+        generation_id: &str,
+    ) -> Result<Option<crate::BackupGeneration>, StoreError> {
+        self.read(|tx| crate::backups::generation(tx, generation_id))
     }
 
     /// Whether the weekly verification (spec/03 "Reads and
@@ -355,12 +388,38 @@ impl Store {
         self.backups.snapshot(destination)
     }
 
+    /// [`Store::backup_snapshot`] as a command under `idempotency_key`
+    /// (spec/07 `start_backup`): the key's receipt,
+    /// `{"generation_id":...}`, commits in the transaction that inserts
+    /// the generation's `in_progress` row. A key that started a
+    /// generation before answers that receipt and does nothing else,
+    /// while that generation is still being copied too; a key spent on
+    /// another command is `Conflict`. A latched store refuses before
+    /// it looks at the key. A failure after the row commits
+    /// leaves the receipt naming a generation the next one's recovery
+    /// marks `failed`. Blocking, like the snapshot.
+    pub fn start_backup(
+        &self,
+        destination: crate::backups::BackupDestination,
+        idempotency_key: &str,
+    ) -> Result<crate::backups::StartedBackup, StoreError> {
+        if self.writer.is_writer_thread() {
+            return Err(StoreError::internal(
+                "the writer thread cannot back up through its own queue",
+            ));
+        }
+        self.backups.start(destination, idempotency_key)
+    }
+
     /// Publish a pinned snapshot as a verified, durable backup generation.
     /// Blocking; never call on the writer thread. A failure leaves the
     /// generation in progress for interrupted-generation recovery. Once
     /// complete, retention runs before returning and preserves this generation
     /// for the receipt. Its error is reported even though the new generation
-    /// may already be complete. Later retention applies the usual policy.
+    /// may already be complete. A retained clone's
+    /// [`BackupSnapshot::completion_committed`](crate::BackupSnapshot::completion_committed)
+    /// distinguishes that outcome without another store read. Later
+    /// retention applies the usual policy.
     pub fn complete_backup(
         &self,
         snapshot: crate::backups::BackupSnapshot,
@@ -557,6 +616,45 @@ impl Store {
         .map_err(SwapRestoreError::Failed)
     }
 
+    /// What `idempotency_key` already answers for a restore (spec/07
+    /// `start_restore`): the receipt [`Store::record_restore`] wrote in
+    /// this store, `None` for a key that is unspent here, `Conflict`
+    /// for one spent on another command. A restore asks before it
+    /// stops or moves anything. A read, so a latched store answers.
+    pub fn restore_receipt(
+        &self,
+        idempotency_key: &str,
+    ) -> Result<Option<crate::Receipt>, StoreError> {
+        self.read(|tx| crate::receipts::replay(tx, idempotency_key, crate::START_RESTORE))
+    }
+
+    /// Record that the restore under `idempotency_key` put this store
+    /// in place from the generation `generation_id`: the receipt
+    /// `{"generation_id":...}`. It is written here, in the restored
+    /// store, because the swap can't carry it: the stage's bytes are
+    /// fixed when it qualifies. A key already recorded for a restore
+    /// answers its stored receipt, and one spent on another command is
+    /// `Conflict`. Bookkeeping about the store, so it makes no
+    /// generation due. Blocking; never on the writer thread.
+    pub fn record_restore(
+        &self,
+        idempotency_key: &str,
+        generation_id: &str,
+    ) -> Result<crate::Receipt, StoreError> {
+        if self.writer.is_writer_thread() {
+            return Err(StoreError::internal(
+                "the writer thread cannot record a restore through its own queue",
+            ));
+        }
+        let (key, generation_id) = (idempotency_key.to_owned(), generation_id.to_owned());
+        let now = self.clock.now();
+        await_write(self.writer.upkeep(WritePriority::User, move |tx| {
+            crate::receipts::run_once(tx, &key, crate::START_RESTORE, now, |_| {
+                Ok(crate::receipts::encode_generation_receipt(&generation_id))
+            })
+        }))
+    }
+
     /// Visit verified external generations with bounded memory. Identified
     /// invalid or incomplete source candidates are skipped. Other failures,
     /// including errors without source provenance, propagate.
@@ -639,7 +737,9 @@ impl Store {
     /// Durably replace `job`'s report in `recovery/` (spec/03, 09).
     /// Blocking.
     pub fn write_import_report(&self, job: &str, report: &[u8]) -> Result<(), StoreError> {
-        self.latch.refuse("write an import report")?;
+        // Reports live inside the root: a latch waits through the
+        // final rename and directory flush, not just the entry check.
+        let _step = self.latch.step("write an import report")?;
         self.import_reports.write(job, report)
     }
 

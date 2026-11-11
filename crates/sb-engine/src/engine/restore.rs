@@ -23,14 +23,21 @@ use sb_resources::{QualifiedStage, Resources, ResourcesSwapError};
 use super::{Engine, StoreAfterRestore, join_failed};
 use crate::EngineError;
 
-/// Why [`Engine::restore`] did not hand back a restored engine.
-pub enum RestoreError {
+mod prepare;
+mod start;
+pub use prepare::PreparedRestore;
+pub use start::Restored;
+
+/// Why a restore did not hand back a restored engine. `S` is what was
+/// to be swapped in: [`Engine::restore`]'s qualified stage, or
+/// [`Engine::start_restore`]'s prepared restore.
+pub enum RestoreError<S = QualifiedStage> {
     /// Refused before the store closed: nothing moved. The engine comes
     /// back running on the same store, and the stage with it.
     Refused {
         cause: EngineError,
         engine: Box<Engine>,
-        stage: Box<QualifiedStage>,
+        stage: Box<S>,
     },
     /// The store had closed, or the engine could not resume: this engine
     /// is gone, with the stage, and the next open resolves whatever the
@@ -38,7 +45,7 @@ pub enum RestoreError {
     Failed(EngineError),
 }
 
-impl std::fmt::Debug for RestoreError {
+impl<S> std::fmt::Debug for RestoreError<S> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Refused { cause, .. } => f.debug_struct("Refused").field("cause", cause).finish(),
@@ -47,7 +54,7 @@ impl std::fmt::Debug for RestoreError {
     }
 }
 
-impl std::fmt::Display for RestoreError {
+impl<S> std::fmt::Display for RestoreError<S> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Refused { cause, .. } => write!(f, "the restore was refused: {cause}"),
@@ -56,7 +63,7 @@ impl std::fmt::Display for RestoreError {
     }
 }
 
-impl std::error::Error for RestoreError {
+impl<S> std::error::Error for RestoreError<S> {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Refused { cause, .. } | Self::Failed(cause) => Some(cause),

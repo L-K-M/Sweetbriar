@@ -10,8 +10,9 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use sb_store::{
-    BackupDestination, BackupReceipt, BackupSnapshot, PreparedRestoreStage, QualifiedStage,
-    RestoreMetadata, StoreError, SwapRestoreError, VerifiedExternalBackup,
+    BackupDestination, BackupGeneration, BackupReceipt, BackupSnapshot, PreparedRestoreStage,
+    QualifiedStage, Receipt, RestoreMetadata, StartedBackup, StoreError, SwapRestoreError,
+    VerifiedExternalBackup,
 };
 
 use crate::Resources;
@@ -58,6 +59,23 @@ impl std::error::Error for ResourcesSwapError {
 }
 
 impl Resources {
+    /// The recorded backup generations for `list_backups` (spec/07),
+    /// newest first, as their rows stand: every complete and
+    /// in-progress one, and the failed ones since the newest complete
+    /// one. No generation's directory is opened.
+    pub fn backup_generations(&self) -> Result<Vec<BackupGeneration>, StoreError> {
+        self.store.backup_generations()
+    }
+
+    /// The one recorded generation `generation_id` names, whatever its
+    /// state; `None` when no row has that id.
+    pub fn backup_generation(
+        &self,
+        generation_id: &str,
+    ) -> Result<Option<BackupGeneration>, StoreError> {
+        self.store.backup_generation(generation_id)
+    }
+
     /// Steps 1–3 of a backup generation: its row, the snapshot and the
     /// object pins. First recovers interrupted generations and applies
     /// retention.
@@ -66,6 +84,18 @@ impl Resources {
         destination: BackupDestination,
     ) -> Result<BackupSnapshot, StoreError> {
         self.store.backup_snapshot(destination)
+    }
+
+    /// [`Resources::backup_snapshot`] as the command `idempotency_key`
+    /// names: the key's receipt commits with the generation's row, and
+    /// a key that started a generation before answers its receipt and
+    /// does nothing else.
+    pub fn start_backup(
+        &self,
+        destination: BackupDestination,
+        idempotency_key: &str,
+    ) -> Result<StartedBackup, StoreError> {
+        self.store.start_backup(destination, idempotency_key)
     }
 
     /// Copy, verify and publish a snapshot as a complete generation.
@@ -144,5 +174,21 @@ impl Resources {
             }),
             Err(SwapRestoreError::Failed(cause)) => Err(ResourcesSwapError::Failed(cause)),
         }
+    }
+
+    /// What `idempotency_key` already answers for a restore: its
+    /// stored receipt, or `None` for a key unspent in this store.
+    pub fn restore_receipt(&self, idempotency_key: &str) -> Result<Option<Receipt>, StoreError> {
+        self.store.restore_receipt(idempotency_key)
+    }
+
+    /// Record, in this restored store, that the restore under
+    /// `idempotency_key` put it in place from `generation_id`.
+    pub fn record_restore(
+        &self,
+        idempotency_key: &str,
+        generation_id: &str,
+    ) -> Result<Receipt, StoreError> {
+        self.store.record_restore(idempotency_key, generation_id)
     }
 }

@@ -83,6 +83,113 @@ async fn Core::shutdown(self);   // flush writer, release the lease
   IDs separately from imports and Search rebuilds. Cancellation durably
   marks an unfinished capture `cancelled`; a terminal export is `Conflict`.
   No export worker or start/query endpoint is exposed by the ledger step.
+- **Backups (M1.8i1):** `list_backups()` is a query. It answers the
+  recorded generations (03 "Backup generations"), newest first, each
+  with its id, state (`in_progress`, `complete` or `failed`), start and
+  completion times, directory, object count and total bytes, and the
+  weekly check's latest verdict with its time. Every complete and
+  in-progress generation is listed, and the failed ones started since
+  the newest complete one, at most 20: a failed row is kept for good,
+  and only the recent ones say anything about the backups now. The
+  answer is the rows as stored. No generation's directory is opened,
+  so one that went missing shows in the weekly check's verdict, or
+  when a restore verifies the generation it was given. A read-only
+  core answers like any other.
+- **Back up now (M1.8i3):** `start_backup()` is a command. It takes a
+  generation in the data root's `backups/` (03 "Backup generations")
+  and answers once its snapshot is taken, with the receipt
+  `{"generation_id":...}` that committed with the generation's row,
+  the generation's id, and a handle on its copy.
+  - The copy goes on in the core as counted work. A caller that stops
+    waiting strands nothing. Shutdown waits for it and stops it at its
+    next object. A restore never meets one: a prepared restore holds
+    the backup operation, so no backup starts beside it.
+  - The handle answers how the copy ended: `Complete` (with the error
+    of the retention that follows completion, if it failed: the
+    generation stands), `Stopped` by a shutdown, or `Failed` with the
+    error's text. An I/O error under a stop is `Failed`. So is a core
+    that turned read-only under the copy, whichever the copy met
+    first, the store's refusal or the stop its latch raises: the text
+    names the finding.
+    A stopped or failed copy leaves its generation `in_progress`
+    until the next backup marks it `failed` and removes it; the
+    scheduler takes that one within the hour (03).
+  - A repeated key answers its receipt and no handle, and starts
+    nothing, while its generation is still being copied too. The
+    receipt names the generation the key started, whatever became of
+    it; retention may have removed its row since. A core that refuses
+    the command answers no key: a read-only one is `Corrupt`, and one
+    that is shutting down `Unavailable`.
+  - `Conflict` while another backup, a generation check or a restore
+    holds the backup operation. `Corrupt`, naming the finding, on a
+    read-only core.
+  - A generation taken here is one the hourly backup doesn't take
+    again: that one runs while there were changes since the newest
+    complete generation.
+  - `sb-cli backup` starts one under a fresh key, waits for the copy
+    and prints the generation's line as `backup list` does.
+- **Preparing a restore (M1.8i4):** `prepare_restore(generation_id)`
+  does a restore's steps 1 to 3 (03 "Restore") for a recorded
+  generation: it verifies the generation where its row says it is,
+  against its manifest and the row's digest and counts, copies it
+  beside the data root and qualifies the copy. The core stays in use
+  throughout and its data doesn't change. It answers a prepared
+  restore, which the swap (M1.8i5) takes.
+  - It is no command: it has no key and stores no receipt. It can take
+    as long as copying the archive. The call has its own cancel flag;
+    a cancelled one answers `Cancelled`. The store marks a step the
+    flag ended as `Unavailable` without an I/O kind and nothing more,
+    so a failure of that shape while the flag is up also answers
+    `Cancelled`; every other error is reported under a raised flag.
+  - `NotFound` for an id no generation has. `Conflict` for a
+    generation that isn't complete, and while a backup, a generation
+    check or another restore holds the backup operation. `Unavailable`
+    when the generation's directory can't be reached. `Corrupt` when
+    it no longer matches its manifest or its row.
+  - The backup operation is taken for the verification and again for
+    the copy. A backup that runs between the two can remove the
+    generation by its retention; the copy then fails `Unavailable`
+    and stages nothing wrong.
+  - A prepared restore holds the backup operation until it is swapped
+    in or dropped. Dropping it deletes nothing, and so does a
+    cancelled or failed preparation: what was staged stays beside the
+    data root and is never used again (03). Listing and removing
+    those is M1.8j's.
+  - It works on a read-only core, where a restore is the way out.
+- **Restoring (M1.8i5):** `restore(prepared)` is the command half of
+  `start_restore`. It swaps a prepared restore in as the core's store
+  (03 "Restore" step 4) under an idempotency key. It consumes the core
+  and hands one back.
+  - On success the core runs on the restored store. Every window and
+    subscription opened before answers `ResetRequired` once,
+    selections are released and every account is paused. The replaced
+    store stays beside the data root under its preserved name.
+  - The receipt, `{"generation_id":...}` under the command name
+    `start_restore`, is written in the restored store once it is
+    open. It can't commit with the swap: a stage's bytes are fixed
+    when it qualifies. A process that dies in between leaves a
+    restored store without the receipt, so replay isn't guaranteed.
+    Retrying an unspent key restores again, which deletes nothing; a
+    key the restored store already holds for another command is
+    refused instead. When the write itself fails, the answer carries
+    the restored core and the error.
+  - A key the store already holds a restore's receipt for answers that
+    receipt and moves nothing; the prepared restore is dropped unused.
+    The key is looked up in the store about to be replaced, a
+    read-only one included.
+  - A refusal hands back the core, running as before, and the
+    prepared restore, and spends no key: a key spent on another
+    command (`Conflict`), an unusable key (`InvalidInput`), an
+    import's inventory or an export's capture in progress
+    (`Conflict`), a raised cancel flag (`Unavailable`), or a stage the
+    swap's own checks turn down.
+  - A failure after the store closed ends the core. It can't say
+    whether the swap went through: the next open settles what it left
+    (03). Nothing is deleted either way.
+  - `sb-cli restore <generation_id>` prepares and restores under a
+    fresh key and prints the id and `restored`.
+  - The FFI export comes with the UI (M1.8j): one call that prepares
+    under the read lock and swaps under the write lock.
 - **Bridge account setup (M2.3c1):** `add_bridge_account(params)` takes
   the Proton Bridge preset's display name, username, Bridge password
   (bytes, moved into the core's zeroizing secret), IMAP and SMTP ports

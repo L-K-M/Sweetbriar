@@ -222,3 +222,32 @@ fn job_receipts_round_trip_arbitrary_ids_and_refuse_malformed_bodies() {
         }
     }
 }
+
+/// A started backup's receipt names its generation, and nothing else
+/// reads as one: a job's receipt, an empty or non-string id, or bytes
+/// that are no JSON are `Corrupt`.
+#[test]
+fn a_generation_receipt_round_trips_and_nothing_else_reads_as_one() {
+    let at = Timestamp::from_millis(FIXED_NOW_MS);
+    let id = "6f9619ff-8b86-4011-b42d-00c04fc964ff";
+    let json = encode_generation_receipt(id);
+    assert_eq!(json, format!("{{\"generation_id\":\"{id}\"}}"));
+    let receipt = Receipt::new("start_backup".to_owned(), json, at);
+    assert_eq!(receipt_generation_id(&receipt).unwrap(), id);
+
+    for json in [
+        "not json",
+        "{\"generation_id\":\"\"}",
+        "{\"generation_id\":7}",
+        "{\"generation_id\":null}",
+        "{}",
+        "[\"generation_id\"]",
+        "{\"job_id\":\"x\"}",
+    ] {
+        let receipt = Receipt::new("start_backup".to_owned(), json.to_owned(), at);
+        match receipt_generation_id(&receipt) {
+            Err(StoreError::Corrupt { .. }) => (),
+            other => panic!("{json} must be Corrupt: {other:?}"),
+        }
+    }
+}

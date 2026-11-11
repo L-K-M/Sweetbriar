@@ -5,11 +5,14 @@
 
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 
 use sb_service::{
-    Anchor, Core, CoreConfig, CoreError, ExportFormat, ExportJobState, ExportScopeInput, ImportJob,
-    ImportJobState, ImportTarget, MboxVariant, WindowSpec, open_core,
+    Anchor, BackupEnd, BackupGeneration, BackupState, BackupVerdict, Core, CoreConfig, CoreError,
+    ExportFormat, ExportJobState, ExportScopeInput, ImportJob, ImportJobState, ImportTarget,
+    MboxVariant, RestoreFailure, Restored, WindowSpec, open_core,
 };
 
 /// How a usage failure exits: everything the user mistyped (plan M0.7).
@@ -81,6 +84,15 @@ enum Command {
     ExportCancel {
         job_id: String,
     },
+    /// `backup`: take a backup generation now and wait for its copy.
+    Backup,
+    /// `backup list`: the recorded backup generations, newest first.
+    BackupList,
+    /// `restore <generation_id>`: put a recorded generation in the
+    /// store's place.
+    Restore {
+        generation_id: String,
+    },
 }
 
 /// The scope word after `export`, with the id it names.
@@ -96,7 +108,10 @@ const USAGE: &str = "usage: sb-cli [--data-root <path>] settings get [<key>]
        sb-cli [--data-root <path>] export mailbox <mailbox_id> <destination> [--format eml|mboxrd]
        sb-cli [--data-root <path>] export account <account_id> <destination> [--format eml|mboxrd]
        sb-cli [--data-root <path>] export status <job_id>
-       sb-cli [--data-root <path>] export cancel <job_id>";
+       sb-cli [--data-root <path>] export cancel <job_id>
+       sb-cli [--data-root <path>] backup
+       sb-cli [--data-root <path>] backup list
+       sb-cli [--data-root <path>] restore <generation_id>";
 
 /// Parse the arguments after the program name: options, then exactly
 /// one command with its fixed shape. Anything else is a usage error
@@ -133,6 +148,12 @@ fn command_from(word: String, args: &mut impl Iterator<Item = String>) -> Result
     if word == "export" {
         return export_from(args);
     }
+    if word == "backup" {
+        return backup_from(args);
+    }
+    if word == "restore" {
+        return restore_from(args);
+    }
     if word != "settings" {
         return Err(format!("unknown command '{word}'"));
     }
@@ -153,6 +174,29 @@ fn command_from(word: String, args: &mut impl Iterator<Item = String>) -> Result
         ("set", _) => Err("settings set takes <key> <value>".to_owned()),
         (other, _) => Err(format!("unknown settings subcommand '{other}'")),
     }
+}
+
+/// `backup`'s arguments: nothing, to take one now, or the `list`
+/// subcommand and nothing after it.
+fn backup_from(args: &mut impl Iterator<Item = String>) -> Result<Command, String> {
+    let Some(subcommand) = args.next() else {
+        return Ok(Command::Backup);
+    };
+    if subcommand != "list" {
+        return Err(format!("unknown backup subcommand '{subcommand}'"));
+    }
+    if args.next().is_some() {
+        return Err("backup list takes no arguments".to_owned());
+    }
+    Ok(Command::BackupList)
+}
+
+/// `restore`'s arguments: one generation id and nothing after it.
+fn restore_from(args: &mut impl Iterator<Item = String>) -> Result<Command, String> {
+    let (Some(generation_id), None) = (args.next(), args.next()) else {
+        return Err("restore takes <generation_id>".to_owned());
+    };
+    Ok(Command::Restore { generation_id })
 }
 
 /// `import`'s arguments: an optional `--variant`, then at least one path.
@@ -271,6 +315,9 @@ fn run(invocation: Invocation) -> Result<(), u8> {
         Err(err) => return failed(err),
     };
     let outcome = match &invocation.command {
+        // A restore consumes the core, and shuts down the one it gets
+        // back.
+        Command::Restore { generation_id } => return restore(core, generation_id),
         Command::SettingsGet { key } => get(&core, key.as_deref()),
         Command::SettingsSet { key, value } => set(&core, key, value),
         Command::Import { variant, paths } => import(&core, *variant, paths),
@@ -281,6 +328,8 @@ fn run(invocation: Invocation) -> Result<(), u8> {
         } => export(&core, scope, *format, destination),
         Command::ExportStatus { job_id } => export_status(&core, job_id),
         Command::ExportCancel { job_id } => export_cancel(&core, job_id),
+        Command::Backup => backup(&core),
+        Command::BackupList => backup_list(&core),
     };
     block_on(core.shutdown());
     outcome
@@ -524,6 +573,216 @@ fn export_cancel(core: &Core, job_id: &str) -> Result<(), u8> {
     Ok(())
 }
 
+/// `backup`: take a generation now, under a fresh key, and wait for
+/// its copy. A complete one prints its line as `backup list` does; a
+/// copy that stopped or failed exits with an error, and its generation
+/// stays in progress until the next backup removes it.
+fn backup(core: &Core) -> Result<(), u8> {
+    let started = block_on(core.start_backup(&core.new_idempotency_key())).map_err(error_exit)?;
+    let id = started.generation_id;
+    let Some(copy) = started.copy else {
+        // A fresh key has started nothing before.
+        eprintln!("sb-cli: backup {id} was started by an earlier command");
+        return Err(ERROR_EXIT);
+    };
+    match backup_report(&id, block_on(copy.finished())) {
+        Ok(warning) => {
+            if let Some(warning) = warning {
+                eprintln!("sb-cli: {warning}");
+            }
+        }
+        Err(problem) => {
+            eprintln!("sb-cli: {problem}");
+            return Err(ERROR_EXIT);
+        }
+    }
+    let generations = block_on(core.list_backups()).map_err(error_exit)?;
+    match generations
+        .iter()
+        .find(|generation| generation.generation_id == id)
+    {
+        Some(generation) => println!("{}", backup_line(generation)),
+        // Its own retention pass keeps it; a later backup's may not.
+        // Half a line would mislead whatever reads these.
+        None => eprintln!("sb-cli: backup {id} is complete; a later backup has removed it since"),
+    }
+    Ok(())
+}
+
+/// How a backup's copy ended, in words: `Ok` for a complete
+/// generation, with a warning when the cleanup after it failed, and
+/// `Err` for one that isn't.
+fn backup_report(id: &str, end: BackupEnd) -> Result<Option<String>, String> {
+    match end {
+        BackupEnd::Complete { after: None } => Ok(None),
+        BackupEnd::Complete { after: Some(error) } => Ok(Some(format!(
+            "backup {id} is complete; removing older backups after it failed: {error}"
+        ))),
+        BackupEnd::Stopped => Err(format!("backup {id} was stopped before it was complete")),
+        BackupEnd::Failed(error) => Err(format!("backup {id} failed: {error}")),
+    }
+}
+
+/// `restore <generation_id>`: verify the recorded generation, copy it
+/// beside the data root and swap the copy in as the store. It prints
+/// the generation's id and `restored`, even if recording the receipt
+/// failed (reported on stderr). The replaced store is kept beside the
+/// data root and nothing is deleted. A refusal leaves the store unchanged
+/// and the prepared copy beside it, and exits with an error.
+fn restore(core: Core, generation_id: &str) -> Result<(), u8> {
+    // Nothing raises it: the CLI has no way to cancel.
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let prepared = match block_on(core.prepare_restore(generation_id, Arc::clone(&cancelled))) {
+        Ok(prepared) => prepared,
+        Err(err) => {
+            block_on(core.shutdown());
+            return failed(err);
+        }
+    };
+    let key = core.new_idempotency_key();
+    let (core, end) = match block_on(core.restore(&key, prepared, cancelled)) {
+        Ok(Restored { core, receipt }) => (
+            Some(core),
+            RestoreEnd::Restored {
+                unrecorded: receipt.err(),
+            },
+        ),
+        Err(RestoreFailure::Refused { cause, core, .. }) => {
+            (Some(*core), RestoreEnd::Refused(cause))
+        }
+        Err(RestoreFailure::Failed(cause)) => (None, RestoreEnd::Failed(cause)),
+    };
+    if let Some(core) = core {
+        block_on(core.shutdown());
+    }
+    match restore_report(generation_id, end) {
+        Ok(warning) => {
+            println!("{generation_id}\trestored");
+            eprintln!(
+                "sb-cli: the replaced store is kept beside the data root, and every account \
+                 is paused"
+            );
+            if let Some(warning) = warning {
+                eprintln!("sb-cli: {warning}");
+            }
+            Ok(())
+        }
+        Err(problem) => {
+            eprintln!("sb-cli: {problem}");
+            Err(ERROR_EXIT)
+        }
+    }
+}
+
+/// How a restore ended, as its report needs it.
+enum RestoreEnd {
+    /// The store was replaced. `unrecorded` is why the command's
+    /// receipt could not be written in the restored store, if it
+    /// couldn't.
+    Restored {
+        unrecorded: Option<CoreError>,
+    },
+    Refused(CoreError),
+    Failed(CoreError),
+}
+
+/// A restore's end in words: `Ok` for a replaced store, with a
+/// warning when its receipt wasn't recorded, and `Err` for one that
+/// was refused or failed part way.
+fn restore_report(id: &str, end: RestoreEnd) -> Result<Option<String>, String> {
+    match end {
+        RestoreEnd::Restored { unrecorded: None } => Ok(None),
+        RestoreEnd::Restored {
+            unrecorded: Some(error),
+        } => Ok(Some(format!(
+            "the store was restored from {id}, but the command's receipt was not recorded: \
+             {error}"
+        ))),
+        RestoreEnd::Refused(cause) => Err(format!(
+            "restoring {id} was refused, and the store is unchanged; \
+             the prepared copy is kept beside the data root: {cause}"
+        )),
+        RestoreEnd::Failed(cause) => Err(format!(
+            "restoring {id} failed part way: {cause}. Nothing was deleted; the next command \
+             finds out whether the store was replaced"
+        )),
+    }
+}
+
+/// `backup list`: one line per recorded generation, newest first. A
+/// store without any prints nothing and says so on stderr.
+fn backup_list(core: &Core) -> Result<(), u8> {
+    let generations = block_on(core.list_backups()).map_err(error_exit)?;
+    if generations.is_empty() {
+        eprintln!("sb-cli: no backups are recorded");
+    }
+    for generation in &generations {
+        println!("{}", backup_line(generation));
+    }
+    Ok(())
+}
+
+/// One generation as tab-separated fields: its id, state, start, size,
+/// the weekly check's verdict and its directory. The directory comes
+/// last, since only a path can hold a tab.
+fn backup_line(generation: &BackupGeneration) -> String {
+    let state = match generation.state {
+        BackupState::InProgress => "in progress",
+        BackupState::Complete => "complete",
+        BackupState::Failed => "failed",
+    };
+    let size = match (generation.total_bytes, generation.object_count) {
+        (Some(bytes), Some(objects)) => format!("{bytes} bytes in {objects} objects"),
+        _ => "-".to_owned(),
+    };
+    let check = match generation.verification {
+        None => "not checked".to_owned(),
+        Some(verification) => {
+            let verdict = match verification.verdict {
+                BackupVerdict::Intact => "intact",
+                BackupVerdict::Damaged => "damaged",
+                BackupVerdict::Missing => "missing",
+            };
+            format!("{verdict} {}", utc(verification.checked_at_ms))
+        }
+    };
+    format!(
+        "{}\t{state}\t{}\t{size}\t{check}\t{}",
+        generation.generation_id,
+        utc(generation.started_at_ms),
+        generation.location.display()
+    )
+}
+
+/// Milliseconds since the epoch as an RFC 3339 UTC time to the second.
+fn utc(millis: i64) -> String {
+    const DAY: i64 = 86_400;
+    let seconds = millis.div_euclid(1_000);
+    let (days, second) = (seconds.div_euclid(DAY), seconds.rem_euclid(DAY));
+    // Days since 1970-01-01 to a civil date, in 400-year eras that
+    // start on a 1 March (Hinnant's `civil_from_days`).
+    let shifted = days + 719_468;
+    let era = shifted.div_euclid(146_097);
+    let day_of_era = shifted.rem_euclid(146_097);
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let march_month = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * march_month + 2) / 5 + 1;
+    let month = if march_month < 10 {
+        march_month + 3
+    } else {
+        march_month - 9
+    };
+    let year = year_of_era + era * 400 + i64::from(month <= 2);
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
+        second / 3_600,
+        second % 3_600 / 60,
+        second % 60
+    )
+}
+
 /// Print a finished job's totals and report; only completion succeeds.
 fn outcome(job: &ImportJob) -> Result<(), u8> {
     let totals = &job.totals;
@@ -585,6 +844,194 @@ fn block_on<F: std::future::Future>(future: F) -> F::Output {
         match future.as_mut().poll(&mut cx) {
             Poll::Ready(output) => return output,
             Poll::Pending => std::thread::park(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use sb_service::BackupVerification;
+
+    use super::*;
+
+    fn command(args: &[&str]) -> Result<Command, String> {
+        parse(args.iter().map(|arg| (*arg).to_owned())).map(|invocation| invocation.command)
+    }
+
+    #[test]
+    fn every_usage_line_names_the_program_at_one_indent() {
+        let mut lines = USAGE.lines();
+        assert!(lines.next().unwrap().starts_with("usage: sb-cli "));
+        for line in lines {
+            assert!(line.starts_with("       sb-cli "), "{line:?}");
+        }
+    }
+
+    #[test]
+    fn backup_alone_takes_one_and_list_lists_them() {
+        assert!(matches!(command(&["backup"]), Ok(Command::Backup)));
+        assert!(matches!(
+            command(&["backup", "list"]),
+            Ok(Command::BackupList)
+        ));
+        assert_eq!(
+            command(&["backup", "now"]).err().as_deref(),
+            Some("unknown backup subcommand 'now'")
+        );
+        assert_eq!(
+            command(&["backup", "list", "extra"]).err().as_deref(),
+            Some("backup list takes no arguments")
+        );
+    }
+
+    #[test]
+    fn restore_takes_exactly_one_generation() {
+        match command(&["restore", "gen-1"]) {
+            Ok(Command::Restore { generation_id }) => assert_eq!(generation_id, "gen-1"),
+            _ => panic!("expected a restore"),
+        }
+        for args in [&["restore"][..], &["restore", "gen-1", "gen-2"]] {
+            assert_eq!(
+                command(args).err().as_deref(),
+                Some("restore takes <generation_id>")
+            );
+        }
+    }
+
+    #[test]
+    fn a_restore_s_end_is_success_only_when_the_store_was_replaced() {
+        let unavailable = || CoreError::Unavailable {
+            reason: "no space".to_owned(),
+        };
+        assert_eq!(
+            restore_report("gen", RestoreEnd::Restored { unrecorded: None }),
+            Ok(None)
+        );
+        let warned = restore_report(
+            "gen",
+            RestoreEnd::Restored {
+                unrecorded: Some(unavailable()),
+            },
+        )
+        .unwrap()
+        .unwrap();
+        assert!(
+            warned.starts_with("the store was restored from gen, but"),
+            "{warned}"
+        );
+        assert!(warned.contains("no space"), "{warned}");
+
+        let refused = restore_report("gen", RestoreEnd::Refused(unavailable())).unwrap_err();
+        assert!(refused.contains("store is unchanged"), "{refused}");
+        assert!(refused.contains("prepared copy"), "{refused}");
+        assert!(refused.contains("no space"), "{refused}");
+        let failed = restore_report("gen", RestoreEnd::Failed(unavailable())).unwrap_err();
+        assert!(failed.contains("failed part way"), "{failed}");
+        assert!(failed.contains("no space"), "{failed}");
+    }
+
+    #[test]
+    fn a_backup_s_end_is_success_only_when_it_is_complete() {
+        assert_eq!(
+            backup_report("gen", BackupEnd::Complete { after: None }),
+            Ok(None)
+        );
+        let warned = backup_report(
+            "gen",
+            BackupEnd::Complete {
+                after: Some("no space".to_owned()),
+            },
+        );
+        assert_eq!(
+            warned,
+            Ok(Some(
+                "backup gen is complete; removing older backups after it failed: no space"
+                    .to_owned()
+            ))
+        );
+        assert_eq!(
+            backup_report("gen", BackupEnd::Stopped),
+            Err("backup gen was stopped before it was complete".to_owned())
+        );
+        assert_eq!(
+            backup_report("gen", BackupEnd::Failed("no space".to_owned())),
+            Err("backup gen failed: no space".to_owned())
+        );
+    }
+
+    #[test]
+    fn times_print_as_utc_to_the_second() {
+        for (millis, shown) in [
+            (0, "1970-01-01T00:00:00Z"),
+            (-1, "1969-12-31T23:59:59Z"),
+            (999, "1970-01-01T00:00:00Z"),
+            // A leap day, and the days around a century's end.
+            (1_709_210_096_000, "2024-02-29T12:34:56Z"),
+            (951_782_400_000, "2000-02-29T00:00:00Z"),
+            (4_107_542_399_000, "2100-02-28T23:59:59Z"),
+            (4_107_542_400_000, "2100-03-01T00:00:00Z"),
+            (1_794_182_400_000, "2026-11-09T00:00:00Z"),
+            (1_798_761_599_999, "2026-12-31T23:59:59Z"),
+        ] {
+            assert_eq!(utc(millis), shown, "{millis}");
+        }
+    }
+
+    #[test]
+    fn a_generation_prints_as_one_tab_separated_line() {
+        let complete = BackupGeneration {
+            generation_id: "00000000-0000-4000-8000-0000000000b1".to_owned(),
+            state: BackupState::Complete,
+            started_at_ms: 1_794_182_400_000,
+            completed_at_ms: Some(1_794_182_401_000),
+            location: PathBuf::from("/data/store/backups/00000000-0000-4000-8000-0000000000b1"),
+            object_count: Some(3),
+            total_bytes: Some(4_096),
+            verification: Some(BackupVerification {
+                verdict: BackupVerdict::Damaged,
+                checked_at_ms: 1_794_268_800_000,
+            }),
+        };
+        assert_eq!(
+            backup_line(&complete),
+            "00000000-0000-4000-8000-0000000000b1\tcomplete\t2026-11-09T00:00:00Z\t\
+             4096 bytes in 3 objects\tdamaged 2026-11-10T00:00:00Z\t\
+             /data/store/backups/00000000-0000-4000-8000-0000000000b1"
+        );
+
+        let running = BackupGeneration {
+            state: BackupState::InProgress,
+            completed_at_ms: None,
+            object_count: None,
+            total_bytes: None,
+            verification: None,
+            ..complete.clone()
+        };
+        assert_eq!(
+            backup_line(&running),
+            "00000000-0000-4000-8000-0000000000b1\tin progress\t2026-11-09T00:00:00Z\t-\t\
+             not checked\t/data/store/backups/00000000-0000-4000-8000-0000000000b1"
+        );
+        for (verdict, shown) in [
+            (BackupVerdict::Intact, "intact"),
+            (BackupVerdict::Missing, "missing"),
+        ] {
+            let checked = BackupGeneration {
+                state: BackupState::Failed,
+                verification: Some(BackupVerification {
+                    verdict,
+                    checked_at_ms: 0,
+                }),
+                ..complete.clone()
+            };
+            let line = backup_line(&checked);
+            assert!(line.contains("\tfailed\t"), "{line}");
+            assert!(
+                line.contains(&format!("\t{shown} 1970-01-01T00:00:00Z\t")),
+                "{line}"
+            );
         }
     }
 }

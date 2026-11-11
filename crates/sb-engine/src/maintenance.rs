@@ -75,7 +75,8 @@ type RunJob = fn(&Resources, &MaintenanceJobs, &dyn Fn() -> bool, &Host);
 /// engine, and it announces what it found.
 pub(crate) struct Host {
     /// Whether long work runs now: an import or an export, a thread
-    /// rebuild, or the Search indexer off its park.
+    /// rebuild, the Search indexer off its park, or a backup a command
+    /// started.
     pub(crate) busy: Box<dyn Fn() -> bool + Send>,
     /// Wake health subscriptions: what `health()` answers changed.
     pub(crate) health_moved: Box<dyn Fn() + Send>,
@@ -190,6 +191,13 @@ impl MaintenanceJobs {
 
     fn stopped(&self) -> bool {
         self.lock().stopping
+    }
+
+    /// The flag [`MaintenanceJobs::stop`] raises, for a backup's copy
+    /// the scheduler didn't start (`start_backup`): the same stops end
+    /// it, at its next object.
+    pub(crate) fn stop_flag(&self) -> &AtomicBool {
+        &self.cancel
     }
 
     /// Lift a stop, as restore's resume does (M1.8g3); the engine then
@@ -326,9 +334,13 @@ impl Engine {
         let imports = Arc::clone(self.imports());
         let index = Arc::clone(self.indexer());
         let windows = Arc::clone(self.windows());
+        let copies = Arc::clone(self.backup_copies());
         Host {
             busy: Box::new(move || {
-                imports.any_live() || imports.threads().running() || index.working()
+                imports.any_live()
+                    || imports.threads().running()
+                    || index.working()
+                    || copies.running()
             }),
             health_moved: Box::new(move || windows.health_moved()),
         }
@@ -439,9 +451,10 @@ fn after(at: Timestamp, period: Duration) -> Timestamp {
     Timestamp::from_millis(at.as_millis().saturating_add(millis))
 }
 
-/// The hourly generation, when there were changes: nothing is recorded
-/// when there weren't. A store that can't say is backed up, so the
-/// attempt and its failure are recorded.
+/// The hourly generation, when one is owed (there were changes, or an
+/// interrupted generation waits for its cleanup): nothing is recorded
+/// when none is. A store that can't say is backed up, so the attempt
+/// and its failure are recorded.
 fn back_up(
     resources: &Resources,
     jobs: &MaintenanceJobs,

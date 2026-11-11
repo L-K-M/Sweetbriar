@@ -12,10 +12,12 @@
 mod account_sync;
 mod accounts;
 mod appearance;
+mod backups;
 pub use appearance::{
     AccountAppearance, AccountAppearanceChange, Appearance, AppearanceTokens, AppearanceVariant,
     IdentityAppearance, IdentityAppearanceChange, PaletteColor, SrgbColor, SrgbColorError,
 };
+pub use backups::{BackupCopy, BackupEnd, BackupStarted};
 mod bodies;
 pub use bodies::{
     AttachmentLease, BodyKind, BodyLease, LeaseReleaser, RenderWarning, RenderWarningCode,
@@ -63,7 +65,7 @@ pub use sb_resources::{
 };
 
 pub use drafts::{DraftContent, DraftCreated, DraftSaved};
-pub use engine::{Engine, RestoreError};
+pub use engine::{Engine, PreparedRestore, RestoreError, Restored};
 pub use error::EngineError;
 pub use health::{Health, Integrity};
 pub use import::{
@@ -73,6 +75,10 @@ pub use import::{
 pub use rebuild::SearchRebuildStarted;
 pub use sb_resources::ParseCode as SearchParseCode;
 pub use sb_resources::QualifiedStage;
+pub use sb_resources::{
+    BackupGeneration, BackupGenerationState, FAILED_GENERATIONS_LISTED, GenerationVerdict,
+    GenerationVerification,
+};
 pub use sb_resources::{
     Coverage, RebuildPhase as SearchRebuildPhase, SearchIndexState, SearchIoCode, SearchLimitation,
     SearchRebuildProgress,

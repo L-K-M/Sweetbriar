@@ -76,6 +76,8 @@ pub struct Engine {
     received: Arc<ReceivedJobs>,
     /// The backup and GC schedule (spec/03 "Scheduled maintenance").
     maintenance: Arc<crate::maintenance::MaintenanceJobs>,
+    /// The backups `start_backup` is copying (spec/07).
+    backup_copies: Arc<crate::backups::BackupCopies>,
     /// One sync worker per syncable IMAP account (spec/04).
     accounts: Arc<crate::account_sync::AccountJobs>,
     leases: Arc<crate::bodies::Leases>,
@@ -543,6 +545,7 @@ impl Engine {
                         index: Arc::default(),
                         received: Arc::default(),
                         maintenance: Arc::default(),
+                        backup_copies: Arc::default(),
                         accounts: Arc::default(),
                         leases: Arc::default(),
                         search_memo: Arc::default(),
@@ -614,6 +617,10 @@ impl Engine {
 
     pub(crate) fn received(&self) -> &Arc<ReceivedJobs> {
         &self.received
+    }
+
+    pub(crate) fn backup_copies(&self) -> &Arc<crate::backups::BackupCopies> {
+        &self.backup_copies
     }
 
     pub(crate) fn maintenance(&self) -> &Arc<crate::maintenance::MaintenanceJobs> {
@@ -961,7 +968,7 @@ pub(crate) fn join_failed(what: &str, join: JoinError) -> EngineError {
 }
 
 mod restore;
-pub use restore::RestoreError;
+pub use restore::{PreparedRestore, RestoreError, Restored};
 
 #[cfg(test)]
 mod tests;

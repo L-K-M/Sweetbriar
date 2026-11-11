@@ -995,6 +995,7 @@ fn completion_commit_failure_keeps_gc_gated_after_pins_are_released() {
     let snapshot = store.backup_snapshot(BackupDestination::DataRoot).unwrap();
     sql(&store, "CREATE TRIGGER fail_backup_complete BEFORE UPDATE ON backup_generations WHEN NEW.state='complete' BEGIN SELECT RAISE(ABORT, 'test completion failure'); END;".to_owned());
     assert!(store.complete_backup(snapshot.clone()).is_err());
+    assert!(!snapshot.completion_committed());
     assert_eq!(
         generation_row(&store, snapshot.generation_id()).unwrap().0,
         "in_progress"
@@ -1444,6 +1445,31 @@ fn own_fixture(store: &Store, path: &Path) {
     );
     std::fs::write(super::owner_path(path), token).unwrap();
     std::fs::write(path.join("payload"), b"generation").unwrap();
+}
+
+#[test]
+fn a_snapshot_keeps_its_completion_fact_when_retention_fails() {
+    let (_scratch, paths, store) = open("backup-completion-retention-failure");
+    let snapshot = store.backup_snapshot(BackupDestination::DataRoot).unwrap();
+    let completion = snapshot.clone();
+    let (older, _) = seed_generation(&store, paths.backups(), 1, FIXED_NOW_MS, "complete");
+    assert!(older.as_str() < snapshot.generation_id());
+    // The older row loses the same retention buckets and its malformed
+    // location makes pruning fail, after the new completion commits.
+    sql(
+        &store,
+        format!("UPDATE backup_generations SET location='relative' WHERE generation_id='{older}'"),
+    );
+    assert!(!completion.completion_committed());
+    let error = store.complete_backup(snapshot).unwrap_err();
+    assert!(matches!(error, StoreError::Corrupt { .. }), "{error:?}");
+    assert!(completion.completion_committed());
+    assert_eq!(
+        generation_row(&store, completion.generation_id())
+            .unwrap()
+            .0,
+        "complete"
+    );
 }
 
 #[test]
@@ -4278,6 +4304,7 @@ fn verifier_image_crash_cuts_recover_owned_scratch() {
 
 mod changes;
 mod clones;
+mod keyed;
 
 mod stage_tests {
     mod bindings;

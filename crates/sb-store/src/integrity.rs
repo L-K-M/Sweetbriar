@@ -266,6 +266,13 @@ impl RootLatch {
         }
     }
 
+    /// The counted work still running, for tests that hold one operation
+    /// open before asking the latch to wait for it.
+    #[cfg(test)]
+    pub(crate) fn file_steps_for_test(&self) -> usize {
+        lock(&self.state).steps
+    }
+
     /// Latch only the store's file work, as a check does first: the
     /// writer stays as it is.
     #[cfg(test)]

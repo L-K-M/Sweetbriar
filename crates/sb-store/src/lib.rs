@@ -62,9 +62,10 @@ pub use sb_types::time::{Clock, Timestamp};
 pub use rusqlite::Transaction;
 
 pub use backups::{
-    BackupDestination, BackupImageInspection, BackupReceipt, BackupSnapshot, GenerationCheck,
-    GenerationVerdict, PreparedRestoreStage, QualifiedStage, RestoreMetadata,
-    VerifiedExternalBackup,
+    BackupDestination, BackupGeneration, BackupGenerationState, BackupImageInspection,
+    BackupReceipt, BackupSnapshot, FAILED_GENERATIONS_LISTED, GenerationCheck, GenerationVerdict,
+    GenerationVerification, PreparedRestoreStage, QualifiedStage, RestoreMetadata, START_BACKUP,
+    START_RESTORE, StartedBackup, VerifiedExternalBackup,
 };
 pub use error::StoreError;
 pub use export_metadata::{ExportMetadata, export_occurrence_metadata};
@@ -79,7 +80,9 @@ pub use objects::{
 };
 pub use paths::StorePaths;
 pub use readers::{ReadStop, Scoped};
-pub use receipts::{Receipt, encode_job_receipt, receipt_job_id, replay, run_once};
+pub use receipts::{
+    Receipt, encode_job_receipt, receipt_generation_id, receipt_job_id, replay, run_once,
+};
 pub use settings::{StoredSetting, read_all, upsert};
 pub use source_snapshots::{ImportSourceCapture, ImportSourceSnapshot};
 pub use store::SwapRestoreError;

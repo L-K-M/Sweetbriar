@@ -268,6 +268,10 @@ fn attachment_quarantine_is_required_before_publication() {
 fn attachment_requires_acquired_integrity_checked_bytes() {
     let scratch = ScratchDir::new("attachment-acquisition");
     let (engine, ids) = imported(&scratch);
+    // Import completion can precede indexing and received-date repair. Let
+    // those readers finish: another verifier can quarantine a damaged object
+    // before recording its state, making this reader see a missing file.
+    wait(|| engine.indexer().waiting() && engine.received().waiting());
     let unacquired = ids[0];
     block_on(
         engine
@@ -302,10 +306,11 @@ fn attachment_requires_acquired_integrity_checked_bytes() {
             let mut bytes = fs::read(&path).unwrap();
             bytes[0] ^= 1;
             fs::write(&path, bytes).unwrap();
-            assert!(matches!(
-                block_on(engine.open_attachment(id, "1.2".into())),
-                Err(EngineError::Corrupt { .. })
-            ));
+            let result = block_on(engine.open_attachment(id, "1.2".into()));
+            assert!(
+                matches!(result, Err(EngineError::Corrupt { .. })),
+                "{result:?}"
+            );
         } else {
             fs::remove_file(path).unwrap();
             assert!(matches!(

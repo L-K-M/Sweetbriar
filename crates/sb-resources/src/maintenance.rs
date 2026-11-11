@@ -17,7 +17,8 @@ use crate::Resources;
 
 impl Resources {
     /// Whether the store owes a backup generation: data changed since
-    /// the newest complete generation's snapshot, or there is none.
+    /// the newest complete generation's snapshot, there is none, or an
+    /// interrupted one waits for the cleanup the next one does.
     pub fn backup_due(&self) -> Result<bool, StoreError> {
         self.store.backup_due()
     }

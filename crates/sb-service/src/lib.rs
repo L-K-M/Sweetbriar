@@ -20,6 +20,7 @@ pub use bodies::{
     AttachmentLease, BodyKind, BodyLease, LeaseReleaser, RenderWarning, RenderWarningCode,
 };
 mod api;
+mod backups;
 mod drafts;
 mod error;
 mod exports;
@@ -27,11 +28,16 @@ mod health;
 mod imports;
 mod messages;
 mod rebuild;
+mod restore;
 mod search;
 mod sidebar;
 mod windows;
 
 pub use api::{Core, CoreConfig, Receipt, Setting, open_core};
+pub use backups::{
+    BackupCopy, BackupEnd, BackupGeneration, BackupStarted, BackupState, BackupVerdict,
+    BackupVerification,
+};
 pub use drafts::{
     AttemptState, ComposeFormat, Draft, DraftAttachment, DraftAttachmentObject, DraftAttachmentRef,
     DraftContent, DraftCreated, DraftRecipient, DraftRevision, DraftSaved, DraftSource, DraftState,
@@ -45,6 +51,7 @@ pub use imports::{
     ImportSourceKind, ImportStarted, ImportTarget, ImportTotals, MboxVariant,
 };
 pub use rebuild::SearchRebuildStarted;
+pub use restore::{PreparedRestore, RestoreFailure, Restored};
 pub use search::{
     Coverage, ParseContext, SearchIndexState, SearchIoCode, SearchLimitation, SearchRebuildPhase,
     SearchRebuildProgress, SearchScope, SearchSort, SearchSpec, SearchStatus,
