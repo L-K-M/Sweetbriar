@@ -8,7 +8,7 @@
 
 use std::path::PathBuf;
 
-use rusqlite::Connection;
+use rusqlite::{Connection, Row};
 
 use super::GenerationVerdict;
 use crate::schema::classify;
@@ -71,6 +71,64 @@ pub struct BackupGeneration {
     pub verification: Option<GenerationVerification>,
 }
 
+const COLUMNS: &str = "generation_id, state, started_at, completed_at, location,
+                       manifest_sha256, object_count, total_bytes, verified_at, verification";
+
+fn malformed(generation_id: &str) -> StoreError {
+    StoreError::corrupt(format!(
+        "backup_generations row {generation_id:?} is malformed"
+    ))
+}
+
+/// The row's id and state, the two columns a listing decides by.
+fn head(row: &Row, what: &str) -> Result<(String, BackupGenerationState), StoreError> {
+    let read = |e| classify(e, what);
+    let generation_id: String = row.get(0).map_err(read)?;
+    let state: String = row.get(1).map_err(read)?;
+    let state = BackupGenerationState::parse(&state).ok_or_else(|| malformed(&generation_id))?;
+    Ok((generation_id, state))
+}
+
+/// The rest of the row. A value no writer could have left is `Corrupt`
+/// and names the row.
+fn rest(
+    row: &Row,
+    generation_id: String,
+    state: BackupGenerationState,
+    what: &str,
+) -> Result<BackupGeneration, StoreError> {
+    let read = |e| classify(e, what);
+    let corrupt = || malformed(&generation_id);
+    let count = |index| -> Result<Option<u64>, StoreError> {
+        let stored: Option<i64> = row.get(index).map_err(read)?;
+        stored
+            .map(|value| u64::try_from(value).map_err(|_| corrupt()))
+            .transpose()
+    };
+    let verified_at: Option<i64> = row.get(8).map_err(read)?;
+    let verdict: Option<String> = row.get(9).map_err(read)?;
+    let verification = match (verified_at, verdict) {
+        (None, None) => None,
+        (Some(at), Some(verdict)) => Some(GenerationVerification {
+            verdict: GenerationVerdict::parse(&verdict).ok_or_else(corrupt)?,
+            checked_at: Timestamp::from_millis(at),
+        }),
+        _ => return Err(corrupt()),
+    };
+    let completed_at: Option<i64> = row.get(3).map_err(read)?;
+    Ok(BackupGeneration {
+        state,
+        started_at: Timestamp::from_millis(row.get(2).map_err(read)?),
+        completed_at: completed_at.map(Timestamp::from_millis),
+        location: PathBuf::from(row.get::<_, String>(4).map_err(read)?),
+        manifest_sha256: row.get(5).map_err(read)?,
+        object_count: count(6)?,
+        total_bytes: count(7)?,
+        verification,
+        generation_id,
+    })
+}
+
 /// Every complete and in-progress generation, and the failed ones
 /// started since the newest complete one (the newest
 /// [`FAILED_GENERATIONS_LISTED`] of them): newest first, a tie by the
@@ -78,12 +136,10 @@ pub struct BackupGeneration {
 pub(crate) fn generations(conn: &Connection) -> Result<Vec<BackupGeneration>, StoreError> {
     let what = "list the backup generations";
     let mut statement = conn
-        .prepare(
-            "SELECT generation_id, state, started_at, completed_at, location,
-                    manifest_sha256, object_count, total_bytes, verified_at, verification
-             FROM backup_generations
-             ORDER BY started_at DESC, generation_id DESC",
-        )
+        .prepare(&format!(
+            "SELECT {COLUMNS} FROM backup_generations
+             ORDER BY started_at DESC, generation_id DESC"
+        ))
         .map_err(|e| classify(e, what))?;
     let mut rows = statement.query([]).map_err(|e| classify(e, what))?;
 
@@ -91,15 +147,7 @@ pub(crate) fn generations(conn: &Connection) -> Result<Vec<BackupGeneration>, St
     let mut failed = 0;
     let mut complete_seen = false;
     while let Some(row) = rows.next().map_err(|e| classify(e, what))? {
-        let read = |e| classify(e, what);
-        let generation_id: String = row.get(0).map_err(read)?;
-        let corrupt = || {
-            StoreError::corrupt(format!(
-                "backup_generations row {generation_id:?} is malformed"
-            ))
-        };
-        let state: String = row.get(1).map_err(read)?;
-        let state = BackupGenerationState::parse(&state).ok_or_else(corrupt)?;
+        let (generation_id, state) = head(row, what)?;
         match state {
             BackupGenerationState::Complete => complete_seen = true,
             BackupGenerationState::InProgress => {}
@@ -113,36 +161,31 @@ pub(crate) fn generations(conn: &Connection) -> Result<Vec<BackupGeneration>, St
                 failed += 1;
             }
         }
-        let count = |index| -> Result<Option<u64>, StoreError> {
-            let stored: Option<i64> = row.get(index).map_err(read)?;
-            stored
-                .map(|value| u64::try_from(value).map_err(|_| corrupt()))
-                .transpose()
-        };
-        let verified_at: Option<i64> = row.get(8).map_err(read)?;
-        let verdict: Option<String> = row.get(9).map_err(read)?;
-        let verification = match (verified_at, verdict) {
-            (None, None) => None,
-            (Some(at), Some(verdict)) => Some(GenerationVerification {
-                verdict: GenerationVerdict::parse(&verdict).ok_or_else(corrupt)?,
-                checked_at: Timestamp::from_millis(at),
-            }),
-            _ => return Err(corrupt()),
-        };
-        let completed_at: Option<i64> = row.get(3).map_err(read)?;
-        listed.push(BackupGeneration {
-            state,
-            started_at: Timestamp::from_millis(row.get(2).map_err(read)?),
-            completed_at: completed_at.map(Timestamp::from_millis),
-            location: PathBuf::from(row.get::<_, String>(4).map_err(read)?),
-            manifest_sha256: row.get(5).map_err(read)?,
-            object_count: count(6)?,
-            total_bytes: count(7)?,
-            verification,
-            generation_id,
-        });
+        listed.push(rest(row, generation_id, state, what)?);
     }
     Ok(listed)
+}
+
+/// The one generation `generation_id` names, whatever its state and
+/// however old; `None` when no row has that id.
+pub(crate) fn generation(
+    conn: &Connection,
+    generation_id: &str,
+) -> Result<Option<BackupGeneration>, StoreError> {
+    let what = "read a backup generation";
+    let mut statement = conn
+        .prepare(&format!(
+            "SELECT {COLUMNS} FROM backup_generations WHERE generation_id = ?1"
+        ))
+        .map_err(|e| classify(e, what))?;
+    let mut rows = statement
+        .query([generation_id])
+        .map_err(|e| classify(e, what))?;
+    let Some(row) = rows.next().map_err(|e| classify(e, what))? else {
+        return Ok(None);
+    };
+    let (generation_id, state) = head(row, what)?;
+    rest(row, generation_id, state, what).map(Some)
 }
 
 #[cfg(test)]

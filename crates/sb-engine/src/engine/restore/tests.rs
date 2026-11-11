@@ -23,6 +23,8 @@ use crate::{
     AccountAppearanceChange, AccountColor, Engine, EngineError, ImportJobState, WindowEvent,
 };
 
+mod prepared;
+
 const PATIENCE: Duration = Duration::from_secs(60);
 
 /// Poll `future` until it finishes or `PATIENCE` runs out: a broken

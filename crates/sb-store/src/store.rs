@@ -233,6 +233,16 @@ impl Store {
         self.read(|tx| crate::backups::generations(tx))
     }
 
+    /// The one recorded generation `generation_id` names, whatever its
+    /// state and however old; `None` when no row has that id. The row
+    /// as stored, like the listing's.
+    pub fn backup_generation(
+        &self,
+        generation_id: &str,
+    ) -> Result<Option<crate::BackupGeneration>, StoreError> {
+        self.read(|tx| crate::backups::generation(tx, generation_id))
+    }
+
     /// Whether the weekly verification (spec/03 "Reads and
     /// verification") has work now: a sample bucket not yet read, or a
     /// generation not yet checked this UTC week.

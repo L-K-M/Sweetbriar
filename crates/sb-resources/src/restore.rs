@@ -67,6 +67,15 @@ impl Resources {
         self.store.backup_generations()
     }
 
+    /// The one recorded generation `generation_id` names, whatever its
+    /// state; `None` when no row has that id.
+    pub fn backup_generation(
+        &self,
+        generation_id: &str,
+    ) -> Result<Option<BackupGeneration>, StoreError> {
+        self.store.backup_generation(generation_id)
+    }
+
     /// Steps 1–3 of a backup generation: its row, the snapshot and the
     /// object pins. First recovers interrupted generations and applies
     /// retention.

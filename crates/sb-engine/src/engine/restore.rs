@@ -23,6 +23,9 @@ use sb_resources::{QualifiedStage, Resources, ResourcesSwapError};
 use super::{Engine, StoreAfterRestore, join_failed};
 use crate::EngineError;
 
+mod prepare;
+pub use prepare::PreparedRestore;
+
 /// Why [`Engine::restore`] did not hand back a restored engine.
 pub enum RestoreError {
     /// Refused before the store closed: nothing moved. The engine comes
