@@ -141,7 +141,10 @@ async fn Core::shutdown(self);   // flush writer, release the lease
     setting: values use Rust debug escapes for control characters,
     quotes and backslashes, without surrounding quotes. Existing enum
     values print unchanged. `settings set` takes the actual value,
-    not this display encoding.
+    not this display encoding. CLI usage and core-failure diagnostics
+    likewise debug-escape their payload at the terminal boundary, so
+    rejected setting values, keys and subcommands cannot inject control
+    characters; structured Service errors are unchanged.
   - The selected destination must exist and be a directory. An absent
     or unmounted one is `Unavailable`; neither missing ancestors nor a
     fallback generation in the data root is created. A repeated key
