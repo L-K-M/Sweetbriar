@@ -76,11 +76,66 @@ fn settings_round_trip_across_processes() {
 
     let out = cli(&root, &["settings", "get"]);
     assert!(out.status.success(), "get failed: {}", stderr(&out));
-    assert_eq!(stdout(&out), "appearance.compose_cue=standard\n");
+    assert_eq!(
+        stdout(&out),
+        "appearance.compose_cue=standard\nbackups.destination=\n"
+    );
 
     let out = cli(&root, &["settings", "get", "appearance.compose_cue"]);
     assert!(out.status.success(), "get by key failed: {}", stderr(&out));
     assert_eq!(stdout(&out), "appearance.compose_cue=standard\n");
+}
+
+#[test]
+fn destination_settings_are_escaped_display_lines_not_terminal_controls() {
+    let (_scratch, root) = scratch("cli-destination-escaped");
+    let value = "/volume/with \"quotes\"\\and café\nnext\t\u{1b}path";
+    let out = cli(&root, &["settings", "set", "backups.destination", value]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let expected =
+        "backups.destination=/volume/with \\\"quotes\\\"\\\\and café\\nnext\\t\\u{1b}path\n";
+    let out = cli(&root, &["settings", "get", "backups.destination"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), expected);
+    let out = cli(&root, &["settings", "get"]);
+    assert_eq!(
+        stdout(&out),
+        format!("appearance.compose_cue=standard\n{expected}")
+    );
+}
+
+#[test]
+fn backup_uses_the_configured_directory_across_cli_processes() {
+    let (scratch, root) = scratch("cli-destination-backup");
+    let parent = std::fs::canonicalize(scratch.path()).unwrap();
+    let volume = parent.join("volume");
+    let destination = volume.join("backups");
+    std::fs::create_dir_all(&destination).unwrap();
+    let out = cli(
+        &root,
+        &[
+            "settings",
+            "set",
+            "backups.destination",
+            destination.to_str().unwrap(),
+        ],
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    let out = cli(&root, &["backup"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let text = stdout(&out);
+    let id = text.split_whitespace().next().unwrap();
+    assert!(
+        destination.join(id).join("manifest.json").is_file(),
+        "{text}"
+    );
+    assert_eq!(std::fs::read_dir(root.join("backups")).unwrap().count(), 0);
+    std::fs::remove_dir_all(&volume).unwrap();
+    let out = cli(&root, &["backup"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(stderr(&out).contains("Unavailable"), "{}", stderr(&out));
+    assert!(!volume.exists());
+    assert_eq!(std::fs::read_dir(root.join("backups")).unwrap().count(), 0);
 }
 
 /// An unknown key exits 1 naming `InvalidInput`; so does an unknown
@@ -205,13 +260,19 @@ fn a_non_default_value_survives_process_restarts() {
         &["settings", "set", "appearance.compose_cue", "strong"],
     );
     assert!(out.status.success(), "set failed: {}", stderr(&out));
-    for args in [
-        &["settings", "get"][..],
-        &["settings", "get", "appearance.compose_cue"][..],
+    for (args, expected) in [
+        (
+            &["settings", "get"][..],
+            "appearance.compose_cue=strong\nbackups.destination=\n",
+        ),
+        (
+            &["settings", "get", "appearance.compose_cue"][..],
+            "appearance.compose_cue=strong\n",
+        ),
     ] {
         let out = cli(&root, args);
         assert!(out.status.success(), "get failed: {}", stderr(&out));
-        assert_eq!(stdout(&out), "appearance.compose_cue=strong\n");
+        assert_eq!(stdout(&out), expected);
     }
 
     let out = cli(

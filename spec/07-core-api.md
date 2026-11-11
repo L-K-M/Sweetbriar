@@ -124,6 +124,11 @@ async fn Core::shutdown(self);   // flush writer, release the lease
   - `Conflict` while another backup, a generation check or a restore
     holds the backup operation. `Corrupt`, naming the finding, on a
     read-only core.
+  - `sb-cli settings get` keeps its `key=value` display one line per
+    setting: values use Rust debug escapes for control characters,
+    quotes and backslashes, without surrounding quotes. Existing enum
+    values print unchanged. `settings set` takes the actual value,
+    not this display encoding.
   - The selected destination must exist and be a directory. An absent
     or unmounted one is `Unavailable`; neither missing ancestors nor a
     fallback generation in the data root is created. A repeated key
