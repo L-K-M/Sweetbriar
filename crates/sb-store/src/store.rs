@@ -210,6 +210,15 @@ impl Store {
         crate::verification::verify_sample(self, stop)
     }
 
+    /// The recorded backup generations for `list_backups` (spec/07),
+    /// newest first: every complete and in-progress one, and the
+    /// failed ones started since the newest complete one, at most
+    /// [`crate::FAILED_GENERATIONS_LISTED`]. The rows as stored: no
+    /// generation's directory is opened.
+    pub fn backup_generations(&self) -> Result<Vec<crate::BackupGeneration>, StoreError> {
+        self.read(|tx| crate::backups::generations(tx))
+    }
+
     /// Whether the weekly verification (spec/03 "Reads and
     /// verification") has work now: a sample bucket not yet read, or a
     /// generation not yet checked this UTC week.

@@ -15,6 +15,7 @@ mod image_inspect;
 mod json;
 #[allow(dead_code)] // Used by the next verifier slice.
 mod ledger;
+mod listing;
 // The next restore slice attaches this parser to the verification ledger.
 #[allow(dead_code)]
 mod manifest;
@@ -27,6 +28,10 @@ mod references;
 pub use checked::{GenerationCheck, GenerationVerdict};
 pub use external::VerifiedExternalBackup;
 pub use image::BackupImageInspection;
+pub(crate) use listing::generations;
+pub use listing::{
+    BackupGeneration, BackupGenerationState, FAILED_GENERATIONS_LISTED, GenerationVerification,
+};
 mod qualify;
 pub use qualify::QualifiedStage;
 mod scratch;

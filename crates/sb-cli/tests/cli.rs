@@ -362,3 +362,52 @@ fn import_reports_problems_and_rejects_bad_arguments() {
         assert_eq!(out.status.code(), Some(2), "args {args:?} must be usage");
     }
 }
+
+/// `backup list` (plan M1.8i1) prints the recorded generations, newest
+/// first, one tab-separated line each: a fresh store prints none, and
+/// rows a backup, an interrupted one and the weekly check left print
+/// as recorded.
+#[test]
+fn backup_list_prints_the_recorded_generations() {
+    let (_scratch, root) = scratch("cli-backup-list");
+    let out = cli(&root, &["backup", "list"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "");
+    assert!(stderr(&out).contains("no backups are recorded"));
+
+    // The store exists and no process holds it now. 1794182400000 is
+    // 2026-11-09 00:00 UTC.
+    sb_test_support::execute_sql(
+        &root.join("state.sqlite"),
+        "INSERT INTO backup_generations
+           (generation_id, started_at, completed_at, state, location, manifest_sha256,
+            object_count, total_bytes, verified_at, verification)
+         VALUES
+           ('gen-complete', 1794182400000, 1794182401000, 'complete', '/backups/gen-complete',
+            'ab', 2, 4096, 1794268800000, 'intact'),
+           ('gen-failed', 1794186000000, NULL, 'failed', '/backups/gen-failed',
+            NULL, NULL, NULL, NULL, NULL),
+           ('gen-running', 1794189600000, NULL, 'in_progress', '/backups/gen-running',
+            NULL, NULL, NULL, NULL, NULL);",
+    );
+
+    let out = cli(&root, &["backup", "list"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        stdout(&out),
+        "gen-running\tin progress\t2026-11-09T02:00:00Z\t-\tnot checked\t/backups/gen-running\n\
+         gen-failed\tfailed\t2026-11-09T01:00:00Z\t-\tnot checked\t/backups/gen-failed\n\
+         gen-complete\tcomplete\t2026-11-09T00:00:00Z\t4096 bytes in 2 objects\t\
+         intact 2026-11-10T00:00:00Z\t/backups/gen-complete\n"
+    );
+    assert_eq!(stderr(&out), "");
+
+    for args in [
+        &["backup"][..],
+        &["backup", "lst"],
+        &["backup", "list", "extra"],
+    ] {
+        let out = cli(&root, args);
+        assert_eq!(out.status.code(), Some(2), "args {args:?} must be usage");
+    }
+}

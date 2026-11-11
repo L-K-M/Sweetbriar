@@ -8,8 +8,9 @@ use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
 use sb_service::{
-    Anchor, Core, CoreConfig, CoreError, ExportFormat, ExportJobState, ExportScopeInput, ImportJob,
-    ImportJobState, ImportTarget, MboxVariant, WindowSpec, open_core,
+    Anchor, BackupGeneration, BackupState, BackupVerdict, Core, CoreConfig, CoreError,
+    ExportFormat, ExportJobState, ExportScopeInput, ImportJob, ImportJobState, ImportTarget,
+    MboxVariant, WindowSpec, open_core,
 };
 
 /// How a usage failure exits: everything the user mistyped (plan M0.7).
@@ -81,6 +82,8 @@ enum Command {
     ExportCancel {
         job_id: String,
     },
+    /// `backup list`: the recorded backup generations, newest first.
+    BackupList,
 }
 
 /// The scope word after `export`, with the id it names.
@@ -96,7 +99,8 @@ const USAGE: &str = "usage: sb-cli [--data-root <path>] settings get [<key>]
        sb-cli [--data-root <path>] export mailbox <mailbox_id> <destination> [--format eml|mboxrd]
        sb-cli [--data-root <path>] export account <account_id> <destination> [--format eml|mboxrd]
        sb-cli [--data-root <path>] export status <job_id>
-       sb-cli [--data-root <path>] export cancel <job_id>";
+       sb-cli [--data-root <path>] export cancel <job_id>
+       sb-cli [--data-root <path>] backup list";
 
 /// Parse the arguments after the program name: options, then exactly
 /// one command with its fixed shape. Anything else is a usage error
@@ -133,6 +137,9 @@ fn command_from(word: String, args: &mut impl Iterator<Item = String>) -> Result
     if word == "export" {
         return export_from(args);
     }
+    if word == "backup" {
+        return backup_from(args);
+    }
     if word != "settings" {
         return Err(format!("unknown command '{word}'"));
     }
@@ -153,6 +160,20 @@ fn command_from(word: String, args: &mut impl Iterator<Item = String>) -> Result
         ("set", _) => Err("settings set takes <key> <value>".to_owned()),
         (other, _) => Err(format!("unknown settings subcommand '{other}'")),
     }
+}
+
+/// `backup`'s arguments: the `list` subcommand, and nothing after it.
+fn backup_from(args: &mut impl Iterator<Item = String>) -> Result<Command, String> {
+    let Some(subcommand) = args.next() else {
+        return Err("backup needs a subcommand".to_owned());
+    };
+    if subcommand != "list" {
+        return Err(format!("unknown backup subcommand '{subcommand}'"));
+    }
+    if args.next().is_some() {
+        return Err("backup list takes no arguments".to_owned());
+    }
+    Ok(Command::BackupList)
 }
 
 /// `import`'s arguments: an optional `--variant`, then at least one path.
@@ -281,6 +302,7 @@ fn run(invocation: Invocation) -> Result<(), u8> {
         } => export(&core, scope, *format, destination),
         Command::ExportStatus { job_id } => export_status(&core, job_id),
         Command::ExportCancel { job_id } => export_cancel(&core, job_id),
+        Command::BackupList => backup_list(&core),
     };
     block_on(core.shutdown());
     outcome
@@ -524,6 +546,80 @@ fn export_cancel(core: &Core, job_id: &str) -> Result<(), u8> {
     Ok(())
 }
 
+/// `backup list`: one line per recorded generation, newest first. A
+/// store without any prints nothing and says so on stderr.
+fn backup_list(core: &Core) -> Result<(), u8> {
+    let generations = block_on(core.list_backups()).map_err(error_exit)?;
+    if generations.is_empty() {
+        eprintln!("sb-cli: no backups are recorded");
+    }
+    for generation in &generations {
+        println!("{}", backup_line(generation));
+    }
+    Ok(())
+}
+
+/// One generation as tab-separated fields: its id, state, start, size,
+/// the weekly check's verdict and its directory. The directory comes
+/// last, since only a path can hold a tab.
+fn backup_line(generation: &BackupGeneration) -> String {
+    let state = match generation.state {
+        BackupState::InProgress => "in progress",
+        BackupState::Complete => "complete",
+        BackupState::Failed => "failed",
+    };
+    let size = match (generation.total_bytes, generation.object_count) {
+        (Some(bytes), Some(objects)) => format!("{bytes} bytes in {objects} objects"),
+        _ => "-".to_owned(),
+    };
+    let check = match generation.verification {
+        None => "not checked".to_owned(),
+        Some(verification) => {
+            let verdict = match verification.verdict {
+                BackupVerdict::Intact => "intact",
+                BackupVerdict::Damaged => "damaged",
+                BackupVerdict::Missing => "missing",
+            };
+            format!("{verdict} {}", utc(verification.checked_at_ms))
+        }
+    };
+    format!(
+        "{}\t{state}\t{}\t{size}\t{check}\t{}",
+        generation.generation_id,
+        utc(generation.started_at_ms),
+        generation.location.display()
+    )
+}
+
+/// Milliseconds since the epoch as an RFC 3339 UTC time to the second.
+fn utc(millis: i64) -> String {
+    const DAY: i64 = 86_400;
+    let seconds = millis.div_euclid(1_000);
+    let (days, second) = (seconds.div_euclid(DAY), seconds.rem_euclid(DAY));
+    // Days since 1970-01-01 to a civil date, in 400-year eras that
+    // start on a 1 March (Hinnant's `civil_from_days`).
+    let shifted = days + 719_468;
+    let era = shifted.div_euclid(146_097);
+    let day_of_era = shifted.rem_euclid(146_097);
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let march_month = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * march_month + 2) / 5 + 1;
+    let month = if march_month < 10 {
+        march_month + 3
+    } else {
+        march_month - 9
+    };
+    let year = year_of_era + era * 400 + i64::from(month <= 2);
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
+        second / 3_600,
+        second % 3_600 / 60,
+        second % 60
+    )
+}
+
 /// Print a finished job's totals and report; only completion succeeds.
 fn outcome(job: &ImportJob) -> Result<(), u8> {
     let totals = &job.totals;
@@ -585,6 +681,89 @@ fn block_on<F: std::future::Future>(future: F) -> F::Output {
         match future.as_mut().poll(&mut cx) {
             Poll::Ready(output) => return output,
             Poll::Pending => std::thread::park(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use sb_service::BackupVerification;
+
+    use super::*;
+
+    #[test]
+    fn times_print_as_utc_to_the_second() {
+        for (millis, shown) in [
+            (0, "1970-01-01T00:00:00Z"),
+            (-1, "1969-12-31T23:59:59Z"),
+            (999, "1970-01-01T00:00:00Z"),
+            // A leap day, and the days around a century's end.
+            (1_709_210_096_000, "2024-02-29T12:34:56Z"),
+            (951_782_400_000, "2000-02-29T00:00:00Z"),
+            (4_107_542_399_000, "2100-02-28T23:59:59Z"),
+            (4_107_542_400_000, "2100-03-01T00:00:00Z"),
+            (1_794_182_400_000, "2026-11-09T00:00:00Z"),
+            (1_798_761_599_999, "2026-12-31T23:59:59Z"),
+        ] {
+            assert_eq!(utc(millis), shown, "{millis}");
+        }
+    }
+
+    #[test]
+    fn a_generation_prints_as_one_tab_separated_line() {
+        let complete = BackupGeneration {
+            generation_id: "00000000-0000-4000-8000-0000000000b1".to_owned(),
+            state: BackupState::Complete,
+            started_at_ms: 1_794_182_400_000,
+            completed_at_ms: Some(1_794_182_401_000),
+            location: PathBuf::from("/data/store/backups/00000000-0000-4000-8000-0000000000b1"),
+            object_count: Some(3),
+            total_bytes: Some(4_096),
+            verification: Some(BackupVerification {
+                verdict: BackupVerdict::Damaged,
+                checked_at_ms: 1_794_268_800_000,
+            }),
+        };
+        assert_eq!(
+            backup_line(&complete),
+            "00000000-0000-4000-8000-0000000000b1\tcomplete\t2026-11-09T00:00:00Z\t\
+             4096 bytes in 3 objects\tdamaged 2026-11-10T00:00:00Z\t\
+             /data/store/backups/00000000-0000-4000-8000-0000000000b1"
+        );
+
+        let running = BackupGeneration {
+            state: BackupState::InProgress,
+            completed_at_ms: None,
+            object_count: None,
+            total_bytes: None,
+            verification: None,
+            ..complete.clone()
+        };
+        assert_eq!(
+            backup_line(&running),
+            "00000000-0000-4000-8000-0000000000b1\tin progress\t2026-11-09T00:00:00Z\t-\t\
+             not checked\t/data/store/backups/00000000-0000-4000-8000-0000000000b1"
+        );
+        for (verdict, shown) in [
+            (BackupVerdict::Intact, "intact"),
+            (BackupVerdict::Missing, "missing"),
+        ] {
+            let checked = BackupGeneration {
+                state: BackupState::Failed,
+                verification: Some(BackupVerification {
+                    verdict,
+                    checked_at_ms: 0,
+                }),
+                ..complete.clone()
+            };
+            let line = backup_line(&checked);
+            assert!(line.contains("\tfailed\t"), "{line}");
+            assert!(
+                line.contains(&format!("\t{shown} 1970-01-01T00:00:00Z\t")),
+                "{line}"
+            );
         }
     }
 }
