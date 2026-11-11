@@ -59,6 +59,12 @@ impl std::error::Error for ResourcesSwapError {
 }
 
 impl Resources {
+    /// Retained restore names beside the resolved root, without opening
+    /// their contents (spec/07; M1.8j1). Works on a latched store.
+    pub fn restore_artifacts(&self) -> Result<Vec<crate::RestoreArtifact>, StoreError> {
+        self.store.restore_artifacts()
+    }
+
     /// The recorded backup generations for `list_backups` (spec/07),
     /// newest first, as their rows stand: every complete and
     /// in-progress one, and the failed ones since the newest complete

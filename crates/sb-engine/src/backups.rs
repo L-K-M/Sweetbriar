@@ -238,6 +238,13 @@ impl Engine {
             .map_err(|_| EngineError::internal("a command ended without an answer"))?
     }
 
+    /// Retained restore names beside the resolved root (spec/07; M1.8j1).
+    /// No entry is opened or reused. A read-only engine answers too.
+    pub async fn list_restore_artifacts(&self) -> Result<Vec<crate::RestoreArtifact>, EngineError> {
+        self.read_through(|resources| resources.restore_artifacts())
+            .await
+    }
+
     /// `list_backups()` (spec/07): the recorded generations, newest
     /// first. Every complete and in-progress one is listed, and the
     /// failed ones started since the newest complete one, at most

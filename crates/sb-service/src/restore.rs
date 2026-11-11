@@ -11,10 +11,46 @@
 //! nothing; the swap is short and replaces the store. The second call
 //! is the command: it takes the idempotency key.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use crate::{Core, CoreError, Receipt};
+
+/// A retained restore name beside the resolved data root (spec/07; M1.8j1).
+/// Names do not establish directory type, ownership or readiness to restore.
+/// A stage may still be in use. No entry is opened, reused or removed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RestoreArtifact {
+    pub path: PathBuf,
+    pub kind: RestoreArtifactKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RestoreArtifactKind {
+    Preserved,
+    Staged,
+}
+
+impl Core {
+    /// The retained restore names beside the resolved root, sorted by path.
+    /// Available on a read-only core. A failed enumeration answers an error,
+    /// never a partial list. The paths can change after enumeration.
+    pub async fn list_restore_artifacts(&self) -> Result<Vec<RestoreArtifact>, CoreError> {
+        let artifacts: Vec<sb_engine::RestoreArtifact> =
+            self.engine().list_restore_artifacts().await?;
+        Ok(artifacts
+            .into_iter()
+            .map(|artifact| RestoreArtifact {
+                path: artifact.path,
+                kind: match artifact.kind {
+                    sb_engine::RestoreArtifactKind::Preserved => RestoreArtifactKind::Preserved,
+                    sb_engine::RestoreArtifactKind::Staged => RestoreArtifactKind::Staged,
+                },
+            })
+            .collect())
+    }
+}
 
 /// A generation ready to be swapped in (spec/03 "Restore"): verified
 /// against its manifest, staged beside the data root and qualified.

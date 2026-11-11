@@ -32,6 +32,7 @@ pub mod query;
 mod readers;
 mod receipts;
 pub mod repair;
+mod restore_artifacts;
 mod restore_pending;
 mod schema;
 pub mod seen;
@@ -83,6 +84,7 @@ pub use readers::{ReadStop, Scoped};
 pub use receipts::{
     Receipt, encode_job_receipt, receipt_generation_id, receipt_job_id, replay, run_once,
 };
+pub use restore_artifacts::{RestoreArtifact, RestoreArtifactKind};
 pub use settings::{StoredSetting, read_all, upsert};
 pub use source_snapshots::{ImportSourceCapture, ImportSourceSnapshot};
 pub use store::SwapRestoreError;
