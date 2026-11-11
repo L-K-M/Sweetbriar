@@ -20,7 +20,7 @@ use super::{
     tally_generations, verify_outcome,
 };
 use crate::index_tests::{TestClock, clocked, count, import, wait, write};
-use crate::{Engine, Integrity};
+use crate::{BackupEnd, Engine, Integrity};
 
 mod acceptance;
 
@@ -822,6 +822,62 @@ fn the_engine_is_busy_while_long_work_runs() {
     assert!((host.busy)());
     drop(release);
     wait(|| !(host.busy)());
+
+    // A backup a command started, held before its first object.
+    let (release, held) = mpsc::channel::<()>();
+    let held = Mutex::new(held);
+    *engine.backup_copies().before_copy.lock().unwrap() = Some(Arc::new(move || {
+        let _ = held.lock().unwrap().recv();
+    }));
+    let started = block_on(engine.start_backup(&engine.new_idempotency_key())).unwrap();
+    assert!((host.busy)());
+    drop(release);
+    block_on(started.into_copy().unwrap().finished());
+    wait(|| !(host.busy)());
+    block_on(engine.shutdown()).unwrap();
+}
+
+/// A started backup holds the backup operation. The hourly one beside
+/// it is recorded `blocked`, and its retry finds the started one
+/// complete and nothing left to take.
+#[test]
+fn a_started_copy_blocks_the_hourly_backup() {
+    let scratch = ScratchDir::new("maintenance-started-copy");
+    let (engine, clock) = scheduled(scratch.path(), MONDAY);
+    let (release, held) = mpsc::channel::<()>();
+    let (entered, reached) = mpsc::channel();
+    let (entered, held) = (Mutex::new(entered), Mutex::new(held));
+    *engine.backup_copies().before_copy.lock().unwrap() = Some(Arc::new(move || {
+        entered.lock().unwrap().send(()).unwrap();
+        let _ = held.lock().unwrap().recv();
+    }));
+    let started = block_on(engine.start_backup(&engine.new_idempotency_key())).unwrap();
+    let copy = started.into_copy().unwrap();
+    reached.recv_timeout(Duration::from_secs(60)).unwrap();
+
+    advance(&engine, &clock, SETTLE);
+    let end = run_of(&engine, MaintenanceJob::Backup)
+        .unwrap()
+        .finished
+        .unwrap();
+    assert_eq!(end.outcome, MaintenanceOutcome::Blocked, "{:?}", end.detail);
+    assert_eq!(
+        (count(&engine, COMPLETE), count(&engine, GENERATIONS)),
+        (0, 1)
+    );
+
+    drop(release);
+    assert_eq!(
+        block_on(copy.finished()),
+        BackupEnd::Complete { after: None }
+    );
+    let blocked = started_of(&engine, MaintenanceJob::Backup);
+    advance(&engine, &clock, BACKUP_RETRY);
+    assert_eq!(started_of(&engine, MaintenanceJob::Backup), blocked);
+    assert_eq!(
+        (count(&engine, COMPLETE), count(&engine, GENERATIONS)),
+        (1, 1)
+    );
     block_on(engine.shutdown()).unwrap();
 }
 

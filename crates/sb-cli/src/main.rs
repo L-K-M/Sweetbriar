@@ -8,7 +8,7 @@ use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
 use sb_service::{
-    Anchor, BackupGeneration, BackupState, BackupVerdict, Core, CoreConfig, CoreError,
+    Anchor, BackupEnd, BackupGeneration, BackupState, BackupVerdict, Core, CoreConfig, CoreError,
     ExportFormat, ExportJobState, ExportScopeInput, ImportJob, ImportJobState, ImportTarget,
     MboxVariant, WindowSpec, open_core,
 };
@@ -82,6 +82,8 @@ enum Command {
     ExportCancel {
         job_id: String,
     },
+    /// `backup`: take a backup generation now and wait for its copy.
+    Backup,
     /// `backup list`: the recorded backup generations, newest first.
     BackupList,
 }
@@ -100,6 +102,7 @@ const USAGE: &str = "usage: sb-cli [--data-root <path>] settings get [<key>]
        sb-cli [--data-root <path>] export account <account_id> <destination> [--format eml|mboxrd]
        sb-cli [--data-root <path>] export status <job_id>
        sb-cli [--data-root <path>] export cancel <job_id>
+       sb-cli [--data-root <path>] backup
        sb-cli [--data-root <path>] backup list";
 
 /// Parse the arguments after the program name: options, then exactly
@@ -162,10 +165,11 @@ fn command_from(word: String, args: &mut impl Iterator<Item = String>) -> Result
     }
 }
 
-/// `backup`'s arguments: the `list` subcommand, and nothing after it.
+/// `backup`'s arguments: nothing, to take one now, or the `list`
+/// subcommand and nothing after it.
 fn backup_from(args: &mut impl Iterator<Item = String>) -> Result<Command, String> {
     let Some(subcommand) = args.next() else {
-        return Err("backup needs a subcommand".to_owned());
+        return Ok(Command::Backup);
     };
     if subcommand != "list" {
         return Err(format!("unknown backup subcommand '{subcommand}'"));
@@ -302,6 +306,7 @@ fn run(invocation: Invocation) -> Result<(), u8> {
         } => export(&core, scope, *format, destination),
         Command::ExportStatus { job_id } => export_status(&core, job_id),
         Command::ExportCancel { job_id } => export_cancel(&core, job_id),
+        Command::Backup => backup(&core),
         Command::BackupList => backup_list(&core),
     };
     block_on(core.shutdown());
@@ -546,6 +551,56 @@ fn export_cancel(core: &Core, job_id: &str) -> Result<(), u8> {
     Ok(())
 }
 
+/// `backup`: take a generation now, under a fresh key, and wait for
+/// its copy. A complete one prints its line as `backup list` does; a
+/// copy that stopped or failed exits with an error, and its generation
+/// stays in progress until the next backup removes it.
+fn backup(core: &Core) -> Result<(), u8> {
+    let started = block_on(core.start_backup(&core.new_idempotency_key())).map_err(error_exit)?;
+    let id = started.generation_id;
+    let Some(copy) = started.copy else {
+        // A fresh key has started nothing before.
+        eprintln!("sb-cli: backup {id} was started by an earlier command");
+        return Err(ERROR_EXIT);
+    };
+    match backup_report(&id, block_on(copy.finished())) {
+        Ok(warning) => {
+            if let Some(warning) = warning {
+                eprintln!("sb-cli: {warning}");
+            }
+        }
+        Err(problem) => {
+            eprintln!("sb-cli: {problem}");
+            return Err(ERROR_EXIT);
+        }
+    }
+    let generations = block_on(core.list_backups()).map_err(error_exit)?;
+    match generations
+        .iter()
+        .find(|generation| generation.generation_id == id)
+    {
+        Some(generation) => println!("{}", backup_line(generation)),
+        // Its own retention pass keeps it; a later backup's may not.
+        // Half a line would mislead whatever reads these.
+        None => eprintln!("sb-cli: backup {id} is complete; a later backup has removed it since"),
+    }
+    Ok(())
+}
+
+/// How a backup's copy ended, in words: `Ok` for a complete
+/// generation, with a warning when the cleanup after it failed, and
+/// `Err` for one that isn't.
+fn backup_report(id: &str, end: BackupEnd) -> Result<Option<String>, String> {
+    match end {
+        BackupEnd::Complete { after: None } => Ok(None),
+        BackupEnd::Complete { after: Some(error) } => Ok(Some(format!(
+            "backup {id} is complete; removing older backups after it failed: {error}"
+        ))),
+        BackupEnd::Stopped => Err(format!("backup {id} was stopped before it was complete")),
+        BackupEnd::Failed(error) => Err(format!("backup {id} failed: {error}")),
+    }
+}
+
 /// `backup list`: one line per recorded generation, newest first. A
 /// store without any prints nothing and says so on stderr.
 fn backup_list(core: &Core) -> Result<(), u8> {
@@ -692,6 +747,65 @@ mod tests {
     use sb_service::BackupVerification;
 
     use super::*;
+
+    fn command(args: &[&str]) -> Result<Command, String> {
+        parse(args.iter().map(|arg| (*arg).to_owned())).map(|invocation| invocation.command)
+    }
+
+    #[test]
+    fn every_usage_line_names_the_program_at_one_indent() {
+        let mut lines = USAGE.lines();
+        assert!(lines.next().unwrap().starts_with("usage: sb-cli "));
+        for line in lines {
+            assert!(line.starts_with("       sb-cli "), "{line:?}");
+        }
+    }
+
+    #[test]
+    fn backup_alone_takes_one_and_list_lists_them() {
+        assert!(matches!(command(&["backup"]), Ok(Command::Backup)));
+        assert!(matches!(
+            command(&["backup", "list"]),
+            Ok(Command::BackupList)
+        ));
+        assert_eq!(
+            command(&["backup", "now"]).err().as_deref(),
+            Some("unknown backup subcommand 'now'")
+        );
+        assert_eq!(
+            command(&["backup", "list", "extra"]).err().as_deref(),
+            Some("backup list takes no arguments")
+        );
+    }
+
+    #[test]
+    fn a_backup_s_end_is_success_only_when_it_is_complete() {
+        assert_eq!(
+            backup_report("gen", BackupEnd::Complete { after: None }),
+            Ok(None)
+        );
+        let warned = backup_report(
+            "gen",
+            BackupEnd::Complete {
+                after: Some("no space".to_owned()),
+            },
+        );
+        assert_eq!(
+            warned,
+            Ok(Some(
+                "backup gen is complete; removing older backups after it failed: no space"
+                    .to_owned()
+            ))
+        );
+        assert_eq!(
+            backup_report("gen", BackupEnd::Stopped),
+            Err("backup gen was stopped before it was complete".to_owned())
+        );
+        assert_eq!(
+            backup_report("gen", BackupEnd::Failed("no space".to_owned())),
+            Err("backup gen failed: no space".to_owned())
+        );
+    }
 
     #[test]
     fn times_print_as_utc_to_the_second() {

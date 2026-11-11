@@ -17,6 +17,7 @@ pub use appearance::{
     AccountAppearance, AccountAppearanceChange, Appearance, AppearanceTokens, AppearanceVariant,
     IdentityAppearance, IdentityAppearanceChange, PaletteColor, SrgbColor, SrgbColorError,
 };
+pub use backups::{BackupCopy, BackupEnd, BackupStarted};
 mod bodies;
 pub use bodies::{
     AttachmentLease, BodyKind, BodyLease, LeaseReleaser, RenderWarning, RenderWarningCode,

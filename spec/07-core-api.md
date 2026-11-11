@@ -95,6 +95,39 @@ async fn Core::shutdown(self);   // flush writer, release the lease
   so one that went missing shows in the weekly check's verdict, or
   when a restore verifies the generation it was given. A read-only
   core answers like any other.
+- **Back up now (M1.8i3):** `start_backup()` is a command. It takes a
+  generation in the data root's `backups/` (03 "Backup generations")
+  and answers once its snapshot is taken, with the receipt
+  `{"generation_id":...}` that committed with the generation's row,
+  the generation's id, and a handle on its copy.
+  - The copy goes on in the core as counted work. A caller that stops
+    waiting strands nothing. Shutdown waits for it and stops it at its
+    next object. A restore never meets one: a prepared restore holds
+    the backup operation, so no backup starts beside it.
+  - The handle answers how the copy ended: `Complete` (with the error
+    of the retention that follows completion, if it failed: the
+    generation stands), `Stopped` by a shutdown, or `Failed` with the
+    error's text. An I/O error under a stop is `Failed`. So is a core
+    that turned read-only under the copy, whichever the copy met
+    first, the store's refusal or the stop its latch raises: the text
+    names the finding.
+    A stopped or failed copy leaves its generation `in_progress`
+    until the next backup marks it `failed` and removes it; the
+    scheduler takes that one within the hour (03).
+  - A repeated key answers its receipt and no handle, and starts
+    nothing, while its generation is still being copied too. The
+    receipt names the generation the key started, whatever became of
+    it; retention may have removed its row since. A core that refuses
+    the command answers no key: a read-only one is `Corrupt`, and one
+    that is shutting down `Unavailable`.
+  - `Conflict` while another backup, a generation check or a restore
+    holds the backup operation. `Corrupt`, naming the finding, on a
+    read-only core.
+  - A generation taken here is one the hourly backup doesn't take
+    again: that one runs while there were changes since the newest
+    complete generation.
+  - `sb-cli backup` starts one under a fresh key, waits for the copy
+    and prints the generation's line as `backup list` does.
 - **Bridge account setup (M2.3c1):** `add_bridge_account(params)` takes
   the Proton Bridge preset's display name, username, Bridge password
   (bytes, moved into the core's zeroizing secret), IMAP and SMTP ports
