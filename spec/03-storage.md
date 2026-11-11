@@ -786,14 +786,16 @@ interrupted run. Recording runs is the store's bookkeeping, so running
 a job never makes a generation due.
 
 **The schedule (M1.8h3b).** One engine worker runs the jobs one at a
-time, the backup first, against the injected clock. Its cadence comes
-from the rows, so a restart or a restored store picks it up:
+time, the backup first, then GC, then the verification, against the
+injected clock. Its cadence comes from the rows, so a restart or a
+restored store picks it up:
 - A job is due a period after its last complete run started: an hour
-  for the backup, a day for GC. A run that was blocked or failed is
-  tried again sooner, 5 minutes after it ended for the backup (so one
-  bad attempt stretches the recovery point by minutes) and an hour
-  after it ended for GC; counted from its end, a long failing run
-  can't follow itself at once.
+  for the backup, a day for GC, a week for the verification. A run
+  that was blocked or failed is tried again sooner, 5 minutes after it
+  ended for the backup (so one bad attempt stretches the recovery
+  point by minutes) and an hour after it ended for GC and the
+  verification; counted from its end, a long failing run can't follow
+  itself at once.
   A job that never ran, or whose last run was interrupted or
   cancelled, is due at once. A start in the future (a clock moved
   back) counts from now.
@@ -803,6 +805,16 @@ from the rows, so a restart or a restored store picks it up:
   Generations go to the data root's `backups/` until a Backups setting
   names another destination (M1.8j).
 - GC runs with the default grace period.
+- **The weekly verification (M1.8h4c)** reads the live sample ("Reads
+  and verification"), then checks each complete generation the UTC
+  week still owes, never-checked first ("Backup generations"). Like
+  the backup, a due verification runs only while it has work: a sample
+  bucket not yet read, or a generation not yet checked this week.
+  Otherwise nothing is recorded and it is looked at again a minute
+  later, so a run's record, what it couldn't read included, stands
+  until there is work again. A week's work is done once: a retry reads
+  only what is still owed. A stopped sample ends the run; a sample that
+  returned an error doesn't keep the generations from their check.
 - The worker's first look waits a minute after it starts, so the
   open's own work goes first and a process that ends within the
   minute (a CLI command) never starts a job its shutdown would
@@ -829,7 +841,16 @@ from the rows, so a restart or a restored store picks it up:
   completed included. A GC pass is `blocked` by its gates and
   `cancelled` when the stop ended it (a stop ends the pass with its
   report, never an error). Failed removals make it `failed`, even when
-  it also stopped, and so does an error the pass returns.
+  it also stopped, and so does an error the pass returns. A
+  verification is `complete` whatever it found: a damaged or missing
+  object or generation is a finding, recorded on its row and counted
+  in the detail. It is `failed` when something couldn't be read to a
+  verdict (an object's or a generation's I/O error, a list that
+  couldn't be read), `blocked` when a backup or a restore held the
+  backup operation a generation's check needs, the generations left
+  waiting for the retry, and `cancelled` when the stop ended it.
+  Failures outrank the gate, and the gate the stop. A generation whose
+  destination isn't there is counted and fails nothing.
 
 ## Restore
 

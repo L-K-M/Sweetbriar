@@ -1,7 +1,8 @@
 //! The maintenance scheduler (spec/03 "Scheduled maintenance", plan
 //! M1.8h3b): one engine worker that takes a backup generation every
-//! hour while there were changes and runs a GC pass daily, against the
-//! injected clock, and records each run in `maintenance_jobs`.
+//! hour while there were changes, runs a GC pass daily and verifies
+//! the objects weekly (M1.8h4c), against the injected clock, and
+//! records each run in `maintenance_jobs`.
 //!
 //! The cadence lives in the records, not in memory: a job is due a
 //! period after its last complete run started, sooner after one that
@@ -16,8 +17,9 @@ use std::sync::{Condvar, Mutex, MutexGuard};
 use std::time::Duration;
 
 use sb_resources::{
-    BackupDestination, BackupReceipt, GC_GRACE_PERIOD, GcGate, GcReport, MaintenanceJob,
-    MaintenanceOutcome, MaintenanceRun, Resources, StoreError, Timestamp,
+    BackupDestination, BackupReceipt, GC_GRACE_PERIOD, GcGate, GcReport, GenerationCheck,
+    GenerationVerdict, MaintenanceJob, MaintenanceOutcome, MaintenanceRun, Resources, SampleReport,
+    StoreError, Timestamp,
 };
 
 use crate::Engine;
@@ -36,6 +38,12 @@ pub(crate) const GC_PERIOD: Duration = Duration::from_secs(24 * 60 * 60);
 /// soon: a backup in progress ends in minutes, and a breaker or a
 /// damaged object waits for the user, so an hour writes few records.
 pub(crate) const GC_RETRY: Duration = Duration::from_secs(60 * 60);
+/// The objects are verified weekly (spec/03 "Reads and verification").
+pub(crate) const VERIFY_PERIOD: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+/// A verification that was blocked (a backup or a restore held the
+/// operation a generation's check needs) or failed is tried again this
+/// soon. The retry reads only what the week still owes.
+pub(crate) const VERIFY_RETRY: Duration = Duration::from_secs(60 * 60);
 /// The scheduler's first look waits this long after it starts: the
 /// open's own work goes first, and a short-lived process (a CLI
 /// command) never starts a job its shutdown would cancel at once.
@@ -66,7 +74,7 @@ pub(crate) struct Cadence {
 }
 
 /// The scheduled jobs in the order a turn considers them.
-const SCHEDULE: [(MaintenanceJob, Cadence, RunJob); 2] = [
+const SCHEDULE: [(MaintenanceJob, Cadence, RunJob); 3] = [
     (
         MaintenanceJob::Backup,
         Cadence {
@@ -82,6 +90,14 @@ const SCHEDULE: [(MaintenanceJob, Cadence, RunJob); 2] = [
             retry: GC_RETRY,
         },
         collect_garbage,
+    ),
+    (
+        MaintenanceJob::Verify,
+        Cadence {
+            period: VERIFY_PERIOD,
+            retry: VERIFY_RETRY,
+        },
+        verify,
     ),
 ];
 
@@ -401,6 +417,165 @@ fn collect_garbage(resources: &Resources, jobs: &MaintenanceJobs, stopped: &dyn 
     let result = resources.collect_garbage_with(GC_GRACE_PERIOD, &jobs.cancel);
     let (outcome, detail) = gc_outcome(result);
     finish(resources, jobs, MaintenanceJob::Gc, outcome, &detail);
+}
+
+/// The weekly verification, when it has work: the live sample of the
+/// objects, then every generation not yet checked this week. Nothing
+/// is recorded when nothing is owed, so the last run's record, its
+/// failures included, stands until there is work again. A store that
+/// can't say is verified, so the attempt and its failure are recorded.
+fn verify(resources: &Resources, jobs: &MaintenanceJobs, stopped: &dyn Fn() -> bool) {
+    if matches!(resources.verification_due(), Ok(false)) || stopped() {
+        return;
+    }
+    if resources.start_maintenance(MaintenanceJob::Verify).is_err() {
+        return;
+    }
+    #[cfg(test)]
+    jobs.event(Event::Running(MaintenanceJob::Verify));
+    let sample = resources.verify_sample(&jobs.cancel);
+    let checks = if generations_follow(&sample) {
+        check_generations(resources, &jobs.cancel)
+    } else {
+        GenerationChecks::default()
+    };
+    let (outcome, detail) = verify_outcome(sample, &checks);
+    finish(resources, jobs, MaintenanceJob::Verify, outcome, &detail);
+}
+
+/// What one run's generation checks came to.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct GenerationChecks {
+    pub(crate) intact: u64,
+    pub(crate) damaged: u64,
+    pub(crate) missing: u64,
+    /// Generations whose destination wasn't there (an unmounted
+    /// volume): nothing recorded, the next run tries again.
+    pub(crate) unreachable: u64,
+    /// Checks that ended in an error, and a list that couldn't be read.
+    pub(crate) failures: Vec<String>,
+    /// A backup or a restore held the backup operation: the
+    /// generations left wait for the retry.
+    pub(crate) blocked: Option<String>,
+    /// The stop ended the checks; the generation in hand recorded
+    /// nothing.
+    pub(crate) stopped: bool,
+}
+
+/// Whether the generations are checked after this sample. A stopped
+/// sample ends the run. A failed one doesn't keep them from their
+/// check: the two read different files.
+pub(crate) fn generations_follow(sample: &Result<SampleReport, StoreError>) -> bool {
+    !matches!(sample, Ok(report) if report.stopped)
+}
+
+/// Check every generation the week still owes, never-checked first. An
+/// error on one doesn't keep the others from their check, except the
+/// held operation, which would refuse each of them.
+fn check_generations(resources: &Resources, stop: &AtomicBool) -> GenerationChecks {
+    tally_generations(resources.generations_to_verify(), stop, |generation| {
+        resources.verify_generation(generation, stop)
+    })
+}
+
+/// [`check_generations`] over the owed list as it was read, with the
+/// check itself supplied: the stop is looked at before each
+/// generation, and a list that couldn't be read is a failure.
+pub(crate) fn tally_generations(
+    owed: Result<Vec<String>, StoreError>,
+    stop: &AtomicBool,
+    mut check: impl FnMut(&str) -> Result<GenerationCheck, StoreError>,
+) -> GenerationChecks {
+    let mut checks = GenerationChecks::default();
+    let owed = match owed {
+        Ok(owed) => owed,
+        Err(error) => {
+            checks.failures.push(error.to_string());
+            return checks;
+        }
+    };
+    for generation in &owed {
+        if stop.load(Ordering::SeqCst) {
+            checks.stopped = true;
+            break;
+        }
+        match check(generation) {
+            Ok(GenerationCheck::Recorded(GenerationVerdict::Intact)) => checks.intact += 1,
+            Ok(GenerationCheck::Recorded(GenerationVerdict::Damaged)) => checks.damaged += 1,
+            Ok(GenerationCheck::Recorded(GenerationVerdict::Missing)) => checks.missing += 1,
+            Ok(GenerationCheck::DestinationAbsent) => checks.unreachable += 1,
+            // Retention removed it since the list was read.
+            Ok(GenerationCheck::Gone) => {}
+            Ok(GenerationCheck::Stopped) => {
+                checks.stopped = true;
+                break;
+            }
+            Err(error @ StoreError::Conflict { .. }) => {
+                checks.blocked = Some(error.to_string());
+                break;
+            }
+            Err(error) => checks
+                .failures
+                .push(format!("generation {generation}: {error}")),
+        }
+    }
+    checks
+}
+
+/// How a verification ended. A damaged or missing object or generation
+/// is a finding, recorded on its row, and the run that found it is
+/// `complete`. What couldn't be read to a verdict makes the run
+/// `failed`, outranking a held operation (`blocked`) and a stop
+/// (`cancelled`): it is the evidence that needs looking at.
+pub(crate) fn verify_outcome(
+    sample: Result<SampleReport, StoreError>,
+    checks: &GenerationChecks,
+) -> (MaintenanceOutcome, String) {
+    let mut failures = Vec::new();
+    let (sampled, sample_stopped) = match sample {
+        Ok(report) => {
+            failures.extend(report.failure_details.iter().cloned());
+            (
+                format!(
+                    "sample: buckets {}, checked {}, intact {}, missing {}, quarantined {}, \
+                     healed {}, gone {}, failed {}",
+                    report.buckets.len(),
+                    report.checked,
+                    report.intact,
+                    report.missing,
+                    report.quarantined,
+                    report.healed,
+                    report.gone,
+                    report.failed,
+                ),
+                report.stopped,
+            )
+        }
+        Err(error) => {
+            failures.push(error.to_string());
+            ("sample: failed".to_owned(), false)
+        }
+    };
+    failures.extend(checks.failures.iter().cloned());
+    let counts = format!(
+        "{sampled}; generations: intact {}, damaged {}, missing {}, unreachable {}, failed {}",
+        checks.intact,
+        checks.damaged,
+        checks.missing,
+        checks.unreachable,
+        checks.failures.len(),
+    );
+    if !failures.is_empty() {
+        let failures = failures.join("; ");
+        return (MaintenanceOutcome::Failed, format!("{counts}: {failures}"));
+    }
+    if let Some(held) = &checks.blocked {
+        return (MaintenanceOutcome::Blocked, format!("{counts}: {held}"));
+    }
+    if sample_stopped || checks.stopped {
+        return (MaintenanceOutcome::Cancelled, format!("stopped: {counts}"));
+    }
+    (MaintenanceOutcome::Complete, counts)
 }
 
 /// Record a run's end. A record that can't be written leaves the run

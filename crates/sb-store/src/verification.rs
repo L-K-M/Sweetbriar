@@ -136,6 +136,14 @@ enum Finding {
     Intact(ObjectId),
 }
 
+/// Whether a run now would read a bucket: a week since the checkpoint
+/// is uncovered.
+pub(crate) fn sample_due(store: &Store) -> Result<bool, StoreError> {
+    let week = week_of(store.clock.now().as_millis());
+    let checkpoint = store.read(|tx| read_checkpoint(tx))?;
+    Ok(!weeks_to_cover(checkpoint, week).is_empty())
+}
+
 pub(crate) fn verify_sample(store: &Store, stop: &AtomicBool) -> Result<SampleReport, StoreError> {
     verify_sample_with(store, &|| stop.load(Ordering::Acquire))
 }

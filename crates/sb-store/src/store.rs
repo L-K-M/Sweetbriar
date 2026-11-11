@@ -210,6 +210,13 @@ impl Store {
         crate::verification::verify_sample(self, stop)
     }
 
+    /// Whether the weekly verification (spec/03 "Reads and
+    /// verification") has work now: a sample bucket not yet read, or a
+    /// generation not yet checked this UTC week.
+    pub fn verification_due(&self) -> Result<bool, StoreError> {
+        Ok(crate::verification::sample_due(self)? || !self.generations_to_verify()?.is_empty())
+    }
+
     /// The complete generations whose weekly check (spec/03 "Backup
     /// generations") hasn't run this UTC week, never-checked first,
     /// then the longest unchecked.

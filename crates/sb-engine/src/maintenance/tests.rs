@@ -3,18 +3,19 @@
 
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use sb_resources::{
-    BackupDestination, GcGate, GcReport, MaintenanceFinish, MaintenanceJob, MaintenanceOutcome,
-    MaintenanceRun, StoreError, Timestamp,
+    BackupDestination, GcGate, GcReport, GenerationCheck, GenerationVerdict, MaintenanceFinish,
+    MaintenanceJob, MaintenanceOutcome, MaintenanceRun, SampleReport, StoreError, Timestamp,
 };
 use sb_test_support::{ScratchDir, block_on, real_fs};
 
 use super::{
-    BACKUP_PERIOD, BACKUP_RETRY, Cadence, Event, GC_PERIOD, GC_RETRY, POLL, SETTLE, backup_outcome,
-    due_at, floor_at, gc_outcome, snapshot_outcome,
+    BACKUP_PERIOD, BACKUP_RETRY, Cadence, Event, GC_PERIOD, GC_RETRY, GenerationChecks, POLL,
+    SETTLE, VERIFY_PERIOD, VERIFY_RETRY, backup_outcome, due_at, floor_at, gc_outcome,
+    generations_follow, snapshot_outcome, tally_generations, verify_outcome,
 };
 use crate::Engine;
 use crate::index_tests::{TestClock, clocked, count, import, wait, write};
@@ -405,6 +406,252 @@ fn a_generation_in_progress_blocks_both_jobs() {
     block_on(engine.shutdown()).unwrap();
 }
 
+// --- the weekly verification (M1.8h4c) ---
+
+/// The verification's recorded end.
+fn verified(engine: &Engine) -> MaintenanceFinish {
+    run_of(engine, MaintenanceJob::Verify)
+        .unwrap()
+        .finished
+        .unwrap()
+}
+
+/// Each generation's recorded verdict, oldest first.
+fn verdicts(engine: &Engine) -> Vec<Option<String>> {
+    engine
+        .resources()
+        .read(|tx| {
+            let mut statement = tx
+                .prepare("SELECT verification FROM backup_generations ORDER BY started_at")
+                .map_err(|error| StoreError::internal(error.to_string()))?;
+            let rows = statement
+                .query_map([], |row| row.get(0))
+                .map_err(|error| StoreError::internal(error.to_string()))?;
+            rows.collect::<Result<_, _>>()
+                .map_err(|error| StoreError::internal(error.to_string()))
+        })
+        .unwrap()
+}
+
+#[test]
+fn the_objects_and_the_generations_are_verified_weekly() {
+    let scratch = ScratchDir::new("maintenance-verify-weekly");
+    let (engine, clock) = clocked(scratch.path(), real_fs(), MONDAY);
+    import(&engine, &scratch.path().join("kept.eml"), RAW);
+    engine.schedule_maintenance();
+    parked(&engine);
+
+    // After the first backup and GC pass: the week's bucket, and the
+    // generation the backup just completed.
+    advance(&engine, &clock, SETTLE);
+    let end = verified(&engine);
+    assert_eq!(
+        end.outcome,
+        MaintenanceOutcome::Complete,
+        "{:?}",
+        end.detail
+    );
+    let detail = end.detail.unwrap();
+    assert!(detail.starts_with("sample: buckets 1, "), "{detail}");
+    assert!(
+        detail.ends_with("generations: intact 1, damaged 0, missing 0, unreachable 0, failed 0"),
+        "{detail}"
+    );
+    assert_eq!(verdicts(&engine), [Some("intact".to_owned())]);
+    let first = started_of(&engine, MaintenanceJob::Verify);
+    assert_eq!(first, MONDAY + ms(SETTLE));
+
+    // Not again before a week since that start.
+    advance(&engine, &clock, VERIFY_PERIOD - Duration::from_millis(1));
+    assert_eq!(started_of(&engine, MaintenanceJob::Verify), first);
+    advance(&engine, &clock, Duration::from_millis(1));
+    assert_eq!(
+        started_of(&engine, MaintenanceJob::Verify),
+        first + ms(VERIFY_PERIOD)
+    );
+    let detail = verified(&engine).detail.unwrap();
+    assert!(detail.starts_with("sample: buckets 1, "), "{detail}");
+    assert!(detail.contains("generations: intact 1, "), "{detail}");
+    block_on(engine.shutdown()).unwrap();
+}
+
+/// A damaged generation is what the check is for: the run that finds
+/// it is complete, and the verdict is on the generation's row.
+#[test]
+fn a_damaged_generation_is_a_finding_of_a_complete_run() {
+    let scratch = ScratchDir::new("maintenance-verify-damaged");
+    let (engine, clock) = scheduled(scratch.path(), MONDAY);
+    advance(&engine, &clock, SETTLE);
+    assert_eq!(verdicts(&engine), [Some("intact".to_owned())]);
+    let location: String = engine
+        .resources()
+        .read(|tx| {
+            tx.query_row("SELECT location FROM backup_generations", [], |row| {
+                row.get(0)
+            })
+            .map_err(|error| StoreError::internal(error.to_string()))
+        })
+        .unwrap();
+    let image = Path::new(&location).join("state.sqlite");
+    let mut bytes = std::fs::read(&image).unwrap();
+    bytes[100] ^= 0xff;
+    std::fs::write(&image, bytes).unwrap();
+
+    advance(&engine, &clock, VERIFY_PERIOD);
+
+    let end = verified(&engine);
+    assert_eq!(
+        end.outcome,
+        MaintenanceOutcome::Complete,
+        "{:?}",
+        end.detail
+    );
+    let detail = end.detail.unwrap();
+    assert!(
+        detail.contains("generations: intact 0, damaged 1, "),
+        "{detail}"
+    );
+    assert_eq!(verdicts(&engine), [Some("damaged".to_owned())]);
+    block_on(engine.shutdown()).unwrap();
+}
+
+#[test]
+fn a_stop_during_the_verification_records_it_cancelled() {
+    let scratch = ScratchDir::new("maintenance-verify-stop");
+    let (engine, clock) = scheduled(scratch.path(), MONDAY);
+    let jobs = engine.maintenance().clone();
+    hook(&engine, move |event| {
+        if event == Event::Running(MaintenanceJob::Verify) {
+            jobs.stop();
+        }
+    });
+    clock.0.fetch_add(ms(SETTLE), Ordering::SeqCst);
+    engine.maintenance().wake();
+    wait(|| outcome_of(&engine, MaintenanceJob::Verify).is_some());
+
+    let end = verified(&engine);
+    assert_eq!(
+        end.outcome,
+        MaintenanceOutcome::Cancelled,
+        "{:?}",
+        end.detail
+    );
+    assert!(end.detail.unwrap().starts_with("stopped: "));
+    // Nothing was read: the generation has no verdict, and the week's
+    // work is still owed.
+    assert_eq!(verdicts(&engine), [None]);
+    assert!(engine.resources().verification_due().unwrap());
+    block_on(engine.shutdown()).unwrap();
+}
+
+/// A generation's check needs the backup operation. While a backup
+/// holds it the run is blocked, and tried again after the retry.
+#[test]
+fn a_held_backup_operation_blocks_the_generation_checks() {
+    let scratch = ScratchDir::new("maintenance-verify-blocked");
+    let (engine, clock) = scheduled(scratch.path(), MONDAY);
+    advance(&engine, &clock, SETTLE);
+    // A second generation, begun in a later hour so that retention
+    // keeps both, and held open.
+    let later = 2 * BACKUP_PERIOD;
+    advance(&engine, &clock, later);
+    let held = engine
+        .resources()
+        .backup_snapshot(BackupDestination::DataRoot)
+        .unwrap();
+
+    advance(&engine, &clock, VERIFY_PERIOD - later);
+
+    let end = verified(&engine);
+    assert_eq!(end.outcome, MaintenanceOutcome::Blocked, "{:?}", end.detail);
+    let blocked = started_of(&engine, MaintenanceJob::Verify);
+    // The sample ran; the first generation still has last week's check.
+    assert!(end.detail.unwrap().starts_with("sample: buckets 1, "));
+
+    engine.resources().complete_backup(held).unwrap();
+    advance(&engine, &clock, VERIFY_RETRY - Duration::from_millis(1));
+    assert_eq!(started_of(&engine, MaintenanceJob::Verify), blocked);
+    advance(&engine, &clock, Duration::from_millis(1));
+    let end = verified(&engine);
+    assert_eq!(
+        end.outcome,
+        MaintenanceOutcome::Complete,
+        "{:?}",
+        end.detail
+    );
+    // The week's bucket is read already; both generations are checked.
+    let detail = end.detail.unwrap();
+    assert!(detail.starts_with("sample: buckets 0, "), "{detail}");
+    assert!(detail.contains("generations: intact 2, "), "{detail}");
+    block_on(engine.shutdown()).unwrap();
+}
+
+/// A destination that isn't there (an unmounted volume) is counted and
+/// fails nothing; the generation keeps the verdict it had.
+#[test]
+fn an_absent_destination_is_counted_and_fails_nothing() {
+    let scratch = ScratchDir::new("maintenance-verify-absent");
+    let (engine, clock) = scheduled(scratch.path(), MONDAY);
+    advance(&engine, &clock, SETTLE);
+    assert_eq!(verdicts(&engine), [Some("intact".to_owned())]);
+    let backups = scratch.path().join("backups");
+    std::fs::rename(&backups, scratch.path().join("backups.away")).unwrap();
+
+    advance(&engine, &clock, VERIFY_PERIOD);
+
+    let end = verified(&engine);
+    assert_eq!(
+        end.outcome,
+        MaintenanceOutcome::Complete,
+        "{:?}",
+        end.detail
+    );
+    let detail = end.detail.unwrap();
+    assert!(
+        detail.ends_with("generations: intact 0, damaged 0, missing 0, unreachable 1, failed 0"),
+        "{detail}"
+    );
+    assert_eq!(verdicts(&engine), [Some("intact".to_owned())]);
+    assert!(engine.resources().verification_due().unwrap());
+    block_on(engine.shutdown()).unwrap();
+}
+
+/// With nothing owed a due job records nothing, so a failed run's
+/// record stands until the next week brings work.
+#[test]
+fn a_verification_with_nothing_owed_records_nothing() {
+    let scratch = ScratchDir::new("maintenance-verify-idle");
+    let (engine, clock) = scheduled(scratch.path(), MONDAY);
+    advance(&engine, &clock, SETTLE);
+    assert!(!engine.resources().verification_due().unwrap());
+    // A failed run, as an unreadable object would leave it.
+    let resources = engine.resources();
+    let failed_at = resources
+        .start_maintenance(MaintenanceJob::Verify)
+        .unwrap()
+        .as_millis();
+    resources
+        .finish_maintenance(
+            MaintenanceJob::Verify,
+            MaintenanceOutcome::Failed,
+            Some("an object couldn't be read"),
+        )
+        .unwrap();
+
+    // Due by its retry, with nothing to read.
+    advance(&engine, &clock, VERIFY_RETRY + POLL);
+    assert_eq!(started_of(&engine, MaintenanceJob::Verify), failed_at);
+    let end = verified(&engine);
+    assert_eq!(end.outcome, MaintenanceOutcome::Failed);
+    assert_eq!(end.detail.as_deref(), Some("an object couldn't be read"));
+
+    // The next week owes a bucket and the generation's check.
+    advance(&engine, &clock, VERIFY_PERIOD);
+    assert_eq!(verified(&engine).outcome, MaintenanceOutcome::Complete);
+    assert!(started_of(&engine, MaintenanceJob::Verify) > failed_at);
+    block_on(engine.shutdown()).unwrap();
+}
+
 // --- the pure rules ---
 
 fn run(started_at: i64, outcome: Option<MaintenanceOutcome>) -> MaintenanceRun {
@@ -564,5 +811,174 @@ fn a_gc_report_maps_to_one_outcome() {
         gc_outcome(error).0,
         MaintenanceOutcome::Failed,
         "a stop is never an error"
+    );
+}
+
+#[test]
+fn the_generations_are_tallied_until_a_stop_or_a_held_operation() {
+    let owed = |count: usize| -> Vec<String> { (1..=count).map(|n| format!("g{n}")).collect() };
+    let recorded = |verdict| Ok(GenerationCheck::Recorded(verdict));
+    let conflict = || StoreError::Conflict {
+        detail: "a backup operation is already running".into(),
+    };
+    let running = AtomicBool::new(false);
+
+    // Every verdict is counted, an error on one doesn't keep the next
+    // from its check, and a generation retention removed counts nowhere.
+    let mut asked = Vec::new();
+    let checks = tally_generations(Ok(owed(7)), &running, |generation| {
+        asked.push(generation.to_owned());
+        match generation {
+            "g1" | "g7" => recorded(GenerationVerdict::Intact),
+            "g2" => recorded(GenerationVerdict::Damaged),
+            "g3" => recorded(GenerationVerdict::Missing),
+            "g4" => Ok(GenerationCheck::DestinationAbsent),
+            "g5" => Ok(GenerationCheck::Gone),
+            _ => Err(StoreError::internal("input/output error")),
+        }
+    });
+    assert_eq!(asked, owed(7));
+    assert_eq!(
+        checks,
+        GenerationChecks {
+            intact: 2,
+            damaged: 1,
+            missing: 1,
+            unreachable: 1,
+            failures: vec![format!(
+                "generation g6: {}",
+                StoreError::internal("input/output error")
+            )],
+            blocked: None,
+            stopped: false,
+        }
+    );
+
+    // A held operation would refuse each of the rest: they wait.
+    let mut asked = 0;
+    let checks = tally_generations(Ok(owed(3)), &running, |generation| {
+        asked += 1;
+        match generation {
+            "g1" => recorded(GenerationVerdict::Intact),
+            _ => Err(conflict()),
+        }
+    });
+    assert_eq!(asked, 2);
+    assert_eq!(checks.intact, 1);
+    assert_eq!(checks.blocked, Some(conflict().to_string()));
+    assert!(checks.failures.is_empty() && !checks.stopped);
+
+    // A check the stop ended ends the run; so does a stop raised
+    // between two generations, before the next is read.
+    let mut asked = 0;
+    let checks = tally_generations(Ok(owed(3)), &running, |_| {
+        asked += 1;
+        Ok(GenerationCheck::Stopped)
+    });
+    assert_eq!((asked, checks.stopped), (1, true));
+    let stop = AtomicBool::new(false);
+    let mut asked = 0;
+    let checks = tally_generations(Ok(owed(3)), &stop, |_| {
+        asked += 1;
+        stop.store(true, Ordering::SeqCst);
+        recorded(GenerationVerdict::Intact)
+    });
+    assert_eq!((asked, checks.intact, checks.stopped), (1, 1, true));
+
+    // A list that couldn't be read is a failure, and nothing is checked.
+    let unread = tally_generations(Err(StoreError::internal("no reader")), &running, |_| {
+        panic!("no generation is known")
+    });
+    assert_eq!(
+        unread.failures,
+        [StoreError::internal("no reader").to_string()]
+    );
+
+    // The sample decides whether they are checked at all.
+    assert!(generations_follow(&Ok(SampleReport::default())));
+    assert!(generations_follow(&Err(StoreError::internal("no reader"))));
+    let stopped = SampleReport {
+        stopped: true,
+        ..SampleReport::default()
+    };
+    assert!(!generations_follow(&Ok(stopped)));
+}
+
+#[test]
+fn a_verification_maps_to_one_outcome() {
+    let sample = |edit: fn(&mut SampleReport)| {
+        let mut report = SampleReport {
+            buckets: vec![7],
+            checked: 4,
+            intact: 2,
+            missing: 1,
+            quarantined: 1,
+            ..SampleReport::default()
+        };
+        edit(&mut report);
+        Ok(report)
+    };
+    let checks = |edit: fn(&mut GenerationChecks)| {
+        let mut checks = GenerationChecks {
+            intact: 3,
+            damaged: 1,
+            ..GenerationChecks::default()
+        };
+        edit(&mut checks);
+        checks
+    };
+    const COUNTS: &str = "sample: buckets 1, checked 4, intact 2, missing 1, quarantined 1, \
+                          healed 0, gone 0, failed 0; generations: intact 3, damaged 1, \
+                          missing 0, unreachable 0, failed 0";
+
+    // Findings are results: the run that made them is complete.
+    assert_eq!(
+        verify_outcome(sample(|_| {}), &checks(|_| {})),
+        (MaintenanceOutcome::Complete, COUNTS.to_owned())
+    );
+    let (outcome, detail) = verify_outcome(sample(|r| r.stopped = true), &checks(|_| {}));
+    assert_eq!(outcome, MaintenanceOutcome::Cancelled);
+    assert_eq!(detail, format!("stopped: {COUNTS}"));
+    let stopped = verify_outcome(sample(|_| {}), &checks(|c| c.stopped = true));
+    assert_eq!(stopped.0, MaintenanceOutcome::Cancelled);
+
+    let held = |c: &mut GenerationChecks| {
+        c.blocked = Some("a backup is running".into());
+        c.stopped = true;
+    };
+    let (outcome, detail) = verify_outcome(sample(|_| {}), &checks(held));
+    assert_eq!(
+        outcome,
+        MaintenanceOutcome::Blocked,
+        "a gate outranks the stop"
+    );
+    assert!(detail.ends_with(": a backup is running"), "{detail}");
+
+    // What couldn't be read outranks both.
+    let unread = |r: &mut SampleReport| {
+        r.failed = 1;
+        r.failure_details = vec!["object ab: permission denied".into()];
+    };
+    let failing = |c: &mut GenerationChecks| {
+        c.failures = vec!["generation g: input/output error".into()];
+        c.blocked = Some("a backup is running".into());
+        c.stopped = true;
+    };
+    let (outcome, detail) = verify_outcome(sample(unread), &checks(failing));
+    assert_eq!(outcome, MaintenanceOutcome::Failed);
+    assert!(
+        detail.ends_with(": object ab: permission denied; generation g: input/output error"),
+        "{detail}"
+    );
+    assert!(detail.contains("healed 0, gone 0, failed 1; "), "{detail}");
+    assert!(detail.contains("unreachable 0, failed 1: "), "{detail}");
+
+    // A sample that returned an error fails the run, whatever the
+    // generations' checks came to.
+    let (outcome, detail) = verify_outcome(Err(StoreError::internal("no reader")), &checks(|_| {}));
+    assert_eq!(outcome, MaintenanceOutcome::Failed);
+    assert!(
+        detail.starts_with("sample: failed; generations: intact 3, "),
+        "{detail}"
     );
 }
