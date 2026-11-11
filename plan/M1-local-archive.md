@@ -1706,7 +1706,8 @@ local drafts. No network yet.
     **j1b Destination (L):** a validated Backups destination setting
     used by scheduled and requested generations; default to the data
     root's `backups/` only when unset, never on an unavailable external
-    volume. **j2 FFI listing (L):** generation and retained-path DTOs and queries,
+    volume. Independent of j1, this may run in parallel with it.
+    **j2 FFI listing (L):** generation and retained-path DTOs and queries,
     generated bindings, bridge types and native endpoint tests.
     **j3 FFI backup (L):** keyed start and its copy's completion handle,
     with cancellation/lifetime tests and a native endpoint proof.

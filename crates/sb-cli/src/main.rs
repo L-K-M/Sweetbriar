@@ -337,7 +337,8 @@ fn run(invocation: Invocation) -> Result<(), u8> {
 
 /// `settings get`: every setting as `key=value` lines, or the one
 /// asked for — a key the registry doesn't hold is `InvalidInput`, as
-/// for `set`.
+/// for `set`. Values use debug escapes without surrounding quotes so
+/// path control characters never create extra lines or terminal actions.
 fn get(core: &Core, key: Option<&str>) -> Result<(), u8> {
     let settings = match block_on(core.settings()) {
         Ok(settings) => settings,
@@ -345,7 +346,7 @@ fn get(core: &Core, key: Option<&str>) -> Result<(), u8> {
     };
     if let Some(wanted) = key {
         match settings.iter().find(|setting| setting.key == wanted) {
-            Some(setting) => println!("{}={}", setting.key, setting.value),
+            Some(setting) => println!("{}={}", setting.key, setting.value.escape_debug()),
             None => {
                 return failed(CoreError::InvalidInput {
                     field: "key".to_owned(),
@@ -355,7 +356,7 @@ fn get(core: &Core, key: Option<&str>) -> Result<(), u8> {
         }
     } else {
         for setting in &settings {
-            println!("{}={}", setting.key, setting.value);
+            println!("{}={}", setting.key, setting.value.escape_debug());
         }
     }
     Ok(())

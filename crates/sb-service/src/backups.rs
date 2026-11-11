@@ -165,7 +165,8 @@ impl Core {
     }
 
     /// `start_backup()` (spec/07): take a backup generation now, in
-    /// the data root's `backups/`. It answers once the generation's
+    /// configured destination (the data root's `backups/` by default).
+    /// It answers once the generation's
     /// snapshot is taken; the copy goes on in the core, and
     /// [`BackupCopy::finished`] waits for it.
     ///

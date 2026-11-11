@@ -63,10 +63,11 @@ pub use sb_types::time::{Clock, Timestamp};
 pub use rusqlite::Transaction;
 
 pub use backups::{
-    BackupDestination, BackupGeneration, BackupGenerationState, BackupImageInspection,
-    BackupReceipt, BackupSnapshot, FAILED_GENERATIONS_LISTED, GenerationCheck, GenerationVerdict,
-    GenerationVerification, PreparedRestoreStage, QualifiedStage, RestoreMetadata, START_BACKUP,
-    START_RESTORE, StartedBackup, VerifiedExternalBackup,
+    BACKUP_DESTINATION_SETTING, BackupDestination, BackupGeneration, BackupGenerationState,
+    BackupImageInspection, BackupReceipt, BackupSnapshot, FAILED_GENERATIONS_LISTED,
+    GenerationCheck, GenerationVerdict, GenerationVerification, PreparedRestoreStage,
+    QualifiedStage, RestoreMetadata, START_BACKUP, START_RESTORE, StartedBackup,
+    VerifiedExternalBackup, valid_backup_destination,
 };
 pub use error::StoreError;
 pub use export_metadata::{ExportMetadata, export_occurrence_metadata};

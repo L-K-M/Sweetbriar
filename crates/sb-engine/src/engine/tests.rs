@@ -21,10 +21,13 @@ fn scratch_engine(label: &str) -> (ScratchDir, Engine) {
 fn settings_default_to_the_registry() {
     let (_scratch, engine) = scratch_engine("engine-defaults");
     let settings = sb_test_support::block_on(engine.settings()).unwrap();
-    assert_eq!(settings.len(), 1, "the pilot's registry holds one key");
+    assert_eq!(settings.len(), 2, "the pilot's registry holds two keys");
     assert_eq!(settings[0].key(), "appearance.compose_cue");
     assert_eq!(settings[0].value(), "standard");
     assert!(settings[0].is_default());
+    assert_eq!(settings[1].key(), "backups.destination");
+    assert_eq!(settings[1].value(), "");
+    assert!(settings[1].is_default());
 }
 
 /// An unknown key and an unknown value are `InvalidInput`, each naming

@@ -6,6 +6,7 @@
 
 mod attachments;
 mod checked;
+mod destination;
 mod external;
 mod frozen_scratch;
 mod home;
@@ -26,6 +27,7 @@ mod reconciliation;
 mod recorded;
 mod references;
 pub use checked::{GenerationCheck, GenerationVerdict};
+pub use destination::{BACKUP_DESTINATION_SETTING, valid_backup_destination};
 pub use external::VerifiedExternalBackup;
 pub use image::BackupImageInspection;
 pub use listing::{
@@ -135,6 +137,9 @@ const _: () = assert!(PIN_BATCH * PIN_IMAGE_BYTES <= crate::imports::MAX_IMPORT_
 
 /// Where a generation's directory goes (spec/03).
 pub enum BackupDestination {
+    /// Resolve `backups.destination` after replay. A non-default directory
+    /// must already exist; never create a missing chosen volume.
+    Configured,
     /// The data root's `backups/` — the pilot's default.
     DataRoot,
     /// A user-chosen directory holding generation directories;
@@ -617,6 +622,7 @@ impl Backups {
     /// canonicalized so the row's `location` names one spelling.
     fn destination_root(&self, destination: &BackupDestination) -> Result<PathBuf, StoreError> {
         match destination {
+            BackupDestination::Configured => self.configured_destination(),
             BackupDestination::DataRoot => self.ensure_destination(&self.backups_dir),
             BackupDestination::Directory(root) => self.ensure_destination(root),
         }
