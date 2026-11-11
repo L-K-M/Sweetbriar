@@ -108,6 +108,16 @@ async fn Core::shutdown(self);   // flush writer, release the lease
   offers the paths for deliberate manual filesystem removal, with a
   warning that preserved roots can contain the listed backup
   generations; no automatic deletion or stage reuse is authorized.
+- **Native backup listing (M1.8j2):** both listing queries cross FFI
+  with a `CancelToken` as ordinary cancellable queries. The adapter
+  owns generation/state/verification/verdict and retained-path/kind
+  DTOs, maps every field and closed variant, and preserves ordering,
+  optional fields, signed millisecond timestamps and unsigned counts.
+  Paths cross as UTF-8 strings: an unrepresentable path fails the
+  whole answer with `Unavailable`, never a lossy or partial list.
+  Swift's bridge owns equivalent Sendable values; generated core
+  types never cross into app code. Listing inspects no generation or
+  retained entry and authorizes no deletion or restore.
 - **Back up now (M1.8i3):** `start_backup()` is a command. It takes a
   generation in the configured `backups.destination`, or the data
   root's `backups/` when empty/unset (03 "Backup generations"), and

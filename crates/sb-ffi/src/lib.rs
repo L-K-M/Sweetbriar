@@ -22,6 +22,7 @@ mod accounts;
 mod api;
 mod appearance;
 mod backup_copy;
+mod backups;
 mod cancel;
 mod drafts;
 mod error;
@@ -44,6 +45,10 @@ pub use appearance::{
     IdentityAppearance, IdentityAppearanceChange, PaletteColor, palette,
 };
 pub use backup_copy::{BackupCopy, BackupEnd, BackupStarted};
+pub use backups::{
+    BackupGeneration, BackupState, BackupVerdict, BackupVerification, RestoreArtifact,
+    RestoreArtifactKind,
+};
 pub use cancel::CancelToken;
 pub use drafts::{
     AttemptState, ComposeFormat, Draft, DraftAttachment, DraftAttachmentObject,

@@ -1183,6 +1183,18 @@ public protocol CoreProtocol: AnyObject, Sendable {
     func startBackup(token: CancelToken, idempotencyKey: String) async throws  -> BackupStarted
     
     /**
+     * Recorded rows, newest first, with the Service's failed-row bound.
+     * Missing generation directories are still listed. Works read-only.
+     */
+    func listBackups(token: CancelToken) async throws  -> [BackupGeneration]
+    
+    /**
+     * Sorted retained names beside the resolved root. Never follows,
+     * opens, deletes or authorizes reusing an entry. Works read-only.
+     */
+    func listRestoreArtifacts(token: CancelToken) async throws  -> [RestoreArtifact]
+    
+    /**
      * `create_draft(context)` (spec/07 "Commands"): a new `editing`
      * draft under an idempotency key the shell made (`UUID()` in
      * Swift) — a repeated key returns the stored receipt and its
@@ -1715,6 +1727,46 @@ open func startBackup(token: CancelToken, idempotencyKey: String)async throws  -
             completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
             freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
             liftFunc: FfiConverterTypeBackupStarted_lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * Recorded rows, newest first, with the Service's failed-row bound.
+     * Missing generation directories are still listed. Works read-only.
+     */
+open func listBackups(token: CancelToken)async throws  -> [BackupGeneration]  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_list_backups(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterSequenceTypeBackupGeneration.lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * Sorted retained names beside the resolved root. Never follows,
+     * opens, deletes or authorizes reusing an entry. Works read-only.
+     */
+open func listRestoreArtifacts(token: CancelToken)async throws  -> [RestoreArtifact]  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_list_restore_artifacts(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterSequenceTypeRestoreArtifact.lift,
             errorHandler: FfiConverterTypeCoreError_lift
         )
 }
@@ -3496,6 +3548,84 @@ public func FfiConverterTypeAttachmentLease_lower(_ value: AttachmentLease) -> R
 }
 
 
+public struct BackupGeneration: Equatable, Hashable {
+    public var generationId: String
+    public var state: BackupState
+    public var startedAtMs: Int64
+    public var completedAtMs: Int64?
+    public var location: String
+    public var objectCount: UInt64?
+    public var totalBytes: UInt64?
+    public var verification: BackupVerification?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(generationId: String, state: BackupState, startedAtMs: Int64, completedAtMs: Int64?, location: String, objectCount: UInt64?, totalBytes: UInt64?, verification: BackupVerification?) {
+        self.generationId = generationId
+        self.state = state
+        self.startedAtMs = startedAtMs
+        self.completedAtMs = completedAtMs
+        self.location = location
+        self.objectCount = objectCount
+        self.totalBytes = totalBytes
+        self.verification = verification
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension BackupGeneration: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeBackupGeneration: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> BackupGeneration {
+        return
+            try BackupGeneration(
+                generationId: FfiConverterString.read(from: &buf), 
+                state: FfiConverterTypeBackupState.read(from: &buf), 
+                startedAtMs: FfiConverterInt64.read(from: &buf), 
+                completedAtMs: FfiConverterOptionInt64.read(from: &buf), 
+                location: FfiConverterString.read(from: &buf), 
+                objectCount: FfiConverterOptionUInt64.read(from: &buf), 
+                totalBytes: FfiConverterOptionUInt64.read(from: &buf), 
+                verification: FfiConverterOptionTypeBackupVerification.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: BackupGeneration, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.generationId, into: &buf)
+        FfiConverterTypeBackupState.write(value.state, into: &buf)
+        FfiConverterInt64.write(value.startedAtMs, into: &buf)
+        FfiConverterOptionInt64.write(value.completedAtMs, into: &buf)
+        FfiConverterString.write(value.location, into: &buf)
+        FfiConverterOptionUInt64.write(value.objectCount, into: &buf)
+        FfiConverterOptionUInt64.write(value.totalBytes, into: &buf)
+        FfiConverterOptionTypeBackupVerification.write(value.verification, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBackupGeneration_lift(_ buf: RustBuffer) throws -> BackupGeneration {
+    return try FfiConverterTypeBackupGeneration.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBackupGeneration_lower(_ value: BackupGeneration) -> RustBuffer {
+    return FfiConverterTypeBackupGeneration.lower(value)
+}
+
+
 /**
  * A command's receipt and the copy started now; replay returns no copy.
  */
@@ -3554,6 +3684,60 @@ public func FfiConverterTypeBackupStarted_lift(_ buf: RustBuffer) throws -> Back
 #endif
 public func FfiConverterTypeBackupStarted_lower(_ value: BackupStarted) -> RustBuffer {
     return FfiConverterTypeBackupStarted.lower(value)
+}
+
+
+public struct BackupVerification: Equatable, Hashable {
+    public var verdict: BackupVerdict
+    public var checkedAtMs: Int64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(verdict: BackupVerdict, checkedAtMs: Int64) {
+        self.verdict = verdict
+        self.checkedAtMs = checkedAtMs
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension BackupVerification: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeBackupVerification: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> BackupVerification {
+        return
+            try BackupVerification(
+                verdict: FfiConverterTypeBackupVerdict.read(from: &buf), 
+                checkedAtMs: FfiConverterInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: BackupVerification, into buf: inout [UInt8]) {
+        FfiConverterTypeBackupVerdict.write(value.verdict, into: &buf)
+        FfiConverterInt64.write(value.checkedAtMs, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBackupVerification_lift(_ buf: RustBuffer) throws -> BackupVerification {
+    return try FfiConverterTypeBackupVerification.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBackupVerification_lower(_ value: BackupVerification) -> RustBuffer {
+    return FfiConverterTypeBackupVerification.lower(value)
 }
 
 
@@ -6313,6 +6497,63 @@ public func FfiConverterTypeRenderWarning_lower(_ value: RenderWarning) -> RustB
 }
 
 
+/**
+ * A name, not proof of ownership, type, completeness or readiness.
+ */
+public struct RestoreArtifact: Equatable, Hashable {
+    public var path: String
+    public var kind: RestoreArtifactKind
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(path: String, kind: RestoreArtifactKind) {
+        self.path = path
+        self.kind = kind
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension RestoreArtifact: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeRestoreArtifact: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> RestoreArtifact {
+        return
+            try RestoreArtifact(
+                path: FfiConverterString.read(from: &buf), 
+                kind: FfiConverterTypeRestoreArtifactKind.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: RestoreArtifact, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.path, into: &buf)
+        FfiConverterTypeRestoreArtifactKind.write(value.kind, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeRestoreArtifact_lift(_ buf: RustBuffer) throws -> RestoreArtifact {
+    return try FfiConverterTypeRestoreArtifact.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeRestoreArtifact_lower(_ value: RestoreArtifact) -> RustBuffer {
+    return FfiConverterTypeRestoreArtifact.lower(value)
+}
+
+
 public struct SearchRebuildProgress: Equatable, Hashable {
     public var jobId: String
     public var phase: SearchRebuildPhase
@@ -7565,6 +7806,152 @@ public func FfiConverterTypeBackupEnd_lift(_ buf: RustBuffer) throws -> BackupEn
 #endif
 public func FfiConverterTypeBackupEnd_lower(_ value: BackupEnd) -> RustBuffer {
     return FfiConverterTypeBackupEnd.lower(value)
+}
+
+
+
+
+public enum BackupState: Equatable, Hashable {
+    
+    case inProgress
+    case complete
+    case failed
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension BackupState: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeBackupState: FfiConverterRustBuffer {
+    typealias SwiftType = BackupState
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> BackupState {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .inProgress
+        
+        case 2: return .complete
+        
+        case 3: return .failed
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: BackupState, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .inProgress:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .complete:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .failed:
+            writeInt(&buf, Int32(3))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBackupState_lift(_ buf: RustBuffer) throws -> BackupState {
+    return try FfiConverterTypeBackupState.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBackupState_lower(_ value: BackupState) -> RustBuffer {
+    return FfiConverterTypeBackupState.lower(value)
+}
+
+
+
+
+public enum BackupVerdict: Equatable, Hashable {
+    
+    case intact
+    case damaged
+    case missing
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension BackupVerdict: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeBackupVerdict: FfiConverterRustBuffer {
+    typealias SwiftType = BackupVerdict
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> BackupVerdict {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .intact
+        
+        case 2: return .damaged
+        
+        case 3: return .missing
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: BackupVerdict, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .intact:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .damaged:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .missing:
+            writeInt(&buf, Int32(3))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBackupVerdict_lift(_ buf: RustBuffer) throws -> BackupVerdict {
+    return try FfiConverterTypeBackupVerdict.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBackupVerdict_lower(_ value: BackupVerdict) -> RustBuffer {
+    return FfiConverterTypeBackupVerdict.lower(value)
 }
 
 
@@ -9326,6 +9713,72 @@ public func FfiConverterTypeRenderWarningCode_lower(_ value: RenderWarningCode) 
 
 
 
+public enum RestoreArtifactKind: Equatable, Hashable {
+    
+    case preserved
+    case staged
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension RestoreArtifactKind: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeRestoreArtifactKind: FfiConverterRustBuffer {
+    typealias SwiftType = RestoreArtifactKind
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> RestoreArtifactKind {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .preserved
+        
+        case 2: return .staged
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: RestoreArtifactKind, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .preserved:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .staged:
+            writeInt(&buf, Int32(2))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeRestoreArtifactKind_lift(_ buf: RustBuffer) throws -> RestoreArtifactKind {
+    return try FfiConverterTypeRestoreArtifactKind.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeRestoreArtifactKind_lower(_ value: RestoreArtifactKind) -> RustBuffer {
+    return FfiConverterTypeRestoreArtifactKind.lower(value)
+}
+
+
+
+
 public enum SearchIndexState: Equatable, Hashable {
     
     case ready
@@ -10121,6 +10574,30 @@ public func FfiConverterTypeWindowSpec_lower(_ value: WindowSpec) -> RustBuffer 
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionUInt64: FfiConverterRustBuffer {
+    typealias SwiftType = UInt64?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterUInt64.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterUInt64.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionInt64: FfiConverterRustBuffer {
     typealias SwiftType = Int64?
 
@@ -10185,6 +10662,30 @@ fileprivate struct FfiConverterOptionTypeBackupCopy: FfiConverterRustBuffer {
         switch try readInt(&buf) as Int8 {
         case 0: return nil
         case 1: return try FfiConverterTypeBackupCopy.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionTypeBackupVerification: FfiConverterRustBuffer {
+    typealias SwiftType = BackupVerification?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeBackupVerification.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeBackupVerification.read(from: &buf)
         default: throw UniffiInternalError.unexpectedOptionalTag
         }
     }
@@ -10501,6 +11002,31 @@ fileprivate struct FfiConverterSequenceTypeAccountAppearance: FfiConverterRustBu
         seq.reserveCapacity(Int(len))
         for _ in 0 ..< len {
             seq.append(try FfiConverterTypeAccountAppearance.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeBackupGeneration: FfiConverterRustBuffer {
+    typealias SwiftType = [BackupGeneration]
+
+    public static func write(_ value: [BackupGeneration], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeBackupGeneration.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [BackupGeneration] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [BackupGeneration]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeBackupGeneration.read(from: &buf))
         }
         return seq
     }
@@ -10859,6 +11385,31 @@ fileprivate struct FfiConverterSequenceTypeRenderWarning: FfiConverterRustBuffer
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeRestoreArtifact: FfiConverterRustBuffer {
+    typealias SwiftType = [RestoreArtifact]
+
+    public static func write(_ value: [RestoreArtifact], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeRestoreArtifact.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [RestoreArtifact] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [RestoreArtifact]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeRestoreArtifact.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeSetting: FfiConverterRustBuffer {
     typealias SwiftType = [Setting]
 
@@ -11120,6 +11671,12 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_core_start_backup() != 41231) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_list_backups() != 36083) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_list_restore_artifacts() != 53957) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_core_create_draft() != 12088) {
