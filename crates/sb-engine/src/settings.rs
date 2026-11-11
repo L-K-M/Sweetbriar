@@ -4,7 +4,10 @@
 //! idempotency key, spec/07) and `settings()` (a query). Values are
 //! strings; `value_json` is the JSON string literal.
 
-use sb_resources::{Receipt, WritePriority, read_all, run_once, upsert};
+use sb_resources::{
+    BACKUP_DESTINATION_SETTING, Receipt, WritePriority, read_all, run_once, upsert,
+    valid_backup_destination,
+};
 
 use crate::engine::validate_idempotency_key;
 use crate::{Engine, EngineError};
@@ -12,20 +15,53 @@ use crate::{Engine, EngineError};
 /// `set_setting`'s name in `command_receipts` (spec/07).
 const SET_SETTING: &str = "set_setting";
 
+#[cfg(test)]
+mod tests;
+
 /// One registered setting (spec/02): its key, its values and its
 /// default.
 struct RegisteredSetting {
     key: &'static str,
-    values: &'static [&'static str],
+    values: Values,
     default: &'static str,
 }
 
+enum Values {
+    Choices(&'static [&'static str]),
+    BackupDirectory,
+}
+
+impl Values {
+    fn accepts(&self, value: &str) -> bool {
+        match self {
+            Self::Choices(values) => values.contains(&value),
+            Self::BackupDirectory => valid_backup_destination(value),
+        }
+    }
+
+    fn expected(&self) -> String {
+        match self {
+            Self::Choices(values) => format!("one of {}", values.join(", ")),
+            Self::BackupDirectory => {
+                "an absolute directory path without NUL, or empty for the default".into()
+            }
+        }
+    }
+}
+
 /// The pilot's settings registry (spec/02), which later steps extend.
-const REGISTRY: &[RegisteredSetting] = &[RegisteredSetting {
-    key: "appearance.compose_cue",
-    values: &["standard", "strong"],
-    default: "standard",
-}];
+const REGISTRY: &[RegisteredSetting] = &[
+    RegisteredSetting {
+        key: "appearance.compose_cue",
+        values: Values::Choices(&["standard", "strong"]),
+        default: "standard",
+    },
+    RegisteredSetting {
+        key: BACKUP_DESTINATION_SETTING,
+        values: Values::BackupDirectory,
+        default: "",
+    },
+];
 
 /// The setting a key names, or `None` when the registry holds no such
 /// key.
@@ -36,7 +72,7 @@ fn registered(key: &str) -> Option<&'static RegisteredSetting> {
 /// A value's canonical JSON (spec/02): the pilot's settings values are
 /// strings, so the JSON string literal.
 fn value_json(value: &str) -> String {
-    format!("\"{value}\"")
+    serde_json::Value::String(value.to_owned()).to_string()
 }
 
 /// One setting as the engine reports it (spec/02): the effective value
@@ -94,12 +130,12 @@ impl Engine {
         let setting = registered(key).ok_or_else(|| {
             EngineError::invalid_input("key", format!("unknown setting key '{key}'"))
         })?;
-        if !setting.values.contains(&value) {
+        if !setting.values.accepts(value) {
             return Err(EngineError::invalid_input(
                 "value",
                 format!(
-                    "'{value}' is not a value of '{key}'; expected one of {}",
-                    setting.values.join(", ")
+                    "'{value}' is not a value of '{key}'; expected {}",
+                    setting.values.expected()
                 ),
             ));
         }
@@ -139,23 +175,25 @@ impl Engine {
 fn settings_from(rows: Vec<sb_resources::StoredSetting>) -> Result<Vec<Setting>, EngineError> {
     REGISTRY
         .iter()
-        .map(|setting| match rows.iter().find(|row| row.key() == setting.key) {
-            None => Ok(Setting::new(setting.key, setting.default, true)),
-            Some(row) => match setting
-                .values
-                .iter()
-                .find(|value| value_json(value) == row.value_json())
-            {
-                // The stored literal equals the default exactly when
-                // the setting holds the default value.
-                Some(value) => Ok(Setting::new(setting.key, value, *value == setting.default)),
-                None => Err(EngineError::corrupt(format!(
-                    "setting '{}' holds {}, which none of its registered values ({}) serialize to",
-                    setting.key,
-                    row.value_json(),
-                    setting.values.join(", ")
-                ))),
+        .map(
+            |setting| match rows.iter().find(|row| row.key() == setting.key) {
+                None => Ok(Setting::new(setting.key, setting.default, true)),
+                Some(row) => {
+                    let corrupt = || {
+                        EngineError::corrupt(format!(
+                            "setting '{}' is not canonical JSON for {}",
+                            setting.key,
+                            setting.values.expected()
+                        ))
+                    };
+                    let value: String =
+                        serde_json::from_str(row.value_json()).map_err(|_| corrupt())?;
+                    if !setting.values.accepts(&value) || value_json(&value) != row.value_json() {
+                        return Err(corrupt());
+                    }
+                    Ok(Setting::new(setting.key, &value, value == setting.default))
+                }
             },
-        })
+        )
         .collect()
 }

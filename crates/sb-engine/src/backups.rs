@@ -157,7 +157,7 @@ fn copy_end(
 
 impl Engine {
     /// `start_backup()` (spec/07): take a backup generation now, in the
-    /// data root's `backups/`.
+    /// configured destination, defaulting to the data root's `backups/`.
     ///
     /// It answers once the generation's snapshot is taken, with the
     /// receipt that committed with its row. The copy goes on in the
@@ -185,7 +185,7 @@ impl Engine {
             let copying = copying;
             let started = worker
                 .blocking(move |resources| {
-                    resources.start_backup(BackupDestination::DataRoot, &key)
+                    resources.start_backup(BackupDestination::Configured, &key)
                 })
                 .await;
             let (receipt, snapshot) = match started {
@@ -236,6 +236,13 @@ impl Engine {
         answered
             .await
             .map_err(|_| EngineError::internal("a command ended without an answer"))?
+    }
+
+    /// Retained restore names beside the resolved root (spec/07; M1.8j1).
+    /// No entry is opened or reused. A read-only engine answers too.
+    pub async fn list_restore_artifacts(&self) -> Result<Vec<crate::RestoreArtifact>, EngineError> {
+        self.read_through(|resources| resources.restore_artifacts())
+            .await
     }
 
     /// `list_backups()` (spec/07): the recorded generations, newest

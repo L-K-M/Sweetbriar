@@ -95,9 +95,23 @@ async fn Core::shutdown(self);   // flush writer, release the lease
   so one that went missing shows in the weekly check's verdict, or
   when a restore verifies the generation it was given. A read-only
   core answers like any other.
+- **Retained restore paths (M1.8j1):** `list_restore_artifacts()` is
+  a query for Settings → Backups, including on a read-only core. It
+  enumerates only direct entries beside the resolved data root whose
+  names are exactly `<root>.preserved-<canonical UUID>` or
+  `<root>.restoring-<canonical UUID>`. Each answer carries its path
+  and kind (`Preserved` or `Staged`), sorted by path. No entry is
+  opened or followed: a name is evidence to inspect, not proof of a
+  directory, ownership, completeness or readiness to restore. A stage
+  may still be in use. Results can change after enumeration. A failed
+  enumeration answers `Unavailable`, never a partial list. The shell
+  offers the paths for deliberate manual filesystem removal, with a
+  warning that preserved roots can contain the listed backup
+  generations; no automatic deletion or stage reuse is authorized.
 - **Back up now (M1.8i3):** `start_backup()` is a command. It takes a
-  generation in the data root's `backups/` (03 "Backup generations")
-  and answers once its snapshot is taken, with the receipt
+  generation in the configured `backups.destination`, or the data
+  root's `backups/` when empty/unset (03 "Backup generations"), and
+  answers once its snapshot is taken, with the receipt
   `{"generation_id":...}` that committed with the generation's row,
   the generation's id, and a handle on its copy.
   - The copy goes on in the core as counted work. A caller that stops
@@ -123,6 +137,15 @@ async fn Core::shutdown(self);   // flush writer, release the lease
   - `Conflict` while another backup, a generation check or a restore
     holds the backup operation. `Corrupt`, naming the finding, on a
     read-only core.
+  - `sb-cli settings get` keeps its `key=value` display one line per
+    setting: values use Rust debug escapes for control characters,
+    quotes and backslashes, without surrounding quotes. Existing enum
+    values print unchanged. `settings set` takes the actual value,
+    not this display encoding.
+  - The selected destination must exist and be a directory. An absent
+    or unmounted one is `Unavailable`; neither missing ancestors nor a
+    fallback generation in the data root is created. A repeated key
+    still replays before checking the current setting or destination.
   - A generation taken here is one the hourly backup doesn't take
     again: that one runs while there were changes since the newest
     complete generation.
@@ -165,8 +188,8 @@ async fn Core::shutdown(self);   // flush writer, release the lease
   - A prepared restore holds the backup operation until it is swapped
     in or dropped. Dropping it deletes nothing, and so does a
     cancelled or failed preparation: what was staged stays beside the
-    data root and is never used again (03). Listing and removing
-    those is M1.8j's.
+    data root and is never used again (03). M1.8j lists those paths
+    for inspection and deliberate manual removal.
   - It works on a read-only core, where a restore is the way out.
 - **Restoring (M1.8i5):** `restore(prepared)` is the command half of
   `start_restore`. It swaps a prepared restore in as the core's store

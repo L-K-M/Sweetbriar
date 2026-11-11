@@ -32,6 +32,7 @@ pub mod query;
 mod readers;
 mod receipts;
 pub mod repair;
+mod restore_artifacts;
 mod restore_pending;
 mod schema;
 pub mod seen;
@@ -62,10 +63,11 @@ pub use sb_types::time::{Clock, Timestamp};
 pub use rusqlite::Transaction;
 
 pub use backups::{
-    BackupDestination, BackupGeneration, BackupGenerationState, BackupImageInspection,
-    BackupReceipt, BackupSnapshot, FAILED_GENERATIONS_LISTED, GenerationCheck, GenerationVerdict,
-    GenerationVerification, PreparedRestoreStage, QualifiedStage, RestoreMetadata, START_BACKUP,
-    START_RESTORE, StartedBackup, VerifiedExternalBackup,
+    BACKUP_DESTINATION_SETTING, BackupDestination, BackupGeneration, BackupGenerationState,
+    BackupImageInspection, BackupReceipt, BackupSnapshot, FAILED_GENERATIONS_LISTED,
+    GenerationCheck, GenerationVerdict, GenerationVerification, PreparedRestoreStage,
+    QualifiedStage, RestoreMetadata, START_BACKUP, START_RESTORE, StartedBackup,
+    VerifiedExternalBackup, valid_backup_destination,
 };
 pub use error::StoreError;
 pub use export_metadata::{ExportMetadata, export_occurrence_metadata};
@@ -83,6 +85,7 @@ pub use readers::{ReadStop, Scoped};
 pub use receipts::{
     Receipt, encode_job_receipt, receipt_generation_id, receipt_job_id, replay, run_once,
 };
+pub use restore_artifacts::{RestoreArtifact, RestoreArtifactKind};
 pub use settings::{StoredSetting, read_all, upsert};
 pub use source_snapshots::{ImportSourceCapture, ImportSourceSnapshot};
 pub use store::SwapRestoreError;

@@ -477,7 +477,7 @@ fn back_up(
             "stopped before the snapshot".to_owned(),
         )
     } else {
-        match resources.backup_snapshot(BackupDestination::DataRoot) {
+        match resources.backup_snapshot(BackupDestination::Configured) {
             Err(error) => snapshot_outcome(error),
             Ok(snapshot) => {
                 #[cfg(test)]

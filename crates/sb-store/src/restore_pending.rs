@@ -315,7 +315,7 @@ fn parent(paths: &StorePaths) -> Result<&Path, StoreError> {
 
 /// The data root's final name; restore requires UTF-8 without control
 /// characters, so the marker's lines round-trip.
-fn root_name(data_root: &Path) -> Result<&str, StoreError> {
+pub(super) fn root_name(data_root: &Path) -> Result<&str, StoreError> {
     data_root
         .file_name()
         .and_then(OsStr::to_str)

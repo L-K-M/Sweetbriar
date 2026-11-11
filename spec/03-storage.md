@@ -823,8 +823,15 @@ the rows, so a restart or a restored store picks it up:
   cleanup); otherwise nothing is recorded and it is looked at again a
   minute later, so after an idle hour a change is backed up within a
   minute.
-  Generations go to the data root's `backups/` until a Backups setting
-  names another destination (M1.8j).
+  Generations use `backups.destination` (M1.8j1b): empty or unset means
+  the data root's `backups/`; otherwise the configured directory must
+  already exist when a fresh generation starts. An absent/unmounted or
+  non-directory destination is `Unavailable`: never create its missing
+  ancestors or fall back to the data root. A selected path is resolved
+  to its canonical location for the generation's row. An explicit
+  lower-level `Directory` destination may still create ancestors; the
+  configured destination never does. Back up now uses the same setting.
+  A spent command key replays before this lookup or filesystem check.
 - GC runs with the default grace period.
 - **The weekly verification (M1.8h4c)** reads the live sample ("Reads
   and verification"), then checks each complete generation the UTC

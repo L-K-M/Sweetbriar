@@ -1698,11 +1698,34 @@ local drafts. No network yet.
   - **M1.8i Backup/restore Service and CLI (L):** owned Service DTOs for
     generations, `start_backup`, `list_backups`, `start_restore` and
     `sb-cli backup|restore`, each with its native endpoint or CLI proof.
-  - **M1.8j3 FFI backup (L):** keyed start plus a Rust-owned copy
-    handle whose completion wait is cancellable without losing its
-    eventual answer. Generated bindings, bridge DTOs and native SDK
-    proofs accompany it. This uses merged i3 and may run in parallel
-    with j1's retained paths, j1b's destination setting and j2's listing.
+  - **M1.8j split before implementation (2026-11-11):** keep every
+    acceptance below, with owner-data qualification recorded separately.
+    **j1 Retained paths (M):** a Store/Resources/Engine/Service query
+    lists preserved roots and stages beside the resolved data root,
+    without opening their contents or claiming they can be reused.
+    **j1b Destination (L):** a validated Backups destination setting
+    used by scheduled and requested generations; default to the data
+    root's `backups/` only when unset, never on an unavailable external
+    volume. Independent of j1, this may run in parallel with it.
+    **j2 FFI listing (L):** generation and retained-path DTOs and queries,
+    generated bindings, bridge types and native endpoint tests.
+    **j3 FFI backup (L):** keyed start and its Rust-owned copy handle,
+    with a cancellable wait that retains its answer. Cancellation/lifetime
+    tests, generated bindings, bridge DTOs and native endpoint proof
+    accompany it. This uses merged i3 and may run in parallel with
+    j1, j1b and j2.
+    **j4 FFI restore (L):** prepare under the shared core's read lock,
+    swap under its write lock, cancellation by flag while awaiting to
+    the end, explicit receipt/refusal/closed-core results, and a native
+    endpoint proof. **j5 Backups model (L):** bridge-only state and
+    commands, confirmation, cancellation and error/recovery tests.
+    **j6 Settings and health (L):** SwiftUI Backups settings in the
+    AppKit shell, the read-only finding/banner and restore action,
+    plus invalidation of open content after a swap.
+    **j7 Native acceptance (L):** synthetic UI backup/restore, retained
+    paths, error/cancellation and read-only recovery proof. Retained
+    paths are available for deliberate manual filesystem removal; no
+    restore or settings refresh automatically deletes evidence.
   - **M1.8j The Backups UI (L):** Settings → Backups: list generations,
     back up now, restore and the preserved data roots, on the Service
     API.

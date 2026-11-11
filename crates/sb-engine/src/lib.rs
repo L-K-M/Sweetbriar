@@ -84,6 +84,7 @@ pub use sb_resources::{
     SearchRebuildProgress,
 };
 pub use sb_resources::{ExportFormat, ExportJobState};
+pub use sb_resources::{RestoreArtifact, RestoreArtifactKind};
 pub use search::SearchScope;
 pub use settings::Setting;
 pub use windows::{
