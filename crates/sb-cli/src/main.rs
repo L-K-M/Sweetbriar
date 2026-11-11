@@ -30,7 +30,7 @@ fn main() -> ExitCode {
     let invocation = match parse(std::env::args().skip(1)) {
         Ok(invocation) => invocation,
         Err(problem) => {
-            eprintln!("sb-cli: {problem}");
+            eprintln!("sb-cli: {}", problem.escape_debug());
             eprint!("\n{USAGE}");
             return ExitCode::from(USAGE_EXIT);
         }
@@ -814,7 +814,8 @@ fn failed(err: CoreError) -> Result<(), u8> {
 }
 
 fn error_exit(err: CoreError) -> u8 {
-    eprintln!("sb-cli: {err}");
+    // Escape at the terminal boundary, not in shared Service diagnostics.
+    eprintln!("sb-cli: {}", err.to_string().escape_debug());
     ERROR_EXIT
 }
 

@@ -105,6 +105,32 @@ fn destination_settings_are_escaped_display_lines_not_terminal_controls() {
 }
 
 #[test]
+fn rejected_settings_arguments_cannot_inject_terminal_controls() {
+    let (_scratch, root) = scratch("cli-setting-error-display");
+    let hostile = "relative \"quoted\"\\ café\nforged\r\t\u{1b}[2J";
+    let cases: [(&[&str], i32); 4] = [
+        (&["settings", "set", "backups.destination", hostile], 1),
+        (&["settings", "set", hostile, "standard"], 1),
+        (&["settings", "get", hostile], 1),
+        (&["settings", hostile], 2),
+    ];
+    for (args, exit) in cases {
+        let out = cli(&root, args);
+        let diagnostic = stderr(&out);
+        assert_eq!(out.status.code(), Some(exit), "{args:?}: {diagnostic:?}");
+        assert!(out.stdout.is_empty());
+        for control in ['\r', '\t', '\u{1b}'] {
+            assert!(!diagnostic.contains(control), "{args:?}: {diagnostic:?}");
+        }
+        assert!(!diagnostic.contains("\nforged"), "{args:?}: {diagnostic:?}");
+        assert!(
+            diagnostic.contains(&hostile.escape_debug().to_string()),
+            "{args:?}: {diagnostic:?}"
+        );
+    }
+}
+
+#[test]
 fn backup_uses_the_configured_directory_across_cli_processes() {
     let (scratch, root) = scratch("cli-destination-backup");
     let parent = std::fs::canonicalize(scratch.path()).unwrap();
