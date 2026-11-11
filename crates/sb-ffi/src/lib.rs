@@ -21,6 +21,7 @@
 mod accounts;
 mod api;
 mod appearance;
+mod backups;
 mod cancel;
 mod drafts;
 mod error;
@@ -41,6 +42,10 @@ pub use appearance::{
     AccountAppearance, AccountAppearanceChange, AccountColor, Appearance, AppearanceAssignment,
     AppearanceEvent, AppearanceSubscription, AppearanceTokens, AppearanceVariant,
     IdentityAppearance, IdentityAppearanceChange, PaletteColor, palette,
+};
+pub use backups::{
+    BackupGeneration, BackupState, BackupVerdict, BackupVerification, RestoreArtifact,
+    RestoreArtifactKind,
 };
 pub use cancel::CancelToken;
 pub use drafts::{

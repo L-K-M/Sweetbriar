@@ -58,6 +58,24 @@ public final class CoreBridge: Sendable {
         )
     }
 
+    /// Stored backup rows, including generations whose directories went missing.
+    public func listBackups() async throws -> [BackupGeneration] {
+        let token = SweetbriarCore.CancelToken()
+        let values = try await Self.withCancellation(token: token) {
+            try await self.core.listBackups(token: token)
+        }
+        return values.map(BackupGeneration.init)
+    }
+
+    /// Retained names only, not permission to remove or reuse an entry.
+    public func listRestoreArtifacts() async throws -> [RestoreArtifact] {
+        let token = SweetbriarCore.CancelToken()
+        let values = try await Self.withCancellation(token: token) {
+            try await self.core.listRestoreArtifacts(token: token)
+        }
+        return values.map(RestoreArtifact.init)
+    }
+
     /// Scoped coverage stays available while Search is resetting or requeued.
     public func coverage(scope: SearchScope) async throws -> SearchCoverage {
         let token = SweetbriarCore.CancelToken()
