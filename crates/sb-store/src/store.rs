@@ -192,8 +192,22 @@ impl Store {
     /// changed the archive's data since the newest complete
     /// generation's snapshot, or there is no complete generation. The
     /// store's own bookkeeping (backups, GC, close) never counts.
+    ///
+    /// One is owed too while an interrupted generation waits for its
+    /// cleanup, which only the next generation does: a stopped copy on
+    /// an archive nothing changes would otherwise freeze GC for good.
+    /// A generation this process is still copying is not interrupted.
     pub fn backup_due(&self) -> Result<bool, StoreError> {
-        self.read(|tx| crate::changes::backup_due(tx))
+        // Asked before the read takes its snapshot. A generation that
+        // starts in between is then taken for interrupted. That answer
+        // is wrong for as long as its copy runs, and the backup it
+        // starts meanwhile finds the operation held (`Conflict`). The
+        // other order would be wrong every time a generation completes
+        // in between, and each time start one nothing owed.
+        let copying = self.backups.generation_running();
+        self.read(|tx| {
+            Ok(crate::changes::backup_due(tx)? || (!copying && crate::backups::cleanup_owed(tx)?))
+        })
     }
 
     /// The weekly live sample (spec/03 "Reads and verification"): the
@@ -362,6 +376,29 @@ impl Store {
             ));
         }
         self.backups.snapshot(destination)
+    }
+
+    /// [`Store::backup_snapshot`] as a command under `idempotency_key`
+    /// (spec/07 `start_backup`): the key's receipt,
+    /// `{"generation_id":...}`, commits in the transaction that inserts
+    /// the generation's `in_progress` row. A key that started a
+    /// generation before answers that receipt and does nothing else,
+    /// while that generation is still being copied too; a key spent on
+    /// another command is `Conflict`. A latched store refuses before
+    /// it looks at the key. A failure after the row commits
+    /// leaves the receipt naming a generation the next one's recovery
+    /// marks `failed`. Blocking, like the snapshot.
+    pub fn start_backup(
+        &self,
+        destination: crate::backups::BackupDestination,
+        idempotency_key: &str,
+    ) -> Result<crate::backups::StartedBackup, StoreError> {
+        if self.writer.is_writer_thread() {
+            return Err(StoreError::internal(
+                "the writer thread cannot back up through its own queue",
+            ));
+        }
+        self.backups.start(destination, idempotency_key)
     }
 
     /// Publish a pinned snapshot as a verified, durable backup generation.

@@ -410,6 +410,51 @@ fn a_generation_in_progress_blocks_both_jobs() {
     block_on(engine.shutdown()).unwrap();
 }
 
+/// A copy that stopped on an archive nothing changes leaves its
+/// generation in progress, which freezes GC. The store then owes a
+/// generation for the cleanup alone (M1.8i2): the next hourly look
+/// takes it, and GC runs again.
+#[test]
+fn an_interrupted_generation_is_cleaned_up_without_a_change() {
+    let scratch = ScratchDir::new("maintenance-interrupted");
+    let (engine, clock) = scheduled(scratch.path(), MONDAY);
+    advance(&engine, &clock, SETTLE);
+    assert_eq!(count(&engine, COMPLETE), 1);
+    let first = started_of(&engine, MaintenanceJob::Backup);
+
+    // While the copy runs nothing is owed: the hour's look records no
+    // run, blocked or otherwise.
+    let copying = engine
+        .resources()
+        .backup_snapshot(BackupDestination::DataRoot)
+        .unwrap();
+    advance(&engine, &clock, BACKUP_PERIOD);
+    assert_eq!(started_of(&engine, MaintenanceJob::Backup), first);
+    assert_eq!(count(&engine, GENERATIONS), 2);
+
+    drop(copying);
+    assert!(engine.resources().backup_due().unwrap());
+    advance(&engine, &clock, POLL);
+    assert_eq!(
+        outcome_of(&engine, MaintenanceJob::Backup),
+        Some(MaintenanceOutcome::Complete)
+    );
+    assert_eq!(
+        started_of(&engine, MaintenanceJob::Backup),
+        first + ms(BACKUP_PERIOD) + ms(POLL)
+    );
+    assert_eq!(count(&engine, FAILED), 1);
+    assert_eq!(count(&engine, COMPLETE), 2);
+    assert!(!engine.resources().backup_due().unwrap());
+
+    advance(&engine, &clock, GC_PERIOD);
+    assert_eq!(
+        outcome_of(&engine, MaintenanceJob::Gc),
+        Some(MaintenanceOutcome::Complete)
+    );
+    block_on(engine.shutdown()).unwrap();
+}
+
 // --- the weekly verification (M1.8h4c) ---
 
 /// The verification's recorded end.

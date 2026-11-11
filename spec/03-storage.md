@@ -686,7 +686,16 @@ backups/<generation-id>/
 
 **Procedure:**
 1. Insert a `backup_generations` row (`in_progress`). GC stops for the
-   duration.
+   duration. A generation a command starts (07 `start_backup`) commits
+   the command's receipt, `{"generation_id":...}`, in this transaction:
+   the generation and the answer that names it exist together or not
+   at all. A key that started a generation answers that receipt before
+   anything else is done, recovery and retention included, and while
+   that generation is still being copied too. The key is asked again
+   when the backup operation turns out to be held, and inside the
+   commit. A latched store refuses before it looks at the key, like
+   every command there. A failure after this step leaves the receipt
+   naming a generation the next run marks `failed`.
 2. Take a snapshot of the database with the online backup API.
 3. From the snapshot, list every referenced object. Insert
    `object_pins(backup_in_progress)` for each, so nothing referenced can
@@ -731,6 +740,12 @@ backups/<generation-id>/
   bookkeeping (backups, retention, GC, reservations, close) never
   counts, so backing up, collecting garbage or restarting never makes
   a generation due by itself (02 "Backup change counters").
+- A generation is owed too while an interrupted one waits for its
+  cleanup: a row left `in_progress` that this process is not copying,
+  or a failed one whose removal stopped part way. Only the next run
+  cleans up. Until it does an `in_progress` row freezes GC, and either
+  one's pins hold their objects. A copy stopped on an archive nothing
+  changes would otherwise wait for a change that never comes.
 - **Retention:** keep the union of the newest complete generation in each
   of the last 24 occupied UTC hour buckets, 7 occupied UTC day buckets,
   and 4 occupied UTC week buckets (weeks start Monday). Break timestamp
@@ -799,9 +814,11 @@ the rows, so a restart or a restored store picks it up:
   A job that never ran, or whose last run was interrupted or
   cancelled, is due at once. A start in the future (a clock moved
   back) counts from now.
-- A due backup runs only while there were changes (`backup_due`);
-  otherwise nothing is recorded and it is looked at again a minute
-  later, so after an idle hour a change is backed up within a minute.
+- A due backup runs only while a generation is owed (`backup_due`:
+  there were changes, or an interrupted generation waits for its
+  cleanup); otherwise nothing is recorded and it is looked at again a
+  minute later, so after an idle hour a change is backed up within a
+  minute.
   Generations go to the data root's `backups/` until a Backups setting
   names another destination (M1.8j).
 - GC runs with the default grace period.

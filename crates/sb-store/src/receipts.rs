@@ -38,6 +38,30 @@ pub fn receipt_job_id(receipt: &Receipt) -> Result<String, StoreError> {
     }
 }
 
+/// A started backup's receipt body (spec/07 `start_backup`):
+/// `{"generation_id":"<id>"}`, the generation the command's key
+/// started.
+pub(crate) fn encode_generation_receipt(generation_id: &str) -> String {
+    let mut body = serde_json::Map::new();
+    body.insert("generation_id".to_owned(), generation_id.into());
+    serde_json::Value::Object(body).to_string()
+}
+
+/// The generation a stored `start_backup` receipt names. A replayed
+/// command answers this one, never a new generation. Malformed stored
+/// JSON, or a `generation_id` that is missing, empty or not a string,
+/// is `Corrupt`.
+pub fn receipt_generation_id(receipt: &Receipt) -> Result<String, StoreError> {
+    let parsed: serde_json::Value = serde_json::from_str(receipt.result_json())
+        .map_err(|_| StoreError::corrupt("a stored command receipt is not JSON"))?;
+    match parsed["generation_id"].as_str() {
+        Some(id) if !id.is_empty() => Ok(id.to_owned()),
+        _ => Err(StoreError::corrupt(
+            "a stored command receipt names no backup generation",
+        )),
+    }
+}
+
 /// The recorded outcome of one command (spec/02): what ran, what it
 /// answered, and when. A repeated idempotency key returns this stored
 /// receipt without running anything.

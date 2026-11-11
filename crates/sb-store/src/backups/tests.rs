@@ -4278,6 +4278,7 @@ fn verifier_image_crash_cuts_recover_owned_scratch() {
 
 mod changes;
 mod clones;
+mod keyed;
 
 mod stage_tests {
     mod bindings;
