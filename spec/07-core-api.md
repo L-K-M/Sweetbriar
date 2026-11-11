@@ -96,8 +96,9 @@ async fn Core::shutdown(self);   // flush writer, release the lease
   when a restore verifies the generation it was given. A read-only
   core answers like any other.
 - **Back up now (M1.8i3):** `start_backup()` is a command. It takes a
-  generation in the data root's `backups/` (03 "Backup generations")
-  and answers once its snapshot is taken, with the receipt
+  generation in the configured `backups.destination`, or the data
+  root's `backups/` when empty/unset (03 "Backup generations"), and
+  answers once its snapshot is taken, with the receipt
   `{"generation_id":...}` that committed with the generation's row,
   the generation's id, and a handle on its copy.
   - The copy goes on in the core as counted work. A caller that stops
@@ -123,6 +124,10 @@ async fn Core::shutdown(self);   // flush writer, release the lease
   - `Conflict` while another backup, a generation check or a restore
     holds the backup operation. `Corrupt`, naming the finding, on a
     read-only core.
+  - The selected destination must exist and be a directory. An absent
+    or unmounted one is `Unavailable`; neither missing ancestors nor a
+    fallback generation in the data root is created. A repeated key
+    still replays before checking the current setting or destination.
   - A generation taken here is one the hourly backup doesn't take
     again: that one runs while there were changes since the newest
     complete generation.

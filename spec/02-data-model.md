@@ -1187,6 +1187,14 @@ extend:
 | Key | Values | Default |
 |---|---|---|
 | `appearance.compose_cue` | `standard`, `strong` (08 Strong mode) | `standard` |
+| `backups.destination` | Empty for the default, or an absolute directory path without NUL (M1.8j1b) | Empty: the data root's `backups/` |
+
+A destination is stored as a canonical JSON string, with quotes, backslashes
+and other string characters escaped. `set_setting` validates its syntax,
+not whether the volume is mounted; a fresh backup checks the selected
+path before creating its generation. A malformed stored value is `Corrupt`,
+never silently replaced with the default. Existing generation locations do
+not change when this setting changes.
 
 ## Safety records
 

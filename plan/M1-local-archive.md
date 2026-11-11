@@ -1698,6 +1698,11 @@ local drafts. No network yet.
   - **M1.8i Backup/restore Service and CLI (L):** owned Service DTOs for
     generations, `start_backup`, `list_backups`, `start_restore` and
     `sb-cli backup|restore`, each with its native endpoint or CLI proof.
+  - **M1.8j1b Destination (L):** a validated Backups destination setting
+    used by both the schedule and Back up now. This substep is independent
+    of j1's retained-path query and may run in parallel with it. An absent
+    chosen volume is an error, never a fallback or a newly created local
+    directory. The default remains the data root's `backups/`.
   - **M1.8j The Backups UI (L):** Settings → Backups: list generations,
     back up now, restore and the preserved data roots, on the Service
     API.
