@@ -44,7 +44,6 @@ fn trip(count: &AtomicU64, nth: u64) {
         // SAFETY: killing our own process takes no capability a child
         // test does not have.
         cut(
-            n,
             || unsafe {
                 libc::kill(libc::getpid(), libc::SIGKILL);
             },
@@ -53,7 +52,7 @@ fn trip(count: &AtomicU64, nth: u64) {
     }
 }
 
-/// End this process at cut point `n`, running nothing more on this
+/// End this process at its cut point, running nothing more on this
 /// thread.
 ///
 /// `SIGKILL` can't be caught or blocked, but the process doesn't end
@@ -67,10 +66,11 @@ fn trip(count: &AtomicU64, nth: u64) {
 /// So the thread waits for its death. A kernel that refused the kill
 /// ends the wait after `patience`: the process exits without unwinding
 /// or running exit handlers, with a status that is no signal.
-fn cut(n: u64, kill: impl FnOnce(), patience: Duration) -> ! {
+fn cut(kill: impl FnOnce(), patience: Duration) -> ! {
     kill();
     thread::sleep(patience);
-    eprintln!("SIGKILL at cut point {n} did not kill the process");
+    // No diagnostic I/O: it can block or panic instead of reaching _exit.
+    // The parent reports the abnormal exit with its own cut-point number.
     // SAFETY: `_exit` only ends the process; skipping destructors and
     // exit handlers is the point.
     unsafe { libc::_exit(KILL_REFUSED_EXIT) }
@@ -563,7 +563,6 @@ mod tests {
         let root = report_root();
         let _leftovers = Unwound(root.clone());
         cut(
-            1,
             || fs::write(root.join("cut"), b"").unwrap(),
             // Far longer than the parent's observation window, but
             // bounded: a child orphaned by a failing parent still ends
@@ -645,7 +644,7 @@ mod tests {
     #[ignore = "spawned by a_refused_kill_exits_without_unwinding"]
     fn refused_kill_child() {
         let _leftovers = Unwound(report_root());
-        cut(1, || {}, Duration::from_millis(50));
+        cut(|| {}, Duration::from_millis(50));
     }
 
     /// A kernel that refused the kill is reported by the exit status,
@@ -656,6 +655,31 @@ mod tests {
         let child = spawn_child("cut::tests::refused_kill_child", scratch.path());
         let status = wait_with_deadline(child, CHILD_DEADLINE);
 
+        assert_eq!(status.code(), Some(KILL_REFUSED_EXIT), "{status}");
+        assert!(!scratch.path().join("unwound").exists());
+    }
+
+    /// Failed diagnostics must not unwind the refused-kill fallback.
+    #[test]
+    fn a_refused_kill_with_broken_stderr_never_unwinds() {
+        let scratch = crate::ScratchDir::new("cut-refused-broken-stderr");
+        // Close the peer before spawning so every diagnostic sees
+        // EPIPE, not EBADF (which stdio deliberately ignores).
+        let (stderr, peer) = std::os::unix::net::UnixStream::pair().unwrap();
+        drop(peer);
+        let stderr: std::os::fd::OwnedFd = stderr.into();
+        let child = Command::new(env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "cut::tests::refused_kill_child",
+                "--ignored",
+                "--nocapture",
+            ])
+            .env(REPORT_ENV, scratch.path())
+            .stderr(stderr)
+            .spawn()
+            .unwrap();
+        let status = wait_with_deadline(child, CHILD_DEADLINE);
         assert_eq!(status.code(), Some(KILL_REFUSED_EXIT), "{status}");
         assert!(!scratch.path().join("unwound").exists());
     }
