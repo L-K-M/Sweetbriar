@@ -3742,7 +3742,7 @@ Used by:
 - `portable-atomic 1.15.0` — <https://github.com/taiki-e/portable-atomic>
 - `proc-macro2 1.0.107` — <https://github.com/dtolnay/proc-macro2>
 - `quote 1.0.47` — <https://github.com/dtolnay/quote>
-- `rustix 1.1.5` — <https://github.com/bytecodealliance/rustix>
+- `rustix 1.1.6` — <https://github.com/bytecodealliance/rustix>
 - `rustversion 1.0.23` — <https://github.com/dtolnay/rustversion>
 - `semver 1.0.28` — <https://github.com/dtolnay/semver>
 - `serde 1.0.229` — <https://github.com/serde-rs/serde>
