@@ -15,6 +15,7 @@ final class ReaderViewController: NSViewController {
     private let textScroll = NSScrollView()
     private let body = NSView()
     private let details = NSStackView()
+    private let reads = ArchiveViewTasks()
     private let opener: @MainActor (URL) -> Bool
     private let confirmer: @MainActor (URL, [String]) async -> Bool
     private(set) var html: HTMLReaderView!
@@ -37,10 +38,10 @@ final class ReaderViewController: NSViewController {
         html.linkActivated = { [weak self] url in
             guard let self else { return }
             let ticket = model.navigationTicket
-            Task { await self.activateLink(url, ticket: ticket) }
+            reads.run { await self.activateLink(url, ticket: ticket) }
         }
         html.ruleListUnavailable = { [weak self] ticket in
-            Task { @MainActor [weak self] in
+            self?.reads.run { [weak self] in
                 guard let self else { return }
                 await model.ruleListUnavailable(ticket: ticket)
                 await render()
@@ -118,7 +119,7 @@ final class ReaderViewController: NSViewController {
     func select(_ selection: Set<Int64>) -> Task<Void, Never> {
         resetSelection(selection)
         let ticket = model.navigationTicket
-        return Task {
+        return reads.run { [self] in
             guard ticket == model.navigationTicket else { return }
             await loadSelection(selection)
         }
@@ -152,7 +153,7 @@ final class ReaderViewController: NSViewController {
     }
 
     @objc private func toggleSource() {
-        Task { await setSource(!model.isShowingSource) }
+        reads.run { await self.setSource(!self.model.isShowingSource) }
     }
 
     func setSource(_ enabled: Bool) async {
@@ -163,11 +164,17 @@ final class ReaderViewController: NSViewController {
     }
 
     func close() {
+        reads.retire()
         model.close()
         if isViewLoaded {
             html.clear(ticket: model.navigationTicket)
             plainText.text = ""
         }
+    }
+
+    func closeAndWait() async {
+        close()
+        await reads.waitForRetirement()
     }
 
     private func render() async {
@@ -247,7 +254,7 @@ final class ReaderViewController: NSViewController {
 
     @objc private func openAttachment(_ sender: NSButton) {
         guard let partID = sender.identifier?.rawValue else { return }
-        Task { await activateAttachment(partID) }
+        reads.run { await self.activateAttachment(partID) }
     }
 
     func activateAttachment(_ partID: String) async {

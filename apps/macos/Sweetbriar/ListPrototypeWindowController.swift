@@ -19,6 +19,7 @@ final class ListPrototypeWindowController: NSWindowController {
     static let contentSize = NSSize(width: 900, height: 640)
 
     private let session: CoreSession
+    private let listSource: (any ListWindowSource)?
     private var implementation: PrototypeImplementation
     private let formatter = MessageRowFormatter()
 
@@ -39,6 +40,8 @@ final class ListPrototypeWindowController: NSWindowController {
     /// Which install owns the window: a later install or the window's
     /// close turns earlier tickets stale (see `InstallTickets`).
     private var tickets = InstallTickets()
+    private let openingTasks = ArchiveViewTasks()
+    private var closing: Task<Void, Never>?
 
     /// The status overlay: the empty-source hint, or why nothing
     /// showed. Centered over the empty list.
@@ -48,8 +51,9 @@ final class ListPrototypeWindowController: NSWindowController {
     /// the next open builds a fresh controller.
     var onWindowClosed: (@MainActor () -> Void)?
 
-    init(session: CoreSession, implementation: PrototypeImplementation) {
+    init(session: CoreSession, implementation: PrototypeImplementation, listSource: (any ListWindowSource)? = nil) {
         self.session = session
+        self.listSource = listSource
         self.implementation = implementation
         let window = NSWindow(
             contentRect: NSRect(origin: .zero, size: Self.contentSize),
@@ -103,7 +107,7 @@ final class ListPrototypeWindowController: NSWindowController {
     /// Resolve the core, then install the current implementation's
     /// model and list. A failed open lands in the window (spec/08).
     func openList() {
-        Task { @MainActor [weak self] in
+        openingTasks.run { [weak self] in
             guard let self else { return }
             do {
                 try await self.install(implementation: self.implementation)
@@ -147,7 +151,11 @@ final class ListPrototypeWindowController: NSWindowController {
     /// second call is a no-op.
     func closeAndAwaitModel() async {
         window?.close()
+        openingTasks.retire()
         await model?.close()
+        // A late open owns a handle even before the model can publish its id.
+        await openingTasks.waitForRetirement()
+        await closing?.value
     }
 
     /// Swap implementations: close the old model, install a fresh
@@ -156,12 +164,16 @@ final class ListPrototypeWindowController: NSWindowController {
         guard newValue != implementation else { return }
         implementation = newValue
         updateTitle()
-        do {
-            try await install(implementation: newValue)
-        } catch {
-            openError = error
-            updateStatus()
+        let task = openingTasks.run { [weak self] in
+            guard let self else { return }
+            do {
+                try await install(implementation: newValue)
+            } catch {
+                openError = error
+                updateStatus()
+            }
         }
+        await task.value
     }
 
     /// Tear down the current list, then install `implementation`'s:
@@ -181,7 +193,7 @@ final class ListPrototypeWindowController: NSWindowController {
         guard tickets.isCurrent(ticket) else { return }
 
         let model = ListWindowModel(
-            source: bridge, spec: .debugSynthetic, clock: clock
+            source: listSource ?? bridge, spec: .debugSynthetic, clock: clock
         )
         if let onPagesDeliveredForBenchmark {
             model.onPagesDeliveredForBenchmark = onPagesDeliveredForBenchmark
@@ -207,7 +219,7 @@ final class ListPrototypeWindowController: NSWindowController {
         self.list = list
         updateStatus()
 
-        Task { @MainActor [weak self] in
+        openingTasks.run { [weak self] in
             guard let self, self.tickets.isCurrent(ticket) else { return }
             var failure: (any Error)?
             do {
@@ -285,10 +297,9 @@ extension ListPrototypeWindowController: NSWindowDelegate {
     /// window's death, and drop the clock's display link.
     func windowWillClose(_ notification: Notification) {
         tickets.close()
+        openingTasks.retire()
         let model = self.model
-        Task { @MainActor in
-            await model?.close()
-        }
+        closing = Task { if let model { await model.close() } }
         clock?.invalidate()
         onWindowClosed?()
     }

@@ -24,6 +24,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
 
     private let session: CoreSession
     private let appearance: SharedAppearance
+    private let backups: SharedBackups
+    private var contentTasks = ArchiveViewTasks()
+    private var contentSerial: UInt64 = 0
+    private var retirement: Task<Void, Never>?
     private let statusLabel = NSTextField(labelWithString: "Opening the archive…")
     private(set) var sidebarModel: SidebarModel?
     private(set) var sidebar: SidebarViewController?
@@ -34,9 +38,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     private var closed = false
 
 
-    init(session: CoreSession, appearance: SharedAppearance) {
+    init(session: CoreSession, appearance: SharedAppearance, backups: SharedBackups) {
         self.session = session
         self.appearance = appearance
+        self.backups = backups
         let window = NSWindow(
             contentRect: NSRect(origin: .zero, size: Self.defaultContentSize),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
@@ -68,11 +73,14 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     /// Wait for the core, then build the panes; a failed open stays in
     /// the window.
     func start() {
-        Task { @MainActor [weak self] in
+        contentTasks.run { [weak self] in
             guard let self else { return }
             do {
                 let bridge = try await session.bridge()
+                try Task.checkCancellation()
+                guard backups.model(source: bridge) != nil else { return }
                 install(bridge)
+            } catch is CancellationError {
             } catch {
                 statusLabel.stringValue = "Couldn't open the archive: \(error.localizedDescription)"
             }
@@ -92,21 +100,91 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         reader?.select([])
     }
 
+    /// Retire all old-context work before the shell opens any new handles.
+    func retireContent() async {
+        if let retirement { await retirement.value; return }
+        contentSerial &+= 1
+        contentTasks.retire()
+        sidebar?.onChoose = nil
+        messageList?.onGeneration = nil
+        messageList?.onSelectionChange = nil
+        imports?.retire()
+        accountSetup?.onAdded = {}
+        if let sheet = window?.attachedSheet {
+            window?.endSheet(sheet)
+            sheet.close()
+        }
+        let list = messageList
+        let reader = self.reader
+        reader?.close()
+        sidebarModel = nil
+        sidebar = nil
+        messageList = nil
+        self.reader = nil
+        imports = nil
+        accountSetup = nil
+        showArchiveStatus("Updating the archive…")
+        let tasks = contentTasks
+        let task = Task {
+            await list?.close()
+            await reader?.closeAndWait()
+            await tasks.waitForRetirement()
+        }
+        retirement = task
+        await task.value
+    }
+
+    func rebuildAfterRestore() async {
+        await retireContent()
+        do {
+            let bridge = try await session.bridge()
+            guard !backups.isStopping else { return }
+            install(bridge)
+        } catch {
+            showArchiveStatus("Couldn't reopen the restored archive: \(error.localizedDescription)")
+        }
+    }
+
+    func archiveClosed() async {
+        await retireContent()
+        showArchiveStatus("The archive is closed. Quit and reopen Sweetbriar to settle the restore.")
+    }
+
+    private func showArchiveStatus(_ message: String) {
+        guard let window else { return }
+        let frame = window.frame
+        let content = NSView(frame: NSRect(origin: .zero, size: Self.defaultContentSize))
+        window.contentViewController = nil
+        statusLabel.removeFromSuperview()
+        statusLabel.stringValue = message
+        content.addSubview(statusLabel)
+        NSLayoutConstraint.activate([
+            statusLabel.centerXAnchor.constraint(equalTo: content.centerXAnchor),
+            statusLabel.centerYAnchor.constraint(equalTo: content.centerYAnchor),
+            statusLabel.widthAnchor.constraint(lessThanOrEqualTo: content.widthAnchor, constant: -40),
+        ])
+        window.contentView = content
+        window.setFrame(frame, display: true)
+    }
+
     /// File → Add Proton Bridge Account…, once the core is up.
     func beginBridgeAccountSetup() {
+        guard !backups.writesUnavailable else { return }
         accountSetup?.begin()
     }
 
     /// File → Import…, once the core is up.
     func beginImport() {
-        guard let imports else { return }
-        Task { @MainActor in
-            await imports.chooseAndImport()
-        }
+        guard !backups.writesUnavailable, let imports else { return }
+        contentTasks.run { await imports.chooseAndImport() }
     }
 
     private func install(_ bridge: CoreBridge) {
         guard let window else { return }
+        if contentTasks.isRetired { contentTasks = ArchiveViewTasks() }
+        retirement = nil
+        contentSerial &+= 1
+        let serial = contentSerial
         let sidebarModel = SidebarModel(source: bridge)
         let appearanceModel = appearance.model(source: bridge)
         let sidebar = SidebarViewController(model: sidebarModel, appearance: appearanceModel)
@@ -117,10 +195,11 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             messageList?.show(spec)
         }
         messageList.onGeneration = { [weak self] generation in
-            self?.listSaw(generation)
+            guard let self, contentSerial == serial else { return }
+            listSaw(generation)
         }
         messageList.onSelectionChange = { [weak self] ids in
-            guard let self, !self.closed else { return }
+            guard let self, !closed, contentSerial == serial else { return }
             self.reader?.select(ids)
         }
 
@@ -138,11 +217,13 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
 
         let imports = ImportCoordinator(bridge: bridge, window: window)
         imports.onArchiveChanged = { [weak self] in
-            self?.reloadSidebar()
+            guard let self, contentSerial == serial else { return }
+            reloadSidebar()
         }
         let accountSetup = BridgeAccountSheet(window: window, source: bridge)
         accountSetup.onAdded = { [weak self] in
-            self?.reloadSidebar()
+            guard let self, contentSerial == serial else { return }
+            reloadSidebar()
         }
 
         self.sidebarModel = sidebarModel
@@ -150,8 +231,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         self.messageList = messageList
         self.imports = imports
         self.accountSetup = accountSetup
-        Task { @MainActor in
+        contentTasks.run { [weak self] in
             await sidebarModel.reload()
+            guard let self, !Task.isCancelled, contentSerial == serial else { return }
             sidebar.reloadSections()
             sidebar.choose(entryID: SidebarModel.unifiedInboxID)
             await imports.reattach()
@@ -161,8 +243,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     /// Re-read the sidebar: an import changed what it lists.
     private func reloadSidebar() {
         guard let sidebarModel, let sidebar else { return }
-        Task { @MainActor in
+        let serial = contentSerial
+        contentTasks.run { [weak self] in
             await sidebarModel.reload()
+            guard let self, !Task.isCancelled, contentSerial == serial else { return }
             sidebar.reloadSections()
         }
     }
@@ -171,8 +255,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     /// older one.
     private func listSaw(_ generation: UInt64) {
         guard let sidebarModel, let sidebar, generation > sidebarModel.generation else { return }
-        Task { @MainActor in
+        let serial = contentSerial
+        contentTasks.run { [weak self] in
             await sidebarModel.noteGeneration(generation)
+            guard let self, !Task.isCancelled, contentSerial == serial else { return }
             sidebar.reloadSections()
         }
     }

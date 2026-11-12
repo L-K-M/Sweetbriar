@@ -35,6 +35,7 @@ final class MessageListViewController: NSViewController {
     /// Which `show` owns the list: a later one turns earlier tickets
     /// stale.
     private var tickets = InstallTickets()
+    private let openingTasks = ArchiveViewTasks()
 
     private let statusLabel = NSTextField(labelWithString: "")
 
@@ -193,7 +194,7 @@ final class MessageListViewController: NSViewController {
         updateStatus()
         updateCoverage()
         // Take the ticket at the user/field choice, before scheduling can reorder it.
-        Task { @MainActor [weak self] in
+        openingTasks.run { [weak self] in
             await self?.install(spec, ticket: ticket)
         }
     }
@@ -278,7 +279,13 @@ final class MessageListViewController: NSViewController {
         indexControls.stopPolling()
         searchModel.close()
         tickets.close()
+        openingTasks.retire()
+        let previous = model
         detach()
+        // close() marks a model closed before an outstanding open can answer.
+        // Then await that open's late release before creating replacement UI.
+        await previous?.close()
+        await openingTasks.waitForRetirement()
         for task in Array(closing.values) {
             await task.value
         }

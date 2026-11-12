@@ -91,6 +91,15 @@ copy wait says only that waiting stopped, not that the copy stopped.
 Before shutting down the shared core, cancel and await the model's calls
 and health watcher. Closing Settings alone does not end them.
 
+The shell (M1.8j6a) retires pending opens as well as existing handles
+before creating replacement panes. Recreate appearance, sidebar, list,
+Search, index controls and reader models after a swap: a restored store's
+generations can be lower. A closed-core outcome retires content without
+reopening it. The Core-free Composer Probe is not an archive editor.
+Restore is unavailable while a Core-backed diagnostic benchmark or
+synthetic fill runs; explain the reason instead of allowing that work to
+continue across a swap.
+
 ## Sidebar
 
 - **Unified section:** Inbox (`Unified(inbox)`), Flagged (`Flagged`),
