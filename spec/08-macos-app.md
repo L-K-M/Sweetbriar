@@ -113,6 +113,14 @@ editor after the awaited shell reset, so neither its model nor its
 selected account/revision comes from the replaced store. A read-only or
 closed core cannot save appearance or destination changes.
 
+At restore admission, synchronously fence every Core-backed UI writer,
+including import, account setup and index controls, before scheduling the
+native restore. Cancel unbegun UI calls; keep awaiting begun commands to
+their receipts. The confirmation warns that open setup/import dialogs
+close; detaching their UI does not itself cancel a durable import job.
+A refusal leaves the original archive usable and admits fresh UI actions,
+never a delayed write from the retired context.
+
 ## Sidebar
 
 - **Unified section:** Inbox (`Unified(inbox)`), Flagged (`Flagged`),
