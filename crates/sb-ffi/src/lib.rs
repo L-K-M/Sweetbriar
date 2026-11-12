@@ -29,6 +29,7 @@ mod error;
 mod health;
 mod imports;
 mod messages;
+mod restore;
 mod search;
 mod sidebar;
 mod subscribe;
@@ -61,6 +62,7 @@ pub use imports::{
     ImportJob, ImportJobState, ImportProblem, ImportProblemKind, ImportReport, ImportSource,
     ImportSourceKind, ImportStarted, ImportTarget, ImportTotals, MboxVariant, VariantChoice,
 };
+pub use restore::RestoreOutcome;
 pub use search::{
     Coverage, ParseContext, SearchIndexState, SearchIoCode, SearchLimitation, SearchRebuildPhase,
     SearchRebuildProgress, SearchRebuildStarted, SearchScope, SearchSort, SearchSpec, SearchStatus,

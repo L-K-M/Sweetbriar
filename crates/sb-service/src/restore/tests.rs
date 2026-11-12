@@ -133,6 +133,25 @@ fn set_cue(core: &Core, value: &str) {
 }
 
 #[test]
+fn receipt_preflight_validates_keys_and_refuses_other_commands_without_preparing() {
+    let scratch = ScratchDir::new("service-restore-receipt");
+    let core = open(&scratch);
+    let key = "00000000-0000-4000-8000-0000000000f3";
+    assert_eq!(block_on(core.restore_receipt(key)).unwrap(), None);
+    assert!(matches!(
+        block_on(core.restore_receipt("")),
+        Err(CoreError::InvalidInput { .. })
+    ));
+    block_on(core.set_setting(key, CUE, "strong")).unwrap();
+    assert!(matches!(
+        block_on(core.restore_receipt(key)),
+        Err(CoreError::Conflict { .. })
+    ));
+    assert!(block_on(core.list_restore_artifacts()).unwrap().is_empty());
+    block_on(core.shutdown());
+}
+
+#[test]
 fn a_prepared_generation_is_restored_under_a_key_once() {
     let scratch = ScratchDir::new("service-restore");
     let core = open(&scratch);
@@ -150,6 +169,10 @@ fn a_prepared_generation_is_restored_under_a_key_once() {
         format!(r#"{{"generation_id":"{id}"}}"#)
     );
     assert_eq!(cue(&core), "strong");
+    assert_eq!(
+        block_on(core.restore_receipt(key)).unwrap(),
+        Some(receipt.clone())
+    );
 
     // The same key again: its receipt, and the store stays as it is.
     set_cue(&core, "standard");

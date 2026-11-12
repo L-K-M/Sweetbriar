@@ -73,6 +73,18 @@ impl PreparedRestore {
 }
 
 impl Core {
+    /// The receipt a valid key already holds for a restore, or `None`.
+    /// A key spent on another command is `Conflict`. This read-only
+    /// query lets a native facade replay before any new preparation.
+    pub async fn restore_receipt(&self, key: &str) -> Result<Option<Receipt>, CoreError> {
+        Ok(self
+            .engine()
+            .restore_receipt(key)
+            .await?
+            .as_ref()
+            .map(Receipt::from_engine))
+    }
+
     /// Prepare a restore of the recorded generation `generation_id`
     /// (`list_backups` names them). The core stays in use throughout
     /// and its data doesn't change. It can take as long as copying the

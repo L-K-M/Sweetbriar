@@ -23,7 +23,7 @@ use crate::CoreError;
 /// waiting. `cancel` is synchronous and in memory — it does no I/O.
 #[derive(uniffi::Object)]
 pub struct CancelToken {
-    cancelled: AtomicBool,
+    cancelled: Arc<AtomicBool>,
     wake: Notify,
 }
 
@@ -33,7 +33,7 @@ impl CancelToken {
     #[uniffi::constructor]
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
-            cancelled: AtomicBool::new(false),
+            cancelled: Arc::new(AtomicBool::new(false)),
             wake: Notify::new(),
         })
     }
@@ -52,6 +52,11 @@ impl CancelToken {
 }
 
 impl CancelToken {
+    /// Restore workers observe this flag without abandoning their future.
+    pub(crate) fn flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.cancelled)
+    }
+
     /// Resolve when the token is cancelled — already cancelled counts.
     /// The `Notified` is enabled before the flag is read, so a `cancel`
     /// racing the first poll can't slip between the check and the wait:
@@ -93,6 +98,16 @@ mod tests {
     use std::task::{Context, Waker};
 
     use super::*;
+
+    #[test]
+    fn a_shared_worker_flag_observes_cancellation_and_outlives_the_token() {
+        let token = CancelToken::new();
+        let flag = token.flag();
+        assert!(!flag.load(Ordering::SeqCst));
+        token.cancel();
+        drop(token);
+        assert!(flag.load(Ordering::SeqCst));
+    }
 
     /// `cancel` wakes a waiter that registered before it, and a waiter
     /// that starts after `cancel` returns at once (spec/07).

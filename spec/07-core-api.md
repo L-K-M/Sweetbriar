@@ -236,8 +236,28 @@ async fn Core::shutdown(self);   // flush writer, release the lease
     (03). Nothing is deleted either way.
   - `sb-cli restore <generation_id>` prepares and restores under a
     fresh key and prints the id and `restored`.
-  - The FFI export comes with the UI (M1.8j): one call that prepares
-    under the read lock and swaps under the write lock.
+  - **Native restore (M1.8j4):** `start_restore(token, key, generation_id)`
+    prepares under the shared core's read lock and consumes/restores it
+    under its write lock. The Engine/Service `restore_receipt(key)`
+    query validates the key and returns its restore receipt (or `None`);
+    a key spent on another command is `Conflict`. Read-only cores answer.
+    The facade checks this BEFORE preparing or validating the selected
+    generation, so replay works even after it disappeared or the caller
+    names another generation. It rechecks under the write lock too.
+  - The token shares the preparation/swap's cancellation flag. Lock
+    acquisition can be cancelled; once preparation starts, await it to
+    the end. Dropping a completed preparation while cancelling the write
+    lock leaves its stage intact. Once the facade takes the core, always
+    await the consuming call: never select/drop that future on a token.
+  - Native outcomes are `Restored(receipt)`, `Replayed(receipt)`,
+    `ReceiptUnrecorded(cause)`, `Refused(cause)` and `Closed(cause)`, with
+    owned errors. Preparation errors are thrown and do not swap the live
+    root. Restored/receipt-unrecorded/refused results reinstall the
+    returned core in the same shared object; only a closed failure leaves
+    no core. Receipt-unrecorded IS restored, not rollback or automatic
+    retry. Replayed starts no preparation/swap. Query retained names after
+    an outcome; no stage reuse or cleanup is added. Calls after Closed
+    are `Unavailable`; reopening the app settles the marker.
 - **Bridge account setup (M2.3c1):** `add_bridge_account(params)` takes
   the Proton Bridge preset's display name, username, Bridge password
   (bytes, moved into the core's zeroizing secret), IMAP and SMTP ports

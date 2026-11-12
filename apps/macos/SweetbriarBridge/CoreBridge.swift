@@ -362,6 +362,16 @@ public final class CoreBridge: Sendable {
         return AppearanceSubscription(subscription)
     }
 
+    /// Prepare and consume under one keyed call. Cancellation raises the flag
+    /// while continuing to await; a restored outcome is not discarded on cancel.
+    public func startRestore(idempotencyKey: String, generationId: String) async throws -> RestoreOutcome {
+        let token = SweetbriarCore.CancelToken()
+        let value = try await Self.withCancellation(token: token) {
+            try await self.core.startRestore(token: token, idempotencyKey: idempotencyKey, generationId: generationId)
+        }
+        return RestoreOutcome(value)
+    }
+
     /// `health()` (spec/07 "Queries"): whether the store is read-only
     /// after an integrity finding (spec/03), with the finding, its
     /// time and its copy.
