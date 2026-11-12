@@ -67,11 +67,12 @@ struct BackupsSettingsView: View {
         }
         if let commandError = model.commandError {
             Text(BackupsPresentation.error(commandError)).foregroundStyle(.red)
+                .accessibilityIdentifier("backupCommandError")
         }
         if let activity = model.activity {
             HStack(spacing: 8) {
                 ProgressView().controlSize(.small)
-                Text(BackupsPresentation.activity(activity))
+                Text(BackupsPresentation.activity(activity)).accessibilityIdentifier("backupActivity")
                 if case .restoring = activity {
                     Button("Cancel Restore") { model.cancelRestore() }
                         .accessibilityIdentifier("backupCancelRestore")
@@ -144,7 +145,6 @@ struct BackupsSettingsView: View {
                 ForEach(model.generations) { generation in
                     row(generation)
                         .tag(generation.generationId)
-                        .accessibilityIdentifier("backupGeneration-\(generation.generationId)")
                 }
             }
             .frame(minHeight: 160, maxHeight: 240)
@@ -171,7 +171,9 @@ struct BackupsSettingsView: View {
     private func row(_ generation: BackupGeneration) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack {
+                // A container identifier masks its descendants' identifiers in SwiftUI.
                 Text(BackupsPresentation.state(generation.state))
+                    .accessibilityIdentifier("backupGeneration-\(generation.id)")
                 Text(generation.generationId)
                     .foregroundStyle(.secondary)
                     .lineLimit(1).truncationMode(.middle)
@@ -187,6 +189,7 @@ struct BackupsSettingsView: View {
             ).font(.caption)
             HStack {
                 Text(generation.location).textSelection(.enabled)
+                    .accessibilityIdentifier("backupLocation-\(generation.id)")
                 Button("Copy location") { copy(generation.location) }
                     .buttonStyle(.borderless)
                     .accessibilityIdentifier("backupLocationCopy-\(generation.id)")
@@ -219,10 +222,10 @@ struct BackupsSettingsView: View {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text(BackupsPresentation.artifactKind(artifact.kind))
                     Text(artifact.path).textSelection(.enabled)
+                        .accessibilityIdentifier("backupArtifact-\(artifact.path)")
                     Button("Copy path") { copy(artifact.path) }
                         .accessibilityIdentifier("backupArtifactCopy-\(artifact.path)")
                 }
-                .accessibilityIdentifier("backupArtifact-\(artifact.path)")
             }
         }
     }

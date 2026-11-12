@@ -171,6 +171,22 @@ jobs:
             CODE_SIGN_IDENTITY=- \
             test
 
+      # M1.8j7: Backups controls over synthetic roots, including restore,
+      # retained evidence, unavailable destinations and read-only recovery.
+      - name: XCUITest Backups and recovery flows
+        timeout-minutes: 15
+        run: |
+          xcodebuild -project apps/macos/Sweetbriar.xcodeproj \
+            -scheme SweetbriarSmoke \
+            -destination 'platform=macOS,arch=arm64' \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            -resultBundlePath "$RUNNER_TEMP/Sweetbriar-backups.xcresult" \
+            -parallel-testing-enabled NO \
+            -only-testing:SweetbriarUITests/BackupsFlowTests \
+            -only-testing:SweetbriarUITests/BackupsRecoveryFlowTests \
+            CODE_SIGN_IDENTITY=- \
+            test
+
       # M1.5p: measure real TCP accepts while imported HTML is displayed.
       - name: XCUITest reader zero connections
         timeout-minutes: 8
@@ -194,6 +210,7 @@ jobs:
             ${{ runner.temp }}/Sweetbriar-import.xcresult
             ${{ runner.temp }}/Sweetbriar-search.xcresult
             ${{ runner.temp }}/Sweetbriar-index.xcresult
+            ${{ runner.temp }}/Sweetbriar-backups.xcresult
             ${{ runner.temp }}/Sweetbriar-reader.xcresult
           if-no-files-found: ignore
 
