@@ -15,6 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var settingsWindow: AppearanceSettingsWindow?
     private let appearance = SharedAppearance()
     private var backups: SharedBackups?
+    private var composeWindows: ComposeWindows?
     private var terminating = false
 
     /// The menu builder is retained: `NSMenuItem.target` is weak, so
@@ -66,6 +67,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             didClose: { [weak self] in await self?.archiveClosed() }
         )
         self.backups = backups
+        composeWindows = ComposeWindows(backups: backups, openCore: { try await session.bridge() },
+            reportError: { [weak self] error in self?.presentError("Couldn't create a draft", error) })
         let mainWindow = MainWindowController(session: session, appearance: appearance, backups: backups,
                                               openBackups: { [weak self] in self?.showSettings(tab: .backups) })
         self.mainWindow = mainWindow
@@ -124,7 +127,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.mainWindow?.beginBridgeAccountSetup()
             },
             onSettings: { [weak self] in self?.showSettings() },
-            isWriteEnabled: { [weak self] in self?.backups?.canWrite == true }
+            isWriteEnabled: { [weak self] in self?.backups?.canWrite == true },
+            onNewMessage: { [weak self] in
+                guard let self, !terminating else { return }
+                composeWindows?.newMessage()
+            },
+            isComposeEnabled: { [weak self] in self?.backups?.canCompose == true }
         )
         NSApplication.shared.mainMenu = builder.makeMainMenu()
         menuBuilder = builder
@@ -362,8 +370,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         guard !terminating else { return .terminateLater }
         terminating = true
-        settingsWindow?.close()
         Task { @MainActor in
+            guard await composeWindows?.closeForQuit() != false else {
+                terminating = false
+                NSApplication.shared.reply(toApplicationShouldTerminate: false)
+                return
+            }
+            settingsWindow?.close()
             await backups?.cancelAndWait()
             await settingsWindow?.cancelAndWait()
             await prototypeController?.closeAndAwaitModel()

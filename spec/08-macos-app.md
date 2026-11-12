@@ -121,8 +121,9 @@ close; detaching their UI does not itself cancel a durable import job.
 A refusal leaves the original archive usable and admits fresh UI actions,
 never a delayed write from the retired context. An admitted compose open
 or window blocks restore: ask the user to close compose windows first.
-Closing must acknowledge their displayed edits before releasing that
-admission, so neither unsaved text nor a delayed draft save crosses a swap.
+Closing must acknowledge their displayed edits, or await the explicitly
+confirmed Close Without Saving path below, before releasing admission.
+Neither unsaved text nor a delayed draft save may cross a swap.
 
 ## Sidebar
 
@@ -353,7 +354,10 @@ admission, so neither unsaved text nor a delayed draft save crosses a swap.
     explicit confirmation: it drops only unsaved editor changes, keeps
     the last saved revision, and does not call `discard_draft`. It must
     await any begun save before closing; an acknowledged save is not
-    rolled back. This path must remain usable when a read-only core
+    rolled back. Its confirmation pauses the quiet-period timer and
+    must not trigger a blur save itself; Keep Editing restarts the timer.
+    Normal close/quit dismisses that owned prompt without discarding and
+    flushes instead. This path must remain usable when a read-only core
     refuses saving, so recovery is not trapped behind a compose window.
     A begun save is awaited, not cancelled because its waiter was cancelled.
   - M1.9c2a first wires subject and plain/Markdown body editing. Existing

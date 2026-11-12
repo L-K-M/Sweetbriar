@@ -11,6 +11,7 @@ final class SharedBackups {
     private var current: BackupsModel?
     private var sourceID: ObjectIdentifier?
     private var diagnostic: DiagnosticActivity?
+    private var composeAdmissions = 0
     private(set) var isStopping = false
     @ObservationIgnored private var closedRetirement: Task<Void, Never>?
     private let beforeRestore: @MainActor @Sendable () -> Void
@@ -61,11 +62,30 @@ final class SharedBackups {
     var canWrite: Bool { !writesUnavailable && current?.health?.integrity == .sound }
 
     var restoreBlockedReason: String? {
-        switch diagnostic {
+        if composeAdmissions > 0 {
+            return "Close your compose windows before restoring. Save or explicitly abandon unsaved changes first."
+        }
+        return switch diagnostic {
         case .benchmark: "Wait for the diagnostic benchmark to finish before restoring."
         case .syntheticFill: "Wait for the synthetic fill to finish before restoring."
         case nil: nil
         }
+    }
+
+    var canCompose: Bool { canWrite && diagnostic == nil }
+
+    /// Count pending opens too: restore must not race a create whose window
+    /// has not appeared yet. Release only after a flush or confirmed abandonment
+    /// has drained any begun command.
+    func beginCompose() -> Bool {
+        guard canCompose else { return false }
+        composeAdmissions += 1
+        return true
+    }
+
+    func endCompose() {
+        precondition(composeAdmissions > 0, "finish only an admitted compose open/window")
+        composeAdmissions -= 1
     }
 
     /// Diagnostic tasks have no cooperative stop contract. Refuse overlap,

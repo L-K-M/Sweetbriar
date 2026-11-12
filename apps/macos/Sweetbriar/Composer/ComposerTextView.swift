@@ -115,7 +115,7 @@ final class ComposerTextView: NSTextView {
     private func applyMarkdownFormatting(_ marker: MarkdownFormatting.Marker) {
         // No edits mid-composition: a storage change under marked
         // text would corrupt the input method's state.
-        guard mode == .markdown, !hasMarkedText(), let textStorage else {
+        guard canFormat, let textStorage else {
             return
         }
 
@@ -182,7 +182,7 @@ final class ComposerTextView: NSTextView {
 
     /// Whether the formatting commands would act.
     private var canFormat: Bool {
-        mode == .markdown && !hasMarkedText()
+        isEditable && mode == .markdown && !hasMarkedText()
     }
 
     // MARK: marked text
