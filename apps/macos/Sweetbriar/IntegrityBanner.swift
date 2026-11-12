@@ -34,18 +34,16 @@ struct IntegrityBanner: View {
             .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(.yellow.opacity(0.14))
-            .accessibilityIdentifier("integrityBanner")
         } else if let error = model.healthError {
             notice("Archive health unavailable", detail: error.localizedDescription)
                 .padding(12)
-                .accessibilityIdentifier("integrityBanner")
         }
     }
 
     private func notice(_ title: String, detail: String) -> some View {
         HStack(alignment: .top, spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
-                Text(title).font(.headline)
+                Text(title).font(.headline).accessibilityIdentifier("integrityBanner")
                 Text(detail).textSelection(.enabled)
             }
             Spacer(minLength: 8)

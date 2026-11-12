@@ -20,6 +20,15 @@ bash scripts/test-build-install.sh  # test --install against a fake macOS toolch
 uv run --with pillow==13.0.0 python -I scripts/app-icon.py  # regenerate the app icon
 ```
 
+The dedicated `SweetbriarBackups` Xcode scheme runs M1.8j7's six
+synthetic XCUITests. Its `BackupsTesting` configuration gives the app
+and runner private bundle identities; each launch supplies fresh data
+and cache roots. After `cargo xtask ffi` and XcodeGen, run it with
+`xcodebuild -project apps/macos/Sweetbriar.xcodeproj -scheme
+SweetbriarBackups -destination 'platform=macOS,arch=arm64'
+-parallel-testing-enabled NO test`. It is separate from CI's named
+smoke-test filters; no workflow is changed for this acceptance.
+
 `scripts/build.sh` runs `cargo xtask ffi`, XcodeGen and `xcodebuild` the
 way macOS CI does, needs Xcode and `brew install xcodegen`, and skips
 the app on Linux. `--install` asks a running Sweetbriar to quit through

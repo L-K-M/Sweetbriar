@@ -1729,6 +1729,18 @@ local drafts. No network yet.
     paths, error/cancellation and read-only recovery proof. Retained
     paths are available for deliberate manual filesystem removal; no
     restore or settings refresh automatically deletes evidence.
+    **j7 automated matrix (2026-11-12):** real UI import, back up,
+    change the archive, then restore with the old Search/reader open;
+    verify original rows, cleared content and retained paths after a
+    normal quit/relaunch. Exercise an unavailable chosen destination
+    without fallback, restore errors/cancellation while awaiting the
+    actual outcome, and a synthetic read-only latch through the banner
+    to a healthy restored core. Use explicit private roots and never
+    force-terminate a begun restore to finish a test. Native unit tests
+    are not this UI acceptance; owner-data qualification stays pending.
+    Run these tests in a dedicated Backups test target/configuration
+    with private app and runner bundle identities, not a production
+    preference domain. Keep existing UI suites and workflows unchanged.
   - **M1.8j The Backups UI (L):** Settings → Backups: list generations,
     back up now, restore and the preserved data roots, on the Service
     API.
