@@ -13,7 +13,13 @@ final class BackupsRecoveryFlowTests: XCTestCase {
         archive.wait(field, "enabled == true")
         field.click()
         field.typeKey("a", modifierFlags: .command)
+        field.typeKey(.delete, modifierFlags: [])
+        // Observe the editor, not just synthetic key delivery, before saving.
+        archive.wait(field, "value == %@", "")
         field.typeText(missing.path)
+        archive.wait(field, "value == %@", missing.path)
+        field.typeKey(.tab, modifierFlags: [])
+        archive.wait(field, "value == %@", missing.path)
         archive.settings.buttons["backupApply"].click()
         archive.wait(archive.settings.staticTexts["backupResult"], "value == %@", "Destination saved.")
         XCTAssertTrue(archive.quit())

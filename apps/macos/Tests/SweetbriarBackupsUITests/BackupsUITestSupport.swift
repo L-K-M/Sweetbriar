@@ -169,6 +169,9 @@ final class BackupsUIArchive {
         ] {
             XCTAssertTrue(text(of: message).contains(consequence))
         }
+        // First mouse on a background sheet can only activate it. Focus its
+        // non-action text first; never repeat a destructive command click.
+        message.click()
         let confirm = sheet.buttons["backupConfirmRestore"]
         XCTAssertTrue(confirm.isEnabled, sheet.debugDescription)
         wait(confirm, "hittable == true")
