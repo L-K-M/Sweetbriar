@@ -41,7 +41,12 @@ Settings → Backups uses only the Service API through the hand-written
 bridge. It lists the recorded generations with their state, dates, size
 and latest verification verdict (or “Not checked”), and the retained
 restore paths (07). Listing a generation is not verification of its
-bytes; every restore verifies again.
+bytes; every restore verifies again. Backup rows, retained names and
+preferences are independent query answers. Publish each whole answer
+within the current archive epoch and show failures for its own section;
+never turn a failed query into an empty success. In particular, unreadable
+or corrupt preferences must not hide a successfully listed recovery
+point or prevent its freshly verified restore, even on a read-only core.
 
 Back up now starts a keyed generation and shows its copy's eventual
 result. A complete generation with a retention warning remains complete;
@@ -99,6 +104,22 @@ reopening it. The Core-free Composer Probe is not an archive editor.
 Restore is unavailable while a Core-backed diagnostic benchmark or
 synthetic fill runs; explain the reason instead of allowing that work to
 continue across a swap.
+
+Settings has Appearance and Backups tabs; the main health banner opens
+Backups directly. Both surfaces use the same model even if Settings opens
+before the main panes finish installing. While a restore is pending,
+remove the appearance editor, not just its save buttons. Recreate that
+editor after the awaited shell reset, so neither its model nor its
+selected account/revision comes from the replaced store. A read-only or
+closed core cannot save appearance or destination changes.
+
+At restore admission, synchronously fence every Core-backed UI writer,
+including import, account setup and index controls, before scheduling the
+native restore. Cancel unbegun UI calls; keep awaiting begun commands to
+their receipts. The confirmation warns that open setup/import dialogs
+close; detaching their UI does not itself cancel a durable import job.
+A refusal leaves the original archive usable and admits fresh UI actions,
+never a delayed write from the retired context.
 
 ## Sidebar
 

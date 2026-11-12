@@ -69,6 +69,7 @@ final class MainMenuBuilder: NSObject {
     private let onImport: @MainActor () -> Void
     private let onAddBridgeAccount: @MainActor () -> Void
     private let onSettings: @MainActor () -> Void
+    private let isWriteEnabled: @MainActor () -> Bool
 
     /// `NSMenuItem.identifier`s that `validateMenuItem` treats
     /// specially.
@@ -112,7 +113,8 @@ final class MainMenuBuilder: NSObject {
         onShowComposerProbe: @escaping @MainActor () -> Void,
         onImport: @escaping @MainActor () -> Void,
         onAddBridgeAccount: @escaping @MainActor () -> Void = {},
-        onSettings: @escaping @MainActor () -> Void = {}
+        onSettings: @escaping @MainActor () -> Void = {},
+        isWriteEnabled: @escaping @MainActor () -> Bool = { true }
     ) {
         self.onFillSynthetic = onFillSynthetic
         self.onShowPrototype = onShowPrototype
@@ -125,6 +127,7 @@ final class MainMenuBuilder: NSObject {
         self.onImport = onImport
         self.onAddBridgeAccount = onAddBridgeAccount
         self.onSettings = onSettings
+        self.isWriteEnabled = isWriteEnabled
         super.init()
     }
 
@@ -419,6 +422,11 @@ extension MainMenuBuilder: NSMenuItemValidation {
     /// is in flight; the implementation pair re-checks itself against
     /// the stored choice each time the menu opens.
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if let action = menuItem.action,
+           [#selector(importMail(_:)), #selector(addBridgeAccount(_:)), #selector(fillSyntheticRows(_:))]
+            .contains(action) {
+            return isWriteEnabled()
+        }
         if menuItem.identifier == ItemID.benchmark {
             return isBenchmarkEnabled()
         }

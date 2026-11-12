@@ -12,6 +12,7 @@
 //   a list's newer generation ──► the sidebar re-reads its counts
 
 import AppKit
+import SwiftUI
 import SweetbriarBridge
 
 @MainActor
@@ -25,6 +26,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     private let session: CoreSession
     private let appearance: SharedAppearance
     private let backups: SharedBackups
+    private let openBackups: @MainActor () -> Void
+    private let writes = ArchiveWriteTasks()
+    private var bridge: CoreBridge?
     private var contentTasks = ArchiveViewTasks()
     private var contentSerial: UInt64 = 0
     private var retirement: Task<Void, Never>?
@@ -38,10 +42,12 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     private var closed = false
 
 
-    init(session: CoreSession, appearance: SharedAppearance, backups: SharedBackups) {
+    init(session: CoreSession, appearance: SharedAppearance, backups: SharedBackups,
+         openBackups: @escaping @MainActor () -> Void = {}) {
         self.session = session
         self.appearance = appearance
         self.backups = backups
+        self.openBackups = openBackups
         let window = NSWindow(
             contentRect: NSRect(origin: .zero, size: Self.defaultContentSize),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
@@ -108,12 +114,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         sidebar?.onChoose = nil
         messageList?.onGeneration = nil
         messageList?.onSelectionChange = nil
-        imports?.retire()
-        accountSetup?.onAdded = {}
-        if let sheet = window?.attachedSheet {
-            window?.endSheet(sheet)
-            sheet.close()
-        }
+        retireWritersForRestore()
         let list = messageList
         let reader = self.reader
         reader?.close()
@@ -125,7 +126,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         accountSetup = nil
         showArchiveStatus("Updating the archive…")
         let tasks = contentTasks
+        let writes = self.writes
         let task = Task {
+            await writes.waitForRetirement()
             await list?.close()
             await reader?.closeAndWait()
             await tasks.waitForRetirement()
@@ -167,20 +170,38 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         window.setFrame(frame, display: true)
     }
 
+    /// Fence UI writers before the native restore is scheduled. Reader/list
+    /// queries remain usable during preparation; fresh actions can resume after
+    /// a refusal, but retired dialogs and queued writes cannot cross the swap.
+    func retireWritersForRestore() {
+        writes.retire()
+        imports?.retire()
+        imports = nil
+        accountSetup?.retire()
+        accountSetup = nil
+        if let sheet = window?.attachedSheet {
+            window?.endSheet(sheet)
+            sheet.close()
+        }
+    }
+
     /// File → Add Proton Bridge Account…, once the core is up.
     func beginBridgeAccountSetup() {
-        guard !backups.writesUnavailable else { return }
+        guard backups.canWrite else { return }
+        configureWriters()
         accountSetup?.begin()
     }
 
     /// File → Import…, once the core is up.
     func beginImport() {
-        guard !backups.writesUnavailable, let imports else { return }
-        contentTasks.run { await imports.chooseAndImport() }
+        guard backups.canWrite else { return }
+        configureWriters()
+        guard let imports else { return }
+        writes.run(revision: writes.revision) { await imports.chooseAndImport() }
     }
 
     private func install(_ bridge: CoreBridge) {
-        guard let window else { return }
+        guard let window, let backupsModel = backups.model(source: bridge) else { return }
         if contentTasks.isRetired { contentTasks = ArchiveViewTasks() }
         retirement = nil
         contentSerial &+= 1
@@ -188,7 +209,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         let sidebarModel = SidebarModel(source: bridge)
         let appearanceModel = appearance.model(source: bridge)
         let sidebar = SidebarViewController(model: sidebarModel, appearance: appearanceModel)
-        let messageList = MessageListViewController(bridge: bridge, sidebar: sidebarModel, appearance: appearanceModel)
+        let policy = backups
+        let messageList = MessageListViewController(bridge: bridge, sidebar: sidebarModel, appearance: appearanceModel,
+                                                     writes: writes, canWrite: { policy.canWrite })
         let reader = ReaderViewController(model: ReaderModel(source: bridge, preferred: .sanitizedHtml))
         self.reader = reader
         sidebar.onChoose = { [weak messageList] spec in
@@ -211,32 +234,65 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         split.addSplitViewItem(sidebarItem)
         split.addSplitViewItem(listItem)
         split.addSplitViewItem(NSSplitViewItem(viewController: reader))
+        let root = NSViewController()
+        root.view = NSView()
+        root.addChild(split)
+        let banner = NSHostingView(rootView: IntegrityBanner(model: backupsModel, openBackups: openBackups))
+        banner.sizingOptions = [.intrinsicContentSize]
+        banner.setContentHuggingPriority(.required, for: .vertical)
+        banner.translatesAutoresizingMaskIntoConstraints = false
+        split.view.translatesAutoresizingMaskIntoConstraints = false
+        root.view.addSubview(banner)
+        root.view.addSubview(split.view)
+        NSLayoutConstraint.activate([
+            banner.topAnchor.constraint(equalTo: root.view.topAnchor),
+            banner.leadingAnchor.constraint(equalTo: root.view.leadingAnchor),
+            banner.trailingAnchor.constraint(equalTo: root.view.trailingAnchor),
+            split.view.topAnchor.constraint(equalTo: banner.bottomAnchor),
+            split.view.leadingAnchor.constraint(equalTo: root.view.leadingAnchor),
+            split.view.trailingAnchor.constraint(equalTo: root.view.trailingAnchor),
+            split.view.bottomAnchor.constraint(equalTo: root.view.bottomAnchor),
+        ])
         let frame = window.frame
-        window.contentViewController = split
+        window.contentViewController = root
         window.setFrame(frame, display: true)
 
-        let imports = ImportCoordinator(bridge: bridge, window: window)
-        imports.onArchiveChanged = { [weak self] in
-            guard let self, contentSerial == serial else { return }
-            reloadSidebar()
-        }
-        let accountSetup = BridgeAccountSheet(window: window, source: bridge)
-        accountSetup.onAdded = { [weak self] in
-            guard let self, contentSerial == serial else { return }
-            reloadSidebar()
-        }
+        self.bridge = bridge
+        configureWriters()
+        let imports = self.imports
 
         self.sidebarModel = sidebarModel
         self.sidebar = sidebar
         self.messageList = messageList
-        self.imports = imports
-        self.accountSetup = accountSetup
         contentTasks.run { [weak self] in
             await sidebarModel.reload()
             guard let self, !Task.isCancelled, contentSerial == serial else { return }
             sidebar.reloadSections()
             sidebar.choose(entryID: SidebarModel.unifiedInboxID)
-            await imports.reattach()
+            await imports?.reattach()
+        }
+    }
+
+    private func configureWriters() {
+        guard let bridge, let window else { return }
+        let serial = contentSerial
+        if imports == nil {
+            let owner = ImportCoordinator(bridge: bridge, window: window)
+            owner.onArchiveChanged = { [weak self] in
+                guard let self, contentSerial == serial else { return }
+                reloadSidebar()
+            }
+            imports = owner
+        }
+        if accountSetup == nil {
+            let policy = backups
+            let owner = BridgeAccountSheet(window: window, source: bridge, writes: writes,
+                                           canWrite: { policy.canWrite })
+            owner.onAdded = { [weak self] in
+                guard let self, contentSerial == serial else { return }
+                reloadSidebar()
+            }
+            accountSetup = owner
         }
     }
 

@@ -8,6 +8,12 @@ import Observation
 @MainActor
 @Observable
 public final class BackupsModel {
+    /// Each query is a whole answer, independent of the other sections.
+    public enum ReadState: Sendable {
+        case unloaded, loaded
+        case failed(any Error)
+    }
+
     public enum Activity: Sendable, Equatable {
         case backingUp, savingDestination
         case restoring(generationId: String)
@@ -25,6 +31,9 @@ public final class BackupsModel {
 
     public private(set) var generations: [BackupGeneration] = []
     public private(set) var artifacts: [RestoreArtifact] = []
+    public private(set) var generationsReadState: ReadState = .unloaded
+    public private(set) var artifactsReadState: ReadState = .unloaded
+    public private(set) var destinationError: (any Error)?
     public private(set) var destination: String?
     public var destinationDraft = ""
     public var selectedGenerationId: String?
@@ -73,7 +82,7 @@ public final class BackupsModel {
         guard !stopped, !isClosed, !isBusy, healthError == nil, let health else { return false }
         return health.integrity == .sound
     }
-    public var canSaveDestination: Bool { canWrite && destination != nil }
+    public var canSaveDestination: Bool { canWrite && destination != nil && destinationError == nil }
     public var canRestore: Bool {
         !stopped && !isClosed && !isBusy
             && generations.contains { $0.id == selectedGenerationId && $0.state == .complete }
@@ -204,12 +213,15 @@ public final class BackupsModel {
                 healthTicket &+= 1
                 generations = []
                 artifacts = []
+                generationsReadState = .unloaded
+                artifactsReadState = .unloaded
                 selectedGenerationId = nil
                 confirmation = nil
                 destination = nil
                 destinationDraft = ""
                 health = nil
                 readError = nil
+                destinationError = nil
                 healthError = nil
                 // CoreBridge.settings also publishes to shared observers. Finish
                 // pre-swap reads before the shell can open new handles/settings.
@@ -226,6 +238,8 @@ public final class BackupsModel {
                 await beginRead(.preserveEdits).value
             case .closed:
                 isClosed = true
+                // A fenced read cannot clear progress, and none will replace it.
+                isRefreshing = false
                 readTicket &+= 1
                 healthTicket &+= 1
                 reading?.cancel()
@@ -265,25 +279,66 @@ public final class BackupsModel {
             }
         }
         do {
-            try Task.checkCancellation()
-            let rows = try await source.listBackups()
-            let names = try await source.listRestoreArtifacts()
-            let settings = try await source.settings()
-            guard let value = settings.first(where: { $0.key == Self.destinationKey })?.value else {
-                throw CoreFailure.internalError(detail: "The backup destination setting is missing.")
+            let source = source
+            let rows = try await captureRead { try await source.listBackups() }
+            let names = try await captureRead { try await source.listRestoreArtifacts() }
+            let setting = try await captureRead {
+                let settings = try await source.settings()
+                guard let value = settings.first(where: { $0.key == Self.destinationKey })?.value else {
+                    throw CoreFailure.internalError(detail: "The backup destination setting is missing.")
+                }
+                return value
             }
+            try Task.checkCancellation()
             guard ticket == readTicket, revision == archiveRevision, !isClosed else { return }
-            let edited = destinationDraft != (destination ?? "")
-            generations = rows
-            artifacts = names
-            destination = value
-            if case .replace = draft { destinationDraft = value } else if !edited { destinationDraft = value }
-            if !rows.contains(where: { $0.id == selectedGenerationId }) { selectedGenerationId = nil }
-            readError = nil
+            // Publish once within this epoch, but never let corrupt preferences
+            // hide a whole backup-ledger answer needed to recover that store.
+            var failure: (any Error)?
+            switch rows {
+            case .success(let rows):
+                generations = rows
+                generationsReadState = .loaded
+                if !rows.contains(where: { $0.id == selectedGenerationId }) { selectedGenerationId = nil }
+            case .failure(let cause):
+                generationsReadState = .failed(cause)
+                failure = cause
+            }
+            switch names {
+            case .success(let names):
+                artifacts = names
+                artifactsReadState = .loaded
+            case .failure(let cause):
+                artifactsReadState = .failed(cause)
+                failure = failure ?? cause
+            }
+            switch setting {
+            case .success(let value):
+                let edited = destinationDraft != (destination ?? "")
+                destination = value
+                destinationError = nil
+                if case .replace = draft {
+                    destinationDraft = value
+                } else if !edited {
+                    destinationDraft = value
+                }
+            case .failure(let cause):
+                destinationError = cause
+                failure = failure ?? cause
+            }
+            readError = failure
         } catch is CancellationError {
         } catch {
             if ticket == readTicket, revision == archiveRevision, !isClosed { readError = error }
         }
+    }
+
+    private func captureRead<Value: Sendable>(
+        _ read: @MainActor () async throws -> Value
+    ) async throws -> Result<Value, any Error> {
+        try Task.checkCancellation()
+        do { return .success(try await read()) } catch is CancellationError {
+            throw CancellationError()
+        } catch { return .failure(error) }
     }
 
     private func followHealth() {
