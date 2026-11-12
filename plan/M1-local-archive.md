@@ -1974,14 +1974,42 @@ local drafts. No network yet.
       concurrent flushes and edits during saves with deterministic gates.
       This prerequisite alone does not wire a native compose window or
       qualify persistence across application quit and relaunch.
-    - **M1.9c2 Native compose integration (L):** the macOS compose window,
-      token fields, subject, a plain or Markdown editor on the M0.11
-      probe's TextKit 2 view, attachment picking and dragging, autosave
-      after 1.5 s and flush on blur and quit, "Saved" only after the
-      receipt, the sidebar's Drafts (local) list, the keep-both conflict
-      UI, and Send unavailable without a sending account. The owner's
-      write-quit-relaunch check stays here. Split again before exceeding
-      the artifact limit without dropping acceptance coverage.
+    - **M1.9c2 Native compose integration:** split again before coding
+      (2026-11-12), retaining the complete acceptance below. Each artifact
+      must fit 1,450 gross changed lines including its native proof:
+      - **M1.9c2a Native text editor and lifetime (L):** File → New Message
+        creates a local draft and opens one AppKit window per draft.
+        Subject and the M0.11 TextKit 2 plain/Markdown body edit the
+        revision-aware model without replacing its other fields. Use the
+        merged 1.5 s scheduler; show Saved only after its receipt. Flush
+        on blur, close and quit; a failed/conflicting flush keeps the
+        window open and refuses quit. Fence edits while closing, await
+        pending opens and begun saves, and block restore while any
+        compose open/window is admitted. Test admission, native editor
+        wiring, receipts, close/quit refusal, cancellation and shutdown
+        over synthetic private roots. Recipient/attachment controls and
+        Drafts navigation remain the following artifacts, not completed
+        composer acceptance.
+      - **M1.9c2b Recipients and identity (L):** To/Cc/Bcc token fields,
+        the identity strip and available identity choices, preserving
+        routing and display names; Send stays unavailable without a
+        sending account (actual sending remains M4). Native tests cover
+        recipient edits and plain/Markdown changes without field loss.
+      - **M1.9c2c Attachment and conflict editing (L):** picking/dragging
+        attachments, publication before reference, attachment undo using
+        authorized republication, and explicit keep-both conflict UI
+        without automatic retry or loss of either window's content.
+        Include deterministic model and native interaction tests.
+      - **M1.9c2d Drafts navigation and restoration (L):** the sidebar's
+        Drafts (local) list, open/reopen by draft id, one window per draft,
+        and AppKit draft-id restoration. Include refresh/error handling
+        and old-archive retirement tests.
+      - **M1.9c2e Native compose acceptance (L):** isolated synthetic
+        XCUITests covering the complete create/edit/autosave, blur,
+        quit/relaunch, attachment and two-window conflict workflows. The
+        owner's write-quit-relaunch, input-method and accessibility checks
+        remain separately pending until qualified on the owner's Mac.
+      Re-size before coding if any artifact exceeds the limit.
 
 - **Goal:** compose and save drafts locally, durably, with revisions and
   attachments. No sending yet.
