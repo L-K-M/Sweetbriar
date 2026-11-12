@@ -22,6 +22,7 @@ final class ImportCoordinator {
     private var session: ImportSession?
     private var sheet: NSWindow?
     private var reportWindows: [ImportReportWindowController] = []
+    private var retired = false
 
     /// The job changed what the archive holds: the sidebar re-reads.
     var onArchiveChanged: (@MainActor () -> Void)?
@@ -34,7 +35,7 @@ final class ImportCoordinator {
     /// File → Import…: choose what to import, then start the job. With
     /// a job already under way, show its sheet again instead.
     func chooseAndImport() async {
-        guard let window else { return }
+        guard !retired, let window else { return }
         if let session, let jobId = session.jobId {
             guard sheet == nil else { return }
             session.attach(jobId: jobId)
@@ -60,6 +61,7 @@ final class ImportCoordinator {
 
     /// Start a job over `paths` and show its sheet.
     func start(paths: [String]) async {
+        guard !retired else { return }
         let session = makeSession()
         do {
             try await session.start(paths: paths)
@@ -68,6 +70,7 @@ final class ImportCoordinator {
             presentFailure("The import couldn't start", error)
             return
         }
+        guard !retired else { session.detach(); return }
         UserDefaults.standard.set(session.jobId, forKey: Self.activeJobKey)
         showSheet()
     }
@@ -75,7 +78,7 @@ final class ImportCoordinator {
     /// Reattach to the job a previous launch left, if any (spec/09). A
     /// job this store doesn't know — another store's — is let go.
     func reattach() async {
-        guard session == nil,
+        guard !retired, session == nil,
               let id = UserDefaults.standard.string(forKey: Self.activeJobKey),
               !id.isEmpty
         else {
@@ -91,10 +94,21 @@ final class ImportCoordinator {
         } catch {
             return
         }
-        guard session == nil else { return }
+        guard !retired, session == nil else { return }
         let session = makeSession()
         session.attach(jobId: id)
         showSheet()
+    }
+
+    /// Retire the UI, not the durable job. A restored core has already settled
+    /// unfinished imports; no old observer may reopen a report or sheet there.
+    func retire() {
+        retired = true
+        onArchiveChanged = nil
+        session?.onJobChanged = { _ in }
+        closeSheet()
+        for controller in reportWindows { controller.close() }
+        reportWindows = []
     }
 
     private func makeSession() -> ImportSession {
@@ -107,7 +121,7 @@ final class ImportCoordinator {
     }
 
     private func showSheet() {
-        guard let window, let session else { return }
+        guard !retired, let window, let session else { return }
         let controller = ImportSheetController(session: session)
         controller.onClose = { [weak self] in
             self?.closeSheet()
@@ -137,6 +151,7 @@ final class ImportCoordinator {
     }
 
     private func showReport(_ report: ImportReport) {
+        guard !retired else { return }
         let controller = ImportReportWindowController(report: report)
         controller.onClose = { [weak self, weak controller] in
             self?.reportWindows.removeAll { $0 === controller }
@@ -146,6 +161,7 @@ final class ImportCoordinator {
     }
 
     private func presentFailure(_ title: String, _ error: any Error) {
+        guard !retired else { return }
         let alert = NSAlert()
         alert.messageText = title
         alert.informativeText = error.localizedDescription

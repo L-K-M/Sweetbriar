@@ -28,6 +28,17 @@ final class SharedAppearance {
         return model
     }
 
+    /// A restored store can have a lower generation. Retire the old follower
+    /// before handing replacement views a fresh model instead of filtering it out.
+    func reset() async {
+        let previous = task
+        task = nil
+        previous?.cancel()
+        await previous?.value
+        current = nil
+        sourceID = nil
+    }
+
     deinit {
         task?.cancel()
     }

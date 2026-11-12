@@ -14,6 +14,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var session: CoreSession?
     private var settingsWindow: AppearanceSettingsWindow?
     private let appearance = SharedAppearance()
+    private var backups: SharedBackups?
+    private var terminating = false
 
     /// The menu builder is retained: `NSMenuItem.target` is weak, so
     /// the Debug items die with their builder otherwise.
@@ -55,7 +57,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         self.session = session
 
-        let mainWindow = MainWindowController(session: session, appearance: appearance)
+        let backups = SharedBackups(
+            didRestore: { [weak self] in await self?.archiveRestored() },
+            didClose: { [weak self] in await self?.archiveClosed() }
+        )
+        self.backups = backups
+        let mainWindow = MainWindowController(session: session, appearance: appearance, backups: backups)
         self.mainWindow = mainWindow
         mainWindow.showWindow(nil)
         mainWindow.start()
@@ -97,7 +104,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.startBenchmark(mode: .search)
             },
             isBenchmarkEnabled: { [weak self] in
-                self?.benchmarkRunner == nil
+                self?.benchmarkRunner == nil && self?.backups?.writesUnavailable != true
+                    && self?.backups?.restoreBlockedReason == nil
             },
             onShowComposerProbe: { [weak self] in
                 self?.showComposerProbe()
@@ -117,7 +125,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func showSettings() {
-        guard let session else { return }
+        guard !terminating, let session else { return }
         if settingsWindow == nil {
             settingsWindow = AppearanceSettingsWindow(session: session, shared: appearance)
         }
@@ -130,7 +138,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// model so it rebuilds — the prototype has no subscriptions
     /// (spec/08). Failures show in an alert.
     private func fillSyntheticRows() {
+        guard let backups, backups.begin(.syntheticFill) else {
+            presentError("The synthetic fill is unavailable", CoreFailure.conflict(detail: "Finish the current operation or recover the read-only archive first."))
+            return
+        }
         Task { @MainActor [weak self] in
+            defer { backups.end(.syntheticFill) }
             guard let self, let session else { return }
             do {
                 let bridge = try await session.bridge()
@@ -148,6 +161,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// make one listing `DebugSynthetic` in the stored
     /// implementation.
     private func showListPrototype() {
+        guard !terminating, backups?.isRestoring != true else { return }
         if let controller = prototypeController {
             controller.window?.makeKeyAndOrderFront(nil)
             return
@@ -186,7 +200,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func prototypeImplementationChanged(
         _ implementation: PrototypeImplementation
     ) {
-        guard let controller = prototypeController else { return }
+        guard backups?.isRestoring != true, let controller = prototypeController else { return }
         Task { @MainActor in
             await controller.setImplementation(implementation)
         }
@@ -200,6 +214,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         mode: BenchmarkMode = .synthetic, reportPath: String? = nil
     ) {
         guard let session, benchmarkRunner == nil else { return }
+        let admitted = backups?.begin(.benchmark) == true
         let runner = ListBenchmarkRunner(session: session)
         benchmarkRunner = runner
         Task { @MainActor [weak self] in
@@ -210,15 +225,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.prototypeController = nil
             }
             let report: ListBenchmarkReport
-            switch mode {
-            case .synthetic:
-                report = await runner.run()
-            case .store:
-                report = await runner.runStore(controller: self?.mainWindow)
-            case .search:
-                report = await runner.runSearch(controller: self?.mainWindow)
+            if admitted {
+                switch mode {
+                case .synthetic:
+                    report = await runner.run()
+                case .store:
+                    report = await runner.runStore(controller: self?.mainWindow)
+                case .search:
+                    report = await runner.runSearch(controller: self?.mainWindow)
+                }
+            } else {
+                report = ListBenchmarkReport(
+                    ok: false, failures: ["The archive is unavailable or another archive operation is active."],
+                    environment: BenchmarkEnvironment.collect(), runs: [], comparison: nil, mode: mode
+                )
             }
             guard let self else { return }
+            if admitted { backups?.end(.benchmark) }
             benchmarkRunner = nil
             guard let reportPath else {
                 let controller = BenchmarkReportWindowController(
@@ -260,6 +283,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
         }
+    }
+
+    /// All old-context handles must finish before any replacement pane opens.
+    private func archiveRestored() async {
+        await prototypeController?.closeAndAwaitModel()
+        prototypeController = nil
+        await mainWindow?.retireContent()
+        await appearance.reset()
+        if !terminating { await mainWindow?.rebuildAfterRestore() }
+    }
+
+    private func archiveClosed() async {
+        await prototypeController?.closeAndAwaitModel()
+        prototypeController = nil
+        await mainWindow?.archiveClosed()
+        await appearance.reset()
     }
 
     /// Debug failures surface as an alert — a sheet when a window can
@@ -312,7 +351,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let session else {
             return .terminateNow
         }
+        guard !terminating else { return .terminateLater }
+        terminating = true
+        settingsWindow?.close()
         Task { @MainActor in
+            await backups?.cancelAndWait()
+            await prototypeController?.closeAndAwaitModel()
+            await mainWindow?.retireContent()
+            await appearance.reset()
             await session.shutdown()
             NSApplication.shared.reply(toApplicationShouldTerminate: true)
         }
