@@ -467,3 +467,70 @@ func autosaveReceiptRemainsAcknowledgedWhenMetadataRefreshFails() async throws {
         #expect(await f.store.saves.count == 1)
     }
 }
+
+@Test(.timeLimit(.minutes(1))) @MainActor
+func autosaveSuspendedDeadlineWaitsForAnExplicitResume() async throws {
+    try await withAutosaveFixture { f in
+        await f.model.load()
+        try await f.edit("pending decision")
+        f.autosave.suspendDebounce()
+        await f.clock.fire(0)
+        await settleAutosaveTasks()
+        #expect(await f.store.saves.isEmpty)
+        #expect(f.model.isDirty)
+        f.autosave.contentDidChange()
+        await autosaveEventually { await f.clock.intervals.count == 2 }
+        await f.clock.fire(1)
+        await autosaveEventually { !f.model.isDirty }
+        #expect(await f.store.saves.count == 1)
+    }
+}
+
+@Test(.timeLimit(.minutes(1))) @MainActor
+func autosaveStopAndWaitDrainsDespiteACancelledWaiter() async throws {
+    try await withAutosaveFixture { f in
+        await f.model.load()
+        let gate = AutosaveGate()
+        await f.store.setGate(gate)
+        try await f.edit("begun save")
+        let flush = Task { await f.autosave.flush() }
+        await autosaveEventually { await f.store.saves.count == 1 }
+        var started = false
+        var drained = false
+        let stop = Task { started = true; await f.autosave.stopAndWait(); drained = true }
+        await autosaveEventually { started }
+        stop.cancel()
+        #expect(!drained && f.model.isSaving && f.model.baseRevisionId == "r1")
+        await gate.open()
+        await stop.value
+        #expect(drained && !f.model.isSaving && !f.model.isStopped)
+        #expect(f.model.baseRevisionId == "r2" && !f.model.isDirty)
+        #expect(!(await flush.value))
+        await f.autosave.stopAndWait()
+        #expect(await f.store.saves.count == 1)
+    }
+}
+
+@Test(.timeLimit(.minutes(1))) @MainActor
+func autosaveStopAndWaitDoesNotSaveNewerUnsavedEdits() async throws {
+    try await withAutosaveFixture { f in
+        await f.model.load()
+        let gate = AutosaveGate()
+        await f.store.setGate(gate)
+        try await f.edit("begun")
+        let flush = Task { await f.autosave.flush() }
+        await autosaveEventually { await f.store.saves.count == 1 }
+        try await f.edit("later unsaved text")
+        var started = false
+        let stop = Task { started = true; await f.autosave.stopAndWait() }
+        await autosaveEventually { started }
+        await f.clock.fire(1)
+        await gate.open()
+        await stop.value
+        #expect(!(await flush.value))
+        #expect(f.model.content?.bodySource == "later unsaved text" && f.model.isDirty)
+        #expect(f.model.baseRevisionId == "r2")
+        #expect(await f.store.saves.count == 1)
+        #expect(await f.store.saves.first?.content.bodySource == "begun")
+    }
+}

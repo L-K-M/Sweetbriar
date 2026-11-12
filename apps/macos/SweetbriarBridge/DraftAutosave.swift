@@ -91,11 +91,27 @@ public final class DraftAutosave {
             && !model.isSaving && !model.isDirty && model.baseRevisionId != nil
     }
 
+    /// Pause the quiet-period deadline for an explicit close decision. Begun
+    /// saves keep running. Resume with contentDidChange, or flush explicitly.
+    public func suspendDebounce() { cancelTimer() }
+
     /// Retire only the timer. Flush successfully before stopping on close or
     /// quit. This does not stop the draft model or hide a begun save's receipt.
     public func stop() {
         stopped = true
         cancelTimer()
+    }
+
+    /// Retire without starting a new save, but await the owned command's
+    /// actual outcome. Normal close/quit must flush first. This is also the
+    /// barrier for an explicitly confirmed abandonment of unsaved UI edits;
+    /// a save that already began may still commit and is never rolled back.
+    public func stopAndWait() async {
+        stop()
+        if let active = saving {
+            await active.task.value
+            if saving?.id == active.id { saving = nil }
+        }
     }
 
     private func cancelTimer() {

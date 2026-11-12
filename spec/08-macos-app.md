@@ -119,7 +119,11 @@ native restore. Cancel unbegun UI calls; keep awaiting begun commands to
 their receipts. The confirmation warns that open setup/import dialogs
 close; detaching their UI does not itself cancel a durable import job.
 A refusal leaves the original archive usable and admits fresh UI actions,
-never a delayed write from the retired context.
+never a delayed write from the retired context. An admitted compose open
+or window blocks restore: ask the user to close compose windows first.
+Closing must acknowledge their displayed edits, or await the explicitly
+confirmed Close Without Saving path below, before releasing admission.
+Neither unsaved text nor a delayed draft save may cross a swap.
 
 ## Sidebar
 
@@ -343,6 +347,23 @@ never a delayed write from the retired context.
   - autosaves 1.5 s after typing stops, and on blur and quit;
   - each save is a new draft revision (02);
   - "Saved" shows only after the receipt.
+  - Close and quit freeze edits, await pending opens and flush. A failure
+    or conflict keeps the affected window open and refuses quit, with an
+    actionable status and an explicit save retry; never discard unsaved
+    text or retry conflicts automatically. Close Without Saving requires
+    explicit confirmation: it drops only unsaved editor changes, keeps
+    the last saved revision, and does not call `discard_draft`. It must
+    await any begun save before closing; an acknowledged save is not
+    rolled back. Its confirmation pauses the quiet-period timer and
+    must not trigger a blur save itself; Keep Editing restarts the timer.
+    Normal close/quit dismisses that owned prompt without discarding and
+    flushes instead. This path must remain usable when a read-only core
+    refuses saving, so recovery is not trapped behind a compose window.
+    A begun save is awaited, not cancelled because its waiter was cancelled.
+  - M1.9c2a first wires subject and plain/Markdown body editing. Existing
+    recipients, route and attachments survive those edits unchanged;
+    their editable controls, Drafts navigation and complete native UI
+    acceptance follow in c2b–c2e. Sending remains unavailable until M4.
 - **Attachments** are dragged in or picked. Each is published to the
   object store before the revision that references it.
 - **Paste:** pasting HTML offers "Paste as Markdown" with a preview and a
