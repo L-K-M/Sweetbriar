@@ -75,6 +75,22 @@ including the event publishing the copy path. Back up now and other writes
 are unavailable, but listing and restore remain available. After a restore,
 read health and Search coverage again; do not leave a stale read-only note.
 
+The shared bridge-owned Backups model (M1.8j5) serializes its commands
+and binds confirmation to an immutable complete generation's id/date.
+An old verification verdict never substitutes for the restore's fresh
+verification. A replay without a copy handle is not a completed backup.
+Retained names and errors are reported without filesystem inspection or
+cleanup by the model.
+
+A restored or receipt-unrecorded outcome invalidates replaced-store state
+exactly once even when the requesting task was cancelled. Stale reads
+from before that swap cannot overwrite new state. Re-subscribe to health
+and read again after a swap or a reset, accepting lower generations.
+Refresh from an uncancelled task after command completion; cancelling a
+copy wait says only that waiting stopped, not that the copy stopped.
+Before shutting down the shared core, cancel and await the model's calls
+and health watcher. Closing Settings alone does not end them.
+
 ## Sidebar
 
 - **Unified section:** Inbox (`Unified(inbox)`), Flagged (`Flagged`),
