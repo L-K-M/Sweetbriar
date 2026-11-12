@@ -208,6 +208,14 @@ final class BackupsUIArchive {
         }
     }
 
+    func openFirstRow() {
+        let row = rows.element(boundBy: 0)
+        // The restored window can publish its count before AppKit realizes
+        // the row. Do not ask XCTest to scroll a still-unhittable placeholder.
+        wait(row, "hittable == true")
+        row.click()
+    }
+
     func chooseMailbox(_ name: String, count: Int) {
         let entry = main.outlines["sidebar"].staticTexts[name]
         XCTAssertTrue(entry.waitForExistence(timeout: Self.timeout))

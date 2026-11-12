@@ -74,7 +74,7 @@ final class BackupsRecoveryFlowTests: XCTestCase {
         archive.closeSettings()
         archive.wait(archive.main.buttons["openBackups"], "exists == false")
         archive.chooseMailbox("ReadOnlyRecovery", count: 1)
-        archive.rows.element(boundBy: 0).click()
+        archive.openFirstRow()
         archive.wait(archive.main.textViews["readerBody"], "value CONTAINS %@", "read-only recovery body")
     }
 
@@ -106,7 +106,7 @@ final class BackupsRecoveryFlowTests: XCTestCase {
         archive.wait(archive.settings.buttons["backupNow"], "enabled == true")
         archive.closeSettings()
         archive.chooseMailbox("StillLive", count: 1)
-        archive.rows.element(boundBy: 0).click()
+        archive.openFirstRow()
         archive.wait(archive.main.textViews["readerBody"], "value CONTAINS %@", "unchanged live body")
         // Deliberate fixture repair, followed by a new explicit user command.
         try FileManager.default.moveItem(at: parked, to: location)

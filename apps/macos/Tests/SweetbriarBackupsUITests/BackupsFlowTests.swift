@@ -31,7 +31,7 @@ final class BackupsFlowTests: XCTestCase {
         archive.chooseMailbox("ChangeAfterBackup", count: 1)
         archive.search("unbacked")
         archive.wait(archive.rows, "count == 1")
-        archive.rows.element(boundBy: 0).click()
+        archive.openFirstRow()
         let body = archive.main.textViews["readerBody"]
         XCTAssertTrue(body.waitForExistence(timeout: BackupsUIArchive.timeout))
         archive.wait(body, "value CONTAINS %@", "change-only body")
@@ -52,7 +52,7 @@ final class BackupsFlowTests: XCTestCase {
                 timeout: BackupsUIArchive.timeout))
         XCTAssertFalse(archive.main.outlines["sidebar"].staticTexts["ChangeAfterBackup"].exists)
         archive.chooseMailbox("RecoveryPoint", count: 1)
-        archive.rows.element(boundBy: 0).click()
+        archive.openFirstRow()
         let restoredBody = archive.main.textViews["readerBody"]
         XCTAssertTrue(restoredBody.waitForExistence(timeout: BackupsUIArchive.timeout))
         archive.wait(restoredBody, "value CONTAINS %@", "snapshot-only body")
