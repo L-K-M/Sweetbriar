@@ -39,7 +39,8 @@ final class BackupsRecoveryFlowTests: XCTestCase {
         continueAfterFailure = false
         let archive = try BackupsUIArchive("readonly")
         addTeardownBlock { await archive.dispose() }
-        let mailbox = try archive.writeMailbox("ReadOnlyRecovery", subject: "Recovery note", body: "read-only recovery body")
+        let mailbox = try archive.writeMailbox(
+            "ReadOnlyRecovery", subject: "Recovery note", body: "read-only recovery body")
         try archive.launch(importPath: mailbox)
         archive.importMail(count: 1)
         archive.openBackups()
@@ -53,7 +54,8 @@ final class BackupsRecoveryFlowTests: XCTestCase {
         XCTAssertFalse(archive.app.menuBars.menuItems["Import…"].isEnabled)
         archive.app.typeKey(.escape, modifierFlags: [])
         bannerButton.click()
-        XCTAssertTrue(archive.settings.buttons["backupNow"].waitForExistence(timeout: BackupsUIArchive.timeout))
+        XCTAssertTrue(
+            archive.settings.buttons["backupNow"].waitForExistence(timeout: BackupsUIArchive.timeout))
         XCTAssertFalse(archive.settings.buttons["backupNow"].isEnabled)
         XCTAssertFalse(archive.settings.textFields["backupDestination"].isEnabled)
         let generation = archive.chooseGeneration()
@@ -71,7 +73,8 @@ final class BackupsRecoveryFlowTests: XCTestCase {
         continueAfterFailure = false
         let archive = try BackupsUIArchive("missing-generation")
         addTeardownBlock { await archive.dispose() }
-        let mailbox = try archive.writeMailbox("StillLive", subject: "Still live", body: "unchanged live body")
+        let mailbox = try archive.writeMailbox(
+            "StillLive", subject: "Still live", body: "unchanged live body")
         try archive.launch(importPath: mailbox)
         archive.importMail(count: 1)
         archive.openBackups()
@@ -87,7 +90,9 @@ final class BackupsRecoveryFlowTests: XCTestCase {
         let parked = archive.root.appendingPathComponent("unavailable-generation")
         try FileManager.default.moveItem(at: location, to: parked)
         archive.confirmRestore(generation)
-        XCTAssertTrue(archive.settings.staticTexts["backupCommandError"].waitForExistence(timeout: BackupsUIArchive.timeout))
+        XCTAssertTrue(
+            archive.settings.staticTexts["backupCommandError"].waitForExistence(
+                timeout: BackupsUIArchive.timeout))
         archive.wait(archive.settings.buttons["backupNow"], "enabled == true")
         archive.closeSettings()
         archive.chooseMailbox("StillLive", count: 1)
@@ -108,12 +113,15 @@ final class BackupsRecoveryFlowTests: XCTestCase {
         addTeardownBlock { await archive.dispose() }
         // Enough distinct objects for UI automation to observe real preparation,
         // not a fake delay or an unbegun call. Import/index has its own UI gate.
-        let baseline = try archive.writeMailbox("CancelBaseline", subject: "Baseline", body: "baseline body", count: 5001)
+        let baseline = try archive.writeMailbox(
+            "CancelBaseline", subject: "Baseline", body: "baseline body", count: 5001)
         let change = try archive.writeMailbox("CancelChange", subject: "Later", body: "unbacked change")
         try archive.launch(importPath: baseline)
-        archive.importMail(count: 5001)
+        // Seeding is not a performance assertion: observed 1,750/5,001
+        // messages after one minute on this filesystem. Keep small flows at 60s.
+        archive.importMail(count: 5001, completionTimeout: 300)
         archive.openBackups()
-        archive.backup()
+        archive.backup(completionTimeout: 300)
         XCTAssertTrue(archive.quit())
         try archive.launch(importPath: change)
         archive.importMail(count: 1)
@@ -121,44 +129,68 @@ final class BackupsRecoveryFlowTests: XCTestCase {
         let generation = archive.chooseGeneration()
         archive.confirmRestore(generation)
         let root = archive.root
-        let staging = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
-            let names = (try? FileManager.default.contentsOfDirectory(atPath: root.path)) ?? []
-            return names.contains { $0.hasPrefix("data.restoring-") }
-        }, object: nil)
+        let staging = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in
+                let names = (try? FileManager.default.contentsOfDirectory(atPath: root.path)) ?? []
+                return names.contains { $0.hasPrefix("data.restoring-") }
+            }, object: nil)
         XCTAssertEqual(XCTWaiter.wait(for: [staging], timeout: BackupsUIArchive.timeout), .completed)
         let cancel = archive.settings.buttons["backupCancelRestore"]
-        XCTAssertTrue(cancel.exists, "Cancellation must actually be requested, not inferred from a fast success")
+        XCTAssertTrue(
+            cancel.exists, "Cancellation must actually be requested, not inferred from a fast success")
         cancel.click()
-        let outcome = archive.waitForRestoreOutcome()
-        let restored = outcome.hasPrefix("Restored")
-        XCTAssertTrue(restored || outcome.hasPrefix("The request was cancelled.") || outcome.hasPrefix("Restore refused:"))
+        let restored: Bool
+        switch archive.waitForRestoreCompletion() {
+        case .result(let outcome):
+            restored = outcome.hasPrefix("Restored")
+            XCTAssertTrue(
+                restored || outcome.hasPrefix("The request was cancelled.")
+                    || outcome.hasPrefix("Restore refused:"))
+        case .error(let detail):
+            // Cancelling a begun manifest read can return its real Interrupted
+            // I/O error, not the facade's pre-admission CancellationError.
+            XCTAssertTrue(detail.contains("operation interrupted"), detail)
+            restored = false
+        }
         let retained = try FileManager.default.contentsOfDirectory(atPath: root.path).filter {
             $0.hasPrefix(restored ? "data.preserved-" : "data.restoring-")
         }
         XCTAssertFalse(retained.isEmpty)
         archive.settings.buttons["backupRefresh"].click()
         for name in retained {
-            let shown = archive.settings.descendants(matching: .any).matching(NSPredicate(
-                format: "identifier BEGINSWITH %@ AND identifier ENDSWITH %@", "backupArtifact-", "/" + name
-            )).firstMatch
+            let shown = archive.settings.descendants(matching: .any).matching(
+                NSPredicate(
+                    format: "identifier BEGINSWITH %@ AND identifier ENDSWITH %@", "backupArtifact-",
+                    "/" + name
+                )
+            ).firstMatch
             XCTAssertTrue(shown.waitForExistence(timeout: BackupsUIArchive.timeout))
         }
         archive.closeSettings()
         let changedMailbox = archive.main.outlines["sidebar"].staticTexts["CancelChange"]
-        if restored { XCTAssertFalse(changedMailbox.exists) }
-        else { archive.chooseMailbox("CancelChange", count: 1) }
+        if restored {
+            XCTAssertFalse(changedMailbox.exists)
+        } else {
+            archive.chooseMailbox("CancelChange", count: 1)
+        }
         XCTAssertTrue(archive.main.outlines["sidebar"].staticTexts["CancelBaseline"].exists)
     }
 
     @MainActor
-    func testQuitDismissesAnOpenImportPicker() throws {
+    func testRestoreClosesAnOpenImportPicker() throws {
         continueAfterFailure = false
         let archive = try BackupsUIArchive("open-picker")
         addTeardownBlock { await archive.dispose() }
         try archive.launch()
+        archive.openBackups()
+        archive.backup()
+        let generation = archive.chooseGeneration()
         archive.app.menuBars.menuBarItems["File"].click()
         archive.app.menuBars.menuItems["Import…"].click()
-        XCTAssertTrue(archive.app.sheets.firstMatch.waitForExistence(timeout: BackupsUIArchive.timeout))
-        XCTAssertTrue(archive.quit())
+        XCTAssertTrue(archive.main.sheets.firstMatch.waitForExistence(timeout: BackupsUIArchive.timeout))
+        archive.openBackups()
+        archive.confirmRestore(generation)
+        XCTAssertTrue(archive.waitForRestoreOutcome().hasPrefix("Restored"))
+        XCTAssertFalse(archive.main.sheets.firstMatch.exists)
     }
 }

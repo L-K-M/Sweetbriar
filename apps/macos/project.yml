@@ -13,6 +13,11 @@ options:
   deploymentTarget:
     macOS: "26.0"
 
+configs:
+  Debug: debug
+  Release: release
+  BackupsTesting: debug
+
 settings:
   base:
     SWIFT_VERSION: "6.0"
@@ -84,6 +89,9 @@ targets:
         ENABLE_USER_SCRIPT_SANDBOXING: NO
         # Derived from media-sources/icon.png by scripts/app-icon.py.
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+      configs:
+        BackupsTesting:
+          PRODUCT_BUNDLE_IDENTIFIER: ch.lkmc.SweetbriarAgentTests.Sweetbriar
     info:
       path: Sweetbriar/Info.plist
       properties:
@@ -158,7 +166,33 @@ targets:
         # The runner inherits these: the reader canary needs loopback.
         CODE_SIGN_ENTITLEMENTS: Tests/SweetbriarUITests/SweetbriarUITests.entitlements
 
+  # Separate from the general smoke suite: both app and runner use private
+  # preference identities, and every test supplies fresh data/cache roots.
+  SweetbriarBackupsUITests:
+    type: bundle.ui-testing
+    platform: macOS
+    sources:
+      - Tests/SweetbriarBackupsUITests
+    dependencies:
+      - target: Sweetbriar
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ch.lkmc.SweetbriarAgentTests.SweetbriarBackupsUITests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: Sweetbriar
+        CODE_SIGN_ENTITLEMENTS: Tests/SweetbriarUITests/SweetbriarUITests.entitlements
+
 schemes:
+  SweetbriarBackups:
+    build:
+      targets:
+        Sweetbriar: all
+        SweetbriarBackupsUITests: [test]
+    test:
+      config: BackupsTesting
+      targets:
+        - SweetbriarBackupsUITests
+
   Sweetbriar:
     build:
       targets:

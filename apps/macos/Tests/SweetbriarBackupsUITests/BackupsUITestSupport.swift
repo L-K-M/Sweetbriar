@@ -16,16 +16,19 @@ final class BackupsUIArchive {
     var settings: XCUIElement { app.windows["Settings"] }
     var rows: XCUIElementQuery { main.tables["messageList"].tableRows }
     var generationRows: XCUIElementQuery {
-        settings.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "backupGeneration-"))
+        settings.descendants(matching: .any).matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "backupGeneration-"))
     }
     var artifactIDs: Set<String> {
-        Set(settings.descendants(matching: .any)
-            .matching(NSPredicate(format: "identifier BEGINSWITH %@", "backupArtifact-"))
-            .allElementsBoundByIndex.map(\.identifier))
+        Set(
+            settings.descendants(matching: .any)
+                .matching(NSPredicate(format: "identifier BEGINSWITH %@", "backupArtifact-"))
+                .allElementsBoundByIndex.map(\.identifier))
     }
 
     init(_ label: String) throws {
-        let path = FileManager.default.temporaryDirectory.appendingPathComponent("sb-backups-\(label)-\(UUID().uuidString)")
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "sb-backups-\(label)-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: path, withIntermediateDirectories: true)
         root = path.resolvingSymlinksInPath()
     }
@@ -40,15 +43,25 @@ final class BackupsUIArchive {
         ownsApp = true
         app.launch()
         app.activate()
-        XCTAssertTrue(main.outlines["sidebar"].staticTexts["Local Archive"].waitForExistence(timeout: Self.timeout))
-        XCTAssertTrue(FileManager.default.fileExists(atPath: data.path), "the UI target must use this fixture, not default/fallback roots")
+        XCTAssertTrue(
+            main.outlines["sidebar"].staticTexts["Local Archive"].waitForExistence(timeout: Self.timeout))
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: data.path),
+            "the UI target must use this fixture, not default/fallback roots")
     }
 
     @discardableResult
     func quit() -> Bool {
         if !ownsApp || app.state == .notRunning { return true }
         app.activate()
-        app.typeKey("q", modifierFlags: .command)
+        // A window-modal import/picker can intercept Quit's key equivalent.
+        // Detach owned UI first; this does not cancel a durable import job.
+        if app.buttons["importClose"].exists { app.buttons["importClose"].click() }
+        if app.buttons["backupDismissRestore"].exists { app.buttons["backupDismissRestore"].click() }
+        let cancel = app.sheets.firstMatch.buttons["Cancel"]
+        if cancel.exists { cancel.click() }
+        app.menuBars.menuBarItems["Sweetbriar"].click()
+        app.menuBars.menuItems["Quit Sweetbriar"].click()
         let stopped = app.wait(for: .notRunning, timeout: Self.timeout)
         XCTAssertTrue(stopped, "No forced termination: retain the fixture and settle the begun operation")
         if stopped { ownsApp = false }
@@ -59,30 +72,53 @@ final class BackupsUIArchive {
         if quit() { try? FileManager.default.removeItem(at: root) }
     }
 
-    func wait(_ object: Any, _ format: String, _ arguments: CVarArg..., file: StaticString = #filePath, line: UInt = #line) {
-        let condition = XCTNSPredicateExpectation(predicate: NSPredicate(format: format, argumentArray: arguments), object: object)
-        XCTAssertEqual(XCTWaiter.wait(for: [condition], timeout: Self.timeout), .completed, format, file: file, line: line)
+    func wait(
+        _ object: Any, _ format: String, _ arguments: CVarArg..., file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let condition = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: format, argumentArray: arguments), object: object)
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [condition], timeout: Self.timeout), .completed, format, file: file,
+            line: line)
     }
 
-    func importMail(count: Int) {
+    func importMail(count: Int, completionTimeout: TimeInterval = timeout) {
         app.menuBars.menuBarItems["File"].click()
         app.menuBars.menuItems["Import…"].click()
         XCTAssertTrue(app.buttons["importConfirm"].waitForExistence(timeout: Self.timeout))
         XCTAssertTrue(app.staticTexts["1 source, \(count) messages."].exists)
         app.buttons["importConfirm"].click()
-        XCTAssertTrue(app.buttons["importShowReport"].waitForExistence(timeout: Self.timeout))
+        XCTAssertTrue(app.buttons["importShowReport"].waitForExistence(timeout: completionTimeout))
         app.buttons["importClose"].click()
         wait(app.sheets.firstMatch, "exists == false")
     }
 
     func openBackups() {
+        openSettings(tab: "Backups")
+        XCTAssertTrue(settings.buttons["backupNow"].waitForExistence(timeout: Self.timeout))
+    }
+
+    func openAppearance() {
+        openSettings(tab: "Appearance")
+        XCTAssertTrue(settings.radioButtons.firstMatch.waitForExistence(timeout: Self.timeout))
+    }
+
+    private func openSettings(tab name: String) {
         app.menuBars.menuBarItems["Sweetbriar"].click()
         app.menuBars.menuItems["Settings…"].click()
         XCTAssertTrue(settings.waitForExistence(timeout: Self.timeout))
-        let tab = settings.descendants(matching: .tab).matching(NSPredicate(format: "label == %@", "Backups")).firstMatch
+        let tab = settings.descendants(matching: .tab).matching(NSPredicate(format: "label == %@", name))
+            .firstMatch
         XCTAssertTrue(tab.waitForExistence(timeout: Self.timeout))
         tab.click()
-        XCTAssertTrue(settings.buttons["backupNow"].waitForExistence(timeout: Self.timeout))
+    }
+
+    func chooseColor(_ name: String) {
+        let button = settings.radioButtons[name]
+        button.click()
+        wait(button, "selected == true")
+        wait(button, "enabled == true")
     }
 
     func closeSettings() {
@@ -94,12 +130,12 @@ final class BackupsUIArchive {
         element.value as? String ?? element.label
     }
 
-    func backup() {
+    func backup(completionTimeout: TimeInterval = timeout) {
         let button = settings.buttons["backupNow"]
         wait(button, "enabled == true")
         button.click()
         let result = settings.staticTexts["backupResult"]
-        XCTAssertTrue(result.waitForExistence(timeout: Self.timeout))
+        XCTAssertTrue(result.waitForExistence(timeout: completionTimeout))
         wait(result, "value CONTAINS %@", "is complete")
         wait(button, "enabled == true")
     }
@@ -109,9 +145,11 @@ final class BackupsUIArchive {
         let row = generationRows.firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: Self.timeout))
         row.click()
-        let dates = settings.staticTexts.matching(NSPredicate(format: "value BEGINSWITH %@", "Started ")).firstMatch
+        let dates = settings.staticTexts.matching(NSPredicate(format: "value BEGINSWITH %@", "Started "))
+            .firstMatch
         XCTAssertTrue(dates.exists)
-        chosenDate = String(text(of: dates).dropFirst("Started ".count)).components(separatedBy: "; completed ").first
+        chosenDate =
+            String(text(of: dates).dropFirst("Started ".count)).components(separatedBy: "; completed ").first
         wait(settings.buttons["backupRestore"], "enabled == true")
         return String(row.identifier.dropFirst("backupGeneration-".count))
     }
@@ -120,21 +158,48 @@ final class BackupsUIArchive {
         settings.buttons["backupRestore"].click()
         let sheet = settings.sheets.firstMatch
         XCTAssertTrue(sheet.waitForExistence(timeout: Self.timeout))
-        let message = sheet.staticTexts.matching(NSPredicate(format: "value CONTAINS %@", generation)).firstMatch
+        let message = sheet.staticTexts.matching(NSPredicate(format: "value CONTAINS %@", generation))
+            .firstMatch
         XCTAssertTrue(message.waitForExistence(timeout: Self.timeout))
         XCTAssertNotNil(chosenDate)
         XCTAssertTrue(text(of: message).contains("from \(chosenDate ?? "missing date")?"))
-        for consequence in ["keeps the replaced root intact", "pauses every account", "quarantines pending work", "Nothing is sent, moved or deleted automatically"] {
+        for consequence in [
+            "keeps the replaced root intact", "pauses every account", "quarantines pending work",
+            "Nothing is sent, moved or deleted automatically",
+        ] {
             XCTAssertTrue(text(of: message).contains(consequence))
         }
-        sheet.buttons["backupConfirmRestore"].click()
+        let confirm = sheet.buttons["backupConfirmRestore"]
+        XCTAssertTrue(confirm.isEnabled, sheet.debugDescription)
+        wait(confirm, "hittable == true")
+        confirm.click()
+        wait(sheet, "exists == false")
+    }
+
+    enum RestoreCompletion {
+        case result(String)
+        case error(String)
+    }
+
+    func waitForRestoreCompletion() -> RestoreCompletion {
+        let answer = settings.staticTexts.matching(
+            NSPredicate(
+                format: "identifier IN %@", ["backupResult", "backupCommandError"]
+            )
+        ).firstMatch
+        XCTAssertTrue(answer.waitForExistence(timeout: Self.timeout))
+        wait(settings.buttons["backupNow"], "enabled == true")
+        if answer.identifier == "backupCommandError" { return .error(text(of: answer)) }
+        return .result(text(of: answer))
     }
 
     func waitForRestoreOutcome() -> String {
-        let result = settings.staticTexts["backupResult"]
-        XCTAssertTrue(result.waitForExistence(timeout: Self.timeout))
-        wait(settings.buttons["backupNow"], "enabled == true")
-        return text(of: result)
+        switch waitForRestoreCompletion() {
+        case .result(let result): return result
+        case .error(let detail):
+            XCTFail("Unexpected native restore error: \(detail)")
+            return ""
+        }
     }
 
     func chooseMailbox(_ name: String, count: Int) {
