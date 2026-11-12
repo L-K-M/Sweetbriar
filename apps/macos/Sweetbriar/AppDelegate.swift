@@ -62,7 +62,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             didClose: { [weak self] in await self?.archiveClosed() }
         )
         self.backups = backups
-        let mainWindow = MainWindowController(session: session, appearance: appearance, backups: backups)
+        let mainWindow = MainWindowController(session: session, appearance: appearance, backups: backups,
+                                              openBackups: { [weak self] in self?.showSettings(tab: .backups) })
         self.mainWindow = mainWindow
         mainWindow.showWindow(nil)
         mainWindow.start()
@@ -118,17 +119,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.mainWindow?.showWindow(nil)
                 self?.mainWindow?.beginBridgeAccountSetup()
             },
-            onSettings: { [weak self] in self?.showSettings() }
+            onSettings: { [weak self] in self?.showSettings() },
+            isWriteEnabled: { [weak self] in self?.backups?.canWrite == true }
         )
         NSApplication.shared.mainMenu = builder.makeMainMenu()
         menuBuilder = builder
     }
 
-    private func showSettings() {
-        guard !terminating, let session else { return }
+    private func showSettings(tab: SettingsTab? = nil) {
+        guard !terminating, let session, let backups else { return }
         if settingsWindow == nil {
-            settingsWindow = AppearanceSettingsWindow(session: session, shared: appearance)
+            settingsWindow = AppearanceSettingsWindow(session: session, shared: appearance, backups: backups)
         }
+        if let tab { settingsWindow?.select(tab) }
         settingsWindow?.showWindow(nil)
         settingsWindow?.window?.makeKeyAndOrderFront(nil)
     }
@@ -287,6 +290,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// All old-context handles must finish before any replacement pane opens.
     private func archiveRestored() async {
+        settingsWindow?.retireEditor()
         await prototypeController?.closeAndAwaitModel()
         prototypeController = nil
         await mainWindow?.retireContent()
@@ -295,6 +299,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func archiveClosed() async {
+        settingsWindow?.retireEditor()
         await prototypeController?.closeAndAwaitModel()
         prototypeController = nil
         await mainWindow?.archiveClosed()
@@ -356,6 +361,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsWindow?.close()
         Task { @MainActor in
             await backups?.cancelAndWait()
+            await settingsWindow?.cancelAndWait()
             await prototypeController?.closeAndAwaitModel()
             await mainWindow?.retireContent()
             await appearance.reset()

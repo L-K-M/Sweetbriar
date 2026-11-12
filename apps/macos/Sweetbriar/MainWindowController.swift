@@ -12,6 +12,7 @@
 //   a list's newer generation ──► the sidebar re-reads its counts
 
 import AppKit
+import SwiftUI
 import SweetbriarBridge
 
 @MainActor
@@ -25,6 +26,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     private let session: CoreSession
     private let appearance: SharedAppearance
     private let backups: SharedBackups
+    private let openBackups: @MainActor () -> Void
     private var contentTasks = ArchiveViewTasks()
     private var contentSerial: UInt64 = 0
     private var retirement: Task<Void, Never>?
@@ -38,10 +40,12 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     private var closed = false
 
 
-    init(session: CoreSession, appearance: SharedAppearance, backups: SharedBackups) {
+    init(session: CoreSession, appearance: SharedAppearance, backups: SharedBackups,
+         openBackups: @escaping @MainActor () -> Void = {}) {
         self.session = session
         self.appearance = appearance
         self.backups = backups
+        self.openBackups = openBackups
         let window = NSWindow(
             contentRect: NSRect(origin: .zero, size: Self.defaultContentSize),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
@@ -169,18 +173,18 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
 
     /// File → Add Proton Bridge Account…, once the core is up.
     func beginBridgeAccountSetup() {
-        guard !backups.writesUnavailable else { return }
+        guard backups.canWrite else { return }
         accountSetup?.begin()
     }
 
     /// File → Import…, once the core is up.
     func beginImport() {
-        guard !backups.writesUnavailable, let imports else { return }
+        guard backups.canWrite, let imports else { return }
         contentTasks.run { await imports.chooseAndImport() }
     }
 
     private func install(_ bridge: CoreBridge) {
-        guard let window else { return }
+        guard let window, let backupsModel = backups.model(source: bridge) else { return }
         if contentTasks.isRetired { contentTasks = ArchiveViewTasks() }
         retirement = nil
         contentSerial &+= 1
@@ -211,8 +215,27 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         split.addSplitViewItem(sidebarItem)
         split.addSplitViewItem(listItem)
         split.addSplitViewItem(NSSplitViewItem(viewController: reader))
+        let root = NSViewController()
+        root.view = NSView()
+        root.addChild(split)
+        let banner = NSHostingView(rootView: IntegrityBanner(model: backupsModel, openBackups: openBackups))
+        banner.sizingOptions = [.intrinsicContentSize]
+        banner.setContentHuggingPriority(.required, for: .vertical)
+        banner.translatesAutoresizingMaskIntoConstraints = false
+        split.view.translatesAutoresizingMaskIntoConstraints = false
+        root.view.addSubview(banner)
+        root.view.addSubview(split.view)
+        NSLayoutConstraint.activate([
+            banner.topAnchor.constraint(equalTo: root.view.topAnchor),
+            banner.leadingAnchor.constraint(equalTo: root.view.leadingAnchor),
+            banner.trailingAnchor.constraint(equalTo: root.view.trailingAnchor),
+            split.view.topAnchor.constraint(equalTo: banner.bottomAnchor),
+            split.view.leadingAnchor.constraint(equalTo: root.view.leadingAnchor),
+            split.view.trailingAnchor.constraint(equalTo: root.view.trailingAnchor),
+            split.view.bottomAnchor.constraint(equalTo: root.view.bottomAnchor),
+        ])
         let frame = window.frame
-        window.contentViewController = split
+        window.contentViewController = root
         window.setFrame(frame, display: true)
 
         let imports = ImportCoordinator(bridge: bridge, window: window)

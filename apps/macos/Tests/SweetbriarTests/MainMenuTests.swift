@@ -15,8 +15,8 @@ struct MainMenuTests {
     private let controller = ComposerProbeWindowController()
 
     @Test("⌘B, ⌘Z and ⇧⌘Z format, undo and redo through the main menu")
-    func formattingUndoRedo() throws {
-        try withFocusedEditor { textView in
+    func formattingUndoRedo() async throws {
+        try await withFocusedEditor { textView in
             textView.mode = .markdown
             textView.string = "say word now"
             textView.setSelectedRange(NSRange(location: 4, length: 4))
@@ -39,7 +39,7 @@ struct MainMenuTests {
     @Test("⌘V replaces a text-expander trigger with an emoji", arguments: [
         ComposerMode.plain, .markdown,
     ])
-    func pasteEmoji(mode: ComposerMode) throws {
+    func pasteEmoji(mode: ComposerMode) async throws {
         let pasteboard = NSPasteboard.general
         // Copy eagerly: clearing the board invalidates its original items.
         let previousItems = (pasteboard.pasteboardItems ?? []).map { original in
@@ -58,7 +58,7 @@ struct MainMenuTests {
         pasteboard.clearContents()
         try #require(pasteboard.setString("👩🏽‍💻", forType: .string))
 
-        try withFocusedEditor { (textView: ComposerTextView) throws in
+        try await withFocusedEditor { (textView: ComposerTextView) throws in
             textView.mode = mode
             textView.string = "hello :rocket: there"
             textView.setSelectedRange(NSRange(location: 6, length: 8))
@@ -74,13 +74,23 @@ struct MainMenuTests {
 
     private func withFocusedEditor(
         _ body: (ComposerTextView) throws -> Void
-    ) throws {
+    ) async throws {
         let previousWindow = NSApplication.shared.keyWindow
         let window = try #require(controller.window)
         defer {
             controller.close()
             previousWindow?.makeKey()
         }
+        // An app-hosted runner may start behind another application. Keyboard
+        // routing needs an active app, not merely an ordered-front window.
+        NSApplication.shared.activate()
+        let deadline = ContinuousClock.now + .seconds(2)
+        while !NSApplication.shared.isActive, ContinuousClock.now < deadline {
+            // Yield to AppKit's real event pump; a nested Foundation run loop
+            // alone does not dispatch the application's activation event.
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        try #require(NSApplication.shared.isActive)
         window.makeKeyAndOrderFront(nil)
         try #require(window.makeFirstResponder(controller.textView))
         try #require(NSApplication.shared.keyWindow === window)

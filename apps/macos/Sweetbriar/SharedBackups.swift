@@ -53,6 +53,10 @@ final class SharedBackups {
         return false
     }
 
+    /// Write UI waits for known sound health; diagnostic startup can still
+    /// precede the first health read through its separate admission contract.
+    var canWrite: Bool { !writesUnavailable && current?.health?.integrity == .sound }
+
     var restoreBlockedReason: String? {
         switch diagnostic {
         case .benchmark: "Wait for the diagnostic benchmark to finish before restoring."

@@ -47,6 +47,8 @@ struct ListAppearanceTests {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 300),
                               styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
+        // These pixel assertions use the light tokens, independent of the Mac's theme.
+        window.appearance = NSAppearance(named: .aqua)
         window.contentViewController = controller
         defer { window.close() }
         controller.show(.flagged)
@@ -99,7 +101,8 @@ struct ListAppearanceTests {
         second.accountId = "account-2"
         func renderRow(_ account: AccountAppearance, label: String, spec: WindowSpec) throws -> NSBitmapImageRep {
             let host = NSHostingView(rootView: RenderedMessageRow(content: content, account: account,
-                accountLabel: label, usesAppearance: true, showsAccountMarker: spec.showsAccountMarker))
+                accountLabel: label, usesAppearance: true, showsAccountMarker: spec.showsAccountMarker)
+                .environment(\.colorScheme, .light))
             host.frame = NSRect(x: 0, y: 0, width: 300, height: 56)
             host.layoutSubtreeIfNeeded()
             return try render(host)

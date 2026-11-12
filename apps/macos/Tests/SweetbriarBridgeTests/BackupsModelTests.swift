@@ -99,18 +99,23 @@ struct BackupsModelTests {
     }
 
     @Test
-    func refreshPublishesAllOrNothingAndKeepsTheLastSnapshotOnError() async throws {
+    func refreshPublishesWholeIndependentAnswersAndKeepsTheFailedSection() async throws {
         let source = FakeBackupsSource()
         let model = try await loaded(source)
-        let original = model.generations
         let originalNames = model.artifacts
         await source.setRows([backupRow("new")])
         await source.setDestination("/new")
         await source.failReads(.unavailable(reason: "unreadable sibling directory"))
         await model.refresh()
-        #expect(model.generations == original)
+        #expect(model.generations == [backupRow("new")])
         #expect(model.artifacts == originalNames)
-        #expect(model.destination == "")
+        #expect(model.destination == "/new")
+        guard case .failed(let cause) = model.artifactsReadState else {
+            Issue.record("A failed retained-name query must not become an empty success")
+            await model.cancelAndWait()
+            return
+        }
+        #expect(cause as? CoreFailure == .unavailable(reason: "unreadable sibling directory"))
         #expect(model.readError as? CoreFailure == .unavailable(reason: "unreadable sibling directory"))
         await source.failReads(nil)
         await model.refresh()

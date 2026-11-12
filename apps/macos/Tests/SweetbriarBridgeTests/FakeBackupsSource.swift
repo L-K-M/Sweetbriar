@@ -68,12 +68,14 @@ actor FakeBackupsSource: BackupsSource {
     private var missingDestination = false
     private var currentHealth = Health(integrity: .sound)
     private var rowGate: Gate?
+    private var rowFailure: CoreFailure?
     private var healthGate: Gate?
     private var restoreGate: Gate?
     private var nextFailure: CoreFailure?
     private var commandCancellation = false
     private var readFailure: CoreFailure?
     private var healthFailure: CoreFailure?
+    private var settingsFailure: CoreFailure?
     private var copy: (any BackupCopy)?
     private var restoreAnswer = RestoreOutcome.restored(receipt: backupsReceipt())
 
@@ -82,12 +84,14 @@ actor FakeBackupsSource: BackupsSource {
     func omitDestination() { missingDestination = true }
     func setHealth(_ health: Health) { currentHealth = health }
     func holdRows(_ gate: Gate?) { rowGate = gate }
+    func failRows(_ error: CoreFailure?) { rowFailure = error }
     func holdHealth(_ gate: Gate?) { healthGate = gate }
     func holdRestore(_ gate: Gate?) { restoreGate = gate }
     func failNextCommand(_ error: CoreFailure) { nextFailure = error }
     func cancelNextCommand() { commandCancellation = true }
     func failReads(_ error: CoreFailure?) { readFailure = error }
     func failHealth(_ error: CoreFailure?) { healthFailure = error }
+    func failSettings(_ error: CoreFailure?) { settingsFailure = error }
     func answerBackup(_ copy: (any BackupCopy)?) { self.copy = copy }
     func answerRestore(_ value: RestoreOutcome) { restoreAnswer = value }
     var rowReads: Int { calls.filter { $0 == .rows }.count }
@@ -97,6 +101,7 @@ actor FakeBackupsSource: BackupsSource {
     func listBackups() async throws -> [BackupGeneration] {
         calls.append(.rows)
         cancelledReads.append(Task.isCancelled)
+        if let rowFailure { throw rowFailure }
         let value = rows
         if let rowGate { await rowGate.wait() }
         return value
@@ -110,6 +115,7 @@ actor FakeBackupsSource: BackupsSource {
 
     func settings() async throws -> [Setting] {
         calls.append(.settings)
+        if let settingsFailure { throw settingsFailure }
         return missingDestination
             ? [] : [Setting(key: "backups.destination", value: destination, isDefault: destination.isEmpty)]
     }

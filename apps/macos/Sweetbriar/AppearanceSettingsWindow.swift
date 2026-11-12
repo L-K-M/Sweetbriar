@@ -1,32 +1,85 @@
 import AppKit
+import Observation
 import SwiftUI
 import SweetbriarBridge
 
+enum SettingsTab: Hashable { case appearance, backups }
+
+@MainActor
+@Observable
+private final class SettingsSelection {
+    var tab = SettingsTab.appearance
+}
+
 @MainActor
 final class AppearanceSettingsWindow: NSWindowController {
-    init(session: CoreSession, shared: SharedAppearance) {
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 620, height: 540),
+    private let selection = SettingsSelection()
+    private let editor = SettingsEditorTasks()
+
+    init(session: CoreSession, shared: SharedAppearance, backups: SharedBackups) {
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 780, height: 680),
                               styleMask: [.titled, .closable, .miniaturizable, .resizable],
                               backing: .buffered, defer: false)
         window.title = "Settings"
         window.center()
-        window.contentView = NSHostingView(rootView: AppearanceSettingsLoader(session: session, shared: shared))
+        window.contentView = NSHostingView(rootView: AppearanceSettingsLoader(
+            session: session, shared: shared, backups: backups, selection: selection, editor: editor
+        ))
         super.init(window: window)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    func select(_ tab: SettingsTab) { selection.tab = tab }
+
+    func retireEditor() { editor.retire() }
+
+    override func close() {
+        retireEditor()
+        super.close()
+    }
+
+    func cancelAndWait() async { await editor.cancelAndWait() }
 }
 
 private struct AppearanceSettingsLoader: View {
     let session: CoreSession
     let shared: SharedAppearance
+    let backups: SharedBackups
+    @Bindable var selection: SettingsSelection
+    let editor: SettingsEditorTasks
     @State private var bridge: CoreBridge?
+    @State private var model: BackupsModel?
     @State private var failure: String?
 
     var body: some View {
         Group {
-            if let bridge {
-                AccountAppearanceSettings(bridge: bridge, model: AppearanceSettingsModel(appearance: shared.model(source: bridge)))
+            if let bridge, let model {
+                TabView(selection: $selection.tab) {
+                    Group {
+                        if model.isClosed {
+                            ContentUnavailableView("Archive closed", systemImage: "exclamationmark.triangle",
+                                                   description: Text("Quit and reopen Sweetbriar to settle the restore."))
+                        } else if backups.isRestoring {
+                            ProgressView("Waiting for the restore outcome…")
+                        } else {
+                            AccountAppearanceSettings(
+                                bridge: bridge, model: AppearanceSettingsModel(appearance: shared.model(source: bridge)),
+                                backups: model, editor: editor, editorRevision: editor.revision
+                            )
+                            .id(editor.revision)
+                            .disabled(!model.canWrite)
+                        }
+                    }
+                    .tabItem { Label("Appearance", systemImage: "paintpalette") }.tag(SettingsTab.appearance)
+                    BackupsSettingsView(model: model, restoreBlockedReason: backups.restoreBlockedReason) {
+                        guard backups.confirmRestore() else { return false }
+                        // Synchronous, before the newly scheduled restore task can run.
+                        editor.retire()
+                        return true
+                    }
+                    .tabItem { Label("Backups", systemImage: "externaldrive") }.tag(SettingsTab.backups)
+                }
             } else if let failure {
                 ContentUnavailableView("Settings unavailable", systemImage: "exclamationmark.triangle", description: Text(failure))
             } else {
@@ -35,8 +88,13 @@ private struct AppearanceSettingsLoader: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task {
-            do { bridge = try await session.bridge() }
-            catch { failure = error.localizedDescription }
+            do {
+                let bridge = try await session.bridge()
+                try Task.checkCancellation()
+                self.bridge = bridge
+                model = backups.model(source: bridge)
+                if model == nil { failure = "Settings are unavailable while quitting." }
+            } catch { failure = error.localizedDescription }
         }
     }
 }
@@ -44,6 +102,10 @@ private struct AppearanceSettingsLoader: View {
 private struct AccountAppearanceSettings: View {
     let bridge: CoreBridge
     @State var model: AppearanceSettingsModel
+    let backups: BackupsModel
+    let editor: SettingsEditorTasks
+    let editorRevision: UInt64
+    @State private var admissionError: String?
     @State private var accounts: [Account] = []
     @State private var loadingAccounts = true
     @State private var selected: String?
@@ -87,7 +149,7 @@ private struct AccountAppearanceSettings: View {
                             },
                             set: { slot in
                                 guard let slot else { return }
-                                Task { await model.choose(.paletteV1(slot: slot), account: current) }
+                                save(.paletteV1(slot: slot), account: current)
                             }
                         )) {
                             ForEach(model.appearance.palette, id: \.slot) { preset in
@@ -117,6 +179,7 @@ private struct AccountAppearanceSettings: View {
                         }
                         Text("Stored on this device; included in export.").font(.footnote).foregroundStyle(.secondary)
                         if let error = model.error { Text(error).foregroundStyle(.red) }
+                        if let admissionError { Text(admissionError).foregroundStyle(.red) }
                         if model.saving { ProgressView("Saving…") }
                     } else if model.appearanceFailure == nil {
                         ProgressView("Loading appearance…")
@@ -149,10 +212,21 @@ private struct AccountAppearanceSettings: View {
                         }
                         guard let account = editingAccount else { customOpen = false; return }
                         customOpen = false
-                        Task { await model.choose(.custom(colorSrgb: value), account: account) }
+                        save(.custom(colorSrgb: value), account: account)
                     }.keyboardShortcut(.defaultAction)
                 }
             }.padding(24).frame(width: 360)
+        }
+    }
+
+    private func save(_ color: AccountColor, account: AccountAppearance) {
+        guard backups.canWrite else {
+            admissionError = "The archive is not writable. Check Backups for its status."
+            return
+        }
+        admissionError = nil
+        if !editor.run(revision: editorRevision, { await model.choose(color, account: account) }) {
+            admissionError = "The archive changed. Reopen this editor before saving."
         }
     }
 
