@@ -41,7 +41,12 @@ Settings → Backups uses only the Service API through the hand-written
 bridge. It lists the recorded generations with their state, dates, size
 and latest verification verdict (or “Not checked”), and the retained
 restore paths (07). Listing a generation is not verification of its
-bytes; every restore verifies again.
+bytes; every restore verifies again. Backup rows, retained names and
+preferences are independent query answers. Publish each whole answer
+within the current archive epoch and show failures for its own section;
+never turn a failed query into an empty success. In particular, unreadable
+or corrupt preferences must not hide a successfully listed recovery
+point or prevent its freshly verified restore, even on a read-only core.
 
 Back up now starts a keyed generation and shows its copy's eventual
 result. A complete generation with a retention warning remains complete;
