@@ -349,8 +349,13 @@ admission, so neither unsaved text nor a delayed draft save crosses a swap.
   - Close and quit freeze edits, await pending opens and flush. A failure
     or conflict keeps the affected window open and refuses quit, with an
     actionable status and an explicit save retry; never discard unsaved
-    text or retry conflicts automatically. A begun save is awaited, not
-    cancelled because the waiting task was cancelled.
+    text or retry conflicts automatically. Close Without Saving requires
+    explicit confirmation: it drops only unsaved editor changes, keeps
+    the last saved revision, and does not call `discard_draft`. It must
+    await any begun save before closing; an acknowledged save is not
+    rolled back. This path must remain usable when a read-only core
+    refuses saving, so recovery is not trapped behind a compose window.
+    A begun save is awaited, not cancelled because its waiter was cancelled.
   - M1.9c2a first wires subject and plain/Markdown body editing. Existing
     recipients, route and attachments survive those edits unchanged;
     their editable controls, Drafts navigation and complete native UI

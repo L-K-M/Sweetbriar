@@ -1983,8 +1983,11 @@ local drafts. No network yet.
         revision-aware model without replacing its other fields. Use the
         merged 1.5 s scheduler; show Saved only after its receipt. Flush
         on blur, close and quit; a failed/conflicting flush keeps the
-        window open and refuses quit. Fence edits while closing, await
-        pending opens and begun saves, and block restore while any
+        window open and refuses quit. Offer an explicitly confirmed
+        Close Without Saving action that awaits begun saves and retains
+        the last saved revision, so a read-only failure cannot trap
+        recovery behind an unclosable editor. Fence edits while closing,
+        await pending opens and begun saves, and block restore while any
         compose open/window is admitted. Test admission, native editor
         wiring, receipts, close/quit refusal, cancellation and shutdown
         over synthetic private roots. Recipient/attachment controls and
