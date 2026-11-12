@@ -41,7 +41,7 @@ private func editorEventually(_ test: @MainActor () -> Bool) async -> Bool {
 @MainActor
 struct SettingsEditorTasksTests {
     @Test func queuedAndStaleControlsCannotWriteAfterRetirement() async {
-        let editor = SettingsEditorTasks()
+        let editor = ArchiveWriteTasks()
         let probe = EditorProbe()
         let old = editor.revision
         #expect(editor.run(revision: old) { probe.writes += 1 })
@@ -54,7 +54,7 @@ struct SettingsEditorTasksTests {
     }
 
     @Test func freshEditorCanWriteButQuitAwaitsAnAlreadyBegunOldCall() async throws {
-        let editor = SettingsEditorTasks()
+        let editor = ArchiveWriteTasks()
         let probe = EditorProbe()
         do {
             #expect(

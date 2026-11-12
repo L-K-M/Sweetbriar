@@ -27,6 +27,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     private let appearance: SharedAppearance
     private let backups: SharedBackups
     private let openBackups: @MainActor () -> Void
+    private let writes = ArchiveWriteTasks()
+    private var bridge: CoreBridge?
     private var contentTasks = ArchiveViewTasks()
     private var contentSerial: UInt64 = 0
     private var retirement: Task<Void, Never>?
@@ -112,12 +114,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         sidebar?.onChoose = nil
         messageList?.onGeneration = nil
         messageList?.onSelectionChange = nil
-        imports?.retire()
-        accountSetup?.onAdded = {}
-        if let sheet = window?.attachedSheet {
-            window?.endSheet(sheet)
-            sheet.close()
-        }
+        retireWritersForRestore()
         let list = messageList
         let reader = self.reader
         reader?.close()
@@ -129,7 +126,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         accountSetup = nil
         showArchiveStatus("Updating the archive…")
         let tasks = contentTasks
+        let writes = self.writes
         let task = Task {
+            await writes.waitForRetirement()
             await list?.close()
             await reader?.closeAndWait()
             await tasks.waitForRetirement()
@@ -171,16 +170,34 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         window.setFrame(frame, display: true)
     }
 
+    /// Fence UI writers before the native restore is scheduled. Reader/list
+    /// queries remain usable during preparation; fresh actions can resume after
+    /// a refusal, but retired dialogs and queued writes cannot cross the swap.
+    func retireWritersForRestore() {
+        writes.retire()
+        imports?.retire()
+        imports = nil
+        accountSetup?.retire()
+        accountSetup = nil
+        if let sheet = window?.attachedSheet {
+            window?.endSheet(sheet)
+            sheet.close()
+        }
+    }
+
     /// File → Add Proton Bridge Account…, once the core is up.
     func beginBridgeAccountSetup() {
         guard backups.canWrite else { return }
+        configureWriters()
         accountSetup?.begin()
     }
 
     /// File → Import…, once the core is up.
     func beginImport() {
-        guard backups.canWrite, let imports else { return }
-        contentTasks.run { await imports.chooseAndImport() }
+        guard backups.canWrite else { return }
+        configureWriters()
+        guard let imports else { return }
+        writes.run(revision: writes.revision) { await imports.chooseAndImport() }
     }
 
     private func install(_ bridge: CoreBridge) {
@@ -192,7 +209,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         let sidebarModel = SidebarModel(source: bridge)
         let appearanceModel = appearance.model(source: bridge)
         let sidebar = SidebarViewController(model: sidebarModel, appearance: appearanceModel)
-        let messageList = MessageListViewController(bridge: bridge, sidebar: sidebarModel, appearance: appearanceModel)
+        let policy = backups
+        let messageList = MessageListViewController(bridge: bridge, sidebar: sidebarModel, appearance: appearanceModel,
+                                                     writes: writes, canWrite: { policy.canWrite })
         let reader = ReaderViewController(model: ReaderModel(source: bridge, preferred: .sanitizedHtml))
         self.reader = reader
         sidebar.onChoose = { [weak messageList] spec in
@@ -238,28 +257,42 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         window.contentViewController = root
         window.setFrame(frame, display: true)
 
-        let imports = ImportCoordinator(bridge: bridge, window: window)
-        imports.onArchiveChanged = { [weak self] in
-            guard let self, contentSerial == serial else { return }
-            reloadSidebar()
-        }
-        let accountSetup = BridgeAccountSheet(window: window, source: bridge)
-        accountSetup.onAdded = { [weak self] in
-            guard let self, contentSerial == serial else { return }
-            reloadSidebar()
-        }
+        self.bridge = bridge
+        configureWriters()
+        let imports = self.imports
 
         self.sidebarModel = sidebarModel
         self.sidebar = sidebar
         self.messageList = messageList
-        self.imports = imports
-        self.accountSetup = accountSetup
         contentTasks.run { [weak self] in
             await sidebarModel.reload()
             guard let self, !Task.isCancelled, contentSerial == serial else { return }
             sidebar.reloadSections()
             sidebar.choose(entryID: SidebarModel.unifiedInboxID)
-            await imports.reattach()
+            await imports?.reattach()
+        }
+    }
+
+    private func configureWriters() {
+        guard let bridge, let window else { return }
+        let serial = contentSerial
+        if imports == nil {
+            let owner = ImportCoordinator(bridge: bridge, window: window)
+            owner.onArchiveChanged = { [weak self] in
+                guard let self, contentSerial == serial else { return }
+                reloadSidebar()
+            }
+            imports = owner
+        }
+        if accountSetup == nil {
+            let policy = backups
+            let owner = BridgeAccountSheet(window: window, source: bridge, writes: writes,
+                                           canWrite: { policy.canWrite })
+            owner.onAdded = { [weak self] in
+                guard let self, contentSerial == serial else { return }
+                reloadSidebar()
+            }
+            accountSetup = owner
         }
     }
 

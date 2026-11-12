@@ -120,7 +120,8 @@ enum BackupsPresentation {
     static func confirmation(_ generation: BackupGeneration) -> String {
         "Restore generation \(generation.generationId) from \(date(generation.startedAtMs))? "
             + "This replaces the live archive with that recovery point, keeps the replaced "
-            + "root intact, pauses every account and quarantines pending work. Nothing is "
+            + "root intact, pauses every account and quarantines pending work. Open setup "
+            + "and import dialogs close; detaching their UI does not cancel durable import jobs. Nothing is "
             + "sent, moved or deleted automatically."
     }
 

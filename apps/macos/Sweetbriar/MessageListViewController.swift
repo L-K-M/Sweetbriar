@@ -21,6 +21,8 @@ final class MessageListViewController: NSViewController {
     private let bridge: CoreBridge
     private let listSource: any ListWindowSource
     private let clockOverride: (any FrameClock)?
+    private let writes: ArchiveWriteTasks
+    private let canWrite: @MainActor () -> Bool
     private let searchModel: SearchFieldModel
     private let search: SearchFieldController
     private let formatter = MessageRowFormatter()
@@ -85,10 +87,13 @@ final class MessageListViewController: NSViewController {
     var searchModelForBenchmark: SearchFieldModel { searchModel }
 
     init(bridge: CoreBridge, sidebar: SidebarModel, appearance: AppearanceModel,
-         listSource: (any ListWindowSource)? = nil, clock: (any FrameClock)? = nil) {
+         listSource: (any ListWindowSource)? = nil, clock: (any FrameClock)? = nil,
+         writes: ArchiveWriteTasks? = nil, canWrite: @escaping @MainActor () -> Bool = { true }) {
         self.bridge = bridge
         self.listSource = listSource ?? bridge
         self.clockOverride = clock
+        self.writes = writes ?? ArchiveWriteTasks()
+        self.canWrite = canWrite
         self.appearance = appearance
         self.sidebar = sidebar
         let model = SearchFieldModel(parser: bridge, label: { reference in
@@ -388,10 +393,10 @@ final class MessageListViewController: NSViewController {
     /// coverage while Search can't open, else the newer of the
     /// window's status and the last standalone read.
     private func perform(_ command: IndexControlModel.Command) {
-        guard let spec = searchSpec else { return }
+        guard !openingTasks.isRetired, canWrite(), let spec = searchSpec else { return }
         let window = standalone ? nil : model?.searchStatus?.coverage
         guard let shown = indexControls.shown(with: window) else { return }
-        Task {
+        writes.run(revision: writes.revision) { [indexControls] in
             await indexControls.perform(command, on: shown, scope: spec.scope)
         }
     }

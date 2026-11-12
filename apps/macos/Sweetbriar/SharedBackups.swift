@@ -13,13 +13,16 @@ final class SharedBackups {
     private var diagnostic: DiagnosticActivity?
     private(set) var isStopping = false
     @ObservationIgnored private var closedRetirement: Task<Void, Never>?
+    private let beforeRestore: @MainActor @Sendable () -> Void
     private let didRestore: @MainActor @Sendable () async -> Void
     private let didClose: @MainActor @Sendable () async -> Void
 
     init(
+        beforeRestore: @escaping @MainActor @Sendable () -> Void = {},
         didRestore: @escaping @MainActor @Sendable () async -> Void,
         didClose: @escaping @MainActor @Sendable () async -> Void
     ) {
+        self.beforeRestore = beforeRestore
         self.didRestore = didRestore
         self.didClose = didClose
     }
@@ -80,9 +83,12 @@ final class SharedBackups {
 
     @discardableResult
     func confirmRestore() -> Bool {
-        guard !isStopping, restoreBlockedReason == nil, let current, current.confirmation != nil else {
+        guard !isStopping, restoreBlockedReason == nil, let current,
+            !current.isBusy, !current.isClosed, current.confirmation != nil
+        else {
             return false
         }
+        beforeRestore()
         current.confirmRestore()
         return true
     }

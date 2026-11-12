@@ -5,7 +5,7 @@ import Observation
 /// against the replacement store, even if its view has not disappeared yet.
 @MainActor
 @Observable
-final class SettingsEditorTasks {
+final class ArchiveWriteTasks {
     private(set) var revision: UInt64 = 0
     private var current = ArchiveViewTasks()
     private var retired: [ArchiveViewTasks] = []
@@ -33,10 +33,16 @@ final class SettingsEditorTasks {
         current.retire()
     }
 
+    func waitForRetirement() async {
+        let draining = retired + [current]
+        for tasks in draining { await tasks.waitForRetirement() }
+        let drained = Set(draining.map(ObjectIdentifier.init))
+        retired.removeAll { drained.contains(ObjectIdentifier($0)) }
+    }
+
     func cancelAndWait() async {
         stopping = true
         retire()
-        for tasks in retired + [current] { await tasks.waitForRetirement() }
-        retired.removeAll()
+        await waitForRetirement()
     }
 }

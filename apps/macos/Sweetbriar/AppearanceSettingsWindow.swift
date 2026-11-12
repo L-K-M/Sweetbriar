@@ -14,7 +14,7 @@ private final class SettingsSelection {
 @MainActor
 final class AppearanceSettingsWindow: NSWindowController {
     private let selection = SettingsSelection()
-    private let editor = SettingsEditorTasks()
+    private let editor = ArchiveWriteTasks()
 
     init(session: CoreSession, shared: SharedAppearance, backups: SharedBackups) {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 780, height: 680),
@@ -47,7 +47,7 @@ private struct AppearanceSettingsLoader: View {
     let shared: SharedAppearance
     let backups: SharedBackups
     @Bindable var selection: SettingsSelection
-    let editor: SettingsEditorTasks
+    let editor: ArchiveWriteTasks
     @State private var bridge: CoreBridge?
     @State private var model: BackupsModel?
     @State private var failure: String?
@@ -103,7 +103,7 @@ private struct AccountAppearanceSettings: View {
     let bridge: CoreBridge
     @State var model: AppearanceSettingsModel
     let backups: BackupsModel
-    let editor: SettingsEditorTasks
+    let editor: ArchiveWriteTasks
     let editorRevision: UInt64
     @State private var admissionError: String?
     @State private var accounts: [Account] = []

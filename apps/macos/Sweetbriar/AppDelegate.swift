@@ -58,6 +58,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.session = session
 
         let backups = SharedBackups(
+            beforeRestore: { [weak self] in
+                self?.settingsWindow?.retireEditor()
+                self?.mainWindow?.retireWritersForRestore()
+            },
             didRestore: { [weak self] in await self?.archiveRestored() },
             didClose: { [weak self] in await self?.archiveClosed() }
         )

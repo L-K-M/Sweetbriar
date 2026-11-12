@@ -16,6 +16,20 @@ private struct OwnerClock: FrameClock {
     func nextFrame() async { await Task.yield() }
 }
 
+private actor OwnerWriteGate {
+    private var opened = false
+    private var waiter: CheckedContinuation<Void, Never>?
+    func wait() async {
+        if opened { return }
+        await withCheckedContinuation { waiter = $0 }
+    }
+    func open() {
+        opened = true
+        waiter?.resume()
+        waiter = nil
+    }
+}
+
 @MainActor
 private func ownerEventually(_ probe: @MainActor () async -> Bool) async -> Bool {
     let deadline = ContinuousClock.now + .seconds(5)
@@ -52,6 +66,9 @@ private final class OwnerProbes {
     var restores = 0
     var restoreWasCancelled = false
     var resetDone = false
+    var writeBegan = false
+    var writeFinished = false
+    var writeCancelled = false
 }
 
 /// One scripted appearance stream: `next` parks until cancelled. A
@@ -148,6 +165,53 @@ private actor OwnerAppearanceSource: AppearanceSource {
 @Suite(.timeLimit(.minutes(1)))
 @MainActor
 struct SharedArchiveOwnerTests {
+    @Test func restoreAdmissionFencesALateOldContextWriteBeforeTheNativeCall() async throws {
+        try await withOwnerBridge { bridge in
+            let probes = OwnerProbes()
+            let gate = OwnerWriteGate()
+            let writes = ArchiveWriteTasks()
+            let factory = SharedBackups(beforeRestore: { writes.retire() }, didRestore: {}, didClose: {})
+            do {
+                let model = try #require(factory.model(source: bridge))
+                await model.refresh()
+                try #require(await ownerEventually { model.canWrite })
+                model.backUpNow()
+                try #require(await ownerEventually { !model.isBusy })
+                guard case .backup(let generation, .complete) = model.lastResult else {
+                    throw CoreFailure.internalError(detail: "the fixture backup did not complete")
+                }
+                writes.run(revision: writes.revision) {
+                    probes.writeBegan = true
+                    await gate.wait()
+                    do {
+                        _ = try await bridge.setSetting(
+                            key: "backups.destination", value: "/synthetic/obsolete-editor")
+                    } catch is CancellationError { probes.writeCancelled = true } catch {
+                        Issue.record("unexpected old-editor failure: \(error)")
+                    }
+                    probes.writeFinished = true
+                }
+                try #require(await ownerEventually { probes.writeBegan })
+                model.selectedGenerationId = generation
+                model.requestRestore()
+                try #require(factory.confirmRestore())
+                try #require(await ownerEventually { !model.isBusy && model.archiveRevision == 1 })
+                await gate.open()
+                try #require(await ownerEventually { probes.writeFinished })
+                let destination = try await bridge.settings().first { $0.key == "backups.destination" }
+                #expect(destination?.value == "", "a retired editor wrote into the physically restored store")
+                #expect(probes.writeCancelled)
+            } catch {
+                await gate.open()
+                await writes.cancelAndWait()
+                await factory.cancelAndWait()
+                throw error
+            }
+            await writes.cancelAndWait()
+            await factory.cancelAndWait()
+        }
+    }
+
     /// Main and Settings both get the one model, so the core sees one
     /// health watch. The diagnostic gate publishes a reason and refuses
     /// overlap without touching the model; `cancelAndWait` retires the

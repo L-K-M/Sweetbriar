@@ -21,14 +21,20 @@ final class BridgeAccountSheet {
     private weak var window: NSWindow?
     private let source: any AccountSetupSource
     private var sheet: NSWindow?
+    private let writes: ArchiveWriteTasks
+    private let canWrite: @MainActor () -> Bool
 
-    init(window: NSWindow, source: any AccountSetupSource) {
+    init(window: NSWindow, source: any AccountSetupSource, writes: ArchiveWriteTasks? = nil,
+         canWrite: @escaping @MainActor () -> Bool = { true }) {
         self.window = window
         self.source = source
+        self.writes = writes ?? ArchiveWriteTasks()
+        self.canWrite = canWrite
     }
 
     /// Show the sheet, or bring an open one forward.
     func begin() {
+        guard canWrite() else { return }
         if let sheet {
             // A sheet still attached comes forward; one that somehow
             // left its parent is dropped and rebuilt.
@@ -43,7 +49,8 @@ final class BridgeAccountSheet {
         let view = BridgeAccountSetupView(
             model: model,
             chooseCertificate: { [weak self] in self?.chooseCertificate(into: model) },
-            finish: { [weak self] added in self?.end(added: added) }
+            finish: { [weak self] added in self?.end(added: added) },
+            writes: writes, revision: writes.revision, canWrite: canWrite
         )
         let sheet = NSWindow(contentViewController: NSHostingController(rootView: view))
         sheet.title = "Add Proton Bridge Account"
@@ -52,6 +59,15 @@ final class BridgeAccountSheet {
         sheet.styleMask.remove([.closable, .miniaturizable])
         self.sheet = sheet
         window.beginSheet(sheet)
+    }
+
+    func retire() {
+        onAdded = {}
+        if let child = sheet?.attachedSheet {
+            sheet?.endSheet(child)
+            child.close()
+        }
+        end(added: false)
     }
 
     private func end(added: Bool) {
@@ -86,6 +102,9 @@ struct BridgeAccountSetupView: View {
     @Bindable var model: BridgeAccountSetupModel
     let chooseCertificate: () -> Void
     let finish: (_ added: Bool) -> Void
+    let writes: ArchiveWriteTasks
+    let revision: UInt64
+    let canWrite: @MainActor () -> Bool
 
     /// Room for every form row without scrolling at the default size.
     private static let formMinimumHeight: CGFloat = 470
@@ -149,7 +168,7 @@ struct BridgeAccountSetupView: View {
                     HStack {
                         Button("Import cert.pem…", action: chooseCertificate)
                         Button("Read From Bridge") {
-                            Task { await model.readPresentedCertificate() }
+                            writes.run(revision: revision) { await model.readPresentedCertificate() }
                         }
                         .disabled(model.readingCertificate)
                         if model.readingCertificate { ProgressView().controlSize(.small) }
@@ -183,10 +202,11 @@ struct BridgeAccountSetupView: View {
                     .keyboardShortcut(.cancelAction)
                     .disabled(model.phase == .submitting)
                 Button("Add Account") {
-                    Task { await model.submit() }
+                    guard canWrite() else { return }
+                    writes.run(revision: revision) { await model.submit() }
                 }
                 .keyboardShortcut(.defaultAction)
-                .disabled(!model.canSubmit)
+                .disabled(!model.canSubmit || !canWrite())
                 if model.phase == .submitting { ProgressView().controlSize(.small) }
             }
         }
