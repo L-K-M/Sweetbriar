@@ -1738,6 +1738,9 @@ local drafts. No network yet.
     to a healthy restored core. Use explicit private roots and never
     force-terminate a begun restore to finish a test. Native unit tests
     are not this UI acceptance; owner-data qualification stays pending.
+    Run these tests in a dedicated Backups test target/configuration
+    with private app and runner bundle identities, not a production
+    preference domain. Keep existing UI suites and workflows unchanged.
   - **M1.8j The Backups UI (L):** Settings → Backups: list generations,
     back up now, restore and the preserved data roots, on the Service
     API.
