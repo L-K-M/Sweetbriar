@@ -1719,9 +1719,12 @@ local drafts. No network yet.
     the end, explicit receipt/refusal/closed-core results, and a native
     endpoint proof. **j5 Backups model (L):** bridge-only state and
     commands, confirmation, cancellation and error/recovery tests.
-    **j6 Settings and health (L):** SwiftUI Backups settings in the
-    AppKit shell, the read-only finding/banner and restore action,
-    plus invalidation of open content after a swap.
+    **j6 split before implementation (2026-11-12):** **j6a Shell
+    lifecycle (L):** one shared Backups owner, quit ordering and awaited
+    retirement/recreation of content and appearance after a swap,
+    including lower generations and pending opens. **j6b Settings and
+    health (L):** SwiftUI Backups settings, the read-only finding/banner
+    and restore action on that shared lifecycle. No acceptance is removed.
     **j7 Native acceptance (L):** synthetic UI backup/restore, retained
     paths, error/cancellation and read-only recovery proof. Retained
     paths are available for deliberate manual filesystem removal; no
