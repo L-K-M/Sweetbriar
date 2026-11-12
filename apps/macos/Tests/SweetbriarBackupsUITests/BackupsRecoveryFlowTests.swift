@@ -34,7 +34,11 @@ final class BackupsRecoveryFlowTests: XCTestCase {
         archive.wait(archive.settings.buttons["backupNow"], "enabled == true")
         XCTAssertFalse(FileManager.default.fileExists(atPath: missing.deletingLastPathComponent().path))
         XCTAssertFalse(archive.settings.staticTexts["Complete"].exists)
-        archive.settings.buttons["backupDefault"].click()
+        // The error banner changes this control's hit region. Observe the
+        // settled native control instead of relying on a pre-error snapshot.
+        let useDefault = archive.settings.buttons["backupDefault"]
+        archive.wait(useDefault, "hittable == true")
+        useDefault.click()
         archive.wait(archive.settings.staticTexts["backupResult"], "value == %@", "Destination saved.")
         archive.backup()
         XCTAssertFalse(FileManager.default.fileExists(atPath: missing.path))
