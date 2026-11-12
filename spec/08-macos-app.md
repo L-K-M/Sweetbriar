@@ -100,6 +100,14 @@ Restore is unavailable while a Core-backed diagnostic benchmark or
 synthetic fill runs; explain the reason instead of allowing that work to
 continue across a swap.
 
+Settings has Appearance and Backups tabs; the main health banner opens
+Backups directly. Both surfaces use the same model even if Settings opens
+before the main panes finish installing. While a restore is pending,
+remove the appearance editor, not just its save buttons. Recreate that
+editor after the awaited shell reset, so neither its model nor its
+selected account/revision comes from the replaced store. A read-only or
+closed core cannot save appearance or destination changes.
+
 ## Sidebar
 
 - **Unified section:** Inbox (`Unified(inbox)`), Flagged (`Flagged`),
