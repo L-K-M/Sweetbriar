@@ -1,4 +1,3 @@
-import AppKit
 import XCTest
 
 /// Only synthetic roots. Normal quit awaits the app's consuming operations;
@@ -9,7 +8,6 @@ final class BackupsUIArchive {
     let app = XCUIApplication()
     let root: URL
     private var ownsApp = false
-    private var runningApp: NSRunningApplication?
     private var chosenDate: String?
     private enum LaunchError: Error { case alreadyRunning }
     var data: URL { root.appendingPathComponent("data") }
@@ -44,10 +42,6 @@ final class BackupsUIArchive {
         if let importPath { app.launchArguments += ["-importPath", importPath.path] }
         ownsApp = true
         app.launch()
-        let running = NSRunningApplication.runningApplications(
-            withBundleIdentifier: "ch.lkmc.SweetbriarAgentTests.Sweetbriar")
-        XCTAssertEqual(running.count, 1)
-        runningApp = running.first
         app.activate()
         XCTAssertTrue(
             main.outlines["sidebar"].staticTexts["Local Archive"].waitForExistence(timeout: Self.timeout))
@@ -66,19 +60,13 @@ final class BackupsUIArchive {
         if app.buttons["backupDismissRestore"].exists { app.buttons["backupDismissRestore"].click() }
         let cancel = app.sheets.firstMatch.buttons["Cancel"]
         if cancel.exists { cancel.click() }
-        // AppKit's terminate() sends a NORMAL quit request to this captured
-        // process and honors applicationShouldTerminate. Unlike XCTest's
-        // XCUIApplication.terminate(), it does not force the app to exit.
-        guard let runningApp else {
-            XCTFail("Cannot identify the owned process for a normal quit")
-            return false
-        }
-        XCTAssertTrue(runningApp.terminate(), "Normal quit request was not sent")
+        // Use the normal key equivalent after dismissing owned modal UI;
+        // synthetic menu tracking can otherwise miss the Quit action.
+        app.typeKey("q", modifierFlags: .command)
         let stopped = app.wait(for: .notRunning, timeout: Self.timeout)
         XCTAssertTrue(stopped, "No forced termination: retain the fixture and settle the begun operation")
         if stopped {
             ownsApp = false
-            self.runningApp = nil
         }
         return stopped
     }
