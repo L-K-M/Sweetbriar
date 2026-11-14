@@ -21,6 +21,8 @@ pub use bodies::{
 };
 mod api;
 mod backups;
+mod compose;
+pub use compose::{ComposeCatalog, ComposeIdentity};
 mod drafts;
 mod error;
 mod exports;

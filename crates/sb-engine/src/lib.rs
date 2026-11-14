@@ -22,6 +22,8 @@ mod bodies;
 pub use bodies::{
     AttachmentLease, BodyKind, BodyLease, LeaseReleaser, RenderWarning, RenderWarningCode,
 };
+mod compose;
+pub use sb_resources::{ComposeCatalog, ComposeIdentity};
 mod drafts;
 mod engine;
 mod error;
