@@ -58,6 +58,33 @@ public final class CoreBridge: Sendable {
         )
     }
 
+    /// Whole retained identity metadata and the core's resolved new-draft default.
+    public func composeCatalog(preferredAccountId: String? = nil) async throws -> ComposeCatalog {
+        let token = SweetbriarCore.CancelToken()
+        let value = try await Self.withCancellation(token: token) {
+            try await self.core.composeCatalog(token: token, preferredAccountId: preferredAccountId)
+        }
+        return ComposeCatalog(value)
+    }
+
+    /// Parse the whole modern mailbox list, or throw without dropping a member.
+    public func parseDraftRecipients(text: String) async throws -> [DraftRecipient] {
+        let token = SweetbriarCore.CancelToken()
+        let values = try await Self.withCancellation(token: token) {
+            try await self.core.parseDraftRecipients(token: token, text: text)
+        }
+        return values.map(DraftRecipient.init)
+    }
+
+    /// Literal, bounded address-history suggestions. Errors are not empty success.
+    public func recipientCompletions(prefix: String, limit: UInt32 = 20) async throws -> [DraftRecipient] {
+        let token = SweetbriarCore.CancelToken()
+        let values = try await Self.withCancellation(token: token) {
+            try await self.core.recipientCompletions(token: token, prefix: prefix, limit: limit)
+        }
+        return values.map(DraftRecipient.init)
+    }
+
     /// Stored backup rows, including generations whose directories went missing.
     public func listBackups() async throws -> [BackupGeneration] {
         let token = SweetbriarCore.CancelToken()
