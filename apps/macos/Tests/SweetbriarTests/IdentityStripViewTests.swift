@@ -28,6 +28,30 @@ struct IdentityStripViewTests {
         #expect(view.accessibilityLabel() == "Sending identity unavailable")
     }
 
+    @Test func canonicallyEquivalentChangesKeepExactAccessibilityBytes() {
+        let composed = "é"
+        let decomposed = "e\u{301}"
+        #expect(composed == decomposed)
+        let view = makeView()
+        let pairs: [(IdentityStripView.Content, IdentityStripView.Content, String)] = [
+            (
+                .identity(label: composed, monogram: "W", tokens: sampleAccount.tokens),
+                .identity(label: decomposed, monogram: "W", tokens: sampleAccount.tokens), "W · \(decomposed)"
+            ),
+            (
+                .identity(label: "Work", monogram: composed, tokens: sampleAccount.tokens),
+                .identity(label: "Work", monogram: decomposed, tokens: sampleAccount.tokens),
+                "\(decomposed) · Work"
+            ),
+            (.unavailable(label: composed), .unavailable(label: decomposed), decomposed),
+        ]
+        for (old, new, expected) in pairs {
+            view.content = old
+            view.content = new
+            #expect(Array((view.accessibilityLabel() ?? "").utf8) == Array(expected.utf8))
+        }
+    }
+
     @Test func displayOptionNotificationsInvalidateExistingViews() async throws {
         let view = makeView()
         let window = NSWindow(

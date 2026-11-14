@@ -9,6 +9,18 @@ final class IdentityStripView: NSView {
         case identity(label: String, monogram: String, tokens: AppearanceTokens)
         case unavailable(label: String)
 
+        // Swift's canonical String equality would keep an old accessibility
+        // label when the displayed identity changes only in source spelling.
+        static func == (lhs: Self, rhs: Self) -> Bool {
+            switch (lhs, rhs) {
+            case (.identity(let a, let markA, let tokensA), .identity(let b, let markB, let tokensB)):
+                a.utf8.elementsEqual(b.utf8) && markA.utf8.elementsEqual(markB.utf8) && tokensA == tokensB
+            case (.unavailable(let a), .unavailable(let b)):
+                a.utf8.elementsEqual(b.utf8)
+            default: false
+            }
+        }
+
         var label: String {
             switch self {
             case .identity(let label, _, _), .unavailable(let label): label
