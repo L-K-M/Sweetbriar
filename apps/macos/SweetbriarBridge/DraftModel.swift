@@ -90,6 +90,10 @@ public final class DraftModel {
         content != nil && !isSaving && !isDiscarding && !isStopped && !isDiscarded
     }
 
+    /// In-module ticket for editor decisions, not a storage generation.
+    /// Loads/receipts do not advance it; every explicit edit does.
+    var editVersion: UInt64 { userEditVersion }
+
     private let source: any DraftStore
     private let discardKey = UUID().uuidString
     @ObservationIgnored private var loadTicket: UInt64 = 0
