@@ -399,8 +399,10 @@ Implements [15-account-colors](../research/15-account-colors.md):
 - **`fullScreenMinHeight`** is set to the strip's height, so it stays
   visible in full screen.
 - **Contents:** monogram, account name and the full From address, as in
-  "**W** Work · Alex Example <alex@company.example>". The whole strip is
-  one accessibility element with that label.
+  "**W** Work · Alex Example <alex@company.example>". Wrap rather than
+  truncate long labels, growing the strip to fit. The whole strip is one
+  accessibility element with that label. An unavailable route has an
+  explicit neutral label, not a guessed address or color.
 - **Colors** come from tokens the core derives (06 of research 15):
   - opaque restrained fill and saturated monogram;
   - foreground chosen per surface for ≥ 4.5:1 contrast;
