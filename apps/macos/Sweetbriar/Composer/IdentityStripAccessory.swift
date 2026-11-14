@@ -39,15 +39,18 @@ final class IdentityStripAccessory: NSTitlebarAccessoryViewController {
         strip.content = content
         measure()
         guard let snapshot else { return }
+        snapshot.frame = strip.bounds
         fadingSnapshot = snapshot
         strip.addSubview(snapshot)
         NSAnimationContext.runAnimationGroup { context in
             context.duration = Self.transitionDuration
             snapshot.animator().alphaValue = 0
         } completionHandler: { [weak self, weak snapshot] in
-            guard let snapshot else { return }
-            snapshot.removeFromSuperview()
-            if self?.fadingSnapshot === snapshot { self?.fadingSnapshot = nil }
+            Task { @MainActor [weak self, weak snapshot] in
+                guard let snapshot else { return }
+                snapshot.removeFromSuperview()
+                if self?.fadingSnapshot === snapshot { self?.fadingSnapshot = nil }
+            }
         }
     }
 

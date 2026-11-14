@@ -77,8 +77,12 @@ struct IdentityStripAccessoryTests {
         window.makeKeyAndOrderFront(nil)
         accessory.reduceMotion = { false }
         accessory.setContent(.unavailable(label: "First"))
-        accessory.setContent(.unavailable(label: "Second"), routeChanged: true)
+        let oldHeight = accessory.strip.bounds.height
+        accessory.setContent(
+            .unavailable(label: String(repeating: "Long identity ", count: 25)), routeChanged: true)
         let snapshot = try #require(accessory.strip.subviews.first as? NSImageView)
+        #expect(accessory.strip.bounds.height > oldHeight)
+        #expect(snapshot.frame.size == accessory.strip.bounds.size)
         #expect(snapshot.image != nil)
         #expect(!snapshot.isAccessibilityElement())
         #expect(IdentityStripAccessory.transitionDuration == 0.15)
