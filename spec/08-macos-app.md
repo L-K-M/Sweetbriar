@@ -414,7 +414,15 @@ Implements [15-account-colors](../research/15-account-colors.md):
   image and full addresses in titles. Provisional identities are marked.
 - **Switching From:**
   - updates the strip, title, signature and Sent behaviour in one view
-    model transition;
+    model transition; sending/Sent effects remain M4;
+  - signature source (02: Markdown or plain text) follows the draft's
+    selected format, with no implicit conversion or format switch. Never
+    guess signature delimiters in saved/user-edited text. Replace or remove
+    only an exact insertion this editor owns and which has not been edited
+    since. Otherwise offer Keep Text as the safe default or explicit append;
+    fence that decision against intervening editor changes. Existing saved
+    nil/unavailable routes remain; only a fresh draft without an explicit
+    route choice may take its captured account/global default;
   - crossfades in 150 ms, or instantly with Reduce Motion;
   - posts one accessibility announcement.
 - **Strong mode** (Settings → Appearance) tints the upper window via

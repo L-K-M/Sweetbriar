@@ -2029,7 +2029,24 @@ local drafts. No network yet.
           default, titlebar accessory and core-derived color tokens,
           provisional/no-identity states and safe signature transition.
           Test actual surfaces, route/name preservation and From changes.
-          Send remains disabled; sending/Sent effects remain M4.
+          Send remains disabled; sending/Sent effects remain M4. Re-size
+          before coding (2026-11-14), retaining every requirement:
+          - **c2b5a Identity selection/signature model (L):** owned catalog
+            loading/default and explicit-choice state, preserved saved nil
+            or unavailable routes, version-fenced signature decisions and
+            awaited query retirement. Signature source follows the chosen
+            draft format without implicit conversion. Only a signature
+            inserted by this editor and untouched since can be replaced;
+            otherwise Keep Text is the safe default, with explicit append.
+            Native bridge and deterministic transition/lifetime proof.
+          - **c2b5b Native identity surfaces (L):** selected-account context
+            captured at New Message admission, From popup/titlebar strip,
+            atomic native route/title/signature change and undo, shared
+            core appearance tokens/Strong mode, 150ms/Reduce Motion and one
+            AX announcement. Test actual light/dark/high-contrast surfaces,
+            32pt/fullscreen/text-size layout, pending input and safe choices.
+            Re-split before coding if the complete artifact exceeds 1,450
+            gross lines; do not drop signature or accessibility checks.
         Optional Contacts stays optional; complete native workflow and
         owner input-method/accessibility gates remain c2e and owner work.
       - **M1.9c2c Attachment and conflict editing (L):** picking/dragging
