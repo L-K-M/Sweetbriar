@@ -9,6 +9,7 @@ mod address_keys;
 pub mod appearance;
 mod backups;
 mod changes;
+pub mod compose;
 mod corpus_tracking;
 pub mod drafts;
 mod error;

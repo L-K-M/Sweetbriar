@@ -121,7 +121,7 @@ impl DraftRecipient {
         }
     }
 
-    fn from_engine(recipient: sb_engine::DraftRecipient) -> Self {
+    pub(crate) fn from_engine(recipient: sb_engine::DraftRecipient) -> Self {
         Self {
             address: recipient.address,
             name: recipient.name,

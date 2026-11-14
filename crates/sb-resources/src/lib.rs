@@ -112,6 +112,10 @@ pub use sb_store::appearance::{
     account_appearance, appearance_generation, identity_appearance, identity_appearances,
     initialize_account_appearance, set_account_appearance, set_identity_appearance,
 };
+pub use sb_store::compose::{
+    ComposeCatalog, ComposeIdentity, MAX_RECIPIENT_INPUT_BYTES, RecipientInputError,
+    RecipientQuery, compose_catalog, parse_draft_recipients, recipient_completions,
+};
 pub use sb_store::drafts::{
     AttachmentRef, AttemptState, ComposeFormat, DraftAttachment, DraftRecipient, DraftSource,
     DraftState, DraftSummary, LiveAttempt, RevisionInput, StoredDraft, StoredRevision,
