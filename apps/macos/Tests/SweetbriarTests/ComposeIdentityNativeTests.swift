@@ -226,19 +226,15 @@ struct ComposeIdentityNativeTests {
             first, _ in
             try await withNativeIdentity(appearance: appearance, announceRoute: announce) {
                 second, _ in
+                let expected = "W · Account a · Native a <a@EXAMPLE.test>"
                 try #require(
                     await identityEventually {
-                        first.identityControls.model.isReady && second.identityControls.model.isReady
+                        first.identityStrip.strip.accessibilityLabel() == expected
+                            && second.identityStrip.strip.accessibilityLabel() == expected
                     })
                 #expect(
                     first.window?.titlebarAccessoryViewControllers.contains { $0 === first.identityStrip }
                         == true)
-                #expect(
-                    first.identityStrip.strip.accessibilityLabel()
-                        == "W · Account a · Native a <a@EXAMPLE.test>")
-                #expect(
-                    second.identityStrip.strip.accessibilityLabel()
-                        == first.identityStrip.strip.accessibilityLabel())
                 let firstContent = first.model.content
                 let secondContent = second.model.content
                 let firstDirty = first.model.isDirty
