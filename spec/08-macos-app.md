@@ -348,7 +348,10 @@ Neither unsaved text nor a delayed draft save may cross a swap.
 - **Saving:**
   - autosaves 1.5 s after typing stops, and on blur and quit;
   - each save is a new draft revision (02);
-  - "Saved" shows only after the receipt.
+  - "Saved" shows only after the receipt. Compare source and field buffers
+    by their UTF-8 bytes, not Swift's canonical-equivalence string equality:
+    normalization-only edits must reach a new revision, and a clean reload
+    must display the exact source bytes it loaded.
   - Close and quit freeze edits, await pending opens and flush. A failure
     or conflict keeps the affected window open and refuses quit, with an
     actionable status and an explicit save retry; never discard unsaved
