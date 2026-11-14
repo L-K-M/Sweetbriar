@@ -107,6 +107,32 @@ struct IdentityStripViewTests {
         #expect(last - first > Int(view.textFont.pointSize * 2))
     }
 
+    @Test func anEmptyMonogramDoesNotReserveOrOutlineAnEmptyMark() throws {
+        let view = makeView(width: 120)
+        view.content = .identity(label: label, monogram: "", tokens: sampleAccount.tokens)
+        let identityHeight = view.intrinsicContentSize.height
+        #expect(view.accessibilityLabel() == label)
+        view.content = .unavailable(label: label)
+        #expect(view.intrinsicContentSize.height == identityHeight)
+        var tokens = sampleAccount.tokens
+        tokens.light.outlineSrgb = "#ff0000"
+        view.content = .identity(label: label, monogram: "", tokens: tokens)
+        view.setFrameSize(NSSize(width: 120, height: view.intrinsicContentSize.height))
+        view.appearance = NSAppearance(named: .aqua)
+        view.contrastOptions = { (false, true) }
+        let bitmap = try render(view)
+        var redInside = 0
+        for x in 5..<40 {
+            for y in 3..<(bitmap.pixelsHigh - 3) {
+                guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+                if color.redComponent > 0.8 && color.greenComponent < 0.2 && color.blueComponent < 0.2 {
+                    redInside += 1
+                }
+            }
+        }
+        #expect(redInside == 0)
+    }
+
     @Test func aLongStoredSymbolWrapsInsteadOfBeingClipped() throws {
         let view = makeView(width: 150)
         let initialHeight = view.intrinsicContentSize.height
@@ -145,6 +171,27 @@ struct IdentityStripViewTests {
         let dark = name == .darkAqua || name == .accessibilityHighContrastDarkAqua
         #expect(dark ? pixel.redComponent < 0.02 : pixel.redComponent > 0.98)
         #expect(pixel.alphaComponent > 0.99)
+    }
+
+    @Test(arguments: [NSAppearance.Name.aqua, .darkAqua])
+    func unavailableLabelHasContrastOnItsActualNeutralSurface(_ name: NSAppearance.Name) throws {
+        let view = makeView()
+        view.content = .unavailable(label: "Sending identity unavailable")
+        view.appearance = NSAppearance(named: name)
+        let bitmap = try render(view)
+        let background = try #require(
+            bitmap.colorAt(x: bitmap.pixelsWide - 8, y: bitmap.pixelsHigh / 2)?.usingColorSpace(.sRGB))
+        #expect(background.alphaComponent > 0.99)
+        let surface = luminance(background)
+        var best = 0.0
+        for x in 8..<min(300, bitmap.pixelsWide) {
+            for y in 0..<bitmap.pixelsHigh {
+                guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+                let ink = luminance(color)
+                best = max(best, (max(surface, ink) + 0.05) / (min(surface, ink) + 0.05))
+            }
+        }
+        #expect(best >= 4.5)
     }
 
     @Test func highContrastAndDifferentiateDrawTheCoreOutline() throws {
@@ -266,6 +313,15 @@ struct IdentityStripViewTests {
         let bitmap = try #require(view.bitmapImageRepForCachingDisplay(in: view.bounds))
         view.cacheDisplay(in: view.bounds, to: bitmap)
         return bitmap
+    }
+
+    private func luminance(_ color: NSColor) -> Double {
+        func linear(_ value: CGFloat) -> Double {
+            let value = Double(value)
+            return value <= 0.04045 ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4)
+        }
+        return 0.2126 * linear(color.redComponent) + 0.7152 * linear(color.greenComponent)
+            + 0.0722 * linear(color.blueComponent)
     }
 
     private func countPixels(_ bitmap: NSBitmapImageRep, matching: (NSColor) -> Bool) -> Int {

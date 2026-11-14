@@ -106,11 +106,12 @@ final class IdentityStripView: NSView {
                 let variant = dark ? tokens.dark : tokens.light
                 appearanceColor(variant.stripSrgb).setFill()
                 bounds.fill()
-                drawLabel(label, color: appearanceColor(variant.foregroundSrgb), hasMonogram: true)
-                drawMonogram(monogram, color: appearanceColor(variant.markerSrgb))
+                let hasMonogram = !monogram.isEmpty
+                drawLabel(label, color: appearanceColor(variant.foregroundSrgb), hasMonogram: hasMonogram)
+                if hasMonogram { drawMonogram(monogram, color: appearanceColor(variant.markerSrgb)) }
                 let name = appearance?.name ?? effectiveAppearance.name
                 let options = contrastOptions()
-                if options.differentiate {
+                if options.differentiate && hasMonogram {
                     appearanceColor(variant.outlineSrgb).setStroke()
                     let markFrame = NSRect(
                         x: padding - 3, y: 3, width: markWidth(for: bounds.width) + 6,
@@ -136,7 +137,7 @@ final class IdentityStripView: NSView {
     }
 
     private func markWidth(for width: CGFloat) -> CGFloat {
-        guard case .identity(_, let monogram, _) = content else { return 0 }
+        guard case .identity(_, let monogram, _) = content, !monogram.isEmpty else { return 0 }
         let natural = (monogram as NSString).size(withAttributes: markAttributes()).width
         let minimum = max(24, ceil(textFont.pointSize * 1.7))
         // Stored symbols can contain more than one character. Wrap them rather
@@ -149,7 +150,11 @@ final class IdentityStripView: NSView {
     private func height(for width: CGFloat) -> CGFloat {
         let width = width > 0 ? width : fallbackWidth
         let hasMonogram: Bool
-        if case .identity = content { hasMonogram = true } else { hasMonogram = false }
+        if case .identity(_, let monogram, _) = content {
+            hasMonogram = !monogram.isEmpty
+        } else {
+            hasMonogram = false
+        }
         let label = NSAttributedString(string: content.label, attributes: labelAttributes(color: .labelColor))
         let rect = label.boundingRect(
             with: NSSize(
