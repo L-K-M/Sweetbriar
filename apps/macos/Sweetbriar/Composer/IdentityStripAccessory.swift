@@ -5,7 +5,10 @@ import AppKit
 @MainActor
 final class IdentityStripAccessory: NSTitlebarAccessoryViewController {
     let strip = IdentityStripView(frame: NSRect(x: 0, y: 0, width: 600, height: 32))
+    var reduceMotion: () -> Bool = { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
     private var measuring = false
+    private var fadingSnapshot: NSImageView?
+    static let transitionDuration: TimeInterval = 0.15
 
     override init(nibName nibNameOrNil: NSNib.Name?, bundle nibBundleOrNil: Bundle?) {
         super.init(nibName: nibNameOrNil, bundle: nibBundleOrNil)
@@ -22,14 +25,48 @@ final class IdentityStripAccessory: NSTitlebarAccessoryViewController {
     override func loadView() {
         let host = IdentityStripHost(frame: NSRect(x: 0, y: 0, width: 600, height: 32))
         host.resized = { [weak self] in self?.measure() }
+        strip.wantsLayer = true
         host.addSubview(strip)
         view = host
         measure()
     }
 
-    func setContent(_ content: IdentityStripView.Content) {
+    func setContent(_ content: IdentityStripView.Content, routeChanged: Bool = false) {
+        guard content != strip.content else { return }
+        fadingSnapshot?.removeFromSuperview()
+        fadingSnapshot = nil
+        let snapshot = routeChanged && !reduceMotion() ? snapshotOldStrip() : nil
         strip.content = content
         measure()
+        guard let snapshot else { return }
+        snapshot.frame = strip.bounds
+        fadingSnapshot = snapshot
+        strip.addSubview(snapshot)
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = Self.transitionDuration
+            snapshot.animator().alphaValue = 0
+        } completionHandler: { [weak self, weak snapshot] in
+            Task { @MainActor [weak self, weak snapshot] in
+                guard let snapshot else { return }
+                snapshot.removeFromSuperview()
+                if self?.fadingSnapshot === snapshot { self?.fadingSnapshot = nil }
+            }
+        }
+    }
+
+    private func snapshotOldStrip() -> NSImageView? {
+        guard isViewLoaded, view.window?.isVisible == true, !strip.bounds.isEmpty,
+            let bitmap = strip.bitmapImageRepForCachingDisplay(in: strip.bounds)
+        else { return nil }
+        strip.cacheDisplay(in: strip.bounds, to: bitmap)
+        let image = NSImage(size: strip.bounds.size)
+        image.addRepresentation(bitmap)
+        let snapshot = NSImageView(frame: strip.bounds)
+        snapshot.image = image
+        snapshot.imageScaling = .scaleAxesIndependently
+        snapshot.autoresizingMask = [.width, .height]
+        snapshot.setAccessibilityElement(false)
+        return snapshot
     }
 
     func setTextFont(_ font: NSFont) {

@@ -66,6 +66,42 @@ struct IdentityStripAccessoryTests {
         window.removeTitlebarAccessoryViewController(at: 0)
     }
 
+    @Test func onlyRouteChangesAnimateAndReduceMotionDisablesTheTransition() async throws {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 600, height: 400),
+            styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let accessory = IdentityStripAccessory(nibName: nil, bundle: nil)
+        window.addTitlebarAccessoryViewController(accessory)
+        window.makeKeyAndOrderFront(nil)
+        accessory.reduceMotion = { false }
+        accessory.setContent(.unavailable(label: "First"))
+        let oldHeight = accessory.strip.bounds.height
+        accessory.setContent(
+            .unavailable(label: String(repeating: "Long identity ", count: 25)), routeChanged: true)
+        let snapshot = try #require(accessory.strip.subviews.first as? NSImageView)
+        #expect(accessory.strip.bounds.height > oldHeight)
+        #expect(snapshot.frame.size == accessory.strip.bounds.size)
+        #expect(snapshot.image != nil)
+        #expect(!snapshot.isAccessibilityElement())
+        #expect(IdentityStripAccessory.transitionDuration == 0.15)
+        for _ in 0..<100 where !accessory.strip.subviews.isEmpty {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(accessory.strip.subviews.isEmpty)
+        accessory.setContent(.unavailable(label: "Next"), routeChanged: true)
+        let earlier = try #require(accessory.strip.subviews.first)
+        accessory.setContent(.unavailable(label: "Later"), routeChanged: true)
+        #expect(earlier.superview == nil)
+        #expect(accessory.strip.subviews.count == 1)
+        accessory.setContent(.unavailable(label: "Appearance changed"))
+        #expect(accessory.strip.subviews.isEmpty)
+        accessory.reduceMotion = { true }
+        accessory.setContent(.unavailable(label: "Third"), routeChanged: true)
+        #expect(accessory.strip.subviews.isEmpty)
+    }
+
     @Test func updatesHeightWhenContentChanges() {
         let accessory = IdentityStripAccessory(nibName: nil, bundle: nil)
         accessory.loadViewIfNeeded()

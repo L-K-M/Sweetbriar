@@ -158,10 +158,12 @@ private enum IdentityUndoEvents { case application, explicitTestTransactions }
 private func withNativeIdentity(
     _ seed: NativeIdentitySource.Seed = .saved(nativeContent()), defaultId: String? = nil,
     catalogGate: NativeIdentityGate? = nil, undoEvents: IdentityUndoEvents = .application,
+    appearance: AppearanceModel? = nil, announceRoute: @escaping @MainActor (String) -> Void = { _ in },
     body: @MainActor (ComposeWindowController, NativeIdentitySource) async throws -> Void
 ) async throws {
     let source = NativeIdentitySource(seed, defaultId: defaultId, catalogGate: catalogGate)
-    let controller = ComposeWindowController(source: source, draftId: "native-identity")
+    let controller = ComposeWindowController(
+        source: source, draftId: "native-identity", appearance: appearance, announceRoute: announceRoute)
     controller.showWindow(nil)
     let result: Result<Void, any Error>
     do {
@@ -183,8 +185,137 @@ private func withNativeIdentity(
     try result.get()
 }
 
+private actor NativeStripAppearanceSource: AppearanceSource {
+    private var mark = "W"
+    private var generation: UInt64 = 1
+    func setMark(_ value: String) {
+        mark = value
+        generation += 1
+    }
+    func appearance() async throws -> Appearance {
+        Appearance(
+            generation: generation, accounts: [],
+            identities: ["a", "b"].map { id in
+                IdentityAppearance(
+                    identityId: id, accountId: "account-\(id)", colorSrgb: "#0072b2",
+                    colorOverrideSrgb: nil, tokens: sampleAccount.tokens, symbolOverride: nil,
+                    monogram: mark, revision: nil)
+            })
+    }
+    func appearanceEvents(generation: UInt64) async throws -> any AppearanceEventSource {
+        throw CoreFailure.unavailable(reason: "Not used by this refresh fixture.")
+    }
+    func setAccountAppearance(
+        accountId: String, expectedRevision: Int64, change: AccountAppearanceChange
+    ) async throws -> Receipt { throw CoreFailure.unavailable(reason: "Not used by this fixture.") }
+    func setIdentityAppearance(
+        identityId: String, expectedRevision: Int64?, change: IdentityAppearanceChange
+    ) async throws -> Receipt { throw CoreFailure.unavailable(reason: "Not used by this fixture.") }
+    nonisolated func palette() -> [PaletteColor] { [] }
+}
+
 @Suite(.serialized, .timeLimit(.minutes(1))) @MainActor
 struct ComposeIdentityNativeTests {
+    @Test func sharedAppearanceUpdatesTwoWindowsWithoutEditingTheirDrafts() async throws {
+        let source = NativeStripAppearanceSource()
+        let appearance = AppearanceModel(source: source)
+        await appearance.refresh()
+        var announcements: [String] = []
+        let announce: @MainActor (String) -> Void = { announcements.append($0) }
+        try await withNativeIdentity(appearance: appearance, announceRoute: announce) {
+            first, _ in
+            try await withNativeIdentity(appearance: appearance, announceRoute: announce) {
+                second, _ in
+                let expected = "W · Account a · Native a <a@EXAMPLE.test>"
+                try #require(
+                    await identityEventually {
+                        first.identityStrip.strip.accessibilityLabel() == expected
+                            && second.identityStrip.strip.accessibilityLabel() == expected
+                    })
+                #expect(
+                    first.window?.titlebarAccessoryViewControllers.contains { $0 === first.identityStrip }
+                        == true)
+                let firstContent = first.model.content
+                let secondContent = second.model.content
+                let firstDirty = first.model.isDirty
+                let firstUndo = first.textView.undoManager?.canUndo
+                let secondUndo = second.textView.undoManager?.canUndo
+                await source.setMark("X")
+                await appearance.refresh()
+                try #require(
+                    await identityEventually {
+                        first.identityStrip.strip.accessibilityLabel()?.hasPrefix("X ·") == true
+                            && second.identityStrip.strip.accessibilityLabel()?.hasPrefix("X ·") == true
+                    })
+                #expect(first.model.content == firstContent)
+                #expect(second.model.content == secondContent)
+                #expect(first.model.isDirty == firstDirty)
+                #expect(first.textView.undoManager?.canUndo == firstUndo)
+                #expect(second.textView.undoManager?.canUndo == secondUndo)
+                #expect(announcements.isEmpty)
+            }
+        }
+    }
+
+    @Test func appearanceRefreshDoesNotCommitMarkedTextOrChangeFocus() async throws {
+        let source = NativeStripAppearanceSource()
+        let appearance = AppearanceModel(source: source)
+        await appearance.refresh()
+        try await withNativeIdentity(.saved(nativeContent(body: "")), appearance: appearance) {
+            controller, _ in
+            try #require(await identityEventually { controller.identityControls.model.isReady })
+            controller.window?.makeFirstResponder(controller.textView)
+            controller.textView.setMarkedText(
+                "編集中", selectedRange: .init(location: 3, length: 0),
+                replacementRange: .init(location: 0, length: 0))
+            try #require(controller.textView.hasMarkedText())
+            let markedRange = controller.textView.markedRange()
+            let nativeBytes = Array(controller.textView.string.utf8)
+            let sourceBefore = controller.model.content
+            let undoBefore = controller.textView.undoManager?.canUndo
+            await source.setMark("X")
+            await appearance.refresh()
+            try #require(
+                await identityEventually {
+                    controller.identityStrip.strip.accessibilityLabel()?.hasPrefix("X ·") == true
+                })
+            #expect(controller.textView.hasMarkedText())
+            #expect(controller.textView.markedRange() == markedRange)
+            #expect(Array(controller.textView.string.utf8) == nativeBytes)
+            #expect(controller.window?.firstResponder === controller.textView)
+            #expect(controller.model.content == sourceBefore)
+            #expect(controller.textView.undoManager?.canUndo == undoBefore)
+            controller.textView.unmarkText()
+        }
+    }
+
+    @Test func committedRouteAndUndoEachAnnounceOnce() async throws {
+        let source = NativeStripAppearanceSource()
+        let appearance = AppearanceModel(source: source)
+        await appearance.refresh()
+        var announcements: [String] = []
+        let announce: @MainActor (String) -> Void = { announcements.append($0) }
+        try await withNativeIdentity(
+            .saved(nativeContent(body: "")), undoEvents: .explicitTestTransactions,
+            appearance: appearance, announceRoute: announce
+        ) { controller, _ in
+            try #require(await identityEventually { controller.identityControls.model.isReady })
+            try chooseNative("b", on: controller)
+            try #require(await identityEventually { controller.model.content?.identityId == "b" })
+            #expect(controller.identityStrip.strip.accessibilityLabel()?.contains("b@EXAMPLE.test") == true)
+            #expect(announcements.count == 1)
+            #expect(announcements.first?.contains("b@EXAMPLE.test") == true)
+            let undo = try #require(controller.textView.undoManager)
+            undo.undo()
+            #expect(controller.model.content?.identityId == "a")
+            #expect(controller.identityStrip.strip.accessibilityLabel()?.contains("a@EXAMPLE.test") == true)
+            #expect(announcements.count == 2)
+            undo.redo()
+            #expect(controller.model.content?.identityId == "b")
+            #expect(announcements.count == 3)
+        }
+    }
+
     @Test func unchangedNativeTextSharesOneEventUnlessTestTransactionsAreExplicit() throws {
         let window = NSWindow(
             contentRect: .init(x: 0, y: 0, width: 320, height: 160),

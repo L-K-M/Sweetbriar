@@ -16,6 +16,9 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
     let bccRecipients: RecipientField
     private var recipientFields: [RecipientField] { [toRecipients, ccRecipients, bccRecipients] }
     let statusLabel = NSTextField(wrappingLabelWithString: "Loading draft…")
+    let identityStrip = IdentityStripAccessory(nibName: nil, bundle: nil)
+    private let appearance: AppearanceModel?
+    private let announceRoute: @MainActor (String) -> Void
     private let modeControl = NSSegmentedControl(
         labels: ["Plain", "Markdown"], trackingMode: .selectOne,
         target: nil, action: nil)
@@ -49,8 +52,16 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
 
     init(
         source: any DraftStore & RecipientSource & ComposeCatalogSource, draftId: String,
-        preferredAccountId: String? = nil, canWrite: @escaping @MainActor () -> Bool = { true }
+        preferredAccountId: String? = nil, appearance: AppearanceModel? = nil,
+        canWrite: @escaping @MainActor () -> Bool = { true },
+        announceRoute: @escaping @MainActor (String) -> Void = { message in
+            NSAccessibility.post(
+                element: NSApp!, notification: .announcementRequested,
+                userInfo: [.announcement: message, .priority: NSAccessibilityPriorityLevel.medium.rawValue])
+        }
     ) {
+        self.appearance = appearance
+        self.announceRoute = announceRoute
         self.canWrite = canWrite
         catalogSource = source
         self.preferredAccountId = preferredAccountId
@@ -68,9 +79,11 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         window.setAccessibilityIdentifier("compose-\(draftId)")
         super.init(window: window)
         window.delegate = self
+        window.addTitlebarAccessoryViewController(identityStrip)
         buildContent(window)
         render()
         observeModel()
+        observeAppearance()
         loadTask = Task { [self] in
             await model.load()
             render()
@@ -212,7 +225,11 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
 
     private func identityChanged(_ event: ComposeIdentityControls.Event) {
         switch event {
-        case .edit: autosave.contentDidChange()
+        case .route:
+            autosave.contentDidChange()
+            render(routeChanged: true)
+            announceRoute("From: \(identityStrip.strip.content.accessibilityLabel)")
+            return
         case .decision:
             if identityControls.isDeciding {
                 autosave.suspendDebounce()
@@ -391,7 +408,19 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         }
     }
 
-    private func render() {
+    private func observeAppearance() {
+        withObservationTracking {
+            _ = appearance?.appearance
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self, !finished else { return }
+                render()
+                observeAppearance()
+            }
+        }
+    }
+
+    private func render(routeChanged: Bool = false) {
         let editable = model.content != nil && !isClosing && !finished
         subjectField.isEditable = editable
         textView.isEditable = editable
@@ -414,6 +443,15 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         }
         window?.isDocumentEdited = model.isDirty || recipientFields.contains(where: \.isPending)
         identityControls.render()
+        let stripContent: IdentityStripView.Content
+        if let content = model.content {
+            stripContent = IdentityStripContent.resolve(
+                route: content.identityId, identity: identityControls.model.selectedIdentity,
+                appearance: appearance?.appearance)
+        } else {
+            stripContent = .unavailable(label: "Loading sending identity…")
+        }
+        identityStrip.setContent(stripContent, routeChanged: routeChanged)
         let subject = model.content.flatMap { $0.subject.isEmpty ? nil : $0.subject } ?? "New Message"
         window?.title = identityControls.titleContext.map { "\(subject) · \($0)" } ?? subject
         if closeIntent == .abandonEdits {

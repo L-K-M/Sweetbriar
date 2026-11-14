@@ -5,14 +5,14 @@ import SweetbriarBridge
 /// A proposed body is accepted synchronously before DraftModel publishes it.
 @MainActor
 final class ComposeIdentityControls: NSObject {
-    enum Event { case presentation, edit, decision }
+    enum Event { case presentation, route, decision }
     let popup = NSPopUpButton()
     let refreshButton = NSButton(title: "Refresh Identities", target: nil, action: nil)
     private(set) lazy var model: ComposeIdentityModel = {
         let model = ComposeIdentityModel(
             draft: draft, source: catalogSource, preferredAccountId: preferredAccountId,
             canApply: { [weak self] in self?.admit($0) ?? false })
-        model.onTransition = { [weak self] _ in self?.changed(.edit) }
+        model.onTransition = { [weak self] _ in self?.changed(.route) }
         return model
     }()
     private(set) var isPublishing = false
@@ -192,7 +192,7 @@ final class ComposeIdentityControls: NSObject {
     private func restoreRoute(_ id: String?, reciprocal: String?, using undo: UndoManager) {
         guard !stopped, model.restoreRoute(identityId: id) else { return }
         recordRouteUndo(reciprocal, reciprocal: id, using: undo)
-        changed(.edit)
+        changed(.route)
     }
 
     func render() {
