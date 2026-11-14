@@ -34,6 +34,7 @@ private actor ComposeTestSource: ComposeSource {
     private(set) var creates = 0
     private(set) var saves = 0
     private(set) var acknowledged = 0
+    private(set) var preferredQueries: [String?] = []
     init(_ bridge: CoreBridge) { self.bridge = bridge }
     func holdCreate(_ gate: ComposeGate) { createGate = gate }
     func holdAnswer(_ gate: ComposeGate) { answerGate = gate }
@@ -50,6 +51,10 @@ private actor ComposeTestSource: ComposeSource {
         return try await bridge.createDraft(idempotencyKey: idempotencyKey, source: source)
     }
     func draft(id: String) async throws -> Draft { try await bridge.draft(id: id) }
+    func composeCatalog(preferredAccountId: String?) async throws -> ComposeCatalog {
+        preferredQueries.append(preferredAccountId)
+        return try await bridge.composeCatalog(preferredAccountId: preferredAccountId)
+    }
     func parseDraftRecipients(text: String) async throws -> [DraftRecipient] {
         let answer = try await bridge.parseDraftRecipients(text: text)
         parsed.append(text)
@@ -230,6 +235,24 @@ private func firstComposeView<T: NSView>(
 
 @Suite(.serialized, .timeLimit(.minutes(1))) @MainActor
 struct ComposeWindowTests {
+    @Test func newMessageCapturesAccountContextBeforeTheHeldCreate() async throws {
+        try await withComposeFixture { f in
+            let gate = ComposeGate()
+            await f.source.holdCreate(gate)
+            let owner = f.makeOwner()
+            var selectedAccount = "previous-account"
+            owner.newMessage(preferredAccountId: selectedAccount)
+            selectedAccount = "later-account"
+            let began = await composeEventually { await f.source.creates == 1 }
+            try #require(began)
+            await gate.open()
+            let queried = await composeEventually { await f.source.preferredQueries.count == 1 }
+            try #require(queried)
+            #expect(await f.source.preferredQueries == ["previous-account"])
+            #expect(selectedAccount == "later-account")
+        }
+    }
+
     @Test func quietRecipientValidationKeepsFocusAndSavesCompleteNamedTokens() async throws {
         try await withComposeFixture { f in
             let c = try await f.makeWindow()

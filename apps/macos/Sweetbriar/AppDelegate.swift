@@ -130,7 +130,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             isWriteEnabled: { [weak self] in self?.backups?.canWrite == true },
             onNewMessage: { [weak self] in
                 guard let self, !terminating else { return }
-                composeWindows?.newMessage()
+                composeWindows?.newMessage(preferredAccountId: mainWindow?.sidebar?.selectedAccountId)
             },
             isComposeEnabled: { [weak self] in self?.backups?.canCompose == true }
         )

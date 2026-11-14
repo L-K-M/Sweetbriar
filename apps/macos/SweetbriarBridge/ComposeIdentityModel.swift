@@ -36,19 +36,22 @@ public final class ComposeIdentityModel {
     private let draft: DraftModel
     private let source: any ComposeCatalogSource
     private let preferredAccountId: String?
-    private let canApply: @MainActor () -> Bool
+    private let canApply: @MainActor (Transition) -> Bool
     private var stopped = false
     private var explicitChoice = false
     private var defaultDecided = false
     private var catalogEpoch: UInt64 = 0
     private var readTicket: UInt64 = 0
     @ObservationIgnored private var loading: (id: UInt64, task: Task<Void, Never>)?
-    private var decisionSnapshot: (version: UInt64, catalog: UInt64)?
+    private var decisionSnapshot:
+        (
+            version: UInt64, catalog: UInt64, body: String, format: ComposeFormat, identityId: String?
+        )?
     private var ownedSignature: (prefix: String, body: String, version: UInt64)?
 
     public init(
         draft: DraftModel, source: any ComposeCatalogSource, preferredAccountId: String? = nil,
-        canApply: @escaping @MainActor () -> Bool = { true }
+        canApply: @escaping @MainActor (Transition) -> Bool = { _ in true }
     ) {
         self.draft = draft
         self.source = source
@@ -136,13 +139,16 @@ public final class ComposeIdentityModel {
         }
         pendingDecision = nil
         decisionSnapshot = nil
+        // A clean load/receipt can replace content without being a user edit.
+        // Consent belongs to the body, format and route the editor displayed.
         guard editable, snapshot.version == draft.editVersion, snapshot.catalog == catalogEpoch,
+            let content = draft.content, content.bodySource.utf8.elementsEqual(snapshot.body.utf8),
+            content.format == snapshot.format, Self.same(content.identityId, snapshot.identityId),
             isReady, choices.contains(where: { Self.same($0.identityId, decision.identity.identityId) })
         else {
             return refuse(
                 "The draft or its sending identities changed. Choose From again without replacing your text.")
         }
-        guard let content = draft.content else { return .refused }
         switch choice {
         case .keepText:
             return apply(identity: decision.identity, body: content.bodySource, ownershipPrefix: nil)
@@ -161,7 +167,11 @@ public final class ComposeIdentityModel {
     /// Keep every later recipient/attachment edit and relinquish signature ownership.
     @discardableResult
     public func restoreRoute(identityId: String?) -> Bool {
-        guard admitsChange(), var content = draft.content else { return false }
+        guard let previous = draft.content else { return false }
+        let transition = Transition(
+            previousIdentityId: previous.identityId, identityId: identityId,
+            previousBody: previous.bodySource, body: previous.bodySource, format: previous.format)
+        guard admitsChange(transition), var content = draft.content else { return false }
         explicitChoice = true
         cancelDecision()
         ownedSignature = nil
@@ -224,26 +234,29 @@ public final class ComposeIdentityModel {
         }
         let decision = Decision(id: UUID(), identity: identity)
         pendingDecision = decision
-        decisionSnapshot = (draft.editVersion, catalogEpoch)
+        decisionSnapshot = (
+            draft.editVersion, catalogEpoch, content.bodySource, content.format, content.identityId
+        )
         problem = nil
         return .needsSignatureChoice
     }
 
-    private func admitsChange() -> Bool {
+    private func admitsChange(_ transition: Transition) -> Bool {
         guard editable else { return false }
         let version = draft.editVersion
         // A native admission callback can commit input reentrantly. Never
         // overwrite that newer source with the already-computed proposal.
-        return canApply() && editable && draft.editVersion == version
+        return canApply(transition) && editable && draft.editVersion == version
     }
 
     private func apply(identity: ComposeIdentity?, body: String, ownershipPrefix: String?) -> Change {
-        guard admitsChange(), var content = draft.content else {
+        guard let previous = draft.content else { return .refused }
+        let transition = Transition(
+            previousIdentityId: previous.identityId, identityId: identity?.identityId,
+            previousBody: previous.bodySource, body: body, format: previous.format)
+        guard admitsChange(transition), var content = draft.content else {
             return refuse("Finish the current native input before changing From.")
         }
-        let transition = Transition(
-            previousIdentityId: content.identityId, identityId: identity?.identityId,
-            previousBody: content.bodySource, body: body, format: content.format)
         content.identityId = identity?.identityId
         content.bodySource = body
         draft.update(content)

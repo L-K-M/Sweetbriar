@@ -2045,8 +2045,27 @@ local drafts. No network yet.
             core appearance tokens/Strong mode, 150ms/Reduce Motion and one
             AX announcement. Test actual light/dark/high-contrast surfaces,
             32pt/fullscreen/text-size layout, pending input and safe choices.
-            Re-split before coding if the complete artifact exceeds 1,450
-            gross lines; do not drop signature or accessibility checks.
+            Re-sized before coding (2026-11-14) to retain the complete
+            native input/undo and appearance proofs under 1,450 gross lines:
+            - **c2b5b1 Native From and signature interaction (L):** capture
+              selected-account context at New Message admission. Load the
+              draft before catalog discovery. Native popup/full-address and
+              provisional/unavailable states; prepare current input before
+              choosing. Admit the proposed native text edit before changing
+              the model, suppress capture during that synchronous edit, and
+              keep route/body in one native undo group. Safe-default Keep
+              Text/explicit append sheets pause autosave; normal close
+              cancels an unresolved proposal and saves existing content.
+              Retire and await discovery/selection tasks on close. Test
+              real controls, no-sender operation, input fencing, choice
+              supersession, sheets, undo/redo and later field preservation.
+            - **c2b5b2 Native identity appearance (L):** titlebar accessory,
+              full address/account/monogram strip and popup swatches from
+              shared core tokens, Standard/Strong setting and neutral
+              editor, adaptive light/dark/high-contrast actual surfaces,
+              32pt/fullscreen/text-size layout, 150ms/Reduce Motion and one
+              AX announcement. Native surfaces and accessibility-setting
+              tests remain required; b1 alone does not qualify the strip.
         Optional Contacts stays optional; complete native workflow and
         owner input-method/accessibility gates remain c2e and owner work.
       - **M1.9c2c Attachment and conflict editing (L):** picking/dragging

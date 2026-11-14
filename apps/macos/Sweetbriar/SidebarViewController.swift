@@ -24,6 +24,7 @@ final class SidebarViewController: NSViewController {
 
     /// The chosen entry's id, kept across reloads.
     private var chosenID: String?
+    var selectedAccountId: String? { chosenID.flatMap { model.accountId(forEntry: $0) } }
 
     /// While the selection is set in code: the delegate then reports
     /// no choice.

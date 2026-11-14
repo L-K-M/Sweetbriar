@@ -99,6 +99,21 @@ func theSidebarListsUnifiedThenEachAccount() async throws {
     #expect(model.generation == 7)
 }
 
+@MainActor
+@Test func composeContextUsesOnlyAnExistingAccountSectionEntry() async {
+    let fake = FakeSidebarSource()
+    await fake.set(archive, [mailbox(1, "Inbox", unread: 0)], generation: 1)
+    let model = SidebarModel(source: fake)
+    #expect(model.accountId(forEntry: "a1/1") == nil)
+    await model.reload()
+    #expect(model.accountId(forEntry: "a1/1") == "a1")
+    #expect(model.accountId(forEntry: SidebarModel.unifiedInboxID) == nil)
+    #expect(model.accountId(forEntry: "a1/not-a-loaded-entry") == nil)
+    await fake.set(archive, [], generation: 2)
+    await model.reload()
+    #expect(model.accountId(forEntry: "a1/1") == nil)
+}
+
 /// A list's newer generation reloads the sidebar; one it already
 /// shows doesn't.
 @MainActor

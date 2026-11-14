@@ -27,6 +27,18 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
             await self?.prepareRecipients() ?? .refused
         })
     private let canWrite: @MainActor () -> Bool
+    private let catalogSource: any ComposeCatalogSource
+    private let preferredAccountId: String?
+    private(set) lazy var identityControls: ComposeIdentityControls = {
+        guard let window else { preconditionFailure("the compose window is installed before its controls") }
+        return ComposeIdentityControls(
+            draft: model, source: catalogSource, preferredAccountId: preferredAccountId,
+            textView: textView, window: window,
+            editable: { [weak self] in self?.canChangeIdentity == true },
+            inputReady: { [weak self] in self?.identityInputReady == true },
+            prepareInput: { [weak self] in await self?.prepareIdentityInput() ?? false },
+            changed: { [weak self] in self?.identityChanged($0) })
+    }()
     private var loadTask: Task<Void, Never>?
     private var closing: Task<Bool, Never>?
     private var closeIntent: CloseMode?
@@ -36,10 +48,12 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
     var onClosed: (@MainActor () -> Void)?
 
     init(
-        source: any DraftStore & RecipientSource, draftId: String,
-        canWrite: @escaping @MainActor () -> Bool = { true }
+        source: any DraftStore & RecipientSource & ComposeCatalogSource, draftId: String,
+        preferredAccountId: String? = nil, canWrite: @escaping @MainActor () -> Bool = { true }
     ) {
         self.canWrite = canWrite
+        catalogSource = source
+        self.preferredAccountId = preferredAccountId
         model = DraftModel(source: ComposeSavePolicy(source: source, canWrite: canWrite), draftId: draftId)
         toRecipients = RecipientField(label: "To", source: source)
         ccRecipients = RecipientField(label: "Cc", source: source)
@@ -60,6 +74,7 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         loadTask = Task { [self] in
             await model.load()
             render()
+            if !isClosing, !finished { identityControls.startDiscovery() }
         }
     }
 
@@ -94,11 +109,11 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         abandonButton.setAccessibilityIdentifier("composeCloseWithoutSaving")
         statusLabel.setAccessibilityIdentifier("composeSaveStatus")
         statusLabel.textColor = .secondaryLabelColor
-        let identity = NSTextField(
-            wrappingLabelWithString:
-                "Local draft. Sending is not available yet. From and attachment controls follow in later steps."
-        )
-        identity.textColor = .secondaryLabelColor
+        let identity = NSStackView(views: [
+            NSTextField(labelWithString: "From:"), identityControls.popup, identityControls.refreshButton,
+        ])
+        identity.spacing = 8
+        identityControls.popup.setContentHuggingPriority(.defaultLow, for: .horizontal)
         let send = NSButton(title: "Send", target: nil, action: nil)
         send.isEnabled = false
         send.toolTip = "Sending is not available yet. You can save a local draft without a sending account."
@@ -149,7 +164,9 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
     @objc private func modeChanged() { captureEdit() }
 
     private func captureEdit() {
-        guard !finished, !isClosing, var content = model.content else { return }
+        guard !finished, !isClosing, !identityControls.isPublishing, var content = model.content else {
+            return
+        }
         let format: ComposeFormat = modeControl.selectedSegment == 0 ? .plain : .markdown
         textView.mode = format == .plain ? .plain : .markdown
         // Canonical String equality conflates distinct source bytes. An edit
@@ -163,7 +180,7 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         content.bodySource = textView.string
         content.format = format
         model.update(content)
-        autosave.contentDidChange()
+        if abandonAlert == nil, !identityControls.isDeciding { autosave.contentDidChange() }
         render()
     }
 
@@ -172,11 +189,43 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         // Version raw input too: a prior receipt must not clear its dirty state
         // just because it cannot yet be represented as validated recipients.
         model.update(content)
-        if abandonAlert == nil { autosave.contentDidChange() }
+        if abandonAlert == nil, !identityControls.isDeciding { autosave.contentDidChange() }
+        render()
+    }
+
+    private var canChangeIdentity: Bool { !finished && !isClosing && model.content != nil }
+    private var identityInputReady: Bool {
+        canChangeIdentity && !recipientFields.contains(where: \.isPending)
+            && !textView.hasMarkedText()
+            && (window?.firstResponder as? NSTextView)?.hasMarkedText() != true
+    }
+
+    private func prepareIdentityInput() async -> Bool {
+        guard canChangeIdentity,
+            (window?.firstResponder as? NSTextView)?.hasMarkedText() != true
+        else { return false }
+        captureEdit()
+        guard await prepareRecipients() == .ready else { return false }
+        captureEdit()
+        return identityInputReady
+    }
+
+    private func identityChanged(_ event: ComposeIdentityControls.Event) {
+        switch event {
+        case .edit: autosave.contentDidChange()
+        case .decision:
+            if identityControls.isDeciding {
+                autosave.suspendDebounce()
+            } else if !isClosing, !finished, abandonAlert == nil {
+                autosave.contentDidChange()
+            }
+        case .presentation: break
+        }
         render()
     }
 
     private func prepareRecipients() async -> DraftAutosave.Readiness {
+        guard !identityControls.isDeciding else { return .refused }
         let versions = recipientFields.map(\.inputVersion)
         var prepared: [[DraftRecipient]] = []
         for field in recipientFields {
@@ -189,6 +238,9 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         guard versions == recipientFields.map(\.inputVersion),
             !recipientFields.contains(where: \.isPending)
         else { return .superseded }
+        // Another native selection may have opened its sheet while this
+        // preparation awaited parsing. Do not start a new write behind it.
+        guard !identityControls.isDeciding else { return .refused }
         guard var content = model.content else { return .refused }
         if !RecipientField.sameBytes(content.to, prepared[0])
             || !RecipientField.sameBytes(content.cc, prepared[1])
@@ -204,13 +256,13 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
     }
 
     @objc func saveNow() {
-        guard !isClosing, !finished, abandonAlert == nil else { return }
+        guard !isClosing, !finished, abandonAlert == nil, !identityControls.isDeciding else { return }
         captureEdit()
         Task { [self] in _ = await saveAndWait() }
     }
 
     func saveAndWait() async -> Bool {
-        guard !isClosing, !finished, abandonAlert == nil else { return false }
+        guard !isClosing, !finished, abandonAlert == nil, !identityControls.isDeciding else { return false }
         captureEdit()
         let saved = await autosave.flush()
         render()
@@ -218,7 +270,7 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
     }
 
     func windowDidResignKey(_ notification: Notification) {
-        guard !isClosing, !finished, abandonAlert == nil else { return }
+        guard !isClosing, !finished, abandonAlert == nil, !identityControls.isDeciding else { return }
         captureEdit()
         Task { [self] in
             _ = await autosave.flush()
@@ -270,6 +322,8 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         if let closing { return closing }
         guard !finished else { return nil }
         if mode == .save {
+            identityControls.cancelDecision()
+            autosave.suspendDebounce()
             if let alert = abandonAlert {
                 window?.endSheet(alert.window, returnCode: .alertFirstButtonReturn)
                 alert.window.orderOut(nil)
@@ -288,17 +342,20 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
             autosave.stop()
         }
         closeIntent = mode
+        identityControls.cancelDecision()
         render()
         let task = Task { [self] in
             await loadTask?.value
             if mode == .save, model.content != nil, !(await autosave.flush()) {
                 closeIntent = nil
                 closing = nil
+                identityControls.startDiscovery()
                 render()
                 return false
             }
             await autosave.stopAndWait()
             for field in recipientFields { await field.stopAndWait() }
+            await identityControls.stopAndWait()
             model.stop()
             finished = true
             window?.close()
@@ -356,7 +413,9 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
             textView.mode = content.format == .plain ? .plain : .markdown
         }
         window?.isDocumentEdited = model.isDirty || recipientFields.contains(where: \.isPending)
-        window?.title = model.content.flatMap { $0.subject.isEmpty ? nil : $0.subject } ?? "New Message"
+        identityControls.render()
+        let subject = model.content.flatMap { $0.subject.isEmpty ? nil : $0.subject } ?? "New Message"
+        window?.title = identityControls.titleContext.map { "\(subject) · \($0)" } ?? subject
         if closeIntent == .abandonEdits {
             statusLabel.stringValue =
                 model.isSaving ? "Waiting for an in-progress save…" : "Closing without another save…"
@@ -366,6 +425,13 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         } else if let failure = model.failure {
             statusLabel.stringValue =
                 "Draft error: \(failure.localizedDescription) Try Save again, keep editing, or explicitly close without saving."
+        } else if identityControls.isDeciding {
+            statusLabel.stringValue = "Choose Keep Text or Append Signature. From has not changed."
+        } else if let problem = identityControls.model.problem ?? identityControls.problem {
+            statusLabel.stringValue = problem
+        } else if case .failed(let error) = identityControls.model.readState {
+            statusLabel.stringValue =
+                "Identity catalog: \(error.localizedDescription) Try Refresh Identities."
         } else if let field = recipientFields.first(where: { $0.problem != nil }) {
             statusLabel.stringValue =
                 "\(field.control.accessibilityLabel() ?? "Recipient"): \(field.problem ?? "Input is not ready.")"
