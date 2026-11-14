@@ -3,15 +3,15 @@
 
 use std::future::Future;
 use std::pin::pin;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
-use std::task::{Context, Waker};
+use std::task::{Context, Wake, Waker};
 use std::time::Duration;
 
 use sb_resources::{BackupDestination, IntegrityCheck, StoreError};
 use sb_test_support::{ScratchDir, block_on, damage_an_index};
 
-use super::copy_end;
+use super::{BackupCopies, answer_without_copy, copy_end};
 use crate::index_tests::{count, import, wait};
 use crate::{BackupEnd, BackupGenerationState, Engine, EngineError, Integrity};
 
@@ -344,6 +344,55 @@ fn a_read_only_engine_starts_no_backup() {
     assert_eq!(count(&engine, GENERATIONS), 0);
     assert!(!engine.backup_copies().running());
     block_on(engine.shutdown()).unwrap();
+}
+
+#[test]
+fn a_no_copy_answer_retires_its_reservation_before_waking_the_caller() {
+    // Observe the synchronous wake, not a later, accidentally idle polling turn.
+    struct OnAnswer {
+        copies: Arc<BackupCopies>,
+        woke: AtomicBool,
+        active_when_woken: AtomicBool,
+    }
+    impl Wake for OnAnswer {
+        fn wake(self: Arc<Self>) {
+            self.active_when_woken
+                .store(self.copies.running(), Ordering::SeqCst);
+            self.woke.store(true, Ordering::SeqCst);
+        }
+    }
+
+    let copies = Arc::new(BackupCopies::default());
+    let copying = copies.begin();
+    let observer = Arc::new(OnAnswer {
+        copies: Arc::clone(&copies),
+        woke: AtomicBool::new(false),
+        active_when_woken: AtomicBool::new(false),
+    });
+    let waker = Waker::from(Arc::clone(&observer));
+    let (answer, answered) = tokio::sync::oneshot::channel();
+    let mut answered = pin!(answered);
+    assert!(copies.running());
+    assert!(
+        answered
+            .as_mut()
+            .poll(&mut Context::from_waker(&waker))
+            .is_pending()
+    );
+    answer_without_copy(
+        copying,
+        answer,
+        Err(EngineError::Corrupt {
+            detail: "synthetic read-only finding".into(),
+        }),
+    );
+    assert!(observer.woke.load(Ordering::SeqCst));
+    assert!(!observer.active_when_woken.load(Ordering::SeqCst));
+    assert!(matches!(
+        block_on(answered),
+        Ok(Err(EngineError::Corrupt { .. }))
+    ));
+    assert!(!copies.running());
 }
 
 /// A store that latches under a copy refuses its next step, then
