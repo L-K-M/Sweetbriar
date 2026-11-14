@@ -51,6 +51,8 @@ public final class BackupsModel {
     public private(set) var archiveRevision: UInt64 = 0
 
     private let source: any BackupsSource
+    private let prepareRestore: @MainActor @Sendable () async -> Void
+    private let didKeepArchive: @MainActor @Sendable () async -> Void
     private let didRestore: @MainActor @Sendable () async -> Void
     private var stopped = false
     private var readTicket: UInt64 = 0
@@ -65,9 +67,13 @@ public final class BackupsModel {
 
     public init(
         source: any BackupsSource,
+        prepareRestore: @escaping @MainActor @Sendable () async -> Void = {},
+        didKeepArchive: @escaping @MainActor @Sendable () async -> Void = {},
         didRestore: @escaping @MainActor @Sendable () async -> Void = {}
     ) {
         self.source = source
+        self.prepareRestore = prepareRestore
+        self.didKeepArchive = didKeepArchive
         self.didRestore = didRestore
     }
 
@@ -203,6 +209,8 @@ public final class BackupsModel {
             operation = nil
         }
         do {
+            await prepareRestore()
+            try Task.checkCancellation()
             let outcome = try await source.startRestore(idempotencyKey: UUID().uuidString, generationId: id)
             // Deliberately no Task.isCancelled check: an acknowledged swap stands.
             lastResult = .restore(outcome)
@@ -235,6 +243,7 @@ public final class BackupsModel {
                 if !stopped { followHealth() }
                 await beginRead(.replace).value
             case .replayed, .refused:
+                await reopenKeptArchive()
                 await beginRead(.preserveEdits).value
             case .closed:
                 isClosed = true
@@ -247,11 +256,18 @@ public final class BackupsModel {
             }
         } catch is CancellationError {
             lastResult = .requestCancelled
+            await reopenKeptArchive()
             await beginRead(.preserveEdits).value
         } catch {
             commandError = error
+            await reopenKeptArchive()
             await beginRead(.preserveEdits).value
         }
+    }
+
+    private func reopenKeptArchive() async {
+        let reopen = didKeepArchive
+        await Task { await reopen() }.value
     }
 
     /// Unstructured tasks do not inherit the command's cancellation. Retire

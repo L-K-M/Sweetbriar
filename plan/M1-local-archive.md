@@ -2084,8 +2084,30 @@ local drafts. No network yet.
                 150ms/Reduce Motion/one AX announcement described above.
                 Include two real full-screen compose windows, preferences
                 across reopen/restore, and unchanged body/undo on appearance
-                changes. Re-split before coding if the complete artifact
-                would exceed 1,450 gross lines; no qualification is dropped.
+                changes. Re-sized before coding (2026-11-14) to keep the
+                lifetime and native rendering proofs below 1,450 gross lines:
+                - **c2b5b2b1 Shared cue context lifetime (M):** one shared
+                  preference owner per source, current application admission,
+                  synchronous restore/quit fences and cohort-owned retirement.
+                  Every concurrent reset/stop caller awaits actual read/write
+                  and initial-load drains; no source replacement or new owner
+                  before retirement. Later freeze and permanent stop beat an
+                  older reset. Failed compose quit leaves owners usable.
+                  Wire actual replaced/kept/closed/accepted-quit hooks; a
+                  refusal, replay or request failure must release the restore
+                  fence after actual retirement. Test cancellation, held
+                  work, replacement, refusal and racing retirement.
+                  No visible setting before its native consumer exists.
+                - **c2b5b2b2 Native identity appearance controls (L):** wire
+                  that shared owner to Settings and compose windows. Complete
+                  the titlebar/full-address/account/monogram, core-derived
+                  popup swatches, Standard/Strong upper tint and neutral
+                  editor, light/dark/high-contrast actual surfaces including
+                  selected rows, text-size/32pt/fullscreen layout, 150ms/Reduce
+                  Motion and one AX announcement. Keep two real full-screen
+                  compose windows, preferences across reopen/restore, and
+                  unchanged source/undo on appearance changes. Re-split
+                  before coding if needed; no qualification is dropped.
         Optional Contacts stays optional; complete native workflow and
         owner input-method/accessibility gates remain c2e and owner work.
       - **M1.9c2c Attachment and conflict editing (L):** picking/dragging

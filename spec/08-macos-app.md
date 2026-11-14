@@ -441,6 +441,16 @@ Implements [15-account-colors](../research/15-account-colors.md):
   last value on failure, and prevent an older read from undoing that change.
   Settings writers use current admission and their frozen editor tickets;
   restore/quit retire and await preference work before replacing its owner.
+  A synchronous fence prevents new preference owners and writes during
+  restore. The restore command waits for the frozen cohort to drain before
+  entering the native restore; cancellation during this wait does not issue
+  the command. Every concurrent reset/stop waiter joins the cohort's actual
+  read/write and initial-load drains. A later freeze or permanent stop
+  defeats an older reset; a closed archive or accepted quit cannot revive
+  an owner. A restore that keeps the current archive, including refusal,
+  replay or request failure, releases its fence after retirement instead of
+  leaving preferences permanently unavailable. Refusing compose quit leaves
+  preference owners usable.
   Appearance changes must not edit draft source or its undo history.
 - **Cross-account check:** replying through a different account than the
   one that received the original shows an inline banner with **Use

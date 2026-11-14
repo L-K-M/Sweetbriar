@@ -27,9 +27,14 @@ private final class BackupsQuitObserver {
 struct BackupsModelTests {
     private func loaded(
         _ source: FakeBackupsSource,
-        observer: BackupsRestoreObserver = BackupsRestoreObserver()
+        observer: BackupsRestoreObserver = BackupsRestoreObserver(),
+        kept: BackupsRestoreObserver = BackupsRestoreObserver(),
+        prepare: BackupsRestoreObserver = BackupsRestoreObserver()
     ) async throws -> BackupsModel {
-        let model = BackupsModel(source: source, didRestore: { await observer.invalidate() })
+        let model = BackupsModel(
+            source: source, prepareRestore: { await prepare.invalidate() },
+            didKeepArchive: { await kept.invalidate() },
+            didRestore: { await observer.invalidate() })
         await model.refresh()
         try #require(await eventually { await model.health != nil })
         return model
@@ -276,11 +281,12 @@ struct BackupsModelTests {
         let source = FakeBackupsSource()
         let gate = Gate()
         let observer = BackupsRestoreObserver()
+        let kept = BackupsRestoreObserver()
         await source.setHealth(
             Health(integrity: .readOnly(detail: "latched", detectedAt: nil, copyPath: nil)))
         await source.holdRestore(gate)
         await source.answerRestore(outcome)
-        let model = try await loaded(source, observer: observer)
+        let model = try await loaded(source, observer: observer, kept: kept)
         #expect(!model.canWrite)
         model.destinationDraft = "/unsaved-replaced-store-value"
         model.selectedGenerationId = "generation-1"
@@ -317,6 +323,7 @@ struct BackupsModelTests {
             })
         #expect(model.lastResult == .restore(outcome))
         #expect(observer.count == 1 && model.archiveRevision == 1)
+        #expect(kept.count == 0)
         #expect(
             observer.cancelledInvalidations == [false],
             "shell reinstallation must not inherit request cancellation")
@@ -337,8 +344,9 @@ struct BackupsModelTests {
     func nonSwappingOutcomesDoNotInvalidateOrClaimRecovery(_ outcome: RestoreOutcome) async throws {
         let source = FakeBackupsSource()
         let observer = BackupsRestoreObserver()
+        let kept = BackupsRestoreObserver()
         await source.answerRestore(outcome)
-        let model = try await loaded(source, observer: observer)
+        let model = try await loaded(source, observer: observer, kept: kept)
         model.selectedGenerationId = "generation-1"
         model.requestRestore()
         model.confirmRestore()
@@ -346,6 +354,7 @@ struct BackupsModelTests {
         #expect(model.lastResult == .restore(outcome))
         #expect(observer.count == 0 && model.archiveRevision == 0)
         if case .closed = outcome {
+            #expect(kept.count == 0)
             #expect(model.isClosed && !model.canWrite && !model.canRestore)
             let before = await source.calls
             await model.refresh()
@@ -354,8 +363,65 @@ struct BackupsModelTests {
             model.requestRestore()
             #expect(await source.calls == before)
         } else {
+            #expect(kept.count == 1 && kept.cancelledInvalidations == [false])
             #expect(!model.isClosed && model.canWrite)
         }
+        await model.cancelAndWait()
+    }
+
+    @Test
+    func restoreWaitsForPreparationAndCancellationDoesNotIssueTheCommand() async throws {
+        let source = FakeBackupsSource()
+        let gate = Gate()
+        let prepare = BackupsRestoreObserver()
+        let kept = BackupsRestoreObserver()
+        prepare.gate = gate
+        let model = try await loaded(source, kept: kept, prepare: prepare)
+        model.selectedGenerationId = "generation-1"
+        model.requestRestore()
+        model.confirmRestore()
+        try #require(await eventually { await prepare.count == 1 })
+        #expect(
+            !(await source.calls).contains {
+                if case .restore = $0 { return true }
+                return false
+            })
+        model.cancelRestore()
+        await gate.open()
+        try #require(await eventually { await !model.isBusy })
+        #expect(
+            !(await source.calls).contains {
+                if case .restore = $0 { return true }
+                return false
+            })
+        #expect(model.lastResult == .requestCancelled)
+        #expect(kept.count == 1)
+        await model.cancelAndWait()
+    }
+
+    @Test
+    func cancelledRestoreReopensKeptArchiveOnAnUncancelledTask() async throws {
+        let source = FakeBackupsSource()
+        let gate = Gate()
+        let kept = BackupsRestoreObserver()
+        await source.holdRestore(gate)
+        await source.answerRestore(.refused(cause: .conflict(detail: "active import")))
+        let model = try await loaded(source, kept: kept)
+        model.selectedGenerationId = "generation-1"
+        model.requestRestore()
+        model.confirmRestore()
+        try #require(
+            await eventually {
+                (await source.calls).contains {
+                    if case .restore = $0 { return true }
+                    return false
+                }
+            })
+        model.cancelRestore()
+        await gate.open()
+        try #require(await eventually { await !model.isBusy })
+        #expect(await source.restoreWasCancelled)
+        #expect(kept.count == 1 && kept.cancelledInvalidations == [false])
         await model.cancelAndWait()
     }
 
@@ -363,7 +429,8 @@ struct BackupsModelTests {
     func preparationCancellationKeepsEvidenceAndDoesNotNotifyASwapOrRetry() async throws {
         let source = FakeBackupsSource()
         let observer = BackupsRestoreObserver()
-        let model = try await loaded(source, observer: observer)
+        let kept = BackupsRestoreObserver()
+        let model = try await loaded(source, observer: observer, kept: kept)
         await source.cancelNextCommand()
         model.selectedGenerationId = "generation-1"
         model.requestRestore()
@@ -373,6 +440,7 @@ struct BackupsModelTests {
         #expect(model.artifacts.first?.kind == .staged)
         #expect(model.generations.first?.id == "generation-1")
         #expect(model.canWrite && observer.count == 0 && model.archiveRevision == 0)
+        #expect(kept.count == 1 && kept.cancelledInvalidations == [false])
         #expect(
             (await source.calls).filter {
                 if case .restore = $0 { return true }
@@ -385,7 +453,8 @@ struct BackupsModelTests {
     @Test
     func preparationFailureLeavesTheCoreAndConfirmationUsableWithoutRetry() async throws {
         let source = FakeBackupsSource()
-        let model = try await loaded(source)
+        let kept = BackupsRestoreObserver()
+        let model = try await loaded(source, kept: kept)
         await source.failNextCommand(.notFound(what: "generation directory disappeared"))
         model.selectedGenerationId = "generation-1"
         model.requestRestore()
@@ -393,6 +462,7 @@ struct BackupsModelTests {
         try #require(await eventually { await !model.isBusy })
         #expect(model.commandError as? CoreFailure == .notFound(what: "generation directory disappeared"))
         #expect(model.lastResult == nil && model.archiveRevision == 0 && model.canWrite)
+        #expect(kept.count == 1 && kept.cancelledInvalidations == [false])
         #expect(
             (await source.calls).filter {
                 if case .restore = $0 { return true }

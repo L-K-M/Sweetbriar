@@ -15,15 +15,21 @@ final class SharedBackups {
     private(set) var isStopping = false
     @ObservationIgnored private var closedRetirement: Task<Void, Never>?
     private let beforeRestore: @MainActor @Sendable () -> Void
+    private let prepareRestore: @MainActor @Sendable () async -> Void
+    private let didKeepArchive: @MainActor @Sendable () async -> Void
     private let didRestore: @MainActor @Sendable () async -> Void
     private let didClose: @MainActor @Sendable () async -> Void
 
     init(
         beforeRestore: @escaping @MainActor @Sendable () -> Void = {},
+        prepareRestore: @escaping @MainActor @Sendable () async -> Void = {},
+        didKeepArchive: @escaping @MainActor @Sendable () async -> Void = {},
         didRestore: @escaping @MainActor @Sendable () async -> Void,
         didClose: @escaping @MainActor @Sendable () async -> Void
     ) {
         self.beforeRestore = beforeRestore
+        self.prepareRestore = prepareRestore
+        self.didKeepArchive = didKeepArchive
         self.didRestore = didRestore
         self.didClose = didClose
     }
@@ -35,7 +41,9 @@ final class SharedBackups {
             return current
         }
         sourceID = ObjectIdentifier(source)
-        let model = BackupsModel(source: source, didRestore: didRestore)
+        let model = BackupsModel(
+            source: source, prepareRestore: prepareRestore,
+            didKeepArchive: didKeepArchive, didRestore: didRestore)
         current = model
         observeClosure(model)
         model.start()
@@ -63,7 +71,8 @@ final class SharedBackups {
 
     var restoreBlockedReason: String? {
         if composeAdmissions > 0 {
-            return "Close your compose windows before restoring. Save or explicitly abandon unsaved changes first."
+            return
+                "Close your compose windows before restoring. Save or explicitly abandon unsaved changes first."
         }
         return switch diagnostic {
         case .benchmark: "Wait for the diagnostic benchmark to finish before restoring."
