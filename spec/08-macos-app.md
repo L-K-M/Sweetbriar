@@ -342,8 +342,17 @@ Neither unsaved text nor a delayed draft save may cross a swap.
     view into compatibility mode.
 - **Above the editor:**
   - the **identity strip** (below);
-  - To, Cc and Bcc token fields, with completion from `seen_addresses`
-    and optional macOS Contacts;
+  - To, Cc and Bcc `NSTokenField` controls, with completion from
+    `seen_addresses` and optional macOS Contacts. Native parsing owns
+    mailbox syntax; quoted commas and display-name/address spelling are
+    preserved. Incomplete, pending or invalid fragments remain visible
+    and unsaved, including while an earlier revision is acknowledged.
+    They pause autosave and refuse Save, close and quit until committed
+    and validated; explicit Close Without Saving remains available.
+    Quiet-period validation and native token commitment must not move
+    keyboard focus or commit marked text. Async answers are versioned:
+    old parsing/completion never replaces later recipient or body edits.
+    Blur commits and validates the displayed input before flushing.
   - Subject.
 - **Saving:**
   - autosaves 1.5 s after typing stops, and on blur and quit;
