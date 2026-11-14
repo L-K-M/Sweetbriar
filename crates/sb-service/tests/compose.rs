@@ -183,6 +183,35 @@ fn bad_utf8_or_default_json_refuses_the_whole_catalog() {
 }
 
 #[test]
+fn orphaned_identity_refuses_instead_of_disappearing_from_the_catalog() {
+    let (s, core) = seeded();
+    sql(
+        &s,
+        "PRAGMA foreign_keys=OFF; INSERT INTO identities(identity_id,account_id,email,display_name,is_default,sendable) VALUES('orphan','missing-account','orphan@example.test','Orphan',0,'validated')",
+    );
+    assert!(matches!(
+        block_on(core.compose_catalog(None)),
+        Err(CoreError::Corrupt { .. })
+    ));
+    block_on(core.shutdown());
+}
+
+#[test]
+fn recipient_errors_do_not_retain_private_input() {
+    let s = ScratchDir::new("compose-error-privacy");
+    let core = open(&s);
+    for input in [
+        "PRIVATE-SENTINEL-without-domain",
+        "PRIVATE-SENTINEL@example..test",
+    ] {
+        let error = block_on(core.parse_draft_recipients(input)).unwrap_err();
+        assert!(matches!(error, CoreError::InvalidInput { .. }));
+        assert!(!error.to_string().contains("PRIVATE-SENTINEL"));
+    }
+    block_on(core.shutdown());
+}
+
+#[test]
 fn oversized_catalog_is_a_refusal_not_a_partial_answer() {
     let (s, core) = seeded();
     sql(

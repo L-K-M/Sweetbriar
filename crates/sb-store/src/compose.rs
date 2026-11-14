@@ -119,7 +119,7 @@ pub fn compose_catalog(
         .prepare_cached(
             "SELECT i.identity_id,i.account_id,a.display_name,a.kind,i.email,i.display_name,
          i.reply_to,i.signature_source,i.is_default,i.sendable,i.revision
-         FROM identities i JOIN accounts a USING(account_id)
+         FROM identities i LEFT JOIN accounts a USING(account_id)
          ORDER BY a.sort_order,a.account_id,i.identity_id LIMIT ?1",
         )
         .map_err(sql_error)?;
