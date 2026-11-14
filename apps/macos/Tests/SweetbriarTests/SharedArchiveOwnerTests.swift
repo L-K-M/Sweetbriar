@@ -251,6 +251,51 @@ struct SharedArchiveOwnerTests {
         }
     }
 
+    @Test func diagnosticsAndComposeExcludeEachOtherInBothAdmissionOrders() async throws {
+        try await withOwnerBridge { bridge in
+            let factory = SharedBackups(didRestore: {}, didClose: {})
+            var composes = 0
+            do {
+                let model = try #require(factory.model(source: bridge))
+                await model.refresh()
+                try #require(await ownerEventually { factory.canCompose })
+                try #require(factory.beginCompose())
+                composes += 1
+                try #require(factory.beginCompose())
+                composes += 1
+                let diagnostics: [SharedBackups.DiagnosticActivity] = [.benchmark, .syntheticFill]
+                let reason =
+                    "Close your compose windows before restoring. Save or explicitly abandon unsaved changes first."
+                #expect(factory.restoreBlockedReason == reason)
+                for remaining in [2, 1] {
+                    for activity in diagnostics {
+                        let admitted = factory.begin(activity)
+                        #expect(!admitted, "a diagnostic started with \(remaining) compose admissions")
+                        if admitted { factory.end(activity) }
+                    }
+                    #expect(factory.canWrite, "compose admission does not prohibit ordinary saves")
+                    factory.endCompose()
+                    composes -= 1
+                    #expect((factory.restoreBlockedReason != nil) == (remaining == 2))
+                }
+                for activity in diagnostics {
+                    try #require(factory.begin(activity))
+                    #expect(!factory.canCompose)
+                    let admitted = factory.beginCompose()
+                    #expect(!admitted, "compose must also refuse an active diagnostic")
+                    if admitted { factory.endCompose() }
+                    factory.end(activity)
+                }
+                #expect(factory.restoreBlockedReason == nil && factory.canCompose)
+            } catch {
+                for _ in 0..<composes { factory.endCompose() }
+                await factory.cancelAndWait()
+                throw error
+            }
+            await factory.cancelAndWait()
+        }
+    }
+
     /// Through the factory's model a real backup completes and that
     /// generation restores: the confirmation is the listed row's
     /// snapshot, an active diagnostic refuses the confirm, and the

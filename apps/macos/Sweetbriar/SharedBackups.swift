@@ -91,7 +91,7 @@ final class SharedBackups {
     /// Diagnostic tasks have no cooperative stop contract. Refuse overlap,
     /// rather than pretending cancellation ended their future Core calls.
     func begin(_ activity: DiagnosticActivity) -> Bool {
-        guard diagnostic == nil, !writesUnavailable else { return false }
+        guard composeAdmissions == 0, diagnostic == nil, !writesUnavailable else { return false }
         diagnostic = activity
         return true
     }
