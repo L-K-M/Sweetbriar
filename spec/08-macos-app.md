@@ -423,6 +423,13 @@ Implements [15-account-colors](../research/15-account-colors.md):
     fence that decision against intervening editor changes. Existing saved
     nil/unavailable routes remain; only a fresh draft without an explicit
     route choice may take its captured account/global default;
+  - prepare displayed input before the explicit choice and refuse marked
+    or invalid input without changing the route. Native text acceptance
+    precedes model mutation, without an event-loop gap; route and body
+    share one native undo step, preserving later unrelated fields. Signature
+    choice sheets pause autosave and owned-sheet blur saves. Normal close
+    cancels an unresolved proposal and saves the existing content; explicit
+    abandonment still drains begun work without starting another write;
   - crossfades in 150 ms, or instantly with Reduce Motion;
   - posts one accessibility announcement.
 - **Strong mode** (Settings → Appearance) tints the upper window via
