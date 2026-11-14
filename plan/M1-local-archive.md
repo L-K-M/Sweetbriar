@@ -2093,8 +2093,10 @@ local drafts. No network yet.
                   and initial-load drains; no source replacement or new owner
                   before retirement. Later freeze and permanent stop beat an
                   older reset. Failed compose quit leaves owners usable.
-                  Wire actual restore/closed/accepted-quit hooks and test
-                  cancellation, held work, replacement and racing retirement.
+                  Wire actual replaced/kept/closed/accepted-quit hooks; a
+                  refusal, replay or request failure must release the restore
+                  fence after actual retirement. Test cancellation, held
+                  work, replacement, refusal and racing retirement.
                   No visible setting before its native consumer exists.
                 - **c2b5b2b2 Native identity appearance controls (L):** wire
                   that shared owner to Settings and compose windows. Complete
