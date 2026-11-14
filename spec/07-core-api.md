@@ -143,7 +143,9 @@ async fn Core::shutdown(self);   // flush writer, release the lease
     receipt names the generation the key started, whatever became of
     it; retention may have removed its row since. A core that refuses
     the command answers no key: a read-only one is `Corrupt`, and one
-    that is shutting down `Unavailable`.
+    that is shutting down `Unavailable`. Refusal or replay releases this
+    request's unused copy reservation before publishing its answer; a prior
+    live copy, if any, remains counted until that copy actually finishes.
   - `Conflict` while another backup, a generation check or a restore
     holds the backup operation. `Corrupt`, naming the finding, on a
     read-only core.
