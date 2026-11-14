@@ -238,6 +238,9 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         guard versions == recipientFields.map(\.inputVersion),
             !recipientFields.contains(where: \.isPending)
         else { return .superseded }
+        // Another native selection may have opened its sheet while this
+        // preparation awaited parsing. Do not start a new write behind it.
+        guard !identityControls.isDeciding else { return .refused }
         guard var content = model.content else { return .refused }
         if !RecipientField.sameBytes(content.to, prepared[0])
             || !RecipientField.sameBytes(content.cc, prepared[1])

@@ -53,6 +53,7 @@ private actor NativeIdentitySource: DraftStore, ComposeCatalogSource, RecipientS
     private var catalogFailure: CoreFailure?
     private var catalogGate: NativeIdentityGate?
     private var parseGate: NativeIdentityGate?
+    private var heldParses: [NativeIdentityGate] = []
     private var receipts: [String: DraftSaved] = [:]
     private(set) var catalogReads = 0
     private(set) var parses: [String] = []
@@ -64,11 +65,14 @@ private actor NativeIdentitySource: DraftStore, ComposeCatalogSource, RecipientS
         self.catalogGate = catalogGate
         if case .saved(let content) = seed { row.revision = Self.revision(content, seq: 0, base: nil) }
     }
-    func holdParse(_ gate: NativeIdentityGate) { parseGate = gate }
+    func holdParse(_ gate: NativeIdentityGate?) {
+        parseGate = gate
+        if let gate { heldParses.append(gate) }
+    }
     func failCatalog(_ error: CoreFailure?) { catalogFailure = error }
     func release() async {
         await catalogGate?.open()
-        await parseGate?.open()
+        for gate in heldParses { await gate.open() }
     }
     func draft(id: String) async throws -> Draft { row }
     func composeCatalog(preferredAccountId: String?) async throws -> ComposeCatalog {
@@ -306,6 +310,33 @@ struct ComposeIdentityNativeTests {
             #expect(saved?.bodySource == "User text")
             #expect(saved?.subject == "Later subject")
             #expect(saved?.attachments.first?.filename == "retained.txt")
+        }
+    }
+
+    @Test func aSignatureChoiceAlsoPausesAnAlreadyPreparingAutosave() async throws {
+        try await withNativeIdentity { c, source in
+            let ready = await identityEventually { c.identityControls.popup.isEnabled }
+            try #require(ready)
+            let gate = NativeIdentityGate()
+            await source.holdParse(gate)
+            let field = c.toRecipients.control
+            try #require(c.window?.makeFirstResponder(field) == true)
+            let editor = try #require(field.currentEditor() as? NSTextView)
+            editor.insertText(
+                "next@example.test", replacementRange: .init(location: 0, length: editor.string.utf16.count))
+            let save = Task { await c.saveAndWait() }
+            let began = await identityEventually { await source.parses.contains("next@example.test") }
+            try #require(began)
+            await source.holdParse(nil)
+            try chooseNative("b", on: c)
+            let deciding = await identityEventually { c.window?.attachedSheet != nil }
+            try #require(deciding)
+            await gate.open()
+            #expect(!(await save.value))
+            #expect(await source.saves == 0)
+            #expect(c.model.content?.identityId == "a")
+            #expect(c.model.isDirty)
+            #expect(c.identityControls.isDeciding)
         }
     }
 
