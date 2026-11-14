@@ -2066,6 +2066,26 @@ local drafts. No network yet.
               32pt/fullscreen/text-size layout, 150ms/Reduce Motion and one
               AX announcement. Native surfaces and accessibility-setting
               tests remain required; b1 alone does not qualify the strip.
+              Re-sized before coding (2026-11-14), keeping all deliverables:
+              - **c2b5b2a Compose cue preference model (M):** typed
+                Standard/Strong reads and receipt-aware changes over the
+                existing `appearance.compose_cue` service setting. Missing,
+                duplicate or malformed values are explicit errors, not a
+                guessed default. Cancel/drain superseded reads, fence stale
+                results after writes, and drain begun writes on retirement.
+                Public native facade/default/roundtrip and deterministic
+                cancellation, health-admission and lifetime tests. No new
+                schema, transport or UI setting exposed before b2b.
+              - **c2b5b2b Native identity appearance surfaces (L):** wire
+                that shared preference to Settings and compose windows,
+                resetting/draining old context on restore/quit. Complete the
+                titlebar, popup swatches, Strong tint/neutral editor, adaptive
+                actual-surface contrast, text-size/fullscreen layout and
+                150ms/Reduce Motion/one AX announcement described above.
+                Include two real full-screen compose windows, preferences
+                across reopen/restore, and unchanged body/undo on appearance
+                changes. Re-split before coding if the complete artifact
+                would exceed 1,450 gross lines; no qualification is dropped.
         Optional Contacts stays optional; complete native workflow and
         owner input-method/accessibility gates remain c2e and owner work.
       - **M1.9c2c Attachment and conflict editing (L):** picking/dragging

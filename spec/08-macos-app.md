@@ -434,7 +434,14 @@ Implements [15-account-colors](../research/15-account-colors.md):
   - posts one accessibility announcement.
 - **Strong mode** (Settings → Appearance) tints the upper window via
   `backgroundColor`, `titlebarAppearsTransparent` and
-  `.fullSizeContentView`. The editor stays neutral.
+  `.fullSizeContentView`. The editor stays neutral. The existing
+  `appearance.compose_cue` setting is a typed Standard/Strong preference;
+  missing or malformed answers are explicit errors, never a guessed mode.
+  Publish a user change only after its receipt, retain an explicitly stale
+  last value on failure, and prevent an older read from undoing that change.
+  Settings writers use current admission and their frozen editor tickets;
+  restore/quit retire and await preference work before replacing its owner.
+  Appearance changes must not edit draft source or its undo history.
 - **Cross-account check:** replying through a different account than the
   one that received the original shows an inline banner with **Use
   <account>** and **Keep <account>**. An unacknowledged mismatch is
