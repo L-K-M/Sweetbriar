@@ -479,6 +479,12 @@ a receipt or file-export command; Service/FFI exposure remains M1.7e/f.
     Malformed stored values refuse the whole answer; queries mutate nothing.
     More than 1,024 identities or 4 MiB of catalog/default-setting text is `Unavailable`,
     never a partial answer. Signature source remains literal source text.
+    M1.9c2b2 exports this as `compose_catalog(token, preferred_account_id?)`
+    through a cancellable FFI query and owned Swift catalog/identity records.
+    Preserve all fields and exact signed revisions; unavailable identities,
+    absent optionals/defaults and local-account kind remain distinct. A
+    cancelled query or closed handle returns its actual typed error, not an
+    empty catalog. Only the Swift bridge imports generated SDK types.
   - `recipient_completions(prefix, limit)` (M1.9c2b1) → owned address/name
     pairs from `seen_addresses`. Prefix is at most 1,024 UTF-8 bytes with no
     controls; limit is 1–50. Empty prefix returns no suggestions. Match a
