@@ -1195,6 +1195,21 @@ public protocol CoreProtocol: AnyObject, Sendable {
     func listRestoreArtifacts(token: CancelToken) async throws  -> [RestoreArtifact]
     
     /**
+     * Metadata/defaults only. Cancellation/failure is never an empty success.
+     */
+    func composeCatalog(token: CancelToken, preferredAccountId: String?) async throws  -> ComposeCatalog
+    
+    /**
+     * Strict whole-input recipient parsing on the native compute pool.
+     */
+    func parseDraftRecipients(token: CancelToken, text: String) async throws  -> [DraftRecipient]
+    
+    /**
+     * Bounded literal history suggestions, with no partial-answer fallback.
+     */
+    func recipientCompletions(token: CancelToken, prefix: String, limit: UInt32) async throws  -> [DraftRecipient]
+    
+    /**
      * `create_draft(context)` (spec/07 "Commands"): a new `editing`
      * draft under an idempotency key the shell made (`UUID()` in
      * Swift) — a repeated key returns the stored receipt and its
@@ -1774,6 +1789,63 @@ open func listRestoreArtifacts(token: CancelToken)async throws  -> [RestoreArtif
             completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
             freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
             liftFunc: FfiConverterSequenceTypeRestoreArtifact.lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * Metadata/defaults only. Cancellation/failure is never an empty success.
+     */
+open func composeCatalog(token: CancelToken, preferredAccountId: String?)async throws  -> ComposeCatalog  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_compose_catalog(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterOptionString.lower(preferredAccountId)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeComposeCatalog_lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * Strict whole-input recipient parsing on the native compute pool.
+     */
+open func parseDraftRecipients(token: CancelToken, text: String)async throws  -> [DraftRecipient]  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_parse_draft_recipients(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterString.lower(text)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterSequenceTypeDraftRecipient.lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * Bounded literal history suggestions, with no partial-answer fallback.
+     */
+open func recipientCompletions(token: CancelToken, prefix: String, limit: UInt32)async throws  -> [DraftRecipient]  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_recipient_completions(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterString.lower(prefix),FfiConverterUInt32.lower(limit)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterSequenceTypeDraftRecipient.lift,
             errorHandler: FfiConverterTypeCoreError_lift
         )
 }
@@ -4081,6 +4153,156 @@ public func FfiConverterTypeBridgeIdentity_lift(_ buf: RustBuffer) throws -> Bri
 #endif
 public func FfiConverterTypeBridgeIdentity_lower(_ value: BridgeIdentity) -> RustBuffer {
     return FfiConverterTypeBridgeIdentity.lower(value)
+}
+
+
+/**
+ * Whole catalog plus its optional, explicitly resolved new-draft default.
+ */
+public struct ComposeCatalog: Equatable, Hashable {
+    public var identities: [ComposeIdentity]
+    public var defaultIdentityId: String?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(identities: [ComposeIdentity], defaultIdentityId: String?) {
+        self.identities = identities
+        self.defaultIdentityId = defaultIdentityId
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension ComposeCatalog: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeComposeCatalog: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ComposeCatalog {
+        return
+            try ComposeCatalog(
+                identities: FfiConverterSequenceTypeComposeIdentity.read(from: &buf), 
+                defaultIdentityId: FfiConverterOptionString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ComposeCatalog, into buf: inout [UInt8]) {
+        FfiConverterSequenceTypeComposeIdentity.write(value.identities, into: &buf)
+        FfiConverterOptionString.write(value.defaultIdentityId, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeComposeCatalog_lift(_ buf: RustBuffer) throws -> ComposeCatalog {
+    return try FfiConverterTypeComposeCatalog.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeComposeCatalog_lower(_ value: ComposeCatalog) -> RustBuffer {
+    return FfiConverterTypeComposeCatalog.lower(value)
+}
+
+
+/**
+ * Complete retained identity metadata; not inferred from appearance tokens.
+ */
+public struct ComposeIdentity: Equatable, Hashable {
+    public var identityId: String
+    public var accountId: String
+    public var accountName: String
+    public var accountKind: AccountKind
+    public var email: String
+    public var displayName: String
+    public var replyTo: String?
+    public var signatureSource: String?
+    public var isDefault: Bool
+    public var sendable: IdentitySendable
+    public var revision: Int64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(identityId: String, accountId: String, accountName: String, accountKind: AccountKind, email: String, displayName: String, replyTo: String?, signatureSource: String?, isDefault: Bool, sendable: IdentitySendable, revision: Int64) {
+        self.identityId = identityId
+        self.accountId = accountId
+        self.accountName = accountName
+        self.accountKind = accountKind
+        self.email = email
+        self.displayName = displayName
+        self.replyTo = replyTo
+        self.signatureSource = signatureSource
+        self.isDefault = isDefault
+        self.sendable = sendable
+        self.revision = revision
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension ComposeIdentity: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeComposeIdentity: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ComposeIdentity {
+        return
+            try ComposeIdentity(
+                identityId: FfiConverterString.read(from: &buf), 
+                accountId: FfiConverterString.read(from: &buf), 
+                accountName: FfiConverterString.read(from: &buf), 
+                accountKind: FfiConverterTypeAccountKind.read(from: &buf), 
+                email: FfiConverterString.read(from: &buf), 
+                displayName: FfiConverterString.read(from: &buf), 
+                replyTo: FfiConverterOptionString.read(from: &buf), 
+                signatureSource: FfiConverterOptionString.read(from: &buf), 
+                isDefault: FfiConverterBool.read(from: &buf), 
+                sendable: FfiConverterTypeIdentitySendable.read(from: &buf), 
+                revision: FfiConverterInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ComposeIdentity, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.identityId, into: &buf)
+        FfiConverterString.write(value.accountId, into: &buf)
+        FfiConverterString.write(value.accountName, into: &buf)
+        FfiConverterTypeAccountKind.write(value.accountKind, into: &buf)
+        FfiConverterString.write(value.email, into: &buf)
+        FfiConverterString.write(value.displayName, into: &buf)
+        FfiConverterOptionString.write(value.replyTo, into: &buf)
+        FfiConverterOptionString.write(value.signatureSource, into: &buf)
+        FfiConverterBool.write(value.isDefault, into: &buf)
+        FfiConverterTypeIdentitySendable.write(value.sendable, into: &buf)
+        FfiConverterInt64.write(value.revision, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeComposeIdentity_lift(_ buf: RustBuffer) throws -> ComposeIdentity {
+    return try FfiConverterTypeComposeIdentity.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeComposeIdentity_lower(_ value: ComposeIdentity) -> RustBuffer {
+    return FfiConverterTypeComposeIdentity.lower(value)
 }
 
 
@@ -11193,6 +11415,31 @@ fileprivate struct FfiConverterSequenceTypeBridgeIdentity: FfiConverterRustBuffe
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeComposeIdentity: FfiConverterRustBuffer {
+    typealias SwiftType = [ComposeIdentity]
+
+    public static func write(_ value: [ComposeIdentity], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeComposeIdentity.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [ComposeIdentity] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [ComposeIdentity]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeComposeIdentity.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeDraftAttachmentRef: FfiConverterRustBuffer {
     typealias SwiftType = [DraftAttachmentRef]
 
@@ -11810,6 +12057,15 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_core_list_restore_artifacts() != 53957) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_compose_catalog() != 37204) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_parse_draft_recipients() != 30089) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_recipient_completions() != 3862) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_core_create_draft() != 12088) {

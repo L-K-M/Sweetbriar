@@ -24,6 +24,8 @@ mod appearance;
 mod backup_copy;
 mod backups;
 mod cancel;
+mod compose;
+pub use compose::{ComposeCatalog, ComposeIdentity};
 mod drafts;
 mod error;
 mod health;

@@ -2008,12 +2008,16 @@ local drafts. No network yet.
           parser over the existing address grammar. Store/Resources,
           Engine and owned Service DTOs, with public native API proof.
           No schema, new dependency, FFI or UI changes.
-        - **c2b2 Catalog SDK and bridge (L):** catalog/default query,
-          generated bindings, owned Swift records and native crossing,
-          cancellation and no-sending-account tests.
-        - **c2b3 Recipient SDK and bridge (L):** parsing/completion queries,
-          generated bindings, whole-answer/error/cancellation and literal
-          prefix native tests. No app imports of generated types.
+        - **c2b2 Composer query SDK and bridge (L):** catalog/default and
+          parsing/completion queries, generated bindings, owned Swift
+          records and native crossing/cancellation/no-sending-account
+          tests. Preserve whole-answer/error/literal-prefix proof. No app
+          imports of generated types. Measured before adding recipient
+          exports (2026-11-14): catalog generation adds only 202 Swift
+          lines; recipients reuse the existing DTO. Fold the former
+          **c2b3 Recipient SDK** into this one artifact while it fits
+          1,450 gross lines, without dropping any proof. Re-split if the
+          complete measured artifact exceeds that bound.
         - **c2b4 Native recipient controls (L):** To/Cc/Bcc token fields
           with history completion; preserve display names and all other
           fields. Pending or invalid input refuses save/close rather than
