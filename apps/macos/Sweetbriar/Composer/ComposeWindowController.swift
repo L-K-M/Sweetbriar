@@ -125,8 +125,11 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         guard !finished, !isClosing, var content = model.content else { return }
         let format: ComposeFormat = modeControl.selectedSegment == 0 ? .plain : .markdown
         textView.mode = format == .plain ? .plain : .markdown
+        // Canonical String equality conflates distinct source bytes. An edit
+        // must retain the spelling actually entered in the native buffers.
         guard
-            content.subject != subjectField.stringValue || content.bodySource != textView.string
+            !content.subject.utf8.elementsEqual(subjectField.stringValue.utf8)
+                || !content.bodySource.utf8.elementsEqual(textView.string.utf8)
                 || content.format != format
         else { return }
         content.subject = subjectField.stringValue
@@ -268,8 +271,12 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         saveButton.isEnabled = editable && canWrite() && !model.isSaving && model.conflict == nil
         abandonButton.isEnabled = !isClosing && !finished
         if let content = model.content, !model.isDirty, !textView.hasMarkedText() {
-            if subjectField.stringValue != content.subject { subjectField.stringValue = content.subject }
-            if textView.string != content.bodySource { textView.string = content.bodySource }
+            if !subjectField.stringValue.utf8.elementsEqual(content.subject.utf8) {
+                subjectField.stringValue = content.subject
+            }
+            if !textView.string.utf8.elementsEqual(content.bodySource.utf8) {
+                textView.string = content.bodySource
+            }
             modeControl.selectedSegment = content.format == .plain ? 0 : 1
             textView.mode = content.format == .plain ? .plain : .markdown
         }
