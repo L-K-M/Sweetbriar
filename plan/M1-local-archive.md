@@ -2146,9 +2146,23 @@ local drafts. No network yet.
                         Standard/Strong settings and chrome, with neutral
                         editor, selected-row and actual-surface contrast,
                         two full-screen windows, text size, restore/reopen,
-                        multiwindow propagation and source/undo proofs. The
-                        complete user workflow remains unqualified until this
-                        artifact and the later acceptance step pass.
+                        multiwindow propagation and source/undo proofs.
+                        Re-sized before implementation:
+                        - **b2b2b2b1 Identity popup swatches (M):** use
+                          matching core light/dark token bundles for opaque,
+                          non-template From menu images, leaving native menu
+                          text and selection styling intact. Missing or
+                          unavailable appearance stays neutral. Test actual
+                          menu items, token pixels, updates and preservation
+                          of route, source and undo; do not expose Strong.
+                        - **b2b2b2b2 Strong mode and full qualification (L):**
+                          wire the shared Standard/Strong preference to
+                          Settings and compose chrome and retain every
+                          remaining neutral-editor, selected-row actual
+                          surface, full-screen, text-size, restore, multiwindow
+                          and source/undo proof above. The complete workflow
+                          remains unqualified until this and the later native
+                          acceptance step pass.
         Optional Contacts stays optional; complete native workflow and
         owner input-method/accessibility gates remain c2e and owner work.
       - **M1.9c2c Attachment and conflict editing (L):** picking/dragging
