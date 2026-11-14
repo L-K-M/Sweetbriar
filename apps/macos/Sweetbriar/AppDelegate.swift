@@ -16,6 +16,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let appearance = SharedAppearance()
     private var backups: SharedBackups?
     private var composeWindows: ComposeWindows?
+    private var composeCues: SharedComposeCue?
     private var terminating = false
 
     /// The menu builder is retained: `NSMenuItem.target` is weak, so
@@ -60,13 +61,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let backups = SharedBackups(
             beforeRestore: { [weak self] in
+                self?.composeCues?.freezeForRestore()
                 self?.settingsWindow?.retireEditor()
                 self?.mainWindow?.retireWritersForRestore()
             },
+            prepareRestore: { [weak self] in await self?.composeCues?.waitForRetirement() },
+            didKeepArchive: { [weak self] in await self?.composeCues?.reset() },
             didRestore: { [weak self] in await self?.archiveRestored() },
             didClose: { [weak self] in await self?.archiveClosed() }
         )
         self.backups = backups
+        composeCues = SharedComposeCue(canWrite: { [weak backups] in backups?.canWrite == true })
         composeWindows = ComposeWindows(backups: backups, openCore: { try await session.bridge() },
             reportError: { [weak self] error in self?.presentError("Couldn't create a draft", error) })
         let mainWindow = MainWindowController(session: session, appearance: appearance, backups: backups,
@@ -303,6 +308,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// All old-context handles must finish before any replacement pane opens.
     private func archiveRestored() async {
         settingsWindow?.retireEditor()
+        await composeCues?.reset()
         await prototypeController?.closeAndAwaitModel()
         prototypeController = nil
         await mainWindow?.retireContent()
@@ -312,6 +318,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func archiveClosed() async {
         settingsWindow?.retireEditor()
+        await composeCues?.stopAndWait()
         await prototypeController?.closeAndAwaitModel()
         prototypeController = nil
         await mainWindow?.archiveClosed()
@@ -376,9 +383,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 NSApplication.shared.reply(toApplicationShouldTerminate: false)
                 return
             }
+            composeCues?.stop()
             settingsWindow?.close()
             await backups?.cancelAndWait()
             await settingsWindow?.cancelAndWait()
+            await composeCues?.stopAndWait()
             await prototypeController?.closeAndAwaitModel()
             await mainWindow?.retireContent()
             await appearance.reset()
