@@ -11,29 +11,43 @@ import Foundation
 /// Use this owner for all of a window's saves, not concurrent direct saves.
 @MainActor
 public final class DraftAutosave {
+    /// Native input must be committed/validated before the save snapshot.
+    /// Superseded preparation began no write; a newer due intent may prepare
+    /// its own input. Refusal requires another explicit intent or edit.
+    public enum Readiness: Sendable, Equatable { case ready, refused, superseded }
+
     static let delay: Duration = .milliseconds(1_500)
 
     private let model: DraftModel
     private let sleep: @Sendable (Duration) async throws -> Void
     private let delay: Duration
+    private let prepareForSave: @MainActor () async -> Readiness
     private var timer: Task<Void, Never>?
     private var timerVersion: UInt64 = 0
-    private var saving: (id: UUID, task: Task<Void, Never>)?
+    private var saving: (id: UUID, task: Task<Readiness, Never>)?
     private var stopped = false
 
-    public convenience init(model: DraftModel) {
-        self.init(model: model, delay: Self.delay, sleep: { try await Task.sleep(for: $0) })
+    public convenience init(
+        model: DraftModel,
+        prepareForSave: @escaping @MainActor () async -> Readiness = { .ready }
+    ) {
+        self.init(
+            model: model, prepareForSave: prepareForSave,
+            delay: Self.delay, sleep: { try await Task.sleep(for: $0) })
     }
 
     // Tests control deadline delivery, including a cancelled sleeper that
     // nevertheless returns. Timer versions fence those stale deliveries.
     init(
-        model: DraftModel, delay: Duration = DraftAutosave.delay,
+        model: DraftModel,
+        prepareForSave: @escaping @MainActor () async -> Readiness = { .ready },
+        delay: Duration = DraftAutosave.delay,
         sleep: @escaping @Sendable (Duration) async throws -> Void
     ) {
         self.model = model
         self.delay = delay
         self.sleep = sleep
+        self.prepareForSave = prepareForSave
     }
 
     deinit { timer?.cancel() }
@@ -49,7 +63,8 @@ public final class DraftAutosave {
         timer = Task { [weak self] in
             do { try await sleep(delay) } catch { return }
             guard !Task.isCancelled, let self,
-                  !self.stopped, self.timerVersion == version else { return }
+                !self.stopped, self.timerVersion == version
+            else { return }
             self.timer = nil
             _ = await self.save(deadline: version)
         }
@@ -69,25 +84,40 @@ public final class DraftAutosave {
     private func save(deadline: UInt64?) async -> Bool {
         guard !stopped else { return false }
         if let active = saving {
-            await active.task.value
+            let readiness = await active.task.value
             if saving?.id == active.id { saving = nil }
+            guard readiness != .refused else { return false }
+            if readiness == .ready, isAcknowledged { return true }
         }
         // A timer waiting for an older save cannot pull a newer edit
         // forward out of its own quiet period. Explicit flushes drain it.
         guard deadline == nil || deadline == timerVersion else { return false }
         guard !stopped, !model.isStopped, !model.isDiscarded,
-              model.content != nil, model.conflict == nil,
-              saving == nil, !model.isSaving, !model.isDiscarding else { return false }
-        // A newly created empty draft has no revision yet. Even it needs a
-        // receipt before a window may claim its editor content was saved.
-        guard model.isDirty || model.baseRevisionId == nil else { return true }
+            model.content != nil, model.conflict == nil,
+            saving == nil, !model.isSaving, !model.isDiscarding
+        else { return false }
         let id = UUID()
         let model = model
-        let task = Task { await model.save() }
+        let prepare = prepareForSave
+        let task = Task<Readiness, Never> { [weak self] in
+            let readiness = await prepare()
+            guard readiness == .ready else { return readiness }
+            guard let self, !self.stopped, model.canSave, model.conflict == nil else { return .refused }
+            guard deadline == nil || deadline == self.timerVersion else { return .superseded }
+            // Preparation can publish validated native input into the model.
+            // Freeze its snapshot only afterwards. A stop during preparation
+            // must not begin a write after explicit abandonment.
+            if model.isDirty || model.baseRevisionId == nil { await model.save() }
+            return .ready
+        }
         saving = (id, task)
-        await task.value
+        let readiness = await task.value
         if saving?.id == id { saving = nil }
-        return !stopped && !model.isStopped && !model.isDiscarded
+        return readiness == .ready && isAcknowledged
+    }
+
+    private var isAcknowledged: Bool {
+        !stopped && !model.isStopped && !model.isDiscarded
             && !model.isSaving && !model.isDirty && model.baseRevisionId != nil
     }
 
@@ -109,7 +139,7 @@ public final class DraftAutosave {
     public func stopAndWait() async {
         stop()
         if let active = saving {
-            await active.task.value
+            _ = await active.task.value
             if saving?.id == active.id { saving = nil }
         }
     }

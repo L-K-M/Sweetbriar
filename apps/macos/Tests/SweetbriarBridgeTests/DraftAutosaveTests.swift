@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+
 @testable import SweetbriarBridge
 
 private actor AutosaveClock {
@@ -115,13 +116,15 @@ private actor AutosaveStore: DraftStore {
                 switch $0 {
                 case .retained(let reference): return reference
                 case .new(let object, let filename, let mediaType):
-                    return DraftAttachmentRef(objectSha256: object.objectSha256,
+                    return DraftAttachmentRef(
+                        objectSha256: object.objectSha256,
                         filename: filename, mediaType: mediaType, size: object.byteLength)
                 }
             }, createdAtMs: seq
         )
         record = autosaveDraft(revision: revision)
-        return DraftSaved(receipt: Receipt(command: "save_draft", resultJson: "{}", createdAtMs: seq),
+        return DraftSaved(
+            receipt: Receipt(command: "save_draft", resultJson: "{}", createdAtMs: seq),
             revisionId: id)
     }
 
@@ -151,22 +154,30 @@ private struct AutosaveFixture {
 @MainActor
 private func withAutosaveFixture(
     record: Draft = autosaveDraft(),
+    prepareForSave: @escaping @MainActor () async -> DraftAutosave.Readiness = { .ready },
+    releasePreparation: @MainActor () async -> Void = {},
     body: @MainActor (AutosaveFixture) async throws -> Void
 ) async throws {
     let store = AutosaveStore(record)
     let clock = AutosaveClock()
     let model = DraftModel(source: store, draftId: "d1")
-    let autosave = DraftAutosave(model: model, sleep: { await clock.sleep($0) })
+    let autosave = DraftAutosave(
+        model: model, prepareForSave: prepareForSave,
+        sleep: { await clock.sleep($0) })
     let fixture = AutosaveFixture(store: store, clock: clock, model: model, autosave: autosave)
     do {
         try await body(fixture)
         autosave.stop()
         await clock.releaseAll()
+        await releasePreparation()
         await store.unblock()
+        await autosave.stopAndWait()
     } catch {
         autosave.stop()
         await clock.releaseAll()
+        await releasePreparation()
         await store.unblock()
+        await autosave.stopAndWait()
         throw error
     }
 }
@@ -376,7 +387,7 @@ func autosaveConflictBlocksResubmissionUntilExplicitResolution() async throws {
         #expect(await f.store.saves.count == 1)
         #expect(f.model.content?.bodySource == "keep this newer edit")
         await f.store.setFailure(nil)
-        await f.model.load() // Explicitly choose the stored revision here.
+        await f.model.load()  // Explicitly choose the stored revision here.
         try await f.edit("resolved")
         #expect(await f.autosave.flush())
         #expect(await f.store.saves.count == 2)
@@ -497,7 +508,11 @@ func autosaveStopAndWaitDrainsDespiteACancelledWaiter() async throws {
         await autosaveEventually { await f.store.saves.count == 1 }
         var started = false
         var drained = false
-        let stop = Task { started = true; await f.autosave.stopAndWait(); drained = true }
+        let stop = Task {
+            started = true
+            await f.autosave.stopAndWait()
+            drained = true
+        }
         await autosaveEventually { started }
         stop.cancel()
         #expect(!drained && f.model.isSaving && f.model.baseRevisionId == "r1")
@@ -512,6 +527,144 @@ func autosaveStopAndWaitDrainsDespiteACancelledWaiter() async throws {
 }
 
 @Test(.timeLimit(.minutes(1))) @MainActor
+func autosaveReadinessPrecedesTheSnapshotAndCoalescesCancelledWaiters() async throws {
+    let gate = AutosaveGate()
+    var preparations = 0
+    try await withAutosaveFixture(
+        prepareForSave: {
+            preparations += 1
+            await gate.wait()
+            return .ready
+        }, releasePreparation: { await gate.open() },
+        body: { f in
+            await f.model.load()
+            try await f.edit("before validation")
+            let first = Task { await f.autosave.flush() }
+            await autosaveEventually { preparations == 1 }
+            #expect(await f.store.saves.isEmpty)
+            #expect(!f.model.isSaving)
+            try await f.edit("body typed during validation")
+            var latest = try #require(f.model.content)
+            latest.to = [DraftRecipient(address: "User@EXAMPLE.test", name: "Doe, Alex")]
+            f.model.update(latest)
+            let second = Task { await f.autosave.flush() }
+            await settleAutosaveTasks()
+            first.cancel()
+            #expect(preparations == 1)
+            await gate.open()
+            #expect(await first.value)
+            #expect(await second.value)
+            let saves = await f.store.saves
+            #expect(saves.count == 1)
+            #expect(saves.first?.content.bodySource == "body typed during validation")
+            #expect(saves.first?.content.to == latest.to)
+        })
+}
+
+@Test(.timeLimit(.minutes(1))) @MainActor
+func autosaveRefusedReadinessCannotClaimEvenACleanEditorSaved() async throws {
+    var readiness = DraftAutosave.Readiness.refused
+    try await withAutosaveFixture(
+        prepareForSave: { readiness },
+        body: { f in
+            await f.model.load()
+            #expect(!(await f.autosave.flush()))
+            #expect(await f.store.saves.isEmpty)
+            #expect(!f.model.isDirty && f.model.baseRevisionId == "r1")
+            readiness = .ready
+            #expect(await f.autosave.flush())
+            #expect(await f.store.saves.isEmpty)
+        })
+}
+
+@Test(.timeLimit(.minutes(1))) @MainActor
+func autosavePreparationCannotPullANewerEditOutOfItsQuietPeriod() async throws {
+    let gate = AutosaveGate()
+    var preparations = 0
+    try await withAutosaveFixture(
+        prepareForSave: {
+            preparations += 1
+            await gate.wait()
+            return .ready
+        }, releasePreparation: { await gate.open() },
+        body: { f in
+            await f.model.load()
+            try await f.edit("old deadline")
+            await f.clock.fire(0)
+            await autosaveEventually { preparations == 1 }
+            try await f.edit("new deadline")
+            await gate.open()
+            await settleAutosaveTasks()
+            #expect(await f.store.saves.isEmpty)
+            await f.clock.fire(1)
+            await autosaveEventually { !f.model.isDirty }
+            #expect(await f.store.saves.count == 1)
+            #expect(await f.store.saves.first?.content.bodySource == "new deadline")
+        })
+}
+
+@Test(.timeLimit(.minutes(1))) @MainActor
+func autosaveLatestDeadlineCanFollowSupersededPreparation() async throws {
+    let gate = AutosaveGate()
+    var preparations = 0
+    try await withAutosaveFixture(
+        prepareForSave: {
+            preparations += 1
+            await gate.wait()
+            return .ready
+        }, releasePreparation: { await gate.open() },
+        body: { f in
+            await f.model.load()
+            try await f.edit("old deadline")
+            await f.clock.fire(0)
+            await autosaveEventually { preparations == 1 }
+            try await f.edit("latest deadline already due")
+            await f.clock.fire(1)
+            await settleAutosaveTasks()
+            #expect(await f.store.saves.isEmpty)
+            await gate.open()
+            await autosaveEventually { !f.model.isDirty }
+            #expect(preparations == 2)
+            #expect(await f.store.saves.count == 1)
+            #expect(await f.store.saves.first?.content.bodySource == "latest deadline already due")
+        })
+}
+
+@Test(.timeLimit(.minutes(1))) @MainActor
+func autosaveAbandonmentDrainsPreparationWithoutBeginningASave() async throws {
+    let gate = AutosaveGate()
+    var preparations = 0
+    try await withAutosaveFixture(
+        prepareForSave: {
+            preparations += 1
+            await gate.wait()
+            return .ready
+        }, releasePreparation: { await gate.open() },
+        body: { f in
+            await f.model.load()
+            try await f.edit("explicitly abandoned")
+            let flush = Task { await f.autosave.flush() }
+            await autosaveEventually { preparations == 1 }
+            var began = false
+            var drained = false
+            let stop = Task {
+                began = true
+                await f.autosave.stopAndWait()
+                drained = true
+            }
+            await autosaveEventually { began }
+            stop.cancel()
+            #expect(!drained)
+            #expect(await f.store.saves.isEmpty)
+            await gate.open()
+            await stop.value
+            #expect(!(await flush.value))
+            #expect(drained && f.model.isDirty && f.model.baseRevisionId == "r1")
+            #expect(await f.store.saves.isEmpty)
+        })
+}
+
+@Test(.timeLimit(.minutes(1))) @MainActor
 func autosaveStopAndWaitDoesNotSaveNewerUnsavedEdits() async throws {
     try await withAutosaveFixture { f in
         await f.model.load()
@@ -522,7 +675,10 @@ func autosaveStopAndWaitDoesNotSaveNewerUnsavedEdits() async throws {
         await autosaveEventually { await f.store.saves.count == 1 }
         try await f.edit("later unsaved text")
         var started = false
-        let stop = Task { started = true; await f.autosave.stopAndWait() }
+        let stop = Task {
+            started = true
+            await f.autosave.stopAndWait()
+        }
         await autosaveEventually { started }
         await f.clock.fire(1)
         await gate.open()

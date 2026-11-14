@@ -2021,7 +2021,10 @@ local drafts. No network yet.
         - **c2b4 Native recipient controls (L):** To/Cc/Bcc token fields
           with history completion; preserve display names and all other
           fields. Pending or invalid input refuses save/close rather than
-          silently dropping recipients. Native delegate/blur/format tests.
+          silently dropping recipients. A coalesced asynchronous readiness
+          barrier precedes the model's save snapshot, including quiet-period
+          saves; abandonment drains preparation but cannot begin a later
+          write. Native delegate/blur/format and held-readiness tests.
         - **c2b5 Native identity strip (L):** From choices, selected-account
           default, titlebar accessory and core-derived color tokens,
           provisional/no-identity states and safe signature transition.

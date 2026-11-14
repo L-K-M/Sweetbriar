@@ -28,6 +28,9 @@ private actor ComposeTestSource: ComposeSource {
     private var createGate: ComposeGate?
     private var answerGate: ComposeGate?
     private var failure: CoreFailure?
+    private var parseHold: (text: String, gate: ComposeGate)?
+    private(set) var parsed: [String] = []
+    func holdParse(_ text: String, gate: ComposeGate) { parseHold = (text, gate) }
     private(set) var creates = 0
     private(set) var saves = 0
     private(set) var acknowledged = 0
@@ -38,6 +41,7 @@ private actor ComposeTestSource: ComposeSource {
     func release() async {
         await createGate?.open()
         await answerGate?.open()
+        if let parseHold { await parseHold.gate.open() }
         failure = nil
     }
     func createDraft(idempotencyKey: String, source: DraftSource) async throws -> DraftCreated {
@@ -46,6 +50,15 @@ private actor ComposeTestSource: ComposeSource {
         return try await bridge.createDraft(idempotencyKey: idempotencyKey, source: source)
     }
     func draft(id: String) async throws -> Draft { try await bridge.draft(id: id) }
+    func parseDraftRecipients(text: String) async throws -> [DraftRecipient] {
+        let answer = try await bridge.parseDraftRecipients(text: text)
+        parsed.append(text)
+        if let parseHold, parseHold.text.utf8.elementsEqual(text.utf8) { await parseHold.gate.wait() }
+        return answer
+    }
+    func recipientCompletions(prefix: String, limit: UInt32) async throws -> [DraftRecipient] {
+        try await bridge.recipientCompletions(prefix: prefix, limit: limit)
+    }
     func saveDraft(
         idempotencyKey: String, draftId: String, baseRevisionId: String?,
         content: DraftContent
@@ -185,6 +198,20 @@ private func editCompose(_ controller: ComposeWindowController, subject: String,
 }
 
 @MainActor
+@discardableResult
+private func editRecipient(_ field: RecipientField, in controller: ComposeWindowController, text: String)
+    throws -> NSTextView
+{
+    controller.showWindow(nil)
+    // Starting a fresh field-editing session resets AppKit's typing undo.
+    // Replacements in an already-active editor must use that same session.
+    if field.control.currentEditor() == nil { field.control.selectText(nil) }
+    let editor = try #require(field.control.currentEditor() as? NSTextView)
+    editor.insertText(text, replacementRange: NSRange(location: 0, length: editor.string.utf16.count))
+    return editor
+}
+
+@MainActor
 private final class ComposeCompletion {
     var started = false
     var finished = false
@@ -203,6 +230,205 @@ private func firstComposeView<T: NSView>(
 
 @Suite(.serialized, .timeLimit(.minutes(1))) @MainActor
 struct ComposeWindowTests {
+    @Test func quietRecipientValidationKeepsFocusAndSavesCompleteNamedTokens() async throws {
+        try await withComposeFixture { f in
+            let c = try await f.makeWindow()
+            let editor = try editRecipient(
+                c.toRecipients, in: c,
+                text: "\"Doe, Alex\" <User@EXAMPLE.test>; 東京 <other@example.test>")
+            #expect(c.toRecipients.isPending && c.model.isDirty)
+            try #require(await composeEventually { c.statusLabel.stringValue == "Saved" })
+            #expect(c.toRecipients.control.currentEditor() === editor)
+            #expect((c.toRecipients.control.objectValue as? [NSObject])?.count == 2)
+            let revision = try #require(try await f.bridge.draft(id: c.model.draftId).revision)
+            #expect(
+                revision.to == [
+                    DraftRecipient(address: "User@EXAMPLE.test", name: "Doe, Alex"),
+                    DraftRecipient(address: "other@example.test", name: "東京"),
+                ])
+            #expect(await f.source.saves == 1)
+        }
+    }
+
+    @Test func allRecipientFieldsSurviveFormatChangesAndNativeTokenRemoval() async throws {
+        try await withComposeFixture { f in
+            let c = try await f.makeWindow()
+            try editRecipient(c.toRecipients, in: c, text: "To Name <to@example.test>")
+            try editRecipient(c.ccRecipients, in: c, text: "\"Cc, Name\" <cc@example.test>")
+            try editRecipient(c.bccRecipients, in: c, text: "Bcc Name <Bcc@EXAMPLE.test>")
+            editCompose(c, subject: "Named recipients", body: "**Source**")
+            let view = try #require(c.window?.contentView)
+            let format = try #require(firstComposeView(NSSegmentedControl.self, in: view))
+            format.selectedSegment = 1
+            let action = try #require(format.action)
+            #expect(NSApp.sendAction(action, to: format.target, from: format))
+            c.saveNow()
+            try #require(await composeEventually { c.statusLabel.stringValue == "Saved" })
+            let first = try #require(try await f.bridge.draft(id: c.model.draftId).revision)
+            #expect(
+                first.to.first?.name == "To Name" && first.cc.first?.name == "Cc, Name"
+                    && first.bcc.first?.name == "Bcc Name")
+            #expect(
+                first.format == .markdown && first.plainFlowed && first.identityId == nil
+                    && first.attachments.isEmpty)
+            try editRecipient(c.ccRecipients, in: c, text: "")
+            #expect(await c.closeAndWait())
+            let final = try #require(try await f.bridge.draft(id: c.model.draftId).revision)
+            #expect(final.cc.isEmpty && final.to == first.to && final.bcc == first.bcc)
+            #expect(
+                final.bodySource == "**Source**" && final.subject == "Named recipients"
+                    && final.format == .markdown)
+        }
+    }
+
+    @Test func anInvalidMemberRefusesCloseWithoutDroppingTheValidOne() async throws {
+        try await withComposeFixture { f in
+            let c = try await f.makeWindow()
+            try editRecipient(c.toRecipients, in: c, text: "valid@example.test,broken")
+            editCompose(c, subject: "Kept subject", body: "Kept body")
+            #expect(!(await c.closeAndWait()))
+            #expect(c.toRecipients.isPending && c.toRecipients.problem != nil)
+            #expect(c.toRecipients.control.stringValue.contains("broken"))
+            #expect(c.model.isDirty && c.textView.isEditable && c.textView.string == "Kept body")
+            #expect(try await f.bridge.draft(id: c.model.draftId).revision == nil)
+            #expect(await f.source.saves == 0)
+            try editRecipient(c.toRecipients, in: c, text: "\"Fixed, Name\" <valid@example.test>")
+            #expect(await c.closeAndWait())
+            #expect(try await f.bridge.draft(id: c.model.draftId).revision?.to.first?.name == "Fixed, Name")
+        }
+    }
+
+    @Test func lateAcknowledgmentDoesNotOverwriteNewRawRecipientInputOrClaimItSaved() async throws {
+        try await withComposeFixture { f in
+            let c = try await f.makeWindow()
+            let gate = ComposeGate()
+            await f.source.holdAnswer(gate)
+            editCompose(c, subject: "Acknowledged", body: "Previous saved text")
+            c.saveNow()
+            try #require(await composeEventually { await f.source.acknowledged == 1 })
+            try editRecipient(c.toRecipients, in: c, text: "valid@example.test,broken")
+            await gate.open()
+            try #require(await composeEventually { !c.model.isSaving })
+            #expect(c.model.isDirty && c.toRecipients.isPending)
+            #expect(c.statusLabel.stringValue != "Saved")
+            #expect(c.toRecipients.control.stringValue.contains("broken"))
+            #expect(!(await c.closeAndWait()))
+            #expect(await c.closeWithoutSavingAndWait())
+            let revision = try #require(try await f.bridge.draft(id: c.model.draftId).revision)
+            #expect(revision.to.isEmpty && revision.bodySource == "Previous saved text")
+            #expect(await f.source.saves == 1)
+        }
+    }
+
+    @Test func staleParsingPreservesLaterRecipientsBodyAndSubject() async throws {
+        try await withComposeFixture { f in
+            let c = try await f.makeWindow()
+            let gate = ComposeGate()
+            let old = "Old <old@example.test>"
+            await f.source.holdParse(old, gate: gate)
+            try editRecipient(c.toRecipients, in: c, text: old)
+            let saving = Task { await c.saveAndWait() }
+            try #require(await composeEventually { await f.source.parsed.contains(old) })
+            try editRecipient(c.toRecipients, in: c, text: "New <New@EXAMPLE.test>")
+            editCompose(c, subject: "Later subject", body: "Later body")
+            await gate.open()
+            #expect(!(await saving.value))
+            #expect(await c.closeAndWait())
+            let revision = try #require(try await f.bridge.draft(id: c.model.draftId).revision)
+            #expect(revision.to == [DraftRecipient(address: "New@EXAMPLE.test", name: "New")])
+            #expect(revision.subject == "Later subject" && revision.bodySource == "Later body")
+        }
+    }
+
+    @Test func abandonmentDrainsBegunParsingWithoutStartingANativeSave() async throws {
+        try await withComposeFixture { f in
+            let c = try await f.makeWindow()
+            let gate = ComposeGate()
+            let text = "Abandoned <abandoned@example.test>"
+            await f.source.holdParse(text, gate: gate)
+            try editRecipient(c.toRecipients, in: c, text: text)
+            c.saveNow()
+            try #require(await composeEventually { await f.source.parsed.contains(text) })
+            let closing = Task { await c.closeWithoutSavingAndWait() }
+            try #require(await composeEventually { c.isClosing && !c.toRecipients.control.isEditable })
+            closing.cancel()
+            #expect(await f.source.saves == 0)
+            await gate.open()
+            #expect(await closing.value)
+            #expect(try await f.bridge.draft(id: c.model.draftId).revision == nil)
+            #expect(await f.source.saves == 0)
+        }
+    }
+
+    @Test func recipientTokenizationDoesNotDestroyNativeTypingUndo() async throws {
+        try await withComposeFixture { f in
+            let c = try await f.makeWindow()
+            let editor = try editRecipient(c.toRecipients, in: c, text: "undo@example.test")
+            try #require(await composeEventually { c.statusLabel.stringValue == "Saved" })
+            let undo = try #require(editor.undoManager)
+            #expect(undo.canUndo)
+            if undo.canUndo { undo.undo() }
+            #expect(await c.saveAndWait())
+            #expect(try await f.bridge.draft(id: c.model.draftId).revision?.to.isEmpty == true)
+            #expect(undo.canRedo)
+            if undo.canRedo { undo.redo() }
+            #expect(await c.saveAndWait())
+            #expect(
+                try await f.bridge.draft(id: c.model.draftId).revision?.to.first?.address
+                    == "undo@example.test")
+            #expect(undo.canUndo)
+            if undo.canUndo { undo.undo() }
+            #expect(await c.closeAndWait())
+            #expect(try await f.bridge.draft(id: c.model.draftId).revision?.to.isEmpty == true)
+        }
+    }
+
+    @Test func validatedRecipientEditsPreserveNativeWholeSessionUndoAndRedo() async throws {
+        try await withComposeFixture { f in
+            let c = try await f.makeWindow()
+            let editor = try editRecipient(c.toRecipients, in: c, text: "first@example.test")
+            try #require(await composeEventually { c.statusLabel.stringValue == "Saved" })
+            editor.setSelectedRange(NSRange(location: 0, length: editor.string.utf16.count))
+            editor.insertText("second@example.test", replacementRange: editor.selectedRange())
+            #expect(await c.saveAndWait())
+            #expect(
+                try await f.bridge.draft(id: c.model.draftId).revision?.to.first?.address
+                    == "second@example.test")
+            let undo = try #require(editor.undoManager)
+            // The independent unchanged-control characterization establishes
+            // AppKit's whole-editing-session undo, not one step per autosave.
+            #expect(undo.canUndo)
+            if undo.canUndo { undo.undo() }
+            #expect(await c.saveAndWait())
+            #expect(try await f.bridge.draft(id: c.model.draftId).revision?.to.isEmpty == true)
+            #expect(undo.canRedo)
+            if undo.canRedo { undo.redo() }
+            #expect(await c.closeAndWait())
+            #expect(
+                try await f.bridge.draft(id: c.model.draftId).revision?.to.first?.address
+                    == "second@example.test")
+        }
+    }
+
+    @Test func nativeRecipientClipboardFormattingRoundTripsNamesAndAddressBytes() async throws {
+        try await withComposeFixture { f in
+            let field = RecipientField(label: "To", source: f.bridge)
+            let expected = [
+                DraftRecipient(address: "User@EXAMPLE.test", name: "Doe, \"A\\B\" 東京"),
+                DraftRecipient(address: "other@example.test", name: nil),
+            ]
+            field.load(expected)
+            let objects = try #require(field.control.objectValue as? [Any])
+            let pasteboard = NSPasteboard.withUniqueName()
+            defer { pasteboard.clearContents() }
+            #expect(field.tokenField(field.control, writeRepresentedObjects: objects, to: pasteboard))
+            let text = try #require(pasteboard.string(forType: .string))
+            #expect(RecipientField.sameBytes(try await f.bridge.parseDraftRecipients(text: text), expected))
+            #expect(field.tokenField(field.control, readFrom: pasteboard)?.count == 1)
+            await field.stopAndWait()
+        }
+    }
+
     @Test func normalizationOnlyEditsReachANewAcknowledgedRevision() async throws {
         try await withComposeFixture { f in
             let original = "Caf\u{e9}"
