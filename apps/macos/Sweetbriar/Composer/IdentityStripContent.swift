@@ -17,12 +17,18 @@ enum IdentityStripContent {
         guard identity.sendable != .unavailable else {
             return .unavailable(label: "Unavailable identity: \(label)")
         }
-        guard let appearance,
-            let resolved = appearance.identities.first(where: {
-                sameBytes($0.identityId, route) && sameBytes($0.accountId, identity.accountId)
-            })
-        else { return .unavailable(label: "Appearance unavailable: \(label)") }
+        guard let resolved = matchingAppearance(for: identity, in: appearance) else {
+            return .unavailable(label: "Appearance unavailable: \(label)")
+        }
         return .identity(label: label, monogram: resolved.monogram, tokens: resolved.tokens)
+    }
+
+    static func matchingAppearance(for identity: ComposeIdentity, in appearance: Appearance?)
+        -> IdentityAppearance?
+    {
+        appearance?.identities.first {
+            sameBytes($0.identityId, identity.identityId) && sameBytes($0.accountId, identity.accountId)
+        }
     }
 
     private static func sameBytes(_ lhs: String, _ rhs: String) -> Bool {
