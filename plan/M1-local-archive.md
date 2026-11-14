@@ -2119,8 +2119,22 @@ local drafts. No network yet.
                     preference to Settings and compose, and deliver Strong
                     chrome, neutral editor, adaptive actual-surface contrast,
                     full-screen, animation, announcement and multiwindow
-                    proofs above. Re-size again before coding if necessary;
-                    the primitive alone does not qualify the user workflow.
+                    proofs above. Re-sized before implementation; neither
+                    prerequisite alone qualifies the user workflow:
+                    - **c2b5b2b2b1 Strip accessory and content (M):** host the
+                      primitive in a bottom titlebar accessory that measures
+                      wrapped height and updates full-screen minimum height;
+                      map selected identity and matching core appearance to
+                      complete labels and tokens, or explicit neutral states.
+                      Test synthetic metadata, exact route matching and native
+                      accessory sizing. Do not attach it to compose yet.
+                    - **c2b5b2b2b2 Native controls and qualification (L):**
+                      attach the accessory and popup swatches, wire the shared
+                      preference to Settings and compose, and retain every
+                      Strong, neutral editor, animation, announcement, actual
+                      surface, full-screen, multiwindow and source/undo proof
+                      above. Re-size this artifact again before coding if it
+                      exceeds the per-PR bound.
         Optional Contacts stays optional; complete native workflow and
         owner input-method/accessibility gates remain c2e and owner work.
       - **M1.9c2c Attachment and conflict editing (L):** picking/dragging
