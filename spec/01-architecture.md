@@ -230,7 +230,7 @@ is committed, and updates are their own PRs.
 | MIME composing | `mail-builder` | 1.0.0 | |
 | Color math | `palette` (`libm`, no default features) | 0.7.7 | OKLCH gamut mapping and quantized account appearance tokens (M1.10a); MIT OR Apache-2.0 |
 | Markdown | `pulldown-cmark` | pin at first use | Raw HTML disabled (05) |
-| HTML sanitizing | `ammonia`, `lol_html`, `markup5ever` | 4.2.4, 3.0.1, 0.40.0 | Per 10; `markup5ever` (already ammonia's) for its HTML5 character-reference table |
+| HTML sanitizing | `ammonia`, `lol_html`, `markup5ever` | 4.2.5, 3.0.1, 0.40.0 | Per 10; `markup5ever` (already ammonia's) for its HTML5 character-reference table |
 | HTML search extraction | `html5ever` | 0.40.1 | Already ammonia's parser; direct text-node traversal with a private tree sink, without sanitizing or serializing (06) |
 | Search dates | `jiff` (`std`, `tzdb-bundle-always`, no default features) | 0.2.37 | Validated explicit IANA date operands (M1.6f0); use only the bundled database, no system timezone/zoneinfo/global clock |
 | Search address domains | `idna` | 1.1.0 | Existing URL dependency reused for validity only (M1.6f0b); comparison keys never use its mapped output |
