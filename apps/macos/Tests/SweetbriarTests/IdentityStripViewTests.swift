@@ -155,6 +155,47 @@ struct IdentityStripViewTests {
         }
     }
 
+    @Test func differentiateWithoutColorStrengthensTheMonogram() throws {
+        let view = makeView()
+        view.appearance = NSAppearance(named: .aqua)
+        let normal = try render(view)
+        view.contrastOptions = { (false, true) }
+        view.needsDisplay = true
+        let differentiated = try render(view)
+        func markerPixels(_ bitmap: NSBitmapImageRep) -> [Bool] {
+            (8..<32).flatMap { x in
+                (0..<bitmap.pixelsHigh).map { y in
+                    guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { return false }
+                    return color.blueComponent > color.redComponent + 0.1
+                }
+            }
+        }
+        let normalMarker = markerPixels(normal)
+        let strongMarker = markerPixels(differentiated)
+        #expect(normalMarker != strongMarker)
+        #expect(strongMarker.filter { $0 }.count > normalMarker.filter { $0 }.count)
+    }
+
+    @Test func differentiateAddsAShapeAroundAColorSymbol() throws {
+        let view = makeView()
+        var tokens = sampleAccount.tokens
+        tokens.light.outlineSrgb = "#ff0000"
+        view.content = .identity(label: label, monogram: "❤️", tokens: tokens)
+        view.appearance = NSAppearance(named: .aqua)
+        view.contrastOptions = { (false, true) }
+        let bitmap = try render(view)
+        var redInsideMark = 0
+        for x in 5..<40 {
+            for y in 3..<(bitmap.pixelsHigh - 3) {
+                guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+                if color.redComponent > 0.8 && color.greenComponent < 0.2 && color.blueComponent < 0.2 {
+                    redInsideMark += 1
+                }
+            }
+        }
+        #expect(redInsideMark > 0)
+    }
+
     @Test(arguments: [NSAppearance.Name.aqua, .darkAqua])
     func theActualLabelSurfaceUsesTheCoreForeground(_ name: NSAppearance.Name) throws {
         let view = makeView()

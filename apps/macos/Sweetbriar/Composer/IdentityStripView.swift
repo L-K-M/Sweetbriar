@@ -62,7 +62,10 @@ final class IdentityStripView: NSView {
     }
 
     @objc private nonisolated func displayOptionsChanged() {
-        Task { @MainActor [weak self] in self?.needsDisplay = true }
+        Task { @MainActor [weak self] in
+            self?.invalidateIntrinsicContentSize()
+            self?.needsDisplay = true
+        }
     }
 
     required init?(coder: NSCoder) { fatalError("IdentityStripView is built in code") }
@@ -95,6 +98,15 @@ final class IdentityStripView: NSView {
                 drawMonogram(monogram, color: appearanceColor(variant.markerSrgb))
                 let name = appearance?.name ?? effectiveAppearance.name
                 let options = contrastOptions()
+                if options.differentiate {
+                    appearanceColor(variant.outlineSrgb).setStroke()
+                    let markFrame = NSRect(
+                        x: padding - 3, y: 3, width: markWidth(for: bounds.width) + 6,
+                        height: max(0, bounds.height - 6))
+                    let shape = NSBezierPath(roundedRect: markFrame, xRadius: 4, yRadius: 4)
+                    shape.lineWidth = 1.5
+                    shape.stroke()
+                }
                 if name == .accessibilityHighContrastAqua || name == .accessibilityHighContrastDarkAqua
                     || options.increase || options.differentiate
                 {
@@ -147,7 +159,8 @@ final class IdentityStripView: NSView {
         paragraph.lineBreakMode = .byCharWrapping
         paragraph.alignment = .center
         return [
-            .font: NSFont.systemFont(ofSize: textFont.pointSize, weight: .bold),
+            .font: NSFont.systemFont(
+                ofSize: textFont.pointSize, weight: contrastOptions().differentiate ? .heavy : .bold),
             .foregroundColor: NSColor.white, .paragraphStyle: paragraph,
         ]
     }
