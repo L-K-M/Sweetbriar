@@ -503,6 +503,10 @@ a receipt or file-export command; Service/FFI exposure remains M1.7e/f.
     obsolete routes and malformed/unclosed quotes/brackets explicitly.
     Preserve local spelling, Unicode and display names; no normalization
     or permissive MIME-header recovery. Parsing runs off the UI executor.
+    M1.9c2b2 exposes both recipient queries under a cancellation token,
+    reusing owned recipient records across Service, FFI and Swift bridge.
+    Keep parse errors/cancel/closed distinct from a successful empty list;
+    a partial result is never substituted for a failed whole input/answer.
   - `mailboxes(account_id)` → each mailbox's id, name, delimiter, role,
     kind and whether it is selectable, with its present occurrences and
     the unread ones among them, read in one short transaction and tagged
