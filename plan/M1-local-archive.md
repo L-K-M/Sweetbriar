@@ -2106,8 +2106,21 @@ local drafts. No network yet.
                   selected rows, text-size/32pt/fullscreen layout, 150ms/Reduce
                   Motion and one AX announcement. Keep two real full-screen
                   compose windows, preferences across reopen/restore, and
-                  unchanged source/undo on appearance changes. Re-split
-                  before coding if needed; no qualification is dropped.
+                  unchanged source/undo on appearance changes. Re-split before
+                  coding (2026-11-14), without dropping qualification:
+                  - **c2b5b2b2a Native strip primitive (M):** the custom
+                    strip view, token-backed light/dark surfaces, readable
+                    full-label wrapping, scalable height and one accessible
+                    element. Exercise real AppKit drawing, layout and
+                    accessibility with synthetic tokens. This standalone
+                    component is not yet attached to compose windows.
+                  - **c2b5b2b2b Native integration and controls (L):** attach
+                    the strip and core-derived popup swatches, wire the shared
+                    preference to Settings and compose, and deliver Strong
+                    chrome, neutral editor, adaptive actual-surface contrast,
+                    full-screen, animation, announcement and multiwindow
+                    proofs above. Re-size again before coding if necessary;
+                    the primitive alone does not qualify the user workflow.
         Optional Contacts stays optional; complete native workflow and
         owner input-method/accessibility gates remain c2e and owner work.
       - **M1.9c2c Attachment and conflict editing (L):** picking/dragging
