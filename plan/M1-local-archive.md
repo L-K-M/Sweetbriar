@@ -2133,8 +2133,22 @@ local drafts. No network yet.
                       preference to Settings and compose, and retain every
                       Strong, neutral editor, animation, announcement, actual
                       surface, full-screen, multiwindow and source/undo proof
-                      above. Re-size this artifact again before coding if it
-                      exceeds the per-PR bound.
+                      above. Re-sized before implementation:
+                      - **b2b2b2a Native strip integration (L):** attach the
+                        accessory to compose windows, follow the shared core
+                        appearance, update it with the committed route and
+                        preserve source and undo. Include route-change
+                        animation, Reduce Motion, one announcement, neutral
+                        unavailable states and focused native tests. This
+                        does not expose the Strong preference.
+                      - **b2b2b2b Native controls and full qualification (L):**
+                        add core-derived popup swatches and wire shared
+                        Standard/Strong settings and chrome, with neutral
+                        editor, selected-row and actual-surface contrast,
+                        two full-screen windows, text size, restore/reopen,
+                        multiwindow propagation and source/undo proofs. The
+                        complete user workflow remains unqualified until this
+                        artifact and the later acceptance step pass.
         Optional Contacts stays optional; complete native workflow and
         owner input-method/accessibility gates remain c2e and owner work.
       - **M1.9c2c Attachment and conflict editing (L):** picking/dragging
