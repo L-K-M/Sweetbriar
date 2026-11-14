@@ -103,7 +103,9 @@ generations can be lower. A closed-core outcome retires content without
 reopening it. The Core-free Composer Probe is not an archive editor.
 Restore is unavailable while a Core-backed diagnostic benchmark or
 synthetic fill runs; explain the reason instead of allowing that work to
-continue across a swap.
+continue across a swap. Core-backed diagnostics and admitted compose opens
+or windows exclude each other in both admission orders. Releasing one of
+several compose windows does not re-enable diagnostics while another remains.
 
 Settings has Appearance and Backups tabs; the main health banner opens
 Backups directly. Both surfaces use the same model even if Settings opens
