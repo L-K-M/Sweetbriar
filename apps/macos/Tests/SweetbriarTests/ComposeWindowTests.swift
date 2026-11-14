@@ -103,6 +103,17 @@ private final class ComposeFixture {
             await composeEventually { controller.model.content != nil && controller.textView.isEditable })
         return controller
     }
+    func makeSavedWindow(subject: String, body: String) async throws -> ComposeWindowController {
+        let created = try await bridge.createDraft(idempotencyKey: UUID().uuidString, source: .new)
+        let content = DraftContent(
+            identityId: nil, format: .plain, plainFlowed: true,
+            subject: subject, to: [], cc: [], bcc: [], bodySource: body, attachments: [])
+        _ = try await bridge.saveDraft(
+            idempotencyKey: UUID().uuidString, draftId: created.draftId,
+            baseRevisionId: nil, content: content)
+        return try await makeWindow(id: created.draftId)
+    }
+
     func makeOwner() -> ComposeWindows {
         let source = source
         let owner = ComposeWindows(
@@ -192,6 +203,48 @@ private func firstComposeView<T: NSView>(
 
 @Suite(.serialized, .timeLimit(.minutes(1))) @MainActor
 struct ComposeWindowTests {
+    @Test func normalizationOnlyEditsReachANewAcknowledgedRevision() async throws {
+        try await withComposeFixture { f in
+            let original = "Caf\u{e9}"
+            let edited = "Cafe\u{301}"
+            #expect(original == edited && !original.utf8.elementsEqual(edited.utf8))
+            let controller = try await f.makeSavedWindow(subject: original, body: original)
+            let base = controller.model.baseRevisionId
+            editCompose(controller, subject: edited, body: edited)
+            #expect(controller.textView.string.utf8.elementsEqual(edited.utf8))
+            #expect(controller.model.isDirty, "canonically equivalent bytes are still an edit")
+            #expect(controller.model.content?.subject.utf8.elementsEqual(edited.utf8) == true)
+            #expect(controller.model.content?.bodySource.utf8.elementsEqual(edited.utf8) == true)
+            #expect(await controller.closeAndWait())
+            let revision = try #require(try await f.bridge.draft(id: controller.model.draftId).revision)
+            #expect(revision.revisionId != base)
+            #expect(revision.subject.utf8.elementsEqual(edited.utf8))
+            #expect(revision.bodySource.utf8.elementsEqual(edited.utf8))
+        }
+    }
+
+    @Test func cleanReloadPublishesExactCanonicallyEquivalentSourceBytes() async throws {
+        try await withComposeFixture { f in
+            let original = "Caf\u{e9}"
+            let replacement = "Cafe\u{301}"
+            let controller = try await f.makeSavedWindow(subject: original, body: original)
+            var content = try #require(controller.model.content)
+            content.subject = replacement
+            content.bodySource = replacement
+            let saved = try await f.bridge.saveDraft(
+                idempotencyKey: UUID().uuidString,
+                draftId: controller.model.draftId, baseRevisionId: controller.model.baseRevisionId,
+                content: content)
+            await controller.model.reload()
+            try #require(controller.model.baseRevisionId == saved.revisionId && !controller.model.isDirty)
+            try #require(
+                await composeEventually {
+                    controller.subjectField.stringValue.utf8.elementsEqual(replacement.utf8)
+                        && controller.textView.string.utf8.elementsEqual(replacement.utf8)
+                }, "a clean reload must publish the exact stored source, not its old equivalent")
+        }
+    }
+
     @Test func nativeFieldAndTextViewDelegatesReachTheRevisionModel() async throws {
         try await withComposeFixture { f in
             let controller = try await f.makeWindow()
