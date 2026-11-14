@@ -111,6 +111,16 @@ impl Drop for Copying {
     }
 }
 
+fn answer_without_copy(
+    copying: Copying,
+    answer: oneshot::Sender<Result<BackupStarted, EngineError>>,
+    result: Result<BackupStarted, EngineError>,
+) {
+    // The receiver can run inside send's wake, before this worker returns.
+    drop(copying);
+    let _ = answer.send(result);
+}
+
 /// How the copy ended, from its result, the stop flag as it returned
 /// and the acknowledged completion fact, without another store read.
 fn copy_end(
@@ -191,15 +201,15 @@ impl Engine {
             let (receipt, snapshot) = match started {
                 Ok(Ok(StartedBackup::Started { receipt, snapshot })) => (receipt, snapshot),
                 Ok(Ok(StartedBackup::Replayed(receipt))) => {
-                    let _ = answer.send(replayed(receipt));
+                    answer_without_copy(copying, answer, replayed(receipt));
                     return;
                 }
                 Ok(Err(error)) => {
-                    let _ = answer.send(Err(error.into()));
+                    answer_without_copy(copying, answer, Err(error.into()));
                     return;
                 }
                 Err(error) => {
-                    let _ = answer.send(Err(error));
+                    answer_without_copy(copying, answer, Err(error));
                     return;
                 }
             };
