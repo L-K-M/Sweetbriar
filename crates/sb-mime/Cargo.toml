@@ -26,7 +26,7 @@ url = "=2.5.8"
 lol_html = "=3.0.1"
 # spec/10 "Rendering": the final allow-list sanitizer. 4.2.4 carries
 # the fix for RUSTSEC-2026-0373 (case-varied CSS `URL()`).
-ammonia = "=4.2.4"
+ammonia = "=4.2.5"
 # The HTML5 named character references and C1 remapping ammonia's parser
 # uses (spec/10 "Rendering"): the sanitizer decodes text references itself
 # so html5ever 0.40's quadratic escaping never sees an `&` (render.rs).
