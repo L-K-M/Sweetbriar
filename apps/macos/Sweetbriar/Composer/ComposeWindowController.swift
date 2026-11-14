@@ -11,13 +11,21 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
     let model: DraftModel
     let textView = ComposerTextView()
     let subjectField = NSTextField()
+    let toRecipients: RecipientField
+    let ccRecipients: RecipientField
+    let bccRecipients: RecipientField
+    private var recipientFields: [RecipientField] { [toRecipients, ccRecipients, bccRecipients] }
     let statusLabel = NSTextField(wrappingLabelWithString: "Loading draft…")
     private let modeControl = NSSegmentedControl(
         labels: ["Plain", "Markdown"], trackingMode: .selectOne,
         target: nil, action: nil)
     private let saveButton = NSButton(title: "Save", target: nil, action: nil)
     private let abandonButton = NSButton(title: "Close Without Saving…", target: nil, action: nil)
-    private let autosave: DraftAutosave
+    private lazy var autosave = DraftAutosave(
+        model: model,
+        prepareForSave: { [weak self] in
+            await self?.prepareRecipients() ?? .refused
+        })
     private let canWrite: @MainActor () -> Bool
     private var loadTask: Task<Void, Never>?
     private var closing: Task<Bool, Never>?
@@ -27,17 +35,22 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
     private var finished = false
     var onClosed: (@MainActor () -> Void)?
 
-    init(source: any DraftStore, draftId: String, canWrite: @escaping @MainActor () -> Bool = { true }) {
+    init(
+        source: any DraftStore & RecipientSource, draftId: String,
+        canWrite: @escaping @MainActor () -> Bool = { true }
+    ) {
         self.canWrite = canWrite
         model = DraftModel(source: ComposeSavePolicy(source: source, canWrite: canWrite), draftId: draftId)
-        autosave = DraftAutosave(model: model)
+        toRecipients = RecipientField(label: "To", source: source)
+        ccRecipients = RecipientField(label: "Cc", source: source)
+        bccRecipients = RecipientField(label: "Bcc", source: source)
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 680, height: 520),
+            contentRect: NSRect(x: 0, y: 0, width: 680, height: 630),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered, defer: false)
         window.title = "New Message"
         window.isReleasedWhenClosed = false
-        window.contentMinSize = NSSize(width: 600, height: 320)
+        window.contentMinSize = NSSize(width: 600, height: 430)
         window.setAccessibilityIdentifier("compose-\(draftId)")
         super.init(window: window)
         window.delegate = self
@@ -53,6 +66,18 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
     required init?(coder: NSCoder) { fatalError("ComposeWindowController is built in code") }
 
     private func buildContent(_ window: NSWindow) {
+        let recipientRows = zip(["To:", "Cc:", "Bcc:"], recipientFields).map { title, field in
+            field.inputDidChange = { [weak self] in self?.recipientInputDidChange() }
+            field.editingDidEnd = { [weak self] in self?.saveNow() }
+            field.presentationDidChange = { [weak self] in self?.render() }
+            let label = NSTextField(labelWithString: title)
+            label.alignment = .right
+            label.widthAnchor.constraint(equalToConstant: 32).isActive = true
+            let row = NSStackView(views: [label, field.control])
+            row.spacing = 8
+            field.control.setContentHuggingPriority(.defaultLow, for: .horizontal)
+            return row
+        }
         subjectField.placeholderString = "Subject"
         subjectField.setAccessibilityLabel("Subject")
         subjectField.setAccessibilityIdentifier("composeSubject")
@@ -71,7 +96,7 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         statusLabel.textColor = .secondaryLabelColor
         let identity = NSTextField(
             wrappingLabelWithString:
-                "Local draft. Sending is not available yet. Recipient and attachment controls follow in a later step."
+                "Local draft. Sending is not available yet. From and attachment controls follow in later steps."
         )
         identity.textColor = .secondaryLabelColor
         let send = NSButton(title: "Send", target: nil, action: nil)
@@ -94,7 +119,8 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         textView.textContainer?.containerSize = NSSize(
             width: scroll.contentSize.width, height: CGFloat.greatestFiniteMagnitude)
         textView.textContainer?.widthTracksTextView = true
-        let stack = NSStackView(views: [identity, subjectField, controls, scroll, statusLabel])
+        let stack = NSStackView(
+            views: [identity as NSView] + recipientRows + [subjectField, controls, scroll, statusLabel])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 10
@@ -113,6 +139,7 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
             scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 120),
             statusLabel.widthAnchor.constraint(equalTo: stack.widthAnchor),
         ])
+        for row in recipientRows { row.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true }
         scroll.setContentHuggingPriority(.defaultLow, for: .vertical)
         window.center()
     }
@@ -140,13 +167,54 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         render()
     }
 
+    private func recipientInputDidChange() {
+        guard !finished, !isClosing, let content = model.content else { return }
+        // Version raw input too: a prior receipt must not clear its dirty state
+        // just because it cannot yet be represented as validated recipients.
+        model.update(content)
+        if abandonAlert == nil { autosave.contentDidChange() }
+        render()
+    }
+
+    private func prepareRecipients() async -> DraftAutosave.Readiness {
+        let versions = recipientFields.map(\.inputVersion)
+        var prepared: [[DraftRecipient]] = []
+        for field in recipientFields {
+            guard let values = await field.prepare() else {
+                render()
+                return versions == recipientFields.map(\.inputVersion) ? .refused : .superseded
+            }
+            prepared.append(values)
+        }
+        guard versions == recipientFields.map(\.inputVersion),
+            !recipientFields.contains(where: \.isPending)
+        else { return .superseded }
+        guard var content = model.content else { return .refused }
+        if !RecipientField.sameBytes(content.to, prepared[0])
+            || !RecipientField.sameBytes(content.cc, prepared[1])
+            || !RecipientField.sameBytes(content.bcc, prepared[2])
+        {
+            content.to = prepared[0]
+            content.cc = prepared[1]
+            content.bcc = prepared[2]
+            model.update(content)
+        }
+        render()
+        return .ready
+    }
+
     @objc func saveNow() {
         guard !isClosing, !finished, abandonAlert == nil else { return }
         captureEdit()
-        Task { [self] in
-            _ = await autosave.flush()
-            render()
-        }
+        Task { [self] in _ = await saveAndWait() }
+    }
+
+    func saveAndWait() async -> Bool {
+        guard !isClosing, !finished, abandonAlert == nil else { return false }
+        captureEdit()
+        let saved = await autosave.flush()
+        render()
+        return saved
     }
 
     func windowDidResignKey(_ notification: Notification) {
@@ -208,7 +276,9 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
                 abandonAlert = nil
             }
             // Let the field editor/input method commit before freezing controls.
-            guard window?.makeFirstResponder(nil) != false, !textView.hasMarkedText() else {
+            guard !recipientFields.contains(where: \.hasMarkedText),
+                window?.makeFirstResponder(nil) != false, !textView.hasMarkedText()
+            else {
                 statusLabel.stringValue = "Finish composing text before closing this draft."
                 return nil
             }
@@ -228,6 +298,7 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
                 return false
             }
             await autosave.stopAndWait()
+            for field in recipientFields { await field.stopAndWait() }
             model.stop()
             finished = true
             window?.close()
@@ -268,6 +339,7 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         subjectField.isEditable = editable
         textView.isEditable = editable
         modeControl.isEnabled = editable
+        for field in recipientFields { field.control.isEditable = editable }
         saveButton.isEnabled = editable && canWrite() && !model.isSaving && model.conflict == nil
         abandonButton.isEnabled = !isClosing && !finished
         if let content = model.content, !model.isDirty, !textView.hasMarkedText() {
@@ -277,10 +349,13 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
             if !textView.string.utf8.elementsEqual(content.bodySource.utf8) {
                 textView.string = content.bodySource
             }
+            toRecipients.load(content.to)
+            ccRecipients.load(content.cc)
+            bccRecipients.load(content.bcc)
             modeControl.selectedSegment = content.format == .plain ? 0 : 1
             textView.mode = content.format == .plain ? .plain : .markdown
         }
-        window?.isDocumentEdited = model.isDirty
+        window?.isDocumentEdited = model.isDirty || recipientFields.contains(where: \.isPending)
         window?.title = model.content.flatMap { $0.subject.isEmpty ? nil : $0.subject } ?? "New Message"
         if closeIntent == .abandonEdits {
             statusLabel.stringValue =
@@ -291,6 +366,11 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         } else if let failure = model.failure {
             statusLabel.stringValue =
                 "Draft error: \(failure.localizedDescription) Try Save again, keep editing, or explicitly close without saving."
+        } else if let field = recipientFields.first(where: { $0.problem != nil }) {
+            statusLabel.stringValue =
+                "\(field.control.accessibilityLabel() ?? "Recipient"): \(field.problem ?? "Input is not ready.")"
+        } else if recipientFields.contains(where: \.isPending) {
+            statusLabel.stringValue = "Recipient input is not saved. Finish the address or try Save again."
         } else if model.isLoading && model.content == nil {
             statusLabel.stringValue = "Loading draft…"
         } else if model.isSaving || isClosing {

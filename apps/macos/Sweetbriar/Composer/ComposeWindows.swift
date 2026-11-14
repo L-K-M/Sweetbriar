@@ -1,7 +1,7 @@
 import Foundation
 import SweetbriarBridge
 
-protocol ComposeSource: DraftStore {
+protocol ComposeSource: DraftStore, RecipientSource {
     func createDraft(idempotencyKey: String, source: DraftSource) async throws -> DraftCreated
 }
 
