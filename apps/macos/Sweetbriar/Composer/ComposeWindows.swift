@@ -1,7 +1,7 @@
 import Foundation
 import SweetbriarBridge
 
-protocol ComposeSource: DraftStore, RecipientSource {
+protocol ComposeSource: DraftStore, RecipientSource, ComposeCatalogSource {
     func createDraft(idempotencyKey: String, source: DraftSource) async throws -> DraftCreated
 }
 
@@ -28,7 +28,7 @@ final class ComposeWindows {
         self.reportError = reportError
     }
 
-    func newMessage() {
+    func newMessage(preferredAccountId: String? = nil) {
         guard !isQuitting, backups.beginCompose() else { return }
         let request = UUID()
         pending[request] = Task { [self] in
@@ -37,7 +37,7 @@ final class ComposeWindows {
                 let source = try await openCore()
                 let created = try await source.createDraft(idempotencyKey: request.uuidString, source: .new)
                 let controller = ComposeWindowController(
-                    source: source, draftId: created.draftId,
+                    source: source, draftId: created.draftId, preferredAccountId: preferredAccountId,
                     canWrite: { [backups] in backups.canWrite })
                 precondition(windows[created.draftId] == nil, "a fresh create key returns a distinct draft")
                 windows[created.draftId] = controller

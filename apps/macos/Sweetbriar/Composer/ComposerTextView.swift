@@ -93,6 +93,25 @@ final class ComposerTextView: NSTextView {
         fatalError("ComposerTextView is built in code")
     }
 
+    /// Native signature insertion uses the same TextKit 2 edit/undo machinery
+    /// as typing. Its caller owns the group that also restores the route.
+    func replaceSourceUndoably(_ source: String) -> Bool {
+        guard isEditable, !hasMarkedText(), let textStorage else { return false }
+        let range = NSRange(location: 0, length: string.utf16.count)
+        guard shouldChangeText(in: range, replacementString: source) else { return false }
+        let selection = selectedRange()
+        contentStorage.performEditingTransaction {
+            textStorage.replaceCharacters(in: range, with: source)
+        }
+        didChangeText()
+        let value = source as NSString
+        let location = min(selection.location, value.length)
+        let length = min(selection.length, value.length - location)
+        setSelectedRange(
+            value.rangeOfComposedCharacterSequences(for: NSRange(location: location, length: length)))
+        return true
+    }
+
     // MARK: formatting commands
 
     /// Format ▸ Bold (⌘B), reached through the responder chain.

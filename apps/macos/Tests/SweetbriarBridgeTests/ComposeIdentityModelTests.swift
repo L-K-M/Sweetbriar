@@ -104,7 +104,7 @@ private func identityEventually(_ predicate: @MainActor () async -> Bool) async 
 private func withIdentityFixture(
     content: DraftContent? = nil, state: DraftState = .editing,
     catalog: ComposeCatalog = identityCatalog(), preferred: String? = nil,
-    canApply: @escaping @MainActor () -> Bool = { true },
+    canApply: @escaping @MainActor (ComposeIdentityModel.Transition) -> Bool = { _ in true },
     body: @MainActor (DraftModel, ComposeIdentityModel, IdentityCatalogFixture) async throws -> Void
 ) async throws {
     let store = IdentityDraftStore(content: content, state: state)
@@ -123,6 +123,8 @@ private func withIdentityFixture(
     draft.stop()
     try result.get()
 }
+
+enum IdentityReadReplacement: CaseIterable, Sendable { case body, normalization, format, route }
 
 @Suite @MainActor
 struct ComposeIdentityModelTests {
@@ -322,10 +324,72 @@ struct ComposeIdentityModelTests {
         }
     }
 
+    @Test(arguments: IdentityReadReplacement.allCases)
+    func aCleanReadReplacementInvalidatesTheSignatureDecision(_ kind: IdentityReadReplacement) async throws {
+        var original = DraftContent.empty(identityId: "a")
+        original.bodySource = "Caf\u{e9}"
+        let store = IdentityDraftStore(content: original, state: .editing)
+        let draft = DraftModel(source: store, draftId: "draft")
+        await draft.load()
+        let source = IdentityCatalogFixture(identityCatalog(defaultId: nil))
+        let model = ComposeIdentityModel(draft: draft, source: source)
+        let result: Result<Void, any Error>
+        do {
+            await model.reload()
+            #expect(model.choose(identityId: "b") == .needsSignatureChoice)
+            let decision = try #require(model.pendingDecision)
+            let version = draft.editVersion
+            var replacement = original
+            switch kind {
+            case .body: replacement.bodySource = "New remote body"
+            case .normalization: replacement.bodySource = "Cafe\u{301}"
+            case .format: replacement.format = .markdown
+            case .route: replacement.identityId = "c"
+            }
+            _ = try await store.saveDraft(
+                idempotencyKey: "external-writer", draftId: "draft", baseRevisionId: draft.baseRevisionId,
+                content: replacement)
+            await draft.reload()
+            #expect(draft.editVersion == version)
+            #expect(model.resolve(decisionId: decision.id, choice: .append) == .refused)
+            #expect(draft.content?.bodySource.utf8.elementsEqual(replacement.bodySource.utf8) == true)
+            #expect(draft.content?.identityId == replacement.identityId)
+            #expect(draft.content?.format == replacement.format)
+            result = .success(())
+        } catch { result = .failure(error) }
+        await source.release()
+        await model.stopAndWait()
+        draft.stop()
+        try result.get()
+    }
+
+    @Test func nativeAdmissionReceivesTheProposalBeforeModelMutation() async throws {
+        var current: DraftModel?
+        var admitted = 0
+        try await withIdentityFixture(
+            catalog: identityCatalog(defaultId: nil),
+            canApply: { proposal in
+                admitted += 1
+                #expect(current?.content?.identityId == nil)
+                #expect(current?.content?.bodySource == "")
+                #expect(proposal.identityId == "a")
+                #expect(proposal.body == "Signature A")
+                return false
+            },
+            body: { draft, model, _ in
+                current = draft
+                await model.reload()
+                #expect(model.choose(identityId: "a") == .refused)
+                #expect(admitted == 1)
+                #expect(draft.content?.identityId == nil)
+                #expect(draft.content?.bodySource == "")
+            })
+    }
+
     @Test func nativeInputAdmissionRefusesBeforeAnyAtomicTransition() async throws {
         var admitted = false
         try await withIdentityFixture(
-            canApply: { admitted },
+            canApply: { _ in admitted },
             body: { draft, model, _ in
                 var transitions = 0
                 model.onTransition = { _ in transitions += 1 }
@@ -341,7 +405,7 @@ struct ComposeIdentityModelTests {
         var current: DraftModel?
         try await withIdentityFixture(
             catalog: identityCatalog(defaultId: nil),
-            canApply: {
+            canApply: { _ in
                 guard let draft = current, var content = draft.content else { return false }
                 content.bodySource = "Committed native input"
                 draft.update(content)

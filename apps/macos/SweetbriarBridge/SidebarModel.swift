@@ -75,6 +75,14 @@ public final class SidebarModel {
     /// The unified section, then one per account.
     public private(set) var sections: [Section] = [SidebarModel.unifiedSection]
 
+    /// Account context comes from the loaded section, never by splitting an
+    /// opaque entry identifier. Unified, removed and unknown entries have none.
+    public func accountId(forEntry entryId: String) -> String? {
+        sections.first {
+            $0.id != Self.unifiedSectionID && $0.entries.contains { $0.id == entryId }
+        }?.id
+    }
+
     /// The oldest list generation the account sections show; 0 before
     /// the first reload.
     public private(set) var generation: UInt64 = 0
