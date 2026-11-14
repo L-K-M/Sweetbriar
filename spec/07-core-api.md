@@ -467,6 +467,36 @@ a receipt or file-export command; Service/FFI exposure remains M1.7e/f.
   - `accounts()` → every account's id, kind, display name, state and
     reason, and sort order, ordered by sort order then id;
   - `identities(account_id)`;
+  - `compose_catalog(preferred_account_id?)` (M1.9c2b1) → every retained
+    identity in account-sort/account-id/identity-id order, with account
+    kind/name, exact address/display name, reply-to/signature source,
+    default flag, sendability and signed revision, plus an optional default
+    identity id. A selected account id is 1–128 UTF-8 bytes without controls
+    and must exist. Resolve its sendable
+    default first, otherwise a valid `identity.default` JSON-string setting;
+    missing/empty/dangling/unavailable defaults give no selection, never an
+    arbitrary first sender. Local accounts cannot supply a sending default.
+    Malformed stored values refuse the whole answer; queries mutate nothing.
+    More than 1,024 identities or 4 MiB of catalog/default-setting text is `Unavailable`,
+    never a partial answer. Signature source remains literal source text.
+  - `recipient_completions(prefix, limit)` (M1.9c2b1) → owned address/name
+    pairs from `seen_addresses`. Prefix is at most 1,024 UTF-8 bytes with no
+    controls; limit is 1–50. Empty prefix returns no suggestions. Match a
+    literal substring of email/display name (SQLite LIKE ASCII case policy),
+    escaping `%`, `_` and backslash. Order by sent count, received count and
+    last-seen time descending, then canonical key ascending. Preserve exact
+    spelling and names. Invalid UTF-8/address/name rows refuse the whole
+    selected answer, never a partial/lossy list. No Contacts/network access.
+  - `parse_draft_recipients(text)` (M1.9c2b1) → owned address/name pairs,
+    or `InvalidInput` for the entire input, never a silently dropped member.
+    At most 16,384 UTF-8 bytes and 256 recipients. Accept modern bare
+    addresses (the existing address grammar) or `display name <address>`,
+    including quoted/escaped names and quoted local parts; comma/semicolon
+    separators outside quotes/angle brackets. Empty input and one trailing
+    separator are allowed. Reject empty members, controls, comments, groups,
+    obsolete routes and malformed/unclosed quotes/brackets explicitly.
+    Preserve local spelling, Unicode and display names; no normalization
+    or permissive MIME-header recovery. Parsing runs off the UI executor.
   - `mailboxes(account_id)` → each mailbox's id, name, delimiter, role,
     kind and whether it is selectable, with its present occurrences and
     the unread ones among them, read in one short transaction and tagged

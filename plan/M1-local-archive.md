@@ -1998,6 +1998,33 @@ local drafts. No network yet.
         routing and display names; Send stays unavailable without a
         sending account (actual sending remains M4). Native tests cover
         recipient edits and plain/Markdown changes without field loss.
+        Re-sized before implementation (2026-11-14): appearance carries
+        colors, not identity addresses/sendability/defaults, and neither
+        recipient completion nor input parsing reaches the application
+        service yet. Split with every requirement retained:
+        - **c2b1 Native compose services (L):** a typed identity catalog
+          and selected-account/global default resolution, bounded literal
+          `seen_addresses` completions, and a strict modern mailbox-list
+          parser over the existing address grammar. Store/Resources,
+          Engine and owned Service DTOs, with public native API proof.
+          No schema, new dependency, FFI or UI changes.
+        - **c2b2 Catalog SDK and bridge (L):** catalog/default query,
+          generated bindings, owned Swift records and native crossing,
+          cancellation and no-sending-account tests.
+        - **c2b3 Recipient SDK and bridge (L):** parsing/completion queries,
+          generated bindings, whole-answer/error/cancellation and literal
+          prefix native tests. No app imports of generated types.
+        - **c2b4 Native recipient controls (L):** To/Cc/Bcc token fields
+          with history completion; preserve display names and all other
+          fields. Pending or invalid input refuses save/close rather than
+          silently dropping recipients. Native delegate/blur/format tests.
+        - **c2b5 Native identity strip (L):** From choices, selected-account
+          default, titlebar accessory and core-derived color tokens,
+          provisional/no-identity states and safe signature transition.
+          Test actual surfaces, route/name preservation and From changes.
+          Send remains disabled; sending/Sent effects remain M4.
+        Optional Contacts stays optional; complete native workflow and
+        owner input-method/accessibility gates remain c2e and owner work.
       - **M1.9c2c Attachment and conflict editing (L):** picking/dragging
         attachments, publication before reference, attachment undo using
         authorized republication, and explicit keep-both conflict UI
