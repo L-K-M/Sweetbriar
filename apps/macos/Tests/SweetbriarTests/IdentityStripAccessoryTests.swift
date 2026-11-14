@@ -49,12 +49,17 @@ struct IdentityStripAccessoryTests {
         window.addTitlebarAccessoryViewController(accessory)
         accessory.setContent(.unavailable(label: String(repeating: "long-address@example.test ", count: 5)))
         window.makeKeyAndOrderFront(nil)
-        try await Task.sleep(for: .milliseconds(100))
+        for _ in 0..<100 where accessory.view.bounds.width <= 600 {
+            try await Task.sleep(for: .milliseconds(10))
+        }
         let wideWidth = accessory.view.bounds.width
+        try #require(wideWidth > 600)
         let wideHeight = accessory.view.frame.height
         window.setContentSize(NSSize(width: 400, height: 400))
-        try await Task.sleep(for: .milliseconds(100))
-        #expect(accessory.view.bounds.width < wideWidth)
+        for _ in 0..<100 where accessory.view.bounds.width >= wideWidth {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        try #require(accessory.view.bounds.width < wideWidth)
         #expect(accessory.view.frame.height > wideHeight)
         #expect(accessory.view.frame.height == accessory.strip.intrinsicContentSize.height)
         #expect(accessory.fullScreenMinHeight == accessory.view.frame.height)
