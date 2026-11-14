@@ -72,7 +72,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         self.backups = backups
         composeCues = SharedComposeCue(canWrite: { [weak backups] in backups?.canWrite == true })
-        composeWindows = ComposeWindows(backups: backups, openCore: { try await session.bridge() },
+        composeWindows = ComposeWindows(backups: backups, appearance: appearance,
+            openCore: { try await session.bridge() },
             reportError: { [weak self] error in self?.presentError("Couldn't create a draft", error) })
         let mainWindow = MainWindowController(session: session, appearance: appearance, backups: backups,
                                               openBackups: { [weak self] in self?.showSettings(tab: .backups) })

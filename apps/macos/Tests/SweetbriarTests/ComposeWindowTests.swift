@@ -51,6 +51,23 @@ private actor ComposeTestSource: ComposeSource {
         return try await bridge.createDraft(idempotencyKey: idempotencyKey, source: source)
     }
     func draft(id: String) async throws -> Draft { try await bridge.draft(id: id) }
+    func appearance() async throws -> Appearance { try await bridge.appearance() }
+    func appearanceEvents(generation: UInt64) async throws -> any AppearanceEventSource {
+        try await bridge.appearanceEvents(generation: generation)
+    }
+    func setAccountAppearance(
+        accountId: String, expectedRevision: Int64, change: AccountAppearanceChange
+    ) async throws -> Receipt {
+        try await bridge.setAccountAppearance(
+            accountId: accountId, expectedRevision: expectedRevision, change: change)
+    }
+    func setIdentityAppearance(
+        identityId: String, expectedRevision: Int64?, change: IdentityAppearanceChange
+    ) async throws -> Receipt {
+        try await bridge.setIdentityAppearance(
+            identityId: identityId, expectedRevision: expectedRevision, change: change)
+    }
+    nonisolated func palette() -> [PaletteColor] { bridge.palette() }
     func composeCatalog(preferredAccountId: String?) async throws -> ComposeCatalog {
         preferredQueries.append(preferredAccountId)
         return try await bridge.composeCatalog(preferredAccountId: preferredAccountId)
@@ -99,6 +116,7 @@ private final class ComposeFixture {
     let bridge: CoreBridge
     let source: ComposeTestSource
     let backups = SharedBackups(didRestore: {}, didClose: {})
+    let appearance = SharedAppearance()
     var controllers: [ComposeWindowController] = []
     var owner: ComposeWindows?
     var errors: [any Error] = []
@@ -135,7 +153,7 @@ private final class ComposeFixture {
     func makeOwner() -> ComposeWindows {
         let source = source
         let owner = ComposeWindows(
-            backups: backups, openCore: { source },
+            backups: backups, appearance: appearance, openCore: { source },
             reportError: { [weak self] in
                 self?.errors.append($0)
             })
@@ -151,7 +169,9 @@ private final class ComposeFixture {
                 if !(await controller.closeWithoutSavingAndWait()) { return false }
             }
         }
-        return await owner?.closeForQuit() != false
+        let closed = await owner?.closeForQuit() != false
+        await appearance.reset()
+        return closed
     }
 }
 
@@ -250,6 +270,12 @@ struct ComposeWindowTests {
             try #require(queried)
             #expect(await f.source.preferredQueries == ["previous-account"])
             #expect(selectedAccount == "later-account")
+            let controller = try #require(owner.windows.values.first)
+            #expect(controller.identityStrip.strip.accessibilityLabel() == "Without a sending identity")
+            #expect(
+                controller.window?.titlebarAccessoryViewControllers.contains {
+                    $0 === controller.identityStrip
+                } == true)
         }
     }
 
