@@ -313,6 +313,21 @@ uint64_t uniffi_sb_ffi_fn_method_core_list_backups(uint64_t ptr, uint64_t token
 uint64_t uniffi_sb_ffi_fn_method_core_list_restore_artifacts(uint64_t ptr, uint64_t token
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_COMPOSE_CATALOG
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_COMPOSE_CATALOG
+uint64_t uniffi_sb_ffi_fn_method_core_compose_catalog(uint64_t ptr, uint64_t token, RustBuffer preferred_account_id
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_PARSE_DRAFT_RECIPIENTS
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_PARSE_DRAFT_RECIPIENTS
+uint64_t uniffi_sb_ffi_fn_method_core_parse_draft_recipients(uint64_t ptr, uint64_t token, RustBuffer text
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_RECIPIENT_COMPLETIONS
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_RECIPIENT_COMPLETIONS
+uint64_t uniffi_sb_ffi_fn_method_core_recipient_completions(uint64_t ptr, uint64_t token, RustBuffer prefix, uint32_t limit
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_CREATE_DRAFT
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_CREATE_DRAFT
 uint64_t uniffi_sb_ffi_fn_method_core_create_draft(uint64_t ptr, uint64_t token, RustBuffer idempotency_key, RustBuffer context
@@ -964,6 +979,24 @@ uint16_t uniffi_sb_ffi_checksum_method_core_list_backups(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_LIST_RESTORE_ARTIFACTS
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_LIST_RESTORE_ARTIFACTS
 uint16_t uniffi_sb_ffi_checksum_method_core_list_restore_artifacts(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_COMPOSE_CATALOG
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_COMPOSE_CATALOG
+uint16_t uniffi_sb_ffi_checksum_method_core_compose_catalog(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_PARSE_DRAFT_RECIPIENTS
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_PARSE_DRAFT_RECIPIENTS
+uint16_t uniffi_sb_ffi_checksum_method_core_parse_draft_recipients(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_RECIPIENT_COMPLETIONS
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_RECIPIENT_COMPLETIONS
+uint16_t uniffi_sb_ffi_checksum_method_core_recipient_completions(void
     
 );
 #endif
