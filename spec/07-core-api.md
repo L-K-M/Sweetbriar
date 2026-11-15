@@ -301,21 +301,28 @@ async fn Core::shutdown(self);   // flush writer, release the lease
     }`. `continue_proton_sign_in(sign_in_id, step)` answers the next
     state for a `SecondFactor { code }`, `MailboxPassword { bytes }` or
     `HumanVerification { token, token_type }` step.
-  - Refusals: a wrong password or code is `InvalidInput` on `password`,
+  - Refusals: a wrong code or mailbox password is `InvalidInput` on
     `second_factor` or `mailbox_password`, and the conversation
-    continues; an account whose only second factor is a security key,
-    or another Proton user than the account's, is `InvalidInput` on
-    `account` with the explanation; Proton refusing the app's identity,
-    offline and 5xx are `Unavailable` with Proton's message. Each
-    refusal stores nothing.
+    continues. A wrong password is `InvalidInput` on `password` and ends
+    the conversation, since each password attempt is a new SRP
+    handshake: the sheet begins again with a new idempotency key. An
+    account whose only second factor is a security key, another Proton
+    user than the account's, or a Proton user another account already
+    holds is `InvalidInput` on `account` with the explanation. Proton
+    refusing the app's identity, offline and 5xx are `Unavailable` with
+    Proton's message; no account exists yet to carry a state (during
+    sync the same refusals set the account's health, 04-sync-proton).
+    Each refusal stores nothing.
   - A conversation lives in memory only, for at most 10 minutes or until
     `cancel_proton_sign_in`; an unknown or expired `sign_in_id` is
     `NotFound`. Nothing is stored before `Complete`: then the account
     rows, the identities and the receipt commit together, and the
     secrets are written as for Bridge accounts (paused with
     `needs_attention` if the secret store fails). `begin_proton_sign_in`
-    takes an idempotency key; a repeated key after `Complete` answers
-    the stored receipt `{"account_id": ...}` without contacting Proton.
+    takes an idempotency key; a repeated key while its conversation is
+    open answers that conversation's `sign_in_id` and current state, and
+    after `Complete` the stored receipt `{"account_id": ...}`, both
+    without contacting Proton.
   - Signing an existing account in again keeps its UUID and data, bumps
     `config_generation`, and replaces its secrets only on `Complete`.
 - **Local archive:** filing commands act locally, with no intent.

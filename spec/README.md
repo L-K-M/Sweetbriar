@@ -5,7 +5,7 @@ decisions in [research/](../research/00-summary.md) into precise rules,
 schemas and interfaces. The step-by-step build order lives in
 [plan/](../plan/README.md).
 
-**Status:** v0.1, 2026-10-12. Covers the pilot: a macOS app with a local
+**Status:** v0.1, 2026-10-12, revised 2026-11-15. Covers the pilot: a macOS app with a local
 archive and Proton Mail through Sweetbriar's own Proton API client
 (owner decision, 2026-11-15; earlier text named Proton Bridge). Sections beyond the
 pilot are marked *later*.

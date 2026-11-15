@@ -236,9 +236,9 @@ mailboxes(account_id, provider_key) WHERE provider_key IS NOT NULL`.
 ```text
 CREATE TABLE proton_accounts (                        -- one per Proton API account
   account_id         TEXT PRIMARY KEY REFERENCES accounts(account_id),
-  api_host           TEXT NOT NULL,                   -- 'https://mail.proton.me/api' in the pilot
+  api_base_url       TEXT NOT NULL,                   -- 'https://mail.proton.me/api' in the pilot
   username           TEXT NOT NULL,                   -- Proton's canonical name after sign-in
-  proton_user_id     TEXT NOT NULL,                   -- a later sign-in must name the same user
+  proton_user_id     TEXT NOT NULL UNIQUE,            -- a later sign-in must name the same user; one account per Proton user
   credential_ref     TEXT NOT NULL,                   -- secret store key: session UID, refresh token, key passphrase (10)
   password_mode      INTEGER NOT NULL CHECK (password_mode IN (1,2)), -- 2: a separate mailbox password
   key_generation     INTEGER NOT NULL DEFAULT 1,      -- bumped when key unlocking changes what it unlocked
@@ -436,7 +436,7 @@ CREATE TABLE mailboxes (
 CREATE TABLE logical_messages (
   message_id       INTEGER PRIMARY KEY AUTOINCREMENT,
   account_id       TEXT NOT NULL REFERENCES accounts(account_id),
-  provider_key     TEXT,                               -- provider object id when one exists; Bridge: X-Pm-Internal-Id (04); Proton API: the message id
+  provider_key     TEXT,                               -- provider object id when one exists; Bridge: X-Pm-Internal-Id (04)
   acquisition_id   INTEGER REFERENCES acquisitions(acquisition_id), -- best complete body, NULL until fetched
   created_at       INTEGER NOT NULL,
   UNIQUE (account_id, provider_key),

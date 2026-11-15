@@ -23,14 +23,19 @@ and D24, D29.
 - **Proton accounts** (04-sync-proton): the Proton password, the mailbox
   password and 2FA codes are entered at sign-in only and are never
   stored. They live in zeroizing buffers (`secrecy`) and are dropped as
-  soon as the SRP proofs and the key passphrase exist. The secret store
-  holds one item per account: the session UID, the refresh token and the
-  key passphrase. Access tokens stay in memory.
+  soon as the SRP proofs and the key passphrase exist. The key
+  passphrase is derived from the password that unlocks the keys (the
+  Proton password in one-password mode, the mailbox password in two)
+  with Proton's key salt: it can't sign in, but it unlocks the keys,
+  so it is guarded like a password. The secret store holds one item per
+  account: the session UID, the refresh token and the key passphrase.
+  Access tokens stay in memory.
 - **Proton private keys** are unlocked in memory from the key passphrase
   and are never written anywhere, decrypted or not; Proton's encrypted
   key blobs are fetched again on each start. Decrypted key material is
   zeroized on drop.
-- **A Keychain error puts the account in `needs_attention`** (04). It
+- **A Keychain error puts the account in `needs_attention`** (04-sync-imap,
+  04-sync-proton). It
   never deletes or recreates
   anything. Logs redact anything that looks like a token or password; a
   CI test scans for this.
@@ -39,16 +44,15 @@ and D24, D29.
 
 - **TLS:** connections to the Proton API host use `rustls` with the
   platform verifier (the system trust store, hostname checked). Pinning
-  Proton's keys is *later*: a stale pin would lock the owner out, and
-  SRP already proves the server knows the account's verifier. A
+  Proton's keys is *later*: a stale pin would lock the owner out. A
   certificate error is never accepted.
 - **SRP:** the modulus must carry a valid signature from the Proton
   modulus key embedded in `proton-srp`, and the server proof must match
   before any token is used (04-sync-proton).
 - **Honest identity:** every request sends `x-pm-appversion: Other` and
   `User-Agent: Sweetbriar/<version> (macOS <version>)`. Sweetbriar never
-  sends another client's identity, whatever Proton refuses; a refusal
-  is shown to the user (04-sync-proton). A test asserts both headers on
+  sends another client's identity, even when Proton refuses its own;
+  the refusal is shown to the user (04-sync-proton). A test asserts both headers on
   every request the fake server sees.
 - **Human verification** opens Proton's verification page in a
   non-persistent `WKWebView` (08) that loads only `verify.proton.me`

@@ -33,10 +33,10 @@ where Proton differs.
 
 | Fact | Consequence |
 |---|---|
-| API host `https://mail.proton.me/api`, JSON over HTTPS; routes under `/core/v4`, `/mail/v4` and `/auth/v4` | One host per account, recorded in `proton_accounts.api_host`; the only host in the pilot |
+| API host `https://mail.proton.me/api`, JSON over HTTPS; routes under `/core/v4`, `/mail/v4` and `/auth/v4` | One host per account, recorded in `proton_accounts.api_base_url`; the only host in the pilot |
 | Every request needs `x-pm-appversion`. Proton has no registration for third-party clients: unknown products are refused (2064) and `Other` is accepted; official product strings are accepted | **Sweetbriar sends `Other` and an honest `User-Agent: Sweetbriar/<version> (macOS <version>)`. It never sends an official Proton client's identity** (10). If Proton refuses `Other`, the account shows why; there is no fallback |
 | Proton's terms allow automated access only while it is indistinguishable from a standard client, and Proton may block it without recourse | Traffic stays within the pacing below; no bulk export, no parallel bursts |
-| Messages and labels have stable string ids. A message carries `LabelIDs`: at most one folder or system location, any number of user labels, plus the synthesized All Mail and, when starred, Starred | `logical_messages.provider_key` is the message id and is authoritative. One occurrence per label the message carries (02) |
+| Messages and labels have stable string ids. A message carries `LabelIDs`: at most one folder or system location, any number of user labels, plus All Mail (`5`), which the server adds to every message, and Starred when starred | `logical_messages.provider_key` is the message id and is authoritative. One occurrence per label the message carries (02) |
 | System labels: Inbox `0`, Trash `3`, Spam `4`, All Mail `5`, Archive `6`, Sent `7`, Drafts `8`, Starred `10`, Scheduled `12`; also AllDrafts `1`, AllSent `2`, Outbox `9`. User labels have type 1, folders type 3 (folders may nest) | Mapping below |
 | Read state is per message (`Unread`); a star is label `10`; `IsReplied`, `IsRepliedAll`, `IsForwarded` and the draft state are per message | Every occurrence of a message carries the same flags |
 | Bodies and attachments are OpenPGP-encrypted to the address's keys. Attachments come as key packets plus a separately downloaded data packet | Decryption needs the unlocked address keys (10) |
@@ -79,7 +79,11 @@ where Proton differs.
 2. **Secrets** (10): the session's UID, refresh token and the key
    passphrase. Never the password. Access tokens live in memory only.
 3. **Refresh:** a 401 refreshes once (`POST /auth/v4/refresh`) and
-   retries the request. A refused refresh (10013) puts the account in
+   retries the request. Refreshes are serialized per account, since
+   Proton rotates the refresh token: a 401 that arrives while a refresh
+   is in flight waits for it and retries with the new access token,
+   and the new refresh token is stored before any request uses it. A
+   refused refresh (10013) puts the account in
    `needs_attention` ("Sign in again"); local data stays.
 4. **On every start** the engine restores the session from the secret
    store and unlocks the keys in memory, without the password.
