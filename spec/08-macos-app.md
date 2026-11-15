@@ -33,7 +33,12 @@ Rests on research [08-macos-ui](../research/08-macos-ui.md),
 | **Import report** | Results of an import job (09) |
 
 State restoration uses AppKit window restoration. A compose window
-restores its draft by `draft_id`.
+restores its draft by `draft_id` (M1.9c2d): only the id is encoded,
+never content. Restoration waits for the archive to open and admits the
+window like any compose open (one window per draft, below). A draft
+that is no longer `editing` or `queued`, an archive that can't open, or
+a quit or restore in progress restores no window and reports nothing:
+restoration is a convenience, not a promise.
 
 ## Backups settings (M1.8j)
 
@@ -167,10 +172,36 @@ conversation; the Bridge account sheet is no longer offered.
   role or hierarchy is read into a file name. IMAP hierarchy uses the
   server's delimiter (M2). A mailbox that isn't selectable opens no
   window.
-- **Until their steps land,** Drafts (local), Out Box and saved views
-  are shown disabled with a note, and the reader is a placeholder
+- **Until their steps land,** Out Box and saved views are shown
+  disabled with a note, and the reader is a placeholder
   (M1.5). Before M1.10's appearance service, accounts show a neutral
   symbol and their name; no color is derived from an id.
+
+## Drafts (local)
+
+M1.9c2d. Choosing Drafts (local) shows the local drafts list in the
+list pane instead of a message list; the reader shows nothing while it
+is up. Choosing any other entry brings its message list back.
+
+- **Rows** are `drafts()` in the core's order (newest update first,
+  `editing` and `queued` only): the subject or "No Subject", the To
+  then Cc recipients by name or address (Bcc is not shown), "Queued"
+  for a queued draft, and the update time.
+- **Opening:** double-click or Return opens the row's draft. There is
+  one compose window per draft: opening a draft whose window is open,
+  or already opening, brings that window forward and opens nothing
+  else. Opening is a compose action, admitted like New Message (refused
+  during quit or restore and while archive writes are unavailable). A
+  draft that has since been sent or discarded opens nothing; the list
+  reloads.
+- **Refresh:** the list reloads when chosen, when a compose window opens
+  or closes, and on Retry. One reload runs at a time; a reload asked
+  for meanwhile runs once after it. A failed reload keeps the previous
+  rows and shows the error with Retry.
+- **Old archive:** the list retires with the rest of the main window's
+  content on restore (above). A result that arrives after retirement is
+  dropped and a retired row opens nothing; the rebuilt window lists the
+  restored archive's drafts.
 
 ## Message list
 
