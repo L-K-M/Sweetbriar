@@ -2,7 +2,7 @@
 
 > **Revision pending (owner decision, 2026-11-15):** Sweetbriar implements
 > the Proton API itself and must not depend on Proton Mail Bridge. This
-> milestone's Bridge, IMAP-intent and SMTP-through-Bridge steps are
+> milestone's Bridge-dependent steps are
 > superseded by the revised spec and plan that follow in their own PR.
 > Do not start unmerged steps here until then. Merged steps stay as
 > tested code.
