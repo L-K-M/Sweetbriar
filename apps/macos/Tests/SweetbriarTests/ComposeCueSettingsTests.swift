@@ -42,6 +42,7 @@ private actor CueSettingsSource: ComposeCueSource {
     func release() async { for gate in gates { await gate.release() } }
     func composeCue() async throws -> ComposeCueMode {
         reads += 1
+        // Capture the answer at admission so held reads can model stale replies.
         let result = value
         await readGate?.wait()
         if let readFailure { throw readFailure }
@@ -65,7 +66,7 @@ private final class CueSettingsFixture {
     let permission = CueSettingsPermission()
     let editor = ArchiveWriteTasks()
     lazy var owner = SharedComposeCue(canWrite: { [permission] in permission.canWrite })
-    var cue: ComposeCueModel { owner.model(source: source)! }
+    func cue() throws -> ComposeCueModel { try #require(owner.model(source: source)) }
     func control(_ cue: ComposeCueModel) -> ComposeCueSettingsControl {
         ComposeCueSettingsControl(cue: cue, editor: editor, revision: editor.revision) { [permission] in
             permission.canWrite
@@ -82,7 +83,7 @@ private final class CueSettingsFixture {
 private func cueSettingsEventually(_ predicate: @MainActor () async -> Bool) async -> Bool {
     let deadline = ContinuousClock.now + .seconds(10)
     while !(await predicate()) {
-        if ContinuousClock.now >= deadline { return false }
+        if Task.isCancelled || ContinuousClock.now >= deadline { return false }
         try? await Task.sleep(for: .milliseconds(5))
     }
     return true
@@ -125,7 +126,7 @@ struct ComposeCueSettingsTests {
         try await withCueSettings { f in
             let read = CueSettingsGate()
             await f.source.holdRead(read)
-            let cue = f.cue
+            let cue = try f.cue()
             let control = f.control(cue)
             try #require(await cueSettingsEventually { await f.source.reads == 1 })
             #expect(cue.mode == nil && !control.canChoose)
@@ -147,7 +148,7 @@ struct ComposeCueSettingsTests {
 
     @Test func healthAndRetiredTicketsRefuseUnbegunWrites() async throws {
         try await withCueSettings { f in
-            let cue = f.cue
+            let cue = try f.cue()
             try #require(await cueSettingsEventually { cue.mode == .standard })
             let old = f.control(cue)
             f.permission.canWrite = false
@@ -155,8 +156,13 @@ struct ComposeCueSettingsTests {
             #expect(old.admissionError != nil)
             #expect(await f.source.writes == 0)
             f.permission.canWrite = true
+            old.choose(.standard)
+            #expect(old.admissionError == nil)
+            #expect(await f.source.writes == 0)
             f.editor.retire()
             #expect(!old.canChoose)
+            old.choose(.standard)
+            #expect(old.admissionError != nil)
             old.choose(.strong)
             #expect(old.admissionError != nil)
             #expect(await f.source.writes == 0)
@@ -174,7 +180,7 @@ struct ComposeCueSettingsTests {
 
     @Test func queuedChoiceRechecksHealthBeforeStartingTheCommand() async throws {
         try await withCueSettings { f in
-            let cue = f.cue
+            let cue = try f.cue()
             try #require(await cueSettingsEventually { cue.mode == .standard })
             let control = f.control(cue)
             control.choose(.strong)
@@ -188,7 +194,7 @@ struct ComposeCueSettingsTests {
 
     @Test func reopeningJoinsTheReceiptOfAStartedSettingsWrite() async throws {
         try await withCueSettings { f in
-            let cue = f.cue
+            let cue = try f.cue()
             try #require(await cueSettingsEventually { cue.mode == .standard })
             let receipt = CueSettingsGate()
             await f.source.holdWrite(receipt)
@@ -208,13 +214,18 @@ struct ComposeCueSettingsTests {
     @Test func retryWorksReadOnlyAndRestoreDrainsABegunWrite() async throws {
         try await withCueSettings { f in
             await f.source.failRead(.unavailable(reason: "synthetic cue failure"))
-            let cue = f.cue
+            let cue = try f.cue()
             let control = f.control(cue)
             try #require(await cueSettingsEventually { cue.lastError != nil && !cue.isLoading })
             #expect(cue.mode == nil)
             await f.source.failRead(nil)
+            let read = CueSettingsGate()
+            await f.source.holdRead(read)
             f.permission.canWrite = false
             control.retry()
+            try #require(await cueSettingsEventually { await f.source.reads == 2 && cue.isLoading })
+            #expect(cue.lastError != nil && cue.mode == nil)
+            await read.release()
             try #require(await cueSettingsEventually { cue.mode == .standard && cue.lastError == nil })
             f.permission.canWrite = true
             let receipt = CueSettingsGate()
@@ -270,7 +281,7 @@ struct ComposeCueSettingsTests {
             await backup.refresh()
             try #require(await cueSettingsEventually { backups.canWrite })
             settings.showWindow(nil)
-            let content = try #require(settings.window?.contentView)
+            var content = try #require(settings.window?.contentView)
             try #require(
                 await cueSettingsEventually {
                     cueButton(content, identifier: "composeCueStrong")?.isEnabled == true
@@ -284,6 +295,7 @@ struct ComposeCueSettingsTests {
                 })
             settings.close()
             settings.showWindow(nil)
+            content = try #require(settings.window?.contentView)
             try #require(
                 await cueSettingsEventually {
                     cueButton(content, identifier: "composeCueStrong")?.state == .on
@@ -306,6 +318,7 @@ struct ComposeCueSettingsTests {
             guard case .restore(.restored) = backup.lastResult else {
                 throw CoreFailure.internalError(detail: "cue settings restore did not complete")
             }
+            content = try #require(settings.window?.contentView)
             try #require(
                 await cueSettingsEventually {
                     (try? await core.composeCue()) == .strong
@@ -327,7 +340,7 @@ struct ComposeCueSettingsTests {
         try await withCueSettings { f in
             let read = CueSettingsGate()
             await f.source.holdRead(read)
-            let cue = f.cue
+            let cue = try f.cue()
             let view = ComposeCueSettingsView(cue: cue, editor: f.editor, revision: f.editor.revision) {
                 f.permission.canWrite
             }

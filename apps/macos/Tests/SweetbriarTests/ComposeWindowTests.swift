@@ -124,6 +124,7 @@ private final class ComposeFixture {
     let appearance = SharedAppearance()
     lazy var cues = SharedComposeCue(canWrite: { [backups] in backups.canWrite })
     var controllers: [ComposeWindowController] = []
+    var editors: [ArchiveWriteTasks] = []
     var owner: ComposeWindows?
     var errors: [any Error] = []
     init(_ bridge: CoreBridge) {
@@ -156,6 +157,12 @@ private final class ComposeFixture {
         return try await makeWindow(id: created.draftId)
     }
 
+    func makeEditor() -> ArchiveWriteTasks {
+        let editor = ArchiveWriteTasks()
+        editors.append(editor)
+        return editor
+    }
+
     func makeOwner() -> ComposeWindows {
         let source = source
         let owner = ComposeWindows(
@@ -168,6 +175,7 @@ private final class ComposeFixture {
     }
     func cleanUp() async -> Bool {
         await source.release()
+        for editor in editors { await editor.cancelAndWait() }
         let all = controllers + (owner.map { Array($0.windows.values) } ?? [])
         for controller in all {
             if !(await controller.closeAndWait()) {
@@ -324,7 +332,7 @@ struct ComposeWindowTests {
             let windows = Array(owner.windows.values)
             let cue = try #require(f.cues.model(source: f.source))
             try #require(await composeEventually { cue.mode == .standard })
-            let editor = ArchiveWriteTasks()
+            let editor = f.makeEditor()
             let view = ComposeCueSettingsView(cue: cue, editor: editor, revision: editor.revision) {
                 f.backups.canWrite
             }
@@ -358,7 +366,6 @@ struct ComposeWindowTests {
                 })
             #expect(windows.map { $0.model.content } == before)
             #expect(windows.map { $0.textView.undoManager?.canUndo } == undo)
-            await editor.cancelAndWait()
         }
     }
 

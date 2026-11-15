@@ -29,6 +29,10 @@ final class ComposeCueSettingsControl {
     }
 
     func choose(_ mode: ComposeCueMode) {
+        guard isCurrent else {
+            admissionError = "The archive changed. Reopen this editor before saving."
+            return
+        }
         guard canWrite() else {
             admissionError = "The archive is not writable. Check Backups for its status."
             return
@@ -37,7 +41,10 @@ final class ComposeCueSettingsControl {
             admissionError = "Wait for the current compose appearance operation to finish."
             return
         }
-        guard cue.mode != mode else { return }
+        guard cue.mode != mode else {
+            admissionError = nil
+            return
+        }
         admissionError = nil
         if !editor.run(revision: revision, { [cue] in _ = await cue.setMode(mode) }) {
             admissionError = "The archive changed. Reopen this editor before saving."

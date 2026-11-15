@@ -36,9 +36,13 @@ struct ComposeCueSettingsView: View {
                 )
                 .foregroundStyle(.red)
                 .accessibilityIdentifier("composeCueError")
-                Button("Retry compose appearance") { control.retry() }
-                    .disabled(!control.isCurrent || control.cue.isLoading || control.cue.isSaving)
-                    .accessibilityIdentifier("composeCueRetry")
+                if control.cue.isLoading {
+                    ProgressView("Refreshing compose appearance…")
+                } else {
+                    Button("Retry compose appearance") { control.retry() }
+                        .disabled(!control.isCurrent || control.cue.isSaving)
+                        .accessibilityIdentifier("composeCueRetry")
+                }
             } else if control.cue.mode == nil || control.cue.isLoading {
                 ProgressView("Loading compose appearance…")
             }
