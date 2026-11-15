@@ -167,8 +167,15 @@ and quits — even a run that can't start writes `ok: false`.
 
 ## Rules for agents (summary of plan/README.md)
 
-- One plan step per PR; automated checks green. Record pending owner
-  qualification under plan/README.md's sequencing rule.
+- One plan step per PR, or adjacent steps of one lane combined within
+  the size limit (plan/README.md "Sizing"); automated checks green.
+  Independent lanes run in parallel and dependent PRs stack
+  ("Lanes").
+- Agents run owner qualification on the owner's Mac and record it as
+  agent-run; ask the owner first for credentials and for effects on a
+  real remote account (plan/README.md, 2026-11-15).
+- Sweetbriar implements the Proton API itself and must not depend on
+  Proton Mail Bridge; Bridge-specific steps wait for the revised spec.
 - The spec wins; never silently deviate or weaken a check to pass.
 - Never weaken safety rules to make a test pass.
 - Tests come with the code; bug fixes start with a failing test.

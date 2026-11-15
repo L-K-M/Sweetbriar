@@ -1,5 +1,12 @@
 # M4 — Send
 
+> **Revision pending (owner decision, 2026-11-15):** Sweetbriar implements
+> the Proton API itself and must not depend on Proton Mail Bridge. This
+> milestone's Bridge-dependent steps are
+> superseded by the revised spec and plan that follow in their own PR.
+> Do not start unmerged steps here until then. Merged steps stay as
+> tested code.
+
 **Outcome:** the owner composes and sends through Bridge, from the right
 identity, with the identity strip, the cross-account check and an
 inspectable Out Box. Unknown outcomes are never retried automatically.
