@@ -774,6 +774,79 @@ fn a_begun_publication_completes_despite_a_cancel() {
     block_on(core.shutdown());
 }
 
+#[test]
+fn selected_file_publication_honours_precancel_and_drains_a_begun_call() {
+    let (scratch, core) = scratch_core("ffi-draft-file-cancel");
+    let path = scratch.path().join("input.txt");
+    std::fs::write(&path, b"begun").unwrap();
+    let path = path.to_str().unwrap().to_owned();
+    let cancelled = CancelToken::new();
+    cancelled.cancel();
+    let err = block_on(core.publish_draft_attachment_file(cancelled, path.clone())).unwrap_err();
+    assert!(matches!(err, CoreError::Cancelled), "{err}");
+    assert_eq!(
+        count_rows(&state_db(&scratch), "SELECT COUNT(*) FROM object_pins"),
+        0
+    );
+
+    let token = CancelToken::new();
+    let mut begun = Box::pin(core.publish_draft_attachment_file(token.clone(), path));
+    with_sqlite_write_lock(&state_db(&scratch), || {
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(begun.as_mut().poll(&mut cx).is_pending());
+        token.cancel();
+    });
+    let object = block_on(begun.as_mut()).expect("begun file publication runs to completion");
+    assert_eq!(object.byte_length(), 5);
+    assert_eq!(
+        std::fs::read(object_path(&scratch, &object.object_sha256())).unwrap(),
+        b"begun"
+    );
+    assert_eq!(pin_count(&state_db(&scratch), &object.object_sha256()), 1);
+    block_on(core.shutdown());
+}
+
+#[test]
+fn selected_file_invalid_input_names_the_path_field() {
+    let (scratch, core) = scratch_core("ffi-draft-file-invalid");
+    for path in [
+        "relative".to_owned(),
+        scratch.path().to_str().unwrap().to_owned(),
+    ] {
+        let error =
+            block_on(core.publish_draft_attachment_file(CancelToken::new(), path)).unwrap_err();
+        assert!(
+            matches!(error, CoreError::InvalidInput { ref field, .. } if field == "path"),
+            "{error}"
+        );
+    }
+    block_on(core.shutdown());
+}
+
+#[test]
+fn dropped_selected_file_publication_finishes_before_shutdown() {
+    let (scratch, core) = scratch_core("ffi-draft-file-drop");
+    let path = scratch.path().join("input.txt");
+    std::fs::write(&path, b"dropped caller").unwrap();
+    let mut future = Box::pin(
+        core.publish_draft_attachment_file(CancelToken::new(), path.to_str().unwrap().to_owned()),
+    );
+    with_sqlite_write_lock(&state_db(&scratch), || {
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(future.as_mut().poll(&mut cx).is_pending());
+        drop(future);
+    });
+    block_on(core.shutdown());
+    assert_eq!(
+        std::fs::read(object_path(
+            &scratch,
+            "7e9b280e0d20e4859e22ec46c744200aba6a0340ee4a58e1346cb74d2546fa7c",
+        ))
+        .unwrap(),
+        b"dropped caller"
+    );
+}
+
 /// A caller dropped after the publication began still gets its bytes:
 /// the blocking publication completes and `shutdown` waits for it
 /// (spec/07).

@@ -543,6 +543,17 @@ impl Core {
         Ok(DraftAttachmentObject::from_engine(object))
     }
 
+    /// Stream a selected regular file to a durable attachment publication
+    /// and its one-shot reservation (spec/07). The final component is not
+    /// followed if it is a symbolic link; no whole-file buffer is required.
+    pub async fn publish_draft_attachment_file(
+        &self,
+        path: std::path::PathBuf,
+    ) -> Result<DraftAttachmentObject, CoreError> {
+        let object = self.engine().publish_draft_attachment_file(path).await?;
+        Ok(DraftAttachmentObject::from_engine(object))
+    }
+
     /// `republish_draft_attachment(draft_id, revision_id, reference)`
     /// (spec/07): re-publish one stored attachment reference from an
     /// exact immutable draft revision. An older revision, or one from

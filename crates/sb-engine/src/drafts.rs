@@ -316,6 +316,23 @@ impl Engine {
             .await
     }
 
+    /// Stream a selected regular file to the same durable publication path
+    /// as [`Engine::publish_draft_attachment`]. The final component is not
+    /// followed if it is a symbolic link. File I/O runs on the blocking pool.
+    pub async fn publish_draft_attachment_file(
+        &self,
+        path: std::path::PathBuf,
+    ) -> Result<PublishedObject, EngineError> {
+        self.read_through(move |resources| resources.publish_draft_attachment_file(&path))
+            .await
+            .map_err(|error| match error {
+                EngineError::InvalidInput { message, .. } => {
+                    EngineError::invalid_input("path", message)
+                }
+                other => other,
+            })
+    }
+
     /// `republish_draft_attachment(draft_id, revision_id, reference)`
     /// (spec/07): re-publish one stored attachment reference from an
     /// exact immutable draft revision. An older revision, or one from

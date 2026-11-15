@@ -299,6 +299,22 @@ async fn Core::shutdown(self);   // flush writer, release the lease
   the Proton policy forbids (04). `undo(token)` creates compensating
   intents, or inverse local commands for local effects. Undo is the inverse
   command, never a rollback of history.
+- **Selected-file attachment publication:** `publish_draft_attachment_file(path)`
+  accepts an absolute path supplied by the shell after a user picks or drops
+  a file. The core trusts the shell to pass only user-authorized paths and
+  performs no independent authorization. It opens the final component
+  without following a symbolic link, refuses non-regular files without
+  blocking on devices or pipes, and streams the opened file through the
+  same durable publication and reservation path as byte publication. It
+  does not load the whole file into memory. An invalid path, a rejected
+  symbolic link or an opened non-file is an explicit input failure; an
+  unreadable or disappearing file is an explicit I/O failure. A file that
+  shrinks or grows while it streams is an explicit I/O failure; the
+  publication never commits a torn copy. Once begun, cancellation or a
+  dropped caller cannot interrupt publication; the resulting handle
+  carries the usual one-shot reservation. The shell keeps any
+  security-scoped access alive through the native outcome and retires
+  begun work before closing or restoring.
 - **Attachment republication:** `republish_draft_attachment(draft_id,
   revision_id, reference)` re-publishes one stored attachment reference
   from an exact immutable draft revision. The revision must belong to the

@@ -567,6 +567,23 @@ impl Core {
         Ok(Arc::new(DraftAttachmentObject { inner: object }))
     }
 
+    /// Stream a user-selected regular file through the ordinary durable
+    /// publication path (spec/07). The caller retains any security-scoped
+    /// file access until this command returns; once begun it drains even if
+    /// cancelled or its caller is dropped.
+    pub async fn publish_draft_attachment_file(
+        &self,
+        token: Arc<CancelToken>,
+        path: String,
+    ) -> Result<Arc<DraftAttachmentObject>, CoreError> {
+        let object = self
+            .command(&token, async |core| {
+                core.publish_draft_attachment_file(path.into()).await
+            })
+            .await?;
+        Ok(Arc::new(DraftAttachmentObject { inner: object }))
+    }
+
     /// `republish_draft_attachment(draft_id, revision_id, reference)`
     /// (spec/07): re-publish one stored attachment reference from an
     /// exact immutable draft revision. `reference` crosses owned and
