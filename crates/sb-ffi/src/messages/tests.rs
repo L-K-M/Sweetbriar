@@ -249,17 +249,32 @@ fn tag_and_note_commands_round_trip_and_replay() {
     assert_eq!(read.tags[0].name, "work");
 
     // A window token names the open window's rows at its generation.
-    let window_key = "20000000-0000-4000-8000-000000000011".to_owned();
-    let later = block_on(core.add_tag(
-        CancelToken::new(),
-        window_key,
-        MessageSelection::Window {
-            window_id: window.window_id,
-            generation: window.generation,
-        },
-        "later".into(),
-    ))
-    .unwrap();
+    // The tag above (and the import's follow-up work) bump the list
+    // generation asynchronously, so the shell's current generation is
+    // read first and a token a bump overtook is retried, as the shell
+    // would after `ResetRequired`.
+    let mut attempt = 0;
+    let later = loop {
+        attempt += 1;
+        let generation = block_on(core.window_ids(CancelToken::new(), window.window_id))
+            .unwrap()
+            .generation;
+        let window_key = format!("20000000-0000-4000-8000-0000000001{attempt:02}");
+        match block_on(core.add_tag(
+            CancelToken::new(),
+            window_key,
+            MessageSelection::Window {
+                window_id: window.window_id,
+                generation,
+            },
+            "later".into(),
+        )) {
+            Err(CoreError::ResetRequired { .. }) if attempt < 50 => {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            result => break result.unwrap(),
+        }
+    };
     assert!(later.result_json.contains(r#""added":1"#));
     let read = block_on(core.get_message(CancelToken::new(), message_id)).unwrap();
     let mut names = read
