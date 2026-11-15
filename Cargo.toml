@@ -11,6 +11,7 @@ members = [
     "crates/sb-imap",
     "crates/sb-smtp",
     "crates/sb-platform",
+    "crates/sb-proton",
     "crates/sb-types",
     "crates/sb-test-support",
     "crates/sb-bindgen",

@@ -35,6 +35,7 @@ sb_mime     = { layer = 5, deps = ["sb_types"] }
 sb_imap     = { layer = 5, deps = ["sb_types"] }
 sb_smtp     = { layer = 5, deps = ["sb_types"] }
 sb_platform = { layer = 5, deps = ["sb_types"] }
+sb_proton  = { layer = 5, deps = ["sb_types"] }
 
 # L6 — shared vocabulary and seam traits only.
 sb_types = { layer = 6 }
