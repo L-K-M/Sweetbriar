@@ -175,13 +175,19 @@ public final class DraftModel {
         guard await resolveUnknownOutcome(ticket: ticket) else { return }
         guard let content else { return }
         let base = baseRevisionId
-        let key = saveKey(base: base)
         let version = userEditVersion
-        var sent = content
+        // The unresolved intent itself retries verbatim under its own key.
+        let retry = unresolved.flatMap {
+            $0.editVersion == version && $0.baseRevisionId == base ? $0 : nil
+        }
+        let key = retry?.key ?? saveKey(base: base)
+        var sent = retry?.content ?? content
         var began = false
         do {
-            sent = try await withAuthority(content)
-            guard !isStopped, ticket == saveTicket else { return }
+            if retry == nil {
+                sent = try await withAuthority(content)
+                guard !isStopped, ticket == saveTicket else { return }
+            }
             began = true
             let saved = try await source.saveDraft(
                 idempotencyKey: key, draftId: draftId, baseRevisionId: base, content: sent
@@ -196,11 +202,13 @@ public final class DraftModel {
         } catch let error as CoreFailure {
             guard case .conflict(let detail) = error else {
                 guard !isStopped, ticket == saveTicket else { return }
-                if began { recordUnknownOutcome(key, version, base, sent) }
+                if began { recordOutcome(of: error, key, version, base, sent) }
                 failure = error
                 return
             }
             guard !isStopped, ticket == saveTicket else { return }
+            // A committed key replays its receipt, so a conflict proves no commit.
+            unresolved = nil
             conflict = Conflict(
                 draftId: draftId, baseRevisionId: base, content: content, detail: detail
             )
@@ -210,7 +218,7 @@ public final class DraftModel {
             // this path has no result to apply.
         } catch {
             guard !isStopped, ticket == saveTicket else { return }
-            if began { recordUnknownOutcome(key, version, base, sent) }
+            if began { recordOutcome(of: error, key, version, base, sent) }
             failure = error
         }
     }
@@ -220,7 +228,9 @@ public final class DraftModel {
     /// Add a published attachment at the end; nil when nothing is editable.
     @discardableResult
     public func appendAttachment(_ attachment: DraftAttachment) -> Int? {
-        guard var current = editableContent else { return nil }
+        guard var current = editableContent, !Self.holdsHandle(of: attachment, in: current) else {
+            return nil
+        }
         current.attachments.append(attachment)
         update(current)
         return current.attachments.count - 1
@@ -247,10 +257,20 @@ public final class DraftModel {
         {
             attachment = .retained(Self.reference(object, filename, mediaType))
         }
+        guard !Self.holdsHandle(of: attachment, in: current) else { return nil }
         let index = min(max(restoration.index, 0), current.attachments.count)
         current.attachments.insert(attachment, at: index)
         update(current)
         return index
+    }
+
+    /// One handle carries one reservation, so it can appear only once.
+    private static func holdsHandle(of attachment: DraftAttachment, in content: DraftContent) -> Bool {
+        guard case .new(let object, _, _) = attachment else { return false }
+        return content.attachments.contains {
+            guard case .new(let present, _, _) = $0 else { return false }
+            return present === object
+        }
     }
 
     private var editableContent: DraftContent? {
@@ -377,15 +397,40 @@ public final class DraftModel {
             return false
         } catch {
             guard !isStopped, ticket == saveTicket else { return false }
+            guard Self.mayHaveCommitted(error) else {
+                // Refused before any write, so it never committed: drop it.
+                unresolved = nil
+                return true
+            }
             failure = error
             return false
         }
     }
 
-    private func recordUnknownOutcome(
-        _ key: String, _ version: UInt64, _ base: String?, _ sent: DraftContent
+    /// Keep the intent only when its failure may have followed a commit.
+    private func recordOutcome(
+        of error: any Error, _ key: String, _ version: UInt64, _ base: String?,
+        _ sent: DraftContent
     ) {
+        guard Self.mayHaveCommitted(error) else {
+            unresolved = nil
+            return
+        }
         unresolved = PendingSave(key: key, editVersion: version, baseRevisionId: base, content: sent)
+    }
+
+    /// Refusals the core answers before writing prove nothing committed: a
+    /// committed key replays its receipt before validation. Anything else,
+    /// including a lost answer, may have followed a commit.
+    private static func mayHaveCommitted(_ error: any Error) -> Bool {
+        guard let failure = error as? CoreFailure else { return true }
+        switch failure {
+        case .unavailable, .internalError, .corrupt, .locked:
+            return true
+        case .notFound, .needsMigration, .newerStore, .invalidInput, .conflict, .resetRequired,
+            .searchParse:
+            return false
+        }
     }
 
     /// A receipt: the new base, its stored references and spent handles.

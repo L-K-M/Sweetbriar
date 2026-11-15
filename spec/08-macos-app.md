@@ -377,8 +377,12 @@ Neither unsaved text nor a delayed draft save may cross a swap.
   - A save whose answer failed after it began may have committed. Its
     exact intent (key, base and content) is retried before any different
     save: a replay answers the lost receipt, otherwise that older content
-    commits first. A conflict means it never committed. A failure before
-    the save began, such as republication, records no such intent.
+    commits first. A conflict, or another refusal the core answers before
+    writing (invalid input, not found, store version), means it never
+    committed; so does a failure before the save began, such as
+    republication. Those record no such intent. A same-intent retry sends
+    the recorded content unchanged. One published handle appears at most
+    once in the content.
   - M1.9c2a first wires subject and plain/Markdown body editing. Existing
     recipients, route and attachments survive those edits unchanged;
     their editable controls, Drafts navigation and complete native UI

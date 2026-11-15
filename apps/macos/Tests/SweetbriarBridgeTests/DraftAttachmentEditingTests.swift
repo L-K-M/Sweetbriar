@@ -263,10 +263,78 @@ func aRepublicationFailureIsAFailureNotAConflict() async throws {
     #expect(session.model.failure != nil && session.model.conflict == nil && session.model.isDirty)
     #expect(await session.store.saveKeys.count == keysBefore, "no save began without authority")
 
+    // A different intent next: a wrongly recorded intent would be replayed
+    // first and show up as an extra save.
+    var edited = try #require(session.model.content)
+    edited.subject = "Edited after the failure"
+    session.model.update(edited)
     await session.store.failRepublication(nil)
     await session.saveCleanly()
     let keys = await session.store.saveKeys
     #expect(keys.count == keysBefore + 1, "a failure before the save began is not replayed")
+    #expect(try await session.stored().count == 1)
+    await session.finish()
+}
+
+@MainActor
+@Test(.timeLimit(.minutes(1)))
+func aRefusalBeforeAnyWriteIsNotReplayed() async throws {
+    let session = try await Session.open()
+    var invalid = try #require(session.model.content)
+    invalid.to = [DraftRecipient(address: "", name: "Nobody")]
+    session.model.update(invalid)
+    await session.model.save()
+    guard case .invalidInput = try #require(session.model.failure as? CoreFailure) else {
+        Issue.record("an empty address is refused as input")
+        await session.finish()
+        return
+    }
+    var fixed = invalid
+    fixed.to = [DraftRecipient(address: "to@example.test", name: "To")]
+    session.model.update(fixed)
+    await session.saveCleanly("a deterministic refusal must not wedge later saves")
+    let keys = await session.store.saveKeys
+    #expect(keys.count == 2 && keys[0] != keys[1])
+    #expect(
+        try await session.bridge.draft(id: session.draftId).revision?.to.first?.address == "to@example.test")
+    await session.finish()
+}
+
+@MainActor
+@Test(.timeLimit(.minutes(1)))
+func aSameIntentRetrySendsItsRecordedContent() async throws {
+    let session = try await Session.open()
+    let object = try await session.publish("attachment bytes")
+    session.model.appendAttachment(.new(object: object, filename: "a.txt", mediaType: "text/plain"))
+    await session.saveCleanly()
+    let removal = try #require(session.model.removeAttachment(at: 0))
+    await session.saveCleanly()
+    session.model.restoreAttachment(removal)
+    await session.store.loseNextReceipt()
+    await session.model.save()
+    #expect(session.model.failure != nil)
+    #expect(await session.store.republications == 1)
+    await session.saveCleanly()
+    // The retry replays the recorded intent and its republished handle.
+    #expect(await session.store.republications == 1)
+    let keys = await session.store.saveKeys
+    #expect(keys.count == 4 && keys[2] == keys[3])
+    #expect(try await session.stored().count == 1)
+    await session.finish()
+}
+
+@MainActor
+@Test(.timeLimit(.minutes(1)))
+func oneHandleCannotBeInsertedTwice() async throws {
+    let session = try await Session.open()
+    let object = try await session.publish("attachment bytes")
+    let attachment = DraftAttachment.new(object: object, filename: "a.txt", mediaType: "text/plain")
+    #expect(session.model.appendAttachment(attachment) == 0)
+    #expect(session.model.appendAttachment(attachment) == nil)
+    let removal = try #require(session.model.removeAttachment(at: 0))
+    #expect(session.model.restoreAttachment(removal) == 0)
+    #expect(session.model.restoreAttachment(removal) == nil)
+    await session.saveCleanly()
     #expect(try await session.stored().count == 1)
     await session.finish()
 }
