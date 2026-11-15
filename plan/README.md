@@ -88,7 +88,7 @@ Every step has:
   or a manual check. A step is done only when all pass in CI (and, if
   listed, on the owner's Mac).
 - **Runs on:** `linux` (agent and Linux CI), `macos-ci` (only in macOS
-  CI) or `owner` (manual on the owner's Mac).
+  CI) or `owner` (agent-run on the owner's Mac, see below).
 - **Size:** S (under ~300 changed lines), M (~300–800), L (~800–1,450).
   Anything larger is split before starting.
 
