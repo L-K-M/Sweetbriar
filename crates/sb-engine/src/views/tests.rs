@@ -165,3 +165,41 @@ fn a_view_window_equals_its_query_over_the_archive() {
     }
     block_on(engine.shutdown()).unwrap();
 }
+
+#[test]
+fn view_ids_must_be_canonical_uuids() {
+    let (_scratch, engine) = scratch_engine("views-canonical-id");
+    let view_id = save_view(&engine, "Seen mail", ViewSort::DateDesc);
+    let spellings = [
+        view_id.to_uppercase(),
+        view_id.replace('-', ""),
+        format!("{{{view_id}}}"),
+        "not-a-uuid".to_owned(),
+        String::new(),
+    ];
+    for spelling in spellings {
+        let upsert = block_on(engine.upsert_saved_view(
+            &engine.new_idempotency_key(),
+            SavedViewParams {
+                view_id: Some(spelling.clone()),
+                name: "Renamed".to_owned(),
+                query_json: SEEN.to_owned(),
+                sort: ViewSort::DateDesc,
+            },
+        ));
+        match upsert {
+            Err(EngineError::InvalidInput { field, .. }) if field == "view_id" => {}
+            other => panic!("upsert {spelling:?}: expected InvalidInput, got {other:?}"),
+        }
+        let delete = block_on(engine.delete_saved_view(&engine.new_idempotency_key(), &spelling));
+        match delete {
+            Err(EngineError::InvalidInput { field, .. }) if field == "view_id" => {}
+            other => panic!("delete {spelling:?}: expected InvalidInput, got {other:?}"),
+        }
+    }
+    let listed = block_on(engine.saved_views()).unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].view_id, view_id);
+    assert_eq!(listed[0].name, "Seen mail");
+    block_on(engine.shutdown()).unwrap();
+}

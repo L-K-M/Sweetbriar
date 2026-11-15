@@ -80,12 +80,7 @@ impl Engine {
         view_id: &str,
     ) -> Result<Receipt, EngineError> {
         validate_idempotency_key(idempotency_key)?;
-        if view_id.is_empty() {
-            return Err(EngineError::invalid_input(
-                "view_id",
-                "a saved view id is required",
-            ));
-        }
+        valid_view_id(view_id)?;
         let now = self.resources().now();
         let (key, id) = (idempotency_key.to_owned(), view_id.to_owned());
         self.command(move |worker| async move {
