@@ -306,8 +306,8 @@ async fn Core::shutdown(self);   // flush writer, release the lease
   without following a symbolic link, refuses non-regular files without
   blocking on devices or pipes, and streams the opened file through the
   same durable publication and reservation path as byte publication. It
-  does not load the whole file into memory. An invalid path or opened
-  non-file is an explicit input failure; a rejected symbolic link,
+  does not load the whole file into memory. An invalid path, a rejected
+  symbolic link or an opened non-file is an explicit input failure; an
   unreadable or disappearing file is an explicit I/O failure. A file that
   shrinks or grows while it streams is an explicit I/O failure; the
   publication never commits a torn copy. Once begun, cancellation or a
