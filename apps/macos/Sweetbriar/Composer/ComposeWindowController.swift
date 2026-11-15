@@ -44,6 +44,15 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
             prepareInput: { [weak self] in await self?.prepareIdentityInput() ?? false },
             changed: { [weak self] in self?.identityChanged($0) })
     }()
+    let publications: DraftAttachmentPublications
+    private(set) lazy var attachmentControls: ComposeAttachmentControls = {
+        guard let window else { preconditionFailure("the compose window is installed before its controls") }
+        return ComposeAttachmentControls(
+            model: model, publications: publications, window: window,
+            admitted: { [weak self] in self?.canAttach == true },
+            changed: { [weak self] in self?.attachmentsChanged() },
+            breakCoalescing: { [weak self] in self?.textView.breakUndoCoalescing() })
+    }()
     private var loadTask: Task<Void, Never>?
     private var closing: Task<Bool, Never>?
     private var closeIntent: CloseMode?
@@ -68,7 +77,9 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         self.canWrite = canWrite
         catalogSource = source
         self.preferredAccountId = preferredAccountId
-        model = DraftModel(source: ComposeSavePolicy(source: source, canWrite: canWrite), draftId: draftId)
+        let policy = ComposeSavePolicy(source: source, canWrite: canWrite)
+        model = DraftModel(source: policy, draftId: draftId)
+        publications = DraftAttachmentPublications(model: model, source: policy)
         toRecipients = RecipientField(label: "To", source: source)
         ccRecipients = RecipientField(label: "Cc", source: source)
         bccRecipients = RecipientField(label: "Bcc", source: source)
@@ -122,6 +133,7 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         subjectField.delegate = self
         textView.delegate = self
         textView.setAccessibilityIdentifier("composeBody")
+        textView.fileDropHandler = { [weak self] urls in self?.attachmentControls.attach(urls) ?? false }
         modeControl.target = self
         modeControl.action = #selector(modeChanged)
         saveButton.target = self
@@ -143,7 +155,9 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         send.isEnabled = false
         send.toolTip = "Sending is not available yet. You can save a local draft without a sending account."
         send.setAccessibilityIdentifier("composeSend")
-        let controls = NSStackView(views: [modeControl, saveButton, send, abandonButton])
+        let controls = NSStackView(views: [
+            modeControl, attachmentControls.attachButton, saveButton, send, abandonButton,
+        ])
         controls.spacing = 8
         let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 640, height: 340))
         scroll.hasVerticalScroller = true
@@ -165,7 +179,7 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         textView.textContainer?.widthTracksTextView = true
         let stack = NSStackView(
             views: [identity as NSView] + recipientRows + [
-                subjectField, controls, scroll, statusLabel, cueStatusLabel,
+                subjectField, attachmentControls.list, controls, scroll, statusLabel, cueStatusLabel,
             ])
         stack.orientation = .vertical
         stack.alignment = .leading
@@ -186,6 +200,7 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
             stack.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -12),
             identity.widthAnchor.constraint(equalTo: stack.widthAnchor),
             subjectField.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            attachmentControls.list.widthAnchor.constraint(equalTo: stack.widthAnchor),
             scroll.widthAnchor.constraint(equalTo: stack.widthAnchor),
             scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 120),
             statusLabel.widthAnchor.constraint(equalTo: stack.widthAnchor),
@@ -231,6 +246,15 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
     }
 
     private var canChangeIdentity: Bool { !finished && !isClosing && model.content != nil }
+    private var canAttach: Bool {
+        canChangeIdentity && canWrite() && abandonAlert == nil && !identityControls.isDeciding
+    }
+
+    private func attachmentsChanged() {
+        guard !finished else { return }
+        if !isClosing, abandonAlert == nil, !identityControls.isDeciding { autosave.contentDidChange() }
+        render()
+    }
     private var identityInputReady: Bool {
         canChangeIdentity && !recipientFields.contains(where: \.isPending)
             && !textView.hasMarkedText()
@@ -379,14 +403,18 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
             }
             captureEdit()
         } else {
-            // Fence an unbegun deadline before scheduling the drain task.
+            // Fence an unbegun deadline and publications before scheduling
+            // the drain task; a begun publication's result is dropped.
             autosave.stop()
+            attachmentControls.stop()
         }
         closeIntent = mode
         identityControls.cancelDecision()
         render()
         let task = Task { [self] in
             await loadTask?.value
+            // A file that finishes publishing now joins the final save.
+            if mode == .save { await publications.settle() }
             if mode == .save, model.content != nil, !(await autosave.flush()) {
                 closeIntent = nil
                 closing = nil
@@ -394,6 +422,7 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
                 render()
                 return false
             }
+            await attachmentControls.stopAndWait()
             await autosave.stopAndWait()
             for field in recipientFields { await field.stopAndWait() }
             await identityControls.stopAndWait()
@@ -422,6 +451,7 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
             _ = model.baseRevisionId
             _ = model.failure
             _ = model.conflict
+            _ = publications.publications.count
             _ = canWrite()
         } onChange: { [weak self] in
             Task { @MainActor [weak self] in
@@ -531,6 +561,7 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         modeControl.isEnabled = editable
         for field in recipientFields { field.control.isEditable = editable }
         saveButton.isEnabled = editable && canWrite() && !model.isSaving && model.conflict == nil
+        attachmentControls.render()
         abandonButton.isEnabled = !isClosing && !finished
         if let content = model.content, !model.isDirty, !textView.hasMarkedText() {
             if !subjectField.stringValue.utf8.elementsEqual(content.subject.utf8) {

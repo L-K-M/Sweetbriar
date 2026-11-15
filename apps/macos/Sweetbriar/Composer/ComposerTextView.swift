@@ -57,6 +57,32 @@ final class ComposerTextView: NSTextView {
         }
     }
 
+    /// Receives files dropped on the editor (spec/08 "Attachments"), so
+    /// they attach instead of inserting their paths as text. Nil keeps
+    /// AppKit's own drop handling (the composer probe).
+    var fileDropHandler: (@MainActor ([URL]) -> Bool)?
+
+    private func droppedFiles(_ sender: any NSDraggingInfo) -> [URL]? {
+        guard fileDropHandler != nil else { return nil }
+        let urls = ComposeAttachmentControls.fileURLs(on: sender.draggingPasteboard)
+        return urls.isEmpty ? nil : urls
+    }
+
+    override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
+        droppedFiles(sender) == nil ? super.draggingEntered(sender) : .copy
+    }
+
+    override func draggingUpdated(_ sender: any NSDraggingInfo) -> NSDragOperation {
+        droppedFiles(sender) == nil ? super.draggingUpdated(sender) : .copy
+    }
+
+    override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+        guard let urls = droppedFiles(sender), let fileDropHandler else {
+            return super.performDragOperation(sender)
+        }
+        return fileDropHandler(urls)
+    }
+
     /// Whether the view still runs TextKit 2 — the probe window's
     /// status line reads it, and the tests assert it stays true.
     /// `false` means a TextKit 1 API slipped in and forced
