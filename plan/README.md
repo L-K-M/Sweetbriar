@@ -58,6 +58,11 @@ is unchanged.
   as tested code but is no longer the Proton path. The spec and the
   M2–M5 plans are revised in their own PR, spec first; until then, do
   not start Bridge-specific steps (M2.3 onward, M2.8).
+  Proton offers no registered third-party client programme: its terms
+  tolerate automated access only while it looks like a standard client,
+  and it may block such access without recourse. Sweetbriar identifies
+  itself honestly and never impersonates a Proton client
+  ([research/proton-api](../research/proton-api/README.md)).
 - **Right-size steps; run lanes in parallel.** See "Sizing" and
   "Lanes" below.
 
