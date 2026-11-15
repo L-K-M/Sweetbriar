@@ -4,12 +4,14 @@
 //! `foreign_key_check` and `quick_check` before it commits.
 
 use std::io;
+use std::path::{Path, PathBuf};
 
 use rusqlite::Connection;
 use rusqlite::Transaction;
 use rusqlite::TransactionBehavior;
 use rusqlite::ffi::ErrorCode;
 use rusqlite::params;
+use sb_types::fs::Fs;
 use sb_types::id::Uuid;
 
 use crate::Seams;
@@ -30,6 +32,17 @@ pub(crate) struct Migration {
     pub(crate) run: fn(&Transaction, &Seams) -> Result<(), StoreError>,
 }
 
+/// The migrations that rewrite or drop data and so take the
+/// `VACUUM INTO` snapshot first (spec/02 "Migrations"). Migration 28 is
+/// the first; migration 1 has none.
+const SNAPSHOTTED_MIGRATIONS: &[u32] = &[28];
+
+/// The migrations that rebuild a table and so run their transaction
+/// with `foreign_keys` off, since the pragma cannot change inside one
+/// (spec/02 "Migrations"); the in-transaction `foreign_key_check`
+/// still verifies the result.
+const FOREIGN_KEYS_OFF_MIGRATIONS: &[u32] = &[28];
+
 /// The production migration list, in order. Version 1 creates schema
 /// v1 (spec/02, spec/06); version 2 adds durable imports; version 3
 /// starts the list projection; version 4 keeps thread membership;
@@ -40,7 +53,9 @@ pub(crate) struct Migration {
 /// version 13 indexes what driven Search reads enumerate; version 14 keys
 /// exact addresses per source and indexes what address drivers enumerate;
 /// version 15 indexes representatives by date for Search walks; version 16
-/// indexes accounts' and mailboxes' rows by occurrence for them.
+/// indexes accounts' and mailboxes' rows by occurrence for them; version 28
+/// adds the Proton account schema and rebuilds the three tables whose CHECK
+/// values it extends.
 pub(crate) const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 1,
@@ -150,6 +165,10 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 27,
         run: migration_27,
     },
+    Migration {
+        version: 28,
+        run: migration_28,
+    },
 ];
 
 /// The `store_meta` keys every migrated store holds (spec/02): a
@@ -177,6 +196,11 @@ pub(crate) fn run_migrations(
 
     let mut ran = false;
     for migration in migrations.iter().filter(|m| m.version as i64 > current) {
+        // The snapshot precedes the transaction that rewrites data, so a
+        // failed snapshot leaves the store untouched (spec/02).
+        if SNAPSHOTTED_MIGRATIONS.contains(&migration.version) {
+            snapshot_before_migration(conn, seams, migration.version)?;
+        }
         apply(conn, migration, seams)?;
         ran = true;
     }
@@ -410,7 +434,30 @@ fn check_ordered(migrations: &[Migration]) -> Result<u32, StoreError> {
 /// transaction — `foreign_key_check` and `quick_check`. A finding
 /// rolls back (the dropped transaction does it) and is `Corrupt`,
 /// naming the migration and the first finding; a clean run commits.
+/// A table-rebuilding migration runs with `foreign_keys` off (the
+/// pragma can't change inside a transaction); the in-transaction
+/// `foreign_key_check` still verifies the rebuilt rows.
 fn apply(conn: &mut Connection, migration: &Migration, seams: &Seams) -> Result<(), StoreError> {
+    let foreign_keys_off = FOREIGN_KEYS_OFF_MIGRATIONS.contains(&migration.version);
+    if foreign_keys_off {
+        conn.execute_batch("PRAGMA foreign_keys = OFF")
+            .map_err(step_err)?;
+    }
+    let outcome = apply_transaction(conn, migration, seams);
+    if foreign_keys_off {
+        conn.execute_batch("PRAGMA foreign_keys = ON")
+            .map_err(step_err)?;
+    }
+    outcome
+}
+
+/// The transaction [`apply`] wraps a migration in, with the pragma
+/// state the migration asked for.
+fn apply_transaction(
+    conn: &mut Connection,
+    migration: &Migration,
+    seams: &Seams,
+) -> Result<(), StoreError> {
     let tx = conn
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(step_err)?;
@@ -432,6 +479,102 @@ fn apply(conn: &mut Connection, migration: &Migration, seams: &Seams) -> Result<
         &format!("migration {}'s quick_check", migration.version),
     )?;
     tx.commit().map_err(step_err)
+}
+
+/// The `VACUUM INTO` snapshot a rewriting migration takes first
+/// (spec/02 "Migrations", spec/03): a fresh file under `recovery/`
+/// beside the database, keeping the last two. A failure is
+/// `Unavailable` and leaves the store untouched, since the
+/// migration's transaction has not begun. An in-memory database has
+/// no file to preserve, so it takes none.
+fn snapshot_before_migration(
+    conn: &Connection,
+    seams: &Seams,
+    version: u32,
+) -> Result<(), StoreError> {
+    // An in-memory database (`conn.path()` answers `Some("")`) has
+    // no file to preserve, so it takes no snapshot.
+    let Some(state_db) = conn.path().filter(|path| !path.is_empty()) else {
+        return Ok(());
+    };
+    let recovery = Path::new(state_db)
+        .parent()
+        .ok_or_else(|| {
+            StoreError::internal("the store database has no parent directory for recovery/")
+        })?
+        .join("recovery");
+    // Open creates `recovery/` with the other layout directories; a
+    // migration runner on a bare database still needs it, and a
+    // missing directory would fail the snapshot for a reason that has
+    // nothing to do with the data.
+    let fs = seams.fs();
+    let dir_err = |e: io::Error| {
+        StoreError::unavailable_io(
+            format!("cannot create {}: {e}", recovery.display()),
+            e.kind(),
+        )
+    };
+    if fs.metadata(&recovery).map_err(dir_err)?.is_none() {
+        fs.create_dir(&recovery).map_err(dir_err)?;
+    }
+    let target = recovery.join(snapshot_name(seams)?);
+    let escaped = target.to_string_lossy().replace('\'', "''");
+    conn.execute_batch(&format!("VACUUM INTO '{escaped}'"))
+        .map_err(|e| classify(e, &format!("migration {version}'s VACUUM INTO snapshot")))?;
+    retain_snapshots(seams.fs(), &recovery)
+}
+
+/// `pre-migration-<millis>-<8 hex>.sqlite` (spec/03): the clock orders
+/// snapshots in production, the random suffix keeps one millisecond's
+/// names distinct.
+fn snapshot_name(seams: &Seams) -> Result<String, StoreError> {
+    let mut bytes = [0u8; 4];
+    seams.random().fill(&mut bytes).map_err(|e| {
+        StoreError::unavailable_io(
+            format!("cannot read randomness for a migration snapshot name: {e}"),
+            e.kind(),
+        )
+    })?;
+    let suffix = bytes
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    Ok(format!(
+        "pre-migration-{}-{suffix}.sqlite",
+        seams.clock().now().as_millis()
+    ))
+}
+
+/// Keep the newest two snapshots, removing the rest. A removal failure
+/// is `Unavailable`: the new snapshot is already safe, but the
+/// retention rule can't be left half-done.
+fn retain_snapshots(fs: &dyn Fs, recovery: &Path) -> Result<(), StoreError> {
+    const PREFIX: &str = "pre-migration-";
+    const SUFFIX: &str = ".sqlite";
+    let err = |e: io::Error| {
+        StoreError::unavailable_io(format!("cannot list {}: {e}", recovery.display()), e.kind())
+    };
+    let mut snapshots: Vec<PathBuf> = fs
+        .read_dir(recovery)
+        .map_err(err)?
+        .into_iter()
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with(PREFIX) && name.ends_with(SUFFIX))
+        })
+        .collect();
+    snapshots.sort();
+    let excess = snapshots.len().saturating_sub(2);
+    for path in &snapshots[..excess] {
+        fs.remove(path).map_err(|e| {
+            StoreError::unavailable_io(
+                format!("cannot remove the old snapshot {}: {e}", path.display()),
+                e.kind(),
+            )
+        })?;
+    }
+    Ok(())
 }
 
 /// The table of the first row `PRAGMA foreign_key_check` returns —
@@ -840,6 +983,16 @@ fn migration_27(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
            AND (verification IS NULL OR verification IN ('intact','damaged','missing')));",
     )
     .map_err(bug)
+}
+
+/// Version 28 (spec/02 "Proton accounts"): the Proton migration. It
+/// rebuilds `accounts`, `acquisition_sources` and `intents` for their
+/// new `CHECK` values, adds `mailboxes.provider_key`, and creates the
+/// two Proton tables. The runner snapshots first and runs the
+/// transaction with `foreign_keys` off.
+fn migration_28(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
+    tx.execute_batch(include_str!("schema/v28.sql"))
+        .map_err(bug)
 }
 
 /// One version-4 UUID from the randomness seam. A seam that can't

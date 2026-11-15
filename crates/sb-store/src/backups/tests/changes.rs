@@ -237,6 +237,10 @@ fn a_store_migrating_in_starts_due() {
          DROP TABLE maintenance_jobs;
          ALTER TABLE backup_generations DROP COLUMN verification;
          ALTER TABLE backup_generations DROP COLUMN verified_at;
+         DROP TABLE proton_accounts;
+         DROP TABLE proton_body_failures;
+         DROP INDEX mailboxes_provider_key;
+         ALTER TABLE mailboxes DROP COLUMN provider_key;
          PRAGMA user_version = 24;",
     );
 

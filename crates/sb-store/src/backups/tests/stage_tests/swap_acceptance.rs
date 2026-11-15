@@ -171,7 +171,15 @@ fn back_up_restore_restart_and_back_up_again_keeps_the_generation() {
     let StagingSource {
         _scratch, store, ..
     } = source;
-    let seams = crate::testing::test_seams(real_fs());
+    // An hour later than the fixture clock, so the second generation
+    // lands in a different retention hour and both survive (spec/03).
+    let seams = crate::Seams::new(
+        real_fs(),
+        Arc::new(FixedClock::new(Timestamp::from_millis(
+            crate::testing::FIXED_NOW_MS + 3_600_000,
+        ))),
+        Arc::new(SeededRandom::new(42)),
+    );
 
     let mut phases = Vec::new();
     let restored = store
