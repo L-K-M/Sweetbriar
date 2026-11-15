@@ -79,6 +79,20 @@ async fn Core::shutdown(self);   // flush writer, release the lease
   that names a query window and its generation.
   The native selection query below materializes exact membership for later
   command adapters; it introduces no export command or durable receipt.
+- **Views:** `upsert_saved_view(params)` takes an optional `view_id`
+  (`None` creates), a name, the canonical v1 query JSON (06) and a
+  `sort`; `delete_saved_view(id)` removes one, `NotFound` when
+  unknown. `saved_views()` lists them in sidebar order (new views
+  append). `View(id)` runs its stored AST through the same checked
+  Search machinery as `Search`, so its results equal its query's.
+  `date_desc` and `relevance` are the pilot's sorts; `date_asc` stays
+  reserved, and saving it is `InvalidInput` on `sort`.
+- **Tags and notes:** `add_tag(selection, tag)` takes a tag name,
+  creating the definition when it is new; `remove_tag` detaches it and
+  keeps the definition (02 rule 8). Both attach to the selected
+  occurrences' logical messages and are local only, so they survive an
+  occurrence vanishing. `set_note(message_id, text)` writes Markdown,
+  one note per message; empty text removes it.
 - **Export capture ledger (M1.7b2a):** `cancel_job` dispatches kept export
   IDs separately from imports and Search rebuilds. Cancellation durably
   marks an unfinished capture `cancelled`; a terminal export is `Conflict`.

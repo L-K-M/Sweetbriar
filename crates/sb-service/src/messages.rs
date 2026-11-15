@@ -1,6 +1,6 @@
-//! Reader metadata DTOs and short read-only queries (spec/07, spec/08).
+//! Reader metadata DTOs, tag/note commands and queries (spec/07).
 
-use crate::{Core, CoreError};
+use crate::{Core, CoreError, Receipt};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BodyAvailability {
@@ -39,6 +39,33 @@ pub struct ReaderTag {
     pub tag_id: String,
     pub name: String,
     pub color_srgb: Option<String>,
+}
+
+/// A message selection (spec/07): up to 1,000 explicit occurrence
+/// ids, or one open window's rows at the generation its caller holds.
+/// Tags resolve to logical messages, not occurrences.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MessageSelection {
+    /// Explicit occurrence ids.
+    OccurrenceIds(Vec<i64>),
+    /// An open window's rows at `generation`; a stale generation is
+    /// `ResetRequired`.
+    Window { window_id: u64, generation: u64 },
+}
+
+impl MessageSelection {
+    fn into_engine(self) -> sb_engine::MessageSelection {
+        match self {
+            Self::OccurrenceIds(ids) => sb_engine::MessageSelection::OccurrenceIds(ids),
+            Self::Window {
+                window_id,
+                generation,
+            } => sb_engine::MessageSelection::Window {
+                window_id,
+                generation,
+            },
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -115,5 +142,50 @@ impl Core {
     /// Resolve the selected occurrence; unknown occurrences are `NotFound`.
     pub async fn message_for_occurrence(&self, occurrence_id: i64) -> Result<i64, CoreError> {
         Ok(self.engine().message_for_occurrence(occurrence_id).await?)
+    }
+
+    /// `add_tag(selection, tag)` (spec/07 Messages): attach the named
+    /// tag, creating the definition when the name is new.
+    pub async fn add_tag(
+        &self,
+        idempotency_key: &str,
+        selection: MessageSelection,
+        tag: &str,
+    ) -> Result<Receipt, CoreError> {
+        let receipt = self
+            .engine()
+            .add_tag(idempotency_key, selection.into_engine(), tag)
+            .await?;
+        Ok(Receipt::from_engine(&receipt))
+    }
+
+    /// `remove_tag(selection, tag)` (spec/07 Messages): detach the
+    /// named tag; the definition stays.
+    pub async fn remove_tag(
+        &self,
+        idempotency_key: &str,
+        selection: MessageSelection,
+        tag: &str,
+    ) -> Result<Receipt, CoreError> {
+        let receipt = self
+            .engine()
+            .remove_tag(idempotency_key, selection.into_engine(), tag)
+            .await?;
+        Ok(Receipt::from_engine(&receipt))
+    }
+
+    /// `set_note(message_id, text)` (spec/07 Messages): one note per
+    /// message; empty text removes it.
+    pub async fn set_note(
+        &self,
+        idempotency_key: &str,
+        message_id: i64,
+        text: &str,
+    ) -> Result<Receipt, CoreError> {
+        let receipt = self
+            .engine()
+            .set_note(idempotency_key, message_id, text)
+            .await?;
+        Ok(Receipt::from_engine(&receipt))
     }
 }

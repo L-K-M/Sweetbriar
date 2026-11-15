@@ -150,7 +150,7 @@ pub use sb_store::lists::{
 pub use sb_store::messages::{
     BodyAvailability, MAX_READER_HEADER_BYTES, MAX_READER_MESSAGE_BYTES, ReaderAddress,
     ReaderHeaders, ReaderMessage, ReaderOccurrence, ReaderTag, StoredAcquisition, best_acquisition,
-    get_message, message_for_occurrence,
+    get_message, message_for_occurrence, messages_for_occurrences,
 };
 pub use sb_store::query::{
     Kept, MAX_QUERY_INPUT_BYTES, ParseCode, ParseContext, Query, QueryCounts, QueryError,
@@ -163,10 +163,14 @@ pub use sb_store::sidebar::{
     AccountKind, AccountState, MailboxKind, MailboxList, StoredAccount, StoredMailbox, accounts,
     mailboxes,
 };
+pub use sb_store::tags::{add_tag, remove_tag, set_note};
 pub use sb_store::threads::{
     StoredThread, ThreadDescription, ThreadRevisions, ThreadSource, assign_thread, create_thread,
     describe_thread, mark_threads_built, note_membership_change, remove_empty_threads,
     remove_thread, stored_threads, thread_memberships, thread_revisions, thread_sources,
+};
+pub use sb_store::views::{
+    SavedView, ViewSort, delete_saved_view, saved_view, saved_views, upsert_saved_view,
 };
 pub use sb_store::{
     AppearanceObserver, ExportMetadata, ImportSourceSnapshot, ListObserver, PublishedObject,

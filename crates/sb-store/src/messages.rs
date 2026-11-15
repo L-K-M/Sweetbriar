@@ -1,8 +1,9 @@
 //! Reader metadata in a short snapshot, with object I/O performed afterward.
 
+use std::collections::HashMap;
 use std::io::Read;
 
-use rusqlite::{Connection, OptionalExtension, Row, Transaction};
+use rusqlite::{Connection, OptionalExtension, Row, Transaction, params_from_iter};
 use serde_json::Value;
 
 use crate::message_source::{self, MESSAGES, Source};
@@ -108,6 +109,40 @@ pub fn message_for_occurrence(tx: &Transaction, occurrence: i64) -> Result<i64, 
     .optional()
     .map_err(sql_error)?
     .ok_or_else(|| StoreError::not_found(format!("occurrence {occurrence}")))
+}
+
+/// Resolve occurrence ids to logical messages in one short read,
+/// preserving order (`NotFound` names an unknown id). Tags and notes
+/// attach to the message (spec/02).
+pub fn messages_for_occurrences(
+    tx: &Transaction,
+    occurrence_ids: &[i64],
+) -> Result<Vec<i64>, StoreError> {
+    if occurrence_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let placeholders = vec!["?"; occurrence_ids.len()].join(", ");
+    let sql = format!(
+        "SELECT occurrence_id, message_id FROM occurrences
+         WHERE occurrence_id IN ({placeholders})"
+    );
+    let mut statement = tx.prepare(&sql).map_err(sql_error)?;
+    let found = statement
+        .query_map(params_from_iter(occurrence_ids), |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
+        })
+        .map_err(sql_error)?
+        .collect::<Result<HashMap<i64, i64>, _>>()
+        .map_err(sql_error)?;
+    occurrence_ids
+        .iter()
+        .map(|id| {
+            found
+                .get(id)
+                .copied()
+                .ok_or_else(|| StoreError::not_found(format!("occurrence {id}")))
+        })
+        .collect()
 }
 
 /// Metadata only: no file I/O or long-lived reader transaction (spec/03, 07).

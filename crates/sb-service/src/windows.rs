@@ -24,6 +24,9 @@ pub enum WindowSpec {
     Thread(i64),
     /// Checked query results with same-snapshot Search status.
     Search(SearchSpec),
+    /// A saved view's query results, resolved when the window opens
+    /// (spec/07 Views).
+    View(String),
 }
 
 impl WindowSpec {
@@ -35,6 +38,7 @@ impl WindowSpec {
             Self::Flagged => sb_engine::WindowSpec::Flagged,
             Self::Thread(id) => sb_engine::WindowSpec::Thread(id),
             Self::Search(spec) => sb_engine::WindowSpec::Search(spec.into_engine()),
+            Self::View(view_id) => sb_engine::WindowSpec::View(view_id),
         }
     }
 }

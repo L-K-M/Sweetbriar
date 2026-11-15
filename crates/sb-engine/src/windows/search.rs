@@ -39,6 +39,14 @@ impl SearchSpec {
         }
     }
 
+    pub(crate) fn from_query(query: Query, scope: SearchScope, sort: SearchSort) -> Self {
+        Self {
+            query: SearchQuery::Validated(Arc::new(query)),
+            scope,
+            sort,
+        }
+    }
+
     fn prepare(mut self) -> Result<Self, EngineError> {
         self.scope.stored()?;
         self.query = match self.query {

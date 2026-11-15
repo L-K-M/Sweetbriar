@@ -7,25 +7,25 @@ is met.
 
 ### M6.1 Saved views, tags and notes — M, linux + macos-ci
 
-- **Goal:** saved views (smart mailboxes) from any query, plus private
-  tags and notes.
-- **Spec:** 02 (`saved_views`, `tags`, `message_tags`, `notes`), 06
-  (Query AST), 07 (Views, Messages commands).
-- **Depends on:** M5 complete.
-- **Deliverables:**
-  - in the core: `upsert_saved_view`, `delete_saved_view`, the `View`
-    window spec, tag and note commands;
-  - macOS:
-    - "Save search as view";
-    - views in the sidebar;
-    - a tag picker;
-    - a note editor in the reader header.
-- **Acceptance:**
-  - a view's results equal those of its query;
-  - tags and notes survive the message vanishing from the server, and
-    restore;
-  - they are never sent to the server (trace);
-  - export includes them in the manifest.
+**M6.1a (core) — M, linux.** `upsert_saved_view`, `delete_saved_view`,
+`saved_views()`, the `View(id)` window spec, `add_tag`, `remove_tag`
+and `set_note`, through `sb-store`, `sb-engine` and `sb-service`.
+- **Spec:** 02 (`saved_views`, `tags`, `message_tags`, `notes`), 06,
+  07 (Views, Messages).
+- **Depends on:** the local archive only (M1.6, M1.8); the "never
+  sent" trace waits for a remote backend (M2+).
+- **Acceptance:** a view's results equal its query; tags and notes
+  survive occurrence vanishing and restore; export includes them (09,
+  capture format 1); commands are idempotent under replay.
+
+**M6.1b (FFI and macOS) — M, macos-ci.** Bindings plus "Save search
+as view", sidebar views, a tag picker and a reader note editor.
+- **Spec:** 02, 07, 08 (reader header, sidebar).
+- **Depends on:** M6.1a; the "never sent" trace also needs a remote
+  backend (M2+).
+- **Acceptance:** saving a search lists its rows under the new view;
+  the picker applies and removes a tag; the note editor saves and
+  clears the note; nothing is sent (trace).
 
 ### M6.2 Account colors complete — M, macos-ci + owner
 

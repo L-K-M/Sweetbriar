@@ -42,11 +42,13 @@ pub mod sidebar;
 mod source_snapshots;
 mod store;
 pub mod sync;
+pub mod tags;
 #[cfg(test)]
 mod testing;
 pub mod threads;
 mod validation_scratch;
 mod verification;
+pub mod views;
 mod writer;
 
 // The seam vocabulary sb-types owns (spec/01 rules 2 and 3), re-exported
@@ -91,8 +93,12 @@ pub use settings::{StoredSetting, read_all, upsert};
 pub use source_snapshots::{ImportSourceCapture, ImportSourceSnapshot};
 pub use store::SwapRestoreError;
 pub use store::{ReadOnlyStore, Seams, Store, await_write, open, open_read_only};
+pub use tags::{add_tag, remove_tag, set_note};
 pub use validation_scratch::{RegistryFile, ValidationFile, ValidationScratch, ValidationTape};
 pub use verification::{SAMPLE_BUCKETS, SampleReport};
+pub use views::{
+    SavedView, ViewSort, delete_saved_view, saved_view, saved_views, upsert_saved_view,
+};
 
 #[cfg(feature = "test-seams")]
 pub use list_rows::refresh_list_rows;
