@@ -185,6 +185,18 @@ private func withNativeIdentity(
     try result.get()
 }
 
+@MainActor
+private final class PopupAppearanceFlip {
+    let popup: NSPopUpButton
+    var fired = false
+    init(_ popup: NSPopUpButton) { self.popup = popup }
+    func flipDuringSecondIdentity() {
+        guard !fired, popup.numberOfItems >= 3 else { return }
+        fired = true
+        popup.appearance = NSAppearance(named: .darkAqua)
+    }
+}
+
 private actor NativeStripAppearanceSource: AppearanceSource {
     private var mark = "W"
     private var lightMarker = sampleAccount.tokens.light.markerSrgb
@@ -321,6 +333,37 @@ struct ComposeIdentityNativeTests {
             controller.identityControls.render()
             #expect(popup.itemArray.allSatisfy { $0.image == nil })
             #expect((popup.selectedItem?.representedObject as? String) == "a")
+        }
+    }
+
+    @Test func appearanceChangesDuringMenuRebuildAreNotLost() async throws {
+        let source = NativeStripAppearanceSource()
+        let appearance = AppearanceModel(source: source)
+        await appearance.refresh()
+        try await withNativeIdentity(appearance: appearance) { controller, _ in
+            let popup = controller.identityControls.popup
+            popup.appearance = NSAppearance(named: .aqua)
+            try #require(
+                await identityEventually {
+                    popup.itemArray.contains { ($0.representedObject as? String) == "b" && $0.image != nil }
+                })
+            let menu = try #require(popup.menu)
+            let probe = PopupAppearanceFlip(popup)
+            let observer = NotificationCenter.default.addObserver(
+                forName: NSMenu.didAddItemNotification, object: menu, queue: nil
+            ) { _ in
+                MainActor.assumeIsolated { probe.flipDuringSecondIdentity() }
+            }
+            defer { NotificationCenter.default.removeObserver(observer) }
+            controller.identityControls.render()
+            try #require(probe.fired)
+            try #require(
+                await identityEventually {
+                    guard let image = popup.selectedItem?.image,
+                        let color = try? swatchPixel(image, x: 0.5, y: 0.5)
+                    else { return false }
+                    return abs(color.redComponent - 0x56 / 255.0) < 0.02
+                })
         }
     }
 

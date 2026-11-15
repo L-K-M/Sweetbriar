@@ -39,6 +39,7 @@ final class ComposeIdentityControls: NSObject {
     private var stopped = false
     private var alert: NSAlert?
     private var rendering = false
+    private var renderPending = false
     private var swatches: [IdentitySwatch.Key: NSImage] = [:]
 
     init(
@@ -201,9 +202,21 @@ final class ComposeIdentityControls: NSObject {
     }
 
     func render() {
-        guard !rendering else { return }
+        guard !rendering else {
+            renderPending = true
+            return
+        }
         rendering = true
-        defer { rendering = false }
+        defer {
+            rendering = false
+            if renderPending {
+                renderPending = false
+                Task { @MainActor [weak self] in
+                    guard let self, !stopped else { return }
+                    render()
+                }
+            }
+        }
         let selected = draft.content?.identityId
         var currentSwatches: [IdentitySwatch.Key: NSImage] = [:]
         popup.removeAllItems()
