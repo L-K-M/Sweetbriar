@@ -59,20 +59,17 @@ as view", sidebar views, a tag picker and a reader note editor.
     quotes, lists, links, images), with source-part references; a
     positive structure detector, with sender layout otherwise. This
     step.
-  - **M6.3b1 (service, FFI and corpus tool):** the reading-document
-    query and its service and FFI DTOs, plus `cargo xtask
-    reading-corpus`, a local tool that runs the model over the owner's
-    own mail and prints counts only. Re-sized 2026-11-15: the complete
-    artifact measures 5,132 gross changed lines including generated
-    bindings and tests, over the 1,450-line limit (the new `Reading*`
-    Swift types sort mid-file, so regeneration shifts every later
-    type). This commit delivers the service query and the corpus tool;
-    the FFI export and regenerated bindings follow.
-  - **M6.3b2 (reader toggle with per-sender memory, owner corpus
-    review):** the reader toggle with per-sender memory; the owner runs
-    the corpus tool on their own mail and reviews the flagged critical
-    failures. Results summary only goes in
-    `plan/qualification/M6-reading.md`.
+  - **M6.3b1 (query and corpus tool):** the reading-document query
+    with its service DTOs, plus `cargo xtask reading-corpus`, a local
+    tool that runs the model over the owner's own mail and prints
+    counts only.
+  - **M6.3b2 (FFI and reader toggle):** the FFI export and bindings;
+    the reader toggle with per-sender memory. Split from M6.3b1
+    2026-11-15: together they measure about 1,620 hand-written lines
+    before the Swift toggle.
+  - **Owner corpus review:** the owner runs the corpus tool on their
+    own mail and reviews the flagged critical failures. Results summary
+    only goes in `plan/qualification/M6-reading.md`.
 - **Acceptance:**
   - **M6.3a:** fixtures with tables, receipts or complex layout are
     classified unsupported; plain text with quotes and lists and simple
@@ -81,7 +78,8 @@ as view", sidebar views, a tag picker and a reader note editor.
   - **M6.3b1:** the query answers the semantic document for supported
     structures and `Unsupported` otherwise, over the reader body query's
     lookup and errors; the corpus tool prints counts only;
-  - **M6.3b2:** the toggle is instant;
+  - **M6.3b2:** each DTO crosses the FFI field for field; the toggle is
+    instant and remembered per sender;
   - **owner:** runs the corpus tool on 200+ of their own messages and
     reviews the flagged critical failures. Results summary only goes in
     `plan/qualification/M6-reading.md`.
