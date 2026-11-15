@@ -39,6 +39,32 @@ struct IdentityStripAccessoryTests {
         window.removeTitlebarAccessoryViewController(at: 0)
     }
 
+    @Test func displayOptionsRefreshThePreferredTextSize() async throws {
+        let accessory = IdentityStripAccessory(nibName: nil, bundle: nil)
+        accessory.loadViewIfNeeded()
+        accessory.view.setFrameSize(NSSize(width: 120, height: 32))
+        accessory.setContent(.unavailable(label: String(repeating: "long-address@example.test ", count: 3)))
+        accessory.setTextFont(.systemFont(ofSize: 13))
+        let initialHeight = accessory.view.frame.height
+        accessory.preferredTextFont = { .systemFont(ofSize: 26) }
+        NSWorkspace.shared.notificationCenter.post(
+            name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil)
+        for _ in 0..<100 where accessory.strip.textFont.pointSize != 26 {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(accessory.strip.textFont.pointSize == 26)
+        #expect(accessory.view.frame.height > initialHeight)
+        #expect(accessory.fullScreenMinHeight == accessory.view.frame.height)
+        accessory.preferredTextFont = { .systemFont(ofSize: 13) }
+        NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: NSApp)
+        for _ in 0..<100 where accessory.strip.textFont.pointSize != 13 {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(accessory.strip.textFont.pointSize == 13)
+        #expect(accessory.view.frame.height == initialHeight)
+        #expect(accessory.fullScreenMinHeight == initialHeight)
+    }
+
     @Test func windowResizeRemeasuresTheInstalledAccessory() async throws {
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 680, height: 400),
