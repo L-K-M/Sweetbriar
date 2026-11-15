@@ -38,7 +38,7 @@ final class DraftsListViewController: NSViewController, NSTableViewDataSource, N
         tableView.dataSource = self
         tableView.delegate = self
         tableView.target = self
-        tableView.doubleAction = #selector(openChosen)
+        tableView.doubleAction = #selector(openClicked)
         tableView.onReturn = { [weak self] in self?.openChosen() }
         tableView.setAccessibilityIdentifier("draftsList")
         let scroll = NSScrollView()
@@ -115,8 +115,15 @@ final class DraftsListViewController: NSViewController, NSTableViewDataSource, N
 
     @objc private func retry() { reload() }
 
-    @objc func openChosen() {
-        let row = tableView.clickedRow >= 0 ? tableView.clickedRow : tableView.selectedRow
+    /// Return and the tests open the selection; only a double-click
+    /// opens the clicked row, so Return never reopens an earlier click.
+    func openChosen() { open(row: tableView.selectedRow) }
+
+    @objc private func openClicked() {
+        open(row: tableView.clickedRow >= 0 ? tableView.clickedRow : tableView.selectedRow)
+    }
+
+    private func open(row: Int) {
         guard model.rows.indices.contains(row), let id = model.draftId(forRow: model.rows[row].id) else {
             return
         }
