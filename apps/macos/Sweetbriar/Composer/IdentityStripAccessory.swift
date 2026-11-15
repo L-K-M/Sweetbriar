@@ -6,6 +6,7 @@ import AppKit
 final class IdentityStripAccessory: NSTitlebarAccessoryViewController {
     let strip = IdentityStripView(frame: NSRect(x: 0, y: 0, width: 600, height: 32))
     var reduceMotion: () -> Bool = { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
+    var preferredTextFont: () -> NSFont = { .preferredFont(forTextStyle: .body, options: [:]) }
     private var measuring = false
     private var fadingSnapshot: NSImageView?
     static let transitionDuration: TimeInterval = 0.15
@@ -18,6 +19,11 @@ final class IdentityStripAccessory: NSTitlebarAccessoryViewController {
         NSWorkspace.shared.notificationCenter.addObserver(
             self, selector: #selector(displayOptionsChanged),
             name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil)
+        // Re-query after returning from System Settings, even when the
+        // system does not send a display-options notification for text size.
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(displayOptionsChanged),
+            name: NSApplication.didBecomeActiveNotification, object: nil)
     }
 
     required init?(coder: NSCoder) { fatalError("IdentityStripAccessory is built in code") }
@@ -75,7 +81,10 @@ final class IdentityStripAccessory: NSTitlebarAccessoryViewController {
     }
 
     @objc private nonisolated func displayOptionsChanged() {
-        Task { @MainActor [weak self] in self?.measure() }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            setTextFont(preferredTextFont())
+        }
     }
 
     private func measure() {

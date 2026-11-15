@@ -165,6 +165,59 @@ private func signatureButton(_ title: String, on controller: ComposeWindowContro
     let content = try #require(sheet.contentView)
     return try #require(identityViews(content).compactMap { $0 as? NSButton }.first { $0.title == title })
 }
+@MainActor
+private final class NativeFullScreenEvents: NSObject {
+    private(set) var entered: Set<ObjectIdentifier> = []
+    private(set) var exited: Set<ObjectIdentifier> = []
+
+    override init() {
+        super.init()
+        let center = NotificationCenter.default
+        center.addObserver(
+            self, selector: #selector(didEnter), name: NSWindow.didEnterFullScreenNotification, object: nil)
+        center.addObserver(
+            self, selector: #selector(didExit), name: NSWindow.didExitFullScreenNotification, object: nil)
+    }
+
+    @objc private func didEnter(_ notification: Notification) {
+        if let window = notification.object as? NSWindow { entered.insert(ObjectIdentifier(window)) }
+    }
+
+    @objc private func didExit(_ notification: Notification) {
+        if let window = notification.object as? NSWindow { exited.insert(ObjectIdentifier(window)) }
+    }
+}
+
+@MainActor
+private func withFullScreenWindows(
+    _ windows: [NSWindow], body: @MainActor () async throws -> Void
+) async throws {
+    let events = NativeFullScreenEvents()
+    let result: Result<Void, any Error>
+    do {
+        for window in windows {
+            window.makeKeyAndOrderFront(nil)
+            window.toggleFullScreen(nil)
+            try #require(
+                await identityEventually {
+                    events.entered.contains(ObjectIdentifier(window))
+                        && window.styleMask.contains(.fullScreen)
+                })
+        }
+        try await body()
+        result = .success(())
+    } catch { result = .failure(error) }
+    for window in windows.reversed() where window.styleMask.contains(.fullScreen) {
+        window.makeKeyAndOrderFront(nil)
+        window.toggleFullScreen(nil)
+        #expect(
+            await identityEventually {
+                events.exited.contains(ObjectIdentifier(window)) && !window.styleMask.contains(.fullScreen)
+            })
+    }
+    try result.get()
+}
+
 private enum IdentityUndoEvents { case application, explicitTestTransactions }
 
 @MainActor
@@ -280,6 +333,95 @@ private actor NativeCueSource: ComposeCueSource {
 
 @Suite(.serialized, .timeLimit(.minutes(1))) @MainActor
 struct ComposeIdentityNativeTests {
+    @Test func twoFullScreenWindowsKeepTheirIdentityAndSharedAppearance() async throws {
+        let colors = NativeStripAppearanceSource()
+        let appearance = AppearanceModel(source: colors)
+        await appearance.refresh()
+        let cue = ComposeCueModel(source: NativeCueSource())
+        await cue.reload()
+        var announcements: [String] = []
+        let announce: @MainActor (String) -> Void = { announcements.append($0) }
+        try await withNativeIdentity(
+            .saved(nativeContent(body: "")), appearance: appearance, cue: cue, announceRoute: announce
+        ) { first, _ in
+            try await withNativeIdentity(
+                .saved(nativeContent(body: "")), appearance: appearance, cue: cue, announceRoute: announce
+            ) { second, _ in
+                let controllers = [first, second]
+                try #require(
+                    await identityEventually {
+                        controllers.allSatisfy {
+                            $0.identityStrip.strip.accessibilityLabel()?.contains("a@EXAMPLE.test") == true
+                        }
+                    })
+                let windows = try controllers.map { try #require($0.window) }
+                for (index, controller) in controllers.enumerated() {
+                    windows[index].makeKeyAndOrderFront(nil)
+                    windows[index].makeFirstResponder(controller.textView)
+                    controller.textView.insertText(
+                        "Typed \(index)", replacementRange: .init(location: 0, length: 0))
+                    #expect(await controller.saveAndWait())
+                    try #require(controller.textView.undoManager?.canUndo == true)
+                }
+                let contents = controllers.map { $0.model.content }
+                let sourceText = controllers.map { Array($0.textView.string.utf8) }
+                let dirty = controllers.map { $0.model.isDirty }
+                let undo = controllers.map { $0.textView.undoManager?.canUndo }
+                let redo = controllers.map { $0.textView.undoManager?.canRedo }
+                try await withFullScreenWindows(windows) {
+                    #expect(windows.allSatisfy { $0.styleMask.contains(.fullScreen) })
+                    for controller in controllers {
+                        let strip = controller.identityStrip
+                        let initialHeight = strip.view.frame.height
+                        #expect(initialHeight >= 32 && strip.fullScreenMinHeight == initialHeight)
+                        strip.setTextFont(.systemFont(ofSize: 26))
+                        #expect(strip.view.frame.height > initialHeight)
+                        #expect(strip.fullScreenMinHeight == strip.view.frame.height)
+                        #expect(strip.strip.accessibilityLabel()?.contains("a@EXAMPLE.test") == true)
+                    }
+                    #expect(await cue.setMode(.strong))
+                    try #require(
+                        await identityEventually {
+                            windows.allSatisfy {
+                                $0.styleMask.contains(.fullScreen)
+                                    && $0.styleMask.contains(.fullSizeContentView)
+                                    && $0.titlebarAppearsTransparent
+                            }
+                        })
+                    await colors.setMark("X")
+                    await appearance.refresh()
+                    try #require(
+                        await identityEventually {
+                            controllers.allSatisfy {
+                                $0.identityStrip.strip.accessibilityLabel()?.hasPrefix("X ·") == true
+                            }
+                        })
+                    #expect(controllers.allSatisfy { $0.textView.drawsBackground })
+                    #expect(controllers.allSatisfy { $0.textView.backgroundColor == .textBackgroundColor })
+                    #expect(controllers.map { $0.model.content } == contents)
+                    #expect(controllers.map { Array($0.textView.string.utf8) } == sourceText)
+                    #expect(controllers.map { $0.model.isDirty } == dirty)
+                    #expect(controllers.map { $0.textView.undoManager?.canUndo } == undo)
+                    #expect(controllers.map { $0.textView.undoManager?.canRedo } == redo)
+                    #expect(announcements.isEmpty)
+                }
+                #expect(windows.allSatisfy { !$0.styleMask.contains(.fullScreen) })
+                #expect(controllers.map { $0.model.content } == contents)
+                #expect(controllers.map { $0.model.isDirty } == dirty)
+                #expect(controllers.map { $0.textView.undoManager?.canUndo } == undo)
+                #expect(controllers.map { $0.textView.undoManager?.canRedo } == redo)
+                for (index, controller) in controllers.enumerated() {
+                    let manager = try #require(controller.textView.undoManager)
+                    manager.undo()
+                    #expect(controller.textView.string.isEmpty)
+                    try #require(manager.canRedo)
+                    manager.redo()
+                    #expect(controller.textView.string == "Typed \(index)")
+                }
+            }
+        }
+    }
+
     @Test func sharedAppearanceUpdatesTwoWindowsWithoutEditingTheirDrafts() async throws {
         let source = NativeStripAppearanceSource()
         let appearance = AppearanceModel(source: source)
