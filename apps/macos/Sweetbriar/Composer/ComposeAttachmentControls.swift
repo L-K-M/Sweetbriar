@@ -69,7 +69,9 @@ final class ComposeAttachmentControls: NSObject {
         panel.beginSheetModal(for: window) { [weak self] response in
             guard let self else { return }
             self.panel = nil
-            if response == .OK { attach(panel.urls) }
+            // A render while the sheet was open disabled Attach…; one
+            // after a cancel enables it again.
+            if response == .OK { attach(panel.urls) } else { render() }
         }
     }
 

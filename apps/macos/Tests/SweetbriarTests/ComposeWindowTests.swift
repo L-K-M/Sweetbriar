@@ -1207,6 +1207,25 @@ struct ComposeAttachmentWindowTests {
         }
     }
 
+    @Test func cancellingTheAttachSheetEnablesAttachAgain() async throws {
+        try await withComposeFixture { f in
+            let controller = try await f.makeSavedWindow(subject: "S", body: "B")
+            let window = try #require(controller.window)
+            controller.attachmentControls.chooseFiles()
+            try #require(await composeEventually { window.attachedSheet != nil })
+            // A render while the sheet is open (a publication landing)
+            // disables Attach…; cancelling must enable it again.
+            controller.attachmentControls.render()
+            #expect(!controller.attachmentControls.attachButton.isEnabled)
+            let sheet = try #require(window.attachedSheet)
+            window.endSheet(sheet, returnCode: .cancel)
+            let enabled = await composeEventually {
+                window.attachedSheet == nil && controller.attachmentControls.attachButton.isEnabled
+            }
+            #expect(enabled)
+        }
+    }
+
     @Test func closeSavesAFileWhosePublicationHadBegun() async throws {
         try await withComposeFixture { f in
             let controller = try await f.makeSavedWindow(subject: "S", body: "B")
