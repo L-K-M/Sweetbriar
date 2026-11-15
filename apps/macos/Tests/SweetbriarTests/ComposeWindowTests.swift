@@ -1174,10 +1174,14 @@ struct ComposeAttachmentWindowTests {
             #expect(controller.attachmentControls.attach([folder]))
             try #require(
                 await composeEventually { controller.publications.publications.first?.failure != nil })
-            let label = try #require(
+            // The window re-renders on a later main-actor turn.
+            let failureLabel = {
                 firstComposeView(NSTextField.self, in: controller.attachmentControls.list) {
                     $0.stringValue.hasPrefix("Couldn't attach")
-                })
+                }
+            }
+            try #require(await composeEventually { failureLabel() != nil })
+            let label = try #require(failureLabel())
             #expect(label.stringValue.contains(folder.lastPathComponent))
             let dismiss = try #require(
                 firstComposeView(NSButton.self, in: controller.attachmentControls.list) {
