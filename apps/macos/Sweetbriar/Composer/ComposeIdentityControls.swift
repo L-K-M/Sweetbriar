@@ -6,7 +6,9 @@ import SweetbriarBridge
 @MainActor
 final class ComposeIdentityControls: NSObject {
     enum Event { case presentation, route, decision }
-    let popup = NSPopUpButton()
+    private let appearancePopup = IdentityPopup()
+    var popup: NSPopUpButton { appearancePopup }
+    var appearanceSnapshot: Appearance?
     let refreshButton = NSButton(title: "Refresh Identities", target: nil, action: nil)
     private(set) lazy var model: ComposeIdentityModel = {
         let model = ComposeIdentityModel(
@@ -36,6 +38,9 @@ final class ComposeIdentityControls: NSObject {
     private var ticket: UInt64 = 0
     private var stopped = false
     private var alert: NSAlert?
+    private var rendering = false
+    private var renderPending = false
+    private var swatches: [IdentitySwatch.Key: NSImage] = [:]
 
     init(
         draft: DraftModel, source: any ComposeCatalogSource, preferredAccountId: String?,
@@ -61,6 +66,7 @@ final class ComposeIdentityControls: NSObject {
         popup.action = #selector(selected)
         popup.setAccessibilityLabel("From")
         popup.setAccessibilityIdentifier("composeFrom")
+        appearancePopup.appearanceDidChange = { [weak self] in self?.render() }
     }
 
     @objc private func refresh() { startDiscovery() }
@@ -196,7 +202,23 @@ final class ComposeIdentityControls: NSObject {
     }
 
     func render() {
+        guard !rendering else {
+            renderPending = true
+            return
+        }
+        rendering = true
+        defer {
+            rendering = false
+            if renderPending {
+                renderPending = false
+                Task { @MainActor [weak self] in
+                    guard let self, !stopped else { return }
+                    render()
+                }
+            }
+        }
         let selected = draft.content?.identityId
+        var currentSwatches: [IdentitySwatch.Key: NSImage] = [:]
         popup.removeAllItems()
         popup.addItem(withTitle: "Without a sending identity")
         popup.lastItem?.representedObject = NSNull()
@@ -207,6 +229,13 @@ final class ComposeIdentityControls: NSObject {
             popup.addItem(
                 withTitle: "\(name)<\(identity.email)> · \(identity.accountName)\(provisional)")
             popup.lastItem?.representedObject = identity.identityId
+            if let appearance = IdentityStripContent.matchingAppearance(for: identity, in: appearanceSnapshot)
+            {
+                let key = IdentitySwatch.Key(tokens: appearance.tokens, appearance: popup.effectiveAppearance)
+                let image = currentSwatches[key] ?? swatches[key] ?? IdentitySwatch.image(key: key)
+                currentSwatches[key] = image
+                popup.lastItem?.image = image
+            }
             if selected?.utf8.elementsEqual(identity.identityId.utf8) == true {
                 selectedIndex = popup.numberOfItems - 1
             }
@@ -217,6 +246,7 @@ final class ComposeIdentityControls: NSObject {
             popup.lastItem?.isEnabled = false
             selectedIndex = popup.numberOfItems - 1
         }
+        swatches = currentSwatches
         popup.selectItem(at: selectedIndex)
         popup.isEnabled = !stopped && editable() && model.isReady && !isDeciding
         refreshButton.isEnabled = !stopped && editable() && discovery == nil && !isDeciding
@@ -235,5 +265,16 @@ final class ComposeIdentityControls: NSObject {
         textView.undoManager?.removeAllActions(withTarget: self)
         popup.target = nil
         refreshButton.target = nil
+        appearancePopup.appearanceDidChange = nil
+    }
+}
+
+@MainActor
+private final class IdentityPopup: NSPopUpButton {
+    var appearanceDidChange: (() -> Void)?
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        appearanceDidChange?()
     }
 }

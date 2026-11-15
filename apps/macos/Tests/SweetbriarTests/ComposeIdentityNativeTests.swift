@@ -185,20 +185,39 @@ private func withNativeIdentity(
     try result.get()
 }
 
+@MainActor
+private final class PopupAppearanceFlip {
+    let popup: NSPopUpButton
+    var fired = false
+    init(_ popup: NSPopUpButton) { self.popup = popup }
+    func flipDuringSecondIdentity() {
+        guard !fired, popup.numberOfItems >= 3 else { return }
+        fired = true
+        popup.appearance = NSAppearance(named: .darkAqua)
+    }
+}
+
 private actor NativeStripAppearanceSource: AppearanceSource {
     private var mark = "W"
+    private var lightMarker = sampleAccount.tokens.light.markerSrgb
     private var generation: UInt64 = 1
     func setMark(_ value: String) {
         mark = value
         generation += 1
     }
+    func setLightMarker(_ value: String) {
+        lightMarker = value
+        generation += 1
+    }
     func appearance() async throws -> Appearance {
-        Appearance(
+        var tokens = sampleAccount.tokens
+        tokens.light.markerSrgb = lightMarker
+        return Appearance(
             generation: generation, accounts: [],
             identities: ["a", "b"].map { id in
                 IdentityAppearance(
                     identityId: id, accountId: "account-\(id)", colorSrgb: "#0072b2",
-                    colorOverrideSrgb: nil, tokens: sampleAccount.tokens, symbolOverride: nil,
+                    colorOverrideSrgb: nil, tokens: tokens, symbolOverride: nil,
                     monogram: mark, revision: nil)
             })
     }
@@ -257,6 +276,97 @@ struct ComposeIdentityNativeTests {
         }
     }
 
+    @Test func popupSwatchesFollowTokensAndAppearanceWithoutEditingTheDraft() async throws {
+        let source = NativeStripAppearanceSource()
+        let appearance = AppearanceModel(source: source)
+        await appearance.refresh()
+        var announcements: [String] = []
+        let announce: @MainActor (String) -> Void = { announcements.append($0) }
+        try await withNativeIdentity(appearance: appearance, announceRoute: announce) { controller, _ in
+            let popup = controller.identityControls.popup
+            popup.appearance = NSAppearance(named: .aqua)
+            try #require(
+                await identityEventually {
+                    popup.itemArray.contains { ($0.representedObject as? String) == "a" && $0.image != nil }
+                })
+            let a = try #require(popup.itemArray.first { ($0.representedObject as? String) == "a" })
+            let b = try #require(popup.itemArray.first { ($0.representedObject as? String) == "b" })
+            #expect(popup.item(at: 0)?.image == nil)
+            #expect((popup.selectedItem?.representedObject as? String) == "a")
+            #expect(b.title.contains("b@EXAMPLE.test") && b.title.contains("provisional"))
+            let image = try #require(a.image)
+            #expect(!image.isTemplate && b.image?.isTemplate == false)
+            #expect(try swatchPixel(image, x: 0.5, y: 0.5).redComponent < 0.1)
+            controller.identityControls.render()
+            #expect(popup.selectedItem?.image === image)
+            let content = controller.model.content
+            let dirty = controller.model.isDirty
+            let undo = controller.textView.undoManager?.canUndo
+            await source.setLightMarker("#d55e00")
+            await appearance.refresh()
+            try #require(
+                await identityEventually {
+                    guard let image = popup.selectedItem?.image,
+                        let color = try? swatchPixel(image, x: 0.5, y: 0.5)
+                    else { return false }
+                    return color.redComponent > 0.7
+                })
+            popup.appearance = NSAppearance(named: .darkAqua)
+            try #require(
+                await identityEventually {
+                    guard let image = popup.selectedItem?.image,
+                        let color = try? swatchPixel(image, x: 0.5, y: 0.5)
+                    else { return false }
+                    return abs(color.redComponent - 0x56 / 255.0) < 0.02
+                })
+            #expect(controller.model.content == content)
+            #expect(controller.model.isDirty == dirty)
+            #expect(controller.textView.undoManager?.canUndo == undo)
+            #expect(announcements.isEmpty)
+            var mismatched = try #require(appearance.appearance)
+            mismatched.identities[0].accountId = "wrong-account"
+            controller.identityControls.appearanceSnapshot = mismatched
+            controller.identityControls.render()
+            #expect(popup.selectedItem?.image == nil)
+            #expect(popup.itemArray.first { ($0.representedObject as? String) == "b" }?.image != nil)
+            controller.identityControls.appearanceSnapshot = nil
+            controller.identityControls.render()
+            #expect(popup.itemArray.allSatisfy { $0.image == nil })
+            #expect((popup.selectedItem?.representedObject as? String) == "a")
+        }
+    }
+
+    @Test func appearanceChangesDuringMenuRebuildAreNotLost() async throws {
+        let source = NativeStripAppearanceSource()
+        let appearance = AppearanceModel(source: source)
+        await appearance.refresh()
+        try await withNativeIdentity(appearance: appearance) { controller, _ in
+            let popup = controller.identityControls.popup
+            popup.appearance = NSAppearance(named: .aqua)
+            try #require(
+                await identityEventually {
+                    popup.itemArray.contains { ($0.representedObject as? String) == "b" && $0.image != nil }
+                })
+            let menu = try #require(popup.menu)
+            let probe = PopupAppearanceFlip(popup)
+            let observer = NotificationCenter.default.addObserver(
+                forName: NSMenu.didAddItemNotification, object: menu, queue: nil
+            ) { _ in
+                MainActor.assumeIsolated { probe.flipDuringSecondIdentity() }
+            }
+            defer { NotificationCenter.default.removeObserver(observer) }
+            controller.identityControls.render()
+            try #require(probe.fired)
+            try #require(
+                await identityEventually {
+                    guard let image = popup.selectedItem?.image,
+                        let color = try? swatchPixel(image, x: 0.5, y: 0.5)
+                    else { return false }
+                    return abs(color.redComponent - 0x56 / 255.0) < 0.02
+                })
+        }
+    }
+
     @Test func appearanceRefreshDoesNotCommitMarkedTextOrChangeFocus() async throws {
         let source = NativeStripAppearanceSource()
         let appearance = AppearanceModel(source: source)
@@ -299,7 +409,12 @@ struct ComposeIdentityNativeTests {
             .saved(nativeContent(body: "")), undoEvents: .explicitTestTransactions,
             appearance: appearance, announceRoute: announce
         ) { controller, _ in
-            try #require(await identityEventually { controller.identityControls.model.isReady })
+            try #require(
+                await identityEventually {
+                    controller.identityControls.popup.itemArray.contains {
+                        ($0.representedObject as? String) == "b"
+                    }
+                })
             try chooseNative("b", on: controller)
             try #require(await identityEventually { controller.model.content?.identityId == "b" })
             #expect(controller.identityStrip.strip.accessibilityLabel()?.contains("b@EXAMPLE.test") == true)

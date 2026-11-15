@@ -442,6 +442,7 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
             textView.mode = content.format == .plain ? .plain : .markdown
         }
         window?.isDocumentEdited = model.isDirty || recipientFields.contains(where: \.isPending)
+        identityControls.appearanceSnapshot = appearance?.appearance
         identityControls.render()
         let stripContent: IdentityStripView.Content
         if let content = model.content {
