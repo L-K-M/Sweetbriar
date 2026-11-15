@@ -1,5 +1,6 @@
 import AppKit
 import SweetbriarBridge
+import SwiftUI
 import Testing
 
 #if canImport(Sweetbriar)
@@ -308,6 +309,56 @@ struct ComposeWindowTests {
                 owner.windows.values.allSatisfy {
                     $0.window?.styleMask.contains(.fullSizeContentView) == false
                 })
+        }
+    }
+
+    @Test func nativeSettingsChoiceReachesBothComposeWindows() async throws {
+        try await withComposeFixture { f in
+            let owner = f.makeOwner()
+            owner.newMessage()
+            owner.newMessage()
+            try #require(
+                await composeEventually {
+                    owner.windows.count == 2 && owner.windows.values.allSatisfy { $0.model.content != nil }
+                })
+            let windows = Array(owner.windows.values)
+            let cue = try #require(f.cues.model(source: f.source))
+            try #require(await composeEventually { cue.mode == .standard })
+            let editor = ArchiveWriteTasks()
+            let view = ComposeCueSettingsView(cue: cue, editor: editor, revision: editor.revision) {
+                f.backups.canWrite
+            }
+            let host = NSHostingView(rootView: view)
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 500, height: 320),
+                styleMask: [.titled, .closable], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = host
+            window.makeKeyAndOrderFront(nil)
+            defer { window.close() }
+            try #require(
+                await composeEventually {
+                    firstComposeView(NSButton.self, in: host) {
+                        $0.accessibilityIdentifier() == "composeCueStrong"
+                    }?.isEnabled == true
+                })
+            let before = windows.map { $0.model.content }
+            let undo = windows.map { $0.textView.undoManager?.canUndo }
+            try #require(
+                firstComposeView(NSButton.self, in: host) {
+                    $0.accessibilityIdentifier() == "composeCueStrong"
+                }
+            ).performClick(nil)
+            try #require(
+                await composeEventually {
+                    cue.mode == .strong
+                        && windows.allSatisfy {
+                            $0.cueStatusLabel.stringValue.contains("Strong appearance is unavailable")
+                        }
+                })
+            #expect(windows.map { $0.model.content } == before)
+            #expect(windows.map { $0.textView.undoManager?.canUndo } == undo)
+            await editor.cancelAndWait()
         }
     }
 

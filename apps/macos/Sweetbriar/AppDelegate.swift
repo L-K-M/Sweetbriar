@@ -146,9 +146,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func showSettings(tab: SettingsTab? = nil) {
-        guard !terminating, let session, let backups else { return }
+        guard !terminating, let session, let backups, let composeCues else { return }
         if settingsWindow == nil {
-            settingsWindow = AppearanceSettingsWindow(session: session, shared: appearance, backups: backups)
+            settingsWindow = AppearanceSettingsWindow(
+                session: session, shared: appearance, cues: composeCues, backups: backups)
         }
         if let tab { settingsWindow?.select(tab) }
         settingsWindow?.showWindow(nil)
